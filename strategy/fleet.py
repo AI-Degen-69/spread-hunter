@@ -36,6 +36,7 @@ from strategy.main import full_book, recent_trades
 from strategy.markets import fetch_pinned_market
 from strategy.net_config import load_net as load_bot_cfg
 from strategy.quotes import Inventory, decide_quotes, mid_price
+from strategy.selector import identity_allowed, pair_books_allowed
 
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "run"
@@ -295,6 +296,11 @@ class MarketState:
         # top-ranked market delivered $0.25/day against $18.96 projected.
         self.theirs_samples: list[tuple[float, float]] = []
         self.err = ""
+        # Operator-facing event deduplication. A quote check runs every cycle,
+        # but the dashboard should show a meaningful transition rather than a
+        # new QUOTING row every two seconds.
+        self.event_key = None
+        self.event_ts = 0.0
         # Rehydrate an EXITED verdict, and only an EXITED verdict.
         #
         # This used to start every market at NORMAL on the argument that a
@@ -709,6 +715,57 @@ def reallocate(states, base) -> dict:
     return out
 
 
+def _record_event(st: MarketState, now: float, kind: str,
+                  reason: str = "", side: str | None = None,
+                  price: float | None = None, size: float | None = None,
+                  reason_code: str | None = None, force: bool = False) -> None:
+    """Write a meaningful operator event, collapsing routine repeats."""
+    code = reason_code or store.reason_code(reason)
+    key = (kind, side, code)
+    previous_key = getattr(st, "event_key", None)
+    previous_ts = getattr(st, "event_ts", 0.0)
+    if not force and previous_key == key and now - previous_ts < 30.0:
+        return
+    # A fill/exit/hedge is more informative than the routine requote that
+    # follows it in the same visit. Keep the event visible for one short window.
+    if (not force and kind == "QUOTING" and previous_key
+            and previous_key[0] in {"FILLED", "HEDGED", "MERGED", "EXITED"}
+            and now - previous_ts < 30.0):
+        return
+    try:
+        store.log_event(market_slug=getattr(st, "spec", {}).get("slug", ""),
+                        condition_id=getattr(st, "cid", None), kind=kind, reason=reason,
+                        reason_code=code, side=side, price=price, size=size,
+                        ts=now)
+        st.event_key, st.event_ts = key, now
+    except Exception as e:
+        log.warning("event log failed for %s: %s", getattr(st, "title", "market")[:30], e)
+
+
+def _cancel_live_orders(st: MarketState) -> None:
+    """Cancel simulated resting quotes when a market loses eligibility.
+
+    Inventory remains owned and continues to be monitored, but stale offers may
+    not survive a hard selector failure or consume committed-capacity budget.
+    """
+    released = st.engine.open_orders()
+    for order in released:
+        order.cancelled = True
+    try:
+        store.mark_cancelled([order.quote_id for order in released
+                              if order.quote_id is not None])
+    except Exception as e:
+        log.warning("selector cancellation not recorded for %s: %s", st.title[:30], e)
+    live = st.spec.get("_live")
+    if isinstance(live, dict):
+        live["quotes"] = []
+        live["capital"] = 0.0
+        live["stale"] = True
+        for field in ("up_bid", "up_ask", "dn_bid", "dn_ask", "mid_up",
+                      "our_up", "our_dn_as_up", "dn_bid_as_up", "pair_cost"):
+            live[field] = None
+
+
 def _stamp_failure(st: MarketState, now: float, err: str) -> None:
     """Record on the market's live payload that this visit produced nothing.
 
@@ -729,6 +786,7 @@ def _stamp_failure(st: MarketState, now: float, err: str) -> None:
         st.spec["_live"] = live
     live["err"] = err
     live["err_ts"] = now
+    _record_event(st, now, "ERROR", err, reason_code="ERROR")
 
 
 def visit(st: MarketState, bot_cfg, now: float,
@@ -736,6 +794,18 @@ def visit(st: MarketState, bot_cfg, now: float,
           states=None, fleet_posture: str = gate.NORMAL) -> None:
     """One poll of one market: books -> fills -> requote -> reward sample."""
     cfg = st.cfg
+    # Defense in depth against stale or hand-edited markets.json. The ranker
+    # applies the same identity rule, but no stale universe may bypass it and
+    # reach a live quote merely because the ranker has not rewritten yet.
+    identity_ok, identity_reason = identity_allowed(
+        st.title, st.spec.get("slug"), st.spec.get("category"),
+        st.spec.get("market_type"), st.spec.get("market_group"),
+        st.spec.get("series_title"), st.spec.get("event_title"))
+    if not identity_ok:
+        st.err = identity_reason
+        _cancel_live_orders(st)
+        _stamp_failure(st, now, st.err)
+        return
     # The single-market helper remains callable in tests; the fleet runner
     # passes the complete state list so emergency-hedge affordability and
     # resting-order reservation use the same fleet-wide committed total.
@@ -770,12 +840,25 @@ def visit(st: MarketState, bot_cfg, now: float,
         dn = full_book(bot_cfg.clob_host, m.down_token)
     except Exception as e:
         st.err = f"book fetch: {e}"
+        _cancel_live_orders(st)
         _stamp_failure(st, now, st.err)
         return
     st.err = ""
 
     # Fills are decided by the TAPE, not by the book emptying: a level that
     # vanishes on cancellations must fill us nothing.
+    # Defense in depth: ranker output may be stale while the live books have
+    # already dried up. Require both YES and NO to retain >=$5k in the top three
+    # bid levels and a <=4c two-sided spread before any fill or quote handling.
+    books_ok, books_reason = pair_books_allowed(
+        [("YES", up["bids"], up["asks"]), ("NO", dn["bids"], dn["asks"])],
+        cfg.select_min_top3_depth_usd, cfg.select_max_book_spread)
+    if not books_ok:
+        st.err = books_reason
+        _cancel_live_orders(st)
+        _stamp_failure(st, now, st.err)
+        return
+
     tape = recent_trades(m.condition_id, st.seen_trades)
     first_pass = not st.tape_primed
     st.tape_primed = True
@@ -843,12 +926,17 @@ def visit(st: MarketState, bot_cfg, now: float,
                 st.inv.down_cost += f.size * f.price
             st.inv.fills += 1
             store.log_fill(
-                market_slug=m.market_slug, condition_id=m.condition_id,
-                token_id=f.token_id, side=f.side, price=f.price, size=f.size,
+                market_slug=m.market_slug, condition_id=m.condition_id, token_id=f.token_id,
+                side=f.side, price=f.price, size=f.size,
                 quote_id=f.quote_id, mid_at_post=None, edge_vs_mid=None,
                 queue_waited=getattr(f, "queue_waited", 0.0),
                 seconds_to_fill=0.0, crossed=False, reason=f.reason,
             )
+            _record_event(st, now, "FILLED",
+                          f"{f.side} {f.size:.0f}sh @ {f.price:.3f}",
+                          side=f.side, price=f.price, size=f.size,
+                          reason_code="FILL", force=True)
+
             # Open the markout clock. `ref_mid_source` is the load-bearing
             # field: in paper mode our quotes never reach the venue, so this
             # book is already clean of our own size. A LIVE run must pass
@@ -903,6 +991,10 @@ def visit(st: MarketState, bot_cfg, now: float,
             # An unpersisted EXIT still holds for this process. Losing it on a
             # restart is the old behaviour, not a reason to stop trading.
             log.warning("gate persist failed for %s: %s", st.title[:30], e)
+        _record_event(st, now, "EXITED",
+                      f"gate EXITED: markout {stats.get('mean_per_share') or 0.0:.4f}/sh "
+                      f"on n={stats.get('n', 0)}",
+                      reason_code="MARKOUT_EXIT", force=True)
         log.info("GATE EXIT %-28s markout %.4f/sh on n=%d",
                  st.title[:28], stats.get("mean_per_share") or 0.0,
                  stats.get("n", 0))
@@ -953,6 +1045,9 @@ def visit(st: MarketState, bot_cfg, now: float,
                 # there is no concession against holding, only the gas.
                 forgone_vs_settlement=0.0,
                 up_cost_removed=up_removed, dn_cost_removed=dn_removed)
+            _record_event(st, now, "MERGED",
+                          f"merged {n:.0f} pairs for ${mg['proceeds']:.2f}",
+                          size=n, reason_code="MERGE", force=True)
 
             # Cost before shares: avg() divides by the share count, so
             # decrementing shares first would rewrite the basis of the residue.
@@ -1001,6 +1096,8 @@ def visit(st: MarketState, bot_cfg, now: float,
                 realized_pnl=pt["realized_pnl"],
                 forgone_vs_settlement=pt["forgone_vs_settlement"],
                 up_cost_removed=up_removed, dn_cost_removed=dn_removed)
+            _record_event(st, now, "EXITED", pt.get("why", ""),
+                          size=n, reason_code="EXIT", force=True)
 
             # Remove the closed pairs at their own average cost, which leaves
             # the average cost of whatever remains unchanged -- the naked
@@ -1055,14 +1152,17 @@ def visit(st: MarketState, bot_cfg, now: float,
                        - fleet_committed_cost(committed_states), 0.0)
         cross_size = _affordable_cross_size(asks, qi.size, available)
         if cross_size <= 1e-9:
+            block_reason = f"{qi.reason}; committed cap leaves no affordable hedge"
             store.log_decision(
                 market_slug=m.market_slug, condition_id=m.condition_id,
                 action="EMERGENCY_HEDGE_BLOCKED", side=qi.side,
                 price=qi.price, mid=qi.mid, edge_vs_mid=qi.edge_vs_mid,
                 t_remaining=None, balance=st.inv.balance,
-                pair_cost=st.inv.pair_cost(),
-                reason=f"{qi.reason}; committed cap leaves no affordable hedge",
+                pair_cost=st.inv.pair_cost(), reason=block_reason,
+                reason_code="COMMITTED_CAP",
             )
+            _record_event(st, now, "BLOCKED", block_reason, side=qi.side,
+                          price=qi.price, reason_code="COMMITTED_CAP")
             continue
         got = 0.0
         qid = store.log_quote(
@@ -1096,14 +1196,17 @@ def visit(st: MarketState, bot_cfg, now: float,
         # otherwise historical open-offer metrics overstate live exposure.
         if got + 1e-9 < cross_size:
             store.mark_cancelled([qid])
+        hedge_reason = (f"{qi.reason}; filled {got:.0f}/{cross_size:.0f}sh "
+                        f"(requested {qi.size:.0f})")
         store.log_decision(
             market_slug=m.market_slug, condition_id=m.condition_id,
             action="EMERGENCY_HEDGE", side=qi.side, price=qi.price,
             mid=qi.mid, edge_vs_mid=qi.edge_vs_mid, t_remaining=None,
             balance=st.inv.balance, pair_cost=st.inv.pair_cost(),
-            reason=f"{qi.reason}; filled {got:.0f}/{cross_size:.0f}sh "
-                   f"(requested {qi.size:.0f})",
+            reason=hedge_reason, reason_code="HEDGE",
         )
+        _record_event(st, now, "HEDGED", hedge_reason, side=qi.side,
+                      size=got, reason_code="HEDGE", force=True)
         log.info("EMERGENCY_HEDGE %-28s %-4s %.0f/%.0fsh bal=%.2f",
                  st.title[:28], qi.side, got, qi.size, st.inv.balance)
 
@@ -1171,6 +1274,24 @@ def visit(st: MarketState, bot_cfg, now: float,
     if budget_blocked:
         why = "; ".join(x for x in (why, *budget_blocked) if x)
 
+    # Preserve the refusal evidence even when the opposite side remains live.
+    # A market can be actively quoting one side while the risk engine refuses
+    # the other; showing only QUOTING would hide the gate that shaped it.
+    if why:
+        _record_event(st, now, "BLOCKED", why,
+                      reason_code=store.reason_code(why))
+
+    open_orders = st.engine.open_orders()
+    if open_orders:
+        sides = "+".join(sorted({o.side for o in open_orders}))
+        # If a fill/exit/hedge happened in this visit, _record_event deliberately
+        # keeps that higher-signal action as the latest visible event.
+        _record_event(st, now, "QUOTING", f"resting {sides} limit orders",
+                      reason_code="QUOTE_ACTIVE")
+    elif not why:
+        _record_event(st, now, "WAITING", "no eligible quote intent",
+                      reason_code="NO_QUOTE")
+
     bq1, bq2 = rewards.book_scores(up, dn, cfg.max_spread_from_mid,
                                    cfg.min_quote_shares)
     oq1, oq2 = rewards.our_scores(st.engine.open_orders(), up, dn,
@@ -1205,8 +1326,11 @@ def visit(st: MarketState, bot_cfg, now: float,
         "income": share * st.pot,
         "pot": st.pot, "source": st.source,
         "capital": sum(o.price * (o.size - o.filled) for o in orders),
-        "quotes": [{"side": o.side, "price": round(o.price, 4), "size": o.size}
-                   for o in orders],
+        "quotes": [{"side": o.side, "price": round(o.price, 4),
+                     "size": o.size, "filled": o.filled,
+                     "remaining": max(0.0, o.size - o.filled),
+                     "notional": round(o.price * max(0.0, o.size - o.filled), 4)}
+                    for o in orders],
         "up_sh": st.inv.up_shares, "dn_sh": st.inv.down_shares,
         "up_avg": st.inv.avg("UP"), "dn_avg": st.inv.avg("DOWN"),
         # Paired shares are safe: one YES + one NO always pays exactly $1.00,
@@ -1253,6 +1377,7 @@ def visit(st: MarketState, bot_cfg, now: float,
         "pair_cost": (round(our_up + our_dn, 4)
                       if (our_up is not None and our_dn is not None) else None),
         "why": why,
+        "stale": False,
     }
 
 

@@ -603,3 +603,56 @@ recoverable from the archive branch by checkout.
 **Result.** The recorded pooled reading of -0.052375 on n=52 returns HALTED, where the fleet sits at WIDENED today — 2.6 times the catastrophic threshold answered by widening quotes 1.5c. -0.008 returns WIDENED and +0.01 returns NORMAL, and `insufficient_sample` returns NORMAL, so thin evidence never halts. Under HALTED the heavy side rests nothing while the light side rests at a size identical to the un-halted run, a flat market still quotes both sides because neither side is heavy, and the emergency cross still fires. The halt lifts on the next sweep once the pooled reading recovers. KTD5 is pinned as one assertion pair: the same -4.75c pool caps a borrowed per-market verdict at WIDENED and halts the fleet, which is exactly the distinction the decision draws.
 
 **Verdict.** LIVE. Pooled evidence now produces a reversible fleet-wide throttle rather than either a shrug or a mass blacklisting.
+
+---
+
+### Session 25 — 2026-08-05: replay validation of the dollar gates (U7)
+
+**Question.** Against the recorded fills, would the new gates avoid more naked cost than realized P&L they would forgo, and would they cut more than half of the profitable flow?
+
+**Method.** Added `scripts/replay_risk_gates.py` and fixture-backed tests in `tests/test_replay_risk_gates.py`. The replay reads `fills`, `quotes`, and `closes` through a read-only SQLite handle, reconstructs inventory in fill order, and asks `risk.hard_block` at each recorded fill. It reports both the live path (R4 exposure-reducing exemption honored) and each gate independently so light-side rule evidence is not mistaken for a live refusal. Because the database records a mid but no book ladder, the depth arm is explicitly reported UNEVALUATED. Per-fill realized P&L does not exist; positive market-level `closes.realized_pnl` is attributed across refused fills by cost share and labelled as attribution, not measurement. Fixture coverage includes the `lol-maz-mg1` dollar-cap case, `wta-kalinsk-kessler` pair-cost case, healthy flow, missing depth, empty and absent databases, and P&L attribution.
+
+**Result.** Replay against the recorded paper database `run/fleet.db` (67 fills, 23 markets) refused 15 fills (22.4%) on the live path, avoiding **$729.88** of incremental naked cost against **$26.19** of attributed realized P&L forgone. The profitable-market stop check refused 6 of 40 fills (15.0%), so it did not trigger. Per-gate evidence was: dollar cap 5 fills / $178.27 naked cost; price band 28 / $743.19; pair cost 16 / $268.18; hedge and own book health 2 each / $223.05 each. Depth remained UNEVALUATED for all 134 health checks. `maker.db` is an empty stale database (0 fills), so it is a zero-data report rather than the recorded-run verdict.
+
+**Verdict.** LIVE for paper replay. The exit criterion passes on the available recorded sample, with book depth and per-fill P&L explicitly OPEN rather than papered over.
+
+### Session 6 — 2026-08-05: operator dashboard action telemetry
+
+**Question.** Can the dashboard show what each market just did, why it did it, and whether risk gates are shaping the book without inferring actions from stale inventory?
+
+**Method.** Added durable `market_events` rows for fills, hedges, merges, exits, blocked decisions, quote state, waits, and errors. Added structured reason codes, per-market recent-event payloads, fleet refusal counters, active-quoting ratio, fleet naked-risk utilization, and a high-contrast gold mid-price marker. The table now separates last action from projected income, order depth, capital, and P&L. Event writes are deduplicated for routine quote cycles while fills and exits remain high-signal.
+
+**Result.** Focused dashboard/event tests pass, and the full suite passes **444 tests**. Existing failure-path tests continue to preserve figure timestamps. Refusal codes prioritize specific book/gate causes over compound prose, and the dashboard labels active quoting as active quoting rather than claiming it is a complete book-health measurement.
+
+**Verdict.** LIVE for dashboard telemetry in paper simulation. Profitability and execution quality remain OPEN; this change improves observability and does not alter strategy thresholds.
+### Session 7 — 2026-08-05: realized exits table
+
+**Question.** Can the dashboard preserve an auditable snapshot of every closed position, including cost, quantity, exit price, and return?
+
+**Method.** Added an API reader over every `closes` row and an event-level table distinguishing `SELL` from `MERGE`. Sell exit price is the effective proceeds-per-share price; merge exit price is parity at $1.00. Fees or gas remain separate.
+
+**Result.** Added a table below live markets with exit time, market, method, shares, average cost, effective exit price, P&L, P&L percentage over cost basis, fees/gas, and leg detail. The suite passes with **447 tests**.
+
+**Verdict.** LIVE for realized-exit telemetry in paper simulation; closed history is now separated from open positions.
+
+---
+
+### Session 8 — 2026-08-05: hard primary-market selector and liquidity gate
+
+**Question.** Can the paper fleet refuse dynamic esports submarkets and dry books before a naked leg is created?
+
+**Method.** Added the pure shared `strategy/selector.py` contract. It rejects Game 1/2, Map 1/2, Set 1, Round, Live, In-Play, and Handicap names; requires explicit Moneyline/Main Line/Outright or Politics/Macro/Economics metadata; requires 24-hour volume above $250,000; requires top-three **bid** depth above $5,000 independently on YES and NO; and requires a two-sided spread no wider than $0.04. `scripts/rank_markets.py` applies the selector before ranking, and `strategy/fleet.py` repeats the identity and live-book checks before fills or quotes, cancelling stale simulated orders on failure.
+
+**Result.** The previous `run/markets.json` visibly contained rejected examples including `Map Handicap` and `Game 1 Winner`; those entries are now refused even if the file is stale. Selector, selection, and ranker tests pass, and the full suite passes **452 tests**. The new depth measurement is dollar notional at the best three bid levels, not raw shares or asks; unknown or one-sided books fail closed.
+
+**Verdict.** LIVE for paper-simulation protection. Profitability remains OPEN: the stricter universe must now produce a clean sample with enough fills and settled exits before any economic conclusion.
+
+### Session 9 — 2026-08-05: clean-run preparation
+
+**Question.** Can the next paper sample start without the prior Game 1 inventory or stale dashboard state?
+
+**Method.** The existing launcher archives `run/fleet.db`, WAL/SHM sidecars, and `fleet_state.json` under `run/archive/fleet_<timestamp>` before starting the supervised fleet, dashboard, and ranker. The selector changes are kept separate from the old sample; no historical rows are deleted.
+
+**Result.** The target listener `127.0.0.1:8800` is free and the working tree contains unrelated pre-existing dashboard/research edits, so the clean start is performed through the scoped launcher rather than broad file deletion.
+
+**Verdict.** OPEN until the fresh supervised process tree is confirmed alive and the newly generated market universe is inspected.

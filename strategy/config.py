@@ -320,7 +320,13 @@ class MakerConfig:
     # argument against reward farming, which is a real strategy earning real
     # emissions; it is an argument against measuring reward farming with
     # fill-based instruments and reading the zeros as a maker result.
-    select_min_volume_24h_usd: float = 25_000.0
+    # HARD MARKET SELECTOR. These are intentionally stricter than the older
+    # $25k research gate: a market must have enough real flow to make a resting
+    # quote reachable and enough immediate exit liquidity to make a naked fill
+    # survivable. The selector requires this depth independently on YES and NO.
+    select_min_volume_24h_usd: float = 250_000.0
+    select_min_top3_depth_usd: float = 5_000.0
+    select_max_book_spread: float = 0.04
     # A market resolving in 2027 cannot contribute a settled observation to a
     # run measured in days, and settlement is the only ground truth this
     # strategy has. The whole 2026-07-31 universe resolved between September

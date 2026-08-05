@@ -33,6 +33,7 @@ sys.path.insert(0, str(ROOT))
 
 from strategy.allocate import spread_capture_daily   # noqa: E402
 from strategy.config import load as _load_cfg   # noqa: E402
+from strategy.selector import identity_allowed, pair_books_allowed  # noqa: E402
 
 RUN = ROOT / "run"
 OFFSET = 0.020          # where we intend to quote, in price units
@@ -51,6 +52,8 @@ FLOOR_MULTIPLE = 1.5    # headroom: projections are noisy and rivals arrive
 _CFG = _load_cfg()
 MIN_VOLUME_24H = _CFG.select_min_volume_24h_usd
 MAX_DAYS_TO_RESOLVE = _CFG.select_max_days_to_resolve
+MIN_TOP3_DEPTH_USD = _CFG.select_min_top3_depth_usd
+MAX_BOOK_SPREAD = _CFG.select_max_book_spread
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
 
@@ -98,7 +101,9 @@ def days_to_resolve(end_iso: Optional[str],
 
 
 def tradable(volume_24h: Optional[float],
-             days: Optional[float]) -> tuple[bool, str]:
+             days: Optional[float],
+             title: object = "", slug: object = "",
+             category: object = "", market_type: object = "") -> tuple[bool, str]:
     """Can this market produce the two observations the run needs?
 
     A fill needs someone to trade at our price; a settled P&L needs the market
@@ -111,6 +116,14 @@ def tradable(volume_24h: Optional[float],
     thin, so a missing field is far more likely to be another one of those than
     a liquid market with a gap in its metadata.
     """
+    # Keep this helper backwards-compatible for callers that only supply the
+    # numeric tradability inputs. Full selector identity is enforced by
+    # `evaluate`, where the venue metadata is available.
+    if any(_value not in (None, "") for _value in (title, slug, category, market_type)):
+        identity_ok, identity_reason = identity_allowed(
+            title, slug, category, market_type)
+        if not identity_ok:
+            return False, identity_reason
     if volume_24h is None:
         return False, "volume unknown"
     if volume_24h < MIN_VOLUME_24H:
@@ -234,6 +247,11 @@ def gamma_spread_universe(session: requests.Session,
                 "condition_id": m.get("conditionId"),
                 "question": m.get("question") or "",
                 "market_slug": m.get("slug") or "",
+                "category": m.get("category") or m.get("categorySlug") or "",
+                "market_type": m.get("marketType") or m.get("type") or "",
+                "market_group": m.get("groupItemTitle") or "",
+                "series_title": ((m.get("events") or [{}])[0].get("series") or [{}])[0].get("title", ""),
+                "event_title": ((m.get("events") or [{}])[0].get("title") or ""),
                 "tokens": [{"token_id": str(t)} for t in toks],
                 # No reward config exists on these markets. The scan below
                 # still needs a window and a scoring minimum to measure
@@ -284,6 +302,18 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     taker on the trade, and no minimum distribution exists to apply.
     """
     rw = m.get("rewards") or {}
+    identity_ok, identity_reason = identity_allowed(
+        m.get("question"), m.get("market_slug") or m.get("slug"),
+        m.get("category"), m.get("market_type"),
+        m.get("market_group"), m.get("series_title"), m.get("event_title"))
+    if not identity_ok:
+        return {
+            "source": source, "eligible": False,
+            "reject_reason": identity_reason,
+            "cid": m.get("condition_id"),
+            "title": m.get("question", "")[:90],
+            "slug": m.get("market_slug", ""),
+        }
     v = (rw.get("max_spread") or 3.5) / 100.0
     min_size = rw.get("min_size") or 50
     toks = [t.get("token_id") for t in (m.get("tokens") or [])]
@@ -294,6 +324,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     capital_per_share = 0.0
     mids: dict[int, float] = {}
     best_bids: dict[int, float] = {}
+    books: list[tuple[str, list[tuple[float, float]], list[tuple[float, float]]]] = []
     for j, tok in enumerate(toks):
         try:
             b = session.get("https://clob.polymarket.com/book",
@@ -304,6 +335,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         asks = [(float(x["price"]), float(x["size"])) for x in (b.get("asks") or [])]
         if not bids or not asks:
             return None
+        books.append(("YES" if j == 0 else "NO", bids, asks))
         mid = (max(bids)[0] + min(asks)[0]) / 2.0
         # Outside [0.05, 0.95] the book is one-sided in practice and the
         # position is mostly a bet on a near-settled outcome.
@@ -321,6 +353,18 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                         q1 += sc
                     else:
                         q2 += sc
+
+    books_ok, books_reason = pair_books_allowed(
+        books, MIN_TOP3_DEPTH_USD, MAX_BOOK_SPREAD)
+    if not books_ok:
+        return {
+            "source": source, "eligible": False,
+            "reject_reason": books_reason,
+            "volume_24h": round(volume_24h, 2) if volume_24h is not None else None,
+            "cid": m.get("condition_id"),
+            "title": m.get("question", "")[:90],
+            "slug": m.get("market_slug", ""),
+        }
 
     theirs = q_min(q1, q2)
     n = max(min_size, 120)
@@ -352,7 +396,11 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # rather than for being unprofitable -- the distinction the last six runs
     # could not make.
     days = days_to_resolve(m.get("end_date_iso"))
-    can_trade, why = tradable(volume_24h, days)
+    can_trade, why = tradable(
+        volume_24h, days, m.get("question"),
+        m.get("market_slug") or m.get("slug"),
+        m.get("category"), m.get("market_type"),
+        m.get("market_group"), m.get("series_title"), m.get("event_title"))
     # The payout floor is a REWARD rule -- the venue's minimum distribution.
     # A spread market is paid by whoever lifts the offer, in the amount of the
     # spread, so there is no distribution to be under. Holding it to the floor
@@ -375,6 +423,11 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "cid": m["condition_id"],
         "title": m.get("question", "")[:90],
         "slug": m.get("market_slug", ""),
+        "category": m.get("category") or m.get("categorySlug") or "",
+        "market_type": m.get("marketType") or m.get("type") or "",
+        "market_group": m.get("market_group") or m.get("groupItemTitle") or "",
+        "series_title": m.get("series_title") or "",
+        "event_title": m.get("event_title") or "",
         # THE REWARD POT, and zero is the honest figure for a market that pays
         # none. `fleet.reallocate` keys the spread path off `daily <= 0` and
         # recomputes the pot from `volume_24h` and `spread`, so the capture
@@ -568,7 +621,10 @@ def main() -> None:
           f"({', '.join(f'{k}={v}' for k, v in sorted(causes.items())) or 'none'}), "
           f"{'would write' if args.dry_run else 'wrote'} top {len(picked)}"
           f" -> run/markets.json")
-    print(f"gates: 24h volume >= ${MIN_VOLUME_24H:,.0f}, "
+    print(f"gates: primary/main-line only, blocked submarkets/live; "
+          f"24h volume >= ${MIN_VOLUME_24H:,.0f}, "
+          f"YES+NO top-3 bid depth >= ${MIN_TOP3_DEPTH_USD:,.0f} each, "
+          f"spread <= {MAX_BOOK_SPREAD:.2f}, "
           f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
           f"income >= ${MIN_PAYOUT * FLOOR_MULTIPLE:.2f}/day\n")
     n_spread = sum(1 for r in picked if r["source"] == "spread")
