@@ -283,6 +283,166 @@ def test_the_gate_is_switchable():
                            _book(0.26, 0.42), _book(0.999, None)) is None
 
 
+# --- hard_block: the price band (U4, R7) ------------------------------------
+#
+# `_in_band` has existed in `strategy/quotes.py` since the beginning and has
+# never run on the objective the fleet actually quotes: it sits in the legacy
+# branch of `decide_quotes`, BELOW the line where `_decide_quotes_rewards`
+# returns. Telemetry reads exactly as an absent rule would -- fills averaged
+# 0.8152 against a nominal 0.30-0.70 band.
+
+
+def test_a_near_certain_price_is_refused_by_the_band():
+    """0.935 is outside 0.30-0.70: the spread has collapsed toward one tick on
+    an outcome the market already considers settled, so there is nothing to
+    capture -- while a wrong resolution still costs the full $1.00."""
+    why = risk.hard_block(_cfg(), _flat(), "UP", 0.935,
+                          _book(0.95, 0.96), _book(0.03, 0.04))
+    assert why is not None
+    assert "band" in why
+
+
+def test_turning_the_band_off_lets_the_same_price_through():
+    """Isolates the band: nothing about the input moved except the switch."""
+    assert risk.hard_block(_cfg(enforce_price_band=False), _flat(), "UP", 0.935,
+                           _book(0.95, 0.96), _book(0.03, 0.04)) is None
+
+
+def test_the_band_edges_are_inclusive():
+    """Mirrors `_in_band`'s `low <= price <= high`. A rule that refused its own
+    stated endpoints would quietly be a narrower rule than the config says."""
+    cfg = _cfg(price_band_low=0.30, price_band_high=0.70)
+    assert risk.hard_block(cfg, _flat(), "UP", 0.30, HEALTHY, HEDGE) is None
+    assert risk.hard_block(cfg, _flat(), "UP", 0.70, HEALTHY, HEDGE) is None
+
+
+def test_the_dollar_cap_is_reported_ahead_of_the_band():
+    """Both bind. The operator must read the DOLLAR cap, because it describes
+    what is already at stake rather than what a new fill would be worth."""
+    inv = Inventory(up_shares=200.0, down_shares=0.0, up_cost=150.0)
+    why = risk.hard_block(_cfg(max_naked_usd=120.0), inv, "UP", 0.935,
+                          _book(0.95, 0.96), _book(0.03, 0.04))
+    assert "naked" in why and "band" not in why
+
+
+# --- hard_block: the pair-cost cap (U4, R7) ---------------------------------
+#
+# Same defect, same cause. `wta-kalinsk-kessler` bought 14 pairs at $1.0200 per
+# pair against a $0.995 cap, on an instrument that pays exactly $1.00 -- a
+# guaranteed 2c/share loss taken 14 times by a rule that was never reached.
+
+
+def test_a_pair_over_the_cap_is_refused():
+    """0.52 on UP against a 0.49 DOWN average is a $1.01 pair on a $1.00
+    payout. Reproduces the $1.0200 pairs recorded on wta-kalinsk-kessler."""
+    inv = Inventory(up_shares=100.0, down_shares=100.0,
+                    up_cost=52.0, down_cost=49.0)
+    why = risk.hard_block(_cfg(max_pair_cost=0.995), inv, "UP", 0.52,
+                          HEALTHY, HEDGE)
+    assert why is not None
+    assert "pair" in why
+
+
+def test_the_same_bid_against_a_cheaper_hedge_is_allowed():
+    """Isolates the cap: the same 0.52 bid, the same shares, a 0.40 DOWN
+    average -- a $0.92 pair, which is the trade this strategy exists to make."""
+    inv = Inventory(up_shares=100.0, down_shares=100.0,
+                    up_cost=52.0, down_cost=40.0)
+    assert risk.hard_block(_cfg(max_pair_cost=0.995), inv, "UP", 0.52,
+                           HEALTHY, HEDGE) is None
+
+
+def test_the_pair_cap_binds_at_the_cap_exactly():
+    """`>=` not `>`, matching the legacy comparison this restores and every
+    other cap here: the cap is a ceiling reached, not approached."""
+    inv = Inventory(up_shares=100.0, down_shares=100.0,
+                    up_cost=50.0, down_cost=49.5)
+    why = risk.hard_block(_cfg(max_pair_cost=0.995), inv, "UP", 0.50,
+                          HEALTHY, HEDGE)
+    assert why is not None and "pair" in why
+
+
+def test_the_pair_cap_is_silent_with_no_hedge_leg_held():
+    """`other_avg > 0` guards it, exactly as the legacy branch does. A zero
+    average is 'we hold none of that token', not 'the hedge is free' -- without
+    the guard every opening bid would look like a sub-$1.00 pair."""
+    assert risk.hard_block(_cfg(max_pair_cost=0.995), _flat(), "UP", 0.50,
+                           HEALTHY, HEDGE) is None
+
+
+def test_the_light_side_keeps_its_exemption_over_both_new_arms():
+    """R4 still rides above the gates. 300 UP against nothing is $240 at risk
+    and the DOWN bid is the only resting order that reduces it, so neither the
+    band nor the pair cap may refuse it -- refusing would freeze the position at
+    maximum exposure with no route back down."""
+    inv = Inventory(up_shares=300.0, down_shares=0.0, up_cost=240.0)
+    assert risk.hard_block(_cfg(), inv, "DOWN", 0.95,
+                           _book(0.96, 0.97), _book(0.03, 0.04)) is None
+
+
+# --- band_risk_factor: variance and magnitude are two different risks --------
+#
+# Every gate above prices a position in dollars and none of them notices WHERE
+# in the 0..1 range the fill lands. On a binary market two risks move in
+# opposite directions across that range: per-share variance is p(1-p), which
+# peaks at the coin flip, while the downside of one long share IS the price
+# paid for it, which rises all the way to 1.00.
+
+
+def test_the_size_cut_is_deepest_at_the_coin_flip():
+    cfg = _cfg()
+    assert risk.band_risk_factor(cfg, 0.50).size_mult == pytest.approx(
+        1.0 - cfg.coinflip_size_cut)
+
+
+def test_there_is_no_size_cut_a_halfwidth_away_from_the_coin_flip():
+    """The taper reaches zero at `coinflip_halfwidth`, so the treatment is
+    bounded rather than applying a little bit everywhere."""
+    cfg = _cfg()
+    for p in (0.5 + cfg.coinflip_halfwidth, 0.5 - cfg.coinflip_halfwidth, 0.95):
+        assert risk.band_risk_factor(cfg, p).size_mult == pytest.approx(1.0)
+
+
+def test_the_extra_offset_is_wider_at_0_68_than_at_0_32():
+    """The two terms are told apart by their symmetry. 0.68 and 0.32 are the
+    same distance from the coin flip, so the variance term is identical on
+    both; the magnitude term is not, because $0.68 of downside per share is
+    more than $0.32."""
+    cfg = _cfg()
+    assert (risk.band_risk_factor(cfg, 0.68).extra_offset
+            > risk.band_risk_factor(cfg, 0.32).extra_offset)
+    assert (risk.band_risk_factor(cfg, 0.68).size_mult
+            == pytest.approx(risk.band_risk_factor(cfg, 0.32).size_mult))
+
+
+def test_the_extra_offset_rises_with_price_outside_the_coinflip_zone():
+    """Past the coin-flip taper only the magnitude term is left, and it must
+    still respond: 0.90 buys more downside per share than 0.80."""
+    cfg = _cfg()
+    assert (risk.band_risk_factor(cfg, 0.90).extra_offset
+            > risk.band_risk_factor(cfg, 0.80).extra_offset)
+
+
+def test_a_zero_halfwidth_disables_the_variance_term_without_dividing_by_zero():
+    """0 means unset, the same escape hatch every other tunable here has -- and
+    it is the one value that would otherwise divide by zero at the coin flip."""
+    cfg = _cfg(coinflip_halfwidth=0.0)
+    assert risk.band_risk_factor(cfg, 0.50).size_mult == pytest.approx(1.0)
+
+
+def test_a_zero_size_cut_leaves_the_multiplier_at_one_everywhere():
+    cfg = _cfg(coinflip_size_cut=0.0)
+    for p in (0.05, 0.32, 0.50, 0.68, 0.95):
+        assert risk.band_risk_factor(cfg, p).size_mult == pytest.approx(1.0)
+
+
+def test_the_multiplier_never_goes_negative():
+    """A multiplier under zero would flip the sign of a size. Even a misconfigured
+    cut past 1.0 must floor at 'quote nothing', never at 'quote backwards'."""
+    cfg = _cfg(coinflip_size_cut=1.5)
+    assert risk.band_risk_factor(cfg, 0.50).size_mult == 0.0
+
+
 # --- size_for: the continuous ladder ----------------------------------------
 #
 # `hard_block` is a cliff by construction: $119.99 of naked cost quotes the

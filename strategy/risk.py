@@ -163,6 +163,58 @@ def skew_offset(cfg, inv, side: str) -> float:
     return push if side == naked else -push
 
 
+@dataclass
+class BandRisk:
+    """Two answers to two different price risks, from one weight.
+
+    Kept as a pair rather than folded into one number because they act on
+    different levers -- variance is answered with size, magnitude with offset --
+    and a single blended factor could not express "quote smaller AND further"
+    without one of the two silently cancelling the other.
+    """
+    size_mult: float
+    extra_offset: float
+
+
+def band_risk_factor(cfg, price: float) -> BandRisk:
+    """How much to shrink and how much further out to sit, at this price.
+
+    R6. Every other rule in this module prices a position in DOLLARS and none
+    of them notices where in the 0..1 range the fill lands. Two risks live
+    there and they point in opposite directions:
+
+      * VARIANCE, answered with SIZE. The payout is Bernoulli, so per-share
+        variance is p(1-p) -- 0.2500 at 0.50 against 0.2100 at 0.30/0.70 and
+        zero at the ends. The coin flip is where a fill says least about the
+        outcome. The weight `w` below is a linear taper of that hump, reaching
+        zero at `coinflip_halfwidth` (0.20 = half the price band, so the
+        treatment stops exactly where the band stops permitting quotes).
+      * MAGNITUDE, answered with OFFSET. The downside of one long share IS the
+        price paid for it, so 0.70 buys more than twice the risk of 0.30 for
+        the same share. `price_risk_widen * price` demands a better price where
+        a share costs more; it is monotonic in price and carries no hump,
+        which is what lets the two terms be told apart at 0.68 versus 0.32.
+
+    The coin-flip term appears in BOTH outputs on purpose. Size alone would
+    leave us resting at the same price in the least readable market on the
+    board; offset alone would keep full size against the widest variance. The
+    offset terms share one scale (`price_risk_widen`) because `w` and `price`
+    are both dimensionless 0..1 weights -- a second magnitude knob would be a
+    number with no independent evidence behind it.
+
+    Zero `coinflip_halfwidth` unsets the variance term, the same escape hatch
+    every other tunable here has, and is also the one value that would divide
+    by zero. The multiplier floors at 0: a negative multiplier would flip the
+    sign of a size, and "quote nothing" is the correct limit of "quote less".
+    """
+    hw = cfg.coinflip_halfwidth
+    w = 0.0 if hw <= 0 else max(0.0, 1.0 - abs(price - 0.50) / hw)
+    return BandRisk(
+        size_mult=max(0.0, 1.0 - cfg.coinflip_size_cut * w),
+        extra_offset=cfg.price_risk_widen * (w + price),
+    )
+
+
 def book_health(book: dict, cfg) -> BookHealth:
     """Is this one token's book worth resting a bid into?
 
@@ -214,13 +266,12 @@ def hard_block(cfg, inv, side: str, price: float,
                own_book: dict, hedge_book: dict) -> Optional[str]:
     """Why a NEW bid on `side` must not rest, or None if it may.
 
-    One function rather than three inline branches, because the caller has to
+    One function rather than five inline branches, because the caller has to
     report a single reason and the operator reading it has to be able to tell
-    which limit bound. `price` is the provisional resting price; the arms here
-    do not read it yet -- U4's band and pair-cost checks are what need it, and
-    passing it now keeps their arrival from changing every call site.
+    which limit bound. `price` is the provisional resting price, read by the
+    last two arms.
 
-    Three arms, cheapest and most certain first, so the reason names the
+    Five arms, cheapest and most certain first, so the reason names the
     rejection that is hardest to argue with:
 
       * HEDGE SIDE (KTD2). A bid is safe only if the position it might create
@@ -230,8 +281,25 @@ def hard_block(cfg, inv, side: str, price: float,
         healthy leg would have left a position no price could unwind.
       * OWN SIDE. The book we would rest into, on the same three arms.
       * DOLLAR CAP. Naked cost on this side at or past `max_naked_usd`.
+      * PRICE BAND (R7). Outside `price_band_low..price_band_high` the spread
+        has collapsed toward one tick on an outcome the market already
+        considers settled, so there is nothing to capture -- while a wrong
+        resolution still costs the full $1.00. Reported AFTER the dollar cap
+        on purpose: when both bind, what is already at stake is the more
+        useful reading than what a new fill would be worth.
+      * PAIR COST (R7). `price + inv.avg(other) >= max_pair_cost`. The pair
+        pays exactly $1.00, so a pair assembled above that is a booked loss,
+        not a risk.
 
-    R4 rides above all three: an order that REDUCES exposure is never blocked.
+    The last two are not new rules. Both have existed in `strategy/quotes.py`
+    since the beginning and neither has ever executed: they sit in the legacy
+    branch of `decide_quotes`, below the line where `_decide_quotes_rewards`
+    returns, so on the objective the fleet actually runs they were unreachable.
+    The telemetry reads exactly as absent rules would -- fills averaged 0.8152
+    against a nominal 0.30-0.70 band, and wta-kalinsk-kessler bought 14 pairs
+    at $1.0200 each against a $0.995 cap.
+
+    R4 rides above all five: an order that REDUCES exposure is never blocked.
     The light side is the only resting order that flattens a position, so
     refusing it would freeze the market at maximum exposure with no route back
     down -- the failure mode the share cap actually produced, where it stopped
@@ -261,5 +329,23 @@ def hard_block(cfg, inv, side: str, price: float,
         if naked >= cfg.max_naked_usd:
             return (f"${naked:.2f} naked >= ${cfg.max_naked_usd:.0f} "
                     f"budget -- not adding")
+
+    # THE PRICE BAND. Inclusive at both ends, mirroring `_in_band` -- a rule
+    # that refused its own stated endpoints would quietly be narrower than the
+    # config says. Switchable for the same reason it always was: a gate that
+    # cannot be turned off cannot be attributed a result.
+    if cfg.enforce_price_band and not (
+            cfg.price_band_low <= price <= cfg.price_band_high):
+        return (f"{price:.3f} outside band {cfg.price_band_low:.2f}-"
+                f"{cfg.price_band_high:.2f}")
+
+    # THE PAIR-COST CAP. `other_avg > 0` guards it, exactly as the legacy
+    # branch does: a zero average means we hold none of that token, not that
+    # the hedge is free, and without the guard every opening bid would read as
+    # a sub-$1.00 pair. `>=` not `>`, same as every other cap here.
+    other_avg = inv.avg(other)
+    if other_avg > 0 and (price + other_avg) >= cfg.max_pair_cost:
+        return (f"pair {price:.3f}+{other_avg:.3f}=${price + other_avg:.4f} "
+                f">= ${cfg.max_pair_cost:.3f} cap -- pays exactly $1.00")
 
     return None

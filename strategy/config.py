@@ -454,8 +454,59 @@ class MakerConfig:
     # Both rules are switchable so their effect can be measured one at a time
     # rather than bundled -- a previous run changed two things at once and the
     # result could not be read.
+    #
+    # `enforce_price_band` reads on BOTH objectives as of U4. It used to be a
+    # rule of the "pair" objective alone -- not by design, but because
+    # `_in_band` sits below the line where `_decide_quotes_rewards` returns, so
+    # on the objective the fleet actually runs it never executed. Measured
+    # 2026-08-05: fills averaged 0.8152 against this nominal 0.30-0.70 band.
     enforce_price_band: bool = True
     enforce_quote_window: bool = True
+
+    # PRICE-DEPENDENT RISK (U4, R6). Every cap above is priced in dollars and
+    # none of them notices WHERE in the 0..1 range a fill lands. On a binary
+    # market two different risks move in opposite directions across that range,
+    # so they get two different treatments rather than one blended knob:
+    #
+    #   * VARIANCE peaks at the coin flip. The payout is Bernoulli, so variance
+    #     per share is p(1-p): 0.2500 at 0.50 against 0.2100 at either band edge
+    #     and 0 at the ends. A 0.50 fill is the one least informative about the
+    #     outcome, and it is answered with SIZE -- quote less where the coin is
+    #     fairest.
+    #   * MAGNITUDE rises with the price. The downside of one long share IS the
+    #     price paid for it, so the same share count is $30 of risk at 0.30 and
+    #     $70 at 0.70 -- the same unit error that made the old share cap
+    #     loosest exactly where a wrong resolution cost most. It is answered
+    #     with OFFSET -- demand a better price where a share costs more.
+    #
+    # `risk.band_risk_factor` computes both from one weight,
+    #   w(p) = max(0, 1 - |p - 0.50| / coinflip_halfwidth)
+    #   size   *= 1 - coinflip_size_cut * w(p)
+    #   offset += price_risk_widen * (w(p) + p)
+    #
+    # 0.20 is half the width of the 0.30-0.70 band above, so the variance
+    # treatment reaches zero exactly where the band stops permitting quotes at
+    # all. The two rules then describe one geometry: inside the band the
+    # response is graduated, at the edge it is nil, past the edge the band
+    # refuses outright. Any other halfwidth would leave a seam -- either
+    # in-band prices treated as risk-free, or a cut still ramping at a price
+    # that is already forbidden.
+    coinflip_halfwidth: float = 0.20
+    # A 10% trim at the coin flip, not a withdrawal. The reward score is LINEAR
+    # in resting size, so a cut of x% forfeits x% of the rent; variance at 0.50
+    # is only 19% above the band edge (0.2500 vs 0.2100). Paying much more than
+    # half that differential in rent to avoid it would be buying the smaller
+    # risk with the larger certainty. It also stays clear of the 50-share
+    # reward minimum: at a 120-share base the heavy side keeps resting up to
+    # ~26% of the naked budget rather than dropping out early.
+    coinflip_size_cut: float = 0.10
+    # 1c of extra offset at full weight, in price units. Reads as 0.3c at 0.30
+    # and 0.7c at 0.70 on the magnitude term -- a 0.4c differential across the
+    # band, comparable to the 0.5c `min_reward_offset` and therefore large
+    # enough to change which side fills first -- plus up to another 1c at the
+    # coin flip. Worst case 1.5c against a 4.5c window: it tilts the quote
+    # without evicting it from the reward window on its own.
+    price_risk_widen: float = 0.010
 
     # --- inventory --------------------------------------------------------
     # He finishes markets ~92% balanced between UP and DOWN (median 0.923).

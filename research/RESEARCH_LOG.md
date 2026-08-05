@@ -563,3 +563,19 @@ recoverable from the archive branch by checkout.
 **Result worth flagging.** With the default 120-share base and the 50-share venue floor, the quadratic ladder reaches the floor at roughly 35% utilization — about $42 of the $120 budget — so the heavy side stops resting well before the budget rather than at it. That is a consequence of the venue minimum, not of the decay curve: 120 * (1 - u)^2 = 50 at u = 0.355. The effective heavy-side stop is therefore materially tighter than the nominal cap, and U7's replay is the instrument that decides whether that is cutting toxic flow or profitable flow.
 
 **Verdict.** LIVE, with the 35% observation OPEN pending replay.
+
+---
+
+### Session 22 — 2026-08-05: the two dead rules, and price-dependent risk (U4)
+
+**Question.** The price band and the pair-cost cap are present in the codebase and documented. Do they run on the objective the fleet actually uses, and should offset and size respond to the price of the fill?
+
+**Method.** Both rules lived in the legacy branch of `decide_quotes`, below the line where `_decide_quotes_rewards` returns, so neither ever executed on the live path. Extended `risk.hard_block` with a band arm and a pair-cost arm, using the existing `enforce_price_band`, `price_band_low`, `price_band_high`, and `max_pair_cost` fields — unchanged values, newly reachable. Gate order is hedge health, own health, dollar cap, band, pair cost. Added `band_risk_factor(cfg, price)` returning a size multiplier and an extra offset: the multiplier falls toward `1 - coinflip_size_cut` at 0.50 and tapers to 1.0 at `coinflip_halfwidth` away; the extra offset sums a coin-flip term and a `price_risk_widen * price` term. Per KTD3 the extra offset is applied before the reward-window clamp, and whatever the clamp truncates is converted into a proportional size reduction rather than discarded. New config: `coinflip_halfwidth: 0.20`, `coinflip_size_cut: 0.10`, `price_risk_widen: 0.010`. The `_decide_quotes_rewards` docstring was rewritten — it claimed the band and pair cost were deliberately bypassed, and that claim no longer holds. 23 new tests; full suite 408 passed, up from 385.
+
+**Result.** A 0.95/0.96 market under the default `rewards` objective now returns no intent, with the reason naming the band; it quoted before. Turning `enforce_price_band` off lets the same market through, which isolates the band as the cause. A bid at 0.52 against a held DOWN average of 0.49 is refused at $1.01 against the $0.995 cap — the shape recorded on `wta-kalinsk-kessler`, which bought 14 pairs at $1.0200 on an instrument that pays exactly $1.00 — while the same bid at a 0.40 average is allowed. Under `WIDENED`, where base offset plus risk terms exceeds the 4.5c window, the resting offset equals the window and the resting size is below what the ladder alone would give, so the risk response survives the clamp instead of vanishing into it.
+
+**Two findings from the work itself.**
+- A production bug, unreachable until now: an offset clamped exactly to `max_spread_from_mid` was then dropped for exceeding it, because `0.525 - 0.48` evaluates to `0.04500000000000004`. Harmless while the clamp never bound; routine once the risk terms push against it. Guarded with a representation-error epsilon.
+- `test_skew_is_symmetric_and_flat_when_balanced` held 120/120 at a 0.50 average each. Under the new pair-cost arm that fixture is illegal — a 0.505 bid against a 0.50 average is a $1.005 pair. The test fixture was itself an instance of the loss the cap now prevents.
+
+**Verdict.** LIVE. Two rules that read as absent in the telemetry now execute on the path the fleet runs.

@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from strategy import risk                             # noqa: E402
+from strategy import gate, risk                       # noqa: E402
 from strategy.config import load as load_cfg          # noqa: E402
 from strategy.quotes import Inventory, decide_quotes  # noqa: E402
 
@@ -114,12 +114,31 @@ def _rcfg(**kw):
     return dataclasses.replace(BASE, **kw)
 
 
+def _band_extra(cfg, q, base=None):
+    """The U4 widening this quote should be carrying, from its own price.
+
+    The band factor reads the PROVISIONAL price (mid - base), because the
+    widening it returns is one of the terms that produces the final price and
+    reading that back would be circular.
+    """
+    base = cfg.reward_offset if base is None else base
+    return risk.band_risk_factor(cfg, round(q.mid - base, 4)).extra_offset
+
+
 def test_rewards_quotes_both_sides_under_mid():
-    intents, why = _quote(_rcfg(reward_offset=0.02))
+    cfg = _rcfg(reward_offset=0.02)
+    intents, why = _quote(cfg)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
     for q in intents:
         assert q.price < q.mid, "a reward quote must rest UNDER mid, never above"
-        assert abs((q.mid - q.price) - 0.02) < 1e-6
+        # `reward_offset` is no longer the whole offset: U4 adds a widening
+        # that is a function of where the quote sits, so this book rests 3.5c
+        # under mid on UP (at 0.505) and 3.2c on DOWN (at 0.445). Asserting a
+        # flat 2.0c on both would now be asserting that R6 does not work. The
+        # venue's 0.001 tick is the only slack allowed.
+        s = q.mid - q.price
+        assert s > 0.02, "the risk terms only ever widen"
+        assert abs(s - (0.02 + _band_extra(cfg, q))) <= cfg.price_tick
 
 
 def test_rewards_pair_is_under_one_dollar_by_construction():
@@ -132,10 +151,12 @@ def test_rewards_pair_is_under_one_dollar_by_construction():
     pair = sum(q.price for q in intents)
     mids = sum(q.mid for q in intents)
     assert pair < 1.0
-    # Exactly 2*offset under the sum of the mids, whatever that sum happens to
-    # be. On a real book the two mids sum to ~1.00 so the pair lands near 0.96;
-    # asserting against `mids` states the mechanism rather than the fixture.
-    assert abs(pair - (mids - 2 * 0.02)) < 1e-6
+    # At LEAST 2*offset under the sum of the mids, whatever that sum happens to
+    # be. Asserting against `mids` states the mechanism rather than the fixture:
+    # on a real book the two mids sum to ~1.00, so the pair lands near 0.96.
+    # It is now strictly cheaper than that -- U4's price-risk widening only
+    # ever moves a bid further under mid, so it can only make the pair cheaper.
+    assert pair < mids - 2 * 0.02
 
 
 def test_rewards_does_not_sit_out_a_wide_or_late_market():
@@ -183,15 +204,35 @@ def test_rewards_skews_to_flatten_instead_of_dropping_a_side():
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
     off = {q.side: q.mid - q.price for q in intents}
     assert off["UP"] > off["DOWN"], "heavy side must sit FURTHER from mid"
-    # The light side is pulled toward mid, so it is the one that fills next.
-    assert off["DOWN"] < 0.02
+    # The light side is pulled TOWARD mid, so it is the one that fills next.
+    # Measured against the same book held flat rather than against a bare
+    # constant: every quote now also carries U4's price-risk widening, and a
+    # fixed threshold would be reading that term rather than the skew.
+    flat, _ = _quote(_rcfg(), inv=Inventory())
+    flat_down = [q.mid - q.price for q in flat if q.side == "DOWN"][0]
+    assert off["DOWN"] < flat_down
 
 
 def test_skew_is_symmetric_and_flat_when_balanced():
-    inv = Inventory(up_shares=120.0, down_shares=120.0, up_cost=60.0, down_cost=60.0)
-    intents, _ = _quote(_rcfg(), inv=inv)
-    off = {q.side: round(q.mid - q.price, 4) for q in intents}
-    assert off["UP"] == off["DOWN"], "a flat book must not be skewed"
+    """Balanced inventory bought at 0.375 a side, not 0.50.
+
+    A 0.50/0.50 book was the old fixture and it is no longer a legal position
+    to add to: the UP bid would land at 0.505 against a 0.50 DOWN average, a
+    $1.005 pair on a $1.00 payout, which U4's pair cap now refuses outright.
+    The fixture was quietly describing the loss the cap exists to prevent.
+    """
+    inv = Inventory(up_shares=120.0, down_shares=120.0, up_cost=45.0,
+                    down_cost=45.0)
+    cfg = _rcfg()
+    assert risk.skew_offset(cfg, inv, "UP") == 0.0, "balanced: no spring"
+    assert risk.skew_offset(cfg, inv, "DOWN") == 0.0
+    intents, why = _quote(cfg, inv=inv)
+    assert {q.side for q in intents} == {"UP", "DOWN"}, why
+    off = {q.side: q.mid - q.price for q in intents}
+    # What asymmetry is left is NOT skew -- it is R6. UP rests at 0.505 and
+    # DOWN at 0.445, so a UP share carries 6c more downside than a DOWN share
+    # and is quoted further out for it.
+    assert off["UP"] > off["DOWN"]
 
 
 def test_never_outbids_the_book_by_more_than_a_tick():
@@ -212,11 +253,19 @@ def test_never_outbids_the_book_by_more_than_a_tick():
 
 
 def test_tight_book_still_quotes_at_the_intended_offset():
-    """The cap must not bite on a normal, tight book."""
+    """The best-bid cap must not bite on a normal, tight book.
+
+    'Intended' is `reward_offset` plus U4's price-risk widening and nothing
+    else: no skew (flat), no clamp (inside the window), no best-bid cap. If the
+    cap were biting, the offset would be some function of the book's 0.52/0.46
+    bids instead, which is what this pins.
+    """
     cfg = _rcfg()
-    intents, _ = _quote(cfg, up=(0.52, 0.53), dn=(0.46, 0.47))
+    intents, why = _quote(cfg, up=(0.52, 0.53), dn=(0.46, 0.47))
+    assert {q.side for q in intents} == {"UP", "DOWN"}, why
     for q in intents:
-        assert abs((q.mid - q.price) - cfg.reward_offset) < 1e-6
+        want = cfg.reward_offset + _band_extra(cfg, q)
+        assert abs((q.mid - q.price) - want) <= cfg.price_tick
 
 
 # --- U2: the hard cap, in dollars -------------------------------------------
@@ -236,43 +285,59 @@ def test_the_dollar_cap_stops_the_heavy_side_where_the_share_cap_did_not():
     the add -- the same blindness that let lol-maz-mg1 build to $190.26 with
     three limits armed and none binding.
     """
+    cfg = _rcfg(max_naked_usd=120.0)
     inv = Inventory(up_shares=150.0, down_shares=0.0,
                     up_cost=123.0, down_cost=0.0)
-    intents, why = _quote(_rcfg(max_naked_usd=120.0),
-                          up=(0.82, 0.83), dn=(0.17, 0.18), inv=inv)
+    intents, why = _quote(cfg, up=(0.82, 0.83), dn=(0.17, 0.18), inv=inv)
     sides = {q.side for q in intents}
     assert "UP" not in sides, f"heavy side must stop adding exposure: {why}"
+    # The DOLLAR cap must be what refuses it. This book is also outside the
+    # 0.30-0.70 band, which U4 now enforces on this path too, so emptiness
+    # alone would no longer identify the rule -- and the gate order puts the
+    # dollar cap first precisely so the operator reads what is already at stake
+    # rather than what a new fill would be worth.
+    why_up = risk.hard_block(cfg, inv, "UP", 0.805,
+                             _book("UPTOK", 0.82, 0.83),
+                             _book("DNTOK", 0.17, 0.18))
+    assert "budget" in why_up and "band" not in why_up, why_up
     # The light side must keep quoting -- it is the only thing that flattens.
     assert "DOWN" in sides, f"light side must keep flattening: {why}"
     # And at FULL size: the side that reduces exposure must not be tapered.
+    # 0.155 is far outside U4's coin-flip zone, so nothing trims it either.
     assert [q.size for q in intents if q.side == "DOWN"] == [120]
 
 
 def test_one_dollar_under_the_budget_it_is_the_ladder_that_stops_the_add():
-    """$119 against a $120 budget, same book and same share count as above.
+    """$119 against a $120 budget, on a book INSIDE the 0.30-0.70 band.
 
     Before U3 this rested a full 120 shares -- which is the cliff R5 removes:
     the largest order of the market's life arriving with $1 of headroom left.
     The heavy side is still refused, and the two dollar rules are told apart
     directly rather than through the log, because `_decide_quotes_rewards`
     returns an empty reason whenever ANY side quotes and DOWN quotes here.
+
+    The book moved from 0.82/0.83 to 0.60/0.61 and the position from 150
+    shares to 200 to hold the SAME $119 of naked cost. It had to: `hard_block`
+    now enforces the band, so at 0.82 the assertion below would have passed for
+    the band's reason rather than showing the dollar arm standing down. The
+    claim being made is about the ladder, so the fixture has to reach it.
     """
     cfg = _rcfg(max_naked_usd=120.0)
-    inv = Inventory(up_shares=150.0, down_shares=0.0,
+    inv = Inventory(up_shares=200.0, down_shares=0.0,
                     up_cost=119.0, down_cost=0.0)
-    intents, why = _quote(cfg, up=(0.82, 0.83), dn=(0.17, 0.18), inv=inv)
+    intents, why = _quote(cfg, up=(0.60, 0.61), dn=(0.39, 0.40), inv=inv)
     assert "UP" not in {q.side for q in intents}, why
     assert "DOWN" in {q.side for q in intents}, why
 
-    up_book = {"token_id": "UPTOK", "best_bid": 0.82, "best_ask": 0.83,
-               "bids": {0.82: 500.0}, "asks": {0.83: 500.0}}
-    dn_book = {"token_id": "DNTOK", "best_bid": 0.17, "best_ask": 0.18,
-               "bids": {0.17: 500.0}, "asks": {0.18: 500.0}}
+    up_book = {"token_id": "UPTOK", "best_bid": 0.60, "best_ask": 0.61,
+               "bids": {0.60: 500.0}, "asks": {0.61: 500.0}}
+    dn_book = {"token_id": "DNTOK", "best_bid": 0.39, "best_ask": 0.40,
+               "bids": {0.39: 500.0}, "asks": {0.40: 500.0}}
     # The BLOCK passes at $119 -- it is a `>=` against the budget and this is a
     # dollar under it. The LADDER is what refuses: 120*(1/120)^2 = 0.008
     # shares, floored to zero because anything under 50 scores nothing.
-    assert risk.hard_block(cfg, inv, "UP", 0.795, up_book, dn_book) is None
-    assert risk.size_for(cfg, inv, "UP", 0.795) == 0
+    assert risk.hard_block(cfg, inv, "UP", 0.585, up_book, dn_book) is None
+    assert risk.size_for(cfg, inv, "UP", 0.585) == 0
 
 
 def test_the_light_side_is_never_blocked_by_the_dollar_cap():
@@ -325,15 +390,24 @@ def test_turning_the_hard_blocks_off_stands_the_cap_down():
 
 
 def test_unsetting_the_budget_quotes_both_sides_at_twice_the_old_limit():
-    """The same $240 position with `max_naked_usd=0`: the whole dollar system
+    """The same $240 position with `max_naked_usd=0`: the whole DOLLAR system
     unset, the way every other cap here is unset. Block, ladder and skew all
-    stand down together, and both sides rest at full size."""
+    stand down together, and both sides rest.
+
+    Sizes are 113 and 115 rather than a flat 120 because U4's price-risk cut is
+    a separate rule with its own switch, keyed to WHERE the quote sits (0.585
+    and 0.375) and not to what is at risk. That is the point of the assertion
+    below: the utilization taper is gone -- a $240 position on a $0 budget rests
+    the same size a flat one would -- while the price cut is untouched.
+    """
+    cfg = _rcfg(max_naked_usd=0.0)
     inv = Inventory(up_shares=400.0, down_shares=0.0,
                     up_cost=240.0, down_cost=0.0)
-    intents, why = _quote(_rcfg(max_naked_usd=0.0),
-                          up=(0.60, 0.61), dn=(0.39, 0.40), inv=inv)
+    intents, why = _quote(cfg, up=(0.60, 0.61), dn=(0.39, 0.40), inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
-    assert {q.size for q in intents} == {120}
+    flat, _ = _quote(cfg, up=(0.60, 0.61), dn=(0.39, 0.40), inv=Inventory())
+    assert ({q.side: q.size for q in intents}
+            == {q.side: q.size for q in flat} == {"UP": 113, "DOWN": 115})
 
 
 def test_fleet_cap_stops_the_heavy_side_even_when_this_market_is_fine():
@@ -358,14 +432,20 @@ def test_fleet_cap_stops_the_heavy_side_even_when_this_market_is_fine():
 def test_fleet_under_budget_quotes_both_sides_normally():
     """Same position, same books; only the fleet total moved. Isolates the
     fleet cap as what bound above -- and the heavy side comes back TAPERED, at
-    67 of 120 shares, because $30 of $120 is a quarter of the budget."""
+    60 shares against the light side's 111, because $30 of $120 is a quarter of
+    the budget. The ladder alone reads 67 (120*(1-0.25)^2); U4's coin-flip cut
+    then takes both sides down together (x0.9025 at 0.505, x0.9275 at 0.445),
+    which is why the two numbers are not 67 and 120."""
     inv = Inventory(up_shares=100.0, down_shares=0.0,
                     up_cost=30.0, down_cost=0.0)
     cfg = _rcfg(fleet_naked_usd=100.0, max_fleet_naked_usd=800.0)
     intents, why = _quote(cfg, inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
-    assert [q.size for q in intents if q.side == "UP"] == [67]
-    assert [q.size for q in intents if q.side == "DOWN"] == [120]
+    assert [q.size for q in intents if q.side == "UP"] == [60]
+    assert [q.size for q in intents if q.side == "DOWN"] == [111]
+    # The taper is still what separates them: the heavy side is the only one
+    # utilization touches, and it rests well under the light side.
+    assert risk.size_for(cfg, inv, "UP", 0.486) == 67
 
 
 def test_skew_never_leaves_the_reward_window_or_crosses():
@@ -389,16 +469,21 @@ def test_skew_never_leaves_the_reward_window_or_crosses():
         assert cfg.min_reward_offset - 1e-9 <= s <= cfg.max_spread_from_mid + 1e-9
         assert q.price < q.mid
 
-    # 400x the budget: utilization clamps at 1.0, so the light side lands
-    # exactly on min_reward_offset (0.020 - 0.015) rather than walking onto the
-    # touch, and the heavy side is gone on size rather than on skew.
+    # 400x the budget: utilization clamps at 1.0, so the skew bottoms out
+    # rather than walking the light side onto the touch, and the heavy side is
+    # gone on size rather than on skew.
     huge = Inventory(up_shares=100000.0, down_shares=0.0,
                      up_cost=50000.0, down_cost=0.0)
     base = _rcfg()
     intents, why = _quote(base, inv=huge)
     assert [q.side for q in intents] == ["DOWN"], why
     only = intents[0]
-    assert abs((only.mid - only.price) - base.min_reward_offset) < 1e-9
+    # 1.7c: skew alone would put this at min_reward_offset (0.020 - 0.015 =
+    # 0.005), and U4's 1.17c price-risk term at 0.445 is added on top before
+    # the venue's 0.001 tick rounds it. The property that matters is unchanged
+    # -- the spring bottoms out INSIDE the window and never reaches the touch.
+    assert abs((only.mid - only.price) - 0.017) < 1e-9
+    assert base.min_reward_offset <= (only.mid - only.price)
     assert only.price < only.mid
 
 
@@ -602,8 +687,12 @@ def test_size_walks_down_to_nothing_instead_of_stepping_off_a_cliff():
 
     400 shares of base, a $120 budget, and a market walked from flat to the cap
     in $24 steps. The old rule produced 400, 400, 400, 400, 400, none. The
-    ladder lands softly -- the last order placed is 64 shares, 16% of full size,
+    ladder lands softly -- the last order placed is 57 shares, 14% of full size,
     and the sequence never steps from full size to zero.
+
+    Every rung is x0.9025 of the ladder's own reading, U4's coin-flip cut at
+    0.505, which is a constant here and therefore changes the levels without
+    changing the shape this test is about.
     """
     cfg = _rw(quote_shares=400, min_quote_shares=50, max_naked_usd=120.0)
     seq = []
@@ -612,7 +701,7 @@ def test_size_walks_down_to_nothing_instead_of_stepping_off_a_cliff():
         up = [q.size for q in intents if q.side == "UP"]
         seq.append(up[0] if up else None)
 
-    assert seq == [400, 191, 144, 64, None, None]
+    assert seq == [361, 177, 129, 57, None, None]
     live = [s for s in seq if s is not None]
     assert live == sorted(live, reverse=True) and len(set(live)) == len(live)
     assert live[-1] < 400 * 0.25, "the last order before the cap must be small"
@@ -620,12 +709,25 @@ def test_size_walks_down_to_nothing_instead_of_stepping_off_a_cliff():
 
 def test_the_light_side_keeps_full_size_all_the_way_up_the_ladder():
     """R4 in the sizing layer: the taper must never slow the exit. Same walk as
-    above, reading the side that REDUCES exposure."""
+    above, reading the side that REDUCES exposure.
+
+    'Full size' is now 371 rather than the 400-share base: U4's price-risk cut
+    reads the PRICE and applies to both legs of a binary market symmetrically,
+    unlike the exposure taper, which is one-sided because only one side reduces
+    exposure. What R4 demands is that utilization never touches this number,
+    and it does not -- it is the same 371 at $24 of risk and at $120.
+    """
     cfg = _rw(quote_shares=400, min_quote_shares=50, max_naked_usd=120.0)
+    sizes = []
     for usd in (24.0, 48.0, 72.0, 96.0, 120.0):
         intents, why = _rw_quote(cfg, inv=_heavy_up(usd))
         down = [q.size for q in intents if q.side == "DOWN"]
-        assert down == [400], f"light side tapered at ${usd:.0f}: {why}"
+        assert down, f"light side dropped at ${usd:.0f}: {why}"
+        sizes.append(down[0])
+    assert sizes == [371] * 5, sizes
+    # And it IS the untapered base, only price-cut: `size_for` never taper the
+    # light side, so the whole difference from 400 is the coin-flip factor.
+    assert sizes[0] == int(400 * risk.band_risk_factor(cfg, 0.445).size_mult)
 
 
 def test_the_taper_names_itself_when_it_zeroes_a_side():
@@ -660,29 +762,154 @@ def test_well_inside_the_budget_the_heavy_side_still_rests_at_a_reduced_size():
     """Isolates the ladder against 'the heavy side just stopped quoting'.
 
     $36 of $120 is 30% utilization: 120*(1-0.3)^2 = 58.8 shares, which clears
-    the 50-share reward minimum. The side keeps scoring, at half its size.
+    the 50-share reward minimum. U4's coin-flip cut then takes it to 52. The
+    side keeps scoring, at under half its size.
     """
     intents, why = _rw_quote(_rw(max_naked_usd=120.0), inv=_heavy_up(36.0))
     up = [q.size for q in intents if q.side == "UP"]
-    assert up == [58], why
+    assert up == [52], why
     assert up[0] < 120, "size must respond to utilization at all"
 
 
 def test_a_zero_budget_leaves_every_size_full():
-    """0 unsets the dollar machinery wholesale, the same escape hatch every
-    other cap here has -- not 'taper everything to nothing'."""
+    """0 unsets the DOLLAR machinery wholesale, the same escape hatch every
+    other cap here has -- not 'taper everything to nothing'.
+
+    Read against the same books held flat rather than against the 120-share
+    base: U4's price-risk cut is a different rule with a different switch, and
+    it still applies. What must be identical is a $240 position and a flat one,
+    which is exactly what 'the budget is unset' means.
+    """
+    cfg = _rw(max_naked_usd=0.0)
     inv = Inventory(up_shares=400.0, down_shares=0.0, up_cost=240.0)
-    intents, why = _rw_quote(_rw(max_naked_usd=0.0), inv=inv)
+    intents, why = _rw_quote(cfg, inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
-    assert {q.size for q in intents} == {120}
+    flat, _ = _rw_quote(cfg, inv=Inventory())
+    assert ({q.side: q.size for q in intents}
+            == {q.side: q.size for q in flat} == {"UP": 108, "DOWN": 111})
+
+
+# --- U4: the band, the pair cap and price risk on the live path -------------
+#
+# `_in_band` and the max_pair_cost comparison have existed since the beginning
+# and neither has ever run on the objective the fleet quotes: both sit in the
+# legacy branch of `decide_quotes`, BELOW the line where the rewards path
+# returns. The telemetry reads exactly as absent rules would -- fills averaged
+# 0.8152 against a nominal 0.30-0.70 band, and wta-kalinsk-kessler bought 14
+# pairs at $1.0200 against a $0.995 cap on an instrument paying exactly $1.00.
+
+
+def test_the_band_applies_to_the_rewards_objective():
+    """U4's Done signal. A 0.95/0.96 market quotes TODAY under the default
+    objective; nothing about the book stops it, because the band never ran.
+
+    The reason must name the band specifically. Book health does not catch this
+    shape -- 0.95 and 0.96 are both further than `decided_price` (0.02) from
+    either end, the spread is a cent, and there is 500sh of depth -- so an
+    assertion on emptiness alone would pass for the wrong reason.
+    """
+    intents, why = _quote(_rcfg(), up=(0.95, 0.96), dn=(0.03, 0.04))
+    assert intents == []
+    assert "outside band" in why, why
+    assert "settled" not in why and "wide" not in why, why
+
+
+def test_turning_the_band_off_lets_the_rewards_objective_quote_it():
+    """Isolates the band as the cause -- nothing else about the input moved."""
+    cfg = _rcfg(enforce_price_band=False)
+    intents, why = _quote(cfg, up=(0.95, 0.96), dn=(0.03, 0.04))
+    assert {q.side for q in intents} == {"UP", "DOWN"}, why
+
+
+def test_the_pair_cap_applies_to_the_rewards_objective():
+    """A 0.52-ish UP bid against a 0.49 DOWN average is a $1.01 pair on a $1.00
+    payout -- the shape wta-kalinsk-kessler repeated 14 times at $1.0200.
+
+    Balanced inventory on purpose: R4 exempts the side that REDUCES exposure,
+    and with 100 shares of each neither side reduces anything, so both are
+    additions and the cap is reachable.
+
+    DOWN keeps quoting, and must: its 0.433 bid against the 0.52 UP average is
+    a $0.953 pair, which is the trade this strategy exists to make. The cap is
+    per-order and per-side, not a switch that shuts the market down. That also
+    means `why` is empty here -- `_decide_quotes_rewards` reports no reason
+    while any side quotes -- so the arm is read from `hard_block` directly.
+    """
+    cfg = _rcfg(max_pair_cost=0.995)
+    inv = Inventory(up_shares=100.0, down_shares=100.0,
+                    up_cost=52.0, down_cost=49.0)
+    intents, why = _quote(cfg, inv=inv)
+    assert "UP" not in {q.side for q in intents}, why
+    assert "DOWN" in {q.side for q in intents}, why
+    why_up = risk.hard_block(cfg, inv, "UP", 0.505,
+                             _book("UPTOK", 0.52, 0.53),
+                             _book("DNTOK", 0.46, 0.47))
+    assert why_up is not None and "pair" in why_up, why_up
+
+
+def test_the_same_market_against_a_cheaper_hedge_still_quotes_both_sides():
+    """Isolates the pair cap: the same books, the same share counts, a 0.40
+    DOWN average instead of 0.49 -- a $0.92 pair, which is the trade this
+    strategy exists to make."""
+    inv = Inventory(up_shares=100.0, down_shares=100.0,
+                    up_cost=52.0, down_cost=40.0)
+    intents, why = _quote(_rcfg(max_pair_cost=0.995), inv=inv)
+    assert {q.side for q in intents} == {"UP", "DOWN"}, why
+
+
+def test_a_clamped_offset_becomes_a_smaller_order_instead_of_nothing():
+    """KTD3. Under WIDENED the base offset is already 0.035, so 0.035 plus the
+    price-risk terms asks for more than the 4.5c reward window allows. The
+    window wins -- outside it an order scores nothing -- but the truncated
+    remainder must not simply evaporate, or risk aversion would have nowhere to
+    go in exactly the state entered BECAUSE fills were losing money. It is
+    converted into a proportional size reduction instead.
+    """
+    cfg = _rcfg(gate_state=gate.WIDENED)
+    intents, why = _quote(cfg, inv=Inventory())
+    up = [q for q in intents if q.side == "UP"]
+    assert up, why
+    q = up[0]
+    # The offset lands exactly ON the window: the clamp bound.
+    assert abs((q.mid - q.price) - cfg.max_spread_from_mid) < 1e-9
+    # And the size is below what the ladder alone would rest at this price.
+    assert q.size < risk.size_for(cfg, Inventory(), "UP", q.price)
+
+
+def test_an_unclamped_offset_leaves_the_size_to_the_ladder_alone():
+    """Isolates the truncation term. NORMAL keeps base+risk inside the window,
+    so only the price-risk size cut applies and the KTD3 remainder is zero."""
+    cfg = _rcfg()
+    intents, why = _quote(cfg, inv=Inventory())
+    up = [q for q in intents if q.side == "UP"][0]
+    assert (up.mid - up.price) < cfg.max_spread_from_mid
+    ladder = risk.size_for(cfg, Inventory(), "UP", up.price)
+    mult = risk.band_risk_factor(cfg, round(up.mid - cfg.reward_offset, 4)).size_mult
+    assert up.size == int(ladder * mult), why
+
+
+def test_the_dearer_side_of_a_flat_book_is_quoted_wider():
+    """R6 end to end, on an inventory that cannot be skewed. UP rests near
+    0.505 and DOWN near 0.445: the same share count, but $0.06 more downside
+    per share on UP, so UP is the side that must sit further from mid."""
+    intents, why = _quote(_rcfg(), inv=Inventory())
+    off = {q.side: q.mid - q.price for q in intents}
+    assert off["UP"] > off["DOWN"], why
 
 
 def test_the_skew_responds_to_dollars_not_to_share_count():
-    """THE UNIT, read end to end. The SAME 100-share imbalance in a 0.34 market
-    and a 0.06 market: $34 of downside against $6, and the expensive one is the
-    urgent one. The share-denominated spring answered both identically, which
-    is why it was still ramping on lol-maz-mg1 at 233 of 240 shares while the
-    position was already fully built.
+    """THE UNIT, read end to end. The SAME 100-share imbalance costing $34 and
+    $6, and the expensive one is the urgent one. The share-denominated spring
+    answered both identically, which is why it was still ramping on lol-maz-mg1
+    at 233 of 240 shares while the position was already fully built.
+
+    Both cases now run on the SAME 0.33/0.35 book, which makes this a stricter
+    isolation than the 0.34-market-versus-0.06-market pairing it replaces: the
+    price-risk terms of U4 are then identical on both sides of the comparison,
+    so the only thing that can move the offsets is the dollar reading. The old
+    0.06 fixture is no longer reachable in any case -- a 0.04 quote is outside
+    the 0.30-0.70 band, which `hard_block` now enforces on this path, so that
+    market is refused before the skew is ever consulted.
     """
     cfg = _rw(max_naked_usd=120.0)
     dear = Inventory(up_shares=100.0, down_shares=0.0, up_cost=34.0)
@@ -691,8 +918,8 @@ def test_the_skew_responds_to_dollars_not_to_share_count():
 
     a, why_a = decide_quotes(cfg, _book("UPTOK", 0.33, 0.35),
                              _book("DNTOK", 0.65, 0.67), dear, 1e9, None)
-    b, why_b = decide_quotes(cfg, _book("UPTOK", 0.05, 0.07),
-                             _book("DNTOK", 0.93, 0.95), cheap, 1e9, None)
+    b, why_b = decide_quotes(cfg, _book("UPTOK", 0.33, 0.35),
+                             _book("DNTOK", 0.65, 0.67), cheap, 1e9, None)
     off_a = {q.side: q.mid - q.price for q in a}
     off_b = {q.side: q.mid - q.price for q in b}
     assert "UP" in off_a and "UP" in off_b, f"{why_a} / {why_b}"
