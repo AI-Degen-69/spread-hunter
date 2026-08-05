@@ -23,8 +23,6 @@ them.
 """
 from __future__ import annotations
 
-import statistics
-
 from strategy import store
 
 
@@ -41,20 +39,70 @@ def markout_per_share(fill_price: float, mid_later: float, side: str) -> float:
     return mid_later - fill_price
 
 
+def _weight(row: dict) -> float:
+    """Shares this row speaks for.
+
+    A row with NO `size` key weighs 1.0 -- one row, one vote, which is exactly
+    the unweighted mean this function used to compute. That branch never fires
+    in production: every live row comes from `store.markout_rows()`, a
+    `SELECT *` over a table that has carried `size` since it was created. It
+    exists so a caller that supplies no sizes degrades to the old behaviour
+    instead of silently weighing all its evidence at zero and reading
+    `insufficient_sample` on a full sample.
+
+    A size that IS present but null, zero or negative is different in kind: it
+    is a defective row, not an unsized caller, and it weighs 0.0 so it can
+    neither move the mean nor pad the effective sample.
+    """
+    if "size" not in row:
+        return 1.0
+    size = row.get("size")
+    if not size or size <= 0:
+        return 0.0
+    return float(size)
+
+
 def _stats_from_rows(rows: list[dict], min_sample: int) -> dict:
-    """Aggregate one market's fills into a verdict.
+    """Aggregate one market's fills into a verdict, weighted by size.
 
     Returns `insufficient_sample` rather than a mean when the sample is thin.
     That is the load-bearing behaviour: a three-fill mean on a thin book is
     noise, and the gate consuming this would happily evict a sound market on
     it, forfeiting real rent for an imaginary reason.
+
+    WHY WEIGHTED. An unweighted mean gives a 10-share print and a 200-share
+    print the same vote. Measured on the 2026-08-04 sample: two prints carrying
+    233 shares each counted once apiece against fifty ~50-share prints, and
+    every one of the 23 live markets inherited the same pooled reading of
+    -0.052375/share on n=52. The money does not experience a mean over fills,
+    it experiences a mean over shares, so that is what the gate is handed.
+
+    WHY AN EFFECTIVE SAMPLE. Once rows are weighted the row count stops
+    describing how much evidence the mean rests on -- ten fills where one
+    carries 90% of the size is roughly one observation. `n` is therefore Kish's
+    `sum(w)^2 / sum(w^2)`, which equals the row count EXACTLY when the sizes
+    are equal, so `markout_min_sample` and the doubling rule in
+    `gate.next_state` keep the meaning they were tuned with and need no
+    re-derivation. `n_rows` carries the raw count for logging.
+
+    Contaminated rows are dropped BEFORE weighting: a live run that cannot
+    subtract our own resting size would otherwise let one large measurement of
+    our own footprint dominate the mean, which is strictly worse than the
+    unweighted version of the same bug. Zero total weight -- every row unsized
+    or defective -- is an absence of evidence, not a division by zero.
     """
     clean = [r for r in rows if r.get("ref_mid_source") != "contaminated"]
-    if len(clean) < min_sample:
-        return {"n": len(clean), "verdict": "insufficient_sample",
-                "mean_per_share": None}
-    mean = statistics.mean(r["markout"] for r in clean)
-    return {"n": len(clean), "mean_per_share": mean,
+    weights = [_weight(r) for r in clean]
+    total = sum(weights)
+    if total <= 0:
+        return {"n": 0.0, "n_rows": len(clean),
+                "verdict": "insufficient_sample", "mean_per_share": None}
+    n_eff = total * total / sum(w * w for w in weights)
+    if n_eff < min_sample:
+        return {"n": n_eff, "n_rows": len(clean),
+                "verdict": "insufficient_sample", "mean_per_share": None}
+    mean = sum(w * r["markout"] for w, r in zip(weights, clean)) / total
+    return {"n": n_eff, "n_rows": len(clean), "mean_per_share": mean,
             "verdict": "losing" if mean < 0 else "earning"}
 
 
@@ -106,7 +154,8 @@ def per_market_stats(min_sample: int) -> dict[str, dict]:
         if not matured:
             continue
         by.setdefault(r["condition_id"], []).append(
-            {"markout": matured[-1], "ref_mid_source": r.get("ref_mid_source")})
+            {"markout": matured[-1], "size": r.get("size"),
+             "ref_mid_source": r.get("ref_mid_source")})
     return {cid: _stats_from_rows(rows, min_sample) for cid, rows in by.items()}
 
 
@@ -134,7 +183,7 @@ def fleet_stats(min_sample: int) -> dict:
         matured = _matured(r)
         if not matured:
             continue
-        rows.append({"markout": matured[-1],
+        rows.append({"markout": matured[-1], "size": r.get("size"),
                      "ref_mid_source": r.get("ref_mid_source")})
     return _stats_from_rows(rows, min_sample)
 

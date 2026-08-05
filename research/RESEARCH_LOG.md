@@ -579,3 +579,15 @@ recoverable from the archive branch by checkout.
 - `test_skew_is_symmetric_and_flat_when_balanced` held 120/120 at a 0.50 average each. Under the new pair-cost arm that fixture is illegal — a 0.505 bid against a 0.50 average is a $1.005 pair. The test fixture was itself an instance of the loss the cap now prevents.
 
 **Verdict.** LIVE. Two rules that read as absent in the telemetry now execute on the path the fleet runs.
+
+---
+
+### Session 23 — 2026-08-05: size-weighted markout (U5)
+
+**Question.** Does the markout mean describe the money at stake, or only the number of prints?
+
+**Method.** `_stats_from_rows` took an unweighted mean, so on 2026-08-05 the two prints that carried 233 shares voted with the weight of two 50-share prints. Rewrote it to compute a size-weighted mean and Kish's effective sample size, `sum(w)^2 / sum(w^2)`, returned as `n` with the raw count kept as `n_rows`. Kish equals the row count exactly when sizes are equal, so `markout_min_sample` and the doubling rule in `gate.next_state` keep the meaning they were tuned with and needed no re-derivation. `n_eff` is what the `insufficient_sample` verdict compares, so a sample dominated by one large fill no longer licenses an exit. `size` is now carried through the row dicts in both `per_market_stats` and `fleet_stats`; the `markouts` table has had a `size` column since creation, so no migration was needed. A row with no `size` key weighs 1.0 — that caller does not supply sizes at all and should degrade to the old unweighted mean — while a size present but null, zero or negative weighs 0.0, because that is a defective row and must not pad the sample. All-zero weights return `insufficient_sample` rather than dividing by zero. `strategy/gate.py` was not touched. 7 new tests; full suite 415 passed, up from 408.
+
+**Result.** The sharpest reading came out of the gate test. Ten 200-share fills at -5c against ten 10-share fills at +1c has an unweighted mean of exactly -2.00c, which lands precisely ON `markout_catastrophic_threshold` and the strict `<` therefore left the market in the book. Weighted, the same rows read -4.71c — more than twice past the threshold — and the magnitude bypass takes the market NORMAL to EXITED. The AE5 case behaves the same way: one 200-share fill at -5c against nine 10-share fills at +1c reads positive unweighted and negative weighted, on an effective sample below 3. Equal-sized rows return an effective sample equal to the row count exactly, across three size scales, which is what keeps the existing thresholds honest.
+
+**Verdict.** LIVE. The mean now describes the dollars rather than the prints, and no threshold had to be retuned to make that true.
