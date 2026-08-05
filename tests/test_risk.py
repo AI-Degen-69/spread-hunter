@@ -178,3 +178,106 @@ def test_missing_depth_is_reported_unevaluated_rather_than_failed():
 def test_present_depth_is_reported_evaluated():
     res = risk.book_health(_book(0.52, 0.53, depth=500.0), _cfg())
     assert res.depth_evaluated is True
+
+
+# --- hard_block -------------------------------------------------------------
+#
+# One function, three arms, ordered so the reason names the cheapest certain
+# rejection first. Every test below pins ONE arm and leaves the others passing,
+# so a failure names the arm that broke.
+
+HEALTHY = _book(0.52, 0.53)
+HEDGE = _book(0.46, 0.47)
+
+
+def _flat():
+    return Inventory()
+
+
+def test_a_healthy_pair_under_budget_is_not_blocked():
+    assert risk.hard_block(_cfg(), _flat(), "UP", 0.50, HEALTHY, HEDGE) is None
+
+
+def test_an_untradeable_hedge_token_blocks_the_side():
+    """KTD2. A bid is safe only if the position it might create can be closed,
+    and on a binary market it is closed by buying the OTHER token. A healthy
+    own book says nothing about that."""
+    why = risk.hard_block(_cfg(), _flat(), "UP", 0.50,
+                          HEALTHY, _book(0.999, None))
+    assert why is not None
+    assert "hedge" in why and "DOWN" in why
+
+
+def test_an_unquotable_own_book_blocks_the_side():
+    why = risk.hard_block(_cfg(), _flat(), "UP", 0.50,
+                          _book(0.26, 0.42), HEDGE)
+    assert why is not None
+    assert "own book" in why and "wide" in why
+
+
+def test_the_hedge_arm_is_reported_ahead_of_the_own_arm():
+    """Both books bad. The operator must read the hedge failure, because an
+    unhedgeable market is the more certain rejection of the two."""
+    why = risk.hard_block(_cfg(), _flat(), "UP", 0.50,
+                          _book(0.26, 0.42), _book(0.999, None))
+    assert "hedge" in why
+
+
+def test_the_dollar_cap_blocks_at_the_budget_exactly():
+    """>= not >. $120.00 of naked cost against a $120 budget is the cap
+    reached, not the cap approached."""
+    inv = Inventory(up_shares=200.0, down_shares=0.0, up_cost=120.0)
+    why = risk.hard_block(_cfg(max_naked_usd=120.0), inv, "UP", 0.50,
+                          HEALTHY, HEDGE)
+    assert why is not None
+    assert "120" in why
+
+
+def test_one_cent_under_the_budget_is_not_blocked():
+    """Isolates the cap: same shape, $119.99, and nothing else moved."""
+    inv = Inventory(up_shares=200.0, down_shares=0.0, up_cost=119.99)
+    assert risk.hard_block(_cfg(max_naked_usd=120.0), inv, "UP", 0.50,
+                           HEALTHY, HEDGE) is None
+
+
+def test_the_share_count_no_longer_decides_anything():
+    """The unit is the whole point. 700 shares at 0.10 is $70 at risk and must
+    pass a $120 budget; the share cap this replaces would have read 700."""
+    inv = Inventory(up_shares=700.0, down_shares=0.0, up_cost=70.0)
+    assert risk.hard_block(_cfg(max_naked_usd=120.0), inv, "UP", 0.50,
+                           HEALTHY, HEDGE) is None
+
+
+def test_a_zero_budget_disables_the_dollar_arm():
+    """0 means unset, the same escape hatch every other cap in this config
+    has -- not 'block everything'."""
+    inv = Inventory(up_shares=300.0, down_shares=0.0, up_cost=240.0)
+    assert risk.hard_block(_cfg(max_naked_usd=0.0), inv, "UP", 0.50,
+                           HEALTHY, HEDGE) is None
+
+
+def test_the_light_side_is_exempt_even_far_over_budget():
+    """R4. The gates bound orders that ADD exposure. The light side is the only
+    resting order that REDUCES it, so blocking it would freeze the position at
+    maximum exposure with no route back down."""
+    inv = Inventory(up_shares=300.0, down_shares=0.0, up_cost=240.0)
+    assert risk.hard_block(_cfg(max_naked_usd=120.0), inv, "DOWN", 0.40,
+                           HEDGE, HEALTHY) is None
+
+
+def test_the_light_side_is_exempt_from_the_book_arms_too():
+    """Same rule, stated on the arm that is easiest to get wrong: a market
+    whose books have gone bad is exactly the market we most need to be able to
+    hedge our way out of."""
+    inv = Inventory(up_shares=300.0, down_shares=0.0, up_cost=240.0)
+    assert risk.hard_block(_cfg(), inv, "DOWN", 0.40,
+                           _book(0.26, 0.42), _book(0.999, None)) is None
+
+
+def test_the_gate_is_switchable():
+    """Same convention as enforce_price_band and enable_emergency_hedge: a new
+    gate has to be measurable on its own, or a change in results cannot be
+    attributed to it."""
+    inv = Inventory(up_shares=300.0, down_shares=0.0, up_cost=240.0)
+    assert risk.hard_block(_cfg(enable_hard_blocks=False), inv, "UP", 0.50,
+                           _book(0.26, 0.42), _book(0.999, None)) is None

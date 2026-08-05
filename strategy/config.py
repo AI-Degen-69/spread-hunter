@@ -64,31 +64,34 @@ class MakerConfig:
     max_skew: float = 0.015             # cap, in price units
     min_reward_offset: float = 0.005    # never quote nearer mid than this
 
-    # HARD CAP on directional exposure, in shares of imbalance. Skew is a
-    # spring and it bottoms out at skew_full_shares: past that, more imbalance
-    # produces no more response because `skew` is already clamped to max_skew.
-    # Measured live over ~40 minutes, unhedged positions ran to 681 shares on a
-    # single market (2.8x saturation) and fleet-wide exposure went $252 -> $1333
-    # against $47/day of rent, because the only hard stop -- max_cost_per_market
-    # at $400 -- never engaged on a $109 position. Set at 1.5x saturation: skew
-    # owns the range where it has authority, this owns the range past it.
-    max_naked_shares: float = 360.0
-
-    # HARD CAP on directional exposure, in DOLLARS of naked cost. Replaces the
-    # share cap above.
+    # THE HARD CAP on directional exposure, in DOLLARS of naked cost. This is
+    # the only unit the cap is stated in -- a share-denominated twin was
+    # removed rather than kept alongside it, because two caps in two units
+    # cannot both be the binding constraint and an operator reading "not
+    # adding" would have no way to tell which one bound.
     #
-    # On a binary market the downside of one long share is the price paid for
-    # it, so a share-denominated cap is loosest exactly where a wrong
-    # resolution costs most: 360 shares permits $72 of risk at 0.20 and $293
-    # at 0.8152. Measured 2026-08-05 on lol-maz-mg1 -- 233.40 UP shares at an
-    # average of 0.8152, $190.26 at risk, against a 360-share cap that read
-    # 233 and stayed silent while 85% of the fleet's -$223.32 unhedged float
-    # sat in that one market.
+    # Skew is a spring and it bottoms out at skew_full_shares: past that, more
+    # imbalance produces no more response because `skew` is already clamped to
+    # max_skew. Something has to own the range past the spring. The share cap
+    # that used to own it could not, and the reason is the unit, not the level:
+    # on a binary market the downside of one long share IS the price paid for
+    # it, so 360 shares permitted $72 of risk at 0.20 and $293 at 0.8152 --
+    # loosest exactly where a wrong resolution costs most.
+    #
+    # Measured 2026-08-05 on lol-maz-mg1: 233.40 UP shares at an average of
+    # 0.8152, $190.26 at risk, against a 360-share cap that read 233 and stayed
+    # silent while 85% of the fleet's -$223.32 unhedged float sat in that one
+    # market. Three limits were armed and none of them bound.
     #
     # $120 binds between 171 shares (at 0.70) and 400 shares (at 0.30) inside
     # the price band, and would have stopped lol-maz-mg1 at roughly 147 shares
     # instead of 233. 0 disables the rule, same as every other cap here.
     max_naked_usd: float = 120.0
+    # Switchable so the dollar gates can be measured on their own rather than
+    # bundled with the rest of a release -- the same convention as
+    # enforce_price_band and enable_emergency_hedge. False makes `hard_block`
+    # return None for every side, and nothing else changes.
+    enable_hard_blocks: bool = True
 
     # BOOK HEALTH. Three arms, all on ONE token's book.
     #
@@ -116,10 +119,16 @@ class MakerConfig:
     # from it while the heavy leg loses money every tick. That is precisely the
     # case where paying the taker fee is the cheap option.
     #
-    # Fraction of max_naked_shares at which the light side is allowed to CROSS
-    # the spread instead of resting. 0.8 puts the exception inside the cap, so
-    # it fires while there is still a hedge to buy rather than at the moment
-    # the cap freezes us at maximum exposure.
+    # Fraction of max_naked_usd at which the light side is allowed to CROSS the
+    # spread instead of resting. The deficit is valued at the HEAVY leg's
+    # average cost, which is what the missing hedge is worth: 400 shares short
+    # is $80 of exposure at 0.20 and $340 at 0.85, and only one of those is an
+    # emergency. Stating the trigger in the same unit as the cap is what keeps
+    # it inside the cap at every price.
+    #
+    # 0.8 puts the exception inside the cap on purpose, so it fires while there
+    # is still a hedge to buy rather than at the moment the cap freezes us at
+    # maximum exposure.
     emergency_hedge_frac: float = 0.8
     # Switchable so the exception can be measured on its own -- a taker order
     # is the one thing this strategy otherwise never does.
@@ -346,7 +355,7 @@ class MakerConfig:
 
     # FLEET-WIDE exposure ceiling, in dollars of unhedged cost.
     #
-    # max_naked_shares bounds ONE market. It works -- and it is not enough.
+    # max_naked_usd bounds ONE market. It works -- and it is not enough.
     # Measured 2026-07-29: 16 markets, every one inside its own 360-share cap,
     # summing to $1,630 of unhedged exposure. Expected value on that book was
     # +$62 with a standard deviation of +/-$456 -- the variance is seven times

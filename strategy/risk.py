@@ -125,3 +125,58 @@ def book_health(book: dict, cfg) -> BookHealth:
                           f"book too thin {depth:.0f}sh < "
                           f"{cfg.min_book_depth_sh:.0f}sh")
     return BookHealth(True, "")
+
+
+def hard_block(cfg, inv, side: str, price: float,
+               own_book: dict, hedge_book: dict) -> Optional[str]:
+    """Why a NEW bid on `side` must not rest, or None if it may.
+
+    One function rather than three inline branches, because the caller has to
+    report a single reason and the operator reading it has to be able to tell
+    which limit bound. `price` is the provisional resting price; the arms here
+    do not read it yet -- U4's band and pair-cost checks are what need it, and
+    passing it now keeps their arrival from changing every call site.
+
+    Three arms, cheapest and most certain first, so the reason names the
+    rejection that is hardest to argue with:
+
+      * HEDGE SIDE (KTD2). A bid is safe only if the position it might create
+        can be closed, and on a binary market it is closed by buying the OTHER
+        token. A pristine own book says nothing about that: wta-kalinsk-kessler
+        finished quoting 0.999 bid against a 0.001 ask, and a fill on the
+        healthy leg would have left a position no price could unwind.
+      * OWN SIDE. The book we would rest into, on the same three arms.
+      * DOLLAR CAP. Naked cost on this side at or past `max_naked_usd`.
+
+    R4 rides above all three: an order that REDUCES exposure is never blocked.
+    The light side is the only resting order that flattens a position, so
+    refusing it would freeze the market at maximum exposure with no route back
+    down -- the failure mode the share cap actually produced, where it stopped
+    the heavy side and then had no further authority. The emergency stop-loss
+    and the merge path reduce exposure too; neither reaches this function.
+    """
+    if not getattr(cfg, "enable_hard_blocks", True):
+        return None
+
+    other = OTHER[side]
+    if _shares(inv, side) < _shares(inv, other):
+        return None
+
+    hedge = book_health(hedge_book, cfg)
+    if not hedge.ok:
+        return (f"hedge token {other} not tradeable ({hedge.reason}) -- "
+                f"a fill here could not be closed")
+
+    own = book_health(own_book, cfg)
+    if not own.ok:
+        return f"own book not quotable ({own.reason})"
+
+    # 0 disables the rule, the same escape hatch every other cap in this config
+    # has. `>=` not `>`: the budget is a ceiling reached, not approached.
+    if cfg.max_naked_usd > 0:
+        naked = naked_usd(inv, side)
+        if naked >= cfg.max_naked_usd:
+            return (f"${naked:.2f} naked >= ${cfg.max_naked_usd:.0f} "
+                    f"budget -- not adding")
+
+    return None

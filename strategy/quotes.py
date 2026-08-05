@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from strategy import gate
+from strategy import gate, risk
 from strategy.config import MakerConfig
 
 
@@ -176,9 +176,13 @@ def _decide_quotes_rewards(
         # Two conditions, both required. Size alone is not an emergency: a
         # large, hedging-in-progress position in a flat market is doing no harm
         # and crossing it would pay the fee for nothing.
-        #   1. The deficit on this side is within `emergency_hedge_frac` of the
-        #      hard cap -- fired INSIDE the cap, while there is still a hedge
-        #      left to buy.
+        #   1. The deficit on this side, VALUED AT THE HEAVY LEG'S AVERAGE
+        #      COST, is within `emergency_hedge_frac` of the dollar cap --
+        #      fired INSIDE the cap, while there is still a hedge left to buy.
+        #      Dollars, not shares, for the same reason the cap itself is in
+        #      dollars: 400 shares short is $80 of exposure at 0.20 and $340 at
+        #      0.85, and a share-denominated trigger would sit inside the cap
+        #      at one of those prices and outside it at the other.
         #   2. The heavy leg's mid has fallen below what we paid for it. That
         #      is the position losing money right now, measured, rather than
         #      inferred from how big it is.
@@ -190,9 +194,15 @@ def _decide_quotes_rewards(
         # rule would be choosing the larger loss to keep the smaller number
         # tidy.
         deficit = -imbalance
+        heavy = "DOWN" if side == "UP" else "UP"
+        # What the missing hedge is worth, priced at what the leg it would
+        # cover actually cost us. A zero budget disables the rule, same escape
+        # hatch as every other cap here -- without the guard a 0 budget would
+        # put the trigger at $0 and cross on the first share of imbalance.
+        deficit_usd = deficit * inv.avg(heavy) if deficit > 0 else 0.0
         if (cfg.enable_emergency_hedge and ba is not None and ba < 1.0
-                and deficit >= cfg.max_naked_shares * cfg.emergency_hedge_frac):
-            heavy = "DOWN" if side == "UP" else "UP"
+                and cfg.max_naked_usd > 0
+                and deficit_usd >= cfg.max_naked_usd * cfg.emergency_hedge_frac):
             heavy_book = down_book if side == "UP" else up_book
             heavy_mid = mid_price(heavy_book.get("best_bid"),
                                   heavy_book.get("best_ask"))
@@ -210,23 +220,43 @@ def _decide_quotes_rewards(
                     price=round(ba, 4), size=int(deficit), mid=mid,
                     edge_vs_mid=mid - ba, crossed=True,
                     reason=(f"EMERGENCY hedge: {deficit:.0f}sh short of "
-                            f"{heavy} vs {cfg.max_naked_shares:.0f} cap, "
+                            f"{heavy} = ${deficit_usd:.0f} vs "
+                            f"${cfg.max_naked_usd:.0f} cap, "
                             f"{heavy} mid {heavy_mid:.3f} under avg "
                             f"{heavy_avg:.3f} -- crossing at {ba:.3f}"),
                 ))
                 continue
 
-        # HARD CAP. The skew below is a spring and it bottoms out at
-        # skew_full_shares; past max_naked_shares it has no authority left, so
-        # stop adding to the heavy side entirely. The light side keeps quoting
-        # -- it is the only order that flattens us -- so this costs reward
-        # score (one-sided books score at 1/c, c=3.0) but bounds the exposure
-        # that actually loses money. Without it, measured live, one market ran
-        # to 681 shares unhedged and fleet exposure hit $1333 against $47/day
-        # of rent.
-        if imbalance >= cfg.max_naked_shares:
-            blocked.append(f"{side}: {imbalance:.0f}sh unhedged >= "
-                           f"{cfg.max_naked_shares:.0f} cap -- not adding")
+        # A WIDENED market quotes further from mid on BOTH sides: fewer fills,
+        # and the ones we still get are on better terms. It stays inside the
+        # 4.5c reward window, so the rent keeps coming while we back off.
+        base = gate.offset_for(getattr(cfg, "gate_state", gate.NORMAL),
+                               cfg.reward_offset, cfg.widen_offset)
+        # Provisional resting price, computed BEFORE the block so the block can
+        # reason about it. The real price below is this one plus skew and then
+        # clamped against the tick, the ask and the book's best bid; none of
+        # those move it far enough to change a band or pair-cost verdict, and
+        # computing the clamps for a quote we are about to refuse would be work
+        # done for nothing.
+        provisional = round(mid - base, 4)
+
+        # THE HARD BLOCK (strategy/risk.py). Three arms -- the hedge token's
+        # health, this token's health, and the dollar cap -- kept out of line
+        # here on purpose: this function already carries six caps inline, and a
+        # seventh spelled out in place would make the binding constraint
+        # unreadable. It replaces a share-denominated cap that measured the
+        # wrong thing: 360 shares was $72 of risk at 0.20 and $293 at 0.8152,
+        # so it never fired on lol-maz-mg1's $190.26 position.
+        #
+        # The light side is exempt inside `hard_block` -- it is the only
+        # resting order that flattens us, so blocking it would freeze the
+        # market at maximum exposure. That costs reward score when the heavy
+        # side drops out (one-sided books score at 1/c, c=3.0) and bounds the
+        # exposure that actually loses money.
+        why = risk.hard_block(cfg, inv, side, provisional, book,
+                              down_book if side == "UP" else up_book)
+        if why:
+            blocked.append(f"{side}: {why}")
             continue
 
         # FLEET-WIDE cap. The per-market rule above cannot see a book where
@@ -268,11 +298,6 @@ def _decide_quotes_rewards(
                 f"${cfg.max_committed_usd:.0f} cap -- not adding")
             continue
         skew = cfg.max_skew * max(-1.0, min(1.0, imbalance / cfg.skew_full_shares))
-        # A WIDENED market quotes further from mid on BOTH sides: fewer fills,
-        # and the ones we still get are on better terms. It stays inside the
-        # 4.5c reward window, so the rent keeps coming while we back off.
-        base = gate.offset_for(getattr(cfg, "gate_state", gate.NORMAL),
-                               cfg.reward_offset, cfg.widen_offset)
         offset = base + skew
         # Stay inside the reward window at the far end and off the touch at the
         # near end: a quote outside 4.5c scores nothing, which defeats the skew.

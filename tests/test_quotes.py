@@ -173,7 +173,10 @@ def test_rewards_skews_to_flatten_instead_of_dropping_a_side():
     c=3.0) and still left the position lopsided. Skew keeps both sides
     resting, so the score is preserved AND the light side fills first.
     """
-    inv = Inventory(up_shares=240.0, down_shares=0.0, up_cost=120.0, down_cost=0.0)
+    # 200 UP at a 0.52 average is $104 of naked cost, inside the $120 budget:
+    # this test is about the skew, so the dollar cap must not be what decides
+    # the outcome.
+    inv = Inventory(up_shares=200.0, down_shares=0.0, up_cost=104.0, down_cost=0.0)
     intents, why = _quote(_rcfg(), inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
     off = {q.side: q.mid - q.price for q in intents}
@@ -214,35 +217,86 @@ def test_tight_book_still_quotes_at_the_intended_offset():
         assert abs((q.mid - q.price) - cfg.reward_offset) < 1e-6
 
 
-def test_heavy_side_is_dropped_once_imbalance_passes_the_hard_cap():
-    """Past the cap the heavy side must stop quoting entirely.
+# --- U2: the hard cap, in dollars -------------------------------------------
+#
+# The cap these cover used to be stated in SHARES, and the unit was the defect.
+# On a binary market the downside of one long share is the price paid for it,
+# so 360 shares permitted $72 of risk at 0.20 and $293 at 0.8152 -- loosest
+# exactly where a wrong resolution costs most. Measured 2026-08-05 on
+# lol-maz-mg1: 233.40 UP shares, $190.26 at risk, and the share cap read 233
+# against 360 and stayed silent while 85% of the fleet's -$223.32 unhedged
+# float sat in that one market.
 
-    Skew saturates at skew_full_shares (240): beyond that, more imbalance buys
-    no more response, because `skew` is already clamped to max_skew. Measured
-    live, positions ran to 681 shares unhedged -- 2.8x saturation -- while the
-    only hard stop, max_cost_per_market, sat at $400 against a $109 position
-    and never engaged. A spring that bottoms out is not a brake, so the cap is
-    what actually bounds directional exposure.
+def test_the_dollar_cap_stops_the_heavy_side_where_the_share_cap_did_not():
+    """150 UP at a 0.82 average is $123 of naked cost against a $120 budget.
+
+    The share cap this replaces would have read 150 against 360 and permitted
+    the add -- the same blindness that let lol-maz-mg1 build to $190.26 with
+    three limits armed and none binding.
     """
-    inv = Inventory(up_shares=700.0, down_shares=0.0,
-                    up_cost=112.0, down_cost=0.0)
-    intents, why = _quote(_rcfg(), inv=inv)
+    inv = Inventory(up_shares=150.0, down_shares=0.0,
+                    up_cost=123.0, down_cost=0.0)
+    intents, why = _quote(_rcfg(max_naked_usd=120.0),
+                          up=(0.82, 0.83), dn=(0.17, 0.18), inv=inv)
     sides = {q.side for q in intents}
     assert "UP" not in sides, f"heavy side must stop adding exposure: {why}"
     # The light side must keep quoting -- it is the only thing that flattens.
     assert "DOWN" in sides, f"light side must keep flattening: {why}"
+    # And at FULL size: the side that reduces exposure must not be tapered.
+    assert [q.size for q in intents if q.side == "DOWN"] == [120]
 
 
-def test_cap_leaves_the_saturation_point_itself_still_two_sided():
-    """At skew saturation we still want both sides: skew has authority there.
+def test_one_dollar_under_the_budget_still_rests_on_the_heavy_side():
+    """$119 against a $120 budget, same book and same share count as above.
 
-    The cap exists for the region where skew has none. Firing it at 240 too
-    would trade away two thirds of the reward score (a one-sided book scores
-    at 1/c, c=3.0) at exactly the imbalance skew is designed to handle.
+    Only the naked dollars moved, so the cap -- and not the price band, the
+    fleet cap, the committed cap or the cost cap -- is what bound in the case
+    above. Without this, a passing block test proves nothing about the rule it
+    names.
     """
-    inv = Inventory(up_shares=240.0, down_shares=0.0,
-                    up_cost=120.0, down_cost=0.0)
-    intents, why = _quote(_rcfg(), inv=inv)
+    inv = Inventory(up_shares=150.0, down_shares=0.0,
+                    up_cost=119.0, down_cost=0.0)
+    intents, why = _quote(_rcfg(max_naked_usd=120.0),
+                          up=(0.82, 0.83), dn=(0.17, 0.18), inv=inv)
+    assert {q.side for q in intents} == {"UP", "DOWN"}, why
+
+
+def test_the_light_side_is_never_blocked_by_the_dollar_cap():
+    """$180 of naked UP is 150% of the budget, and the DOWN bid is still the
+    only resting order that brings it back down. R4: the gates bound orders
+    that ADD exposure, never one that reduces it."""
+    inv = Inventory(up_shares=300.0, down_shares=0.0,
+                    up_cost=180.0, down_cost=0.0)
+    intents, why = _quote(_rcfg(max_naked_usd=120.0),
+                          up=(0.60, 0.61), dn=(0.39, 0.40), inv=inv)
+    assert [q.side for q in intents] == ["DOWN"], why
+
+
+def test_an_untradeable_hedge_token_blocks_the_healthy_side_too():
+    """KTD2. The UP book here is a clean 0.52/0.53 with 500sh of depth, and UP
+    must still not be quoted: DOWN is a 0.999 bid against no ask, the exact
+    shape recorded on wta-kalinsk-kessler. A UP fill would create a naked leg
+    that nothing on the venue could close, because on a binary market the only
+    instrument that hedges UP is DOWN.
+    """
+    dn = {"token_id": "DNTOK", "best_bid": 0.999, "best_ask": None,
+          "bids": {0.999: 500.0}}
+    intents, why = decide_quotes(_rcfg(), _book("UPTOK", 0.52, 0.53), dn,
+                                 Inventory(), 200.0, None)
+    assert intents == []
+    assert "hedge" in why and "DOWN" in why, why
+
+
+def test_turning_the_hard_blocks_off_quotes_both_sides_at_twice_the_budget():
+    """$240 of naked cost against a $120 budget, quoting both sides.
+
+    Isolates the new gate as the cause of every assertion above -- nothing else
+    about the input moved, so the switch is the only explanation.
+    """
+    inv = Inventory(up_shares=400.0, down_shares=0.0,
+                    up_cost=240.0, down_cost=0.0)
+    intents, why = _quote(_rcfg(max_naked_usd=120.0, enable_hard_blocks=False),
+                          up=(0.60, 0.61), dn=(0.39, 0.40), inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
 
 
@@ -292,14 +346,19 @@ def test_skew_never_leaves_the_reward_window_or_crosses():
 
 def _rw(**kw):
     kw.setdefault("objective", "rewards")
-    kw.setdefault("max_naked_shares", 360.0)
+    kw.setdefault("max_naked_usd", 120.0)
     kw.setdefault("emergency_hedge_frac", 0.8)
     return dataclasses.replace(BASE, **kw)
 
 
 def _lopsided(up_sh=400.0, dn_sh=0.0, up_px=0.52):
-    """Long UP, nothing on DOWN: 400sh of deficit on the DOWN side, past the
-    288sh (0.8 x 360) emergency trigger."""
+    """Long UP, nothing on DOWN: 400sh of deficit on the DOWN side.
+
+    Valued at the heavy leg's 0.52 average that is $208 of hedge still to buy,
+    past the $96 (0.8 x $120) emergency trigger. The trigger is stated in
+    dollars for the same reason the cap it sits inside is: 400 shares is $80 of
+    deficit at 0.20 and $340 at 0.85, and only one of those is an emergency.
+    """
     return Inventory(up_shares=up_sh, down_shares=dn_sh, up_cost=up_sh * up_px,
                      down_cost=0.0)
 
@@ -329,10 +388,30 @@ def test_a_big_deficit_in_a_flat_market_does_not_cross():
 
 
 def test_a_losing_position_inside_the_trigger_does_not_cross():
-    """250sh is under 0.8 x 360 = 288. Skew still owns this range."""
+    """150sh at a 0.52 average is $78 of deficit, under 0.8 x $120 = $96.
+
+    Skew still owns this range, and paying the taker fee inside it buys nothing
+    the resting light-side bid was not already going to get for free.
+    """
     up, dn = _losing_books()
-    intents, _ = decide_quotes(_rw(), up, dn, _lopsided(up_sh=250.0), 1e9, None)
+    intents, _ = decide_quotes(_rw(), up, dn, _lopsided(up_sh=150.0), 1e9, None)
     assert [q for q in intents if q.crossed] == []
+
+
+def test_an_unhealthy_hedge_book_does_not_stop_the_emergency_cross():
+    """R4, on the case that matters most. Both books here are 16c wide, which
+    the book-health arm refuses for a NEW bid -- and this is not a new bid, it
+    is the exit from a $208 naked leg whose mid (0.34) has fallen 18c below the
+    0.52 we paid. A gate that refuses the hedge in the one market that needs it
+    has inverted its own purpose.
+    """
+    up = _book("UPTOK", 0.26, 0.42)      # mid 0.34, far under the 0.52 average
+    dn = _book("DNTOK", 0.58, 0.74)
+    intents, why = decide_quotes(_rw(), up, dn, _lopsided(), 1e9, None)
+    hedge = [q for q in intents if q.crossed]
+    assert len(hedge) == 1, why
+    assert hedge[0].side == "DOWN"
+    assert hedge[0].price == 0.74        # the ask -- we are taking, not resting
 
 
 def test_the_exception_is_switchable():

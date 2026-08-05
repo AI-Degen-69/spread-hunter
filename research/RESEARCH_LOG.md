@@ -535,3 +535,17 @@ recoverable from the archive branch by checkout.
 **Result.** The dollar reading reproduces the observed loss exactly: 233.40 UP shares at an average of 0.8152 returns $190.26, against a 360-share cap that read 233 and stayed silent. The same measure values 200 UP against 100 DOWN at a 0.60 average as $60 at risk rather than $120, because the hedged 100 shares pay $1.00 either way. `book_health` refuses the recorded 0.999/0.001 shape as settled and the recorded 0.26/0.42 shape as too wide. Nothing imports the module yet, so no live behaviour changed and the running sample stays valid.
 
 **Verdict.** LIVE as a measurement. The unit is now dollars; whether the $120 budget is the right number is a separate question that U7's replay answers.
+
+---
+
+### Session 20 — 2026-08-05: the dollar cap and the hedge-side gate (U2)
+
+**Question.** Does the live quoting path refuse to add to an over-budget naked leg, and does it refuse a bid whose hedge token cannot be traded?
+
+**Method.** Added `hard_block(cfg, inv, side, price, own_book, hedge_book)` to `strategy/risk.py` and called it from `_decide_quotes_rewards` in place of the `imbalance >= max_naked_shares` branch. Three arms, ordered so the reason names the cheapest certain rejection first: hedge-token health, own-book health, then the dollar cap. An exposure-REDUCING side returns None before any arm runs, so the light side is never gated. `max_naked_shares` was removed from `strategy/config.py` rather than kept beside `max_naked_usd` — two caps in two units cannot both be binding, and the looser one governs silently. The emergency stop-loss trigger was restated in the same unit: the deficit is valued at the heavy leg's average cost and compared against `max_naked_usd * emergency_hedge_frac`. Added `enable_hard_blocks: bool = True` so the gate can be measured on its own. 16 new tests; full suite 359 passed, up from 344.
+
+**Result.** A market holding 140 naked UP at 0.82 ($114.80 against a $120 budget) rests nothing on UP and full size on DOWN; one dollar under the budget it still rests on UP, so the cap and not an unrelated filter is what binds. A healthy UP book paired with a 0.999-bid/no-ask DOWN book now rests nothing on EITHER side, and the UP reason names the hedge token — the case that produced the observed loss, where the position was built in two prints before the book degraded. With `enable_hard_blocks` false the same market at 200% of budget quotes both sides, which isolates the new gate as the cause of every result above. The emergency cross still fires with an unhealthy hedge book, per R4.
+
+**Caveat.** Restating the emergency trigger in dollars preserves the relationship (it fires at 80% of the cap, inside it, with a losing heavy leg) but not the share count: 288 shares was $144 at 0.50 and $234 at 0.8152.
+
+**Verdict.** LIVE. This changes quoting behaviour, so the running sample is invalidated from here — archive `maker.db` before the next run rather than mixing configs in one dataset.
