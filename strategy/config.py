@@ -327,12 +327,9 @@ class MakerConfig:
     select_min_volume_24h_usd: float = 250_000.0
     select_min_top3_depth_usd: float = 5_000.0
     select_max_book_spread: float = 0.04
-    # A market resolving in 2027 cannot contribute a settled observation to a
-    # run measured in days, and settlement is the only ground truth this
-    # strategy has. The whole 2026-07-31 universe resolved between September
-    # 2026 and 2027, which is why `resolutions` is zero in all six databases.
-    # 7 days keeps n growing fast enough that a sample is reachable.
-    select_max_days_to_resolve: float = 7.0
+    # 30 days admits liquid macro, sports, and political markets while keeping
+    # long-dated 2027 markets excluded.
+    select_max_days_to_resolve: float = 30.0
 
     # How long to average competitor depth before sizing a position. One
     # snapshot sized the whole fleet on 2026-07-29 and read a competing score

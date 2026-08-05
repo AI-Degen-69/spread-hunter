@@ -656,3 +656,16 @@ recoverable from the archive branch by checkout.
 **Result.** The target listener `127.0.0.1:8800` is free and the working tree contains unrelated pre-existing dashboard/research edits, so the clean start is performed through the scoped launcher rather than broad file deletion.
 
 **Verdict.** OPEN until the fresh supervised process tree is confirmed alive and the newly generated market universe is inspected.
+
+---
+
+### Session 10 — 2026-08-05: horizon extension for primary market selection (R14)
+
+**Question.** Does extending the resolution horizon from 7 to 30 days admit liquid macro, sports, and political instruments while maintaining safety?
+
+**Method.** Updated `select_max_days_to_resolve` in `strategy/config.py` from 7.0 to 30.0 days. Re-ran the ranker dry-run and full test suite.
+
+**Result.** Ranker dry-run immediately selected 3 high-volume primary markets (up from 1), admitting liquid tournaments and macro events that resolve within the month. 452 tests pass.
+
+**Verdict.** LIVE. Extended horizon retains selector safety while increasing eligible candidate breadth.
+
