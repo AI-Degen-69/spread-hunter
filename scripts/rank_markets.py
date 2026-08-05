@@ -103,7 +103,9 @@ def days_to_resolve(end_iso: Optional[str],
 def tradable(volume_24h: Optional[float],
              days: Optional[float],
              title: object = "", slug: object = "",
-             category: object = "", market_type: object = "") -> tuple[bool, str]:
+             category: object = "", market_type: object = "",
+             market_group: object = "", series_title: object = "",
+             event_title: object = "") -> tuple[bool, str]:
     """Can this market produce the two observations the run needs?
 
     A fill needs someone to trade at our price; a settled P&L needs the market
@@ -119,9 +121,12 @@ def tradable(volume_24h: Optional[float],
     # Keep this helper backwards-compatible for callers that only supply the
     # numeric tradability inputs. Full selector identity is enforced by
     # `evaluate`, where the venue metadata is available.
-    if any(_value not in (None, "") for _value in (title, slug, category, market_type)):
+    all_meta = (title, slug, category, market_type, market_group,
+                series_title, event_title)
+    if any(_value not in (None, "") for _value in all_meta):
         identity_ok, identity_reason = identity_allowed(
-            title, slug, category, market_type)
+            title, slug, category, market_type,
+            market_group, series_title, event_title)
         if not identity_ok:
             return False, identity_reason
     if volume_24h is None:
