@@ -60,7 +60,13 @@ class MakerConfig:
     # DOWN closer to mid (easier to fill, which FLATTENS us). It runs every
     # cycle from the first share of imbalance, while both sides still cost real
     # money, and it keeps us two-sided so the reward score is preserved.
-    skew_full_shares: float = 240.0     # imbalance that produces max skew
+    # The spring is wound by DOLLARS at risk, not by share count: `skew_offset`
+    # scales this cap by `risk_utilization` of the naked side, so it is at full
+    # stretch exactly when the dollar budget is full. A share-denominated ramp
+    # (240 shares to full stretch, removed) answered a 100-share naked leg with the
+    # same push at 0.85, where it is $85 of downside, as at 0.15, where it is
+    # $15 -- so on lol-maz-mg1 it was still ramping at 233 of 240 shares while
+    # $190.26 was already at stake and the position was fully built.
     max_skew: float = 0.015             # cap, in price units
     min_reward_offset: float = 0.005    # never quote nearer mid than this
 
@@ -70,10 +76,10 @@ class MakerConfig:
     # cannot both be the binding constraint and an operator reading "not
     # adding" would have no way to tell which one bound.
     #
-    # Skew is a spring and it bottoms out at skew_full_shares: past that, more
-    # imbalance produces no more response because `skew` is already clamped to
-    # max_skew. Something has to own the range past the spring. The share cap
-    # that used to own it could not, and the reason is the unit, not the level:
+    # Skew is a spring and it bottoms out AT this budget: `risk_utilization`
+    # clamps at 1.0, so past the cap more exposure produces no more response.
+    # Something has to own that range. The share cap that used to own it could
+    # not, and the reason is the unit, not the level:
     # on a binary market the downside of one long share IS the price paid for
     # it, so 360 shares permitted $72 of risk at 0.20 and $293 at 0.8152 --
     # loosest exactly where a wrong resolution costs most.
@@ -85,7 +91,12 @@ class MakerConfig:
     #
     # $120 binds between 171 shares (at 0.70) and 400 shares (at 0.30) inside
     # the price band, and would have stopped lol-maz-mg1 at roughly 147 shares
-    # instead of 233. 0 disables the rule, same as every other cap here.
+    # instead of 233. 0 disables the rule, same as every other cap here -- and
+    # it disables the whole dollar system with it, because this number is the
+    # denominator of all three rules that read it: the hard block, the skew
+    # spring above, and U3's size ladder (`risk.size_for`), which decays resting
+    # size as base*(1-utilization)^2 so the last order before the cap is 16% of
+    # full size rather than 100% of it.
     max_naked_usd: float = 120.0
     # Switchable so the dollar gates can be measured on their own rather than
     # bundled with the rest of a release -- the same convention as

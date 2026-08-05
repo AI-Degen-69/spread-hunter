@@ -80,6 +80,89 @@ def risk_utilization(cfg, inv, side: str) -> float:
     return max(0.0, min(1.0, naked_usd(inv, side) / budget))
 
 
+def size_for(cfg, inv, side: str, price: float) -> int:
+    """How many shares to rest on `side`, given what is already at risk.
+
+    R5. `hard_block` is a step, and a step is the wrong shape for a limit: at
+    $119.99 of a $120 budget it permits the FULL 120 shares, and at $120.00 it
+    permits none. The largest order of a market's life therefore arrives with
+    one cent of headroom left -- and on lol-maz-mg1, where 233 shares arrived
+    in two fills, that is not a hypothetical shape. This walks the size down
+    instead, reaching zero AT the budget rather than one order past it.
+
+    Three terms, applied in order:
+
+      * THE TAPER, base * (1 - u)^2 with u = `risk_utilization`. Quadratic and
+        not linear, because linear is still too generous near the top: halfway
+        to the budget a linear rule rests 60 of a 120-share base against the
+        $60 that remains, so one order could consume most of what is left.
+        Quadratic rests 30.
+      * THE REMAINDER CAP, (budget - naked) / price. The taper bounds the SIZE
+        and not the dollars the size costs, and those differ by a factor of the
+        price -- the same confusion of units that made the old share cap $72 of
+        risk at 0.20 and $293 at 0.8152. With it, one order can never buy more
+        exposure than the budget it is walking toward.
+      * THE FLOOR at `min_quote_shares`. rewardsMinSize is 50: below it an
+        order earns no score at all while still buying inventory, so the honest
+        answer is 0 -- post nothing -- rather than a token order. This is what
+        makes the tail of the ladder terminate instead of trickling.
+
+    The light side is never tapered (R4). It is the only resting order that
+    FLATTENS the position, and slowing it as exposure peaks is precisely the
+    failure the share cap produced: it stopped the heavy side and then had no
+    authority left, freezing the market at maximum exposure.
+    """
+    # `quote_shares == 0` is the allocator defunding this market, and
+    # `max(quote_shares, min_quote_shares)` below would promote it back to the
+    # venue minimum -- how 17 defunded markets kept posting 50-share orders.
+    # `_decide_quotes_rewards` returns early on it; this keeps the function
+    # honest for callers that reach it directly (replay, U7).
+    if cfg.quote_shares <= 0:
+        return 0
+
+    base = max(cfg.quote_shares, cfg.min_quote_shares)
+    if naked_side(inv) != side:
+        return base
+
+    size = base * (1.0 - risk_utilization(cfg, inv, side)) ** 2
+
+    if cfg.max_naked_usd > 0:
+        if price <= 0:
+            # The remaining budget buys an unbounded number of shares at a
+            # price of zero. That is the one reading that must never reach the
+            # venue, so a degenerate book quotes nothing.
+            return 0
+        remaining = max(0.0, cfg.max_naked_usd - naked_usd(inv, side))
+        size = min(size, remaining / price)
+
+    if size < cfg.min_quote_shares:
+        return 0
+    return int(size)
+
+
+def skew_offset(cfg, inv, side: str) -> float:
+    """How far to move this side's quote, in price units. Positive = away.
+
+    The spring that used to be wound by imbalance against a fixed share ramp
+    and is now wound by dollars. 100 naked shares is $85 of downside at 0.85 and $15
+    at 0.15; the share-denominated spring answered both with the same push,
+    which is why it was still ramping on lol-maz-mg1 -- 233 shares against a
+    240-share ramp -- when the position was already fully built and $190 was at
+    stake.
+
+    Heavy side out, light side in, by the same magnitude: pushing the heavy
+    side away without pulling the light side toward mid would just make us
+    quote worse, rather than making the FLATTENING order the one that fills.
+    Zero for a flat or balanced book -- the hedged part pays exactly $1.00
+    whichever way the market resolves, so there is nothing to lean against.
+    """
+    naked = naked_side(inv)
+    if naked is None:
+        return 0.0
+    push = cfg.max_skew * risk_utilization(cfg, inv, naked)
+    return push if side == naked else -push
+
+
 def book_health(book: dict, cfg) -> BookHealth:
     """Is this one token's book worth resting a bid into?
 

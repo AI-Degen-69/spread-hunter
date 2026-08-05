@@ -297,7 +297,14 @@ def _decide_quotes_rewards(
                 f"{side}: fleet ${cfg.committed_usd:.0f} committed >= "
                 f"${cfg.max_committed_usd:.0f} cap -- not adding")
             continue
-        skew = cfg.max_skew * max(-1.0, min(1.0, imbalance / cfg.skew_full_shares))
+        # THE SPRING, wound by dollars (strategy/risk.py). It used to be wound
+        # by imbalance against a fixed share ramp, which answered a 100-share naked
+        # leg identically at 0.85 ($85 of downside) and at 0.15 ($15) -- so on
+        # lol-maz-mg1 it was still ramping, 233 shares into a 240-share ramp,
+        # while $190 was already at stake. Utilization of the naked side is the
+        # same number the cap and the taper read, so all three now respond to
+        # the same event.
+        skew = risk.skew_offset(cfg, inv, side)
         offset = base + skew
         # Stay inside the reward window at the far end and off the touch at the
         # near end: a quote outside 4.5c scores nothing, which defeats the skew.
@@ -349,7 +356,26 @@ def _decide_quotes_rewards(
             blocked.append(f"{side}: cost cap ${cfg.max_cost_per_market:.0f}")
             continue
 
-        size = max(cfg.quote_shares, cfg.min_quote_shares)
+        # THE SIZE LADDER (strategy/risk.py). The dollar cap above is a step:
+        # $119.99 of a $120 budget rested the full 120 shares and $120.00
+        # rested none, so the largest order of a market's life arrived with a
+        # cent of headroom left. `size_for` walks the size down as the budget
+        # fills -- 16% of full size at 60% utilization -- and reaches zero AT
+        # the budget. It reads the FINAL price, not the provisional one, because
+        # its remaining-dollars arm is priced in the money an order actually
+        # costs.
+        size = risk.size_for(cfg, inv, side, price)
+        if size <= 0:
+            # No intent at all, never a zero-size order: below rewardsMinSize
+            # (50) an order earns no score while still buying inventory. Named
+            # apart from the cap's "not adding" on purpose -- at 80% of the
+            # budget the cap has NOT fired, and an operator reading the wrong
+            # reason goes looking for the wrong limit.
+            util = risk.risk_utilization(cfg, inv, side)
+            blocked.append(
+                f"{side}: size tapered to 0 at {100*util:.0f}% of the "
+                f"${cfg.max_naked_usd:.0f} naked budget")
+            continue
         out.append(QuoteIntent(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,

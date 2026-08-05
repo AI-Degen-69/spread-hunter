@@ -281,3 +281,189 @@ def test_the_gate_is_switchable():
     inv = Inventory(up_shares=300.0, down_shares=0.0, up_cost=240.0)
     assert risk.hard_block(_cfg(enable_hard_blocks=False), inv, "UP", 0.50,
                            _book(0.26, 0.42), _book(0.999, None)) is None
+
+
+# --- size_for: the continuous ladder ----------------------------------------
+#
+# `hard_block` is a cliff by construction: $119.99 of naked cost quotes the
+# full 120 shares and $120.00 quotes nothing. On lol-maz-mg1 that shape meant
+# the last order placed before the cap was the largest one -- the position took
+# its biggest single step toward the limit at the moment it was closest to it.
+# The ladder replaces the step with base*(1-u)^2, so the order that arrives at
+# 60% of the budget is 16% of full size rather than 100%.
+
+
+def _long_up(usd: float, price: float = 0.60) -> Inventory:
+    """UP-heavy inventory holding exactly `usd` of naked cost at `price`.
+
+    Shares are derived from the dollars, not the other way round: the whole
+    point of U3 is that the dollars are the input and the share count is a
+    consequence of the price.
+    """
+    return Inventory(up_shares=(usd / price) if usd else 0.0, down_shares=0.0,
+                     up_cost=usd, down_cost=0.0)
+
+
+def test_size_is_full_when_nothing_is_at_risk():
+    cfg = _cfg()
+    full = max(cfg.quote_shares, cfg.min_quote_shares)
+    assert risk.size_for(cfg, Inventory(), "UP", 0.50) == full
+
+
+def test_size_is_zero_at_the_budget():
+    """R5. The ladder reaches zero AT the budget, not one order past it."""
+    cfg = _cfg(max_naked_usd=120.0)
+    assert risk.size_for(cfg, _long_up(120.0), "UP", 0.60) == 0
+
+
+def test_size_decays_monotonically_across_the_budget():
+    """Steps of 0.2 utilization, nothing else moving.
+
+    400 shares of base at a 0.20 average keeps the dollar-remainder cap well
+    clear (96/0.20 = 480 shares of headroom at u=0.2), so this test reads the
+    TAPER alone. The floor at min_quote_shares is what turns the last two rungs
+    into zero: 400*(1-0.8)^2 = 16 shares would score nothing.
+    """
+    cfg = _cfg(quote_shares=400, min_quote_shares=50, max_naked_usd=120.0)
+    sizes = [risk.size_for(cfg, _long_up(u * 120.0, 0.20), "UP", 0.20)
+             for u in (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)]
+    assert sizes == [400, 256, 144, 64, 0, 0]
+    assert sizes == sorted(sizes, reverse=True)
+
+
+def test_the_decay_is_quadratic_not_linear():
+    """Halfway to the budget must be BELOW half size.
+
+    Linear would leave 200 shares resting with $60 of headroom left, i.e. an
+    order that alone consumes two thirds of what remains. Quadratic leaves 100.
+    """
+    cfg = _cfg(quote_shares=400, min_quote_shares=50, max_naked_usd=120.0)
+    half = risk.size_for(cfg, _long_up(60.0, 0.20), "UP", 0.20)
+    assert half == 100
+    assert half < 400 / 2
+
+
+def test_a_size_under_the_venue_minimum_is_zero_rather_than_a_scoreless_order():
+    """rewardsMinSize is 50: an order below it earns nothing and still buys
+    inventory. 120*(1-0.5)^2 = 30 shares is exactly that order."""
+    cfg = _cfg(max_naked_usd=120.0)          # base 120, min 50
+    assert risk.size_for(cfg, _long_up(60.0, 0.50), "UP", 0.50) == 0
+
+
+def test_just_above_the_floor_still_produces_an_order():
+    """Isolates the floor: 120*(1-0.3)^2 = 58.8 shares clears 50, so the zero
+    above is the floor talking and not the taper collapsing early."""
+    cfg = _cfg(max_naked_usd=120.0)
+    assert risk.size_for(cfg, _long_up(36.0, 0.50), "UP", 0.50) == 58
+
+
+def test_the_dollar_remainder_caps_a_size_the_taper_would_still_allow():
+    """One order must not be able to exceed the cap it is walking toward.
+
+    $80 budget, $16 spent, so $64 of headroom -- and at 0.90 that is 71 shares.
+    The taper alone would rest 76 (120*(1-0.2)^2 = 76.8), which would put $69
+    of cost against $64 of room and land past the budget in a single fill.
+    """
+    cfg = _cfg(max_naked_usd=80.0)
+    got = risk.size_for(cfg, _long_up(16.0, 0.90), "UP", 0.90)
+    assert got == 71
+    assert got < 76, "the taper alone would have allowed a larger order"
+    assert got * 0.90 <= 80.0 - 16.0 + 1e-9
+
+
+def test_the_light_side_never_tapers():
+    """R4, in the sizing layer. The light side is the only resting order that
+    FLATTENS the position, so tapering it would slow the exit exactly as the
+    exposure peaked -- the failure the share cap already produced."""
+    cfg = _cfg(max_naked_usd=120.0)
+    full = max(cfg.quote_shares, cfg.min_quote_shares)
+    heavy = Inventory(up_shares=400.0, down_shares=0.0, up_cost=240.0)
+    assert risk.size_for(cfg, heavy, "DOWN", 0.40) == full
+
+
+def test_a_zero_budget_leaves_the_size_full():
+    """0 means unset, the same escape hatch every other cap here has. It must
+    not read as 'fully utilized' and taper every order to nothing."""
+    cfg = _cfg(max_naked_usd=0.0)
+    full = max(cfg.quote_shares, cfg.min_quote_shares)
+    assert risk.size_for(cfg, _long_up(500.0, 0.50), "UP", 0.50) == full
+
+
+def test_an_unfunded_market_sizes_to_zero_rather_than_the_venue_minimum():
+    """`quote_shares == 0` is the allocator saying 'do not quote this market'.
+    `max(quote_shares, min_quote_shares)` used to promote it back to 50, which
+    is how 17 defunded markets kept posting orders."""
+    assert risk.size_for(_cfg(quote_shares=0), Inventory(), "UP", 0.50) == 0
+
+
+def test_size_is_an_int():
+    """QuoteIntent.size is an int and the venue takes whole shares."""
+    got = risk.size_for(_cfg(max_naked_usd=120.0), _long_up(24.0, 0.60),
+                        "UP", 0.60)
+    assert isinstance(got, int)
+
+
+def test_a_zero_price_does_not_divide_by_zero():
+    """A degenerate book must produce no order, not a ZeroDivisionError: the
+    remaining budget buys an unbounded number of shares at a price of zero,
+    which is the one reading that must never reach the venue."""
+    cfg = _cfg(max_naked_usd=120.0)
+    assert risk.size_for(cfg, _long_up(24.0, 0.60), "UP", 0.0) == 0
+
+
+# --- skew_offset: the spring, priced in dollars -----------------------------
+
+
+def test_skew_is_zero_for_a_flat_inventory():
+    assert risk.skew_offset(_cfg(), Inventory(), "UP") == 0.0
+    assert risk.skew_offset(_cfg(), Inventory(), "DOWN") == 0.0
+
+
+def test_skew_is_zero_when_exactly_balanced():
+    """Balanced is not a small imbalance -- the hedged part pays exactly $1.00
+    either way, so there is nothing to lean against."""
+    inv = Inventory(up_shares=120.0, down_shares=120.0,
+                    up_cost=62.0, down_cost=58.0)
+    assert risk.skew_offset(_cfg(), inv, "UP") == 0.0
+    assert risk.skew_offset(_cfg(), inv, "DOWN") == 0.0
+
+
+def test_skew_pushes_the_heavy_side_out_and_pulls_the_light_side_in():
+    cfg = _cfg(max_naked_usd=120.0)
+    inv = _long_up(60.0, 0.60)                    # half the budget
+    heavy = risk.skew_offset(cfg, inv, "UP")
+    light = risk.skew_offset(cfg, inv, "DOWN")
+    assert heavy > 0 > light
+    assert heavy == pytest.approx(-light)
+    assert heavy == pytest.approx(cfg.max_skew * 0.5)
+
+
+def test_the_same_share_imbalance_skews_harder_at_a_higher_price():
+    """THE UNIT, stated on the skew. 100 naked shares is $85 of downside at
+    0.85 and $15 at 0.15, and only one of those is urgent. The share-denominated
+    spring answered both identically, which is why it was still ramping on
+    lol-maz-mg1 when the position was already fully built.
+    """
+    cfg = _cfg(max_naked_usd=120.0)
+    dear = Inventory(up_shares=100.0, down_shares=0.0, up_cost=85.0)
+    cheap = Inventory(up_shares=100.0, down_shares=0.0, up_cost=15.0)
+    assert dear.up_shares == cheap.up_shares, "same SHARE imbalance by design"
+    assert risk.skew_offset(cfg, dear, "UP") > risk.skew_offset(cfg, cheap, "UP")
+    assert risk.skew_offset(cfg, dear, "UP") == pytest.approx(
+        cfg.max_skew * 85.0 / 120.0)
+
+
+def test_skew_is_capped_at_max_skew():
+    """Utilization clamps at 1.0, so the spring bottoms out at the cap rather
+    than walking a quote out of the 4.5c reward window."""
+    cfg = _cfg(max_naked_usd=120.0)
+    huge = Inventory(up_shares=100000.0, down_shares=0.0, up_cost=50000.0)
+    assert risk.skew_offset(cfg, huge, "UP") == pytest.approx(cfg.max_skew)
+    assert risk.skew_offset(cfg, huge, "DOWN") == pytest.approx(-cfg.max_skew)
+
+
+def test_a_zero_budget_disables_the_skew_with_the_rest_of_the_dollar_rules():
+    """0 unsets the dollar machinery wholesale, skew included. Anything else
+    would leave a spring with no scale to measure itself against."""
+    cfg = _cfg(max_naked_usd=0.0)
+    assert risk.skew_offset(cfg, _long_up(500.0, 0.50), "UP") == 0.0

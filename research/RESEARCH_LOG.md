@@ -549,3 +549,17 @@ recoverable from the archive branch by checkout.
 **Caveat.** Restating the emergency trigger in dollars preserves the relationship (it fires at 80% of the cap, inside it, with a losing heavy leg) but not the share count: 288 shares was $144 at 0.50 and $234 at 0.8152.
 
 **Verdict.** LIVE. This changes quoting behaviour, so the running sample is invalidated from here — archive `maker.db` before the next run rather than mixing configs in one dataset.
+
+---
+
+### Session 21 — 2026-08-05: the size ladder and the dollar-wound spring (U3)
+
+**Question.** Can resting size decay continuously toward the dollar budget instead of stepping from full size to none, and can the skew respond to dollars rather than to share count?
+
+**Method.** Added `size_for(cfg, inv, side, price)` and `skew_offset(cfg, inv, side)` to `strategy/risk.py`. The ladder is `base * (1 - utilization)^2`, additionally capped at `(budget - naked) / price` so one order cannot exceed the cap it is approaching, and floored to zero below `min_quote_shares` because an order under the venue minimum earns no reward score. The light side returns full size at any utilization — it is the only resting order that flattens the position. `skew_offset` scales `max_skew` by `risk_utilization` of the naked side, positive heavy and negative light, 0.0 when flat. `skew_full_shares` was removed from the config and both comment blocks describing it were rewritten. 26 net new tests; full suite 385 passed, up from 359.
+
+**Result.** The decisive reading is the one the share-denominated spring could not produce: at the same 100-share imbalance the new skew pushes further at a 0.85 average than at a 0.15 average, because $85 of downside is not $15 of downside. The old ramp answered both identically, which is why on `lol-maz-mg1` it was still ramping at 233 of 240 shares while $190.26 was already at stake. A market walking from flat to the budget now produces a decreasing sequence of intent sizes ending in no intent.
+
+**Result worth flagging.** With the default 120-share base and the 50-share venue floor, the quadratic ladder reaches the floor at roughly 35% utilization — about $42 of the $120 budget — so the heavy side stops resting well before the budget rather than at it. That is a consequence of the venue minimum, not of the decay curve: 120 * (1 - u)^2 = 50 at u = 0.355. The effective heavy-side stop is therefore materially tighter than the nominal cap, and U7's replay is the instrument that decides whether that is cutting toxic flow or profitable flow.
+
+**Verdict.** LIVE, with the 35% observation OPEN pending replay.
