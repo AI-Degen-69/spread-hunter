@@ -74,6 +74,40 @@ class MakerConfig:
     # owns the range where it has authority, this owns the range past it.
     max_naked_shares: float = 360.0
 
+    # HARD CAP on directional exposure, in DOLLARS of naked cost. Replaces the
+    # share cap above.
+    #
+    # On a binary market the downside of one long share is the price paid for
+    # it, so a share-denominated cap is loosest exactly where a wrong
+    # resolution costs most: 360 shares permits $72 of risk at 0.20 and $293
+    # at 0.8152. Measured 2026-08-05 on lol-maz-mg1 -- 233.40 UP shares at an
+    # average of 0.8152, $190.26 at risk, against a 360-share cap that read
+    # 233 and stayed silent while 85% of the fleet's -$223.32 unhedged float
+    # sat in that one market.
+    #
+    # $120 binds between 171 shares (at 0.70) and 400 shares (at 0.30) inside
+    # the price band, and would have stopped lol-maz-mg1 at roughly 147 shares
+    # instead of 233. 0 disables the rule, same as every other cap here.
+    max_naked_usd: float = 120.0
+
+    # BOOK HEALTH. Three arms, all on ONE token's book.
+    #
+    # A price this close to either end means the market has decided. There is
+    # no spread left to capture and the naked leg a fill would create is
+    # already decided against us -- wta-kalinsk-kessler finished quoting 0.999
+    # bid against a 0.001 ask, and the position was unhedgeable at any price.
+    decided_price: float = 0.02
+    # Widest two-sided spread still worth quoting into. Above 2 x
+    # max_spread_from_mid (9c) the entire reward window lies INSIDE the
+    # spread, so landing in it means being the most exposed order in the book
+    # -- measured on a 0.26/0.42 market, six cents better than anyone else.
+    # 6c leaves margin under that arithmetic.
+    max_book_spread: float = 0.06
+    # Summed bid depth below which the book cannot absorb an exit. A proxy,
+    # not a measurement of exit liquidity: one aggregated number is the most
+    # the recorded book shape supports.
+    min_book_depth_sh: float = 200.0
+
     # EMERGENCY STOP-LOSS. The hard cap above stops us ADDING to the heavy
     # side; it does nothing about the exposure already on the book. Skew is
     # supposed to flatten that with resting orders, and it does -- when someone

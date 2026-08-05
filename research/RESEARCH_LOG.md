@@ -523,3 +523,15 @@ recoverable from the archive branch by checkout.
 6. **Rejected for now:** a broad offset increase or aggressive market exit. The central drift distribution is mostly healthy, while a wider offset would sacrifice fill rate without addressing the binary tail; a market order cannot fill where no bid exists.
 
 **Verdict.** OPEN — the audit identifies concentrated unhedged exposure and three immediately testable controls, but it does not establish a final profitability verdict. The snapshot is small, partially unresolved, and includes live marks; implement each rule in isolation, start a fresh paper sample after strategy changes, and require realized/settled outcomes before declaring the maker strategy LIVE or DEAD.
+
+---
+
+### Session 19 — 2026-08-05: risk primitives in dollars (U1)
+
+**Question.** Can the per-market risk limits be restated in dollars at risk rather than in shares, and can a book be judged tradeable before a bid rests on it?
+
+**Method.** Added `strategy/risk.py` as a pure module with no callers: `naked_side`, `naked_usd`, `risk_utilization`, and `book_health`. `naked_usd` values the excess leg at average cost rather than at the current mark, so the measure does not shrink when the mid moves against the position. `book_health` rejects on three arms — one-sided, settled (either quote within `decided_price` of an end), and too wide or too thin — and reports `depth_evaluated` separately from `ok` so a replay against recorded history, which carries a mid but no depth, can tell "depth passed" from "depth was never measured". New config fields: `max_naked_usd: 120.0`, `decided_price: 0.02`, `max_book_spread: 0.06`, `min_book_depth_sh: 200.0`. 20 tests in `tests/test_risk.py`; full suite 344 passed.
+
+**Result.** The dollar reading reproduces the observed loss exactly: 233.40 UP shares at an average of 0.8152 returns $190.26, against a 360-share cap that read 233 and stayed silent. The same measure values 200 UP against 100 DOWN at a 0.60 average as $60 at risk rather than $120, because the hedged 100 shares pay $1.00 either way. `book_health` refuses the recorded 0.999/0.001 shape as settled and the recorded 0.26/0.42 shape as too wide. Nothing imports the module yet, so no live behaviour changed and the running sample stays valid.
+
+**Verdict.** LIVE as a measurement. The unit is now dollars; whether the $120 budget is the right number is a separate question that U7's replay answers.
