@@ -491,6 +491,26 @@ def _gate_with_fleet_fallback(prev_gate: str, own_stats: dict, cfg):
     return nxt, stats
 
 
+def _fleet_posture(cfg) -> str:
+    """The fleet's current brake position, from the same pool as the fallback.
+
+    Two readings of one number, to two different questions. The fallback above
+    asks "what is THIS market's state?" and must cap a borrowed verdict at
+    WIDENED, because the pool is not evidence about a market that never
+    matured a sample of its own. This asks "should the fleet be ADDING right
+    now?", and the pool is precisely the right evidence for that -- it is the
+    only reading that exists when, as on 2026-08-02, no individual market ever
+    reaches a sample and the pooled mean is -4.75c/share.
+
+    A separate one-line function rather than an inline call so the posture can
+    be read in a test without standing up a sweep, and so the DB touch has one
+    site. Nothing here is stored: `gate.fleet_posture` is a pure function of
+    the reading, and the reading is taken fresh every sweep.
+    """
+    return gate.fleet_posture(
+        markout.fleet_stats(cfg.markout_fleet_min_sample), cfg)
+
+
 def _affordable_rest_size(requested: float, price: float,
                           available_usd: float, market_room_usd: float) -> int:
     """Largest resting order that fits BOTH the wallet and this market's cap.
@@ -713,7 +733,7 @@ def _stamp_failure(st: MarketState, now: float, err: str) -> None:
 
 def visit(st: MarketState, bot_cfg, now: float,
           fleet_naked_usd: float = 0.0, committed_usd: float = 0.0,
-          states=None) -> None:
+          states=None, fleet_posture: str = gate.NORMAL) -> None:
     """One poll of one market: books -> fills -> requote -> reward sample."""
     cfg = st.cfg
     # The single-market helper remains callable in tests; the fleet runner
@@ -887,10 +907,15 @@ def visit(st: MarketState, bot_cfg, now: float,
                  st.title[:28], stats.get("mean_per_share") or 0.0,
                  stats.get("n", 0))
     # Fleet exposure is a property of every OTHER market as well, so it has to
-    # be injected here rather than derived from this market's inventory.
+    # be injected here rather than derived from this market's inventory. The
+    # posture is the same kind of fact and arrives the same way -- computed
+    # once per sweep from the POOLED markout, because a per-market verdict
+    # cannot see a universe where every book is individually fine and every
+    # fill is still being bought from someone better informed.
     cfg = replace(cfg, gate_state=st.gate,
                   fleet_naked_usd=fleet_naked_usd,
-                  committed_usd=committed_usd)
+                  committed_usd=committed_usd,
+                  fleet_posture=fleet_posture)
 
     # MERGE FIRST, then consider selling. A matched pair redeems for exactly
     # 1.00 through the collateral adapter with no spread and no taker fee, so
@@ -1285,6 +1310,13 @@ def main() -> None:
     # that capital committed for another 15 minutes.
     last_resolve = 0.0
     empty_logged = False
+    # THE FLEET BRAKE, held across visits and re-read once per sweep. Per-sweep
+    # rather than per-visit because it is one aggregate over the whole markout
+    # table -- the exposure totals beside it are recomputed per visit because a
+    # fill two seconds ago already changed them, while a pooled mean over
+    # dozens of markets does not move within one rotation. NORMAL until the
+    # first sweep boundary, which is the same answer a thin pool gives anyway.
+    posture = gate.NORMAL
     while True:
         # PERIODIC RE-RANK. run/markets.json was written 2026-07-29 01:39 and
         # the fleet ran against it for a day and a half while competitors
@@ -1377,6 +1409,32 @@ def main() -> None:
             log.info("markets restored: %d in fleet", len(states))
             empty_logged = False
 
+        if i % len(states) == 0:
+            # Re-read at the sweep boundary so every market in a rotation is
+            # judged against the same pooled reading. Half a sweep on one
+            # posture and half on another is the fleet disagreeing with itself
+            # about whether it is braking.
+            #
+            # Wrapped for the same reason every other periodic step in this
+            # loop is: a failed read must degrade to the PREVIOUS posture, not
+            # stop the fleet. Falling back to NORMAL instead would quietly lift
+            # a live halt on a transient DB error, which is the one direction
+            # this must never fail in.
+            prev_posture = posture
+            try:
+                posture = _fleet_posture(base)
+            except Exception as e:
+                log.warning("fleet posture read failed, holding %s: %s: %s",
+                            posture, type(e).__name__, e)
+            # Logged on the TRANSITION only, exactly like GATE EXIT above: at
+            # one line per sweep an unconditional log would bury the moment the
+            # fleet actually stopped adding. Both directions are logged --
+            # resuming is as operationally significant as halting, and unlike
+            # EXITED this one does resume.
+            if posture != prev_posture:
+                log.info("FLEET POSTURE %s -> %s (pooled markout)",
+                         prev_posture, posture)
+
         st = states[i % len(states)]
         i += 1
         # THE HEARTBEAT TOUCHPOINT. Stamped before the visit, not after, so a
@@ -1390,7 +1448,7 @@ def main() -> None:
             # them, and a cap evaluated against a stale total is a cap that
             # lets the overshoot through.
             visit(st, bot_cfg, time.time(), fleet_naked_cost(states),
-                  fleet_committed_cost(states), states)
+                  fleet_committed_cost(states), states, posture)
         except Exception as e:
             log.warning("%s: %s", st.title[:30], e)
             st.err = str(e)

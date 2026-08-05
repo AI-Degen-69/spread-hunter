@@ -404,6 +404,22 @@ class MakerConfig:
     # Zero for a single-market bot, which has no fleet to total up.
     committed_usd: float = 0.0
 
+    # FLEET CIRCUIT BREAKER (U6): NORMAL | WIDENED | HALTED, derived once per
+    # sweep from the POOLED markout by `gate.fleet_posture` and injected here
+    # by the fleet runner, same per-cycle mechanism as `gate_state` above.
+    #
+    # Every cap above bounds a QUANTITY -- dollars naked, dollars committed,
+    # shares per order -- and none of them reads whether the fills being bought
+    # are any good. This one does, and it is the only fleet-wide rule that can
+    # stop us adding while every individual market still looks healthy.
+    #
+    # Deliberately NOT persisted, unlike EXITED: it describes the current
+    # pooled reading rather than judging a market, so it is re-derived every
+    # sweep and lifts by itself when the pool recovers. NORMAL here so a
+    # single-market bot (strategy.main) is unaffected -- it has no fleet whose
+    # markout could be pooled.
+    fleet_posture: str = "NORMAL"
+
     # Maker pool per 5-min window, for turning score-share into dollars.
     # Measured 2026-07-28 from 15 recorded windows: 68405 shares traded per
     # window -> $716 median taker-fee pool -> 20% = $143 to makers. Treat as an

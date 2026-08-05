@@ -927,3 +927,96 @@ def test_the_skew_responds_to_dollars_not_to_share_count():
         "the more expensive naked position must be pushed further from mid")
     assert off_a["DOWN"] < off_b["DOWN"], (
         "and its hedge must be pulled harder toward mid")
+
+
+# --- U6: the fleet circuit breaker ------------------------------------------
+#
+# Every cap above bounds a QUANTITY -- dollars naked, dollars committed, shares
+# per order. None of them reads whether the fills we are buying are good. The
+# pooled markout does, and on the recorded run it reads -4.75c/share while
+# every per-market gate sits at WIDENED, because no single market ever reaches
+# a sample of its own. HALTED is that reading turned into an action: stop
+# ADDING everywhere at once.
+#
+# It is a POSTURE, not a state (KTD5). It blocks the heavy side only, leaves
+# the light side, the merge and the emergency exit open, and it is derived
+# fresh each sweep -- so it lifts by itself when the pool recovers. EXITED is
+# the opposite in all three respects, and the two must not be confused.
+
+def test_the_fleet_halt_stops_the_heavy_side():
+    """R9. The market itself is fine -- in band, two-sided, $30 of a $120
+    budget -- and the fleet reading is what refuses the addition."""
+    intents, why = _rw_quote(_rw(fleet_posture=gate.HALTED),
+                             inv=_heavy_up(30.0))
+    assert [q.side for q in intents] == ["DOWN"], why
+
+
+def test_the_fleet_halt_leaves_the_light_side_at_full_size():
+    """R4/R10. The light side is the only resting order that FLATTENS us, so a
+    halt that touched it would freeze the fleet at maximum exposure with no
+    route down -- and it must not be quietly shrunk either: the size is
+    identical to the one the same market rests with no halt at all."""
+    inv = _heavy_up(30.0)
+    halted, why_h = _rw_quote(_rw(fleet_posture=gate.HALTED), inv=inv)
+    normal, why_n = _rw_quote(_rw(fleet_posture=gate.NORMAL), inv=inv)
+    dn_h = [q.size for q in halted if q.side == "DOWN"]
+    dn_n = [q.size for q in normal if q.side == "DOWN"]
+    assert dn_h and dn_h == dn_n, f"{why_h} / {why_n}"
+
+
+def test_a_flat_market_rests_on_both_sides_under_the_halt():
+    """Neither side of a flat book is the heavy one, so neither is an addition
+    to an existing naked leg. A halt that shut flat markets down would forfeit
+    the rent across the fleet to prevent exposure that does not exist."""
+    intents, why = _rw_quote(_rw(fleet_posture=gate.HALTED), inv=Inventory())
+    assert {q.side for q in intents} == {"UP", "DOWN"}, why
+
+
+def test_the_halt_does_not_persist_into_the_next_sweep():
+    """THE DIFFERENCE FROM EXITED, stated as behaviour. The posture is derived
+    from the pooled reading every sweep and never written down, so a recovered
+    fleet quotes the heavy side again with no re-entry rule to clear."""
+    inv = _heavy_up(30.0)
+    halted, _ = _rw_quote(_rw(fleet_posture=gate.HALTED), inv=inv)
+    assert "UP" not in {q.side for q in halted}
+    recovered, why = _rw_quote(_rw(fleet_posture=gate.NORMAL), inv=inv)
+    assert "UP" in {q.side for q in recovered}, why
+
+
+def test_the_halt_names_itself_in_the_blocked_reason():
+    """An operator reading 'not adding' has to be able to tell which limit
+    bound. The fleet DOLLAR cap and the fleet MARKOUT halt both stop the heavy
+    side fleet-wide for entirely different reasons, and the log must separate
+    them. `min_quote_shares` is raised only so that nothing rests at all --
+    `_decide_quotes_rewards` reports no reason while any side quotes.
+    """
+    cfg = _rw(fleet_posture=gate.HALTED, min_quote_shares=10_000)
+    intents, why = _rw_quote(cfg, inv=_heavy_up(30.0))
+    assert intents == []
+    assert "UP: fleet HALTED" in why, why
+    assert "unhedged" not in why and "committed" not in why, why
+
+
+def test_the_emergency_exit_still_crosses_under_the_halt():
+    """R4 on the case that matters most. A $208 naked leg whose mid has fallen
+    below what we paid is the exact position the halt exists to stop us
+    building -- and the order that CLOSES it must never be caught by the rule
+    that objects to opening it."""
+    up, dn = _losing_books()
+    intents, why = decide_quotes(_rw(fleet_posture=gate.HALTED), up, dn,
+                                 _lopsided(), 1e9, None)
+    hedge = [q for q in intents if q.crossed]
+    assert len(hedge) == 1, why
+    assert hedge[0].side == "DOWN" and hedge[0].size == 400
+
+
+def test_an_exited_market_is_unaffected_by_the_fleet_posture():
+    """The two mechanisms are independent, in both directions: EXITED is a
+    verdict on THIS market and outranks any posture, and the posture is a
+    verdict on the universe that can neither impose nor lift it."""
+    for posture in (gate.NORMAL, gate.HALTED):
+        intents, why = _rw_quote(
+            _rw(gate_state=gate.EXITED, fleet_posture=posture),
+            inv=_heavy_up(30.0))
+        assert intents == [], posture
+        assert "market exited" in why, why

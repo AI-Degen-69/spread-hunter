@@ -591,3 +591,15 @@ recoverable from the archive branch by checkout.
 **Result.** The sharpest reading came out of the gate test. Ten 200-share fills at -5c against ten 10-share fills at +1c has an unweighted mean of exactly -2.00c, which lands precisely ON `markout_catastrophic_threshold` and the strict `<` therefore left the market in the book. Weighted, the same rows read -4.71c — more than twice past the threshold — and the magnitude bypass takes the market NORMAL to EXITED. The AE5 case behaves the same way: one 200-share fill at -5c against nine 10-share fills at +1c reads positive unweighted and negative weighted, on an effective sample below 3. Equal-sized rows return an effective sample equal to the row count exactly, across three size scales, which is what keeps the existing thresholds honest.
 
 **Verdict.** LIVE. The mean now describes the dollars rather than the prints, and no threshold had to be retuned to make that true.
+
+---
+
+### Session 24 — 2026-08-05: the fleet circuit breaker (U6)
+
+**Question.** Pooled markout evidence is strong enough to read and too weak to sentence any individual market. What is the proportionate response to it?
+
+**Method.** Added `HALTED` and `fleet_posture(pooled, cfg)` to `strategy/gate.py`, kept separate from `next_state`, which remains a pure function of one market's own stats. `fleet_posture` takes no previous posture — having nothing to remember is what makes it reversible. `strategy/fleet.py` computes it once per sweep from `markout.fleet_stats` and injects it through the existing `replace(cfg, ...)` call alongside `gate_state`, `fleet_naked_usd` and `committed_usd`; a failed read holds the previous posture rather than falling back to NORMAL, because that is the one direction that must not silently lift a live halt. The transition is logged once, following the `GATE EXIT` pattern, and never persisted. In `_decide_quotes_rewards` the halt blocks the heavy side only, placed after the committed-capital check and before the size ladder — rules describing this market's own book report first, since a market refused on its own terms should not be blamed on the fleet, and there is nothing to size for an order that is not going out. 18 new tests; full suite 433 passed, up from 415.
+
+**Result.** The recorded pooled reading of -0.052375 on n=52 returns HALTED, where the fleet sits at WIDENED today — 2.6 times the catastrophic threshold answered by widening quotes 1.5c. -0.008 returns WIDENED and +0.01 returns NORMAL, and `insufficient_sample` returns NORMAL, so thin evidence never halts. Under HALTED the heavy side rests nothing while the light side rests at a size identical to the un-halted run, a flat market still quotes both sides because neither side is heavy, and the emergency cross still fires. The halt lifts on the next sweep once the pooled reading recovers. KTD5 is pinned as one assertion pair: the same -4.75c pool caps a borrowed per-market verdict at WIDENED and halts the fleet, which is exactly the distinction the decision draws.
+
+**Verdict.** LIVE. Pooled evidence now produces a reversible fleet-wide throttle rather than either a shrug or a mass blacklisting.

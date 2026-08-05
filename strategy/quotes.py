@@ -319,6 +319,41 @@ def _decide_quotes_rewards(
                 f"{side}: fleet ${cfg.committed_usd:.0f} committed >= "
                 f"${cfg.max_committed_usd:.0f} cap -- not adding")
             continue
+
+        # THE FLEET CIRCUIT BREAKER (U6). Every rule above this line bounds a
+        # QUANTITY -- dollars naked here, dollars naked fleet-wide, dollars
+        # committed, and below, shares per order. Not one of them reads whether
+        # the fills being bought are any good, so a fleet quoting compliant
+        # sizes into uniformly toxic flow passes all of them. Measured
+        # 2026-08-02 the POOLED markout read -4.75c/share while every market
+        # individually sat at WIDENED, because none of them ever matured a
+        # sample of its own.
+        #
+        # Placed AFTER the pair-cost arm of `hard_block` and BEFORE the size
+        # ladder for the same reason the caps are ordered as they are: the
+        # rules that describe THIS market's book report first, because they are
+        # the more specific answer, and a market refused on its own terms
+        # should not be blamed on the fleet. Before the ladder because the
+        # ladder's job is to SIZE an order we have decided to place, and there
+        # is no size to compute for one that is not going out.
+        #
+        # `imbalance > 0` is the whole of the exemption (R4/R10). The light
+        # side, the merge and the emergency stop-loss all reduce exposure, and
+        # a brake that also stopped them would freeze the fleet at maximum
+        # exposure with no route down -- exactly the failure the old share cap
+        # produced, where it held us AT the limit rather than under it. A FLAT
+        # market has no heavy side and keeps quoting both.
+        #
+        # Reversible and un-persisted, unlike the EXITED check at the top of
+        # this function: the posture is re-derived from the pool every sweep,
+        # so this stops binding the moment the fleet's fills stop losing money.
+        if imbalance > 0 and getattr(cfg, "fleet_posture",
+                                     gate.NORMAL) == gate.HALTED:
+            blocked.append(
+                f"{side}: fleet HALTED on pooled markout -- no new naked "
+                f"exposure until the fleet's fills stop losing money")
+            continue
+
         # THE SPRING, wound by dollars (strategy/risk.py). It used to be wound
         # by imbalance against a fixed share ramp, which answered a 100-share naked
         # leg identically at 0.85 ($85 of downside) and at 0.15 ($15) -- so on

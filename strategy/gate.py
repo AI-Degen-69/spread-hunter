@@ -13,10 +13,63 @@ from __future__ import annotations
 
 NORMAL, WIDENED, EXITED = "NORMAL", "WIDENED", "EXITED"
 
+# FLEET POSTURE only. Never a value of a market's own `gate_state`: the state
+# machine below is a statement about ONE market and HALTED is a statement about
+# the universe, so mixing them would let pooled evidence sentence a market that
+# was never measured -- the exact thing `_gate_with_fleet_fallback` caps at
+# WIDENED to prevent.
+HALTED = "HALTED"
+
 
 def offset_for(state: str, base: float, widened: float) -> float:
     """How far under mid to quote, given the market's gate state."""
     return widened if state == WIDENED else base
+
+
+def fleet_posture(pooled: dict, cfg) -> str:
+    """How hard the whole fleet should be leaning on the brakes, from the pool.
+
+    A pure function of ONE reading, with no previous posture argument, and that
+    is the design rather than an omission. Everything below is a posture the
+    fleet ADOPTS while a reading holds, not a sentence it serves: nothing is
+    remembered, nothing is persisted, and a recovered pool lifts the halt on
+    the next sweep with no re-entry rule to satisfy. Contrast `next_state`
+    below, where EXITED is terminal precisely because it is a judgement about a
+    market rather than a description of the moment.
+
+    Three readings, on the same two thresholds the per-market machine uses, so
+    "catastrophic" means one thing in this codebase:
+
+      * `insufficient_sample`, or no mean at all -> NORMAL. Identical noise
+        guard to `next_state`, and it matters MORE here: a per-market verdict
+        gates one book, a posture gates every book at once, so acting on thin
+        evidence is the more expensive mistake by the size of the fleet.
+      * Past `markout_catastrophic_threshold` -> HALTED. Pooled across every
+        market, a mean that deep is not one book priced a cent wrong; it is
+        the whole universe selling to us on better information. Measured
+        2026-08-02 the pool read -4.75c/share while every market individually
+        sat at WIDENED, because none of them ever reached a sample of its own.
+      * Past `markout_widen_threshold` -> WIDENED. A loss a wider quote can
+        still trade its way out of, inside the 4.5c window, so the rent keeps
+        coming while we back off.
+
+    The caller decides what a posture DOES. `quotes._decide_quotes_rewards`
+    reads HALTED as "no additions to the heavy side anywhere", and deliberately
+    leaves the light side, the merge and the emergency exit alone -- a brake
+    that also blocked the orders which flatten a position would freeze the
+    fleet at maximum exposure, which is the failure the share cap already
+    produced once.
+    """
+    if pooled.get("verdict") == "insufficient_sample":
+        return NORMAL
+    mean = pooled.get("mean_per_share")
+    if mean is None:
+        return NORMAL
+    if mean < cfg.markout_catastrophic_threshold:
+        return HALTED
+    if mean < cfg.markout_widen_threshold:
+        return WIDENED
+    return NORMAL
 
 
 def next_state(state: str, stats: dict, cfg) -> str:

@@ -11,7 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategy.config import load as load_cfg  # noqa: E402
-from strategy.gate import next_state, offset_for  # noqa: E402
+from strategy.gate import (  # noqa: E402
+    HALTED, NORMAL, WIDENED, fleet_posture, next_state, offset_for)
 
 
 def _c():
@@ -95,3 +96,66 @@ def test_widened_state_quotes_further_from_mid():
     assert offset_for("WIDENED", 0.020, 0.035) == 0.035
     assert offset_for("NORMAL", 0.020, 0.035) == 0.020
     assert offset_for("EXITED", 0.020, 0.035) == 0.020
+
+
+# --- fleet posture (U6) ------------------------------------------------------
+# A POOLED reading is evidence about the universe, not about any one market, so
+# it gets its own function rather than another arm of `next_state`. Posture is
+# derived fresh from the pool every sweep and takes no previous state: there is
+# nothing to remember, which is exactly what makes it reversible.
+
+def test_the_recorded_pooled_reading_halts_the_fleet():
+    """AE6. -0.052375/share on n=52 is the reading off the recorded run, where
+    the fleet sits at WIDENED today. Two and a half times the catastrophic
+    threshold pooled across every market is not one mispriced book."""
+    p = {"verdict": "losing", "mean_per_share": -0.052375, "n": 52}
+    assert fleet_posture(p, _c()) == HALTED
+
+
+def test_a_merely_losing_pool_only_widens():
+    """-0.8c is past the widen threshold and nowhere near the catastrophic one.
+    Halting the whole fleet on it would forfeit the rent everywhere for a loss
+    a wider quote can still trade its way out of."""
+    p = {"verdict": "losing", "mean_per_share": -0.008, "n": 52}
+    assert fleet_posture(p, _c()) == WIDENED
+
+
+def test_an_earning_pool_is_normal():
+    p = {"verdict": "earning", "mean_per_share": 0.01, "n": 52}
+    assert fleet_posture(p, _c()) == NORMAL
+
+
+def test_a_thin_pool_never_halts():
+    """The same noise guard `next_state` keeps: a catastrophic MEAN over a
+    handful of fills is a handful of fills. The posture gates every market at
+    once, so acting on thin evidence is the more expensive mistake."""
+    p = {"verdict": "insufficient_sample", "mean_per_share": -0.05, "n": 3}
+    assert fleet_posture(p, _c()) == NORMAL
+
+
+def test_a_pool_with_no_mean_is_normal():
+    """Absence of a reading is not a bad reading."""
+    assert fleet_posture({"verdict": "losing", "mean_per_share": None,
+                          "n": 52}, _c()) == NORMAL
+    assert fleet_posture({}, _c()) == NORMAL
+
+
+def test_the_halt_clears_when_the_pool_recovers():
+    """HALTED is a posture, not a state. Nothing is carried between readings,
+    so a recovered pool returns NORMAL with no re-entry rule to satisfy --
+    unlike EXITED, which is terminal by design."""
+    cfg = _c()
+    assert fleet_posture({"verdict": "losing", "mean_per_share": -0.052,
+                          "n": 52}, cfg) == HALTED
+    assert fleet_posture({"verdict": "earning", "mean_per_share": 0.02,
+                          "n": 52}, cfg) == NORMAL
+
+
+def test_the_posture_never_reaches_the_per_market_state_machine():
+    """The two mechanisms are independent. `next_state` is a pure function of
+    ONE market's stats and has no posture input; feeding it the same
+    catastrophic pooled numbers produces EXITED on its own terms, which is why
+    the fallback caps borrowed verdicts at WIDENED (KTD5)."""
+    p = {"verdict": "losing", "mean_per_share": -0.052375, "n": 52}
+    assert fleet_posture(p, _c()) == HALTED
+    assert next_state(HALTED, p, _c()) != HALTED
