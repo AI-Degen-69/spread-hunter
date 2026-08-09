@@ -19,6 +19,7 @@ import argparse
 import concurrent.futures as cf
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -31,8 +32,10 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from strategy.allocate import spread_capture_daily   # noqa: E402
+from strategy.allocate import (marginal, spread_capture_daily)   # noqa: E402
 from strategy.config import load as _load_cfg   # noqa: E402
+from strategy.rewards import score_per_share   # noqa: E402
+from strategy.selector import identity_allowed, pair_books_allowed  # noqa: E402
 
 RUN = ROOT / "run"
 OFFSET = 0.020          # where we intend to quote, in price units
@@ -51,6 +54,8 @@ FLOOR_MULTIPLE = 1.5    # headroom: projections are noisy and rivals arrive
 _CFG = _load_cfg()
 MIN_VOLUME_24H = _CFG.select_min_volume_24h_usd
 MAX_DAYS_TO_RESOLVE = _CFG.select_max_days_to_resolve
+MIN_TOP3_DEPTH_USD = _CFG.select_min_top3_depth_usd
+MAX_BOOK_SPREAD = _CFG.select_max_book_spread
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
 
@@ -98,7 +103,11 @@ def days_to_resolve(end_iso: Optional[str],
 
 
 def tradable(volume_24h: Optional[float],
-             days: Optional[float]) -> tuple[bool, str]:
+             days: Optional[float],
+             title: object = "", slug: object = "",
+             category: object = "", market_type: object = "",
+             market_group: object = "", series_title: object = "",
+             event_title: object = "") -> tuple[bool, str]:
     """Can this market produce the two observations the run needs?
 
     A fill needs someone to trade at our price; a settled P&L needs the market
@@ -111,6 +120,17 @@ def tradable(volume_24h: Optional[float],
     thin, so a missing field is far more likely to be another one of those than
     a liquid market with a gap in its metadata.
     """
+    # Keep this helper backwards-compatible for callers that only supply the
+    # numeric tradability inputs. Full selector identity is enforced by
+    # `evaluate`, where the venue metadata is available.
+    all_meta = (title, slug, category, market_type, market_group,
+                series_title, event_title)
+    if any(_value not in (None, "") for _value in all_meta):
+        identity_ok, identity_reason = identity_allowed(
+            title, slug, category, market_type,
+            market_group, series_title, event_title)
+        if not identity_ok:
+            return False, identity_reason
     if volume_24h is None:
         return False, "volume unknown"
     if volume_24h < MIN_VOLUME_24H:
@@ -234,6 +254,11 @@ def gamma_spread_universe(session: requests.Session,
                 "condition_id": m.get("conditionId"),
                 "question": m.get("question") or "",
                 "market_slug": m.get("slug") or "",
+                "category": m.get("category") or m.get("categorySlug") or "",
+                "market_type": m.get("marketType") or m.get("type") or "",
+                "market_group": m.get("groupItemTitle") or "",
+                "series_title": ((m.get("events") or [{}])[0].get("series") or [{}])[0].get("title", ""),
+                "event_title": ((m.get("events") or [{}])[0].get("title") or ""),
                 "tokens": [{"token_id": str(t)} for t in toks],
                 # No reward config exists on these markets. The scan below
                 # still needs a window and a scoring minimum to measure
@@ -284,6 +309,18 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     taker on the trade, and no minimum distribution exists to apply.
     """
     rw = m.get("rewards") or {}
+    identity_ok, identity_reason = identity_allowed(
+        m.get("question"), m.get("market_slug") or m.get("slug"),
+        m.get("category"), m.get("market_type"),
+        m.get("market_group"), m.get("series_title"), m.get("event_title"))
+    if not identity_ok:
+        return {
+            "source": source, "eligible": False,
+            "reject_reason": identity_reason,
+            "cid": m.get("condition_id"),
+            "title": m.get("question", "")[:90],
+            "slug": m.get("market_slug", ""),
+        }
     v = (rw.get("max_spread") or 3.5) / 100.0
     min_size = rw.get("min_size") or 50
     toks = [t.get("token_id") for t in (m.get("tokens") or [])]
@@ -294,6 +331,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     capital_per_share = 0.0
     mids: dict[int, float] = {}
     best_bids: dict[int, float] = {}
+    books: list[tuple[str, list[tuple[float, float]], list[tuple[float, float]]]] = []
     for j, tok in enumerate(toks):
         try:
             b = session.get("https://clob.polymarket.com/book",
@@ -304,6 +342,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         asks = [(float(x["price"]), float(x["size"])) for x in (b.get("asks") or [])]
         if not bids or not asks:
             return None
+        books.append(("YES" if j == 0 else "NO", bids, asks))
         mid = (max(bids)[0] + min(asks)[0]) / 2.0
         # Outside [0.05, 0.95] the book is one-sided in practice and the
         # position is mostly a bet on a near-settled outcome.
@@ -321,6 +360,27 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                         q1 += sc
                     else:
                         q2 += sc
+
+    books_ok, books_reason = pair_books_allowed(
+        books, MIN_TOP3_DEPTH_USD, MAX_BOOK_SPREAD)
+    if not books_ok:
+        return {
+            "source": source, "eligible": False,
+            "reject_reason": books_reason,
+            "volume_24h": round(volume_24h, 2) if volume_24h is not None else None,
+            # The book WAS readable -- this market failed the depth/spread
+            # gate, not the fetch -- so the competition reading an adopted
+            # fleet would average over its window is already in hand here.
+            # Carried so the pipeline view can estimate what the allocator
+            # would have said had this market been admitted.
+            "their_score": round(q_min(q1, q2), 1),
+            "daily": rate if source == "rewards" else 0.0,
+            "spread": round(float(m.get("_spread") or 0.0), 4) or None,
+            "max_spread": rw.get("max_spread") or 3.5,
+            "cid": m.get("condition_id"),
+            "title": m.get("question", "")[:90],
+            "slug": m.get("market_slug", ""),
+        }
 
     theirs = q_min(q1, q2)
     n = max(min_size, 120)
@@ -352,7 +412,11 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # rather than for being unprofitable -- the distinction the last six runs
     # could not make.
     days = days_to_resolve(m.get("end_date_iso"))
-    can_trade, why = tradable(volume_24h, days)
+    can_trade, why = tradable(
+        volume_24h, days, m.get("question"),
+        m.get("market_slug") or m.get("slug"),
+        m.get("category"), m.get("market_type"),
+        m.get("market_group"), m.get("series_title"), m.get("event_title"))
     # The payout floor is a REWARD rule -- the venue's minimum distribution.
     # A spread market is paid by whoever lifts the offer, in the amount of the
     # spread, so there is no distribution to be under. Holding it to the floor
@@ -375,6 +439,11 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "cid": m["condition_id"],
         "title": m.get("question", "")[:90],
         "slug": m.get("market_slug", ""),
+        "category": m.get("category") or m.get("categorySlug") or "",
+        "market_type": m.get("marketType") or m.get("type") or "",
+        "market_group": m.get("market_group") or m.get("groupItemTitle") or "",
+        "series_title": m.get("series_title") or "",
+        "event_title": m.get("event_title") or "",
         # THE REWARD POT, and zero is the honest figure for a market that pays
         # none. `fleet.reallocate` keys the spread path off `daily <= 0` and
         # recomputes the pot from `volume_24h` and `spread`, so the capture
@@ -393,6 +462,111 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "est_capital": round(capital, 2),
         "return_pct_day": round(100 * income / capital, 3) if capital else 0,
         "their_score": round(theirs, 1),
+    }
+
+
+def _cause(reason: str) -> str:
+    """Bucket a rejection reason by GATE, not by first word.
+
+    Splitting on whitespace put one gate in two buckets -- "volume unknown"
+    landed under `volume` while "24h volume $900 < $5,000" landed under `24h`
+    -- and "no spread income" became `no`. Labels that do not match the gates
+    cannot answer the question this bucketing exists to answer.
+    """
+    r = reason.lower()
+    if "volume" in r:
+        return "volume"
+    if "horizon" in r:
+        return "horizon"
+    if "income" in r:
+        return "income"
+    # The book gate embeds the measured value in the reason -- "YES: spread
+    # 0.8250 > 0.0600" -- so splitting on " $" left one bucket per spread
+    # level (23 buckets in one live run). The side still matters (YES-side vs
+    # NO-side failures are different problems), but the value only belongs in
+    # the example text. Collapse to at most two cards, keeping the side tag.
+    if "spread" in r:
+        side = ("YES" if r.startswith("yes")
+                else "NO" if r.startswith("no") else "")
+        return f"{side} spread" if side else "spread"
+    return reason.split(" $")[0] or "other"
+
+
+def _if_adopted(r: dict) -> dict | None:
+    """What the allocator WOULD have said had this rejected market been adopted.
+
+    The allocator's admission test is the first-dollar marginal return --
+    pot / competitor-depth, compared to `marginal_return_floor` -- and it is
+    the same number the GRADUATED lane's alloc-verdict shows for a refused
+    market. For a market the ranker refused there is no fleet-measured
+    `avg_theirs` to use, so the venue's own score reading (`their_score`, the
+    same q_min the fleet averages over its 30-min window) stands in as a
+    single-snapshot estimate, and `k` -- the per-share score of the quote we
+    would rest -- converts it to competitor depth in dollars exactly as
+    `reallocate` does. `pot` is the reward rate for a reward market, or the
+    spread-capture pot for a spread one, so both income sources are judged
+    on the same axis as the fleet's water-fill.
+
+    Returns None where no book reading exists -- an identity rejection never
+    fetched the book, and a readable book with `their_score` 0.0 (nothing
+    resting inside the reward window) is the thin-book shape the depth gate
+    exists to catch, so treating it as an empty competitor field and guessing
+    "we would take the whole pot" would be the wrong signal (the same
+    no-guess principle as the fleet's `avg_theirs()` returning None). There
+    is nothing honest to estimate from in either case.
+    """
+    theirs = r.get("their_score")
+    if not theirs:
+        return None
+    pot = r.get("daily") or 0.0
+    if pot <= 0 and r.get("source") == "spread":
+        pot = spread_capture_daily(
+            float(r.get("volume_24h") or 0.0),
+            float(r.get("spread") or _CFG.spread_capture_default_spread),
+            _CFG.spread_capture_frac)
+    k = score_per_share(float(r.get("max_spread") or 3.5) / 100.0, OFFSET)
+    # T == inf (k == 0 -- we would score nothing per share -- or a null
+    # reading): the first dollar earns nothing, not NaN. Same guard as the
+    # fleet's `_alloc_verdict`.
+    T = theirs / k if k and k > 0 else float("inf")
+    first = 0.0 if T == float("inf") else marginal(0.0, pot, T) * 100.0
+    thresh = _CFG.marginal_return_floor * 100.0
+    # With no pot `first` is always 0.0, so the floor comparison alone is
+    # the admission test -- no separate pot guard needed.
+    would_fund = first >= thresh
+    # The MIRAGE arm: the estimate is pot / competition, so a book with
+    # nobody resting inside the reward window (competition reading near zero)
+    # divides by ~nothing and reports an absurd %/day -- 890%/day on the Dem
+    # retirees book, 4,938%/day on UK inflation. That is the empty-book shape
+    # the depth gate exists to catch, not an opportunity. A depth reject at
+    # under half the gate bar is the same shape measured directly. Both are
+    # flagged `trap` so the lanes can show them honestly instead of as green
+    # "would clear the floor" wins -- same rule the tracker's pot tile uses.
+    _d = _DEPTH_RE.search(r.get("reject_reason") or "")
+    depth_trap = False
+    if _d:
+        dm = float(_d.group(1).replace(",", ""))
+        db = float(_d.group(2).replace(",", ""))
+        depth_trap = db > 0 and dm < 0.5 * db
+    trap = depth_trap or first > 10.0
+    if pot <= 0:
+        reason = "unpayable: no pot (spread/volume unmeasured)"
+    elif trap:
+        reason = ("empty-book mirage: nobody resting in the reward window, "
+                  "the estimate divides by ~zero competition and is not real")
+    elif would_fund:
+        reason = (f"first dollar clears the {thresh:.2f}%/day floor -- "
+                  "the allocator would have admitted it")
+    else:
+        reason = f"below the {thresh:.2f}%/day floor"
+    return {
+        "marg_pct_day": round(first, 2),
+        "would_fund": would_fund,
+        "trap": trap,
+        "threshold_pct": round(thresh, 2),
+        "pot_day": round(pot, 2),
+        "competition": round(theirs, 1),
+        "reason": reason,
     }
 
 
@@ -424,6 +598,184 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="score and print the ranking, but leave "
                         "run/markets.json untouched")
     return p.parse_args(argv)
+
+
+# A depth-gate reason embeds its measurement -- "YES: top-3 bid depth
+# $612.00 <= $1,000.00" -- and the near-miss log records it so the stats can
+# answer "how many of these would a modest loosening have admitted?".
+_DEPTH_RE = re.compile(
+    r"top-3 bid depth \$([\d,.]+) <= \$([\d,.]+)", re.IGNORECASE)
+
+
+def _log_rank_near_misses(out, rejected, verdicts, ts=None) -> int:
+    """Append this rank's near-misses to run/near_misses.jsonl.
+
+    A NEAR-MISS is a rejected market whose if-adopted first-dollar marginal
+    return clears the allocator's floor -- the green cards on the FILTERS
+    lane. The ranker's own gates refused it, but the allocator would have
+    funded it, so every one is a candidate for loosening a gate. Written as
+    ONE line per rank (the greens embedded), so a rank with zero greens still
+    records itself -- the stats reader needs to tell "no greens" from "no
+    data", and the stability bar is a fraction of ranks.
+
+    Telemetry only, and it is the input to the dashboard's near-miss tracker:
+    it accumulates whether the estimate is CONSISTENT over days -- the
+    precondition for a controlled gate-loosening trial. Consistency is not
+    profitability; the trial measures that.
+
+    Returns how many greens were logged this rank.
+    """
+    greens = []
+    depth_unparsed = 0
+    for r in out:
+        if r.get("eligible"):
+            continue
+        v = verdicts.get(id(r))
+        if not v or not v["would_fund"]:
+            continue
+        d = _DEPTH_RE.search(r.get("reject_reason") or "")
+        if not d and "top-3 bid depth" in (r.get("reject_reason") or ""):
+            # The reason format changed and the parse went quiet -- the
+            # small-margin bar would undercount with no signal. Recorded on
+            # the line so the tracker can show it.
+            depth_unparsed += 1
+        greens.append({
+            "cid": r.get("cid"), "title": r.get("title"),
+            "slug": r.get("slug"),
+            "cause": _cause(r.get("reject_reason") or ""),
+            "reason": r.get("reject_reason"),
+            "source": r.get("source"),
+            "marg_pct_day": v["marg_pct_day"], "pot_day": v["pot_day"],
+            "competition": v["competition"],
+            "trap": v.get("trap", False),
+            "threshold_pct": v["threshold_pct"],
+            "volume_24h": r.get("volume_24h"),
+            "days": r.get("days_to_resolve"),
+            "depth_measured": (float(d.group(1).replace(",", ""))
+                                if d else None),
+            "depth_bar": (float(d.group(2).replace(",", ""))
+                           if d else None),
+        })
+    line = {"ts": ts if ts is not None else time.time(),
+            "scored": len(out), "rejected": rejected,
+            "depth_unparsed": depth_unparsed,
+            "greens": greens}
+    RUN.mkdir(exist_ok=True)
+    with open(RUN / "near_misses.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\n")
+    return len(greens)
+
+
+def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
+                             causes, census, gates, attempted,
+                             rejected, verdicts=None) -> None:
+    """Persist the whole selection funnel to run/pipeline.json.
+
+    run/markets.json keeps only the winners, so the dashboard can show the
+    fleet but not the funnel that produced it. This file keeps the rest of
+    the run: the raw pools the ranker listed, every rejection bucketed by
+    gate with example titles, the eligible-but-unpicked ranking, and the
+    picks -- enough to replay the funnel's shape live, run after run.
+
+    Telemetry only: nothing in the fleet reads it as input, so writing it
+    during a --dry-run audit is safe (and useful -- the dashboard then shows
+    the audited funnel, timestamp and gates line included, rather than a
+    silently stale picture).
+    """
+    def _days(m):
+        return days_to_resolve(m.get("end_date_iso"))
+
+    raw_rewards = []
+    for rate, m in cands[:24]:
+        raw_rewards.append({
+            "title": (m.get("question") or "")[:80],
+            "rate": round(rate, 2),
+            "days": _days(m),
+        })
+    raw_spread = []
+    for m in spread_cands[:24]:
+        raw_spread.append({
+            "title": (m.get("question") or "")[:80],
+            "volume": round(float(m.get("_volume_24h") or 0.0), 0),
+            "spread": m.get("_spread"),
+            "days": _days(m),
+        })
+
+    # Estimated allocator verdict per scored-and-rejected market, keyed by
+    # object id so the per-bucket near-miss count and the example cards are
+    # computed from the same rows and cannot disagree. Precomputed by `main`
+    # and shared with the near-miss logger; computed here for direct callers.
+    if verdicts is None:
+        verdicts = {id(r): _if_adopted(r) for r in out}
+
+    rejections = []
+    for cause, n in sorted(causes.items(), key=lambda kv: -kv[1]):
+        bucket_rows = [r for r in out
+                       if not r["eligible"] and _cause(r["reject_reason"]) == cause]
+        examples = []
+        for r in bucket_rows[:4]:
+            v = verdicts.get(id(r))
+            examples.append({
+                "title": r["title"],
+                "reason": r["reject_reason"],
+                "volume": r.get("volume_24h"),
+                "days": r.get("days_to_resolve"),
+                # Absent (not None) for markets with no book reading -- an
+                # identity reject never fetched the book, so there is nothing
+                # to estimate from and the card shows no verdict.
+                **({"marg": v} if v else {}),
+            })
+        # would_fund counts only CREDIBLE near-misses: an empty-book mirage
+        # (the estimate dividing by ~zero competition) is not evidence for
+        # loosening a gate -- the traps are shown separately, not hidden.
+        would_fund = sum(1 for r in bucket_rows
+                         if (v := verdicts.get(id(r)))
+                         and v["would_fund"] and not v["trap"])
+        traps = sum(1 for r in bucket_rows
+                    if (v := verdicts.get(id(r))) and v and v["trap"])
+        rejections.append({"cause": cause, "n": n,
+                           "would_fund": would_fund, "traps": traps,
+                           "examples": examples})
+
+    def _row(r: dict) -> dict:
+        return {
+            "title": r["title"], "source": r["source"],
+            "income": r.get("est_income"), "capital": r.get("est_capital"),
+            "ret_day_pct": r.get("return_pct_day"),
+            "volume": r.get("volume_24h"), "days": r.get("days_to_resolve"),
+        }
+
+    snap = {
+        "ts": time.time(),
+        "census": census,
+        "gates": gates,
+        "counts": {
+            "funded": len(cands),
+            "spread_universe": len(spread_cands),
+            "attempted": attempted,
+            "scored": len(out),
+            "dropped_no_verdict": attempted - len(out),
+            "rejected": rejected,
+            "eligible": len(eligible),
+            "picked": len(picked),
+        },
+        "raw": {"rewards": raw_rewards, "spread": raw_spread},
+        "rejections": rejections,
+        "final": [_row(r) for r in eligible],
+        "picked": [_row(r) for r in picked],
+    }
+    RUN.mkdir(exist_ok=True)
+    f = RUN / "pipeline.json"
+    tmp = RUN / f"pipeline.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+    try:
+        tmp.write_text(json.dumps(snap, indent=1), encoding="utf-8")
+        tmp.replace(f)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def main() -> None:
@@ -544,33 +896,35 @@ def main() -> None:
     # the venue had no tradeable market today or the filters are set wrong --
     # a bare count cannot, and a silent empty universe is how the fleet ended
     # up quoting markets that never traded.
-    # Bucket by GATE, not by first word. Splitting on whitespace put one gate
-    # in two buckets -- "volume unknown" landed under `volume` while "24h
-    # volume $900 < $5,000" landed under `24h` -- and "no spread income"
-    # became `no`. Labels that do not match the gates cannot answer the
-    # question this block exists to answer.
-    def _cause(reason: str) -> str:
-        r = reason.lower()
-        if "volume" in r:
-            return "volume"
-        if "horizon" in r:
-            return "horizon"
-        if "income" in r:
-            return "income"
-        return reason.split(" $")[0] or "other"
-
     causes: dict[str, int] = {}
     for r in out:
         if not r["eligible"]:
             k = _cause(r["reject_reason"])
             causes[k] = causes.get(k, 0) + 1
-    print(f"scored {len(out)}, rejected {rejected} "
-          f"({', '.join(f'{k}={v}' for k, v in sorted(causes.items())) or 'none'}), "
-          f"{'would write' if args.dry_run else 'wrote'} top {len(picked)}"
-          f" -> run/markets.json")
-    print(f"gates: 24h volume >= ${MIN_VOLUME_24H:,.0f}, "
-          f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
-          f"income >= ${MIN_PAYOUT * FLOOR_MULTIPLE:.2f}/day\n")
+    census = (f"scored {len(out)}, rejected {rejected} "
+              f"({', '.join(f'{k}={v}' for k, v in sorted(causes.items())) or 'none'}), "
+              f"{'would write' if args.dry_run else 'wrote'} top {len(picked)}"
+              f" -> run/markets.json")
+    print(census)
+    gates = (f"gates: primary/main-line only, blocked submarkets/live; "
+             f"24h volume >= ${MIN_VOLUME_24H:,.0f}, "
+             f"YES+NO top-3 bid depth >= ${MIN_TOP3_DEPTH_USD:,.0f} each, "
+             f"spread <= {MAX_BOOK_SPREAD:.2f}, "
+             f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
+             f"income >= ${MIN_PAYOUT * FLOOR_MULTIPLE:.2f}/day\n")
+    print(gates)
+    verdicts = {id(r): _if_adopted(r) for r in out}
+    _write_pipeline_snapshot(
+        cands=cands, spread_cands=spread_cands, out=out, eligible=eligible,
+        picked=picked, causes=causes, census=census, gates=gates,
+        attempted=len(jobs), rejected=rejected, verdicts=verdicts)
+    # The near-miss log is the accumulated evidence for a gate decision; a
+    # dry-run audit must not pollute it (it would double-count against the
+    # supervised every-10-min ranks).
+    if not args.dry_run:
+        n_greens = _log_rank_near_misses(out, rejected, verdicts)
+        if n_greens:
+            print(f"near-misses logged: {n_greens} would clear the floor")
     n_spread = sum(1 for r in picked if r["source"] == "spread")
     print(f"picked {n_spread} spread / {len(picked) - n_spread} reward\n")
     print(f"{'market':<40}{'src':>7}{'$/day':>7}{'capital':>9}{'ret%/d':>8}")

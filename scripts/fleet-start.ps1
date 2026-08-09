@@ -1,75 +1,77 @@
+# THE ONLY START SCRIPT. Start the whole fleet in the background, with NO
+# console windows.
+#
+# There used to be two launchers: a FOREGROUND variant of this same name
+# (supervisor tied to a PowerShell window, one visible terminal per process),
+# and `fleet-bg.ps1`, which started the same processes detached and hidden.
+# One is enough, and background is the mode that survives closing the window
+# that launched it. This script is that one -- the name `fleet-start.ps1`
+# now means "start in the background".
+#
+# Duplicates are stopped BEFORE starting: it stops the fleet THIS checkout
+# recorded in run/fleet.pids.json (children included, so no second writer can
+# corrupt the database), reports -- but does not kill -- fleet-shaped
+# processes that belong to another checkout, and refuses to start if an
+# unrelated process owns port 8800. Every stream is redirected to a file, so
+# closing the window that launched it changes nothing.
+#
+#   .\scripts\fleet-start.ps1              # keep the current sample
+#   .\scripts\fleet-start.ps1 -FreshRun    # archive the DB first
+#
+# Stop with .\scripts\fleet-stop.ps1. Watch with:
+#   Get-Content logs\supervisor.log -Wait -Tail 20
 param(
     [switch]$FreshRun
 )
 
-# ==========================================
-# Polymarket Fleet Startup & Supervisor Script
-# ==========================================
-
-# Resolve from this script so the launcher works from any checkout path.
+$ErrorActionPreference = "Stop"
 $ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$DashboardUrl = "http://127.0.0.1:8800"
-
 Set-Location $ProjectPath
+New-Item -ItemType Directory -Force -Path (Join-Path $ProjectPath "logs") | Out-Null
 
-Write-Host "[1/4] Checking for existing supervisor processes..." -ForegroundColor Cyan
+. (Join-Path $PSScriptRoot "fleet-procs.ps1")
 
-# 1. Detect and stop the whole prior fleet, using native Windows process
-# metadata rather than Get-Process.CommandLine (which is not populated on all
-# PowerShell hosts). Stopping only the supervisor leaves its children alive and
-# can create a second writer or a port conflict during a fresh run.
-$RunningFleet = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.CommandLine -like "*strategy.supervisor*" -or
-        $_.CommandLine -like "*strategy.fleet*" -or
-        $_.CommandLine -like "*uvicorn*server.fleet_dash*" -or
-        $_.CommandLine -like "*uvicorn*8800*"
-    }
+# 1. Stop the fleet WE recorded, children included. Stopping only the
+# supervisor leaves the fleet and the dashboard alive, which produces a second
+# writer on the same database and a port conflict on 8800.
+#
+# Scoped to the recorded instance rather than a command-line wildcard: the old
+# pattern matched the same module name in any checkout or session on this
+# machine, so starting a fleet here could kill someone else's -- and its
+# database writer with it.
+$stopped = Stop-FleetInstance
+if ($stopped -gt 0) { Write-Host "stopped $stopped prior fleet process tree(s)" -ForegroundColor Yellow }
 
-if ($RunningFleet) {
-    foreach ($proc in $RunningFleet) {
-        Write-Host "[ACTION] Found prior fleet process (PID: $($proc.ProcessId)). Terminating..." -ForegroundColor Yellow
-        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+# Anything fleet-shaped we do NOT own is reported, never killed. It may be
+# another checkout entirely; it may also be why port 8800 is busy, which the
+# operator now gets told instead of having to guess.
+$strays = @(Find-FleetStrays)
+if ($strays.Count -gt 0) {
+    Write-Host ""
+    Write-Host "WARNING: $($strays.Count) fleet-shaped process(es) not started by this script:" -ForegroundColor Red
+    # Collapse FIRST, then bound against the collapsed length. Bounding with
+    # $_.CommandLine.Length while slicing the collapsed string throws
+    # ArgumentOutOfRangeException the moment collapsing shortens it -- and this
+    # scans arbitrary third-party processes, which is exactly where irregular
+    # spacing comes from. Under $ErrorActionPreference = "Stop" that aborts
+    # startup before the new fleet launches: a cosmetic line killing the run.
+    $strays | ForEach-Object {
+        $cl = ($_.CommandLine -replace '\s+', ' ')
+        Write-Host "  PID $($_.ProcessId)  $($cl.Substring(0, [Math]::Min(90, $cl.Length)))" -ForegroundColor DarkGray
     }
-    # Do not archive or restart while a child is still alive. The supervisor
-    # owns children, but force-stopping it can leave them briefly visible.
-    $deadline = (Get-Date).AddSeconds(20)
-    do {
-        Start-Sleep -Milliseconds 500
-        $remaining = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.CommandLine -like "*strategy.supervisor*" -or
-                $_.CommandLine -like "*strategy.fleet*" -or
-                $_.CommandLine -like "*uvicorn*server.fleet_dash*" -or
-                $_.CommandLine -like "*uvicorn*8800*"
-            }
-    } while ($remaining -and (Get-Date) -lt $deadline)
-    if ($remaining) {
-        throw "Fleet processes did not stop before the restart deadline."
-    }
-    do {
-        Start-Sleep -Milliseconds 500
-        $listener = netstat -ano | Select-String ":8800\s+.*LISTENING"
-    } while ($listener -and (Get-Date) -lt $deadline)
-    if ($listener) {
-        throw "Port 8800 is still occupied; refusing to archive or restart."
-    }
-    Write-Host "[OK] Existing fleet processes terminated and port 8800 is free." -ForegroundColor Green
-} else {
-    Write-Host "[OK] No conflicting fleet processes found." -ForegroundColor Green
+    Write-Host "  Not stopping them -- they may belong to another checkout or user." -ForegroundColor DarkGray
+    Write-Host "  If they are yours, stop them first: .\scripts\fleet-stop.ps1 -Strays" -ForegroundColor DarkGray
+    Write-Host ""
 }
 
-# Even without a matching fleet process, another service may own 8800. Never
-# archive a sample and start a supervisor that cannot bind its dashboard port.
-$listener = netstat -ano | Select-String ":8800\s+.*LISTENING"
-if ($listener) {
-    throw "Port 8800 is occupied by an unrelated process; refusing to restart."
+# The dashboard cannot bind a port someone else owns, and a supervisor whose
+# dashboard child dies on startup restarts it in a loop.
+if (netstat -ano | Select-String ":8800\s+.*LISTENING") {
+    throw "Port 8800 is occupied by an unrelated process; refusing to start."
 }
 
-# 2. A changed bankroll/config invalidates the old sample. Preserve the old
-# database and all SQLite sidecars before creating the clean run requested by
-# the operator. Without the state file move, the dashboard can show zombie
-# markets while the new DB is still empty.
+# 2. A fresh sample archives rather than deletes -- a paper run that has been
+# accumulating for hours is evidence, and evidence is not overwritten in place.
 if ($FreshRun) {
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $archive = Join-Path $ProjectPath "run/archive/fleet_$stamp"
@@ -77,26 +79,73 @@ if ($FreshRun) {
     Get-ChildItem -Path (Join-Path $ProjectPath "run") -File -Filter "fleet.db*" -ErrorAction SilentlyContinue |
         Move-Item -Destination $archive -Force
     $state = Join-Path $ProjectPath "run/fleet_state.json"
-    if (Test-Path $state) {
-        Move-Item -Path $state -Destination $archive -Force
-    }
-    Write-Host "`n[2/5] Archived prior paper run to $archive" -ForegroundColor Yellow
-} else {
-    Write-Host "`n[2/5] Preserving current database (use -FreshRun for a clean sample)..." -ForegroundColor Cyan
+    if (Test-Path $state) { Move-Item -Path $state -Destination $archive -Force }
+    Write-Host "archived prior run to $archive" -ForegroundColor Yellow
 }
 
-# 3. Set the database used by both child processes.
-Write-Host "`n[3/5] Setting environment variables..." -ForegroundColor Cyan
 $env:MAKER_DB = "run/fleet.db"
 
-# 4. Open the dashboard in the default browser after three seconds.
-Write-Host "`n[4/5] Launching Dashboard in default browser..." -ForegroundColor Cyan
-Start-Job -ScriptBlock {
-    Start-Sleep -Seconds 3
-    Start-Process "http://127.0.0.1:8800"
-} | Out-Null
+# 3. Start hidden. The supervisor owns the fleet, the dashboard, the ranker
+# and the universe watcher as children, and children inherit the parent's
+# hidden console -- so one hidden start yields five windowless processes, not
+# one hidden and four visible.
+#
+# Streams are redirected because a hidden process still writes to stdout and
+# that output would otherwise go nowhere. The supervisor's own logging already
+# goes to logs/supervisor.log; these files catch what happens BEFORE logging is
+# configured, which is exactly where a startup crash lands.
+$sup = Start-Process -FilePath "python" `
+    -ArgumentList "-m", "strategy.supervisor" `
+    -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput (Join-Path $ProjectPath "logs/supervisor.out.log") `
+    -RedirectStandardError  (Join-Path $ProjectPath "logs/supervisor.err.log")
 
-# 5. Run the supervisor in the foreground so its child processes are owned.
-Write-Host "`n[5/5] Starting strategy.supervisor..." -ForegroundColor Green
-Write-Host "=========================================================" -ForegroundColor Gray
-python -m strategy.supervisor
+# THE RANKER IS NO LONGER STARTED HERE. It used to run as a sibling of the
+# supervisor, which meant nothing restarted it when it died -- and on
+# 2026-08-03 it died at 17:08 and run/markets.json was not rewritten for 28.5
+# hours. The universe is short-dated by construction, so by then half of it had
+# settled and the fleet was quoting closed markets while reporting a perfectly
+# healthy heartbeat. It is now a supervised child in `strategy.supervisor`,
+# alongside the fleet and the dashboard; starting it here as well would put two
+# rankers on the machine writing the same file.
+
+# Recorded BEFORE the liveness check, so a process that dies during startup is
+# still owned and can be cleaned up by fleet-stop rather than left orphaned.
+Save-FleetInstance -Procs @{ supervisor = $sup }
+
+Start-Sleep -Seconds 6
+
+# A COUNT OF MATCHING PROCESSES IS NOT PROOF THE SUPERVISOR SURVIVED.
+#
+# $alive below counts anything matching the patterns, so a supervisor that died
+# on a bad markets.json still printed a green success line while the fleet was
+# not running. Ask the Process object we actually started, and name the log
+# that holds the traceback -- the crash lands in the .err.log before logging is
+# configured, which is the file nobody thinks to open.
+$sup.Refresh()
+if ($sup.HasExited) {
+    throw "Fleet startup failed: supervisor (see logs\supervisor.err.log)"
+}
+
+# The ranker is a supervised child now, so its absence is a real failure rather
+# than a cosmetic one: without it the universe silently ages out. The
+# supervisor restarts it, but it must be RUNNING before this script claims
+# success, or a ranker that crashes on every start looks like a healthy fleet.
+$rrPid = @(Get-DescendantPids -ParentId $sup.Id | ForEach-Object {
+    (Get-CimInstance Win32_Process -Filter "ProcessId = $_" -ErrorAction SilentlyContinue)
+} | Where-Object { $_.CommandLine -like "*scripts.rerank_loop*" })
+if ($rrPid.Count -eq 0) {
+    Write-Host "WARNING: ranker not up yet; check logs\supervisor.log and logs\rerank.log" -ForegroundColor Yellow
+}
+
+# Our own processes plus the supervisor's children (fleet + dashboard +
+# ranker + watcher), rather than every fleet-shaped process on the machine.
+$alive = @(Get-FleetInstance).Count + @(Get-DescendantPids -ParentId $sup.Id).Count
+Write-Host ""
+# ASCII separator, not a middle dot. This file has no BOM, so Windows
+# PowerShell 5.1 reads it as ANSI and renders any non-ASCII character as
+# mojibake in the one line that reports the fleet came up.
+Write-Host "supervisor PID $($sup.Id) | $alive processes up (fleet, dash, rerank, watch)" -ForegroundColor Green
+Write-Host "dashboard  http://127.0.0.1:8800"
+Write-Host "logs       Get-Content logs\supervisor.log -Wait -Tail 20"
+Write-Host "stop       .\scripts\fleet-stop.ps1"

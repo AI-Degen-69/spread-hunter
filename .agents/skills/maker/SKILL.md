@@ -117,7 +117,7 @@ def test_match_orders_edge_case():
 
 _Example:_
 ```powershell
-# scripts/fleet-bg.ps1
+# scripts/fleet-start.ps1
 # Improved error handling for process start
 ...
 ```

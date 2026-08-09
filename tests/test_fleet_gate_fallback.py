@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategy import gate, markout                          # noqa: E402
 from strategy.config import load as load_cfg                # noqa: E402
-from strategy.fleet import _gate_with_fleet_fallback        # noqa: E402
+from strategy.fleet import (                                # noqa: E402
+    _fleet_posture, _gate_with_fleet_fallback)
 
 
 def _cfg():
@@ -217,3 +218,47 @@ def test_the_threshold_drop_alone_would_not_have_helped(rows):
     assert all(v["verdict"] == "insufficient_sample"
                for v in markout.per_market_stats(8).values())
     assert markout.fleet_stats(25)["verdict"] == "losing"
+
+
+# --- the fleet posture rides the SAME pool, to a different conclusion --------
+# The fallback above answers "what is this market's state?" and must not
+# blacklist an unmeasured market on someone else's evidence. The posture
+# answers a different question -- "should the fleet be ADDING right now?" --
+# and pooled evidence is exactly the right evidence for that. Both read
+# `fleet_stats`; only one of them is terminal.
+
+def test_the_pooled_reading_that_capped_at_widened_still_halts_the_fleet(rows):
+    """KTD5, stated as one assertion pair. -4.75c/share pooled leaves an
+    unmeasured market at WIDENED -- it is not evidence about that market -- and
+    simultaneously puts the fleet in HALTED, because it IS evidence that
+    everything we add right now is being bought from someone better informed."""
+    rows.extend(_mk(-0.0475) for _ in range(30))
+    own = {"verdict": "insufficient_sample", "mean_per_share": None, "n": 0}
+    assert _gate_with_fleet_fallback(gate.NORMAL, own, _cfg())[0] == gate.WIDENED
+    assert _fleet_posture(_cfg()) == gate.HALTED
+
+
+def test_a_mildly_losing_pool_leaves_the_fleet_quoting(rows):
+    """-0.8c pooled is past the widen threshold and far inside the
+    catastrophic one. Backing off is the response; stopping is not."""
+    rows.extend(_mk(-0.008) for _ in range(30))
+    assert _fleet_posture(_cfg()) == gate.WIDENED
+
+
+def test_a_thin_pool_never_halts_the_fleet(rows):
+    """Under `markout_fleet_min_sample` there is no pooled verdict at all, and
+    a halt derived from an absent reading would stop every market at once on
+    no evidence."""
+    rows.extend(_mk(-0.05) for _ in range(5))
+    assert _fleet_posture(_cfg()) == gate.NORMAL
+
+
+def test_the_halt_lifts_when_the_pool_recovers(rows):
+    """Derived fresh each sweep and never persisted: emptying the toxic rows
+    and pooling an earning sample returns NORMAL with no re-entry rule to
+    clear, which is the whole difference from EXITED."""
+    rows.extend(_mk(-0.0475) for _ in range(30))
+    assert _fleet_posture(_cfg()) == gate.HALTED
+    rows.clear()
+    rows.extend(_mk(+0.02) for _ in range(30))
+    assert _fleet_posture(_cfg()) == gate.NORMAL

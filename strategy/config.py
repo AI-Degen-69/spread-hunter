@@ -60,19 +60,67 @@ class MakerConfig:
     # DOWN closer to mid (easier to fill, which FLATTENS us). It runs every
     # cycle from the first share of imbalance, while both sides still cost real
     # money, and it keeps us two-sided so the reward score is preserved.
-    skew_full_shares: float = 240.0     # imbalance that produces max skew
+    # The spring is wound by DOLLARS at risk, not by share count: `skew_offset`
+    # scales this cap by `risk_utilization` of the naked side, so it is at full
+    # stretch exactly when the dollar budget is full. A share-denominated ramp
+    # (240 shares to full stretch, removed) answered a 100-share naked leg with the
+    # same push at 0.85, where it is $85 of downside, as at 0.15, where it is
+    # $15 -- so on lol-maz-mg1 it was still ramping at 233 of 240 shares while
+    # $190.26 was already at stake and the position was fully built.
     max_skew: float = 0.015             # cap, in price units
     min_reward_offset: float = 0.005    # never quote nearer mid than this
 
-    # HARD CAP on directional exposure, in shares of imbalance. Skew is a
-    # spring and it bottoms out at skew_full_shares: past that, more imbalance
-    # produces no more response because `skew` is already clamped to max_skew.
-    # Measured live over ~40 minutes, unhedged positions ran to 681 shares on a
-    # single market (2.8x saturation) and fleet-wide exposure went $252 -> $1333
-    # against $47/day of rent, because the only hard stop -- max_cost_per_market
-    # at $400 -- never engaged on a $109 position. Set at 1.5x saturation: skew
-    # owns the range where it has authority, this owns the range past it.
-    max_naked_shares: float = 360.0
+    # THE HARD CAP on directional exposure, in DOLLARS of naked cost. This is
+    # the only unit the cap is stated in -- a share-denominated twin was
+    # removed rather than kept alongside it, because two caps in two units
+    # cannot both be the binding constraint and an operator reading "not
+    # adding" would have no way to tell which one bound.
+    #
+    # Skew is a spring and it bottoms out AT this budget: `risk_utilization`
+    # clamps at 1.0, so past the cap more exposure produces no more response.
+    # Something has to own that range. The share cap that used to own it could
+    # not, and the reason is the unit, not the level:
+    # on a binary market the downside of one long share IS the price paid for
+    # it, so 360 shares permitted $72 of risk at 0.20 and $293 at 0.8152 --
+    # loosest exactly where a wrong resolution costs most.
+    #
+    # Measured 2026-08-05 on lol-maz-mg1: 233.40 UP shares at an average of
+    # 0.8152, $190.26 at risk, against a 360-share cap that read 233 and stayed
+    # silent while 85% of the fleet's -$223.32 unhedged float sat in that one
+    # market. Three limits were armed and none of them bound.
+    #
+    # $120 binds between 171 shares (at 0.70) and 400 shares (at 0.30) inside
+    # the price band, and would have stopped lol-maz-mg1 at roughly 147 shares
+    # instead of 233. 0 disables the rule, same as every other cap here -- and
+    # it disables the whole dollar system with it, because this number is the
+    # denominator of all three rules that read it: the hard block, the skew
+    # spring above, and U3's size ladder (`risk.size_for`), which decays resting
+    # size as base*(1-utilization)^2 so the last order before the cap is 16% of
+    # full size rather than 100% of it.
+    max_naked_usd: float = 120.0
+    # Switchable so the dollar gates can be measured on their own rather than
+    # bundled with the rest of a release -- the same convention as
+    # enforce_price_band and enable_emergency_hedge. False makes `hard_block`
+    # return None for every side, and nothing else changes.
+    enable_hard_blocks: bool = True
+
+    # BOOK HEALTH. Three arms, all on ONE token's book.
+    #
+    # A price this close to either end means the market has decided. There is
+    # no spread left to capture and the naked leg a fill would create is
+    # already decided against us -- wta-kalinsk-kessler finished quoting 0.999
+    # bid against a 0.001 ask, and the position was unhedgeable at any price.
+    decided_price: float = 0.02
+    # Widest two-sided spread still worth quoting into. Above 2 x
+    # max_spread_from_mid (9c) the entire reward window lies INSIDE the
+    # spread, so landing in it means being the most exposed order in the book
+    # -- measured on a 0.26/0.42 market, six cents better than anyone else.
+    # 6c leaves margin under that arithmetic.
+    max_book_spread: float = 0.06
+    # Summed bid depth below which the book cannot absorb an exit. A proxy,
+    # not a measurement of exit liquidity: one aggregated number is the most
+    # the recorded book shape supports.
+    min_book_depth_sh: float = 200.0
 
     # EMERGENCY STOP-LOSS. The hard cap above stops us ADDING to the heavy
     # side; it does nothing about the exposure already on the book. Skew is
@@ -82,10 +130,16 @@ class MakerConfig:
     # from it while the heavy leg loses money every tick. That is precisely the
     # case where paying the taker fee is the cheap option.
     #
-    # Fraction of max_naked_shares at which the light side is allowed to CROSS
-    # the spread instead of resting. 0.8 puts the exception inside the cap, so
-    # it fires while there is still a hedge to buy rather than at the moment
-    # the cap freezes us at maximum exposure.
+    # Fraction of max_naked_usd at which the light side is allowed to CROSS the
+    # spread instead of resting. The deficit is valued at the HEAVY leg's
+    # average cost, which is what the missing hedge is worth: 400 shares short
+    # is $80 of exposure at 0.20 and $340 at 0.85, and only one of those is an
+    # emergency. Stating the trigger in the same unit as the cap is what keeps
+    # it inside the cap at every price.
+    #
+    # 0.8 puts the exception inside the cap on purpose, so it fires while there
+    # is still a hedge to buy rather than at the moment the cap freezes us at
+    # maximum exposure.
     emergency_hedge_frac: float = 0.8
     # Switchable so the exception can be measured on its own -- a taker order
     # is the one thing this strategy otherwise never does.
@@ -266,13 +320,31 @@ class MakerConfig:
     # argument against reward farming, which is a real strategy earning real
     # emissions; it is an argument against measuring reward farming with
     # fill-based instruments and reading the zeros as a maker result.
-    select_min_volume_24h_usd: float = 25_000.0
-    # A market resolving in 2027 cannot contribute a settled observation to a
-    # run measured in days, and settlement is the only ground truth this
-    # strategy has. The whole 2026-07-31 universe resolved between September
-    # 2026 and 2027, which is why `resolutions` is zero in all six databases.
-    # 7 days keeps n growing fast enough that a sample is reachable.
-    select_max_days_to_resolve: float = 7.0
+    # HARD MARKET SELECTOR. These are intentionally stricter than the older
+    # $25k research gate: a market must have enough real flow to make a resting
+    # quote reachable and enough immediate exit liquidity to make a naked fill
+    # survivable. The selector requires this depth independently on YES and NO.
+    select_min_volume_24h_usd: float = 250_000.0
+    # DEPTH AND SPREAD, ALIGNED TO THE LIVE GATE (2026-08-06). The entry
+    # pre-filter was stricter than the continuous protection that actually
+    # governs every quote decision: `risk.book_health` (below) requires only
+    # 200 SHARES of depth (roughly $100 notional at a 0.50 mid) and a 0.06
+    # spread, checked on EVERY quote, not once at pick time. $5,000 was an
+    # 41x margin over the $120 `max_naked_usd` worst-case position this depth
+    # exists to make exitable -- comfortable, but double-gating against a live
+    # system that already refuses to add to a bad book, refuses an untradeable
+    # hedge leg, and caps naked cost independent of how the market was picked.
+    # Measured 2026-08-06: of 189 scored candidates in a live off-peak read,
+    # ~120 failed on YES-side depth alone, most by a wide margin (not a close
+    # call at $5,000 -- either well over or an order of magnitude under), so
+    # this mainly widens the CANDIDATE POOL rather than admitting marginal
+    # books. Set to the same bar the live system already enforces rather than
+    # a stricter, redundant one: $1,000 (8x the $120 worst case) and 0.06.
+    select_min_top3_depth_usd: float = 1_000.0
+    select_max_book_spread: float = 0.06
+    # 30 days admits liquid macro, sports, and political markets while keeping
+    # long-dated 2027 markets excluded.
+    select_max_days_to_resolve: float = 30.0
 
     # How long to average competitor depth before sizing a position. One
     # snapshot sized the whole fleet on 2026-07-29 and read a competing score
@@ -281,7 +353,7 @@ class MakerConfig:
     rank_sample_window_sec: float = 1800.0
     # Re-rank cadence. run/markets.json was frozen from 2026-07-29 01:39 while
     # the fleet ran against it for a day and a half.
-    rerank_interval_sec: float = 3600.0
+    rerank_interval_sec: float = 600.0
     # Required profit per share AFTER both fees. Set at roughly one fee's
     # width again, so a close is only taken on a move clearly larger than the
     # cost of taking it -- at 1c the threshold sits inside the noise of a
@@ -312,7 +384,7 @@ class MakerConfig:
 
     # FLEET-WIDE exposure ceiling, in dollars of unhedged cost.
     #
-    # max_naked_shares bounds ONE market. It works -- and it is not enough.
+    # max_naked_usd bounds ONE market. It works -- and it is not enough.
     # Measured 2026-07-29: 16 markets, every one inside its own 360-share cap,
     # summing to $1,630 of unhedged exposure. Expected value on that book was
     # +$62 with a standard deviation of +/-$456 -- the variance is seven times
@@ -349,6 +421,22 @@ class MakerConfig:
     # Injected each cycle by the fleet runner, same pattern as fleet_naked_usd.
     # Zero for a single-market bot, which has no fleet to total up.
     committed_usd: float = 0.0
+
+    # FLEET CIRCUIT BREAKER (U6): NORMAL | WIDENED | HALTED, derived once per
+    # sweep from the POOLED markout by `gate.fleet_posture` and injected here
+    # by the fleet runner, same per-cycle mechanism as `gate_state` above.
+    #
+    # Every cap above bounds a QUANTITY -- dollars naked, dollars committed,
+    # shares per order -- and none of them reads whether the fills being bought
+    # are any good. This one does, and it is the only fleet-wide rule that can
+    # stop us adding while every individual market still looks healthy.
+    #
+    # Deliberately NOT persisted, unlike EXITED: it describes the current
+    # pooled reading rather than judging a market, so it is re-derived every
+    # sweep and lifts by itself when the pool recovers. NORMAL here so a
+    # single-market bot (strategy.main) is unaffected -- it has no fleet whose
+    # markout could be pooled.
+    fleet_posture: str = "NORMAL"
 
     # Maker pool per 5-min window, for turning score-share into dollars.
     # Measured 2026-07-28 from 15 recorded windows: 68405 shares traded per
@@ -400,8 +488,68 @@ class MakerConfig:
     # Both rules are switchable so their effect can be measured one at a time
     # rather than bundled -- a previous run changed two things at once and the
     # result could not be read.
+    #
+    # `enforce_price_band` reads on BOTH objectives as of U4. It used to be a
+    # rule of the "pair" objective alone -- not by design, but because
+    # `_in_band` sits below the line where `_decide_quotes_rewards` returns, so
+    # on the objective the fleet actually runs it never executed. Measured
+    # 2026-08-05: fills averaged 0.8152 against this nominal 0.30-0.70 band.
     enforce_price_band: bool = True
     enforce_quote_window: bool = True
+
+    # PRICE-DEPENDENT RISK (U4, R6). Every cap above is priced in dollars and
+    # none of them notices WHERE in the 0..1 range a fill lands. On a binary
+    # market two different risks move in opposite directions across that range,
+    # so they get two different treatments rather than one blended knob:
+    #
+    #   * VARIANCE peaks at the coin flip. The payout is Bernoulli, so variance
+    #     per share is p(1-p): 0.2500 at 0.50 against 0.2100 at either band edge
+    #     and 0 at the ends. A 0.50 fill is the one least informative about the
+    #     outcome, and it is answered with SIZE -- quote less where the coin is
+    #     fairest.
+    #   * MAGNITUDE rises with the price. The downside of one long share IS the
+    #     price paid for it, so the same share count is $30 of risk at 0.30 and
+    #     $70 at 0.70 -- the same unit error that made the old share cap
+    #     loosest exactly where a wrong resolution cost most. It is answered
+    #     with OFFSET -- demand a better price where a share costs more.
+    #
+    # `risk.band_risk_factor` computes both from one weight,
+    #   w(p) = max(0, 1 - |p - 0.50| / coinflip_halfwidth)
+    #   size   *= 1 - coinflip_size_cut * w(p)
+    #   offset += price_risk_widen * (w(p) + p)
+    #
+    # 0.20 is half the width of the 0.30-0.70 band above, so the variance
+    # treatment reaches zero exactly where the band stops permitting quotes at
+    # all. The two rules then describe one geometry: inside the band the
+    # response is graduated, at the edge it is nil, past the edge the band
+    # refuses outright. Any other halfwidth would leave a seam -- either
+    # in-band prices treated as risk-free, or a cut still ramping at a price
+    # that is already forbidden.
+    coinflip_halfwidth: float = 0.20
+    # Originally a 10% trim, sized off the THEORETICAL variance differential
+    # alone (0.2500 at 0.50 vs 0.2100 at the band edge, a 19% gap -- paying
+    # much more than half of that in forgone rent looked like buying the
+    # smaller risk with the larger certainty). The 2026-08-05 forensic audit
+    # then measured the REALIZED cost directly and it dominates that estimate:
+    # -10.68c mean drift and -$122.00 size-weighted loss in 0.40-0.60 (n=19),
+    # the only price band that read negative on both the mean and the
+    # size-weighted total. Raised to 55%, the strongest cut that does not
+    # zero out at the coin flip: `size = int(ladder * size_mult)` also gates
+    # the LIGHT side (the one order exempt from every OTHER risk rule,
+    # because it is the only one that reduces exposure), and the 120-share
+    # base falls below the 50-share reward minimum for any cut past ~58%
+    # (120 * 0.42 =~ 50). 88% was tried first and silently zeroed BOTH sides
+    # at 0.50, flat markets included -- the full exclusion this setting was
+    # chosen instead of. Reassess against the go-live readiness panel's
+    # per-band markout once more data accumulates under this setting.
+    coinflip_size_cut: float = 0.55
+    # 1c of extra offset at full weight, in price units. Reads as 0.3c at 0.30
+    # and 0.7c at 0.70 on the magnitude term -- a 0.4c differential across the
+    # band, comparable to the 0.5c `min_reward_offset` and therefore large
+    # enough to change which side fills first -- plus up to another 1c at the
+    # coin flip. Worst case 1.5c against a 4.5c window: it tilts the quote
+    # without evicting it from the reward window on its own.
+    price_risk_widen: float = 0.010
 
     # --- inventory --------------------------------------------------------
     # He finishes markets ~92% balanced between UP and DOWN (median 0.923).

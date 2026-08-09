@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from strategy import gate
+from strategy import gate, risk
 from strategy.config import MakerConfig
 
 
@@ -104,9 +104,23 @@ def _decide_quotes_rewards(
         Quoting off the ASK did the opposite: ~half a spread ABOVE mid on each
         side, i.e. 1.00 + spread, which is why no sub-$1.00 pair ever appeared.
 
-    Deliberately NOT gated on the price band, the quoting window, or the pair
-    cost. Those rules exist to protect fill quality; here a fill is a side
-    effect, and every cycle spent sitting out earns nothing.
+    Still deliberately NOT gated on the QUOTING WINDOW. That rule exists to
+    protect fill quality by refusing to open late, and here a fill is a side
+    effect: the score is paid on resting size every minute the order is there,
+    so a cycle spent sitting out earns nothing and buys nothing.
+
+    The PRICE BAND and the PAIR-COST cap used to be excused on the same
+    reasoning, and that reasoning was wrong -- not because sitting out is
+    cheap, but because neither rule protects fill quality alone. Outside the
+    band the spread has collapsed on an outcome the market already considers
+    settled, so the rent is small AND the naked leg a fill creates is decided
+    against us. A pair over $1.00 is not a worse fill, it is a booked loss on
+    an instrument that pays exactly $1.00. Both now run in `risk.hard_block`,
+    on this path. They were unreachable rather than declined: both sit in the
+    legacy branch of `decide_quotes`, below the line where this function
+    returns, and the telemetry reads as absent rules would -- fills averaged
+    0.8152 against a nominal 0.30-0.70 band, and wta-kalinsk-kessler bought 14
+    pairs at $1.0200 against a $0.995 cap.
     """
     if t_remaining < cfg.min_t_remaining_sec:
         return [], f"t_remaining {t_remaining:.0f}s < {cfg.min_t_remaining_sec:.0f}s"
@@ -176,9 +190,13 @@ def _decide_quotes_rewards(
         # Two conditions, both required. Size alone is not an emergency: a
         # large, hedging-in-progress position in a flat market is doing no harm
         # and crossing it would pay the fee for nothing.
-        #   1. The deficit on this side is within `emergency_hedge_frac` of the
-        #      hard cap -- fired INSIDE the cap, while there is still a hedge
-        #      left to buy.
+        #   1. The deficit on this side, VALUED AT THE HEAVY LEG'S AVERAGE
+        #      COST, is within `emergency_hedge_frac` of the dollar cap --
+        #      fired INSIDE the cap, while there is still a hedge left to buy.
+        #      Dollars, not shares, for the same reason the cap itself is in
+        #      dollars: 400 shares short is $80 of exposure at 0.20 and $340 at
+        #      0.85, and a share-denominated trigger would sit inside the cap
+        #      at one of those prices and outside it at the other.
         #   2. The heavy leg's mid has fallen below what we paid for it. That
         #      is the position losing money right now, measured, rather than
         #      inferred from how big it is.
@@ -190,9 +208,15 @@ def _decide_quotes_rewards(
         # rule would be choosing the larger loss to keep the smaller number
         # tidy.
         deficit = -imbalance
+        heavy = "DOWN" if side == "UP" else "UP"
+        # What the missing hedge is worth, priced at what the leg it would
+        # cover actually cost us. A zero budget disables the rule, same escape
+        # hatch as every other cap here -- without the guard a 0 budget would
+        # put the trigger at $0 and cross on the first share of imbalance.
+        deficit_usd = deficit * inv.avg(heavy) if deficit > 0 else 0.0
         if (cfg.enable_emergency_hedge and ba is not None and ba < 1.0
-                and deficit >= cfg.max_naked_shares * cfg.emergency_hedge_frac):
-            heavy = "DOWN" if side == "UP" else "UP"
+                and cfg.max_naked_usd > 0
+                and deficit_usd >= cfg.max_naked_usd * cfg.emergency_hedge_frac):
             heavy_book = down_book if side == "UP" else up_book
             heavy_mid = mid_price(heavy_book.get("best_bid"),
                                   heavy_book.get("best_ask"))
@@ -210,23 +234,51 @@ def _decide_quotes_rewards(
                     price=round(ba, 4), size=int(deficit), mid=mid,
                     edge_vs_mid=mid - ba, crossed=True,
                     reason=(f"EMERGENCY hedge: {deficit:.0f}sh short of "
-                            f"{heavy} vs {cfg.max_naked_shares:.0f} cap, "
+                            f"{heavy} = ${deficit_usd:.0f} vs "
+                            f"${cfg.max_naked_usd:.0f} cap, "
                             f"{heavy} mid {heavy_mid:.3f} under avg "
                             f"{heavy_avg:.3f} -- crossing at {ba:.3f}"),
                 ))
                 continue
 
-        # HARD CAP. The skew below is a spring and it bottoms out at
-        # skew_full_shares; past max_naked_shares it has no authority left, so
-        # stop adding to the heavy side entirely. The light side keeps quoting
-        # -- it is the only order that flattens us -- so this costs reward
-        # score (one-sided books score at 1/c, c=3.0) but bounds the exposure
-        # that actually loses money. Without it, measured live, one market ran
-        # to 681 shares unhedged and fleet exposure hit $1333 against $47/day
-        # of rent.
-        if imbalance >= cfg.max_naked_shares:
-            blocked.append(f"{side}: {imbalance:.0f}sh unhedged >= "
-                           f"{cfg.max_naked_shares:.0f} cap -- not adding")
+        # A WIDENED market quotes further from mid on BOTH sides: fewer fills,
+        # and the ones we still get are on better terms. It stays inside the
+        # 4.5c reward window, so the rent keeps coming while we back off.
+        base = gate.offset_for(getattr(cfg, "gate_state", gate.NORMAL),
+                               cfg.reward_offset, cfg.widen_offset)
+        # Provisional resting price, computed BEFORE the block so the block can
+        # reason about it. The real price below is this one plus skew and the
+        # price-risk widening, then clamped against the tick, the ask and the
+        # book's best bid. Those move it by at most max_skew + 1.5c ~ 3c, which
+        # cannot carry a price from inside the 0.30-0.70 band to outside it or
+        # back, and computing the clamps for a quote we are about to refuse
+        # would be work done for nothing.
+        #
+        # It is also the input to `band_risk_factor`, and it has to be: the
+        # widening it returns is one of the terms that produces the final
+        # price, so reading the final price here would be circular. Basing both
+        # the band VERDICT and the risk RESPONSE on the same number is the
+        # property that matters -- the two never disagree about where the quote
+        # sits.
+        provisional = round(mid - base, 4)
+
+        # THE HARD BLOCK (strategy/risk.py). Five arms -- the hedge token's
+        # health, this token's health, the dollar cap, the price band and the
+        # pair-cost cap -- kept out of line here on purpose: this function
+        # already carries six caps inline, and five more spelled out in place
+        # would make the binding constraint unreadable. It replaces a share-denominated cap that measured the
+        # wrong thing: 360 shares was $72 of risk at 0.20 and $293 at 0.8152,
+        # so it never fired on lol-maz-mg1's $190.26 position.
+        #
+        # The light side is exempt inside `hard_block` -- it is the only
+        # resting order that flattens us, so blocking it would freeze the
+        # market at maximum exposure. That costs reward score when the heavy
+        # side drops out (one-sided books score at 1/c, c=3.0) and bounds the
+        # exposure that actually loses money.
+        why = risk.hard_block(cfg, inv, side, provisional, book,
+                              down_book if side == "UP" else up_book)
+        if why:
+            blocked.append(f"{side}: {why}")
             continue
 
         # FLEET-WIDE cap. The per-market rule above cannot see a book where
@@ -267,16 +319,81 @@ def _decide_quotes_rewards(
                 f"{side}: fleet ${cfg.committed_usd:.0f} committed >= "
                 f"${cfg.max_committed_usd:.0f} cap -- not adding")
             continue
-        skew = cfg.max_skew * max(-1.0, min(1.0, imbalance / cfg.skew_full_shares))
-        # A WIDENED market quotes further from mid on BOTH sides: fewer fills,
-        # and the ones we still get are on better terms. It stays inside the
-        # 4.5c reward window, so the rent keeps coming while we back off.
-        base = gate.offset_for(getattr(cfg, "gate_state", gate.NORMAL),
-                               cfg.reward_offset, cfg.widen_offset)
-        offset = base + skew
+
+        # THE FLEET CIRCUIT BREAKER (U6). Every rule above this line bounds a
+        # QUANTITY -- dollars naked here, dollars naked fleet-wide, dollars
+        # committed, and below, shares per order. Not one of them reads whether
+        # the fills being bought are any good, so a fleet quoting compliant
+        # sizes into uniformly toxic flow passes all of them. Measured
+        # 2026-08-02 the POOLED markout read -4.75c/share while every market
+        # individually sat at WIDENED, because none of them ever matured a
+        # sample of its own.
+        #
+        # Placed AFTER the pair-cost arm of `hard_block` and BEFORE the size
+        # ladder for the same reason the caps are ordered as they are: the
+        # rules that describe THIS market's book report first, because they are
+        # the more specific answer, and a market refused on its own terms
+        # should not be blamed on the fleet. Before the ladder because the
+        # ladder's job is to SIZE an order we have decided to place, and there
+        # is no size to compute for one that is not going out.
+        #
+        # `imbalance > 0` is the whole of the exemption (R4/R10). The light
+        # side, the merge and the emergency stop-loss all reduce exposure, and
+        # a brake that also stopped them would freeze the fleet at maximum
+        # exposure with no route down -- exactly the failure the old share cap
+        # produced, where it held us AT the limit rather than under it. A FLAT
+        # market has no heavy side and keeps quoting both.
+        #
+        # Reversible and un-persisted, unlike the EXITED check at the top of
+        # this function: the posture is re-derived from the pool every sweep,
+        # so this stops binding the moment the fleet's fills stop losing money.
+        if imbalance > 0 and getattr(cfg, "fleet_posture",
+                                     gate.NORMAL) == gate.HALTED:
+            blocked.append(
+                f"{side}: fleet HALTED on pooled markout -- no new naked "
+                f"exposure until the fleet's fills stop losing money")
+            continue
+
+        # THE SPRING, wound by dollars (strategy/risk.py). It used to be wound
+        # by imbalance against a fixed share ramp, which answered a 100-share naked
+        # leg identically at 0.85 ($85 of downside) and at 0.15 ($15) -- so on
+        # lol-maz-mg1 it was still ramping, 233 shares into a 240-share ramp,
+        # while $190 was already at stake. Utilization of the naked side is the
+        # same number the cap and the taper read, so all three now respond to
+        # the same event.
+        skew = risk.skew_offset(cfg, inv, side)
+
+        # PRICE-DEPENDENT RISK (R6, strategy/risk.py). Everything above is
+        # priced in dollars ALREADY HELD; nothing yet reads where in the 0..1
+        # range the next fill would land. Two risks live there and they point
+        # opposite ways -- variance peaks at the coin flip, magnitude rises all
+        # the way to 1.00 -- so `band_risk_factor` answers the first with size
+        # and the second with offset. Applied to BOTH sides, unlike the
+        # exposure taper: this is a property of the PRICE, and on a binary
+        # market both legs sit at prices summing to ~1.00, so treating them
+        # symmetrically tilts nothing. The exposure taper is one-sided because
+        # only one side reduces exposure; nothing here reduces anything.
+        band = risk.band_risk_factor(cfg, provisional)
+        desired = base + skew + band.extra_offset
+
         # Stay inside the reward window at the far end and off the touch at the
         # near end: a quote outside 4.5c scores nothing, which defeats the skew.
-        offset = max(cfg.min_reward_offset, min(cfg.max_spread_from_mid, offset))
+        offset = max(cfg.min_reward_offset,
+                     min(cfg.max_spread_from_mid, desired))
+
+        # KTD3. THE WINDOW IS A HARD BUDGET AND RISK AVERSION MUST NOT VANISH
+        # INTO IT. Under WIDENED `base` is already 0.035, so 0.015 of skew plus
+        # up to 1.5c of price-risk widening asks for more than the 4.5c window
+        # allows -- and the clamp above would silently discard the excess in
+        # exactly the state we entered BECAUSE fills were losing money. The
+        # truncated fraction becomes a proportional size cut instead: if only
+        # 90% of the requested distance fits, only 90% of the size rests.
+        # Aversion always has somewhere to go. Only the FAR clamp counts; being
+        # pushed out to `min_reward_offset` at the near end means resting
+        # further from mid than asked for, which is not a truncation.
+        truncated = 1.0
+        if desired > offset > 0:
+            truncated = offset / desired
 
         price = round(mid - offset, 4)
         # Land on a real venue price level (min tick 0.001), never above mid.
@@ -310,7 +427,14 @@ def _decide_quotes_rewards(
                 price = cap_price
 
         s = mid - price
-        if s > cfg.max_spread_from_mid:
+        # The epsilon is representation error, not tolerance. The clamp above
+        # sets the offset TO `max_spread_from_mid` in the cases that now reach
+        # it, and `0.525 - 0.48` evaluates to 0.04500000000000004 in binary
+        # floating point -- so without it a quote the clamp deliberately placed
+        # ON the window edge is thrown out for being outside the window. That
+        # is unreachable while the clamp never binds and routine once the U4
+        # risk terms push against it, which is the whole of KTD3.
+        if s > cfg.max_spread_from_mid + 1e-9:
             blocked.append(f"{side}: {100*s:.1f}c from mid > "
                            f"{100*cfg.max_spread_from_mid:.1f}c reward window")
             continue
@@ -324,7 +448,55 @@ def _decide_quotes_rewards(
             blocked.append(f"{side}: cost cap ${cfg.max_cost_per_market:.0f}")
             continue
 
-        size = max(cfg.quote_shares, cfg.min_quote_shares)
+        # THE SIZE LADDER (strategy/risk.py). The dollar cap above is a step:
+        # $119.99 of a $120 budget rested the full 120 shares and $120.00
+        # rested none, so the largest order of a market's life arrived with a
+        # cent of headroom left. `size_for` walks the size down as the budget
+        # fills -- 16% of full size at 60% utilization -- and reaches zero AT
+        # the budget. It reads the FINAL price, not the provisional one, because
+        # its remaining-dollars arm is priced in the money an order actually
+        # costs.
+        ladder = risk.size_for(cfg, inv, side, price)
+        # The two price-driven cuts, applied to what the ladder allowed. Both
+        # are fractions of a size the exposure rules already approved, so they
+        # can only ever make an order smaller -- neither can license one the
+        # dollar budget refused.
+        size = int(ladder * band.size_mult * truncated)
+        if size < cfg.min_quote_shares:
+            # Below rewardsMinSize (50) an order earns no score while still
+            # buying inventory, so the honest answer is no order at all.
+            size = 0
+        if size <= 0:
+            # No intent at all, never a zero-size order. Each rule names
+            # ITSELF: at 80% of the budget the dollar cap has NOT fired, and an
+            # operator reading the wrong reason goes looking for the wrong
+            # limit. THREE terms cut this size -- the exposure ladder, the
+            # price-risk multiplier and the KTD3 reward-window truncation --
+            # so all three get their own arm. Reporting the truncation as
+            # "price risk" named a rule that was not binding, and it also
+            # classified wrong: `store.reason_code` matches "reward window"
+            # but not "reward minimum", so those refusals were counted OTHER
+            # instead of SPREAD.
+            if ladder <= 0:
+                util = risk.risk_utilization(cfg, inv, side)
+                blocked.append(
+                    f"{side}: size tapered to 0 at {100*util:.0f}% of the "
+                    f"${cfg.max_naked_usd:.0f} naked budget")
+            elif (truncated < 1.0
+                    and int(ladder * band.size_mult) >= cfg.min_quote_shares):
+                # The ladder and the price-risk cut together still cleared the
+                # minimum; only the truncation took it under. That is the
+                # 4.5c window refusing to carry the aversion the risk terms
+                # asked for, which is a spread problem, not a price one.
+                blocked.append(
+                    f"{side}: reward window truncated the quote to "
+                    f"{100*truncated:.0f}% of the distance asked for, cutting "
+                    f"{ladder}sh under the {cfg.min_quote_shares}sh minimum")
+            else:
+                blocked.append(
+                    f"{side}: price risk at {price:.3f} cut {ladder}sh to "
+                    f"under the {cfg.min_quote_shares}sh reward minimum")
+            continue
         out.append(QuoteIntent(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,

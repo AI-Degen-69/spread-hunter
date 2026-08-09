@@ -240,7 +240,7 @@ Follow the script-improvement-or-safety-hardening workflow:
 
 - Workflow detected from commit patterns
 - Frequency: ~2x per month
-- Files: scripts/fleet-bg.ps1, scripts/fleet-stop.ps1, scripts/fleet-procs.ps1
+- Files: scripts/fleet-start.ps1, scripts/fleet-stop.ps1, scripts/fleet-procs.ps1
 
 ---
 id: maker-workflow-untrack-runtime-or-generated-files
