@@ -139,6 +139,23 @@ def test_the_recorded_settled_book_is_refused():
     assert "settled" in res.reason
 
 
+def test_a_crossed_book_is_refused_outright():
+    """A bid ABOVE the ask is not a wide book, it is an impossible one.
+
+    Width could not catch it either way round: the raw `ba - bb` went
+    NEGATIVE, and a negative number is never greater than the cap, while the
+    absolute gap here is 5c -- comfortably inside the 6c bar. The recorded
+    0.999/0.001 case was only ever stopped because the settled arm fires
+    first; 0.60/0.55 sits nowhere near either end and reached the quoting
+    path untouched.
+    """
+    res = risk.book_health(_book(0.60, 0.55, depth=5000.0), _cfg())
+    assert not res.ok
+    assert "crossed" in res.reason
+    # The settled arm still owns the recorded case, which is crossed too.
+    assert "settled" in risk.book_health(_book(0.999, 0.001), _cfg()).reason
+
+
 def test_a_near_certain_one_way_book_is_refused_as_settled():
     res = risk.book_health(_book(0.997, 0.999), _cfg())
     assert not res.ok

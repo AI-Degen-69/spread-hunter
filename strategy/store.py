@@ -820,7 +820,8 @@ def reason_code(reason: str | None) -> str:
         return "FLEET_HALTED"
     if "too thin" in text or "depth" in text:
         return "THIN_BOOK"
-    if "too wide" in text or "spread" in text or "reward window" in text:
+    if ("too wide" in text or "spread" in text or "reward window" in text
+            or "crossed book" in text):
         return "SPREAD"
     # BEFORE "not tradeable", not after. `risk.hard_block` wraps the hedge
     # leg's rejection inside its own prose -- "hedge token UP not tradeable

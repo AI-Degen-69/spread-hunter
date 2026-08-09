@@ -124,7 +124,7 @@ def test_near_miss_stats_stays_collecting_until_every_bar(tmp_path, monkeypatch)
                   for j in range(6)]
         lines.append(_rank(day0 + i * 60, greens))
     (tmp_path / "near_misses.jsonl").write_text(
-        "\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
+        "\n".join(json.dumps(row) for row in lines) + "\n", encoding="utf-8")
     s = dash.near_miss_stats()
     assert s["status"] == "COLLECTING"
     assert s["ranks"] == 72
@@ -158,7 +158,7 @@ def test_near_miss_stats_ready_to_trial_when_all_bars_met(tmp_path, monkeypatch)
         # Spread the ranks across 3 distinct UTC dates.
         lines.append(_rank(day + (i % 3) * 86400.0 + i * 600, greens))
     (tmp_path / "near_misses.jsonl").write_text(
-        "\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
+        "\n".join(json.dumps(row) for row in lines) + "\n", encoding="utf-8")
     s = dash.near_miss_stats()
     assert s["status"] == "READY_TO_TRIAL"
     assert s["days"] >= 3
@@ -185,7 +185,7 @@ def test_traps_do_not_feed_decision_bars(tmp_path, monkeypatch):
                         depth_measured=None, marg=4938.27, pot=16.0)
         lines.append(_rank(day + i * 86400.0, [mirage]))
     (tmp_path / "near_misses.jsonl").write_text(
-        "\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
+        "\n".join(json.dumps(row) for row in lines) + "\n", encoding="utf-8")
     s = dash.near_miss_stats()
     assert s["days"] == 0
     assert s["unique_markets"] == 0

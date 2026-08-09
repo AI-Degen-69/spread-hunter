@@ -44,7 +44,8 @@ function Save-FleetInstance {
             # then compared a String against a DateTime, PowerShell stringified
             # the DateTime with its DEFAULT format, and the two could never be
             # equal -- so every recorded pid was reported "recycled" and
-            # disowned. The fleet became unkillable by its own tooling, and#            fleet-start.ps1 reported its own processes as strays.
+            # disowned. The fleet became unkillable by its own tooling, and
+            # fleet-start.ps1 reported its own processes as strays.
             #
             # An Int64 has no such alternate rendering: it round-trips through
             # JSON as itself.

@@ -474,7 +474,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     _print(rep)
     if a.json:
         import json
-        Path(a.json).write_text(json.dumps(rep, indent=2))
+        # Explicit encoding: `write_text` otherwise takes the platform
+        # default, which on this repo's Windows hosts is a legacy codepage.
+        # One market slug or note carrying a non-ASCII character then raises
+        # UnicodeEncodeError after the entire replay has already run.
+        Path(a.json).write_text(json.dumps(rep, indent=2), encoding="utf-8")
         print(f"\nwrote {a.json}")
     return 0
 

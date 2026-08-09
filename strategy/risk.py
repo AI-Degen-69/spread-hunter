@@ -240,7 +240,23 @@ def book_health(book: dict, cfg) -> BookHealth:
         return BookHealth(False, f"settled book {bb:.3f}/{ba:.3f}",
                           depth_evaluated=False)
 
-    spread = ba - bb
+    # CROSSED. A bid at or above the ask is not a wide book, it is an
+    # impossible one -- stale data, or a venue mid-update. Refused on its own
+    # arm rather than left to the width test below, because width cannot catch
+    # it either way round: the raw `ba - bb` goes NEGATIVE and a negative
+    # number is never greater than the cap, while the absolute gap of a
+    # crossed 0.60/0.55 is 5c, comfortably inside the 6c bar. The recorded
+    # 0.999/0.001 case was only ever stopped because the settled arm fires
+    # first; a crossed book in the middle of the range had nothing to stop it.
+    if bb >= ba:
+        return BookHealth(False, f"crossed book {bb:.3f}/{ba:.3f}",
+                          depth_evaluated=False)
+
+    # `hi - lo` rather than `ba - bb`, so this arm reads the same normalised
+    # pair the settled arm above does. With the crossed case already refused
+    # the two are equal; keeping the normalised form means a future reordering
+    # cannot silently reintroduce the negative-width hole.
+    spread = hi - lo
     if spread > cfg.max_book_spread:
         return BookHealth(False,
                           f"book too wide {100*spread:.1f}c > "

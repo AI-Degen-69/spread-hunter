@@ -33,7 +33,7 @@ def _build(path: Path, fills=(), closes=(), quotes=()) -> Path:
     """
     c = sqlite3.connect(str(path))
     c.executescript(SCHEMA)
-    for i, (ts, slug, side, price, size) in enumerate(fills):
+    for ts, slug, side, price, size in fills:
         c.execute(
             "INSERT INTO fills (ts, quote_id, market_slug, condition_id, "
             "token_id, side, price, size, reason) VALUES (?,?,?,?,?,?,?,?,?)",

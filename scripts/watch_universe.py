@@ -85,6 +85,16 @@ def _esports_books(session: requests.Session) -> list[dict]:
             "end_date_min": now.isoformat()}, timeout=30).json()
     except Exception:
         return out
+    # Gamma answers with a bare list on some paths and `{"data": [...]}` on
+    # others; `gamma_spread_universe` in scripts/rank_markets.py already
+    # normalises both. Without this the dict form iterates its KEYS, `m` is a
+    # string, and `m.get` raises AttributeError OUTSIDE the try above -- and
+    # this process is a supervised child, so that is a restart loop rather
+    # than one bad sample.
+    if isinstance(rows, dict):
+        rows = rows.get("data") or []
+    if not isinstance(rows, list):
+        return out
     for m in rows:
         q = m.get("question") or ""
         if not ESPORTS_RE.search(q):
@@ -184,7 +194,13 @@ def main() -> None:
         if picked > 0:
             lines.append(f"  ** FLEET HAS {picked} MARKET(S) — universe live")
         msg = "\n".join(lines)
-        print(msg, flush=True)
+        # The console gets an ASCII-folded copy; the log file gets the real
+        # text. Windows PowerShell 5.1 hands `print` a legacy codepage, and
+        # these lines carry an em dash plus venue titles with accents and
+        # curly quotes -- enough for UnicodeEncodeError, which would land
+        # AFTER the sample was taken and restart this supervised child on
+        # every pass. scripts/rank_markets.py documents the same failure.
+        print(msg.encode("ascii", "replace").decode("ascii"), flush=True)
         with LOG.open("a", encoding="utf-8") as f:
             f.write(msg + "\n")
         if args.once:

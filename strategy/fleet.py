@@ -955,6 +955,14 @@ def _settle_resolved(st: MarketState, now: float) -> None:
         "up_sh": 0.0, "dn_sh": 0.0, "up_avg": 0.0, "dn_avg": 0.0,
         "paired": 0.0, "naked_side": "", "naked_sh": 0.0, "naked_cost": 0.0,
         "pair_paid": 0.0, "fills": st.inv.fills,
+        # `stale` back to False, because `_cancel_live_orders` above set it
+        # True on the way in. That flag means "these figures are older than
+        # the fleet's last look at the market", and these figures are the
+        # opposite: measured now, against a settlement that is final. Left
+        # True the dashboard renders a settled market as permanently STALE
+        # while carrying a fresh `ts`, which is the page disagreeing with
+        # itself about the one market whose numbers can no longer move.
+        "stale": False,
         "err": "", "ts": now,
     })
 

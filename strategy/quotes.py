@@ -262,11 +262,11 @@ def _decide_quotes_rewards(
         # sits.
         provisional = round(mid - base, 4)
 
-        # THE HARD BLOCK (strategy/risk.py). Three arms -- the hedge token's
-        # health, this token's health, and the dollar cap -- kept out of line
-        # here on purpose: this function already carries six caps inline, and a
-        # seventh spelled out in place would make the binding constraint
-        # unreadable. It replaces a share-denominated cap that measured the
+        # THE HARD BLOCK (strategy/risk.py). Five arms -- the hedge token's
+        # health, this token's health, the dollar cap, the price band and the
+        # pair-cost cap -- kept out of line here on purpose: this function
+        # already carries six caps inline, and five more spelled out in place
+        # would make the binding constraint unreadable. It replaces a share-denominated cap that measured the
         # wrong thing: 360 shares was $72 of risk at 0.20 and $293 at 0.8152,
         # so it never fired on lol-maz-mg1's $190.26 position.
         #
@@ -470,14 +470,28 @@ def _decide_quotes_rewards(
             # No intent at all, never a zero-size order. Each rule names
             # ITSELF: at 80% of the budget the dollar cap has NOT fired, and an
             # operator reading the wrong reason goes looking for the wrong
-            # limit. The same now applies between the exposure ladder and the
-            # price-risk cut, which bind at different times for different
-            # reasons and would otherwise be indistinguishable in the log.
+            # limit. THREE terms cut this size -- the exposure ladder, the
+            # price-risk multiplier and the KTD3 reward-window truncation --
+            # so all three get their own arm. Reporting the truncation as
+            # "price risk" named a rule that was not binding, and it also
+            # classified wrong: `store.reason_code` matches "reward window"
+            # but not "reward minimum", so those refusals were counted OTHER
+            # instead of SPREAD.
             if ladder <= 0:
                 util = risk.risk_utilization(cfg, inv, side)
                 blocked.append(
                     f"{side}: size tapered to 0 at {100*util:.0f}% of the "
                     f"${cfg.max_naked_usd:.0f} naked budget")
+            elif (truncated < 1.0
+                    and int(ladder * band.size_mult) >= cfg.min_quote_shares):
+                # The ladder and the price-risk cut together still cleared the
+                # minimum; only the truncation took it under. That is the
+                # 4.5c window refusing to carry the aversion the risk terms
+                # asked for, which is a spread problem, not a price one.
+                blocked.append(
+                    f"{side}: reward window truncated the quote to "
+                    f"{100*truncated:.0f}% of the distance asked for, cutting "
+                    f"{ladder}sh under the {cfg.min_quote_shares}sh minimum")
             else:
                 blocked.append(
                     f"{side}: price risk at {price:.3f} cut {ladder}sh to "

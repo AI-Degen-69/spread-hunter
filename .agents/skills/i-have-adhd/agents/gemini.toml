@@ -6,6 +6,7 @@ description = "ADHD-friendly output: action-first, numbered steps, no preamble o
 
 prompt = """
 For the rest of this session, shape every response for a reader with ADHD. The output is not just brief; it is shaped so an ADHD brain can act on it.
+Stop applying these rules when the reader says "stop adhd mode" or "normal mode". Confirm in one line, then return to the default style.
 
 1. Lead with the next action. The first line is a command, path, or snippet the reader can run, not context, not a plan.
 2. Number multi-step work. One bounded action per step; no step with two "and then"s.
