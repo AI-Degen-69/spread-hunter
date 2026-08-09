@@ -1,4 +1,4 @@
-# Ownership of fleet processes, shared by fleet-bg.ps1 and fleet-stop.ps1.
+# Ownership of fleet processes, shared by fleet-start.ps1 and fleet-stop.ps1.
 #
 # WHY THIS EXISTS. Both scripts used to select processes with command-line
 # wildcards -- "*strategy.fleet*" and friends -- and then Stop-Process -Force
@@ -22,7 +22,8 @@ $FleetPidFile = Join-Path $ProjectPath "run/fleet.pids.json"
 # Reporting only -- never a kill list. Kept so an operator can be TOLD about a
 # fleet this script does not own, rather than silently killing it.
 $FleetPatterns = "*strategy.supervisor*", "*strategy.fleet*",
-                 "*scripts.rerank_loop*", "*uvicorn*server.fleet_dash*"
+                 "*scripts.rerank_loop*", "*uvicorn*server.fleet_dash*",
+                 "*scripts.watch_universe*"
 
 
 function Save-FleetInstance {
@@ -43,8 +44,7 @@ function Save-FleetInstance {
             # then compared a String against a DateTime, PowerShell stringified
             # the DateTime with its DEFAULT format, and the two could never be
             # equal -- so every recorded pid was reported "recycled" and
-            # disowned. The fleet became unkillable by its own tooling, and
-            # fleet-bg.ps1 reported its own processes as strays.
+            # disowned. The fleet became unkillable by its own tooling, and#            fleet-start.ps1 reported its own processes as strays.
             #
             # An Int64 has no such alternate rendering: it round-trips through
             # JSON as itself.

@@ -28,8 +28,8 @@ from pathlib import Path
 
 from strategy import (gate, markout, merge, profit_take, resolve, rewards,
                       store)
-from strategy.allocate import (allocate_fundable, capital_scarcity, shares_for,
-                               spread_capture_daily)
+from strategy.allocate import (allocate_fundable, capital_scarcity, marginal,
+                               shares_for, spread_capture_daily)
 from strategy.config import load as load_cfg
 from strategy.fills import QueueFillEngine
 from strategy.main import full_book, recent_trades
@@ -81,6 +81,18 @@ PULSE_WRITE_SEC = 10.0
 # two.
 MARKET_RETRY_SEC = 60.0
 
+# How long a book-readiness failure (book fetch or the depth/spread gate) must
+# persist before the fleet acts on it. The venue's books flicker: a live match's
+# top-3 depth routinely dips under the $1K bar for a single poll and refills a
+# second later. Acting on the FIRST failure made the fleet cancel and re-post
+# its quotes on every such blip -- the dashboard flashed STALE/ERROR plus a fake
+# full-cost unrealized loss (the last-known bids had been blanked) every few
+# seconds, and the order churn read as broken to the venue. This window is the
+# confirmation delay: a blip that recovers never accumulates toward a cancel,
+# while a genuinely dead book still gets the full cancel+stamp treatment within
+# a few rotations (well under the dashboard's 120s STALE threshold).
+BOOK_GATE_CONFIRM_SEC = 15.0
+
 # How often to ask the venue which of our filled markets have closed. Settlement
 # is
 # the only ground truth this strategy has, and until a market is recorded
@@ -129,6 +141,21 @@ class _Pulse:
             self._sweep_sec = now - self._sweep_start
             self._sweep_start = now
 
+    def idle(self) -> None:
+        """Roll the in-progress sweep clock over an empty-universe pass.
+
+        An empty fleet never completes a sweep, so without this
+        `sweep_elapsed` would measure from process boot forever and the
+        dashboard would report a healthy idle loop as "a full sweep is
+        taking 49m". Each idle pass IS a completed pass -- over zero
+        markets -- so roll the clock and keep the in-progress figure
+        honest, but record no measured sweep: there was nothing to measure,
+        and a fake `sweep_sec` would read as a healthy 1-second sweep when
+        no market was ever visited.
+        """
+        with self._lock:
+            self._sweep_start = time.time()
+
     def snapshot(self) -> dict:
         with self._lock:
             return {"loop_ts": self._ts, "iterations": self._iterations,
@@ -173,6 +200,66 @@ def _pulse_writer(pulse: _Pulse, stop: threading.Event,
             # A heartbeat that cannot be written is not worth taking the fleet
             # down for, and this thread has no other job -- try again next tick.
             log.warning("pulse write failed: %s: %s", type(e).__name__, e)
+
+
+def _publish_state(states) -> None:
+    """Serialise the fleet's current market set for the dashboard.
+
+    The single site that writes `run/fleet_state.json`, called at the end of
+    every completed sweep AND on the empty-universe transition. The empty case
+    is the one this function exists for: an empty fleet never completes a
+    sweep, so without a write here the dashboard keeps rendering whatever the
+    previous run serialized -- dead markets frozen on their last 404 errors --
+    until the universe refills.
+
+    Written via a temp file and renamed because the dashboard reads this on
+    its own schedule; json.loads on a half-written file throws and the page
+    then reports the fleet as not running. Wrapped for the same reason every
+    other sweep-end step is: a full disk must degrade the dashboard, not stop
+    the trading loop before it can reach the next heartbeat.
+    """
+    try:
+        f = RUN / "fleet_state.json"
+        _atomic_write_json(f, [s.spec for s in states], default=str)
+    except Exception as e:
+        log.warning("fleet_state write failed: %s: %s",
+                    type(e).__name__, e)
+
+
+def _idle_empty(states, pulse: _Pulse, empty_logged: bool) -> bool:
+    """One idle iteration of an empty universe, keeping the fleet alive.
+
+    `states[i % 0]` would take the process down; idling keeps it and its
+    heartbeat alive so the next re-rank can refill the fleet. The pulse still
+    advances -- the loop IS running, it just has nothing to visit, and the
+    empty market count on the pulse is what tells the operator which of the
+    two it is.
+
+    It also rolls the sweep clock (`pulse.idle`) on every pass: a pass over
+    zero markets completes as trivially as one over six, and without the
+    roll `sweep_elapsed` would measure from process boot forever -- a
+    healthy idle fleet was being reported as "a full sweep is taking 49m".
+
+    The warning and the state publish ride the same transition. At one
+    iteration per second an unconditional write or warning fills the log (or
+    the disk) faster than the re-rank interval that would clear it; once is
+    enough because an empty set is empty forever until the universe refills.
+    """
+    pulse.touch("", 0)
+    # Roll the sweep clock: a pass over zero markets completes as trivially
+    # as a pass over six, and `sweep_elapsed` must not grow from boot while
+    # the fleet idles -- a healthy empty loop was being reported as "a full
+    # sweep is taking 49m" (see `_Pulse.idle`).
+    pulse.idle()
+    if not empty_logged:
+        log.warning("no markets in fleet; waiting for re-rank")
+        # The dashboard renders whatever the LAST completed sweep serialized,
+        # and an empty fleet never completes a sweep. Publish `[]` on the
+        # transition so the page clears the previous run's markets instead of
+        # serving a file the fleet will never rewrite.
+        _publish_state(states)
+        empty_logged = True
+    return empty_logged
 
 
 def _inventory_from_db(cid: str) -> Inventory:
@@ -276,6 +363,15 @@ class MarketState:
         # sweep into a multi-minute one and the dashboard reports the fleet
         # dead. Retrying on a cooldown instead keeps a broken market cheap.
         self.market_retry_ts = 0.0
+        # When the book-readiness gates (fetch / depth) began failing
+        # consecutively, or None while they pass. Drives the confirmation
+        # window in `_book_gate_confirmed` so a 1-2s venue blip does not cancel
+        # quotes and stamp STALE/ERROR.
+        self.book_gate_fail_since: float | None = None
+        # Per-market allocator verdict from the last `reallocate` (why this
+        # market is funded or not, with the numbers). None until the first
+        # sweep has measured the market. Surfaced on the pipeline view.
+        self.alloc_verdict: dict | None = None
         self.engine = QueueFillEngine()
         # Rehydrate from the fills table instead of starting at zero. Fills are
         # persisted, inventory was not, so every restart silently dropped the
@@ -566,6 +662,53 @@ def fleet_committed_cost(states) -> float:
     return total
 
 
+def _alloc_verdict(dollars: float, min_size: int, pot: float,
+                   avg_theirs: float, k: float, floor: float) -> dict:
+    """The allocator's verdict on one market, in the numbers that decided it.
+
+    `dollars` is what `allocate_fundable` returned (0.0 = refused), `avg_theirs`
+    is the measured competition score and `k` the per-share score used to
+    convert it into competitor depth (`T = avg_theirs / k` dollars). The
+    marginal return shown is on the NEXT dollar at the allocator's decision:
+    for a funded market that is the marginal at its final size; for an
+    unfunded one it is the first-dollar marginal, which is exactly the number
+    that was compared to `floor` and found wanting.
+
+    Pure, so the pipeline view can be pinned by a test without standing up a
+    fleet sweep.
+    """
+    T = avg_theirs / k if k and k > 0 else float("inf")
+    # T == inf means we score nothing against the book (k == 0): the first
+    # dollar earns nothing, not NaN.
+    first = 0.0 if T == float("inf") else marginal(0.0, pot, T) * 100.0
+    thresh = floor * 100.0
+    n = shares_for(dollars, min_size) if dollars > 0 else 0
+    if pot <= 0:
+        reason = "unpayable: no pot (spread/volume unmeasured)"
+    elif n > 0:
+        reason = f"funded {n} shares"
+    elif dollars > 0:
+        reason = (f"${dollars:.0f} allocated but under the "
+                  f"{min_size}-share minimum")
+    elif first < thresh:
+        reason = f"unfunded: below {thresh:.2f}%/day floor"
+    else:
+        reason = (f"unfunded: first dollar clears {thresh:.2f}%/day but the "
+                  f"{min_size}-share minimum cannot pay it")
+    return {
+        "funded": n > 0,
+        "shares": n,
+        "dollars": round(dollars, 2),
+        "marginal_pct": round(
+            0.0 if T == float("inf") else marginal(dollars, pot, T) * 100.0, 2),
+        "first_marginal_pct": round(first, 2),
+        "competition_avg": round(avg_theirs, 1),
+        "pot_day": round(pot, 2),
+        "threshold_pct": round(thresh, 2),
+        "reason": reason,
+    }
+
+
 def reallocate(states, base) -> dict:
     """Resize every market by marginal return instead of a flat 120 shares.
 
@@ -705,6 +848,9 @@ def reallocate(states, base) -> dict:
         # shares each while only 4 were funded, so offers alone reached $2,108
         # against a $2,000 committed cap before a single share was bought.
         if s.cid not in dollars:
+            # Never sampled this sweep: keep the previous verdict (or none).
+            # Sizing off a guess is worse than leaving it alone, and the same
+            # discipline applies to the verdict shown.
             continue
         n = shares_for(dollars[s.cid], int(s.spec["min_size"]))
         out[s.cid] = n
@@ -712,6 +858,18 @@ def reallocate(states, base) -> dict:
         # floor and must not be raised above it, or we would quote below our
         # own threshold and score zero.
         s.cfg = replace(s.cfg, quote_shares=max(n, 0))
+        # Every measured market learns why it was (or wasn't) funded, on the
+        # same numbers the water-fill used -- recomputed here so the verdict
+        # cannot drift from the decision.
+        try:
+            s.alloc_verdict = _alloc_verdict(
+                dollars[s.cid], int(s.spec["min_size"]), s.pot,
+                s.avg_theirs() or 0.0,
+                rewards.score_per_share(s.cfg.max_spread_from_mid,
+                                        s.cfg.reward_offset),
+                base.marginal_return_floor)
+        except Exception as e:
+            log.warning("alloc verdict failed for %s: %s", s.title[:30], e)
     return out
 
 
@@ -766,12 +924,92 @@ def _cancel_live_orders(st: MarketState) -> None:
             live[field] = None
 
 
+def _settle_resolved(st: MarketState, now: float) -> None:
+    """The venue has already reported a winner for this market (`resolutions`
+    carries a row for it). Its book is gone from the venue -- every further
+    fetch is a guaranteed 404 -- and its true settled P&L already comes out
+    of `fills` + `resolutions` on the dashboard side (`_settled_positions` /
+    `_realized`). Leaving the position "open" here double-books it as both
+    realized and still-naked, and is exactly why a resolved market kept
+    showing up as a permanent "unreadable" market with capital that never
+    freed.
+
+    `ts` IS touched, unlike `_stamp_failure`: these zeroed figures are
+    correct as of right now, not stale ones the fleet failed to refresh.
+    """
+    _cancel_live_orders(st)
+    if st.inv.up_shares or st.inv.down_shares:
+        _record_event(
+            st, now, "RESOLVED",
+            f"venue resolved; released {st.inv.up_shares:.2f} UP / "
+            f"{st.inv.down_shares:.2f} DOWN", reason_code="RESOLVED",
+            force=True)
+    st.inv.up_shares = st.inv.down_shares = 0.0
+    st.inv.up_cost = st.inv.down_cost = 0.0
+    st.err = ""
+    live = st.spec.get("_live")
+    if not isinstance(live, dict):
+        live = {}
+        st.spec["_live"] = live
+    live.update({
+        "up_sh": 0.0, "dn_sh": 0.0, "up_avg": 0.0, "dn_avg": 0.0,
+        "paired": 0.0, "naked_side": "", "naked_sh": 0.0, "naked_cost": 0.0,
+        "pair_paid": 0.0, "fills": st.inv.fills,
+        "err": "", "ts": now,
+    })
+
+
+def _settle_startup_resolved(states, resolved_cids, now: float) -> tuple[int, float]:
+    """Zero inventory for any market the venue has already settled.
+
+    `MarketState.__init__` rebuilds each market's inventory from the fills
+    ledger, and the fills ledger never learns about resolutions -- so a market
+    that resolved while the fleet was down comes back holding phantom shares
+    that count as committed capital from the very first heartbeat. The first
+    `visit` would settle it, but only after its turn in the rotation comes
+    around -- and if the ranker drops the market before that turn, the re-rank
+    retention rule ("still holding inventory") keeps it in `states` forever on
+    exactly the phantom position this pass clears.
+
+    Settling here, before the first visit, releases that capital at startup.
+    `visit` will still find the cid in `resolved_cids` and settle it again,
+    which is a no-op on an already-zeroed inventory.
+
+    Scoped to `states` on purpose: only markets in the universe can display
+    phantom inventory, and a resolved market the ranker has already dropped
+    simply has no MarketState -- the dashboard's `_settled_positions` /
+    `_realized` already reports its P&L straight from `fills` + `resolutions`.
+
+    Returns (markets that held inventory and were settled, dollars of
+    committed cost released) for the startup log line. `freed` is the FULL
+    two-leg cost basis (`up_cost + down_cost`), so a paired position counts
+    both legs -- that is the committed capital being released. One bad market
+    must not stop the rest of the pass.
+    """
+    settled = 0
+    freed = 0.0
+    for st in states:
+        if st.cid not in resolved_cids:
+            continue
+        try:
+            if st.inv.up_shares or st.inv.down_shares:
+                settled += 1
+                freed += (st.inv.up_cost or 0.0) + (st.inv.down_cost or 0.0)
+            _settle_resolved(st, now)
+        except Exception as e:
+            log.warning("startup settle failed for %s: %s: %s",
+                        st.title[:30], type(e).__name__, e)
+    return settled, freed
+
+
 def _stamp_failure(st: MarketState, now: float, err: str) -> None:
     """Record on the market's live payload that this visit produced nothing.
 
-    `visit` returns early on three paths -- retry cooldown, an unloadable
-    market, a failed book fetch -- and all three are ABOVE the `_live` write at
-    the end of the function. A market that has been closed since yesterday
+    `visit` returns early on five paths -- retry cooldown, an unloadable
+    market, a failed book fetch, an unconfirmed book-gate failure (still
+    inside BOOK_GATE_CONFIRM_SEC), and a confirmed one -- and all five are
+    ABOVE the `_live` write at the end of the function. A market that has
+    been closed since yesterday
     therefore kept whatever `_live` it last succeeded with, or none at all, and
     the dashboard rendered it as data that was merely old rather than as a
     market the fleet cannot read.
@@ -789,18 +1027,73 @@ def _stamp_failure(st: MarketState, now: float, err: str) -> None:
     _record_event(st, now, "ERROR", err, reason_code="ERROR")
 
 
+def _book_gate_confirmed(st: MarketState, now: float) -> bool:
+    """Hysteresis for the book-readiness gates: is this failure real yet?
+
+    The venue's books flicker. A live match's top-3 depth can dip under the
+    $1K bar for a single poll and refill a second later; a fetch can time out
+    once and succeed on the next rotation. Acting on the FIRST such failure
+    made the fleet cancel its resting orders, blank the last-known bids and
+    stamp STALE/ERROR on the dashboard's next poll -- then re-quote and clear
+    it on the one after. The dashboard read the blanked bids as a $0 exit and
+    flashed a fake full-cost unrealized loss every few seconds, and the
+    constant cancel/re-post churn was exactly what read as "broken" to the
+    venue.
+
+    The first failure records when it started and returns False, so the caller
+    returns early with orders and marks untouched. Only once the failure has
+    persisted for BOOK_GATE_CONFIRM_SEC -- well beyond one or two blips, still
+    short enough that a genuinely dead book gets the full treatment within a
+    few rotations -- does this return True and let the caller cancel, stamp
+    the error and blank the marks.
+
+    A successful gate pass resets the clock in `visit`, so a blip that recovers
+    never accumulates toward a false confirmation.
+    """
+    if st.book_gate_fail_since is None:
+        st.book_gate_fail_since = now
+    held = now - st.book_gate_fail_since
+    if held < BOOK_GATE_CONFIRM_SEC:
+        log.debug("%s: book gate failed %.0fs ago, holding (confirm in %.0fs)",
+                  st.title[:30], held, BOOK_GATE_CONFIRM_SEC - held)
+        return False
+    return True
+
+
 def visit(st: MarketState, bot_cfg, now: float,
           fleet_naked_usd: float = 0.0, committed_usd: float = 0.0,
-          states=None, fleet_posture: str = gate.NORMAL) -> None:
+          states=None, fleet_posture: str = gate.NORMAL,
+          resolved_cids: frozenset[str] = frozenset()) -> None:
     """One poll of one market: books -> fills -> requote -> reward sample."""
+    if st.cid in resolved_cids:
+        # Settled by the venue -- its book is gone, so there is nothing left
+        # to poll. Checked before anything else touches the network.
+        _settle_resolved(st, now)
+        return
     cfg = st.cfg
     # Defense in depth against stale or hand-edited markets.json. The ranker
     # applies the same identity rule, but no stale universe may bypass it and
     # reach a live quote merely because the ranker has not rewritten yet.
+    #
+    # A spec written BEFORE the selector existed carries a title and a slug and
+    # none of the five metadata fields the sports and macro keywords are read
+    # from, so judged normally every matchup in it fails -- "Yankees vs Red
+    # Sox" has no league word in its own title -- and the fleet cancels quotes
+    # across the entire universe until the next rank rewrites the file. That is
+    # a gap in the DATA, and refusing on it asserts something the data never
+    # said. `require_primary=False` keeps every rejection arm (the blocked
+    # keywords read title and slug, so Game 1 / Map 2 / live / in-play still
+    # go) and drops only the positive confirmation those absent fields would
+    # have carried. Bounded by the re-rank interval: once the file is
+    # rewritten the fields are there and the full rule applies again.
+    has_selector_meta = any(
+        st.spec.get(k) for k in ("category", "market_type", "market_group",
+                                 "series_title", "event_title"))
     identity_ok, identity_reason = identity_allowed(
         st.title, st.spec.get("slug"), st.spec.get("category"),
         st.spec.get("market_type"), st.spec.get("market_group"),
-        st.spec.get("series_title"), st.spec.get("event_title"))
+        st.spec.get("series_title"), st.spec.get("event_title"),
+        require_primary=has_selector_meta)
     if not identity_ok:
         st.err = identity_reason
         _cancel_live_orders(st)
@@ -839,6 +1132,10 @@ def visit(st: MarketState, bot_cfg, now: float,
         up = full_book(bot_cfg.clob_host, m.up_token)
         dn = full_book(bot_cfg.clob_host, m.down_token)
     except Exception as e:
+        # A single failed fetch is usually a venue blip (timeout, 5xx), not a
+        # dead book. Hold for the confirmation window before cancelling.
+        if not _book_gate_confirmed(st, now):
+            return
         st.err = f"book fetch: {e}"
         _cancel_live_orders(st)
         _stamp_failure(st, now, st.err)
@@ -848,16 +1145,28 @@ def visit(st: MarketState, bot_cfg, now: float,
     # Fills are decided by the TAPE, not by the book emptying: a level that
     # vanishes on cancellations must fill us nothing.
     # Defense in depth: ranker output may be stale while the live books have
-    # already dried up. Require both YES and NO to retain >=$5k in the top three
-    # bid levels and a <=4c two-sided spread before any fill or quote handling.
+    # already dried up. Require both YES and NO to retain at least
+    # `select_min_top3_depth_usd` in the top three bid levels and no more than
+    # `select_max_book_spread` of two-sided spread before any fill or quote
+    # handling. Stated by config name, not by number: the bars moved to $1,000
+    # and 0.06 on 2026-08-06 to match `risk.book_health`, and a hardcoded
+    # number here would go stale the next time they move.
     books_ok, books_reason = pair_books_allowed(
         [("YES", up["bids"], up["asks"]), ("NO", dn["bids"], dn["asks"])],
         cfg.select_min_top3_depth_usd, cfg.select_max_book_spread)
     if not books_ok:
+        # A live match's depth dips under the bar for a second and refills.
+        # Hold for the confirmation window instead of cancelling quotes and
+        # stamping STALE/ERROR on the first blip.
+        if not _book_gate_confirmed(st, now):
+            return
         st.err = books_reason
         _cancel_live_orders(st)
         _stamp_failure(st, now, st.err)
         return
+    # The book is readable again: a transient dip that recovered must not
+    # accumulate toward a future false confirmation.
+    st.book_gate_fail_since = None
 
     tape = recent_trades(m.condition_id, st.seen_trades)
     first_pass = not st.tape_primed
@@ -1319,6 +1628,7 @@ def visit(st: MarketState, bot_cfg, now: float,
     dn_bid, dn_ask = dn.get("best_bid"), dn.get("best_ask")
 
     st.spec["_live"] = {
+        "alloc": getattr(st, "alloc_verdict", None),
         "share": share, "ours": ours, "theirs": theirs,
         # Projected income at the CURRENT score share, off whichever pot pays
         # this market. Reading `daily` here reported $0.00/day for every
@@ -1434,6 +1744,31 @@ def main() -> None:
     # closed while it was down, and waiting a full interval to notice keeps
     # that capital committed for another 15 minutes.
     last_resolve = 0.0
+    # Same "deliberately not `now`" reasoning as `last_resolve`: loaded before
+    # the loop starts so a fleet holding positions resolved while it was down
+    # skips their books on its very first visit, not after a 15-minute wait.
+    try:
+        resolved_cids = frozenset(store.resolved_cids())
+    except Exception as e:
+        log.warning("initial resolved-cid load failed: %s: %s",
+                    type(e).__name__, e)
+        resolved_cids = frozenset()
+    # STARTUP SETTLE PASS (U11). `MarketState.__init__` rebuilt inventory from
+    # the fills ledger, which never learns about resolutions -- so a market
+    # that settled while the fleet was down restarted holding phantom shares
+    # that counted as committed capital. The first visit would settle it, but
+    # only after its turn in the rotation, and a re-rank that drops the market
+    # before that turn retains it forever on the phantom position. Settle now,
+    # before the first visit, so the process starts with the truth.
+    try:
+        settled, freed = _settle_startup_resolved(states, resolved_cids,
+                                                  time.time())
+        if settled:
+            log.info("STARTUP SETTLE %d market(s) already resolved; "
+                     "released $%.2f committed", settled, freed)
+    except Exception as e:
+        log.warning("startup settle pass failed: %s: %s",
+                    type(e).__name__, e)
     empty_logged = False
     # THE FLEET BRAKE, held across visits and re-read once per sweep. Per-sweep
     # rather than per-visit because it is one aggregate over the whole markout
@@ -1460,7 +1795,14 @@ def main() -> None:
         # cycle is recorded resolved before the ranker is allowed to drop it:
         # `unresolved()` is keyed off fills, not off the current market set,
         # but recording it first keeps the two views consistent within a cycle.
+        resolve_ran_at = last_resolve
         last_resolve = _maybe_resolve(bot_cfg, last_resolve, now_ts)
+        if last_resolve != resolve_ran_at:
+            try:
+                resolved_cids = frozenset(store.resolved_cids())
+            except Exception as e:
+                log.warning("resolved-cid refresh failed: %s: %s",
+                            type(e).__name__, e)
 
         # ADOPT WHEN THE FILE CHANGES, NOT ONLY WHEN THE TIMER FIRES. The
         # ranker's write IS the event; the interval is now just a floor that
@@ -1515,19 +1857,7 @@ def main() -> None:
                             type(e).__name__, e)
 
         if not states:
-            # Every market dropped, or the ranker has not written a usable
-            # markets.json yet. `states[i % 0]` would take the process down;
-            # idling keeps it and its heartbeat alive so the next re-rank can
-            # refill the fleet. The pulse still advances -- the loop IS running,
-            # it just has nothing to visit, and the empty market count on the
-            # pulse is what tells the operator which of the two it is.
-            pulse.touch("", 0)
-            # Logged on the transition only. At one iteration per second an
-            # unconditional warning here fills the log faster than the re-rank
-            # interval that would clear it.
-            if not empty_logged:
-                log.warning("no markets in fleet; waiting for re-rank")
-                empty_logged = True
+            empty_logged = _idle_empty(states, pulse, empty_logged)
             time.sleep(gap)
             continue
         if empty_logged:
@@ -1573,7 +1903,8 @@ def main() -> None:
             # them, and a cap evaluated against a stale total is a cap that
             # lets the overshoot through.
             visit(st, bot_cfg, time.time(), fleet_naked_cost(states),
-                  fleet_committed_cost(states), states, posture)
+                  fleet_committed_cost(states), states, posture,
+                  resolved_cids)
         except Exception as e:
             log.warning("%s: %s", st.title[:30], e)
             st.err = str(e)
@@ -1636,20 +1967,7 @@ def main() -> None:
             # its live telemetry never reached the dashboard, and a market the
             # ranker DROPPED kept its final `_live` in the file forever. Reading
             # the states list makes the file exactly the set being traded.
-            #
-            # Written via a temp file and renamed because the dashboard reads
-            # this on its own schedule; json.loads on a half-written file throws
-            # and the page then reports the fleet as not running.
-            #
-            # Wrapped for the same reason every other sweep-end step is: a full
-            # disk must degrade the dashboard, not stop the trading loop before
-            # it can reach the next heartbeat.
-            try:
-                f = RUN / "fleet_state.json"
-                _atomic_write_json(f, [s.spec for s in states], default=str)
-            except Exception as e:
-                log.warning("fleet_state write failed: %s: %s",
-                            type(e).__name__, e)
+            _publish_state(states)
         time.sleep(gap)
 
 

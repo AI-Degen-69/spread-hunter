@@ -142,3 +142,70 @@ def test_unreadable_pulse_degrades_to_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(dash, "RUN", tmp_path)
     (tmp_path / "fleet_pulse.json").write_text("{truncated", encoding="utf-8")
     assert _pulse() == {}
+
+
+def test_idle_pass_does_not_grow_the_sweep_clock():
+    """An empty universe must not report a phantom 49-minute sweep.
+
+    Observed 2026-08-08: the fleet idling with zero markets was banner-text
+    "Fleet is live, but a full sweep is taking 49m35s", because the pulse's
+    in-progress clock measures from `_sweep_start`, which `sweep_done()` is
+    the only thing that rolls -- and an empty fleet never completes a sweep.
+    `_idle_empty` now calls `pulse.idle()`, so one pass over zero markets
+    rolls the clock exactly as one pass over six markets does.
+    """
+    p = fleet._Pulse()
+    p.touch("", 0)
+    p.idle()
+
+    got = p.snapshot()
+    # The clock rolled: elapsed is seconds, not the 3005s since boot the bug
+    # reported. Allow a generous bound for slow CI machines.
+    assert got["sweep_elapsed"] < 5.0
+    # And no sweep was recorded: an empty pass measured nothing.
+    assert got["sweep_sec"] is None
+    assert got["sweeps"] == 0
+
+
+def test_idle_rolls_the_clock_even_after_boot_time_passes():
+    """THE FIX, at the observed scale: elapsed stays small after an hour idle.
+
+    Before the fix, `sweep_elapsed` was `now - boot`, so a fleet that booted
+    at 14:30 and was still empty at 15:20 reported a 3005-second sweep. After
+    `idle()` the clock measures from the last IDLE PASS, not from boot.
+    """
+    p = fleet._Pulse()
+    p.touch("", 0)
+    # Simulate the boot-time anchor the bug measured from: an hour ago.
+    p._sweep_start = time.time() - 3600.0
+    p.idle()
+
+    got = p.snapshot()
+    assert got["sweep_elapsed"] < 5.0
+    assert got["sweep_sec"] is None
+
+
+def test_empty_fleet_sweep_age_stays_small_on_the_dashboard(tmp_path, monkeypatch):
+    """End to end: the idle pass publishes a small sweep_age, not 3005s.
+
+    Pins the full chain the operator sees: `_idle_empty` -> pulse snapshot ->
+    dashboard `_sweep_duration`. A stale, growing elapsed would re-trigger the
+    "full sweep is taking 49m" banner on every page load.
+    """
+    import server.fleet_dash as dash
+
+    monkeypatch.setattr(dash, "RUN", tmp_path)
+    monkeypatch.setattr(fleet, "RUN", tmp_path)
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
+    monkeypatch.setattr(dash, "DB", tmp_path / "dash.db")
+
+    p = fleet._Pulse()
+    fleet._idle_empty([], p, False)
+    snapshot = p.snapshot()
+
+    age = dash._sweep_duration(snapshot, time.time(), 0.0)
+    assert age is not None
+    assert age < 120.0, f"phantom sweep clock survived: {age:.1f}s"
+    # And the fleet still reads alive -- idling is not staleness.
+    assert not dash._heartbeat(
+        time.time(), snapshot["loop_ts"], snapshot["loop_ts"], snapshot)[2]

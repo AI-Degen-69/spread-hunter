@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     balance REAL,
     pair_cost REAL,
     reason TEXT,
+    reason_code TEXT DEFAULT 'OTHER',
     count INTEGER DEFAULT 1
 );
 
@@ -167,6 +168,25 @@ CREATE INDEX IF NOT EXISTS idx_q_ts ON quotes(ts);
 CREATE INDEX IF NOT EXISTS idx_f_ts ON fills(ts);
 CREATE INDEX IF NOT EXISTS idx_f_cond ON fills(condition_id);
 CREATE INDEX IF NOT EXISTS idx_d_ts ON decisions(ts);
+
+-- Meaningful operator-facing state changes. Unlike the compressed decision log,
+-- these rows are intentionally event-shaped: fills, exits, gate refusals, and
+-- quote-state transitions are durable and can be shown per market without
+-- making the dashboard infer actions from inventory arithmetic.
+CREATE TABLE IF NOT EXISTS market_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    market_slug TEXT,
+    condition_id TEXT,
+    kind TEXT NOT NULL,          -- QUOTING | FILLED | HEDGED | MERGED | EXITED | BLOCKED | WAITING | ERROR
+    reason TEXT,
+    reason_code TEXT DEFAULT 'OTHER',
+    side TEXT,
+    price REAL,
+    size REAL
+);
+CREATE INDEX IF NOT EXISTS idx_me_market_ts ON market_events(condition_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_me_kind_code ON market_events(kind, reason_code, ts);
 
 -- Decisive experiment census: for each DISTINCT live market we poll, record
 -- whether a fillable sub-$1.00 hedged pair existed at ask-1tick. This is the
@@ -322,6 +342,7 @@ _MIGRATIONS = {
                # U2. Existing rows predate merge, so 'sell' is the correct
                # value for every one of them -- the default backfills itself.
                "method": "TEXT DEFAULT 'sell'", "gas": "REAL"},
+    "decisions": {"reason_code": "TEXT DEFAULT 'OTHER'"},
 }
 
 
@@ -718,6 +739,17 @@ def unresolved() -> list[tuple[str, str]]:
         ).fetchall()]
 
 
+def resolved_cids() -> set[str]:
+    """Every condition_id the venue has ever reported a winner for.
+
+    The fleet loop caches this to decide, per visit, whether a market's book
+    is worth fetching at all -- a resolved market's book is gone from the
+    venue, so asking again is a guaranteed 404, not a retry worth making.
+    """
+    with db() as c:
+        return {r[0] for r in c.execute("SELECT condition_id FROM resolutions")}
+
+
 def open_markets() -> int:
     return len(unresolved())
 
@@ -778,6 +810,58 @@ _RUN_MAX_SEC = 30.0
 _run: dict = {"key": None, "row": None, "count": 0, "started": 0.0}
 
 
+def reason_code(reason: str | None) -> str:
+    """Stable operator code for a human-readable gate/decision reason."""
+    text = (reason or "").lower()
+    # Test the specific compound causes before broad words such as "naked" or
+    # "not tradeable". The displayed prose may contain both the gate and its
+    # consequence, but the counter must name the binding cause.
+    if "halted" in text or "pooled markout" in text:
+        return "FLEET_HALTED"
+    if "too thin" in text or "depth" in text:
+        return "THIN_BOOK"
+    if "too wide" in text or "spread" in text or "reward window" in text:
+        return "SPREAD"
+    # BEFORE "not tradeable", not after. `risk.hard_block` wraps the hedge
+    # leg's rejection inside its own prose -- "hedge token UP not tradeable
+    # (settled book 0.999/0.001)" -- so a settled hedge carries BOTH phrases
+    # and the later arm never saw it. It counted as ONE_SIDED_BOOK, which
+    # sends the operator looking for a missing side on a book that has two
+    # and has simply already decided. Same discipline as the depth and spread
+    # arms above, which are hoisted for exactly this reason.
+    if "outside band" in text or "settled book" in text:
+        return "PRICE_BAND"
+    if "one-sided" in text:
+        return "ONE_SIDED_BOOK"
+    if "not tradeable" in text:
+        return "ONE_SIDED_BOOK"
+    if "naked" in text or "unhedged" in text:
+        return "NAKED_CAP"
+    if "pair" in text or "parity" in text:
+        return "PAIR_COST"
+    if "committed" in text or "cost cap" in text or "budget" in text:
+        return "COMMITTED_CAP"
+    if "error" in text or "fetch" in text or "closed" in text:
+        return "ERROR"
+    if not text:
+        return "OTHER"
+    return "OTHER"
+
+
+def log_event(**kw) -> None:
+    """Persist one meaningful per-market operator event."""
+    reason = kw.get("reason") or ""
+    with db() as c:
+        c.execute(
+            "INSERT INTO market_events (ts, market_slug, condition_id, kind, "
+            "reason, reason_code, side, price, size) VALUES (?,?,?,?,?,?,?,?,?)",
+            (kw.get("ts") or time.time(), kw.get("market_slug"),
+             kw.get("condition_id"), kw["kind"], reason,
+             kw.get("reason_code") or reason_code(reason), kw.get("side"),
+             kw.get("price"), kw.get("size")),
+        )
+
+
 def log_decision(**kw) -> None:
     """Collapse consecutive identical decisions into one row with a count."""
     global _run
@@ -785,7 +869,8 @@ def log_decision(**kw) -> None:
     key = (kw.get("condition_id"), kw.get("action"), kw.get("side"))
     row = (now, kw.get("market_slug"), kw.get("condition_id"), kw.get("action"),
            kw.get("side"), kw.get("price"), kw.get("mid"), kw.get("edge_vs_mid"),
-           kw.get("t_remaining"), kw.get("balance"), kw.get("pair_cost"), kw.get("reason"))
+           kw.get("t_remaining"), kw.get("balance"), kw.get("pair_cost"),
+           kw.get("reason"), kw.get("reason_code") or reason_code(kw.get("reason")))
     if _run["key"] == key and (now - _run["started"]) < _RUN_MAX_SEC:
         _run["count"] += 1
         _run["row"] = row          # keep the freshest values
@@ -805,8 +890,8 @@ def flush_decision(force: bool = False) -> None:
     with db() as c:
         c.execute(
             "INSERT INTO decisions (ts, market_slug, condition_id, action, side, "
-            "price, mid, edge_vs_mid, t_remaining, balance, pair_cost, reason, count) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "price, mid, edge_vs_mid, t_remaining, balance, pair_cost, reason, "
+            "reason_code, count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             _run["row"] + (_run["count"],),
         )
     _run = {"key": None, "row": None, "count": 0, "started": 0.0}

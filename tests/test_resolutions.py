@@ -298,3 +298,93 @@ def test_fleet_resolution_failure_still_advances_the_deadline(
 
     now = 1000.0 + fleet.RESOLVE_INTERVAL_SEC
     assert fleet._maybe_resolve(_Cfg(), 1000.0, now) == now
+
+
+# --- resolved markets must stop being polled ------------------------------
+# A market can carry a `resolutions` row (record_resolution already ran) and
+# still sit in `states` forever: nothing ever told `visit` to stop asking the
+# venue for a book it tore down the moment the event ended. The dashboard
+# read this as "Fleet is live and sweeping, but N/N markets are unreadable"
+# on a permanent loop, and the naked capital in those markets was never
+# released because nothing zeroed the position either.
+
+def test_resolved_cids_returns_every_settled_condition(monkeypatch, tmp_path):
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    from strategy import store
+
+    store.record_resolution("cond-a", "tok-a")
+    store.record_resolution("cond-b", "tok-b")
+    assert store.resolved_cids() == {"cond-a", "cond-b"}
+
+
+def _resolved_spec(cid="cond-1"):
+    return {"cid": cid, "title": "Test Market", "slug": "test-mkt",
+            "daily": 0.0, "min_size": 5, "max_spread": 4.5, "tick": 0.01,
+            "shares": 120, "volume_24h": 100_000.0, "days_to_resolve": 1.0,
+            "est_income": 0.0, "est_capital": 120.0, "return_pct_day": 0.0,
+            "their_score": 100.0, "spread": 0.01}
+
+
+def test_a_resolved_market_never_fetches_its_book(monkeypatch, tmp_path):
+    """THE BUG, STATED AS A TEST. A market already recorded as resolved must
+    not cost a book-fetch request -- the venue has already torn the book
+    down, so every such request is a guaranteed 404."""
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    from strategy.config import load as load_cfg
+    from strategy.fleet import MarketState, visit
+
+    def _boom(*a, **k):
+        raise AssertionError("book fetch attempted on a resolved market")
+    monkeypatch.setattr("strategy.fleet.full_book", _boom)
+
+    st = MarketState(_resolved_spec(), load_cfg())
+    st.inv.up_shares = 84.0
+    st.inv.up_cost = 35.28
+    st.inv.fills = 1
+    st.err = "book fetch: 404 Client Error: Not Found"
+    st.spec["_live"] = {"err": st.err, "ts": 1000.0, "naked_sh": 84.0,
+                        "naked_cost": 35.28, "naked_side": "UP"}
+
+    visit(st, bot_cfg=None, now=2000.0, resolved_cids=frozenset({"cond-1"}))
+
+    assert st.err == ""
+    assert st.inv.up_shares == 0.0
+    assert st.inv.down_shares == 0.0
+    live = st.spec["_live"]
+    assert live["err"] == ""
+    assert live["naked_sh"] == 0.0
+    assert live["naked_cost"] == 0.0
+    assert live["ts"] == 2000.0
+
+
+def test_a_resolved_market_with_no_prior_live_payload_still_settles(
+        monkeypatch, tmp_path):
+    """A fleet that restarts holding an already-resolved position has never
+    written `_live` for it this process. Settling must not KeyError on a
+    market it has not visited yet."""
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    from strategy.config import load as load_cfg
+    from strategy.fleet import MarketState, visit
+
+    monkeypatch.setattr("strategy.fleet.full_book",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("book fetch attempted")))
+
+    st = MarketState(_resolved_spec(), load_cfg())
+    st.inv.down_shares = 40.0
+    st.inv.down_cost = 20.0
+
+    visit(st, bot_cfg=None, now=3000.0, resolved_cids=frozenset({"cond-1"}))
+
+    assert st.inv.down_shares == 0.0
+    assert st.spec["_live"]["naked_sh"] == 0.0
+
+
+def test_an_unresolved_market_is_not_short_circuited():
+    """resolved_cids defaults to empty, so nothing about existing callers of
+    `visit` changes when they never pass it."""
+    import inspect
+    from strategy.fleet import visit
+
+    assert inspect.signature(visit).parameters["resolved_cids"].default \
+        == frozenset()

@@ -12,7 +12,15 @@ maker.db-*
 # predictions) are deliberately NOT ignored -- they are source of truth.
 run/*.db
 run/*.db-*
+run/*.db.bak-*
 run/fleet_state.json
+# ranker output, same class as fleet_state.json above. near_misses.jsonl is
+# appended once per rank -- at a 600s rerank interval that is 144 lines/day,
+# each embedding every green card of that pass -- and pipeline.json is
+# rewritten whole on every rank. Both are telemetry the dashboard reads, not
+# source, and neither survives a checkout in any useful form.
+run/near_misses.jsonl
+run/pipeline.json
 # recorded market data + backfilled tape (scripts/record_books.py,
 # scripts/fetch_trades.py). Regenerable, and large after a long run.
 books.db

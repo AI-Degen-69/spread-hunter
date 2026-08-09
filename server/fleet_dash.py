@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
+import statistics
 import threading
 import time
 from pathlib import Path
@@ -190,6 +192,145 @@ def _db_stats() -> dict:
         return {}
 
 
+def _settled_positions() -> list[dict]:
+    """One audit row per realized close event, newest first.
+
+    Sell rows report the achieved combined effective exit price (both legs'
+    proceeds divided by shares); merge rows report parity at $1.00 and expose
+    gas separately. P&L percentage is net realized P&L over the recorded cost
+    basis -- return on cost basis, including fees/gas in net P&L.
+
+    A naked position that is never voluntarily closed does not stop being
+    realized -- it settles the moment the venue resolves the market, paying
+    $1/share on the winning token and $0 on the losing one. That never wrote a
+    `closes` row (there was no SELL or MERGE, just a payout), so it was
+    counted in `_realized()`'s aggregate total but invisible here: an operator
+    could see "$8.20 realized" at the top of the page and an empty table below
+    it, which reads as a discrepancy rather than as two views of the same
+    money. Synthesized as METHOD "RESOLVE" rows below, using the same
+    held-shares-after-closes math `_realized()` already uses.
+    """
+    if not DB.exists():
+        return []
+    try:
+        c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        c.row_factory = sqlite3.Row
+        rows = []
+        for r in c.execute(
+                "SELECT id, ts, market_slug, condition_id, method, gas, shares, "
+                "up_price, dn_price, cost_basis, proceeds, fee, realized_pnl, "
+                "forgone_vs_settlement FROM closes ORDER BY ts DESC, id DESC"):
+            shares = float(r["shares"] or 0.0)
+            cost = float(r["cost_basis"] or 0.0)
+            proceeds = float(r["proceeds"] or 0.0)
+            pnl = float(r["realized_pnl"] or 0.0)
+            method = (r["method"] or "sell").upper()
+            rows.append({
+                "id": r["id"], "ts": r["ts"],
+                "market_slug": r["market_slug"] or "",
+                "condition_id": r["condition_id"] or "",
+                "method": method, "shares": shares,
+                "avg_cost": (cost / shares) if shares else None,
+                "exit_price": (proceeds / shares) if shares else None,
+                "yes_exit": r["up_price"], "no_exit": r["dn_price"],
+                "cost_basis": cost, "proceeds": proceeds,
+                "fee_or_gas": (r["gas"] if method == "MERGE" else r["fee"]),
+                "realized_pnl": pnl,
+                "pnl_pct": (100.0 * pnl / cost) if cost else None,
+                "forgone_vs_settlement": r["forgone_vs_settlement"],
+            })
+
+        res = {rr["condition_id"]: (rr["winning_token"], rr["resolved_ts"])
+               for rr in c.execute(
+                   "SELECT condition_id, winning_token, resolved_ts "
+                   "FROM resolutions")}
+        by: dict[str, dict] = {}
+        slugs: dict[str, str] = {}
+        for r in c.execute(
+                "SELECT condition_id, market_slug, token_id, size, price "
+                "FROM fills"):
+            m = by.setdefault(r["condition_id"], {"cost": 0.0, "tok": {}})
+            m["cost"] += (r["size"] or 0) * (r["price"] or 0)
+            m["tok"][r["token_id"]] = (m["tok"].get(r["token_id"], 0.0)
+                                       + (r["size"] or 0))
+            slugs.setdefault(r["condition_id"], r["market_slug"] or "")
+        closed = {r["condition_id"]: r for r in c.execute(
+                "SELECT condition_id, SUM(shares) sh, SUM(cost_basis) cb "
+                "FROM closes GROUP BY condition_id")}
+        c.close()
+
+        for cid, m in by.items():
+            win_res = res.get(cid)
+            if not win_res:
+                continue
+            win, resolved_ts = win_res
+            cl = closed.get(cid)
+            cl_shares = float(cl["sh"] or 0.0) if cl else 0.0
+            cl_cost = float(cl["cb"] or 0.0) if cl else 0.0
+            total_shares = sum(m["tok"].values())
+            remaining_shares = total_shares - cl_shares
+            if remaining_shares <= 1e-9:
+                continue          # fully closed voluntarily, nothing left to settle
+            remaining_cost = m["cost"] - cl_cost
+            # Same correction `_realized()` applies: one UP + one DOWN were
+            # sold per pair closed, so the winning token's fill count must
+            # drop by the closed-share count before the $1 credit applies.
+            held_win_shares = max(0.0, m["tok"].get(win, 0.0) - cl_shares)
+            pnl = held_win_shares - remaining_cost
+            rows.append({
+                "id": f"resolve:{cid}", "ts": resolved_ts,
+                "market_slug": slugs.get(cid, ""),
+                "condition_id": cid,
+                "method": "RESOLVE", "shares": remaining_shares,
+                "avg_cost": (remaining_cost / remaining_shares),
+                "exit_price": (held_win_shares / remaining_shares),
+                "yes_exit": None, "no_exit": None,
+                "cost_basis": remaining_cost, "proceeds": held_win_shares,
+                "fee_or_gas": None,
+                "realized_pnl": pnl,
+                "pnl_pct": (100.0 * pnl / remaining_cost) if remaining_cost else None,
+                "forgone_vs_settlement": None,
+            })
+        rows.sort(key=lambda r: (r["ts"] or 0, str(r["id"])), reverse=True)
+        return rows
+    except Exception as e:
+        log.debug("settled position telemetry unavailable: %s", e)
+        return []
+
+
+def _market_event_stats() -> tuple[dict[str, list[dict]], dict[str, int]]:
+    """Return recent per-market events and structured refusal counters."""
+    if not DB.exists():
+        return {}, {}
+    try:
+        c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        c.row_factory = sqlite3.Row
+        events: dict[str, list[dict]] = {}
+        for r in c.execute(
+                "SELECT condition_id, ts, kind, reason, reason_code, side, "
+                "price, size FROM market_events "
+                "ORDER BY condition_id, ts DESC, id DESC"):
+            cid = r["condition_id"]
+            bucket = events.setdefault(cid, [])
+            if len(bucket) >= 3:
+                continue
+            bucket.append({
+                "ts": r["ts"], "kind": r["kind"],
+                "reason": r["reason"] or "", "reason_code": r["reason_code"] or "OTHER",
+                "side": r["side"], "price": r["price"], "size": r["size"],
+            })
+        refusals = {r["reason_code"] or "OTHER": r["n"] for r in c.execute(
+            "SELECT reason_code, COUNT(*) n FROM market_events "
+            "WHERE kind='BLOCKED' GROUP BY reason_code")}
+        c.close()
+        return events, refusals
+    except Exception as e:
+        # Existing databases created before event telemetry are still valid;
+        # report no events rather than making the whole dashboard disappear.
+        log.debug("market event telemetry unavailable: %s", e)
+        return {}, {}
+
+
 def _maker_rebate(db: Path | None = None) -> dict:
     """Serialised entry point -- see `_maker_rebate_locked` for the substance."""
     with _REBATE_LOCK:
@@ -303,7 +444,16 @@ def _realized() -> dict:
     never sent.
     """
     out = {"realized": 0.0, "settled": 0, "wins": 0, "losses": 0, "cost": 0.0,
-           "closes": 0, "closed_pnl": 0.0, "closed_forgone": 0.0}
+           "closes": 0, "closed_pnl": 0.0, "closed_forgone": 0.0,
+           # One row per fully-resolved market: the TRUE settled outcome
+           # (closes' own realized_pnl plus the $1/$0 the venue paid on
+           # whatever was still held), not just voluntary exits. `closes`
+           # alone is a biased sample -- a merge is a completed hedge and is
+           # therefore almost always positive, while the naked tail that
+           # loses money sits unrealized until it resolves and never gets a
+           # `closes` row of its own. This is the population the go-live
+           # readiness read (below) draws its statistics from.
+           "rows": []}
     if not DB.exists():
         return out
     try:
@@ -312,6 +462,9 @@ def _realized() -> dict:
         res = {r["condition_id"]: r["winning_token"]
                for r in c.execute(
                    "SELECT condition_id, winning_token FROM resolutions")}
+        slugs = {r["condition_id"]: r["market_slug"] for r in c.execute(
+            "SELECT condition_id, market_slug FROM fills "
+            "GROUP BY condition_id")}
         by: dict[str, dict] = {}
         for r in c.execute(
                 "SELECT condition_id, token_id, size, price FROM fills"):
@@ -355,6 +508,10 @@ def _realized() -> dict:
             out["closes"] += cl["n"]
             out["closed_pnl"] += cl["pnl"]
             out["closed_forgone"] += cl["forgone"]
+            out["rows"].append({
+                "condition_id": cond, "market_slug": slugs.get(cond, ""),
+                "pnl": pnl, "cost": m["cost"],
+            })
         # Closes on markets that have NOT yet resolved still book real,
         # already-realized money -- count them too, so an operator sees the
         # close activity even before the underlying market settles.
@@ -368,6 +525,155 @@ def _realized() -> dict:
     except Exception:
         pass
     return out
+
+
+# GO-LIVE READINESS (2026-08-06). Two tiers, because they answer different
+# questions and reach significance on different timelines.
+#
+# Tier 1, MACHINERY: does the pooled size-weighted markout (strategy/markout.py
+# fleet_stats, same statistic that drives the HALTED gate) read positive on a
+# real effective sample. This is a fast, low-variance leading indicator --
+# drift is measured within hours of a fill, not weeks -- so it answers "are the
+# entry/risk rules behaving as designed" long before enough markets have
+# resolved to answer the money question.
+#
+# Tier 2, MONEY: does TRUE realized P&L per market (closes.realized_pnl plus
+# the $1/$0 the venue paid on whatever was still held at resolution -- see
+# `_realized`, NOT the closes table alone, which is biased toward voluntary
+# hedge-merges and mostly excludes the naked tail that loses) read positive
+# with a confidence interval that excludes zero.
+#
+# WHY THE MONEY-TIER SAMPLE SIZE IS LARGE. Audited 2026-08-06 against the last
+# populated paper run (13 closes, all merges, mean +16.5% / stdev 10.8% --
+# optimistic because it excludes the naked tail entirely) and against the
+# 2026-08-05 forensic audit (3 of 23 markets carried concentrated naked losses
+# up to -$190 on a ~$190 cost basis, i.e. close to -100% on that market). A
+# blend illustrative of that shape -- 85% of markets near +18%, 15% near -90%
+# -- has a mean near +2% and a stdev near 39%. Detecting a ~2% mean against a
+# ~39% stdev at 90% confidence needs roughly (1.645 * 39 / 2) ** 2 =~ 1,000
+# settled markets. That is a real property of a strategy whose payoff is
+# "small frequent capture, rare large binary tail," not a bug in the read --
+# and it is exactly why U1-U7 (the dollar risk gates) matter: shrinking the
+# tail's magnitude shrinks the required sample far faster than waiting out
+# more trades does. GO_LIVE_MIN_SETTLED below is therefore a practical minimum
+# for a small real-money pilot decision, not a claim of full significance;
+# treat SIGNAL_MIN_SETTLED as "enough to stop being pure noise" and
+# GO_LIVE_MIN_SETTLED as "enough to bet the first real dollars," with the
+# confidence interval sign as the actual gate in both cases.
+SIGNAL_MIN_SETTLED = 30
+GO_LIVE_MIN_SETTLED = 100
+GO_LIVE_MIN_CALENDAR_DAYS = 14.0
+GO_LIVE_MAX_CATEGORY_SHARE = 0.5
+
+
+def _pooled_markout_neff() -> dict:
+    """Kish effective sample size and size-weighted mean drift, pooled fleet-
+    wide over every fill's longest matured horizon. Mirrors
+    strategy/markout.py's `_stats_from_rows` exactly (same weighting, same
+    contamination exclusion) so this number means what the live HALTED gate
+    means, not an approximation of it.
+    """
+    out = {"n_eff": 0.0, "n_rows": 0, "mean_per_share": None}
+    if not DB.exists():
+        return out
+    try:
+        c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        c.row_factory = sqlite3.Row
+        weights: list[float] = []
+        values: list[float] = []
+        for r in c.execute(
+                "SELECT ref_mid, mid_h0, mid_h1, mid_h2, size, "
+                "ref_mid_source FROM markouts"):
+            if r["ref_mid_source"] == "contaminated" or r["ref_mid"] is None:
+                continue
+            mid = next((r[f"mid_h{i}"] for i in (2, 1, 0)
+                        if r[f"mid_h{i}"] is not None), None)
+            if mid is None:
+                continue
+            size = r["size"]
+            w = float(size) if (size and size > 0) else 0.0
+            if w <= 0:
+                continue
+            weights.append(w)
+            values.append(mid - r["ref_mid"])
+        c.close()
+        total = sum(weights)
+        out["n_rows"] = len(weights)
+        if total > 0:
+            out["n_eff"] = total * total / sum(w * w for w in weights)
+            out["mean_per_share"] = sum(
+                w * v for w, v in zip(weights, values)) / total
+    except Exception:
+        pass
+    return out
+
+
+def _go_live_readiness() -> dict:
+    """Where the fleet stands against both readiness tiers, right now."""
+    real = _realized()
+    rows = real["rows"]
+    n = len(rows)
+    returns = [100.0 * r["pnl"] / r["cost"] for r in rows if r["cost"]]
+    mean_ret = (sum(returns) / len(returns)) if returns else None
+    ci_low = None
+    stdev_ret = None
+    if len(returns) > 1:
+        stdev_ret = statistics.stdev(returns)
+        se = stdev_ret / math.sqrt(len(returns))
+        ci_low = mean_ret - 1.645 * se
+
+    markout = _pooled_markout_neff()
+
+    calendar_days = None
+    if DB.exists():
+        try:
+            c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+            t0, t1 = c.execute(
+                "SELECT MIN(ts), MAX(ts) FROM fills").fetchone()
+            c.close()
+            if t0 is not None and t1 is not None:
+                calendar_days = (t1 - t0) / 86400.0
+        except Exception:
+            pass
+
+    # A rough sport/category tag: the venue slug's first hyphen-delimited
+    # token ("atp-jodar-...", "lol-maz-...", "cs2-arc4-..."). Good enough to
+    # catch "every settled market is the same sport", which is the
+    # concentration failure a thin universe reproduces even after a filter
+    # fix -- it says nothing about individual-market correlation.
+    category_counts: dict[str, int] = {}
+    for r in rows:
+        tag = (r["market_slug"] or "?").split("-", 1)[0] or "?"
+        category_counts[tag] = category_counts.get(tag, 0) + 1
+    max_category_share = (max(category_counts.values()) / n) if n else None
+
+    if n >= GO_LIVE_MIN_SETTLED and ci_low is not None and ci_low > 0 \
+            and (calendar_days or 0) >= GO_LIVE_MIN_CALENDAR_DAYS \
+            and (max_category_share or 1.0) <= GO_LIVE_MAX_CATEGORY_SHARE:
+        status = "READY_FOR_SMALL_LIVE_PILOT"
+    elif n >= SIGNAL_MIN_SETTLED:
+        status = "DIRECTIONAL_SIGNAL"
+    elif n > 0:
+        status = "COLLECTING"
+    else:
+        status = "NO_DATA"
+
+    return {
+        "status": status,
+        "n_settled": n,
+        "signal_min_settled": SIGNAL_MIN_SETTLED,
+        "go_live_min_settled": GO_LIVE_MIN_SETTLED,
+        "mean_return_pct": mean_ret,
+        "stdev_return_pct": stdev_ret,
+        "ci90_lower_pct": ci_low,
+        "calendar_days": calendar_days,
+        "go_live_min_calendar_days": GO_LIVE_MIN_CALENDAR_DAYS,
+        "max_category_share": max_category_share,
+        "go_live_max_category_share": GO_LIVE_MAX_CATEGORY_SHARE,
+        "category_counts": category_counts,
+        "markout_n_eff": markout["n_eff"],
+        "markout_mean_per_share": markout["mean_per_share"],
+    }
 
 
 def _markout_stats() -> dict:
@@ -453,6 +759,8 @@ def fleet():
         return {"markets": [], "error": "fleet not running (run/fleet_state.json missing)"}
     specs = json.loads(f.read_text(encoding="utf-8"))
     hist = _db_stats()
+    event_by_market, refusal_counts = _market_event_stats()
+    settled_positions = _settled_positions()
     mk = _markout_stats()
     now = time.time()
     live_ts = max((s.get("_live", {}).get("ts", 0) or 0
@@ -491,7 +799,11 @@ def fleet():
                                                "rewards" if s["daily"] > 0
                                                else "spread")),
             "min_size": s["min_size"],
-            "max_spread": s["max_spread"],
+            # Specs store the venue window in cents (4.5); live state stores
+            # the normalized decimal (0.045). Keep one contract for the page.
+            "max_spread": (live.get("max_spread")
+                            if live.get("max_spread") is not None
+                            else float(s["max_spread"]) / 100.0),
             "share": live.get("share", 0.0),
             "income": live.get("income", 0.0),
             # `capital` is resting offers only. `committed` includes offers
@@ -501,8 +813,12 @@ def fleet():
             "committed": (live.get("capital", 0.0)
                           + (live.get("naked_cost", 0.0) or 0.0)
                           + (live.get("pair_paid", 0.0) or 0.0)),
-            "quotes": live.get("quotes", []),
-            "fills": h.get("fills", 0),
+             "quotes": live.get("quotes", []),
+             "up_sh": live.get("up_sh", 0.0),
+             "dn_sh": live.get("dn_sh", 0.0),
+             "up_avg": live.get("up_avg", 0.0),
+             "dn_avg": live.get("dn_avg", 0.0),
+             "fills": h.get("fills", 0),
             "uptime": h.get("uptime", 0.0),
             "samples": h.get("samples", 0),
             # Estimate, not a ledger entry: no dollar amount is persisted per
@@ -571,6 +887,7 @@ def fleet():
             "merged_shares": live.get("merged_shares", 0.0),
             "recycled_usd": live.get("recycled_usd", 0.0),
             "pairing_rate": live.get("pairing_rate"),
+            "events": event_by_market.get(s["cid"], []),
         })
     rows.sort(key=lambda r: -r["income"])
 
@@ -610,11 +927,15 @@ def fleet():
     committed_total = cap + at_risk + sum(r["pair_paid"] or 0 for r in rows)
     available_cash = max(0.0, CFG.bankroll_usd - committed_total)
     committed_overage = max(0.0, committed_total - CFG.max_committed_usd)
+    active_quoting = sum(1 for r in rows if r["quotes"] and not r["err"])
+    book_health_ratio = (active_quoting / len(rows)) if rows else None
 
     return {
         "now": now,
         "run_started": _run_started(),
         "markets": rows,
+        "settled_positions": settled_positions,
+        "go_live": _go_live_readiness(),
         "share_history": _share_history(),
         "totals": {
             "markets": len(rows),
@@ -751,7 +1072,282 @@ def fleet():
             "uptime": (sum(r["uptime"] for r in rows) / len(rows)) if rows else 0,
             "concentration": (max((r["income"] for r in rows), default=0) / inc)
                              if inc else 0,
+            "active_quoting": active_quoting,
+            "book_health_ratio": book_health_ratio,
+            "gate_refusals": refusal_counts,
         },
+    }
+
+
+# NEAR-MISS TRACKER (U21): how much evidence it takes to loosen a gate.
+#
+# The FILTERS lane estimates, for every ranker-rejected market, what the
+# allocator would have said had it been adopted (first-dollar marginal %/day
+# vs the 2%/day floor). Markets that clear the floor are near-misses -- the
+# ranker's gates refused them but the allocator would have funded them, so
+# each is a candidate for loosening a gate. The ranker appends them to
+# run/near_misses.jsonl, one line per rank, and this is the accumulated read.
+#
+# What the numbers mean and why these bars:
+#   * The estimate is a SINGLE snapshot of the venue's own score reading,
+#     not the fleet's 30-min average -- noisy, and optimistic (the crowd can
+#     arrive after we quote). No single rank justifies a gate change.
+#   * The log can only validate CONSISTENCY of the estimate, never its
+#     profitability -- a near-miss's actual markout is unobservable until the
+#     fleet trades it. The bars therefore license a CONTROLLED TRIAL (adopt
+#     the small-margin greens, watch markouts and the gate), and only
+#     positive trial markouts justify loosening the bar itself.
+#   * Days guard against one evening's slate (the universe is day-sport
+#     dominated); unique markets guard against 144 rows/day of the same ~15
+#     cids re-appearing; the small-margin depth count is the operational
+#     proof that a SPECIFIC loosening (e.g. $1,000 -> $750) admits concrete
+#     markets; the stability fraction guards against the estimate firing in
+#     one wild hour.
+#   * days/unique/small-margin accumulate over the WHOLE file -- all-time
+#     evidence is the point of the log -- while stability is the only recency
+#     gate (last 72 ranks). The two are deliberately different: evidence
+#     accumulates, persistence is judged on the recent window.
+NEAR_MISS_MIN_DAYS = 3.0
+NEAR_MISS_MIN_UNIQUE = 25
+NEAR_MISS_MIN_SMALL_MARGIN = 5
+NEAR_MISS_MIN_STABILITY = 0.5
+NEAR_MISS_LOOKBACK_RANKS = 72
+NEAR_MISS_FILE = RUN / "near_misses.jsonl"
+
+
+def near_miss_stats() -> dict:
+    """Accumulated near-miss evidence, and whether it justifies a trial."""
+    ranks: list[dict] = []
+    greens: list[dict] = []
+    depth_unparsed_total = 0
+    if NEAR_MISS_FILE.exists():
+        try:
+            with open(NEAR_MISS_FILE, encoding="utf-8") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        row = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if not isinstance(row, dict) or "greens" not in row:
+                        continue
+                    ranks.append(row)
+                    depth_unparsed_total += int(row.get("depth_unparsed") or 0)
+                    ts = row.get("ts")
+                    for g in row.get("greens") or []:
+                        if not isinstance(g, dict):
+                            continue
+                        g = dict(g)
+                        g["ts"] = ts
+                        greens.append(g)
+        except Exception:
+            pass
+
+    # The MIRAGE rule, applied to every decision bar below: a near-miss whose
+    # depth is under half the gate bar, or whose estimate blew past 10%/day
+    # (pot / ~zero competition -- the Dem-retirees 890%/day and UK-inflation
+    # 4,938%/day shapes), is an empty book, not an opportunity. Only the
+    # CREDIBLE set feeds the bars, or a single wild rank of empty books would
+    # trip "enough evidence" on garbage.
+    def _is_trap(g):
+        d, b = g.get("depth_measured"), g.get("depth_bar")
+        # `is not None`, not truthiness: a fully empty book parses depth
+        # "$0.00" -> 0.0, which is falsy and MUST still count as a trap --
+        # it is the exact empty-book shape the rule exists to catch, and it
+        # must agree with the verdict's `db > 0 and dm < 0.5 * db` arm.
+        if d is not None and b and d < 0.5 * b:
+            return True
+        return (g.get("marg_pct_day") or 0.0) > 10.0
+
+    credible = [g for g in greens if not _is_trap(g)]
+    unique_cids = {g.get("cid") for g in credible if g.get("cid")}
+    days = {time.strftime("%Y-%m-%d", time.gmtime(g["ts"]))
+            for g in credible if g.get("ts")}
+    # A depth reject whose measured depth was at least half the bar: a modest
+    # loosening (e.g. $1,000 -> $750 or $500) would have admitted it, which is
+    # the concrete candidate list a trial would adopt. All-time evidence
+    # within the credible set: ANY credible reading qualifies.
+    small_margin_cids = {
+        g.get("cid") for g in credible
+        if g.get("depth_measured") and g.get("depth_bar")
+        and g["depth_measured"] >= 0.5 * g["depth_bar"]}
+    # If the venue ever changes the depth-gate reason format, the logger's
+    # parse goes quiet and the small-margin bar silently undercounts. Surface
+    # the count so that degradation is visible instead of invisible.
+    depth_unparsed = sum(1 for g in credible
+                         if (g.get("cause") or "").endswith("top-3 bid depth")
+                         and not g.get("depth_measured"))
+    # Stability is a fraction of recent RANKS with at least one credible
+    # green: ranks with none count against the estimate, or one wild hour of
+    # deep books would look like a persistent opportunity.
+    recent = sorted((r for r in ranks if r.get("ts")),
+                    key=lambda r: -r["ts"])[:NEAR_MISS_LOOKBACK_RANKS]
+    stable_ranks = sum(1 for r in recent
+                       if any(not _is_trap(g) for g in r.get("greens") or []))
+    stability = (stable_ranks / len(recent)) if recent else 0.0
+
+    per_cause: dict[str, int] = {}
+    for g in credible:
+        k = g.get("cause") or "other"
+        per_cause[k] = per_cause.get(k, 0) + 1
+    # The $/day pot the CURRENT unique near-miss set represents (last reading
+    # per cid) -- a materiality read, not a rate. Summed over the CREDIBLE
+    # set only: an empty-window trap carries a giant pot no sane quote would
+    # capture -- the Yankees game at $15,768/day on $22 of depth made the
+    # all-in total read $16,124/day while the credible total (depth >= 50% of
+    # the bar AND marg <= 10%/day) was ~$3/day, a single market. The raw
+    # total is kept alongside so the gap itself stays visible.
+    # One pass over the LAST reading per market, so the trap count, the
+    # credible pot and the raw pot all use the same unique-cid basis.
+    last_by_cid: dict[str, dict] = {}
+    for g in greens:
+        if g.get("cid"):
+            last_by_cid[g["cid"]] = g
+    by_cid: dict[str, float] = {}
+    raw_by_cid: dict[str, float] = {}
+    pot_traps = 0
+    for cid, g in last_by_cid.items():
+        raw_by_cid[cid] = g.get("pot_day") or 0.0
+        if _is_trap(g):
+            pot_traps += 1
+            continue
+        by_cid[cid] = g.get("pot_day") or 0.0
+
+    ready = (len(days) >= NEAR_MISS_MIN_DAYS
+             and len(unique_cids) >= NEAR_MISS_MIN_UNIQUE
+             and len(small_margin_cids) >= NEAR_MISS_MIN_SMALL_MARGIN
+             and stability >= NEAR_MISS_MIN_STABILITY)
+    if ready:
+        status = "READY_TO_TRIAL"
+    elif greens:
+        status = "COLLECTING"
+    else:
+        status = "NO_DATA"
+
+    return {
+        "status": status,
+        "ranks": len(ranks),
+        "greens": len(credible),
+        "traps": len(greens) - len(credible),
+        "days": len(days), "min_days": NEAR_MISS_MIN_DAYS,
+        "unique_markets": len(unique_cids), "min_unique": NEAR_MISS_MIN_UNIQUE,
+        "small_margin_depth": len(small_margin_cids),
+        "min_small_margin": NEAR_MISS_MIN_SMALL_MARGIN,
+        "depth_unparsed": depth_unparsed + depth_unparsed_total,
+        "stability": round(stability, 3),
+        "min_stability": NEAR_MISS_MIN_STABILITY,
+        "lookback_ranks": NEAR_MISS_LOOKBACK_RANKS,
+        "uniq_pot_day": round(sum(by_cid.values()), 2),
+        "raw_uniq_pot_day": round(sum(raw_by_cid.values()), 2),
+        "pot_traps": pot_traps,
+        "top_causes": dict(sorted(per_cause.items(),
+                                   key=lambda kv: -kv[1])[:5]),
+    }
+
+
+@app.get("/api/pipeline")
+def pipeline():
+    """The market-selection funnel, live: raw -> filters -> final -> adopted.
+
+    Serves run/pipeline.json -- rewritten by scripts/rank_markets.py on every
+    rank, capturing the raw pools, every rejection bucketed by gate with
+    example titles, the eligible ranking and the picks -- plus the fleet's
+    CURRENT universe from run/markets.json, annotated with live fleet state
+    from run/fleet_state.json so the last lane shows what the fleet is
+    actually working right now, not just what the latest rank chose.
+
+    All three files are telemetry; nothing here writes anything.
+    """
+    now = time.time()
+    snap = None
+    f = RUN / "pipeline.json"
+    if f.exists():
+        try:
+            snap = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            snap = None
+
+    hist = _db_stats()
+    live_by_cid: dict[str, dict] = {}
+    state_f = RUN / "fleet_state.json"
+    if state_f.exists():
+        try:
+            for s in json.loads(state_f.read_text(encoding="utf-8")):
+                live = s.get("_live") or {}
+                live_by_cid[s["cid"]] = {
+                    "income": live.get("income", 0.0),
+                    "capital": live.get("capital", 0.0),
+                    "share": live.get("share", 0.0),
+                    "err": bool(live.get("err")),
+                    "ts": live.get("ts"),
+                    "source": live.get("source") or s.get("source", ""),
+                    "alloc": live.get("alloc"),
+                }
+        except Exception:
+            pass
+
+    graduated: list[dict] = []
+    picked_n = 0
+    live_n = 0
+    mf = RUN / "markets.json"
+    if mf.exists():
+        try:
+            specs = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:
+            specs = []
+        if isinstance(specs, list):
+            picked_n = len(specs)
+            for s in specs:
+                live = live_by_cid.get(s.get("cid"))
+                is_live = live is not None
+                # Presence in fleet_state, NOT income > 0: the lane badge
+                # shows LIVE for any row the fleet is working (a defunded
+                # market still being quoted is live), so the header count
+                # must count the same rows or the two disagree.
+                if is_live:
+                    live_n += 1
+                h = hist.get(s.get("cid"), {})
+                graduated.append({
+                    "title": s.get("title", ""),
+                    "slug": s.get("slug", ""),
+                    "url": (f"https://polymarket.com/market/{s['slug']}"
+                            if s.get("slug") else ""),
+                    "source": (live or {}).get("source")
+                              or s.get("source", "rewards"
+                                       if (s.get("daily") or 0) > 0
+                                       else "spread"),
+                    "income": (live or {}).get("income", 0.0),
+                    "capital": (live or {}).get("capital", 0.0),
+                    "share": (live or {}).get("share", 0.0),
+                    "fills": h.get("fills", 0),
+                    "uptime": h.get("uptime", 0.0),
+                    "err": bool((live or {}).get("err")),
+                    "live": is_live,
+                    "daily": s.get("daily", 0.0),
+                    "alloc": (live or {}).get("alloc"),
+                })
+
+    fleet_alive = None
+    if state_f.exists():
+        p = _pulse()
+        live_ts = max((v.get("ts") or 0 for v in live_by_cid.values()),
+                      default=0.0)
+        _, _, fleet_stale, _ = _heartbeat(now, live_ts,
+                                          state_f.stat().st_mtime, p)
+        fleet_alive = not fleet_stale
+
+    return {
+        "now": now,
+        "snapshot": snap,
+        "snapshot_age": (now - snap["ts"])
+                         if snap and snap.get("ts") else None,
+        "graduated": graduated,
+        "picked": picked_n,
+        "live": live_n,
+        "fleet_alive": fleet_alive,
+        "near_miss": near_miss_stats(),
     }
 
 
@@ -784,6 +1380,14 @@ PAGE = r"""<!doctype html>
  .proj{color:var(--proj)}.alert-tx{color:var(--alert)}.dim{color:var(--tx-dim)}
  .bold{font-weight:600}.mono{font-family:var(--mono)}
  .num{text-align:right;font-variant-numeric:tabular-nums}
+ .mid-label{color:#0a0d12;background:var(--gold);border-radius:3px;padding:1px 4px;text-shadow:none;box-shadow:0 0 8px rgba(232,184,75,.65)}
+ .action-cell{min-width:210px;max-width:290px}.action-pill{display:inline-block;border-radius:99px;padding:2px 8px;font-size:10px;letter-spacing:.07em;font-weight:700}.action-recent{font-family:var(--mono);font-size:10px;line-height:1.35;margin-top:4px} .event-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:270px}
+ .settled-section{padding:24px;background:var(--bg);border-top:1px solid var(--line)}
+ .section-heading{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;color:var(--tx-dim);font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600}
+ .settled-section table{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden}
+ .settled-section td,.settled-section th{padding:10px 12px}
+ .settled-empty{text-align:center;color:var(--tx-dim);padding:22px!important;font-size:12px}
+
 
  /* ---------- masthead ---------- */
  .mast{display:flex;align-items:center;gap:14px;padding:14px 24px;
@@ -871,6 +1475,79 @@ PAGE = r"""<!doctype html>
  tr.alert td{background:rgba(255,92,92,.05)}
  .mkt-link{color:var(--tx);text-decoration:none;font-weight:500}
  .mkt-link:hover{color:var(--gold);text-decoration:underline}
+
+ /* ---------- view switcher + market-pipeline (selection funnel) ---------- */
+ .views{display:flex;gap:3px;background:var(--panel-2);border:1px solid var(--line);border-radius:99px;padding:3px;margin-left:6px}
+ .view-btn{border:0;background:transparent;color:var(--tx-dim);font:600 12px/1 var(--body);letter-spacing:.05em;padding:6px 14px;border-radius:99px;cursor:pointer;transition:color .15s,background .15s}
+ .view-btn:hover{color:var(--tx);background:rgba(255,255,255,.05)}
+ .view-btn.active{background:var(--proj-soft);color:var(--proj);box-shadow:inset 0 0 0 1px rgba(123,155,247,.35)}
+ .pipe-view{padding:20px 24px}
+ .pipe-strip{display:flex;flex-direction:column;gap:6px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);margin-bottom:14px}
+ .pipe-census{font-family:var(--mono);font-size:11px;color:var(--tx-dim)}
+ .pipe-chain{font-family:var(--mono);font-size:12px;color:var(--tx)}
+ .pipe-chain span{margin:0 2px}
+ .pipe-gates{font-size:11px;color:var(--tx-faint)}
+ .pipe-board{display:grid;grid-template-columns:minmax(250px,1fr) 26px minmax(280px,1.35fr) 26px minmax(250px,1fr) 26px minmax(280px,1.2fr);gap:8px;align-items:stretch}
+ .pipe-arrow{align-self:center;text-align:center;font-size:20px;color:var(--tx-faint);user-select:none}
+ .pipe-lane{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);display:flex;flex-direction:column;min-height:340px;max-height:680px}
+ .pipe-lane-raw{border-color:var(--line)}
+ .pipe-lane-filter{border-color:rgba(240,104,77,.45)}
+ .pipe-lane-final{border-color:rgba(123,155,247,.45)}
+ .pipe-lane-grad{border-color:rgba(51,201,181,.45)}
+ .pipe-lane-hdr{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+ .pipe-lane-hdr h3{margin:0;font:700 12px/1.25 var(--disp);letter-spacing:.08em;text-transform:uppercase}
+ .pipe-count{font:700 13px/1 var(--mono);border-radius:99px;padding:4px 8px;background:var(--panel-2);border:1px solid var(--line);white-space:nowrap}
+ .pipe-lane-body{padding:8px;overflow:auto;display:flex;flex-direction:column;gap:8px;flex:1}
+ .pipe-lane-body::-webkit-scrollbar{width:6px}
+ .pipe-lane-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+ .pipe-group{border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:6px}
+ .pipe-group-hdr{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx-faint);font-weight:600;margin-bottom:6px}
+ .pipe-empty{padding:6px;font-size:11px;color:var(--tx-dim)}
+ .chip{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:5px 7px;font-size:11px;line-height:1.3}
+ .chip-t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px}
+ .chip-s{font-family:var(--mono);font-size:10px;color:var(--tx-dim);margin-top:2px}
+ .gate-card{background:var(--down-soft);border:1px solid rgba(240,104,77,.35);border-radius:var(--r-sm);padding:7px 9px}
+ .gate-hdr{display:flex;align-items:center;justify-content:space-between;gap:8px}
+ .gate-name{font-weight:600;font-size:12px;text-transform:capitalize}
+ .gate-n{font:700 13px/1 var(--mono);color:var(--down);background:rgba(240,104,77,.15);border-radius:99px;padding:3px 8px}
+ .gate-exs{margin-top:6px;display:flex;flex-direction:column;gap:3px}
+ .gate-ex{font-size:10.5px;color:var(--tx-dim)}
+ .gate-ex-t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px}
+ .gate-ex .r{color:var(--tx-faint)}
+ .gate-marg{margin-top:2px;font:10px/1.3 var(--mono)}
+ .gate-marg.trap{color:var(--gold)}
+ .gate-near{margin-top:5px;font:10px/1.2 var(--mono)}
+ .gate-near.trap{color:var(--gold)}
+ .pipe-near{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:9px 11px;margin-top:8px}
+ .pipe-near-hdr{display:flex;align-items:center;justify-content:space-between;gap:8px}
+ .pipe-near-t{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--tx-dim)}
+ .pipe-near-body{display:flex;flex-wrap:wrap;gap:7px 16px;margin-top:7px}
+ .pn-tile{display:flex;flex-direction:column;gap:2px}
+ .pn-tl{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--tx-faint)}
+ .pn-tv{font:600 12px/1 var(--mono)}
+ .pipe-near-sub{margin-top:7px;font-size:10px}
+ .pipe-near-note{margin-top:7px;font-size:10.5px;border-top:1px dashed var(--line);padding-top:5px}
+ .mkt-card{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 9px;transition:border-color .15s}
+ .mkt-card:hover{border-color:var(--proj)}
+ .mkt-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+ .mkt-t{font-size:11.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+ .mkt-mid{display:flex;gap:10px;margin-top:5px;font-size:11px;flex-wrap:wrap}
+ .mkt-sub{margin-top:3px;font-size:10px}
+ .alloc-line{margin-top:5px;padding-top:4px;border-top:1px dashed var(--line);font-size:10px}
+ .alloc-line .alloc-nums{margin-top:2px}
+ .pill{font-size:9px;letter-spacing:.07em;font-weight:700;border-radius:99px;padding:2px 6px;white-space:nowrap}
+ .pill-rew{color:var(--gold);background:var(--gold-soft)}
+ .pill-spr{color:var(--proj);background:var(--proj-soft)}
+ .pill-live{color:var(--up);background:var(--up-soft)}
+ .pill-wait{color:var(--tx-dim);background:var(--panel-2);border:1px solid var(--line)}
+ @media(max-width:1500px){
+   .pipe-board{grid-template-columns:1fr 1fr}
+   .pipe-arrow{display:none}
+ }
+ @media(max-width:900px){
+   .pipe-board{grid-template-columns:1fr}
+   .mast{flex-wrap:wrap}
+ }
 </style></head><body>
 <header class="mast">
   <div class="mast-id"><b>◆</b> Maker Fleet</div>
@@ -881,11 +1558,16 @@ PAGE = r"""<!doctype html>
     <span><i style="background:var(--gold)"></i>income</span>
     <span><i style="background:var(--proj)"></i>projected</span>
   </span>
+  <nav class="views" id="viewNav" title="Switch between the fleet page and the live market-selection funnel">
+    <button type="button" id="viewFleet" class="view-btn active">Fleet</button>
+    <button type="button" id="viewScan" class="view-btn">Market scan</button>
+  </nav>
   <span style="flex:1"></span>
   <span id="live" class="live"></span>
   <span id="health" class="live"></span>
   <span id="clock" class="clock"></span>
 </header>
+<div id="view-fleet">
 <section class="hero">
   <div class="hero-main">
     <div class="hero-duo">
@@ -929,22 +1611,58 @@ PAGE = r"""<!doctype html>
   <div class="gauge-track"><div class="gauge-fill" id="sampleFill"></div></div>
   <div class="gauge-value" id="sampleValue"></div>
 </div>
+<!-- GO-LIVE PROGRESS. Same bar language as the sample-size gauge above, but
+     against the money question: how many fully-resolved markets, of the
+     100 a small real-money pilot decision needs, does the fleet have right
+     now. The KPI group below carries the confidence-interval detail; this is
+     the one-glance version. -->
+<div class="gauge-strip" id="readyStrip">
+  <div class="gauge-label">Go-live progress</div>
+  <div class="sample-blocks mono" id="readyBlocks"></div>
+  <div class="gauge-track"><div class="gauge-fill" id="readyFill"></div></div>
+  <div class="gauge-value" id="readyValue"></div>
+</div>
 <div class="kpi-wrapper" id="agg"></div>
 <div class="exp-err" id="exp"></div>
 <div class="wrap"><table id="tbl">
  <thead><tr>
   <th>Market</th>
+  <th>Last action</th>
   <th class="num">Projected / day</th>
   <th class="num">Committed</th>
-  <th>Position / risk</th>
-  <th class="num">Unrealized P&L</th>
+   <th>Order depth / mid</th>
+   <th class="num">Unrealized P&L</th>
   <th class="num">Realized P&L</th>
   <th class="num">Score share</th>
   <th class="num">Uptime</th>
   <th class="num">Fills</th>
-  <th>Status</th>
+  <th>Telemetry</th>
  </tr></thead><tbody id="rows"></tbody></table></div>
-<script>
+<section class="settled-section">
+  <div class="section-heading"><span>Realized exits</span><span class="dim" style="font-size:11px;font-weight:400">one row per close event · effective exit price · P&amp;L % is return on cost basis</span></div>
+  <div class="wrap"><table id="settledTbl">
+   <thead><tr>
+    <th>Exit time</th><th>Market</th><th>Method</th><th class="num">Shares</th>
+    <th class="num">Avg cost</th><th class="num">Effective exit price</th>
+    <th class="num">P&amp;L %</th><th class="num">P&amp;L</th>
+    <th class="num">Fees / gas</th><th>Exit detail</th>
+   </tr></thead><tbody id="settledRows"></tbody></table></div>
+</section>
+</div><!-- /view-fleet -->
+<section id="view-pipeline" class="pipe-view" hidden>
+  <div class="pipe-strip" id="pipeStrip"></div>
+  <div class="pipe-near" id="nearMiss"></div>
+  <div class="pipe-board" id="pipeBoard">
+    <div class="pipe-lane pipe-lane-raw" id="laneRaw"></div>
+    <div class="pipe-arrow" aria-hidden="true">→</div>
+    <div class="pipe-lane pipe-lane-filter" id="laneFilter"></div>
+    <div class="pipe-arrow" aria-hidden="true">→</div>
+    <div class="pipe-lane pipe-lane-final" id="laneFinal"></div>
+    <div class="pipe-arrow" aria-hidden="true">→</div>
+    <div class="pipe-lane pipe-lane-grad" id="laneGrad"></div>
+  </div>
+</section>
+ <script>
 const $=x=>document.getElementById(x);
 const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const usd=(v,d=2)=>v==null?'-':'$'+Number(v).toFixed(d);
@@ -959,7 +1677,7 @@ const hms=s=>{s=Math.max(0,Math.floor(s));
 function ladder(m){
   const mid=m.mid_up, bid=m.up_bid, ask=m.up_ask;
   if(mid==null||bid==null||ask==null) return '<span class="dim">No two-sided book</span>';
-  const v=(m.max_spread||4.5)/100;
+  const v=(m.max_spread||0.045);
   const half=Math.max(v*1.35, (ask-bid)*0.75, 0.01);
   const lo=mid-half, hi=mid+half, W=hi-lo;
   const x=p=>Math.max(0,Math.min(100,100*(p-lo)/W));
@@ -968,58 +1686,52 @@ function ladder(m){
        <span class="${cls}" style="font-family:var(--mono);font-weight:700;font-size:10.5px;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,.9)">${lbl}</span></span>`;
   const mark=(p,color,top,h)=>p==null?'':
     `<span style="position:absolute;left:${x(p)}%;top:${top}px;width:2px;height:${h}px;
-       background:${color};transform:translateX(-50%)"></span>`;
+       background:${color};width:${color==='var(--gold)'?'3px':'2px'};transform:translateX(-50%)"></span>`;
   const wl=x(mid-v), wr=x(mid+v);
   return `<div style="position:relative;height:38px;width:100%;max-width:280px">
     <div style="position:absolute;left:${wl}%;width:${wr-wl}%;top:12px;height:12px;
          background:var(--up-soft);border-left:1px solid #24463f;border-right:1px solid #24463f"></div>
     <div style="position:absolute;left:0;right:0;top:17px;height:1px;background:var(--line)"></div>
-    ${mark(mid,'#4a5568',10,16)}
+    ${mark(mid,'var(--gold)',7,22)}
     ${mark(bid,'var(--tx-faint)',13,10)}${mark(ask,'var(--tx-faint)',13,10)}
     ${mark(m.our_up,'var(--proj)',8,20)}
     ${mark(m.our_dn_as_up,'var(--down)',8,20)}
     ${tag(m.our_up,'proj',(m.our_up!=null?m.our_up.toFixed(3):''),27)}
     ${tag(m.our_dn_as_up,'down',(m.our_dn_as_up!=null?m.our_dn_as_up.toFixed(3):''),27)}
-    ${tag(mid,'dim','mid',-2)}
+    ${tag(mid,'mid-label','MID '+mid.toFixed(3),-4)}
   </div>`;
 }
 
 function capBar(m){
-  let up=0, dn=0;
+  let up=0, dn=0, upSh=0, dnSh=0;
   for(const o of (m.quotes||[])){
-    const notional=(o.price||0)*(o.size||0);
-    if(o.side==='UP') up+=notional; else dn+=notional;
+    const remaining=o.remaining==null?Math.max(0,(o.size||0)-(o.filled||0)):o.remaining;
+    const notional=o.notional==null?(o.price||0)*remaining:o.notional;
+    if(o.side==='UP'){ up+=notional; upSh+=remaining; }
+    else { dn+=notional; dnSh+=remaining; }
   }
   const total=up+dn;
   if(total<=0) return '<div class="dim" style="font-size:11px;margin-top:6px">No capital resting</div>';
   const upPct=100*up/total, dnPct=100*dn/total;
-  return `<div style="display:flex;height:16px;width:100%;max-width:280px;margin-top:6px;
-       background:var(--line-soft);border-radius:4px;overflow:hidden;font-size:11px;font-weight:600;letter-spacing:0.02em">
-    <div style="width:${dnPct}%;background:var(--down-soft);display:flex;align-items:center;padding-left:6px;color:var(--down);white-space:nowrap">${usd(dn,0)} NO</div>
-    <div style="width:${upPct}%;background:var(--proj-soft);display:flex;align-items:center;justify-content:flex-end;padding-right:6px;color:var(--proj);white-space:nowrap">${usd(up,0)} YES</div>
+  return `<div style="width:100%;max-width:280px;margin-top:6px" title="YES ${upSh.toFixed(0)} shares / ${usd(up,2)} · NO ${dnSh.toFixed(0)} shares / ${usd(dn,2)}">
+    <div style="display:flex;height:16px;background:var(--line-soft);border-radius:4px;overflow:hidden;font-size:11px;font-weight:600;letter-spacing:0.02em">
+      <div style="width:${dnPct}%;background:var(--down-soft);display:flex;align-items:center;padding-left:6px;color:var(--down);white-space:nowrap">${usd(dn,0)} NO</div>
+      <div style="width:${upPct}%;background:var(--proj-soft);display:flex;align-items:center;justify-content:flex-end;padding-right:6px;color:var(--proj);white-space:nowrap">${usd(up,0)} YES</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:3px;font-family:var(--mono);font-size:10px;color:var(--tx-dim)">
+      <span class="down">NO ${dnSh.toFixed(0)} sh</span><span class="proj">YES ${upSh.toFixed(0)} sh</span>
+    </div>
   </div>`;
 }
 
-function posBar(m) {
-  if (!(m.paired>0) && !(m.naked_sh>0)) {
-    return m.closes>0 ? `<span class="dim">Closed ${m.closes}x early</span>` : '<span class="dim">-</span>';
-  }
-  const p = m.paired || 0;
-  const n = m.naked_sh || 0;
-  const tot = p + n;
-  const pPct = 100 * p / tot;
-  const nPct = 100 * n / tot;
-
-  return `<div style="width:160px">
-    <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:6px">
-      <span class="proj">${p?p.toFixed(0)+' pairs':''}</span>
-      <span class="down">${n?n.toFixed(0)+' '+m.naked_side:''}</span>
-    </div>
-    <div style="display:flex;height:8px;background:var(--line-soft);border-radius:4px;overflow:hidden">
-      ${p ? `<div style="width:${pPct}%;background:var(--proj)"></div>` : ''}
-      ${n ? `<div style="width:${nPct}%;background:var(--down)"></div>` : ''}
-    </div>
-  </div>`;
+function orderDepth(m){
+  const detail=capBar(m);
+  const yesHeld=(m.up_sh||0)*(m.up_avg||0);
+  const noHeld=(m.dn_sh||0)*(m.dn_avg||0);
+  const held=(m.up_sh||0)+(m.dn_sh||0)>0
+    ? `<div class="dim" style="font-family:var(--mono);font-size:10px;margin-top:4px" title="Held inventory cost, separate from resting-order collateral">held YES ${(m.up_sh||0).toFixed(0)} sh / ${usd(yesHeld,0)} · NO ${(m.dn_sh||0).toFixed(0)} sh / ${usd(noHeld,0)}</div>`
+    : '';
+  return `${ladder(m)}${detail}${held}`;
 }
 
 function finBox(m) {
@@ -1238,6 +1950,32 @@ async function tick(){
     ? `Fleet markout gate is armed: ${gateN} fills have a matured 1h mark (threshold ${gateNeed}).`
     : `Fleet markout gate stays inactive until ${gateNeed} fills have a matured 1h mark. ${gateNeed - gateN} to go.`;
 
+  // ---- go-live progress (n settled markets / 100 needed for a pilot call) ----
+  const gl = s.go_live || {};
+  const glN = gl.n_settled || 0;
+  const glNeed = gl.go_live_min_settled || 100;
+  const glReady = gl.status === 'READY_FOR_SMALL_LIVE_PILOT';
+  const glSignal = glN >= (gl.signal_min_settled || 30);
+  const glPct = Math.min(100, 100 * glN / glNeed);
+  const glFilled = Math.round(CELLS * glPct / 100);
+  $('readyBlocks').innerHTML =
+    `<span class="${glReady?'up':(glSignal?'gold':'dim')}">${'█'.repeat(glFilled)}</span>` +
+    `<span class="dim">${'░'.repeat(CELLS - glFilled)}</span>`;
+  const rf = $('readyFill');
+  rf.style.width = glPct + '%';
+  rf.style.background = glReady ? 'var(--up)' : (glSignal ? 'var(--gold)' : 'var(--tx-dim)');
+  const glLabel = {
+    NO_DATA: 'no settled markets', COLLECTING: 'collecting',
+    DIRECTIONAL_SIGNAL: 'directional signal only',
+    READY_FOR_SMALL_LIVE_PILOT: 'ready for small live pilot',
+  }[gl.status] || (gl.status || '').toLowerCase();
+  $('readyValue').innerHTML =
+    `<span class="${glReady?'up bold':(glSignal?'gold bold':'dim bold')}">${glN}/${glNeed}</span>` +
+    ` <span class="dim">(Settled Markets) · ${glLabel}</span>`;
+  $('readyStrip').title = glReady
+    ? `Ready for a small live pilot: ${glN} settled markets, 90% CI lower bound ${(gl.ci90_lower_pct||0).toFixed(1)}% (above zero), ${(gl.calendar_days||0).toFixed(1)} calendar days, largest category ${((gl.max_category_share||0)*100).toFixed(0)}% of sample.`
+    : `Needs ${glNeed} settled markets (has ${glN}), a positive 90% CI lower bound, ${gl.go_live_min_calendar_days}+ calendar days, and no single sport over ${((gl.go_live_max_category_share||0)*100).toFixed(0)}% of the sample before a small live pilot is warranted.`;
+
   const K=(n,v,sub,cl,isAlert,tip)=>`<div class="k ${isAlert?'alert':''}" ${tip?`title="${tip}"`:''}><div class="n">${n}</div>
     <div class="v ${cl||''}">${v}</div><div class="s">${sub||''}</div></div>`;
   const renderGroup = (title, tiles) => `<div><div class="kpi-hdr">${title}</div><div class="kpi-group">${tiles.join('')}</div></div>`;
@@ -1286,11 +2024,68 @@ async function tick(){
       'Solid average daily yield sustained over time, smoothing out position enter/exit noise')
   ];
 
+  // ---- go-live readiness: is this trustworthy enough for real dollars ----
+  // Two tiers. MACHINERY (pooled size-weighted markout, same statistic that
+  // drives the fleet HALTED gate) reaches a real sample in hours. MONEY (true
+  // settled P&L per market -- closes plus the $1/$0 the venue paid on
+  // whatever was still held, NOT closes alone, which is biased toward
+  // successful hedge-merges) needs far more settled markets because the
+  // payoff is small-frequent-capture against a rare-large-binary-tail. See
+  // `_go_live_readiness` in server/fleet_dash.py for the reasoning behind the
+  // thresholds below. `gl` itself is declared above, next to the progress bar.
+  const glStatusLabel = {
+    NO_DATA: 'No settled markets yet', COLLECTING: 'Collecting data',
+    DIRECTIONAL_SIGNAL: 'Directional signal only',
+    READY_FOR_SMALL_LIVE_PILOT: 'Ready for small live pilot',
+  }[gl.status] || gl.status || '-';
+  const glStatusCls = {
+    NO_DATA: 'dim', COLLECTING: 'dim', DIRECTIONAL_SIGNAL: 'gold',
+    READY_FOR_SMALL_LIVE_PILOT: 'up',
+  }[gl.status] || 'dim';
+  const t_ready = [
+    K('Go-Live Status', glStatusLabel,
+      (gl.n_settled||0)+' settled markets seen', glStatusCls, false,
+      'Composite readiness read: needs '+gl.go_live_min_settled+'+ settled markets, a positive 90% confidence lower bound on mean return, '+gl.go_live_min_calendar_days+'+ calendar days, and no single sport/category over '+pct(gl.go_live_max_category_share)+' of the sample'),
+    K('Settled Sample (Money)', (gl.n_settled||0)+' / '+gl.go_live_min_settled,
+      (gl.n_settled||0) >= (gl.signal_min_settled||0)
+        ? 'past the '+gl.signal_min_settled+'-market noise floor'
+        : 'below the '+gl.signal_min_settled+'-market noise floor',
+      (gl.n_settled||0) >= (gl.go_live_min_settled||1e9) ? 'up'
+        : (gl.n_settled||0) >= (gl.signal_min_settled||1e9) ? 'gold' : 'dim',
+      false,
+      'Fully-resolved markets, TRUE settled P&L (closes + venue $1/$0 payout on anything still held) -- not just voluntary closes, which are biased toward profitable hedge-merges'),
+    K('Mean Return / Trade', gl.mean_return_pct==null?'-':gl.mean_return_pct.toFixed(1)+'%',
+      gl.stdev_return_pct==null?'stdev unknown':'stdev '+gl.stdev_return_pct.toFixed(1)+'%',
+      gl.mean_return_pct==null?'dim':cls(gl.mean_return_pct), false,
+      'Mean realized P&L as a percent of cost basis, across all TRUE settled markets'),
+    K('90% CI Lower Bound', gl.ci90_lower_pct==null?'-':gl.ci90_lower_pct.toFixed(1)+'%',
+      gl.ci90_lower_pct==null ? 'need 2+ settled markets'
+        : (gl.ci90_lower_pct>0 ? 'distinguishable from breakeven' : 'not yet distinguishable from breakeven'),
+      gl.ci90_lower_pct==null?'dim':cls(gl.ci90_lower_pct), false,
+      'One-sided 90% confidence lower bound on mean return; the actual go/no-go threshold is whether this stays above zero, not the point estimate'),
+    K('Markout Effective Sample', (gl.markout_n_eff||0).toFixed(0),
+      'size-weighted (Kish n_eff), fleet-pooled', (gl.markout_n_eff||0)>=30?'up':'dim', false,
+      'Same pooled size-weighted markout statistic the HALTED gate reads -- a fast, low-variance leading indicator of whether the entry/risk rules are behaving as designed, well before enough markets have resolved for the money read'),
+    K('Calendar Coverage', gl.calendar_days==null?'-':gl.calendar_days.toFixed(1)+'d',
+      'need '+gl.go_live_min_calendar_days+'d+ to cross multiple days/regimes',
+      gl.calendar_days>=gl.go_live_min_calendar_days?'up':'dim', false,
+      'Span between the earliest and latest fill; a short window can look good or bad purely from one event cluster'),
+    K('Category Concentration', gl.max_category_share==null?'-':pct(gl.max_category_share),
+      Object.entries(gl.category_counts||{}).map(([k,v])=>k+':'+v).join(' · ') || 'no settled markets',
+      gl.max_category_share==null?'dim':(gl.max_category_share<=gl.go_live_max_category_share?'up':'down'), false,
+      'Largest single sport/category share of the settled sample; a sample that is all one sport is not diversification even if the mean looks good')
+  ];
+
   const t_risk = [
     K('Capital Deployed',usd(t.committed_total,0),`of ${usd(t.wallet,0)} simulated wallet`,t.committed_total>=t.max_committed?'alert-tx':'dim',t.committed_total>=t.max_committed,
-      'Total capital currently locked in open bids and active inventory'),
-    K('Unhedged Exposure Value',usd(t.naked_exit,0),'unhedged positions current bid value','down', false,
-      'Current resale value of single-sided (unhedged) open positions'),
+      'Total capital currently locked in open bids and active inventory'),    K('Fleet Naked Risk',usd(t.at_risk,0)+' / '+usd(t.fleet_naked_budget,0),
+      Math.min(100,100*t.at_risk/Math.max(1,t.fleet_naked_budget)).toFixed(0)+'% of hard naked-risk budget',
+      t.at_risk >= t.fleet_naked_budget ? 'alert-tx' : (t.at_risk > .8*t.fleet_naked_budget ? 'down' : 'up'),
+      t.at_risk >= t.fleet_naked_budget,
+      'Naked cost at risk, using the same cost basis the dollar risk gate enforces'),
+    K('Unhedged Exit Value',usd(t.naked_exit,0),'current bid value if liquidated now','down', false,
+       'Current resale value of single-sided positions; not the risk-gate cost basis'),
+
     K('Resolution Floor (Worst Case)',usd(t.net_worst),
       'P&L if all unhedged positions expire to $0',cls(t.net_worst), false,
       'Final portfolio profit/loss floor if all unhedged bets expire to $0.00 at resolution, keeping past realized gains.'),
@@ -1314,18 +2109,29 @@ async function tick(){
     K('Scoring uptime',pct(t.uptime),'checks with non-zero score',thresh(t.uptime,true,0.8)),
     K('Fills',String(t.fills),'tape-confirmed + crossed','dim'),
     K('Max Allowed Unrealized Loss',usd(t.fleet_naked_budget,0),'hard unhedged-loss ceiling','dim'),
+    K('Active Quoting Markets',String(t.active_quoting||0)+' / '+String(t.markets||0),
+      t.book_health_ratio == null ? 'no markets' : pct(t.book_health_ratio)+' actively quoting',
+      t.book_health_ratio == null ? 'dim' : thresh(t.book_health_ratio,true,.8), false,
+      'Markets with active resting quotes divided by monitored markets; this is not a two-sided book-depth test'),
+    K('Gate Refusals',String(Object.values(t.gate_refusals||{}).reduce((a,b)=>a+b,0)),
+      Object.entries(t.gate_refusals||{}).map(([k,v])=>k+': '+v).join(' · ') || 'none recorded',
+      Object.keys(t.gate_refusals||{}).length ? 'down' : 'dim', false,
+      'Structured refusal events from the risk and budget gates'),
     K('Data health',healthy?'LIVE':'STALE',healthy?'heartbeat < 120s':'do not trust live figures',healthy?'up':'alert-tx',!healthy)
   ];
 
-  $('agg').innerHTML = renderGroup('Profit &amp; loss', t_pl) + renderGroup('Risk &amp; exposure', t_risk) + renderGroup('Capital &amp; operations', t_cap);
+  $('agg').innerHTML = renderGroup('Profit &amp; loss', t_pl) + renderGroup('Go-live readiness', t_ready) + renderGroup('Risk &amp; exposure', t_risk) + renderGroup('Capital &amp; operations', t_cap);
 
   $('rows').innerHTML=s.markets.map(m=>{
     const currentIncome = (m.income || 0);
     const isGenerating = currentIncome > 0;
-    const risk = m.naked_sh || 0;
-    const position = risk > 0
-      ? `<span class="down bold">${risk.toFixed(0)} ${m.naked_side || 'naked'}</span><br><span class="dim">risk ${usd(m.naked_cost,0)}</span>`
-      : (m.paired > 0 ? `<span class="up bold">${m.paired.toFixed(0)} paired</span>` : '<span class="dim">flat</span>');
+    const position = orderDepth(m);
+    const events = m.events || [];
+    const latest = events[0];
+    const actionClass = latest ? ({FILLED:'up',QUOTING:'proj',HEDGED:'gold',MERGED:'up',EXITED:'down',BLOCKED:'down',ERROR:'alert-tx',WAITING:'dim'}[latest.kind] || 'dim') : 'dim';
+    const actionHtml = latest
+      ? `<div class="action-cell" title="${esc(latest.reason)}"><span class="action-pill ${actionClass}" style="background:rgba(255,255,255,.06)">${esc(latest.kind)}</span><span class="dim" style="font-size:10px;margin-left:6px">${hms(Math.max(0,s.now-latest.ts))} ago</span><div class="action-recent"><div class="event-line">${esc(latest.reason || latest.reason_code)}</div>${events.slice(1,3).map(e=>`<div class="event-line dim">${esc(e.kind)} · ${esc(e.reason || e.reason_code)}</div>`).join('')}</div></div>`
+      : `<span class="dim">No event telemetry</span>`;
     const unrealized = m.unrealized_pnl || 0;
     const hasPos = (m.paired > 0) || (m.naked_sh > 0);
     const unrlHtml = hasPos
@@ -1334,14 +2140,12 @@ async function tick(){
     const rzlHtml = m.closes
       ? `<span class="${cls(m.closed_pnl)} bold mono">${usd(m.closed_pnl)}</span>`
       : `<span class="dim">-</span>`;
-    let statusHtml = m.err
-      ? `<span class="down bold">${esc(m.err)}</span>`
-      : (m.gate === 'EXITED' ? '<span class="down bold">EXITED</span>'
-      : (isGenerating
-          ? `<span class="up bold">${m.source === 'spread' ? 'EARNING SPREAD' : 'SCORING'}</span>`
-          : `<span class="dim">${esc(m.why || 'not earning')}</span>`));
+    const statusHtml = m.err
+      ? `<span class="down bold">STALE / ERROR</span>`
+      : `<span class="${isGenerating?'up':'dim'} bold">${m.source === 'spread' ? 'SPREAD' : 'SCORING'}</span><div class="dim" style="font-size:10px;margin-top:3px">${m.age==null?'no live data':hms(m.age)+' old'}</div>`;
     return `<tr class="${m.gate === 'EXITED' ? 'alert' : ''}">
       <td style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(m.title)}">${m.url?`<a class="mkt-link" href="${esc(m.url)}" target="_blank">${esc(m.title)}</a>`:esc(m.title)}</td>
+      <td>${actionHtml}</td>
       <td class="num bold mono ${isGenerating ? 'up' : 'dim'}" style="font-size:15px">${usd(currentIncome)}</td>
       <td class="num mono" title="Offers ${usd(m.capital,0)}">${usd(m.committed,0)}</td>
       <td>${position}</td>
@@ -1351,13 +2155,171 @@ async function tick(){
       <td class="num mono ${thresh(m.uptime,true,0.8)}">${pct(m.uptime,0)}</td>
       <td class="num mono dim">${m.fills}</td>
       <td>${statusHtml}</td>
+    </tr>`;  }).join('');
+
+  const settled = s.settled_positions || [];
+  $('settledRows').innerHTML = settled.length ? settled.map(p=>{
+    const exitTime = new Date(p.ts * 1000).toLocaleString();
+    const pnlClass = cls(p.realized_pnl);
+    const detail = p.method === 'SELL'
+      ? `YES ${p.yes_exit == null ? '-' : Number(p.yes_exit).toFixed(4)} · NO ${p.no_exit == null ? '-' : Number(p.no_exit).toFixed(4)}`
+      : p.method === 'RESOLVE'
+      ? `Venue resolution payout, blended ${usd(p.exit_price)}/sh (winning shares pay $1, losing pay $0)`
+      : 'Parity redemption at $1.0000';
+    const feeLabel = p.fee_or_gas == null ? '-' : usd(p.fee_or_gas);
+    const pillCls = p.method === 'MERGE' ? 'up' : p.method === 'RESOLVE' ? 'gold' : 'proj';
+    return `<tr>
+      <td class="mono dim" style="white-space:nowrap">${esc(exitTime)}</td>
+      <td style="max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.market_slug)}">${esc(p.market_slug || p.condition_id)}</td>
+      <td><span class="action-pill ${pillCls}" style="background:rgba(255,255,255,.06)">${esc(p.method)}</span></td>
+      <td class="num mono">${Number(p.shares || 0).toFixed(2)}</td>
+      <td class="num mono">${usd(p.avg_cost)}</td>
+      <td class="num mono">${usd(p.exit_price)}</td>
+      <td class="num mono ${p.pnl_pct == null ? 'dim' : pnlClass}">${p.pnl_pct == null ? '-' : (p.pnl_pct >= 0 ? '+' : '') + Number(p.pnl_pct).toFixed(2) + '%'}</td>
+      <td class="num mono ${pnlClass} bold">${usd(p.realized_pnl)}</td>
+      <td class="num mono dim">${feeLabel}</td>
+      <td class="dim" title="${esc(detail)}">${esc(detail)}</td>
     </tr>`;
-  }).join('');
+  }).join('') : '<tr><td colspan="10" class="settled-empty">No realized exits yet — closed positions will appear here.</td></tr>';
 }
-tick(); setInterval(tick,4000);
+// ---------- view switcher: fleet page <-> market pipeline ----------
+const viewShow=(name)=>{
+  $('view-fleet').hidden=(name!=='fleet');
+  $('view-pipeline').hidden=(name!=='scan');
+  $('viewFleet').classList.toggle('active',name==='fleet');
+  $('viewScan').classList.toggle('active',name==='scan');
+  history.replaceState(null,'','?view='+name);
+};
+// The scan view is the evening watch; a reload should not kick the operator
+// back to the fleet page. Re-apply the ?view= param at boot.
+const viewFromUrl=new URLSearchParams(location.search).get('view');
+$('viewFleet').addEventListener('click',()=>viewShow('fleet'));
+$('viewScan').addEventListener('click',()=>viewShow('scan'));
+if(viewFromUrl==='scan'){viewShow('scan');}
+
+// ---------- market pipeline view: the selection funnel, live ----------
+// Four lanes mirror the ranker's actual funnel -- RAW (what the venue
+// lists) -> FILTERS (the selector gates, bucketed by refusal cause) ->
+// FINAL (eligible, ranked by return per dollar) -> GRADUATED (what the
+// fleet adopted). Data comes from run/pipeline.json, which
+// scripts/rank_markets.py rewrites every rank.
+function pipeLane(title,sub,count,countCls,body){
+  return `<div class="pipe-lane-hdr"><div><h3>${title}</h3><div class="dim" style="font-size:10px;margin-top:3px">${sub}</div></div><span class="pipe-count ${countCls||''}">${count}</span></div><div class="pipe-lane-body">${body}</div>`;
+}
+function pipeEmpty(txt){return `<div class="pipe-empty">${txt}</div>`;}
+function pipeChip(t,sub){
+  return `<div class="chip"><div class="chip-t">${esc(t)}</div><div class="chip-s">${sub}</div></div>`;
+}
+function gateCard(g){
+  // `e.marg` is the ranker's estimate of what the allocator would have said
+  // had this rejected market been adopted -- first-dollar marginal %/day on
+  // the venue's own score reading, the same math the GRADUATED lane shows
+  // for a refused market. Absent for identity rejects (no book was fetched).
+  const ex=(g.examples||[]).map(e=>{
+    const m=e.marg;
+    const margHtml=m?`<div class="gate-marg ${m.trap?'trap':m.would_fund?'up':'down'}" title="${esc(m.reason)} · pot $${m.pot_day}/day · competition ${Number(m.competition).toLocaleString()} · floor ${m.threshold_pct}%/day">if adopted: ~${m.marg_pct_day}%/day · ${m.trap?'EMPTY-BOOK MIRAGE — nobody resting in the reward window, the estimate is not real':m.would_fund?'would clear the floor':'below floor'}</div>`:'';
+    return `<div class="gate-ex" title="${esc(e.reason)}"><div class="gate-ex-t">${esc(e.title)}<span class="r"> — ${esc((e.reason||'').slice(0,46))}</span></div>${margHtml}</div>`;
+  }).join('');
+  // First-dollar admission is not a funded quote -- the allocator can still
+  // drop a market at its min-lot payout check -- so the headline says "clear
+  // the floor", the claim that is actually being made. would_fund counts
+  // CREDIBLE near-misses only: an empty-book mirage (pot divided by ~zero
+  // competition) is evidence of nothing, so it is shown separately in amber,
+  // not counted as a green.
+  const near=(g.would_fund||0)>0?`<div class="gate-near up">${g.would_fund} of ${g.n} rejected here would clear the 2%/day floor</div>`:'';
+  const traps=(g.traps||0)>0?`<div class="gate-near trap">${g.traps} empty-book mirages here — the estimate divides by ~zero competition and is not real</div>`:'';
+  return `<div class="gate-card"><div class="gate-hdr"><span class="gate-name">${esc(g.cause||'other')}</span><span class="gate-n">${g.n||0}</span></div>${near}${traps}${ex?`<div class="gate-exs">${ex}</div>`:''}</div>`;
+}
+function mktCard(m){
+  const src=m.source==='spread';
+  return `<div class="mkt-card"><div class="mkt-top"><span class="mkt-t" title="${esc(m.title)}">${esc(m.title)}</span><span class="pill ${src?'pill-spr':'pill-rew'}">${src?'SPREAD':'REWARD'}</span></div><div class="mkt-mid"><span class="proj bold mono">${usd(m.income)}/d</span><span class="dim mono">${usd(m.capital,0)} cap</span><span class="dim mono">${m.ret_day_pct==null?'-':m.ret_day_pct.toFixed(2)+'%/d'}</span></div><div class="mkt-sub dim mono">${m.volume==null?'vol ?':'$'+(m.volume/1000).toFixed(0)+'K vol'} · ${m.days==null?'horizon ?':m.days.toFixed(1)+'d'}</div></div>`;
+}
+function gradCard(m){
+  const st=m.live?(m.err?'ERR':'LIVE'):'QUEUED';
+  const pillCls=m.live?(m.err?'pill-spr':'pill-live'):'pill-wait';
+  const a=m.alloc;
+  const allocHtml=a?`<div class="alloc-line"><div class="${a.funded?'up':'down'}" title="first dollar ${a.first_marginal_pct}%/day · pot $${a.pot_day}/day · allocated $${a.dollars}">${esc(a.reason)}</div><div class="alloc-nums dim mono">marginal ${a.marginal_pct}%/day · competition ${Number(a.competition_avg).toLocaleString()} · floor ${a.threshold_pct}%/day</div></div>`:`<div class="alloc-line dim">allocator: no verdict yet</div>`;
+  return `<div class="mkt-card"><div class="mkt-top"><span class="mkt-t" title="${esc(m.title)}">${esc(m.title)}</span><span class="pill ${pillCls}">${st}</span></div><div class="mkt-mid"><span class="proj bold mono">${usd(m.income)}/d</span><span class="dim mono">${usd(m.capital,0)} cap</span><span class="dim mono">${pct(m.share,1)} share</span></div><div class="mkt-sub dim mono">${m.fills||0} fills · ${pct(m.uptime,0)} uptime</div>${allocHtml}</div>`;
+}
+function pipeStrip(s,snap){
+  if(!snap){
+    const fleetTxt=s.fleet_alive===true?' The fleet is alive.':s.fleet_alive===false?' The fleet is down.':'';
+    return pipeEmpty('No pipeline snapshot yet — the ranker writes <span class="mono">run/pipeline.json</span> on its next pass (every 10 min).'+fleetTxt+(s.picked?' '+s.picked+' market(s) adopted':''));
+  }
+  const c=snap.counts||{};
+  const age=Math.max(0,s.snapshot_age||0);
+  const stale=age>900;
+  const chain=`<span class="up">RAW ${(c.funded||0)+(c.spread_universe||0)}</span><span>→</span><span>scored ${c.scored||0}</span><span>→</span><span class="down">rejected ${c.rejected||0}</span><span>→</span><span class="proj">eligible ${c.eligible||0}</span><span>→</span><span class="up bold">picked ${c.picked||0}</span>`;
+  return `<div class="pipe-census">${esc(snap.census||'')} <span class="${stale?'down':'dim'}">· snapshot ${hms(age)} old</span></div><div class="pipe-chain">${chain}</div><div class="pipe-gates">${esc((snap.gates||'').trim())}</div>`;
+}
+function pipeNearMiss(nm){
+  if(!nm) return '';
+  const st=nm.status;
+  const badge=st==='READY_TO_TRIAL'?'<span class="pill pill-live">READY TO TRIAL</span>'
+    :st==='COLLECTING'?'<span class="pill pill-wait">COLLECTING</span>'
+    :'<span class="pill pill-wait">NO DATA</span>';
+  const tile=(label,val,cls)=>`<span class="pn-tile"><span class="pn-tl">${label}</span><span class="pn-tv ${cls||''}">${val}</span></span>`;
+  const causes=Object.entries(nm.top_causes||{}).slice(0,3).map(([k,v])=>`${esc(k)} ${v}`).join(' · ');
+  const note=st==='READY_TO_TRIAL'
+    ?`<span class="up bold">Enough consistent evidence — the next step is a controlled trial (adopt the small-margin greens, watch markouts), not an immediate gate change.</span>`
+    :(st==='COLLECTING'&&nm.greens===0&&nm.traps>0
+      ?`<span class="dim">Only empty-book mirages so far (${nm.traps} excluded) — no credible near-miss yet, so the bars stay at zero. Not a malfunction; real candidates will move them.</span>`
+      :`<span class="dim">Logging the green near-misses the floor would fund but the gates refuse — the estimate is single-snapshot and optimistic, so this validates it is CONSISTENT over time; a trial measures whether it actually pays.</span>`);
+  return `<div class="pipe-near-hdr"><span class="pipe-near-t">NEAR-MISS TRACKER</span>${badge}</div>`+
+    `<div class="pipe-near-body">`+
+    tile('days',`${nm.days}/${nm.min_days}`,nm.days>=nm.min_days?'up':'proj')+
+    tile('unique markets',`${nm.unique_markets}/${nm.min_unique}`,nm.unique_markets>=nm.min_unique?'up':'proj')+
+    tile('small-margin depth',`${nm.small_margin_depth}/${nm.min_small_margin}`,nm.small_margin_depth>=nm.min_small_margin?'up':'proj')+
+    (nm.depth_unparsed?`<span class="pn-tile"><span class="pn-tl">unparsed depth reasons</span><span class="pn-tv down">${nm.depth_unparsed}</span></span>`:'')+
+    tile('stability (72 ranks)',`${Math.round(100*nm.stability)}%`,nm.stability>=nm.min_stability?'up':'proj')+
+    tile('pot on the table',`$${nm.uniq_pot_day}/d`,'')+
+    (nm.pot_traps?`<span class="pn-tile"><span class="pn-tl">excl. traps</span><span class="pn-tv dim">${nm.pot_traps} ($${Math.round((nm.raw_uniq_pot_day||0)-(nm.uniq_pot_day||0))}/d)</span></span>`:'')+
+    (nm.traps?`<span class="pn-tile"><span class="pn-tl">mirages seen</span><span class="pn-tv down">${nm.traps} (not counted)</span></span>`:'')+
+    tile('ranks logged',`${nm.ranks}`,'')+
+    `</div>`+
+    (causes?`<div class="pipe-near-sub dim mono">credible green by gate: ${causes}</div>`:'')+
+    `<div class="pipe-near-note">${note}</div>`;
+}
+function pipeRaw(snap){
+  const c=snap.counts||{};
+  const raw=snap.raw||{};
+  const rew=(raw.rewards||[]).map(m=>pipeChip(m.title,'$'+Number(m.rate||0).toFixed(2)+'/day · '+(m.days==null?'?':m.days.toFixed(1))+'d')).join('');
+  const spr=(raw.spread||[]).map(m=>pipeChip(m.title,'$'+(Number(m.volume||0)/1000).toFixed(0)+'K vol · sp '+(m.spread==null?'?':m.spread)+' · '+(m.days==null?'?':m.days.toFixed(1))+'d')).join('');
+  return pipeLane('① RAW — what the venue lists','sampling-markets reward pool + gamma liquid pool',(c.funded||0)+(c.spread_universe||0),'',
+    `<div class="pipe-group"><div class="pipe-group-hdr">Reward-funded (${c.funded||0}) · top by rate shown</div>${rew||pipeEmpty('no funded reward markets listed')}</div><div class="pipe-group"><div class="pipe-group-hdr">Unfunded liquid (${c.spread_universe||0}) · by 24h volume</div>${spr||pipeEmpty('no unfunded markets cleared the listing scan')}</div>`);
+}
+function pipeFilter(snap){
+  const c=snap.counts||{};
+  const cards=(snap.rejections||[]).map(gateCard).join('');
+  const nb=c.dropped_no_verdict||0;
+  const nbCard=nb>0?gateCard({cause:'no usable book',n:nb,examples:[{title:'dropped inside scoring',reason:'book fetch failed / one-sided / mid out of band / would overbid'}]}):'';
+  return pipeLane('② FILTERS — who is refused, and why','identity · depth · spread · volume · horizon · income',c.rejected||0,'down',cards+nbCard||pipeEmpty('nothing rejected on the last rank'));
+}
+function pipeFinal(snap){
+  const fin=snap.final||[];
+  const body=fin.length?fin.map(mktCard).join(''):pipeEmpty('nothing cleared every gate on the last rank — the bars are doing their job');
+  return pipeLane('③ FINAL STAGE — eligible, ranked','passed every gate · return per $ of capital',fin.length,'proj',body);
+}
+function pipeGrad(s){
+  const g=s.graduated||[];
+  const body=g.length?g.map(gradCard).join(''):pipeEmpty('fleet has adopted no markets yet');
+  return pipeLane('④ GRADUATED — the fleet\'s universe','from run/markets.json · annotated with live fleet state',(s.live||0)+'/'+(s.picked||0),'up',body);
+}
+async function tickPipeline(){
+  let s; try{ s=await (await fetch('/api/pipeline',{cache:'no-store'})).json(); }catch(e){ return; }
+  const snap=s.snapshot||null;
+  $('pipeStrip').innerHTML=pipeStrip(s,snap);
+  $('nearMiss').innerHTML=pipeNearMiss(s.near_miss||null);
+  $('laneRaw').innerHTML=snap?pipeRaw(snap):pipeLane('① RAW','','-','',pipeEmpty('waiting for the next rank…'));
+  $('laneFilter').innerHTML=snap?pipeFilter(snap):pipeLane('② FILTERS','','-','',pipeEmpty('waiting for the next rank…'));
+  $('laneFinal').innerHTML=snap?pipeFinal(snap):pipeLane('③ FINAL STAGE','','-','',pipeEmpty('waiting for the next rank…'));
+  $('laneGrad').innerHTML=pipeGrad(s);
+}
+tickPipeline(); setInterval(tickPipeline,10000);
+ tick(); setInterval(tick,4000);
 </script>
 </body></html>
 """
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTMLResponse(content=PAGE, headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
+    return HTMLResponse(content=PAGE, headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})

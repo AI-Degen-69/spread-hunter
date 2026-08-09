@@ -15,6 +15,7 @@ from typing import Iterable, Mapping
 # venue slugs ("game1", "in-play", "map_2") are rejected.
 _BLOCKED_RE = re.compile(
     r"(?<![a-z0-9])(?:game|map|set)[\s_-]*[12](?![a-z0-9])|"
+    r"\b(?:game|map|set)\s+winner\b|"
     r"\bround\b|\blive\b|\bin[\s_-]*play\b|\bhandicap\b",
     re.IGNORECASE,
 )
@@ -43,13 +44,43 @@ def _text(*values: object) -> str:
 def identity_allowed(title: object = "", slug: object = "",
                      category: object = "", market_type: object = "",
                      market_group: object = "", series_title: object = "",
-                     event_title: object = "") -> tuple[bool, str]:
+                     event_title: object = "",
+                     require_primary: bool = True) -> tuple[bool, str]:
     """Return whether a market is a permitted primary/main-line instrument.
 
-    Unknown metadata is rejected. Sports/eSports markets must explicitly identify
-    themselves as Moneyline/Main Line/Outright; Politics and Macro/Economics are
-    allowed by category or market type because their primary market titles do not
-    consistently carry the word ``Moneyline``.
+    A head-to-head "A vs B" title is the shape that hides Game/Map/Round
+    submarkets (a BO5 has a Game 1, Game 2, ... alongside its match winner), so
+    that shape must confirm itself against a known league/series keyword before
+    it is admitted. A standalone event question ("Strait of Hormuz traffic
+    returns to normal by August 31?") has no head-to-head to fragment into a
+    submarket -- there is no "Game 1" version of it -- so it only needs to clear
+    the blocked-keyword and no-group-label checks. Requiring a topic keyword
+    for that shape too was rejecting real, liquid, non-sports questions (audited
+    2026-08-06: a $600K/24h geopolitical market) for lacking a hardcoded macro
+    word, while contributing almost nothing against the reward-market universe
+    it was meant to protect (audited same day: of 131 identity-only rejections,
+    1 cleared the volume gate and 0 cleared volume+horizon). The liquidity,
+    depth, and spread gates downstream are the real risk control for this
+    shape, not a keyword whitelist.
+
+    `require_primary=False` keeps every REJECTION arm and drops only the
+    positive confirmation the matchup shape has to earn. It exists for one
+    caller: a `run/markets.json` written before this module did, whose entries
+    carry a title and a slug and none of the five metadata fields the sports
+    and macro keywords are read from. Judged normally, every such entry fails
+    -- "Yankees vs Red Sox" has no league word in its own title -- so the live
+    fleet would cancel its quotes on the entire universe until the next rank
+    rewrote the file. That is a gap in the DATA, not evidence about the market,
+    and answering it with a block inverts what the flag is for.
+
+    What still runs on that path is the part that needs no metadata: the
+    blocked-keyword arm reads title and slug, so Game 1, Map 2, Round, live,
+    in-play and handicap are refused exactly as before. Only the "confirm this
+    matchup against a known league" step is skipped, and the market still
+    answers to the volume, depth, and spread gates downstream, which do not
+    depend on the ranker's vocabulary. The window is bounded by the re-rank
+    interval (600s), after which the file carries the fields and the full rule
+    applies again.
     """
     title_slug = _text(title, slug)
     all_text = _text(title, slug, category, market_type, market_group,
@@ -61,19 +92,36 @@ def identity_allowed(title: object = "", slug: object = "",
     if _MACRO_RE.search(_text(category, market_type, market_group,
                               series_title, event_title, title, slug)):
         return True, ""
-    # A direct sports matchup with no group label is the venue's common shape
-    # for a main line (for example MLB). Submarkets carry a group label or a
-    # blocked token and are rejected above.
-    if (_SPORTS_SERIES_RE.search(_text(category, market_type, series_title,
-                                       event_title, title_slug))
-            and re.search(r"\bvs\.?\s", title_slug, re.IGNORECASE)
-            and not _text(market_group)):
-        return True, ""
-    # Unknown category/type is rejected rather than inferred from a generic
-    # "A vs B" title. Series, finals, and other submarkets often look exactly
-    # like that; admitting them would recreate the failure this selector exists
-    # to prevent. The venue must identify the primary instrument explicitly.
-    return False, "not a primary Moneyline/Outright or Macro/Politics market"
+    is_matchup = bool(re.search(r"\bvs\.?\s", title_slug, re.IGNORECASE))
+    if is_matchup:
+        # A direct sports matchup with no group label is the venue's common
+        # shape for a main line (for example MLB). Submarkets carry a group
+        # label or a blocked token and are rejected above. Unknown
+        # category/type is rejected rather than inferred from a generic
+        # "A vs B" title -- series, finals, and other submarkets often look
+        # exactly like that, and this shape is where a keyword miss would
+        # readmit exactly what the selector exists to block.
+        if (_SPORTS_SERIES_RE.search(_text(category, market_type, series_title,
+                                           event_title, title_slug))
+                and not _text(market_group)):
+            return True, ""
+        if not require_primary:
+            # The keyword could not be found because the fields it is read
+            # from are absent, not because the market failed the test. A group
+            # label still refuses -- that field being present and populated IS
+            # evidence, and it is the one submarket signal that survives on a
+            # metadata-less spec.
+            if _text(market_group):
+                return False, "carries a submarket group label"
+            return True, ""
+        return False, "not a primary Moneyline/Outright or Macro/Politics market"
+    # No head-to-head shape to fragment. A blocked token already returned
+    # above; a group label means this is still someone's submarket even
+    # without one, so both are refused. Everything else is admitted and
+    # answers for itself at the liquidity/depth/spread gates.
+    if _text(market_group):
+        return False, "carries a submarket group label"
+    return True, ""
 
 
 def top_depth_usd(levels: Mapping[float, float] | Iterable[tuple[float, float]],

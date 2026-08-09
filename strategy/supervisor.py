@@ -40,7 +40,7 @@ CHILDREN = {
     "fleet": [sys.executable, "-m", "strategy.fleet"],
     "dash": [sys.executable, "-m", "uvicorn", "server.fleet_dash:app",
              "--host", "127.0.0.1", "--port", "8800"],
-    # THE RANKER, which `fleet-bg.ps1` used to start as an UNSUPERVISED
+    # THE RANKER, which `fleet-start.ps1` used to start as an UNSUPERVISED
     # sibling. It died on 2026-08-03 at 17:08 and nothing restarted it, so
     # run/markets.json went 28.5 hours without a rewrite while the fleet
     # re-read it every cycle. The U6 universe is short-dated by construction:
@@ -49,6 +49,16 @@ CHILDREN = {
     # line all read perfectly healthy at $0.00/day. That is the same silent
     # death this supervisor was written for; the ranker belongs under it.
     "rerank": [sys.executable, "-m", "scripts.rerank_loop"],
+    # THE UNIVERSE WATCHER, an observer started 2026-08-08 to log the evening
+    # slate without anyone sitting at the terminal: every 5 minutes it records
+    # picked-market count, the latest ranker census, and live esports book
+    # depth/spread against the selector bars (logs/universe_watch.log). It is
+    # read-only -- it never writes run/markets.json or the DB -- so losing it
+    # costs nothing but the log; keeping it supervised means the log simply
+    # keeps accruing across crashes and reboots instead of silently stopping.
+    # It was first started detached; the supervisor owns it so the stack and
+    # the observer cannot drift apart.
+    "watch": [sys.executable, "-m", "scripts.watch_universe"],
 }
 
 

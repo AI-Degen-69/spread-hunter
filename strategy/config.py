@@ -325,8 +325,23 @@ class MakerConfig:
     # quote reachable and enough immediate exit liquidity to make a naked fill
     # survivable. The selector requires this depth independently on YES and NO.
     select_min_volume_24h_usd: float = 250_000.0
-    select_min_top3_depth_usd: float = 5_000.0
-    select_max_book_spread: float = 0.04
+    # DEPTH AND SPREAD, ALIGNED TO THE LIVE GATE (2026-08-06). The entry
+    # pre-filter was stricter than the continuous protection that actually
+    # governs every quote decision: `risk.book_health` (below) requires only
+    # 200 SHARES of depth (roughly $100 notional at a 0.50 mid) and a 0.06
+    # spread, checked on EVERY quote, not once at pick time. $5,000 was an
+    # 41x margin over the $120 `max_naked_usd` worst-case position this depth
+    # exists to make exitable -- comfortable, but double-gating against a live
+    # system that already refuses to add to a bad book, refuses an untradeable
+    # hedge leg, and caps naked cost independent of how the market was picked.
+    # Measured 2026-08-06: of 189 scored candidates in a live off-peak read,
+    # ~120 failed on YES-side depth alone, most by a wide margin (not a close
+    # call at $5,000 -- either well over or an order of magnitude under), so
+    # this mainly widens the CANDIDATE POOL rather than admitting marginal
+    # books. Set to the same bar the live system already enforces rather than
+    # a stricter, redundant one: $1,000 (8x the $120 worst case) and 0.06.
+    select_min_top3_depth_usd: float = 1_000.0
+    select_max_book_spread: float = 0.06
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
     select_max_days_to_resolve: float = 30.0
@@ -338,7 +353,7 @@ class MakerConfig:
     rank_sample_window_sec: float = 1800.0
     # Re-rank cadence. run/markets.json was frozen from 2026-07-29 01:39 while
     # the fleet ran against it for a day and a half.
-    rerank_interval_sec: float = 3600.0
+    rerank_interval_sec: float = 600.0
     # Required profit per share AFTER both fees. Set at roughly one fee's
     # width again, so a close is only taken on a move clearly larger than the
     # cost of taking it -- at 1c the threshold sits inside the noise of a
@@ -511,14 +526,23 @@ class MakerConfig:
     # in-band prices treated as risk-free, or a cut still ramping at a price
     # that is already forbidden.
     coinflip_halfwidth: float = 0.20
-    # A 10% trim at the coin flip, not a withdrawal. The reward score is LINEAR
-    # in resting size, so a cut of x% forfeits x% of the rent; variance at 0.50
-    # is only 19% above the band edge (0.2500 vs 0.2100). Paying much more than
-    # half that differential in rent to avoid it would be buying the smaller
-    # risk with the larger certainty. It also stays clear of the 50-share
-    # reward minimum: at a 120-share base the heavy side keeps resting up to
-    # ~26% of the naked budget rather than dropping out early.
-    coinflip_size_cut: float = 0.10
+    # Originally a 10% trim, sized off the THEORETICAL variance differential
+    # alone (0.2500 at 0.50 vs 0.2100 at the band edge, a 19% gap -- paying
+    # much more than half of that in forgone rent looked like buying the
+    # smaller risk with the larger certainty). The 2026-08-05 forensic audit
+    # then measured the REALIZED cost directly and it dominates that estimate:
+    # -10.68c mean drift and -$122.00 size-weighted loss in 0.40-0.60 (n=19),
+    # the only price band that read negative on both the mean and the
+    # size-weighted total. Raised to 55%, the strongest cut that does not
+    # zero out at the coin flip: `size = int(ladder * size_mult)` also gates
+    # the LIGHT side (the one order exempt from every OTHER risk rule,
+    # because it is the only one that reduces exposure), and the 120-share
+    # base falls below the 50-share reward minimum for any cut past ~58%
+    # (120 * 0.42 =~ 50). 88% was tried first and silently zeroed BOTH sides
+    # at 0.50, flat markets included -- the full exclusion this setting was
+    # chosen instead of. Reassess against the go-live readiness panel's
+    # per-band markout once more data accumulates under this setting.
+    coinflip_size_cut: float = 0.55
     # 1c of extra offset at full weight, in price units. Reads as 0.3c at 0.30
     # and 0.7c at 0.70 on the magnitude term -- a 0.4c differential across the
     # band, comparable to the 0.5c `min_reward_offset` and therefore large

@@ -1,10 +1,11 @@
 # Stop the fleet this checkout started.
 #
 # Hidden processes cannot be closed by shutting a window, which is the point of
-# running them hidden and also the reason this script has to exist. There was
-# previously no way to stop the fleet at all except by starting it again --
-# `fleet-start.ps1` kills the old processes only on its way to launching new
-# ones.
+# running them hidden and also the reason this script has to exist. The old
+# foreground launcher stopped a previous fleet only on its way to starting a
+# new one; the current `fleet-start.ps1` does the same (it stops the recorded
+# instance before launching), but stopping without restarting is this script's
+# whole job.
 #
 #   .\scripts\fleet-stop.ps1            stop the recorded fleet
 #   .\scripts\fleet-stop.ps1 -Strays    also stop fleet-shaped processes this

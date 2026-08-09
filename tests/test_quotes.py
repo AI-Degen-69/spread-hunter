@@ -199,8 +199,12 @@ def test_rewards_skews_to_flatten_instead_of_dropping_a_side():
     # this test is about the skew, so neither the dollar cap NOR the U3 size
     # taper (which floors a side to zero above ~35% utilization, at a 120-share
     # base) may be what decides the outcome. Both sides must still rest.
+    #
+    # Quoted off-center (0.65/0.32 mids) so U4's coinflip cut, strengthened to
+    # 55% on 2026-08-06, does not ALSO floor the heavy side here -- that is a
+    # separate concern this test does not own.
     inv = Inventory(up_shares=60.0, down_shares=0.0, up_cost=31.20, down_cost=0.0)
-    intents, why = _quote(_rcfg(), inv=inv)
+    intents, why = _quote(_rcfg(), up=(0.65, 0.66), dn=(0.32, 0.33), inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
     off = {q.side: q.mid - q.price for q in intents}
     assert off["UP"] > off["DOWN"], "heavy side must sit FURTHER from mid"
@@ -208,7 +212,7 @@ def test_rewards_skews_to_flatten_instead_of_dropping_a_side():
     # Measured against the same book held flat rather than against a bare
     # constant: every quote now also carries U4's price-risk widening, and a
     # fixed threshold would be reading that term rather than the skew.
-    flat, _ = _quote(_rcfg(), inv=Inventory())
+    flat, _ = _quote(_rcfg(), up=(0.65, 0.66), dn=(0.32, 0.33), inv=Inventory())
     flat_down = [q.mid - q.price for q in flat if q.side == "DOWN"][0]
     assert off["DOWN"] < flat_down
 
@@ -394,11 +398,13 @@ def test_unsetting_the_budget_quotes_both_sides_at_twice_the_old_limit():
     unset, the way every other cap here is unset. Block, ladder and skew all
     stand down together, and both sides rest.
 
-    Sizes are 113 and 115 rather than a flat 120 because U4's price-risk cut is
+    Sizes are 82 and 95 rather than a flat 120 because U4's price-risk cut is
     a separate rule with its own switch, keyed to WHERE the quote sits (0.585
     and 0.375) and not to what is at risk. That is the point of the assertion
     below: the utilization taper is gone -- a $240 position on a $0 budget rests
-    the same size a flat one would -- while the price cut is untouched.
+    the same size a flat one would -- while the price cut is untouched. (Sizes
+    dropped from 113/115 when `coinflip_size_cut` was strengthened from 10% to
+    55% on 2026-08-06.)
     """
     cfg = _rcfg(max_naked_usd=0.0)
     inv = Inventory(up_shares=400.0, down_shares=0.0,
@@ -407,7 +413,7 @@ def test_unsetting_the_budget_quotes_both_sides_at_twice_the_old_limit():
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
     flat, _ = _quote(cfg, up=(0.60, 0.61), dn=(0.39, 0.40), inv=Inventory())
     assert ({q.side: q.size for q in intents}
-            == {q.side: q.size for q in flat} == {"UP": 113, "DOWN": 115})
+            == {q.side: q.size for q in flat} == {"UP": 82, "DOWN": 95})
 
 
 def test_fleet_cap_stops_the_heavy_side_even_when_this_market_is_fine():
@@ -431,21 +437,23 @@ def test_fleet_cap_stops_the_heavy_side_even_when_this_market_is_fine():
 
 def test_fleet_under_budget_quotes_both_sides_normally():
     """Same position, same books; only the fleet total moved. Isolates the
-    fleet cap as what bound above -- and the heavy side comes back TAPERED, at
-    60 shares against the light side's 111, because $30 of $120 is a quarter of
-    the budget. The ladder alone reads 67 (120*(1-0.25)^2); U4's coin-flip cut
-    then takes both sides down together (x0.9025 at 0.505, x0.9275 at 0.445),
-    which is why the two numbers are not 67 and 120."""
-    inv = Inventory(up_shares=100.0, down_shares=0.0,
-                    up_cost=30.0, down_cost=0.0)
+    fleet cap as what bound above -- and the heavy side comes back TAPERED.
+
+    $3 of naked cost (not $30: since `coinflip_size_cut` was strengthened to
+    55% on 2026-08-06, the heavy side floors to zero under the 50-share reward
+    minimum at almost any meaningful utilization near the coin flip, so this
+    keeps utilization low enough that a heavy-but-nonzero order still isolates
+    the fleet cap from the price-risk cut)."""
+    inv = Inventory(up_shares=3.0 / 0.52, down_shares=0.0,
+                    up_cost=3.0, down_cost=0.0)
     cfg = _rcfg(fleet_naked_usd=100.0, max_fleet_naked_usd=800.0)
     intents, why = _quote(cfg, inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
-    assert [q.size for q in intents if q.side == "UP"] == [60]
-    assert [q.size for q in intents if q.side == "DOWN"] == [111]
+    assert [q.size for q in intents if q.side == "UP"] == [52]
+    assert [q.size for q in intents if q.side == "DOWN"] == [72]
     # The taper is still what separates them: the heavy side is the only one
     # utilization touches, and it rests well under the light side.
-    assert risk.size_for(cfg, inv, "UP", 0.486) == 67
+    assert risk.size_for(cfg, inv, "UP", 0.49) == 114
 
 
 def test_skew_never_leaves_the_reward_window_or_crosses():
@@ -457,11 +465,14 @@ def test_skew_never_leaves_the_reward_window_or_crosses():
     to iterate over. So the window is pinned at a utilization where BOTH sides
     still rest, and the clamp at the near end is pinned separately.
     """
-    # 70% of the budget, on a 1000-share base so the taper still leaves an
-    # order (1000*(1-0.7)^2 = 90 shares) on the heavy side.
+    # 40% of the budget, on a 1000-share base so the taper still leaves an
+    # order on the heavy side. (Was 70%/90 shares; lowered on 2026-08-06 when
+    # `coinflip_size_cut` was strengthened to 55% -- at 70% utilization the
+    # heavy side now floors to zero under the 50-share reward minimum, which
+    # this test does not exist to demonstrate.)
     cfg = _rcfg(quote_shares=1000, min_quote_shares=50, max_naked_usd=120.0)
-    inv = Inventory(up_shares=84.0 / 0.52, down_shares=0.0,
-                    up_cost=84.0, down_cost=0.0)
+    inv = Inventory(up_shares=48.0 / 0.52, down_shares=0.0,
+                    up_cost=48.0, down_cost=0.0)
     intents, why = _quote(cfg, inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
     for q in intents:
@@ -584,9 +595,9 @@ def test_ordinary_reward_quotes_are_never_marked_crossed():
 
 # --- U3: bounding what is committed, not just what is unhedged ---------------
 
-def _rw_quote(cfg, inv=None):
-    return decide_quotes(cfg, _book("UPTOK", 0.52, 0.53),
-                         _book("DNTOK", 0.46, 0.47), inv or Inventory(),
+def _rw_quote(cfg, inv=None, up=(0.52, 0.53), dn=(0.46, 0.47)):
+    return decide_quotes(cfg, _book("UPTOK", *up),
+                         _book("DNTOK", *dn), inv or Inventory(),
                          1e9, None)
 
 
@@ -687,12 +698,14 @@ def test_size_walks_down_to_nothing_instead_of_stepping_off_a_cliff():
 
     400 shares of base, a $120 budget, and a market walked from flat to the cap
     in $24 steps. The old rule produced 400, 400, 400, 400, 400, none. The
-    ladder lands softly -- the last order placed is 57 shares, 14% of full size,
-    and the sequence never steps from full size to zero.
+    ladder lands softly -- the last order placed is well under full size, and
+    the sequence never steps from full size to zero.
 
-    Every rung is x0.9025 of the ladder's own reading, U4's coin-flip cut at
-    0.505, which is a constant here and therefore changes the levels without
-    changing the shape this test is about.
+    Every rung also carries U4's coin-flip cut at 0.505, a constant here and
+    therefore changing the levels without changing the shape this test is
+    about. (Raised from a 10% cut to 55% on 2026-08-06, per the 2026-08-05
+    forensic audit's measured -10.68c / -$122.00 in the 0.40-0.60 band -- the
+    sequence now reaches None one step earlier than before.)
     """
     cfg = _rw(quote_shares=400, min_quote_shares=50, max_naked_usd=120.0)
     seq = []
@@ -701,7 +714,7 @@ def test_size_walks_down_to_nothing_instead_of_stepping_off_a_cliff():
         up = [q.size for q in intents if q.side == "UP"]
         seq.append(up[0] if up else None)
 
-    assert seq == [361, 177, 129, 57, None, None]
+    assert seq == [185, 91, 66, None, None, None]
     live = [s for s in seq if s is not None]
     assert live == sorted(live, reverse=True) and len(set(live)) == len(live)
     assert live[-1] < 400 * 0.25, "the last order before the cap must be small"
@@ -711,11 +724,13 @@ def test_the_light_side_keeps_full_size_all_the_way_up_the_ladder():
     """R4 in the sizing layer: the taper must never slow the exit. Same walk as
     above, reading the side that REDUCES exposure.
 
-    'Full size' is now 371 rather than the 400-share base: U4's price-risk cut
-    reads the PRICE and applies to both legs of a binary market symmetrically,
-    unlike the exposure taper, which is one-sided because only one side reduces
-    exposure. What R4 demands is that utilization never touches this number,
-    and it does not -- it is the same 371 at $24 of risk and at $120.
+    'Full size' is now 240 rather than the 400-share base (was 371 at the old
+    10% coin-flip cut; the cut was strengthened to 55% on 2026-08-06 per the
+    2026-08-05 forensic audit): U4's price-risk cut reads the PRICE and applies
+    to both legs of a binary market symmetrically, unlike the exposure taper,
+    which is one-sided because only one side reduces exposure. What R4 demands
+    is that utilization never touches this number, and it does not -- it is
+    the same 240 at $24 of risk and at $120.
     """
     cfg = _rw(quote_shares=400, min_quote_shares=50, max_naked_usd=120.0)
     sizes = []
@@ -724,7 +739,7 @@ def test_the_light_side_keeps_full_size_all_the_way_up_the_ladder():
         down = [q.size for q in intents if q.side == "DOWN"]
         assert down, f"light side dropped at ${usd:.0f}: {why}"
         sizes.append(down[0])
-    assert sizes == [371] * 5, sizes
+    assert sizes == [240] * 5, sizes
     # And it IS the untapered base, only price-cut: `size_for` never taper the
     # light side, so the whole difference from 400 is the coin-flip factor.
     assert sizes[0] == int(400 * risk.band_risk_factor(cfg, 0.445).size_mult)
@@ -761,13 +776,15 @@ def test_no_side_ever_rests_a_zero_size_order():
 def test_well_inside_the_budget_the_heavy_side_still_rests_at_a_reduced_size():
     """Isolates the ladder against 'the heavy side just stopped quoting'.
 
-    $36 of $120 is 30% utilization: 120*(1-0.3)^2 = 58.8 shares, which clears
-    the 50-share reward minimum. U4's coin-flip cut then takes it to 52. The
-    side keeps scoring, at under half its size.
+    $5 of $120 (was $36/30% before `coinflip_size_cut` was strengthened to
+    55% on 2026-08-06 -- at 30% utilization the ladder's own 58.8 shares no
+    longer survives a 55% price-risk cut and floors to zero under the
+    50-share reward minimum, which this test does not exist to demonstrate).
+    The side keeps scoring, at well under its ladder-only size.
     """
-    intents, why = _rw_quote(_rw(max_naked_usd=120.0), inv=_heavy_up(36.0))
+    intents, why = _rw_quote(_rw(max_naked_usd=120.0), inv=_heavy_up(5.0))
     up = [q.size for q in intents if q.side == "UP"]
-    assert up == [52], why
+    assert up == [51], why
     assert up[0] < 120, "size must respond to utilization at all"
 
 
@@ -785,8 +802,10 @@ def test_a_zero_budget_leaves_every_size_full():
     intents, why = _rw_quote(cfg, inv=inv)
     assert {q.side for q in intents} == {"UP", "DOWN"}, why
     flat, _ = _rw_quote(cfg, inv=Inventory())
+    # Was {"UP": 108, "DOWN": 111} before `coinflip_size_cut` was strengthened
+    # from 10% to 55% on 2026-08-06.
     assert ({q.side: q.size for q in intents}
-            == {q.side: q.size for q in flat} == {"UP": 108, "DOWN": 111})
+            == {q.side: q.size for q in flat} == {"UP": 55, "DOWN": 72})
 
 
 # --- U4: the band, the pair cap and price risk on the live path -------------
@@ -976,10 +995,14 @@ def test_the_halt_does_not_persist_into_the_next_sweep():
     """THE DIFFERENCE FROM EXITED, stated as behaviour. The posture is derived
     from the pooled reading every sweep and never written down, so a recovered
     fleet quotes the heavy side again with no re-entry rule to clear."""
+    # Off-center books: this test is about HALT/recover, not the coinflip
+    # band, and 55% (strengthened 2026-08-06) floors the heavy side at 0.52.
     inv = _heavy_up(30.0)
-    halted, _ = _rw_quote(_rw(fleet_posture=gate.HALTED), inv=inv)
+    halted, _ = _rw_quote(_rw(fleet_posture=gate.HALTED), inv=inv,
+                          up=(0.65, 0.66), dn=(0.32, 0.33))
     assert "UP" not in {q.side for q in halted}
-    recovered, why = _rw_quote(_rw(fleet_posture=gate.NORMAL), inv=inv)
+    recovered, why = _rw_quote(_rw(fleet_posture=gate.NORMAL), inv=inv,
+                               up=(0.65, 0.66), dn=(0.32, 0.33))
     assert "UP" in {q.side for q in recovered}, why
 
 

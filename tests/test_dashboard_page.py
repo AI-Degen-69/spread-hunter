@@ -70,6 +70,27 @@ def test_no_duplicate_top_level_consts_all_pages(name):
         assert not dupes, f"{name}: duplicate const declarations: {sorted(dupes)}"
 
 
+def test_order_depth_view_uses_live_orders_and_mid_axis():
+    """The market table must show live resting depth, not a stale flat position."""
+    assert '<th>Order depth / mid</th>' in FLEET_PAGE
+    assert 'function orderDepth(m)' in FLEET_PAGE
+    assert 'm.quotes||[]' in FLEET_PAGE
+    assert 'm.mid_up' in FLEET_PAGE
+    assert 'YES ${upSh.toFixed(0)} sh' in FLEET_PAGE
+    assert 'NO ${dnSh.toFixed(0)} sh' in FLEET_PAGE
+    assert "const v=(m.max_spread||0.045);" in FLEET_PAGE
+    assert 'function posBar(m)' not in FLEET_PAGE
+    assert 'position/risk' not in FLEET_PAGE.lower()
+    assert '<th>Last action</th>' in FLEET_PAGE
+    assert 'function orderDepth(m)' in FLEET_PAGE
+    assert "color==='var(--gold)'?'3px':'2px'" in FLEET_PAGE
+    assert 'action-pill' in FLEET_PAGE
+    assert 'events.slice(1,3)' in FLEET_PAGE
+    assert 'Fleet Naked Risk' in FLEET_PAGE
+    assert 'Gate Refusals' in FLEET_PAGE
+    assert 'Active Quoting Markets' in FLEET_PAGE
+
+
 def test_no_duplicate_top_level_consts():
     """Top-level duplicate `const` in the same script block.
 
@@ -85,3 +106,26 @@ def test_no_duplicate_top_level_consts():
         names = re.findall(r"^const\s+([A-Za-z_$][\w$]*)\s*=", src, re.M)
         dupes = {n for n in names if names.count(n) > 1}
         assert not dupes, f"duplicate const declarations: {sorted(dupes)}"
+
+
+def test_market_pipeline_view_is_wired_in():
+    """The fleet page and the market-scan view must both exist, with the
+    switcher, the four-lane board, and the JS that renders it from
+    /api/pipeline -- the whole point of the view is seeing the funnel live,
+    so a board skeleton without its renderer is the blank-page bug class."""
+    assert 'id="view-fleet"' in FLEET_PAGE
+    assert 'id="view-pipeline"' in FLEET_PAGE
+    assert 'id="viewFleet"' in FLEET_PAGE
+    assert 'id="viewScan"' in FLEET_PAGE
+    assert 'class="view-btn active"' in FLEET_PAGE
+    assert 'id="laneRaw"' in FLEET_PAGE
+    assert 'id="laneFilter"' in FLEET_PAGE
+    assert 'id="laneFinal"' in FLEET_PAGE
+    assert 'id="laneGrad"' in FLEET_PAGE
+    assert 'id="pipeStrip"' in FLEET_PAGE
+    assert 'function pipeLane(' in FLEET_PAGE
+    assert 'function pipeFilter(snap)' in FLEET_PAGE
+    assert 'function pipeGrad(s)' in FLEET_PAGE
+    assert 'async function tickPipeline()' in FLEET_PAGE
+    assert "fetch('/api/pipeline'" in FLEET_PAGE
+    assert 'setInterval(tickPipeline,10000)' in FLEET_PAGE

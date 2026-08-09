@@ -25,7 +25,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LOG = ROOT / "logs" / "rerank.log"
 
-INTERVAL_SEC = 3600.0
+# How often to regenerate run/markets.json. The fleet adopts the file within
+# a second of its mtime changing, so this is the whole "how fast do new
+# markets appear" budget. 3600 was the original: a universe that emptied at
+# 09:58 left the fleet quoting nothing until the next hourly sweep found
+# nothing new. 600 (10 min) keeps the venue scoring (a full pass over ~200
+# candidates) from becoming a burden while cutting the worst-case wait from an
+# hour to ten minutes.
+INTERVAL_SEC = 600.0
 TOP = 20
 
 
@@ -34,7 +41,7 @@ def main() -> None:
     while True:
         # Rank FIRST, then sleep. Sleeping first left a newly started fleet
         # quoting whatever markets.json happened to be on disk for a full
-        # hour -- and fleet-bg.ps1 starts the supervisor before this process,
+        # hour -- and fleet-start.ps1 starts the supervisor before this process,
         # so that stale universe is exactly what it picks up.
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         try:
