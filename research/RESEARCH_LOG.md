@@ -976,3 +976,15 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 **Result.** 548/548 pass (534 + 14 new), zero network. The gates that used to be live-venue-only now run offline against stub sessions; the seam test pins criterion 1 (the scorer takes the session and opens no connection itself) so a future edit that adds a stray `requests.get` inside the scorer fails the suite instead of leaking a real request.
 
 **Verdict.** LIVE. Test-only change — no production code, no strategy parameter, no new sample. This closes the last slice of the fetch-seam frontier named in Sessions 29/30.
+
+---
+
+### Session 32 — 2026-08-10: offline coverage for the volume reader (issue #15 follow-on)
+
+**Question.** The scorer's fetch seam is now locked with stub sessions (#15). The other universe fetcher that still had zero offline coverage was `gamma_volume` — the ranker's 24h-volume reader, which queries gamma in chunks of 20 `condition_ids`. Its chunking and its error tolerance had only ever run against the live venue. Can it get the same stub-session treatment?
+
+**Method.** Four tests in `tests/test_selection.py`, against a stub gamma that serves volume rows keyed by condition_id and records every request (and can be told to fail a specific chunk): chunking (45 ids → 3 requests of 20/20/5, `limit` matching each chunk, URL pinned to `GAMMA`), error tolerance (the second chunk fails → that chunk's ids are absent, the rest intact, no exception), response-shape tolerance (a `{"data": [...]}`-wrapped response, a row with no `conditionId` skipped, a null volume reading as zero), and the empty-candidate edge (no ids → no requests, empty result).
+
+**Result.** 552/552 pass (548 + 4 new), zero network. The volume reader's two contracts — never ask for more than 20 ids at once, and a partial map beats a crashed read — are now pinned offline, same as the scorer's gates.
+
+**Verdict.** LIVE. Test-only change — no production code, no new sample.

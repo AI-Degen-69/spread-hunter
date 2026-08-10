@@ -27,8 +27,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.rank_markets import (                            # noqa: E402
-    MAX_DAYS_TO_RESOLVE, MIN_VOLUME_24H, days_to_resolve,
-    gamma_spread_universe, tradable,
+    GAMMA, MAX_DAYS_TO_RESOLVE, MIN_VOLUME_24H, days_to_resolve,
+    gamma_spread_universe, gamma_volume, tradable,
 )
 from strategy.config import load as load_cfg                  # noqa: E402
 
@@ -136,6 +136,88 @@ class _StubGamma:
             "spread": 0.01, "bestBid": 0.49, "bestAsk": 0.51,
             "endDate": "2026-08-03T00:00:00Z",
         } for i in range(n)])
+
+
+class _StubVolumeGamma:
+    """A gamma that serves volume rows keyed by condition_id and records
+    every request, for the volume reader's chunking contract."""
+
+    def __init__(self, volumes, fail_chunks=()):
+        self.volumes = dict(volumes)
+        self.fail_chunks = set(fail_chunks)
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append((url, dict(params)))
+        chunk = params["condition_ids"]
+        if tuple(chunk) in self.fail_chunks:
+            raise AssertionError(f"simulated failure for chunk {chunk[:3]}...")
+        # Strict like _StubClobSession: a test that forgets to set up a cid
+        # fails loudly instead of silently reading 0.0.
+        return _StubResponse([
+            {"conditionId": cid, "volume24hr": self.volumes[cid]}
+            for cid in chunk])
+
+
+def _cids(n):
+    return [f"0x{i:04x}" for i in range(n)]
+
+
+def test_gamma_volume_queries_in_chunks_of_twenty():
+    """The candidate list is a few hundred long and the endpoint takes
+    repeated `condition_ids`, so the reader must split it into chunks of 20
+    with `limit` matching the chunk -- never the whole list at once."""
+    cids = _cids(45)
+    volumes = {cid: float(i) for i, cid in enumerate(cids)}
+    g = _StubVolumeGamma(volumes)
+
+    out = gamma_volume(g, cids)
+
+    assert len(g.calls) == 3, "45 ids must split into 3 requests"
+    assert [len(c["condition_ids"]) for _, c in g.calls] == [20, 20, 5]
+    assert all(c["limit"] == len(c["condition_ids"]) for _, c in g.calls)
+    assert all(url == GAMMA for url, _ in g.calls)
+    assert out == volumes, "every id's reading must come back"
+
+
+def test_gamma_volume_survives_a_failed_chunk():
+    """One unreachable or malformed chunk must not abort the whole volume
+    read -- the caller treats a missing volume as a failed candidate, and a
+    partial map is strictly better than none."""
+    cids = _cids(45)
+    bad = tuple(cids[20:40])            # the second chunk fails
+    g = _StubVolumeGamma({cid: 1.0 for cid in cids}, fail_chunks={bad})
+
+    out = gamma_volume(g, cids)
+
+    assert out == {cid: 1.0 for cid in cids[:20] + cids[40:]}, (
+        "the failed chunk's ids are absent, the others intact")
+
+
+def test_gamma_volume_reads_a_dict_wrapped_response():
+    """Gamma can wrap rows in {"data": [...]}; a row without a conditionId
+    is skipped, and a missing volume reads as zero rather than crashing."""
+    seen = []
+
+    class _Session:
+        def get(self, url, params=None, timeout=None):
+            seen.append((url, params["condition_ids"]))
+            return _StubResponse({"data": [
+                {"conditionId": "0x1", "volume24hr": "500.0"},
+                {"conditionId": "0x2", "volume24hr": None},
+                {"noId": True},
+            ]})
+
+    out = gamma_volume(_Session(), ["0x1", "0x2", "0x3"])
+    assert out == {"0x1": 500.0, "0x2": 0.0}
+    assert seen == [(GAMMA, ["0x1", "0x2", "0x3"])]
+
+
+def test_gamma_volume_with_no_candidates_makes_no_requests():
+    """An empty candidate list is an empty result and no network at all."""
+    g = _StubVolumeGamma({})
+    assert gamma_volume(g, []) == {}
+    assert g.calls == []
 
 
 def test_paging_advances_by_rows_returned_not_by_the_limit_requested():
