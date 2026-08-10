@@ -76,3 +76,17 @@ The reader has ADHD. Shape every response so it can be acted on:
 Exceptions: explain fully when asked to explain. Confirm before destructive actions. After three failed fixes, stop and name the doubtful assumption. If the request is ambiguous, ask one short question.
 
 Source: ayghri/i-have-adhd skill installed at `.agents/skills/i-have-adhd/SKILL.md`. Turn off with "stop adhd mode" or "normal mode".
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (`AI-Degen-69/maker`); use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles map to the default labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
