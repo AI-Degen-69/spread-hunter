@@ -207,8 +207,19 @@ def gamma_spread_universe(session: requests.Session,
     # Unreachable today only because the volume floor stops the scan inside the
     # first page -- which is luck, not a design. Tracking the real cursor makes
     # it correct whatever the cap turns out to be.
+    # PAGINATION CONTRACT (verified live 2026-08-10): this endpoint serves a
+    # flat array and supports `offset` only. There is no cursor field in the
+    # response, and `after_cursor` is silently ignored -- identical rows to
+    # `offset=0` -- so keyset pagination is not possible here and there is no
+    # next-cursor to feed back.
     offset = 0
     page_cap: int | None = None
+    # The floor cutoff below is only sound while the venue keeps the verified
+    # descending-volume sort. Track the first sub-floor row and whether a
+    # qualifying row has appeared after one -- the regression that
+    # invalidates the cutoff.
+    floor_seen = False
+    ordering_violated = False
     for _ in range(pages):
         params = {
             "closed": "false", "active": "true", "archived": "false",
@@ -229,13 +240,19 @@ def gamma_spread_universe(session: requests.Session,
         for m in rows:
             vol = float(m.get("volume24hr") or 0.0)
             if vol < MIN_VOLUME_24H:
-                # Sorted by volume, so the first market under the floor ends
-                # the useful part of the listing. Verified against the live
-                # endpoint 2026-08-02 with the date filters applied: 100 rows,
-                # zero inversions, and the first row under the floor had no
-                # qualifying market after it. The `order=volume24hr&
-                # ascending=false` sort survives `end_date_min`/`end_date_max`.
-                return out
+                floor_seen = True
+                continue
+            if floor_seen and not ordering_violated:
+                # A qualifying market after a sub-floor one: the venue's
+                # sort regressed. Warn once, then keep filtering per-row
+                # instead of trusting the cutoff -- silently dropping a
+                # qualifying market is exactly the failure the ordering
+                # assumption exists to rule out.
+                ordering_violated = True
+                print("WARNING: gamma page not sorted by volume24hr "
+                      "(qualifying market below a sub-floor one); "
+                      "falling back to per-row filtering for the rest "
+                      "of the scan")
             if not m.get("enableOrderBook") or not m.get("acceptingOrders"):
                 continue
             # Reward-funded markets belong to the other path.
@@ -277,6 +294,20 @@ def gamma_spread_universe(session: requests.Session,
                 "_volume_24h": vol,
                 "_spread": spread,
             })
+        # Sorted by volume, so the first market under the floor ends the
+        # useful part of the listing -- when the sort holds. Verified
+        # against the live endpoint 2026-08-02 and re-verified 2026-08-10
+        # with the date filters applied: 100 rows, zero inversions, and the
+        # first row under the floor had no qualifying market after it. The
+        # `order=volume24hr&ascending=false` sort survives
+        # `end_date_min`/`end_date_max`. An inverted page sets
+        # `ordering_violated`, which skips this cut and scans on. Inversion
+        # detection is WITHIN a page only: a page that ends on a clean
+        # sub-floor tail trusts the cut, so a venue regression at exactly
+        # the page boundary (qualifying rows at the top of the next page)
+        # is not detected -- the verified sort rules that case out.
+        if floor_seen and not ordering_violated:
+            break
         # A SHORT PAGE MEANS THE LISTING ENDED -- measured against what this
         # endpoint actually serves, not what we asked for.
         #
