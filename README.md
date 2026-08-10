@@ -40,7 +40,6 @@ output as an **upper bound**. The dashboard shows live progress toward
                 queue-aware fills, risk, store/stats
     server/     fleet_dash.py (dashboard API + page)
     research/   lab notebook, EN + HE
-    deploy/     container entrypoint + preflight
 
 The sibling repo [`polymarket-taker`](https://github.com/AI-Degen-69/polymarket-taker)
 uses the same layout.

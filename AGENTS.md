@@ -41,9 +41,8 @@ Escape hatch for typos and formatting: `git commit --no-verify`.
 ## Layout
 
     strategy/   engine
-    server/     dashboard.py (API + app) + kanban.py (page)
+    server/     fleet_dash.py (dashboard API + page)
     research/   the five files above
-    deploy/     container entrypoint + preflight
 
 The sibling repo `polymarket-taker` uses the SAME layout. Keep it that way — the only
 difference between the repos should be strategy-specific.
