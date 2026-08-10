@@ -687,3 +687,15 @@ deploy/run_service.py) למת פונקציונלית על המארח הזה. ה�
 **תוצאה.** 532/532 עוברות (528 + 4 חדשות). לא נשאר SQL ב-`kpi.py` או ב-`fleet_dash.py`; ה-SQL היחיד ב-`strategy/` + `server/` חי ב-`store.py` (מודול הכתיבה) וב-`stats.py`. הערת פרשנות על קריטריון קבלה 4: `scripts/` (`fetch_trades`, `measure_fill_rate`, `record_books`, `replay_risk_gates`) עדיין מריץ SQL מול מסדי נתונים משלו — אלה כלים עצמאיים, לא מודולי מנוע, ולכן השאילתות שלהם הושארו במקום.
 
 **פסק דין.** LIVE. תפר קריאה אחד, תפר כתיבה אחד, ו-`snapshot()` שהדף קורא פעם אחת. צפייה: #14 (un-merge של main.py, שייבואי ה-fetcher שלו נמצאים עכשיו ב-sweep.py) ו-#15 (fetch seam של evaluate) הם הפרונטיר הנותר.
+
+---
+
+### סשן 30 — 2026-08-10: איחוי נקודת הכניסה (issue #14)
+
+**שאלה.** `strategy/main.py` (נקודת הכניסה של הבוט ה-8788 שפרש) עדיין החזיק בשני ה-fetchers החיים של נתוני שוק -- `full_book` ו-`recent_trades` -- שמודול הסוויפ וסקריפט ה-live-test ייבאו ממנו. השארת קוד של בוט מת כמקום הייבוא של קוד חי מצמידה את הצי לקובץ שאמור להיעלם. האם אפשר להעביר את ה-fetchers למודול השווקים ולמחוק את נקודת הכניסה כליל?
+
+**שיטה.** הועברו `full_book` ו-`recent_trades` ככתבם ל-`strategy/markets.py` (שכבר החזיק ב-session המאוחד ובעזרי זהות השוק), יחד עם הקבועים `TRADES_API`/`BOOK_TIMEOUT`/`TAPE_TIMEOUT` ו-logger מודולי. `strategy/sweep.py` ו-`scripts/live_test.py` מייבאים עכשיו את ה-fetchers מ-`strategy.markets`; מרחב השמות של sweep מייצא מחדש את אותם אובייקטי פונקציה, כך שתפרי ה-monkeypatch הקיימים (`strategy.sweep.full_book`) בבדיקות הצי ממשיכים לעבוד ללא שינוי. חמש הערות פרוזה שציינו את `strategy.main` עודכנו להפנות לארכיון. `strategy/main.py` נמחק עם `git rm`.
+
+**תוצאה.** 534/534 עוברות (532 + 2 חדשות). `tests/test_markets.py` החדש קושר את ההעתקה: שני ה-fetchers ניתנים לייבוא מ-`strategy.markets`, ו-sweep מייצא מחדש את אותם אובייקטים (בדיקת זהות) כך שתפרי ה-monkeypatch עדיין שולטים בהם. grep רוחבי מאשר שלא נותרה אף הפניה חיה ל-`strategy.main` ב-`.py`, `.md`, `.ps1`, `.toml`, `Dockerfile` או קובצי הגדרה אחרים (ארכיונים/מיומנויות/מחקר הם היסטוריים ואינם נגועים).
+
+**פסק דין.** LIVE. נקודת הכניסה נעלמה; קוד חי מייבא קוד חי ממודול השווקים. צפייה: #15 (fetch seam של evaluate) הוא החלק האחרון.

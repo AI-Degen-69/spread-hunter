@@ -6,7 +6,7 @@ $3,000 into a single market returns ~1.0%/day while the same money spread over
 20 markets returns ~5%/day, because each market is a separate pot with its own
 competition.
 
-Why one process rather than 20 copies of strategy.main: 20 markets x 2 books
+Why one process rather than 20 copies of the old single-market bot: 20 markets x 2 books
 polled every second is 40 requests/second against a public API. That gets
 rate-limited, and the failure mode is silent -- the bots keep reporting uptime
 while scoring nothing. Here markets are visited on a rotation with a fixed

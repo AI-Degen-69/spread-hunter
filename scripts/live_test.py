@@ -28,8 +28,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategy import rewards                          # noqa: E402
-from strategy.main import full_book                   # noqa: E402
-from strategy.markets import fetch_pinned_market      # noqa: E402
+from strategy.markets import (fetch_pinned_market,    # noqa: E402
+                              full_book)
 from strategy.net_config import load_net as load_bot_cfg  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent

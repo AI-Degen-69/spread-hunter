@@ -27,8 +27,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from strategy import gate, markout, merge, profit_take, rewards, store
-from strategy.main import full_book, recent_trades
-from strategy.markets import fetch_pinned_market
+from strategy.markets import (fetch_pinned_market, full_book, recent_trades)
 from strategy.quotes import decide_quotes, mid_price
 from strategy.selector import identity_allowed, pair_books_allowed
 
