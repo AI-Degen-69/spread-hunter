@@ -333,7 +333,8 @@ def order_score(v: float, s: float, size: float, min_size: float) -> float:
 
 def evaluate(session: requests.Session, rate: float, m: dict,
              volume_24h: Optional[float] = None,
-             source: str = "rewards") -> dict | None:
+             source: str = "rewards", *,
+             min_depth_usd: Optional[float] = None) -> dict | None:
     """Income and capital for one market, from its live book.
 
     `rate` is the market's pot in $/day, and `source` says what pays it. For a
@@ -410,8 +411,13 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                     else:
                         q2 += sc
 
+    # The depth bar is injectable so a DEPTH-GATE TRIAL run can gate on a
+    # lower bar without touching the permanent config value. None (the normal
+    # path) means the permanent bar; `main` passes the resolved trial bar.
+    depth_bar = (MIN_TOP3_DEPTH_USD if min_depth_usd is None
+                 else min_depth_usd)
     books_ok, books_reason = pair_books_allowed(
-        books, MIN_TOP3_DEPTH_USD, MAX_BOOK_SPREAD)
+        books, depth_bar, MAX_BOOK_SPREAD)
     if not books_ok:
         return {
             "source": source, "eligible": False,
@@ -619,6 +625,23 @@ def _if_adopted(r: dict) -> dict | None:
     }
 
 
+def _effective_depth_bar(cli_trial_usd: Optional[float]) -> float:
+    """The depth bar this run gates on: CLI trial > config trial > permanent.
+
+    `select_min_top3_depth_usd_trial` (env MAKER_DEPTH_TRIAL_USD) lets an
+    operator stage the trial without touching the permanent config; an explicit
+    `--trial-depth` on the command line wins over both because it is the most
+    deliberate of the three. A non-positive trial value is a mistake, not a
+    signal -- fall back to the permanent bar rather than gating on nothing.
+    """
+    trial = cli_trial_usd
+    if trial is None:
+        trial = _CFG.select_min_top3_depth_usd_trial
+    if trial is not None and trial > 0:
+        return float(trial)
+    return MIN_TOP3_DEPTH_USD
+
+
 def _positive_int(v: str) -> int:
     n = int(v)
     if n < 1:
@@ -646,6 +669,16 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true",
                    help="score and print the ranking, but leave "
                         "run/markets.json untouched")
+    p.add_argument("--trial-depth", type=float, default=None, metavar="USD",
+                   help="DEPTH-GATE TRIAL (U32): gate on this top-3 bid depth "
+                        "bar instead of the permanent one ($%.0f). Wins over "
+                        "MAKER_DEPTH_TRIAL_USD; the permanent config value is "
+                        "never changed. Adopted markets are tagged "
+                        "trial_depth_usd in run/markets.json so their "
+                        "markouts can be watched before the bar is loosened "
+                        "permanently. See scripts/trial_depth_gate.py for the "
+                        "recorded-data replay that shows which markets a bar "
+                        "adopts." % MIN_TOP3_DEPTH_USD)
     return p.parse_args(argv)
 
 
@@ -717,7 +750,9 @@ def _log_rank_near_misses(out, rejected, verdicts, ts=None) -> int:
 
 def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
                              causes, census, gates, attempted,
-                             rejected, verdicts=None) -> None:
+                             rejected, verdicts=None,
+                             depth_gate_usd: Optional[float] = None,
+                             trial_depth_usd: Optional[float] = None) -> None:
     """Persist the whole selection funnel to run/pipeline.json.
 
     run/markets.json keeps only the winners, so the dashboard can show the
@@ -798,6 +833,12 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         "ts": time.time(),
         "census": census,
         "gates": gates,
+        # Which depth bar this rank gated on, and whether it was a TRIAL bar
+        # rather than the permanent one -- the dashboard's funnel would
+        # otherwise silently show a loosened gate as if it were the standing
+        # contract.
+        "depth_gate_usd": depth_gate_usd,
+        "trial_depth_usd": trial_depth_usd,
         "counts": {
             "funded": len(cands),
             "spread_universe": len(spread_cands),
@@ -850,7 +891,8 @@ def _worker_session() -> requests.Session:
 
 def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                *, session_factory=_worker_session,
-               max_workers: int = 12) -> list[dict]:
+               max_workers: int = 12,
+               min_depth_usd: Optional[float] = None) -> list[dict]:
     """Score candidate jobs across a worker pool, one session per worker.
 
     `session_factory` is injected so a test can prove the pool never shares
@@ -863,7 +905,8 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
     with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
         for r in ex.map(
                 lambda a: evaluate(session_factory(), a[0], a[1], a[2],
-                                   source=a[3]),
+                                   source=a[3],
+                                   min_depth_usd=min_depth_usd),
                 jobs):
             if r:
                 out.append(r)
@@ -873,6 +916,12 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
 def main() -> None:
     args = parse_args()
     top = args.top
+    # DEPTH-GATE TRIAL (U32): the bar this run gates on. Same contract as the
+    # permanent config value, but opt-in per run and never written back to
+    # config; adopted markets are tagged so the trial's markouts can be
+    # watched before the bar is loosened permanently.
+    trial_bar = _effective_depth_bar(args.trial_depth)
+    trial_active = trial_bar != MIN_TOP3_DEPTH_USD
 
     # Up-front universe fetches run sequentially on the main thread and keep
     # their own keep-alive session; the worker pool below uses one session
@@ -914,7 +963,7 @@ def main() -> None:
               m, m["_volume_24h"], "spread")
              for m in spread_cands]
 
-    out = score_pool(jobs)
+    out = score_pool(jobs, min_depth_usd=trial_bar)
     # Eligibility BEFORE ranking. Sorting on return_pct_day alone put the
     # top-ranked market at $0.25/day actual against $18.96 projected, because a
     # spectacular percentage return on an income of eleven cents is still
@@ -960,6 +1009,14 @@ def main() -> None:
         except Exception:
             pass
 
+        # STAGING MARKER. A trial-run adoption is not a permanent gate change:
+        # each picked spec carries the bar it was admitted under, so the fleet
+        # and dashboard can identify trial markets and their markouts are the
+        # evidence that decides whether the bar becomes permanent.
+        if trial_active:
+            for r in picked:
+                r["trial_depth_usd"] = trial_bar
+
         # Temp file and rename: the fleet re-reads this on its own schedule and
         # a half-written file is a SystemExit on the next re-rank.
         f = RUN / "markets.json"
@@ -996,18 +1053,28 @@ def main() -> None:
               f"{'would write' if args.dry_run else 'wrote'} top {len(picked)}"
               f" -> run/markets.json")
     print(census)
+    depth_bar_str = (f"${trial_bar:,.0f}"
+                     + (f" [TRIAL vs permanent ${MIN_TOP3_DEPTH_USD:,.0f}]"
+                        if trial_active else ""))
     gates = (f"gates: primary/main-line only, blocked submarkets/live; "
              f"24h volume >= ${MIN_VOLUME_24H:,.0f}, "
-             f"YES+NO top-3 bid depth >= ${MIN_TOP3_DEPTH_USD:,.0f} each, "
+             f"YES+NO top-3 bid depth >= {depth_bar_str} each, "
              f"spread <= {MAX_BOOK_SPREAD:.2f}, "
              f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
              f"income >= ${MIN_PAYOUT * FLOOR_MULTIPLE:.2f}/day\n")
     print(gates)
+    if trial_active:
+        print(f"DEPTH-GATE TRIAL: gating on ${trial_bar:,.0f} instead of "
+              f"the permanent ${MIN_TOP3_DEPTH_USD:,.0f}; adopted markets "
+              "are tagged trial_depth_usd and their markouts are the "
+              "decision evidence (see scripts/trial_depth_gate.py)")
     verdicts = {id(r): _if_adopted(r) for r in out}
     _write_pipeline_snapshot(
         cands=cands, spread_cands=spread_cands, out=out, eligible=eligible,
         picked=picked, causes=causes, census=census, gates=gates,
-        attempted=len(jobs), rejected=rejected, verdicts=verdicts)
+        attempted=len(jobs), rejected=rejected, verdicts=verdicts,
+        depth_gate_usd=trial_bar,
+        trial_depth_usd=(trial_bar if trial_active else None))
     # The near-miss log is the accumulated evidence for a gate decision; a
     # dry-run audit must not pollute it (it would double-count against the
     # supervised every-10-min ranks).

@@ -341,6 +341,15 @@ class MakerConfig:
     # books. Set to the same bar the live system already enforces rather than
     # a stricter, redundant one: $1,000 (8x the $120 worst case) and 0.06.
     select_min_top3_depth_usd: float = 1_000.0
+    # DEPTH-GATE TRIAL (U32). When set, the RANKER gates on this bar instead of
+    # `select_min_top3_depth_usd` -- a controlled loosening licensed by the
+    # near-miss tracker (READY_TO_TRIAL: 29 unique markets, 19 with measured
+    # depth >= half the bar). The permanent bar above never changes; the trial
+    # is opt-in per rank run, adopted markets are tagged `trial_depth_usd` in
+    # run/markets.json, and their markouts are watched before the change is
+    # made permanent. Overridable from MAKER_DEPTH_TRIAL_USD; the ranker's own
+    # `--trial-depth` flag wins over both.
+    select_min_top3_depth_usd_trial: float | None = None
     select_max_book_spread: float = 0.06
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
@@ -650,6 +659,9 @@ def load() -> MakerConfig:
         tk = os.environ.get("MAKER_TICK")
         if tk:
             kw["price_tick"] = float(tk)
+    trial = os.environ.get("MAKER_DEPTH_TRIAL_USD") or ""
+    if trial.strip():
+        kw["select_min_top3_depth_usd_trial"] = float(trial)
     return MakerConfig(**kw)
 # hook probe
 # hook probe

@@ -19,6 +19,7 @@ Two filters the ranker never had:
   * HORIZON. A market resolving in 2027 cannot contribute a settled P&L
     observation to a run measured in days.
 """
+import json
 import sys
 import threading
 import time
@@ -390,6 +391,119 @@ def test_the_scoring_pool_creates_one_session_per_worker(monkeypatch):
     assert len({id(s) for s in created}) == 12
     assert out == [], ("every job fetched through the failing stub and "
                        "evaluate fails closed to no verdict")
+
+
+# --- DEPTH-GATE TRIAL (U32): the bar is injectable, never silently lowered -
+
+class _StubClobSession:
+    """A CLOB that serves one book per token, for the trial-bar gate test."""
+
+    def __init__(self, books):
+        self.books = books          # {token_id: {"bids": {...}, "asks": {...}}}
+
+    def get(self, url, params=None, timeout=None):
+        if "clob.polymarket.com/book" not in url:
+            raise AssertionError(f"unexpected URL {url}")
+        b = self.books[params["token_id"]]
+        return _StubResponse({
+            "bids": [{"price": str(p), "size": str(s)}
+                     for p, s in b["bids"].items()],
+            "asks": [{"price": str(p), "size": str(s)}
+                     for p, s in b["asks"].items()],
+        })
+
+
+def _trial_market():
+    """A market whose YES-side top-3 bid depth is ~$770: refused at the
+    permanent $1,000 bar, admitted under a $750 trial bar."""
+    return {
+        "condition_id": "0xtrial",
+        "question": "Team A vs Team B",
+        "market_slug": "mlb-trial-slate",
+        "category": "Sports",
+        "market_type": "Moneyline",
+        "market_group": "",
+        "series_title": "MLB",
+        "event_title": "MLB",
+        "tokens": [{"token_id": "0xaa"}, {"token_id": "0xbb"}],
+        "rewards": {"max_spread": 3.5, "min_size": 50},
+        "minimum_tick_size": 0.001,
+        "end_date_iso": "2026-08-20T00:00:00Z",
+        "_volume_24h": 1_000_000.0,
+        "_spread": 0.02,
+    }
+
+
+def test_evaluate_gates_on_the_trial_depth_bar_when_passed():
+    """The near-miss shape the controlled trial exists to adopt: ~$770 of
+    top-3 bid depth is refused at the permanent $1,000 bar and admitted under
+    a $750 trial bar. None (the normal path) must keep the permanent bar, so
+    a trial can never leak into a normal rank by accident."""
+    books = {
+        "0xaa": {"bids": {0.49: 600, 0.48: 600, 0.47: 400},
+                 "asks": {0.51: 600}},
+        "0xbb": {"bids": {0.49: 3000, 0.48: 3000, 0.47: 3000},
+                  "asks": {0.51: 600}},
+    }
+    s = _StubClobSession(books)
+    m = _trial_market()
+
+    refused = rank_markets.evaluate(s, 100.0, m, 1_000_000.0, "rewards")
+    assert refused is not None and not refused["eligible"]
+    assert "top-3 bid depth" in refused["reject_reason"]
+
+    admitted = rank_markets.evaluate(s, 100.0, m, 1_000_000.0, "rewards",
+                                     min_depth_usd=750.0)
+    assert admitted is not None and admitted["eligible"]
+
+
+def test_effective_depth_bar_resolution_cli_over_config_over_default(monkeypatch):
+    """The bar a run gates on comes from --trial-depth first, then the config
+    trial (env MAKER_DEPTH_TRIAL_USD), then the permanent value; a
+    non-positive trial is a mistake, not a signal, and falls back."""
+    base = load_cfg()
+    assert rank_markets._effective_depth_bar(None) == \
+        base.select_min_top3_depth_usd
+
+    class _Cfg:
+        select_min_top3_depth_usd_trial = 750.0
+
+    monkeypatch.setattr(rank_markets, "_CFG", _Cfg())
+    assert rank_markets._effective_depth_bar(None) == 750.0
+    assert rank_markets._effective_depth_bar(500.0) == 500.0   # CLI wins
+    assert rank_markets._effective_depth_bar(0.0) == \
+        base.select_min_top3_depth_usd                          # invalid -> permanent
+
+
+def test_config_env_sets_the_trial_bar_without_touching_the_permanent_one(monkeypatch):
+    monkeypatch.setenv("MAKER_DEPTH_TRIAL_USD", "600")
+    cfg = load_cfg()
+    assert cfg.select_min_top3_depth_usd_trial == 600.0
+    assert cfg.select_min_top3_depth_usd == 1000.0
+
+
+def test_pipeline_snapshot_records_the_trial_bar(monkeypatch, tmp_path):
+    """The staging contract: a trial run's snapshot says which bar it gated on
+    and flags it as a trial, so the dashboard's funnel can never silently show
+    a loosened gate as the standing contract. The permanent path records the
+    permanent bar with no trial flag."""
+    monkeypatch.setattr(rank_markets, "RUN", tmp_path)
+
+    rank_markets._write_pipeline_snapshot(
+        cands=[], spread_cands=[], out=[], eligible=[], picked=[],
+        causes={}, census="", gates="", attempted=0, rejected=0,
+        verdicts={}, depth_gate_usd=750.0, trial_depth_usd=750.0)
+    snap = json.loads((tmp_path / "pipeline.json").read_text(encoding="utf-8"))
+    assert snap["depth_gate_usd"] == 750.0
+    assert snap["trial_depth_usd"] == 750.0
+
+    rank_markets._write_pipeline_snapshot(
+        cands=[], spread_cands=[], out=[], eligible=[], picked=[],
+        causes={}, census="", gates="", attempted=0, rejected=0,
+        verdicts={}, depth_gate_usd=1000.0, trial_depth_usd=None)
+    snap = json.loads((tmp_path / "pipeline.json").read_text(encoding="utf-8"))
+    assert snap["depth_gate_usd"] == 1000.0
+    assert snap["trial_depth_usd"] is None
 
 
 # --- the script and the fleet must not drift --------------------------------
