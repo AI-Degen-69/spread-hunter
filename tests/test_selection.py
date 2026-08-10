@@ -20,15 +20,19 @@ Two filters the ranker never had:
     observation to a run measured in days.
 """
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import scripts.rank_markets as rank_markets                    # noqa: E402
 from scripts.rank_markets import (                            # noqa: E402
-    GAMMA, MAX_DAYS_TO_RESOLVE, MIN_VOLUME_24H, days_to_resolve,
-    gamma_spread_universe, gamma_volume, tradable,
+    GAMMA, MAX_DAYS_TO_RESOLVE, MIN_VOLUME_24H,
+    days_to_resolve, gamma_spread_universe, gamma_volume,
+    score_pool, tradable,
 )
 from strategy.config import load as load_cfg                  # noqa: E402
 
@@ -318,6 +322,74 @@ def test_days_to_resolve_handles_a_naive_now_as_well():
 def test_days_to_resolve_is_negative_once_the_end_date_has_passed():
     d = days_to_resolve("2026-07-31T00:00:00Z", now_iso="2026-08-01T00:00:00Z")
     assert d < 0
+
+
+# --- C3: one session per worker, never shared -------------------------------
+
+def test_worker_session_is_stable_per_thread_and_distinct_across_threads():
+    """`requests.Session` is documented as not thread-safe, so the ranking
+    pool must never hand one session object to every worker. The lazy
+    thread-local factory must return the SAME session on every call inside
+    one thread (so keep-alive pooling survives) and DIFFERENT sessions
+    across threads."""
+    barrier = threading.Barrier(12)
+    results = []
+
+    def worker():
+        barrier.wait()                     # all 12 alive before any reads
+        first = rank_markets._worker_session()
+        second = rank_markets._worker_session()
+        results.append((threading.get_ident(), first, second))
+
+    threads = [threading.Thread(target=worker) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert all(a is b for _, a, b in results), (
+        "each thread must reuse its own session, not mint a new one per call")
+    assert len({id(a) for _, a, _ in results}) == 12, (
+        "twelve workers must hold twelve distinct session objects")
+
+
+def test_the_scoring_pool_creates_one_session_per_worker(monkeypatch):
+    """The pool dispatch must route through the session factory, so a
+    regression that hands every worker one shared session is caught: the
+    factory is invoked once per job, and with one job per worker the run
+    creates exactly as many sessions as workers -- never one shared object.
+    Before the seam existed, `main` passed a single pooled session straight
+    into every `evaluate` call; that shape makes the factory invisible and
+    this test fails with `created == []`.
+
+    The stub's `get` sleeps so all twelve workers are held alive inside the
+    fetch while the jobs are submitted: the executor never guarantees one
+    thread per job, and a worker that finishes instantly goes idle and gets
+    reused, collapsing the session count. Sleeping makes the 12-worker
+    count deterministic."""
+    created = []
+
+    class _CountingSession:
+        def __init__(self):
+            created.append(self)
+
+        def get(self, *args, **kwargs):
+            time.sleep(0.2)              # hold every worker alive mid-fetch
+            raise AssertionError("no network in the scoring-pool test")
+
+    monkeypatch.setattr(rank_markets.requests, "Session", _CountingSession)
+
+    jobs = [(1.0, {"tokens": [{"token_id": f"{i}a"},
+                               {"token_id": f"{i}b"}]},
+             None, "rewards") for i in range(12)]
+    out = score_pool(jobs, max_workers=12)
+
+    assert len(created) == 12, (
+        f"expected one session per worker, got {len(created)} "
+        f"(a shared session would create exactly one)")
+    assert len({id(s) for s in created}) == 12
+    assert out == [], ("every job fetched through the failing stub and "
+                       "evaluate fails closed to no verdict")
 
 
 # --- the script and the fleet must not drift --------------------------------

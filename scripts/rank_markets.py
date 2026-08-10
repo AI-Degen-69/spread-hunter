@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -826,10 +827,56 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
                 pass
 
 
+_worker_local = threading.local()
+
+
+def _worker_session() -> requests.Session:
+    """One `requests.Session` per worker thread, created lazily.
+
+    The requests documentation is explicit that a Session is not thread-safe
+    ("use a session per thread, or use a connection pool elsewhere"), and the
+    ranking pool ran 12 ThreadPool workers against one shared session -- a
+    latent shared-state bug that every future edit to the fetchers could
+    trip. Each thread lazily owns its own keep-alive pool instead; the
+    session is created on first use inside the thread and reused for all of
+    that thread's markets.
+    """
+    s = getattr(_worker_local, "session", None)
+    if s is None:
+        s = requests.Session()
+        _worker_local.session = s
+    return s
+
+
+def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
+               *, session_factory=_worker_session,
+               max_workers: int = 12) -> list[dict]:
+    """Score candidate jobs across a worker pool, one session per worker.
+
+    `session_factory` is injected so a test can prove the pool never shares
+    one session object across workers -- the documented-not-thread-safe
+    shape `main` used to have. Each worker's session comes from the factory,
+    so the #15 seam still holds: `evaluate` takes a session and opens no
+    connection itself.
+    """
+    out: list[dict] = []
+    with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for r in ex.map(
+                lambda a: evaluate(session_factory(), a[0], a[1], a[2],
+                                   source=a[3]),
+                jobs):
+            if r:
+                out.append(r)
+    return out
+
+
 def main() -> None:
     args = parse_args()
     top = args.top
 
+    # Up-front universe fetches run sequentially on the main thread and keep
+    # their own keep-alive session; the worker pool below uses one session
+    # per thread (see `_worker_session`) instead of sharing this one.
     s = requests.Session()
     data = s.get("https://clob.polymarket.com/sampling-markets", timeout=30).json()
     cands = []
@@ -867,12 +914,7 @@ def main() -> None:
               m, m["_volume_24h"], "spread")
              for m in spread_cands]
 
-    out = []
-    with cf.ThreadPoolExecutor(max_workers=12) as ex:
-        for r in ex.map(lambda a: evaluate(s, a[0], a[1], a[2], source=a[3]),
-                        jobs):
-            if r:
-                out.append(r)
+    out = score_pool(jobs)
     # Eligibility BEFORE ranking. Sorting on return_pct_day alone put the
     # top-ranked market at $0.25/day actual against $18.96 projected, because a
     # spectacular percentage return on an income of eleven cents is still

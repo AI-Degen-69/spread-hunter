@@ -1000,3 +1000,15 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 **Result.** 561/561 pass (552 + 9 new: parse_book shape/skip-count/structural/empty, full_book regression, tape regression + non-list guard, scorer malformed + structural). `resolve.py` was confirmed already fail-closed and left untouched — the survey's negative finding stands. CONTEXT.md gained the **Book adapter** term. The parse exists in exactly one place; the ranker can no longer crash on venue data.
 
 **Verdict.** LIVE. The parse moved behind one interface with one contract; three distinct failure modes collapsed into classified outcomes. No strategy-parameter change — the tolerance matches what the selector already did, so no new sample.
+
+---
+
+### Session 34 — 2026-08-10: one session per worker thread (architecture review, C3)
+
+**Question.** The ranker's scoring pool runs `evaluate` across 12 ThreadPoolExecutor workers, all fed ONE shared `requests.Session` created in `main`. The requests documentation is explicit that a Session is not thread-safe. Is that shared session a real hazard, and does giving each worker its own session change any behavior?
+
+**Method.** Audited the session flow: `main` uses one session for its sequential up-front universe fetches (sampling-markets, gamma volume, gamma spread) and hands the SAME session to every pool worker through the `ex.map` lambda. Added two pieces behind the #15 seam (`evaluate` still takes a session and opens no connection itself): a `_worker_session()` lazy thread-local factory (one session per thread, keep-alive pooled within the thread, reused across that thread's markets) and a `score_pool(jobs, *, session_factory, max_workers=12)` seam that `main` now calls instead of the inline loop. Two tests pin it: (1) 12 barrier-synced threads each call the factory twice — the same object within a thread, 12 distinct objects across threads; (2) the real pool path with a counting Session patch, where each job's stub `get` sleeps long enough to hold all 12 workers alive mid-fetch — exactly 12 sessions created, one per worker, never one shared. The sleep is load-bearing: the executor never guarantees one thread per job, and an instantly-finishing worker goes idle and gets reused, collapsing the count.
+
+**Result.** 563/563 pass (561 + 2 new). The ranker's 12 workers now each own a keep-alive pool; the sequential universe fetches keep their own. Scoring behavior is unchanged — `evaluate`'s contract is untouched, and the #15 seam tests still hold.
+
+**Verdict.** LIVE. Latent shared-state hazard removed; the per-worker session seam is testable and pinned. No strategy-parameter change, no new sample.
