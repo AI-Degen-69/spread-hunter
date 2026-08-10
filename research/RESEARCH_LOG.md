@@ -964,3 +964,15 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 **Result.** 534/534 pass (532 + 2 new). New `tests/test_markets.py` pins the relocation: both fetchers importable from `strategy.markets`, and sweep re-exports the identical objects (identity check) so the monkeypatch seams still control them. Repo-wide grep confirms no live reference to `strategy.main` remains in `.py`, `.md`, `.ps1`, `.toml`, `Dockerfile` or other config (archives/skills/research are historical and intentionally untouched).
 
 **Verdict.** LIVE. The entry point is gone; live code imports live code from the markets module. Watch: #15 (evaluate fetch seam) is the last slice.
+
+---
+
+### Session 31 — 2026-08-10: the fetch seam under the market scorer (issue #15)
+
+**Question.** The scorer in the selection script (`evaluate` in `scripts/rank_markets.py`) was the one ranker path with no offline coverage: its gates — identity, book health, volume, horizon, payout floor — had only ever run against the live venue, and any change to them could only be verified by a network round trip. The universe fetchers (`gamma_volume`, `gamma_spread_universe`) already receive their HTTP session across the seam. Does the scorer too, and can its gates be locked with stub sessions so the whole selection funnel runs offline?
+
+**Method.** Audit first: `evaluate(session, ...)` has taken the session since the repo baseline and `main()` passes the pooled session through the worker pool; the scorer's only fetch is one `session.get(.../book)` per token, and every helper it calls (`identity_allowed`, `pair_books_allowed`, `tradable`, `days_to_resolve`) is pure. What was missing was the second half of the contract — tests. New `tests/test_scorer_gates.py` drives every gate against a stub CLOB session that serves canned books and refuses any other request (the refusal is the offline guarantee: a regression reaching for the network fails loudly). Fourteen tests cover the seam itself (a monkeypatched `requests.Session`/`requests.get` turns any self-opened connection into a hard failure, and the stub proves exactly two book GETs, one per token), the no-verdict drops (fetch failure, one-sided book, near-settled mid, <2 tokens, reward window narrower than our offset), the verdict rejects (identity without fetching, depth with its measured reading, spread, volume, horizon, reward payout floor, and the spread-source exemption), and the admission path (income/capital recomputed from the score formula against the canned book).
+
+**Result.** 548/548 pass (534 + 14 new), zero network. The gates that used to be live-venue-only now run offline against stub sessions; the seam test pins criterion 1 (the scorer takes the session and opens no connection itself) so a future edit that adds a stray `requests.get` inside the scorer fails the suite instead of leaking a real request.
+
+**Verdict.** LIVE. Test-only change — no production code, no strategy parameter, no new sample. This closes the last slice of the fetch-seam frontier named in Sessions 29/30.
