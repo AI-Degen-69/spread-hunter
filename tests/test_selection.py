@@ -116,9 +116,10 @@ class _StubGamma:
 
     CAP = 100
 
-    def __init__(self, total, volume=1e9):
+    def __init__(self, total, volume=1e9, volumes=None):
         self.total = total
         self.volume = volume
+        self.volumes = volumes
         self.offsets = []
 
     def get(self, url, params=None, timeout=None):
@@ -127,7 +128,8 @@ class _StubGamma:
         n = max(0, min(self.CAP, params["limit"], self.total - start))
         return _StubResponse([{
             "conditionId": f"0x{start + i:04x}",
-            "volume24hr": self.volume,
+            "volume24hr": (self.volumes[start + i]
+                           if self.volumes is not None else self.volume),
             "enableOrderBook": True, "acceptingOrders": True,
             "clobRewards": None,
             "clobTokenIds": f'["{start + i}a", "{start + i}b"]',
@@ -180,6 +182,34 @@ def test_an_oversized_limit_no_longer_ends_the_scan_after_one_page():
     gamma_spread_universe(g, pages=2, per_page=250)
     assert len(g.offsets) == 2, (
         f"an oversized limit must not end the scan after one page: {g.offsets}")
+
+
+def test_ordering_cutoff_stops_at_the_first_sub_floor_row():
+    """The verified descending-volume sort makes the first market under the
+    volume floor the end of the listing: nothing after it qualifies, so the
+    scan stops without fetching another page and returns only the markets
+    above the floor.
+    """
+    g = _StubGamma(total=10, volumes=[1e9] * 5 + [1e5] * 5)
+    rows = gamma_spread_universe(g, pages=3, per_page=100)
+
+    assert g.offsets == [0], "a clean floor cutoff must not fetch page 2"
+    assert len(rows) == 5, "only the markets above the floor may be returned"
+
+
+def test_an_inverted_page_does_not_silently_truncate_the_universe():
+    """A qualifying market after a sub-floor one is an ordering regression.
+    The scan must not trust the floor cutoff then: it keeps scanning, so the
+    qualifying market is included instead of silently dropped.
+    """
+    g = _StubGamma(total=150, volumes=[1e5] + [1e9] * 149)
+    rows = gamma_spread_universe(g, pages=3, per_page=100)
+
+    ids = [r["condition_id"] for r in rows]
+    assert "0x0001" in ids, "the market after the sub-floor row was dropped"
+    assert g.offsets == [0, 100], (
+        "the scan must continue past the floor cutoff after a violation")
+    assert len(rows) == 149
 
 
 def test_days_to_resolve_survives_an_end_date_with_no_timezone():

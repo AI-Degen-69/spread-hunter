@@ -35,7 +35,7 @@ def test_startup_settle_zeroes_phantom_inventory(monkeypatch, tmp_path):
     zero them (and their cost) so committed capital is freed immediately."""
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
-    from strategy import fleet, store
+    from strategy import fleet, store, sweep
 
     _seed_fill(store, side="UP", price=0.44, size=100.0)
     store.record_resolution("cond-1", "TOK-UP")
@@ -44,7 +44,7 @@ def test_startup_settle_zeroes_phantom_inventory(monkeypatch, tmp_path):
     assert st.inv.up_shares == 100.0          # phantom, rebuilt from fills
     assert st.inv.up_cost == 44.0
 
-    settled, freed = fleet._settle_startup_resolved(
+    settled, freed = sweep.settle_startup_resolved(
         [st], frozenset({"cond-1"}), now=2000.0)
 
     assert settled == 1
@@ -65,14 +65,14 @@ def test_startup_settle_leaves_unresolved_markets_alone(monkeypatch, tmp_path):
     its inventory must survive the pass untouched."""
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
-    from strategy import fleet, store
+    from strategy import fleet, store, sweep
 
     _seed_fill(store, side="UP", price=0.44, size=100.0)
 
     # No `record_resolution` was called, so `store.resolved_cids()` is empty
     # and the pass receives that empty set -- the market must survive.
     st = fleet.MarketState(_spec(), load_cfg())
-    settled, freed = fleet._settle_startup_resolved(
+    settled, freed = sweep.settle_startup_resolved(
         [st], frozenset(), now=2000.0)
 
     assert settled == 0
@@ -86,7 +86,7 @@ def test_startup_settle_only_affects_resolved_members(monkeypatch, tmp_path):
     one loses its inventory."""
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
-    from strategy import fleet, store
+    from strategy import fleet, store, sweep
 
     _seed_fill(store, cond="cond-res", price=0.50, size=50.0)
     store.record_resolution("cond-res", "TOK-UP")
@@ -94,7 +94,7 @@ def test_startup_settle_only_affects_resolved_members(monkeypatch, tmp_path):
 
     st_res = fleet.MarketState(_spec(cid="cond-res"), load_cfg())
     st_live = fleet.MarketState(_spec(cid="cond-live"), load_cfg())
-    settled, freed = fleet._settle_startup_resolved(
+    settled, freed = sweep.settle_startup_resolved(
         [st_res, st_live], frozenset({"cond-res"}), now=2000.0)
 
     assert settled == 1
@@ -110,13 +110,13 @@ def test_startup_settle_is_idempotent_with_visit(monkeypatch, tmp_path):
     inventory stays zero."""
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
-    from strategy import fleet, store
+    from strategy import fleet, store, sweep
 
     _seed_fill(store, side="DOWN", price=0.30, size=40.0)
     store.record_resolution("cond-1", "TOK-UP")
 
     st = fleet.MarketState(_spec(), load_cfg())
-    fleet._settle_startup_resolved([st], frozenset({"cond-1"}), now=1000.0)
+    sweep.settle_startup_resolved([st], frozenset({"cond-1"}), now=1000.0)
 
     fleet.visit(st, bot_cfg=None, now=3000.0,
                 resolved_cids=frozenset({"cond-1"}))
@@ -136,12 +136,12 @@ def test_startup_settle_resolved_market_with_no_inventory_is_not_counted(
     pass still normalises its live payload but must not report it as settled."""
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
-    from strategy import fleet, store
+    from strategy import fleet, store, sweep
 
     store.record_resolution("cond-1", "TOK-UP")
 
     st = fleet.MarketState(_spec(), load_cfg())
-    settled, freed = fleet._settle_startup_resolved(
+    settled, freed = sweep.settle_startup_resolved(
         [st], frozenset({"cond-1"}), now=2000.0)
 
     assert settled == 0
@@ -153,9 +153,9 @@ def test_startup_settle_resolved_market_with_no_inventory_is_not_counted(
 def test_startup_settle_empty_fleet_is_a_noop():
     """The pass must be safe on the empty-universe startup too -- nothing to
     settle, no error."""
-    from strategy import fleet
+    from strategy import fleet, sweep
 
-    settled, freed = fleet._settle_startup_resolved(
+    settled, freed = sweep.settle_startup_resolved(
         [], frozenset({"cond-1"}), now=2000.0)
 
     assert settled == 0
