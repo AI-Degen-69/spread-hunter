@@ -173,6 +173,15 @@ def _deep_book(token="tok-up"):
             "token_id": token}
 
 
+def _mid_book(token="tok-up"):
+    """A side whose top-3 bid depth (~$710) clears the $500 trial bar but
+    fails the permanent $1,000 one -- the population the U36 depth trial
+    exists to admit, and the one the fleet used to refuse at quote time."""
+    return {"bids": {0.48: 800.0, 0.47: 400.0, 0.46: 300.0},
+            "asks": {0.50: 800.0}, "best_bid": 0.48, "best_ask": 0.50,
+            "token_id": token}
+
+
 def _boom(host, token):
     raise RuntimeError("venue timeout")
 
@@ -268,6 +277,72 @@ def test_sweep_quoting_outcome_rests_both_sides(monkeypatch, tmp_path):
     out = sweep.sweep(st, _ctx(now=100.0))
 
     assert out.status == "QUOTING"
+
+
+def test_trial_depth_bar_reaches_the_live_book_gate(monkeypatch, tmp_path):
+    """U36 wiring fix. A spec tagged `trial_depth_usd: 500` must gate the
+    fleet's live book gate at $500, not the permanent $1,000 -- otherwise the
+    ranker admits a market the fleet immediately refuses, and the trial is a
+    no-op. Proven with a book whose top-3 depth (~$710) sits between the two
+    bars: it must reach QUOTING under the trial tag and fail without it."""
+    from strategy import sweep
+    from strategy.config import load as load_cfg
+    from strategy import fleet
+
+    base_cfg = load_cfg()
+    assert base_cfg.select_min_top3_depth_usd == 1000.0
+
+    # Without the tag: the ~$710 book fails the permanent $1,000 bar.
+    plain = fleet.MarketState(_spec(cid="cond-no-trial"), base_cfg)
+    assert plain.cfg.select_min_top3_depth_usd == 1000.0
+
+    # With the tag: the live gate drops to the trial bar.
+    spec = _spec(cid="cond-trial")
+    spec["trial_depth_usd"] = 500.0
+    st = fleet.MarketState(spec, base_cfg)
+    assert st.cfg.select_min_top3_depth_usd == 500.0
+
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    st.market = _Market()
+    monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
+    monkeypatch.setattr("strategy.sweep.full_book",
+                        lambda host, token: _mid_book(token))
+
+    out = sweep.sweep(st, _ctx(now=100.0))
+    assert out.status == "QUOTING", out.why
+    assert st.engine.open_orders(), "the trial bar must let orders rest"
+
+
+def test_price_band_widened_to_the_spread_universe(monkeypatch, tmp_path):
+    """U36f. The 0.30-0.70 band was tuned to the old coin-flip BTC series; the
+    spread universe (tennis/CS2/MLB favourites) legitimately trades at
+    0.15-0.85, and the band's protection lives at the 0.95+ settled edge.
+    A 0.25/0.75 book must now quote on the rewards path -- it was blocked
+    before the widening, and blocking it refused a funded market for hours."""
+    from strategy import sweep
+    from strategy.config import load as load_cfg
+    from strategy import fleet
+
+    base_cfg = load_cfg()
+    assert base_cfg.price_band_low == 0.10
+    assert base_cfg.price_band_high == 0.90
+
+    spec = _spec(cid="cond-band")
+    spec["spread"] = 0.01
+    spec["volume_24h"] = 500_000.0
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    st = fleet.MarketState(spec, base_cfg)
+    st.market = _Market()
+    monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
+
+    def lopsided(host, token):
+        return {"bids": {0.25: 3000.0, 0.24: 2000.0, 0.23: 1000.0},
+                "asks": {0.28: 3000.0}, "best_bid": 0.25, "best_ask": 0.28,
+                "token_id": token}
+
+    monkeypatch.setattr("strategy.sweep.full_book", lopsided)
+    out = sweep.sweep(st, _ctx(now=100.0))
+    assert out.status == "QUOTING", out.why
     assert out.requoted is True
     assert len(st.engine.open_orders()) == 2
     assert st.book_gate_fail_since is None

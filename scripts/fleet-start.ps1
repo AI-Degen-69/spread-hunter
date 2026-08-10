@@ -96,6 +96,19 @@ $env:MAKER_DB = "run/fleet.db"
 $env:MAKER_DEPTH_TRIAL_USD = "500"
 $env:MAKER_VOLUME_TRIAL_USD = "125000"
 
+# ALLOCATOR FLOOR (U36f, operator decision 2026-08-11). The 2%/day marginal-
+# return floor was tuned for the old 20-market BTC-era universe. The current
+# eligible set (7 real-book markets) all measure 0.046-3.997%/day first-dollar
+# marginal, so the 2%/day floor defunds EVERYTHING and the fleet quotes
+# nothing -- "it's been hours and nothing happens". 0.5%/day funded only
+# 3/7 (Shnaider/Jodar/Falcons); the 4 refused are still real books (competition
+# depth 56k-880k, tight spreads, real volume -- mirage triage already removed
+# the junk), just deep-competition. 0.01%/day funds the whole eligible
+# universe; max_market_frac (0.15) still caps concentration, and the
+# pairs-only rule (U35) is the measured edge these samples are for. Set to ""
+# for the permanent 2%/day floor.
+$env:MAKER_MARGINAL_FLOOR = "0.0001"
+
 # 3. Start hidden. The supervisor owns the fleet, the dashboard, the ranker
 # and the universe watcher as children, and children inherit the parent's
 # hidden console -- so one hidden start yields five windowless processes, not

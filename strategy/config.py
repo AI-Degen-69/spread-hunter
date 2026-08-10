@@ -498,14 +498,24 @@ class MakerConfig:
     quote_shares: int = 120
 
     # --- powerwinner's two entry rules ------------------------------------
-    # PRICE BAND. 54% of his volume enters at 0.30-0.70, and he has ZERO trades
-    # at 0.98+. That is where the spread -- and the taker fee he is avoiding,
-    # fee = 0.07*p*(1-p), which peaks at p=0.50 -- are widest, so it is where
-    # being the maker is worth most. Outside the band the spread collapses
-    # toward one tick on a near-certain outcome and there is nothing to capture,
-    # while the downside stays the full $1.00.
-    price_band_low: float = 0.30
-    price_band_high: float = 0.70
+    # PRICE BAND. 54% of powerwinner's BTC 5-min volume enters at 0.30-0.70, and
+    # he has ZERO trades at 0.98+. That is where the spread -- and the taker fee
+    # he is avoiding, fee = 0.07*p*(1-p), which peaks at p=0.50 -- are widest, so
+    # it is where being the maker is worth most. Outside the band the spread
+    # collapses toward one tick on a near-certain outcome and there is nothing to
+    # capture, while the downside stays the full $1.00.
+    #
+    # WIDENED 0.30-0.70 -> 0.10-0.90 (2026-08-11). The 0.30-0.70 range was tuned
+    # to the coin-flip BTC series, where every mid is ~0.50. The spread universe
+    # the fleet now quotes (tennis, CS2, MLB favourites) legitimately trades at
+    # 0.15-0.85, and the band's own protection -- refusing a near-settled outcome
+    # at the extreme -- lives at the 0.95+ edge, which 0.10-0.90 still refuses.
+    # Measured on the live funnel 2026-08-11: 7 of 8 adopted markets had mids
+    # outside 0.30-0.70, and the allocator's funded picks were both blocked by
+    # the band (Shnaider at 0.255/0.705) -- a funded market the strategy then
+    # refused to quote for hours.
+    price_band_low: float = 0.10
+    price_band_high: float = 0.90
     # QUOTE TIMING. 57% of his entries land in the FIRST 40% of the window.
     # A passive order needs time to be reached; posting late means resting into
     # the minutes when the price is converging on the outcome, which is exactly
@@ -708,6 +718,9 @@ def load() -> MakerConfig:
     pr = os.environ.get("MAKER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
+    mf = os.environ.get("MAKER_MARGINAL_FLOOR") or ""
+    if mf.strip():
+        kw["marginal_return_floor"] = float(mf)
     return MakerConfig(**kw)
 # hook probe
 # hook probe

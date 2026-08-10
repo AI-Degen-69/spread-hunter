@@ -586,6 +586,19 @@ def test_config_env_sets_the_volume_trial_bar_without_touching_the_permanent_one
     assert cfg.select_min_volume_24h_usd == 250_000.0
 
 
+def test_config_env_overrides_the_allocator_marginal_floor(monkeypatch):
+    """U36f: the 2%/day marginal-return floor defunded the entire eligible
+    universe (all 7 real-book markets measure 0.04-1.84%/day first-dollar), so
+    the operator re-armed it lower via MAKER_MARGINAL_FLOOR. The env must
+    override the permanent floor without touching anything else."""
+    monkeypatch.setenv("MAKER_MARGINAL_FLOOR", "0.005")
+    cfg = load_cfg()
+    assert cfg.marginal_return_floor == 0.005
+
+    monkeypatch.delenv("MAKER_MARGINAL_FLOOR", raising=False)
+    assert load_cfg().marginal_return_floor == 0.02  # permanent default intact
+
+
 def test_pipeline_snapshot_records_the_volume_trial_bar(monkeypatch, tmp_path):
     """Same staging contract as depth: a trial run's snapshot says which
     volume bar it gated on and flags it as a trial."""

@@ -797,6 +797,13 @@ def pipeline():
                     "capital": live.get("capital", 0.0),
                     "share": live.get("share", 0.0),
                     "err": bool(live.get("err")),
+                    # The live refusal string itself, not just the bool -- a
+                    # market showing $0.00/day with no explanation is how
+                    # "the fleet is doing nothing" reads to an operator, when
+                    # it is actually refusing a market for a named reason
+                    # (depth gate, book failure, band). The card renders this.
+                    "err_text": live.get("err") or "",
+                    "why": live.get("why") or "",
                     "ts": live.get("ts"),
                     "source": live.get("source") or s.get("source", ""),
                     "alloc": live.get("alloc"),
@@ -840,6 +847,7 @@ def pipeline():
                     "fills": h.get("fills", 0),
                     "uptime": h.get("uptime", 0.0),
                     "err": bool((live or {}).get("err")),
+                    "err_text": (live or {}).get("err_text") or "",
                     "live": is_live,
                     "daily": s.get("daily", 0.0),
                     "alloc": (live or {}).get("alloc"),
@@ -1764,7 +1772,14 @@ function gradCard(m){
   const pillCls=m.live?(m.err?'pill-spr':'pill-live'):'pill-wait';
   const a=m.alloc;
   const allocHtml=a?`<div class="alloc-line"><div class="${a.funded?'up':'down'}" title="first dollar ${a.first_marginal_pct}%/day · pot $${a.pot_day}/day · allocated $${a.dollars}">${esc(a.reason)}</div><div class="alloc-nums dim mono">marginal ${a.marginal_pct}%/day · competition ${Number(a.competition_avg).toLocaleString()} · floor ${a.threshold_pct}%/day</div></div>`:`<div class="alloc-line dim">allocator: no verdict yet</div>`;
-  return `<div class="mkt-card"><div class="mkt-top"><span class="mkt-t" title="${esc(m.title)}">${esc(m.title)}</span><span class="pill ${pillCls}">${st}</span></div><div class="mkt-mid"><span class="proj bold mono">${usd(m.income)}/d</span><span class="dim mono">${usd(m.capital,0)} cap</span><span class="dim mono">${pct(m.share,1)} share</span></div><div class="mkt-sub dim mono">${m.fills||0} fills · ${pct(m.uptime,0)} uptime</div>${allocHtml}</div>`;
+  // WHY THIS MARKET ISN'T QUOTING. A funded market that rests nothing reads
+  // as "the bot does nothing" unless the named refusal is on the card: the
+  // live book-gate error (depth/spread), the allocator's funding verdict, or
+  // the requote's blocked reason. All three are now on the same card.
+  const reasonHtml=(m.err_text||m.why||(!m.live?'not adopted yet':''))
+    ?`<div class="alloc-line" style="border-top-color:rgba(240,104,77,.35)"><div class="down" title="live gate refusal">${esc(m.err_text||m.why||(!m.live?'queued — not adopted yet':''))}</div></div>`
+    :(m.income<=0?'<div class="alloc-line dim">resting nothing — allocator has not funded this market</div>':'');
+  return `<div class="mkt-card"><div class="mkt-top"><span class="mkt-t" title="${esc(m.title)}">${esc(m.title)}</span><span class="pill ${pillCls}">${st}</span></div><div class="mkt-mid"><span class="proj bold mono">${usd(m.income)}/d</span><span class="dim mono">${usd(m.capital,0)} cap</span><span class="dim mono">${pct(m.share,1)} share</span></div><div class="mkt-sub dim mono">${m.fills||0} fills · ${pct(m.uptime,0)} uptime</div>${allocHtml}${reasonHtml}</div>`;
 }
 function pipeStrip(s,snap){
   if(!snap){
