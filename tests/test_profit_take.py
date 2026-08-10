@@ -5,6 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from strategy import stats  # noqa: E402
 from strategy.config import load as load_cfg  # noqa: E402
 from strategy.profit_take import should_close  # noqa: E402
 from strategy.quotes import Inventory  # noqa: E402
@@ -193,7 +194,7 @@ def test_close_reconstruction_uses_per_leg_removed_cost_not_share_split(
 
     Exercises the real store (via MAKER_DB pointed at a temp DB) for
     log_close and the fills/closes tables, and calls
-    strategy.fleet._inventory_from_db directly so the fix under test -- the
+    strategy.stats.inventory_from_db directly so the fix under test -- the
     up_cost_removed/dn_cost_removed columns and their use in rehydration --
     is what actually runs, not a re-implementation of it in the test.
     """
@@ -243,7 +244,7 @@ def test_close_reconstruction_uses_per_leg_removed_cost_not_share_split(
                      forgone_vs_settlement=0.0,
                      up_cost_removed=up_removed, dn_cost_removed=dn_removed)
 
-    rebuilt = fleet._inventory_from_db(cid)
+    rebuilt = stats.inventory_from_db(cid)
 
     # The reconstruction after "restart" must match the live values exactly,
     # including down_cost being 0.0 on a zero-share leg -- the specific case

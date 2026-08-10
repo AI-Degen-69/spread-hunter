@@ -940,3 +940,15 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 **Result.** 528/528 pass (524 + 4 new). The alias maps positional args exactly; the only code change beyond relocation was the `now` → `ctx.now` conversion, and a premature-return slip of mine was caught by the existing hysteresis tests. `fleet.py` is down from 1,983 to ~1,100 lines and imports the sweep module.
 
 **Verdict.** LIVE. The sweep is one interface with private step seams; tests assert outcomes, not engine internals. Watch: #13 (state reader) and #14 (un-merge main.py, whose fetcher imports now live in sweep.py) are the next slices.
+
+---
+
+### Session 29 — 2026-08-10: one read-side module for the fleet's KPIs (issue #13)
+
+**Question.** Read SQL was split across the report module (`kpi.py`), the dashboard page (`fleet_dash.py` -- with its own read-only connection and cached running totals) and the engine's inventory rehydration (`fleet.py`). A schema change meant three files of coordination. Can every read query move behind one state-reader module, leaving the report module pure computation and the page HTTP + HTML?
+
+**Method.** New `strategy/stats.py` owns every read query: kpi's row fetchers (via the write module's connection), the dashboard's readers (read-only connections to `run/fleet.db`, including the incremental maker-rebate cache + lock, moved with the reads), and `inventory_from_db` from the engine. `kpi.py` kept its pure math (`taker_fee`, reward-share computation) and calls the state reader; `fleet_dash.py` kept `_pulse`/`_heartbeat`/`_sweep_duration` (pure/file) plus the three endpoints, and `fleet()` pulls the whole DB-derived payload with one `snapshot()`. `fleet.py` lost its last direct SQL. Import cycle avoided by direction: kpi imports stats at module level, stats imports kpi lazily (outside the lock) for `taker_fee`. Tests updated to import the readers from `strategy.stats`; 4 new tests pin the surface (snapshot payload, db_stats aggregation, kpi.report through the state reader, inventory rehydration).
+
+**Result.** 532/532 pass (528 + 4 new). No SQL remains in `kpi.py` or `fleet_dash.py`; the only SQL in `strategy/` + `server/` lives in `store.py` (write module) and `stats.py`. Interpretation note on acceptance criterion 4: `scripts/` (`fetch_trades`, `measure_fill_rate`, `record_books`, `replay_risk_gates`) still issues SQL against its own databases -- those are standalone tools, not engine modules, so their queries were left in place.
+
+**Verdict.** LIVE. One read seam, one write seam, and a `snapshot()` the page calls once. Watch: #14 (un-merge main.py, whose fetcher imports now live in sweep.py) and #15 (evaluate fetch seam) are the remaining frontier.

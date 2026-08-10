@@ -36,6 +36,7 @@ from strategy.quotes import Inventory
 from strategy.sweep import (SweepContext, SweepOutcome,
                             _settle_startup_resolved, fleet_committed_cost,
                             sweep as run_sweep)
+from strategy.stats import inventory_from_db
 
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "run"
@@ -241,58 +242,6 @@ def _idle_empty(states, pulse: _Pulse, empty_logged: bool) -> bool:
     return empty_logged
 
 
-def _inventory_from_db(cid: str) -> Inventory:
-    """Rebuild a market's share position from its persisted fills.
-
-    The fills table is the ledger; Inventory was only ever a running total of
-    it held in memory. Recomputing from the ledger on startup makes the two
-    agree, which is the difference between a dashboard that says "no position"
-    and one that shows the shares we are actually holding.
-
-    Returns an empty Inventory on any failure -- a fresh DB, a missing table.
-    That is the same state as before this function existed, so a broken read
-    degrades to the old behaviour rather than stopping the fleet.
-    """
-    inv = Inventory()
-    try:
-        with store.db() as c:
-            for side, size, price in c.execute(
-                    "SELECT side, size, price FROM fills WHERE condition_id=?",
-                    (cid,)):
-                if side == "UP":
-                    inv.up_shares += size or 0.0
-                    inv.up_cost += (size or 0.0) * (price or 0.0)
-                else:
-                    inv.down_shares += size or 0.0
-                    inv.down_cost += (size or 0.0) * (price or 0.0)
-                inv.fills += 1
-            for shares, cost_basis, up_removed, dn_removed in c.execute(
-                    "SELECT shares, cost_basis, up_cost_removed, "
-                    "dn_cost_removed FROM closes WHERE condition_id=?",
-                    (cid,)):
-                # A close removed one UP and one DOWN share per pair, each at
-                # its OWN average cost at close time -- not in proportion to
-                # share counts, which only coincides with the true split when
-                # both legs happen to share the same average price. The exact
-                # per-leg amounts removed are recorded on the row, so use them
-                # directly instead of re-deriving (and getting wrong) a split.
-                n = shares or 0.0
-                inv.up_shares -= n
-                inv.down_shares -= n
-                if up_removed is not None and dn_removed is not None:
-                    inv.up_cost -= up_removed
-                    inv.down_cost -= dn_removed
-                else:
-                    # Row written before up_cost_removed/dn_cost_removed
-                    # existed: fall back to the old (approximate) even split
-                    # rather than crashing on a NULL.
-                    inv.up_cost -= (cost_basis or 0.0) * 0.5
-                    inv.down_cost -= (cost_basis or 0.0) * 0.5
-    except Exception as e:
-        log.warning("inventory rehydrate failed for %s: %s", cid[:10], e)
-    return inv
-
-
 def _gate_from_db(cid: str) -> str:
     """The persisted gate verdict, defaulting to NORMAL.
 
@@ -358,7 +307,7 @@ class MarketState:
         # "no position" against 77 recorded fills. Open orders are NOT restored
         # (the venue would not have them after a restart either); only shares
         # already bought, which are the part that can still lose money.
-        self.inv = _inventory_from_db(self.cid)
+        self.inv = inventory_from_db(self.cid)
         self.seen_trades: set = set()
         self.tape_primed = False
         # Pairs merged back to collateral this process. Session-scoped on

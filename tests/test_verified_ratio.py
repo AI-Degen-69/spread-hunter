@@ -151,18 +151,19 @@ def test_dashboard_renders_real_verified_ratio_when_db_has_tape_fills(
     # confirmed by the trade tape; one row is enough to populate the tile.
     store.log_fill(market_slug="d", condition_id="c", token_id="t",
                    side="UP", price=0.50, size=10, reason="tape")
-    # server.fleet_dash binds `DB` and `RUN` at module load -- patch them
-    # before calling functions, so the dashboard reads the same tmp DB I
-    # just seeded.
+    # The state reader binds `DB` and the page binds `RUN` at module load --
+    # patch them before calling functions, so the dashboard reads the same
+    # tmp DB I just seeded.
     import server.fleet_dash as dash
-    monkeypatch.setattr(dash, "DB", tmp_path / "dash.db")
+    from strategy import stats
+    monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
     monkeypatch.setattr(dash, "RUN", tmp_path)
-    # Defense-in-depth: dash.DB (used by the dashboard's stdlib sqlite3
-    # readers) and `store._cfg.db_path()` (used by store.verified_ratio())
-    # MUST resolve to the same file, or the regression test passes for the
-    # wrong reason -- a write to one file and a read from another. Lock
-    # the coupling here so a future refactor of either module fails loudly.
-    assert dash.DB.resolve() == store._cfg.db_path().resolve()
+    # Defense-in-depth: stats.DB (used by the state reader's RO connections)
+    # and `store._cfg.db_path()` (used by store.verified_ratio()) MUST resolve
+    # to the same file, or the regression test passes for the wrong reason --
+    # a write to one file and a read from another. Lock the coupling here so
+    # a future refactor of either module fails loudly.
+    assert stats.DB.resolve() == store._cfg.db_path().resolve()
     # dash.fleet() short-circuits with an error payload if it can't find the
     # fleet-state file; an empty spec list drives it through to the totals
     # where the verified tile is computed.
