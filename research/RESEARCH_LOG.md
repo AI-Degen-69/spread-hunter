@@ -928,3 +928,15 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 **Result.** 524/524 tests pass (520 before + 4 new). The functions' bodies were not edited -- only relocated -- and `visit`'s call sites renamed. The startup-settle suite now imports the step from the sweep module instead of the engine.
 
 **Verdict.** LIVE. Slice 1 landed with zero behavior change and a new direct test surface. Watch: the gate/decide extraction (issue #12) is slice 2; `fleet.py` should keep shrinking toward orchestration-only.
+
+---
+
+### Session 28 — 2026-08-10: the whole market sweep behind one interface — gate and decide extracted too (issue #12)
+
+**Question.** Slice 1 (#11) moved settle/cancel behind the sweep module. Can the remaining ~600 lines of `visit` — the identity gate, market load, book gate, fills, gate advance, exits and requote — move behind one `sweep(state, ctx) → SweepOutcome` interface, leaving `fleet.py` as orchestration?
+
+**Method.** Rewrote `strategy/sweep.py` with `SweepContext` (bot_cfg, now, fleet-wide totals, states, posture, resolved_cids) and a frozen `SweepOutcome` (status, prev_gate, gate, why, fills, requoted, released). The public `sweep()` runs books → fills → gate → exits → requote → reward sample and maps every early exit to an outcome status (SETTLED, IDENTITY_BLOCKED, COOLDOWN, UNLOADABLE, BOOK_HOLDING, BOOK_FAILED, else QUOTING/BLOCKED/WAITING). `visit` became a thin backward-compatible alias building a SweepContext from its old signature; `main()` still calls it, unchanged. Step helpers moved with their bare `now` reads converted to `ctx.now` (19 sites in 5 functions). Tests updated to the new homes (monkeypatch targets → `strategy.sweep.full_book`/`recent_trades`, imports split between fleet and sweep); 4 new tests drive `sweep()` through its one interface.
+
+**Result.** 528/528 pass (524 + 4 new). The alias maps positional args exactly; the only code change beyond relocation was the `now` → `ctx.now` conversion, and a premature-return slip of mine was caught by the existing hysteresis tests. `fleet.py` is down from 1,983 to ~1,100 lines and imports the sweep module.
+
+**Verdict.** LIVE. The sweep is one interface with private step seams; tests assert outcomes, not engine internals. Watch: #13 (state reader) and #14 (un-merge main.py, whose fetcher imports now live in sweep.py) are the next slices.

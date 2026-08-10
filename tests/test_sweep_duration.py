@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from server.fleet_dash import _sweep_duration                    # noqa: E402
-from strategy import fleet                                       # noqa: E402
+from strategy import fleet, sweep                                # noqa: E402
 
 NOW = 1_780_000_000.0
 
@@ -112,7 +112,7 @@ class _St:
 
 def test_a_failed_visit_records_why():
     st = _St()
-    fleet._stamp_failure(st, NOW, "closed / not accepting orders")
+    sweep._stamp_failure(st, NOW, "closed / not accepting orders")
     assert st.spec["_live"]["err"] == "closed / not accepting orders"
     assert st.spec["_live"]["err_ts"] == NOW
 
@@ -121,7 +121,7 @@ def test_a_failed_visit_does_not_back_date_its_figures():
     """`ts` dates the FIGURES. A market failing for six hours must not look
     freshly measured just because the fleet keeps trying it."""
     st = _St({"ts": NOW - 21600.0, "income": 4.2})
-    fleet._stamp_failure(st, NOW, "book fetch: timeout")
+    sweep._stamp_failure(st, NOW, "book fetch: timeout")
     assert st.spec["_live"]["ts"] == NOW - 21600.0
     assert st.spec["_live"]["income"] == 4.2
     assert st.spec["_live"]["err_ts"] == NOW
@@ -131,6 +131,6 @@ def test_a_market_that_never_loaded_still_gets_a_payload():
     """Ten of twenty markets had no `_live` at all, so the page could not say
     they were broken -- only that they were missing."""
     st = _St()
-    fleet._stamp_failure(st, NOW, "market unloadable (cooling down)")
+    sweep._stamp_failure(st, NOW, "market unloadable (cooling down)")
     assert st.spec["_live"]["err"]
     assert "ts" not in st.spec["_live"], "no figures were measured"

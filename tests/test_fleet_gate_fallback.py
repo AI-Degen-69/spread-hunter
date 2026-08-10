@@ -26,8 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategy import gate, markout                          # noqa: E402
 from strategy.config import load as load_cfg                # noqa: E402
-from strategy.fleet import (                                # noqa: E402
-    _fleet_posture, _gate_with_fleet_fallback)
+from strategy.fleet import _fleet_posture                     # noqa: E402
+from strategy.sweep import _gate_with_fleet_fallback         # noqa: E402
 
 
 def _cfg():
