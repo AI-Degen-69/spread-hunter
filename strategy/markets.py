@@ -191,21 +191,68 @@ BOOK_TIMEOUT = (3.05, 5.0)
 TAPE_TIMEOUT = (3.05, 5.0)
 
 
-def full_book(clob_host: str, token_id: str) -> dict:
-    """Full depth, not just top-of-book -- queue position needs the level sizes."""
-    r = _SESSION.get(f"{clob_host}/book", params={"token_id": token_id},
-                     timeout=BOOK_TIMEOUT)
-    r.raise_for_status()
-    b = r.json()
-    bids = {round(float(x["price"]), 4): float(x["size"]) for x in (b.get("bids") or [])}
-    asks = {round(float(x["price"]), 4): float(x["size"]) for x in (b.get("asks") or [])}
+def parse_book(raw: dict, token_id: str) -> dict:
+    """Venue /book payload -> the canonical book dict, skipping bad levels.
+
+    The parse half of the fetch seam. The contract distinguishes ROW garbage
+    from a STRUCTURAL failure:
+
+      * a row whose price or size will not parse is skipped and counted in
+        `malformed` -- the same tolerance `selector.top_depth_usd` applies
+        to gate inputs. One bad level must not take down a caller: it used
+        to crash the ranker's whole run and get the fleet to cancel quotes
+        on a healthy venue.
+      * a payload that is not a dict, or a side that is not a list, raises
+        ValueError -- that is a fetch-shaped failure, and callers already
+        treat fetch failures (retry, hold, fail closed).
+
+    `malformed` lets a caller fail closed when a skipped level would overstate
+    its own reading (the ranker drops the market: an under-counted competitor
+    inflates projected income) or ignore the count when the gate judges what
+    is readable (the fleet).
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("book payload is not a dict")
+    bids: dict[float, float] = {}
+    asks: dict[float, float] = {}
+    malformed = 0
+    for side, target in (("bids", bids), ("asks", asks)):
+        rows = raw.get(side) or []
+        if not isinstance(rows, list):
+            raise ValueError(f"book {side} is not a list")
+        for x in rows:
+            if not isinstance(x, dict):
+                malformed += 1
+                continue
+            try:
+                price = round(float(x["price"]), 4)
+                size = float(x["size"])
+            except (TypeError, ValueError, KeyError):
+                malformed += 1
+                continue
+            target[price] = size
     return {
         "token_id": token_id,
         "bids": bids,
         "asks": asks,
         "best_bid": max(bids) if bids else None,
         "best_ask": min(asks) if asks else None,
+        "malformed": malformed,
     }
+
+
+def full_book(clob_host: str, token_id: str) -> dict:
+    """Full depth, not just top-of-book -- queue position needs the level sizes.
+
+    Row-level garbage is skipped by `parse_book`, never raised: a malformed
+    level must not look like a network failure to the sweep's book gate, or
+    a healthy venue gets its quotes cancelled. Structural failures still
+    raise and ride the fetch-failure path.
+    """
+    r = _SESSION.get(f"{clob_host}/book", params={"token_id": token_id},
+                     timeout=BOOK_TIMEOUT)
+    r.raise_for_status()
+    return parse_book(r.json(), token_id)
 
 
 def recent_trades(condition_id: str, seen: set, limit: int = 500) -> dict:
@@ -221,6 +268,13 @@ def recent_trades(condition_id: str, seen: set, limit: int = 500) -> dict:
     stamps trades to the second while we poll faster than that, so a time-based
     cursor would double-count or skip. `seen` is per-market and is dropped when
     the window rolls.
+
+    Row-level garbage is skipped, never raised: the parse sits OUTSIDE the
+    fetch try, and before this a single unparseable price crashed out of the
+    loop -- which the sweep's "exceptions propagate" contract turned into a
+    market that silently vanished from every sweep with no status, no err and
+    no event. A skipped trade only under-counts volume at a level, which is
+    the conservative direction for a fill model.
     """
     out: dict[str, dict[float, float]] = {}
     try:
@@ -232,16 +286,24 @@ def recent_trades(condition_id: str, seen: set, limit: int = 500) -> dict:
     except Exception as e:
         log.debug("tape fetch failed: %s", e)
         return out                      # no tape -> caller falls back to books
+    if not isinstance(rows, list):
+        log.debug("tape response is not a list (got %s)", type(rows).__name__)
+        return out
     for t in rows:
+        if not isinstance(t, dict):
+            continue
         key = (str(t.get("transactionHash") or ""), str(t.get("asset")),
                t.get("timestamp"), t.get("price"), t.get("size"))
         if key in seen:
             continue
         seen.add(key)
         tok = str(t.get("asset"))
-        p = round(float(t.get("price") or 0), 4)
-        out.setdefault(tok, {})[p] = out.setdefault(tok, {}).get(p, 0.0) + \
-            float(t.get("size") or 0)
+        try:
+            p = round(float(t.get("price") or 0), 4)
+            size = float(t.get("size") or 0)
+        except (TypeError, ValueError):
+            continue
+        out.setdefault(tok, {})[p] = out.setdefault(tok, {}).get(p, 0.0) + size
     return out
 
 

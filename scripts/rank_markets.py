@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT))
 
 from strategy.allocate import (marginal, spread_capture_daily)   # noqa: E402
 from strategy.config import load as _load_cfg   # noqa: E402
+from strategy.markets import parse_book   # noqa: E402
 from strategy.rewards import score_per_share   # noqa: E402
 from strategy.selector import identity_allowed, pair_books_allowed  # noqa: E402
 
@@ -369,8 +370,24 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                             params={"token_id": tok}, timeout=12).json()
         except Exception:
             return None
-        bids = [(float(x["price"]), float(x["size"])) for x in (b.get("bids") or [])]
-        asks = [(float(x["price"]), float(x["size"])) for x in (b.get("asks") or [])]
+        # The fetch is guarded with Exception, and so is the parse: the whole
+        # point is that the scorer must never crash on venue data, whatever
+        # parse_book's structural-failure type evolves into. This also rounds
+        # prices to 4 decimals (shared with full_book) -- a no-op on the
+        # venue's 3-decimal tick, deliberately one parse for every caller.
+        try:
+            book = parse_book(b, tok)
+        except Exception:
+            return None
+        # A skipped level under-counts competitor depth, which OVERSTATES our
+        # income share -- the dangerous direction for a funding decision.
+        # Fail closed rather than scoring against a partial book; this used
+        # to crash the whole ranking run (the parse sat outside the try and
+        # the exception aborted every ThreadPool worker).
+        if book["malformed"]:
+            return None
+        bids = list(book["bids"].items())
+        asks = list(book["asks"].items())
         if not bids or not asks:
             return None
         books.append(("YES" if j == 0 else "NO", bids, asks))

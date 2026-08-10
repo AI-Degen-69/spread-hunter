@@ -138,6 +138,30 @@ def test_a_failed_book_fetch_drops_the_market_without_a_verdict():
     assert evaluate(s, rate=50.0, m=_spec()) is None
 
 
+def test_a_malformed_book_row_drops_the_market_instead_of_crashing():
+    """The old parse sat outside the fetch try, so one garbage level aborted
+    the whole ranking run (the exception took down every ThreadPool worker).
+    parse_book skips the row and counts it; the scorer fails closed on the
+    count -- a skipped competitor under-counts `theirs` and inflates our
+    income share, the dangerous direction for a funding decision."""
+    bad = {"bids": [{"price": "0.49", "size": "60"},
+                    {"price": "garbage", "size": "60"},
+                    {"price": "0.46", "size": "2200"}],
+           "asks": [{"price": "0.51", "size": "60"},
+                     {"price": "0.52", "size": "60"},
+                     {"price": "0.54", "size": "2200"}]}
+    s = _StubClobSession({"tok-yes": bad, "tok-no": _good_book()})
+    assert evaluate(s, rate=50.0, m=_spec(), volume_24h=500_000.0) is None
+
+
+def test_a_structural_book_failure_drops_the_market():
+    """A payload that is not a dict is a fetch-shaped failure: parse_book
+    raises ValueError and the scorer treats the book as unreadable."""
+    s = _StubClobSession({"tok-yes": ["not", "a", "dict"],
+                          "tok-no": _good_book()})
+    assert evaluate(s, rate=50.0, m=_spec(), volume_24h=500_000.0) is None
+
+
 def test_a_one_sided_book_is_dropped():
     s = _StubClobSession({
         "tok-yes": {"bids": [{"price": "0.49", "size": "60"}], "asks": []},

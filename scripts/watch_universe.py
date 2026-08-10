@@ -30,13 +30,18 @@ from pathlib import Path
 import requests
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from strategy.markets import parse_book                       # noqa: E402
 LOG = ROOT / "logs" / "universe_watch.log"
 MARKETS = ROOT / "run" / "markets.json"
 RERANK = ROOT / "logs" / "rerank.log"
 
 # The selector bars, kept in sync with strategy/config.py by hand here
-# because the watcher is a script and must not import the strategy package
+# because the watcher is a script and must not import the strategy config
 # (the fleet may be mid-write on the same DB the config loader touches).
+# `parse_book` is imported from strategy.markets -- that module imports no
+# config and touches no DB, so the isolation principle holds.
 MIN_TOP3_DEPTH_USD = 1_000.0
 MAX_BOOK_SPREAD = 0.06
 
@@ -121,8 +126,15 @@ def _esports_books(session: requests.Session) -> list[dict]:
                 spreads.append(None)
                 one_sided.append(True)  # unreadable is not tradeable either
                 continue
-            bids = [(float(x["price"]), float(x["size"])) for x in (b.get("bids") or [])]
-            asks = [(float(x["price"]), float(x["size"])) for x in (b.get("asks") or [])]
+            try:
+                book = parse_book(b, tok)
+            except ValueError:
+                depths.append(None)
+                spreads.append(None)
+                one_sided.append(True)
+                continue
+            bids = list(book["bids"].items())
+            asks = list(book["asks"].items())
             if not bids or not asks:
                 depths.append(None)
                 spreads.append(None)

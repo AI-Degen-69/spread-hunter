@@ -31,7 +31,7 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from strategy.markets import fetch_live_market          # noqa: E402
+from strategy.markets import fetch_live_market, parse_book  # noqa: E402
 from strategy.net_config import load_net                # noqa: E402
 
 log = logging.getLogger("recorder")
@@ -75,15 +75,12 @@ def db(path: Path) -> sqlite3.Connection:
 
 
 def book(clob_host: str, token_id: str) -> dict:
+    """One book via the shared parse: bad levels are skipped, never raised,
+    so one garbage row cannot abort a recording run mid-window."""
     r = requests.get(f"{clob_host}/book", params={"token_id": token_id}, timeout=10)
     r.raise_for_status()
-    b = r.json()
-    return {
-        "bids": {round(float(x["price"]), 4): float(x["size"])
-                 for x in (b.get("bids") or [])},
-        "asks": {round(float(x["price"]), 4): float(x["size"])
-                 for x in (b.get("asks") or [])},
-    }
+    parsed = parse_book(r.json(), token_id)
+    return {"bids": parsed["bids"], "asks": parsed["asks"]}
 
 
 def run(out: Path, interval: float, minutes: float) -> None:

@@ -988,3 +988,15 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 **Result.** 552/552 pass (548 + 4 new), zero network. The volume reader's two contracts — never ask for more than 20 ids at once, and a partial map beats a crashed read — are now pinned offline, same as the scorer's gates.
 
 **Verdict.** LIVE. Test-only change — no production code, no new sample.
+
+---
+
+### Session 33 — 2026-08-10: the venue-payload parse seam (architecture review, C1+C2)
+
+**Question.** The architecture survey asked whether malformed book-payload handling is an isolated parse gap in the ranker's scorer or a systemic seam problem. Answer: systemic — five live copies of the same `float(x["price"])` comprehension, three failure modes (ranker crash, fleet misclassification, tape silent-skip); `resolve.py` is the one site already fail-closed. Can the parse converge on one adapter?
+
+**Method.** Added `strategy.markets.parse_book` — the parse half of the fetch seam. Contract: row-level garbage (unparseable price/size, non-dict row) is **skipped and counted** in `malformed` — the same tolerance the selector's depth gate already applies to its inputs; a structurally wrong payload (not a dict, side not a list) **raises ValueError** as a fetch-shaped failure. Five call sites converged on it: `full_book` (no longer raises on row garbage, so the sweep's book gate can no longer mistake a bad level for a dead network — the misclassification dies by construction), `recent_trades` (bad tape rows skipped + a non-list response guarded — previously one bad price crashed out of the loop and the sweep's "exceptions propagate" contract turned it into a market that vanished from every sweep with no status, no err, no event), the ranker's `evaluate` (fails closed on `malformed > 0` — a skipped competitor under-counts `theirs` and inflates projected income, the dangerous direction for a funding decision; previously the exception aborted the whole ranking run through the ThreadPool), and the two tool scripts `watch_universe` / `record_books`.
+
+**Result.** 561/561 pass (552 + 9 new: parse_book shape/skip-count/structural/empty, full_book regression, tape regression + non-list guard, scorer malformed + structural). `resolve.py` was confirmed already fail-closed and left untouched — the survey's negative finding stands. CONTEXT.md gained the **Book adapter** term. The parse exists in exactly one place; the ranker can no longer crash on venue data.
+
+**Verdict.** LIVE. The parse moved behind one interface with one contract; three distinct failure modes collapsed into classified outcomes. No strategy-parameter change — the tolerance matches what the selector already did, so no new sample.
