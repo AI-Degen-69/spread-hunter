@@ -1,11 +1,18 @@
 # polymarket-maker
 
-Paper-trading simulation of a **maker** strategy on Polymarket's 5-minute
-"Bitcoin Up or Down" market. Instead of crossing the spread it rests bids on
-**both** outcomes, aiming to earn the spread and stay inventory-balanced, and
-holds to resolution.
+Paper-trading simulation of a **maker** strategy on Polymarket, run as a
+**fleet**: `scripts/rank_markets.py` scores the venue's funded **reward
+markets** (liquidity-reward rent for resting size) alongside liquid unfunded
+**spread markets** (income from the spread on fills), and the **allocator**
+sizes the winners on a water-fill over each market's projected income. The
+maker mechanism itself is unchanged — instead of crossing the spread the
+strategy rests bids on **both** outcomes of each market, aiming to earn the
+spread and stay inventory-balanced, and holds to resolution.
 
-**Live dashboard:** https://polymarket-maker-production.up.railway.app
+**Dashboard:** http://localhost:8800 — served locally while the fleet runs
+(`uvicorn server.fleet_dash:app --port 8800`). The old public URL
+(https://polymarket-maker-production.up.railway.app) is dead: this checkout
+was never deployed to Railway.
 
 > Simulation only. It never places a real order and loads no wallet
 > credentials at all — see [AGENTS.md](AGENTS.md).
@@ -16,7 +23,8 @@ Measured from 56,768 of @powerwinner's fills: he wins only **41.4%** of markets
 against a 56.1% breakeven, so he has no directional edge. His gross is
 **+$39,884/week** — but **−$32,501** if charged a taker fee. The entire
 difference is that he rests orders instead of crossing. That is the mechanism
-this repo tests.
+this repo tests — now spread across a fleet of markets the ranker scores and
+the allocator sizes, rather than one fixed market.
 
 ## The honest caveat
 
@@ -28,8 +36,9 @@ output as an **upper bound**. The dashboard shows live progress toward
 
 ## Layout
 
-    strategy/   engine (quotes, queue-aware fills, kpi, store, net_config)
-    server/     dashboard.py (API) + kanban.py (page)
+    strategy/   engine: fleet + per-market sweep, ranker gates, quotes,
+                queue-aware fills, risk, store/stats
+    server/     fleet_dash.py (dashboard API + page)
     research/   lab notebook, EN + HE
     deploy/     container entrypoint + preflight
 
@@ -42,8 +51,10 @@ uses the same layout.
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 bash scripts/setup-hooks.sh        # required once: research-log enforcement
-MAKER_DB=./maker.db .venv/bin/python -m strategy.main
-.venv/bin/uvicorn server.dashboard:app --port 8788
+.\scripts\fleet-start.ps1                  # supervised paper fleet (keep the current sample)
+.\scripts\fleet-start.ps1 -FreshRun        # ... or archive the DB and start a fresh sample
+.venv/bin/uvicorn server.fleet_dash:app --port 8800   # dashboard
+.venv/bin/python -m scripts.rank_markets   # ranker (writes run/markets.json)
 ```
 
 ## Current state — post-fix run too small to judge; the old verdict was about a fixed bug
