@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import rank_markets as rank  # noqa: E402
 from server import fleet_dash as dash     # noqa: E402
+from strategy import stats                # noqa: E402
 
 
 def _out(title, eligible, reason="", vol=100_000, days=2.0, source="rewards",
@@ -148,7 +149,7 @@ def test_dashboard_pipeline_endpoint_merges_live_fleet_state(tmp_path,
                                                              monkeypatch):
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
     monkeypatch.setattr(dash, "RUN", tmp_path)
-    monkeypatch.setattr(dash, "DB", tmp_path / "dash.db")
+    monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
 
     (tmp_path / "pipeline.json").write_text(json.dumps({
         "ts": time.time(), "census": "c", "gates": "g",
@@ -205,7 +206,7 @@ def test_dashboard_pipeline_endpoint_degrades_without_snapshot(tmp_path,
     """No pipeline.json yet (fresh install) must be a shape, not a crash."""
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
     monkeypatch.setattr(dash, "RUN", tmp_path)
-    monkeypatch.setattr(dash, "DB", tmp_path / "dash.db")
+    monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
     payload = dash.pipeline()
     assert payload["snapshot"] is None
     assert payload["snapshot_age"] is None

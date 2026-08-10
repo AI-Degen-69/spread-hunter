@@ -26,9 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from strategy import fleet  # noqa: E402
+from strategy import stats  # noqa: E402
 
-# The dashboard binds `DB` and `RUN` at module load; this test patches them to
-# a tmp dir so it never touches the live database or the real state file.
+# The state reader binds `DB` and `RUN` at module load; this test patches them
+# to a tmp dir so it never touches the live database or the real state file.
 import server.fleet_dash as dash  # noqa: E402
 
 
@@ -111,7 +112,7 @@ def test_dashboard_renders_an_empty_fleet_as_no_markets(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
 
-    monkeypatch.setattr(dash, "DB", tmp_path / "dash.db")
+    monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
     monkeypatch.setattr(dash, "RUN", tmp_path)
     monkeypatch.setattr(fleet, "RUN", tmp_path)
 
@@ -134,7 +135,7 @@ def test_dashboard_still_renders_markets_after_an_empty_episode_recovers(
     """
     monkeypatch.setattr(fleet, "RUN", tmp_path)
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
-    monkeypatch.setattr(dash, "DB", tmp_path / "dash.db")
+    monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
     monkeypatch.setattr(dash, "RUN", tmp_path)
 
     fleet._idle_empty([], fleet._Pulse(), False)

@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 def test_settled_positions_exposes_sell_exit_math(monkeypatch, tmp_path):
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settled.db"))
     from strategy import store
-    import server.fleet_dash as dash
+    import strategy.stats as stats
 
     store.log_close(
         condition_id="c-sell", market_slug="market-sell", shares=10.0,
@@ -16,9 +16,9 @@ def test_settled_positions_exposes_sell_exit_math(monkeypatch, tmp_path):
         fee=0.10, realized_pnl=0.20, forgone_vs_settlement=0.30,
         up_cost_removed=5.0, dn_cost_removed=4.5,
     )
-    monkeypatch.setattr(dash, "DB", tmp_path / "settled.db")
+    monkeypatch.setattr(stats, "DB", tmp_path / "settled.db")
 
-    rows = dash._settled_positions()
+    rows = stats.settled_positions()
     assert len(rows) == 1
     row = rows[0]
     assert row["method"] == "SELL"
@@ -34,7 +34,7 @@ def test_settled_positions_exposes_sell_exit_math(monkeypatch, tmp_path):
 def test_settled_positions_uses_parity_for_merge_and_gas(monkeypatch, tmp_path):
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settled.db"))
     from strategy import store
-    import server.fleet_dash as dash
+    import strategy.stats as stats
 
     store.log_close(
         condition_id="c-merge", market_slug="market-merge", method="merge",
@@ -42,9 +42,9 @@ def test_settled_positions_uses_parity_for_merge_and_gas(monkeypatch, tmp_path):
         realized_pnl=0.37, forgone_vs_settlement=0.0,
         up_cost_removed=9.8, dn_cost_removed=9.8,
     )
-    monkeypatch.setattr(dash, "DB", tmp_path / "settled.db")
+    monkeypatch.setattr(stats, "DB", tmp_path / "settled.db")
 
-    row = dash._settled_positions()[0]
+    row = stats.settled_positions()[0]
     assert row["method"] == "MERGE"
     assert abs(row["avg_cost"] - 0.98) < 1e-9
     assert row["exit_price"] == 1.0
@@ -61,14 +61,14 @@ def test_settled_positions_includes_resolution_only_naked_wins(monkeypatch, tmp_
     in this table read it as a bug, not as two views of the same money."""
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settled.db"))
     from strategy import store
-    import server.fleet_dash as dash
+    import strategy.stats as stats
 
     store.log_fill(market_slug="mkt-resolve", condition_id="c-resolve",
                    token_id="TOK-UP", side="UP", price=0.44, size=14.636362)
     store.record_resolution("c-resolve", "TOK-UP")
-    monkeypatch.setattr(dash, "DB", tmp_path / "settled.db")
+    monkeypatch.setattr(stats, "DB", tmp_path / "settled.db")
 
-    rows = dash._settled_positions()
+    rows = stats.settled_positions()
     assert len(rows) == 1
     row = rows[0]
     assert row["method"] == "RESOLVE"
@@ -84,7 +84,7 @@ def test_settled_positions_skips_fully_closed_resolved_markets(monkeypatch, tmp_
     nothing left to settle -- it must not double-count the close's own row."""
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "settled.db"))
     from strategy import store
-    import server.fleet_dash as dash
+    import strategy.stats as stats
 
     store.log_fill(market_slug="mkt-done", condition_id="c-done",
                    token_id="TOK-UP", side="UP", price=0.50, size=10.0)
@@ -93,9 +93,9 @@ def test_settled_positions_skips_fully_closed_resolved_markets(monkeypatch, tmp_
                     fee=0.10, realized_pnl=4.80, forgone_vs_settlement=0.0,
                     up_cost_removed=5.0, dn_cost_removed=0.0)
     store.record_resolution("c-done", "TOK-UP")
-    monkeypatch.setattr(dash, "DB", tmp_path / "settled.db")
+    monkeypatch.setattr(stats, "DB", tmp_path / "settled.db")
 
-    rows = dash._settled_positions()
+    rows = stats.settled_positions()
     assert len(rows) == 1
     assert rows[0]["method"] == "SELL"
 

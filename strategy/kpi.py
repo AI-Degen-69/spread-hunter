@@ -15,10 +15,14 @@ import statistics
 import time
 from typing import Optional
 
-from strategy import store
+from strategy import stats
 from strategy.config import load as load_cfg
 
 cfg = load_cfg()
+
+# NOTE: this module owns NO SQL. Every read query it used to write lives in
+# `strategy/stats.py` (the state reader, issue #13); the fetchers above are
+# its rows, and the math here stays pure computation over them.
 
 
 def taker_fee(price: float, shares: float) -> float:
@@ -34,13 +38,6 @@ def taker_fee(price: float, shares: float) -> float:
     return shares * cfg.fee_rate * p * (1.0 - p)
 
 
-def _rows(sql: str, params: tuple = ()) -> list[dict]:
-    with store.db() as c:
-        cur = c.execute(sql, params)
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, r)) for r in cur.fetchall()]
-
-
 def _reward_report() -> dict:
     """What the liquidity-reward objective is actually earning.
 
@@ -53,8 +50,7 @@ def _reward_report() -> dict:
     `est_usd_per_window` multiplies our share by the observed maker pool. The
     pool figure is measured, not guaranteed -- see cfg.est_reward_pool_usd.
     """
-    rows = _rows("SELECT ts, our_score, market_score, our_share, n_sides "
-                 "FROM reward_samples ORDER BY ts")
+    rows = stats.reward_samples()
     if not rows:
         return {"samples": 0}
 
@@ -85,7 +81,7 @@ def _reward_report() -> dict:
     # 0.35c/share at p=0.50, against 24.5c/share of measured adverse
     # selection -- the cost is 70x the income. Reported as a real, earned
     # number instead of an estimate, so the dashboard cannot flatter itself.
-    fills = _rows("SELECT price, size, crossed FROM fills")
+    fills = stats.fills()
     rebate_earned = sum(
         cfg.rebate_rate * taker_fee(f["price"] or 0.0, f["size"] or 0.0)
         for f in fills if not f.get("crossed"))
@@ -126,9 +122,9 @@ def _reward_report() -> dict:
 
 
 def report() -> dict:
-    quotes = _rows("SELECT * FROM quotes")
-    fills = _rows("SELECT * FROM fills")
-    _res_rows = _rows("SELECT * FROM resolutions")
+    quotes = stats.quotes()
+    fills = stats.fills()
+    _res_rows = stats.resolutions()
     res = {r["condition_id"]: r["winning_token"] for r in _res_rows}
     res_ts = {r["condition_id"]: r["resolved_ts"] for r in _res_rows}
 
@@ -249,14 +245,13 @@ def report() -> dict:
     # Fraction of observed market-time we actually had a quote resting. A
     # maker that is not on the book cannot be filled, so a low fill rate means
     # something very different at 20% uptime than at 95%.
-    dec_rows = _rows("SELECT action, count, t_remaining FROM decisions")
+    dec_rows = stats.decisions()
     dec_total = sum((d["count"] or 1) for d in dec_rows)
     dec_quoting = sum((d["count"] or 1) for d in dec_rows
                       if d["action"] == "QUOTE")
     quote_uptime = (dec_quoting / dec_total) if dec_total else None
     skip_reasons = {}
-    for d in _rows("SELECT action, reason, count FROM decisions "
-                   "WHERE action <> 'QUOTE'"):
+    for d in stats.decisions_non_quote():
         skip_reasons[d["reason"] or d["action"]] = (
             skip_reasons.get(d["reason"] or d["action"], 0) + (d["count"] or 1))
     top_skips = sorted(skip_reasons.items(), key=lambda kv: -kv[1])[:6]
@@ -313,7 +308,7 @@ def report() -> dict:
     census = {"markets_observed": 0, "fillable": 0, "fillable_rate": None,
               "median_pair_at_touch": None}
     try:
-        crows = _rows("SELECT pair_cost_at_touch, fillable_sub_one FROM hedge_census")
+        crows = stats.hedge_census()
         if crows:
             census["markets_observed"] = len(crows)
             census["fillable"] = sum(1 for r in crows if r["fillable_sub_one"])
@@ -401,8 +396,7 @@ def report() -> dict:
         "bankroll": cfg.bankroll_usd,
         "sample": sample,
         "census": census,
-        "balance_hedges": _rows(
-            "SELECT count(*) AS n FROM decisions WHERE action='CROSS_HEDGE'")[0]["n"],
+        "balance_hedges": stats.balance_hedge_count(),
         "experiment": {
             "phase": phase,
             "census_markets": cfg.experiment_census_markets,
@@ -416,12 +410,16 @@ def report() -> dict:
 
 
 def recent_decisions(limit: int = 60) -> list[dict]:
-    return _rows("SELECT * FROM decisions ORDER BY id DESC LIMIT ?", (limit,))
+    """Raw decision rows, newest first -- the query lives in the state
+    reader; this wrapper keeps the report module's public surface (issue
+    #13 moved every query out of kpi.py)."""
+    return stats.recent_decisions(limit)
 
 
 def recent_fills(limit: int = 40) -> list[dict]:
-    return _rows("SELECT * FROM fills ORDER BY id DESC LIMIT ?", (limit,))
+    return stats.recent_fills(limit)
 
 
 def recent_quotes(limit: int = 40) -> list[dict]:
-    return _rows("SELECT * FROM quotes ORDER BY id DESC LIMIT ?", (limit,))
+    return stats.recent_quotes(limit)
+

@@ -27,9 +27,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from server import fleet_dash  # noqa: E402
-from server.fleet_dash import _maker_rebate  # noqa: E402
+from strategy import stats  # noqa: E402
 from strategy.config import load as load_config  # noqa: E402
+from strategy.stats import maker_rebate  # noqa: E402
 
 CFG = load_config()
 
@@ -69,7 +69,7 @@ def _expect(price: float, size: float) -> float:
 
 
 def test_maker_fill_earns_its_share_of_the_taker_fee(tmp_path):
-    r = _maker_rebate(_db(tmp_path, [(0.50, 100.0, 0)]))
+    r = maker_rebate(_db(tmp_path, [(0.50, 100.0, 0)]))
     assert r["earned"] == pytest.approx(_expect(0.50, 100.0))
     assert r["shares"] == 100.0
     assert r["fills"] == 1
@@ -77,14 +77,14 @@ def test_maker_fill_earns_its_share_of_the_taker_fee(tmp_path):
 
 def test_crossed_fill_earns_nothing(tmp_path):
     """We were the taker on it. It pays a fee, it does not collect one."""
-    r = _maker_rebate(_db(tmp_path, [(0.50, 100.0, 1)]))
+    r = maker_rebate(_db(tmp_path, [(0.50, 100.0, 1)]))
     assert r["earned"] == 0.0
     assert r["shares"] == 0.0
     assert r["fills"] == 0
 
 
 def test_only_maker_shares_count_when_the_book_holds_both(tmp_path):
-    r = _maker_rebate(_db(tmp_path, [(0.50, 100.0, 0), (0.50, 40.0, 1),
+    r = maker_rebate(_db(tmp_path, [(0.50, 100.0, 0), (0.50, 40.0, 1),
                                      (0.20, 50.0, 0)]))
     assert r["earned"] == pytest.approx(_expect(0.50, 100.0)
                                         + _expect(0.20, 50.0))
@@ -94,7 +94,7 @@ def test_only_maker_shares_count_when_the_book_holds_both(tmp_path):
 
 def test_resting_size_alone_earns_zero(tmp_path):
     """The whole point. No fills means no rebate, however long we quoted."""
-    r = _maker_rebate(_db(tmp_path, []))
+    r = maker_rebate(_db(tmp_path, []))
     assert r == {"earned": 0.0, "shares": 0.0, "fills": 0,
                  "per_share_cents": None, "err": ""}
 
@@ -106,19 +106,19 @@ def test_rebate_scales_with_price_toward_the_fee_peak(tmp_path):
     move with price would mean the taker-fee curve had been dropped for a flat
     per-share rate.
     """
-    mid = _maker_rebate(_db(tmp_path, [(0.50, 100.0, 0)]))["earned"]
-    tail = _maker_rebate(_db(tmp_path, [(0.05, 100.0, 0)]))["earned"]
+    mid = maker_rebate(_db(tmp_path, [(0.50, 100.0, 0)]))["earned"]
+    tail = maker_rebate(_db(tmp_path, [(0.05, 100.0, 0)]))["earned"]
     assert mid > tail > 0.0
 
 
 def test_per_share_cents_reports_the_rate_actually_achieved(tmp_path):
-    r = _maker_rebate(_db(tmp_path, [(0.50, 100.0, 0)]))
+    r = maker_rebate(_db(tmp_path, [(0.50, 100.0, 0)]))
     assert r["per_share_cents"] == 100.0 * r["earned"] / 100.0
 
 
 def test_missing_database_reads_as_zero_not_an_error(tmp_path):
     """No DB yet is not a failure -- $0.00 earned is the honest answer."""
-    assert _maker_rebate(tmp_path / "absent.db") == {
+    assert maker_rebate(tmp_path / "absent.db") == {
         "earned": 0.0, "shares": 0.0, "fills": 0, "per_share_cents": None,
         "err": ""}
 
@@ -138,11 +138,11 @@ def test_new_fills_accumulate_onto_the_running_total(tmp_path):
     new fills in between has to give the same answer as scanning everything.
     """
     p = _db(tmp_path, [(0.50, 100.0, 0)])
-    first = _maker_rebate(p)
+    first = maker_rebate(p)
     assert first["fills"] == 1
 
     _append(p, [(0.20, 50.0, 0), (0.50, 40.0, 1)])   # one maker, one crossed
-    second = _maker_rebate(p)
+    second = maker_rebate(p)
 
     assert second["fills"] == 2, "the crossed fill must still be excluded"
     assert second["shares"] == 150.0
@@ -153,9 +153,9 @@ def test_new_fills_accumulate_onto_the_running_total(tmp_path):
 def test_polling_without_new_fills_does_not_double_count(tmp_path):
     """The failure mode of a running total: adding the same rows twice."""
     p = _db(tmp_path, [(0.50, 100.0, 0), (0.20, 50.0, 0)])
-    once = _maker_rebate(p)
+    once = maker_rebate(p)
     for _ in range(5):
-        again = _maker_rebate(p)
+        again = maker_rebate(p)
     assert again == once
 
 
@@ -195,13 +195,13 @@ def test_a_fill_landing_mid_read_is_not_counted_twice(tmp_path):
             lambda stmt: racer() if "rowid >" in stmt else None)
         return conn
 
-    fleet_dash.sqlite3.connect = connect
+    stats.sqlite3.connect = connect
     try:
-        first = _maker_rebate(p)
+        first = maker_rebate(p)
     finally:
-        fleet_dash.sqlite3.connect = real_connect
+        stats.sqlite3.connect = real_connect
 
-    second = _maker_rebate(p)
+    second = maker_rebate(p)
 
     # Whatever the first poll saw, the second must not re-add anything.
     full = _expect(0.50, 100.0) + _expect(0.20, 50.0)
@@ -218,7 +218,7 @@ def test_a_replaced_database_restarts_the_total(tmp_path):
     never earned it, and new fills would stack on top of a stranger's history.
     """
     p = _db(tmp_path, [(0.50, 100.0, 0), (0.50, 100.0, 0)])
-    assert _maker_rebate(p)["fills"] == 2
+    assert maker_rebate(p)["fills"] == 2
 
     # Recreate at the SAME path, as archiving then restarting does.
     p.unlink()
@@ -228,7 +228,7 @@ def test_a_replaced_database_restarts_the_total(tmp_path):
     c.commit()
     c.close()
 
-    after = _maker_rebate(p)
+    after = maker_rebate(p)
     assert after["fills"] == 1, "the new DB has one fill, not three"
     assert after["shares"] == 10.0
     assert after["earned"] == pytest.approx(_expect(0.20, 10.0))
@@ -248,7 +248,7 @@ def test_unreadable_table_reports_an_error_rather_than_a_silent_zero(tmp_path):
     c.execute("CREATE TABLE unrelated (x INTEGER)")
     c.commit()
     c.close()
-    r = _maker_rebate(p)
+    r = maker_rebate(p)
     assert r["earned"] == 0.0
     assert r["err"], "a failed read must say so"
     assert "fills" in r["err"], f"error should name the missing table: {r['err']}"
@@ -256,7 +256,7 @@ def test_unreadable_table_reports_an_error_rather_than_a_silent_zero(tmp_path):
 
 def test_a_healthy_read_leaves_err_empty(tmp_path):
     """The happy path must not set `err`, or the UI would show a dash."""
-    assert _maker_rebate(_db(tmp_path, [(0.50, 100.0, 0)]))["err"] == ""
+    assert maker_rebate(_db(tmp_path, [(0.50, 100.0, 0)]))["err"] == ""
 
 
 def test_connection_is_closed_even_when_the_query_fails(tmp_path):
@@ -270,7 +270,7 @@ def test_connection_is_closed_even_when_the_query_fails(tmp_path):
     c.execute("CREATE TABLE unrelated (x INTEGER)")
     c.commit()
     c.close()
-    assert _maker_rebate(p)["err"]
+    assert maker_rebate(p)["err"]
     p.unlink()  # raises PermissionError on Windows if the handle leaked
     assert not p.exists()
 
@@ -283,6 +283,6 @@ def test_null_columns_do_not_crash_the_reader(tmp_path):
     c.execute("INSERT INTO fills VALUES (NULL, NULL, NULL)")
     c.commit()
     c.close()
-    r = _maker_rebate(p)
+    r = maker_rebate(p)
     assert r["earned"] == 0.0
     assert r["fills"] == 1

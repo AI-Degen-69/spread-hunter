@@ -197,7 +197,6 @@ def test_empty_fleet_sweep_age_stays_small_on_the_dashboard(tmp_path, monkeypatc
     monkeypatch.setattr(dash, "RUN", tmp_path)
     monkeypatch.setattr(fleet, "RUN", tmp_path)
     monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
-    monkeypatch.setattr(dash, "DB", tmp_path / "dash.db")
 
     p = fleet._Pulse()
     fleet._idle_empty([], p, False)

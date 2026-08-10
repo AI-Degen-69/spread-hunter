@@ -223,7 +223,7 @@ def test_merge_and_sell_share_one_table_and_reconstruct_identically(
     have required every P&L and rehydrate query to union two sources and stay
     in sync forever."""
     store = _fresh(monkeypatch, tmp_path)
-    from strategy.fleet import _inventory_from_db
+    from strategy.stats import inventory_from_db
 
     store.log_fill(market_slug="s", condition_id="c", token_id="tu",
                    side="UP", price=0.50, size=100, reason="tape")
@@ -235,7 +235,7 @@ def test_merge_and_sell_share_one_table_and_reconstruct_identically(
                     forgone_vs_settlement=0.0,
                     up_cost_removed=40 * 0.50, dn_cost_removed=40 * 0.4728)
 
-    inv = _inventory_from_db("c")
+    inv = inventory_from_db("c")
     assert inv.up_shares == 60.0 and inv.down_shares == 60.0
     # The residue keeps the basis it actually has -- merging at each leg's own
     # average leaves the remaining average untouched.
