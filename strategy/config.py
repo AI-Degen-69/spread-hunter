@@ -378,8 +378,9 @@ class MakerConfig:
     # normal case rather than the exception.
     scarcity_marginal_multiple: float = 2.0
     # Set per-cycle by the fleet allocator, same mechanism as gate_state and
-    # fleet_naked_usd. False here so a single-market bot (strategy.main) is
-    # unaffected -- it has no allocator and therefore no scarcity to report.
+    # fleet_naked_usd. False here so a single-market bot (archived on the
+    # legacy-bot-8788 branch) is unaffected -- it has no allocator and therefore
+    # no scarcity to report.
     capital_scarce: bool = False
 
     # FLEET-WIDE exposure ceiling, in dollars of unhedged cost.
@@ -396,8 +397,8 @@ class MakerConfig:
     # capped markets quote one-sided and score at 1/c, c=3.0.
     max_fleet_naked_usd: float = 400.0
     # Current fleet-wide unhedged cost, injected each cycle by the fleet
-    # runner. Zero here so a single-market bot (strategy.main) is unaffected --
-    # it has no fleet to be over budget.
+    # runner. Zero here so a single-market bot (archived on the legacy-bot-8788
+    # branch) is unaffected -- it has no fleet to be over budget.
     fleet_naked_usd: float = 0.0
 
     # TOTAL COMMITTED CAPITAL (U3). Everything above bounds the UNHEDGED leg;
@@ -434,8 +435,8 @@ class MakerConfig:
     # Deliberately NOT persisted, unlike EXITED: it describes the current
     # pooled reading rather than judging a market, so it is re-derived every
     # sweep and lifts by itself when the pool recovers. NORMAL here so a
-    # single-market bot (strategy.main) is unaffected -- it has no fleet whose
-    # markout could be pooled.
+    # single-market bot (archived on the legacy-bot-8788 branch) is unaffected
+    # -- it has no fleet whose markout could be pooled.
     fleet_posture: str = "NORMAL"
 
     # Maker pool per 5-min window, for turning score-share into dollars.

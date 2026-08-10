@@ -49,7 +49,7 @@ def should_close(inv, up_bids, dn_bids, cfg, capital_scarce: bool = False) -> di
     """Should the paired portion of this position be sold now?
 
     `up_bids` / `dn_bids` are the venue's full bid LADDERS for each side --
-    `{price: size}`, the same shape `full_book()` in strategy/main.py returns
+    `{price: size}`, the same shape `full_book()` in strategy/markets.py returns
     as `book["bids"]`. We would be the seller, and a seller hits bids, never
     asks.
 

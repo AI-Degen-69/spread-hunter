@@ -952,3 +952,15 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 **Result.** 532/532 pass (528 + 4 new). No SQL remains in `kpi.py` or `fleet_dash.py`; the only SQL in `strategy/` + `server/` lives in `store.py` (write module) and `stats.py`. Interpretation note on acceptance criterion 4: `scripts/` (`fetch_trades`, `measure_fill_rate`, `record_books`, `replay_risk_gates`) still issues SQL against its own databases -- those are standalone tools, not engine modules, so their queries were left in place.
 
 **Verdict.** LIVE. One read seam, one write seam, and a `snapshot()` the page calls once. Watch: #14 (un-merge main.py, whose fetcher imports now live in sweep.py) and #15 (evaluate fetch seam) are the remaining frontier.
+
+---
+
+### Session 30 — 2026-08-10: un-merge the entry point (issue #14)
+
+**Question.** `strategy/main.py` (the retired 8788 bot's entry point) still held the two live market-data fetchers -- `full_book` and `recent_trades` -- which the sweep module and the live-test script imported from it. Keeping dead-bot code as the import home for live code couples the fleet to a file that should be gone. Can the fetchers move into the markets module and the entry point be deleted outright?
+
+**Method.** Moved `full_book` and `recent_trades` verbatim into `strategy/markets.py` (which already owned the pooled session and market-identity helpers), carrying the `TRADES_API`/`BOOK_TIMEOUT`/`TAPE_TIMEOUT` constants and a module logger with them. `strategy/sweep.py` and `scripts/live_test.py` now import the fetchers from `strategy.markets`; sweep's namespace re-exports the same function objects so the existing `strategy.sweep.full_book` monkeypatch seams in the fleet tests keep working unchanged. Five prose comments naming `strategy.main` updated to point at the archive. `strategy/main.py` deleted with `git rm`.
+
+**Result.** 534/534 pass (532 + 2 new). New `tests/test_markets.py` pins the relocation: both fetchers importable from `strategy.markets`, and sweep re-exports the identical objects (identity check) so the monkeypatch seams still control them. Repo-wide grep confirms no live reference to `strategy.main` remains in `.py`, `.md`, `.ps1`, `.toml`, `Dockerfile` or other config (archives/skills/research are historical and intentionally untouched).
+
+**Verdict.** LIVE. The entry point is gone; live code imports live code from the markets module. Watch: #15 (evaluate fetch seam) is the last slice.

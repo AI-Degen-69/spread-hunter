@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 import requests
+
+log = logging.getLogger("markets")
 
 # (connect, read). `fetch_pinned_market` is called from inside the fleet's
 # trading loop for any market not yet loaded, and its old scalar 15s applied to
@@ -16,10 +19,9 @@ import requests
 MARKET_TIMEOUT = (3.05, 5.0)
 EVENTS_TIMEOUT = (3.05, 5.0)
 
-# Pooled, for the same reason as strategy.main._SESSION: keep-alive instead of a
-# fresh TLS handshake per call. No retries -- a failed load is handled by the
-# caller (the market is skipped for this visit) and retrying here would spend
-# the loop's time budget silently.
+# Pooled keep-alive instead of a fresh TLS handshake per call. No retries -- a
+# failed load is handled by the caller (the market is skipped for this visit)
+# and retrying here would spend the loop's time budget silently.
 _SESSION = requests.Session()
 for _scheme in ("https://", "http://"):
     _SESSION.mount(_scheme, requests.adapters.HTTPAdapter(
@@ -173,6 +175,74 @@ def market_meta(condition_id: str) -> dict:
         "min_size": rw.get("min_size"),
         "tick": m.get("minimum_tick_size"),
     }
+
+
+# --- book / tape fetchers (moved here from the deleted strategy/main.py, #14) --
+
+TRADES_API = "https://data-api.polymarket.com/trades"
+
+# (connect, read) rather than one scalar. Split deliberately: a host that is not
+# answering its SYN at all is abandoned in ~3s, while a host that did answer
+# gets 5s to finish the body. The old scalar 10s applied to BOTH phases, so a
+# single unreachable endpoint could add 20s to one market visit -- three such
+# markets in a sweep is the difference between a 60s cycle and the >120s the
+# dashboard calls dead.
+BOOK_TIMEOUT = (3.05, 5.0)
+TAPE_TIMEOUT = (3.05, 5.0)
+
+
+def full_book(clob_host: str, token_id: str) -> dict:
+    """Full depth, not just top-of-book -- queue position needs the level sizes."""
+    r = _SESSION.get(f"{clob_host}/book", params={"token_id": token_id},
+                     timeout=BOOK_TIMEOUT)
+    r.raise_for_status()
+    b = r.json()
+    bids = {round(float(x["price"]), 4): float(x["size"]) for x in (b.get("bids") or [])}
+    asks = {round(float(x["price"]), 4): float(x["size"]) for x in (b.get("asks") or [])}
+    return {
+        "token_id": token_id,
+        "bids": bids,
+        "asks": asks,
+        "best_bid": max(bids) if bids else None,
+        "best_ask": min(asks) if asks else None,
+    }
+
+
+def recent_trades(condition_id: str, seen: set, limit: int = 500) -> dict:
+    """Volume by (token_id, price) that has actually TRADED since we last looked.
+
+    The fill model needs this to tell a level that was TRADED from one that was
+    CANCELLED -- from the book they are identical, and guessing costs an order
+    of magnitude: on recorded books the book-only model reported a 50% fill
+    rate where the tape-confirmed rate was 3%, because every fill it produced
+    came from the "level emptied, credit the whole remainder" branch.
+
+    De-duplicated by trade identity rather than by timestamp window: the API
+    stamps trades to the second while we poll faster than that, so a time-based
+    cursor would double-count or skip. `seen` is per-market and is dropped when
+    the window rolls.
+    """
+    out: dict[str, dict[float, float]] = {}
+    try:
+        r = _SESSION.get(TRADES_API,
+                         params={"market": condition_id, "limit": limit},
+                         timeout=TAPE_TIMEOUT)
+        r.raise_for_status()
+        rows = r.json() or []
+    except Exception as e:
+        log.debug("tape fetch failed: %s", e)
+        return out                      # no tape -> caller falls back to books
+    for t in rows:
+        key = (str(t.get("transactionHash") or ""), str(t.get("asset")),
+               t.get("timestamp"), t.get("price"), t.get("size"))
+        if key in seen:
+            continue
+        seen.add(key)
+        tok = str(t.get("asset"))
+        p = round(float(t.get("price") or 0), 4)
+        out.setdefault(tok, {})[p] = out.setdefault(tok, {}).get(p, 0.0) + \
+            float(t.get("size") or 0)
+    return out
 
 
 if __name__ == "__main__":
