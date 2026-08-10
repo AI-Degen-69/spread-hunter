@@ -42,7 +42,8 @@ def test_snapshot_returns_every_db_derived_payload(monkeypatch, tmp_path):
     assert set(snap) == {
         "run_started", "db_heartbeat", "db_stats", "settled_positions",
         "market_event_stats", "maker_rebate", "realized",
-        "go_live_readiness", "share_history", "markout_stats"}
+        "go_live_readiness", "share_history", "markout_stats",
+        "pairs_ev"}
     assert snap["run_started"] == 1000.0
     assert snap["db_heartbeat"] == 1000.0
     assert snap["db_stats"]["c"]["fills"] == 1
@@ -127,3 +128,84 @@ def test_inventory_from_db_rehydrates_after_closes(monkeypatch, tmp_path):
     assert inv.up_shares == 60.0 and inv.down_shares == 60.0
     assert inv.up_cost == pytest.approx(100 * 0.50 - 40 * 0.50)
     assert inv.down_cost == pytest.approx(100 * 0.4728 - 40 * 0.4728)
+
+
+def test_inventory_from_db_rehydrates_after_naked_exit(monkeypatch, tmp_path):
+    """U35: a naked_exit close removed ONE leg only, so the rebuild must not
+    decrement the untouched leg -- the old pair-close assumption (one of
+    each) would silently drop shares that were never sold."""
+    _env(monkeypatch, tmp_path)
+    from strategy import stats, store
+
+    store.log_fill(market_slug="m", condition_id="c", token_id="TOK-UP",
+                   side="UP", price=0.44, size=100.0)
+    store.log_fill(market_slug="m", condition_id="c", token_id="TOK-DN",
+                   side="DOWN", price=0.46, size=40.0)
+    # The pairs rule sold the DOWN residue at 0.48: 60 held + 40 sold.
+    store.log_close(condition_id="c", market_slug="m", method="naked_exit",
+                    shares=40.0, up_price=None, dn_price=0.48,
+                    cost_basis=40 * 0.46, proceeds=40 * 0.48, fee=0.68,
+                    realized_pnl=40 * 0.48 - 40 * 0.46 - 0.68,
+                    forgone_vs_settlement=None,
+                    up_cost_removed=0.0, dn_cost_removed=40 * 0.46)
+
+    inv = stats.inventory_from_db("c")
+    assert inv.up_shares == 100.0, "the UP leg was never touched"
+    assert inv.down_shares == 0.0
+    assert inv.up_cost == pytest.approx(44.0)
+    assert inv.down_cost == 0.0
+    assert inv.last_fill_ts is not None, "the fill clock survives a rebuild"
+
+
+def test_realized_is_side_aware_after_naked_exit(monkeypatch, tmp_path):
+    """U35: when the EXITED side is the loser, its shares must not be
+    credited at resolution -- the old pair-close assumption subtracted the
+    closed count from the winning token, which would under-credit the still-
+    held winner (and vice versa when the exited side is the winner)."""
+    _env(monkeypatch, tmp_path)
+    from strategy import stats, store
+
+    store.log_fill(market_slug="m", condition_id="c", token_id="TOK-UP",
+                   side="UP", price=0.50, size=100.0)
+    store.log_fill(market_slug="m", condition_id="c", token_id="TOK-DN",
+                   side="DOWN", price=0.50, size=100.0)
+    # Exited 40 DOWN (the eventual loser) at 0.50, booked at cost.
+    store.log_close(condition_id="c", market_slug="m", method="naked_exit",
+                    shares=40.0, up_price=None, dn_price=0.50,
+                    cost_basis=20.0, proceeds=20.0, fee=40 * 0.017,
+                    realized_pnl=-40 * 0.017,
+                    forgone_vs_settlement=None,
+                    up_cost_removed=0.0, dn_cost_removed=20.0)
+    store.record_resolution("c", "TOK-UP")
+
+    r = stats.realized()
+    # The 100 UP still held win $1 each; the 60 DOWN still held lose. Cost
+    # was 100 (fills) - 20 (exited basis) = 80; the exit booked -0.68.
+    assert r["realized"] == pytest.approx(100 - 80 - 40 * 0.017)
+    assert r["settled"] == 1
+
+
+def test_pairs_ev_counts_rule_decisions(monkeypatch, tmp_path):
+    """The EV KPI is completion rate x merge capture - exit rate x half-
+    spread, over every rule-triggering one-sided fill (completed, exited, or
+    rode out the window). None before the first decision, not a confident 0."""
+    _env(monkeypatch, tmp_path)
+    from strategy import stats, store
+
+    ev0 = stats.pairs_ev()
+    assert ev0["one_sided"] == 0 and ev0["ev_cents"] is None
+
+    for kind, side in (("PAIR_COMPLETE", "DOWN"), ("PAIR_COMPLETE", "DOWN"),
+                       ("NAKED_EXIT", "UP"), ("PAIR_WINDOW_EXPIRED", "UP")):
+        store.log_event(ts=1000.0, market_slug="m", condition_id="c",
+                        kind=kind, reason=kind, side=side, size=100.0)
+
+    ev = stats.pairs_ev()
+    assert ev["one_sided"] == 4
+    assert ev["completions"] == 2 and ev["exits"] == 1 and ev["expired"] == 1
+    assert ev["completion_rate"] == pytest.approx(0.5)
+    assert ev["exit_rate"] == pytest.approx(0.25)
+    # 0.5 x 16.3 - 0.25 x 3.0 = 8.15 - 0.75.
+    assert ev["ev_cents"] == pytest.approx(7.4)
+    assert stats.snapshot()["pairs_ev"]["one_sided"] == 4, \
+        "the dashboard payload must carry the EV read"

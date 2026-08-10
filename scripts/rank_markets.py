@@ -688,6 +688,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 _DEPTH_RE = re.compile(
     r"top-3 bid depth \$([\d,.]+) <= \$([\d,.]+)", re.IGNORECASE)
 
+# A volume-gate reason embeds its measurement too -- "24h volume $12,906 <
+# $250,000" -- and the VOLUME near-miss log (U34) records it so the stats can
+# answer "how many of these would a looser bar have admitted?".
+_VOLUME_RE = re.compile(
+    r"24h volume \$([\d,.]+) < \$([\d,.]+)", re.IGNORECASE)
+
 
 def _log_rank_near_misses(out, rejected, verdicts, ts=None) -> int:
     """Append this rank's near-misses to run/near_misses.jsonl.
@@ -746,6 +752,73 @@ def _log_rank_near_misses(out, rejected, verdicts, ts=None) -> int:
     with open(RUN / "near_misses.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps(line) + "\n")
     return len(greens)
+
+
+def _log_rank_volume_near_misses(out, rejected, verdicts=None, ts=None) -> int:
+    """Append this rank's volume-rejects to run/volume_near_misses.jsonl.
+
+    The DEPTH near-miss log records only would-fund greens, and U33's triage
+    showed the binding constraint is the VOLUME gate, not depth: on the
+    recorded population, 83 of 110 depth-rejects -- including 5 of the 6
+    near-misses -- would fail the live $250k/24h bar anyway, and the $500
+    depth trial adopted zero new markets because the depth-clear candidates
+    failed live re-verification on volume. That population never reached any
+    log: volume rejects are refused by `tradable` inside `evaluate`, and the
+    depth logger only keeps greens.
+
+    This sibling log records EVERY volume-rejected market whose reason
+    carries a measured 24h volume ("24h volume $X < $Y" parses it out;
+    "volume unknown" is a data gap, not a near-miss, and is skipped but
+    counted). One line per rank, exactly like the depth log, so the stats
+    reader accumulates days, unique markets, and how many measured volumes
+    came within half the bar -- the same evidence shape that licensed the
+    depth trial, applied to the gate that actually binds.
+
+    Returns how many volume-rejects were logged this rank.
+    """
+    vols = []
+    volume_unknown = 0
+    for r in out:
+        if r.get("eligible"):
+            continue
+        reason = r.get("reject_reason") or ""
+        if _cause(reason) != "volume":
+            continue
+        v = _VOLUME_RE.search(reason)
+        if not v:
+            # "volume unknown": gamma never returned a reading. Not a
+            # near-miss -- but count it so the tracker can show the gap
+            # instead of silently undercounting the population.
+            volume_unknown += 1
+            continue
+        vd = verdicts.get(id(r)) if verdicts else None
+        vols.append({
+            "cid": r.get("cid"), "title": r.get("title"),
+            "slug": r.get("slug"),
+            "cause": "volume",
+            "reason": reason,
+            "source": r.get("source"),
+            "volume_measured": float(v.group(1).replace(",", "")),
+            "volume_bar": float(v.group(2).replace(",", "")),
+            "volume_24h": r.get("volume_24h"),
+            "days": r.get("days_to_resolve"),
+            # The allocator verdict travels too, so the tracker can show the
+            # pot and competition of the population, not just its volume.
+            "pot_day": (vd["pot_day"] if vd else r.get("daily") or 0.0),
+            "competition": (vd["competition"] if vd
+                             else r.get("their_score")),
+            "marg_pct_day": vd["marg_pct_day"] if vd else None,
+            "trap": bool(vd and vd.get("trap")),
+        })
+    line = {"ts": ts if ts is not None else time.time(),
+            "scored": len(out), "rejected": rejected,
+            "volume_unknown": volume_unknown,
+            "volumes": vols}
+    RUN.mkdir(exist_ok=True)
+    with open(RUN / "volume_near_misses.jsonl", "a",
+              encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\n")
+    return len(vols)
 
 
 def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
@@ -1082,6 +1155,13 @@ def main() -> None:
         n_greens = _log_rank_near_misses(out, rejected, verdicts)
         if n_greens:
             print(f"near-misses logged: {n_greens} would clear the floor")
+        # The VOLUME tracker (U34): every volume-reject with a measured
+        # reading, for the gate U33 showed actually binds. Same dry-run guard
+        # as the depth log -- an audit must not pollute the evidence.
+        n_vols = _log_rank_volume_near_misses(out, rejected, verdicts)
+        if n_vols:
+            print(f"volume-rejects logged: {n_vols} measured "
+                  "(volume near-miss tracker)")
     n_spread = sum(1 for r in picked if r["source"] == "spread")
     print(f"picked {n_spread} spread / {len(picked) - n_spread} reward\n")
     print(f"{'market':<40}{'src':>7}{'$/day':>7}{'capital':>9}{'ret%/d':>8}")

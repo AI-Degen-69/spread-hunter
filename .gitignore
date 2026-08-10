@@ -20,6 +20,7 @@ run/fleet_state.json
 # rewritten whole on every rank. Both are telemetry the dashboard reads, not
 # source, and neither survives a checkout in any useful form.
 run/near_misses.jsonl
+run/volume_near_misses.jsonl
 run/pipeline.json
 run/trial_depth_report.json
 # recorded market data + backfilled tape (scripts/record_books.py,

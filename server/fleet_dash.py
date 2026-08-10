@@ -414,6 +414,9 @@ def fleet():
             "active_quoting": active_quoting,
             "book_health_ratio": book_health_ratio,
             "gate_refusals": refusal_counts,
+            # U35: the pairs-only rule's measured EV per one-sided fill
+            # (completion rate x merge capture - exit rate x half-spread).
+            "pairs_ev": snap["pairs_ev"],
         },
     }
 
@@ -586,6 +589,180 @@ def near_miss_stats() -> dict:
     }
 
 
+# VOLUME NEAR-MISS TRACKER (U34): the gate that actually binds.
+#
+# U33's triage overturned the depth tracker's premise. Of the recorded
+# depth-reject population, 83 of 110 markets -- including 5 of the 6
+# near-misses -- would fail the live $250k/24h volume gate anyway, and the
+# $500 depth trial adopted zero new markets because the depth-clear
+# candidates failed live re-verification on volume. Depth was never the
+# binding constraint; volume is, and until U34 nothing watched it: volume
+# rejects are refused inside `evaluate`/`tradable`, so they never reached the
+# depth log, which only keeps would-fund greens.
+#
+# The ranker appends every volume-rejected market with a measured 24h volume
+# to run/volume_near_misses.jsonl -- one line per rank, mirroring the depth
+# log -- and this is the accumulated read. Same evidence philosophy: a
+# "small-margin" market (measured volume >= half the bar) is the concrete
+# candidate a loosening to $125k would admit, and the bars license a
+# CONTROLLED TRIAL -- consistency of the volume readings over days, then a
+# staged loosening whose adopted markets' markouts are watched.
+#
+# There is deliberately NO marg-estimate trap arm here: a volume-reject has
+# ALREADY cleared the depth gate (volume is gated after depth in the ranker),
+# so its book is real and a large pot/competition ratio is an opportunity
+# signal, not the empty-book mirage the depth trap catches. The one thing
+# excluded is a MISSING measurement -- that is a data gap, not a near-miss.
+VOLUME_NEAR_MISS_MIN_DAYS = 3.0
+VOLUME_NEAR_MISS_MIN_UNIQUE = 25
+VOLUME_NEAR_MISS_MIN_SMALL_MARGIN = 5
+VOLUME_NEAR_MISS_MIN_STABILITY = 0.5
+VOLUME_NEAR_MISS_LOOKBACK_RANKS = 72
+VOLUME_NEAR_MISS_FILE = RUN / "volume_near_misses.jsonl"
+# Half the volume bar: the "modest loosening" marker, mirroring the depth
+# tracker's 0.5 * depth_bar. A market at >= half the bar is the concrete
+# candidate a $125k trial bar would admit. The choice is DELIBERATE about
+# what it will not do: U33 measured the volume-reject population 1-3 orders
+# of magnitude under the bar, so this count staying at zero is the honest
+# signal that the gate rejects far-misses, not near-misses -- it does not
+# stretch the definition down to a loosening the strategy would not stage.
+VOLUME_NEAR_MISS_FRACTION = 0.5
+
+
+def volume_near_miss_stats() -> dict:
+    """Accumulated volume-reject evidence, and whether it justifies a trial."""
+    ranks: list[dict] = []
+    vols: list[dict] = []
+    volume_unknown_total = 0
+    if VOLUME_NEAR_MISS_FILE.exists():
+        try:
+            with open(VOLUME_NEAR_MISS_FILE, encoding="utf-8") as fh:
+                for ln in fh:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        row = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if not isinstance(row, dict) or "volumes" not in row:
+                        continue
+                    ranks.append(row)
+                    volume_unknown_total += int(row.get("volume_unknown") or 0)
+                    ts = row.get("ts")
+                    for g in row.get("volumes") or []:
+                        if not isinstance(g, dict):
+                            continue
+                        g = dict(g)
+                        g["ts"] = ts
+                        vols.append(g)
+        except Exception:
+            pass
+
+    def _is_trap(g):
+        # A measured volume near or under the bar is DATA; a missing
+        # measurement is a gap. Same `is not None` discipline as the depth
+        # trap -- 0.0 volume is falsy but is a real reading of a market that
+        # trades nothing.
+        v, b = g.get("volume_measured"), g.get("volume_bar")
+        return v is None or not b
+
+    credible = [g for g in vols if not _is_trap(g)]
+    unique_cids = {g.get("cid") for g in credible if g.get("cid")}
+    days = {time.strftime("%Y-%m-%d", time.gmtime(g["ts"]))
+            for g in credible if g.get("ts")}
+    # A volume reject whose measured volume reached at least half the bar: a
+    # loosening to $125k (0.5 * $250k) would have admitted it -- the concrete
+    # candidate list a volume trial would adopt. All-time, any reading, like
+    # the depth tracker's small-margin count.
+    small_margin_cids = {
+        g.get("cid") for g in credible
+        if g.get("volume_measured") and g.get("volume_bar")
+        and g["volume_measured"] >= (VOLUME_NEAR_MISS_FRACTION
+                                      * g["volume_bar"])}
+    # The WHOLE measured population -- the ~80 markets per rank the volume
+    # gate refuses. Distinct from the near-miss set: most are FAR below the
+    # bar, which is itself the finding (the gate is not rejecting
+    # near-misses).
+    watched_cids = {g.get("cid") for g in credible if g.get("cid")}
+
+    # Stability is a fraction of recent RANKS with at least one measured
+    # volume-reject -- the population is persistent by construction, so this
+    # bar is nearly always met when the log is being written; the bar that
+    # binds is small_margin_volume.
+    recent = sorted((r for r in ranks if r.get("ts")),
+                    key=lambda r: -r["ts"])[:VOLUME_NEAR_MISS_LOOKBACK_RANKS]
+    stable_ranks = sum(1 for r in recent
+                       if any(not _is_trap(g)
+                              for g in r.get("volumes") or []))
+    stability = (stable_ranks / len(recent)) if recent else 0.0
+
+    last_by_cid: dict[str, dict] = {}
+    for g in vols:
+        if g.get("cid"):
+            last_by_cid[g["cid"]] = g
+    by_cid: dict[str, float] = {}
+    raw_by_cid: dict[str, float] = {}
+    pot_gaps = 0
+    for cid, g in last_by_cid.items():
+        raw_by_cid[cid] = g.get("pot_day") or 0.0
+        if _is_trap(g):
+            pot_gaps += 1
+            continue
+        by_cid[cid] = g.get("pot_day") or 0.0
+
+    ready = (len(days) >= VOLUME_NEAR_MISS_MIN_DAYS
+             and len(unique_cids) >= VOLUME_NEAR_MISS_MIN_UNIQUE
+             and len(small_margin_cids) >= VOLUME_NEAR_MISS_MIN_SMALL_MARGIN
+             and stability >= VOLUME_NEAR_MISS_MIN_STABILITY)
+    if ready:
+        status = "READY_TO_TRIAL"
+    elif vols:
+        status = "COLLECTING"
+    else:
+        status = "NO_DATA"
+
+    # The closest markets right now: last reading per cid, ranked by how far
+    # along the bar the measured volume is. Rank-time snapshots, not today's
+    # book -- the note on the panel says so.
+    closest: list[dict] = []
+    for cid, g in last_by_cid.items():
+        v, b = g.get("volume_measured"), g.get("volume_bar")
+        if v is None or not b:
+            continue
+        closest.append({
+            "cid": cid, "title": g.get("title"), "slug": g.get("slug"),
+            "volume": v, "bar": b, "ratio": round(v / b, 3),
+            "pot_day": g.get("pot_day"), "days": g.get("days"),
+        })
+    closest.sort(key=lambda m: -m["ratio"])
+    closest = closest[:5]
+
+    return {
+        "status": status,
+        "ranks": len(ranks),
+        "watched": len(watched_cids),
+        "volumes": len(credible),
+        "gaps": len(vols) - len(credible),
+        "volume_unknown_total": volume_unknown_total,
+        "days": len(days), "min_days": VOLUME_NEAR_MISS_MIN_DAYS,
+        "unique_markets": len(unique_cids),
+        "min_unique": VOLUME_NEAR_MISS_MIN_UNIQUE,
+        "small_margin_volume": len(small_margin_cids),
+        "min_small_margin": VOLUME_NEAR_MISS_MIN_SMALL_MARGIN,
+        "stability": round(stability, 3),
+        "min_stability": VOLUME_NEAR_MISS_MIN_STABILITY,
+        "lookback_ranks": VOLUME_NEAR_MISS_LOOKBACK_RANKS,
+        "uniq_pot_day": round(sum(by_cid.values()), 2),
+        "raw_uniq_pot_day": round(sum(raw_by_cid.values()), 2),
+        "pot_gaps": pot_gaps,
+        "volume_bar": CFG.select_min_volume_24h_usd,
+        "half_bar_usd": round(CFG.select_min_volume_24h_usd
+                               * VOLUME_NEAR_MISS_FRACTION),
+        "closest": closest,
+    }
+
+
 @app.get("/api/pipeline")
 def pipeline():
     """The market-selection funnel, live: raw -> filters -> final -> adopted.
@@ -687,6 +864,7 @@ def pipeline():
         "live": live_n,
         "fleet_alive": fleet_alive,
         "near_miss": near_miss_stats(),
+        "volume_near_miss": volume_near_miss_stats(),
     }
 
 
@@ -991,6 +1169,7 @@ PAGE = r"""<!doctype html>
 <section id="view-pipeline" class="pipe-view" hidden>
   <div class="pipe-strip" id="pipeStrip"></div>
   <div class="pipe-near" id="nearMiss"></div>
+  <div class="pipe-near" id="volumeNearMiss"></div>
   <div class="pipe-board" id="pipeBoard">
     <div class="pipe-lane pipe-lane-raw" id="laneRaw"></div>
     <div class="pipe-arrow" aria-hidden="true">→</div>
@@ -1127,6 +1306,7 @@ async function tick(){
   }
 
   const t=s.totals;
+  const pe=t.pairs_ev||{};
   const activeCount = s.markets.filter(m => (m.income || 0) > 0).length;
   // Markets the fleet visited and could not read. `visit` now records the
   // failure on every early-return path, so this counts markets that are
@@ -1360,7 +1540,13 @@ async function tick(){
       t.income_twa_day === null ? '—' : usd(t.income_twa_day)+'/day',
       t.income_twa_day === null ? 'need 2 samples' : (t.income_hours !== null ? t.income_hours+'h time-weighted avg hold rate' : '15h time-weighted avg hold rate'),
       'proj', false,
-      'Solid average daily yield sustained over time, smoothing out position enter/exit noise')
+      'Solid average daily yield sustained over time, smoothing out position enter/exit noise'),
+    K('Pairs EV / one-sided fill', pe.ev_cents === null ? '—' : pe.ev_cents.toFixed(1)+'¢',
+      pe.one_sided
+        ? pe.completions+' completed · '+pe.exits+' exited · '+pe.expired+' rode out · '+pe.one_sided+' fills'
+        : 'no one-sided fills yet',
+      pe.ev_cents === null ? 'dim' : cls(pe.ev_cents), false,
+      "The pairs-only rule's measured EV per one-sided fill: completion rate × "+pe.complete_gain_cents+'¢ (merge capture) − exit rate × '+pe.exit_cost_cents+'¢ (half-spread). Positive means completing pairs instead of holding naked legs into the drift pays.')
   ];
 
   // ---- go-live readiness: is this trustworthy enough for real dollars ----
@@ -1467,7 +1653,7 @@ async function tick(){
     const position = orderDepth(m);
     const events = m.events || [];
     const latest = events[0];
-    const actionClass = latest ? ({FILLED:'up',QUOTING:'proj',HEDGED:'gold',MERGED:'up',EXITED:'down',BLOCKED:'down',ERROR:'alert-tx',WAITING:'dim'}[latest.kind] || 'dim') : 'dim';
+    const actionClass = latest ? ({FILLED:'up',QUOTING:'proj',HEDGED:'gold',MERGED:'up',EXITED:'down',BLOCKED:'down',ERROR:'alert-tx',WAITING:'dim',PAIR_COMPLETE:'up',NAKED_EXIT:'gold',PAIR_WINDOW_EXPIRED:'down'}[latest.kind] || 'dim') : 'dim';
     const actionHtml = latest
       ? `<div class="action-cell" title="${esc(latest.reason)}"><span class="action-pill ${actionClass}" style="background:rgba(255,255,255,.06)">${esc(latest.kind)}</span><span class="dim" style="font-size:10px;margin-left:6px">${hms(Math.max(0,s.now-latest.ts))} ago</span><div class="action-recent"><div class="event-line">${esc(latest.reason || latest.reason_code)}</div>${events.slice(1,3).map(e=>`<div class="event-line dim">${esc(e.kind)} · ${esc(e.reason || e.reason_code)}</div>`).join('')}</div></div>`
       : `<span class="dim">No event telemetry</span>`;
@@ -1619,6 +1805,38 @@ function pipeNearMiss(nm){
     (causes?`<div class="pipe-near-sub dim mono">credible green by gate: ${causes}</div>`:'')+
     `<div class="pipe-near-note">${note}</div>`;
 }
+function pipeVolumeNearMiss(nm){
+  if(!nm) return '';
+  const st=nm.status;
+  const badge=st==='READY_TO_TRIAL'?'<span class="pill pill-live">READY TO TRIAL</span>'
+    :st==='COLLECTING'?'<span class="pill pill-wait">COLLECTING</span>'
+    :'<span class="pill pill-wait">NO DATA</span>';
+  const tile=(label,val,cls)=>`<span class="pn-tile"><span class="pn-tl">${label}</span><span class="pn-tv ${cls||''}">${val}</span></span>`;
+  const half=Math.round((nm.half_bar_usd||0)/1000);
+  const bar=Math.round((nm.volume_bar||250000)/1000);
+  const closest=(nm.closest||[]).slice(0,3).map(m=>{
+    const t=(m.title||'').slice(0,44);
+    return `<div class="gate-ex" title="${esc(t)} · ${esc(m.slug||'')}"><div class="gate-ex-t">${esc(t)}<span class="r"> — ${(100*(m.ratio||0)).toFixed(1)}% of bar · $${Math.round((m.volume||0)/1000)}K/24h${m.pot_day?' · pot $'+Math.round(m.pot_day)+'/d':''}</span></div></div>`;
+  }).join('');
+  const note=st==='READY_TO_TRIAL'
+    ?`<span class="up bold">Enough consistent evidence — the next step is a controlled volume trial (loosen to half the bar, watch markouts), not an immediate gate change.</span>`
+    :(st==='NO_DATA'
+      ?`<span class="dim">No volume-reject log yet — the ranker writes <span class="mono">run/volume_near_misses.jsonl</span> from the next rank after it runs the updated code.</span>`
+      :`<span class="dim">Watching every market the $${bar}k/24h gate refuses. A small-margin market (measured volume ≥ $${half}k) is the concrete candidate a loosening would admit — U33 showed most rejects are 1-3 orders of magnitude under the bar, so a low count is the honest read, not a malfunction.</span>`);
+  return `<div class="pipe-near-hdr"><span class="pipe-near-t">VOLUME NEAR-MISS TRACKER</span>${badge}</div>`+
+    `<div class="pipe-near-body">`+
+    tile('watched',`${nm.watched||0}`,nm.watched?'':'dim')+
+    tile('days',`${nm.days||0}/${nm.min_days}`,(nm.days||0)>=nm.min_days?'up':'proj')+
+    tile('unique markets',`${nm.unique_markets||0}/${nm.min_unique}`,(nm.unique_markets||0)>=nm.min_unique?'up':'proj')+
+    tile(`≥ half bar (≥$${half}k)`,`${nm.small_margin_volume||0}/${nm.min_small_margin}`,(nm.small_margin_volume||0)>=nm.min_small_margin?'up':'proj')+
+    tile('stability (72 ranks)',`${Math.round(100*(nm.stability||0))}%`,(nm.stability||0)>=nm.min_stability?'up':'proj')+
+    tile('pot on the table',`$${nm.uniq_pot_day||0}/d`,'')+
+    ((nm.gaps||nm.volume_unknown_total)?`<span class="pn-tile"><span class="pn-tl">unmeasured</span><span class="pn-tv dim">${(nm.gaps||0)+(nm.volume_unknown_total||0)} (not counted)</span></span>`:'')+
+    tile('ranks logged',`${nm.ranks||0}`,'')+
+    `</div>`+
+    (closest?`<div class="pipe-near-sub dim">closest to the bar now (last reading — rank-time snapshot, not today's book):</div><div class="gate-exs">${closest}</div>`:'')+
+    `<div class="pipe-near-note">${note}</div>`;
+}
 function pipeRaw(snap){
   const c=snap.counts||{};
   const raw=snap.raw||{};
@@ -1649,6 +1867,7 @@ async function tickPipeline(){
   const snap=s.snapshot||null;
   $('pipeStrip').innerHTML=pipeStrip(s,snap);
   $('nearMiss').innerHTML=pipeNearMiss(s.near_miss||null);
+  $('volumeNearMiss').innerHTML=pipeVolumeNearMiss(s.volume_near_miss||null);
   $('laneRaw').innerHTML=snap?pipeRaw(snap):pipeLane('① RAW','','-','',pipeEmpty('waiting for the next rank…'));
   $('laneFilter').innerHTML=snap?pipeFilter(snap):pipeLane('② FILTERS','','-','',pipeEmpty('waiting for the next rank…'));
   $('laneFinal').innerHTML=snap?pipeFinal(snap):pipeLane('③ FINAL STAGE','','-','',pipeEmpty('waiting for the next rank…'));

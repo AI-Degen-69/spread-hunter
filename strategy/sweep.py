@@ -142,6 +142,36 @@ def _affordable_cross_size(book_asks: dict, requested: float,
     return size
 
 
+def _pair_completion_size(asks: dict, requested: float, fill_cost: float,
+                          max_pair_cost: float, available_usd: float) -> float:
+    """Shares of the missing leg buyable at a price that keeps the completed
+    pair under `max_pair_cost`, within the wallet's remaining committed room.
+
+    The pairs-only rule (U35) buys the light leg at the ask to complete a
+    one-sided fill. Two caps bind at once, and both are walked here like
+    `_affordable_cross_size` walks the emergency-hedge ask ladder: the pair
+    must stay under `max_pair_cost` (a completion that costs more than the
+    $1.00 payout is a guaranteed loss), and the wallet's committed budget must
+    not be exceeded. Stops the walk at the first ask level where
+    `fill_cost + price >= max_pair_cost` -- deeper, worse levels would break
+    the completion bound even if the wallet could afford them.
+    """
+    remaining = max(float(requested), 0.0)
+    budget = max(float(available_usd), 0.0)
+    size = 0.0
+    for price in sorted(asks):
+        if remaining <= 1e-9 or budget <= 1e-9:
+            break
+        if fill_cost + price >= max_pair_cost:
+            break
+        depth = max(float(asks.get(price, 0.0)), 0.0)
+        take = min(depth, remaining, (budget / price) if price > 0 else 0.0)
+        size += take
+        remaining -= take
+        budget -= take * price
+    return size
+
+
 def _affordable_rest_size(requested: float, price: float,
                           available_usd: float, market_room_usd: float) -> int:
     """Largest resting order that fits BOTH the wallet and this market's cap.
@@ -613,6 +643,10 @@ def _process_fills(st: "MarketState", m, up, dn, now: float) -> int:
                 st.inv.down_cost += f.size * f.price
             st.inv.fills += 1
             applied += 1
+            # U35 pairs-only rule: the 15-minute action window is dated off
+            # the most recent fill, so a fill that lands now opens (or
+            # re-opens) the window.
+            st.last_fill_ts = now
             store.log_fill(
                 market_slug=m.market_slug, condition_id=m.condition_id, token_id=f.token_id,
                 side=f.side, price=f.price, size=f.size,
@@ -640,6 +674,175 @@ def _process_fills(st: "MarketState", m, up, dn, now: float) -> int:
             log.info("FILL %-28s %-4s %.0fsh @ %.3f",
                      st.title[:28], f.side, f.size, f.price)
     return applied
+
+
+def _apply_pairs_rule(st: "MarketState", m, up, dn, cfg, ctx: SweepContext,
+                      committed_states) -> dict:
+    """U35 pairs-only rule: resolve a one-sided fill within its window.
+
+    Measured on the 112h clean sample: merged pairs were 7/7 profitable at
+    +16.3c/share, while a naked leg held past 15 minutes drifted -18.5c/share
+    by the 1h mark. The rule therefore turns every recent one-sided fill into
+    either a COMPLETED pair -- cross the missing leg at ask when
+    `heavy_avg + ask < max_pair_cost` (the pair is guaranteed sub-$1.00, and
+    the merge step later in this same sweep redeems it at parity) -- or an
+    EXIT of the naked leg at the best bid (pay the ~3c half-spread instead of
+    the drift). A fill older than `pairs_exit_window_sec` is left alone; the
+    rule's license is the 15-minute window, not naked-position management in
+    general.
+
+    Returns the verdict dict for the live payload. Side effects: the pair
+    completion crosses the book (fills + inventory + close accounting via the
+    subsequent merge), the exit books a `closes` row with method='naked_exit'
+    (one leg only -- the readers in stats.py are side-aware for it), and both
+    arms record a market event so the EV KPI can count them.
+    """
+    if not cfg.enable_pairs_rule:
+        return {"action": "disabled"}
+    naked = abs(st.inv.up_shares - st.inv.down_shares)
+    if naked <= 1e-9:
+        return {"action": "balanced"}
+    if st.last_fill_ts is None:
+        # A naked position with no fill clock (pre-U35 inventory) is out of
+        # scope: the rule acts on fills, not on whatever predates it.
+        return {"action": "no_fill_clock"}
+
+    age = ctx.now - st.last_fill_ts
+    if age > cfg.pairs_exit_window_sec:
+        # Window expired. Record the expiry ONCE per fill -- the handled
+        # stamp is per fill, so a later fill re-opens the window.
+        if st.pair_rule_handled_ts != st.last_fill_ts:
+            st.pair_rule_handled_ts = st.last_fill_ts
+            heavy_side = ("UP" if st.inv.up_shares > st.inv.down_shares
+                          else "DOWN")
+            _record_event(st, ctx.now, "PAIR_WINDOW_EXPIRED",
+                          f"one-sided fill {age / 60:.0f}m old rode out the "
+                          f"{cfg.pairs_exit_window_sec / 60:.0f}min window "
+                          f"({naked:.0f}sh {heavy_side} still held)",
+                          side=heavy_side, size=naked,
+                          reason_code="PAIR_EXPIRED", force=True)
+            log.info("PAIR_WINDOW_EXPIRED %-28s %.0fsh %s after %.0fm",
+                     st.title[:28], naked, heavy_side, age / 60.0)
+        return {"action": "expired", "age": round(age, 1)}
+
+    heavy_side = "UP" if st.inv.up_shares > st.inv.down_shares else "DOWN"
+    light_side = "DOWN" if heavy_side == "UP" else "UP"
+    heavy_book = up if heavy_side == "UP" else dn
+    light_book = up if light_side == "UP" else dn
+    fill_cost = st.inv.avg(heavy_side)
+    ask = light_book.get("best_ask")
+
+    # COMPLETE: buy the missing leg at ask when the pair stays under the cap.
+    # The completion is a TAKER order (the mirror of the emergency-hedge
+    # crossing in `_requote`), capped by both the pair-cost bound and the
+    # wallet's committed room. A partial completion is a real outcome -- the
+    # residue stays naked and the rule re-runs next sweep, still inside the
+    # window.
+    if ask is not None and ask > 0:
+        available = max(cfg.max_committed_usd
+                        - fleet_committed_cost(committed_states), 0.0)
+        cross_size = _pair_completion_size(
+            light_book.get("asks") or {}, naked, fill_cost,
+            cfg.max_pair_cost, available)
+        if cross_size >= 1.0:
+            asks = light_book.get("asks") or {}
+            qid = store.log_quote(
+                market_slug=m.market_slug, condition_id=m.condition_id,
+                token_id=light_book["token_id"], side=light_side,
+                price=ask, size=cross_size, queue_ahead=0.0,
+                mid=mid_price(light_book.get("best_bid"), ask),
+                edge_vs_mid=None, t_remaining=None,
+            )
+            got = 0.0
+            # max_price is defense-in-depth on top of _pair_completion_size's
+            # walk: the size math already refuses levels where
+            # fill_cost + price >= max_pair_cost, but the cross primitive's
+            # own documented guard must also refuse them, so a future change
+            # to the size math cannot silently walk a completion past the cap
+            # (a pair that costs >= $1.00 is a guaranteed loss after gas).
+            max_price = max(cfg.max_pair_cost - fill_cost, 0.0)
+            for f in st.engine.cross(light_book["token_id"], light_side,
+                                     cross_size, asks, ctx.now,
+                                     max_price=max_price):
+                if f.side == "UP":
+                    st.inv.up_shares += f.size
+                    st.inv.up_cost += f.size * f.price
+                else:
+                    st.inv.down_shares += f.size
+                    st.inv.down_cost += f.size * f.price
+                st.inv.fills += 1
+                got += f.size
+                # crossed=True is load-bearing downstream: kpi.py excludes
+                # these from the maker fill rate and charges the taker fee.
+                store.log_fill(
+                    quote_id=qid, market_slug=m.market_slug,
+                    condition_id=m.condition_id, token_id=f.token_id,
+                    side=f.side, price=f.price, size=f.size,
+                    mid_at_post=ask, edge_vs_mid=None, queue_waited=0.0,
+                    seconds_to_fill=0.0, crossed=True, reason=f.reason,
+                )
+            if got + 1e-9 < cross_size:
+                store.mark_cancelled([qid])
+            pair_cost = fill_cost + ask
+            _record_event(st, ctx.now, "PAIR_COMPLETE",
+                          f"completed pair: bought {light_side} {got:.0f}sh "
+                          f"@ ~{ask:.3f} (fill {fill_cost:.3f} + ask "
+                          f"{ask:.3f} < {cfg.max_pair_cost:.3f})",
+                          side=light_side, size=got,
+                          reason_code="PAIR_COMPLETE", force=True)
+            log.info("PAIR_COMPLETE %-28s %-4s %.0fsh @ %.3f (pair %.4f)",
+                     st.title[:28], light_side, got, ask, pair_cost)
+            return {"action": "complete", "side": light_side, "size": got,
+                    "price": ask, "pair_cost": round(pair_cost, 4)}
+
+    # EXIT: the pair is not fillable under the cap (or the wallet cannot
+    # afford it), so sell the naked leg at the best bid rather than hold it
+    # into the drift. Capped at the bid ladder's depth, like profit_take.
+    bid = heavy_book.get("best_bid")
+    if bid and bid > 0:
+        bids = heavy_book.get("bids") or {}
+        size = min(naked, sum(bids.values()))
+        if size >= 1.0:
+            proceeds, avg_price = profit_take._walk(bids, size)
+            fee = size * cfg.profit_take_fee_per_share
+            cost_basis = size * fill_cost
+            realized = proceeds - cost_basis - fee
+            # Ledger first, memory second -- same discipline as `_manage_exits`:
+            # a close must never exist in memory without also existing on disk,
+            # or a restart rebuilds a position the live process already sold.
+            if heavy_side == "UP":
+                up_price, dn_price = avg_price, None
+                up_removed, dn_removed = cost_basis, 0.0
+            else:
+                up_price, dn_price = None, avg_price
+                up_removed, dn_removed = 0.0, cost_basis
+            store.log_close(
+                condition_id=m.condition_id, market_slug=m.market_slug,
+                method="naked_exit", shares=size, up_price=up_price,
+                dn_price=dn_price, cost_basis=cost_basis, proceeds=proceeds,
+                fee=fee, realized_pnl=realized,
+                # The leg would have paid $1 or $0 at resolution -- unknown,
+                # so no forgone figure is recorded rather than a guessed one.
+                forgone_vs_settlement=None,
+                up_cost_removed=up_removed, dn_cost_removed=dn_removed)
+            if heavy_side == "UP":
+                st.inv.up_shares -= size
+                st.inv.up_cost -= cost_basis
+            else:
+                st.inv.down_shares -= size
+                st.inv.down_cost -= cost_basis
+            _record_event(st, ctx.now, "NAKED_EXIT",
+                          f"exited naked {heavy_side} {size:.0f}sh @ "
+                          f"{avg_price:.3f} (pair not fillable under "
+                          f"{cfg.max_pair_cost:.3f})",
+                          side=heavy_side, size=size,
+                          reason_code="NAKED_EXIT", force=True)
+            log.info("NAKED_EXIT %-28s %-4s %.0fsh @ %.3f pnl %+.2f",
+                     st.title[:28], heavy_side, size, avg_price, realized)
+            return {"action": "exit", "side": heavy_side, "size": size,
+                    "price": round(avg_price, 4), "realized_pnl": realized}
+
+    return {"action": "deferred", "why": "no fillable pair and no exit bid"}
 
 
 def _advance_gate(st: "MarketState", m, up, dn, cfg, ctx: SweepContext):
@@ -1020,7 +1223,7 @@ def _requote(st: "MarketState", m, up, dn, cfg, ctx: SweepContext,
 
 
 def _score_and_publish(st: "MarketState", m, up, dn, cfg, ctx: SweepContext,
-                       mg: dict, pt: dict, why) -> None:
+                       mg: dict, pt: dict, why, pair: dict | None = None) -> None:
     """Measure the reward share and write the market's live payload."""
     bq1, bq2 = rewards.book_scores(up, dn, cfg.max_spread_from_mid,
                                    cfg.min_quote_shares)
@@ -1030,6 +1233,27 @@ def _score_and_publish(st: "MarketState", m, up, dn, cfg, ctx: SweepContext,
     # Feed the rolling window the allocator averages over, so sizing responds
     # to the competition's typical depth rather than to one lucky snapshot.
     st.observe_theirs(ctx.now, theirs, cfg.rank_sample_window_sec)
+
+    # HEDGE CENSUS (U35), recorded every sweep: was a fillable sub-$1.00 pair
+    # present at the touch? The table and its Phase A census reader were
+    # written for this run and never switched on -- 0 rows through 112 hours
+    # -- and the pairs-only rule's completion rate is only interpretable
+    # against it. `pair_cost_at_touch = ask + ask - reward_offset`: the pair
+    # cost if we rest one offset under each ask, the same basis the census
+    # comment defines. A missing ask on either side is a data gap, not a
+    # fillable-pair reading -- skipped, exactly like the volume tracker.
+    try:
+        up_ask = up.get("best_ask")
+        dn_ask = dn.get("best_ask")
+        if up_ask is not None and dn_ask is not None:
+            pair_cost_at_touch = up_ask + dn_ask - cfg.reward_offset
+            store.record_hedge_census(
+                m.condition_id, m.market_slug, up_ask, dn_ask,
+                pair_cost_at_touch,
+                pair_cost_at_touch < cfg.max_pair_cost, ctx.now)
+    except Exception as e:
+        # A telemetry write must never stop the trading loop.
+        log.warning("hedge census failed for %s: %s", st.title[:30], e)
     store.log_reward_sample(
         ts=ctx.now, market_slug=m.market_slug, condition_id=m.condition_id,
         our_score=ours, market_score=theirs,
@@ -1076,6 +1300,9 @@ def _score_and_publish(st: "MarketState", m, up, dn, cfg, ctx: SweepContext,
                           else st.inv.avg("DOWN"))),
         "pair_paid": (min(st.inv.up_shares, st.inv.down_shares)
                       * (st.inv.avg("UP") + st.inv.avg("DOWN"))),
+        # U35: what the pairs-only rule did with a one-sided fill this sweep
+        # (complete | exit | expired | deferred | balanced | disabled).
+        "pairs_rule": pair or {"action": "none"},
         "gate": st.gate,
         # Surfaced because it silently changes the close threshold: a close
         # booked at -0.3c/sh is correct under scarcity and a bug without it,
@@ -1154,10 +1381,15 @@ def sweep(state: "MarketState", ctx: SweepContext) -> SweepOutcome:
     up, dn = books
 
     fills = _process_fills(state, m, up, dn, ctx.now)
+    # The pairs-only rule runs before the gate and exits so a pair completed
+    # here is merged (or a naked leg exited) in the SAME sweep's `_manage_exits`
+    # -- waiting a full rotation would leave the completed pair -- or the
+    # naked residue -- sitting for another 30-60s for no reason.
+    pair = _apply_pairs_rule(state, m, up, dn, cfg, ctx, committed_states)
     cfg, prev_gate = _advance_gate(state, m, up, dn, cfg, ctx)
     mg, pt = _manage_exits(state, m, up, dn, cfg, ctx)
     why = _requote(state, m, up, dn, cfg, ctx, committed_states)
-    _score_and_publish(state, m, up, dn, cfg, ctx, mg, pt, why)
+    _score_and_publish(state, m, up, dn, cfg, ctx, mg, pt, why, pair)
 
     open_orders = state.engine.open_orders()
     if open_orders:

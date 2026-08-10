@@ -582,6 +582,30 @@ class MakerConfig:
     max_cost_per_market: float = 400.0
     max_open_markets: int = 3
 
+    # --- pairs-only rule (U35): what happens to a one-sided fill -------------
+    #
+    # Measured on the 112h clean sample (Session 36 / U32): merged pairs were
+    # 7/7 positive at +16.3c/share with zero variance, while a naked leg held
+    # past 15 minutes drifted -18.5c/share by the 1h markout -- someone was
+    # betting against every fill. The rule converts each one-sided fill into
+    # either a COMPLETED pair (cross the missing leg at ask when the pair
+    # stays under `max_pair_cost`, then merge at parity -- the proven +16c
+    # capture) or a SAME-WINDOW EXIT of the naked leg at the best bid (pay
+    # the ~3c half-spread instead of the drift). Switchable like every other
+    # behavioural change here, so the rule can be measured on its own.
+    enable_pairs_rule: bool = True
+    # How long after a one-sided fill the rule may still act. 15 minutes is
+    # where the measured drift is still ~0 (+0.09c/share at the 5m horizon)
+    # and long before the 1h mark where it is -18.5c.
+    pairs_exit_window_sec: float = 900.0
+    # The EV formula's fixed payoffs (cents per one-sided fill), measured
+    # 2026-08-10: a completion pays the merge capture on completed pairs
+    # (+$49.46 on 302.5 shares = +16.3c, 7/7 profitable); an exit costs the
+    # half-spread (~2-3c). The RATES come from the rule's own decisions; the
+    # dashboard KPI is completion_rate x gain - exit_rate x cost.
+    pairs_complete_gain_cents: float = 16.3
+    pairs_exit_cost_cents: float = 3.0
+
     # --- experiment end criteria (decisive test of the maker mechanism) -----
     # Phase A (census): observe this many DISTINCT live markets and measure how
     # often a fillable sub-$1.00 hedged pair exists at ask-1tick. Below the
@@ -662,6 +686,9 @@ def load() -> MakerConfig:
     trial = os.environ.get("MAKER_DEPTH_TRIAL_USD") or ""
     if trial.strip():
         kw["select_min_top3_depth_usd_trial"] = float(trial)
+    pr = os.environ.get("MAKER_PAIRS_RULE") or ""
+    if pr.strip():
+        kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
     return MakerConfig(**kw)
 # hook probe
 # hook probe

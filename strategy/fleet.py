@@ -314,6 +314,13 @@ class MarketState:
         # purpose: it feeds the pairing rate against fills observed in the same
         # window, and the durable record is the `closes` table.
         self.merged_shares = 0.0
+        # U35 pairs-only rule. `last_fill_ts` is when the most recent fill
+        # landed -- rebuilt from the fills ledger here so the 15-minute action
+        # window survives a restart; `pair_rule_handled_ts` marks which fill
+        # the rule already declared window-expired, so that event is recorded
+        # once per fill rather than on every sweep while the window stays shut.
+        self.last_fill_ts = getattr(self.inv, "last_fill_ts", None)
+        self.pair_rule_handled_ts: float | None = None
         # Rolling (ts, theirs) observations. One snapshot sized the entire
         # fleet on 2026-07-29 and read a competing score of 35 for a market
         # that measured 3,727 live -- a 100x error, and the reason the
