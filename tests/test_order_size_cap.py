@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategy.config import load as load_cfg           # noqa: E402
-from strategy.fleet import _affordable_rest_size       # noqa: E402
+from strategy.sweep import _affordable_rest_size       # noqa: E402
 
 
 # --- the regression itself ---------------------------------------------------

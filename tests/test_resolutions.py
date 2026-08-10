@@ -335,7 +335,7 @@ def test_a_resolved_market_never_fetches_its_book(monkeypatch, tmp_path):
 
     def _boom(*a, **k):
         raise AssertionError("book fetch attempted on a resolved market")
-    monkeypatch.setattr("strategy.fleet.full_book", _boom)
+    monkeypatch.setattr("strategy.sweep.full_book", _boom)
 
     st = MarketState(_resolved_spec(), load_cfg())
     st.inv.up_shares = 84.0
@@ -366,7 +366,7 @@ def test_a_resolved_market_with_no_prior_live_payload_still_settles(
     from strategy.config import load as load_cfg
     from strategy.fleet import MarketState, visit
 
-    monkeypatch.setattr("strategy.fleet.full_book",
+    monkeypatch.setattr("strategy.sweep.full_book",
                         lambda *a, **k: (_ for _ in ()).throw(
                             AssertionError("book fetch attempted")))
 

@@ -14,7 +14,8 @@ orders and marks untouched; only a failure persisting past the window gets the
 full cancel+stamp treatment. A recovered book resets the clock.
 """
 from strategy.config import load as load_cfg
-from strategy.fleet import BOOK_GATE_CONFIRM_SEC, MarketState, visit
+from strategy.fleet import MarketState, visit
+from strategy.sweep import BOOK_GATE_CONFIRM_SEC
 
 
 def _spec(cid="cond-1"):
@@ -78,7 +79,7 @@ def test_a_transient_depth_dip_does_not_cancel_or_stamp(monkeypatch, tmp_path):
     dashboard then keeps showing live figures instead of flashing STALE/ERROR
     and a fake full-cost loss on every venue blip."""
     st = _make_state(monkeypatch, tmp_path)
-    monkeypatch.setattr("strategy.fleet.full_book", _books_yes_deep)
+    monkeypatch.setattr("strategy.sweep.full_book", _books_yes_deep)
 
     visit(st, bot_cfg=_BotCfg(), now=100.0)
 
@@ -98,7 +99,7 @@ def test_a_persistent_depth_failure_past_the_window_cancels_and_stamps(
     protection the depth gate exists for -- once the failure outlives the
     confirmation window."""
     st = _make_state(monkeypatch, tmp_path)
-    monkeypatch.setattr("strategy.fleet.full_book", _books_yes_deep)
+    monkeypatch.setattr("strategy.sweep.full_book", _books_yes_deep)
 
     visit(st, bot_cfg=_BotCfg(), now=100.0)
     assert st.err == ""
@@ -118,14 +119,14 @@ def test_a_recovered_book_resets_the_confirmation_clock(monkeypatch, tmp_path):
     """A blip that recovers must not accumulate toward a false confirmation:
     the next successful visit clears the clock and quotes again."""
     st = _make_state(monkeypatch, tmp_path)
-    monkeypatch.setattr("strategy.fleet.recent_trades", lambda *a, **k: {})
-    monkeypatch.setattr("strategy.fleet.full_book", _books_yes_deep)
+    monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
+    monkeypatch.setattr("strategy.sweep.full_book", _books_yes_deep)
 
     visit(st, bot_cfg=_BotCfg(), now=100.0)
     assert st.book_gate_fail_since == 100.0
 
     # Book recovers one rotation later: both sides deep now.
-    monkeypatch.setattr("strategy.fleet.full_book",
+    monkeypatch.setattr("strategy.sweep.full_book",
                         lambda host, token: _deep_book(token))
     visit(st, bot_cfg=_BotCfg(), now=101.0)
 
@@ -143,7 +144,7 @@ def test_a_transient_fetch_failure_also_holds_then_fires(monkeypatch,
 
     def _boom(host, token):
         raise ConnectionError("venue timeout")
-    monkeypatch.setattr("strategy.fleet.full_book", _boom)
+    monkeypatch.setattr("strategy.sweep.full_book", _boom)
 
     visit(st, bot_cfg=_BotCfg(), now=100.0)
     assert st.err == ""
@@ -161,14 +162,14 @@ def test_confirmed_failure_then_recovery_requotes(monkeypatch, tmp_path):
     """End to end: persistent failure fires the cancel+stamp; when the book
     comes back, the market requotes and clears its error."""
     st = _make_state(monkeypatch, tmp_path)
-    monkeypatch.setattr("strategy.fleet.recent_trades", lambda *a, **k: {})
-    monkeypatch.setattr("strategy.fleet.full_book", _books_yes_deep)
+    monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
+    monkeypatch.setattr("strategy.sweep.full_book", _books_yes_deep)
 
     visit(st, bot_cfg=_BotCfg(), now=100.0)
     visit(st, bot_cfg=_BotCfg(), now=100.0 + BOOK_GATE_CONFIRM_SEC + 0.01)
     assert "NO: top-3 bid depth" in st.err
 
-    monkeypatch.setattr("strategy.fleet.full_book",
+    monkeypatch.setattr("strategy.sweep.full_book",
                         lambda host, token: _deep_book(token))
     visit(st, bot_cfg=_BotCfg(), now=200.0)
 

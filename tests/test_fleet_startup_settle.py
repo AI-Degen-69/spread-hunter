@@ -44,7 +44,7 @@ def test_startup_settle_zeroes_phantom_inventory(monkeypatch, tmp_path):
     assert st.inv.up_shares == 100.0          # phantom, rebuilt from fills
     assert st.inv.up_cost == 44.0
 
-    settled, freed = sweep.settle_startup_resolved(
+    settled, freed = sweep._settle_startup_resolved(
         [st], frozenset({"cond-1"}), now=2000.0)
 
     assert settled == 1
@@ -72,7 +72,7 @@ def test_startup_settle_leaves_unresolved_markets_alone(monkeypatch, tmp_path):
     # No `record_resolution` was called, so `store.resolved_cids()` is empty
     # and the pass receives that empty set -- the market must survive.
     st = fleet.MarketState(_spec(), load_cfg())
-    settled, freed = sweep.settle_startup_resolved(
+    settled, freed = sweep._settle_startup_resolved(
         [st], frozenset(), now=2000.0)
 
     assert settled == 0
@@ -94,7 +94,7 @@ def test_startup_settle_only_affects_resolved_members(monkeypatch, tmp_path):
 
     st_res = fleet.MarketState(_spec(cid="cond-res"), load_cfg())
     st_live = fleet.MarketState(_spec(cid="cond-live"), load_cfg())
-    settled, freed = sweep.settle_startup_resolved(
+    settled, freed = sweep._settle_startup_resolved(
         [st_res, st_live], frozenset({"cond-res"}), now=2000.0)
 
     assert settled == 1
@@ -116,7 +116,7 @@ def test_startup_settle_is_idempotent_with_visit(monkeypatch, tmp_path):
     store.record_resolution("cond-1", "TOK-UP")
 
     st = fleet.MarketState(_spec(), load_cfg())
-    sweep.settle_startup_resolved([st], frozenset({"cond-1"}), now=1000.0)
+    sweep._settle_startup_resolved([st], frozenset({"cond-1"}), now=1000.0)
 
     fleet.visit(st, bot_cfg=None, now=3000.0,
                 resolved_cids=frozenset({"cond-1"}))
@@ -141,7 +141,7 @@ def test_startup_settle_resolved_market_with_no_inventory_is_not_counted(
     store.record_resolution("cond-1", "TOK-UP")
 
     st = fleet.MarketState(_spec(), load_cfg())
-    settled, freed = sweep.settle_startup_resolved(
+    settled, freed = sweep._settle_startup_resolved(
         [st], frozenset({"cond-1"}), now=2000.0)
 
     assert settled == 0
@@ -155,7 +155,7 @@ def test_startup_settle_empty_fleet_is_a_noop():
     settle, no error."""
     from strategy import fleet, sweep
 
-    settled, freed = sweep.settle_startup_resolved(
+    settled, freed = sweep._settle_startup_resolved(
         [], frozenset({"cond-1"}), now=2000.0)
 
     assert settled == 0
