@@ -85,6 +85,17 @@ if ($FreshRun) {
 
 $env:MAKER_DB = "run/fleet.db"
 
+# STAGED GATE TRIALS (U36, operator decision 2026-08-10). The universe is
+# narrow -- 2 eligible of 205 scored -- and the funnel audit measured the
+# depth trial alone ($1,000 -> $750) admits 0 additional markets today while
+# a $200k volume bar admits the $235-242k would-fund population. Both bars
+# are run as TRIALS: adopted markets are tagged trial_depth_usd /
+# trial_volume_usd in run/markets.json and their markouts are the decision
+# evidence before either bar becomes permanent. Set to "" to run the
+# permanent bars (or override per-run with --trial-depth / --trial-volume).
+$env:MAKER_DEPTH_TRIAL_USD = "500"
+$env:MAKER_VOLUME_TRIAL_USD = "125000"
+
 # 3. Start hidden. The supervisor owns the fleet, the dashboard, the ranker
 # and the universe watcher as children, and children inherit the parent's
 # hidden console -- so one hidden start yields five windowless processes, not

@@ -350,6 +350,22 @@ class MakerConfig:
     # made permanent. Overridable from MAKER_DEPTH_TRIAL_USD; the ranker's own
     # `--trial-depth` flag wins over both.
     select_min_top3_depth_usd_trial: float | None = None
+    # VOLUME-GATE TRIAL (U36). Same staging contract as the depth trial above:
+    # when set, the RANKER gates 24h volume on this bar instead of
+    # `select_min_volume_24h_usd`; adopted markets are tagged `trial_volume_usd`
+    # and their markouts are the decision evidence. Measured 2026-08-10 funnel
+    # audit: of 54 markets that cleared depth but failed volume, only 2 would
+    # fund even with the gate fully lifted, and the top of that population
+    # sits at $235-242k -- so the honest trial bar is $200k (a 20% staged
+    # loosening), NOT the half-bar $125k the depth tracker's convention would
+    # suggest (U33 measured the volume-reject population 1-3 orders of
+    # magnitude under the bar; a $125k bar admits nothing). The depth trial
+    # alone ($1,000 -> $750) admits 0 additional eligible markets today -- the
+    # depth near-miss population has 3-25x-thin volume -- which is why the
+    # volume trial is the real lever, and the two run together so a
+    # $200k-volume market with a $750-depth book is admissible. Overridable
+    # from MAKER_VOLUME_TRIAL_USD; the ranker's own `--trial-volume` flag wins.
+    select_min_volume_24h_usd_trial: float | None = None
     select_max_book_spread: float = 0.06
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
@@ -686,6 +702,9 @@ def load() -> MakerConfig:
     trial = os.environ.get("MAKER_DEPTH_TRIAL_USD") or ""
     if trial.strip():
         kw["select_min_top3_depth_usd_trial"] = float(trial)
+    vtri = os.environ.get("MAKER_VOLUME_TRIAL_USD") or ""
+    if vtri.strip():
+        kw["select_min_volume_24h_usd_trial"] = float(vtri)
     pr = os.environ.get("MAKER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
