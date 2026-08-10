@@ -37,6 +37,8 @@ from strategy.markets import fetch_pinned_market
 from strategy.net_config import load_net as load_bot_cfg
 from strategy.quotes import Inventory, decide_quotes, mid_price
 from strategy.selector import identity_allowed, pair_books_allowed
+from strategy.sweep import (cancel_live_orders, record_event, settle_resolved,
+                            settle_startup_resolved)
 
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "run"
@@ -873,141 +875,7 @@ def reallocate(states, base) -> dict:
     return out
 
 
-def _record_event(st: MarketState, now: float, kind: str,
-                  reason: str = "", side: str | None = None,
-                  price: float | None = None, size: float | None = None,
-                  reason_code: str | None = None, force: bool = False) -> None:
-    """Write a meaningful operator event, collapsing routine repeats."""
-    code = reason_code or store.reason_code(reason)
-    key = (kind, side, code)
-    previous_key = getattr(st, "event_key", None)
-    previous_ts = getattr(st, "event_ts", 0.0)
-    if not force and previous_key == key and now - previous_ts < 30.0:
-        return
-    # A fill/exit/hedge is more informative than the routine requote that
-    # follows it in the same visit. Keep the event visible for one short window.
-    if (not force and kind == "QUOTING" and previous_key
-            and previous_key[0] in {"FILLED", "HEDGED", "MERGED", "EXITED"}
-            and now - previous_ts < 30.0):
-        return
-    try:
-        store.log_event(market_slug=getattr(st, "spec", {}).get("slug", ""),
-                        condition_id=getattr(st, "cid", None), kind=kind, reason=reason,
-                        reason_code=code, side=side, price=price, size=size,
-                        ts=now)
-        st.event_key, st.event_ts = key, now
-    except Exception as e:
-        log.warning("event log failed for %s: %s", getattr(st, "title", "market")[:30], e)
 
-
-def _cancel_live_orders(st: MarketState) -> None:
-    """Cancel simulated resting quotes when a market loses eligibility.
-
-    Inventory remains owned and continues to be monitored, but stale offers may
-    not survive a hard selector failure or consume committed-capacity budget.
-    """
-    released = st.engine.open_orders()
-    for order in released:
-        order.cancelled = True
-    try:
-        store.mark_cancelled([order.quote_id for order in released
-                              if order.quote_id is not None])
-    except Exception as e:
-        log.warning("selector cancellation not recorded for %s: %s", st.title[:30], e)
-    live = st.spec.get("_live")
-    if isinstance(live, dict):
-        live["quotes"] = []
-        live["capital"] = 0.0
-        live["stale"] = True
-        for field in ("up_bid", "up_ask", "dn_bid", "dn_ask", "mid_up",
-                      "our_up", "our_dn_as_up", "dn_bid_as_up", "pair_cost"):
-            live[field] = None
-
-
-def _settle_resolved(st: MarketState, now: float) -> None:
-    """The venue has already reported a winner for this market (`resolutions`
-    carries a row for it). Its book is gone from the venue -- every further
-    fetch is a guaranteed 404 -- and its true settled P&L already comes out
-    of `fills` + `resolutions` on the dashboard side (`_settled_positions` /
-    `_realized`). Leaving the position "open" here double-books it as both
-    realized and still-naked, and is exactly why a resolved market kept
-    showing up as a permanent "unreadable" market with capital that never
-    freed.
-
-    `ts` IS touched, unlike `_stamp_failure`: these zeroed figures are
-    correct as of right now, not stale ones the fleet failed to refresh.
-    """
-    _cancel_live_orders(st)
-    if st.inv.up_shares or st.inv.down_shares:
-        _record_event(
-            st, now, "RESOLVED",
-            f"venue resolved; released {st.inv.up_shares:.2f} UP / "
-            f"{st.inv.down_shares:.2f} DOWN", reason_code="RESOLVED",
-            force=True)
-    st.inv.up_shares = st.inv.down_shares = 0.0
-    st.inv.up_cost = st.inv.down_cost = 0.0
-    st.err = ""
-    live = st.spec.get("_live")
-    if not isinstance(live, dict):
-        live = {}
-        st.spec["_live"] = live
-    live.update({
-        "up_sh": 0.0, "dn_sh": 0.0, "up_avg": 0.0, "dn_avg": 0.0,
-        "paired": 0.0, "naked_side": "", "naked_sh": 0.0, "naked_cost": 0.0,
-        "pair_paid": 0.0, "fills": st.inv.fills,
-        # `stale` back to False, because `_cancel_live_orders` above set it
-        # True on the way in. That flag means "these figures are older than
-        # the fleet's last look at the market", and these figures are the
-        # opposite: measured now, against a settlement that is final. Left
-        # True the dashboard renders a settled market as permanently STALE
-        # while carrying a fresh `ts`, which is the page disagreeing with
-        # itself about the one market whose numbers can no longer move.
-        "stale": False,
-        "err": "", "ts": now,
-    })
-
-
-def _settle_startup_resolved(states, resolved_cids, now: float) -> tuple[int, float]:
-    """Zero inventory for any market the venue has already settled.
-
-    `MarketState.__init__` rebuilds each market's inventory from the fills
-    ledger, and the fills ledger never learns about resolutions -- so a market
-    that resolved while the fleet was down comes back holding phantom shares
-    that count as committed capital from the very first heartbeat. The first
-    `visit` would settle it, but only after its turn in the rotation comes
-    around -- and if the ranker drops the market before that turn, the re-rank
-    retention rule ("still holding inventory") keeps it in `states` forever on
-    exactly the phantom position this pass clears.
-
-    Settling here, before the first visit, releases that capital at startup.
-    `visit` will still find the cid in `resolved_cids` and settle it again,
-    which is a no-op on an already-zeroed inventory.
-
-    Scoped to `states` on purpose: only markets in the universe can display
-    phantom inventory, and a resolved market the ranker has already dropped
-    simply has no MarketState -- the dashboard's `_settled_positions` /
-    `_realized` already reports its P&L straight from `fills` + `resolutions`.
-
-    Returns (markets that held inventory and were settled, dollars of
-    committed cost released) for the startup log line. `freed` is the FULL
-    two-leg cost basis (`up_cost + down_cost`), so a paired position counts
-    both legs -- that is the committed capital being released. One bad market
-    must not stop the rest of the pass.
-    """
-    settled = 0
-    freed = 0.0
-    for st in states:
-        if st.cid not in resolved_cids:
-            continue
-        try:
-            if st.inv.up_shares or st.inv.down_shares:
-                settled += 1
-                freed += (st.inv.up_cost or 0.0) + (st.inv.down_cost or 0.0)
-            _settle_resolved(st, now)
-        except Exception as e:
-            log.warning("startup settle failed for %s: %s: %s",
-                        st.title[:30], type(e).__name__, e)
-    return settled, freed
 
 
 def _stamp_failure(st: MarketState, now: float, err: str) -> None:
@@ -1032,7 +900,7 @@ def _stamp_failure(st: MarketState, now: float, err: str) -> None:
         st.spec["_live"] = live
     live["err"] = err
     live["err_ts"] = now
-    _record_event(st, now, "ERROR", err, reason_code="ERROR")
+    record_event(st, now, "ERROR", err, reason_code="ERROR")
 
 
 def _book_gate_confirmed(st: MarketState, now: float) -> bool:
@@ -1076,7 +944,7 @@ def visit(st: MarketState, bot_cfg, now: float,
     if st.cid in resolved_cids:
         # Settled by the venue -- its book is gone, so there is nothing left
         # to poll. Checked before anything else touches the network.
-        _settle_resolved(st, now)
+        settle_resolved(st, now)
         return
     cfg = st.cfg
     # Defense in depth against stale or hand-edited markets.json. The ranker
@@ -1104,7 +972,7 @@ def visit(st: MarketState, bot_cfg, now: float,
         require_primary=has_selector_meta)
     if not identity_ok:
         st.err = identity_reason
-        _cancel_live_orders(st)
+        cancel_live_orders(st)
         _stamp_failure(st, now, st.err)
         return
     # The single-market helper remains callable in tests; the fleet runner
@@ -1145,7 +1013,7 @@ def visit(st: MarketState, bot_cfg, now: float,
         if not _book_gate_confirmed(st, now):
             return
         st.err = f"book fetch: {e}"
-        _cancel_live_orders(st)
+        cancel_live_orders(st)
         _stamp_failure(st, now, st.err)
         return
     st.err = ""
@@ -1169,7 +1037,7 @@ def visit(st: MarketState, bot_cfg, now: float,
         if not _book_gate_confirmed(st, now):
             return
         st.err = books_reason
-        _cancel_live_orders(st)
+        cancel_live_orders(st)
         _stamp_failure(st, now, st.err)
         return
     # The book is readable again: a transient dip that recovered must not
@@ -1249,7 +1117,7 @@ def visit(st: MarketState, bot_cfg, now: float,
                 queue_waited=getattr(f, "queue_waited", 0.0),
                 seconds_to_fill=0.0, crossed=False, reason=f.reason,
             )
-            _record_event(st, now, "FILLED",
+            record_event(st, now, "FILLED",
                           f"{f.side} {f.size:.0f}sh @ {f.price:.3f}",
                           side=f.side, price=f.price, size=f.size,
                           reason_code="FILL", force=True)
@@ -1308,7 +1176,7 @@ def visit(st: MarketState, bot_cfg, now: float,
             # An unpersisted EXIT still holds for this process. Losing it on a
             # restart is the old behaviour, not a reason to stop trading.
             log.warning("gate persist failed for %s: %s", st.title[:30], e)
-        _record_event(st, now, "EXITED",
+        record_event(st, now, "EXITED",
                       f"gate EXITED: markout {stats.get('mean_per_share') or 0.0:.4f}/sh "
                       f"on n={stats.get('n', 0)}",
                       reason_code="MARKOUT_EXIT", force=True)
@@ -1362,7 +1230,7 @@ def visit(st: MarketState, bot_cfg, now: float,
                 # there is no concession against holding, only the gas.
                 forgone_vs_settlement=0.0,
                 up_cost_removed=up_removed, dn_cost_removed=dn_removed)
-            _record_event(st, now, "MERGED",
+            record_event(st, now, "MERGED",
                           f"merged {n:.0f} pairs for ${mg['proceeds']:.2f}",
                           size=n, reason_code="MERGE", force=True)
 
@@ -1413,7 +1281,7 @@ def visit(st: MarketState, bot_cfg, now: float,
                 realized_pnl=pt["realized_pnl"],
                 forgone_vs_settlement=pt["forgone_vs_settlement"],
                 up_cost_removed=up_removed, dn_cost_removed=dn_removed)
-            _record_event(st, now, "EXITED", pt.get("why", ""),
+            record_event(st, now, "EXITED", pt.get("why", ""),
                           size=n, reason_code="EXIT", force=True)
 
             # Remove the closed pairs at their own average cost, which leaves
@@ -1478,7 +1346,7 @@ def visit(st: MarketState, bot_cfg, now: float,
                 pair_cost=st.inv.pair_cost(), reason=block_reason,
                 reason_code="COMMITTED_CAP",
             )
-            _record_event(st, now, "BLOCKED", block_reason, side=qi.side,
+            record_event(st, now, "BLOCKED", block_reason, side=qi.side,
                           price=qi.price, reason_code="COMMITTED_CAP")
             continue
         got = 0.0
@@ -1522,7 +1390,7 @@ def visit(st: MarketState, bot_cfg, now: float,
             balance=st.inv.balance, pair_cost=st.inv.pair_cost(),
             reason=hedge_reason, reason_code="HEDGE",
         )
-        _record_event(st, now, "HEDGED", hedge_reason, side=qi.side,
+        record_event(st, now, "HEDGED", hedge_reason, side=qi.side,
                       size=got, reason_code="HEDGE", force=True)
         log.info("EMERGENCY_HEDGE %-28s %-4s %.0f/%.0fsh bal=%.2f",
                  st.title[:28], qi.side, got, qi.size, st.inv.balance)
@@ -1595,18 +1463,18 @@ def visit(st: MarketState, bot_cfg, now: float,
     # A market can be actively quoting one side while the risk engine refuses
     # the other; showing only QUOTING would hide the gate that shaped it.
     if why:
-        _record_event(st, now, "BLOCKED", why,
+        record_event(st, now, "BLOCKED", why,
                       reason_code=store.reason_code(why))
 
     open_orders = st.engine.open_orders()
     if open_orders:
         sides = "+".join(sorted({o.side for o in open_orders}))
-        # If a fill/exit/hedge happened in this visit, _record_event deliberately
+        # If a fill/exit/hedge happened in this visit, record_event deliberately
         # keeps that higher-signal action as the latest visible event.
-        _record_event(st, now, "QUOTING", f"resting {sides} limit orders",
+        record_event(st, now, "QUOTING", f"resting {sides} limit orders",
                       reason_code="QUOTE_ACTIVE")
     elif not why:
-        _record_event(st, now, "WAITING", "no eligible quote intent",
+        record_event(st, now, "WAITING", "no eligible quote intent",
                       reason_code="NO_QUOTE")
 
     bq1, bq2 = rewards.book_scores(up, dn, cfg.max_spread_from_mid,
@@ -1769,8 +1637,8 @@ def main() -> None:
     # before that turn retains it forever on the phantom position. Settle now,
     # before the first visit, so the process starts with the truth.
     try:
-        settled, freed = _settle_startup_resolved(states, resolved_cids,
-                                                  time.time())
+        settled, freed = settle_startup_resolved(states, resolved_cids,
+                                                time.time())
         if settled:
             log.info("STARTUP SETTLE %d market(s) already resolved; "
                      "released $%.2f committed", settled, freed)

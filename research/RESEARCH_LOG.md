@@ -916,3 +916,15 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 - The structural core is the market's own judgment: nobody quotes TIGHT on these specific-bin questions (inflation ranges, retiree counts), so the books stay wide and the venue's quadratic penalty makes every parked order score ~nothing. The depth gate refusing them is mirroring the market's own reluctance, not an artifact.
 
 **Verdict.** OPEN with a refined model. The mirage labeling (U22) is correct as a point-in-time statement but the classification flickers with the hour: the same market is a 4,938%/day mirage at the trough and a ~1–3%/day credible near-miss at the peak, so `trap` flips rank to rank. The natural next step is to make the near-miss estimate time-robust: average several book samples per rank, or feed the tracker's own accumulated competition readings back into the estimate so a market is judged on its day-average, not its luckiest snapshot. That is a measurement improvement, not a gate change — the depth gate stays as-is.
+
+---
+
+### Session 27 — 2026-08-10: the sweep's settle-and-cancel step behind a module interface (issue #11)
+
+**Question.** The per-market sweep in `strategy/fleet.py` was one 630-line function owning settle, cancel, gate, decide and record inline, inside a module that imports 14 others. Can the settle-and-cancel step move behind the sweep module's interface -- behavior-preserving -- so it is testable on its own?
+
+**Method.** Moved `_settle_resolved`, `_cancel_live_orders`, `_record_event` and `_settle_startup_resolved` verbatim into a new `strategy/sweep.py` (slice 1 of the sweep extraction; the gate/decide steps stay in `visit` for slice 2). The fleet loop now imports and calls them. Safety net: the existing fleet tests (startup settle, state publish, gate fallback, resolutions) must pass unchanged; 4 new direct tests drive the step through the module interface (settle zeroes both legs and refreshes the payload fresh; cancel blanks the payload and persists; record_event collapses repeats and honours force).
+
+**Result.** 524/524 tests pass (520 before + 4 new). The functions' bodies were not edited -- only relocated -- and `visit`'s call sites renamed. The startup-settle suite now imports the step from the sweep module instead of the engine.
+
+**Verdict.** LIVE. Slice 1 landed with zero behavior change and a new direct test surface. Watch: the gate/decide extraction (issue #12) is slice 2; `fleet.py` should keep shrinking toward orchestration-only.
