@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from statistics import median
@@ -71,29 +72,26 @@ def _load_ranks(nm_path: Path) -> tuple[list[dict], int]:
     """
     ranks: list[dict] = []
     if nm_path.exists():
-        try:
-            with open(nm_path, encoding="utf-8") as fh:
-                for ln in fh:
-                    ln = ln.strip()
-                    if not ln:
+        with open(nm_path, encoding="utf-8") as fh:
+            for ln in fh:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    row = json.loads(ln)
+                except (ValueError, json.JSONDecodeError):
+                    continue
+                if not isinstance(row, dict) or "greens" not in row:
+                    continue
+                ts = row.get("ts")
+                greens = []
+                for g in row.get("greens") or []:
+                    if not isinstance(g, dict):
                         continue
-                    try:
-                        row = json.loads(ln)
-                    except ValueError:
-                        continue
-                    if not isinstance(row, dict) or "greens" not in row:
-                        continue
-                    ts = row.get("ts")
-                    greens = []
-                    for g in row.get("greens") or []:
-                        if not isinstance(g, dict):
-                            continue
-                        g = dict(g)
-                        g["ts"] = ts
-                        greens.append(g)
-                    ranks.append({"ts": ts, "greens": greens})
-        except Exception:
-            pass
+                    g = dict(g)
+                    g["ts"] = ts
+                    greens.append(g)
+                ranks.append({"ts": ts, "greens": greens})
     return ranks, len(ranks)
 
 
@@ -126,8 +124,6 @@ def _per_market(ranks: list[dict]) -> dict[str, dict]:
         readings.sort(key=lambda r: r.get("ts") or 0)
         m["last"] = readings[-1]          # a real green, for `_grade`
         m["n_readings"] = len(readings)
-        m["first_ts"] = min((r.get("ts") or 0) for r in readings)
-        m["last_ts"] = max((r.get("ts") or 0) for r in readings)
         vols = [r.get("volume_24h") for r in readings
                 if r.get("volume_24h") is not None]
         depths = [r.get("depth_measured") for r in readings
@@ -174,6 +170,10 @@ def _vol_fail(m: dict, volume_bar: float) -> bool:
 def triage_report(nm_path: Path, bar: float = PERMANENT_BAR,
                   volume_bar: float = VOLUME_BAR) -> dict:
     """The full triage: population, mirage profile, volume interaction, signals."""
+    if not (math.isfinite(bar) and bar > 0):
+        raise ValueError(f"bar must be finite and greater than zero, got {bar}")
+    if not (math.isfinite(volume_bar) and volume_bar >= 0):
+        raise ValueError(f"volume_bar must be finite and non-negative, got {volume_bar}")
     ranks, n_ranks = _load_ranks(nm_path)
     markets = _per_market(ranks)
     buckets = _buckets(markets, bar)
@@ -348,7 +348,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--json", default=None, help="write the report dict here")
     a = p.parse_args(argv)
 
-    rep = triage_report(Path(a.nm), a.bar)
+    try:
+        rep = triage_report(Path(a.nm), a.bar)
+    except ValueError as e:
+        p.error(str(e))
     _print(rep)
     if a.json:
         Path(a.json).write_text(json.dumps(rep, indent=2), encoding="utf-8")
