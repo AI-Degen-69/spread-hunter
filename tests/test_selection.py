@@ -506,6 +506,112 @@ def test_pipeline_snapshot_records_the_trial_bar(monkeypatch, tmp_path):
     assert snap["trial_depth_usd"] is None
 
 
+# --- VOLUME-GATE TRIAL (U36): the volume bar is injectable, same contract ---
+
+def _volume_trial_market():
+    """A market with $210k/24h volume (under the permanent $250k bar, over a
+    $200k trial bar) and deep-enough books on BOTH sides to clear the depth
+    gate -- the measured shape of the volume would-fund population
+    ($235-242k, real books, just under the bar)."""
+    return {
+        "condition_id": "0xvol",
+        "question": "Team C vs Team D",
+        "market_slug": "tennis-volume-trial",
+        "category": "Sports",
+        "market_type": "Moneyline",
+        "market_group": "",
+        "series_title": "ATP",
+        "event_title": "ATP",
+        "tokens": [{"token_id": "0xcc"}, {"token_id": "0xdd"}],
+        "rewards": {"max_spread": 3.5, "min_size": 50},
+        "minimum_tick_size": 0.001,
+        "end_date_iso": "2026-08-25T00:00:00Z",
+        "_volume_24h": 210_000.0,
+        "_spread": 0.02,
+    }
+
+
+def test_tradable_gates_on_the_trial_volume_bar_when_passed():
+    ok, why = tradable(volume_24h=210_000.0, days=3.0)
+    assert not ok and "24h volume" in why
+    ok2, why2 = tradable(volume_24h=210_000.0, days=3.0,
+                         min_volume_usd=200_000.0)
+    assert ok2 and not why2
+
+
+def test_evaluate_gates_on_the_trial_volume_bar_when_passed():
+    """The volume would-fund shape: $210k/24h is refused at the permanent
+    $250k bar and admitted under a $200k trial bar. None (the normal path)
+    keeps the permanent bar, so a trial can never leak into a normal rank."""
+    books = {
+        "0xcc": {"bids": {0.49: 3000, 0.48: 3000, 0.47: 3000},
+                 "asks": {0.51: 3000}},
+        "0xdd": {"bids": {0.49: 3000, 0.48: 3000, 0.47: 3000},
+                 "asks": {0.51: 3000}},
+    }
+    s = _StubClobSession(books)
+    m = _volume_trial_market()
+
+    refused = rank_markets.evaluate(s, 500.0, m, 210_000.0, "rewards")
+    assert refused is not None and not refused["eligible"]
+    assert "24h volume" in refused["reject_reason"]
+
+    admitted = rank_markets.evaluate(s, 500.0, m, 210_000.0, "rewards",
+                                     min_volume_usd=200_000.0)
+    assert admitted is not None and admitted["eligible"]
+
+
+def test_effective_volume_bar_resolution_cli_over_config_over_default(monkeypatch):
+    """Same precedence as the depth bar: --trial-volume first, then the config
+    trial (env MAKER_VOLUME_TRIAL_USD), then the permanent value; a
+    non-positive trial is a mistake, not a signal, and falls back."""
+    base = load_cfg()
+    assert rank_markets._effective_volume_bar(None) == \
+        base.select_min_volume_24h_usd
+
+    class _Cfg:
+        select_min_volume_24h_usd_trial = 200_000.0
+
+    monkeypatch.setattr(rank_markets, "_CFG", _Cfg())
+    assert rank_markets._effective_volume_bar(None) == 200_000.0
+    assert rank_markets._effective_volume_bar(150_000.0) == 150_000.0   # CLI wins
+    assert rank_markets._effective_volume_bar(0.0) == \
+        base.select_min_volume_24h_usd                                  # invalid -> permanent
+
+
+def test_config_env_sets_the_volume_trial_bar_without_touching_the_permanent_one(monkeypatch):
+    monkeypatch.setenv("MAKER_VOLUME_TRIAL_USD", "200000")
+    cfg = load_cfg()
+    assert cfg.select_min_volume_24h_usd_trial == 200_000.0
+    assert cfg.select_min_volume_24h_usd == 250_000.0
+
+
+def test_config_env_overrides_the_allocator_marginal_floor(monkeypatch):
+    """U36f: the 2%/day marginal-return floor defunded the entire eligible
+    universe (all 7 real-book markets measure 0.04-1.84%/day first-dollar), so
+    the operator re-armed it lower via MAKER_MARGINAL_FLOOR. The env must
+    override the permanent floor without touching anything else."""
+    monkeypatch.setenv("MAKER_MARGINAL_FLOOR", "0.005")
+    cfg = load_cfg()
+    assert cfg.marginal_return_floor == 0.005
+
+    monkeypatch.delenv("MAKER_MARGINAL_FLOOR", raising=False)
+    assert load_cfg().marginal_return_floor == 0.02  # permanent default intact
+
+
+def test_pipeline_snapshot_records_the_volume_trial_bar(monkeypatch, tmp_path):
+    """Same staging contract as depth: a trial run's snapshot says which
+    volume bar it gated on and flags it as a trial."""
+    monkeypatch.setattr(rank_markets, "RUN", tmp_path)
+    rank_markets._write_pipeline_snapshot(
+        cands=[], spread_cands=[], out=[], eligible=[], picked=[],
+        causes={}, census="", gates="", attempted=0, rejected=0,
+        verdicts={}, volume_gate_usd=200_000.0, trial_volume_usd=200_000.0)
+    snap = json.loads((tmp_path / "pipeline.json").read_text(encoding="utf-8"))
+    assert snap["volume_gate_usd"] == 200_000.0
+    assert snap["trial_volume_usd"] == 200_000.0
+
+
 # --- the script and the fleet must not drift --------------------------------
 
 def test_the_script_gate_and_the_fleet_gate_agree():

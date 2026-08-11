@@ -350,6 +350,22 @@ class MakerConfig:
     # made permanent. Overridable from MAKER_DEPTH_TRIAL_USD; the ranker's own
     # `--trial-depth` flag wins over both.
     select_min_top3_depth_usd_trial: float | None = None
+    # VOLUME-GATE TRIAL (U36). Same staging contract as the depth trial above:
+    # when set, the RANKER gates 24h volume on this bar instead of
+    # `select_min_volume_24h_usd`; adopted markets are tagged `trial_volume_usd`
+    # and their markouts are the decision evidence. Measured 2026-08-10 funnel
+    # audit: of 54 markets that cleared depth but failed volume, only 2 would
+    # fund even with the gate fully lifted, and the top of that population
+    # sits at $235-242k -- so the honest trial bar is $200k (a 20% staged
+    # loosening), NOT the half-bar $125k the depth tracker's convention would
+    # suggest (U33 measured the volume-reject population 1-3 orders of
+    # magnitude under the bar; a $125k bar admits nothing). The depth trial
+    # alone ($1,000 -> $750) admits 0 additional eligible markets today -- the
+    # depth near-miss population has 3-25x-thin volume -- which is why the
+    # volume trial is the real lever, and the two run together so a
+    # $200k-volume market with a $750-depth book is admissible. Overridable
+    # from MAKER_VOLUME_TRIAL_USD; the ranker's own `--trial-volume` flag wins.
+    select_min_volume_24h_usd_trial: float | None = None
     select_max_book_spread: float = 0.06
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
@@ -482,14 +498,24 @@ class MakerConfig:
     quote_shares: int = 120
 
     # --- powerwinner's two entry rules ------------------------------------
-    # PRICE BAND. 54% of his volume enters at 0.30-0.70, and he has ZERO trades
-    # at 0.98+. That is where the spread -- and the taker fee he is avoiding,
-    # fee = 0.07*p*(1-p), which peaks at p=0.50 -- are widest, so it is where
-    # being the maker is worth most. Outside the band the spread collapses
-    # toward one tick on a near-certain outcome and there is nothing to capture,
-    # while the downside stays the full $1.00.
-    price_band_low: float = 0.30
-    price_band_high: float = 0.70
+    # PRICE BAND. 54% of powerwinner's BTC 5-min volume enters at 0.30-0.70, and
+    # he has ZERO trades at 0.98+. That is where the spread -- and the taker fee
+    # he is avoiding, fee = 0.07*p*(1-p), which peaks at p=0.50 -- are widest, so
+    # it is where being the maker is worth most. Outside the band the spread
+    # collapses toward one tick on a near-certain outcome and there is nothing to
+    # capture, while the downside stays the full $1.00.
+    #
+    # WIDENED 0.30-0.70 -> 0.10-0.90 (2026-08-11). The 0.30-0.70 range was tuned
+    # to the coin-flip BTC series, where every mid is ~0.50. The spread universe
+    # the fleet now quotes (tennis, CS2, MLB favourites) legitimately trades at
+    # 0.15-0.85, and the band's own protection -- refusing a near-settled outcome
+    # at the extreme -- lives at the 0.95+ edge, which 0.10-0.90 still refuses.
+    # Measured on the live funnel 2026-08-11: 7 of 8 adopted markets had mids
+    # outside 0.30-0.70, and the allocator's funded picks were both blocked by
+    # the band (Shnaider at 0.255/0.705) -- a funded market the strategy then
+    # refused to quote for hours.
+    price_band_low: float = 0.10
+    price_band_high: float = 0.90
     # QUOTE TIMING. 57% of his entries land in the FIRST 40% of the window.
     # A passive order needs time to be reached; posting late means resting into
     # the minutes when the price is converging on the outcome, which is exactly
@@ -582,6 +608,30 @@ class MakerConfig:
     max_cost_per_market: float = 400.0
     max_open_markets: int = 3
 
+    # --- pairs-only rule (U35): what happens to a one-sided fill -------------
+    #
+    # Measured on the 112h clean sample (Session 36 / U32): merged pairs were
+    # 7/7 positive at +16.3c/share with zero variance, while a naked leg held
+    # past 15 minutes drifted -18.5c/share by the 1h markout -- someone was
+    # betting against every fill. The rule converts each one-sided fill into
+    # either a COMPLETED pair (cross the missing leg at ask when the pair
+    # stays under `max_pair_cost`, then merge at parity -- the proven +16c
+    # capture) or a SAME-WINDOW EXIT of the naked leg at the best bid (pay
+    # the ~3c half-spread instead of the drift). Switchable like every other
+    # behavioural change here, so the rule can be measured on its own.
+    enable_pairs_rule: bool = True
+    # How long after a one-sided fill the rule may still act. 15 minutes is
+    # where the measured drift is still ~0 (+0.09c/share at the 5m horizon)
+    # and long before the 1h mark where it is -18.5c.
+    pairs_exit_window_sec: float = 900.0
+    # The EV formula's fixed payoffs (cents per one-sided fill), measured
+    # 2026-08-10: a completion pays the merge capture on completed pairs
+    # (+$49.46 on 302.5 shares = +16.3c, 7/7 profitable); an exit costs the
+    # half-spread (~2-3c). The RATES come from the rule's own decisions; the
+    # dashboard KPI is completion_rate x gain - exit_rate x cost.
+    pairs_complete_gain_cents: float = 16.3
+    pairs_exit_cost_cents: float = 3.0
+
     # --- experiment end criteria (decisive test of the maker mechanism) -----
     # Phase A (census): observe this many DISTINCT live markets and measure how
     # often a fillable sub-$1.00 hedged pair exists at ask-1tick. Below the
@@ -662,6 +712,15 @@ def load() -> MakerConfig:
     trial = os.environ.get("MAKER_DEPTH_TRIAL_USD") or ""
     if trial.strip():
         kw["select_min_top3_depth_usd_trial"] = float(trial)
+    vtri = os.environ.get("MAKER_VOLUME_TRIAL_USD") or ""
+    if vtri.strip():
+        kw["select_min_volume_24h_usd_trial"] = float(vtri)
+    pr = os.environ.get("MAKER_PAIRS_RULE") or ""
+    if pr.strip():
+        kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
+    mf = os.environ.get("MAKER_MARGINAL_FLOOR") or ""
+    if mf.strip():
+        kw["marginal_return_floor"] = float(mf)
     return MakerConfig(**kw)
 # hook probe
 # hook probe

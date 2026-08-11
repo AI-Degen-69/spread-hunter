@@ -109,7 +109,8 @@ def tradable(volume_24h: Optional[float],
              title: object = "", slug: object = "",
              category: object = "", market_type: object = "",
              market_group: object = "", series_title: object = "",
-             event_title: object = "") -> tuple[bool, str]:
+             event_title: object = "",
+             min_volume_usd: Optional[float] = None) -> tuple[bool, str]:
     """Can this market produce the two observations the run needs?
 
     A fill needs someone to trade at our price; a settled P&L needs the market
@@ -135,8 +136,9 @@ def tradable(volume_24h: Optional[float],
             return False, identity_reason
     if volume_24h is None:
         return False, "volume unknown"
-    if volume_24h < MIN_VOLUME_24H:
-        return False, f"24h volume ${volume_24h:,.0f} < ${MIN_VOLUME_24H:,.0f}"
+    volume_bar = MIN_VOLUME_24H if min_volume_usd is None else min_volume_usd
+    if volume_24h < volume_bar:
+        return False, f"24h volume ${volume_24h:,.0f} < ${volume_bar:,.0f}"
     if days is None:
         return False, "horizon unknown"
     if days < 0:
@@ -174,7 +176,8 @@ def gamma_volume(session: requests.Session,
 
 
 def gamma_spread_universe(session: requests.Session,
-                          pages: int = 2, per_page: int = 100) -> list[dict]:
+                          pages: int = 2, per_page: int = 100,
+                          min_volume_usd: Optional[float] = None) -> list[dict]:
     """Liquid short-dated markets that pay NO rewards, shaped like CLOB rows.
 
     `/sampling-markets` lists reward-funded markets and nothing else, so the
@@ -198,6 +201,7 @@ def gamma_spread_universe(session: requests.Session,
     """
     now = datetime.now(timezone.utc)
     out: list[dict] = []
+    volume_bar = MIN_VOLUME_24H if min_volume_usd is None else min_volume_usd
     # ADVANCE BY WHAT THE ENDPOINT ACTUALLY RETURNED, NOT BY WHAT WE ASKED FOR.
     #
     # Gamma caps a page at 100 rows and ignores a larger `limit` -- measured
@@ -241,7 +245,7 @@ def gamma_spread_universe(session: requests.Session,
         offset += len(rows)
         for m in rows:
             vol = float(m.get("volume24hr") or 0.0)
-            if vol < MIN_VOLUME_24H:
+            if vol < volume_bar:
                 floor_seen = True
                 continue
             if floor_seen and not ordering_violated:
@@ -334,7 +338,8 @@ def order_score(v: float, s: float, size: float, min_size: float) -> float:
 def evaluate(session: requests.Session, rate: float, m: dict,
              volume_24h: Optional[float] = None,
              source: str = "rewards", *,
-             min_depth_usd: Optional[float] = None) -> dict | None:
+             min_depth_usd: Optional[float] = None,
+             min_volume_usd: Optional[float] = None) -> dict | None:
     """Income and capital for one market, from its live book.
 
     `rate` is the market's pot in $/day, and `source` says what pays it. For a
@@ -471,7 +476,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         volume_24h, days, m.get("question"),
         m.get("market_slug") or m.get("slug"),
         m.get("category"), m.get("market_type"),
-        m.get("market_group"), m.get("series_title"), m.get("event_title"))
+        m.get("market_group"), m.get("series_title"), m.get("event_title"),
+        min_volume_usd=min_volume_usd)
     # The payout floor is a REWARD rule -- the venue's minimum distribution.
     # A spread market is paid by whoever lifts the offer, in the amount of the
     # spread, so there is no distribution to be under. Holding it to the floor
@@ -642,6 +648,21 @@ def _effective_depth_bar(cli_trial_usd: Optional[float]) -> float:
     return MIN_TOP3_DEPTH_USD
 
 
+def _effective_volume_bar(cli_trial_usd: Optional[float]) -> float:
+    """The volume bar this run gates on: CLI trial > config trial > permanent.
+
+    Mirrors `_effective_depth_bar` for the VOLUME-GATE TRIAL (U36): the
+    permanent `select_min_volume_24h_usd` never changes, and a non-positive
+    trial value is a mistake, not a signal.
+    """
+    trial = cli_trial_usd
+    if trial is None:
+        trial = _CFG.select_min_volume_24h_usd_trial
+    if trial is not None and trial > 0:
+        return float(trial)
+    return MIN_VOLUME_24H
+
+
 def _positive_int(v: str) -> int:
     n = int(v)
     if n < 1:
@@ -679,6 +700,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "permanently. See scripts/trial_depth_gate.py for the "
                         "recorded-data replay that shows which markets a bar "
                         "adopts." % MIN_TOP3_DEPTH_USD)
+    p.add_argument("--trial-volume", type=float, default=None, metavar="USD",
+                   help="VOLUME-GATE TRIAL (U36): gate 24h volume on this bar "
+                        "instead of the permanent one ($%.0f). Wins over "
+                        "MAKER_VOLUME_TRIAL_USD; the permanent config value is "
+                        "never changed. Adopted markets are tagged "
+                        "trial_volume_usd in run/markets.json so their "
+                        "markouts can be watched before the bar is loosened "
+                        "permanently." % MIN_VOLUME_24H)
     return p.parse_args(argv)
 
 
@@ -687,6 +716,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 # answer "how many of these would a modest loosening have admitted?".
 _DEPTH_RE = re.compile(
     r"top-3 bid depth \$([\d,.]+) <= \$([\d,.]+)", re.IGNORECASE)
+
+# A volume-gate reason embeds its measurement too -- "24h volume $12,906 <
+# $250,000" -- and the VOLUME near-miss log (U34) records it so the stats can
+# answer "how many of these would a looser bar have admitted?".
+_VOLUME_RE = re.compile(
+    r"24h volume \$([\d,.]+) < \$([\d,.]+)", re.IGNORECASE)
 
 
 def _log_rank_near_misses(out, rejected, verdicts, ts=None) -> int:
@@ -748,11 +783,80 @@ def _log_rank_near_misses(out, rejected, verdicts, ts=None) -> int:
     return len(greens)
 
 
+def _log_rank_volume_near_misses(out, rejected, verdicts=None, ts=None) -> int:
+    """Append this rank's volume-rejects to run/volume_near_misses.jsonl.
+
+    The DEPTH near-miss log records only would-fund greens, and U33's triage
+    showed the binding constraint is the VOLUME gate, not depth: on the
+    recorded population, 83 of 110 depth-rejects -- including 5 of the 6
+    near-misses -- would fail the live $250k/24h bar anyway, and the $500
+    depth trial adopted zero new markets because the depth-clear candidates
+    failed live re-verification on volume. That population never reached any
+    log: volume rejects are refused by `tradable` inside `evaluate`, and the
+    depth logger only keeps greens.
+
+    This sibling log records EVERY volume-rejected market whose reason
+    carries a measured 24h volume ("24h volume $X < $Y" parses it out;
+    "volume unknown" is a data gap, not a near-miss, and is skipped but
+    counted). One line per rank, exactly like the depth log, so the stats
+    reader accumulates days, unique markets, and how many measured volumes
+    came within half the bar -- the same evidence shape that licensed the
+    depth trial, applied to the gate that actually binds.
+
+    Returns how many volume-rejects were logged this rank.
+    """
+    vols = []
+    volume_unknown = 0
+    for r in out:
+        if r.get("eligible"):
+            continue
+        reason = r.get("reject_reason") or ""
+        if _cause(reason) != "volume":
+            continue
+        v = _VOLUME_RE.search(reason)
+        if not v:
+            # "volume unknown": gamma never returned a reading. Not a
+            # near-miss -- but count it so the tracker can show the gap
+            # instead of silently undercounting the population.
+            volume_unknown += 1
+            continue
+        vd = verdicts.get(id(r)) if verdicts else None
+        vols.append({
+            "cid": r.get("cid"), "title": r.get("title"),
+            "slug": r.get("slug"),
+            "cause": "volume",
+            "reason": reason,
+            "source": r.get("source"),
+            "volume_measured": float(v.group(1).replace(",", "")),
+            "volume_bar": float(v.group(2).replace(",", "")),
+            "volume_24h": r.get("volume_24h"),
+            "days": r.get("days_to_resolve"),
+            # The allocator verdict travels too, so the tracker can show the
+            # pot and competition of the population, not just its volume.
+            "pot_day": (vd["pot_day"] if vd else r.get("daily") or 0.0),
+            "competition": (vd["competition"] if vd
+                             else r.get("their_score")),
+            "marg_pct_day": vd["marg_pct_day"] if vd else None,
+            "trap": bool(vd and vd.get("trap")),
+        })
+    line = {"ts": ts if ts is not None else time.time(),
+            "scored": len(out), "rejected": rejected,
+            "volume_unknown": volume_unknown,
+            "volumes": vols}
+    RUN.mkdir(exist_ok=True)
+    with open(RUN / "volume_near_misses.jsonl", "a",
+              encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\n")
+    return len(vols)
+
+
 def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
                              causes, census, gates, attempted,
                              rejected, verdicts=None,
                              depth_gate_usd: Optional[float] = None,
-                             trial_depth_usd: Optional[float] = None) -> None:
+                             trial_depth_usd: Optional[float] = None,
+                             volume_gate_usd: Optional[float] = None,
+                             trial_volume_usd: Optional[float] = None) -> None:
     """Persist the whole selection funnel to run/pipeline.json.
 
     run/markets.json keeps only the winners, so the dashboard can show the
@@ -839,6 +943,10 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         # contract.
         "depth_gate_usd": depth_gate_usd,
         "trial_depth_usd": trial_depth_usd,
+        # Which volume bar this rank gated on -- same trial contract as depth.
+        "volume_gate_usd": (volume_gate_usd if volume_gate_usd is not None
+                            else MIN_VOLUME_24H),
+        "trial_volume_usd": trial_volume_usd,
         "counts": {
             "funded": len(cands),
             "spread_universe": len(spread_cands),
@@ -892,7 +1000,8 @@ def _worker_session() -> requests.Session:
 def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                *, session_factory=_worker_session,
                max_workers: int = 12,
-               min_depth_usd: Optional[float] = None) -> list[dict]:
+               min_depth_usd: Optional[float] = None,
+               min_volume_usd: Optional[float] = None) -> list[dict]:
     """Score candidate jobs across a worker pool, one session per worker.
 
     `session_factory` is injected so a test can prove the pool never shares
@@ -906,7 +1015,8 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
         for r in ex.map(
                 lambda a: evaluate(session_factory(), a[0], a[1], a[2],
                                    source=a[3],
-                                   min_depth_usd=min_depth_usd),
+                                   min_depth_usd=min_depth_usd,
+                                   min_volume_usd=min_volume_usd),
                 jobs):
             if r:
                 out.append(r)
@@ -922,6 +1032,8 @@ def main() -> None:
     # watched before the bar is loosened permanently.
     trial_bar = _effective_depth_bar(args.trial_depth)
     trial_active = trial_bar != MIN_TOP3_DEPTH_USD
+    volume_bar = _effective_volume_bar(args.trial_volume)
+    volume_trial_active = volume_bar != MIN_VOLUME_24H
 
     # Up-front universe fetches run sequentially on the main thread and keep
     # their own keep-alive session; the worker pool below uses one session
@@ -952,9 +1064,12 @@ def main() -> None:
     # why the reward-only universe could run 74 hours and produce 9 tape-backed
     # fills. Markets that pay no rewards at all are sourced here, on volume,
     # and priced on the spread they pay instead.
-    spread_cands = gamma_spread_universe(s)
+    spread_cands = gamma_spread_universe(s, min_volume_usd=volume_bar)
+    volume_str = (f"${volume_bar:,.0f}"
+                  + (f" [TRIAL vs permanent ${MIN_VOLUME_24H:,.0f}]"
+                     if volume_trial_active else ""))
     print(f"unfunded liquid markets: {len(spread_cands)} "
-          f"(>= ${MIN_VOLUME_24H:,.0f}/24h, <= {MAX_DAYS_TO_RESOLVE:.0f}d)")
+          f"(>= {volume_str}/24h, <= {MAX_DAYS_TO_RESOLVE:.0f}d)")
 
     jobs = [(rate, m, vols.get(m["condition_id"]), "rewards")
             for rate, m in short]
@@ -963,7 +1078,8 @@ def main() -> None:
               m, m["_volume_24h"], "spread")
              for m in spread_cands]
 
-    out = score_pool(jobs, min_depth_usd=trial_bar)
+    out = score_pool(jobs, min_depth_usd=trial_bar,
+                     min_volume_usd=volume_bar)
     # Eligibility BEFORE ranking. Sorting on return_pct_day alone put the
     # top-ranked market at $0.25/day actual against $18.96 projected, because a
     # spectacular percentage return on an income of eleven cents is still
@@ -1016,6 +1132,9 @@ def main() -> None:
         if trial_active:
             for r in picked:
                 r["trial_depth_usd"] = trial_bar
+        if volume_trial_active:
+            for r in picked:
+                r["trial_volume_usd"] = volume_bar
 
         # Temp file and rename: the fleet re-reads this on its own schedule and
         # a half-written file is a SystemExit on the next re-rank.
@@ -1056,8 +1175,11 @@ def main() -> None:
     depth_bar_str = (f"${trial_bar:,.0f}"
                      + (f" [TRIAL vs permanent ${MIN_TOP3_DEPTH_USD:,.0f}]"
                         if trial_active else ""))
+    volume_bar_str = (f"${volume_bar:,.0f}"
+                      + (f" [TRIAL vs permanent ${MIN_VOLUME_24H:,.0f}]"
+                         if volume_trial_active else ""))
     gates = (f"gates: primary/main-line only, blocked submarkets/live; "
-             f"24h volume >= ${MIN_VOLUME_24H:,.0f}, "
+             f"24h volume >= {volume_bar_str}, "
              f"YES+NO top-3 bid depth >= {depth_bar_str} each, "
              f"spread <= {MAX_BOOK_SPREAD:.2f}, "
              f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
@@ -1068,13 +1190,21 @@ def main() -> None:
               f"the permanent ${MIN_TOP3_DEPTH_USD:,.0f}; adopted markets "
               "are tagged trial_depth_usd and their markouts are the "
               "decision evidence (see scripts/trial_depth_gate.py)")
+    if volume_trial_active:
+        print(f"VOLUME-GATE TRIAL: gating on ${volume_bar:,.0f} instead of "
+              f"the permanent ${MIN_VOLUME_24H:,.0f}; adopted markets are "
+              "tagged trial_volume_usd and their markouts are the "
+              "decision evidence")
+
     verdicts = {id(r): _if_adopted(r) for r in out}
     _write_pipeline_snapshot(
         cands=cands, spread_cands=spread_cands, out=out, eligible=eligible,
         picked=picked, causes=causes, census=census, gates=gates,
         attempted=len(jobs), rejected=rejected, verdicts=verdicts,
         depth_gate_usd=trial_bar,
-        trial_depth_usd=(trial_bar if trial_active else None))
+        trial_depth_usd=(trial_bar if trial_active else None),
+        volume_gate_usd=volume_bar,
+        trial_volume_usd=(volume_bar if volume_trial_active else None))
     # The near-miss log is the accumulated evidence for a gate decision; a
     # dry-run audit must not pollute it (it would double-count against the
     # supervised every-10-min ranks).
@@ -1082,6 +1212,13 @@ def main() -> None:
         n_greens = _log_rank_near_misses(out, rejected, verdicts)
         if n_greens:
             print(f"near-misses logged: {n_greens} would clear the floor")
+        # The VOLUME tracker (U34): every volume-reject with a measured
+        # reading, for the gate U33 showed actually binds. Same dry-run guard
+        # as the depth log -- an audit must not pollute the evidence.
+        n_vols = _log_rank_volume_near_misses(out, rejected, verdicts)
+        if n_vols:
+            print(f"volume-rejects logged: {n_vols} measured "
+                  "(volume near-miss tracker)")
     n_spread = sum(1 for r in picked if r["source"] == "spread")
     print(f"picked {n_spread} spread / {len(picked) - n_spread} reward\n")
     print(f"{'market':<40}{'src':>7}{'$/day':>7}{'capital':>9}{'ret%/d':>8}")

@@ -33,6 +33,11 @@ class Inventory:
     up_cost: float = 0.0
     down_cost: float = 0.0
     fills: int = 0
+    # Wall time of the most recent fill (rebuilt from the fills ledger by
+    # `stats.inventory_from_db`; None before the first fill). The pairs-only
+    # rule (U35) dates its 15-minute action window off this -- a naked leg
+    # older than the window is left alone rather than force-exited.
+    last_fill_ts: float | None = None
 
     @property
     def cost(self) -> float:

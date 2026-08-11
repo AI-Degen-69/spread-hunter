@@ -255,17 +255,34 @@ def settled_positions() -> list[dict]:
                    "FROM resolutions")}
         by: dict[str, dict] = {}
         slugs: dict[str, str] = {}
+        side_by_tok: dict[str, dict[str, str]] = {}
         for r in c.execute(
-                "SELECT condition_id, market_slug, token_id, size, price "
-                "FROM fills"):
+                "SELECT condition_id, market_slug, token_id, side, size, "
+                "price FROM fills"):
             m = by.setdefault(r["condition_id"], {"cost": 0.0, "tok": {}})
             m["cost"] += (r["size"] or 0) * (r["price"] or 0)
             m["tok"][r["token_id"]] = (m["tok"].get(r["token_id"], 0.0)
                                        + (r["size"] or 0))
             slugs.setdefault(r["condition_id"], r["market_slug"] or "")
-        closed = {r["condition_id"]: r for r in c.execute(
-                "SELECT condition_id, SUM(shares) sh, SUM(cost_basis) cb "
-                "FROM closes GROUP BY condition_id")}
+            side_by_tok.setdefault(r["condition_id"], {})[
+                r["token_id"]] = r["side"]
+        closed: dict[str, dict] = {}
+        for r in c.execute(
+                "SELECT condition_id, method, up_price, dn_price, shares, "
+                "cost_basis FROM closes"):
+            cl = closed.setdefault(r["condition_id"], {
+                "sh": 0.0, "cb": 0.0, "up_closed": 0.0, "dn_closed": 0.0})
+            n = r["shares"] or 0.0
+            cl["sh"] += n
+            cl["cb"] += r["cost_basis"] or 0.0
+            if r["method"] == "naked_exit":
+                if r["up_price"] is not None:
+                    cl["up_closed"] += n
+                else:
+                    cl["dn_closed"] += n
+            else:
+                cl["up_closed"] += n
+                cl["dn_closed"] += n
         c.close()
 
         for cid, m in by.items():
@@ -274,17 +291,22 @@ def settled_positions() -> list[dict]:
                 continue
             win, resolved_ts = win_res
             cl = closed.get(cid)
-            cl_shares = float(cl["sh"] or 0.0) if cl else 0.0
-            cl_cost = float(cl["cb"] or 0.0) if cl else 0.0
+            cl_shares = cl["sh"] if cl else 0.0
+            cl_cost = cl["cb"] if cl else 0.0
             total_shares = sum(m["tok"].values())
             remaining_shares = total_shares - cl_shares
             if remaining_shares <= 1e-9:
                 continue          # fully closed voluntarily, nothing left to settle
             remaining_cost = m["cost"] - cl_cost
             # Same correction `realized()` applies: one UP + one DOWN were
-            # sold per pair closed, so the winning token's fill count must
-            # drop by the closed-share count before the $1 credit applies.
-            held_win_shares = max(0.0, m["tok"].get(win, 0.0) - cl_shares)
+            # sold per pair closed, so the winning token's fill count drops
+            # by the closed-share count; a naked exit (U35) sold only one
+            # side, so only that side's count drops before the $1 credit.
+            win_side = side_by_tok.get(cid, {}).get(win)
+            closed_win = (cl["up_closed"] if (cl and win_side == "UP")
+                          else cl["dn_closed"] if (cl and win_side == "DOWN")
+                          else cl_shares)
+            held_win_shares = max(0.0, m["tok"].get(win, 0.0) - closed_win)
             pnl = held_win_shares - remaining_cost
             rows.append({
                 "id": f"resolve:{cid}", "ts": resolved_ts,
@@ -483,34 +505,57 @@ def realized() -> dict:
             "SELECT condition_id, market_slug FROM fills "
             "GROUP BY condition_id")}
         by: dict[str, dict] = {}
+        side_by_tok: dict[str, dict[str, str]] = {}
         for r in c.execute(
-                "SELECT condition_id, token_id, size, price FROM fills"):
+                "SELECT condition_id, token_id, side, size, price FROM fills"):
             m = by.setdefault(r["condition_id"], {"cost": 0.0, "tok": {}})
             m["cost"] += (r["size"] or 0) * (r["price"] or 0)
             m["tok"][r["token_id"]] = (m["tok"].get(r["token_id"], 0.0)
                                        + (r["size"] or 0))
+            side_by_tok.setdefault(r["condition_id"], {})[
+                r["token_id"]] = r["side"]
         closes: dict[str, dict] = {}
         for r in c.execute(
-                "SELECT condition_id, COUNT(*) n, SUM(shares) sh, "
-                "SUM(cost_basis) cb, SUM(realized_pnl) pnl, "
-                "SUM(forgone_vs_settlement) forgone FROM closes "
-                "GROUP BY condition_id"):
-            closes[r["condition_id"]] = {
-                "n": r["n"], "shares": r["sh"] or 0.0,
-                "cost_basis": r["cb"] or 0.0, "pnl": r["pnl"] or 0.0,
-                "forgone": r["forgone"] or 0.0,
-            }
+                "SELECT condition_id, method, up_price, dn_price, shares, "
+                "cost_basis, realized_pnl, forgone_vs_settlement "
+                "FROM closes"):
+            cl = closes.setdefault(r["condition_id"], {
+                "n": 0, "shares": 0.0, "cost_basis": 0.0, "pnl": 0.0,
+                "forgone": 0.0, "up_closed": 0.0, "dn_closed": 0.0})
+            n = r["shares"] or 0.0
+            cl["n"] += 1
+            cl["shares"] += n
+            cl["cost_basis"] += r["cost_basis"] or 0.0
+            cl["pnl"] += r["realized_pnl"] or 0.0
+            cl["forgone"] += r["forgone_vs_settlement"] or 0.0
+            if r["method"] == "naked_exit":
+                # U35: one leg sold. The side is encoded by which price
+                # field the row set.
+                if r["up_price"] is not None:
+                    cl["up_closed"] += n
+                else:
+                    cl["dn_closed"] += n
+            else:
+                cl["up_closed"] += n
+                cl["dn_closed"] += n
         c.close()
         for cond, m in by.items():
             win = res.get(cond)
             if not win:
                 continue
             cl = closes.get(cond, {"n": 0, "shares": 0.0, "cost_basis": 0.0,
-                                    "pnl": 0.0, "forgone": 0.0})
-            # Resolution only pays for shares still held: one UP + one DOWN
-            # were sold per pair closed, so the winning token's fill count
-            # must drop by the same amount before the $1 credit is applied.
-            held_win_shares = m["tok"].get(win, 0.0) - cl["shares"]
+                                    "pnl": 0.0, "forgone": 0.0,
+                                    "up_closed": 0.0, "dn_closed": 0.0})
+            # Resolution only pays for shares still held. A pair close
+            # (merge/sell) removed one UP + one DOWN share, so the winning
+            # token's fill count drops by the same amount; a naked exit
+            # (U35) removed only the exited side, so only THAT side's count
+            # drops before the $1 credit is applied.
+            win_side = side_by_tok.get(cond, {}).get(win)
+            closed_win = (cl["up_closed"] if win_side == "UP"
+                          else cl["dn_closed"] if win_side == "DOWN"
+                          else cl["shares"])
+            held_win_shares = m["tok"].get(win, 0.0) - closed_win
             # cost is every dollar ever spent on fills in this market. The
             # portion already removed by closes (cost_basis) must come back
             # out here too, or it is charged against P&L twice: once inside
@@ -748,6 +793,50 @@ def markout_stats() -> dict:
     return out
 
 
+def pairs_ev() -> dict:
+    """The pairs-only rule's EV read (U35), per one-sided fill.
+
+    EV = completion_rate x complete_gain_cents - exit_rate x exit_cost_cents,
+    where the rates come from the rule's own recorded decisions and the two
+    payoffs are the MEASURED constants in config: +16.3c for a completed pair
+    (the merge capture on the 112h sample's 7/7 profitable pairs) and ~3c for
+    a naked exit (the half-spread paid instead of holding to drift). The
+    denominators are the rule-triggering one-sided fills: completed, exited,
+    or rode out the window.
+
+    None, not 0.0, for the rates and EV before the first decision: an empty
+    run must not read as a measured breakeven.
+    """
+    out = {"one_sided": 0, "completions": 0, "exits": 0, "expired": 0,
+           "completion_rate": None, "exit_rate": None, "ev_cents": None,
+           "complete_gain_cents": CFG.pairs_complete_gain_cents,
+           "exit_cost_cents": CFG.pairs_exit_cost_cents}
+    if not DB.exists():
+        return out
+    try:
+        c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        rows = c.execute(
+            "SELECT kind, COUNT(*) FROM market_events WHERE kind IN "
+            "('PAIR_COMPLETE','NAKED_EXIT','PAIR_WINDOW_EXPIRED') "
+            "GROUP BY kind").fetchall()
+        c.close()
+    except Exception:
+        return out
+    by = dict(rows)
+    out["completions"] = int(by.get("PAIR_COMPLETE", 0))
+    out["exits"] = int(by.get("NAKED_EXIT", 0))
+    out["expired"] = int(by.get("PAIR_WINDOW_EXPIRED", 0))
+    one = out["completions"] + out["exits"] + out["expired"]
+    out["one_sided"] = one
+    if one > 0:
+        out["completion_rate"] = out["completions"] / one
+        out["exit_rate"] = out["exits"] / one
+        out["ev_cents"] = round(
+            out["completion_rate"] * CFG.pairs_complete_gain_cents
+            - out["exit_rate"] * CFG.pairs_exit_cost_cents, 3)
+    return out
+
+
 def share_history(n: int = 24) -> list[float]:
     """Fleet-wide avg our_share, one point per hour, most recent n hours.
 
@@ -782,10 +871,11 @@ def inventory_from_db(cid: str) -> Inventory:
     degrades to the old behaviour rather than stopping the fleet.
     """
     inv = Inventory()
+    last_fill_ts: float | None = None
     try:
         with store.db() as c:
-            for side, size, price in c.execute(
-                    "SELECT side, size, price FROM fills WHERE condition_id=?",
+            for side, size, price, ts in c.execute(
+                    "SELECT side, size, price, ts FROM fills WHERE condition_id=?",
                     (cid,)):
                 if side == "UP":
                     inv.up_shares += size or 0.0
@@ -794,17 +884,35 @@ def inventory_from_db(cid: str) -> Inventory:
                     inv.down_shares += size or 0.0
                     inv.down_cost += (size or 0.0) * (price or 0.0)
                 inv.fills += 1
-            for shares, cost_basis, up_removed, dn_removed in c.execute(
-                    "SELECT shares, cost_basis, up_cost_removed, "
-                    "dn_cost_removed FROM closes WHERE condition_id=?",
-                    (cid,)):
-                # A close removed one UP and one DOWN share per pair, each at
-                # its OWN average cost at close time -- not in proportion to
-                # share counts, which only coincides with the true split when
-                # both legs happen to share the same average price. The exact
-                # per-leg amounts removed are recorded on the row, so use them
-                # directly instead of re-deriving (and getting wrong) a split.
+                if ts:
+                    last_fill_ts = (ts if last_fill_ts is None
+                                    else max(last_fill_ts, ts))
+            for shares, cost_basis, up_removed, dn_removed, method, \
+                    up_price, dn_price in c.execute(
+                        "SELECT shares, cost_basis, up_cost_removed, "
+                        "dn_cost_removed, method, up_price, dn_price "
+                        "FROM closes WHERE condition_id=?",
+                        (cid,)):
                 n = shares or 0.0
+                if method == "naked_exit":
+                    # U35. A naked exit sold ONE leg only. The side is encoded
+                    # by which price field is set -- the same encoding the
+                    # settled-positions reader uses. The OTHER leg is
+                    # untouched, so it must not be decremented.
+                    if up_price is not None:
+                        inv.up_shares -= n
+                        inv.up_cost -= up_removed or 0.0
+                    else:
+                        inv.down_shares -= n
+                        inv.down_cost -= dn_removed or 0.0
+                    continue
+                # A pair close (merge or sell) removed one UP and one DOWN
+                # share per pair, each at its OWN average cost at close time --
+                # not in proportion to share counts, which only coincides with
+                # the true split when both legs happen to share the same
+                # average price. The exact per-leg amounts removed are recorded
+                # on the row, so use them directly instead of re-deriving (and
+                # getting wrong) a split.
                 inv.up_shares -= n
                 inv.down_shares -= n
                 if up_removed is not None and dn_removed is not None:
@@ -818,6 +926,7 @@ def inventory_from_db(cid: str) -> Inventory:
                     inv.down_cost -= (cost_basis or 0.0) * 0.5
     except Exception as e:
         log.warning("inventory rehydrate failed for %s: %s", cid[:10], e)
+    inv.last_fill_ts = last_fill_ts
     return inv
 
 
@@ -841,4 +950,5 @@ def snapshot() -> dict:
         "go_live_readiness": go_live_readiness(),
         "share_history": share_history(),
         "markout_stats": markout_stats(),
+        "pairs_ev": pairs_ev(),
     }

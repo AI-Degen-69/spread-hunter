@@ -280,10 +280,13 @@ CREATE TABLE IF NOT EXISTS closes (
     ts REAL NOT NULL,
     condition_id TEXT,
     market_slug TEXT,
-    -- 'sell' (crossed the book, strategy/profit_take.py) or 'merge'
-    -- (redeemed a complete set at parity, strategy/merge.py). Defaults to
-    -- 'sell' so rows written before U2 keep their true meaning without a
-    -- backfill.
+    -- 'sell' (crossed the book, strategy/profit_take.py), 'merge'
+    -- (redeemed a complete set at parity, strategy/merge.py), or
+    -- 'naked_exit' (U35: the pairs-only rule sold ONE leg -- the exited
+    -- side is encoded by which of up_price/dn_price is set, and only that
+    -- side's up/dn_cost_removed is populated; the stats readers are
+    -- side-aware for it). Defaults to 'sell' so rows written before U2 keep
+    -- their true meaning without a backfill.
     method TEXT DEFAULT 'sell',
     gas REAL,                  -- merge only; NULL for a sell
     shares REAL,               -- pairs closed

@@ -182,7 +182,10 @@ def test_realized_pnl_attribution_is_labelled_not_invented(tmp_path):
     """
     db = _build(
         tmp_path / "pnl.db",
-        fills=[(1000.0, "band-mkt", "UP", 0.90, 100.0)],
+        # 0.95 sits outside the widened 0.10-0.90 band (U36f) -- the fill is
+        # a price-band violation under the current config, which is what the
+        # gate bucket asserts below.
+        fills=[(1000.0, "band-mkt", "UP", 0.95, 100.0)],
         closes=[(1100.0, "band-mkt", 20.0, 50.0)],
     )
     rep = replay(db)

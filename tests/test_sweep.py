@@ -9,7 +9,10 @@ exercise: the mid-life settle (`_settle_resolved`), the bare cancel
 (`_cancel_live_orders`) and the event dedup (`_record_event`).
 """
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -170,6 +173,15 @@ def _deep_book(token="tok-up"):
             "token_id": token}
 
 
+def _mid_book(token="tok-up"):
+    """A side whose top-3 bid depth (~$710) clears the $500 trial bar but
+    fails the permanent $1,000 one -- the population the U36 depth trial
+    exists to admit, and the one the fleet used to refuse at quote time."""
+    return {"bids": {0.48: 800.0, 0.47: 400.0, 0.46: 300.0},
+            "asks": {0.50: 800.0}, "best_bid": 0.48, "best_ask": 0.50,
+            "token_id": token}
+
+
 def _boom(host, token):
     raise RuntimeError("venue timeout")
 
@@ -265,6 +277,266 @@ def test_sweep_quoting_outcome_rests_both_sides(monkeypatch, tmp_path):
     out = sweep.sweep(st, _ctx(now=100.0))
 
     assert out.status == "QUOTING"
+
+
+def test_trial_depth_bar_reaches_the_live_book_gate(monkeypatch, tmp_path):
+    """U36 wiring fix. A spec tagged `trial_depth_usd: 500` must gate the
+    fleet's live book gate at $500, not the permanent $1,000 -- otherwise the
+    ranker admits a market the fleet immediately refuses, and the trial is a
+    no-op. Proven with a book whose top-3 depth (~$710) sits between the two
+    bars: it must reach QUOTING under the trial tag and fail without it."""
+    from strategy import sweep
+    from strategy.config import load as load_cfg
+    from strategy import fleet
+
+    base_cfg = load_cfg()
+    assert base_cfg.select_min_top3_depth_usd == 1000.0
+
+    # Without the tag: the ~$710 book fails the permanent $1,000 bar.
+    plain = fleet.MarketState(_spec(cid="cond-no-trial"), base_cfg)
+    assert plain.cfg.select_min_top3_depth_usd == 1000.0
+
+    # With the tag: the live gate drops to the trial bar.
+    spec = _spec(cid="cond-trial")
+    spec["trial_depth_usd"] = 500.0
+    st = fleet.MarketState(spec, base_cfg)
+    assert st.cfg.select_min_top3_depth_usd == 500.0
+
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    st.market = _Market()
+    monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
+    monkeypatch.setattr("strategy.sweep.full_book",
+                        lambda host, token: _mid_book(token))
+
+    out = sweep.sweep(st, _ctx(now=100.0))
+    assert out.status == "QUOTING", out.why
+    assert st.engine.open_orders(), "the trial bar must let orders rest"
+
+
+def test_price_band_widened_to_the_spread_universe(monkeypatch, tmp_path):
+    """U36f. The 0.30-0.70 band was tuned to the old coin-flip BTC series; the
+    spread universe (tennis/CS2/MLB favourites) legitimately trades at
+    0.15-0.85, and the band's protection lives at the 0.95+ settled edge.
+    A 0.25/0.75 book must now quote on the rewards path -- it was blocked
+    before the widening, and blocking it refused a funded market for hours."""
+    from strategy import sweep
+    from strategy.config import load as load_cfg
+    from strategy import fleet
+
+    base_cfg = load_cfg()
+    assert base_cfg.price_band_low == 0.10
+    assert base_cfg.price_band_high == 0.90
+
+    spec = _spec(cid="cond-band")
+    spec["spread"] = 0.01
+    spec["volume_24h"] = 500_000.0
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    st = fleet.MarketState(spec, base_cfg)
+    st.market = _Market()
+    monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
+
+    def lopsided(host, token):
+        return {"bids": {0.25: 3000.0, 0.24: 2000.0, 0.23: 1000.0},
+                "asks": {0.28: 3000.0}, "best_bid": 0.25, "best_ask": 0.28,
+                "token_id": token}
+
+    monkeypatch.setattr("strategy.sweep.full_book", lopsided)
+    out = sweep.sweep(st, _ctx(now=100.0))
+    assert out.status == "QUOTING", out.why
     assert out.requoted is True
     assert len(st.engine.open_orders()) == 2
     assert st.book_gate_fail_since is None
+
+
+# --- U35 pairs-only rule ------------------------------------------------------
+#
+# A one-sided fill is either completed into a pair within 15 minutes (cross
+# the missing leg at ask when the pair stays under max_pair_cost, then merge
+# at parity) or exited at the best bid -- the measured alternative to holding
+# a naked leg into the -18.5c/share 1h drift. The rule is dated off the most
+# recent fill's wall time, so these tests seed the ledger rather than driving
+# fills through the engine.
+
+
+def _mk_book(bids, asks, token):
+    return {"bids": bids, "asks": asks,
+            "best_bid": max(bids) if bids else None,
+            "best_ask": min(asks) if asks else None,
+            "token_id": token}
+
+
+# Both books clear the $1K top-3 depth bar and the 0.06 spread bar on both
+# sides, so the sweep reaches the full path.
+_UP_BOOK = _mk_book({0.48: 5000.0, 0.47: 4000.0, 0.46: 3000.0},
+                    {0.50: 8000.0}, "tok-up")
+# DOWN ask 0.46: a 0.44 UP fill completes at 0.90 < max_pair_cost 0.995.
+_DN_BOOK_CHEAP = _mk_book({0.44: 5000.0, 0.43: 4000.0, 0.42: 3000.0},
+                          {0.46: 8000.0}, "tok-dn")
+# DOWN ask 0.555: a 0.44 UP fill would cost 0.995 >= max_pair_cost -- the
+# pair is not completable, so the rule must exit the UP leg at its 0.48 bid.
+# (0.555 keeps the DOWN spread at 0.055, clear of the 0.06 bar after float
+# rounding, which 0.56 - 0.50 = 0.06000...05 trips.)
+_DN_BOOK_DEAR = _mk_book({0.50: 5000.0, 0.49: 4000.0, 0.48: 3000.0},
+                         {0.555: 8000.0}, "tok-dn")
+
+
+def _pairs_state(monkeypatch, tmp_path, books, fills=None):
+    """A market with healthy books and optionally a seeded one-sided fill.
+
+    The temp MAKER_DB must be set BEFORE the fills are seeded -- the state
+    rehydrates its inventory (and the rule's fill clock) from that database
+    at construction, so a fill seeded into the previous env's DB would leave
+    the rebuilt position empty.
+    """
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    from strategy import store
+
+    for side, price, size in fills or []:
+        _seed_fill(store, side=side, price=price, size=size)
+    st = _mk_sweep_state(monkeypatch, tmp_path)
+    monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
+    up, dn = books
+    monkeypatch.setattr(
+        "strategy.sweep.full_book",
+        lambda host, token: up if token == "tok-up" else dn)
+    return st
+
+
+def _closes(store) -> list[dict]:
+    with store.db() as c:
+        cols = [d[0] for d in c.execute("SELECT * FROM closes").description]
+        return [dict(zip(cols, r)) for r in c.execute("SELECT * FROM closes")]
+
+
+def _crossed_fills(store) -> int:
+    with store.db() as c:
+        return c.execute("SELECT COUNT(*) FROM fills WHERE crossed = 1"
+                         ).fetchone()[0]
+
+
+def test_pairs_rule_completes_fillable_pair_and_merges(monkeypatch, tmp_path):
+    """A recent one-sided UP fill whose missing leg is buyable under
+    max_pair_cost is COMPLETED (crossed DOWN fill) and the completed pair is
+    merged at parity in the same sweep -- the measured +16c capture, not a
+    naked leg held into the drift."""
+    from strategy import store, sweep
+
+    st = _pairs_state(monkeypatch, tmp_path,
+                      books=(_UP_BOOK, _DN_BOOK_CHEAP),
+                      fills=[("UP", 0.44, 100.0)])
+
+    out = sweep.sweep(st, _ctx(now=time.time()))
+
+    assert _crossed_fills(store) == 1, "the missing leg was crossed at ask"
+    closes = _closes(store)
+    assert [c["method"] for c in closes] == ["merge"], \
+        "the completed pair is redeemed at parity in the same sweep"
+    # 0.44 + 0.46 = 0.90 -> 100 pairs pay 100, cost 90, gas 0.05.
+    assert closes[0]["realized_pnl"] == pytest.approx(9.95)
+    assert st.inv.up_shares == 0.0 and st.inv.down_shares == 0.0
+    live = st.spec["_live"]
+    assert live["pairs_rule"]["action"] == "complete"
+    assert live["pairs_rule"]["pair_cost"] == pytest.approx(0.90, abs=0.001)
+
+
+def test_pairs_rule_exits_naked_leg_at_best_bid(monkeypatch, tmp_path):
+    """When the missing leg would make the pair cost >= max_pair_cost, the
+    rule EXITS the naked leg at the best bid instead of holding it -- a
+    closes row with method='naked_exit' booking the half-spread cost."""
+    from strategy import store, sweep
+
+    st = _pairs_state(monkeypatch, tmp_path,
+                      books=(_UP_BOOK, _DN_BOOK_DEAR),
+                      fills=[("UP", 0.44, 100.0)])
+
+    out = sweep.sweep(st, _ctx(now=time.time()))
+
+    closes = _closes(store)
+    assert [c["method"] for c in closes] == ["naked_exit"]
+    assert closes[0]["up_price"] == pytest.approx(0.48)
+    assert closes[0]["dn_price"] is None, "only the UP leg was sold"
+    # 100 x 0.48 bid - 44 cost - 100 x 0.017 fee.
+    assert closes[0]["realized_pnl"] == pytest.approx(2.3)
+    assert st.inv.up_shares == 0.0 and st.inv.down_shares == 0.0
+    assert st.spec["_live"]["pairs_rule"]["action"] == "exit"
+    assert _crossed_fills(store) == 0, "an exit sells, it does not cross"
+
+
+def test_pairs_rule_window_expiry_leaves_position_alone(monkeypatch,
+                                                        tmp_path):
+    """A one-sided fill older than the 15-minute window is left alone: no
+    forced exit, no completion -- but the expiry is recorded ONCE so the EV
+    KPI can count the fill as having ridden out the window."""
+    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    from strategy import store, sweep
+
+    with store.db() as c:
+        c.execute(
+            "INSERT INTO fills (ts, market_slug, condition_id, token_id, "
+            "side, price, size) VALUES (?,?,?,?,?,?,?)",
+            (1000.0, "test-mkt", "cond-1", "TOK-UP", "UP", 0.44, 100.0))
+    st = _mk_sweep_state(monkeypatch, tmp_path)
+    monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "strategy.sweep.full_book",
+        lambda host, token: _UP_BOOK if token == "tok-up" else _DN_BOOK_CHEAP)
+
+    out = sweep.sweep(st, _ctx(now=2000.0))  # fill is 1000s old
+
+    assert _closes(store) == [], "an expired window must not force an exit"
+    assert _crossed_fills(store) == 0
+    assert st.inv.up_shares == 100.0, "the position is left exactly as it was"
+    assert st.spec["_live"]["pairs_rule"]["action"] == "expired"
+    # Once per fill: a second sweep in the same window does not re-record the
+    # EXPIRY (the requote/score steps may still write their own events).
+    def _expiry_events():
+        with store.db() as c:
+            return c.execute("SELECT COUNT(*) FROM market_events "
+                             "WHERE kind='PAIR_WINDOW_EXPIRED'"
+                             ).fetchone()[0]
+    assert _expiry_events() == 1
+    sweep.sweep(st, _ctx(now=2100.0))
+    assert _expiry_events() == 1
+
+
+def test_pairs_rule_disabled_flag_leaves_fills_untouched(monkeypatch,
+                                                         tmp_path):
+    """MAKER_PAIRS_RULE=0 turns the rule off entirely -- the naked leg is
+    neither completed nor exited (the switchable-trial convention every other
+    behavioural change here follows)."""
+    monkeypatch.setenv("MAKER_PAIRS_RULE", "0")
+    from strategy import store, sweep
+
+    st = _pairs_state(monkeypatch, tmp_path,
+                      books=(_UP_BOOK, _DN_BOOK_CHEAP),
+                      fills=[("UP", 0.44, 100.0)])
+
+    out = sweep.sweep(st, _ctx(now=time.time()))
+
+    assert _closes(store) == []
+    assert _crossed_fills(store) == 0
+    assert st.inv.up_shares == 100.0 and st.inv.down_shares == 0.0
+    assert st.spec["_live"]["pairs_rule"]["action"] == "disabled"
+
+
+def test_hedge_census_recorded_every_sweep(monkeypatch, tmp_path):
+    """Every successful sweep records whether a fillable sub-$1.00 pair was
+    present at the touch -- the census table the Phase A reader was written
+    for and that never got switched on."""
+    from strategy import store, sweep
+
+    st = _pairs_state(monkeypatch, tmp_path,
+                      books=(_UP_BOOK, _DN_BOOK_CHEAP))
+
+    out = sweep.sweep(st, _ctx(now=time.time()))
+
+    with store.db() as c:
+        row = c.execute("SELECT up_ask, down_ask, pair_cost_at_touch, "
+                        "fillable_sub_one FROM hedge_census "
+                        "WHERE condition_id='cond-1'").fetchone()
+    assert row is not None, "every sweep must record the pair census"
+    up_ask, dn_ask, pair_cost, fillable = row
+    assert (up_ask, dn_ask) == (0.50, 0.46)
+    # pair_cost_at_touch = ask + ask - reward_offset (0.02).
+    assert pair_cost == pytest.approx(0.94)
+    assert fillable == 1, "0.94 < max_pair_cost 0.995"

@@ -85,6 +85,30 @@ if ($FreshRun) {
 
 $env:MAKER_DB = "run/fleet.db"
 
+# STAGED GATE TRIALS (U36, operator decision 2026-08-10). The universe is
+# narrow -- 2 eligible of 205 scored -- and the funnel audit measured the
+# depth trial alone ($1,000 -> $750) admits 0 additional markets today while
+# a $200k volume bar admits the $235-242k would-fund population. Both bars
+# are run as TRIALS: adopted markets are tagged trial_depth_usd /
+# trial_volume_usd in run/markets.json and their markouts are the decision
+# evidence before either bar becomes permanent. Set to "" to run the
+# permanent bars (or override per-run with --trial-depth / --trial-volume).
+$env:MAKER_DEPTH_TRIAL_USD = "500"
+$env:MAKER_VOLUME_TRIAL_USD = "125000"
+
+# ALLOCATOR FLOOR (U36f, operator decision 2026-08-11). The 2%/day marginal-
+# return floor was tuned for the old 20-market BTC-era universe. The current
+# eligible set (7 real-book markets) all measure 0.046-3.997%/day first-dollar
+# marginal, so the 2%/day floor defunds EVERYTHING and the fleet quotes
+# nothing -- "it's been hours and nothing happens". 0.5%/day funded only
+# 3/7 (Shnaider/Jodar/Falcons); the 4 refused are still real books (competition
+# depth 56k-880k, tight spreads, real volume -- mirage triage already removed
+# the junk), just deep-competition. 0.01%/day funds the whole eligible
+# universe; max_market_frac (0.15) still caps concentration, and the
+# pairs-only rule (U35) is the measured edge these samples are for. Set to ""
+# for the permanent 2%/day floor.
+$env:MAKER_MARGINAL_FLOOR = "0.0001"
+
 # 3. Start hidden. The supervisor owns the fleet, the dashboard, the ranker
 # and the universe watcher as children, and children inherit the parent's
 # hidden console -- so one hidden start yields five windowless processes, not

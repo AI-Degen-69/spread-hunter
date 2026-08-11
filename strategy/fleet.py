@@ -284,6 +284,16 @@ class MarketState:
             market_title=spec["title"],
             market_daily_rate=spec["daily"],
         )
+        # U36 WIRING BUG FIX. The ranker admits a market on the trial depth bar
+        # and tags the spec `trial_depth_usd`; the fleet's live book gate must
+        # quote it at the SAME bar or the trial is a no-op -- measured 2026-08-11:
+        # the allocator's top pick (LoL, 11.72%/day, funded 135sh) was blocked
+        # every sweep by "top-3 bid depth $535 <= $1,000.00" while the spec
+        # carried trial_depth_usd: 500.0, so the trial admitted markets the
+        # fleet immediately refused. The permanent bar stays the fallback.
+        td = spec.get("trial_depth_usd")
+        if td:
+            self.cfg = replace(self.cfg, select_min_top3_depth_usd=float(td))
         self.market = None
         # Earliest time we may try loading this market again. A market that is
         # closed, or whose metadata endpoint is timing out, costs a full request
@@ -314,6 +324,13 @@ class MarketState:
         # purpose: it feeds the pairing rate against fills observed in the same
         # window, and the durable record is the `closes` table.
         self.merged_shares = 0.0
+        # U35 pairs-only rule. `last_fill_ts` is when the most recent fill
+        # landed -- rebuilt from the fills ledger here so the 15-minute action
+        # window survives a restart; `pair_rule_handled_ts` marks which fill
+        # the rule already declared window-expired, so that event is recorded
+        # once per fill rather than on every sweep while the window stays shut.
+        self.last_fill_ts = getattr(self.inv, "last_fill_ts", None)
+        self.pair_rule_handled_ts: float | None = None
         # Rolling (ts, theirs) observations. One snapshot sized the entire
         # fleet on 2026-07-29 and read a competing score of 35 for a market
         # that measured 3,727 live -- a 100x error, and the reason the
@@ -389,7 +406,12 @@ class MarketState:
                 price_tick=float(self.spec["tick"]),
                 market_title=self.spec["title"],
                 market_daily_rate=self.spec["daily"])
-
+            # Keep the live depth gate aligned with the trial bar a re-ranked
+            # spec carries (U36 wiring fix -- see __init__).
+            td = self.spec.get("trial_depth_usd")
+            if td:
+                self.cfg = replace(self.cfg,
+                                   select_min_top3_depth_usd=float(td))
         self.daily = self.spec["daily"]
         self.source = "rewards" if self.daily > 0 else "spread"
         self.pot = self.daily if self.daily > 0 else spread_capture_daily(
