@@ -38,8 +38,16 @@ POLL_SEC = 2.0
 
 CHILDREN = {
     "fleet": [sys.executable, "-m", "strategy.fleet"],
-    "dash": [sys.executable, "-m", "uvicorn", "server.fleet_dash:app",
+    # THE CANONICAL DASHBOARD (2026-08-12). `server.spread_dash` is the
+    # Spread Hunter design migration wired to real fleet data -- it is now
+    # THE dashboard, on the well-known port 8800. `server.fleet_dash` (the
+    # prior dashboard) is kept below as "scan", demoted to 8801, purely
+    # because its market-scan view (?view=scan) has not been redesigned yet;
+    # it is not meant to be visited directly as "the dashboard" anymore.
+    "dash": [sys.executable, "-m", "uvicorn", "server.spread_dash:app",
              "--host", "127.0.0.1", "--port", "8800"],
+    "scan": [sys.executable, "-m", "uvicorn", "server.fleet_dash:app",
+             "--host", "127.0.0.1", "--port", "8801"],
     # THE RANKER, which `fleet-start.ps1` used to start as an UNSUPERVISED
     # sibling. It died on 2026-08-03 at 17:08 and nothing restarted it, so
     # run/markets.json went 28.5 hours without a rewrite while the fleet

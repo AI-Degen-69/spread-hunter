@@ -163,13 +163,15 @@ if ($rrPid.Count -eq 0) {
 }
 
 # Our own processes plus the supervisor's children (fleet + dashboard +
-# ranker + watcher), rather than every fleet-shaped process on the machine.
+# scan + ranker + watcher), rather than every fleet-shaped process on the
+# machine.
 $alive = @(Get-FleetInstance).Count + @(Get-DescendantPids -ParentId $sup.Id).Count
 Write-Host ""
 # ASCII separator, not a middle dot. This file has no BOM, so Windows
 # PowerShell 5.1 reads it as ANSI and renders any non-ASCII character as
 # mojibake in the one line that reports the fleet came up.
-Write-Host "supervisor PID $($sup.Id) | $alive processes up (fleet, dash, rerank, watch)" -ForegroundColor Green
+Write-Host "supervisor PID $($sup.Id) | $alive processes up (fleet, dash, scan, rerank, watch)" -ForegroundColor Green
 Write-Host "dashboard  http://127.0.0.1:8800"
+Write-Host "market scan (not yet redesigned) http://127.0.0.1:8801/?view=scan"
 Write-Host "logs       Get-Content logs\supervisor.log -Wait -Tail 20"
 Write-Host "stop       .\scripts\fleet-stop.ps1"

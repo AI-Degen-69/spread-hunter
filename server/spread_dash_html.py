@@ -262,7 +262,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
         <span class="size-1.5 bg-[#9CA3AF]"></span>
         <span class="tracking-[0.12em] uppercase text-[12px]">Loading</span>
       </div>
-      <a href="http://127.0.0.1:8800/?view=scan" target="_blank" rel="noopener" title="Legacy market-scan view (not yet redesigned)" class="hidden md:flex h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] transition-colors items-center gap-1.5">Market Scan &nearr;</a>
+      <a href="http://127.0.0.1:8801/?view=scan" target="_blank" rel="noopener" title="Legacy market-scan view (not yet redesigned)" class="hidden md:flex h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] transition-colors items-center gap-1.5">Market Scan &nearr;</a>
       <a href="/" class="h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] transition-colors flex items-center gap-1.5">&larr; Home</a>
     </div>
   </div>

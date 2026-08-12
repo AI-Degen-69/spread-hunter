@@ -22,8 +22,8 @@ $FleetPidFile = Join-Path $ProjectPath "run/fleet.pids.json"
 # Reporting only -- never a kill list. Kept so an operator can be TOLD about a
 # fleet this script does not own, rather than silently killing it.
 $FleetPatterns = "*strategy.supervisor*", "*strategy.fleet*",
-                 "*scripts.rerank_loop*", "*uvicorn*server.fleet_dash*",
-                 "*scripts.watch_universe*"
+                 "*scripts.rerank_loop*", "*uvicorn*server.spread_dash*",
+                 "*uvicorn*server.fleet_dash*", "*scripts.watch_universe*"
 
 
 function Save-FleetInstance {
