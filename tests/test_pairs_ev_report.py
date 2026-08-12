@@ -276,12 +276,20 @@ def test_exit_counterfactual_no_column_reports_honestly(monkeypatch, tmp_path):
     assert xc["aggregate"] is None
 
 
-def test_report_empty_db_is_no_data_not_zero(monkeypatch, tmp_path):
-    """A database with no rule decisions must not read as a measured breakeven."""
-    db = tmp_path / "empty.db"
-    monkeypatch.setenv("HUNTER_DB", str(db))
+def test_report_missing_db_fails_fast_and_empty_db_is_no_data(
+        monkeypatch, tmp_path):
+    """A missing path must fail fast -- the read-only fallback would otherwise
+    CREATE the file, contradicting the report's never-writes guarantee
+    (coderabbit) -- while an existing database with no rule decisions must
+    still read as NO DATA, not a measured breakeven."""
     from scripts.pairs_ev_report import report
 
+    missing = tmp_path / "missing.db"
+    with pytest.raises(SystemExit, match="no such database"):
+        report(missing)
+    assert not missing.exists()
+
+    db = _env(monkeypatch, tmp_path)
     rep = report(db)
     assert rep["kpi"]["one_sided"] == 0
     assert rep["kpi"]["ev_cents"] is None
@@ -291,6 +299,48 @@ def test_report_empty_db_is_no_data_not_zero(monkeypatch, tmp_path):
     assert rep["attribution"] == []
     assert rep["exit_counterfactual"]["closes"] == []
     assert rep["exit_counterfactual"]["aggregate"] is None
+
+
+def test_report_survives_legacy_rows_without_prices(monkeypatch, tmp_path):
+    """A legacy naked-exit close with no side prices (up_price/dn_price NULL)
+    must not abort the report with a TypeError on a format spec -- the print
+    path guards None (coderabbit: format guards missing for None values)."""
+    db = _env(monkeypatch, tmp_path)
+    # shares=0 also forces avg_cost/per_share_c to None; leave side prices
+    # NULL so exit_price is None too -- the worst legacy row shape.
+    _seed_close(db, 1200.0, "m1", "naked_exit", 0.0, 0.0, cost=0.0,
+                proceeds=0.0, fee=0.0)
+
+    from scripts.pairs_ev_report import report, _print
+
+    rep = report(db)
+    assert rep["exits"]["n"] == 1
+    assert rep["exits"]["closes"][0]["avg_cost"] is None
+    assert rep["exits"]["closes"][0]["exit_price"] is None
+    # The print path must render 'n/a', not raise TypeError.
+    _print(rep)
+
+
+def test_exit_counterfactual_no_fill_reports_honestly(monkeypatch, tmp_path):
+    """A naked-exit close whose condition has no fill inside the 10s join
+    window must read 'no_fill' -- the window join's failure state, exercised
+    (coderabbit: the fifth documented state had no coverage)."""
+    db = _env(monkeypatch, tmp_path)
+    _seed_close(db, 1400.0, "m4", "naked_exit", 100.0, -2.0, cost=10.0,
+                proceeds=9.0, fee=1.0, cid="lonely-cid")
+    c = sqlite3.connect(str(db))
+    try:
+        c.execute("UPDATE closes SET up_price=0.09 "
+                  "WHERE method='naked_exit'")
+        c.commit()
+    finally:
+        c.close()
+
+    from scripts.pairs_ev_report import report
+    xc = report(db)["exit_counterfactual"]
+    assert xc["no_fill"] == 1
+    assert xc["closes"][0]["status"] == "no_fill"
+    assert xc["aggregate"] is None
 
 
 def test_main_json_output(monkeypatch, tmp_path):

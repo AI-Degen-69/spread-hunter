@@ -77,7 +77,13 @@ def _connect(path: Path) -> sqlite3.Connection:
     this file while the report reads it. WAL databases occasionally refuse a
     URI-readonly open when the -shm file is missing, so `query_only` is the
     fallback -- same guarantee, weaker mechanism.
+
+    The existence check is load-bearing: the fallback `sqlite3.connect(str(path))`
+    would otherwise CREATE an empty file for a missing path, contradicting the
+    report's never-writes guarantee (coderabbit).
     """
+    if not path.exists():
+        raise SystemExit(f"no such database: {path}")
     try:
         c = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True,
                             timeout=BUSY_TIMEOUT_SEC)
@@ -265,6 +271,10 @@ def report(path: Path) -> dict:
         # --- completed pairs: rule-era merge capture ---------------------
         merges = {"n": 0, "pnl": 0.0, "shares": 0.0, "by_market": {}}
         rates: list[float] = []
+        # (slug, shares, pnl, rate) per nonzero-share close, collected in the
+        # one rule-era read so the outlier pass below reuses it instead of
+        # issuing a second identical query (coderabbit).
+        merge_rows: list[tuple[str, float, float, float]] = []
         if has_close and era_start is not None:
             for r in _rows(c, "SELECT market_slug, shares, realized_pnl FROM "
                               "closes WHERE method='merge' AND ts >= ?",
@@ -281,7 +291,9 @@ def report(path: Path) -> dict:
                 b["shares"] += sh
                 b["pnl"] += pnl
                 if sh:
-                    rates.append(pnl / sh * 100.0)
+                    rate = pnl / sh * 100.0
+                    rates.append(rate)
+                    merge_rows.append((slug or "(unknown)", sh, pnl, rate))
         dist = None
         outliers = []
         if rates:
@@ -294,17 +306,13 @@ def report(path: Path) -> dict:
             dist = {"mean": statistics.mean(rates), "median": statistics.median(rates),
                     "p25": p25, "p75": p75, "min": rates[0], "max": rates[-1],
                     "iqr_fences": [lo, hi], "n": n}
-            # IQR outliers, per close (market + rate), flagged not hidden.
-            for r in _rows(c, "SELECT market_slug, shares, realized_pnl FROM "
-                              "closes WHERE method='merge' AND ts >= ?",
-                           [era_start]):
-                sh, pnl = float(r[1] or 0.0), float(r[2] or 0.0)
-                if sh:
-                    rate = pnl / sh * 100.0
-                    if rate < lo or rate > hi:
-                        outliers.append({"market": r[0] or "(unknown)",
-                                         "per_share_c": rate,
-                                         "pnl": pnl, "shares": sh})
+            # IQR outliers, per close (market + rate), flagged not hidden --
+            # from the rows already collected in the first read, no re-query.
+            for market, sh, pnl, rate in merge_rows:
+                if rate < lo or rate > hi:
+                    outliers.append({"market": market,
+                                     "per_share_c": rate,
+                                     "pnl": pnl, "shares": sh})
         out["merges"] = {
             **merges,
             "per_share_c": (merges["pnl"] / merges["shares"] * 100.0
@@ -384,10 +392,16 @@ def _print(rep: dict) -> None:
     print("\n  NAKED EXITS (realized economics)")
     if ex["closes"]:
         for e in ex["closes"]:
+            # avg_cost / per_share_c are None when shares is 0; exit_price is
+            # None when a legacy row carries neither side price -- a format
+            # spec on None aborts the whole report (coderabbit).
+            avg = 'n/a' if e['avg_cost'] is None else f"{e['avg_cost']:.3f}"
+            pps = ('n/a' if e['per_share_c'] is None
+                   else f"{e['per_share_c']:6.2f}c/sh")
+            xp = 'n/a' if e['exit_price'] is None else f"{e['exit_price']}"
             print(f"    {_fmt_ts(e['ts'])} {e['market'][:28]:<28} "
-                  f"sh={e['shares']:6.1f} avg={e['avg_cost']:.3f} "
-                  f"exit={e['exit_price']} pnl={e['pnl']:7.2f} "
-                  f"{e['per_share_c']:6.2f}c/sh")
+                  f"sh={e['shares']:6.1f} avg={avg} "
+                  f"exit={xp} pnl={e['pnl']:7.2f} {pps}")
         print(f"    aggregate: {ex['n']} closes, {ex['shares']:.1f} sh, "
               f"${ex['pnl']:,.2f} = {ex['per_share_c']:.2f}c/sh"
               if ex["per_share_c"] is not None else
@@ -399,9 +413,12 @@ def _print(rep: dict) -> None:
     print("\n  EXIT-VS-WAIT COUNTERFACTUAL (recorded 15m mid vs exit price, Session 50)")
     if xc["closes"]:
         for e in xc["closes"]:
+            # exit_price is None when a close row has neither up_price nor
+            # dn_price (legacy rows) -- guard before formatting (coderabbit).
+            xp = 'n/a' if e['exit_price'] is None else f"{e['exit_price']:.3f}"
             line = (f"    {_fmt_ts(e['ts'])} {e['market'][:26]:<26} "
                     f"{e['side']:<4} sh={e['shares']:6.1f} "
-                    f"exit={e['exit_price']:.3f}")
+                    f"exit={xp}")
             if e["status"] == "recorded":
                 line += (f"  mid15={e['mid_h3']:.3f}  gap={e['gap_c']:+.2f}c  "
                          + ("exit BEAT waiting (mid kept falling)"
