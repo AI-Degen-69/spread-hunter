@@ -66,10 +66,14 @@ def build() -> str:
             cwd=td, capture_output=True, text=True)
         if r.returncode != 0:
             raise SystemExit(f"npm install failed:\n{r.stderr}")
-        src_windows = str(SOURCE).replace("/", "\\")
+        # Tailwind v4's @source expects forward slashes on every platform
+        # (as_posix() yields them on Windows too) -- the old backslash
+        # replacement corrupted the path on POSIX, so the build scanned
+        # nothing and silently shipped an unstyled class set (coderabbit).
+        src = SOURCE.as_posix()
         (td / "input.css").write_text(
             '@import "tailwindcss";\n'
-            f'@source "{src_windows}";\n', encoding="utf-8")
+            f'@source "{src}";\n', encoding="utf-8")
         out_css = td / "tailwind.css"
         npx = _tool("npx")
         r = subprocess.run(

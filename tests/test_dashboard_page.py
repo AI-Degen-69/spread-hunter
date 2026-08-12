@@ -85,6 +85,23 @@ def test_static_tailwind_replaces_the_cdn_runtime():
         assert TAILWIND_CSS in page
 
 
+@pytest.mark.skipif(shutil.which("npm") is None, reason="npm not installed")
+def test_generated_tailwind_css_is_fresh():
+    """The committed stylesheet must equal a fresh build from the template's
+    current class set. A utility class added to `spread_dash_html.py` without
+    rebuilding silently renders UNSTYLED (there is no CDN runtime fallback), so
+    staleness must fail here rather than pass the inlining-only check
+    (coderabbit: stale CSS should fail, not just verify inlining).
+    """
+    from scripts.build_tailwind_css import build
+    from server._tailwind_css import TAILWIND_CSS
+
+    fresh = build()
+    assert fresh == TAILWIND_CSS, (
+        "server/_tailwind_css.py is stale -- run "
+        "python -m scripts.build_tailwind_css from the repo root")
+
+
 def test_settled_rows_harden_market_identifiers():
     """PR #22 review: a persisted market slug must never reach an inline
     handler, an unescaped attribute, or a raw link. The row carries
@@ -473,25 +490,19 @@ def test_data_change_cues_and_market_drawer_are_wired():
     assert "toggleMarketExpand(row.getAttribute(\"data-market\"))" in page
 
 
-def test_order_depth_view_uses_live_orders_and_mid_axis():
-    """The market table must show live resting depth, not a stale flat position."""
-    assert '<th>Order depth / mid</th>' in FLEET_PAGE
-    assert 'function orderDepth(m)' in FLEET_PAGE
-    assert 'm.quotes||[]' in FLEET_PAGE
-    assert 'm.mid_up' in FLEET_PAGE
-    assert 'YES ${upSh.toFixed(0)} sh' in FLEET_PAGE
-    assert 'NO ${dnSh.toFixed(0)} sh' in FLEET_PAGE
-    assert "const v=(m.max_spread||0.045);" in FLEET_PAGE
-    assert 'function posBar(m)' not in FLEET_PAGE
-    assert 'position/risk' not in FLEET_PAGE.lower()
-    assert '<th>Last action</th>' in FLEET_PAGE
-    assert 'function orderDepth(m)' in FLEET_PAGE
-    assert "color==='var(--gold)'?'3px':'2px'" in FLEET_PAGE
-    assert 'action-pill' in FLEET_PAGE
-    assert 'events.slice(1,3)' in FLEET_PAGE
-    assert 'Fleet Naked Risk' in FLEET_PAGE
-    assert 'Gate Refusals' in FLEET_PAGE
-    assert 'Active Quoting Markets' in FLEET_PAGE
+def test_scan_page_has_no_fleet_view():
+    """The 8801 page IS the market scan now: the fleet view, its table
+    renderers, and the view switcher are gone, and the funnel is the whole
+    page. The fleet page lives on 8800 (server.spread_dash)."""
+    assert 'id="view-fleet"' not in FLEET_PAGE
+    assert 'id="viewFleet"' not in FLEET_PAGE
+    assert 'id="viewScan"' not in FLEET_PAGE
+    assert 'function tick()' not in FLEET_PAGE
+    assert 'function ladder(m)' not in FLEET_PAGE
+    assert 'id="settledTbl"' not in FLEET_PAGE
+    assert 'Fleet Naked Risk' not in FLEET_PAGE
+    assert 'id="heroValue"' not in FLEET_PAGE
+    assert 'tick(); setInterval(tick,4000);' not in FLEET_PAGE
 
 
 def test_no_duplicate_top_level_consts():
@@ -512,15 +523,12 @@ def test_no_duplicate_top_level_consts():
 
 
 def test_market_pipeline_view_is_wired_in():
-    """The fleet page and the market-scan view must both exist, with the
-    switcher, the four-lane board, and the JS that renders it from
-    /api/pipeline -- the whole point of the view is seeing the funnel live,
-    so a board skeleton without its renderer is the blank-page bug class."""
-    assert 'id="view-fleet"' in FLEET_PAGE
+    """The market-scan funnel is the entire 8801 page: the four-lane board,
+    the census strip, the near-miss trackers, and the JS that renders them
+    from /api/pipeline -- the whole point of the view is seeing the funnel
+    live, so a board skeleton without its renderer is the blank-page bug
+    class."""
     assert 'id="view-pipeline"' in FLEET_PAGE
-    assert 'id="viewFleet"' in FLEET_PAGE
-    assert 'id="viewScan"' in FLEET_PAGE
-    assert 'class="view-btn active"' in FLEET_PAGE
     assert 'id="laneRaw"' in FLEET_PAGE
     assert 'id="laneFilter"' in FLEET_PAGE
     assert 'id="laneFinal"' in FLEET_PAGE
@@ -532,3 +540,4 @@ def test_market_pipeline_view_is_wired_in():
     assert 'async function tickPipeline()' in FLEET_PAGE
     assert "fetch('/api/pipeline'" in FLEET_PAGE
     assert 'setInterval(tickPipeline,10000)' in FLEET_PAGE
+    assert "● FLEET ALIVE" in FLEET_PAGE
