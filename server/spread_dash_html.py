@@ -53,9 +53,20 @@ _HEAD = """
   .pulse-live{animation:sh-beat 2.4s ease-out infinite;}
   /* During a live refresh the panels dim briefly instead of flickering. */
   main.sh-refreshing section{opacity:.55;transition:opacity .18s ease;}
+  /* Data-change cues: financial figures flash green/red when their value
+     changes (300ms), status cells fade+scale in, and the data-health dot
+     pulses continuously. All stand down under reduced motion. */
+  @keyframes kpi-flash-up{0%{background-color:rgba(34,197,94,.2)}100%{background-color:transparent}}
+  @keyframes kpi-flash-down{0%{background-color:rgba(239,68,68,.2)}100%{background-color:transparent}}
+  .flash-up{animation:kpi-flash-up .3s ease-out;}
+  .flash-down{animation:kpi-flash-down .3s ease-out;}
+  @keyframes status-in{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
+  .status-in{animation:status-in .18s ease-out both;}
+  @keyframes health-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.95)}}
+  .health-pulse{animation:health-pulse 2s ease-in-out infinite;}
   @media (prefers-reduced-motion: reduce){
-    .sh-rise,.pulse-live{animation:none;}
-    .sh-fade,.sh-chev,main.sh-refreshing section{transition:none;}
+    .sh-rise,.pulse-live,.flash-up,.flash-down,.status-in,.health-pulse{animation:none;}
+    .sh-fade,.sh-chev,main.sh-refreshing section,#drawer,#drawer-backdrop{transition:none;}
   }
   ::-webkit-scrollbar{height:8px;width:8px;}
   ::-webkit-scrollbar-thumb{background:var(--line);}
@@ -417,6 +428,14 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </div>
 </div>
 
+<!-- Market-detail drawer: slides in from the right edge (x: 100% -> 0) when
+     an active-market row is clicked. Populated from the market row object
+     and the settled exits already in memory -- no extra fetch. -->
+<div id="drawer-backdrop" class="fixed inset-0 z-40 bg-black/60 opacity-0 pointer-events-none transition-opacity duration-300" onclick="closeDrawer()" aria-hidden="true"></div>
+<div id="drawer" role="dialog" aria-modal="true" aria-label="Market details" class="fixed inset-y-0 right-0 z-50 w-full max-w-[520px] bg-[#111827] border-l border-[#1F2937] flex flex-col shadow-[-16px_0_40px_rgba(0,0,0,0.45)] transition-transform duration-300 ease-out translate-x-full">
+  <div id="drawer-body" class="flex-1 overflow-y-auto flex flex-col"></div>
+</div>
+
 <script>
 // ---------- formatting ----------
 function fmtUsd(v){ if(v===null||v===undefined) return "--"; const s=v<0?"-":"+"; return s+"$"+Math.abs(v).toFixed(2); }
@@ -467,6 +486,8 @@ function plainPnlPctHTML(usd, pct) {
 
 // ---------- collapsible sections ----------
 document.addEventListener("click", (e) => {
+  const dr = e.target.closest("[data-drawer]");
+  if (dr){ openDrawer(dr.getAttribute("data-drawer")); return; }
   const btn = e.target.closest("[data-toggle]");
   if (btn) {
     const id = btn.getAttribute("data-toggle");
@@ -490,6 +511,10 @@ document.addEventListener("click", (e) => {
   if (row) {
     toggleMarketExpand(row.getAttribute("data-market"));
   }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && DRAWER_SLUG) closeDrawer();
 });
 
 // ---------- SVG chart builders ----------
@@ -713,7 +738,7 @@ function renderPositions(s){
       <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#10B981] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Realized P&amp;L &mdash; Settled Positions</div>
       <div class="mono text-[13px] tracking-[0.08em] uppercase text-[#9CA3AF] mt-1">Booked closes plus resolutions on markets held to settlement</div>
       <div class="mt-6 flex items-baseline gap-3 flex-wrap">
-        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]">${fmtPnlHTML(s.realized_usd)}</div>
+        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]" data-kpi="hero_realized" data-v="${s.realized_usd}" data-rollup data-fmt="usd">${fmtPnlHTML(s.realized_usd)}</div>
         <div class="mono text-[14px] font-semibold px-2 py-1 bg-[#10B981]/10 border border-[#10B981]/20 text-[#10B981]">${fmtPct(s.realized_pct)}</div>
         <div class="mono text-[13px] text-[#9CA3AF]">on ${s.realized_cost.toFixed(0)} committed</div>
       </div>
@@ -729,7 +754,7 @@ function renderPositions(s){
       <div class="absolute top-0 left-0 w-full h-[2px] bg-[#3B82F6]"></div>
       <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#3B82F6] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#3B82F6]"></span> Unrealized P&amp;L &mdash; Open Positions</div>
       <div class="mt-6 flex items-baseline gap-3">
-        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]">${fmtPnlHTML(s.unrealized_usd)}</div>
+        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]" data-kpi="hero_unrealized" data-v="${s.unrealized_usd}" data-rollup data-fmt="usd">${fmtPnlHTML(s.unrealized_usd)}</div>
         <div class="mono text-[12px] tracking-widest uppercase px-2 py-1 bg-[#3B82F6] border border-[#1F2937]">Unrealized</div>
       </div>
       <div class="mono text-[13px] tracking-widest uppercase text-[#9CA3AF] mt-1">Floating midpoint on ${s.committed_open_usd.toFixed(0)} &middot; ${s.active_positions} active positions</div>
@@ -845,7 +870,7 @@ function renderEvidence(s){
       <div class="p-3 grid grid-cols-3 gap-2">
         <div class="bg-[#111827] border border-[#1F2937] p-3 text-center"><div class="mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Wins</div><div class="mono text-[17px] font-bold text-[#10B981]">${s.wins}</div></div>
         <div class="bg-[#111827] border border-[#1F2937] p-3 text-center"><div class="mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Losses</div><div class="mono text-[17px] font-bold text-[#EF4444]">${s.losses}</div></div>
-        <div class="bg-[#111827] border border-[#1F2937] p-3 text-center"><div class="mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Win rate</div><div class="mono text-[17px] font-bold">${(s.wins+s.losses)?(100*s.wins/(s.wins+s.losses)).toFixed(1):'--'}%</div></div>
+        <div class="bg-[#111827] border border-[#1F2937] p-3 text-center"><div class="mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Win rate</div><div class="mono text-[17px] font-bold" data-kpi="win_rate" data-v="${(s.wins+s.losses)?(100*s.wins/(s.wins+s.losses)).toFixed(1):'--'}" data-rollup data-fmt="pct">${(s.wins+s.losses)?(100*s.wins/(s.wins+s.losses)).toFixed(1):'--'}%</div></div>
       </div>
     </div>
     <div class="border border-[#1F2937] bg-[#111827] overflow-hidden">
@@ -859,23 +884,28 @@ function renderEvidence(s){
 }
 
 function renderMarkets(rows){
+  LAST_MARKETS = rows;
+  // Rows are clickable and open the market-detail drawer; the P&L cells and
+  // status cells carry data-kpi / data-state so animateChanges() can flash
+  // and transition them when a poll changes their values. The Polymarket
+  // link keeps its own stopPropagation so it never opens the drawer.
   const table = `<div class="overflow-x-auto"><table class="w-full text-left border-collapse">
     <thead><tr class="bg-[#090D16] mono text-[12px] tracking-[0.14em] uppercase border-b border-[#1F2937]">
       <th class="px-3 py-2.5">Market</th><th class="px-3 py-2.5">Order Depth / Mid</th><th class="px-3 py-2.5 text-right">Commit</th>
       <th class="px-3 py-2.5 text-right">Unrealized P&amp;L</th><th class="px-3 py-2.5 text-right">Realized P&amp;L</th><th class="px-3 py-2.5 text-center">Fills</th><th class="px-3 py-2.5">Status</th>
     </tr></thead>
     <tbody class="mono text-[14px] divide-y divide-[#1F2937]">
-      ${rows.length ? rows.map(r => `<tr class="hover:bg-[#1F2937] transition-colors">
+      ${rows.length ? rows.map(r => `<tr class="hover:bg-[#1F2937] transition-colors cursor-pointer" data-drawer="${escAttr(r.market)}">
         <td class="px-3 py-2.5">
           <div class="font-medium max-w-[280px] truncate text-[13px]"><a href="https://polymarket.com/event/${esc(r.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${formatMarketTitle(r.market)}</a></div>
           <div class="mt-1">${getCategoryTag(r.category)}</div>
         </td>
         <td class="px-3 py-2.5">${orderDepthHtml(r)}</td>
         <td class="px-3 py-2.5 text-right font-semibold text-[13px]">$${r.committed.toFixed(0)}</td>
-        <td class="px-3 py-2.5 text-right">${badgePnlPctHTML(r.unrealized, r.unrealized_pct)}</td>
-        <td class="px-3 py-2.5 text-right">${r.closes ? badgePnlPctHTML(r.realized, r.realized_pct) : `<span class="text-[#9CA3AF]">--</span>`}</td>
+        <td class="px-3 py-2.5 text-right" data-kpi="u_${escAttr(r.market)}" data-v="${r.unrealized}">${badgePnlPctHTML(r.unrealized, r.unrealized_pct)}</td>
+        <td class="px-3 py-2.5 text-right" data-kpi="r_${escAttr(r.market)}" data-v="${r.closes ? r.realized : 'n/a'}">${r.closes ? badgePnlPctHTML(r.realized, r.realized_pct) : `<span class="text-[#9CA3AF]">--</span>`}</td>
         <td class="px-3 py-2.5 text-center"><span class="px-2 py-1 text-[13px] font-bold border border-[#1F2937]">${r.fills}</span></td>
-        <td class="px-3 py-2.5 max-w-[240px] truncate">
+        <td class="px-3 py-2.5 max-w-[240px] truncate" data-state="${escAttr(r.market)}" data-v="${escAttr(r.status)}">
           <div class="flex flex-col gap-1 items-start">
             ${getStatusTag(r.status)}
             ${r.age && r.status.includes("Orders resting") ? `<span class="text-[11px] text-[#9CA3AF] mono pl-1">Resting ${formatAge(r.age)}</span>` : ''}
@@ -883,7 +913,7 @@ function renderMarkets(rows){
         </td>
       </tr>`).join("") : `<tr><td colspan="8" class="px-4 py-6 text-center mono text-[13px] text-[#9CA3AF]">No active markets right now.</td></tr>`}
     </tbody></table></div>
-    <div class="px-4 py-2.5 border-t border-[#1F2937] mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">${rows.length} active markets &middot; Realized = already-booked P&amp;L from partial closes on that market &middot; Unrealized values are estimates only</div>`;
+    <div class="px-4 py-2.5 border-t border-[#1F2937] mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">${rows.length} active markets &middot; click a row for the market detail drawer &middot; Realized = already-booked P&amp;L from partial closes &middot; Unrealized values are estimates only</div>`;
   document.getElementById("tab-markets").innerHTML = table;
 }
 
@@ -1209,6 +1239,149 @@ function startPulseTicker(){
   window.__pulseTick = setInterval(tick, 1000);
 }
 
+// ---------- data-change cues (flash / roll-up / status transitions) ----------
+// Financial figures carry data-kpi + data-v; when a poll changes a value
+// the cell flashes green/red (300ms) and data-rollup cells animate the
+// number from the previous value to the new one (400ms, ease-out). Status
+// cells carry data-state and fade+scale in when the string changes. The
+// previous-value maps are empty until the first poll, so first paint never
+// flashes -- only real data changes do.
+const KPI_PREV = {};
+const STATE_PREV = {};
+const MOTION_OK = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function fmtKPI(v, kind){
+  if (kind === "pct") return v.toFixed(1) + "%";
+  return (v < 0 ? "-" : "+") + "$" + Math.abs(v).toFixed(2);
+}
+
+function animateNumber(el, from, to, kind){
+  if (!MOTION_OK || from === to){ el.textContent = fmtKPI(to, kind); return; }
+  const dur = 400, t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / dur);
+    const e = 1 - Math.pow(1 - k, 3);
+    el.textContent = fmtKPI(from + (to - from) * e, kind);
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function animateChanges(){
+  document.querySelectorAll("[data-kpi]").forEach(el => {
+    const name = el.getAttribute("data-kpi");
+    const v = el.getAttribute("data-v");
+    const prev = KPI_PREV[name];
+    KPI_PREV[name] = v;
+    if (prev === undefined || prev === v) return;
+    const p = parseFloat(prev), n = parseFloat(v);
+    if (isNaN(p) || isNaN(n) || p === n) return;
+    el.classList.remove("flash-up", "flash-down");
+    void el.offsetWidth;
+    el.classList.add(n > p ? "flash-up" : "flash-down");
+    if (el.hasAttribute("data-rollup")){
+      const target = el.querySelector("span") || el;
+      animateNumber(target, p, n, el.getAttribute("data-fmt") || "usd");
+    }
+  });
+  document.querySelectorAll("[data-state]").forEach(el => {
+    const name = el.getAttribute("data-state");
+    const v = el.getAttribute("data-v");
+    const prev = STATE_PREV[name];
+    STATE_PREV[name] = v;
+    if (prev === undefined || prev === v) return;
+    el.classList.remove("status-in");
+    void el.offsetWidth;
+    el.classList.add("status-in");
+  });
+}
+
+// ---------- market detail drawer ----------
+// Clicking an active-market row slides a panel in from the right edge
+// (x: 100% -> 0) showing that market's live book, P&L, markout, and
+// execution log. Pure frontend: the row object and the settled exits are
+// already in memory from the last poll, so nothing new is fetched.
+let DRAWER_SLUG = null;
+let LAST_MARKETS = [];
+
+function openDrawer(slug){
+  DRAWER_SLUG = slug;
+  renderDrawer();
+  document.getElementById("drawer").classList.remove("translate-x-full");
+  document.getElementById("drawer").classList.add("translate-x-0");
+  const b = document.getElementById("drawer-backdrop");
+  b.classList.remove("opacity-0", "pointer-events-none");
+  b.classList.add("opacity-100");
+  const close = document.getElementById("drawer-close");
+  if (close) close.focus();
+}
+
+function closeDrawer(){
+  DRAWER_SLUG = null;
+  document.getElementById("drawer").classList.add("translate-x-full");
+  document.getElementById("drawer").classList.remove("translate-x-0");
+  const b = document.getElementById("drawer-backdrop");
+  b.classList.add("opacity-0", "pointer-events-none");
+  b.classList.remove("opacity-100");
+}
+
+function renderDrawer(){
+  const body = document.getElementById("drawer-body");
+  const m = LAST_MARKETS.find(x => x.market === DRAWER_SLUG) || null;
+  if (!m){
+    body.innerHTML = `<div class="p-6 mono text-[13px] text-[#9CA3AF]">This market is no longer active.</div>`;
+    return;
+  }
+  const g = settledState.grouped.find(x => x.market === m.market);
+  const exits = g ? g.exits : [];
+  const markout = (m.markout === null || m.markout === undefined)
+    ? "--" : (m.markout * 100).toFixed(2) + "&cent;";
+  body.innerHTML = `
+    <div class="sticky top-0 z-10 bg-[#111827] flex items-start justify-between gap-3 px-4 h-12 border-b border-[#1F2937] shrink-0">
+      <div class="min-w-0">
+        <div class="font-medium text-[14px] truncate">${esc(formatMarketTitle(m.market))}</div>
+        <div class="mt-1 flex items-center gap-2 flex-wrap">${getCategoryTag(m.category)} ${getStatusTag(m.status)}</div>
+      </div>
+      <button id="drawer-close" onclick="closeDrawer()" class="size-7 border border-[#1F2937] grid place-items-center hover:bg-[#1F2937] transition-colors mono text-[13px] shrink-0" aria-label="Close market details">&times;</button>
+    </div>
+    <div class="p-4 space-y-4">
+      <div>
+        <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#9CA3AF] mb-2">Order book &middot; live mid</div>
+        ${orderDepthHtml(m)}
+      </div>
+      <div class="grid grid-cols-4 gap-2 mono text-[12px]">
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Commit</div><div class="font-bold mt-1">$${m.committed.toFixed(0)}</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Resting</div><div class="font-bold mt-1">${m.resting}</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Fills</div><div class="font-bold mt-1">${m.fills}</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Age</div><div class="font-bold mt-1">${formatAge(m.age)}</div></div>
+      </div>
+      <div class="grid grid-cols-2 gap-2 mono text-[12px]">
+        <div class="bg-[#3B82F6]/10 border border-[#3B82F6]/20 p-3"><div class="text-[#3B82F6] tracking-[0.14em] uppercase">Unrealized</div><div class="font-bold mt-1 text-[16px]">${plainPnlPctHTML(m.unrealized, m.unrealized_pct)}</div></div>
+        <div class="bg-[#10B981]/10 border border-[#10B981]/20 p-3"><div class="text-[#10B981] tracking-[0.14em] uppercase">Realized (closes)</div><div class="font-bold mt-1 text-[16px]">${m.closes ? plainPnlPctHTML(m.realized, null) : `<span class="text-[#9CA3AF]">--</span>`}</div></div>
+      </div>
+      <div>
+        <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#9CA3AF] mb-2">Markout drift</div>
+        <div class="border border-[#1F2937] bg-[#090D16] px-3 py-2.5 mono text-[13px] flex items-center justify-between">
+          <span class="text-[#9CA3AF]">Mean drift per filled share</span>
+          <span class="font-bold ${(m.markout||0)<0?'text-[#EF4444]':'text-[#F9FAFB]'}">${markout}</span>
+        </div>
+        <div class="mt-1.5 mono text-[11px] leading-4 text-[#9CA3AF]">Pooled fleet-wide drift lives in the Verdict panel; this is this market's own measured mean.</div>
+      </div>
+      <div>
+        <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#9CA3AF] mb-2">Execution log &middot; ${exits.length} exit${exits.length===1?'':'s'}</div>
+        ${exits.length ? `<div class="border border-[#1F2937] divide-y divide-[#1F2937] mono text-[13px]">
+          ${exits.map(x => `<div class="flex items-center justify-between gap-3 px-3 py-2">
+            <span class="flex items-center gap-2 min-w-0">${getMethodTag(x.method)}<span class="text-[#9CA3AF] text-[12px] truncate">${x.shares ? x.shares.toFixed(0) + ' sh' : ''} @ $${x.avg_cost===null?'--':x.avg_cost.toFixed(4)}</span></span>
+            <span>${plainPnlPctHTML(x.pnl, x.pnl_pct)}</span>
+          </div>`).join("")}
+        </div>` : `<div class="border border-[#1F2937] bg-[#090D16] px-3 py-2.5 mono text-[12px] text-[#9CA3AF]">No closes recorded for this market yet.</div>`}
+      </div>
+      <div class="mono text-[11px] leading-4 text-[#9CA3AF] border-t border-[#1F2937] pt-2.5">
+        <a href="https://polymarket.com/event/${encodeURIComponent(m.market)}" target="_blank" rel="noopener" class="text-blue-400 hover:underline">Open on Polymarket &nearr;</a> &middot; refreshes with each 15s poll &middot; Esc or backdrop to close.
+      </div>
+    </div>`;
+}
+
 // ---------- auto-refresh ----------
 // Poll the four endpoints every 15s and re-render in place. Tab state and
 // open settled groups survive because the panel shells keep their classes
@@ -1225,8 +1398,8 @@ function renderSummary(s){
   document.getElementById("hdr-pills").innerHTML = `
     <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 bg-[#090D16] font-semibold border border-[#1F2937]">${esc(s.status)}</span>`;
   document.getElementById("hdr-live").innerHTML = `
-    <span class="size-1.5 ${s.fleet_alive?'bg-[#10B981] animate-pulse':'bg-[#F59E0B]'}"></span>
-    <span class="tracking-[0.12em] uppercase text-[12px]">${s.fleet_alive?'Live':'Idle'}</span>`;
+    <span class="size-2 ${s.fleet_alive?'bg-[#10B981] health-pulse':'bg-[#F59E0B]'} shrink-0"></span>
+    <span class="tracking-[0.12em] uppercase text-[12px] text-[#9CA3AF]">Data health &middot; <span class="text-[#F9FAFB]">${s.fleet_alive?'Live':'Idle'}</span></span>`;
   renderHinge(s);
   renderPositions(s);
   renderVerdict(s);
@@ -1254,6 +1427,10 @@ async function refresh(){
     if (fn) renderFunnel(fn);
     if (mk) renderMarkets(mk.markets);
     if (s) renderSummary(s);
+    // Flash changed figures, animate status transitions, and keep an open
+    // drawer live with the freshest data -- all after the re-render.
+    animateChanges();
+    if (DRAWER_SLUG) renderDrawer();
   } finally {
     REFRESH_BUSY = false;
     if (main) main.classList.remove("sh-refreshing");
@@ -1275,12 +1452,18 @@ async function boot(){
   try {
     s = await fetchJSON("/api/summary");
     renderSummary(s);
+    // Seed the previous-value maps so the FIRST poll flashes on real
+    // changes rather than treating the initial paint as a change.
+    animateChanges();
   } catch (e) {
     showSectionError("sec-positions", e);
     showSectionError("sec-verdict", e);
     showSectionError("sec-gauges", e);
     showSectionError("sec-evidence", e);
     renderHingeOffline(e);
+    document.getElementById("hdr-live").innerHTML = `
+      <span class="size-2 bg-[#EF4444] shrink-0"></span>
+      <span class="tracking-[0.12em] uppercase text-[12px] text-[#9CA3AF]">Data health &middot; <span class="text-[#EF4444]">Offline</span></span>`;
     document.getElementById("scope-tiles").innerHTML =
       `<div class="col-span-3 border border-[#EF4444]/30 p-3 text-center mono text-[12px] text-[#EF4444]">Summary unavailable</div>`;
   }

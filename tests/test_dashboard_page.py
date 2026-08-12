@@ -112,6 +112,31 @@ def test_dashboard_auto_refreshes_every_15s():
     assert "settledState.page = page;" in page
 
 
+def test_data_change_cues_and_market_drawer_are_wired():
+    """Phase-1 interactions: financial figures flash on change (data-kpi /
+    data-v), hero numbers roll up (data-rollup), status cells fade+scale in
+    (data-state), the data-health dot pulses (health-pulse), and clicking a
+    market row opens the right-edge drawer (data-drawer + openDrawer) whose
+    content is rendered from data already in memory."""
+    page = DASHBOARD_HTML
+    assert "function animateChanges()" in page
+    assert "function animateNumber(" in page
+    assert "data-kpi=\"hero_realized\"" in page
+    assert "data-rollup" in page
+    assert "data-state=\"${escAttr(r.market)}\"" in page
+    assert "health-pulse" in page
+    assert "data-drawer=\"${escAttr(r.market)}\"" in page
+    assert "function openDrawer(slug)" in page
+    assert "function closeDrawer()" in page
+    assert "function renderDrawer()" in page
+    assert 'id="drawer"' in page
+    assert "translate-x-full" in page
+    assert "rgba(34,197,94,.2)" in page
+    # Drawer wiring must not regress the PR #22 hardening: the settled
+    # rows still expand inline, never via the drawer.
+    assert "toggleMarketExpand(row.getAttribute(\"data-market\"))" in page
+
+
 def test_order_depth_view_uses_live_orders_and_mid_axis():
     """The market table must show live resting depth, not a stale flat position."""
     assert '<th>Order depth / mid</th>' in FLEET_PAGE
