@@ -9,12 +9,14 @@ mockup's placeholder data.
 """
 from __future__ import annotations
 
-_HEAD = """
+from server._tailwind_css import TAILWIND_CSS
+
+_HEAD = ("""
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Geist+Mono:wght@400;500;600;700&display=swap">
-<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600..800&family=Geist+Mono:wght@400..700&display=swap">
+<style>""" + TAILWIND_CSS + """</style>
 <script src="/capital.js"></script>
 <style>
   /* Design tokens -- the operator-approved desk palette, codified as one
@@ -125,7 +127,7 @@ _HEAD = """
   ::-webkit-scrollbar{height:8px;width:8px;}
   ::-webkit-scrollbar-thumb{background:var(--line);}
 </style>
-"""
+""")
 
 
 # The capital-since-inception widget, shared by BOTH pages via a single

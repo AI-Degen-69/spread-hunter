@@ -73,6 +73,18 @@ def test_no_duplicate_top_level_consts_all_pages(name):
         assert not dupes, f"{name}: duplicate const declarations: {sorted(dupes)}"
 
 
+def test_static_tailwind_replaces_the_cdn_runtime():
+    """Session 52: the Tailwind Play CDN (~350KB render-blocking third-party
+    JS, fetched from a public CDN on every cold load) is replaced by the
+    pre-built minified stylesheet shipped in `server/_tailwind_css.py` and
+    inlined into both pages. The CDN must never return -- re-adding it
+    re-introduces the render-blocking dependency and breaks offline use."""
+    from server._tailwind_css import TAILWIND_CSS
+    for page in (DASHBOARD_HTML, LANDING_HTML):
+        assert "cdn.tailwindcss.com" not in page
+        assert TAILWIND_CSS in page
+
+
 def test_settled_rows_harden_market_identifiers():
     """PR #22 review: a persisted market slug must never reach an inline
     handler, an unescaped attribute, or a raw link. The row carries

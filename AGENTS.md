@@ -43,6 +43,7 @@ Escape hatch for typos and formatting: `git commit --no-verify`.
     strategy/   engine
     server/     fleet_dash.py (dashboard API + page)
     research/   the five files above
+    PROGRAM.md  research org code — how a bounded experiment is run (read it before an experiment)
 
 The sibling repo `polymarket-taker` uses the SAME layout. Keep it that way — the only
 difference between the repos should be strategy-specific.

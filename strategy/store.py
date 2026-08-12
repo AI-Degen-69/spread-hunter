@@ -256,6 +256,17 @@ CREATE TABLE IF NOT EXISTS markouts (
     -- of quietly reporting our own footprint back to us as edge.
     ref_mid_source TEXT,
     mid_h0 REAL, mid_h1 REAL, mid_h2 REAL,
+    -- mid_h3 (Session 50): the 15-minute EXIT-WINDOW read, filled at
+    -- fill+900s. It exists for the naked-exit counterfactual -- "what would
+    -- the mid have been 15 minutes after we exited?" -- which Session 49 had
+    -- to infer from the bid ladder. APPENDED LAST on purpose: a horizon maps
+    -- to its column by position, so inserting it between 5m and 1h would
+    -- relabel every existing mid_h1/mid_h2 reading. It therefore matures
+    -- BEFORE the 1h and 6h horizons while sitting after them in the schema:
+    -- readers that want the longest matured horizon must compare DURATIONS,
+    -- never columns, and the sampling loop must not set `done` on the last
+    -- column alone (see markout.sample_due).
+    mid_h3 REAL,
     done INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_mk_done ON markouts(done, ts);
@@ -363,6 +374,9 @@ _MIGRATIONS = {
                # value for every one of them -- the default backfills itself.
                "method": "TEXT DEFAULT 'sell'", "gas": "REAL"},
     "decisions": {"reason_code": "TEXT DEFAULT 'OTHER'"},
+    # Session 50. Existing fleet DBs predate the 15m exit-window read; the
+    # column must arrive by ALTER TABLE, not only in fresh CREATE TABLEs.
+    "markouts": {"mid_h3": "REAL"},
 }
 
 

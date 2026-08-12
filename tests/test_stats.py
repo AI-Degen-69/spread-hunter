@@ -205,7 +205,59 @@ def test_pairs_ev_counts_rule_decisions(monkeypatch, tmp_path):
     assert ev["completions"] == 2 and ev["exits"] == 1 and ev["expired"] == 1
     assert ev["completion_rate"] == pytest.approx(0.5)
     assert ev["exit_rate"] == pytest.approx(0.25)
-    # 0.5 x 16.3 - 0.25 x 3.0 = 8.15 - 0.75.
-    assert ev["ev_cents"] == pytest.approx(7.4)
+    # 0.5 x 3.68 - 0.25 x 3.67 = 0.9225 -> rounds to 0.923 (constants
+    # re-measured in Sessions 44/45: 16.3c was a 302.5-share pre-spread-era
+    # sample; the exit cost was corrected from a mis-added 3.89 to 3.67).
+    assert ev["ev_cents"] == pytest.approx(0.923)
+    # No completed-pair closes exist yet -> the distribution is None, not a
+    # confident 0 (the same empty-run rule as the EV itself).
+    assert ev["dist"] is None and ev["outliers"] is None
     assert stats.snapshot()["pairs_ev"]["one_sided"] == 4, \
         "the dashboard payload must carry the EV read"
+
+
+def test_pairs_ev_distribution_and_outliers(monkeypatch, tmp_path):
+    """The completed-pair capture distribution + IQR outlier count ride the
+    same payload the tile reads (Sessions 44-47): median/p25-p75 visible next
+    to the EV, outliers flagged -- None, not empty, before the first
+    rule-era merge."""
+    import sqlite3
+
+    _env(monkeypatch, tmp_path)
+    from strategy import stats, store
+
+    # A rule decision but no rule-era merge yet -> dist stays None.
+    store.log_event(ts=1000.0, market_slug="m", condition_id="c",
+                    kind="PAIR_COMPLETE", reason="PAIR_COMPLETE", size=100.0)
+    assert stats.pairs_ev()["dist"] is None
+    assert stats.pairs_ev()["outliers"] is None
+
+    # Three rule-era merges: rates 3.0 / 5.0 / 16.5 c/sh -> 16.5 is an IQR
+    # outlier against the 3-5c set (fences 0.0..8.0), exactly as the report
+    # computes it.
+    db = tmp_path / "stats.db"
+    c = sqlite3.connect(str(db))
+    try:
+        for ts, pnl in ((1100.0, 3.0), (1101.0, 5.0), (1102.0, 16.5)):
+            c.execute(
+                "INSERT INTO closes (ts, condition_id, market_slug, method, "
+                "gas, shares, up_price, dn_price, cost_basis, proceeds, fee, "
+                "realized_pnl, forgone_vs_settlement, up_cost_removed, "
+                "dn_cost_removed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (ts, "c", "m", "merge", None, 100.0, None, None, 0.0, 0.0,
+                 0.0, pnl, None, 0.0, 0.0))
+        c.commit()
+    finally:
+        c.close()
+
+    ev = stats.pairs_ev()
+    d = ev["dist"]
+    assert d["n"] == 3
+    assert d["mean"] == pytest.approx(8.1667, abs=1e-3)
+    assert d["median"] == pytest.approx(5.0)
+    assert d["p25"] == pytest.approx(3.0) and d["p75"] == pytest.approx(5.0)
+    assert d["min"] == pytest.approx(3.0) and d["max"] == pytest.approx(16.5)
+    assert ev["outliers"]["count"] == 1
+    assert ev["outliers"]["fences"] == pytest.approx([0.0, 8.0])
+    # The dashboard payload carries the same fields (the tile reads snapshot).
+    assert stats.snapshot()["pairs_ev"]["dist"]["median"] == pytest.approx(5.0)

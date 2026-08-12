@@ -194,3 +194,72 @@ def test_the_gate_consumes_the_new_shape_unmodified():
                             min_sample=8)
     assert gate.next_state(gate.NORMAL, thin, cfg) == gate.NORMAL
     assert gate.next_state(gate.WIDENED, thin, cfg) == gate.WIDENED
+
+
+# --- the 15m exit-window horizon (mid_h3, Session 50) ------------------------
+
+def _sampling_store(monkeypatch, tmp_path):
+    """Point the store at a fresh DB. `store._cfg.db_path()` reads HUNTER_DB at
+    call time, so a late setenv still takes effect even though `store` was
+    imported at module import."""
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "mk.db"))
+    from strategy import store
+    return store
+
+
+def test_sampling_records_the_15m_read_and_stays_open(monkeypatch, tmp_path):
+    """The 900s horizon is APPENDED after the 6h one, so it matures EARLIEST
+    of the last three -- writing it must not seal the row. `done` means "every
+    horizon recorded", which here happens only when the 6h reading lands.
+    Without the fix, close_markout marked done at len(horizons)-1 and the 1h
+    and 6h readings were never written."""
+    store = _sampling_store(monkeypatch, tmp_path)
+    from strategy.markout import sample_due
+    from strategy.config import load as load_cfg
+    horizons = load_cfg().markout_horizons
+    assert horizons == (300.0, 3600.0, 21600.0, 900.0)
+    store.log_markout_open(ts=1_000.0, condition_id="c1", market_slug="s",
+                           side="UP", fill_price=0.48, size=100.0,
+                           ref_mid=0.50)
+    mids = {"c1": {"UP": 0.50, "DOWN": 0.50}}
+    # nothing due before 5m; the 5m reading lands on schedule
+    assert sample_due(mids, 1_000.0 + 250.0, horizons) == 0
+    assert sample_due(mids, 1_000.0 + 301.0, horizons) == 1
+    # 15m lands -- and the row must STAY open: 1h and 6h are still owed
+    assert sample_due(mids, 1_000.0 + 901.0, horizons) == 1
+    # 1h lands, still not done; only the 6h reading seals the row
+    assert sample_due(mids, 1_000.0 + 3_601.0, horizons) == 1
+    assert sample_due(mids, 1_000.0 + 21_601.0, horizons) == 1
+    rows = store.markout_rows()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["mid_h0"] == 0.50 and r["mid_h1"] == 0.50
+    assert r["mid_h2"] == 0.50 and r["mid_h3"] == 0.50
+    assert r["done"] == 1
+
+
+def test_migration_adds_mid_h3_to_an_existing_table(monkeypatch, tmp_path):
+    """run/fleet.db predates mid_h3. The column must arrive by ALTER TABLE in
+    _MIGRATIONS -- fresh CREATE TABLEs get it from the schema, but an existing
+    database only sees it when the migration runs, and a restarted fleet writes
+    nothing until then."""
+    import sqlite3
+    db = tmp_path / "old.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE markouts ("
+              "id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, "
+              "condition_id TEXT, market_slug TEXT, side TEXT, "
+              "fill_price REAL, size REAL, ref_mid REAL, ref_mid_source TEXT, "
+              "mid_h0 REAL, mid_h1 REAL, mid_h2 REAL, done INTEGER DEFAULT 0)")
+    c.execute("INSERT INTO markouts (ts, condition_id, side, ref_mid, "
+              "mid_h0) VALUES (1.0, 'c1', 'UP', 0.5, 0.5)")
+    c.commit()
+    c.close()
+    monkeypatch.setenv("HUNTER_DB", str(db))
+    from strategy import store
+    with store.db() as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(markouts)")}
+        assert "mid_h3" in cols
+        # existing row survived, with the new column unset
+        row = conn.execute("SELECT mid_h0, mid_h3 FROM markouts").fetchone()
+        assert row == (0.5, None)

@@ -24,6 +24,11 @@ them.
 from __future__ import annotations
 
 from strategy import store
+from strategy.config import load as load_cfg
+
+# Horizon lengths in tuple order -- column i of the markouts table is written
+# at horizon `_HORIZONS[i]`. Loaded once: the horizons never change mid-run.
+_HORIZONS = load_cfg().markout_horizons
 
 
 def markout_per_share(fill_price: float, mid_later: float, side: str) -> float:
@@ -124,20 +129,31 @@ def drift_per_share(ref_mid: float, mid_later: float) -> float:
 
 
 def _matured(row: dict) -> list[float]:
-    """Drift at every horizon already sampled for this fill, in order.
+    """Drift at every horizon already sampled for this fill, LONGEST FIRST.
 
     Deliberately drift and not total: this feeds the gate, and the gate must
     react to the market moving against us, never to our own offset.
+
+    Longest first by DURATION, not by column (Session 50): the 15m exit-window
+    read is APPENDED to the schema as mid_h3, after the 6h column, so column
+    order and horizon length diverge. A fill with both the 6h and the 15m
+    reading recorded must be judged on the 6h one -- the 15m reading is the
+    exit counterfactual, not the gate's evidence. Iteration stops at the
+    columns the row actually carries (`SELECT *`), so a pre-migration row or
+    an older fixture degrades to the horizons it has.
     """
     ref = row.get("ref_mid")
     if ref is None:
         return []
     out = []
-    for i in range(3):
+    i = 0
+    while f"mid_h{i}" in row and i < len(_HORIZONS):
         mid = row.get(f"mid_h{i}")
         if mid is not None:
-            out.append(drift_per_share(ref, mid))
-    return out
+            out.append((i, drift_per_share(ref, mid)))
+        i += 1
+    out.sort(key=lambda p: _HORIZONS[p[0]], reverse=True)
+    return [d for _, d in out]
 
 
 def per_market_stats(min_sample: int) -> dict[str, dict]:
@@ -153,8 +169,11 @@ def per_market_stats(min_sample: int) -> dict[str, dict]:
         matured = _matured(r)
         if not matured:
             continue
+        # `_matured` returns longest-first (Session 50: mid_h3, the 15m
+        # exit-window read, sits AFTER the 6h column in the schema but is
+        # SHORTER), so the longest matured horizon is the first element.
         by.setdefault(r["condition_id"], []).append(
-            {"markout": matured[-1], "size": r.get("size"),
+            {"markout": matured[0], "size": r.get("size"),
              "ref_mid_source": r.get("ref_mid_source")})
     return {cid: _stats_from_rows(rows, min_sample) for cid, rows in by.items()}
 
@@ -183,7 +202,8 @@ def fleet_stats(min_sample: int) -> dict:
         matured = _matured(r)
         if not matured:
             continue
-        rows.append({"markout": matured[-1], "size": r.get("size"),
+        # Longest matured horizon first -- see per_market_stats.
+        rows.append({"markout": matured[0], "size": r.get("size"),
                      "ref_mid_source": r.get("ref_mid_source")})
     return _stats_from_rows(rows, min_sample)
 
@@ -205,6 +225,16 @@ def sample_due(mids_by_cid: dict, now: float, horizons) -> int:
         if mid is None:
             continue
         i = row["_due"]
-        store.close_markout(row["id"], i, mid, last=(i == len(horizons) - 1))
+        # `done` must mean "every horizon recorded", not "the last tuple
+        # element was written". Horizons are APPENDED, never re-sorted
+        # (Session 50): the 15m exit-window read matures BEFORE the 1h and 6h
+        # ones while sitting after them in the tuple, so marking done at
+        # len(horizons)-1 would seal the row while two readings were still
+        # owed -- they would never be written. Only columns the row actually
+        # carries are counted, so a pre-migration row keeps the old behaviour.
+        still_open = any(
+            f"mid_h{j}" in row and row[f"mid_h{j}"] is None
+            for j in range(len(horizons)) if j != i)
+        store.close_markout(row["id"], i, mid, last=not still_open)
         n += 1
     return n

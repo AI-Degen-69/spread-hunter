@@ -162,7 +162,17 @@ class MakerConfig:
     # Horizons at which a fill is re-priced, in seconds. 5m catches immediate
     # adverse flow; 6h is the shortest horizon on which a long-dated market
     # plausibly repriced on news.
-    markout_horizons: tuple[float, ...] = (300.0, 3600.0, 21600.0)
+    #
+    # 15m (900s, Session 50) is the EXIT-WINDOW read: the naked-exit
+    # counterfactual -- where was the mid 15 minutes after we exited? -- which
+    # Session 49 had to infer from the bid ladder. APPENDED LAST, not sorted
+    # into place: a horizon maps to its column by position, so inserting it
+    # between 5m and 1h would relabel every existing mid_h1/mid_h2 reading on
+    # the live DB. Because it matures BEFORE the 1h and 6h horizons while
+    # sitting AFTER them in the tuple, readers that want the longest matured
+    # horizon must compare durations (never columns), and the sampling loop
+    # must not seal a row done when this horizon records.
+    markout_horizons: tuple[float, ...] = (300.0, 3600.0, 21600.0, 900.0)
     # Below this many fills the mean is dominated by noise on a thin book, and
     # evicting a sound market on noise costs real rent.
     #
@@ -635,15 +645,16 @@ class MakerConfig:
     # MEASURED 2026-08-12 (Session 44) on the rule's own recorded decisions:
     # a completion pays the realized merge capture on rule-era completed
     # pairs (+$368.25 on 10,010.7 shares = +3.68c, 144 closes, 100% positive);
-    # an exit costs the realized exit economics (-$17.93 on 461 shares =
-    # -3.89c, n=4 closes, includes the taker fee). The original +16.3c was a
-    # 302.5-share sample (7 pairs) from the pre-spread era and overstates the
-    # current instrument's capture ~4.4x; the KPI would have read +15.78c
-    # instead of +3.48c per one-sided fill. The RATES still come from the
-    # rule's own decisions; the dashboard KPI is completion_rate x gain -
-    # exit_rate x cost.
+    # an exit costs the realized exit economics (-$16.93 on 461 shares =
+    # -3.67c, n=4 closes, includes the taker fee; corrected Session 45 -
+    # Session 44's -3.89c came from a $1 mis-add of the same four closes).
+    # The original +16.3c was a 302.5-share sample (7 pairs) from the
+    # pre-spread era and overstates the current instrument's capture ~4.4x;
+    # the KPI would have read +15.78c instead of +3.48c per one-sided fill.
+    # The RATES still come from the rule's own decisions; the dashboard KPI
+    # is completion_rate x gain - exit_rate x cost.
     pairs_complete_gain_cents: float = 3.68
-    pairs_exit_cost_cents: float = 3.89
+    pairs_exit_cost_cents: float = 3.67
 
     # --- experiment end criteria (decisive test of the maker mechanism) -----
     # Phase A (census): observe this many DISTINCT live markets and measure how
