@@ -9,8 +9,14 @@ maker mechanism itself is unchanged — instead of crossing the spread the
 strategy rests bids on **both** outcomes of each market, aiming to earn the
 spread and stay inventory-balanced, and holds to resolution.
 
-**Dashboard:** http://localhost:8800 — served locally while the fleet runs
-(`uvicorn server.fleet_dash:app --port 8800`). The old public URL
+**Dashboard:** http://localhost:8801 — served locally while the fleet runs
+(`uvicorn server.spread_dash:app --port 8801`). This is the primary dashboard
+as of 2026-08-12 (design migrated from the `spread-hunter` mockup onto real
+fleet data — see `server/spread_dash.py`). The legacy dashboard at
+http://localhost:8800 (`uvicorn server.fleet_dash:app --port 8800`) still runs
+alongside it and is where the **market scan** view lives
+(http://localhost:8800/?view=scan, linked from the primary dashboard's header)
+until that page gets the same design pass. The old public URL
 (https://polymarket-maker-production.up.railway.app) is dead: this checkout
 was never deployed to Railway.
 
@@ -38,7 +44,8 @@ output as an **upper bound**. The dashboard shows live progress toward
 
     strategy/   engine: fleet + per-market sweep, ranker gates, quotes,
                 queue-aware fills, risk, store/stats
-    server/     fleet_dash.py (dashboard API + page)
+    server/     spread_dash.py (primary dashboard, :8801)
+                fleet_dash.py (legacy dashboard + market scan, :8800)
     research/   lab notebook, EN + HE
 
 The sibling repo [`polymarket-taker`](https://github.com/AI-Degen-69/polymarket-taker)
@@ -52,7 +59,8 @@ python3.12 -m venv .venv
 bash scripts/setup-hooks.sh        # required once: research-log enforcement
 .\scripts\fleet-start.ps1                  # supervised paper fleet (keep the current sample)
 .\scripts\fleet-start.ps1 -FreshRun        # ... or archive the DB and start a fresh sample
-.venv/bin/uvicorn server.fleet_dash:app --port 8800   # dashboard
+.venv/bin/uvicorn server.spread_dash:app --port 8801  # dashboard (primary)
+.venv/bin/uvicorn server.fleet_dash:app --port 8800   # legacy dashboard + market scan (?view=scan)
 .venv/bin/python -m scripts.rank_markets   # ranker (writes run/markets.json)
 ```
 
