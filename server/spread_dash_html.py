@@ -42,7 +42,7 @@ def _wrap(title: str, body: str) -> str:
 </body></html>"""
 
 
-LANDING_HTML = _wrap("Spread Hunter -- maker fleet", r"""
+LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
 <div class="h-[2px] w-full bg-[#10B981]"></div>
 <nav class="sticky top-0 z-40 bg-[#111827]/95 backdrop-blur border-b border-[#1F2937]">
   <div class="mx-auto max-w-[1440px] px-6 lg:px-10 h-[72px] flex items-center justify-between">
@@ -51,7 +51,7 @@ LANDING_HTML = _wrap("Spread Hunter -- maker fleet", r"""
         <div class="size-[40px] bg-[#F9FAFB] text-[#090D16] grid place-items-center mono text-[13px] font-bold tracking-widest">SH<span class="text-[#EF4444]">&mdash;</span>01</div>
         <div>
           <div class="font-display text-[15px] leading-none tracking-[-0.02em]">SPREAD HUNTER</div>
-          <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#9CA3AF] mt-0.5">maker fleet &middot; live desk</div>
+          <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#9CA3AF] mt-0.5">Hunter fleet &middot; live desk</div>
         </div>
       </div>
       <div class="hidden lg:flex items-center gap-2 ml-6 pl-6 border-l border-[#1F2937] h-8">
@@ -179,7 +179,7 @@ LANDING_HTML = _wrap("Spread Hunter -- maker fleet", r"""
   </div>
 
   <div class="px-2 lg:px-0 py-6 flex flex-col md:flex-row items-center justify-between gap-3 mono text-[13px] tracking-[0.12em] uppercase text-[#9CA3AF]">
-    <span>maker fleet &middot; Spread Hunter design</span>
+    <span>Hunter fleet &middot; Spread Hunter design</span>
     <span class="flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Swiss Edition &middot; Live Desk</span>
   </div>
 </section>
@@ -339,7 +339,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </section>
 
   <div class="flex flex-col sm:flex-row items-center justify-between gap-3 mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF] pb-2">
-    <span>maker fleet &middot; Spread Hunter design &middot; color guides decisions</span>
+    <span>Hunter fleet &middot; Spread Hunter design &middot; color guides decisions</span>
     <span class="flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Green = gain <span class="size-1.5 bg-[#EF4444] ml-2"></span> Red = loss / risk</span>
   </div>
 </main>

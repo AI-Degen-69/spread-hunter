@@ -1,4 +1,4 @@
-# AGENTS.md — polymarket-maker
+# AGENTS.md — Spread Hunter
 
 ## What this repo is
 
@@ -80,7 +80,7 @@ Source: ayghri/i-have-adhd skill installed at `.agents/skills/i-have-adhd/SKILL.
 
 ### Issue tracker
 
-Issues live in GitHub Issues (`AI-Degen-69/maker`); use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues (`AI-Degen-69/spread-hunter`); use the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

@@ -95,7 +95,7 @@ def _seed_fill(store, cond="cond-1", slug="slug-1"):
 
 
 def test_closed_market_records_the_winning_token(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store)
@@ -112,7 +112,7 @@ def test_closed_market_records_the_winning_token(monkeypatch, tmp_path):
 def test_the_losing_side_is_never_recorded(monkeypatch, tmp_path):
     """A market can settle DOWN. Recording the first token unconditionally
     would invert the sign of every settled P&L."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store)
@@ -129,7 +129,7 @@ def test_the_market_is_fetched_by_condition_id(monkeypatch, tmp_path):
     """The whole point of moving off the slug lookup. condition_id is exact:
     it cannot collide with a sibling market inside the same event, and it
     works for the game-2 and handicap slugs that are not event slugs at all."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store, cond="0xabc", slug="lol-sk-g2-game-handicap-home-1pt5")
@@ -141,7 +141,7 @@ def test_the_market_is_fetched_by_condition_id(monkeypatch, tmp_path):
 
 
 def test_open_market_is_not_recorded(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store)
@@ -157,7 +157,7 @@ def test_closed_market_with_no_declared_winner_is_skipped(monkeypatch, tmp_path)
     """A market can report closed before the winner flag is set. Recording
     now would write a settlement no later pass revisits -- the row is keyed by
     condition_id and would simply be found already present."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store)
@@ -173,7 +173,7 @@ def test_closed_market_with_no_declared_winner_is_skipped(monkeypatch, tmp_path)
 def test_two_declared_winners_is_refused(monkeypatch, tmp_path):
     """Ambiguity is not a coin flip. Skip and let a later pass see a fixed
     payload."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store)
@@ -189,7 +189,7 @@ def test_two_declared_winners_is_refused(monkeypatch, tmp_path):
 def test_recorded_market_leaves_the_unresolved_set(monkeypatch, tmp_path):
     """A settled market must stop being asked about, or every cycle re-fetches
     every market we have ever filled."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store)
@@ -208,7 +208,7 @@ def test_recorded_market_leaves_the_unresolved_set(monkeypatch, tmp_path):
 def test_transport_failure_does_not_raise(monkeypatch, tmp_path):
     """This runs inside the trading loop. A raising settlement pass would take
     the fleet down over a settlement lookup."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store)
@@ -219,7 +219,7 @@ def test_transport_failure_does_not_raise(monkeypatch, tmp_path):
 
 
 def test_malformed_payloads_are_skipped(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store)
@@ -243,7 +243,7 @@ def test_malformed_payloads_are_skipped(monkeypatch, tmp_path):
 def test_one_bad_market_does_not_stop_the_rest(monkeypatch, tmp_path):
     """The pass walks every filled market. One malformed payload must not
     strand the markets behind it in the loop."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import resolve, store
 
     _seed_fill(store, cond="cond-bad", slug="slug-bad")
@@ -262,7 +262,7 @@ def test_one_bad_market_does_not_stop_the_rest(monkeypatch, tmp_path):
 # not assumed.
 
 def test_fleet_resolution_pass_respects_its_interval(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import fleet
 
     calls = []
@@ -285,7 +285,7 @@ def test_fleet_resolution_failure_still_advances_the_deadline(
         monkeypatch, tmp_path):
     """Otherwise a persistently failing venue is retried on every iteration of
     the trading loop instead of once per interval."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import fleet
 
     def _boom(host):
@@ -309,7 +309,7 @@ def test_fleet_resolution_failure_still_advances_the_deadline(
 # released because nothing zeroed the position either.
 
 def test_resolved_cids_returns_every_settled_condition(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy import store
 
     store.record_resolution("cond-a", "tok-a")
@@ -329,7 +329,7 @@ def test_a_resolved_market_never_fetches_its_book(monkeypatch, tmp_path):
     """THE BUG, STATED AS A TEST. A market already recorded as resolved must
     not cost a book-fetch request -- the venue has already torn the book
     down, so every such request is a guaranteed 404."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy.config import load as load_cfg
     from strategy.fleet import MarketState, visit
 
@@ -362,7 +362,7 @@ def test_a_resolved_market_with_no_prior_live_payload_still_settles(
     """A fleet that restarts holding an already-resolved position has never
     written `_live` for it this process. Settling must not KeyError on a
     market it has not visited yet."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "res.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "res.db"))
     from strategy.config import load as load_cfg
     from strategy.fleet import MarketState, visit
 

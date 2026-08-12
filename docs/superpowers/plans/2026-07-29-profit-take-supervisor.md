@@ -281,7 +281,7 @@ def log_close(**kw) -> None:
 
 Run:
 ```bash
-MAKER_DB=run/t.db python -c "
+HUNTER_DB=run/t.db python -c "
 from strategy import store
 store.log_close(condition_id='x', market_slug='s', shares=10, up_price=0.56,
                 dn_price=0.45, cost_basis=9.5, proceeds=10.1, fee=0.34,
@@ -464,7 +464,7 @@ dies silently is worth nothing, however good the strategy is.
 This owns both processes and restarts either one when it exits. It does NOT
 survive a reboot: that needs Task Scheduler, and is a separate decision.
 
-    set MAKER_DB=run/fleet.db
+    set HUNTER_DB=run/fleet.db
     python -m strategy.supervisor
 """
 from __future__ import annotations
@@ -562,15 +562,15 @@ class Child:
 
 
 def main() -> None:
-    if not os.environ.get("MAKER_DB"):
-        raise SystemExit("MAKER_DB is not set -- the children would write to a "
+    if not os.environ.get("HUNTER_DB"):
+        raise SystemExit("HUNTER_DB is not set -- the children would write to a "
                          "different database than the one you are reading. "
                          "Set it (e.g. run/fleet.db) and try again.")
     children = [Child(n, c) for n, c in CHILDREN.items()]
     for ch in children:
         ch.start()
-    log.info("supervising %d children | MAKER_DB=%s",
-             len(children), os.environ["MAKER_DB"])
+    log.info("supervising %d children | HUNTER_DB=%s",
+             len(children), os.environ["HUNTER_DB"])
     try:
         while True:
             now = time.time()
@@ -616,7 +616,7 @@ Expected: no output and no error. If nothing matches, nothing happens — that i
 
 Run (PowerShell):
 ```bash
-$env:MAKER_DB='run/fleet.db'; python -m strategy.supervisor
+$env:HUNTER_DB='run/fleet.db'; python -m strategy.supervisor
 ```
 Expected in `logs/supervisor.log`: a `started fleet` line and a `started dash` line.
 
@@ -639,7 +639,7 @@ decorative.
 
 Run:
 ```bash
-$env:MAKER_DB='run/fleet.db'; python -c "
+$env:HUNTER_DB='run/fleet.db'; python -c "
 from strategy import store
 with store.db() as c:
     print(list(c.execute('SELECT COUNT(*) FROM closes')))
@@ -653,7 +653,7 @@ mechanism firing, which is the result being looked for.
 After the run has been up long enough to have taken fills, read both tables:
 
 ```bash
-$env:MAKER_DB='run/fleet.db'; python -c "
+$env:HUNTER_DB='run/fleet.db'; python -c "
 from strategy import store
 with store.db() as c:
     print('fills  ', c.execute('SELECT COUNT(*) FROM fills').fetchone()[0])

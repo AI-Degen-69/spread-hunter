@@ -1,4 +1,4 @@
-# CONTEXT.md — polymarket-maker
+# CONTEXT.md — Spread Hunter
 
 The shared domain language for this repo. When a ticket, plan, test, or hypothesis names a concept, use the term defined here. If a term you need is missing, that is either invented language or a real gap — note it for `/domain-modeling`.
 

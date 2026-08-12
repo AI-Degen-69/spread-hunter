@@ -20,7 +20,7 @@ from strategy import kpi, store
 from strategy.config import load as load_cfg
 
 cfg = load_cfg()
-app = FastAPI(title="maker sim")
+app = FastAPI(title="Hunter sim")
 
 _cache = {"ts": 0.0, "data": None}
 

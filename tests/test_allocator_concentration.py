@@ -186,7 +186,7 @@ def test_the_default_is_unchanged_behaviour():
 
 @pytest.fixture(autouse=True)
 def _isolated_db(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "conc.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "conc.db"))
 
 
 def _spec(cid, daily, min_size=100):

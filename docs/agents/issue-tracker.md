@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo (`AI-Degen-69/maker`) live as GitHub issues. Use the `gh` CLI for all operations.
+Issues and specs for this repo (`AI-Degen-69/spread-hunter`) live as GitHub issues. Use the `gh` CLI for all operations.
 
 ## Conventions
 

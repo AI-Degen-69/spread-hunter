@@ -110,7 +110,7 @@ def test_dashboard_renders_an_empty_fleet_as_no_markets(tmp_path, monkeypatch):
     Mirrors test_verified_ratio's DB-seeding pattern so `dash.fleet()` runs
     its full payload path rather than the missing-file early return.
     """
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "dash.db"))
 
     monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
     monkeypatch.setattr(dash, "RUN", tmp_path)
@@ -134,7 +134,7 @@ def test_dashboard_still_renders_markets_after_an_empty_episode_recovers(
     the dashboard must render them, not stay on the cleared file.
     """
     monkeypatch.setattr(fleet, "RUN", tmp_path)
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "dash.db"))
     monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
     monkeypatch.setattr(dash, "RUN", tmp_path)
 

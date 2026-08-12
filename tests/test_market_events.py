@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def test_reason_codes_are_stable_and_specific(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "events.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "events.db"))
     from strategy import store
 
     assert store.reason_code("$120 naked >= $120 budget -- not adding") == "NAKED_CAP"
@@ -25,7 +25,7 @@ def test_reason_codes_are_stable_and_specific(monkeypatch, tmp_path):
 
 
 def test_market_event_is_durable_and_reason_code_is_stored(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "events.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "events.db"))
     from strategy import store
 
     store.log_event(condition_id="c", market_slug="m", kind="BLOCKED",
@@ -38,7 +38,7 @@ def test_market_event_is_durable_and_reason_code_is_stored(monkeypatch, tmp_path
 
 
 def test_decision_schema_migrates_reason_code(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "events.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "events.db"))
     from strategy import store
 
     store.log_decision(condition_id="c", market_slug="m", action="BLOCKED",

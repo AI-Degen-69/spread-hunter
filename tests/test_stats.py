@@ -16,10 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _env(monkeypatch, tmp_path):
-    """Point the write module (`MAKER_DB`) and the state reader (`DB`) at the
+    """Point the write module (`HUNTER_DB`) and the state reader (`DB`) at the
     same temp database, so what `store` seeds is what `stats` reads."""
     db = tmp_path / "stats.db"
-    monkeypatch.setenv("MAKER_DB", str(db))
+    monkeypatch.setenv("HUNTER_DB", str(db))
     from strategy import stats
     monkeypatch.setattr(stats, "DB", db)
 

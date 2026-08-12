@@ -1,5 +1,5 @@
 ---
-title: Dollar-Denominated Risk Gates for the Maker Fleet - Plan
+title: Dollar-Denominated Risk Gates for the Spread Hunter Fleet - Plan
 type: feat
 date: 2026-08-05
 artifact_contract: ce-unified-plan/v1
@@ -8,7 +8,7 @@ product_contract_source: ce-plan-bootstrap
 execution: code
 ---
 
-# Dollar-Denominated Risk Gates for the Maker Fleet - Plan
+# Dollar-Denominated Risk Gates for the Spread Hunter Fleet - Plan
 
 ## Goal Capsule
 
@@ -61,7 +61,7 @@ Measurement has the same shape of defect. `_stats_from_rows` takes an unweighted
 
 **Validation and operations**
 
-- R11. The gates are proven by replay against the fills and markouts already recorded in `maker.db` before they run live.
+- R11. The gates are proven by replay against the fills and markouts already recorded in `hunter.db` before they run live.
 - R12. Replay reports how much of the recorded realized P&L the gates would have prevented, alongside how much of the unhedged loss they would have prevented.
 - R13. Every commit touching `strategy/` updates the four `research/` files in the same commit.
 
@@ -149,7 +149,7 @@ Book health is a three-part test on one token: two-sided, not settled, and neith
 
 ### Assumptions
 
-- Replay against `maker.db` is representative enough to size the thresholds. The database holds 57 fills across 23 markets over a 40.9-hour span, which is a small sample for threshold tuning even though it is adequate for demonstrating that a gate fires.
+- Replay against `hunter.db` is representative enough to size the thresholds. The database holds 57 fills across 23 markets over a 40.9-hour span, which is a small sample for threshold tuning even though it is adequate for demonstrating that a gate fires.
 - The `bids` and `asks` dictionaries on the book carry enough depth to compute a meaningful sum. `tests/test_quotes.py` builds them as `{price: size}` and `strategy/fleet.py` passes real venue depth to `QueueFillEngine.cross`, so the shape is confirmed; the sufficiency of one aggregated number as a depth proxy is the assumption.
 
 ---
@@ -325,7 +325,7 @@ Book health is a three-part test on one token: two-sided, not settled, and neith
   - `scripts/replay_risk_gates.py` (create)
   - `tests/test_replay_risk_gates.py` (create)
 - **Approach:**
-  1. Read `fills`, `markouts`, and `quotes` from the database path given as an argument, defaulting to `maker.db`.
+  1. Read `fills`, `markouts`, and `quotes` from the database path given as an argument, defaulting to `hunter.db`.
   2. Reconstruct per-market inventory in fill order, and at each fill ask whether `hard_block` would have refused the order that produced it, using the mid recorded on the quote row as the book proxy.
   3. Attribute each blocked fill to the gate that bound, and sum the cost of blocked fills separately for fills that ended profitable and fills that ended in unhedged loss.
   4. Report per-gate: fills blocked, dollars of naked cost avoided, and dollars of realized P&L forgone. The second number is the Goal Capsule stop condition.
@@ -338,7 +338,7 @@ Book health is a three-part test on one token: two-sided, not settled, and neith
   - A fixture of only profitable, in-band, two-sided fills reports zero fills blocked, proving the gates do not refuse healthy flow.
   - A fixture with no depth recorded reports the depth arm as unevaluated rather than counting it as passed.
   - An empty database exits cleanly with a zero report rather than raising.
-- **Verification:** Running against `maker.db` produces a report where the naked cost avoided exceeds the realized P&L forgone. If it does not, the Goal Capsule stop condition applies.
+- **Verification:** Running against `hunter.db` produces a report where the naked cost avoided exceeds the realized P&L forgone. If it does not, the Goal Capsule stop condition applies.
 
 ---
 
@@ -350,7 +350,7 @@ Book health is a three-part test on one token: two-sided, not settled, and neith
 | Quoting behavior unchanged where healthy | `python -m pytest tests/test_quotes.py -q` | U2, U3, U4, U6 |
 | Measurement and gate contracts | `python -m pytest tests/test_markout.py tests/test_gate.py tests/test_fleet_gate_fallback.py -q` | U5, U6 |
 | Full suite | `python -m pytest tests -q` | every unit |
-| Replay report | `python scripts/replay_risk_gates.py maker.db` | U7 |
+| Replay report | `python scripts/replay_risk_gates.py hunter.db` | U7 |
 
 The replay report carries the exit criterion: naked cost avoided must exceed realized P&L forgone. A gate set that blocks more profitable flow than toxic flow has failed even with a green suite.
 
@@ -376,13 +376,13 @@ The replay report carries the exit criterion: naked cost avoided must exceed rea
 | U4 | A 0.95/0.96 market produces no intent under the default `rewards` objective |
 | U5 | A weighted mean fires the gate on a sample where the unweighted mean would not, with `strategy/gate.py` unmodified |
 | U6 | The recorded pooled reading of -0.052375 on n=52 puts the fleet in `HALTED` |
-| U7 | The replay report against `maker.db` shows naked cost avoided exceeding realized P&L forgone |
+| U7 | The replay report against `hunter.db` shows naked cost avoided exceeding realized P&L forgone |
 
 ---
 
 ## Operational Notes
 
-Changing strategy parameters invalidates the current sample. Per `AGENTS.md`, archive `maker.db` and start a fresh run rather than mixing configs in one dataset. This applies from U2 onward — U1 alone changes no behavior, and U7 reads the archived database rather than the live one.
+Changing strategy parameters invalidates the current sample. Per `AGENTS.md`, archive `hunter.db` and start a fresh run rather than mixing configs in one dataset. This applies from U2 onward — U1 alone changes no behavior, and U7 reads the archived database rather than the live one.
 
 Run one instance at a time. Two bots writing one database sum their independent inventories, and the dollar cap is computed from that inventory.
 

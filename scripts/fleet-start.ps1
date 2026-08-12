@@ -83,7 +83,7 @@ if ($FreshRun) {
     Write-Host "archived prior run to $archive" -ForegroundColor Yellow
 }
 
-$env:MAKER_DB = "run/fleet.db"
+$env:HUNTER_DB = "run/fleet.db"
 
 # STAGED GATE TRIALS (U36, operator decision 2026-08-10). The universe is
 # narrow -- 2 eligible of 205 scored -- and the funnel audit measured the
@@ -93,8 +93,8 @@ $env:MAKER_DB = "run/fleet.db"
 # trial_volume_usd in run/markets.json and their markouts are the decision
 # evidence before either bar becomes permanent. Set to "" to run the
 # permanent bars (or override per-run with --trial-depth / --trial-volume).
-$env:MAKER_DEPTH_TRIAL_USD = "500"
-$env:MAKER_VOLUME_TRIAL_USD = "125000"
+$env:HUNTER_DEPTH_TRIAL_USD = "500"
+$env:HUNTER_VOLUME_TRIAL_USD = "125000"
 
 # ALLOCATOR FLOOR (U36f, operator decision 2026-08-11). The 2%/day marginal-
 # return floor was tuned for the old 20-market BTC-era universe. The current
@@ -107,7 +107,7 @@ $env:MAKER_VOLUME_TRIAL_USD = "125000"
 # universe; max_market_frac (0.15) still caps concentration, and the
 # pairs-only rule (U35) is the measured edge these samples are for. Set to ""
 # for the permanent 2%/day floor.
-$env:MAKER_MARGINAL_FLOOR = "0.0001"
+$env:HUNTER_MARGINAL_FLOOR = "0.0001"
 
 # 3. Start hidden. The supervisor owns the fleet, the dashboard, the ranker
 # and the universe watcher as children, and children inherit the parent's

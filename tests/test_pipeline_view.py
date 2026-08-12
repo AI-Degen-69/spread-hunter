@@ -147,7 +147,7 @@ def test_ranker_snapshot_reports_dropped_without_verdict(tmp_path, monkeypatch):
 
 def test_dashboard_pipeline_endpoint_merges_live_fleet_state(tmp_path,
                                                              monkeypatch):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "dash.db"))
     monkeypatch.setattr(dash, "RUN", tmp_path)
     monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
 
@@ -204,7 +204,7 @@ def test_dashboard_pipeline_endpoint_merges_live_fleet_state(tmp_path,
 def test_dashboard_pipeline_endpoint_degrades_without_snapshot(tmp_path,
                                                                monkeypatch):
     """No pipeline.json yet (fresh install) must be a shape, not a crash."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "dash.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "dash.db"))
     monkeypatch.setattr(dash, "RUN", tmp_path)
     monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
     payload = dash.pipeline()

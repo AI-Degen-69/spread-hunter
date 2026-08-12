@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Container entrypoint: supervise the maker sim and serve its dashboard.
+"""Container entrypoint: supervise the Hunter sim and serve its dashboard.
 
 Preflight fails loudly on the two failures that otherwise stay silent while the
 healthcheck goes green:
@@ -28,20 +28,20 @@ RESTART_BACKOFF = 5.0
 def preflight() -> None:
     problems: list[str] = []
 
-    # Opt-in destructive reset: when MAKER_DB_RESET=1, wipe the DB at the
+    # Opt-in destructive reset: when HUNTER_DB_RESET=1, wipe the DB at the
     # mount path so a code change starts a clean sample (AGENTS.md: changing
     # strategy params invalidates the run). Only triggers on explicit opt-in,
     # never by default, so routine redeploys keep their data.
-    if os.environ.get("MAKER_DB_RESET") == "1":
-        db = os.environ.get("MAKER_DB", "")
+    if os.environ.get("HUNTER_DB_RESET") == "1":
+        db = os.environ.get("HUNTER_DB", "")
         if db and Path(db).exists():
             Path(db).unlink()
-            print(f"[preflight] MAKER_DB_RESET=1 -> wiped {db}", flush=True)
+            print(f"[preflight] HUNTER_DB_RESET=1 -> wiped {db}", flush=True)
 
-    db = os.environ.get("MAKER_DB")
+    db = os.environ.get("HUNTER_DB")
     if not db:
-        print("[preflight] WARNING: MAKER_DB unset -- using a container-local "
-              "maker.db, which is LOST on redeploy unless a volume is mounted.",
+        print("[preflight] WARNING: HUNTER_DB unset -- using a container-local "
+              "hunter.db, which is LOST on redeploy unless a volume is mounted.",
               flush=True)
     else:
         try:
@@ -52,7 +52,7 @@ def preflight() -> None:
             print(f"[preflight] volume OK: {db} is writable", flush=True)
         except Exception as e:
             problems.append(
-                f"MAKER_DB={db} is not writable ({e}). Mount a Railway volume "
+                f"HUNTER_DB={db} is not writable ({e}). Mount a Railway volume "
                 f"at that directory (Settings -> Volumes -> /data)."
             )
 
@@ -95,10 +95,10 @@ def preflight() -> None:
 
 
 def run_bot() -> None:
-    """Run the maker sim, restarting it if it exits."""
+    """Run the Hunter sim, restarting it if it exits."""
     env = dict(os.environ, PYTHONPATH=str(ROOT))
     while True:
-        print("[bot] starting (maker sim)", flush=True)
+        print("[bot] starting (Hunter sim)", flush=True)
         proc = subprocess.Popen([sys.executable, "-m", "strategy.main"],
                                 cwd=str(ROOT), env=env)
         code = proc.wait()

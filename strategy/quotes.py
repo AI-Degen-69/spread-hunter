@@ -1,4 +1,4 @@
-"""Where to rest bids. The decision layer of the maker sim.
+"""Where to rest bids. The decision layer of the Hunter sim.
 
 Mirrors powerwinner's measured behaviour: quote BOTH outcomes, stay ~92%
 balanced, never let the pair cost reach $1.00 (it pays exactly $1.00, so a pair

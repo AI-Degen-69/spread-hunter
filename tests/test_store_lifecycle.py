@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def test_mark_cancelled_preserves_partial_fill(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "lifecycle.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "lifecycle.db"))
     from strategy import store
 
     quote_id = store.log_quote(
@@ -32,7 +32,7 @@ def test_mark_cancelled_preserves_partial_fill(monkeypatch, tmp_path):
 
 def test_store_reinitializes_schema_on_file_recreation(monkeypatch, tmp_path):
     db_file = tmp_path / "recreate.db"
-    monkeypatch.setenv("MAKER_DB", str(db_file))
+    monkeypatch.setenv("HUNTER_DB", str(db_file))
     from strategy import store
 
     with store.db() as c:

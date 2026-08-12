@@ -42,7 +42,7 @@ Successfully created and tested the supervisor module that owns both processes (
   - Logs all state transitions at INFO/ERROR levels to `logs/supervisor.log`
   
 - `main()` function:
-  - Requires `MAKER_DB` environment variable (exits with clear message if missing)
+  - Requires `HUNTER_DB` environment variable (exits with clear message if missing)
   - Spawns both fleet and dashboard children
   - Polls every `POLL_SEC` (2s) to check child status and schedule restarts
   - Gracefully terminates children on keyboard interrupt (signal handling)
@@ -88,7 +88,7 @@ None. The implementation is complete and all tests pass. The module is ready for
 ## Next Steps (Not This Task)
 
 Task 6 (DEMO run) will:
-1. Set MAKER_DB environment variable
+1. Set HUNTER_DB environment variable
 2. Execute `python -m strategy.supervisor`
 3. Verify both child processes start and are monitored correctly
 4. Confirm crash detection and restart logic works in practice

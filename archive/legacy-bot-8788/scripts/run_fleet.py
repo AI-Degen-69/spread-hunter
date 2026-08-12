@@ -97,17 +97,17 @@ def launch(i: int, p: dict) -> None:
     db = RUN / f"bot{i}.db"
     env = dict(os.environ)
     env.update({
-        "MAKER_DB": str(db),
-        "MAKER_MARKET": p["cid"],
-        "MAKER_TITLE": p["title"],
-        "MAKER_URL": f"https://polymarket.com/market/{p['slug']}" if p["slug"] else "",
-        "MAKER_DAILY_RATE": str(p["daily"]),
-        "MAKER_MIN_SIZE": str(p["min_size"]),
-        "MAKER_MAX_SPREAD": str(p["max_spread"]),
-        "MAKER_TICK": str(p["tick"]),
+        "HUNTER_DB": str(db),
+        "HUNTER_MARKET": p["cid"],
+        "HUNTER_TITLE": p["title"],
+        "HUNTER_URL": f"https://polymarket.com/market/{p['slug']}" if p["slug"] else "",
+        "HUNTER_DAILY_RATE": str(p["daily"]),
+        "HUNTER_MIN_SIZE": str(p["min_size"]),
+        "HUNTER_MAX_SPREAD": str(p["max_spread"]),
+        "HUNTER_TICK": str(p["tick"]),
         # Each bot needs its own single-instance lock, or bot 2 exits on
         # finding bot 1's pidfile.
-        "MAKER_PID": str(RUN / f"bot{i}.pid"),
+        "HUNTER_PID": str(RUN / f"bot{i}.pid"),
     })
     bot_log = open(LOGS / f"bot{i}.out", "w")
     dash_log = open(LOGS / f"dash{i}.out", "w")

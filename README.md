@@ -1,4 +1,4 @@
-# polymarket-maker
+# Spread Hunter
 
 Paper-trading simulation of a **maker** strategy on Polymarket, run as a
 **fleet**: `scripts/rank_markets.py` scores the venue's funded **reward
@@ -17,7 +17,7 @@ The prior dashboard (`server/fleet_dash.py`) is demoted to
 http://localhost:8801, kept running only because its **market scan** view
 (http://localhost:8801/?view=scan, linked from the dashboard's header) has
 not had the same design pass yet — don't use :8801 as "the dashboard". The
-old public URL (https://polymarket-maker-production.up.railway.app) is dead:
+old public URL (https://Spread Hunter-production.up.railway.app) is dead:
 this checkout was never deployed to Railway.
 
 > Simulation only. It never places a real order and loads no wallet
@@ -34,7 +34,7 @@ the allocator sizes, rather than one fixed market.
 
 ## The honest caveat
 
-A maker simulation lives or dies on its fill model. Ours is **queue-aware**,
+A Hunter simulation lives or dies on its fill model. Ours is **queue-aware**,
 driven by observed order-book deltas, and its optimistic biases are documented
 in [`strategy/fills.py`](strategy/fills.py) rather than hidden. Treat its
 output as an **upper bound**. The dashboard shows live progress toward

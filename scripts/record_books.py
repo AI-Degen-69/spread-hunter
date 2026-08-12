@@ -13,7 +13,7 @@ Raw books are strategy-independent. Record once, replay any rule offline,
 compare rules on the SAME market data instead of on different hours. It also
 means the fill-rate claim is reproducible: the input is on disk, not gone.
 
-Writes to books.db, never to maker.db. Does not import strategy.store, so it
+Writes to books.db, never to hunter.db. Does not import strategy.store, so it
 cannot touch the bot's data even by accident.
 """
 from __future__ import annotations

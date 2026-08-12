@@ -51,7 +51,7 @@ def _mk(drift, cid="c1", ref_mid=0.50, source="venue_clean"):
 
 @pytest.fixture
 def rows(monkeypatch):
-    """Swap the store for an in-memory list. No DB, no MAKER_DB, no fixtures on
+    """Swap the store for an in-memory list. No DB, no HUNTER_DB, no fixtures on
     disk -- these tests are about the aggregation, not about SQLite."""
     box = []
     monkeypatch.setattr(markout.store, "markout_rows", lambda: list(box))

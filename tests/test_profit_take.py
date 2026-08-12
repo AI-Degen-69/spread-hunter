@@ -192,14 +192,14 @@ def test_close_reconstruction_uses_per_leg_removed_cost_not_share_split(
     reconstructing from a share-count split corrupts down_cost even though
     down_shares lands at exactly zero.
 
-    Exercises the real store (via MAKER_DB pointed at a temp DB) for
+    Exercises the real store (via HUNTER_DB pointed at a temp DB) for
     log_close and the fills/closes tables, and calls
     strategy.stats.inventory_from_db directly so the fix under test -- the
     up_cost_removed/dn_cost_removed columns and their use in rehydration --
     is what actually runs, not a re-implementation of it in the test.
     """
     db_path = tmp_path / "profit_take_recon.db"
-    monkeypatch.setenv("MAKER_DB", str(db_path))
+    monkeypatch.setenv("HUNTER_DB", str(db_path))
 
     from strategy import store, fleet
     from strategy.quotes import Inventory as InvCls

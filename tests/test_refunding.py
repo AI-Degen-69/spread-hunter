@@ -36,7 +36,7 @@ from strategy.fleet import MarketState, reallocate    # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolated_db(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "refund.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "refund.db"))
 
 
 def _spec(cid="c1", daily=50, min_size=100, shares=120):

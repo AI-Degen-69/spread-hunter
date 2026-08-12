@@ -634,7 +634,7 @@ def _if_adopted(r: dict) -> dict | None:
 def _effective_depth_bar(cli_trial_usd: Optional[float]) -> float:
     """The depth bar this run gates on: CLI trial > config trial > permanent.
 
-    `select_min_top3_depth_usd_trial` (env MAKER_DEPTH_TRIAL_USD) lets an
+    `select_min_top3_depth_usd_trial` (env HUNTER_DEPTH_TRIAL_USD) lets an
     operator stage the trial without touching the permanent config; an explicit
     `--trial-depth` on the command line wins over both because it is the most
     deliberate of the three. A non-positive trial value is a mistake, not a
@@ -693,7 +693,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--trial-depth", type=float, default=None, metavar="USD",
                    help="DEPTH-GATE TRIAL (U32): gate on this top-3 bid depth "
                         "bar instead of the permanent one ($%.0f). Wins over "
-                        "MAKER_DEPTH_TRIAL_USD; the permanent config value is "
+                        "HUNTER_DEPTH_TRIAL_USD; the permanent config value is "
                         "never changed. Adopted markets are tagged "
                         "trial_depth_usd in run/markets.json so their "
                         "markouts can be watched before the bar is loosened "
@@ -703,7 +703,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--trial-volume", type=float, default=None, metavar="USD",
                    help="VOLUME-GATE TRIAL (U36): gate 24h volume on this bar "
                         "instead of the permanent one ($%.0f). Wins over "
-                        "MAKER_VOLUME_TRIAL_USD; the permanent config value is "
+                        "HUNTER_VOLUME_TRIAL_USD; the permanent config value is "
                         "never changed. Adopted markets are tagged "
                         "trial_volume_usd in run/markets.json so their "
                         "markouts can be watched before the bar is loosened "
