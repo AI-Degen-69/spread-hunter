@@ -95,6 +95,23 @@ def test_grouped_return_uses_aggregate_pnl_over_cost_basis():
     assert 'count_pct' not in page
 
 
+def test_dashboard_auto_refreshes_every_15s():
+    """Auto-refresh polls the four endpoints in place instead of rebuilding
+    the page: a 15s interval drives refresh(), renderSummary() is the single
+    summary renderer shared by boot and refresh, a busy guard stops polls
+    from overlapping, and the refresh reuses the stateful renderers so open
+    settled groups, pagination, and the active tab survive."""
+    page = DASHBOARD_HTML
+    assert "setInterval(refresh, 15000)" in page
+    assert "async function refresh()" in page
+    assert "function renderSummary(s)" in page
+    assert "if (REFRESH_BUSY) return;" in page
+    assert "if (st) renderSettled(st.settled, st.total_closes);" in page
+    # The settled list can shrink between polls; the page index is clamped
+    # so a refresh never strands the table on an empty page.
+    assert "settledState.page = page;" in page
+
+
 def test_order_depth_view_uses_live_orders_and_mid_axis():
     """The market table must show live resting depth, not a stale flat position."""
     assert '<th>Order depth / mid</th>' in FLEET_PAGE

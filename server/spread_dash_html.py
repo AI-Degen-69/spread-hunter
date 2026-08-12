@@ -51,9 +51,11 @@ _HEAD = """
   .sh-rise{animation:sh-rise .4s cubic-bezier(.2,.7,.2,1) both;}
   @keyframes sh-beat{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}45%{box-shadow:0 0 0 6px rgba(16,185,129,.16)}}
   .pulse-live{animation:sh-beat 2.4s ease-out infinite;}
+  /* During a live refresh the panels dim briefly instead of flickering. */
+  main.sh-refreshing section{opacity:.55;transition:opacity .18s ease;}
   @media (prefers-reduced-motion: reduce){
     .sh-rise,.pulse-live{animation:none;}
-    .sh-fade,.sh-chev{transition:none;}
+    .sh-fade,.sh-chev,main.sh-refreshing section{transition:none;}
   }
   ::-webkit-scrollbar{height:8px;width:8px;}
   ::-webkit-scrollbar-thumb{background:var(--line);}
@@ -1040,13 +1042,18 @@ function formatMarketTitle(slug) {
   }
   
   return parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-}
-
-function renderSettledTable() {
-  const { grouped, page, perPage, expanded, totalCloses } = settledState;
+}  function renderSettledTable() {
+  const { grouped, perPage, expanded, totalCloses } = settledState;
+  // The grouped list can shrink between refreshes; clamp the page so a
+  // poll never strands the table on an empty page past the last one.
+  let { page } = settledState;
+  const totalPages = Math.ceil(grouped.length / perPage);
+  if (page >= totalPages) {
+    page = Math.max(0, totalPages - 1);
+    settledState.page = page;
+  }
   const start = page * perPage;
   const shown = grouped.slice(start, start + perPage);
-  const totalPages = Math.ceil(grouped.length / perPage);
   
   const table = `<div class="overflow-x-auto"><table class="w-full text-left border-collapse">
     <thead><tr class="bg-[#090D16] mono text-[12px] tracking-[0.14em] uppercase border-b border-[#1F2937]">
@@ -1209,6 +1216,55 @@ function startPulseTicker(){
   window.__pulseTick = setInterval(tick, 1000);
 }
 
+// ---------- auto-refresh ----------
+// Poll the four endpoints every 15s and re-render in place. Tab state and
+// open settled groups survive because the panel shells keep their classes
+// and renderSettled reuses settledState (expanded groups + pagination).
+// A failed poll keeps the last good data on screen -- the pulse age is
+// what reports staleness, turning amber after 45s.
+let REFRESH_BUSY = false;
+
+function renderSummary(s){
+  LAST_STATS = s;
+  document.getElementById("hdr-pills").innerHTML = `
+    <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 bg-[#090D16] font-semibold border border-[#1F2937]">${esc(s.status)}</span>
+    <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 border border-[#1F2937]">${s.n_settled} of ${s.go_live_min_settled} settled</span>`;
+  document.getElementById("hdr-live").innerHTML = `
+    <span class="size-1.5 ${s.fleet_alive?'bg-[#10B981] animate-pulse':'bg-[#F59E0B]'}"></span>
+    <span class="tracking-[0.12em] uppercase text-[12px]">${s.fleet_alive?'Live':'Idle'}</span>`;
+  renderHinge(s);
+  renderPositions(s);
+  renderVerdict(s);
+  renderGauges(s);
+  renderEvidence(s);
+  document.getElementById("scope-tiles").innerHTML = `
+    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">${fmtClock(s.now)}</div></div>
+    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Sample</div><div class="font-semibold mt-1">${esc(s.status)}</div><div class="text-[#9CA3AF] mt-0.5">n = ${s.n_settled}</div></div>
+    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Lower bound</div><div class="font-bold mt-1">${fmtPct(s.ci90_lower_pct,2)}</div></div>`;
+}
+
+async function refresh(){
+  if (REFRESH_BUSY) return;
+  REFRESH_BUSY = true;
+  const main = document.querySelector("main");
+  if (main) main.classList.add("sh-refreshing");
+  try {
+    const [st, fn, mk, s] = await Promise.all([
+      fetchJSON("/api/settled").catch(() => null),
+      fetchJSON("/api/funnel").catch(() => null),
+      fetchJSON("/api/markets").catch(() => null),
+      fetchJSON("/api/summary").catch(() => null),
+    ]);
+    if (st) renderSettled(st.settled, st.total_closes);
+    if (fn) renderFunnel(fn);
+    if (mk) renderMarkets(mk.markets);
+    if (s) renderSummary(s);
+  } finally {
+    REFRESH_BUSY = false;
+    if (main) main.classList.remove("sh-refreshing");
+  }
+}
+
 async function boot(){
   // Paint what is instant first and let the slower endpoints stream in --
   // the summary bundle is the heaviest read, so it renders last. Every
@@ -1223,6 +1279,7 @@ async function boot(){
   let s;
   try {
     s = await fetchJSON("/api/summary");
+    renderSummary(s);
   } catch (e) {
     showSectionError("sec-positions", e);
     showSectionError("sec-verdict", e);
@@ -1231,27 +1288,10 @@ async function boot(){
     renderHingeOffline(e);
     document.getElementById("scope-tiles").innerHTML =
       `<div class="col-span-3 border border-[#EF4444]/30 p-3 text-center mono text-[12px] text-[#EF4444]">Summary unavailable</div>`;
-    return;
   }
-  LAST_STATS = s;
-
-  document.getElementById("hdr-pills").innerHTML = `
-    <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 bg-[#090D16] font-semibold border border-[#1F2937]">${esc(s.status)}</span>
-    <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 border border-[#1F2937]">${s.n_settled} of ${s.go_live_min_settled} settled</span>`;
-  document.getElementById("hdr-live").innerHTML = `
-    <span class="size-1.5 ${s.fleet_alive?'bg-[#10B981] animate-pulse':'bg-[#F59E0B]'}"></span>
-    <span class="tracking-[0.12em] uppercase text-[12px]">${s.fleet_alive?'Live':'Idle'}</span>`;
-  renderHinge(s);
-
-  renderPositions(s);
-  renderVerdict(s);
-  renderGauges(s);
-  renderEvidence(s);
-
-  document.getElementById("scope-tiles").innerHTML = `
-    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">${fmtClock(s.now)}</div></div>
-    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Sample</div><div class="font-semibold mt-1">${esc(s.status)}</div><div class="text-[#9CA3AF] mt-0.5">n = ${s.n_settled}</div></div>
-    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Lower bound</div><div class="font-bold mt-1">${fmtPct(s.ci90_lower_pct,2)}</div></div>`;
+  // Poll every 15s from here on. A failed first load still gets recovery
+  // polls; a successful poll re-renders the whole desk in place.
+  setInterval(refresh, 15000);
 }
 boot();
 </script>
