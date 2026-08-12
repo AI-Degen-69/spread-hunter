@@ -91,6 +91,28 @@ def test_float_mark_roundtrip_thinning_and_prune(monkeypatch, tmp_path):
     assert hist[0]["ts"] == 8500.0 and hist[-1]["ts"] == 8999.0
 
 
+def test_float_history_sparse_timestamps_not_excluded(monkeypatch, tmp_path):
+    """Sparse marks (gaps far larger than min_spacing_sec) must not be
+    excluded by the read window before thinning: the thinning loop widens
+    its window until it holds `max_points` retained marks or reaches the
+    oldest mark (coderabbit: the min_spacing-derived read window dropped
+    sparse history -- marks at 0/3600/7200/10800 with max_points=3 and
+    min_spacing=60 must keep the newest three, not just the last one)."""
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "marks_sparse.db"))
+    from strategy import store
+
+    for ts in (0.0, 3600.0, 7200.0, 10800.0):
+        store.log_float_mark(ts, 1.0, 2.0, 3.0)
+
+    hist = store.float_history(max_points=3, min_spacing_sec=60.0)
+    assert [h["ts"] for h in hist] == [3600.0, 7200.0, 10800.0]
+
+    # Every mark farther apart than the minimum spacing survives thinning;
+    # the cap (newest `max_points`) is what binds on a sparse table.
+    assert len(hist) == 3
+    assert all(h["unrealized_usd"] == 1.0 for h in hist)
+
+
 def test_float_history_read_does_not_create_db(monkeypatch, tmp_path):
     """float_history on a cold DB reads as an empty series and does NOT create
     the database file -- a dashboard poll must never materialise an empty

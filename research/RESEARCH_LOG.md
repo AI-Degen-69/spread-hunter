@@ -1396,3 +1396,12 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Result.** Every trigger is now Tab-reachable and activatable with Enter/Space; opening focuses the modal's close button, Tab is trapped inside the dialog, and closing returns focus to the invoking button. Dashboard page suite 26/26, node --check parses both pages' scripts.
 
 **Verdict.** LIVE -- the modal's keyboard contract is implemented, not merely declared via aria-modal.
+### 2026-08-12 (design): PR #23 review fixes -- sparse float-mark history no longer truncated by the read window
+
+**Question.** float_history's bounded read window (MAX(ts) - max_points*min_spacing*2, added for the dashboard poll cost) was sized for a DENSE table: with marks at 0/3600/7200/10800 and max_points=3 / min_spacing=60, the window covered only the last 360s and returned one mark instead of the newest three -- sparse timestamps were excluded before thinning (coderabbit round 3).
+
+**Method.** The window now anchors to the newest mark as before, but if thinning keeps fewer than `max_points` points the window doubles and the read repeats -- stopping once the window spans the whole table or the cap fills. The bounded-read cost is preserved (a dense table still fills the cap on the first read; the doubling path only fires on sparse data, converging in O(log(span/window)) cheap reads), and thinning stays deterministic oldest-first.
+
+**Result.** Regression test seeds 0/3600/7200/10800 with max_points=3 and asserts the series is [3600, 7200, 10800]; the existing cap/thinning/prune and cold-DB tests still pass. First draft of the widening loop never terminated when the window covered the whole table (widening forever); the `newest - window > 0` guard fixes it. market_events + dashboard suites green.
+
+**Verdict.** LIVE -- sparse history keeps full coverage while dense tables still read a bounded window.

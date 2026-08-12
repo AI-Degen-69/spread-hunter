@@ -586,39 +586,64 @@ def float_history(max_points: int = 1000,
     months of marks stays small -- the dashboard's Total view needs the shape
     of the history, not every row.
 
-    The read is bounded to the window the cap can possibly need: the last
-    (max_points - 1) kept points span at most (max_points - 1) *
-    min_spacing_sec, anchored to the newest mark, so a dashboard poll scans
-    hours of marks instead of 90 days of them. Thinning disabled
-    (min_spacing_sec <= 0) means no read bound -- the cap alone decides.
-    The real DB path is checked so a cold dashboard cannot create an empty
-    database file just by being polled.
+    The read is anchored to the newest mark and sized for the DENSEST case
+    the cap can need -- the newest (max_points - 1) kept points span at most
+    (max_points - 1) * min_spacing_sec, doubled for headroom -- so a
+    dashboard poll scans hours of marks instead of 90 days of them. If
+    thinning keeps fewer than `max_points` points, the window is widened and
+    the read repeats: a SPARSE table (marks farther apart than
+    `min_spacing_sec`) must not lose coverage just because the cap's window
+    was sized for a dense one. Thinning disabled (min_spacing_sec <= 0)
+    means no read bound -- the cap alone decides. The real DB path is
+    checked so a cold dashboard cannot create an empty database file just by
+    being polled.
     """
     path = _cfg.db_path()
     if not path.exists():
         return []
     try:
-        where = ""
-        params = ()
-        if min_spacing_sec > 0:
-            where = ("WHERE ts >= (SELECT COALESCE(MAX(ts), 0) "
-                     "FROM float_marks) - ? ")
-            params = (max_points * min_spacing_sec * 2,)
         with _conn() as c:
-            rows = c.execute(
-                "SELECT ts, unrealized_usd, committed_open_usd, naked_usd "
-                f"FROM float_marks {where}ORDER BY ts", params).fetchall()
+            newest = c.execute(
+                "SELECT MAX(ts) FROM float_marks").fetchone()[0]
     except Exception:
         return []
-    out = []
-    last_ts = -float("inf")
-    for ts, unreal, committed, naked in rows:
-        if ts - last_ts < min_spacing_sec:
+    if newest is None:
+        return []
+    window = (max_points * min_spacing_sec * 2
+              if min_spacing_sec > 0 else None)
+    while True:
+        try:
+            with _conn() as c:
+                if window is None:
+                    rows = c.execute(
+                        "SELECT ts, unrealized_usd, committed_open_usd, "
+                        "naked_usd FROM float_marks ORDER BY ts").fetchall()
+                else:
+                    rows = c.execute(
+                        "SELECT ts, unrealized_usd, committed_open_usd, "
+                        "naked_usd FROM float_marks WHERE ts >= ? "
+                        "ORDER BY ts", (newest - window,)).fetchall()
+        except Exception:
+            return []
+        if not rows:
+            return []
+        out = []
+        last_ts = -float("inf")
+        for ts, unreal, committed, naked in rows:
+            if ts - last_ts < min_spacing_sec:
+                continue
+            last_ts = ts
+            out.append({"ts": ts, "unrealized_usd": unreal,
+                        "committed_open_usd": committed, "naked_usd": naked})
+        if (len(out) < max_points and window is not None
+                and newest - window > 0):
+            # The window hit the sparse-data wall before the cap could fill:
+            # double it and re-read -- but only while a wider window can
+            # actually reach older rows. Once the window spans the whole
+            # table (newest - window <= 0) further widening adds nothing.
+            window *= 2
             continue
-        last_ts = ts
-        out.append({"ts": ts, "unrealized_usd": unreal,
-                    "committed_open_usd": committed, "naked_usd": naked})
-    return out[-max_points:]
+        return out[-max_points:]
 
 
 # A sweep is ~30-60s. Anything longer than this between two samples is a gap
