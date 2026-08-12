@@ -47,6 +47,7 @@ output as an **upper bound**. The dashboard shows live progress toward
     server/     spread_dash.py (canonical dashboard, :8800)
                 fleet_dash.py (legacy dashboard, kept only for market scan, :8801)
     research/   lab notebook, EN + HE
+    docs/       explanation + agent/plan docs (fleet data flow: [docs/explanation-fleet-data-flow.md](docs/explanation-fleet-data-flow.md))
 
 The sibling repo [`polymarket-taker`](https://github.com/AI-Degen-69/polymarket-taker)
 uses the same layout.
