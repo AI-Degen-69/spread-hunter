@@ -1,5 +1,12 @@
 """One dashboard for the whole fleet: aggregate on top, per-market below.
 
+DEPRECATION NOTICE:
+Status: Deprecated as of 2026-08-12
+Replacement: server/spread_dash.py (Spread Hunter UI)
+Removal date: Advisory — no hard deadline yet
+Reason: The new Spread Hunter dashboard handles identical data with 
+a strictly unified, brutalist layout and faster, flattened navigation.
+
 Replaces four separate pages on four ports. The aggregate strip answers "is
 this working overall", the table answers "which market is carrying it" -- and
 with 20 markets the second question is the one that matters, because income is
@@ -226,6 +233,8 @@ def fleet():
             "merged_shares": live.get("merged_shares", 0.0),
             "recycled_usd": live.get("recycled_usd", 0.0),
             "pairing_rate": live.get("pairing_rate"),
+            "paired": live.get("paired", 0.0),
+            "naked_sh": live.get("naked_sh", 0.0),
             "events": event_by_market.get(s["cid"], []),
         })
     rows.sort(key=lambda r: -r["income"])

@@ -36,8 +36,23 @@ def _cat_color(i: int) -> str:
 
 
 def _category(slug: str) -> str:
-    tag = (slug or "?").split("-", 1)[0] or "?"
-    return tag.upper()
+    parts = (slug or "?").split("-")
+    tag = parts[0].lower()
+    
+    if tag in ["mlb", "atp", "wta", "nfl", "nba", "nhl", "soccer", "fifa", "ufc", "boxing", "f1", "tennis", "golf"]:
+        return "Sports"
+    elif tag in ["lol", "cs2", "csgo", "dota", "dota2", "val", "valorant", "esports"]:
+        return "E-Sports"
+    elif tag in ["pol", "politics", "election", "pres", "senate", "gop", "dem"]:
+        return "Politics"
+    elif tag in ["crypto", "btc", "eth", "sol", "defi", "nft"]:
+        return "Crypto"
+    elif tag in ["pop", "culture", "oscars", "grammys", "movie", "boxoffice"]:
+        return "Pop Culture"
+    elif tag in ["biz", "econ", "finance", "fed"]:
+        return "Business"
+    else:
+        return tag.title()
 
 
 @app.get("/api/summary")
@@ -65,12 +80,17 @@ def api_summary() -> dict:
     total_liquidation_usd = real["realized"] + rebate_usd + unrealized_total
 
     cat_counts = go["category_counts"]
-    total_cat = sum(cat_counts.values()) or 1
+    grouped = {}
+    for tag, count in cat_counts.items():
+        c = _category(tag)
+        grouped[c] = grouped.get(c, 0) + count
+
+    total_cat = sum(grouped.values()) or 1
     categories = [
         {"name": k.upper(), "n": v, "pct": 100.0 * v / total_cat,
          "color": _cat_color(i)}
         for i, (k, v) in enumerate(
-            sorted(cat_counts.items(), key=lambda kv: -kv[1]))
+            sorted(grouped.items(), key=lambda kv: -kv[1]))
     ]
 
     try:
@@ -129,16 +149,31 @@ def api_markets() -> dict:
     rows = fleet_dash.fleet()["markets"]
     out = []
     for r in rows:
-        status = (r.get("close_why") or r.get("merge_why")
-                  or r.get("err") or r.get("why") or "Quoting")
+        err = r.get("err") or r.get("why")
+        paired = r.get("paired", 0)
+        naked = r.get("naked_sh", 0)
+        has_quotes = len(r.get("quotes") or []) > 0
+        
+        if err:
+            status = err
+        elif paired > 0:
+            status = "Paired (holding)"
+        elif naked > 0:
+            status = "One side filled (15m window)"
+        elif has_quotes:
+            status = "Orders resting"
+        else:
+            status = r.get("close_why") or r.get("merge_why") or "Inactive"
         out.append({
             "id": r["slug"] or r["title"],
-            "market": r["title"],
+            "market": r["slug"] or r["title"],
             "category": _category(r["slug"]),
             "committed": r["committed"],
             "resting": len(r.get("quotes") or []),
             "quotes": r.get("quotes") or [],
             "unrealized": r["unrealized_pnl"],
+            "unrealized_pct": (r["unrealized_pnl"] / r["committed"] * 100.0) if r.get("committed") else None,
+            "age": r.get("age"),
             # Realized P&L already booked on THIS market from voluntary
             # closes (merges/sells/naked exits) so far -- independent of
             # whether the market as a whole has resolved. A market can be
@@ -146,6 +181,7 @@ def api_markets() -> dict:
             # here, because some of its shares were already closed for
             # real money while the rest of the position is still open.
             "realized": r.get("closed_pnl", 0.0),
+            "realized_pct": None, # We don't have cost basis for partial closes easily available yet
             "closes": r.get("closes", 0),
             "fills": r["fills"],
             "status": status,
@@ -169,11 +205,15 @@ def api_settled() -> dict:
     rows = stats.settled_positions()
     out = [{
         "market": r["market_slug"] or r["condition_id"],
+        "category": _category(r["market_slug"] or r["condition_id"]),
         "ts": r["ts"],
         "pnl": r["realized_pnl"],
         "pnl_pct": r["pnl_pct"],
         "method": r["method"],
         "win": (r["realized_pnl"] or 0.0) > 0,
+        "avg_cost": r["avg_cost"],
+        "shares": r.get("shares", 0.0),
+        "cost_basis": r.get("cost_basis", 0.0),
     } for r in rows]
     return {"settled": out, "total_closes": len(out)}
 

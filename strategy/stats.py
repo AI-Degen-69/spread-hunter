@@ -293,20 +293,27 @@ def settled_positions() -> list[dict]:
             cl = closed.get(cid)
             cl_shares = cl["sh"] if cl else 0.0
             cl_cost = cl["cb"] if cl else 0.0
-            total_shares = sum(m["tok"].values())
-            remaining_shares = total_shares - cl_shares
-            if remaining_shares <= 1e-9:
-                continue          # fully closed voluntarily, nothing left to settle
-            remaining_cost = m["cost"] - cl_cost
-            # Same correction `realized()` applies: one UP + one DOWN were
-            # sold per pair closed, so the winning token's fill count drops
-            # by the closed-share count; a naked exit (U35) sold only one
-            # side, so only that side's count drops before the $1 credit.
+            
             win_side = side_by_tok.get(cid, {}).get(win)
             closed_win = (cl["up_closed"] if (cl and win_side == "UP")
                           else cl["dn_closed"] if (cl and win_side == "DOWN")
                           else cl_shares)
             held_win_shares = max(0.0, m["tok"].get(win, 0.0) - closed_win)
+
+            lose_toks = [t for t in m["tok"] if t != win]
+            lose_tok = lose_toks[0] if lose_toks else None
+            lose_side = side_by_tok.get(cid, {}).get(lose_tok) if lose_tok else None
+            closed_lose = (cl["up_closed"] if (cl and lose_side == "UP")
+                           else cl["dn_closed"] if (cl and lose_side == "DOWN")
+                           else cl_shares)
+            held_lose_shares = max(0.0, m["tok"].get(lose_tok, 0.0) - closed_lose) if lose_tok else 0.0
+            
+            remaining_shares = max(held_win_shares, held_lose_shares)
+            
+            if remaining_shares <= 1e-4:
+                continue          # fully closed voluntarily, nothing left to settle
+
+            remaining_cost = max(0.0, m["cost"] - cl_cost)
             pnl = held_win_shares - remaining_cost
             rows.append({
                 "id": f"resolve:{cid}", "ts": resolved_ts,

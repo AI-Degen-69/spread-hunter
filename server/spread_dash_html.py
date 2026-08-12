@@ -22,7 +22,7 @@ _HEAD = """
   .mono{font-family:"JetBrains Mono","SF Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;}
   ::selection{background:#10B981;color:#F9FAFB;}
   .sh-fade{transition:opacity .2s ease,transform .2s ease;}
-  .sh-collapsed{display:none;}
+  .sh-collapsed{display:none !important;}
   .sh-chev{transition:transform .2s ease;}
   .sh-open .sh-chev{transform:rotate(180deg);}
   ::-webkit-scrollbar{height:8px;width:8px;}
@@ -276,10 +276,10 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-5">
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <button data-toggle="sec-positions" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-10 hover:bg-[#1F2937] transition-colors text-left">
+    <button data-toggle="sec-positions" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
         <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">01</span>
-        <span class="mono text-[13px] tracking-[0.14em] uppercase flex items-center gap-2">Positions <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
+        <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Positions <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
       <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Realized and Unrealized P&amp;L &mdash; kept separate</span>
     </button>
@@ -287,44 +287,55 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </section>
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <button data-toggle="sec-verdict" class="sh-open w-full flex items-center justify-between px-4 h-10 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
-      <span class="flex items-center gap-3">
-        <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold">Verdict</span>
-        <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Five decisive readings</span>
+    <button data-toggle="sec-verdict" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+      <span class="flex items-center gap-3 min-w-0">
+        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">02</span>
+        <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Verdict <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
-      <span class="sh-chev size-6 border border-[#1F2937] grid place-items-center">&#9660;</span>
+      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Five decisive readings</span>
     </button>
     <div id="sec-verdict" class="sh-fade grid grid-cols-12 gap-0"></div>
   </section>
 
-  <section class="space-y-3">
-    <button data-toggle="sec-gauges" class="sh-open flex items-center gap-2.5 px-3 py-1.5 bg-[#111827] hover:bg-[#1F2937] transition-colors border border-[#1F2937]">
-      <span class="mono text-[13px] tracking-[0.16em] uppercase">Readiness</span>
-      <span class="sh-chev">&#9660;</span>
+  <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <button data-toggle="sec-gauges" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+      <span class="flex items-center gap-3 min-w-0">
+        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">03</span>
+        <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Readiness <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
+      </span>
+      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Three threshold gauges</span>
     </button>
-    <div id="sec-gauges" class="sh-fade grid grid-cols-1 lg:grid-cols-3 gap-4"></div>
-  </section>
-
-  <section class="space-y-3">
-    <button data-toggle="sec-evidence" class="sh-open flex items-center gap-2.5 px-3 py-1.5 bg-[#111827] hover:bg-[#1F2937] transition-colors border border-[#1F2937]">
-      <span class="mono text-[13px] tracking-[0.16em] uppercase">Evidence</span>
-      <span class="sh-chev">&#9660;</span>
-    </button>
-    <div id="sec-evidence" class="sh-fade grid grid-cols-1 lg:grid-cols-2 gap-4"></div>
+    <div id="sec-gauges" class="sh-fade grid grid-cols-1 lg:grid-cols-3 gap-4 p-4 bg-[#090D16]"></div>
   </section>
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <div class="bg-[#111827] px-4 h-11 flex items-center justify-between gap-4 border-b border-[#1F2937]">
-      <span class="mono text-[13px] tracking-[0.14em] uppercase">Active Markets</span>
-      <div class="flex items-center gap-1 shrink-0">
-        <button data-tab="markets" class="tab-btn h-7 px-3 mono text-[13px] font-semibold tracking-widest uppercase border border-[#1F2937] bg-[#10B981] text-white">Active Markets</button>
-        <button data-tab="settled" class="tab-btn h-7 px-3 mono text-[13px] font-semibold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937]">Closed History</button>
-        <button data-tab="funnel" class="tab-btn h-7 px-3 mono text-[13px] font-semibold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937]">Selection</button>
+    <button data-toggle="sec-evidence" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+      <span class="flex items-center gap-3 min-w-0">
+        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">04</span>
+        <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Evidence <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
+      </span>
+      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Performance, readiness, risk, capital</span>
+    </button>
+    <div id="sec-evidence" class="sh-fade grid grid-cols-1 lg:grid-cols-2 gap-4 p-4 bg-[#090D16]"></div>
+  </section>
+
+  <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <button data-toggle="sec-inspection" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+      <span class="flex items-center gap-3 min-w-0">
+        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">05</span>
+        <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Inspection <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
+      </span>
+      <div class="flex items-center gap-1 shrink-0" onclick="event.stopPropagation()">
+        <button data-tab="markets" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] bg-[#10B981] text-white">Active Markets</button>
+        <button data-tab="settled" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937] text-[#9CA3AF]">Closed History</button>
+        <button data-tab="funnel" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937] text-[#9CA3AF]">Selection</button>
       </div>
+    </button>
+    <div id="sec-inspection">
+      <div id="tab-markets" class="tab-panel sh-fade"></div>
+      <div id="tab-settled" class="tab-panel sh-collapsed sh-fade"></div>
+      <div id="tab-funnel" class="tab-panel sh-collapsed sh-fade"></div>
     </div>
-    <div id="tab-markets" class="tab-panel"></div>
-    <div id="tab-settled" class="tab-panel sh-collapsed"></div>
-    <div id="tab-funnel" class="tab-panel sh-collapsed"></div>
   </section>
 
   <section class="border border-[#1F2937] bg-[#111827] p-5 flex flex-col lg:flex-row gap-6">
@@ -359,6 +370,47 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
 function fmtUsd(v){ if(v===null||v===undefined) return "--"; const s=v<0?"-":"+"; return s+"$"+Math.abs(v).toFixed(2); }
 function fmtPct(v,d){ if(v===null||v===undefined) return "--"; d=d===undefined?1:d; const s=v>0?"+":""; return s+v.toFixed(d)+"%"; }
 function esc(s){ return (s===null||s===undefined?"":String(s)).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function fmtPnlHTML(v){
+  if(v===null||v===undefined) return "--";
+  if(Math.abs(v) < 0.005) return `<span class="text-[#9CA3AF] opacity-60">+$0.00</span>`;
+  const s=v<0?"-":"+"; const c=v>0?"text-[#10B981]":"text-[#EF4444]";
+  return `<span class="font-bold ${c}">${s}$${Math.abs(v).toFixed(2)}</span>`;
+}
+function fmtPctHTML(v){
+  if(v===null||v===undefined) return "--";
+  if(Math.abs(v) < 0.005) return `<span class="text-[#9CA3AF] opacity-60">+0.00%</span>`;
+  const s=v<0?"-":"+"; const c=v>0?"text-[#10B981]":"text-[#EF4444]";
+  return `<span class="font-bold ${c}">${s}${Math.abs(v).toFixed(2)}%</span>`;
+}
+function badgePnlHTML(v) {
+  if(v===null||v===undefined) return `<span class="text-[#9CA3AF]">--</span>`;
+  if(Math.abs(v) < 0.005) return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[13px] font-bold border border-[#1F2937]/50 text-[#9CA3AF] opacity-60">+$0.00</span>`;
+  const s=v<0?"-":"+";
+  const bg = v>0 ? 'bg-[#10B981]/10 border-[#10B981]/20 text-[#10B981]' : 'bg-[#EF4444]/10 border-[#EF4444]/20 text-[#EF4444]';
+  return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[13px] font-bold border ${bg}">${s}$${Math.abs(v).toFixed(2)}</span>`;
+}
+function badgePnlPctHTML(usd, pct) {
+  if (usd === null || usd === undefined) return `<span class="text-[#9CA3AF]">--</span>`;
+  const pctStr = (pct !== null && pct !== undefined) ? ` <span class="font-normal opacity-75 ml-0.5">(${pct>0?'+':''}${pct.toFixed(2)}%)</span>` : '';
+  if (Math.abs(usd) < 0.005) {
+    const zeroPctStr = (pct !== null && pct !== undefined) ? ` <span class="font-normal opacity-75 ml-0.5">(0.00%)</span>` : '';
+    return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[13px] font-bold border border-[#1F2937]/50 text-[#9CA3AF] opacity-60">+$0.00${zeroPctStr}</span>`;
+  }
+  const s = usd < 0 ? "-" : "+";
+  const bg = usd > 0 ? 'bg-[#10B981]/10 border-[#10B981]/20 text-[#10B981]' : 'bg-[#EF4444]/10 border-[#EF4444]/20 text-[#EF4444]';
+  return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[13px] font-bold border ${bg}">${s}$${Math.abs(usd).toFixed(2)}${pctStr}</span>`;
+}
+function plainPnlPctHTML(usd, pct) {
+  if (usd === null || usd === undefined) return `<span class="text-[#9CA3AF]">--</span>`;
+  const pctStr = (pct !== null && pct !== undefined) ? ` <span class="font-normal opacity-75 text-[12px] ml-1">(${pct>0?'+':''}${pct.toFixed(2)}%)</span>` : '';
+  if (Math.abs(usd) < 0.005) {
+    const zeroPctStr = (pct !== null && pct !== undefined) ? ` <span class="font-normal opacity-75 text-[12px] ml-1">(0.00%)</span>` : '';
+    return `<span class="text-[#9CA3AF] opacity-60 font-bold">+$0.00${zeroPctStr}</span>`;
+  }
+  const s = usd < 0 ? "-" : "+";
+  const c = usd > 0 ? "text-[#10B981]" : "text-[#EF4444]";
+  return `<span class="font-bold ${c}">${s}$${Math.abs(usd).toFixed(2)}${pctStr}</span>`;
+}
 
 // ---------- collapsible sections ----------
 document.addEventListener("click", (e) => {
@@ -602,7 +654,7 @@ function renderPositions(s){
       <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#10B981] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Realized P&amp;L &mdash; Settled Positions</div>
       <div class="mono text-[13px] tracking-[0.08em] uppercase text-[#9CA3AF] mt-1">Booked closes plus resolutions on markets held to settlement</div>
       <div class="mt-6 flex items-baseline gap-3 flex-wrap">
-        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em] ${s.realized_usd>=0?'text-[#10B981]':'text-[#EF4444]'}">${fmtUsd(s.realized_usd)}</div>
+        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]">${fmtPnlHTML(s.realized_usd)}</div>
         <div class="mono text-[14px] font-semibold px-2 py-1 bg-[#10B981]/10 border border-[#10B981]/20 text-[#10B981]">${fmtPct(s.realized_pct)}</div>
         <div class="mono text-[13px] text-[#9CA3AF]">on ${s.realized_cost.toFixed(0)} committed</div>
       </div>
@@ -620,7 +672,7 @@ function renderPositions(s){
       <div class="absolute top-0 left-0 w-full h-[2px] bg-[#3B82F6]"></div>
       <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#3B82F6] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#3B82F6]"></span> Unrealized P&amp;L &mdash; Open Positions</div>
       <div class="mt-6 flex items-baseline gap-3">
-        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]">${fmtUsd(s.unrealized_usd)}</div>
+        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]">${fmtPnlHTML(s.unrealized_usd)}</div>
         <div class="mono text-[12px] tracking-widest uppercase px-2 py-1 bg-[#3B82F6] border border-[#1F2937]">Unrealized</div>
       </div>
       <div class="mono text-[13px] tracking-widest uppercase text-[#9CA3AF] mt-1">Floating midpoint on ${s.committed_open_usd.toFixed(0)} &middot; ${s.active_positions} active positions</div>
@@ -713,9 +765,9 @@ function renderEvidence(s){
           ${bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444"})}
         </div>
         <div class="grid grid-cols-3 gap-2">
-          <div class="bg-[#10B981]/10 border border-[#10B981]/20 p-3"><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#10B981]">Realized</div><div class="mono text-[18px] font-bold text-[#10B981] mt-1">${fmtUsd(s.realized_usd)}</div></div>
-          <div class="bg-[#111827] border border-[#1F2937] p-3"><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]">Mean / Stdev</div><div class="mono text-[15px] font-bold mt-1">${fmtPct(s.mean_return_pct)} / ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}</div></div>
-          <div class="bg-[#3B82F6]/10 border border-[#3B82F6]/20 p-3"><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#3B82F6]">Unrealized</div><div class="mono text-[18px] font-bold mt-1 text-[#3B82F6]">${fmtUsd(s.unrealized_usd)}</div></div>
+          <div class="bg-[#10B981]/10 border border-[#10B981]/20 p-3"><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#10B981]">Realized</div><div class="mono text-[18px] font-bold text-[#10B981] mt-1">${fmtPnlHTML(s.realized_usd)}</div></div>
+          <div class="bg-[#111827] border border-[#1F2937] p-3"><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]">Mean / Stdev</div><div class="mono text-[15px] font-bold mt-1">${fmtPctHTML(s.mean_return_pct)} / ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}</div></div>
+          <div class="bg-[#3B82F6]/10 border border-[#3B82F6]/20 p-3"><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#3B82F6]">Unrealized</div><div class="mono text-[18px] font-bold mt-1 text-[#3B82F6]">${fmtPnlHTML(s.unrealized_usd)}</div></div>
         </div>
       </div>
     </div>
@@ -758,19 +810,26 @@ function renderEvidence(s){
 function renderMarkets(rows){
   const table = `<div class="overflow-x-auto"><table class="w-full text-left border-collapse">
     <thead><tr class="bg-[#090D16] mono text-[12px] tracking-[0.14em] uppercase border-b border-[#1F2937]">
-      <th class="px-3 py-2.5">Market</th><th class="px-2 py-2.5">Cat</th><th class="px-2 py-2.5 text-right">Commit</th>
-      <th class="px-2 py-2.5">Order Depth / Mid</th><th class="px-2 py-2.5 text-right">Unrealized</th><th class="px-2 py-2.5 text-right">Realized</th><th class="px-2 py-2.5 text-center">Fills</th><th class="px-2 py-2.5">Status</th>
+      <th class="px-3 py-2.5">Market</th><th class="px-3 py-2.5">Order Depth / Mid</th><th class="px-3 py-2.5 text-right">Commit</th>
+      <th class="px-3 py-2.5 text-right">Unrealized P&amp;L</th><th class="px-3 py-2.5 text-right">Realized P&amp;L</th><th class="px-3 py-2.5 text-center">Fills</th><th class="px-3 py-2.5">Status</th>
     </tr></thead>
     <tbody class="mono text-[14px] divide-y divide-[#1F2937]">
-      ${rows.length ? rows.map(r => `<tr class="hover:bg-[#090D16] transition-colors">
-        <td class="px-2.5 py-2 font-medium max-w-[200px] truncate text-[13px]">${esc(r.market)}</td>
-        <td class="px-3 py-2.5"><span class="px-1 py-0.5 text-[12px] font-bold tracking-widest uppercase bg-[#1F2937]">${esc(r.category)}</span></td>
-        <td class="px-2 py-2 text-right font-semibold text-[13px]">$${r.committed.toFixed(0)}</td>
-        <td class="px-2 py-2">${orderDepthHtml(r)}</td>
-        <td class="px-2 py-2 text-right"><span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[13px] font-bold border ${r.unrealized>=0?'bg-[#10B981]/10 border-[#10B981]/20 text-[#10B981]':'bg-[#EF4444]/10 border-[#EF4444]/20 text-[#EF4444]'}">${fmtUsd(r.unrealized)}</span></td>
-        <td class="px-2 py-2 text-right">${r.closes ? `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[13px] font-bold border ${r.realized>=0?'bg-[#10B981]/10 border-[#10B981]/20 text-[#10B981]':'bg-[#EF4444]/10 border-[#EF4444]/20 text-[#EF4444]'}">${fmtUsd(r.realized)}</span>` : `<span class="text-[#9CA3AF]">--</span>`}</td>
-        <td class="px-2 py-2 text-center"><span class="px-2 py-1 text-[13px] font-bold border border-[#1F2937]">${r.fills}</span></td>
-        <td class="px-2 py-2 text-[12px] text-[#9CA3AF] max-w-[180px] truncate">${esc(r.status)}</td>
+      ${rows.length ? rows.map(r => `<tr class="hover:bg-[#1F2937] transition-colors">
+        <td class="px-3 py-2.5">
+          <div class="font-medium max-w-[280px] truncate text-[13px]"><a href="https://polymarket.com/event/${esc(r.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${formatMarketTitle(r.market)}</a></div>
+          <div class="mt-1">${getCategoryTag(r.category)}</div>
+        </td>
+        <td class="px-3 py-2.5">${orderDepthHtml(r)}</td>
+        <td class="px-3 py-2.5 text-right font-semibold text-[13px]">$${r.committed.toFixed(0)}</td>
+        <td class="px-3 py-2.5 text-right">${badgePnlPctHTML(r.unrealized, r.unrealized_pct)}</td>
+        <td class="px-3 py-2.5 text-right">${r.closes ? badgePnlPctHTML(r.realized, r.realized_pct) : `<span class="text-[#9CA3AF]">--</span>`}</td>
+        <td class="px-3 py-2.5 text-center"><span class="px-2 py-1 text-[13px] font-bold border border-[#1F2937]">${r.fills}</span></td>
+        <td class="px-3 py-2.5 max-w-[240px] truncate">
+          <div class="flex flex-col gap-1 items-start">
+            ${getStatusTag(r.status)}
+            ${r.age && r.status.includes("Orders resting") ? `<span class="text-[11px] text-[#9CA3AF] mono pl-1">Resting ${formatAge(r.age)}</span>` : ''}
+          </div>
+        </td>
       </tr>`).join("") : `<tr><td colspan="8" class="px-4 py-6 text-center mono text-[13px] text-[#9CA3AF]">No active markets right now.</td></tr>`}
     </tbody></table></div>
     <div class="px-4 py-2.5 border-t border-[#1F2937] mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">${rows.length} active markets &middot; Realized = already-booked P&amp;L from partial closes on that market &middot; Unrealized values are estimates only</div>`;
@@ -793,11 +852,13 @@ function renderSettled(rows, totalCloses) {
   const groups = {};
   for (const r of rows) {
     if (!groups[r.market]) {
-      groups[r.market] = { market: r.market, exits: [], total_pnl: 0, methods: new Set() };
+      groups[r.market] = { market: r.market, category: r.category, exits: [], total_pnl: 0, methods: new Set(), total_shares: 0, total_cost_basis: 0 };
     }
     groups[r.market].exits.push(r);
     groups[r.market].total_pnl += r.pnl;
     groups[r.market].methods.add(r.method);
+    groups[r.market].total_shares += (r.shares || 0);
+    groups[r.market].total_cost_basis += (r.cost_basis || 0);
   }
   
   const orderedGroups = [];
@@ -814,6 +875,7 @@ function renderSettled(rows, totalCloses) {
         }
       }
       g.avg_pnl_pct = count_pct > 0 ? (total_pct / count_pct) : null;
+      g.avg_cost = g.total_shares > 0 ? (g.total_cost_basis / g.total_shares) : null;
       g.win = g.total_pnl > 0;
       g.method = g.methods.size === 1 ? [...g.methods][0] : "MIXED";
       orderedGroups.push(g);
@@ -840,10 +902,89 @@ window.setSettledPerPage = function(pp) {
   renderSettledTable();
 };
 
-function getMethodIcon(method) {
-  if (method === "MERGE") return `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7l-3 3m3-3l3 3m4-4h.01M16 11h.01M16 15h.01" /></svg>`;
-  if (method === "RESOLVE") return `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#10B981]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>`;
-  return `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#9CA3AF]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>`;
+const TAG_BASE_CLASS = "inline-flex items-center px-2 py-0.5 text-[11px] font-bold tracking-widest uppercase border whitespace-nowrap rounded-sm";
+const TAG_DEFAULT_COLOR = "bg-[#090D16] text-[#D1D5DB] border-[#1F2937]/75";
+
+function renderTag(icon, text, colors = TAG_DEFAULT_COLOR) {
+  return `<span class="${TAG_BASE_CLASS} ${colors}">${icon} ${esc(text)}</span>`;
+}
+
+function getMethodTag(method) {
+  let icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#9CA3AF]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>`;
+  if (method === "MERGE") icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7l-3 3m3-3l3 3m4-4h.01M16 11h.01M16 15h.01" /></svg>`;
+  else if (method === "RESOLVE") icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#10B981]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>`;
+  return renderTag(icon, method);
+}
+
+function getCategoryTag(cat) {
+  let icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#9CA3AF]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>`;
+  
+  if (cat.startsWith("Sports")) icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M21 5h-4M19 3v4M7 3h10v4a5 5 0 01-10 0V3z M12 17v4 M8 21h8" /></svg>`;
+  else if (cat.startsWith("E-Sports")) icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#8B5CF6]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>`;
+  else if (cat.startsWith("Politics")) icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#EF4444]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z" /></svg>`;
+  else if (cat.startsWith("Crypto")) icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#F59E0B]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`;
+  else if (cat.startsWith("Pop Culture")) icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#EC4899]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>`;
+  else if (cat.startsWith("Business")) icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#10B981]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>`;
+  
+  return renderTag(icon, cat);
+}
+
+function formatAge(sec) {
+  if (sec === null || sec === undefined) return "";
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function getStatusTag(status) {
+  if (!status) return "";
+  let icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#9CA3AF]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>`;
+  let bg = `bg-[#090D16] text-[#9CA3AF] border-[#1F2937]/50`;
+  
+  if (status.includes("Orders resting") || status.includes("Quoting")) {
+    icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`;
+    bg = `bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20`; 
+  } else if (status.includes("side filled")) {
+    icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`;
+    bg = `bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20`;
+  } else if (status.includes("Paired")) {
+    icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`;
+    bg = `bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20`;
+  } else if (status.includes("ERROR") || status.includes("blocked")) {
+    icon = `<svg class="w-3.5 h-3.5 mr-1.5 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>`;
+    bg = `bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20`;
+  }
+  return renderTag(icon, status, bg);
+}
+
+function formatMarketTitle(slug) {
+  if (!slug) return "";
+  
+  let parts = slug.split('-');
+  if (parts.length === 1) return slug;
+  
+  if (parts.length >= 3) {
+    const last3 = parts.slice(-3).join('-');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(last3)) {
+      parts = parts.slice(0, -3);
+    }
+  }
+  
+  const cat = parts[0];
+  const knownCats = ["mlb", "atp", "wta", "nfl", "nba", "cs2", "lol", "pol", "nhl", "soccer", "fifa", "ufc", "boxing", "f1", "tennis", "golf", "csgo", "dota", "dota2", "val", "valorant", "esports", "politics", "election", "pres", "senate", "gop", "dem", "crypto", "btc", "eth", "sol", "defi", "nft", "pop", "culture", "oscars", "grammys", "movie", "boxoffice", "biz", "econ", "finance", "fed"];
+  if (knownCats.includes(cat)) {
+    parts.shift();
+    if (cat === "lol" && parts.length > 0 && ["lck", "lpl", "lcs", "lec"].includes(parts[0])) {
+      parts.shift();
+    }
+  }
+  
+  if (parts.length === 2) {
+    return parts[0].toUpperCase() + " vs " + parts[1].toUpperCase();
+  }
+  
+  return parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
 function renderSettledTable() {
@@ -852,33 +993,31 @@ function renderSettledTable() {
   const shown = grouped.slice(start, start + perPage);
   const totalPages = Math.ceil(grouped.length / perPage);
   
-  const table = `<div class="px-4 py-3 border-b border-[#1F2937] flex items-center justify-between">
-      <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold">History &mdash; the sample that matters</span>
-      <span class="mono text-[12px] tracking-widest uppercase px-2 py-1 bg-[#1F2937]">${totalCloses} closes</span>
-    </div>
-    <div class="overflow-x-auto"><table class="w-full text-left border-collapse">
+  const table = `<div class="overflow-x-auto"><table class="w-full text-left border-collapse">
     <thead><tr class="bg-[#090D16] mono text-[12px] tracking-[0.14em] uppercase border-b border-[#1F2937]">
-      <th class="px-3 py-2.5">Method</th><th class="px-3 py-2.5">Market</th><th class="px-3 py-2.5 text-right">Gain/Loss ($)</th><th class="px-3 py-2.5 text-right">Return (%)</th>
+      <th class="px-3 py-2.5">Method</th><th class="px-3 py-2.5">Market</th><th class="px-3 py-2.5 text-right">Avg Price</th><th class="px-3 py-2.5 text-right">Gain/Loss ($ / %)</th>
     </tr></thead>
     <tbody class="mono text-[14px] divide-y divide-[#1F2937]">
       ${shown.length ? shown.map(g => {
         const isExpanded = expanded[g.market];
-        const rowBg = g.win ? 'bg-[#10B981]/10' : 'bg-[#EF4444]/10';
         
-        let html = `<tr class="cursor-pointer hover:bg-[#1F2937] transition-colors ${rowBg}" onclick="toggleMarketExpand('${g.market}')">
-          <td class="px-3 py-2.5 whitespace-nowrap"><span class="inline-flex items-center px-2 py-0.5 text-[12px] tracking-widest uppercase border border-[#1F2937]/50">${getMethodIcon(g.method)} ${esc(g.method)}</span></td>
-          <td class="px-3 py-2.5 font-medium max-w-[280px] truncate"><a href="https://polymarket.com/event/${esc(g.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${esc(g.market)}</a></td>
-          <td class="px-3 py-2.5 text-right font-bold ${g.win?'text-[#10B981]':'text-[#EF4444]'}">${fmtUsd(g.total_pnl)}</td>
-          <td class="px-3 py-2.5 text-right font-semibold ${(g.avg_pnl_pct||0)<0?'text-[#EF4444]':''}">${g.avg_pnl_pct !== null ? fmtPct(g.avg_pnl_pct) : '--'}</td>
+        let html = `<tr class="cursor-pointer hover:bg-[#1F2937] transition-colors" onclick="toggleMarketExpand('${g.market}')">
+          <td class="px-3 py-2.5 whitespace-nowrap">${getMethodTag(g.method)}</td>
+          <td class="px-3 py-2.5">
+            <div class="font-medium max-w-[280px] truncate text-[13px]"><a href="https://polymarket.com/event/${esc(g.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${formatMarketTitle(g.market)}</a></div>
+            <div class="mt-1">${getCategoryTag(g.category)}</div>
+          </td>
+          <td class="px-3 py-2.5 text-right text-[13px] font-mono opacity-80">${g.avg_cost !== null ? '$' + g.avg_cost.toFixed(4) : '--'}</td>
+          <td class="px-3 py-2.5 text-right">${plainPnlPctHTML(g.total_pnl, g.avg_pnl_pct)}</td>
         </tr>`;
         
         if (isExpanded) {
            for (const x of g.exits) {
              html += `<tr class="bg-[#090D16]/50">
-               <td class="px-3 py-2 pl-8 whitespace-nowrap opacity-75"><span class="inline-flex items-center px-2 py-0.5 text-[11px] tracking-widest uppercase border border-[#1F2937]">${getMethodIcon(x.method)} ${esc(x.method)}</span></td>
-               <td class="px-3 py-2 max-w-[280px] truncate opacity-75 text-[13px]">${esc(x.market)}</td>
-               <td class="px-3 py-2 text-right opacity-75 ${x.win?'text-[#10B981]':'text-[#EF4444]'}">${fmtUsd(x.pnl)}</td>
-               <td class="px-3 py-2 text-right opacity-75 ${(x.pnl_pct||0)<0?'text-[#EF4444]':''}">${fmtPct(x.pnl_pct)}</td>
+               <td class="px-3 py-2 pl-8 whitespace-nowrap opacity-75">${getMethodTag(x.method)}</td>
+               <td class="px-3 py-2 max-w-[280px] truncate opacity-75 text-[13px]">${formatMarketTitle(x.market)}</td>
+               <td class="px-3 py-2 text-right opacity-60 text-[12px] font-mono">${x.avg_cost !== null ? '$' + x.avg_cost.toFixed(4) : '--'}</td>
+               <td class="px-3 py-2 text-right opacity-75">${plainPnlPctHTML(x.pnl, x.pnl_pct)}</td>
              </tr>`;
            }
         }

@@ -1117,3 +1117,7 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 ### 2026-08-12 (design, minimal entry): isolated Spread Hunter dashboard
 
 Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8801), zero edits to `fleet_dash.py`/`dashboard.py`/`strategy/`, all numbers pulled from existing `strategy.stats`/`fleet_dash.fleet()` functions. No strategy, gate, or risk change. Per operator: design-only commits get this one-line form, not the full Question/Method/Result/Verdict entry (reserved for strategy/reasoning/functionality changes).
+
+### 2026-08-12 (design, minimal entry): dashboard unification and global taxonomy
+
+Unified brutalist layout for Spread Hunter dashboard. Global category mapping established (mapping specific sports/games to "Sports", "E-Sports", etc.). Old fleet_dash.py officially marked as deprecated. Fixed a minor IDE syntax typo in fleet.py.
