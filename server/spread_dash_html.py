@@ -420,10 +420,21 @@ function bellCurveSvg(opts){
 // per-market returns, so the caption says so rather than implying more
 // precision than the sample supports.
 function expandedBellCurveSvg(opts){
-  const {min,max,mean,stdev,zero,ciLow,ciHigh,color,unit,fmt} = opts;
+  const {mean,stdev,zero,ciLow,ciHigh,color,fmt} = opts;
   const W = 640, H = 300, padL = 46, padR = 20, padT = 16, padB = 34;
+  const sd = stdev && stdev>0 ? stdev : Math.abs(mean||1)/4 || 1;
+  // Domain is CENTERED ON THE MEAN (+/-3.5 sigma) so the peak always sits
+  // in the horizontal middle of the chart, regardless of where the mean
+  // happens to fall -- a fixed arbitrary range only looked centered when
+  // the mean was near zero. Expanded symmetrically (never asymmetrically)
+  // if that would otherwise clip the zero line or the CI band.
+  let half = 3.5*sd;
+  if(zero!==undefined) half = Math.max(half, Math.abs(zero-mean));
+  if(ciLow!==undefined) half = Math.max(half, Math.abs(ciLow-mean));
+  if(ciHigh!==undefined) half = Math.max(half, Math.abs(ciHigh-mean));
+  half *= 1.08; // a little breathing room past the outermost marker
+  const min = mean-half, max = mean+half;
   const x = v => padL + ((v-min)/(max-min))*(W-padL-padR);
-  const sd = stdev && stdev>0 ? stdev : (max-min)/6;
   const bell = [];
   for(let i=0;i<160;i++){
     const v = min + (i/159)*(max-min);
@@ -436,20 +447,23 @@ function expandedBellCurveSvg(opts){
   const path = bell.map((p,i) => `${i===0?"M":"L"} ${x(p[0]).toFixed(1)} ${yS(p[1]).toFixed(1)}`).join(" ");
   const area = `${path} L ${x(bell[bell.length-1][0]).toFixed(1)} ${baseY} L ${x(bell[0][0]).toFixed(1)} ${baseY} Z`;
   const fmtV = v => fmt ? fmt(v) : v.toFixed(1);
-  const nTicks = 6;
-  const ticks = Array.from({length:nTicks+1}, (_,i) => min + (i/nTicks)*(max-min));
-  const sdBand = `<rect x="${x(Math.max(min,mean-sd)).toFixed(1)}" y="${padT}" width="${(x(Math.min(max,mean+sd))-x(Math.max(min,mean-sd))).toFixed(1)}" height="${baseY-padT}" fill="${color}" opacity="0.06"/>`;
-  let ciRect = "";
+  // Grid ticks at whole-sigma steps from the mean, not arbitrary round
+  // numbers -- so the grid actually reflects the distribution's own shape.
+  const ticks = [-3,-2,-1,0,1,2,3].map(k => mean + k*sd);
+  const sdBand = `<rect x="${x(mean-sd).toFixed(1)}" y="${padT}" width="${(x(mean+sd)-x(mean-sd)).toFixed(1)}" height="${baseY-padT}" fill="${color}" opacity="0.06"/>`;
+  let ciRect = "", ciLabel = "";
   if(ciLow!==undefined && ciHigh!==undefined){
-    ciRect = `<rect x="${x(ciLow).toFixed(1)}" y="${baseY-10}" width="${Math.max(2,x(ciHigh)-x(ciLow)).toFixed(1)}" height="10" fill="#10B981" opacity="0.9"/>
-      <text x="${((x(ciLow)+x(ciHigh))/2).toFixed(1)}" y="${baseY+22}" text-anchor="middle" font-size="11" fill="#10B981" font-family="JetBrains Mono" font-weight="700">90% CI [${fmtV(ciLow)}, ${fmtV(ciHigh)}]</text>`;
+    ciRect = `<rect x="${x(ciLow).toFixed(1)}" y="${baseY-10}" width="${Math.max(2,x(ciHigh)-x(ciLow)).toFixed(1)}" height="10" fill="#10B981" opacity="0.9"/>`;
+    const lowColor = ciLow>=0 ? "#10B981" : "#EF4444";
+    const highColor = ciHigh>=0 ? "#10B981" : "#EF4444";
+    ciLabel = `<div class="mono text-[13px] text-center mt-2">&mu; &isin; [<span style="color:${lowColor}">${fmtV(ciLow)}</span>, <span style="color:${highColor}">${fmtV(ciHigh)}</span>] <span class="text-[#9CA3AF]">(90% confidence)</span></div>`;
   }
   let zeroLine = "";
   if(zero!==undefined && zero>=min && zero<=max){
     zeroLine = `<line x1="${x(zero).toFixed(1)}" x2="${x(zero).toFixed(1)}" y1="${padT}" y2="${baseY}" stroke="#EF4444" stroke-width="1.25" stroke-dasharray="4 3"/>
       <text x="${x(zero).toFixed(1)}" y="${padT-4}" text-anchor="middle" font-size="10" fill="#EF4444" font-family="JetBrains Mono" font-weight="700">ZERO</text>`;
   }
-  return `<svg viewBox="0 0 ${W} ${H}" class="w-full" style="height:${H}px">
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="w-full" style="height:${H}px">
     ${ticks.map(t=>`<line x1="${x(t).toFixed(1)}" x2="${x(t).toFixed(1)}" y1="${padT}" y2="${baseY}" stroke="#1F2937" stroke-width="1"/>`).join("")}
     <line x1="${padL}" x2="${W-padR}" y1="${baseY}" y2="${baseY}" stroke="#374151" stroke-width="1.5"/>
     ${sdBand}
@@ -463,6 +477,7 @@ function expandedBellCurveSvg(opts){
     ${ticks.map(t=>`<text x="${x(t).toFixed(1)}" y="${baseY+16}" text-anchor="middle" font-size="10" fill="#9CA3AF" font-family="JetBrains Mono">${fmtV(t)}</text>`).join("")}
     <text x="${padL-8}" y="${padT+4}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="JetBrains Mono">&#8593; likelihood</text>
   </svg>`;
+  return svg + ciLabel;
 }
 
 let LAST_STATS = null;
@@ -485,10 +500,10 @@ function openDistModal(kind){
     title.textContent = "90% Confidence Bound — expanded";
     const ciHigh = (s.mean_return_pct!==null && s.ci90_lower_pct!==null) ? (2*s.mean_return_pct - s.ci90_lower_pct) : undefined;
     body.innerHTML = `
-      ${expandedBellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,ciLow:s.ci90_lower_pct,ciHigh,color:"#3B82F6",fmt:v=>v.toFixed(0)+"%"})}
+      ${expandedBellCurveSvg({mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,ciLow:s.ci90_lower_pct,ciHigh,color:"#3B82F6",fmt:v=>v.toFixed(0)+"%"})}
       <div class="grid grid-cols-4 gap-2 mt-4 mono text-[12px]">
         <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Mean</div><div class="font-bold mt-1">${fmtPct(s.mean_return_pct)}</div></div>
-        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Stdev (&sigma;)</div><div class="font-bold mt-1">${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Stdev (<span class="normal-case">&sigma;</span>)</div><div class="font-bold mt-1">${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}</div></div>
         <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">n settled</div><div class="font-bold mt-1">${s.n_settled}</div></div>
         <div class="border border-[#1F2937] p-2.5 text-center" style="color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'}"><div class="tracking-widest uppercase opacity-80">90% lower bound</div><div class="font-bold mt-1">${fmtPct(s.ci90_lower_pct,2)}</div></div>
       </div>
@@ -497,7 +512,7 @@ function openDistModal(kind){
     title.textContent = "Markout Drift — expanded";
     const meanC = (s.markout_mean_per_share||0)*100;
     body.innerHTML = `
-      ${expandedBellCurveSvg({min:-6,max:6,mean:meanC,stdev:2,zero:0,color:"#EF4444",fmt:v=>v.toFixed(1)+"&cent;"})}
+      ${expandedBellCurveSvg({mean:meanC,stdev:2,zero:0,color:"#EF4444",fmt:v=>v.toFixed(1)+"&cent;"})}
       <div class="grid grid-cols-3 gap-2 mt-4 mono text-[12px]">
         <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Mean drift</div><div class="font-bold mt-1 text-[#EF4444]">${meanC.toFixed(2)}&cent;</div></div>
         <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Effective n</div><div class="font-bold mt-1">${s.markout_n_eff.toFixed(1)}</div></div>
