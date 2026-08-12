@@ -160,3 +160,5 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
 * **2026-08-12 (design, /design-review):** fixed color-swatch legend in spread_dash_html.py Design Principles section — swatch squares were splitting from their labels on line-wrap (flex-wrap without an atomic wrapper per pair); now each swatch+label is one inline-flex whitespace-nowrap unit.
 
 * **2026-08-12 (design, /design-review):** fixed dashboard header logo overflow (SH-01 wrapped to 3 lines, busting its box), low-contrast white-on-green decision-hinge badge (near-white text on solid #10B981 failed WCAG AA), and redundant "separate ledgers" copy repeated twice in the Unrealized P&L card.
+
+* **2026-08-12 (design, /design-review):** added click-to-expand on the CI-bound and markout-drift distribution charts (both the Verdict-tile minis and the Performance-section versions) -- opens a modal with a larger axis-labeled normal-approximation chart (mean marker, +/-1 sigma band, 90% CI band, x-axis ticks), a real-numbers stats readout, and an explicit caption that it is a fitted approximation from the real mean/stdev, not a histogram of actual outcomes.

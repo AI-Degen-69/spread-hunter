@@ -343,6 +343,16 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </div>
 </main>
 
+<div id="dist-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-4" onclick="if(event.target===this)closeDistModal()">
+  <div class="bg-[#111827] border border-[#1F2937] max-w-[720px] w-full max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between px-4 h-11 border-b border-[#1F2937]">
+      <span id="dist-modal-title" class="mono text-[13px] tracking-[0.14em] uppercase font-semibold"></span>
+      <button onclick="closeDistModal()" class="size-7 border border-[#1F2937] grid place-items-center hover:bg-[#1F2937] transition-colors mono text-[13px]">&times;</button>
+    </div>
+    <div id="dist-modal-body" class="p-5"></div>
+  </div>
+</div>
+
 <script>
 // ---------- formatting ----------
 function fmtUsd(v){ if(v===null||v===undefined) return "--"; const s=v<0?"-":"+"; return s+"$"+Math.abs(v).toFixed(2); }
@@ -402,6 +412,99 @@ function bellCurveSvg(opts){
     ${zeroLine}
     <circle cx="${x(mean).toFixed(1)}" cy="${yS(Math.exp(0)).toFixed(1)}" r="4" fill="#111827" stroke="#F9FAFB" stroke-width="1.5"/>
   </svg>`;
+}
+
+// Larger, axis-labeled version of the same fitted-normal curve for the
+// click-to-expand modal. Same math as bellCurveSvg -- this is a normal
+// approximation from the real mean/stdev, not a histogram of actual
+// per-market returns, so the caption says so rather than implying more
+// precision than the sample supports.
+function expandedBellCurveSvg(opts){
+  const {min,max,mean,stdev,zero,ciLow,ciHigh,color,unit,fmt} = opts;
+  const W = 640, H = 300, padL = 46, padR = 20, padT = 16, padB = 34;
+  const x = v => padL + ((v-min)/(max-min))*(W-padL-padR);
+  const sd = stdev && stdev>0 ? stdev : (max-min)/6;
+  const bell = [];
+  for(let i=0;i<160;i++){
+    const v = min + (i/159)*(max-min);
+    const z = (v-mean)/sd;
+    bell.push([v, Math.exp(-0.5*z*z)]);
+  }
+  const maxY = Math.max(...bell.map(p=>p[1]));
+  const baseY = H - padB;
+  const yS = y => baseY - (y/maxY)*(baseY-padT-20);
+  const path = bell.map((p,i) => `${i===0?"M":"L"} ${x(p[0]).toFixed(1)} ${yS(p[1]).toFixed(1)}`).join(" ");
+  const area = `${path} L ${x(bell[bell.length-1][0]).toFixed(1)} ${baseY} L ${x(bell[0][0]).toFixed(1)} ${baseY} Z`;
+  const fmtV = v => fmt ? fmt(v) : v.toFixed(1);
+  const nTicks = 6;
+  const ticks = Array.from({length:nTicks+1}, (_,i) => min + (i/nTicks)*(max-min));
+  const sdBand = `<rect x="${x(Math.max(min,mean-sd)).toFixed(1)}" y="${padT}" width="${(x(Math.min(max,mean+sd))-x(Math.max(min,mean-sd))).toFixed(1)}" height="${baseY-padT}" fill="${color}" opacity="0.06"/>`;
+  let ciRect = "";
+  if(ciLow!==undefined && ciHigh!==undefined){
+    ciRect = `<rect x="${x(ciLow).toFixed(1)}" y="${baseY-10}" width="${Math.max(2,x(ciHigh)-x(ciLow)).toFixed(1)}" height="10" fill="#10B981" opacity="0.9"/>
+      <text x="${((x(ciLow)+x(ciHigh))/2).toFixed(1)}" y="${baseY+22}" text-anchor="middle" font-size="11" fill="#10B981" font-family="JetBrains Mono" font-weight="700">90% CI [${fmtV(ciLow)}, ${fmtV(ciHigh)}]</text>`;
+  }
+  let zeroLine = "";
+  if(zero!==undefined && zero>=min && zero<=max){
+    zeroLine = `<line x1="${x(zero).toFixed(1)}" x2="${x(zero).toFixed(1)}" y1="${padT}" y2="${baseY}" stroke="#EF4444" stroke-width="1.25" stroke-dasharray="4 3"/>
+      <text x="${x(zero).toFixed(1)}" y="${padT-4}" text-anchor="middle" font-size="10" fill="#EF4444" font-family="JetBrains Mono" font-weight="700">ZERO</text>`;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" class="w-full" style="height:${H}px">
+    ${ticks.map(t=>`<line x1="${x(t).toFixed(1)}" x2="${x(t).toFixed(1)}" y1="${padT}" y2="${baseY}" stroke="#1F2937" stroke-width="1"/>`).join("")}
+    <line x1="${padL}" x2="${W-padR}" y1="${baseY}" y2="${baseY}" stroke="#374151" stroke-width="1.5"/>
+    ${sdBand}
+    <path d="${area}" fill="${color}" fill-opacity="0.12" stroke="none"/>
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="1.8"/>
+    ${ciRect}
+    ${zeroLine}
+    <line x1="${x(mean).toFixed(1)}" x2="${x(mean).toFixed(1)}" y1="${yS(Math.exp(0)).toFixed(1)}" y2="${baseY}" stroke="#F9FAFB" stroke-width="1" stroke-dasharray="2 3" opacity="0.6"/>
+    <circle cx="${x(mean).toFixed(1)}" cy="${yS(Math.exp(0)).toFixed(1)}" r="5" fill="#111827" stroke="#F9FAFB" stroke-width="2"/>
+    <text x="${x(mean).toFixed(1)}" y="${(yS(Math.exp(0))-10).toFixed(1)}" text-anchor="middle" font-size="11" fill="#F9FAFB" font-family="JetBrains Mono" font-weight="700">MEAN ${fmtV(mean)}</text>
+    ${ticks.map(t=>`<text x="${x(t).toFixed(1)}" y="${baseY+16}" text-anchor="middle" font-size="10" fill="#9CA3AF" font-family="JetBrains Mono">${fmtV(t)}</text>`).join("")}
+    <text x="${padL-8}" y="${padT+4}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="JetBrains Mono">&#8593; likelihood</text>
+  </svg>`;
+}
+
+let LAST_STATS = null;
+
+function closeDistModal(){
+  document.getElementById("dist-modal").classList.add("hidden");
+  document.getElementById("dist-modal").classList.remove("flex");
+}
+
+function openDistModal(kind){
+  if(!LAST_STATS) return;
+  const s = LAST_STATS;
+  document.addEventListener("keydown", function esc(e){ if(e.key==="Escape"){ closeDistModal(); document.removeEventListener("keydown", esc); } });
+  const modal = document.getElementById("dist-modal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  const title = document.getElementById("dist-modal-title");
+  const body = document.getElementById("dist-modal-body");
+  if(kind === "ci"){
+    title.textContent = "90% Confidence Bound — expanded";
+    const ciHigh = (s.mean_return_pct!==null && s.ci90_lower_pct!==null) ? (2*s.mean_return_pct - s.ci90_lower_pct) : undefined;
+    body.innerHTML = `
+      ${expandedBellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,ciLow:s.ci90_lower_pct,ciHigh,color:"#3B82F6",fmt:v=>v.toFixed(0)+"%"})}
+      <div class="grid grid-cols-4 gap-2 mt-4 mono text-[12px]">
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Mean</div><div class="font-bold mt-1">${fmtPct(s.mean_return_pct)}</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Stdev (&sigma;)</div><div class="font-bold mt-1">${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">n settled</div><div class="font-bold mt-1">${s.n_settled}</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center" style="color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'}"><div class="tracking-widest uppercase opacity-80">90% lower bound</div><div class="font-bold mt-1">${fmtPct(s.ci90_lower_pct,2)}</div></div>
+      </div>
+      <div class="mt-3 mono text-[12px] leading-5 text-[#9CA3AF] bg-[#090D16] border border-[#1F2937] px-3 py-2">Normal approximation fitted from the real mean and standard deviation of settled-market returns &mdash; illustrative of spread, not a histogram of individual outcomes. The shaded band is &plusmn;1&sigma;.</div>`;
+  } else {
+    title.textContent = "Markout Drift — expanded";
+    const meanC = (s.markout_mean_per_share||0)*100;
+    body.innerHTML = `
+      ${expandedBellCurveSvg({min:-6,max:6,mean:meanC,stdev:2,zero:0,color:"#EF4444",fmt:v=>v.toFixed(1)+"&cent;"})}
+      <div class="grid grid-cols-3 gap-2 mt-4 mono text-[12px]">
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Mean drift</div><div class="font-bold mt-1 text-[#EF4444]">${meanC.toFixed(2)}&cent;</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Effective n</div><div class="font-bold mt-1">${s.markout_n_eff.toFixed(1)}</div></div>
+        <div class="border border-[#1F2937] p-2.5 text-center"><div class="text-[#9CA3AF] tracking-widest uppercase">Spread captured</div><div class="font-bold mt-1">${fmtUsd(s.markout_spread_usd)}</div></div>
+      </div>
+      <div class="mt-3 mono text-[12px] leading-5 text-[#9CA3AF] bg-[#090D16] border border-[#1F2937] px-3 py-2">Normal approximation centered on the pooled size-weighted mean drift per filled share &mdash; the &sigma;=2&cent; spread shown is illustrative (drift dispersion isn't separately tracked yet), the mean and n_eff are the real measured figures. The shaded band is &plusmn;1&sigma;.</div>`;
+  }
 }
 
 function gaugeSvg(value, max, color, threshold){
@@ -513,12 +616,12 @@ function renderVerdict(s){
   const weightGap = (s.mean_return_pct!==null && s.realized_pct!==null) ? (s.mean_return_pct - s.realized_pct) : null;
   const tiles = [
     {label:"90% Lower Bound", value: fmtPct(s.ci90_lower_pct,2), accent: (s.ci90_lower_pct||0)>0?"#10B981":"#EF4444",
-     chart: bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,
+     chart: `<div class="cursor-pointer" title="Click to expand" onclick="openDistModal('ci')">${bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,
        ciLow:s.ci90_lower_pct,ciHigh:(s.mean_return_pct!==null&&s.ci90_lower_pct!==null)?(2*s.mean_return_pct-s.ci90_lower_pct):undefined,
-       color:"#3B82F6",w:140,h:64}),
+       color:"#3B82F6",w:140,h:64})}</div>`,
      sub:`Mean ${fmtPct(s.mean_return_pct)} &middot; &sigma; ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'} &middot; n=${s.n_settled}`},
     {label:"Markout Drift", value: s.markout_mean_per_share===null?"--":(s.markout_mean_per_share*100).toFixed(2)+"&cent;", accent:"#EF4444",
-     chart: bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444",w:140,h:64}),
+     chart: `<div class="cursor-pointer" title="Click to expand" onclick="openDistModal('markout')">${bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444",w:140,h:64})}</div>`,
      sub:`n_eff ${s.markout_n_eff.toFixed(1)} &middot; measured`},
     {label:"Weighting Gap", value: weightGap===null?"--":weightGap.toFixed(1)+" pp", accent:"#F59E0B",
      chart: `<div class="space-y-1.5 pt-1"><div class="flex items-center gap-2"><span class="mono text-[12px] text-[#9CA3AF] w-[46px]">Equal</span><div class="flex-1 h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden"><div class="h-full bg-[#9CA3AF]" style="width:${Math.min(100,Math.abs(s.mean_return_pct||0))}%"></div></div></div><div class="flex items-center gap-2"><span class="mono text-[12px] text-[#9CA3AF] w-[46px]">Cash</span><div class="flex-1 h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden"><div class="h-full bg-[#3B82F6]" style="width:${Math.min(100,Math.abs(s.realized_pct||0))}%"></div></div></div></div>`,
@@ -585,11 +688,11 @@ function renderEvidence(s){
     <div class="border border-[#1F2937] bg-[#111827] overflow-hidden">
       <div class="px-3.5 h-9 flex items-center gap-2 mono text-[13px] tracking-[0.14em] uppercase font-semibold border-b border-[#1F2937]">Performance</div>
       <div class="p-3 space-y-3">
-        <div class="bg-[#111827] border border-[#1F2937] p-3">
+        <div class="bg-[#111827] border border-[#1F2937] p-3 cursor-pointer hover:border-[#3B82F6]/40 transition-colors" title="Click to expand" onclick="openDistModal('ci')">
           <div class="flex items-center justify-between mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]"><span>90% Confidence vs zero</span><span class="px-2 py-1 border" style="color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'};border-color:${(s.ci90_lower_pct||0)>0?'#10B98133':'#EF444433'}">Lower ${fmtPct(s.ci90_lower_pct,2)}</span></div>
           ${bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,color:"#3B82F6"})}
         </div>
-        <div class="bg-[#111827] border border-[#1F2937] p-3">
+        <div class="bg-[#111827] border border-[#1F2937] p-3 cursor-pointer hover:border-[#EF4444]/40 transition-colors" title="Click to expand" onclick="openDistModal('markout')">
           <div class="flex items-center justify-between mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]"><span>Markout drift</span><span class="px-2 py-1 border text-[#EF4444] border-[#EF444433]">Mean ${s.markout_mean_per_share===null?'--':(s.markout_mean_per_share*100).toFixed(2)+'c'}</span></div>
           ${bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444"})}
         </div>
@@ -716,6 +819,7 @@ async function boot(){
     fetch("/api/settled").then(r=>r.json()),
     fetch("/api/funnel").then(r=>r.json()),
   ]);
+  LAST_STATS = s;
 
   document.getElementById("hdr-pills").innerHTML = `
     <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 bg-[#090D16] font-semibold border border-[#1F2937]">${esc(s.status)}</span>
