@@ -170,6 +170,55 @@ def test_summary_exposes_naked_risk_fields():
     assert s["max_naked_usd"] == 120.0
 
 
+def test_markets_payload_carries_phase4_fields():
+    """api_markets must expose the raw classification inputs, the refusal
+    code, the persisted lifecycle events, and a per-row telemetry anchor so
+    the table can badge states truthfully instead of guessing."""
+    from server.spread_dash import app
+    from starlette.testclient import TestClient
+
+    with TestClient(app) as c:
+        m = c.get("/api/markets").json()
+    assert "now" in m
+    assert m["markets"], "live fleet should have market rows"
+    r = m["markets"][0]
+    for key in ("paired", "naked_sh", "err", "why", "code", "events", "ts"):
+        assert key in r, f"missing {key} in api_markets row"
+    assert isinstance(r["events"], list)
+
+
+def test_phase4_table_badges_filters_and_age_applied():
+    """Phase-4 market table: the four action buckets with the exact brief
+    color coding, the gate refusal code in micro-text under BLOCKED pills,
+    lifecycle dots from persisted events, the quick-filter bar (category +
+    state chips, instant, no reload), and per-row age badges ticked live with
+    stale rows dimmed past 60s."""
+    page = DASHBOARD_HTML
+    # Buckets + exact brief colors (blue-950/400/800, emerald, amber, purple).
+    assert "function classifyStatus(r)" in page
+    assert "bg-[#172554] text-[#60A5FA] border-[#1E40AF]" in page
+    assert "bg-[#022C22] text-[#34D399] border-[#065F46]" in page
+    assert "bg-[#451A03] text-[#FBBF24] border-[#92400E]" in page
+    assert "bg-[#3B0764] text-[#C084FC] border-[#6B21A8]" in page
+    assert "RISK_GATE" in page
+    # Lifecycle dots come from the persisted market_events telemetry.
+    assert "function stateDots(events)" in page
+    assert "reason_code" in page
+    # Filter bar: category + state chips, clear, no-reload filtering.
+    assert "function marketMatches(r, cls)" in page
+    assert "data-fcat=" in page
+    assert "data-fst=" in page
+    assert "data-fclear" in page
+    assert "No markets match the current filters" in page
+    assert "Actively Quoting" in page and "Blocked by Risk" in page
+    assert "Has Active Inventory" in page
+    # Age badges tick live; stale rows dim.
+    assert "function tickAgeBadges()" in page
+    assert "data-age=" in page
+    assert 'opacity = stale ? "0.6"' in page
+    assert "STALE " in page
+
+
 def test_data_change_cues_and_market_drawer_are_wired():
     """Phase-1 interactions: financial figures flash on change (data-kpi /
     data-v), hero numbers roll up (data-rollup), status cells fade+scale in

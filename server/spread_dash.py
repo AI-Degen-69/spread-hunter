@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse
 from server import fleet_dash
 from strategy import stats
 from strategy.config import load as load_config
+from strategy.store import reason_code
 
 ROOT = Path(__file__).resolve().parent.parent
 CFG = load_config()
@@ -217,9 +218,16 @@ def api_summary() -> dict:
 @app.get("/api/markets")
 def api_markets() -> dict:
     rows = _cached("fleet", fleet_dash.fleet)["markets"]
+    now = time.time()
     out = []
     for r in rows:
         status = _market_status(r)
+        # Phase-4 table: the refusal code is the operator's stable gate code
+        # (strategy/store.py reason_code) derived from the live err/why prose;
+        # events are the market's real persisted lifecycle telemetry; ts is the
+        # row's telemetry anchor so the page can show a truthful age badge.
+        refusal = reason_code(r.get("err") or r.get("why"))
+        age = r.get("age")
         out.append({
             "id": r["slug"] or r["title"],
             "market": r["slug"] or r["title"],
@@ -251,9 +259,20 @@ def api_markets() -> dict:
             "our_up": r.get("our_up"),
             "our_dn_as_up": r.get("our_dn_as_up"),
             "max_spread": r.get("max_spread"),
+            # Phase-4 raw inputs the table classifies on (paired/naked/err),
+            # plus the refusal code and the persisted lifecycle events.
+            "paired": r.get("paired", 0.0),
+            "naked_sh": r.get("naked_sh", 0.0),
+            "err": r.get("err", ""),
+            "why": r.get("why", ""),
+            "close_why": r.get("close_why", ""),
+            "merge_why": r.get("merge_why", ""),
+            "code": refusal,
+            "events": r.get("events") or [],
+            "ts": (now - age) if age is not None else None,
         })
     out.sort(key=lambda r: -abs(r["unrealized"]))
-    return {"markets": out}
+    return {"markets": out, "now": now}
 
 
 @app.get("/api/settled")

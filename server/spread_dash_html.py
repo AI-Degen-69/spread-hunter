@@ -519,6 +519,13 @@ function plainPnlPctHTML(usd, pct) {
 document.addEventListener("click", (e) => {
   const dr = e.target.closest("[data-drawer]");
   if (dr){ openDrawer(dr.getAttribute("data-drawer")); return; }
+  // Quick-filter chips re-render the market table in place -- no reload.
+  const fcat = e.target.closest("[data-fcat]");
+  if (fcat){ FILTERS.cat = fcat.getAttribute("data-fcat"); renderMarkets(LAST_MARKETS); tickAgeBadges(); return; }
+  const fst = e.target.closest("[data-fst]");
+  if (fst){ FILTERS.state = fst.getAttribute("data-fst"); renderMarkets(LAST_MARKETS); tickAgeBadges(); return; }
+  const fclear = e.target.closest("[data-fclear]");
+  if (fclear){ FILTERS.cat = "all"; FILTERS.state = "all"; renderMarkets(LAST_MARKETS); tickAgeBadges(); return; }
   const btn = e.target.closest("[data-toggle]");
   if (btn) {
     const id = btn.getAttribute("data-toggle");
@@ -953,36 +960,53 @@ function renderEvidence(s){
 
 function renderMarkets(rows){
   LAST_MARKETS = rows;
-  // Rows are clickable and open the market-detail drawer; the P&L cells and
-  // status cells carry data-kpi / data-state so animateChanges() can flash
-  // and transition them when a poll changes their values. The Polymarket
-  // link keeps its own stopPropagation so it never opens the drawer.
+  // Phase-4 table: quick-filter bar + classified action pills. Rows stay
+  // clickable (market drawer); P&L and status cells keep data-kpi/data-state
+  // so animateChanges() still flashes and transitions on poll changes.
+  const withCls = rows.map(r => ({ r, cls: classifyStatus(r) }));
+  const shown = withCls.filter(({r, cls}) => marketMatches(r, cls));
+  // Category chips derive from the categories actually present right now --
+  // the taxonomy is slug-derived, so a hardcoded sport enum would silently
+  // strand a new category with no way to reach it.
+  const cats = ["all", ...new Set(rows.map(r => r.category).filter(Boolean))];
+  const chips = `<div class="flex flex-wrap items-center gap-1.5 px-3 py-2.5 border-b border-[#1F2937] bg-[#090D16]/60">
+    <span class="mono text-[11px] tracking-[0.18em] uppercase text-[#9CA3AF] mr-1">Filter</span>
+    ${cats.map(c => filterChip(FILTERS.cat === c, `data-fcat="${escAttr(c)}"`, c === "all" ? "All Categories" : c)).join("")}
+    <span class="w-px h-4 bg-[#1F2937] mx-1.5 shrink-0"></span>
+    ${STATE_FILTERS.map(s => filterChip(FILTERS.state === s.id, `data-fst="${s.id}"`, s.label)).join("")}
+    ${(FILTERS.cat !== "all" || FILTERS.state !== "all") ? `<button type="button" data-fclear class="ml-auto h-6 px-2 mono text-[11px] tracking-[0.14em] uppercase text-[#F59E0B] border border-[#92400E] hover:bg-[#451A03]/40 transition-colors">Clear</button>` : ""}
+  </div>`;
+  const bodyRows = shown.map(({r, cls}) => `<tr class="hover:bg-[#1F2937] transition-colors cursor-pointer" data-drawer="${escAttr(r.market)}">
+    <td class="px-3 py-2.5">
+      <div class="font-medium max-w-[280px] truncate text-[13px]"><a href="https://polymarket.com/event/${esc(r.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${formatMarketTitle(r.market)}</a></div>
+      <div class="mt-1">${getCategoryTag(r.category)}</div>
+    </td>
+    <td class="px-3 py-2.5">${orderDepthHtml(r)}</td>
+    <td class="px-3 py-2.5 text-right font-semibold text-[13px]">$${r.committed.toFixed(0)}</td>
+    <td class="px-3 py-2.5 text-right" data-kpi="u_${escAttr(r.market)}" data-v="${r.unrealized}">${badgePnlPctHTML(r.unrealized, r.unrealized_pct)}</td>
+    <td class="px-3 py-2.5 text-right" data-kpi="r_${escAttr(r.market)}" data-v="${r.closes ? r.realized : 'n/a'}">${r.closes ? badgePnlPctHTML(r.realized, r.realized_pct) : `<span class="text-[#9CA3AF]">--</span>`}</td>
+    <td class="px-3 py-2.5 text-center"><span class="px-2 py-1 text-[13px] font-bold border border-[#1F2937]">${r.fills}</span></td>
+    <td class="px-3 py-2.5" data-state="${escAttr(r.market)}" data-v="${escAttr(cls.bucket)}">
+      <div class="flex flex-col gap-0.5 items-start min-w-[120px]">
+        ${getStatePill(cls)}
+        ${cls.bucket === "BLOCKED" ? `<span class="mono text-[9px] font-bold tracking-[0.18em] text-[#FBBF24]/80">${esc(r.code && r.code !== "OTHER" ? r.code : "RISK_GATE")}</span>` : stateDots(r.events)}
+        ${ageBadgeHtml(r.ts)}
+      </div>
+    </td>
+  </tr>`).join("");
+  const empty = !rows.length
+    ? `<tr><td colspan="8" class="px-4 py-6 text-center mono text-[13px] text-[#9CA3AF]">No active markets right now.</td></tr>`
+    : !shown.length
+      ? `<tr><td colspan="8" class="px-4 py-6 text-center mono text-[13px] text-[#9CA3AF]">No markets match the current filters.</td></tr>`
+      : bodyRows;
   const table = `<div class="overflow-x-auto"><table class="w-full text-left border-collapse">
     <thead><tr class="bg-[#090D16] mono text-[12px] tracking-[0.14em] uppercase border-b border-[#1F2937]">
       <th class="px-3 py-2.5">Market</th><th class="px-3 py-2.5">Order Depth / Mid</th><th class="px-3 py-2.5 text-right">Commit</th>
       <th class="px-3 py-2.5 text-right">Unrealized P&amp;L</th><th class="px-3 py-2.5 text-right">Realized P&amp;L</th><th class="px-3 py-2.5 text-center">Fills</th><th class="px-3 py-2.5">Status</th>
     </tr></thead>
-    <tbody class="mono text-[14px] divide-y divide-[#1F2937]">
-      ${rows.length ? rows.map(r => `<tr class="hover:bg-[#1F2937] transition-colors cursor-pointer" data-drawer="${escAttr(r.market)}">
-        <td class="px-3 py-2.5">
-          <div class="font-medium max-w-[280px] truncate text-[13px]"><a href="https://polymarket.com/event/${esc(r.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${formatMarketTitle(r.market)}</a></div>
-          <div class="mt-1">${getCategoryTag(r.category)}</div>
-        </td>
-        <td class="px-3 py-2.5">${orderDepthHtml(r)}</td>
-        <td class="px-3 py-2.5 text-right font-semibold text-[13px]">$${r.committed.toFixed(0)}</td>
-        <td class="px-3 py-2.5 text-right" data-kpi="u_${escAttr(r.market)}" data-v="${r.unrealized}">${badgePnlPctHTML(r.unrealized, r.unrealized_pct)}</td>
-        <td class="px-3 py-2.5 text-right" data-kpi="r_${escAttr(r.market)}" data-v="${r.closes ? r.realized : 'n/a'}">${r.closes ? badgePnlPctHTML(r.realized, r.realized_pct) : `<span class="text-[#9CA3AF]">--</span>`}</td>
-        <td class="px-3 py-2.5 text-center"><span class="px-2 py-1 text-[13px] font-bold border border-[#1F2937]">${r.fills}</span></td>
-        <td class="px-3 py-2.5 max-w-[240px] truncate" data-state="${escAttr(r.market)}" data-v="${escAttr(r.status)}">
-          <div class="flex flex-col gap-1 items-start">
-            ${getStatusTag(r.status)}
-            ${r.age && r.status.includes("Orders resting") ? `<span class="text-[11px] text-[#9CA3AF] mono pl-1">Resting ${formatAge(r.age)}</span>` : ''}
-          </div>
-        </td>
-      </tr>`).join("") : `<tr><td colspan="8" class="px-4 py-6 text-center mono text-[13px] text-[#9CA3AF]">No active markets right now.</td></tr>`}
-    </tbody></table></div>
-    <div class="px-4 py-2.5 border-t border-[#1F2937] mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">${rows.length} active markets &middot; click a row for the market detail drawer &middot; Realized = already-booked P&amp;L from partial closes &middot; Unrealized values are estimates only</div>`;
-  document.getElementById("tab-markets").innerHTML = table;
+    <tbody class="mono text-[14px] divide-y divide-[#1F2937]">${empty}</tbody></table></div>
+    <div class="px-4 py-2.5 border-t border-[#1F2937] mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">${shown.length} of ${rows.length} active markets &middot; click a row for the market detail drawer &middot; Realized = already-booked P&amp;L from partial closes &middot; Unrealized values are estimates only</div>`;
+  document.getElementById("tab-markets").innerHTML = chips + table;
 }
 
 let settledState = {
@@ -1082,6 +1106,95 @@ function formatAge(sec) {
   const m = Math.floor((sec % 3600) / 60);
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+// ---------- phase-4: market-table states, lifecycle, filters ----------
+// The table classifies each market's CURRENT posture into the operator's
+// four action buckets (the same vocabulary the market_events telemetry
+// uses), with the exact color coding from the brief: QUOTING soft blue,
+// FILLED neon green, BLOCKED muted amber with the gate refusal code below
+// in micro-text, MERGED electric purple. The classification reads the real
+// fleet row (err/why, paired/naked_sh, quotes) -- never the display string.
+const STATE_PILL = {
+  QUOTING:  { cls: "bg-[#172554] text-[#60A5FA] border-[#1E40AF]", label: "Quoting" },
+  FILLED:   { cls: "bg-[#022C22] text-[#34D399] border-[#065F46]", label: "Filled" },
+  BLOCKED:  { cls: "bg-[#451A03] text-[#FBBF24] border-[#92400E]", label: "Blocked" },
+  MERGED:   { cls: "bg-[#3B0764] text-[#C084FC] border-[#6B21A8]", label: "Merged" },
+  CLOSED:   { cls: "bg-[#0B111E] text-[#94A3B8] border-[#1F2937]", label: "Closed" },
+  INACTIVE: { cls: "bg-[#0B111E] text-[#94A3B8] border-[#1F2937]", label: "Inactive" },
+};
+
+function classifyStatus(r){
+  if (r.err || r.why) return { bucket: "BLOCKED", label: "Blocked" };
+  if ((r.paired||0) > 0 && (r.naked_sh||0) > 0) return { bucket: "FILLED", label: "Filled" };
+  if ((r.paired||0) > 0) return { bucket: "MERGED", label: "Merged" };
+  if ((r.naked_sh||0) > 0) return { bucket: "FILLED", label: "Filled" };
+  if ((r.quotes||[]).length) return { bucket: "QUOTING", label: "Quoting" };
+  if (r.merge_why) return { bucket: "MERGED", label: "Merged" };
+  if (r.close_why) return { bucket: "CLOSED", label: "Closed" };
+  return { bucket: "INACTIVE", label: "Inactive" };
+}
+
+function getStatePill(cls){
+  const s = STATE_PILL[cls.bucket] || STATE_PILL.INACTIVE;
+  return `<span class="mono text-[11px] font-bold tracking-[0.14em] uppercase px-2 py-0.5 border ${s.cls}">${s.label}</span>`;
+}
+
+// Lifecycle dots: the market's up-to-3 most recent PERSISTED events from the
+// market_events telemetry (kind + reason_code + ts), not anything fabricated
+// client-side. One colored dot per event, with the detail in the title.
+const EVENT_COLOR = { QUOTING:"#60A5FA", FILLED:"#34D399", HEDGED:"#C084FC",
+  MERGED:"#C084FC", EXITED:"#94A3B8", BLOCKED:"#FBBF24", WAITING:"#94A3B8", ERROR:"#EF4444" };
+
+function stateDots(events){
+  if (!events || !events.length) return "";
+  const dots = events.slice(0, 3);
+  const tip = dots.map(e => `${e.kind}${e.reason_code && e.reason_code !== "OTHER" ? " · " + e.reason_code : ""} · ${fmtClock(e.ts)}`).join(" | ");
+  return `<span class="flex items-center gap-1 mt-1" title="${esc(tip)}">` +
+    dots.map(e => `<span class="size-1.5 rounded-full" style="background:${EVENT_COLOR[e.kind] || "#94A3B8"}"></span>`).join("") + `</span>`;
+}
+
+// Quick filter bar state. `state === "HOLD"` means any market holding
+// inventory (Filled or Merged) -- the operator's "Has Active Inventory".
+let FILTERS = { cat: "all", state: "all" };
+const STATE_FILTERS = [
+  { id: "all",     label: "All States" },
+  { id: "QUOTING", label: "Actively Quoting" },
+  { id: "BLOCKED", label: "Blocked by Risk" },
+  { id: "HOLD",    label: "Has Active Inventory" },
+];
+
+function marketMatches(r, cls){
+  if (FILTERS.cat !== "all" && r.category !== FILTERS.cat) return false;
+  if (FILTERS.state === "all") return true;
+  if (FILTERS.state === "HOLD") return cls.bucket === "FILLED" || cls.bucket === "MERGED";
+  return cls.bucket === FILTERS.state;
+}
+
+function filterChip(active, attrs, label){
+  return `<button type="button" ${attrs} class="h-6 px-2.5 mono text-[11px] font-bold tracking-[0.14em] uppercase border transition-colors ${active?"bg-[#10B981] text-white border-[#10B981]":"bg-[#090D16] text-[#94A3B8] border-[#1F2937] hover:text-[#F9FAFB] hover:border-[#10B981]/50"}">${esc(label)}</button>`;
+}
+
+// Age badge: seconds since this market's last telemetry update, ticked live
+// by the pulse ticker. Past 60s the row dims and the badge reads STALE.
+function ageBadgeHtml(ts){
+  if (ts === null || ts === undefined) return `<span class="mono text-[10px] text-[#9CA3AF]">age --</span>`;
+  return `<span data-age="${ts}" class="mono text-[10px] text-[#9CA3AF]">&hellip;</span>`;
+}
+
+function tickAgeBadges(){
+  const now = Date.now()/1000;
+  document.querySelectorAll("[data-age]").forEach(el => {
+    const ts = parseFloat(el.getAttribute("data-age"));
+    if (!isFinite(ts)) return;
+    const secs = Math.max(0, Math.round(now - ts));
+    const stale = secs >= 60;
+    el.textContent = stale ? `STALE ${Math.floor(secs/60)}m` : `${secs}s ago`;
+    el.classList.toggle("text-[#F59E0B]", stale);
+    el.classList.toggle("text-[#9CA3AF]", !stale);
+    const tr = el.closest("tr");
+    if (tr) tr.style.opacity = stale ? "0.6" : "";
+  });
 }
 
 function getStatusTag(status) {
@@ -1304,6 +1417,9 @@ function startPulseTicker(){
     if (!age || PULSE.base === null) return;
     const secs = Math.max(0, Math.round(Date.now()/1000 - PULSE.base));
     age.textContent = secs + "s";
+    // Phase-4: the same tick drives the per-row freshness badges and dims
+    // stale rows (past 60s without a telemetry update).
+    tickAgeBadges();
     if (dot){
       const fresh = PULSE.alive && secs < 45;
       dot.classList.toggle("bg-[#10B981]", fresh);
