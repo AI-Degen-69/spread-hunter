@@ -40,8 +40,11 @@ def _cfg():
 def _mk(drift, cid="c1", ref_mid=0.50, source="venue_clean"):
     """One markouts row whose LONGEST matured horizon carries `drift`.
 
-    Mirrors the live schema: `_matured` reads ref_mid plus mid_h0..h2 and takes
-    the last non-null, so h1 is the horizon under test and h2 is still open.
+    Mirrors the live schema: `_matured` reads ref_mid plus mid_h0..h2 and
+    takes the longest matured (h2 is still open, so h1 wins), making h1 the
+    horizon under test. Rows predate mid_h3 (the 15m exit-window read,
+    Session 50), which is exactly the pre-migration shape the iteration must
+    degrade to.
     """
     return {"condition_id": cid, "market_slug": "s", "side": "UP",
             "fill_price": 0.48, "size": 100.0, "ref_mid": ref_mid,
@@ -194,6 +197,41 @@ def test_own_sample_takes_the_graduated_path_for_a_smaller_loss(rows):
     second = {"verdict": "losing", "mean_per_share": -0.01, "n": 16}
     assert _gate_with_fleet_fallback(gate.WIDENED, second,
                                      _cfg())[0] == gate.EXITED
+
+
+# --- mid_h3 (15m exit-window read, Session 50) ----------------------------
+# The 15m horizon is APPENDED after the 6h column, so column order and horizon
+# length diverge. "Longest matured" must be a comparison of DURATIONS -- the
+# 6h reading stays the gate's evidence even when a 15m reading has also
+# landed, and the 15m reading is only used when it is genuinely the longest
+# matured one.
+
+def test_the_6h_reading_beats_a_matured_15m_reading(rows):
+    """Both h2 (6h, +1c) and h3 (15m, -5c) have landed. The gate must judge
+    the fill on the 6h horizon -- the 15m read is the exit counterfactual, not
+    the evidence. Index order would pick h3 and read this pool as catastrophic;
+    duration order reads it as earning."""
+    rows.extend({**_mk(0.01), "mid_h2": 0.50 + 0.01, "mid_h3": 0.50 - 0.05}
+                for _ in range(30))
+    assert markout.fleet_stats(25)["mean_per_share"] == pytest.approx(0.01)
+    assert markout.fleet_stats(25)["verdict"] == "earning"
+
+
+def test_the_1h_reading_beats_a_matured_15m_reading(rows):
+    """The 6h horizon is still open, but both h1 (1h, +1c) and h3 (15m, -5c)
+    have landed. Duration order picks the 1h reading; index order would pick
+    the 15m one and report a -5c pool."""
+    rows.extend({**_mk(0.01), "mid_h3": 0.50 - 0.05} for _ in range(30))
+    assert markout.fleet_stats(25)["mean_per_share"] == pytest.approx(0.01)
+
+
+def test_a_15m_reading_is_used_when_nothing_longer_has_matured(rows):
+    """h3 alone has landed (h0/h1/h2 still open). It IS the longest matured
+    horizon, so the pool must read it -- a row whose only reading is the 15m
+    one contributes its drift, not nothing."""
+    rows.extend({**_mk(0.0), "mid_h0": None, "mid_h1": None, "mid_h2": None,
+                 "mid_h3": 0.50 + 0.01} for _ in range(30))
+    assert markout.fleet_stats(25)["mean_per_share"] == pytest.approx(0.01)
 
 
 def test_an_earning_market_is_not_dragged_down_by_a_toxic_fleet(rows):

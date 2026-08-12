@@ -47,6 +47,11 @@ output as an **upper bound**. The dashboard shows live progress toward
     server/     spread_dash.py (canonical dashboard, :8800)
                 fleet_dash.py (legacy dashboard, kept only for market scan, :8801)
     research/   lab notebook, EN + HE
+    docs/       explanation + agent/plan docs (fleet data flow:
+                [docs/explanation-fleet-data-flow.md](docs/explanation-fleet-data-flow.md),
+                pairs-rule EV report: [docs/explanation-pairs-ev-report.md](docs/explanation-pairs-ev-report.md),
+                markout horizons: [docs/explanation-markout-horizons.md](docs/explanation-markout-horizons.md),
+                dashboard CSS: [docs/howto-regenerate-dashboard-css.md](docs/howto-regenerate-dashboard-css.md))
 
 The sibling repo [`polymarket-taker`](https://github.com/AI-Degen-69/polymarket-taker)
 uses the same layout.
@@ -65,6 +70,8 @@ bash scripts/setup-hooks.sh        # required once: research-log enforcement
 .venv/bin/uvicorn server.spread_dash:app --port 8800  # canonical dashboard
 .venv/bin/uvicorn server.fleet_dash:app --port 8801   # legacy, market scan only (?view=scan)
 .venv/bin/python -m scripts.rank_markets   # ranker (writes run/markets.json)
+.venv/bin/python -m scripts.pairs_ev_report      # pairs-rule EV stack, read-only (see docs/explanation-pairs-ev-report.md)
+.venv/bin/python -m scripts.build_tailwind_css   # regenerate static dashboard CSS after editing classes (see docs/howto-regenerate-dashboard-css.md)
 ```
 
 ## Current state — post-fix run too small to judge; the old verdict was about a fixed bug

@@ -635,6 +635,25 @@ GO_LIVE_MIN_CALENDAR_DAYS = 14.0
 GO_LIVE_MAX_CATEGORY_SHARE = 0.5
 
 
+def _markout_read_cols(c) -> tuple[int, ...]:
+    """Longest-first horizon column indices for the markouts table `c` sees.
+
+    Session 50: the 15m exit-window read is APPENDED to the schema as mid_h3,
+    after the 6h column, so column index and horizon length diverge once it
+    exists -- every reader that needs "the longest matured horizon" must
+    descend by DURATION, never by index. A dashboard polling a fleet that has
+    not restarted since the column landed may still see a 3-column table (the
+    read-only connection cannot run the ALTER TABLE migration), so the request
+    is resolved against the live schema rather than assumed.
+    """
+    # PRAGMA table_info rows are (cid, name, type, notnull, dflt, pk) -- the
+    # column NAME is at index 1; index 0 is the numeric cid.
+    cols = {r[1] for r in c.execute("PRAGMA table_info(markouts)")}
+    return tuple(i for i, _ in sorted(enumerate(CFG.markout_horizons),
+                                      key=lambda p: -p[1])
+                 if f"mid_h{i}" in cols)
+
+
 def pooled_markout_neff() -> dict:
     """Kish effective sample size and size-weighted mean drift, pooled fleet-
     wide over every fill's longest matured horizon. Mirrors
@@ -647,15 +666,24 @@ def pooled_markout_neff() -> dict:
         return out
     try:
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    except Exception:
+        return out
+    try:
         c.row_factory = sqlite3.Row
+        order = _markout_read_cols(c)
+        if not order:
+            # No mid_h* column on this schema (pre-migration DB or absent
+            # table): an empty SELECT column list would be malformed SQL, and
+            # an honest empty read beats a swallowed OperationalError.
+            return out
+        cols = ", ".join(f"mid_h{i}" for i in order)
         weights: list[float] = []
         values: list[float] = []
         for r in c.execute(
-                "SELECT ref_mid, mid_h0, mid_h1, mid_h2, size, "
-                "ref_mid_source FROM markouts"):
+                f"SELECT ref_mid, {cols}, size, ref_mid_source FROM markouts"):
             if r["ref_mid_source"] == "contaminated" or r["ref_mid"] is None:
                 continue
-            mid = next((r[f"mid_h{i}"] for i in (2, 1, 0)
+            mid = next((r[f"mid_h{i}"] for i in order
                         if r[f"mid_h{i}"] is not None), None)
             if mid is None:
                 continue
@@ -665,7 +693,6 @@ def pooled_markout_neff() -> dict:
                 continue
             weights.append(w)
             values.append(mid - r["ref_mid"])
-        c.close()
         total = sum(weights)
         out["n_rows"] = len(weights)
         if total > 0:
@@ -674,6 +701,8 @@ def pooled_markout_neff() -> dict:
                 w * v for w, v in zip(weights, values)) / total
     except Exception:
         pass
+    finally:
+        c.close()
     return out
 
 
@@ -758,13 +787,22 @@ def markout_stats() -> dict:
         return out
     try:
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    except Exception:
+        return out
+    try:
         c.row_factory = sqlite3.Row
+        order = _markout_read_cols(c)
+        if not order:
+            # No mid_h* column on this schema: same empty-SELECT guard as
+            # pooled_markout_neff -- an honest empty read, not malformed SQL.
+            return out
+        cols = ", ".join(f"mid_h{i}" for i in order)
         for r in c.execute(
                 "SELECT condition_id, side, fill_price, size, ref_mid, "
-                "ref_mid_source, mid_h0, mid_h1, mid_h2 FROM markouts"):
+                f"ref_mid_source, {cols} FROM markouts"):
             if r["ref_mid_source"] == "contaminated":
                 continue
-            mid = next((r[f"mid_h{i}"] for i in (2, 1, 0)
+            mid = next((r[f"mid_h{i}"] for i in order
                         if r[f"mid_h{i}"] is not None), None)
             if mid is None:
                 continue          # no horizon matured yet
@@ -792,9 +830,10 @@ def markout_stats() -> dict:
             out["total"] += drift * (r["size"] or 0.0)
             out["spread"] += spread * (r["size"] or 0.0)
             out["n"] += 1
-        c.close()
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        c.close()
     for cid, b in out["by_market"].items():
         b["mean_per_share"] = b["sum"] / b["n"] if b["n"] else None
     return out
@@ -805,42 +844,83 @@ def pairs_ev() -> dict:
 
     EV = completion_rate x complete_gain_cents - exit_rate x exit_cost_cents,
     where the rates come from the rule's own recorded decisions and the two
-    payoffs are the MEASURED constants in config: +16.3c for a completed pair
-    (the merge capture on the 112h sample's 7/7 profitable pairs) and ~3c for
-    a naked exit (the half-spread paid instead of holding to drift). The
-    denominators are the rule-triggering one-sided fills: completed, exited,
-    or rode out the window.
+    payoffs are the re-measured config constants (Sessions 44-46): +3.68c for
+    a completed pair (rule-era merge capture on 145+ closes) and -3.67c for a
+    naked exit (realized exit economics, n=4). The denominators are the
+    rule-triggering one-sided fills: completed, exited, or rode out the
+    window.
 
-    None, not 0.0, for the rates and EV before the first decision: an empty
-    run must not read as a measured breakeven.
+    `dist` and `outliers` (Sessions 44-47) describe the completed-pair
+    capture over the SAME rule-era slice and IQR fences as
+    `scripts/pairs_ev_report.py`, so the tile's tooltip and the report
+    always agree. None, not 0.0, for the rates, EV, and distribution before
+    the first decision: an empty run must not read as a measured breakeven.
     """
     out = {"one_sided": 0, "completions": 0, "exits": 0, "expired": 0,
            "completion_rate": None, "exit_rate": None, "ev_cents": None,
            "complete_gain_cents": CFG.pairs_complete_gain_cents,
-           "exit_cost_cents": CFG.pairs_exit_cost_cents}
+           "exit_cost_cents": CFG.pairs_exit_cost_cents,
+           "dist": None, "outliers": None}
     if not DB.exists():
         return out
     try:
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    except Exception:
+        return out
+    try:
         rows = c.execute(
             "SELECT kind, COUNT(*) FROM market_events WHERE kind IN "
             "('PAIR_COMPLETE','NAKED_EXIT','PAIR_WINDOW_EXPIRED') "
             "GROUP BY kind").fetchall()
-        c.close()
+        by = dict(rows)
+        out["completions"] = int(by.get("PAIR_COMPLETE", 0))
+        out["exits"] = int(by.get("NAKED_EXIT", 0))
+        out["expired"] = int(by.get("PAIR_WINDOW_EXPIRED", 0))
+        one = out["completions"] + out["exits"] + out["expired"]
+        out["one_sided"] = one
+        if one > 0:
+            out["completion_rate"] = out["completions"] / one
+            out["exit_rate"] = out["exits"] / one
+            out["ev_cents"] = round(
+                out["completion_rate"] * CFG.pairs_complete_gain_cents
+                - out["exit_rate"] * CFG.pairs_exit_cost_cents, 3)
+
+        # Completed-pair capture distribution: per-close rates over the
+        # rule-era slice (ts >= the first PAIR_COMPLETE), IQR fences exactly
+        # as scripts/pairs_ev_report.py computes them. None before the first
+        # rule-era merge, not an empty dict.
+        era = c.execute(
+            "SELECT MIN(ts) FROM market_events WHERE kind='PAIR_COMPLETE'"
+        ).fetchone()
+        if era and era[0] is not None:
+            rates = sorted(float(r[0]) for r in c.execute(
+                "SELECT realized_pnl / shares * 100.0 FROM closes "
+                "WHERE method='merge' AND ts >= ? AND shares > 0",
+                (era[0],)))
+            if rates:
+                n = len(rates)
+
+                def _pct(idx):
+                    return rates[min(n - 1, int((n - 1) * idx))]
+
+                p25, p75 = _pct(0.25), _pct(0.75)
+                iqr = p75 - p25
+                lo, hi = p25 - 1.5 * iqr, p75 + 1.5 * iqr
+                out["dist"] = {
+                    "n": n,
+                    "mean": round(sum(rates) / n, 3),
+                    "median": round(statistics.median(rates), 3),
+                    "p25": round(p25, 3), "p75": round(p75, 3),
+                    "min": round(rates[0], 3), "max": round(rates[-1], 3),
+                }
+                out["outliers"] = {
+                    "count": sum(1 for r in rates if r < lo or r > hi),
+                    "fences": [round(lo, 3), round(hi, 3)],
+                }
     except Exception:
         return out
-    by = dict(rows)
-    out["completions"] = int(by.get("PAIR_COMPLETE", 0))
-    out["exits"] = int(by.get("NAKED_EXIT", 0))
-    out["expired"] = int(by.get("PAIR_WINDOW_EXPIRED", 0))
-    one = out["completions"] + out["exits"] + out["expired"]
-    out["one_sided"] = one
-    if one > 0:
-        out["completion_rate"] = out["completions"] / one
-        out["exit_rate"] = out["exits"] / one
-        out["ev_cents"] = round(
-            out["completion_rate"] * CFG.pairs_complete_gain_cents
-            - out["exit_rate"] * CFG.pairs_exit_cost_cents, 3)
+    finally:
+        c.close()
     return out
 
 

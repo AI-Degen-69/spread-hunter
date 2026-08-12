@@ -1558,10 +1558,15 @@ async function tick(){
       'Solid average daily yield sustained over time, smoothing out position enter/exit noise'),
     K('Pairs EV / one-sided fill', pe.ev_cents === null ? '—' : pe.ev_cents.toFixed(1)+'¢',
       pe.one_sided
-        ? pe.completions+' completed · '+pe.exits+' exited · '+pe.expired+' rode out · '+pe.one_sided+' fills'
+        ? pe.completions+' completed · '+pe.exits+' exited · '+pe.expired+' rode out'
+          + (pe.dist ? ' · median '+pe.dist.median+'¢/pair' : '')
+          + ' · '+pe.one_sided+' fills'
         : 'no one-sided fills yet',
       pe.ev_cents === null ? 'dim' : cls(pe.ev_cents), false,
-      "The pairs-only rule's measured EV per one-sided fill: completion rate × "+pe.complete_gain_cents+'¢ (merge capture) − exit rate × '+pe.exit_cost_cents+'¢ (half-spread). Positive means completing pairs instead of holding naked legs into the drift pays.')
+      "The pairs-only rule's measured EV per one-sided fill: completion rate × "+pe.complete_gain_cents+'¢ (merge capture) − exit rate × '+pe.exit_cost_cents+'¢ (half-spread). Positive means completing pairs instead of holding naked legs into the drift pays.'
+      + (pe.dist
+        ? ' Completed-pair capture (Sessions 44-47): median '+pe.dist.median+'¢, p25–p75 '+pe.dist.p25+'–'+pe.dist.p75+'¢, n='+pe.dist.n+' pairs, all-positive sample; '+(pe.outliers?pe.outliers.count:0)+' IQR outliers (full stack: python -m scripts.pairs_ev_report).'
+        : ''))
   ];
 
   // ---- go-live readiness: is this trustworthy enough for real dollars ----

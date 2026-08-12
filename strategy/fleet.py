@@ -756,6 +756,50 @@ def _maybe_resolve(bot_cfg, last: float, now: float) -> float:
     return now
 
 
+def _naked_exit_value(live: dict) -> float:
+    """What the naked leg fetches if sold at the current best bid right now.
+    Mirror of server/fleet_dash.py's per-row derivation: UP sells against
+    `up_bid` directly, DOWN against `dn_bid_as_up` (1 - dn_bid, carried on the
+    UP axis). No live bid (None) means "can't exit right now" -- valued at 0,
+    the same as the worst-case resolution number, not blended into a guess.
+    """
+    side = live.get("naked_side")
+    sh = live.get("naked_sh", 0.0) or 0.0
+    if side == "UP" and live.get("up_bid") is not None:
+        return sh * live["up_bid"]
+    if side == "DOWN" and live.get("dn_bid_as_up") is not None:
+        return sh * (1.0 - live["dn_bid_as_up"])
+    return 0.0
+
+
+def _float_mark_totals(states) -> tuple:
+    """Fleet-wide unrealized / committed / naked, derived EXACTLY as the
+    dashboard derives them (server/fleet_dash.py fleet() + spread_dash.py
+    api_summary) from each market's published `_live` dict, so the float-mark
+    series means what the dashboard's open-position numbers mean:
+
+      unrealized = paired*1 - pair_paid + (naked_exit_value - naked_cost)
+      committed  = capital (resting offers) + naked_cost + pair_paid
+      naked      = naked_cost
+
+    `_live` is fresh at the sweep boundary: every market has been visited
+    this rotation, and `_publish_state` serialises the same dicts.
+    """
+    unreal = 0.0
+    committed = 0.0
+    naked = 0.0
+    for s in states:
+        live = s.spec.get("_live", {})
+        pair_paid = live.get("pair_paid", 0.0) or 0.0
+        naked_cost = live.get("naked_cost", 0.0) or 0.0
+        unreal += ((live.get("paired", 0.0) or 0.0) * 1.0 - pair_paid
+                   + (_naked_exit_value(live) - naked_cost))
+        committed += ((live.get("capital", 0.0) or 0.0)
+                      + naked_cost + pair_paid)
+        naked += naked_cost
+    return unreal, committed, naked
+
+
 def main() -> None:
     RUN.mkdir(exist_ok=True)
     base = load_cfg()
@@ -997,6 +1041,21 @@ def main() -> None:
                 store.log_income_sample(time.time(), inc, committed)
             except Exception as e:
                 log.warning("income sample failed: %s", e)
+            # THE FLOAT MARK -- the same fleet-wide open-position totals the
+            # dashboard derives at read time, snapshotted once per sweep so the
+            # Total equity view can become a true historical series instead of
+            # shifting today's realized curve by today's float. `_live` is
+            # fresh here: every market has been visited this rotation, and
+            # `_publish_state` below serialises the same dicts. Retention is
+            # self-maintained on the write path (prune_before).
+            try:
+                unreal, committed_open, naked = _float_mark_totals(states)
+                store.log_float_mark(
+                    time.time(), unreal, committed_open, naked,
+                    prune_before=(time.time()
+                                  - base.float_mark_retention_days * 86400.0))
+            except Exception as e:
+                log.warning("float mark failed: %s", e)
             log.info("sweep | %d/%d scoring | est $%.2f/day | offers $%.0f "
                      "| committed $%.0f/%.0f | naked $%.0f | funded %d/%d "
                      "| verified %s (%s)",

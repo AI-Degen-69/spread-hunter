@@ -10,6 +10,7 @@ copy carried over from the design source.
 """
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -19,11 +20,88 @@ from fastapi.responses import HTMLResponse
 from server import fleet_dash
 from strategy import stats
 from strategy.config import load as load_config
+from strategy.store import float_history, reason_code
 
 ROOT = Path(__file__).resolve().parent.parent
 CFG = load_config()
 
 app = FastAPI(title="Hunter fleet -- spread hunter design")
+
+# The dashboard endpoints re-read the fleet DB on every request; under the
+# live writer's lock traffic a full `stats.snapshot()` read can take 9-12s,
+# which makes the page look dead on every load. This is a monitoring view and
+# the fleet's own pulse is written roughly every 10s, so an 8-second-stale
+# snapshot is indistinguishable from live. Cache the two expensive payloads
+# per process instead of re-reading the DB per request.
+_DASH_TTL = 8.0
+_DASH_CACHE: dict = {}
+_DASH_LOCK = threading.Lock()
+# Per-key in-flight marker for single-flight loading: a threading.Event that
+# the owning request sets when it finishes (success or failure). A request
+# that observes a miss while another request is loading waits on this instead
+# of re-running the expensive fleet read -- without it, N requests arriving
+# right after expiry each run `fleet_dash.fleet()` (~2s) under the same lock
+# traffic they were caching to avoid.
+_DASH_LOADING: dict = {}
+
+
+def _cached(key: str, loader):
+    while True:
+        now = time.time()
+        with _DASH_LOCK:
+            hit = _DASH_CACHE.get(key)
+            if hit and now - hit[0] < _DASH_TTL:
+                return hit[1]
+            other = _DASH_LOADING.get(key)
+            if other is None:
+                # CHECK AND INSTALL in one critical section: two racers must
+                # not both observe a miss and both install a marker, or the
+                # duplicate fleet read this exists to prevent comes back.
+                ev = threading.Event()
+                _DASH_LOADING[key] = ev
+                break
+        # Another request owns this load. Wait OUTSIDE the lock -- the loader
+        # needs the lock to publish its result, so waiting while holding it
+        # deadlocks. Then loop to re-check the cache, or to take over the load
+        # if the owner failed and cleared its marker.
+        other.wait()
+    try:
+        value = loader()
+    except BaseException:
+        with _DASH_LOCK:
+            _DASH_LOADING.pop(key, None)
+            ev.set()
+        raise
+    with _DASH_LOCK:
+        _DASH_CACHE[key] = (time.time(), value)
+        _DASH_LOADING.pop(key, None)
+        ev.set()
+    return value
+
+
+def _cache_ts(key: str):
+    """When the cached value for `key` was loaded, or None if never loaded.
+    The dashboard's "Data as of" tile reads this so it reports the data's
+    freshness, not the response time -- the fleet/pipeline values inside can
+    be up to _DASH_TTL older than the response that carries them."""
+    with _DASH_LOCK:
+        hit = _DASH_CACHE.get(key)
+        return hit[0] if hit else None
+
+
+def _warm_cache() -> None:
+    """Prime the dashboard cache shortly after startup so the first page
+    load after a restart is not the slow one. Best-effort: a missing DB or
+    state file just means the first real request pays the cold cost."""
+    try:
+        time.sleep(2.0)
+        _cached("fleet", fleet_dash.fleet)
+        _cached("pipeline", fleet_dash.pipeline)
+    except Exception:
+        pass
+
+
+threading.Thread(target=_warm_cache, daemon=True).start()
 
 # A small fixed cycle so an open-ended set of category tags (derived from
 # market-slug prefixes, not a hardcoded sport enum) still gets a stable,
@@ -85,13 +163,18 @@ def api_summary() -> dict:
     real = stats.realized()
     go = stats.go_live_readiness()
     mk = stats.markout_stats()
-    fl = fleet_dash.fleet()
+    fl = _cached("fleet", fleet_dash.fleet)
     open_rows = fl["markets"]
 
     unrealized_total = sum(r["unrealized_pnl"] for r in open_rows)
     committed_open = sum(r["committed"] for r in open_rows)
     active_positions = sum(
         1 for r in open_rows if (r["paired"] or r["naked_sh"]))
+    # Fleet-wide naked exposure: the USD in the unhedged leg, valued at
+    # average cost per market (fleet_dash's `naked_cost`). The $120 cap is
+    # strategy/config.py's max_naked_usd -- the binding per-market dollar
+    # budget the quoting layer enforces. Shown as a utilization bar.
+    naked_usd = sum(r.get("naked_cost") or 0.0 for r in open_rows)
     cost = real["cost"] or 0.0
     realized_pct = (100.0 * real["realized"] / cost) if cost else None
 
@@ -119,7 +202,7 @@ def api_summary() -> dict:
     ]
 
     try:
-        pipe = fleet_dash.pipeline()
+        pipe = _cached("pipeline", fleet_dash.pipeline)
         fleet_alive = pipe.get("fleet_alive")
         counts = (pipe.get("snapshot") or {}).get("counts") or {}
     except Exception:
@@ -128,6 +211,10 @@ def api_summary() -> dict:
 
     return {
         "now": time.time(),
+        # When the fleet payload was actually loaded, so "Data as of" shows
+        # data freshness rather than response time (coderabbit). Falls back
+        # to `now` client-side when the cache has never filled.
+        "fleet_ts": _cache_ts("fleet"),
         "fleet_alive": fleet_alive,
         "status": go["status"],
         "n_settled": go["n_settled"],
@@ -162,6 +249,13 @@ def api_summary() -> dict:
         "total_liquidation_usd": total_liquidation_usd,
         "bankroll_usd": CFG.bankroll_usd,
         "max_committed_usd": CFG.max_committed_usd,
+        "naked_usd": naked_usd,
+        "max_naked_usd": CFG.max_naked_usd,
+        # The per-sweep open-position marks (fleet-side float_marks, pruned to
+        # 90 days, downsampled here to <=1 pt/min, capped). The Total equity
+        # widget time-merges these with the settled closes so the curve
+        # reflects the float that was actually open at each point.
+        "float_history": float_history(),
         "scanned": counts.get("attempted"),
         "scored": counts.get("scored"),
         "eligible": counts.get("eligible"),
@@ -171,10 +265,17 @@ def api_summary() -> dict:
 
 @app.get("/api/markets")
 def api_markets() -> dict:
-    rows = fleet_dash.fleet()["markets"]
+    rows = _cached("fleet", fleet_dash.fleet)["markets"]
+    now = time.time()
     out = []
     for r in rows:
         status = _market_status(r)
+        # Phase-4 table: the refusal code is the operator's stable gate code
+        # (strategy/store.py reason_code) derived from the live err/why prose;
+        # events are the market's real persisted lifecycle telemetry; ts is the
+        # row's telemetry anchor so the page can show a truthful age badge.
+        refusal = reason_code(r.get("err") or r.get("why"))
+        age = r.get("age")
         out.append({
             "id": r["slug"] or r["title"],
             "market": r["slug"] or r["title"],
@@ -206,9 +307,20 @@ def api_markets() -> dict:
             "our_up": r.get("our_up"),
             "our_dn_as_up": r.get("our_dn_as_up"),
             "max_spread": r.get("max_spread"),
+            # Phase-4 raw inputs the table classifies on (paired/naked/err),
+            # plus the refusal code and the persisted lifecycle events.
+            "paired": r.get("paired", 0.0),
+            "naked_sh": r.get("naked_sh", 0.0),
+            "err": r.get("err", ""),
+            "why": r.get("why", ""),
+            "close_why": r.get("close_why", ""),
+            "merge_why": r.get("merge_why", ""),
+            "code": refusal,
+            "events": r.get("events") or [],
+            "ts": (now - age) if age is not None else None,
         })
     out.sort(key=lambda r: -abs(r["unrealized"]))
-    return {"markets": out}
+    return {"markets": out, "now": now}
 
 
 @app.get("/api/settled")
@@ -232,7 +344,7 @@ def api_settled() -> dict:
 @app.get("/api/funnel")
 def api_funnel() -> dict:
     try:
-        pipe = fleet_dash.pipeline()
+        pipe = _cached("pipeline", fleet_dash.pipeline)
     except Exception:
         pipe = {}
     snap = pipe.get("snapshot") or {}
@@ -254,7 +366,18 @@ def api_funnel() -> dict:
     }
 
 
-from server.spread_dash_html import LANDING_HTML, DASHBOARD_HTML  # noqa: E402
+from server.spread_dash_html import (  # noqa: E402
+    LANDING_HTML, DASHBOARD_HTML, _CAPITAL_JS)
+
+
+@app.get("/capital.js")
+def capital_js():
+    """The capital-since-inception widget, shared verbatim by the landing
+    page and the dashboard -- the one piece of JS the two pages hold in
+    common. Served as a static script so the pages stay self-contained
+    copies (matching the repo's per-page duplication of fmtUsd/fmtPct)."""
+    return HTMLResponse(content=_CAPITAL_JS, media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/", response_class=HTMLResponse)

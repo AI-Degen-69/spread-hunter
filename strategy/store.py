@@ -256,6 +256,17 @@ CREATE TABLE IF NOT EXISTS markouts (
     -- of quietly reporting our own footprint back to us as edge.
     ref_mid_source TEXT,
     mid_h0 REAL, mid_h1 REAL, mid_h2 REAL,
+    -- mid_h3 (Session 50): the 15-minute EXIT-WINDOW read, filled at
+    -- fill+900s. It exists for the naked-exit counterfactual -- "what would
+    -- the mid have been 15 minutes after we exited?" -- which Session 49 had
+    -- to infer from the bid ladder. APPENDED LAST on purpose: a horizon maps
+    -- to its column by position, so inserting it between 5m and 1h would
+    -- relabel every existing mid_h1/mid_h2 reading. It therefore matures
+    -- BEFORE the 1h and 6h horizons while sitting after them in the schema:
+    -- readers that want the longest matured horizon must compare DURATIONS,
+    -- never columns, and the sampling loop must not set `done` on the last
+    -- column alone (see markout.sample_due).
+    mid_h3 REAL,
     done INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_mk_done ON markouts(done, ts);
@@ -331,6 +342,23 @@ CREATE TABLE IF NOT EXISTS market_gate (
     gate_state TEXT,           -- NORMAL | WIDENED | EXITED
     updated_ts REAL
 );
+
+-- One fleet-wide open-position mark per sweep (the sibling of income_samples):
+-- the unrealized float, the dollars committed, and the naked residue, all
+-- derived exactly as the dashboard derives them at read time. Unlike
+-- market_events (event-shaped: fills, exits, refusals), this is a continuous
+-- time series -- the missing history behind the Total equity view, so that
+-- view can mark the realized curve by the float that was actually open at
+-- each point instead of today's float. Rows older than the retention window
+-- are pruned on the write path (see log_float_mark).
+CREATE TABLE IF NOT EXISTS float_marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    unrealized_usd REAL NOT NULL,
+    committed_open_usd REAL NOT NULL,
+    naked_usd REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fm_ts ON float_marks(ts);
 """
 
 
@@ -346,6 +374,9 @@ _MIGRATIONS = {
                # value for every one of them -- the default backfills itself.
                "method": "TEXT DEFAULT 'sell'", "gas": "REAL"},
     "decisions": {"reason_code": "TEXT DEFAULT 'OTHER'"},
+    # Session 50. Existing fleet DBs predate the 15m exit-window read; the
+    # column must arrive by ALTER TABLE, not only in fresh CREATE TABLEs.
+    "markouts": {"mid_h3": "REAL"},
 }
 
 
@@ -526,6 +557,93 @@ def log_income_sample(ts: float, income_day: float, committed: float) -> None:
     with _conn() as c:
         c.execute("INSERT INTO income_samples (ts, income_day, committed) "
                   "VALUES (?,?,?)", (ts, income_day, committed))
+
+
+def log_float_mark(ts: float, unrealized_usd: float,
+                   committed_open_usd: float, naked_usd: float,
+                   prune_before: Optional[float] = None) -> None:
+    """One fleet-wide open-position reading, once per sweep -- the same
+    unrealized / committed / naked totals the dashboard derives at read time
+    (server/fleet_dash.py fleet() + spread_dash.py api_summary), so the marks
+    mean what the dashboard's open-position numbers mean.
+
+    `prune_before` is a unix timestamp: rows older than it are deleted on the
+    write path, so retention is self-maintaining (90 days by default, set by
+    the fleet from config) instead of requiring a separate maintenance task.
+    """
+    with _conn() as c:
+        if prune_before is not None:
+            c.execute("DELETE FROM float_marks WHERE ts < ?", (prune_before,))
+        c.execute("INSERT INTO float_marks (ts, unrealized_usd, "
+                  "committed_open_usd, naked_usd) VALUES (?,?,?,?)",
+                  (ts, unrealized_usd, committed_open_usd, naked_usd))
+
+
+def float_history(max_points: int = 1000,
+                  min_spacing_sec: float = 60.0) -> list:
+    """The float-mark series, oldest first, thinned to at most one point per
+    `min_spacing_sec` and capped at `max_points`. A monitoring payload over
+    months of marks stays small -- the dashboard's Total view needs the shape
+    of the history, not every row.
+
+    The read is anchored to the newest mark and sized for the DENSEST case
+    the cap can need -- the newest (max_points - 1) kept points span at most
+    (max_points - 1) * min_spacing_sec, doubled for headroom -- so a
+    dashboard poll scans hours of marks instead of 90 days of them. If
+    thinning keeps fewer than `max_points` points, the window is widened and
+    the read repeats: a SPARSE table (marks farther apart than
+    `min_spacing_sec`) must not lose coverage just because the cap's window
+    was sized for a dense one. Thinning disabled (min_spacing_sec <= 0)
+    means no read bound -- the cap alone decides. The real DB path is
+    checked so a cold dashboard cannot create an empty database file just by
+    being polled.
+    """
+    path = _cfg.db_path()
+    if not path.exists():
+        return []
+    try:
+        with _conn() as c:
+            newest = c.execute(
+                "SELECT MAX(ts) FROM float_marks").fetchone()[0]
+    except Exception:
+        return []
+    if newest is None:
+        return []
+    window = (max_points * min_spacing_sec * 2
+              if min_spacing_sec > 0 else None)
+    while True:
+        try:
+            with _conn() as c:
+                if window is None:
+                    rows = c.execute(
+                        "SELECT ts, unrealized_usd, committed_open_usd, "
+                        "naked_usd FROM float_marks ORDER BY ts").fetchall()
+                else:
+                    rows = c.execute(
+                        "SELECT ts, unrealized_usd, committed_open_usd, "
+                        "naked_usd FROM float_marks WHERE ts >= ? "
+                        "ORDER BY ts", (newest - window,)).fetchall()
+        except Exception:
+            return []
+        if not rows:
+            return []
+        out = []
+        last_ts = -float("inf")
+        for ts, unreal, committed, naked in rows:
+            if ts - last_ts < min_spacing_sec:
+                continue
+            last_ts = ts
+            out.append({"ts": ts, "unrealized_usd": unreal,
+                        "committed_open_usd": committed, "naked_usd": naked})
+        if (len(out) < max_points and window is not None
+                and newest - window > 0):
+            # The window hit the sparse-data wall before the cap could fill:
+            # double it and re-read -- but only while a wider window can
+            # actually reach older rows. Once the window spans the whole
+            # table (newest - window <= 0) further widening adds nothing.
+            window *= 2
+            continue
+        return out[-max_points:]
 
 
 # A sweep is ~30-60s. Anything longer than this between two samples is a gap
