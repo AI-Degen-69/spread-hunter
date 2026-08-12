@@ -391,9 +391,15 @@ def test_cached_single_flight():
         time.sleep(0.2)
         return {"loaded": len(calls)}
 
+    # A barrier lines every thread up at the same instant so the race window
+    # (all five observing the miss before any installs a marker) is actually
+    # exercised -- with the check-and-install split across critical sections
+    # this test catches duplicate loads, not just relies on scheduling.
+    barrier = threading.Barrier(5)
     results = []
 
     def worker():
+        barrier.wait()
         results.append(sd._cached(key, loader))
 
     threads = [threading.Thread(target=worker) for _ in range(5)]

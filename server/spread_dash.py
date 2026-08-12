@@ -46,25 +46,25 @@ _DASH_LOADING: dict = {}
 
 
 def _cached(key: str, loader):
-    now = time.time()
-    with _DASH_LOCK:
-        hit = _DASH_CACHE.get(key)
-        if hit and now - hit[0] < _DASH_TTL:
-            return hit[1]
-        ev = _DASH_LOADING.get(key)
-    if ev is not None:
-        # Another request is already running this load. Wait OUTSIDE the
-        # lock -- the loader needs the lock to publish its result, so
-        # waiting while holding it would deadlock. If the load failed the
-        # marker is cleared and we fall through to load it ourselves.
-        ev.wait()
+    while True:
+        now = time.time()
         with _DASH_LOCK:
             hit = _DASH_CACHE.get(key)
-            if hit:
+            if hit and now - hit[0] < _DASH_TTL:
                 return hit[1]
-    with _DASH_LOCK:
-        ev = threading.Event()
-        _DASH_LOADING[key] = ev
+            other = _DASH_LOADING.get(key)
+            if other is None:
+                # CHECK AND INSTALL in one critical section: two racers must
+                # not both observe a miss and both install a marker, or the
+                # duplicate fleet read this exists to prevent comes back.
+                ev = threading.Event()
+                _DASH_LOADING[key] = ev
+                break
+        # Another request owns this load. Wait OUTSIDE the lock -- the loader
+        # needs the lock to publish its result, so waiting while holding it
+        # deadlocks. Then loop to re-check the cache, or to take over the load
+        # if the owner failed and cleared its marker.
+        other.wait()
     try:
         value = loader()
     except BaseException:

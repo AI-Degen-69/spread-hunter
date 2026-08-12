@@ -570,17 +570,30 @@ def float_history(max_points: int = 1000,
     """The float-mark series, oldest first, thinned to at most one point per
     `min_spacing_sec` and capped at `max_points`. A monitoring payload over
     months of marks stays small -- the dashboard's Total view needs the shape
-    of the history, not every row. The real DB path is checked so a cold
-    dashboard cannot create an empty database file just by being polled.
+    of the history, not every row.
+
+    The read is bounded to the window the cap can possibly need: the last
+    (max_points - 1) kept points span at most (max_points - 1) *
+    min_spacing_sec, anchored to the newest mark, so a dashboard poll scans
+    hours of marks instead of 90 days of them. Thinning disabled
+    (min_spacing_sec <= 0) means no read bound -- the cap alone decides.
+    The real DB path is checked so a cold dashboard cannot create an empty
+    database file just by being polled.
     """
     path = _cfg.db_path()
     if not path.exists():
         return []
     try:
+        where = ""
+        params = ()
+        if min_spacing_sec > 0:
+            where = ("WHERE ts >= (SELECT COALESCE(MAX(ts), 0) "
+                     "FROM float_marks) - ? ")
+            params = (max_points * min_spacing_sec * 2,)
         with _conn() as c:
             rows = c.execute(
                 "SELECT ts, unrealized_usd, committed_open_usd, naked_usd "
-                "FROM float_marks ORDER BY ts").fetchall()
+                f"FROM float_marks {where}ORDER BY ts", params).fetchall()
     except Exception:
         return []
     out = []

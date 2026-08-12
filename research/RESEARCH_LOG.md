@@ -1239,7 +1239,14 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Verdict.** LIVE -- the hero now shows both readings of the desk's money: the booked ledger and the marked-to-market total, with the view's limits stated in the chart's own note. The one honesty constraint is structural: without historical float snapshots the total view can only shift today's trajectory -- a future telemetry change (persisting open-position marks per poll) would make the total view a true historical series.
 
 ### Landing equity curve + shared widget (Aug 12)
-Extracted the capital-since-inception widget out of the dashboard template into a single served /capital.js (one source of truth, node-parse covers both pages), wired a route in spread_dash.py, and swapped the landing hero's Unrealized tile for the same equity curve: current capital, since-inception delta chip, Realized|Total view toggle, 164-close curve, empty state before the first close. Same math and honesty note as the dashboard slice. Verified live on both pages: curve renders on each, toggle flips aria-pressed + aria-label on both, no duplicate inline copies, console clean. 629/629 tests (3 new pins: served-widget parse, landing panel + toggle, dashboard single-source). No strategy/risk code touched.
+
+**Question.** The landing hero still showed the old Unrealized tile while the dashboard carried the capital-since-inception curve -- two pages, two widgets, drifting copies. The curve had to be one source of truth consumed by both.
+
+**Method.** Extracted the widget out of the dashboard template into a single served /capital.js (one source of truth, node-parse covers both pages), wired a route in spread_dash.py, and swapped the landing hero's Unrealized tile for the same equity curve: current capital, since-inception delta chip, Realized|Total view toggle, 164-close curve, empty state before the first close. Same math and honesty note as the dashboard slice.
+
+**Result.** Verified live on both pages: curve renders on each, toggle flips aria-pressed + aria-label on both, no duplicate inline copies, console clean. 629/629 tests (3 new pins: served-widget parse, landing panel + toggle, dashboard single-source).
+
+**Verdict.** LIVE -- one widget, two pages, same code. No strategy/risk code touched.
 
 ### Session 43 — 2026-08-12: the research org code — karpathy/autoresearch applied to our own methods
 
