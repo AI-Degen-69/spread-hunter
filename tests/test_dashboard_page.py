@@ -220,6 +220,12 @@ def test_summary_exposes_naked_risk_fields(monkeypatch, tmp_path):
     for key in ("n", "recorded", "pending", "no_markout", "no_fill",
                 "no_column", "re_read_at"):
         assert key in card
+    # The 15m fill-horizon ladder rides the same payload: the verdict tile
+    # renders it under the exit card (Session 55).
+    fh = s["pairs_ev"]["fill_horizon"]
+    for key in ("n", "recorded", "pending", "no_markout", "no_column",
+                "drift", "window_sec"):
+        assert key in fh
 
 
 def test_verdict_panel_has_exit_card_tile():
@@ -233,6 +239,10 @@ def test_verdict_panel_has_exit_card_tile():
     assert "exit_card" in DASHBOARD_HTML
     assert "re_read_at" in DASHBOARD_HTML
     assert "python -m scripts.pairs_ev_report" in DASHBOARD_HTML
+    # The tile also renders the 15m fill capture (Session 55) driven by
+    # s.pairs_ev.fill_horizon.
+    assert "fill_horizon" in DASHBOARD_HTML
+    assert "15m capture:" in DASHBOARD_HTML
 
 
 def test_markets_payload_carries_phase4_fields(monkeypatch):

@@ -373,6 +373,63 @@ def test_pairs_ev_exit_card_ladder(monkeypatch, tmp_path):
     assert stats.snapshot()["pairs_ev"]["exit_card"]["re_read_at"] == 10
 
 
+def test_pairs_ev_fill_horizon_capture(monkeypatch, tmp_path):
+    """The 15m fill-capture ladder (Session 55): every rule-era fill's
+    mid_h3 is classified so the exit-window counterfactual accumulates on the
+    current pace instead of waiting on naked exits (which almost never fire).
+    Classification is TIME-based: a NULL mid_h3 whose 15m window has elapsed
+    is no_markout (never recorded), not pending -- pending means the window
+    is genuinely still open."""
+    import time
+    import sqlite3
+
+    _env(monkeypatch, tmp_path)
+    from strategy import stats, store
+
+    # The rule era starts at the first PAIR_COMPLETE; the fill read slices on
+    # it, so a seed decision is required or the read stays at n=0.
+    store.log_event(ts=1000.0, market_slug="m0", condition_id="c0",
+                    kind="PAIR_COMPLETE", reason="PAIR_COMPLETE", size=100.0)
+
+    db = tmp_path / "stats.db"
+
+    def seed_markout(ts, cid, price, mid_h3):
+        c = sqlite3.connect(str(db))
+        try:
+            c.execute("INSERT INTO fills (ts, condition_id, market_slug, "
+                      "token_id, side, price, size, reason) "
+                      "VALUES (?,?,?,?,?,?,?,?)",
+                      (ts, cid, "m1", "tok", "UP", price, 100.0, "tape"))
+            c.execute("INSERT INTO markouts (ts, condition_id, market_slug, "
+                      "side, fill_price, size, ref_mid, ref_mid_source, "
+                      "mid_h0, mid_h1, mid_h2, mid_h3) "
+                      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (ts, cid, "m1", "UP", price, 100.0, price + 0.02,
+                       "venue_clean", None, None, None, mid_h3))
+            c.commit()
+        finally:
+            c.close()
+
+    # Two recorded: drift -7.0c (0.33 vs 0.40) and +10.0c (0.30 vs 0.20).
+    seed_markout(1100.0, "c1", 0.40, mid_h3=0.33)
+    seed_markout(1101.0, "c2", 0.20, mid_h3=0.30)
+    # Pending: window genuinely open (ts + 900s > now).
+    seed_markout(time.time() + 100.0, "c3", 0.30, mid_h3=None)
+    # no_markout: window elapsed, never recorded.
+    seed_markout(1200.0, "c4", 0.25, mid_h3=None)
+
+    ev = stats.pairs_ev()
+    fh = ev["fill_horizon"]
+    assert fh["n"] == 4
+    assert fh["recorded"] == 2 and fh["pending"] == 1
+    assert fh["no_markout"] == 1 and fh["no_column"] == 0
+    assert fh["window_sec"] == 900.0
+    assert fh["drift"] == {"n": 2, "mean_c": 1.5, "median_c": 1.5,
+                            "pos": 1, "neg": 1}
+    # The dashboard payload carries the same ladder (the tile reads snapshot).
+    assert stats.snapshot()["pairs_ev"]["fill_horizon"]["recorded"] == 2
+
+
 def test_pairs_ev_exit_card_no_column(monkeypatch, tmp_path):
     """A DB whose markouts table predates mid_h3 (the fleet has not restarted
     since the Session 50 migration) must read every exit as 'no_column' -- not
@@ -388,6 +445,11 @@ def test_pairs_ev_exit_card_no_column(monkeypatch, tmp_path):
     # the markouts table in its pre-mid_h3 shape.
     store.log_event(ts=999.0, market_slug="m0", condition_id="c0",
                     kind="QUOTING", reason="r", size=1.0)
+    # Seed the rule era too: the fill-horizon read slices on the first
+    # PAIR_COMPLETE, so without one it would stay at n=0 and never exercise
+    # the pre-mid_h3 no_column branch.
+    store.log_event(ts=1000.0, market_slug="m0", condition_id="c0",
+                    kind="PAIR_COMPLETE", reason="PAIR_COMPLETE", size=100.0)
 
     db = tmp_path / "stats.db"
     c = sqlite3.connect(str(db))
@@ -410,7 +472,14 @@ def test_pairs_ev_exit_card_no_column(monkeypatch, tmp_path):
     c.close()
 
     monkeypatch.setattr(stats, "DB", db)
-    card = stats.pairs_ev()["exit_card"]
+    ev = stats.pairs_ev()
+    card = ev["exit_card"]
     assert card["n"] == 1
     assert card["no_column"] == 1
     assert card["recorded"] == 0 and card["pending"] == 0
+    # The fill-horizon ladder reads the same pre-migration markouts table:
+    # every rule-era fill is no_column, never a false "pending".
+    fh = ev["fill_horizon"]
+    assert fh["n"] == 1 and fh["no_column"] == 1
+    assert fh["recorded"] == 0 and fh["pending"] == 0
+    assert fh["no_markout"] == 0 and fh["drift"] is None

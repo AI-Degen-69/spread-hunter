@@ -1443,3 +1443,13 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 
 **Verdict.** LIVE -- the pending exit card is visible at a glance and ready to re-read at ~10 exits, with the tile and the report guaranteed to agree on the ladder's state.
 
+
+### 2026-08-12 (design, Session 55): the 15m counterfactual stops waiting on exits -- fill-horizon capture on every rule-era fill
+
+**Question.** The exit card (Session 54) re-reads the exit-window counterfactual only when naked exits accumulate -- but the exit path almost never fires (4 exits in 3 rule-days, zero PAIR_WINDOW_EXPIRED ever: the completion branch resolves the one-sided fill first), so the instrument produces no evidence on the current pace. Worse, its pending classification was NULL-based: every pre-migration fill (mid_h3 never written, because the fleet predates the Session 50 migration) would read "pending" forever, lying about accumulating.
+
+**Method.** Added a fill-horizon ladder to `stats.pairs_ev()`: every rule-era fill (ts >= the first PAIR_COMPLETE -- the same population as the completion-side dist slice, so the tile and the report cannot disagree) is classified by its 15m mid: recorded (mid_h3 landed; drift = mid_h3 - fill_price accumulated) / pending (the 900s window is genuinely still open: ts + window > now) / no_markout (window elapsed, never written) / no_column (markouts table predates mid_h3). Classification is TIME-based, not NULL-based; window_sec comes from `CFG.markout_horizons[3]`. The verdict tile renders it as a second progress bar under the exit card, with the signed drift mean colored by sign.
+
+**Result.** 654/654. Live run/fleet.db: 166 rule-era fills -> 8 recorded (mean +5.63c/sh, median +1.50, 6 positive / 2 negative), 1 pending, 157 no_markout -- the pre-migration legacy now counted honestly instead of falsely "pending". New tests pin the four states, the drift aggregate, the no_column branch, and the tile wiring; the summary test asserts the payload shape.
+
+**Verdict.** LIVE -- the 15m exit-window counterfactual now accumulates evidence on every fill at the current pace, and pre-migration fills can no longer masquerade as pending.

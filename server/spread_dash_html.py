@@ -1041,6 +1041,11 @@ function renderVerdict(s){
   // the re-read is one command -- python -m scripts.pairs_ev_report.
   const ec = (s.pairs_ev||{}).exit_card || null;
   const ecReady = !!(ec && ec.n > 0 && ec.n >= ec.re_read_at);
+  // Fill-horizon capture (Session 55): the exit-window counterfactual on
+  // EVERY rule-era fill, not just exits -- the exit card waits on an event
+  // that almost never fires, this read accumulates on the current pace.
+  const fh = (s.pairs_ev||{}).fill_horizon || null;
+  const fhBar = (fh&&fh.n>0) ? Math.min(100,100*fh.recorded/Math.max(1,fh.n)) : 0;
   const tiles = [
     {label:"90% Lower Bound", value: fmtPct(s.ci90_lower_pct,2), accent: (s.ci90_lower_pct||0)>0?"#10B981":"#EF4444",
      tip: `Formula: mean &minus; 1.645&middot;&sigma;/&radic;n_eff &mdash; the 90% one-sided lower bound on the pooled size-weighted mean drift. Current: ${fmtPct(s.ci90_lower_pct,2)}. Gate: must clear 0% for a GO call.`,
@@ -1065,9 +1070,9 @@ function renderVerdict(s){
      sub:`${s.wins}W &middot; ${s.losses}L &middot; ${s.closes} closes`},
     {label:"Exit Card", value: ec?`${ec.n} / ${ec.re_read_at}`:"--",
      accent: ecReady?"#10B981":(ec&&ec.n>0?"#F59E0B":"#9CA3AF"),
-     tip: `The pairs-rule exit counterfactual (Sessions 49-51): for each naked exit, the recorded 15m mid (mid_h3) vs the exit price -- did waiting beat the exit? States: recorded (mid_h3 landed) / pending (15m not elapsed) / no_markout / no_fill / no_column (fleet not restarted since the mid_h3 migration). Current: ${ec?ec.n+' exits, '+ec.recorded+' recorded, '+ec.pending+' pending':'none'}. Re-read at ${ec?ec.re_read_at:'10'} exits: python -m scripts.pairs_ev_report.`,
-     chart: `<div class="h-[36px] flex items-center"><div class="w-full h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden relative"><div class="absolute left-0 top-0 bottom-0 ${ecReady?"bg-[#10B981]":"bg-[#F59E0B]"}" style="width:${ec?Math.min(100,100*ec.n/ec.re_read_at):0}%"></div></div></div>`,
-     sub: !ec?"no exits yet":(ecReady?`<span class="font-bold text-[#10B981]">READY &mdash; re-read now</span>`:`${ec.recorded} recorded &middot; ${ec.pending} pending`+(ec.no_markout?` &middot; ${ec.no_markout} no markout`:"")+(ec.no_column?` &middot; ${ec.no_column} no column`:"")+(ec.no_fill?` &middot; ${ec.no_fill} no fill`:""))},
+     tip: `The pairs-rule exit counterfactual (Sessions 49-51): for each naked exit, the recorded 15m mid (mid_h3) vs the exit price -- did waiting beat the exit? States: recorded (mid_h3 landed) / pending (15m not elapsed) / no_markout / no_fill / no_column (fleet not restarted since the mid_h3 migration). Current: ${ec?ec.n+' exits, '+ec.recorded+' recorded, '+ec.pending+' pending':'none'}. Re-read at ${ec?ec.re_read_at:'10'} exits: python -m scripts.pairs_ev_report. Below it, the 15m fill capture (Session 55) classifies every rule-era fill's mid_h3 so the instrument accumulates on the current pace: recorded / pending (window open) / no_markout (window elapsed, never written -- pre-migration or sampler gap).`,
+     chart: `<div class="h-[36px] flex flex-col justify-center gap-1.5"><div class="flex items-center"><div class="w-full h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden relative"><div class="absolute left-0 top-0 bottom-0 ${ecReady?"bg-[#10B981]":"bg-[#F59E0B]"}" style="width:${ec?Math.min(100,100*ec.n/ec.re_read_at):0}%"></div></div></div><div class="flex items-center"><div class="w-full h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden relative"><div class="absolute left-0 top-0 bottom-0 bg-[#3B82F6]" style="width:${fhBar}%"></div></div></div></div>`,
+     sub: !ec?"no exits yet":(ecReady?`<span class="font-bold text-[#10B981]">READY &mdash; re-read now</span>`:`${ec.recorded} recorded &middot; ${ec.pending} pending`+(ec.no_markout?` &middot; ${ec.no_markout} no markout`:"")+(ec.no_column?` &middot; ${ec.no_column} no column`:"")+(ec.no_fill?` &middot; ${ec.no_fill} no fill`:""))+"<br>15m capture: "+(fh?`${fh.recorded} / ${fh.n} fills`+(fh.drift?` &middot; drift <span style="color:${fh.drift.mean_c>0?"#10B981":"#EF4444"}">${fh.drift.mean_c>0?"+":""}${fh.drift.mean_c.toFixed(2)}&cent;</span>`:` &middot; ${fh.pending} pending &middot; ${fh.no_markout} unwritten`):"--")},
   ];
   const left = `<div class="col-span-12 lg:col-span-3 p-6 flex flex-col justify-center border-b lg:border-b-0 lg:border-r border-[#1F2937]">
     <div class="mono text-[12px] tracking-[0.18em] uppercase text-[#9CA3AF]">Go or no-go</div>

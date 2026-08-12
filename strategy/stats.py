@@ -27,6 +27,7 @@ import math
 import sqlite3
 import statistics
 import threading
+import time
 from pathlib import Path
 
 from strategy import store
@@ -873,7 +874,10 @@ def pairs_ev() -> dict:
            "dist": None, "outliers": None,
            "exit_card": {"n": 0, "recorded": 0, "pending": 0,
                           "no_markout": 0, "no_fill": 0, "no_column": 0,
-                          "re_read_at": PAIRS_EXIT_CARD_RE_READ_AT}}
+                          "re_read_at": PAIRS_EXIT_CARD_RE_READ_AT},
+           "fill_horizon": {"n": 0, "recorded": 0, "pending": 0,
+                             "no_markout": 0, "no_column": 0, "drift": None,
+                             "window_sec": CFG.markout_horizons[3]}}
     if not DB.exists():
         return out
     try:
@@ -965,6 +969,56 @@ def pairs_ev() -> dict:
                     card["pending"] += 1
                 else:
                     card["recorded"] += 1
+
+        # Fill-horizon capture (Session 55): the exit-window counterfactual
+        # on EVERY rule-era one-sided fill, not just the naked exits. The
+        # exit card above waits on an event that almost never fires (4 exits
+        # in 3 rule-days -- the completion branch resolves the one-sided fill
+        # first); this read classifies every rule-era fill's 15m mid (mid_h3)
+        # so the instrument accumulates evidence on the current pace. Same
+        # population as the completion-side dist slice (ts >= the first
+        # PAIR_COMPLETE) so the tile and the report cannot disagree.
+        #
+        # Classification is TIME-based, not NULL-based: a NULL mid_h3 whose
+        # 15m window HAS elapsed is no_markout (never recorded -- the fleet
+        # predates the mid_h3 migration, or the sampler gaped), NOT pending.
+        # Pending means the window is genuinely still open (ts + window >
+        # now). Without the time check every pre-migration fill reads
+        # "pending" forever and the ladder lies about accumulating.
+        fh = out["fill_horizon"]
+        if era and era[0] is not None and c.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND "
+                "name='markouts'").fetchone():
+            if not has_h3:
+                fh["n"] = int(c.execute(
+                    "SELECT COUNT(*) FROM markouts WHERE ts >= ?",
+                    (era[0],)).fetchone()[0])
+                fh["no_column"] = fh["n"]
+            else:
+                win = fh["window_sec"]
+                now = time.time()
+                drift = []
+                for ts, fp, h3 in c.execute(
+                        "SELECT ts, fill_price, mid_h3 FROM markouts "
+                        "WHERE ts >= ?", (era[0],)):
+                    fh["n"] += 1
+                    if h3 is not None:
+                        fh["recorded"] += 1
+                        if fp is not None:
+                            drift.append((h3 - fp) * 100.0)
+                    elif ts + win > now:
+                        fh["pending"] += 1
+                    else:
+                        fh["no_markout"] += 1
+                if drift:
+                    nn = len(drift)
+                    fh["drift"] = {
+                        "n": nn,
+                        "mean_c": round(sum(drift) / nn, 3),
+                        "median_c": round(statistics.median(drift), 3),
+                        "pos": sum(1 for x in drift if x > 0),
+                        "neg": sum(1 for x in drift if x < 0),
+                    }
     except Exception:
         return out
     finally:
