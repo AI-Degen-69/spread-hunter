@@ -13,7 +13,9 @@ python -m scripts.pairs_ev_report
 
 The pairs-only rule lives and dies on one comparison:
 
-    EV per one-sided fill = completion_rate × complete_gain − exit_rate × exit_cost
+```text
+EV per one-sided fill = completion_rate × complete_gain − exit_rate × exit_cost
+```
 
 - **completion_rate / exit_rate** come from the rule's recorded decisions in
   `market_events` — PAIR_COMPLETE / NAKED_EXIT / PAIR_WINDOW_EXPIRED. The
@@ -53,9 +55,12 @@ the contract:
   includes the spread earned on the passive leg that filled before the rule
   acted. The completion payoff is the pair-level number, not the marginal
   cost of the crossed leg alone.
-- **Fills are not linked to their closes.** The EV denominator (rule
-  decisions) and the closes are counted independently; the report shows both
-  and their realized totals, and never invents a fill-to-close join.
+- **EV decisions and close totals are counted independently.** The EV
+  denominator (rule decisions in `market_events`) and the realized close
+  totals are counted separately — the report never invents a fill-to-close
+  join for EV accounting. The exit counterfactual is the deliberate
+  exception: it links each naked-exit close to its triggering fill with the
+  window-based join described below.
 - **Natural pairs can slip into the rule-era slice.** A pair whose both legs
   filled passively also merges without a PAIR_COMPLETE event, and the slice
   (ts ≥ the first PAIR_COMPLETE) can include one. The per-market

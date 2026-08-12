@@ -36,7 +36,7 @@ must be re-run whenever the class set changes.
 
    Expected output:
 
-   ```
+   ```text
    wrote server/_tailwind_css.py (29.4 KB minified)
    ```
 

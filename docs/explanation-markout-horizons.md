@@ -89,8 +89,11 @@ current exit population — the pairing is exact, and it is why the pair report
 can join a close to its fill's markout row instead of building a counterfactual
 by hand. Two boundaries are stated in the code and the report:
 
-- a future exit at nonzero age inside the window reads fill+900s, not
-  exit+900s — the exit-vs-wait arithmetic must subtract the exit's age;
+- the pairing holds only for today's exit population: a future exit at
+  nonzero age would read the triggering fill's fill+900s markout, not its
+  own exit+900s, and the report does NOT subtract the exit's age — such an
+  exit is outside the report's guarantee (the exit-vs-wait gap would be
+  wrong by the exit's age);
 - mid_h3 cannot be backfilled — exits recorded before the migration have no
   15m reading and never will.
 
