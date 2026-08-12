@@ -465,8 +465,8 @@ def _print(rep: dict) -> None:
 
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("db", nargs="?", default=str(ROOT / "maker.db"),
-                   help="database to replay (default: maker.db)")
+    p.add_argument("db", nargs="?", default=str(ROOT / "hunter.db"),
+                   help="database to replay (default: hunter.db)")
     p.add_argument("--json", default=None, help="write the report dict here")
     a = p.parse_args(argv)
 

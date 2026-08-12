@@ -50,7 +50,7 @@ Added one new test function to `tests/test_profit_take.py`,
 `test_close_reconstruction_uses_per_leg_removed_cost_not_share_split`
 (the six existing tests untouched). It exercises the real store rather
 than testing the arithmetic in isolation: uses `monkeypatch.setenv` to
-point `MAKER_DB` at a `tmp_path` DB, seeds the `fills` table with the
+point `HUNTER_DB` at a `tmp_path` DB, seeds the `fills` table with the
 skewed position (150 UP @ 0.50, 100 DOWN @ 0.40), mimics the fleet close
 block's exact mutation order to close 100 pairs, asserts the live values
 (`up_cost=25.0`, `down_cost=0.0`, `up_shares=50.0`, `down_shares=0.0`),
@@ -59,7 +59,7 @@ calls the real `strategy.fleet._inventory_from_db(cid)` and asserts the
 reconstruction matches the live values exactly — including
 `down_cost == 0.0` on a zero-share leg, the specific case the old split
 got wrong. Driving the real store/rehydration function was not awkward
-(both worked directly against the temp DB via `MAKER_DB`), so no
+(both worked directly against the temp DB via `HUNTER_DB`), so no
 arithmetic-only fallback was needed.
 
 ### Commands and verbatim output
@@ -161,11 +161,11 @@ no additional plumbing was needed.
 ### Task 3 Step 3 — fresh-DB check (PowerShell env-var form used per brief)
 
 Command run (bash tool, `$env:` form not needed there since Bash tool is
-Git Bash on this box — plain `MAKER_DB=run/t.db python -c "..."` worked):
+Git Bash on this box — plain `HUNTER_DB=run/t.db python -c "..."` worked):
 
 ```
 rm -f run/t.db
-MAKER_DB=run/t.db python -c "
+HUNTER_DB=run/t.db python -c "
 from strategy import store
 store.log_close(condition_id='x', market_slug='s', shares=10, up_price=0.56,
                 dn_price=0.45, cost_basis=9.5, proceeds=10.1, fee=0.34,
@@ -204,7 +204,7 @@ count before this dispatch — that count already included the 6 new
 regressions and no new failures).
 
 ## Ambiguities and how they were resolved
-- The brief's PowerShell note (`$env:MAKER_DB='run/t.db'`) applies to
+- The brief's PowerShell note (`$env:HUNTER_DB='run/t.db'`) applies to
   PowerShell; I ran the verification through the Bash tool (Git Bash),
   where the `VAR=val cmd` prefix form works natively, so I used that form
   instead — same effect, correct verbatim SQL/Python from the brief.

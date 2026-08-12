@@ -41,7 +41,7 @@ def _rank_cmd(top: int = TOP) -> list[str]:
 
     The depth trial (U32) and the volume trial (U36) stay opt-in: when
     `select_min_top3_depth_usd_trial` / `select_min_volume_24h_usd_trial` are
-    set (env MAKER_DEPTH_TRIAL_USD / MAKER_VOLUME_TRIAL_USD, or a config
+    set (env HUNTER_DEPTH_TRIAL_USD / HUNTER_VOLUME_TRIAL_USD, or a config
     default), the loop passes the bar through so adopted markets are tagged
     `trial_depth_usd` / `trial_volume_usd` and their markouts are the decision
     evidence. Config is read fresh at process start, so flipping a trial on is

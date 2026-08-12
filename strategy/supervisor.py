@@ -9,7 +9,7 @@ dies silently is worth nothing, however good the strategy is.
 This owns both processes and restarts either one when it exits. It does NOT
 survive a reboot: that needs Task Scheduler, and is a separate decision.
 
-    set MAKER_DB=run/fleet.db
+    set HUNTER_DB=run/fleet.db
     python -m strategy.supervisor
 """
 from __future__ import annotations
@@ -134,15 +134,15 @@ class Child:
 
 
 def main() -> None:
-    if not os.environ.get("MAKER_DB"):
-        raise SystemExit("MAKER_DB is not set -- the children would write to a "
+    if not os.environ.get("HUNTER_DB"):
+        raise SystemExit("HUNTER_DB is not set -- the children would write to a "
                          "different database than the one you are reading. "
                          "Set it (e.g. run/fleet.db) and try again.")
     children = [Child(n, c) for n, c in CHILDREN.items()]
     for ch in children:
         ch.start()
-    log.info("supervising %d children | MAKER_DB=%s",
-             len(children), os.environ["MAKER_DB"])
+    log.info("supervising %d children | HUNTER_DB=%s",
+             len(children), os.environ["HUNTER_DB"])
     try:
         while True:
             now = time.time()

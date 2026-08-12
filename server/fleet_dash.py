@@ -24,7 +24,7 @@ CFG = load_config()
 # otherwise a healthy fleet flashes STALE between every state-file write.
 STALE_AFTER_SEC = 120.0
 
-app = FastAPI(title="maker fleet")
+app = FastAPI(title="Hunter fleet")
 
 
 def _pulse() -> dict:
@@ -879,7 +879,7 @@ def pipeline():
 PAGE = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Maker Fleet</title>
+<title>Spread Hunter Fleet</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
@@ -1075,7 +1075,7 @@ PAGE = r"""<!doctype html>
  }
 </style></head><body>
 <header class="mast">
-  <div class="mast-id"><b>◆</b> Maker Fleet</div>
+  <div class="mast-id"><b>◆</b> Spread Hunter Fleet</div>
   <span class="tag">Paper · simulated fills</span>
   <span class="legend">
     <span><i style="background:var(--up)"></i>gain</span>

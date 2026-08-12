@@ -56,7 +56,7 @@ class _BotCfg:
 
 
 def _make_state(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "hyst.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "hyst.db"))
     st = MarketState(_spec(), load_cfg())
     st.market = _Market()
     # Last-known-good payload: what a successful visit wrote before the blip.

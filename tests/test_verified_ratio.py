@@ -24,11 +24,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 def _fresh(monkeypatch, tmp_path, name="verified_ratio.db"):
     """Point the store at an empty DB and hand back the module.
 
-    Canonical pattern: setenv MAKER_DB before the `from strategy import store`
+    Canonical pattern: setenv HUNTER_DB before the `from strategy import store`
     so that the module-level `_cfg = load_cfg()` reads our tmp path. Any later
     call into `store.<fn>` (including `verified_ratio()`) opens that DB.
     """
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / name))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / name))
     from strategy import store
     return store
 

@@ -141,7 +141,7 @@ Task 6 (DEMO run): COMPLETE, on the human's request for a clean sheet.
     the supervisor restarts the dashboard independently, and a
     module-import anchor would silently reset to zero on a dash crash and
     report a fresh run that never happened.
-  - Supervisor started clean: MAKER_DB=run/fleet.db, both children up.
+  - Supervisor started clean: HUNTER_DB=run/fleet.db, both children up.
   - RESTART PROVEN: killed the fleet child (pid 14848); supervisor logged
     "fleet EXITED code=4294967295 after 178s (crash #1) -- restarting in 5s"
     and started pid 40796 five seconds later, then logged "fleet stable,

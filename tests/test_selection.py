@@ -459,7 +459,7 @@ def test_evaluate_gates_on_the_trial_depth_bar_when_passed():
 
 def test_effective_depth_bar_resolution_cli_over_config_over_default(monkeypatch):
     """The bar a run gates on comes from --trial-depth first, then the config
-    trial (env MAKER_DEPTH_TRIAL_USD), then the permanent value; a
+    trial (env HUNTER_DEPTH_TRIAL_USD), then the permanent value; a
     non-positive trial is a mistake, not a signal, and falls back."""
     base = load_cfg()
     assert rank_markets._effective_depth_bar(None) == \
@@ -476,7 +476,7 @@ def test_effective_depth_bar_resolution_cli_over_config_over_default(monkeypatch
 
 
 def test_config_env_sets_the_trial_bar_without_touching_the_permanent_one(monkeypatch):
-    monkeypatch.setenv("MAKER_DEPTH_TRIAL_USD", "600")
+    monkeypatch.setenv("HUNTER_DEPTH_TRIAL_USD", "600")
     cfg = load_cfg()
     assert cfg.select_min_top3_depth_usd_trial == 600.0
     assert cfg.select_min_top3_depth_usd == 1000.0
@@ -563,7 +563,7 @@ def test_evaluate_gates_on_the_trial_volume_bar_when_passed():
 
 def test_effective_volume_bar_resolution_cli_over_config_over_default(monkeypatch):
     """Same precedence as the depth bar: --trial-volume first, then the config
-    trial (env MAKER_VOLUME_TRIAL_USD), then the permanent value; a
+    trial (env HUNTER_VOLUME_TRIAL_USD), then the permanent value; a
     non-positive trial is a mistake, not a signal, and falls back."""
     base = load_cfg()
     assert rank_markets._effective_volume_bar(None) == \
@@ -580,7 +580,7 @@ def test_effective_volume_bar_resolution_cli_over_config_over_default(monkeypatc
 
 
 def test_config_env_sets_the_volume_trial_bar_without_touching_the_permanent_one(monkeypatch):
-    monkeypatch.setenv("MAKER_VOLUME_TRIAL_USD", "200000")
+    monkeypatch.setenv("HUNTER_VOLUME_TRIAL_USD", "200000")
     cfg = load_cfg()
     assert cfg.select_min_volume_24h_usd_trial == 200_000.0
     assert cfg.select_min_volume_24h_usd == 250_000.0
@@ -589,13 +589,13 @@ def test_config_env_sets_the_volume_trial_bar_without_touching_the_permanent_one
 def test_config_env_overrides_the_allocator_marginal_floor(monkeypatch):
     """U36f: the 2%/day marginal-return floor defunded the entire eligible
     universe (all 7 real-book markets measure 0.04-1.84%/day first-dollar), so
-    the operator re-armed it lower via MAKER_MARGINAL_FLOOR. The env must
+    the operator re-armed it lower via HUNTER_MARGINAL_FLOOR. The env must
     override the permanent floor without touching anything else."""
-    monkeypatch.setenv("MAKER_MARGINAL_FLOOR", "0.005")
+    monkeypatch.setenv("HUNTER_MARGINAL_FLOOR", "0.005")
     cfg = load_cfg()
     assert cfg.marginal_return_floor == 0.005
 
-    monkeypatch.delenv("MAKER_MARGINAL_FLOOR", raising=False)
+    monkeypatch.delenv("HUNTER_MARGINAL_FLOOR", raising=False)
     assert load_cfg().marginal_return_floor == 0.02  # permanent default intact
 
 

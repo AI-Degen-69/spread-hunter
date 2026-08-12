@@ -90,7 +90,7 @@ reboot (that needs Task Scheduler / a Windows service — not requested, out of
 scope).
 
 **`strategy/supervisor.py`:**
-- Launches both children via `subprocess.Popen`, inheriting `MAKER_DB` from
+- Launches both children via `subprocess.Popen`, inheriting `HUNTER_DB` from
   the environment (required — supervisor exits early with a clear message if
   unset, same contract `fleet.py` already has via `load_specs()`).
 - Poll loop (~2s): for each child, if `proc.poll() is not None`, that child

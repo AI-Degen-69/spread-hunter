@@ -1,4 +1,4 @@
-# Maker Fleet EV System Implementation Plan
+# Spread Hunter Fleet EV System Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -143,7 +143,7 @@ def markout_rows() -> list[dict]:
 
 - [ ] **Step 3: Verify schema applies to a fresh DB**
 
-Run: `MAKER_DB=run/t.db python -c "from strategy import store; store.log_markout_open(ts=1.0, condition_id='x', market_slug='s', side='UP', fill_price=0.5, size=10, ref_mid=0.52); print(store.pending_markouts(1e9,(300.0,)))"`
+Run: `HUNTER_DB=run/t.db python -c "from strategy import store; store.log_markout_open(ts=1.0, condition_id='x', market_slug='s', side='UP', fill_price=0.5, size=10, ref_mid=0.52); print(store.pending_markouts(1e9,(300.0,)))"`
 Expected: one dict with `_due` = 0. Then delete `run/t.db`.
 
 ---

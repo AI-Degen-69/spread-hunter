@@ -1,4 +1,4 @@
-"""SQLite store for the maker sim. Entirely separate DB from the taker bot.
+"""SQLite store for the Hunter sim. Entirely separate DB from the taker bot.
 
 Schema is maker-shaped: we record every QUOTE we post (not just fills), because
 for a maker the quotes that DIDN'T fill are half the information -- fill rate,

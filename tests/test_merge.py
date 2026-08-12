@@ -210,7 +210,7 @@ def test_pairing_rate_is_undefined_with_nothing_filled():
 # --- one ledger, two methods (KTD2c) ----------------------------------------
 
 def _fresh(monkeypatch, tmp_path, name="merge.db"):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / name))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / name))
     from strategy import store
     return store
 

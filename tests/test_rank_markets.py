@@ -26,7 +26,7 @@ from strategy.fleet import MarketState, reallocate           # noqa: E402
 def _isolated_db(monkeypatch, tmp_path):
     """MarketState rehydrates inventory from the store, so every test needs a
     database of its own or one test's fills become another's position."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "rank.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "rank.db"))
 
 
 def _spec(cid="c1", daily=50, title="t", min_size=50, shares=120):

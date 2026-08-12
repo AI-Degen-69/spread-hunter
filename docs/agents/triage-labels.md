@@ -1,6 +1,6 @@
 # Triage Labels
 
-The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker (GitHub Issues for `AI-Degen-69/maker`).
+The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker (GitHub Issues for `AI-Degen-69/spread-hunter`).
 
 | Canonical role    | Label in our tracker | Meaning                                  |
 | ----------------- | -------------------- | ---------------------------------------- |

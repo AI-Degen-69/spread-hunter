@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def test_settled_positions_exposes_sell_exit_math(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settled.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settled.db"))
     from strategy import store
     import strategy.stats as stats
 
@@ -32,7 +32,7 @@ def test_settled_positions_exposes_sell_exit_math(monkeypatch, tmp_path):
 
 
 def test_settled_positions_uses_parity_for_merge_and_gas(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settled.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settled.db"))
     from strategy import store
     import strategy.stats as stats
 
@@ -59,7 +59,7 @@ def test_settled_positions_includes_resolution_only_naked_wins(monkeypatch, tmp_
     still has to show up here -- it is already inside `_realized()`'s
     aggregate total, and an operator seeing that total move with nothing new
     in this table read it as a bug, not as two views of the same money."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settled.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settled.db"))
     from strategy import store
     import strategy.stats as stats
 
@@ -82,7 +82,7 @@ def test_settled_positions_includes_resolution_only_naked_wins(monkeypatch, tmp_
 def test_settled_positions_skips_fully_closed_resolved_markets(monkeypatch, tmp_path):
     """A market that resolved but was already fully closed voluntarily has
     nothing left to settle -- it must not double-count the close's own row."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settled.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settled.db"))
     from strategy import store
     import strategy.stats as stats
 

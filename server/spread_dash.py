@@ -23,7 +23,7 @@ from strategy.config import load as load_config
 ROOT = Path(__file__).resolve().parent.parent
 CFG = load_config()
 
-app = FastAPI(title="maker fleet -- spread hunter design")
+app = FastAPI(title="Hunter fleet -- spread hunter design")
 
 # A small fixed cycle so an open-ended set of category tags (derived from
 # market-slug prefixes, not a hardcoded sport enum) still gets a stable,

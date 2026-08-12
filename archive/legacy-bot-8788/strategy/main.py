@@ -27,12 +27,12 @@ from strategy.quotes import Inventory, decide_quotes, reward_score
 
 log = logging.getLogger("maker")
 
-# pid file for the single-instance guard. Per-bot when MAKER_PID is set: the
+# pid file for the single-instance guard. Per-bot when HUNTER_PID is set: the
 # fleet runs four bots at once, and a shared pidfile would make each new bot
 # look like a duplicate of the last and refuse to start.
 ROOT_PID = __import__("pathlib").Path(
-    __import__("os").environ.get("MAKER_PID")
-    or (__import__("pathlib").Path(__file__).resolve().parent.parent / "maker.pid"))
+    __import__("os").environ.get("HUNTER_PID")
+    or (__import__("pathlib").Path(__file__).resolve().parent.parent / "hunter.pid"))
 
 
 def full_book(clob_host: str, token_id: str) -> dict:
@@ -119,7 +119,7 @@ def resolve_finished(bot_cfg) -> int:
 def _single_instance_guard() -> None:
     """Refuse to start if another maker.main is already running.
 
-    Four copies once ran concurrently against the same maker.db. Each keeps its
+    Four copies once ran concurrently against the same hunter.db. Each keeps its
     OWN in-memory inventory and fill engine, so the DB ends up holding the SUM
     of several independent strategies -- silently invalid data that still looks
     plausible. Cheap guard, expensive bug.
@@ -163,12 +163,12 @@ def loop() -> None:
     bot_cfg = load_bot_cfg()
     _single_instance_guard()
     if cfg.objective == "rewards":
-        log.info("maker sim starting | bankroll $%.0f | objective=rewards | "
+        log.info("Hunter sim starting | bankroll $%.0f | objective=rewards | "
                  "quote %dsh %.1fc under mid (reward window %.1fc)",
                  cfg.bankroll_usd, cfg.quote_shares, 100 * cfg.reward_offset,
                  100 * cfg.max_spread_from_mid)
     else:
-        log.info("maker sim starting | bankroll $%.0f | objective=pair | "
+        log.info("Hunter sim starting | bankroll $%.0f | objective=pair | "
                  "quote %dsh %d tick under ask",
                  cfg.bankroll_usd, cfg.quote_shares, cfg.ticks_below_ask)
 

@@ -347,7 +347,7 @@ class MakerConfig:
     # depth >= half the bar). The permanent bar above never changes; the trial
     # is opt-in per rank run, adopted markets are tagged `trial_depth_usd` in
     # run/markets.json, and their markouts are watched before the change is
-    # made permanent. Overridable from MAKER_DEPTH_TRIAL_USD; the ranker's own
+    # made permanent. Overridable from HUNTER_DEPTH_TRIAL_USD; the ranker's own
     # `--trial-depth` flag wins over both.
     select_min_top3_depth_usd_trial: float | None = None
     # VOLUME-GATE TRIAL (U36). Same staging contract as the depth trial above:
@@ -364,7 +364,7 @@ class MakerConfig:
     # depth near-miss population has 3-25x-thin volume -- which is why the
     # volume trial is the real lever, and the two run together so a
     # $200k-volume market with a $750-depth book is admissible. Overridable
-    # from MAKER_VOLUME_TRIAL_USD; the ranker's own `--trial-volume` flag wins.
+    # from HUNTER_VOLUME_TRIAL_USD; the ranker's own `--trial-volume` flag wins.
     select_min_volume_24h_usd_trial: float | None = None
     select_max_book_spread: float = 0.06
     # 30 days admits liquid macro, sports, and political markets while keeping
@@ -667,7 +667,7 @@ class MakerConfig:
     sim_only: bool = True
 
     def db_path(self) -> Path:
-        return Path(os.environ.get("MAKER_DB", str(ROOT / "maker.db")))
+        return Path(os.environ.get("HUNTER_DB", str(ROOT / "hunter.db")))
 
 
     # --- pinned market (multi-bot mode) -----------------------------------
@@ -686,39 +686,39 @@ def load() -> MakerConfig:
     """Config, with the per-bot fields overridable from the environment.
 
     Four bots run the same code against different markets; each gets its own
-    MAKER_DB, port and MAKER_MARKET. Nothing else differs, so a difference in
+    HUNTER_DB, port and HUNTER_MARKET. Nothing else differs, so a difference in
     results is a difference in the MARKET, not in the settings.
     """
     kw: dict = {}
-    cid = os.environ.get("MAKER_MARKET", "").strip()
+    cid = os.environ.get("HUNTER_MARKET", "").strip()
     if cid:
         kw["pinned_condition_id"] = cid
-        kw["market_title"] = os.environ.get("MAKER_TITLE", "")
-        kw["market_url"] = os.environ.get("MAKER_URL", "")
-        kw["market_daily_rate"] = float(os.environ.get("MAKER_DAILY_RATE", "0") or 0)
+        kw["market_title"] = os.environ.get("HUNTER_TITLE", "")
+        kw["market_url"] = os.environ.get("HUNTER_URL", "")
+        kw["market_daily_rate"] = float(os.environ.get("HUNTER_DAILY_RATE", "0") or 0)
         # Long-dated markets do not close in 15 seconds, and the min-size floor
         # is per-market (20, 50, 100, 200) -- quoting under it earns nothing.
         kw["min_t_remaining_sec"] = 0.0
-        ms = os.environ.get("MAKER_MIN_SIZE")
+        ms = os.environ.get("HUNTER_MIN_SIZE")
         if ms:
             kw["min_quote_shares"] = int(float(ms))
             kw["quote_shares"] = max(int(float(ms)), 120)
-        sp = os.environ.get("MAKER_MAX_SPREAD")   # in cents, from the venue
+        sp = os.environ.get("HUNTER_MAX_SPREAD")   # in cents, from the venue
         if sp:
             kw["max_spread_from_mid"] = float(sp) / 100.0
-        tk = os.environ.get("MAKER_TICK")
+        tk = os.environ.get("HUNTER_TICK")
         if tk:
             kw["price_tick"] = float(tk)
-    trial = os.environ.get("MAKER_DEPTH_TRIAL_USD") or ""
+    trial = os.environ.get("HUNTER_DEPTH_TRIAL_USD") or ""
     if trial.strip():
         kw["select_min_top3_depth_usd_trial"] = float(trial)
-    vtri = os.environ.get("MAKER_VOLUME_TRIAL_USD") or ""
+    vtri = os.environ.get("HUNTER_VOLUME_TRIAL_USD") or ""
     if vtri.strip():
         kw["select_min_volume_24h_usd_trial"] = float(vtri)
-    pr = os.environ.get("MAKER_PAIRS_RULE") or ""
+    pr = os.environ.get("HUNTER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
-    mf = os.environ.get("MAKER_MARGINAL_FLOOR") or ""
+    mf = os.environ.get("HUNTER_MARGINAL_FLOOR") or ""
     if mf.strip():
         kw["marginal_return_floor"] = float(mf)
     return MakerConfig(**kw)

@@ -33,7 +33,7 @@ def test_startup_settle_zeroes_phantom_inventory(monkeypatch, tmp_path):
     """THE BUG, STATED AS A TEST. A market with a `resolutions` row restarts
     holding shares that `_inventory_from_db` rebuilt from fills; the pass must
     zero them (and their cost) so committed capital is freed immediately."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -63,7 +63,7 @@ def test_startup_settle_zeroes_phantom_inventory(monkeypatch, tmp_path):
 def test_startup_settle_leaves_unresolved_markets_alone(monkeypatch, tmp_path):
     """A market with fills but NO resolution row is still genuinely open --
     its inventory must survive the pass untouched."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -84,7 +84,7 @@ def test_startup_settle_leaves_unresolved_markets_alone(monkeypatch, tmp_path):
 def test_startup_settle_only_affects_resolved_members(monkeypatch, tmp_path):
     """A mixed fleet: one market resolved, one still open. Only the resolved
     one loses its inventory."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -108,7 +108,7 @@ def test_startup_settle_is_idempotent_with_visit(monkeypatch, tmp_path):
     """After the startup pass clears a resolved market, the next `visit` (which
     also checks resolved_cids) must be a no-op -- no double counting, no error,
     inventory stays zero."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -134,7 +134,7 @@ def test_startup_settle_resolved_market_with_no_inventory_is_not_counted(
         monkeypatch, tmp_path):
     """A resolved market holding nothing has no phantom capital to free -- the
     pass still normalises its live payload but must not report it as settled."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "settle.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "settle.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 

@@ -42,7 +42,7 @@ def test_settle_resolved_zeroes_inventory_and_refreshes_the_payload(
     dashboard payload all read zero, and the payload is FRESH (stale=False,
     ts=now) -- measured now, not stamped as a failure.
     """
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -70,7 +70,7 @@ def test_settle_resolved_zeroes_inventory_and_refreshes_the_payload(
 def test_settle_resolved_records_a_resolved_event(monkeypatch, tmp_path):
     """A market holding inventory records the RESOLVED event; the zero case
     does not pretend shares were released."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -91,7 +91,7 @@ def test_cancel_live_orders_blank_the_payload_and_persist(monkeypatch,
                                                           tmp_path):
     """A market losing eligibility cancels its resting offers, blanks the
     dashboard's quote fields and marks the historical rows cancelled."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -128,7 +128,7 @@ def test_record_event_collapses_routine_repeats_and_honours_force(
         monkeypatch, tmp_path):
     """A routine repeat inside the dedup window writes once; force writes
     through; a DIFFERENT event is not collapsed."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -194,7 +194,7 @@ def _ctx(now=100.0, **kw):
 def _mk_sweep_state(monkeypatch, tmp_path):
     """A market that passes the identity gate with its metadata already
     cached, so `sweep()` runs on fakes without touching the network."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet
 
@@ -207,7 +207,7 @@ def test_sweep_settled_outcome_releases_the_committed_cost(monkeypatch,
                                                            tmp_path):
     """A market the venue has already closed settles and reports the released
     dollars as the outcome -- the caller never reaches into the engine."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, store, sweep
 
@@ -227,7 +227,7 @@ def test_sweep_settled_outcome_releases_the_committed_cost(monkeypatch,
 def test_sweep_identity_blocked_outcome(monkeypatch, tmp_path):
     """A market the selector would never admit is refused before any fetch:
     its resting quotes are cancelled and the reason is the outcome's `why`."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy.config import load as load_cfg
     from strategy import fleet, sweep
 
@@ -302,7 +302,7 @@ def test_trial_depth_bar_reaches_the_live_book_gate(monkeypatch, tmp_path):
     st = fleet.MarketState(spec, base_cfg)
     assert st.cfg.select_min_top3_depth_usd == 500.0
 
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     st.market = _Market()
     monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
     monkeypatch.setattr("strategy.sweep.full_book",
@@ -330,7 +330,7 @@ def test_price_band_widened_to_the_spread_universe(monkeypatch, tmp_path):
     spec = _spec(cid="cond-band")
     spec["spread"] = 0.01
     spec["volume_24h"] = 500_000.0
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     st = fleet.MarketState(spec, base_cfg)
     st.market = _Market()
     monkeypatch.setattr("strategy.sweep.recent_trades", lambda *a, **k: {})
@@ -383,12 +383,12 @@ _DN_BOOK_DEAR = _mk_book({0.50: 5000.0, 0.49: 4000.0, 0.48: 3000.0},
 def _pairs_state(monkeypatch, tmp_path, books, fills=None):
     """A market with healthy books and optionally a seeded one-sided fill.
 
-    The temp MAKER_DB must be set BEFORE the fills are seeded -- the state
+    The temp HUNTER_DB must be set BEFORE the fills are seeded -- the state
     rehydrates its inventory (and the rule's fill clock) from that database
     at construction, so a fill seeded into the previous env's DB would leave
     the rebuilt position empty.
     """
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy import store
 
     for side, price, size in fills or []:
@@ -467,7 +467,7 @@ def test_pairs_rule_window_expiry_leaves_position_alone(monkeypatch,
     """A one-sided fill older than the 15-minute window is left alone: no
     forced exit, no completion -- but the expiry is recorded ONCE so the EV
     KPI can count the fill as having ridden out the window."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "sweep.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "sweep.db"))
     from strategy import store, sweep
 
     with store.db() as c:
@@ -501,10 +501,10 @@ def test_pairs_rule_window_expiry_leaves_position_alone(monkeypatch,
 
 def test_pairs_rule_disabled_flag_leaves_fills_untouched(monkeypatch,
                                                          tmp_path):
-    """MAKER_PAIRS_RULE=0 turns the rule off entirely -- the naked leg is
+    """HUNTER_PAIRS_RULE=0 turns the rule off entirely -- the naked leg is
     neither completed nor exited (the switchable-trial convention every other
     behavioural change here follows)."""
-    monkeypatch.setenv("MAKER_PAIRS_RULE", "0")
+    monkeypatch.setenv("HUNTER_PAIRS_RULE", "0")
     from strategy import store, sweep
 
     st = _pairs_state(monkeypatch, tmp_path,

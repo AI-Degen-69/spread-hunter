@@ -16,7 +16,7 @@ from strategy import gate  # noqa: E402
 
 def _fresh(monkeypatch, tmp_path, name="gate.db"):
     """Point the store at an empty DB and hand back the module."""
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / name))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / name))
     from strategy import store
     return store
 

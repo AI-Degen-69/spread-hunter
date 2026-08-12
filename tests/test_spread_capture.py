@@ -27,7 +27,7 @@ from strategy.fleet import MarketState, reallocate    # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolated_db(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "spread.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "spread.db"))
 
 
 def _spec(cid="btc", daily=0.0, volume=92_000.0, spread=0.01, min_size=100):

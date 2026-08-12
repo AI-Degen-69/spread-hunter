@@ -17,7 +17,7 @@ from strategy.fills import QueueFillEngine                   # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolated_db(monkeypatch, tmp_path):
-    monkeypatch.setenv("MAKER_DB", str(tmp_path / "recon.db"))
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "recon.db"))
 
 
 def _rows(eng, cid="c1"):

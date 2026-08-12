@@ -1,7 +1,7 @@
 """Replay validation (U7): what the gates would have refused, in dollars.
 
 Every fixture here is built in `tmp_path`. NONE of these tests touch the real
-`maker.db` or `run/fleet.db`: a test that reads the live database measures
+`hunter.db` or `run/fleet.db`: a test that reads the live database measures
 whatever the fleet did last night, so it would pass or fail on data rather than
 on code. The two market shapes below are transcribed from the recorded run --
 `lol-maz-mg1-2026-08-04` (98.397296 UP at 0.74, then 135.0 UP at 0.87) and
