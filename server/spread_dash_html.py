@@ -1032,13 +1032,13 @@ function renderVerdict(s){
   const tiles = [
     {label:"90% Lower Bound", value: fmtPct(s.ci90_lower_pct,2), accent: (s.ci90_lower_pct||0)>0?"#10B981":"#EF4444",
      tip: `Formula: mean &minus; 1.645&middot;&sigma;/&radic;n_eff &mdash; the 90% one-sided lower bound on the pooled size-weighted mean drift. Current: ${fmtPct(s.ci90_lower_pct,2)}. Gate: must clear 0% for a GO call.`,
-     chart: `<div class="cursor-pointer" title="Click to expand" onclick="openDistModal('ci')">${bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,
+     chart: `<button type="button" class="w-full text-left cursor-pointer" style="font:inherit;color:inherit;background:none;border:0;padding:0" title="Click to expand" aria-label="Expand the 90% confidence bound chart" onclick="openDistModal('ci')">${bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,
        ciLow:s.ci90_lower_pct,ciHigh:(s.mean_return_pct!==null&&s.ci90_lower_pct!==null)?(2*s.mean_return_pct-s.ci90_lower_pct):undefined,
-       color:"#3B82F6",w:140,h:64})}</div>`,
+       color:"#3B82F6",w:140,h:64})}</button>`,
      sub:`Mean ${fmtPct(s.mean_return_pct)} &middot; &sigma; ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}`},
     {label:"Markout Drift", value: s.markout_mean_per_share===null?"--":(s.markout_mean_per_share*100).toFixed(2)+"&cent;", accent:"#EF4444",
      tip: `Formula: size-weighted mean of (reference mid &minus; fill mid) per filled share, in cents. Current: ${s.markout_mean_per_share===null?"--":(s.markout_mean_per_share*100).toFixed(2)+"&cent;"}. Negative = adverse selection: fills systematically arrive against us.`,
-     chart: `<div class="cursor-pointer" title="Click to expand" onclick="openDistModal('markout')">${bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444",w:140,h:64})}</div>`,
+     chart: `<button type="button" class="w-full text-left cursor-pointer" style="font:inherit;color:inherit;background:none;border:0;padding:0" title="Click to expand" aria-label="Expand the markout drift chart" onclick="openDistModal('markout')">${bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444",w:140,h:64})}</button>`,
      sub:`n_eff ${s.markout_n_eff.toFixed(1)} &middot; measured`},
     {label:"Weighting Gap", value: weightGap===null?"--":weightGap.toFixed(1)+" pp", accent:"#F59E0B",
      tip: `Formula: equal-weighted mean return &minus; cash-weighted realized return, in percentage points. Current: ${weightGap===null?"--":weightGap.toFixed(1)+" pp"}. A wide gap means per-settlement weighting changes the picture.`,
@@ -1127,14 +1127,14 @@ function renderEvidence(s){
     <div class="border border-[#1F2937] bg-[#111827] overflow-hidden">
       <div class="px-3.5 h-9 flex items-center gap-2 mono text-[13px] tracking-[0.14em] uppercase font-semibold border-b border-[#1F2937]">Performance</div>
       <div class="p-3 space-y-3">
-        <div class="bg-[#111827] border border-[#1F2937] p-3 cursor-pointer hover:border-[#3B82F6]/40 transition-colors" title="Click to expand" onclick="openDistModal('ci')">
+        <button type="button" class="w-full text-left bg-[#111827] border border-[#1F2937] p-3 cursor-pointer hover:border-[#3B82F6]/40 transition-colors" style="font:inherit;color:inherit" title="Click to expand" aria-label="Expand the 90% confidence vs zero chart" onclick="openDistModal('ci')">
           <div class="flex items-center justify-between mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]"><span>90% Confidence vs zero</span><span class="text-[#9CA3AF]/60">Expand &nearr;</span></div>
           ${bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,color:"#3B82F6"})}
-        </div>
-        <div class="bg-[#111827] border border-[#1F2937] p-3 cursor-pointer hover:border-[#EF4444]/40 transition-colors" title="Click to expand" onclick="openDistModal('markout')">
+        </button>
+        <button type="button" class="w-full text-left bg-[#111827] border border-[#1F2937] p-3 cursor-pointer hover:border-[#EF4444]/40 transition-colors" style="font:inherit;color:inherit" title="Click to expand" aria-label="Expand the markout drift chart" onclick="openDistModal('markout')">
           <div class="flex items-center justify-between mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]"><span>Markout drift</span><span class="px-2 py-1 border text-[#EF4444] border-[#EF444433]">Mean ${s.markout_mean_per_share===null?'--':(s.markout_mean_per_share*100).toFixed(2)+'c'}</span></div>
           ${bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444"})}
-        </div>
+        </button>
         <div class="grid grid-cols-3 gap-2">
           <div class="bg-[#10B981]/10 border border-[#10B981]/20 p-3"><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#10B981]">Realized</div><div class="mono text-[18px] font-bold text-[#10B981] mt-1">${fmtPnlHTML(s.realized_usd)}</div></div>
           <div class="bg-[#111827] border border-[#1F2937] p-3"><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]">Mean / Stdev</div><div class="mono text-[15px] font-bold mt-1">${fmtPctHTML(s.mean_return_pct)} / ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}</div></div>

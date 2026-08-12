@@ -1387,3 +1387,12 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 
 **Verdict.** LIVE. The "Tailwind CDN / Google Fonts as offline dependencies" audit item is half closed: the page now renders with zero third-party JS and works offline. Regeneration is the one workflow change the design agent must know -- ANY new class in spread_dash_html.py needs `python -m scripts.build_tailwind_css` or it renders unstyled (documented in the build script's docstring and the generated file's header). Honest limits: /capital.js stays a blocking script on purpose (the pages' inline scripts call its functions top-level during parse, so `defer` would throw a ReferenceError -- noted, not forced); Google Fonts remains a network dependency -- the variable-font consolidation cut the surface, and self-hosting the two OFL variable fonts is the natural follow-up. No strategy/quoting/risk behavior touched.
 
+### 2026-08-12 (design): PR #23 review fixes -- distribution modal fully keyboard-operable
+
+**Question.** The expanded-chart modal already moved focus to its close button on open, trapped Tab/Shift+Tab, and restored focus on close (coderabbit round 1) -- but all four chart triggers were divs with onclick handlers, so a keyboard user could never open the modal at all.
+
+**Method.** Converted the four triggers (the verdict panel's two bell-curve tiles and the evidence panel's two large chart cards) from divs to real `<button type="button">` elements, each with an aria-label naming the chart it expands and inline reset styles (font, color, background, border, padding, text-align) so the snapshot Tailwind stylesheet needs no regeneration. The open/focus/trap/restore JS is unchanged.
+
+**Result.** Every trigger is now Tab-reachable and activatable with Enter/Space; opening focuses the modal's close button, Tab is trapped inside the dialog, and closing returns focus to the invoking button. Dashboard page suite 26/26, node --check parses both pages' scripts.
+
+**Verdict.** LIVE -- the modal's keyboard contract is implemented, not merely declared via aria-modal.
