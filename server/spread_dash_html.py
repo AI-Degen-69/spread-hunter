@@ -250,7 +250,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
 <header class="sticky top-0 z-30 bg-[#111827]/90 backdrop-blur border-b border-[#1F2937]">
   <div class="mx-auto max-w-[1440px] px-6 lg:px-8 h-[60px] flex items-center justify-between gap-4">
     <div class="flex items-center gap-4 min-w-0">
-      <div class="size-9 bg-[#111827] text-[#F9FAFB] grid place-items-center mono text-[12px] font-bold tracking-widest shrink-0 border border-[#1F2937]">SH<span class="text-[#EF4444]">&mdash;</span>01</div>
+      <div class="size-10 px-1 bg-[#111827] text-[#F9FAFB] grid place-items-center mono text-[12px] font-bold whitespace-nowrap shrink-0 border border-[#1F2937]">SH<span class="text-[#EF4444]">&mdash;</span>01</div>
       <div class="hidden md:block min-w-0">
         <div class="font-display text-[15px] leading-none tracking-tight flex items-center gap-2">SPREAD HUNTER <span class="hidden lg:inline mono text-[12px] tracking-[0.14em] uppercase font-normal text-[#9CA3AF]">Fleet Desk</span></div>
         <div class="mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF] truncate">Live fleet database &mdash; maker</div>
@@ -500,7 +500,6 @@ function renderPositions(s){
     <div class="col-span-12 lg:col-span-6 p-6 lg:p-7 relative border-l border-[#1F2937]">
       <div class="absolute top-0 left-0 w-full h-[2px] bg-[#3B82F6]"></div>
       <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#3B82F6] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#3B82F6]"></span> Unrealized P&amp;L &mdash; Open Positions</div>
-      <div class="mono text-[13px] tracking-[0.08em] uppercase text-[#9CA3AF] mt-1">Midpoint estimate &middot; separate from Realized P&amp;L</div>
       <div class="mt-6 flex items-baseline gap-3">
         <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]">${fmtUsd(s.unrealized_usd)}</div>
         <div class="mono text-[12px] tracking-widest uppercase px-2 py-1 bg-[#3B82F6] border border-[#1F2937]">Unrealized</div>
@@ -727,7 +726,7 @@ async function boot(){
   document.getElementById("hdr-hinge").innerHTML = `
     <span class="mono text-[12px] tracking-[0.16em] uppercase text-[#9CA3AF]">Decision hinge</span>
     <span class="mono text-[14px] font-semibold tracking-tight flex items-center gap-2">90% lower bound
-      <span class="px-1.5 py-0.5 ml-1 font-bold border" style="background:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'};border-color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'}">${fmtPct(s.ci90_lower_pct,2)}</span></span>
+      <span class="px-1.5 py-0.5 ml-1 font-bold border" style="background:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'};border-color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'};color:#0B1220">${fmtPct(s.ci90_lower_pct,2)}</span></span>
     <span class="hidden md:inline mono text-[13px] text-[#9CA3AF]">Mean ${fmtPct(s.mean_return_pct)} &middot; n=${s.n_settled}</span>`;
 
   renderPositions(s);

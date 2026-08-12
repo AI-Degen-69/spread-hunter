@@ -158,3 +158,5 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
 * **2026-08-12 (design):** isolated Spread Hunter dashboard (`server/spread_dash.py`, port 8801) — visual reskin only, real data, zero strategy/behavior change. No full log entry per operator: design/UI changes get a one-liner here, not the full Question/Method/Result/Verdict ceremony (reserved for strategy/reasoning/functionality changes).
 
 * **2026-08-12 (design, /design-review):** fixed color-swatch legend in spread_dash_html.py Design Principles section — swatch squares were splitting from their labels on line-wrap (flex-wrap without an atomic wrapper per pair); now each swatch+label is one inline-flex whitespace-nowrap unit.
+
+* **2026-08-12 (design, /design-review):** fixed dashboard header logo overflow (SH-01 wrapped to 3 lines, busting its box), low-contrast white-on-green decision-hinge badge (near-white text on solid #10B981 failed WCAG AA), and redundant "separate ledgers" copy repeated twice in the Unrealized P&L card.
