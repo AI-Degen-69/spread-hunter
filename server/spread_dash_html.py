@@ -12,21 +12,51 @@ from __future__ import annotations
 _HEAD = """
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  :root{color-scheme:dark;}
-  body{background:#090D16;color:#F9FAFB;font-family:Inter,"Helvetica Neue",Helvetica,Arial,sans-serif;
-       -webkit-font-smoothing:antialiased;letter-spacing:-0.01em;}
-  .font-display{font-family:Inter,"Helvetica Neue",Helvetica,Arial,sans-serif;letter-spacing:-0.03em;font-weight:800;}
-  .mono{font-family:"JetBrains Mono","SF Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;}
-  ::selection{background:#10B981;color:#F9FAFB;}
+  /* Design tokens -- the operator-approved desk palette, codified as one
+     system instead of scattered arbitrary values. Big Shoulders Display
+     (a condensed industrial grotesque, the visual language of odds boards)
+     carries the identity; IBM Plex Mono carries every number and label. */
+  :root{
+    color-scheme:dark;
+    --ink:#090D16;      /* canvas */
+    --panel:#111827;    /* panels */
+    --line:#1F2937;     /* hairlines */
+    --ink-soft:#F9FAFB; /* primary text */
+    --muted:#9CA3AF;    /* secondary text */
+    --signal:#10B981;   /* gains, thresholds, live */
+    --loss:#EF4444;     /* losses, fails */
+    --open:#3B82F6;     /* open exposure */
+    --warn:#F59E0B;     /* idle, caution */
+  }
+  body{background:var(--ink);color:var(--ink-soft);
+       font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+       -webkit-font-smoothing:antialiased;}
+  .font-display{font-family:"Big Shoulders Display",Impact,"Arial Narrow",sans-serif;
+                letter-spacing:0.015em;font-weight:700;}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+        font-variant-numeric:tabular-nums;}
+  ::selection{background:var(--signal);color:var(--ink-soft);}
+  :focus-visible{outline:2px solid var(--signal);outline-offset:2px;}
   .sh-fade{transition:opacity .2s ease,transform .2s ease;}
   .sh-collapsed{display:none !important;}
   .sh-chev{transition:transform .2s ease;}
   .sh-open .sh-chev{transform:rotate(180deg);}
+  /* Boot choreography: panels rise in one after another; the fleet pulse
+     beats only while its data is fresh. Both stand down for reduced motion. */
+  @keyframes sh-rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+  .sh-rise{animation:sh-rise .4s cubic-bezier(.2,.7,.2,1) both;}
+  @keyframes sh-beat{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}45%{box-shadow:0 0 0 6px rgba(16,185,129,.16)}}
+  .pulse-live{animation:sh-beat 2.4s ease-out infinite;}
+  @media (prefers-reduced-motion: reduce){
+    .sh-rise,.pulse-live{animation:none;}
+    .sh-fade,.sh-chev{transition:none;}
+  }
   ::-webkit-scrollbar{height:8px;width:8px;}
-  ::-webkit-scrollbar-thumb{background:#1F2937;}
+  ::-webkit-scrollbar-thumb{background:var(--line);}
 </style>
 """
 
@@ -50,7 +80,7 @@ LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
       <div class="flex items-center gap-3 shrink-0">
         <div class="size-[40px] bg-[#F9FAFB] text-[#090D16] grid place-items-center mono text-[13px] font-bold tracking-widest">SH<span class="text-[#EF4444]">&mdash;</span>01</div>
         <div>
-          <div class="font-display text-[15px] leading-none tracking-[-0.02em]">SPREAD HUNTER</div>
+          <div class="font-display text-[16px] leading-none">SPREAD HUNTER</div>
           <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#9CA3AF] mt-0.5">Hunter fleet &middot; live desk</div>
         </div>
       </div>
@@ -75,7 +105,7 @@ LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
     <div class="col-span-12 lg:col-span-7 border-b lg:border-b-0 lg:border-r border-[#1F2937] p-8 lg:p-12 flex flex-col justify-between min-h-[600px] bg-[#111827]">
       <div>
         <div class="mono text-[14px] tracking-[0.16em] uppercase text-[#3B82F6] flex items-center gap-3"><span class="h-px w-9 bg-[#3B82F6]"></span> Your private desk for spread capture</div>
-        <h1 class="font-display text-[46px] lg:text-[64px] leading-[0.92] tracking-[-0.035em] mt-6">
+        <h1 class="font-display text-[46px] lg:text-[64px] leading-[0.9] tracking-[-0.01em] mt-6">
           Find the<br><span class="text-[#10B981]">spread</span> others<br>leave <span class="text-[#EF4444]">behind</span>.
         </h1>
         <p class="mt-6 max-w-[540px] text-[17px] leading-7 text-[#9CA3AF]">
@@ -136,22 +166,22 @@ LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
       <div class="mono text-[13px] tracking-widest uppercase border border-[#1F2937] px-3 py-1.5 bg-[#111827] shrink-0 text-[#9CA3AF]">Personal &middot; Minimal &middot; Evidence-Driven</div>
     </div>
     <div class="col-span-12 md:col-span-6 lg:col-span-3 border-r last:border-r-0 border-b lg:border-b-0 border-[#1F2937] p-6 flex flex-col gap-4">
-      <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">01 &middot; Overview</span>
+      <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">01 &middot; BOOK</span>
       <div class="font-display text-[18px] leading-none tracking-tight">Two valuations, kept apart</div>
       <div class="text-[14px] leading-6 text-[#9CA3AF]">Realized value from closed positions alongside Unrealized P&amp;L for open exposure &mdash; never combined.</div>
     </div>
     <div class="col-span-12 md:col-span-6 lg:col-span-3 border-r last:border-r-0 border-b lg:border-b-0 border-[#1F2937] p-6 flex flex-col gap-4">
-      <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">02 &middot; Readiness</span>
+      <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">02 &middot; GATES</span>
       <div class="font-display text-[18px] leading-none tracking-tight">Three threshold gauges</div>
       <div class="text-[14px] leading-6 text-[#9CA3AF]">Capital committed against your limit, markout sample maturity, and progress toward the settlement target.</div>
     </div>
     <div class="col-span-12 md:col-span-6 lg:col-span-3 border-r last:border-r-0 border-b lg:border-b-0 border-[#1F2937] p-6 flex flex-col gap-4">
-      <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">03 &middot; Evidence</span>
+      <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">03 &middot; PROOF</span>
       <div class="font-display text-[18px] leading-none tracking-tight">Performance, readiness, risk, capital</div>
       <div class="text-[14px] leading-6 text-[#9CA3AF]">Each figure notes its source, so you can trace every conclusion back to the database.</div>
     </div>
     <div class="col-span-12 md:col-span-6 lg:col-span-3 p-6 flex flex-col gap-4">
-      <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">04 &middot; Inspection</span>
+      <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">04 &middot; DETAIL</span>
       <div class="font-display text-[18px] leading-none tracking-tight">Markets, exits, and selection</div>
       <div class="text-[14px] leading-6 text-[#9CA3AF]">Per-market positions, closed-trade log, and the full selection funnel from scan to settlement.</div>
     </div>
@@ -268,7 +298,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
     <div class="flex items-center gap-4 min-w-0">
       <div class="size-10 px-1 bg-[#111827] text-[#F9FAFB] grid place-items-center mono text-[12px] font-bold whitespace-nowrap shrink-0 border border-[#1F2937]">SH<span class="text-[#EF4444]">&mdash;</span>01</div>
       <div class="hidden md:block min-w-0">
-        <div class="font-display text-[15px] leading-none tracking-tight flex items-center gap-2">SPREAD HUNTER <span class="hidden lg:inline mono text-[12px] tracking-[0.14em] uppercase font-normal text-[#9CA3AF]">Fleet Desk</span></div>
+        <div class="font-display text-[16px] leading-none flex items-center gap-2">SPREAD HUNTER <span class="hidden lg:inline mono text-[12px] tracking-[0.14em] uppercase font-normal text-[#9CA3AF]">Fleet Desk</span></div>
         <div class="mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF] truncate">Live fleet database &mdash; maker</div>
       </div>
       <div id="hdr-pills" class="hidden lg:flex items-center gap-1.5 ml-2"></div>
@@ -283,18 +313,22 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
     </div>
   </div>
   <div class="bg-[#111827] border-y border-[#1F2937]">
-    <div class="mx-auto max-w-[1440px] px-6 lg:px-8 min-h-9 py-2 flex flex-wrap items-center justify-between gap-3">
-      <div id="hdr-hinge" class="flex flex-wrap items-center gap-3 mono text-[13px] text-[#9CA3AF]">Loading decision hinge&hellip;</div>
+    <div class="mx-auto max-w-[1440px] px-6 lg:px-8 min-h-9 py-2.5 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+      <!-- The decision hinge: one line answering the desk's only question --
+           go or no-go -- rendered by renderHinge() from the live summary. -->
+      <div id="hdr-hinge" class="w-full flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+        <span class="mono text-[13px] tracking-[0.2em] uppercase text-[#9CA3AF]">Loading the call&hellip;</span>
+      </div>
     </div>
   </div>
 </header>
 
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-5">
 
-  <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.05s">
     <button data-toggle="sec-positions" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
-        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">01</span>
+        <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">BOOK</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Positions <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
       <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Realized and Unrealized P&amp;L &mdash; kept separate</span>
@@ -302,10 +336,10 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
     <div id="sec-positions" class="sh-fade grid grid-cols-12 gap-0"></div>
   </section>
 
-  <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.1s">
     <button data-toggle="sec-verdict" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
-        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">02</span>
+        <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">CALL</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Verdict <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
       <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Five decisive readings</span>
@@ -313,10 +347,10 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
     <div id="sec-verdict" class="sh-fade grid grid-cols-12 gap-0"></div>
   </section>
 
-  <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.15s">
     <button data-toggle="sec-gauges" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
-        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">03</span>
+        <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">GATES</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Readiness <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
       <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Three threshold gauges</span>
@@ -324,10 +358,10 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
     <div id="sec-gauges" class="sh-fade grid grid-cols-1 lg:grid-cols-3 gap-4 p-4 bg-[#090D16]"></div>
   </section>
 
-  <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.2s">
     <button data-toggle="sec-evidence" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
-        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">04</span>
+        <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">PROOF</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Evidence <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
       <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Performance, readiness, risk, capital</span>
@@ -335,10 +369,10 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
     <div id="sec-evidence" class="sh-fade grid grid-cols-1 lg:grid-cols-2 gap-4 p-4 bg-[#090D16]"></div>
   </section>
 
-  <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.25s">
     <div class="w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937]">
       <button data-toggle="sec-inspection" aria-expanded="true" class="sh-open flex items-center gap-3 min-w-0 h-full flex-1 text-left hover:bg-[#1F2937] transition-colors">
-        <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">05</span>
+        <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">DETAIL</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Inspection <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </button>
       <div class="flex items-center gap-1 shrink-0" role="tablist" aria-label="Inspection views">
@@ -354,7 +388,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
     </div>
   </section>
 
-  <section class="border border-[#1F2937] bg-[#111827] p-5 flex flex-col lg:flex-row gap-6">
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] p-5 flex flex-col lg:flex-row gap-6" style="animation-delay:.3s">
     <div class="flex-1">
       <div class="mono text-[13px] font-semibold tracking-[0.12em] uppercase">Scope</div>
       <div class="mono text-[12px] leading-6 text-[#9CA3AF] mt-2">
@@ -1110,6 +1144,71 @@ function fmtClock(ts){
   return new Date(ts * 1000).toLocaleTimeString();
 }
 
+// ---------- the call (decision hinge) ----------
+// The desk exists to answer one question: go or no-go. The hinge renders
+// that answer in one line -- the verdict in display type, the deciding
+// figure, the sample behind it, and the fleet pulse (fresh data beats).
+// The verdict words are the real go-live statuses from stats.py.
+const PULSE = { base: null, alive: false };
+
+function renderHinge(s){
+  PULSE.base = s.now || Math.floor(Date.now()/1000);
+  PULSE.alive = !!s.fleet_alive;
+  const st = s.status || "NO_DATA";
+  const call = {
+    READY_FOR_SMALL_LIVE_PILOT: { word:"GO",      color:"#10B981" },
+    DIRECTIONAL_SIGNAL:         { word:"SIGNAL",  color:"#F59E0B" },
+    COLLECTING:                 { word:"COLLECT", color:"#F59E0B" },
+    NO_DATA:                    { word:"NO DATA", color:"#9CA3AF" },
+  }[st] || { word: st, color: "#9CA3AF" };
+  const el = document.getElementById("hdr-hinge");
+  el.innerHTML = `
+    <div class="flex items-center gap-x-3 gap-y-1 flex-wrap min-w-0">
+      <span class="mono text-[11px] tracking-[0.22em] uppercase text-[#9CA3AF] shrink-0">The call</span>
+      <span class="font-display text-[24px] sm:text-[28px] leading-none font-bold tracking-[0.04em]" style="color:${call.color}">${esc(call.word)}</span>
+      <span class="mono text-[13px] text-[#9CA3AF]">90% lower bound <span class="font-bold" style="color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'}">${fmtPct(s.ci90_lower_pct,2)}</span></span>
+    </div>
+    <div class="flex items-center gap-4 mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF]">
+      <span class="hidden sm:inline">${s.n_settled} / ${s.go_live_min_settled} settled &middot; ${esc(st)}</span>
+      <span class="flex items-center gap-2 border border-[#1F2937] bg-[#090D16] px-2.5 py-1">
+        <span id="hdr-pulse-dot" class="size-1.5 ${PULSE.alive?'bg-[#10B981] pulse-live':'bg-[#F59E0B]'}"></span>
+        <span class="text-[#F9FAFB]">Pulse</span>
+        <span id="hdr-pulse-age" class="text-[#F9FAFB]">0s</span>
+      </span>
+    </div>`;
+  startPulseTicker();
+}
+
+function renderHingeOffline(err){
+  PULSE.base = null; PULSE.alive = false;
+  const el = document.getElementById("hdr-hinge");
+  el.innerHTML = `
+    <div class="flex items-center gap-x-3 gap-y-1 flex-wrap min-w-0">
+      <span class="mono text-[11px] tracking-[0.22em] uppercase text-[#9CA3AF]">The call</span>
+      <span class="font-display text-[24px] sm:text-[28px] leading-none font-bold tracking-[0.04em] text-[#EF4444]">Offline</span>
+      <span class="mono text-[13px] text-[#9CA3AF]">${err && err.message ? esc(err.message) : 'summary unavailable'}</span>
+    </div>`;
+}
+
+function startPulseTicker(){
+  if (window.__pulseTick) clearInterval(window.__pulseTick);
+  const tick = () => {
+    const age = document.getElementById("hdr-pulse-age");
+    const dot = document.getElementById("hdr-pulse-dot");
+    if (!age || PULSE.base === null) return;
+    const secs = Math.max(0, Math.round(Date.now()/1000 - PULSE.base));
+    age.textContent = secs + "s";
+    if (dot){
+      const fresh = PULSE.alive && secs < 45;
+      dot.classList.toggle("bg-[#10B981]", fresh);
+      dot.classList.toggle("pulse-live", fresh);
+      dot.classList.toggle("bg-[#F59E0B]", !fresh);
+    }
+  };
+  tick();
+  window.__pulseTick = setInterval(tick, 1000);
+}
+
 async function boot(){
   // Paint what is instant first and let the slower endpoints stream in --
   // the summary bundle is the heaviest read, so it renders last. Every
@@ -1129,8 +1228,7 @@ async function boot(){
     showSectionError("sec-verdict", e);
     showSectionError("sec-gauges", e);
     showSectionError("sec-evidence", e);
-    document.getElementById("hdr-hinge").innerHTML =
-      `<span class="mono text-[13px] text-[#EF4444]">Summary unavailable</span>`;
+    renderHingeOffline(e);
     document.getElementById("scope-tiles").innerHTML =
       `<div class="col-span-3 border border-[#EF4444]/30 p-3 text-center mono text-[12px] text-[#EF4444]">Summary unavailable</div>`;
     return;
@@ -1143,11 +1241,7 @@ async function boot(){
   document.getElementById("hdr-live").innerHTML = `
     <span class="size-1.5 ${s.fleet_alive?'bg-[#10B981] animate-pulse':'bg-[#F59E0B]'}"></span>
     <span class="tracking-[0.12em] uppercase text-[12px]">${s.fleet_alive?'Live':'Idle'}</span>`;
-  document.getElementById("hdr-hinge").innerHTML = `
-    <span class="mono text-[12px] tracking-[0.16em] uppercase text-[#9CA3AF]">Decision hinge</span>
-    <span class="mono text-[14px] font-semibold tracking-tight flex items-center gap-2">90% lower bound
-      <span class="px-1.5 py-0.5 ml-1 font-bold border" style="background:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'};border-color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'};color:#0B1220">${fmtPct(s.ci90_lower_pct,2)}</span></span>
-    <span class="hidden md:inline mono text-[13px] text-[#9CA3AF]">Mean ${fmtPct(s.mean_return_pct)} &middot; n=${s.n_settled}</span>`;
+  renderHinge(s);
 
   renderPositions(s);
   renderVerdict(s);
