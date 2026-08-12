@@ -191,31 +191,54 @@ def test_summary_exposes_naked_risk_fields():
     """api_summary must carry the fleet-wide naked-USD figure and the cap so
     the capacity bar has real numbers (computed in server/spread_dash.py, not
     faked in the template)."""
-    from server.spread_dash import app
+    from server.spread_dash import CFG, app
     from starlette.testclient import TestClient
 
     with TestClient(app) as c:
         s = c.get("/api/summary").json()
     assert "naked_usd" in s
     assert "max_naked_usd" in s
-    assert s["max_naked_usd"] == 120.0
+    # The contract is "the configured cap", not a magic number: the next
+    # retune of strategy/config.py must not break this test (coderabbit).
+    assert s["max_naked_usd"] == CFG.max_naked_usd
 
 
-def test_markets_payload_carries_phase4_fields():
+def test_markets_payload_carries_phase4_fields(monkeypatch):
     """api_markets must expose the raw classification inputs, the refusal
     code, the persisted lifecycle events, and a per-row telemetry anchor so
-    the table can badge states truthfully instead of guessing."""
-    from server.spread_dash import app
+    the table can badge states truthfully instead of guessing. The fleet
+    payload is stubbed: the test must not depend on live fleet state
+    (coderabbit: /api/markets reads run/fleet_state.json, which CI lacks)."""
+    from server import spread_dash as sd
     from starlette.testclient import TestClient
 
-    with TestClient(app) as c:
+    row = {
+        "slug": "atp-test-m", "title": "Test market",
+        "committed": 50.0, "quotes": [], "unrealized_pnl": 1.25,
+        "age": 30.0, "closed_pnl": 0.0, "closes": 0, "fills": 2,
+        "gate": "NORMAL", "markout": None, "mid_up": 0.55,
+        "up_bid": 0.54, "up_ask": 0.56, "our_up": 0.0,
+        "our_dn_as_up": 0.0, "max_spread": 0.045,
+        "paired": 20.0, "naked_sh": 0.0, "err": "", "why": "",
+        "close_why": "", "merge_why": "",
+        "events": [{"kind": "FILLED", "ts": 1.0, "reason": "tape"}],
+    }
+
+    def fake_cached(key, loader):
+        if key == "fleet":
+            return {"markets": [row], "now": time.time()}
+        return loader()
+
+    monkeypatch.setattr(sd, "_cached", fake_cached)
+    with TestClient(sd.app) as c:
         m = c.get("/api/markets").json()
     assert "now" in m
-    assert m["markets"], "live fleet should have market rows"
+    assert m["markets"]
     r = m["markets"][0]
     for key in ("paired", "naked_sh", "err", "why", "code", "events", "ts"):
         assert key in r, f"missing {key} in api_markets row"
     assert isinstance(r["events"], list)
+    assert r["market"] == "atp-test-m"
 
 
 def test_phase4_table_badges_filters_and_age_applied():
