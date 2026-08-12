@@ -77,3 +77,4 @@ run/fleet_state.json
 run/fleet.pids.json
 run/fleet_pulse.json
 run/ranking.marker
+.gstack/
