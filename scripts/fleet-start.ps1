@@ -172,6 +172,6 @@ Write-Host ""
 # mojibake in the one line that reports the fleet came up.
 Write-Host "supervisor PID $($sup.Id) | $alive processes up (fleet, dash, scan, rerank, watch)" -ForegroundColor Green
 Write-Host "dashboard  http://127.0.0.1:8800"
-Write-Host "market scan (not yet redesigned) http://127.0.0.1:8801/?view=scan"
+Write-Host "market scan (funnel only)      http://127.0.0.1:8801/?view=scan"
 Write-Host "logs       Get-Content logs\supervisor.log -Wait -Tail 20"
 Write-Host "stop       .\scripts\fleet-stop.ps1"

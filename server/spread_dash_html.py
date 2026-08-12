@@ -13,9 +13,14 @@ from server._tailwind_css import TAILWIND_CSS
 
 _HEAD = ("""
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600..800&family=Geist+Mono:wght@400..700&display=swap">
+<!-- Font CSS is not render-critical: display=swap already swaps the glyphs
+     in, so fetching it in the background (preload -> stylesheet onload)
+     keeps the first paint off the Google round trip. -->
+<link rel="preload" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600..800&family=Geist+Mono:wght@400..700&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600..800&family=Geist+Mono:wght@400..700&display=swap"></noscript>
 <style>""" + TAILWIND_CSS + """</style>
 <script src="/capital.js"></script>
 <style>
@@ -531,7 +536,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
         <span class="size-1.5 bg-[#9CA3AF]"></span>
         <span class="tracking-[0.12em] uppercase text-[12px]">Loading</span>
       </div>
-      <a href="http://127.0.0.1:8801/?view=scan" target="_blank" rel="noopener" title="Legacy market-scan view (not yet redesigned)" class="hidden md:flex h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] transition-colors items-center gap-1.5">Market Scan &nearr;</a>
+      <a href="http://127.0.0.1:8801/?view=scan" target="_blank" rel="noopener" title="The market-selection funnel: scan to graduated" class="hidden md:flex h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] transition-colors items-center gap-1.5">Market Scan &nearr;</a>
       <a href="/" class="h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] transition-colors flex items-center gap-1.5">&larr; Home</a>
     </div>
   </div>

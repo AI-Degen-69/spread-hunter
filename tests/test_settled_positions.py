@@ -99,14 +99,3 @@ def test_settled_positions_skips_fully_closed_resolved_markets(monkeypatch, tmp_
     assert len(rows) == 1
     assert rows[0]["method"] == "SELL"
 
-
-def test_dashboard_contains_settled_positions_table():
-    from server.fleet_dash import PAGE
-
-    assert 'id="settledTbl"' in PAGE
-    assert 'id="settledRows"' in PAGE
-    assert 'Realized exits' in PAGE
-    assert 'Avg cost' in PAGE
-    assert 'Effective exit price' in PAGE
-    assert 'P&amp;L %' in PAGE
-    assert 'No realized exits yet' in PAGE

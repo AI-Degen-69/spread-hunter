@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from starlette.middleware.gzip import GZipMiddleware
 
 from server import fleet_dash
 from strategy import stats
@@ -26,6 +27,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CFG = load_config()
 
 app = FastAPI(title="Hunter fleet -- spread hunter design")
+# Both pages are large inline HTML blobs; gzip is the cheapest transfer win.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # The dashboard endpoints re-read the fleet DB on every request; under the
 # live writer's lock traffic a full `stats.snapshot()` read can take 9-12s,
@@ -376,8 +379,11 @@ def capital_js():
     page and the dashboard -- the one piece of JS the two pages hold in
     common. Served as a static script so the pages stay self-contained
     copies (matching the repo's per-page duplication of fmtUsd/fmtPct)."""
+    # Static, stable widget shared verbatim by both pages -- a short public
+    # cache beats re-fetching on every visit, and the pages themselves stay
+    # no-cache so their live numbers are never stale.
     return HTMLResponse(content=_CAPITAL_JS, media_type="text/javascript",
-                        headers={"Cache-Control": "no-cache"})
+                        headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.get("/", response_class=HTMLResponse)

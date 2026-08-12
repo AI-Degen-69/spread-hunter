@@ -213,3 +213,39 @@ def test_dashboard_pipeline_endpoint_degrades_without_snapshot(tmp_path,
     assert payload["graduated"] == []
     assert payload["picked"] == 0
     assert payload["live"] == 0
+
+
+def test_pipeline_payload_is_cached_and_keyed_by_run(tmp_path, monkeypatch):
+    """The scan page polls /api/pipeline every 10s, and building the payload
+    re-reads the fleet DB plus the near-miss JSONL logs -- measured 4-5s per
+    request under the live writer's lock traffic, which makes the page look
+    dead between every poll. Repeat polls must serve the SAME cached
+    snapshot (identity, not a rebuilt dict), and the cache must be keyed by
+    the RUN path so one test's monkeypatched run dir can never leak its
+    snapshot into another's."""
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "dash.db"))
+    monkeypatch.setattr(dash, "RUN", tmp_path)
+    monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
+    (tmp_path / "pipeline.json").write_text(json.dumps({
+        "ts": time.time(), "census": "c", "gates": "g",
+        "counts": {"funded": 3, "spread_universe": 0, "attempted": 3,
+                   "scored": 3, "dropped_no_verdict": 0, "rejected": 1,
+                   "eligible": 2, "picked": 2},
+        "raw": {"rewards": [], "spread": []}, "rejections": [],
+        "final": [], "picked": [],
+    }), encoding="utf-8")
+
+    first = dash.pipeline()
+    second = dash.pipeline()
+    assert first is second, "repeat poll must serve the cached snapshot"
+    assert first["snapshot"]["counts"]["eligible"] == 2
+
+    # A different run dir gets its own cache entry, not the previous one's.
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.setattr(dash, "RUN", other)
+    monkeypatch.setattr(stats, "DB", other / "dash.db")
+    fresh = dash.pipeline()
+    assert fresh is not first
+    assert fresh["snapshot"] is None
+    assert fresh["graduated"] == []

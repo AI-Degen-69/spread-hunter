@@ -85,6 +85,13 @@ and HTML. From the specs and the snapshot it derives each market row —
 paired and naked inventory, committed dollars, unrealized PnL — and the
 fleet-wide naked USD total.
 
+`fleet_dash.pipeline()` caches its own payload the same way on the scan
+side: a background thread refreshes it every 10s and the endpoint serves
+the freshest snapshot instantly, falling back to an on-demand build only
+when the snapshot is missing or the thread is dead. The cache is keyed by
+the run directory so per-test `RUN` overrides can never serve each other's
+snapshots.
+
 `spread_dash.py`'s `api_summary` layers on top: it calls
 `_cached("fleet", fleet_dash.fleet)` and `_cached("pipeline", ...)` — 8s
 TTL, guarded by a lock — plus `go_live_readiness()` and the realized /

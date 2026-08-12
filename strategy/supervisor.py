@@ -41,9 +41,8 @@ CHILDREN = {
     # THE CANONICAL DASHBOARD (2026-08-12). `server.spread_dash` is the
     # Spread Hunter design migration wired to real fleet data -- it is now
     # THE dashboard, on the well-known port 8800. `server.fleet_dash` (the
-    # prior dashboard) is kept below as "scan", demoted to 8801, purely
-    # because its market-scan view (?view=scan) has not been redesigned yet;
-    # it is not meant to be visited directly as "the dashboard" anymore.
+    # prior dashboard) is demoted to 8801 and serves ONLY its market-scan
+    # funnel (?view=scan); the fleet page there was removed as redundant.
     "dash": [sys.executable, "-m", "uvicorn", "server.spread_dash:app",
              "--host", "127.0.0.1", "--port", "8800"],
     "scan": [sys.executable, "-m", "uvicorn", "server.fleet_dash:app",

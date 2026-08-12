@@ -1,25 +1,28 @@
-"""One dashboard for the whole fleet: aggregate on top, per-market below.
+"""The market-selection funnel, live (:8801).
 
-DEPRECATION NOTICE:
-Status: Deprecated as of 2026-08-12
-Replacement: server/spread_dash.py (Spread Hunter UI)
-Removal date: Advisory — no hard deadline yet
-Reason: The new Spread Hunter dashboard handles identical data with 
-a strictly unified, brutalist layout and faster, flattened navigation.
+The scan page renders the ranker's actual funnel -- RAW (everything the
+venue lists) -> FILTERS (refusals bucketed by gate) -> FINAL (cleared every
+gate, ranked) -> GRADUATED (the fleet's current universe, annotated with
+live state) -- plus the two near-miss trackers that license a controlled
+trial. It is telemetry only: everything is read from run/pipeline.json,
+run/markets.json, run/fleet_state.json and the near-miss JSONL logs;
+nothing here writes.
 
-Replaces four separate pages on four ports. The aggregate strip answers "is
-this working overall", the table answers "which market is carrying it" -- and
-with 20 markets the second question is the one that matters, because income is
-concentrated: measured, a single market can be a third of the total.
+`server/spread_dash.py` (:8800) remains the canonical dashboard for fleet
+operations (P&L, positions, readiness); the fleet page this module used to
+serve was removed as redundant with it.
 """
 from __future__ import annotations
 
 import json
+import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from starlette.middleware.gzip import GZipMiddleware
 from strategy import stats, store
 from strategy.config import load as load_config
 
@@ -31,7 +34,20 @@ CFG = load_config()
 # otherwise a healthy fleet flashes STALE between every state-file write.
 STALE_AFTER_SEC = 120.0
 
-app = FastAPI(title="Hunter fleet")
+
+@asynccontextmanager
+async def _lifespan(_app):
+    # Start the pipeline refresher only when this app is actually serving
+    # (uvicorn runs the lifespan); direct calls in tests never start the
+    # loop, so monkeypatched run/ paths stay deterministic.
+    threading.Thread(target=_pipeline_refresh_loop, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Hunter fleet", lifespan=_lifespan)
+# Both pages are large inline HTML/JS blobs and the scan page re-polls
+# /api/pipeline every 10s -- compression is the cheapest transfer win.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 def _pulse() -> dict:
@@ -770,6 +786,47 @@ def volume_near_miss_stats() -> dict:
     }
 
 
+# The scan page polls /api/pipeline every 10s, and building the payload
+# re-reads the fleet DB plus the near-miss JSONL logs -- measured 4-5s per
+# request under the live writer's lock traffic, which makes the page look
+# dead between every poll. Cache the payload and refresh it on a background
+# thread instead, exactly as spread_dash caches its fleet/pipeline reads;
+# the endpoint returns the freshest snapshot instantly and only falls back
+# to an on-demand build when the snapshot is missing or the thread is dead.
+#
+# The cache is keyed by the RUN path so direct calls in tests (which
+# monkeypatch RUN to per-test tmp dirs and never start the serving loop)
+# never serve another test's snapshot.
+PIPELINE_REFRESH_SEC = 10.0
+_PIPELINE: dict[str, dict] = {}
+_PIPELINE_LOCK = threading.Lock()
+
+
+def _pipeline_cache_key() -> str:
+    return str(RUN)
+
+
+def _pipeline_refresh() -> dict:
+    now = time.time()
+    data = _build_pipeline(now)
+    with _PIPELINE_LOCK:
+        _PIPELINE[_pipeline_cache_key()] = {"data": data, "ts": now}
+    return data
+
+
+def _pipeline_refresh_loop() -> None:
+    while True:
+        try:
+            # Refresh immediately on start too, so the first poll after a
+            # server boot hits a warm cache instead of a 4-5s build.
+            _pipeline_refresh()
+        except Exception:
+            # Fleet down or mid-restart: keep the last good snapshot and try
+            # again next cycle rather than crashing the thread.
+            pass
+        time.sleep(PIPELINE_REFRESH_SEC)
+
+
 @app.get("/api/pipeline")
 def pipeline():
     """The market-selection funnel, live: raw -> filters -> final -> adopted.
@@ -784,6 +841,25 @@ def pipeline():
     All three files are telemetry; nothing here writes anything.
     """
     now = time.time()
+    key = _pipeline_cache_key()
+    with _PIPELINE_LOCK:
+        entry = _PIPELINE.get(key)
+        cached = entry["data"] if entry else None
+        ts = entry["ts"] if entry else 0.0
+    # Fresh enough while the background thread is alive (refreshes every
+    # PIPELINE_REFRESH_SEC). Falls back to an on-demand build if the thread
+    # has been dead long enough that the snapshot is clearly stale.
+    if cached is not None and now - ts <= PIPELINE_REFRESH_SEC * 3:
+        return cached
+    return _pipeline_refresh()
+
+
+def _build_pipeline(now: float) -> dict:
+    """Assemble the funnel payload: the rank snapshot plus the fleet's
+    CURRENT universe annotated with live state. The one heavy path in the
+    page's data feed (fleet DB read + the near-miss JSONL logs); the
+    endpoint above serves this through the cache.
+    """
     snap = None
     f = RUN / "pipeline.json"
     if f.exists():
@@ -886,9 +962,15 @@ def pipeline():
 PAGE = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Spread Hunter Fleet</title>
+<title>Market Scan — Spread Hunter Fleet</title>
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Font CSS is not render-critical: display=swap already swaps the glyphs
+     in, so fetching it in the background (preload -> stylesheet onload)
+     keeps the first paint off the Google round trip. -->
+<link rel="preload" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"></noscript>
 <style>
  :root{
    --bg:#0a0d12; --panel:#12161d; --panel-2:#171c24; --line:#232a35; --line-soft:#1a2029;
@@ -898,7 +980,7 @@ PAGE = r"""<!doctype html>
    --gold:#e8b84b; --gold-soft:#3a2f18;
    --proj:#7b9bf7; --proj-soft:#1c2540;
    --alert:#ff5c5c;
-   --r-lg:12px; --r-md:8px; --r-sm:5px;
+   --r-md:8px; --r-sm:5px;
    --disp:'Space Grotesk',system-ui,sans-serif;
    --mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;
    --body:'IBM Plex Sans',system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -911,14 +993,7 @@ PAGE = r"""<!doctype html>
  .up{color:var(--up)}.down{color:var(--down)}.gold{color:var(--gold)}
  .proj{color:var(--proj)}.alert-tx{color:var(--alert)}.dim{color:var(--tx-dim)}
  .bold{font-weight:600}.mono{font-family:var(--mono)}
- .num{text-align:right;font-variant-numeric:tabular-nums}
- .mid-label{color:#0a0d12;background:var(--gold);border-radius:3px;padding:1px 4px;text-shadow:none;box-shadow:0 0 8px rgba(232,184,75,.65)}
- .action-cell{min-width:210px;max-width:290px}.action-pill{display:inline-block;border-radius:99px;padding:2px 8px;font-size:10px;letter-spacing:.07em;font-weight:700}.action-recent{font-family:var(--mono);font-size:10px;line-height:1.35;margin-top:4px} .event-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:270px}
- .settled-section{padding:24px;background:var(--bg);border-top:1px solid var(--line)}
- .section-heading{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;color:var(--tx-dim);font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600}
- .settled-section table{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden}
- .settled-section td,.settled-section th{padding:10px 12px}
- .settled-empty{text-align:center;color:var(--tx-dim);padding:22px!important;font-size:12px}
+
 
 
  /* ---------- masthead ---------- */
@@ -934,91 +1009,17 @@ PAGE = r"""<!doctype html>
  .live{font-size:12px;font-weight:600}
  .clock{font-family:var(--mono);font-size:12px;color:var(--tx-dim)}
 
- /* ---------- hero ---------- */
- /* The equation and the strip live in hero-main, so main takes the width and
-    the rail is capped. It was the other way round, which squeezed a one-line
-    sum into four wrapped lines while six rank bars -- five of them $0.00 --
-    stretched across two thirds of the screen. */
- .hero{display:grid;grid-template-columns:1fr minmax(300px,380px);gap:1px;
-       background:var(--line);border-bottom:1px solid var(--line)}
- .hero-main{background:var(--panel);padding:24px 28px}
- .hero-eyebrow{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-dim);font-weight:600}
- .hero-duo{display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start}
- .hero-value{font-family:var(--disp);font-size:44px;font-weight:700;line-height:1.05;margin-top:8px;
-             transition:color .3s ease}
- /* The sum reads as one statement or it reads as noise -- 32ch broke it
-    across four lines. Wraps only when the viewport genuinely cannot hold it. */
- .hero-sub{font-size:13px;color:var(--tx-dim);margin-top:8px;max-width:none;
-   line-height:1.7}
- .hero-spark{width:100%;height:36px;margin-top:14px;display:block}
- /* The five facts that decide whether this run means anything, on one line.
-    They were spread across three KPI groups, so answering "is it working?"
-    meant assembling them by eye every time. */
- .hero-strip{display:flex;flex-wrap:wrap;gap:22px;margin-top:16px;
-   padding-top:14px;border-top:1px solid var(--line-soft)}
- .hs{min-width:96px}
- .hs .hs-n{font-size:10px;letter-spacing:.08em;text-transform:uppercase;
-   color:var(--tx-dim);font-weight:600}
- .hs .hs-v{font-family:var(--mono);font-size:17px;font-weight:600;margin-top:3px}
- .hs .hs-s{font-size:11px;color:var(--tx-dim);margin-top:1px}
- .hero-rail{background:var(--panel);padding:24px 28px;display:flex;flex-direction:column;gap:14px}
- .hero-rail-hdr{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-dim);font-weight:600}
- .rank-row{display:grid;grid-template-columns:1fr 84px auto;align-items:center;gap:10px;font-size:12px}
- .rank-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx-dim)}
- .rank-track{height:8px;background:var(--line-soft);border-radius:4px;overflow:hidden}
- .rank-fill{height:100%;background:var(--up);border-radius:4px;transition:width .4s ease}
- .rank-val{font-family:var(--mono);font-weight:600;text-align:right;min-width:6ch}
 
- /* ---------- gauge strip ---------- */
- .gauge-strip{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 28px;
-              display:flex;align-items:center;gap:16px}
- .gauge-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx-dim);
-              font-weight:600;min-width:15ch}
- .gauge-track{flex:1;height:14px;background:var(--line-soft);border-radius:7px;position:relative;overflow:hidden}
- .gauge-fill{height:100%;border-radius:7px;background:var(--up);transition:width .4s ease,background .4s ease}
- .gauge-cap{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--tx-faint)}
- .gauge-value{font-family:var(--mono);font-size:12px;color:var(--tx-dim);min-width:16ch;text-align:right}
- .sample-blocks{font-size:13px;letter-spacing:.06em;white-space:nowrap;line-height:1}
 
- /* ---------- kpi groups ---------- */
- .kpi-wrapper{display:flex;flex-direction:column;gap:18px;padding:20px 24px;
-              background:var(--bg);border-bottom:1px solid var(--line)}
- .kpi-hdr{color:var(--tx-faint);font-size:11px;padding:0 0 8px 2px;
-          letter-spacing:.1em;font-weight:600;text-transform:uppercase}
- .kpi-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
-            gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden}
- .k{background:var(--panel);padding:14px 16px}
- .k.alert{box-shadow:inset 3px 0 0 var(--alert);background:rgba(255,92,92,.06)}
- .k .n{color:var(--tx-dim);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:600}
- .k .v{font-family:var(--mono);font-size:21px;font-weight:600;margin-top:5px}
- .k .s{color:var(--tx-faint);font-size:11.5px;margin-top:4px;line-height:1.35}
-
- .exp-err{padding:12px 24px;background:rgba(255,92,92,.1);color:var(--alert);
-          border-bottom:1px solid var(--line);display:none;font-weight:500;font-size:13px}
-
- /* ---------- table ---------- */
- .wrap{overflow-x:auto}
- table{width:100%;border-collapse:collapse;font-size:13px}
- th{text-align:left;color:var(--tx-faint);font-weight:600;font-size:10.5px;
-    letter-spacing:.07em;padding:12px;border-bottom:1px solid var(--line);text-transform:uppercase;
-    white-space:nowrap}
- td{padding:12px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
- tr:hover td{background:var(--panel-2)}
- tr.alert td{background:rgba(255,92,92,.05)}
- .mkt-link{color:var(--tx);text-decoration:none;font-weight:500}
- .mkt-link:hover{color:var(--gold);text-decoration:underline}
-
- /* ---------- view switcher + market-pipeline (selection funnel) ---------- */
- .views{display:flex;gap:3px;background:var(--panel-2);border:1px solid var(--line);border-radius:99px;padding:3px;margin-left:6px}
- .view-btn{border:0;background:transparent;color:var(--tx-dim);font:600 12px/1 var(--body);letter-spacing:.05em;padding:6px 14px;border-radius:99px;cursor:pointer;transition:color .15s,background .15s}
- .view-btn:hover{color:var(--tx);background:rgba(255,255,255,.05)}
- .view-btn.active{background:var(--proj-soft);color:var(--proj);box-shadow:inset 0 0 0 1px rgba(123,155,247,.35)}
+ /* ---------- market-pipeline (selection funnel) ---------- */
  .pipe-view{padding:20px 24px}
  .pipe-strip{display:flex;flex-direction:column;gap:6px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);margin-bottom:14px}
- .pipe-census{font-family:var(--mono);font-size:11px;color:var(--tx-dim)}
+ .pipe-census{font-family:var(--mono);font-size:11px;color:var(--tx-dim);margin-top:2px}
+ .pipe-census summary{cursor:pointer;color:var(--tx-faint);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;user-select:none}
+ .pipe-census[open] summary{margin-bottom:5px}
  .pipe-chain{font-family:var(--mono);font-size:12px;color:var(--tx)}
  .pipe-chain span{margin:0 2px}
- .pipe-gates{font-size:11px;color:var(--tx-faint)}
+ .pipe-gates{font-size:11px;color:var(--tx-faint);margin-top:5px;border-top:1px dashed var(--line);padding-top:4px}
  .pipe-board{display:grid;grid-template-columns:minmax(250px,1fr) 26px minmax(280px,1.35fr) 26px minmax(250px,1fr) 26px minmax(280px,1.2fr);gap:8px;align-items:stretch}
  .pipe-arrow{align-self:center;text-align:center;font-size:20px;color:var(--tx-faint);user-select:none}
  .pipe-lane{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);display:flex;flex-direction:column;min-height:340px;max-height:680px}
@@ -1072,6 +1073,20 @@ PAGE = r"""<!doctype html>
  .pill-spr{color:var(--proj);background:var(--proj-soft)}
  .pill-live{color:var(--up);background:var(--up-soft)}
  .pill-wait{color:var(--tx-dim);background:var(--panel-2);border:1px solid var(--line)}
+ /* ---------- operator guide + trial callout ---------- */
+ .pipe-guide{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);padding:11px 14px;margin-bottom:10px;font-size:11.5px;color:var(--tx-dim);line-height:1.55}
+ .pipe-guide summary{cursor:pointer;font:700 11px/1.4 var(--disp);letter-spacing:.08em;text-transform:uppercase;color:var(--tx);user-select:none}
+ .pipe-guide[open] summary{margin-bottom:9px}
+ .pipe-guide ol{margin:6px 0 0;padding-left:17px}
+ .pipe-guide li{margin:4px 0}
+ .pipe-guide b{color:var(--tx)}
+ .pipe-guide code{font-family:var(--mono);font-size:10.5px;color:var(--gold)}
+ .trial-callout{display:none;background:linear-gradient(180deg,rgba(240,104,77,.09),rgba(240,104,77,.03));border:1px solid rgba(240,104,77,.5);border-radius:var(--r-md);padding:12px 14px;margin-bottom:10px}
+ .trial-hdr{font:700 12px/1.3 var(--disp);letter-spacing:.08em;text-transform:uppercase;color:var(--gold)}
+ .trial-txt{margin-top:6px;font-size:11.5px;color:var(--tx-dim);line-height:1.55}
+ .trial-txt b{color:var(--tx)}
+ .trial-row{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+ .trial-chip{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);background:var(--panel-2);border-radius:99px;padding:3px 9px;color:var(--tx-dim)}
  @media(max-width:1500px){
    .pipe-board{grid-template-columns:1fr 1fr}
    .pipe-arrow{display:none}
@@ -1090,98 +1105,24 @@ PAGE = r"""<!doctype html>
     <span><i style="background:var(--gold)"></i>income</span>
     <span><i style="background:var(--proj)"></i>projected</span>
   </span>
-  <nav class="views" id="viewNav" title="Switch between the fleet page and the live market-selection funnel">
-    <button type="button" id="viewFleet" class="view-btn active">Fleet</button>
-    <button type="button" id="viewScan" class="view-btn">Market scan</button>
-  </nav>
+
   <span style="flex:1"></span>
   <span id="live" class="live"></span>
   <span id="health" class="live"></span>
   <span id="clock" class="clock"></span>
 </header>
-<div id="view-fleet">
-<section class="hero">
-  <div class="hero-main">
-    <div class="hero-duo">
-      <div>
-        <div class="hero-eyebrow">Liquidation P&L</div>
-        <div class="hero-value" id="heroValue">$0.00</div>
-      </div>
-      <!-- The modelled side, deliberately the same size and deliberately a
-           different colour. It is income the strategy claims to have earned,
-           and it is NOT summed into the hard number to its left: for a
-           spread-funded market that income arrives by being filled, so it is
-           already inside `booked` and `pairs held`. Two figures, one hard and
-           one modelled, is the honest presentation -- adding them would book
-           the same dollars twice. -->
-      <div>
-        <div class="hero-eyebrow">Unrealized P&L <span class="dim">(Floating)</span></div>
-        <div class="hero-value proj" id="heroIncome">$0.00</div>
-      </div>
-    </div>
-    <div class="hero-sub" id="heroBridge">&nbsp;</div>
-    <svg class="hero-spark" id="heroSpark" viewBox="0 0 300 36" preserveAspectRatio="none"></svg>
-    <div class="hero-strip" id="heroStrip"></div>
-  </div>
-  <div class="hero-rail">
-    <div class="hero-rail-hdr">Which market is carrying the fleet</div>
-    <div id="rankRows"></div>
-  </div>
-</section>
-<div class="gauge-strip">
-  <div class="gauge-label">Wallet committed</div>
-  <div class="gauge-track"><div class="gauge-fill" id="gaugeFill"></div><div class="gauge-cap" id="gaugeCap"></div></div>
-  <div class="gauge-value" id="gaugeValue"></div>
-</div>
-<!-- SAMPLE PROGRESS. The markout gate cannot act on a thin sample, so until
-     this bar fills the fleet's verdicts are noise and every markout tile below
-     is provisional. Sitting beside the wallet gauge because "can I trust these
-     numbers yet?" is asked at the same moment as "how much is committed?". -->
-<div class="gauge-strip" id="sampleStrip">
-  <div class="gauge-label">Sample size</div>
-  <div class="sample-blocks mono" id="sampleBlocks"></div>
-  <div class="gauge-track"><div class="gauge-fill" id="sampleFill"></div></div>
-  <div class="gauge-value" id="sampleValue"></div>
-</div>
-<!-- GO-LIVE PROGRESS. Same bar language as the sample-size gauge above, but
-     against the money question: how many fully-resolved markets, of the
-     100 a small real-money pilot decision needs, does the fleet have right
-     now. The KPI group below carries the confidence-interval detail; this is
-     the one-glance version. -->
-<div class="gauge-strip" id="readyStrip">
-  <div class="gauge-label">Go-live progress</div>
-  <div class="sample-blocks mono" id="readyBlocks"></div>
-  <div class="gauge-track"><div class="gauge-fill" id="readyFill"></div></div>
-  <div class="gauge-value" id="readyValue"></div>
-</div>
-<div class="kpi-wrapper" id="agg"></div>
-<div class="exp-err" id="exp"></div>
-<div class="wrap"><table id="tbl">
- <thead><tr>
-  <th>Market</th>
-  <th>Last action</th>
-  <th class="num">Projected / day</th>
-  <th class="num">Committed</th>
-   <th>Order depth / mid</th>
-   <th class="num">Unrealized P&L</th>
-  <th class="num">Realized P&L</th>
-  <th class="num">Score share</th>
-  <th class="num">Uptime</th>
-  <th class="num">Fills</th>
-  <th>Telemetry</th>
- </tr></thead><tbody id="rows"></tbody></table></div>
-<section class="settled-section">
-  <div class="section-heading"><span>Realized exits</span><span class="dim" style="font-size:11px;font-weight:400">one row per close event · effective exit price · P&amp;L % is return on cost basis</span></div>
-  <div class="wrap"><table id="settledTbl">
-   <thead><tr>
-    <th>Exit time</th><th>Market</th><th>Method</th><th class="num">Shares</th>
-    <th class="num">Avg cost</th><th class="num">Effective exit price</th>
-    <th class="num">P&amp;L %</th><th class="num">P&amp;L</th>
-    <th class="num">Fees / gas</th><th>Exit detail</th>
-   </tr></thead><tbody id="settledRows"></tbody></table></div>
-</section>
-</div><!-- /view-fleet -->
-<section id="view-pipeline" class="pipe-view" hidden>
+<section id="view-pipeline" class="pipe-view">
+  <details class="pipe-guide" id="pipeGuide">
+    <summary>How to read this page · what to do with it</summary>
+    <ol>
+      <li><b>The four lanes are the ranker's real funnel.</b> ① RAW — everything the venue lists (reward pool + liquid). ② FILTERS — every refusal, bucketed by gate, with real example titles. ③ FINAL — cleared every gate, ranked by return per dollar. ④ GRADUATED — the fleet's universe right now, live state included. When ③ and ④ differ, the allocator dropped markets the ranker admitted — the reason is on the card.</li>
+      <li><b>Start at the census chain.</b> RAW → scored → rejected → eligible → picked is the whole evening in one line. A funnel that lands on 0 picked is the gates doing their job, not a broken bot.</li>
+      <li><b>Read the big rejection buckets first.</b> Each gate card shows the refusal count and example titles. The "if adopted" line is the ranker's optimistic single-snapshot estimate of what the allocator would have said.</li>
+      <li><b>The two near-miss trackers are the decision instruments.</b> They log markets the gates refuse that would clear the 2%/day floor. <b>READY TO TRIAL</b> means the evidence is consistent (days · unique markets · stability) and the next step is a controlled trial — loosen one gate, watch markouts — not an immediate gate change.</li>
+      <li><b>The graduated lane answers "what is the bot doing now".</b> A market showing $0.00/day with a refusal string on its card is being actively refused, not ignored.</li>
+    </ol>
+  </details>
+  <div class="trial-callout" id="trialCallout"></div>
   <div class="pipe-strip" id="pipeStrip"></div>
   <div class="pipe-near" id="nearMiss"></div>
   <div class="pipe-near" id="volumeNearMiss"></div>
@@ -1200,547 +1141,11 @@ const $=x=>document.getElementById(x);
 const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const usd=(v,d=2)=>v==null?'-':'$'+Number(v).toFixed(d);
 const pct=(v,d=1)=>v==null?'-':(100*v).toFixed(d)+'%';
-const cls=v=>v==null||v===0?'dim':(v>0?'up':'down');
-const thresh=(v,goodAbove,cut)=>v==null?'dim':((v>=cut)===goodAbove?'up':'down');
 const hms=s=>{s=Math.max(0,Math.floor(s));
   const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
   const p=n=>String(n).padStart(2,'0');
   return h?`${h}h ${p(m)}m ${p(x)}s`:`${m}m ${p(x)}s`;};
 
-function ladder(m){
-  const mid=m.mid_up, bid=m.up_bid, ask=m.up_ask;
-  if(mid==null||bid==null||ask==null) return '<span class="dim">No two-sided book</span>';
-  const v=(m.max_spread||0.045);
-  const half=Math.max(v*1.35, (ask-bid)*0.75, 0.01);
-  const lo=mid-half, hi=mid+half, W=hi-lo;
-  const x=p=>Math.max(0,Math.min(100,100*(p-lo)/W));
-  const tag=(p,cls,lbl,top)=>p==null?'':
-    `<span style="position:absolute;left:${x(p)}%;top:${top}px;transform:translateX(-50%)">
-       <span class="${cls}" style="font-family:var(--mono);font-weight:700;font-size:10.5px;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,.9)">${lbl}</span></span>`;
-  const mark=(p,color,top,h)=>p==null?'':
-    `<span style="position:absolute;left:${x(p)}%;top:${top}px;width:2px;height:${h}px;
-       background:${color};width:${color==='var(--gold)'?'3px':'2px'};transform:translateX(-50%)"></span>`;
-  const wl=x(mid-v), wr=x(mid+v);
-  return `<div style="position:relative;height:38px;width:100%;max-width:280px">
-    <div style="position:absolute;left:${wl}%;width:${wr-wl}%;top:12px;height:12px;
-         background:var(--up-soft);border-left:1px solid #24463f;border-right:1px solid #24463f"></div>
-    <div style="position:absolute;left:0;right:0;top:17px;height:1px;background:var(--line)"></div>
-    ${mark(mid,'var(--gold)',7,22)}
-    ${mark(bid,'var(--tx-faint)',13,10)}${mark(ask,'var(--tx-faint)',13,10)}
-    ${mark(m.our_up,'var(--proj)',8,20)}
-    ${mark(m.our_dn_as_up,'var(--down)',8,20)}
-    ${tag(m.our_up,'proj',(m.our_up!=null?m.our_up.toFixed(3):''),27)}
-    ${tag(m.our_dn_as_up,'down',(m.our_dn_as_up!=null?m.our_dn_as_up.toFixed(3):''),27)}
-    ${tag(mid,'mid-label','MID '+mid.toFixed(3),-4)}
-  </div>`;
-}
-
-function capBar(m){
-  let up=0, dn=0, upSh=0, dnSh=0;
-  for(const o of (m.quotes||[])){
-    const remaining=o.remaining==null?Math.max(0,(o.size||0)-(o.filled||0)):o.remaining;
-    const notional=o.notional==null?(o.price||0)*remaining:o.notional;
-    if(o.side==='UP'){ up+=notional; upSh+=remaining; }
-    else { dn+=notional; dnSh+=remaining; }
-  }
-  const total=up+dn;
-  if(total<=0) return '<div class="dim" style="font-size:11px;margin-top:6px">No capital resting</div>';
-  const upPct=100*up/total, dnPct=100*dn/total;
-  return `<div style="width:100%;max-width:280px;margin-top:6px" title="YES ${upSh.toFixed(0)} shares / ${usd(up,2)} · NO ${dnSh.toFixed(0)} shares / ${usd(dn,2)}">
-    <div style="display:flex;height:16px;background:var(--line-soft);border-radius:4px;overflow:hidden;font-size:11px;font-weight:600;letter-spacing:0.02em">
-      <div style="width:${dnPct}%;background:var(--down-soft);display:flex;align-items:center;padding-left:6px;color:var(--down);white-space:nowrap">${usd(dn,0)} NO</div>
-      <div style="width:${upPct}%;background:var(--proj-soft);display:flex;align-items:center;justify-content:flex-end;padding-right:6px;color:var(--proj);white-space:nowrap">${usd(up,0)} YES</div>
-    </div>
-    <div style="display:flex;justify-content:space-between;margin-top:3px;font-family:var(--mono);font-size:10px;color:var(--tx-dim)">
-      <span class="down">NO ${dnSh.toFixed(0)} sh</span><span class="proj">YES ${upSh.toFixed(0)} sh</span>
-    </div>
-  </div>`;
-}
-
-function orderDepth(m){
-  const detail=capBar(m);
-  const yesHeld=(m.up_sh||0)*(m.up_avg||0);
-  const noHeld=(m.dn_sh||0)*(m.dn_avg||0);
-  const held=(m.up_sh||0)+(m.dn_sh||0)>0
-    ? `<div class="dim" style="font-family:var(--mono);font-size:10px;margin-top:4px" title="Held inventory cost, separate from resting-order collateral">held YES ${(m.up_sh||0).toFixed(0)} sh / ${usd(yesHeld,0)} · NO ${(m.dn_sh||0).toFixed(0)} sh / ${usd(noHeld,0)}</div>`
-    : '';
-  return `${ladder(m)}${detail}${held}`;
-}
-
-function finBox(m) {
-  if (!(m.paired>0) && !(m.naked_sh>0) && !(m.closes>0)) return '<span class="dim">-</span>';
-  let h = `<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 16px;align-items:center;font-family:var(--mono);font-size:12px">`;
-
-  if (m.paired > 0) {
-    const locked = m.paired * 1.0 - m.pair_paid;
-    h += `<span class="dim" style="font-family:var(--body)">Locked</span>
-          <span class="${locked>=0?'up':'down'} bold">${locked>=0?'+':''}${usd(locked)}</span>`;
-  }
-  if (m.naked_sh > 0) {
-    h += `<span class="dim" style="font-family:var(--body)">Risk</span>
-          <span class="down bold">-${usd(m.naked_cost)}</span>`;
-  }
-  if (m.closes > 0) {
-    h += `<span class="dim" style="font-family:var(--body)">Closed</span>
-          <span class="${m.closed_pnl>=0?'up':'down'} bold">${m.closed_pnl>=0?'+':''}${usd(m.closed_pnl)}</span>`;
-  }
-  h += `</div>`;
-
-  if (m.close_why) {
-    h += `<div class="dim" style="font-size:11px;margin-top:8px;line-height:1.3;">${m.close_why}</div>`;
-  }
-  return h;
-}
-
-function sparkline(points){
-  if(!points || points.length<2) return '';
-  const w=300,ht=36,pad=2;
-  const lo=Math.min(...points), hi=Math.max(...points), span=(hi-lo)||1;
-  const step=(w-2*pad)/(points.length-1);
-  const xy=(v,i)=>[pad+i*step, ht-pad-((v-lo)/span)*(ht-2*pad)];
-  const d=points.map((v,i)=>{const [x,y]=xy(v,i); return `${i===0?'M':'L'}${x.toFixed(1)},${y.toFixed(1)}`;}).join(' ');
-  const [lx,ly]=xy(points[points.length-1],points.length-1);
-  return `<path d="${d}" fill="none" stroke="var(--proj)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="${lx}" cy="${ly}" r="2.5" fill="var(--proj)"/>`;
-}
-
-async function tick(){
-  let s; try{ s=await (await fetch('/api/fleet',{cache:'no-store'})).json(); }
-  catch(e){ return; }
-  $('clock').textContent = s.run_started
-    ? 'T+ ' + hms(s.now - s.run_started)
-    : 'Not started';
-
-  if(s.error){
-    $('exp').textContent = s.error;
-    $('exp').style.display = 'block';
-    $('health').innerHTML = '<span class="alert-tx">● OFFLINE</span>';
-    return;
-  } else {
-    $('exp').style.display = 'none';
-  }
-
-  const t=s.totals;
-  const pe=t.pairs_ev||{};
-  const activeCount = s.markets.filter(m => (m.income || 0) > 0).length;
-  // Markets the fleet visited and could not read. `visit` now records the
-  // failure on every early-return path, so this counts markets that are
-  // actually broken rather than markets that merely have no data yet.
-  const unreadable = s.markets.filter(m => m.err).length;
-  const healthy = !t.fleet_stale;
-  $('live').innerHTML = `<span class="${activeCount > 0 ? 'up' : 'down'}">● ${activeCount}/${t.markets} scoring</span>`;
-  $('health').innerHTML = healthy
-    ? '<span class="up">● LIVE</span>'
-    : (t.state_age !== null
-        ? `<span class="alert-tx">● STALE · ${hms(t.state_age)}</span>`
-        : '<span class="alert-tx">● STALE · no heartbeat</span>');
-  if(!healthy){
-    // Name the market the loop died on when we know it. The old message said
-    // only "stale", which read identically whether the process had crashed or
-    // one venue was hanging -- two different problems with two different fixes.
-    const at = t.loop_market ? ` Last market visited: ${t.loop_market}.` : '';
-    const ageMsg = t.state_age !== null
-      ? `Fleet heartbeat is stale (${hms(t.state_age)} old).`
-      : 'Fleet heartbeat is missing (no state file write recorded).';
-    $('exp').textContent = `${ageMsg} Displayed figures are historical, not live.${at}`;
-    $('exp').style.display = 'block';
-  } else if(t.sweep_age !== null && t.sweep_age > (t.stale_after_sec || 120)){
-    // Loop alive, sweep genuinely slow. This now reads the duration the fleet
-    // MEASURED, so it means what it says; the old version derived it from the
-    // freshest per-market payload and reported 30m41s against a fleet that was
-    // completing a sweep every 21 seconds.
-    $('exp').textContent = `Fleet is live, but a full sweep is taking ${hms(t.sweep_age)}. Per-market figures lag by up to that much.`;
-    $('exp').style.display = 'block';
-  } else if(unreadable > 0){
-    // THE CONDITION THAT USED TO MASQUERADE AS A SLOW SWEEP. The loop is fine
-    // and the sweep is fast; some markets simply cannot be read, so their
-    // figures are frozen at whenever they last answered. Naming the count and
-    // the age of the stalest data points at the real fix -- the universe --
-    // instead of at the loop.
-    const dataMsg = t.data_age !== null ? ` Their figures are up to ${hms(t.data_age)} old.` : '';
-    $('exp').textContent = `Fleet is live and sweeping in ${hms(t.sweep_age || 0)}, but ${unreadable}/${t.markets} markets are unreadable (closed, or the book will not load).${dataMsg}`;
-    $('exp').style.display = 'block';
-  }
-
-  // ---- hero: the one number, its trend, and who's carrying it ----
-  // TWO PROGRAMS PAY A MAKER, AND BOTH BELONG IN THIS TERM.
-  //
-  // Reward rent is money the venue owes for RESTING size. Maker rebates are a
-  // share of the taker fee on volume we MADE. They are disjoint products, so
-  // they add; and neither is inside `booked`, because a rebate arrives on top
-  // of the fill rather than through its price.
-  //
-  // Spread "rent" is still NOT added: it projects income that arrives BY being
-  // filled, and a fill is already in `booked` and `pairs held`. That is the
-  // one line here that would double-count, which is why the split exists.
-  //
-  // Declared BEFORE the headline because the headline has to include it. It
-  // did not, while the bridge directly below already summed it -- so the big
-  // number and the "Total Liquidation P&L" under it disagreed by exactly the
-  // rebate, on a page whose whole job is to make that arithmetic checkable.
-  const rent = (t.rent_reward || 0) + (t.maker_rebate || 0);
-  const liquidation = t.liquidate_now_pnl + rent;
-  const hv=$('heroValue');
-  hv.textContent = usd(liquidation);
-  hv.className = 'hero-value ' + cls(liquidation);
-  // FLOATING P&L IS A POSITION VALUE, NOT A MODEL. Unrealized P&L means what
-  // the open book is worth against what it cost -- inventory float plus
-  // unhedged float -- and that is exactly the middle of the liquidation
-  // equation below. The modelled accrual that used to sit here is a
-  // projection integrated over time; giving it a brokerage name for a live
-  // position would put a forecast where a mark-to-market belongs. It keeps
-  // its place in the income-rate tile, labelled as the benchmark it is.
-  const floating = (t.locked_pair || 0) + (t.naked_exit || 0) - (t.at_risk || 0);
-  const hi = $('heroIncome');
-  hi.textContent = usd(floating);
-  hi.className = 'hero-value ' + cls(floating);
-  // THE ARITHMETIC, SPELLED OUT. The hero used to carry a prose description
-  // of a formula while four tiles showed pieces of it under names that did
-  // not match -- so $40 realized sitting above an $18.89 headline read as a
-  // contradiction. Every term below is signed and they sum to the headline.
-  const term=(label,v)=>`<span class="${cls(v)}">${v>=0?'+':'−'}${usd(Math.abs(v))}</span> ${label}`;
-  // Naked cost and resale are one term now -- "Unhedged Float", the mark on
-  // the unpaired leg -- because a reader tracking a brokerage statement wants
-  // realized, inventory float and unhedged float, not the venue mechanics
-  // underneath each.
-  $('heroBridge').innerHTML =
-    term('Realized', t.realized) + ' &nbsp;|&nbsp; ' +
-    // Shown unconditionally now: a rebate line reading +$0.00 states that
-    // nothing held pays a rebate, which is itself the fact worth knowing on a
-    // fleet whose entire universe publishes clobRewards: 0. Hiding it left the
-    // reader unable to tell "no rebate" from "rebates not counted".
-    term('Earned Rebates', rent) + ' &nbsp;|&nbsp; ' +
-    term('Paired Unrealized', t.locked_pair) + ' &nbsp;|&nbsp; ' +
-    term('Unhedged Unrealized', t.naked_exit - t.at_risk) +
-    ` &nbsp;=&nbsp; <b>${usd(liquidation)}</b> Total Liquidation P&L`;
-  $('heroSpark').innerHTML = sparkline(s.share_history);
-
-  // THE STORY, IN FIVE FACTS. Ordered as the questions actually get asked:
-  // has it run long enough, is it trading, is being filled profitable, is the
-  // model believable, and has anything settled to prove it.
-  const edgePerFill = t.markout_n ? t.fill_edge / t.markout_n : null;
-  const HS=(n,v,sub,cl,tip)=>`<div class="hs" ${tip?`title="${tip}"`:''}><div class="hs-n">${n}</div>
-    <div class="hs-v ${cl||''}">${v}</div><div class="hs-s">${sub||''}</div></div>`;
-  $('heroStrip').innerHTML =
-    HS('Active Fills', String(t.fills),
-       (t.verified && t.verified.ratio !== null)
-         ? pct(t.verified.ratio)+' tape-verified' : 'no tape yet',
-       t.fills ? 'up' : 'dim',
-       'Fills recorded in current session') +
-    HS('Markout Edge / fill', edgePerFill === null ? '—' : usd(edgePerFill),
-       t.markout_n ? t.markout_n+' matured (15m+)'+(t.markout_n<20?' · need 20':'') : 'awaiting 15m horizon',
-       edgePerFill === null ? 'dim' : cls(edgePerFill),
-       'Average dollar gain/loss per trade 15 minutes after fill. If negative, filled orders dropped in value.') +
-    HS('Avg Income Rate (Hold Rate)',
-       t.income_twa_day === null ? '—' : usd(t.income_twa_day)+'/d',
-       t.income_twa_day === null
-         ? 'need 2 samples'
-         : 'avg over '+t.income_hours.toFixed(1)+'h · spot now '+usd(t.income_day)+'/d',
-       'proj',
-       'Time-Weighted Average Yield: Solid average income rate held over time, filtering out temporary spikes from entering/exiting positions.') +
-    HS('Settled P&L', String(t.settled),
-       t.settled ? usd(t.realized)+' booked' : 'no ground truth yet',
-       t.settled ? 'up' : 'dim',
-       'Actual cash profit collected from resolved markets');
-
-  const top = [...s.markets].sort((a,b)=>b.income-a.income).slice(0,6);
-  const maxInc = Math.max(1e-9, ...top.map(m=>m.income||0));
-  $('rankRows').innerHTML = top.map(m=>`
-    <div class="rank-row">
-      <span class="rank-name" title="${esc(m.title)}">${esc(m.title)}</span>
-      <div class="rank-track"><div class="rank-fill" style="width:${Math.max(2,100*(m.income||0)/maxInc)}%"></div></div>
-      <span class="rank-val mono ${m.income>0?'up':'dim'}">${usd(m.income)}</span>
-    </div>`).join('') || '<span class="dim" style="font-size:12px">No markets reporting yet</span>';
-
-  // ---- exposure gauge ----
-  const budgetPct = t.wallet > 0 ? Math.min(100, 100*t.committed_total/t.wallet) : 0;
-  const capPct = t.wallet > 0 ? Math.min(100, 100*t.max_committed/t.wallet) : 100;
-  const budgetAlert = t.committed_total >= t.max_committed;
-  const gf=$('gaugeFill');
-  gf.style.width = budgetPct+'%';
-  gf.style.background = budgetAlert ? 'var(--alert)' : (budgetPct>70?'var(--down)':'var(--up)');
-  $('gaugeCap').style.left = capPct+'%';
-  $('gaugeValue').innerHTML = `<span class="${budgetAlert?'alert-tx bold':'dim'}">${usd(t.committed_total,0)} / ${usd(t.wallet,0)}</span>`+
-    (budgetAlert ? ` <span class="alert-tx">· ${usd(t.committed_overage,0)} over cap</span>` : ` · ${usd(t.available_cash,0)} available`);
-
-  // ---- markout sample progress (n / gate threshold) ----
-  // Counts fills whose 1h mark has landed, not every fill on the tape: the
-  // gate reads h1, so anything earlier is a fill the gate cannot see yet.
-  const gateN = t.matured_n || 0;
-  const gateNeed = t.gate_min_sample || 25;
-  const gateReady = gateN >= gateNeed;
-  const gatePct = Math.min(100, 100 * gateN / gateNeed);
-  const CELLS = 10, filled = Math.round(CELLS * gatePct / 100);
-  $('sampleBlocks').innerHTML =
-    `<span class="${gateReady?'up':'gold'}">${'█'.repeat(filled)}</span>` +
-    `<span class="dim">${'░'.repeat(CELLS - filled)}</span>`;
-  const sf = $('sampleFill');
-  sf.style.width = gatePct + '%';
-  sf.style.background = gateReady ? 'var(--up)' : 'var(--gold)';
-  $('sampleValue').innerHTML =
-    `<span class="${gateReady?'up bold':'gold bold'}">${gateN}/${gateNeed}</span>` +
-    ` <span class="dim">(Matured Fills) · ${gatePct.toFixed(0)}%</span>`;
-  $('sampleStrip').title = gateReady
-    ? `Fleet markout gate is armed: ${gateN} fills have a matured 1h mark (threshold ${gateNeed}).`
-    : `Fleet markout gate stays inactive until ${gateNeed} fills have a matured 1h mark. ${gateNeed - gateN} to go.`;
-
-  // ---- go-live progress (n settled markets / 100 needed for a pilot call) ----
-  const gl = s.go_live || {};
-  const glN = gl.n_settled || 0;
-  const glNeed = gl.go_live_min_settled || 100;
-  const glReady = gl.status === 'READY_FOR_SMALL_LIVE_PILOT';
-  const glSignal = glN >= (gl.signal_min_settled || 30);
-  const glPct = Math.min(100, 100 * glN / glNeed);
-  const glFilled = Math.round(CELLS * glPct / 100);
-  $('readyBlocks').innerHTML =
-    `<span class="${glReady?'up':(glSignal?'gold':'dim')}">${'█'.repeat(glFilled)}</span>` +
-    `<span class="dim">${'░'.repeat(CELLS - glFilled)}</span>`;
-  const rf = $('readyFill');
-  rf.style.width = glPct + '%';
-  rf.style.background = glReady ? 'var(--up)' : (glSignal ? 'var(--gold)' : 'var(--tx-dim)');
-  const glLabel = {
-    NO_DATA: 'no settled markets', COLLECTING: 'collecting',
-    DIRECTIONAL_SIGNAL: 'directional signal only',
-    READY_FOR_SMALL_LIVE_PILOT: 'ready for small live pilot',
-  }[gl.status] || (gl.status || '').toLowerCase();
-  $('readyValue').innerHTML =
-    `<span class="${glReady?'up bold':(glSignal?'gold bold':'dim bold')}">${glN}/${glNeed}</span>` +
-    ` <span class="dim">(Settled Markets) · ${glLabel}</span>`;
-  $('readyStrip').title = glReady
-    ? `Ready for a small live pilot: ${glN} settled markets, 90% CI lower bound ${(gl.ci90_lower_pct||0).toFixed(1)}% (above zero), ${(gl.calendar_days||0).toFixed(1)} calendar days, largest category ${((gl.max_category_share||0)*100).toFixed(0)}% of sample.`
-    : `Needs ${glNeed} settled markets (has ${glN}), a positive 90% CI lower bound, ${gl.go_live_min_calendar_days}+ calendar days, and no single sport over ${((gl.go_live_max_category_share||0)*100).toFixed(0)}% of the sample before a small live pilot is warranted.`;
-
-  const K=(n,v,sub,cl,isAlert,tip)=>`<div class="k ${isAlert?'alert':''}" ${tip?`title="${tip}"`:''}><div class="n">${n}</div>
-    <div class="v ${cl||''}">${v}</div><div class="s">${sub||''}</div></div>`;
-  const renderGroup = (title, tiles) => `<div><div class="kpi-hdr">${title}</div><div class="kpi-group">${tiles.join('')}</div></div>`;
-
-  const totalFloating = (t.locked_pair || 0) + (t.naked_exit || 0) - (t.at_risk || 0);
-
-  const t_pl = [
-    K('Spot Daily Yield',usd(t.income_day)+'/day',
-      'Spot rate right now (' + t.return_pct_day.toFixed(1) + '%/day on cap)',
-      'proj', false,
-      'Instantaneous earning rate at this exact second based on active quote placement'),
-    K('15-Min Markout Edge ($)',usd(t.fill_edge),
-      t.markout_n ? usd(t.markout_spread)+' Discount Bought + '+usd(t.markout_total)+' 15m Price Change · '+t.markout_n+' fills'
-                  : 'no completed trades evaluated yet',
-      t.markout_n ? cls(t.fill_edge) : 'dim', false,
-      'Post-Trade Quality Check: Total value change 15m after buying. (Discount captured below market price) + (Market price movement after 15m). NOT overall portfolio P&L.'),
-    K('Realized P&L',usd(t.realized),
-      (t.closes?t.closes+' closed trade'+(t.closes===1?'':'s'):'no closed trades')
-        +' · '+(t.settled?t.settled+' settled':'$0.00 settled'),
-      (t.settled||t.closes)?cls(t.realized):'dim', false,
-      'Actual cash profit booked and finalized from closed or settled positions'),
-    K('Target vs Actual Discount',
-      (t.markout_n
-        ? usd(t.markout_spread)+' – '+usd(t.rent_modelled_spread + t.rent_reward)
-        : usd(t.rent_modelled_spread + t.rent_reward)),
-      (t.markout_n
-        ? 'Baseline: Discount Secured | Target: Model Target'
-        : 'Target: Model Target · no evaluated fills yet'),
-      'proj', false,
-      'Compares actual discount captured on filled orders against theoretical model target'),
-    K('Dividend / Fee Rebates',t.maker_rebate_err ? '—' : usd(rent),
-      t.maker_rebate_err
-        ? 'rebate read failed · '+t.maker_rebate_err
-        : rent > 0
-        ? [t.rent_reward > 0 ? usd(t.rent_reward)+' emissions' : null,
-           t.maker_rebate > 0
-             ? usd(t.maker_rebate)+' rebates on '+(t.maker_rebate_shares||0).toFixed(0)+' filled sh'
-             : null].filter(Boolean).join(' · ')+' · unpaid, in headline'
-        : 'no emissions funded · no maker fills yet',
-      t.maker_rebate_err ? 'alert-tx' : (rent > 0 ? 'gold' : 'dim'), false,
-      'Fee rebates paid back by exchange for making liquidity'),
-    K('Hold-Weighted Yield',
-      t.income_twa_day === null ? '—' : usd(t.income_twa_day)+'/day',
-      t.income_twa_day === null ? 'need 2 samples' : (t.income_hours !== null ? t.income_hours+'h time-weighted avg hold rate' : '15h time-weighted avg hold rate'),
-      'proj', false,
-      'Solid average daily yield sustained over time, smoothing out position enter/exit noise'),
-    K('Pairs EV / one-sided fill', pe.ev_cents === null ? '—' : pe.ev_cents.toFixed(1)+'¢',
-      pe.one_sided
-        ? pe.completions+' completed · '+pe.exits+' exited · '+pe.expired+' rode out'
-          + (pe.dist ? ' · median '+pe.dist.median+'¢/pair' : '')
-          + ' · '+pe.one_sided+' fills'
-        : 'no one-sided fills yet',
-      pe.ev_cents === null ? 'dim' : cls(pe.ev_cents), false,
-      "The pairs-only rule's measured EV per one-sided fill: completion rate × "+pe.complete_gain_cents+'¢ (merge capture) − exit rate × '+pe.exit_cost_cents+'¢ (half-spread). Positive means completing pairs instead of holding naked legs into the drift pays.'
-      + (pe.dist
-        ? ' Completed-pair capture (Sessions 44-47): median '+pe.dist.median+'¢, p25–p75 '+pe.dist.p25+'–'+pe.dist.p75+'¢, n='+pe.dist.n+' pairs, all-positive sample; '+(pe.outliers?pe.outliers.count:0)+' IQR outliers (full stack: python -m scripts.pairs_ev_report).'
-        : ''))
-  ];
-
-  // ---- go-live readiness: is this trustworthy enough for real dollars ----
-  // Two tiers. MACHINERY (pooled size-weighted markout, same statistic that
-  // drives the fleet HALTED gate) reaches a real sample in hours. MONEY (true
-  // settled P&L per market -- closes plus the $1/$0 the venue paid on
-  // whatever was still held, NOT closes alone, which is biased toward
-  // successful hedge-merges) needs far more settled markets because the
-  // payoff is small-frequent-capture against a rare-large-binary-tail. See
-  // `go_live_readiness` in strategy/stats.py for the reasoning behind the
-  // thresholds below. `gl` itself is declared above, next to the progress bar.
-  const glStatusLabel = {
-    NO_DATA: 'No settled markets yet', COLLECTING: 'Collecting data',
-    DIRECTIONAL_SIGNAL: 'Directional signal only',
-    READY_FOR_SMALL_LIVE_PILOT: 'Ready for small live pilot',
-  }[gl.status] || gl.status || '-';
-  const glStatusCls = {
-    NO_DATA: 'dim', COLLECTING: 'dim', DIRECTIONAL_SIGNAL: 'gold',
-    READY_FOR_SMALL_LIVE_PILOT: 'up',
-  }[gl.status] || 'dim';
-  const t_ready = [
-    K('Go-Live Status', glStatusLabel,
-      (gl.n_settled||0)+' settled markets seen', glStatusCls, false,
-      'Composite readiness read: needs '+gl.go_live_min_settled+'+ settled markets, a positive 90% confidence lower bound on mean return, '+gl.go_live_min_calendar_days+'+ calendar days, and no single sport/category over '+pct(gl.go_live_max_category_share)+' of the sample'),
-    K('Settled Sample (Money)', (gl.n_settled||0)+' / '+gl.go_live_min_settled,
-      (gl.n_settled||0) >= (gl.signal_min_settled||0)
-        ? 'past the '+gl.signal_min_settled+'-market noise floor'
-        : 'below the '+gl.signal_min_settled+'-market noise floor',
-      (gl.n_settled||0) >= (gl.go_live_min_settled||1e9) ? 'up'
-        : (gl.n_settled||0) >= (gl.signal_min_settled||1e9) ? 'gold' : 'dim',
-      false,
-      'Fully-resolved markets, TRUE settled P&L (closes + venue $1/$0 payout on anything still held) -- not just voluntary closes, which are biased toward profitable hedge-merges'),
-    K('Mean Return / Trade', gl.mean_return_pct==null?'-':gl.mean_return_pct.toFixed(1)+'%',
-      gl.stdev_return_pct==null?'stdev unknown':'stdev '+gl.stdev_return_pct.toFixed(1)+'%',
-      gl.mean_return_pct==null?'dim':cls(gl.mean_return_pct), false,
-      'Mean realized P&L as a percent of cost basis, across all TRUE settled markets'),
-    K('90% CI Lower Bound', gl.ci90_lower_pct==null?'-':gl.ci90_lower_pct.toFixed(1)+'%',
-      gl.ci90_lower_pct==null ? 'need 2+ settled markets'
-        : (gl.ci90_lower_pct>0 ? 'distinguishable from breakeven' : 'not yet distinguishable from breakeven'),
-      gl.ci90_lower_pct==null?'dim':cls(gl.ci90_lower_pct), false,
-      'One-sided 90% confidence lower bound on mean return; the actual go/no-go threshold is whether this stays above zero, not the point estimate'),
-    K('Markout Effective Sample', (gl.markout_n_eff||0).toFixed(0),
-      'size-weighted (Kish n_eff), fleet-pooled', (gl.markout_n_eff||0)>=30?'up':'dim', false,
-      'Same pooled size-weighted markout statistic the HALTED gate reads -- a fast, low-variance leading indicator of whether the entry/risk rules are behaving as designed, well before enough markets have resolved for the money read'),
-    K('Calendar Coverage', gl.calendar_days==null?'-':gl.calendar_days.toFixed(1)+'d',
-      'need '+gl.go_live_min_calendar_days+'d+ to cross multiple days/regimes',
-      gl.calendar_days>=gl.go_live_min_calendar_days?'up':'dim', false,
-      'Span between the earliest and latest fill; a short window can look good or bad purely from one event cluster'),
-    K('Category Concentration', gl.max_category_share==null?'-':pct(gl.max_category_share),
-      Object.entries(gl.category_counts||{}).map(([k,v])=>k+':'+v).join(' · ') || 'no settled markets',
-      gl.max_category_share==null?'dim':(gl.max_category_share<=gl.go_live_max_category_share?'up':'down'), false,
-      'Largest single sport/category share of the settled sample; a sample that is all one sport is not diversification even if the mean looks good')
-  ];
-
-  const t_risk = [
-    K('Capital Deployed',usd(t.committed_total,0),`of ${usd(t.wallet,0)} simulated wallet`,t.committed_total>=t.max_committed?'alert-tx':'dim',t.committed_total>=t.max_committed,
-      'Total capital currently locked in open bids and active inventory'),    K('Fleet Naked Risk',usd(t.at_risk,0)+' / '+usd(t.fleet_naked_budget,0),
-      Math.min(100,100*t.at_risk/Math.max(1,t.fleet_naked_budget)).toFixed(0)+'% of hard naked-risk budget',
-      t.at_risk >= t.fleet_naked_budget ? 'alert-tx' : (t.at_risk > .8*t.fleet_naked_budget ? 'down' : 'up'),
-      t.at_risk >= t.fleet_naked_budget,
-      'Naked cost at risk, using the same cost basis the dollar risk gate enforces'),
-    K('Unhedged Exit Value',usd(t.naked_exit,0),'current bid value if liquidated now','down', false,
-       'Current resale value of single-sided positions; not the risk-gate cost basis'),
-
-    K('Resolution Floor (Worst Case)',usd(t.net_worst),
-      'P&L if all unhedged positions expire to $0',cls(t.net_worst), false,
-      'Final portfolio profit/loss floor if all unhedged bets expire to $0.00 at resolution, keeping past realized gains.'),
-    K('Total Floating Unrealized P&L',usd(totalFloating),
-      usd(t.locked_pair)+' paired float + '+usd(t.naked_exit - t.at_risk)+' unhedged float',cls(totalFloating), false,
-      'Current paper profit/loss on all open positions if sold right now at market price'),
-    K('Matured Trades (15m+)',String(t.markout_n),'fills with 15m+ history (need 20+)',t.markout_n>=20?'up':'dim', false,
-      'Number of completed trades older than 15 minutes used for trade quality stats.'),
-    K('Markets Exited',String(t.exited),'stopped for adverse selection',t.exited?'down':'up',t.exited>0,
-      'Markets auto-stopped due to severe post-trade price drops')
-  ];
-
-  const t_cap = [
-    // Unallocated cash only -- deliberately NOT buying power, which would
-    // also count collateral released by cancelling open orders.
-    K('Net Available Cash',usd(t.available_cash,0),'unallocated of '+usd(t.wallet,0)+' wallet','up'),
-    K('Open Orders Collateral',usd(t.capital,0),'cash held against resting bids','gold'),
-    K('Active Traded Bets',t.scoring+' / '+t.markets,
-      t.markets_spread ? t.markets_spread+' priced on spread capture' : 'positive projected income',
-      t.scoring?'up':'dim'),
-    K('Scoring uptime',pct(t.uptime),'checks with non-zero score',thresh(t.uptime,true,0.8)),
-    K('Fills',String(t.fills),'tape-confirmed + crossed','dim'),
-    K('Max Allowed Unrealized Loss',usd(t.fleet_naked_budget,0),'hard unhedged-loss ceiling','dim'),
-    K('Active Quoting Markets',String(t.active_quoting||0)+' / '+String(t.markets||0),
-      t.book_health_ratio == null ? 'no markets' : pct(t.book_health_ratio)+' actively quoting',
-      t.book_health_ratio == null ? 'dim' : thresh(t.book_health_ratio,true,.8), false,
-      'Markets with active resting quotes divided by monitored markets; this is not a two-sided book-depth test'),
-    K('Gate Refusals',String(Object.values(t.gate_refusals||{}).reduce((a,b)=>a+b,0)),
-      Object.entries(t.gate_refusals||{}).map(([k,v])=>k+': '+v).join(' · ') || 'none recorded',
-      Object.keys(t.gate_refusals||{}).length ? 'down' : 'dim', false,
-      'Structured refusal events from the risk and budget gates'),
-    K('Data health',healthy?'LIVE':'STALE',healthy?'heartbeat < 120s':'do not trust live figures',healthy?'up':'alert-tx',!healthy)
-  ];
-
-  $('agg').innerHTML = renderGroup('Profit &amp; loss', t_pl) + renderGroup('Go-live readiness', t_ready) + renderGroup('Risk &amp; exposure', t_risk) + renderGroup('Capital &amp; operations', t_cap);
-
-  $('rows').innerHTML=s.markets.map(m=>{
-    const currentIncome = (m.income || 0);
-    const isGenerating = currentIncome > 0;
-    const position = orderDepth(m);
-    const events = m.events || [];
-    const latest = events[0];
-    const actionClass = latest ? ({FILLED:'up',QUOTING:'proj',HEDGED:'gold',MERGED:'up',EXITED:'down',BLOCKED:'down',ERROR:'alert-tx',WAITING:'dim',PAIR_COMPLETE:'up',NAKED_EXIT:'gold',PAIR_WINDOW_EXPIRED:'down'}[latest.kind] || 'dim') : 'dim';
-    const actionHtml = latest
-      ? `<div class="action-cell" title="${esc(latest.reason)}"><span class="action-pill ${actionClass}" style="background:rgba(255,255,255,.06)">${esc(latest.kind)}</span><span class="dim" style="font-size:10px;margin-left:6px">${hms(Math.max(0,s.now-latest.ts))} ago</span><div class="action-recent"><div class="event-line">${esc(latest.reason || latest.reason_code)}</div>${events.slice(1,3).map(e=>`<div class="event-line dim">${esc(e.kind)} · ${esc(e.reason || e.reason_code)}</div>`).join('')}</div></div>`
-      : `<span class="dim">No event telemetry</span>`;
-    const unrealized = m.unrealized_pnl || 0;
-    const hasPos = (m.paired > 0) || (m.naked_sh > 0);
-    const unrlHtml = hasPos
-      ? `<span class="${cls(unrealized)} bold mono">${usd(unrealized)}</span>`
-      : `<span class="dim">-</span>`;
-    const rzlHtml = m.closes
-      ? `<span class="${cls(m.closed_pnl)} bold mono">${usd(m.closed_pnl)}</span>`
-      : `<span class="dim">-</span>`;
-    const statusHtml = m.err
-      ? `<span class="down bold">STALE / ERROR</span>`
-      : `<span class="${isGenerating?'up':'dim'} bold">${m.source === 'spread' ? 'SPREAD' : 'SCORING'}</span><div class="dim" style="font-size:10px;margin-top:3px">${m.age==null?'no live data':hms(m.age)+' old'}</div>`;
-    return `<tr class="${m.gate === 'EXITED' ? 'alert' : ''}">
-      <td style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(m.title)}">${m.url?`<a class="mkt-link" href="${esc(m.url)}" target="_blank">${esc(m.title)}</a>`:esc(m.title)}</td>
-      <td>${actionHtml}</td>
-      <td class="num bold mono ${isGenerating ? 'up' : 'dim'}" style="font-size:15px">${usd(currentIncome)}</td>
-      <td class="num mono" title="Offers ${usd(m.capital,0)}">${usd(m.committed,0)}</td>
-      <td>${position}</td>
-      <td class="num mono">${unrlHtml}</td>
-      <td class="num mono">${rzlHtml}</td>
-      <td class="num mono">${pct(m.share,1)}</td>
-      <td class="num mono ${thresh(m.uptime,true,0.8)}">${pct(m.uptime,0)}</td>
-      <td class="num mono dim">${m.fills}</td>
-      <td>${statusHtml}</td>
-    </tr>`;  }).join('');
-
-  const settled = s.settled_positions || [];
-  $('settledRows').innerHTML = settled.length ? settled.map(p=>{
-    const exitTime = new Date(p.ts * 1000).toLocaleString();
-    const pnlClass = cls(p.realized_pnl);
-    const detail = p.method === 'SELL'
-      ? `YES ${p.yes_exit == null ? '-' : Number(p.yes_exit).toFixed(4)} · NO ${p.no_exit == null ? '-' : Number(p.no_exit).toFixed(4)}`
-      : p.method === 'RESOLVE'
-      ? `Venue resolution payout, blended ${usd(p.exit_price)}/sh (winning shares pay $1, losing pay $0)`
-      : 'Parity redemption at $1.0000';
-    const feeLabel = p.fee_or_gas == null ? '-' : usd(p.fee_or_gas);
-    const pillCls = p.method === 'MERGE' ? 'up' : p.method === 'RESOLVE' ? 'gold' : 'proj';
-    return `<tr>
-      <td class="mono dim" style="white-space:nowrap">${esc(exitTime)}</td>
-      <td style="max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.market_slug)}">${esc(p.market_slug || p.condition_id)}</td>
-      <td><span class="action-pill ${pillCls}" style="background:rgba(255,255,255,.06)">${esc(p.method)}</span></td>
-      <td class="num mono">${Number(p.shares || 0).toFixed(2)}</td>
-      <td class="num mono">${usd(p.avg_cost)}</td>
-      <td class="num mono">${usd(p.exit_price)}</td>
-      <td class="num mono ${p.pnl_pct == null ? 'dim' : pnlClass}">${p.pnl_pct == null ? '-' : (p.pnl_pct >= 0 ? '+' : '') + Number(p.pnl_pct).toFixed(2) + '%'}</td>
-      <td class="num mono ${pnlClass} bold">${usd(p.realized_pnl)}</td>
-      <td class="num mono dim">${feeLabel}</td>
-      <td class="dim" title="${esc(detail)}">${esc(detail)}</td>
-    </tr>`;
-  }).join('') : '<tr><td colspan="10" class="settled-empty">No realized exits yet — closed positions will appear here.</td></tr>';
-}
-// ---------- view switcher: fleet page <-> market pipeline ----------
-const viewShow=(name)=>{
-  $('view-fleet').hidden=(name!=='fleet');
-  $('view-pipeline').hidden=(name!=='scan');
-  $('viewFleet').classList.toggle('active',name==='fleet');
-  $('viewScan').classList.toggle('active',name==='scan');
-  history.replaceState(null,'','?view='+name);
-};
-// The scan view is the evening watch; a reload should not kick the operator
-// back to the fleet page. Re-apply the ?view= param at boot.
-const viewFromUrl=new URLSearchParams(location.search).get('view');
-$('viewFleet').addEventListener('click',()=>viewShow('fleet'));
-$('viewScan').addEventListener('click',()=>viewShow('scan'));
-if(viewFromUrl==='scan'){viewShow('scan');}
 
 // ---------- market pipeline view: the selection funnel, live ----------
 // Four lanes mirror the ranker's actual funnel -- RAW (what the venue
@@ -1793,6 +1198,19 @@ function gradCard(m){
     :(m.income<=0?'<div class="alloc-line dim">resting nothing — allocator has not funded this market</div>':'');
   return `<div class="mkt-card"><div class="mkt-top"><span class="mkt-t" title="${esc(m.title)}">${esc(m.title)}</span><span class="pill ${pillCls}">${st}</span></div><div class="mkt-mid"><span class="proj bold mono">${usd(m.income)}/d</span><span class="dim mono">${usd(m.capital,0)} cap</span><span class="dim mono">${pct(m.share,1)} share</span></div><div class="mkt-sub dim mono">${m.fills||0} fills · ${pct(m.uptime,0)} uptime</div>${allocHtml}${reasonHtml}</div>`;
 }
+function trialCallout(nm,vn){
+  // The actionable layer: when a near-miss tracker crosses its consistency
+  // bars, that is a decision on the desk, not a status tile -- the funnel
+  // landing on 0 picked is only a mystery until this explains it.
+  const ready=[];
+  if(nm&&nm.status==='READY_TO_TRIAL') ready.push({name:'Depth/spread near-miss',pot:nm.uniq_pot_day,d:nm.days,u:nm.unique_markets});
+  if(vn&&vn.status==='READY_TO_TRIAL') ready.push({name:'Volume near-miss',pot:vn.uniq_pot_day,d:vn.days,u:vn.unique_markets});
+  if(!ready.length) return '';
+  const chips=ready.map(r=>`<span class="trial-chip">${r.name} · pot $${Math.round(r.pot)}/d · ${r.d} days · ${r.u} unique markets</span>`).join('');
+  return `<div class="trial-hdr">Trial ready — the evidence is in</div>`+
+    `<div class="trial-txt">The near-miss trackers have crossed their consistency bars, so an empty funnel bottom is a <b>decision</b>, not a mystery. Next step: a <b>controlled trial</b> — adopt the small-margin greens on one gate and watch their markouts, not an immediate gate change. That trial is the actual use of this page.</div>`+
+    `<div class="trial-row">${chips}</div>`;
+}
 function pipeStrip(s,snap){
   if(!snap){
     const fleetTxt=s.fleet_alive===true?' The fleet is alive.':s.fleet_alive===false?' The fleet is down.':'';
@@ -1802,7 +1220,16 @@ function pipeStrip(s,snap){
   const age=Math.max(0,s.snapshot_age||0);
   const stale=age>900;
   const chain=`<span class="up">RAW ${(c.funded||0)+(c.spread_universe||0)}</span><span>→</span><span>scored ${c.scored||0}</span><span>→</span><span class="down">rejected ${c.rejected||0}</span><span>→</span><span class="proj">eligible ${c.eligible||0}</span><span>→</span><span class="up bold">picked ${c.picked||0}</span>`;
-  return `<div class="pipe-census">${esc(snap.census||'')} <span class="${stale?'down':'dim'}">· snapshot ${hms(age)} old</span></div><div class="pipe-chain">${chain}</div><div class="pipe-gates">${esc((snap.gates||'').trim())}</div>`;
+  // One glanceable line -- the chain -- and the rank's prose under a
+  // collapsed details so the strip reads top-to-bottom, not as a paragraph.
+  // A stale snapshot auto-opens: "the ranker died" is exactly when the
+  // census detail matters most.
+  const gates=(snap.gates||'').trim();
+  return `<div class="pipe-chain">${chain} <span class="${stale?'down':'dim'}">· snapshot ${hms(age)} old</span></div>`+
+    `<details class="pipe-census" ${stale?'open':''}><summary>what the last rank did · the gates it used</summary>`+
+    `<div>${esc(snap.census||'')}</div>`+
+    (gates?`<div class="pipe-gates">${esc(gates)}</div>`:'')+
+    `</details>`;
 }
 function pipeNearMiss(nm){
   if(!nm) return '';
@@ -1892,16 +1319,25 @@ function pipeGrad(s){
 async function tickPipeline(){
   let s; try{ s=await (await fetch('/api/pipeline',{cache:'no-store'})).json(); }catch(e){ return; }
   const snap=s.snapshot||null;
+  // Mast liveness, previously driven by the fleet-page tick (removed): the
+  // pipeline payload carries the fleet heartbeat and the snapshot age.
+  const alive=s.fleet_alive;
+  $('live').innerHTML = alive===true?'<span class="up">● FLEET ALIVE</span>':alive===false?'<span class="down">● FLEET DOWN</span>':'<span class="dim">● fleet status unknown</span>';
+  $('health').innerHTML = s.snapshot_age==null?'<span class="dim">● NO SNAPSHOT</span>':(s.snapshot_age>900?'<span class="alert-tx">● STALE SNAPSHOT</span>':'<span class="up">● RANK FRESH</span>');
+  $('clock').textContent = s.snapshot_age==null?'':hms(s.snapshot_age)+' old';
   $('pipeStrip').innerHTML=pipeStrip(s,snap);
-  $('nearMiss').innerHTML=pipeNearMiss(s.near_miss||null);
-  $('volumeNearMiss').innerHTML=pipeVolumeNearMiss(s.volume_near_miss||null);
+  const nm=s.near_miss||null, vn=s.volume_near_miss||null;
+  const tcEl=$('trialCallout'), tc=trialCallout(nm,vn);
+  tcEl.innerHTML=tc; tcEl.style.display=tc?'block':'none';
+  $('nearMiss').innerHTML=pipeNearMiss(nm);
+  $('volumeNearMiss').innerHTML=pipeVolumeNearMiss(vn);
   $('laneRaw').innerHTML=snap?pipeRaw(snap):pipeLane('① RAW','','-','',pipeEmpty('waiting for the next rank…'));
   $('laneFilter').innerHTML=snap?pipeFilter(snap):pipeLane('② FILTERS','','-','',pipeEmpty('waiting for the next rank…'));
   $('laneFinal').innerHTML=snap?pipeFinal(snap):pipeLane('③ FINAL STAGE','','-','',pipeEmpty('waiting for the next rank…'));
   $('laneGrad').innerHTML=pipeGrad(s);
 }
 tickPipeline(); setInterval(tickPipeline,10000);
- tick(); setInterval(tick,4000);
+
 </script>
 </body></html>
 """

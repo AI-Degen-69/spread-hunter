@@ -13,12 +13,13 @@ spread and stay inventory-balanced, and holds to resolution.
 `.\scripts\fleet-start.ps1` as a supervised child (`uvicorn
 server.spread_dash:app --port 8800`). Design migrated from the
 `spread-hunter` mockup onto real fleet data — see `server/spread_dash.py`.
-The prior dashboard (`server/fleet_dash.py`) is demoted to
-http://localhost:8801, kept running only because its **market scan** view
-(http://localhost:8801/?view=scan, linked from the dashboard's header) has
-not had the same design pass yet — don't use :8801 as "the dashboard". The
-old public URL (https://Spread Hunter-production.up.railway.app) is dead:
-this checkout was never deployed to Railway.
+The prior dashboard (`server/fleet_dash.py`) now serves **only** the
+**market scan** funnel (http://localhost:8801/?view=scan, linked from the
+dashboard's header): RAW → FILTERS → FINAL → GRADUATED plus the two
+near-miss trackers. The old fleet page there was removed as redundant with
+:8800 — don't use :8801 as "the dashboard". The old public URL
+(https://Spread Hunter-production.up.railway.app) is dead: this checkout
+was never deployed to Railway.
 
 > Simulation only. It never places a real order and loads no wallet
 > credentials at all — see [AGENTS.md](AGENTS.md).
@@ -45,7 +46,7 @@ output as an **upper bound**. The dashboard shows live progress toward
     strategy/   engine: fleet + per-market sweep, ranker gates, quotes,
                 queue-aware fills, risk, store/stats
     server/     spread_dash.py (canonical dashboard, :8800)
-                fleet_dash.py (legacy dashboard, kept only for market scan, :8801)
+                fleet_dash.py (market scan funnel only, :8801)
     research/   lab notebook, EN + HE
     docs/       explanation + agent/plan docs (fleet data flow:
                 [docs/explanation-fleet-data-flow.md](docs/explanation-fleet-data-flow.md),
@@ -68,7 +69,7 @@ bash scripts/setup-hooks.sh        # required once: research-log enforcement
 # fleet-start.ps1 already brings both of these up as supervised children.
 # Run them standalone only for dashboard-only development, without the fleet:
 .venv/bin/uvicorn server.spread_dash:app --port 8800  # canonical dashboard
-.venv/bin/uvicorn server.fleet_dash:app --port 8801   # legacy, market scan only (?view=scan)
+.venv/bin/uvicorn server.fleet_dash:app --port 8801   # market scan funnel (?view=scan)
 .venv/bin/python -m scripts.rank_markets   # ranker (writes run/markets.json)
 .venv/bin/python -m scripts.pairs_ev_report      # pairs-rule EV stack, read-only (see docs/explanation-pairs-ev-report.md)
 .venv/bin/python -m scripts.build_tailwind_css   # regenerate static dashboard CSS after editing classes (see docs/howto-regenerate-dashboard-css.md)
