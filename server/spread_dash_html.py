@@ -174,8 +174,8 @@ LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
     </div>
     <div class="col-span-12 md:col-span-6 lg:col-span-3 border-r last:border-r-0 border-b lg:border-b-0 border-[#1F2937] p-6 flex flex-col gap-4">
       <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">02 &middot; GATES</span>
-      <div class="font-display text-[18px] leading-none tracking-tight">Three threshold gauges</div>
-      <div class="text-[14px] leading-6 text-[#9CA3AF]">Capital committed against your limit, markout sample maturity, and progress toward the settlement target.</div>
+      <div class="font-display text-[18px] leading-none tracking-tight">Two threshold gauges</div>
+      <div class="text-[14px] leading-6 text-[#9CA3AF]">Capital committed against your limit, and markout sample maturity. Settlement progress lives with the Verdict.</div>
     </div>
     <div class="col-span-12 md:col-span-6 lg:col-span-3 border-r last:border-r-0 border-b lg:border-b-0 border-[#1F2937] p-6 flex flex-col gap-4">
       <span class="w-fit mono text-[13px] tracking-[0.14em] uppercase px-2 py-1 bg-[#1F2937] border border-[#1F2937]">03 &middot; PROOF</span>
@@ -355,9 +355,9 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
         <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">GATES</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Readiness <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
-      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Three threshold gauges</span>
+      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Two threshold gauges</span>
     </button>
-    <div id="sec-gauges" class="sh-fade grid grid-cols-1 lg:grid-cols-3 gap-4 p-4 bg-[#090D16]"></div>
+    <div id="sec-gauges" class="sh-fade grid grid-cols-1 lg:grid-cols-2 gap-4 p-4 bg-[#090D16]"></div>
   </section>
 
   <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.2s">
@@ -398,7 +398,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
       </div>
     </div>
     <div class="hidden lg:block w-px bg-[#1F2937]"></div>
-    <div id="scope-tiles" class="flex-1 grid grid-cols-3 gap-2 mono text-[12px] tracking-widest uppercase"></div>
+    <div id="scope-tiles" class="flex-1 grid grid-cols-1 gap-2 mono text-[12px] tracking-widest uppercase"></div>
   </section>
 
   <div class="flex flex-col sm:flex-row items-center justify-between gap-3 mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF] pb-2">
@@ -720,11 +720,9 @@ function renderPositions(s){
       <div class="mt-3 mono text-[12px] leading-5 text-[#9CA3AF] bg-[#090D16] border border-[#1F2937] px-3 py-2">
         ${fmtUsd(s.realized_usd)} Realized &nbsp;|&nbsp; ${fmtUsd(s.rebate_usd)} Earned Rebates &nbsp;|&nbsp; ${fmtUsd(s.unrealized_usd)} Unrealized &nbsp;=&nbsp; <span class="font-bold text-[#F9FAFB]">${fmtUsd(s.total_liquidation_usd)} Total Liquidation P&amp;L</span>
       </div>
-      <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <div class="p-3.5 bg-[#10B981]/10 border border-[#10B981]/20"><div class="mono text-[12px] tracking-[0.12em] uppercase text-[#10B981]">Settled</div><div class="mono text-[17px] font-bold mt-1 text-[#10B981]">${s.n_settled}</div><div class="mono text-[12px] text-[#10B981]/70 mt-0.5">${s.wins}W / ${s.losses}L</div></div>
+      <div class="mt-3 grid grid-cols-2 gap-2">
         <div class="p-3.5 bg-[#111827] border border-[#1F2937]"><div class="mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF]">Total closes</div><div class="mono text-[17px] font-bold mt-1">${s.closes}</div><div class="mono text-[12px] text-[#9CA3AF] mt-0.5">${fmtUsd(s.closed_pnl)} booked</div></div>
         <div class="p-3.5 bg-[#10B981]/10 border border-[#10B981]/20"><div class="mono text-[12px] tracking-[0.12em] uppercase text-[#10B981]">Rebates earned</div><div class="mono text-[17px] font-bold mt-1 text-[#10B981]">${fmtUsd(s.rebate_usd)}</div><div class="mono text-[12px] text-[#10B981]/70 mt-0.5">${s.rebate_fills} fills${s.rebate_cps===null?'':' &middot; '+s.rebate_cps.toFixed(2)+'c/sh'}</div></div>
-        <div class="p-3.5 bg-[#111827] border border-[#1F2937]"><div class="mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF]">Status</div><div class="mono text-[15px] font-bold mt-1">${esc(s.status)}</div><div class="mono text-[12px] text-[#9CA3AF] mt-0.5">${s.n_settled} / ${s.go_live_min_settled} to go-live</div></div>
       </div>
     </div>
     <div class="col-span-12 lg:col-span-6 p-6 lg:p-7 relative border-l border-[#1F2937]">
@@ -746,7 +744,7 @@ function renderVerdict(s){
      chart: `<div class="cursor-pointer" title="Click to expand" onclick="openDistModal('ci')">${bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,
        ciLow:s.ci90_lower_pct,ciHigh:(s.mean_return_pct!==null&&s.ci90_lower_pct!==null)?(2*s.mean_return_pct-s.ci90_lower_pct):undefined,
        color:"#3B82F6",w:140,h:64})}</div>`,
-     sub:`Mean ${fmtPct(s.mean_return_pct)} &middot; &sigma; ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'} &middot; n=${s.n_settled}`},
+     sub:`Mean ${fmtPct(s.mean_return_pct)} &middot; &sigma; ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}`},
     {label:"Markout Drift", value: s.markout_mean_per_share===null?"--":(s.markout_mean_per_share*100).toFixed(2)+"&cent;", accent:"#EF4444",
      chart: `<div class="cursor-pointer" title="Click to expand" onclick="openDistModal('markout')">${bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444",w:140,h:64})}</div>`,
      sub:`n_eff ${s.markout_n_eff.toFixed(1)} &middot; measured`},
@@ -765,10 +763,6 @@ function renderVerdict(s){
     <div class="mono text-[12px] tracking-[0.18em] uppercase text-[#9CA3AF]">Go or no-go</div>
     <div class="font-display text-[26px] leading-none mt-2">Determined by<br><span class="text-[#10B981]">the lower bound</span></div>
     <div class="mono text-[13px] leading-5 text-[#9CA3AF] mt-3">Not the mean. Not win rate. Bound, drift, gap, concentration, and sample.</div>
-    <div class="mt-5 flex items-center gap-2">
-      <span class="px-3 py-1.5 border border-[#1F2937] mono text-[13px] tracking-widest uppercase">${esc(s.status)}</span>
-      <span class="px-3 py-1.5 border border-[#1F2937] mono text-[13px] tracking-widest uppercase">${s.n_settled} / ${s.go_live_min_settled}</span>
-    </div>
   </div>`;
   const right = `<div class="col-span-12 lg:col-span-9 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 divide-y md:divide-y-0 md:divide-x divide-[#1F2937]">
     ${tiles.map((t,i)=>`<div class="p-3 flex flex-col gap-2 hover:bg-[#090D16] transition-colors">
@@ -782,10 +776,11 @@ function renderVerdict(s){
 }
 
 function renderGauges(s){
+  // Two threshold instruments. Settlement progress is not repeated here:
+  // the settled sample's home is the Verdict panel (Sample tile + note).
   const items = [
     {label:"Capital Committed", sub:`${s.committed_open_usd.toFixed(0)} of ${s.max_committed_usd.toFixed(0)}`, value:s.committed_open_usd, max:s.max_committed_usd, color:"#3B82F6"},
     {label:"Markout Coverage", sub:`${s.markout_n_eff.toFixed(1)} fills &middot; threshold ${s.markout_min_sample}`, value:s.markout_n_eff, max:Math.max(s.markout_min_sample*2, s.markout_n_eff), color:"#10B981", threshold:s.markout_min_sample},
-    {label:"Settlement Progress", sub:`${s.n_settled} of ${s.go_live_min_settled} settled`, value:s.n_settled, max:s.go_live_min_settled, color:"#EF4444", threshold:s.signal_min_settled},
   ];
   document.getElementById("sec-gauges").innerHTML = items.map(g => {
     const pct = Math.min(100, Math.max(0,(g.value/g.max)*100));
@@ -803,7 +798,7 @@ function renderGauges(s){
         </div>
         <div class="flex-1 space-y-3">
           <div class="h-1.5 w-full bg-[#090D16] overflow-hidden"><div class="h-full" style="width:${pct}%;background:${g.color}"></div></div>
-          <div class="mono text-[13px] leading-5 text-[#9CA3AF] border-l-2 pl-3" style="border-color:${g.color}">${g.label==='Capital Committed'?'Cash committed to resting offers and held inventory.':g.label==='Markout Coverage'?'Effective sample vs the gate threshold this fleet actually uses.':'Live needs '+s.go_live_min_settled+' settled; signal floor is '+s.signal_min_settled+'.'}</div>
+          <div class="mono text-[13px] leading-5 text-[#9CA3AF] border-l-2 pl-3" style="border-color:${g.color}">${g.label==='Capital Committed'?'Cash committed to resting offers and held inventory.':'Effective sample vs the gate threshold this fleet actually uses.'}</div>
         </div>
       </div>
     </div>`;
@@ -816,7 +811,7 @@ function renderEvidence(s){
       <div class="px-3.5 h-9 flex items-center gap-2 mono text-[13px] tracking-[0.14em] uppercase font-semibold border-b border-[#1F2937]">Performance</div>
       <div class="p-3 space-y-3">
         <div class="bg-[#111827] border border-[#1F2937] p-3 cursor-pointer hover:border-[#3B82F6]/40 transition-colors" title="Click to expand" onclick="openDistModal('ci')">
-          <div class="flex items-center justify-between mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]"><span>90% Confidence vs zero</span><span class="px-2 py-1 border" style="color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'};border-color:${(s.ci90_lower_pct||0)>0?'#10B98133':'#EF444433'}">Lower ${fmtPct(s.ci90_lower_pct,2)}</span></div>
+          <div class="flex items-center justify-between mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]"><span>90% Confidence vs zero</span><span class="text-[#9CA3AF]/60">Expand &nearr;</span></div>
           ${bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,color:"#3B82F6"})}
         </div>
         <div class="bg-[#111827] border border-[#1F2937] p-3 cursor-pointer hover:border-[#EF4444]/40 transition-colors" title="Click to expand" onclick="openDistModal('markout')">
@@ -840,10 +835,7 @@ function renderEvidence(s){
               <div class="mono text-[12px] tracking-[0.14em] uppercase text-[#EF4444] font-semibold">Concentration vs cap</div>
               <div class="mt-3 space-y-1.5">${s.categories.map(c=>`<div class="flex items-center justify-between mono text-[12px]"><span class="flex items-center gap-1.5"><span class="size-2" style="background:${c.color}"></span>${c.name}</span><span class="${c.pct>s.go_live_max_category_share*100?'text-[#EF4444] font-bold':'text-[#9CA3AF]'}">${c.pct.toFixed(1)}%</span></div>`).join("")}</div>
             </div>
-            <div class="grid grid-cols-2 gap-2">
-              <div class="bg-[#111827] border border-[#1F2937] p-2.5 text-center"><div class="mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Settled</div><div class="mono text-[17px] font-bold">${s.n_settled} / ${s.go_live_min_settled}</div></div>
-              <div class="bg-[#111827] border border-[#1F2937] p-2.5 text-center"><div class="mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Calendar</div><div class="mono text-[17px] font-bold ${(s.calendar_days||0)<s.go_live_min_calendar_days?'text-[#EF4444]':'text-[#10B981]'}">${s.calendar_days===null?'--':s.calendar_days.toFixed(1)} / ${s.go_live_min_calendar_days} d</div></div>
-            </div>
+            <div class="bg-[#111827] border border-[#1F2937] p-2.5 text-center"><div class="mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Calendar</div><div class="mono text-[17px] font-bold ${(s.calendar_days||0)<s.go_live_min_calendar_days?'text-[#EF4444]':'text-[#10B981]'}">${s.calendar_days===null?'--':s.calendar_days.toFixed(1)} / ${s.go_live_min_calendar_days} d</div></div>
           </div>
         </div>
       </div>
@@ -1169,14 +1161,15 @@ function renderHinge(s){
     NO_DATA:                    { word:"NO DATA", color:"#9CA3AF" },
   }[st] || { word: st, color: "#9CA3AF" };
   const el = document.getElementById("hdr-hinge");
+  // The hinge answers the desk's only question in one line -- the call and
+  // the freshness. The deciding figure (lower bound) and the sample live in
+  // the Verdict panel; the raw status lives in the header pill.
   el.innerHTML = `
     <div class="flex items-center gap-x-3 gap-y-1 flex-wrap min-w-0">
       <span class="mono text-[11px] tracking-[0.22em] uppercase text-[#9CA3AF] shrink-0">The call</span>
       <span class="font-display text-[24px] sm:text-[28px] leading-none font-bold tracking-[0.04em]" style="color:${call.color}">${esc(call.word)}</span>
-      <span class="mono text-[13px] text-[#9CA3AF]">90% lower bound <span class="font-bold" style="color:${(s.ci90_lower_pct||0)>0?'#10B981':'#EF4444'}">${fmtPct(s.ci90_lower_pct,2)}</span></span>
     </div>
     <div class="flex items-center gap-4 mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF]">
-      <span class="hidden sm:inline">${s.n_settled} / ${s.go_live_min_settled} settled &middot; ${esc(st)}</span>
       <span class="flex items-center gap-2 border border-[#1F2937] bg-[#090D16] px-2.5 py-1">
         <span id="hdr-pulse-dot" class="size-1.5 ${PULSE.alive?'bg-[#10B981] pulse-live':'bg-[#F59E0B]'}"></span>
         <span class="text-[#F9FAFB]">Pulse</span>
@@ -1226,9 +1219,11 @@ let REFRESH_BUSY = false;
 
 function renderSummary(s){
   LAST_STATS = s;
+  // The status string appears once on this screen -- right here in the
+  // header. The settled sample lives in the Verdict panel; the go-live
+  // readiness lives in the Gates panel.
   document.getElementById("hdr-pills").innerHTML = `
-    <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 bg-[#090D16] font-semibold border border-[#1F2937]">${esc(s.status)}</span>
-    <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 border border-[#1F2937]">${s.n_settled} of ${s.go_live_min_settled} settled</span>`;
+    <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 bg-[#090D16] font-semibold border border-[#1F2937]">${esc(s.status)}</span>`;
   document.getElementById("hdr-live").innerHTML = `
     <span class="size-1.5 ${s.fleet_alive?'bg-[#10B981] animate-pulse':'bg-[#F59E0B]'}"></span>
     <span class="tracking-[0.12em] uppercase text-[12px]">${s.fleet_alive?'Live':'Idle'}</span>`;
@@ -1237,10 +1232,10 @@ function renderSummary(s){
   renderVerdict(s);
   renderGauges(s);
   renderEvidence(s);
+  // Scope keeps one thing the panels don't: honest freshness. The status,
+  // the settled sample, and the lower bound each have a single home above.
   document.getElementById("scope-tiles").innerHTML = `
-    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">${fmtClock(s.now)}</div></div>
-    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Sample</div><div class="font-semibold mt-1">${esc(s.status)}</div><div class="text-[#9CA3AF] mt-0.5">n = ${s.n_settled}</div></div>
-    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Lower bound</div><div class="font-bold mt-1">${fmtPct(s.ci90_lower_pct,2)}</div></div>`;
+    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">${fmtClock(s.now)}</div></div>`;
 }
 
 async function refresh(){
