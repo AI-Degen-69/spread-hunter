@@ -49,3 +49,55 @@ def test_decision_schema_migrates_reason_code(monkeypatch, tmp_path):
             "SELECT action, reason_code, count FROM decisions"
         ).fetchone()
     assert row == ("BLOCKED", "PAIR_COST", 1)
+
+
+def test_float_mark_roundtrip_thinning_and_prune(monkeypatch, tmp_path):
+    """float_marks: one fleet-wide mark per sweep survives a write/read
+    round-trip oldest-first; sub-minute marks are thinned out of the history
+    (one point per 60s minimum); and the retention prune runs on the write
+    path, so rows older than `prune_before` never come back."""
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "marks.db"))
+    from strategy import store
+
+    # One mark per minute: every row lands on the thinning boundary.
+    for i, ts in enumerate([1000.0 + 60.0 * i for i in range(5)]):
+        store.log_float_mark(ts, unrealized_usd=float(i),
+                             committed_open_usd=10.0 + i, naked_usd=1.0 + i)
+    # A sub-minute mark is written but thinned out of the read series.
+    store.log_float_mark(1030.0, 99.0, 199.0, 29.0)
+
+    hist = store.float_history()
+    assert [h["ts"] for h in hist] == [1000.0, 1060.0, 1120.0, 1180.0, 1240.0]
+    assert all(set(h) == {"ts", "unrealized_usd", "committed_open_usd",
+                          "naked_usd"} for h in hist)
+    assert hist[2]["unrealized_usd"] == 2.0
+
+    # Prune on the write path: older rows are deleted before the new one.
+    store.log_float_mark(5000.0, 1.0, 2.0, 3.0, prune_before=1100.0)
+    hist = store.float_history()
+    assert [h["ts"] for h in hist] == [1120.0, 1180.0, 1240.0, 5000.0]
+
+    # The read is bounded: at most `max_points`, newest kept (thinning
+    # disabled here so the cap is what binds). Bulk-inserted in one
+    # transaction -- the writer's commit-per-row cost is not what is under
+    # test here.
+    with store.db() as c:
+        c.executemany(
+            "INSERT INTO float_marks (ts, unrealized_usd, "
+            "committed_open_usd, naked_usd) VALUES (?,?,?,?)",
+            [(6000.0 + i, 0.0, 0.0, 0.0) for i in range(3000)])
+    hist = store.float_history(max_points=500, min_spacing_sec=0.0)
+    assert len(hist) == 500
+    assert hist[0]["ts"] == 8500.0 and hist[-1]["ts"] == 8999.0
+
+
+def test_float_history_read_does_not_create_db(monkeypatch, tmp_path):
+    """float_history on a cold DB reads as an empty series and does NOT create
+    the database file -- a dashboard poll must never materialise an empty
+    hunter.db just by being looked at."""
+    db_path = tmp_path / "cold.db"
+    monkeypatch.setenv("HUNTER_DB", str(db_path))
+    from strategy import store
+
+    assert store.float_history() == []
+    assert not db_path.exists()

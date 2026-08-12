@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse
 from server import fleet_dash
 from strategy import stats
 from strategy.config import load as load_config
-from strategy.store import reason_code
+from strategy.store import float_history, reason_code
 
 ROOT = Path(__file__).resolve().parent.parent
 CFG = load_config()
@@ -36,6 +36,13 @@ app = FastAPI(title="Hunter fleet -- spread hunter design")
 _DASH_TTL = 8.0
 _DASH_CACHE: dict = {}
 _DASH_LOCK = threading.Lock()
+# Per-key in-flight marker for single-flight loading: a threading.Event that
+# the owning request sets when it finishes (success or failure). A request
+# that observes a miss while another request is loading waits on this instead
+# of re-running the expensive fleet read -- without it, N requests arriving
+# right after expiry each run `fleet_dash.fleet()` (~2s) under the same lock
+# traffic they were caching to avoid.
+_DASH_LOADING: dict = {}
 
 
 def _cached(key: str, loader):
@@ -44,10 +51,42 @@ def _cached(key: str, loader):
         hit = _DASH_CACHE.get(key)
         if hit and now - hit[0] < _DASH_TTL:
             return hit[1]
-    value = loader()
+        ev = _DASH_LOADING.get(key)
+    if ev is not None:
+        # Another request is already running this load. Wait OUTSIDE the
+        # lock -- the loader needs the lock to publish its result, so
+        # waiting while holding it would deadlock. If the load failed the
+        # marker is cleared and we fall through to load it ourselves.
+        ev.wait()
+        with _DASH_LOCK:
+            hit = _DASH_CACHE.get(key)
+            if hit:
+                return hit[1]
+    with _DASH_LOCK:
+        ev = threading.Event()
+        _DASH_LOADING[key] = ev
+    try:
+        value = loader()
+    except BaseException:
+        with _DASH_LOCK:
+            _DASH_LOADING.pop(key, None)
+            ev.set()
+        raise
     with _DASH_LOCK:
         _DASH_CACHE[key] = (time.time(), value)
+        _DASH_LOADING.pop(key, None)
+        ev.set()
     return value
+
+
+def _cache_ts(key: str):
+    """When the cached value for `key` was loaded, or None if never loaded.
+    The dashboard's "Data as of" tile reads this so it reports the data's
+    freshness, not the response time -- the fleet/pipeline values inside can
+    be up to _DASH_TTL older than the response that carries them."""
+    with _DASH_LOCK:
+        hit = _DASH_CACHE.get(key)
+        return hit[0] if hit else None
 
 
 def _warm_cache() -> None:
@@ -172,6 +211,10 @@ def api_summary() -> dict:
 
     return {
         "now": time.time(),
+        # When the fleet payload was actually loaded, so "Data as of" shows
+        # data freshness rather than response time (coderabbit). Falls back
+        # to `now` client-side when the cache has never filled.
+        "fleet_ts": _cache_ts("fleet"),
         "fleet_alive": fleet_alive,
         "status": go["status"],
         "n_settled": go["n_settled"],
@@ -208,6 +251,11 @@ def api_summary() -> dict:
         "max_committed_usd": CFG.max_committed_usd,
         "naked_usd": naked_usd,
         "max_naked_usd": CFG.max_naked_usd,
+        # The per-sweep open-position marks (fleet-side float_marks, pruned to
+        # 90 days, downsampled here to <=1 pt/min, capped). The Total equity
+        # widget time-merges these with the settled closes so the curve
+        # reflects the float that was actually open at each point.
+        "float_history": float_history(),
         "scanned": counts.get("attempted"),
         "scored": counts.get("scored"),
         "eligible": counts.get("eligible"),
@@ -318,7 +366,18 @@ def api_funnel() -> dict:
     }
 
 
-from server.spread_dash_html import LANDING_HTML, DASHBOARD_HTML  # noqa: E402
+from server.spread_dash_html import (  # noqa: E402
+    LANDING_HTML, DASHBOARD_HTML, _CAPITAL_JS)
+
+
+@app.get("/capital.js")
+def capital_js():
+    """The capital-since-inception widget, shared verbatim by the landing
+    page and the dashboard -- the one piece of JS the two pages hold in
+    common. Served as a static script so the pages stay self-contained
+    copies (matching the repo's per-page duplication of fmtUsd/fmtPct)."""
+    return HTMLResponse(content=_CAPITAL_JS, media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/", response_class=HTMLResponse)

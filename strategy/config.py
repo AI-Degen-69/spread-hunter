@@ -104,6 +104,14 @@ class MakerConfig:
     # return None for every side, and nothing else changes.
     enable_hard_blocks: bool = True
 
+    # FLOAT-MARK RETENTION. The fleet writes one fleet-wide open-position mark
+    # per sweep (unrealized float, committed dollars, naked residue -- the
+    # same totals the dashboard derives at read time). 90 days keeps the
+    # Total-equity history deep while bounding the table, instead of growing
+    # forever like market_events; the dashboard downsamples to one point per
+    # minute anyway, so finer-than-a-minute retention buys nothing.
+    float_mark_retention_days: float = 90.0
+
     # BOOK HEALTH. Three arms, all on ONE token's book.
     #
     # A price this close to either end means the market has decided. There is
@@ -610,27 +618,32 @@ class MakerConfig:
 
     # --- pairs-only rule (U35): what happens to a one-sided fill -------------
     #
-    # Measured on the 112h clean sample (Session 36 / U32): merged pairs were
-    # 7/7 positive at +16.3c/share with zero variance, while a naked leg held
-    # past 15 minutes drifted -18.5c/share by the 1h markout -- someone was
-    # betting against every fill. The rule converts each one-sided fill into
-    # either a COMPLETED pair (cross the missing leg at ask when the pair
-    # stays under `max_pair_cost`, then merge at parity -- the proven +16c
-    # capture) or a SAME-WINDOW EXIT of the naked leg at the best bid (pay
-    # the ~3c half-spread instead of the drift). Switchable like every other
-    # behavioural change here, so the rule can be measured on its own.
+    # Origin (Session 36 / U32, 112h sample): merged pairs were 7/7 positive
+    # while a naked leg held past 15 minutes drifted -18.5c/share by the 1h
+    # markout. The rule converts each one-sided fill into either a COMPLETED
+    # pair (cross the missing leg at ask when the pair stays under
+    # `max_pair_cost`, then merge at parity) or a SAME-WINDOW EXIT of the
+    # naked leg at the best bid (pay the half-spread instead of the drift).
+    # Switchable like every other behavioural change here, so the rule can
+    # be measured on its own.
     enable_pairs_rule: bool = True
     # How long after a one-sided fill the rule may still act. 15 minutes is
     # where the measured drift is still ~0 (+0.09c/share at the 5m horizon)
     # and long before the 1h mark where it is -18.5c.
     pairs_exit_window_sec: float = 900.0
-    # The EV formula's fixed payoffs (cents per one-sided fill), measured
-    # 2026-08-10: a completion pays the merge capture on completed pairs
-    # (+$49.46 on 302.5 shares = +16.3c, 7/7 profitable); an exit costs the
-    # half-spread (~2-3c). The RATES come from the rule's own decisions; the
-    # dashboard KPI is completion_rate x gain - exit_rate x cost.
-    pairs_complete_gain_cents: float = 16.3
-    pairs_exit_cost_cents: float = 3.0
+    # The EV formula's payoffs (cents per share of a one-sided fill), RE-
+    # MEASURED 2026-08-12 (Session 44) on the rule's own recorded decisions:
+    # a completion pays the realized merge capture on rule-era completed
+    # pairs (+$368.25 on 10,010.7 shares = +3.68c, 144 closes, 100% positive);
+    # an exit costs the realized exit economics (-$17.93 on 461 shares =
+    # -3.89c, n=4 closes, includes the taker fee). The original +16.3c was a
+    # 302.5-share sample (7 pairs) from the pre-spread era and overstates the
+    # current instrument's capture ~4.4x; the KPI would have read +15.78c
+    # instead of +3.48c per one-sided fill. The RATES still come from the
+    # rule's own decisions; the dashboard KPI is completion_rate x gain -
+    # exit_rate x cost.
+    pairs_complete_gain_cents: float = 3.68
+    pairs_exit_cost_cents: float = 3.89
 
     # --- experiment end criteria (decisive test of the maker mechanism) -----
     # Phase A (census): observe this many DISTINCT live markets and measure how

@@ -15,11 +15,12 @@ _HEAD = """
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Geist+Mono:wght@400;500;600;700&display=swap">
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="/capital.js"></script>
 <style>
   /* Design tokens -- the operator-approved desk palette, codified as one
      system instead of scattered arbitrary values. Big Shoulders Display
      (a condensed industrial grotesque, the visual language of odds boards)
-     carries the identity; IBM Plex Mono carries every number and label. */
+     carries the identity; Geist Mono carries every number and label. */
   :root{
     color-scheme:dark;
     --ink:#080C14;      /* canvas */
@@ -95,13 +96,188 @@ _HEAD = """
   .tip-pop .tip-k{display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:6px;}
   .tip-pop .tip-t{display:block;font-size:11px;line-height:1.65;color:#94A3B8;font-weight:400;letter-spacing:0;text-transform:none;}
   .tip-wrap:hover .tip-pop,.tip-wrap:focus-within .tip-pop{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);}
+  /* The call is a split-flap instrument: when the verdict word changes, the
+     old letter halves flap away and the new halves flip in from behind --
+     the desk's only question answered with an odds-board commit. Plays only
+     on a word change; the hinge is static otherwise; off for reduced motion
+     (the JS renders plain text there instead). */
+  .flap{position:relative;display:inline-block;width:.62em;height:1em;overflow:hidden;vertical-align:bottom;perspective:240px;}
+  .flap-word{display:inline-flex;align-items:flex-end;}
+  .flap-gap{width:.35em;}
+  .flap+.flap{margin-left:.08em;}
+  .flap-top,.flap-bottom{position:absolute;left:0;right:0;height:50%;overflow:hidden;}
+  .flap-top{top:0;}
+  .flap-bottom{bottom:0;}
+  .flap-top .flap-o,.flap-top .flap-n,.flap-bottom .flap-o,.flap-bottom .flap-n{position:absolute;left:0;right:0;display:block;line-height:1;text-align:center;white-space:nowrap;}
+  .flap-top .flap-o,.flap-top .flap-n{top:0;}
+  .flap-bottom .flap-o,.flap-bottom .flap-n{top:-0.5em;}
+  .flap-o{z-index:2;}
+  .flap.flipping .flap-top .flap-o{animation:flap-top-out .16s ease-in both;transform-origin:top;}
+  .flap.flipping .flap-bottom .flap-o{animation:flap-bot-out .16s ease-in both;animation-delay:.16s;transform-origin:bottom;}
+  .flap.flipping .flap-bottom .flap-n{animation:flap-bot-in .16s ease-out both;animation-delay:.16s;transform-origin:bottom;}
+  @keyframes flap-top-out{from{transform:rotateX(0)}to{transform:rotateX(-90deg)}}
+  @keyframes flap-bot-out{from{transform:rotateX(0)}to{transform:rotateX(90deg)}}
+  @keyframes flap-bot-in{from{transform:rotateX(90deg)}to{transform:rotateX(0)}}
   @media (prefers-reduced-motion: reduce){
-    .sh-rise,.pulse-live,.flash-up,.flash-down,.status-in,.health-pulse,.warn-bar{animation:none;}
+    .sh-rise,.pulse-live,.flash-up,.flash-down,.status-in,.health-pulse,.warn-bar,.flap.flipping .flap-top .flap-o,.flap.flipping .flap-bottom .flap-o,.flap.flipping .flap-bottom .flap-n{animation:none;}
     .sh-fade,.sh-chev,main.sh-refreshing section,#drawer,#drawer-backdrop,.tip-pop{transition:none;}
   }
   ::-webkit-scrollbar{height:8px;width:8px;}
   ::-webkit-scrollbar-thumb{background:var(--line);}
 </style>
+"""
+
+
+# The capital-since-inception widget, shared by BOTH pages via a single
+# /capital.js route -- the one piece of JS the landing and the dashboard
+# hold in common (each page otherwise stays a self-contained copy, matching
+# how fmtUsd/fmtPct are already duplicated per page). Self-contained: it
+# takes the summary and the settled rows explicitly, renders the panel into
+# any container, and wires its own view toggle.
+_CAPITAL_JS = r"""
+// ---------- capital since inception (shared widget) ----------
+// An equity curve built from the REAL closed positions (each exit's ts +
+// pnl) stacked on the starting bankroll. Open positions are not marked to
+// market in the Realized view -- this desk keeps realized and unrealized
+// as separate ledgers. The Total view marks them at the float actually
+// recorded once per sweep (api_summary.float_history): a true historical
+// series where the marks exist, falling back to today's float where they
+// don't (a DB with no marks yet). No new endpoint: the summary already
+// carries the marks.
+let CAP_VIEW = "realized";
+let CAPITAL_TARGET = null;
+let CAPITAL_DATA = { s: null, rows: [] };
+
+function fmtShortDate(ts){
+  if (!ts) return "--";
+  // Explicit locale: the page is lang="en" and the dates must not follow
+  // the operator's browser locale (the numbers already pass "en-US").
+  return new Date(ts * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function capitalSeries(rows, bankroll, marks, floatNow){
+  const sorted = rows.slice().sort((a, b) => a.ts - b.ts);
+  const ms = (marks || []).slice().sort((a, b) => a.ts - b.ts);
+  const useTotal = CAP_VIEW === "total";
+  const pts = [];
+  let eq = bankroll;
+  let float = 0;
+  let mi = 0;
+  // Fold in every mark up to time t. Each recorded mark becomes a point at
+  // its own ts -- the equity the desk would have read at that moment, with
+  // the realized P&L banked so far plus the float that was actually open.
+  // Marks carry no points in the Realized view (float is always zero there).
+  const advanceMarks = (t) => {
+    while (mi < ms.length && ms[mi].ts <= t){
+      float = ms[mi].unrealized_usd || 0;
+      if (useTotal) pts.push({ ts: ms[mi].ts, v: eq + float });
+      mi++;
+    }
+  };
+  for (const r of sorted){
+    advanceMarks(r.ts);
+    eq += (r.pnl || 0);
+    pts.push({ ts: r.ts, v: useTotal ? eq + float : eq });
+  }
+  // Trailing marks after the last close: the curve keeps stepping with the
+  // float that was open, ending on the most recent recorded mark.
+  while (mi < ms.length){
+    float = ms[mi].unrealized_usd || 0;
+    if (useTotal) pts.push({ ts: ms[mi].ts, v: eq + float });
+    mi++;
+  }
+  // No recorded marks yet (a DB the fleet has not swept since this shipped):
+  // fall back to shifting the whole trajectory by today's open float, which
+  // is what the Total view did before the marks series existed.
+  if (useTotal && ms.length === 0 && pts.length && floatNow){
+    for (const p of pts) p.v += floatNow;
+  }
+  return { pts, bankroll, now: Math.floor(Date.now() / 1000),
+           label: useTotal ? "Total equity since inception" : "Capital since inception" };
+}
+
+function capitalChartSvg(ser){
+  const { pts, bankroll, now } = ser;
+  const W = 560, H = 200, padL = 52, padR = 14, padT = 16, padB = 24;
+  const t0 = pts[0].ts;
+  const t1 = Math.max(now, pts[pts.length - 1].ts);
+  const span = Math.max(1, t1 - t0);
+  const lo = Math.min(bankroll, ...pts.map(p => p.v));
+  const hi = Math.max(bankroll, ...pts.map(p => p.v));
+  const pad = Math.max((hi - lo) * 0.12, 1);
+  const minY = lo - pad, maxY = hi + pad;
+  const x = v => padL + ((v - t0) / span) * (W - padL - padR);
+  const y = v => padT + (1 - (v - minY) / (maxY - minY)) * (H - padT - padB);
+  const grid = [0, 1, 2].map(i => {
+    const v = minY + ((maxY - minY) * (2 - i)) / 2;
+    return `<line x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}" stroke="#1F2937" stroke-width="1"/>` +
+      `<text x="${padL - 6}" y="${y(v) + 3}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Geist Mono">$${Math.round(v).toLocaleString("en-US")}</text>`;
+  }).join("");
+  const path = pts.map((p, i) => `${i ? "L" : "M"} ${x(p.ts).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
+  const area = `${path} L ${x(pts[pts.length - 1].ts).toFixed(1)} ${H - padB} L ${x(t0).toFixed(1)} ${H - padB} Z`;
+  const up = pts[pts.length - 1].v >= bankroll;
+  const line = up ? "#10B981" : "#EF4444";
+  const last = pts[pts.length - 1];
+  return `<svg viewBox="0 0 ${W} ${H}" class="w-full" style="height:${H}px" role="img" aria-label="${ser.label}: from $${bankroll.toFixed(0)} to $${last.v.toFixed(2)}">
+    ${grid}
+    <line x1="${x(t0)}" x2="${x(t1)}" y1="${y(bankroll)}" y2="${y(bankroll)}" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3 3"/>
+    <path d="${area}" fill="${line}" fill-opacity="0.08" stroke="none"/>
+    <path d="${path}" fill="none" stroke="${line}" stroke-width="1.6"/>
+    <circle cx="${x(last.ts).toFixed(1)}" cy="${y(last.v).toFixed(1)}" r="3.5" fill="#111827" stroke="${line}" stroke-width="2"/>
+    <text x="${x(t0)}" y="${H - 6}" font-size="10" fill="#9CA3AF" font-family="Geist Mono">${fmtShortDate(t0)}</text>
+    <text x="${W - padR}" y="${H - 6}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Geist Mono">${fmtShortDate(now)}</text>
+    <text x="${x(t0) + 4}" y="${y(bankroll) - 4}" font-size="9" fill="#94A3B8" font-family="Geist Mono">start $${Math.round(bankroll).toLocaleString("en-US")}</text>
+  </svg>`;
+}
+
+function capitalPanelHtml(s, rows){
+  const bankroll = (s && s.bankroll_usd) || 0;
+  if (!rows || !rows.length){
+    return `<div class="border border-[#1F2937] bg-[#090D16] px-3 py-4 mono text-[12px] leading-5 text-[#9CA3AF]">No closes recorded yet &mdash; the capital curve starts with the first settled position.</div>`;
+  }
+  const total = CAP_VIEW === "total";
+  const marks = (s && s.float_history) || [];
+  const ser = capitalSeries(rows, bankroll, marks, s && s.unrealized_usd);
+  const last = ser.pts[ser.pts.length - 1];
+  const delta = last.v - bankroll;
+  const up = delta >= 0;
+  const toggleBtn = (id, label) => `<button type="button" data-capview="${id}" aria-pressed="${CAP_VIEW === id}" class="h-6 px-2.5 mono text-[11px] font-bold tracking-[0.14em] uppercase border transition-colors ${CAP_VIEW === id ? "bg-[#10B981] text-white border-[#10B981]" : "bg-[#090D16] text-[#94A3B8] border-[#1F2937] hover:text-[#F9FAFB] hover:border-[#10B981]/50"}">${label}</button>`;
+  return `
+    <div class="flex items-baseline gap-2.5 flex-wrap">
+      <div class="mono text-[28px] font-bold leading-none tracking-[-0.02em]" data-kpi="capital_now" data-v="${last.v.toFixed(2)}">$${last.v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+      <div class="mono text-[12px] font-semibold px-2 py-1 border ${up ? "bg-[#10B981]/10 border-[#10B981]/20 text-[#10B981]" : "bg-[#EF4444]/10 border-[#EF4444]/20 text-[#EF4444]"}">${up ? "+" : ""}$${Math.abs(delta).toFixed(2)} since inception</div>
+    </div>
+    <div class="mt-2 flex items-center justify-between gap-3 flex-wrap">
+      <div class="flex items-center gap-1" role="group" aria-label="Capital view">
+        ${toggleBtn("realized", "Realized")}
+        ${toggleBtn("total", "Total")}
+      </div>
+      <div class="mono text-[11px] tracking-widest uppercase text-[#9CA3AF]">Bankroll $${Math.round(bankroll).toLocaleString("en-US")} &middot; ${rows.length} closes</div>
+    </div>
+    <div class="mt-3">${capitalChartSvg(ser)}</div>
+    <div class="mt-1.5 mono text-[11px] leading-4 text-[#9CA3AF]">${total
+      ? (marks.length
+          ? `Total equity: the realized curve marked by the open float recorded once per sweep, so each point reflects the float that was actually open then. Before the first recorded mark the line carries no float shift.`
+          : `Total equity: the realized curve shifted by today's open float (${fmtUsd(s.unrealized_usd)}). No per-sweep float marks recorded yet, so this is the trajectory marked at current float, not a per-point mark.`)
+      : `Cumulative realized P&amp;L on top of the starting bankroll. Open positions stay a separate ledger &mdash; not marked to market here.`}</div>`;
+}
+
+function renderCapitalPanel(el, s, rows){
+  if (!el) return;
+  CAPITAL_TARGET = el.id;
+  CAPITAL_DATA = { s, rows };
+  el.innerHTML = capitalPanelHtml(s, rows);
+}
+
+// The view toggle re-renders the panel in place; the choice survives the
+// 15s poll because CAP_VIEW is module state.
+document.addEventListener("click", (e) => {
+  const capv = e.target.closest("[data-capview]");
+  if (capv && capv.getAttribute("data-capview") !== CAP_VIEW){
+    CAP_VIEW = capv.getAttribute("data-capview");
+    if (CAPITAL_TARGET) renderCapitalPanel(document.getElementById(CAPITAL_TARGET), CAPITAL_DATA.s, CAPITAL_DATA.rows);
+  }
+});
 """
 
 
@@ -169,14 +345,14 @@ LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
           <div id="hero-realized-rebate" class="mono text-[12px] text-[#9CA3AF] mt-1">&nbsp;</div>
         </div>
         <div class="p-5 bg-[#111827] relative overflow-hidden">
-          <div class="absolute inset-x-0 top-0 h-[2px] bg-[#3B82F6]"></div>
-          <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#9CA3AF] flex items-center gap-2">Unrealized P&amp;L <span class="ml-auto px-1.5 py-0.5 bg-[#1F2937] border border-[#3B82F6]/30 text-[#3B82F6] text-[12px] tracking-widest uppercase font-semibold">Separate</span></div>
-          <div id="hero-unrealized" class="mono text-[26px] font-bold tracking-tight leading-none mt-3 text-[#3B82F6]">&hellip;</div>
-          <div id="hero-unrealized-sub" class="mono text-[13px] text-[#9CA3AF] mt-1">&nbsp;</div>
+          <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
+          <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#10B981] flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Capital Since Inception</div>
+          <!-- Filled by the shared /capital.js widget (renderCapitalPanel). -->
+          <div id="capital-panel" class="mt-2.5"></div>
         </div>
         <div class="col-span-2 border-t border-[#1F2937] px-5 py-3 flex items-center justify-between bg-[#090D16]">
-          <span class="mono text-[13px] tracking-[0.12em] uppercase text-[#9CA3AF]">Two independent valuations &mdash; kept separate by design</span>
-          <span class="hidden sm:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF] border border-[#1F2937] bg-[#111827] px-2 py-1">Never combined</span>
+          <span class="mono text-[13px] tracking-[0.12em] uppercase text-[#9CA3AF]">Realized P&amp;L and the capital curve it has built</span>
+          <span class="hidden sm:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF] border border-[#1F2937] bg-[#111827] px-2 py-1">Since inception</span>
         </div>
       </div>
 
@@ -266,13 +442,13 @@ async function load(){
   let s;
   try {
     const r = await fetch("/api/summary");
-    if (!r.ok) throw new Error("HTTP " + r.status);
+    if (!r.ok){ let body = ""; try { body = (await r.text()).slice(0, 120); } catch(_){} throw new Error("HTTP " + r.status + (body ? " — " + body : "")); }
     s = await r.json();
   } catch (e) {
     const nav = document.getElementById("nav-status");
     nav.innerHTML = `<span class="size-1.5 bg-[#EF4444]"></span><span class="tracking-[0.12em] uppercase text-[13px]">Offline</span>`;
     document.getElementById("hero-realized").textContent = "--";
-    document.getElementById("hero-unrealized").textContent = "--";
+    renderCapitalPanel(document.getElementById("capital-panel"), null, []);
     const list = document.getElementById("verdict-list");
     list.innerHTML = `<div class="p-4 mono text-[13px] text-[#EF4444]">Could not load the live summary.</div>`;
     const detail = document.createElement("div");
@@ -287,9 +463,10 @@ async function load(){
     (s.realized_pct===null?"":fmtPct(s.realized_pct)+" ") + "on " + (s.realized_cost||0).toFixed(0) + " committed";
   document.getElementById("hero-realized-rebate").textContent =
     fmtUsd(s.rebate_usd) + " rebates = " + fmtUsd(s.total_liquidation_usd) + " total liquidation P&L";
-  document.getElementById("hero-unrealized").textContent = fmtUsd(s.unrealized_usd);
-  document.getElementById("hero-unrealized-sub").textContent =
-    s.active_positions + " active position" + (s.active_positions===1?"":"s");
+  // The capital-since-inception curve: same settled closes the dashboard
+  // uses, rendered by the shared /capital.js widget.
+  const st = await fetch("/api/settled").then(r => r.json()).catch(() => null);
+  renderCapitalPanel(document.getElementById("capital-panel"), s, (st && st.settled) || []);
 
   const nav = document.getElementById("nav-status");
   nav.innerHTML = `<span class="size-1.5 ${s.fleet_alive ? 'bg-[#10B981] animate-pulse' : 'bg-[#F59E0B]'}"></span>
@@ -375,7 +552,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
         <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">BOOK</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Positions <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
-      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Realized and Unrealized P&amp;L &mdash; kept separate</span>
+      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Realized P&amp;L &mdash; capital since inception</span>
     </button>
     <div id="sec-positions" class="sh-fade grid grid-cols-12 gap-0"></div>
   </section>
@@ -453,7 +630,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   <div class="bg-[#111827] border border-[#1F2937] max-w-[720px] w-full max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between px-4 h-11 border-b border-[#1F2937]">
       <span id="dist-modal-title" class="mono text-[13px] tracking-[0.14em] uppercase font-semibold"></span>
-      <button onclick="closeDistModal()" class="size-7 border border-[#1F2937] grid place-items-center hover:bg-[#1F2937] transition-colors mono text-[13px]">&times;</button>
+      <button id="dist-modal-close" onclick="closeDistModal()" class="size-7 border border-[#1F2937] grid place-items-center hover:bg-[#1F2937] transition-colors mono text-[13px]" aria-label="Close expanded chart">&times;</button>
     </div>
     <div id="dist-modal-body" class="p-5"></div>
   </div>
@@ -520,6 +697,8 @@ document.addEventListener("click", (e) => {
   const dr = e.target.closest("[data-drawer]");
   if (dr){ openDrawer(dr.getAttribute("data-drawer")); return; }
   // Quick-filter chips re-render the market table in place -- no reload.
+  // (The capital chart's view toggle is handled by the shared /capital.js
+  // widget, which re-renders only #capital-panel.)
   const fcat = e.target.closest("[data-fcat]");
   if (fcat){ FILTERS.cat = fcat.getAttribute("data-fcat"); renderMarkets(LAST_MARKETS); tickAgeBadges(); return; }
   const fst = e.target.closest("[data-fst]");
@@ -551,9 +730,41 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// Tab stays inside the open drawer so focus can't wander behind the modal.
+function trapDrawerFocus(e){
+  const d = document.getElementById("drawer");
+  const f = d.querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])');
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  const out = !d.contains(document.activeElement);
+  if (e.shiftKey && (document.activeElement === first || out)){ e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || out)){ e.preventDefault(); first.focus(); }
+}
+
+function distModalOpen(){
+  const m = document.getElementById("dist-modal");
+  return m && !m.classList.contains("hidden");
+}
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && DRAWER_SLUG) closeDrawer();
+  if (e.key === "Escape" && distModalOpen()) closeDistModal();
+  if (e.key === "Tab" && DRAWER_SLUG) trapDrawerFocus(e);
+  if (e.key === "Tab" && !DRAWER_SLUG && distModalOpen()) trapDistFocus(e);
 });
+
+// Tab stays inside the open distribution modal so focus can't wander behind
+// it; the drawer has its own trap (above). Escape is handled by the global
+// handler, so the per-open listener is not needed.
+function trapDistFocus(e){
+  const m = document.getElementById("dist-modal");
+  const f = m.querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])');
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  const out = !m.contains(document.activeElement);
+  if (e.shiftKey && (document.activeElement === first || out)){ e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || out)){ e.preventDefault(); first.focus(); }
+}
 
 // ---------- SVG chart builders ----------
 function bellCurveSvg(opts){
@@ -636,7 +847,7 @@ function expandedBellCurveSvg(opts){
   let zeroLine = "";
   if(zero!==undefined && zero>=min && zero<=max){
     zeroLine = `<line x1="${x(zero).toFixed(1)}" x2="${x(zero).toFixed(1)}" y1="${padT}" y2="${baseY}" stroke="#EF4444" stroke-width="1.25" stroke-dasharray="4 3"/>
-      <text x="${x(zero).toFixed(1)}" y="${padT-4}" text-anchor="middle" font-size="10" fill="#EF4444" font-family="JetBrains Mono" font-weight="700">ZERO</text>`;
+      <text x="${x(zero).toFixed(1)}" y="${padT-4}" text-anchor="middle" font-size="10" fill="#EF4444" font-family="Geist Mono" font-weight="700">ZERO</text>`;
   }
   const svg = `<svg viewBox="0 0 ${W} ${H}" class="w-full" style="height:${H}px">
     ${ticks.map(t=>`<line x1="${x(t).toFixed(1)}" x2="${x(t).toFixed(1)}" y1="${padT}" y2="${baseY}" stroke="#1F2937" stroke-width="1"/>`).join("")}
@@ -648,9 +859,9 @@ function expandedBellCurveSvg(opts){
     ${zeroLine}
     <line x1="${x(mean).toFixed(1)}" x2="${x(mean).toFixed(1)}" y1="${yS(Math.exp(0)).toFixed(1)}" y2="${baseY}" stroke="#F9FAFB" stroke-width="1" stroke-dasharray="2 3" opacity="0.6"/>
     <circle cx="${x(mean).toFixed(1)}" cy="${yS(Math.exp(0)).toFixed(1)}" r="5" fill="#111827" stroke="#F9FAFB" stroke-width="2"/>
-    <text x="${x(mean).toFixed(1)}" y="${(yS(Math.exp(0))-10).toFixed(1)}" text-anchor="middle" font-size="11" fill="#F9FAFB" font-family="JetBrains Mono" font-weight="700">MEAN ${fmtV(mean)}</text>
-    ${ticks.map(t=>`<text x="${x(t).toFixed(1)}" y="${baseY+16}" text-anchor="middle" font-size="10" fill="#9CA3AF" font-family="JetBrains Mono">${fmtV(t)}</text>`).join("")}
-    <text x="${padL-8}" y="${padT+4}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="JetBrains Mono">&#8593; likelihood</text>
+    <text x="${x(mean).toFixed(1)}" y="${(yS(Math.exp(0))-10).toFixed(1)}" text-anchor="middle" font-size="11" fill="#F9FAFB" font-family="Geist Mono" font-weight="700">MEAN ${fmtV(mean)}</text>
+    ${ticks.map(t=>`<text x="${x(t).toFixed(1)}" y="${baseY+16}" text-anchor="middle" font-size="10" fill="#9CA3AF" font-family="Geist Mono">${fmtV(t)}</text>`).join("")}
+    <text x="${padL-8}" y="${padT+4}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Geist Mono">&#8593; likelihood</text>
   </svg>`;
   return svg + ciLabel;
 }
@@ -660,15 +871,19 @@ let LAST_STATS = null;
 function closeDistModal(){
   document.getElementById("dist-modal").classList.add("hidden");
   document.getElementById("dist-modal").classList.remove("flex");
+  if (DIST_LAST_FOCUS && DIST_LAST_FOCUS.focus) DIST_LAST_FOCUS.focus();
+  DIST_LAST_FOCUS = null;
 }
 
 function openDistModal(kind){
   if(!LAST_STATS) return;
   const s = LAST_STATS;
-  document.addEventListener("keydown", function esc(e){ if(e.key==="Escape"){ closeDistModal(); document.removeEventListener("keydown", esc); } });
+  DIST_LAST_FOCUS = document.activeElement;
   const modal = document.getElementById("dist-modal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
+  const closeBtn = document.getElementById("dist-modal-close");
+  if (closeBtn) closeBtn.focus();
   const title = document.getElementById("dist-modal-title");
   const body = document.getElementById("dist-modal-body");
   if(kind === "ci"){
@@ -779,6 +994,11 @@ function orderDepthHtml(m){
 }
 
 // ---------- section renderers ----------
+// The capital-since-inception panel (hero second reading) is the SHARED
+// widget served from /capital.js -- see _CAPITAL_JS. It renders into
+// #capital-panel below; the toggle state lives in that script and survives
+// the 15s poll. The curve is built from the REAL closed positions already
+// in settledState.rows, stacked on the starting bankroll.
 function renderPositions(s){
   document.getElementById("sec-positions").innerHTML = `
     <div class="col-span-12 lg:col-span-6 p-6 lg:p-7 border-b lg:border-b-0 lg:border-r border-[#1F2937] relative">
@@ -799,15 +1019,10 @@ function renderPositions(s){
       </div>
     </div>
     <div class="col-span-12 lg:col-span-6 p-6 lg:p-7 relative border-l border-[#1F2937]">
-      <div class="absolute top-0 left-0 w-full h-[2px] bg-[#3B82F6]"></div>
-      <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#3B82F6] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#3B82F6]"></span> Unrealized P&amp;L &mdash; Open Positions</div>
-      <div class="mt-6 flex items-baseline gap-3">
-        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]" data-kpi="hero_unrealized" data-v="${s.unrealized_usd}" data-rollup data-fmt="usd">${fmtPnlHTML(s.unrealized_usd)}</div>
-        <div class="mono text-[12px] tracking-widest uppercase px-2 py-1 bg-[#3B82F6] border border-[#1F2937]">Unrealized</div>
-      </div>
-      <div class="mono text-[13px] tracking-widest uppercase text-[#9CA3AF] mt-1">Floating midpoint on ${s.committed_open_usd.toFixed(0)} &middot; ${s.active_positions} active positions</div>
-      <div class="mt-3 bg-[#111827] border border-[#1F2937] px-3 py-2 mono text-[12px] leading-5 text-[#9CA3AF]">Realized ${fmtUsd(s.realized_usd)} and Unrealized ${fmtUsd(s.unrealized_usd)} are separate ledgers. Never summed.</div>
+      <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#10B981] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Capital Since Inception</div>
+      <div id="capital-panel" class="mt-4"></div>
     </div>`;
+  renderCapitalPanel(document.getElementById("capital-panel"), s, settledState.rows);
 }
 
 function renderVerdict(s){
@@ -1125,14 +1340,14 @@ const STATE_PILL = {
 };
 
 function classifyStatus(r){
-  if (r.err || r.why) return { bucket: "BLOCKED", label: "Blocked" };
-  if ((r.paired||0) > 0 && (r.naked_sh||0) > 0) return { bucket: "FILLED", label: "Filled" };
-  if ((r.paired||0) > 0) return { bucket: "MERGED", label: "Merged" };
-  if ((r.naked_sh||0) > 0) return { bucket: "FILLED", label: "Filled" };
-  if ((r.quotes||[]).length) return { bucket: "QUOTING", label: "Quoting" };
-  if (r.merge_why) return { bucket: "MERGED", label: "Merged" };
-  if (r.close_why) return { bucket: "CLOSED", label: "Closed" };
-  return { bucket: "INACTIVE", label: "Inactive" };
+  if (r.err || r.why) return { bucket: "BLOCKED" };
+  if ((r.paired||0) > 0 && (r.naked_sh||0) > 0) return { bucket: "FILLED" };
+  if ((r.paired||0) > 0) return { bucket: "MERGED" };
+  if ((r.naked_sh||0) > 0) return { bucket: "FILLED" };
+  if ((r.quotes||[]).length) return { bucket: "QUOTING" };
+  if (r.merge_why) return { bucket: "MERGED" };
+  if (r.close_why) return { bucket: "CLOSED" };
+  return { bucket: "INACTIVE" };
 }
 
 function getStatePill(cls){
@@ -1154,8 +1369,12 @@ function stateDots(events){
     dots.map(e => `<span class="size-1.5 rounded-full" style="background:${EVENT_COLOR[e.kind] || "#94A3B8"}"></span>`).join("") + `</span>`;
 }
 
-// Quick filter bar state. `state === "HOLD"` means any market holding
-// inventory (Filled or Merged) -- the operator's "Has Active Inventory".
+// Quick filter bar state. `state === "HOLD"` means any market actually
+// holding inventory -- the operator's "Has Active Inventory". Deliberately
+// matched on the inventory properties, NOT the status bucket: classifyStatus
+// sends an err/why market straight to BLOCKED before it ever checks
+// inventory, so a blocked market that is still carrying a position would
+// otherwise vanish from the operator's inventory view.
 let FILTERS = { cat: "all", state: "all" };
 const STATE_FILTERS = [
   { id: "all",     label: "All States" },
@@ -1167,7 +1386,7 @@ const STATE_FILTERS = [
 function marketMatches(r, cls){
   if (FILTERS.cat !== "all" && r.category !== FILTERS.cat) return false;
   if (FILTERS.state === "all") return true;
-  if (FILTERS.state === "HOLD") return cls.bucket === "FILLED" || cls.bucket === "MERGED";
+  if (FILTERS.state === "HOLD") return (r.paired || 0) > 0 || (r.naked_sh || 0) > 0;
   return cls.bucket === FILTERS.state;
 }
 
@@ -1338,7 +1557,7 @@ function renderFunnel(f){
 // ---------- boot ----------
 async function fetchJSON(url){
   const r = await fetch(url);
-  if (!r.ok) throw new Error("HTTP " + r.status);
+  if (!r.ok){ let body = ""; try { body = (await r.text()).slice(0, 120); } catch(_){} throw new Error("HTTP " + r.status + (body ? " — " + body : "")); }
   return r.json();
 }
 
@@ -1369,6 +1588,28 @@ function tip(key, body){
 // The verdict words are the real go-live statuses from stats.py.
 const PULSE = { base: null, alive: false };
 
+// Split-flap letters for the call word. The previous word's letters stay in
+// the .flap-o layers, so a verdict change plays as a mechanical odds-board
+// flip (old halves flap away, new halves flip in). Same word or first paint:
+// plain display type. Reduced motion: plain text, no flap layers at all.
+let HINGE_WORD = null;
+
+function hingeWordHtml(word, color){
+  const flip = MOTION_OK && HINGE_WORD && HINGE_WORD !== word;
+  const oldChars = [...(HINGE_WORD || "")];
+  const cells = [...word].map((ch, i) => {
+    if (ch === " ") return `<span class="flap-gap">&nbsp;</span>`;
+    const o = (flip && oldChars[i] !== undefined && oldChars[i] !== ch) ? esc(oldChars[i]) : "";
+    const n = esc(ch);
+    return `<span class="flap${o ? " flipping" : ""}" aria-hidden="true">` +
+      `<span class="flap-top"><span class="flap-n">${n}</span>${o ? `<span class="flap-o">${o}</span>` : ""}</span>` +
+      `<span class="flap-bottom"><span class="flap-n">${n}</span>${o ? `<span class="flap-o">${o}</span>` : ""}</span></span>`;
+  }).join("");
+  HINGE_WORD = word;
+  return `<span class="sr-only">${esc(word)}</span>` +
+    `<span class="flap-word font-display text-[28px] sm:text-[36px] leading-none font-bold" style="color:${color}" aria-hidden="true">${cells}</span>`;
+}
+
 function renderHinge(s){
   PULSE.base = s.now || Math.floor(Date.now()/1000);
   PULSE.alive = !!s.fleet_alive;
@@ -1386,7 +1627,7 @@ function renderHinge(s){
   el.innerHTML = `
     <div class="flex items-center gap-x-3 gap-y-1 flex-wrap min-w-0">
       <span class="mono text-[11px] tracking-[0.22em] uppercase text-[#9CA3AF] shrink-0">The call</span>
-      <span class="font-display text-[24px] sm:text-[28px] leading-none font-bold tracking-[0.04em]" style="color:${call.color}">${esc(call.word)}</span>
+      ${hingeWordHtml(call.word, call.color)}
     </div>
     <div class="flex items-center gap-4 mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF]">
       <span class="flex items-center gap-2 border border-[#1F2937] bg-[#090D16] px-2.5 py-1">
@@ -1494,6 +1735,7 @@ function animateChanges(){
 // execution log. Pure frontend: the row object and the settled exits are
 // already in memory from the last poll, so nothing new is fetched.
 let DRAWER_SLUG = null;
+let DIST_LAST_FOCUS = null;
 let LAST_MARKETS = [];
 
 function openDrawer(slug){
@@ -1599,8 +1841,12 @@ function renderSummary(s){
   renderEvidence(s);
   // Scope keeps one thing the panels don't: honest freshness. The status,
   // the settled sample, and the lower bound each have a single home above.
+  // "Data as of" is the fleet payload's load time (api_summary.fleet_ts), NOT
+  // the response time -- the payload inside can be up to the 8s cache TTL
+  // older than the response that carries it. Falls back to s.now for a
+  // process whose cache has never filled.
   document.getElementById("scope-tiles").innerHTML = `
-    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">${fmtClock(s.now)}</div></div>`;
+    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">${fmtClock(s.fleet_ts || s.now)}</div></div>`;
 }
 
 async function refresh(){

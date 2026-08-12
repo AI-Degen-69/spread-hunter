@@ -17,6 +17,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -30,13 +32,13 @@ sys.path.insert(0, str(ROOT))
 # single-bot pipeline). Importing it here would point at the archive
 # snapshot, which is not what this regression test is for.
 from server.fleet_dash import PAGE as FLEET_PAGE  # noqa: E402
-from server.spread_dash_html import DASHBOARD_HTML  # noqa: E402
+from server.spread_dash_html import DASHBOARD_HTML, LANDING_HTML  # noqa: E402
 
 NODE = shutil.which("node")
 
 # One page, one flatten, one parse: SyntaxError in any <script> renders a
 # fully blank dashboard, not a degraded one.
-PAGES = {"fleet": FLEET_PAGE, "spread": DASHBOARD_HTML}
+PAGES = {"fleet": FLEET_PAGE, "spread": DASHBOARD_HTML, "landing": LANDING_HTML}
 
 
 def _script_blocks(page: str | None = None) -> list[str]:
@@ -206,6 +208,13 @@ def test_phase4_table_badges_filters_and_age_applied():
     assert "reason_code" in page
     # Filter bar: category + state chips, clear, no-reload filtering.
     assert "function marketMatches(r, cls)" in page
+    # "Has Active Inventory" matches on the inventory properties, NOT the
+    # status bucket: classifyStatus sends an err/why market straight to
+    # BLOCKED before checking inventory, so a blocked market that is still
+    # carrying a position must stay visible under this filter.
+    assert ('FILTERS.state === "HOLD"' in page
+            and "return (r.paired || 0) > 0 || (r.naked_sh || 0) > 0" in page)
+    assert 'cls.bucket === "FILLED" || cls.bucket === "MERGED"' not in page
     assert "data-fcat=" in page
     assert "data-fst=" in page
     assert "data-fclear" in page
@@ -217,6 +226,208 @@ def test_phase4_table_badges_filters_and_age_applied():
     assert "data-age=" in page
     assert 'opacity = stale ? "0.6"' in page
     assert "STALE " in page
+
+
+def test_split_flap_hinge_and_drawer_focus_trap_wired():
+    """Design pass: the decision hinge renders its call as a split-flap
+    instrument -- old letter halves flap away and new halves flip in only
+    when the verdict word actually changes (hingeWordHtml + .flap layers),
+    plain display type on first paint and under reduced motion -- and the
+    market drawer traps Tab focus so it cannot wander behind the modal."""
+    page = DASHBOARD_HTML
+    assert "function hingeWordHtml(word, color)" in page
+    assert "let HINGE_WORD" in page
+    assert "flap.flipping" in page
+    assert "flap-top-out" in page
+    assert "flap-bot-in" in page
+    assert "class=\"flap-gap\"" in page
+    # Reduced motion: the JS renders plain text (no flap layers) and the CSS
+    # stops the flap animations outright.
+    assert "MOTION_OK && HINGE_WORD && HINGE_WORD !== word" in page
+    assert "flap.flipping .flap-top .flap-o" in page
+    assert "function trapDrawerFocus(e)" in page
+    assert 'if (e.key === "Tab" && DRAWER_SLUG) trapDrawerFocus(e);' in page
+
+
+def test_capital_since_inception_chart_replaces_hero_unrealized():
+    """The Unrealized tiles in both heroes were replaced by a
+    capital-since-inception panel -- a SHARED widget served from
+    /capital.js, rendered by the dashboard from settledState.rows and by the
+    landing from its own /api/settled fetch, on top of the starting
+    bankroll. Open positions stay a separate ledger."""
+    page = DASHBOARD_HTML
+    landing = LANDING_HTML
+    assert "Capital Since Inception" in page
+    assert "Capital Since Inception" in landing
+    assert 'id="capital-panel"' in page and 'id="capital-panel"' in landing
+    assert ('renderCapitalPanel(document.getElementById("capital-panel"), '
+            's, settledState.rows)' in page)
+    assert ('renderCapitalPanel(document.getElementById("capital-panel"), '
+            's, (st && st.settled) || [])' in landing)
+    assert "Realized P&amp;L &mdash; capital since inception" in page
+    assert "Realized P&amp;L and the capital curve it has built" in landing
+    assert '<script src="/capital.js"></script>' in page
+    assert '<script src="/capital.js"></script>' in landing
+    assert 'font-family="Geist Mono"' in page
+    # The old unrealized tiles are gone from both pages.
+    assert 'data-kpi="hero_unrealized"' not in page
+    assert "hero-unrealized" not in landing
+    assert "Two independent valuations" not in landing
+
+
+def test_capital_widget_served_and_parses(tmp_path):
+    """The shared capital widget is served from /capital.js, parses as JS,
+    and carries the view-toggle machinery (CAP_VIEW, data-capview,
+    aria-pressed) plus the total-equity honesty note."""
+    from server.spread_dash import app
+    from starlette.testclient import TestClient
+
+    with TestClient(app) as c:
+        r = c.get("/capital.js")
+    assert r.status_code == 200
+    src = r.text
+    assert "function capitalSeries(rows, bankroll, marks, floatNow)" in src
+    assert "function capitalChartSvg(ser)" in src
+    assert 'data-kpi="capital_now"' in src
+    assert "let CAP_VIEW = \"realized\"" in src
+    assert 'data-capview="${id}"' in src
+    assert 'aria-label="Capital view"' in src
+    assert 'aria-pressed="${CAP_VIEW === id}"' in src
+    assert "float_history" in src  # the Total view reads per-sweep marks here
+    assert "recorded once per sweep" in src  # marks exist -> true historical series
+    assert "No per-sweep float marks recorded yet" in src  # no marks -> fallback note
+    assert "Total equity since inception" in src
+    assert "No closes recorded yet" in src
+    assert "not marked to market here" in src
+    if NODE:
+        f = tmp_path / "capital.js"
+        f.write_text(src, encoding="utf-8")
+        r = subprocess.run([NODE, "--check", str(f)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, (
+            f"capital.js does not parse -- a SyntaxError here breaks the "
+            f"landing AND the dashboard:\n{r.stderr}")
+
+
+def test_summary_exposes_float_history():
+    """api_summary carries the float-mark series (fleet-side float_marks,
+    downsampled server-side), so the shared Total equity widget can time-merge
+    it with the settled closes instead of shifting by today's float. Also
+    carries the fleet payload's load time so the "Data as of" tile reports
+    data freshness, not response time."""
+    from server.spread_dash import app
+    from starlette.testclient import TestClient
+
+    with TestClient(app) as c:
+        s = c.get("/api/summary").json()
+    assert "float_history" in s
+    assert isinstance(s["float_history"], list)
+    assert "fleet_ts" in s
+    assert s["fleet_ts"] is None or isinstance(s["fleet_ts"], float)
+    if s["float_history"]:
+        h = s["float_history"][0]
+        assert set(h) == {"ts", "unrealized_usd", "committed_open_usd",
+                          "naked_usd"}
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_capital_widget_float_marks_math(tmp_path):
+    """The Total view time-merges closes with per-sweep float marks: each
+    recorded mark is a point at its own ts (bankroll + realized-so-far + the
+    float that was open then), marks before the first close and after the
+    last close are real points, the Realized view ignores marks entirely, and
+    no marks falls back to shifting the whole curve by today's float."""
+    from server.spread_dash import app
+    from starlette.testclient import TestClient
+
+    with TestClient(app) as c:
+        src = c.get("/capital.js").text
+    harness = """
+// --- realized view: closes only, marks contribute no points ---
+CAP_VIEW = "realized";
+let r = capitalSeries([{ts:100, pnl:10}, {ts:200, pnl:5}], 1000, [
+  {ts:50, unrealized_usd:20}, {ts:150, unrealized_usd:30}, {ts:250, unrealized_usd:10}
+], 0);
+let rp = r.pts.map(p => p.ts + ":" + p.v).join(",");
+if (rp !== "100:1010,200:1015") throw new Error("realized pts: " + rp);
+
+// --- total view: marks time-merge with closes ---
+CAP_VIEW = "total";
+let t = capitalSeries([{ts:100, pnl:10}, {ts:200, pnl:5}], 1000, [
+  {ts:50, unrealized_usd:20}, {ts:150, unrealized_usd:30}, {ts:250, unrealized_usd:10}
+], 0);
+let tp = t.pts.map(p => p.ts + ":" + p.v).join(",");
+if (tp !== "50:1020,100:1030,150:1040,200:1045,250:1025") {
+  throw new Error("total pts: " + tp);
+}
+
+// --- no marks: fall back to shifting the whole curve by today's float ---
+let f = capitalSeries([{ts:100, pnl:10}], 1000, [], 7);
+if (f.pts.length !== 1 || f.pts[0].v !== 1017) {
+  throw new Error("fallback pts: " + JSON.stringify(f.pts));
+}
+"""
+    f = tmp_path / "float_marks_math.js"
+    f.write_text("global.document = { addEventListener(){} };\n" + src + "\n"
+                 + harness, encoding="utf-8")
+    r = subprocess.run([NODE, str(f)], capture_output=True, text=True)
+    assert r.returncode == 0, f"float-marks widget math failed:\n{r.stderr}"
+
+
+def test_cached_single_flight():
+    """Concurrent misses on the same cache key run the loader exactly once;
+    the waiting requests receive the same value, and a failed load clears
+    the in-flight marker so the next request retries instead of deadlocking
+    (coderabbit: prevent duplicate cold-cache loads)."""
+    from server import spread_dash as sd
+
+    key = "t_single_flight"
+    sd._DASH_CACHE.pop(key, None)
+    sd._DASH_LOADING.pop(key, None)
+    calls = []
+
+    def loader():
+        calls.append(time.time())
+        time.sleep(0.2)
+        return {"loaded": len(calls)}
+
+    results = []
+
+    def worker():
+        results.append(sd._cached(key, loader))
+
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1, f"loader ran {len(calls)} times for one key"
+    assert all(r == {"loaded": 1} for r in results)
+
+    # A failed load clears the marker; the next request loads fresh.
+    sd._DASH_CACHE.pop(key, None)
+    sd._DASH_LOADING.pop(key, None)
+    calls.clear()
+
+    def bad():
+        calls.append("bad")
+        raise RuntimeError("boom")
+
+    try:
+        sd._cached(key, bad)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("loader failure should propagate")
+
+    def good():
+        calls.append("good")
+        return {"ok": True}
+
+    # The failure cleared the marker, so the next request loads fresh rather
+    # than deadlocking on a never-set event.
+    assert sd._cached(key, good) == {"ok": True}
+    assert calls == ["bad", "good"]  # failed once, retried exactly once
 
 
 def test_data_change_cues_and_market_drawer_are_wired():

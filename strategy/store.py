@@ -331,6 +331,23 @@ CREATE TABLE IF NOT EXISTS market_gate (
     gate_state TEXT,           -- NORMAL | WIDENED | EXITED
     updated_ts REAL
 );
+
+-- One fleet-wide open-position mark per sweep (the sibling of income_samples):
+-- the unrealized float, the dollars committed, and the naked residue, all
+-- derived exactly as the dashboard derives them at read time. Unlike
+-- market_events (event-shaped: fills, exits, refusals), this is a continuous
+-- time series -- the missing history behind the Total equity view, so that
+-- view can mark the realized curve by the float that was actually open at
+-- each point instead of today's float. Rows older than the retention window
+-- are pruned on the write path (see log_float_mark).
+CREATE TABLE IF NOT EXISTS float_marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    unrealized_usd REAL NOT NULL,
+    committed_open_usd REAL NOT NULL,
+    naked_usd REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fm_ts ON float_marks(ts);
 """
 
 
@@ -526,6 +543,55 @@ def log_income_sample(ts: float, income_day: float, committed: float) -> None:
     with _conn() as c:
         c.execute("INSERT INTO income_samples (ts, income_day, committed) "
                   "VALUES (?,?,?)", (ts, income_day, committed))
+
+
+def log_float_mark(ts: float, unrealized_usd: float,
+                   committed_open_usd: float, naked_usd: float,
+                   prune_before: Optional[float] = None) -> None:
+    """One fleet-wide open-position reading, once per sweep -- the same
+    unrealized / committed / naked totals the dashboard derives at read time
+    (server/fleet_dash.py fleet() + spread_dash.py api_summary), so the marks
+    mean what the dashboard's open-position numbers mean.
+
+    `prune_before` is a unix timestamp: rows older than it are deleted on the
+    write path, so retention is self-maintaining (90 days by default, set by
+    the fleet from config) instead of requiring a separate maintenance task.
+    """
+    with _conn() as c:
+        if prune_before is not None:
+            c.execute("DELETE FROM float_marks WHERE ts < ?", (prune_before,))
+        c.execute("INSERT INTO float_marks (ts, unrealized_usd, "
+                  "committed_open_usd, naked_usd) VALUES (?,?,?,?)",
+                  (ts, unrealized_usd, committed_open_usd, naked_usd))
+
+
+def float_history(max_points: int = 1000,
+                  min_spacing_sec: float = 60.0) -> list:
+    """The float-mark series, oldest first, thinned to at most one point per
+    `min_spacing_sec` and capped at `max_points`. A monitoring payload over
+    months of marks stays small -- the dashboard's Total view needs the shape
+    of the history, not every row. The real DB path is checked so a cold
+    dashboard cannot create an empty database file just by being polled.
+    """
+    path = _cfg.db_path()
+    if not path.exists():
+        return []
+    try:
+        with _conn() as c:
+            rows = c.execute(
+                "SELECT ts, unrealized_usd, committed_open_usd, naked_usd "
+                "FROM float_marks ORDER BY ts").fetchall()
+    except Exception:
+        return []
+    out = []
+    last_ts = -float("inf")
+    for ts, unreal, committed, naked in rows:
+        if ts - last_ts < min_spacing_sec:
+            continue
+        last_ts = ts
+        out.append({"ts": ts, "unrealized_usd": unreal,
+                    "committed_open_usd": committed, "naked_usd": naked})
+    return out[-max_points:]
 
 
 # A sweep is ~30-60s. Anything longer than this between two samples is a gap
