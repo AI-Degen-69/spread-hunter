@@ -167,7 +167,7 @@ LANDING_HTML = _wrap("Spread Hunter -- maker fleet", r"""
         </div>
         <div>
           <div class="font-semibold tracking-[0.12em] uppercase text-[13px]">Palette &amp; Form</div>
-          <div class="text-[#9CA3AF] mt-1.5 flex flex-col gap-2"><span class="flex items-center gap-2 flex-wrap"><span class="size-3 bg-[#10B981] inline-block"></span> Green &mdash; gains &amp; thresholds <span class="size-3 bg-[#EF4444] inline-block ml-2"></span> Red &mdash; risk &amp; fails <span class="size-3 bg-[#3B82F6] inline-block ml-2"></span> Blue &mdash; open positions</span><span>Square corners, hairline rules, restrained color.</span></div>
+          <div class="text-[#9CA3AF] mt-1.5 flex flex-col gap-2"><span class="flex items-center gap-x-4 gap-y-1.5 flex-wrap"><span class="inline-flex items-center gap-1.5 whitespace-nowrap"><span class="size-3 bg-[#10B981] inline-block shrink-0"></span> Green &mdash; gains &amp; thresholds</span><span class="inline-flex items-center gap-1.5 whitespace-nowrap"><span class="size-3 bg-[#EF4444] inline-block shrink-0"></span> Red &mdash; risk &amp; fails</span><span class="inline-flex items-center gap-1.5 whitespace-nowrap"><span class="size-3 bg-[#3B82F6] inline-block shrink-0"></span> Blue &mdash; open positions</span></span><span>Square corners, hairline rules, restrained color.</span></div>
         </div>
       </div>
     </div>
