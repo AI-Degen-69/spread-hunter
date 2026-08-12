@@ -666,8 +666,16 @@ def pooled_markout_neff() -> dict:
         return out
     try:
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    except Exception:
+        return out
+    try:
         c.row_factory = sqlite3.Row
         order = _markout_read_cols(c)
+        if not order:
+            # No mid_h* column on this schema (pre-migration DB or absent
+            # table): an empty SELECT column list would be malformed SQL, and
+            # an honest empty read beats a swallowed OperationalError.
+            return out
         cols = ", ".join(f"mid_h{i}" for i in order)
         weights: list[float] = []
         values: list[float] = []
@@ -685,7 +693,6 @@ def pooled_markout_neff() -> dict:
                 continue
             weights.append(w)
             values.append(mid - r["ref_mid"])
-        c.close()
         total = sum(weights)
         out["n_rows"] = len(weights)
         if total > 0:
@@ -694,6 +701,8 @@ def pooled_markout_neff() -> dict:
                 w * v for w, v in zip(weights, values)) / total
     except Exception:
         pass
+    finally:
+        c.close()
     return out
 
 
@@ -778,8 +787,15 @@ def markout_stats() -> dict:
         return out
     try:
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    except Exception:
+        return out
+    try:
         c.row_factory = sqlite3.Row
         order = _markout_read_cols(c)
+        if not order:
+            # No mid_h* column on this schema: same empty-SELECT guard as
+            # pooled_markout_neff -- an honest empty read, not malformed SQL.
+            return out
         cols = ", ".join(f"mid_h{i}" for i in order)
         for r in c.execute(
                 "SELECT condition_id, side, fill_price, size, ref_mid, "
@@ -814,9 +830,10 @@ def markout_stats() -> dict:
             out["total"] += drift * (r["size"] or 0.0)
             out["spread"] += spread * (r["size"] or 0.0)
             out["n"] += 1
-        c.close()
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        c.close()
     for cid, b in out["by_market"].items():
         b["mean_per_share"] = b["sum"] / b["n"] if b["n"] else None
     return out
@@ -848,6 +865,9 @@ def pairs_ev() -> dict:
         return out
     try:
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    except Exception:
+        return out
+    try:
         rows = c.execute(
             "SELECT kind, COUNT(*) FROM market_events WHERE kind IN "
             "('PAIR_COMPLETE','NAKED_EXIT','PAIR_WINDOW_EXPIRED') "
@@ -897,9 +917,10 @@ def pairs_ev() -> dict:
                     "count": sum(1 for r in rates if r < lo or r > hi),
                     "fences": [round(lo, 3), round(hi, 3)],
                 }
-        c.close()
     except Exception:
         return out
+    finally:
+        c.close()
     return out
 
 

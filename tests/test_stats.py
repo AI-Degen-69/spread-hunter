@@ -54,6 +54,34 @@ def test_snapshot_returns_every_db_derived_payload(monkeypatch, tmp_path):
     assert snap["share_history"] == [0.5]
 
 
+def test_markout_reads_guard_an_empty_mid_column_schema(monkeypatch, tmp_path):
+    """A `markouts` table with no mid_h* column (a pre-migration DB the
+    dashboard's read-only connection cannot migrate) must read as an honest
+    empty/zero fallback -- not malformed SQL built from an empty column list
+    and not a swallowed OperationalError string (coderabbit)."""
+    import sqlite3
+
+    _env(monkeypatch, tmp_path)
+    db = tmp_path / "stats.db"
+    c = sqlite3.connect(str(db))
+    try:
+        c.execute("CREATE TABLE markouts (id INTEGER PRIMARY KEY, ts REAL, "
+                  "condition_id TEXT, side TEXT, ref_mid REAL, size REAL)")
+        c.execute("INSERT INTO markouts (ts, condition_id, side, ref_mid, "
+                  "size) VALUES (1.0, 'c', 'UP', 0.5, 10.0)")
+        c.commit()
+    finally:
+        c.close()
+
+    from strategy import stats
+
+    assert stats.pooled_markout_neff() == {
+        "n_eff": 0.0, "n_rows": 0, "mean_per_share": None}
+    m = stats.markout_stats()
+    assert m["n"] == 0 and m["matured_n"] == 0
+    assert "error" not in m
+
+
 def test_db_stats_aggregates_rewards_fills_and_closes(monkeypatch, tmp_path):
     """Per-market history combines all three tables, exactly as the fleet
     page's rows need them."""

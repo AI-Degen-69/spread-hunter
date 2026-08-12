@@ -1405,3 +1405,12 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Result.** Regression test seeds 0/3600/7200/10800 with max_points=3 and asserts the series is [3600, 7200, 10800]; the existing cap/thinning/prune and cold-DB tests still pass. First draft of the widening loop never terminated when the window covered the whole table (widening forever); the `newest - window > 0` guard fixes it. market_events + dashboard suites green.
 
 **Verdict.** LIVE -- sparse history keeps full coverage while dense tables still read a bounded window.
+### 2026-08-12 (design): PR #23 review fixes -- markout readers guard empty schemas and close their connections on failure
+
+**Question.** Two stats readers had fragile failure shapes: with a `markouts` table carrying no mid_h* column (a pre-migration DB the dashboard's read-only connection cannot migrate), `pooled_markout_neff` and `markout_stats` built a SELECT with an empty column list -- malformed SQL that surfaced as a swallowed OperationalError (neff) or a confusing `error` string (markout_stats). Separately, the read-only connections in all three readers (plus `pairs_ev`) were closed only on the success path, leaking a handle on every exception (coderabbit).
+
+**Method.** Both markout readers now return their safe empty/zero fallback when `_markout_read_cols` yields nothing, and all three readers split connect from query so a `finally: c.close()` runs on success and failure alike.
+
+**Result.** New test seeds a raw pre-migration `markouts` table and pins `pooled_markout_neff` -> the zeroed dict and `markout_stats` -> zero counts with no `error` key. stats + dashboard suites green.
+
+**Verdict.** LIVE -- empty schemas read as empty, and connection handles can no longer leak.
