@@ -10,6 +10,7 @@ copy carried over from the design source.
 """
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -24,6 +25,43 @@ ROOT = Path(__file__).resolve().parent.parent
 CFG = load_config()
 
 app = FastAPI(title="Hunter fleet -- spread hunter design")
+
+# The dashboard endpoints re-read the fleet DB on every request; under the
+# live writer's lock traffic a full `stats.snapshot()` read can take 9-12s,
+# which makes the page look dead on every load. This is a monitoring view and
+# the fleet's own pulse is written roughly every 10s, so an 8-second-stale
+# snapshot is indistinguishable from live. Cache the two expensive payloads
+# per process instead of re-reading the DB per request.
+_DASH_TTL = 8.0
+_DASH_CACHE: dict = {}
+_DASH_LOCK = threading.Lock()
+
+
+def _cached(key: str, loader):
+    now = time.time()
+    with _DASH_LOCK:
+        hit = _DASH_CACHE.get(key)
+        if hit and now - hit[0] < _DASH_TTL:
+            return hit[1]
+    value = loader()
+    with _DASH_LOCK:
+        _DASH_CACHE[key] = (time.time(), value)
+    return value
+
+
+def _warm_cache() -> None:
+    """Prime the dashboard cache shortly after startup so the first page
+    load after a restart is not the slow one. Best-effort: a missing DB or
+    state file just means the first real request pays the cold cost."""
+    try:
+        time.sleep(2.0)
+        _cached("fleet", fleet_dash.fleet)
+        _cached("pipeline", fleet_dash.pipeline)
+    except Exception:
+        pass
+
+
+threading.Thread(target=_warm_cache, daemon=True).start()
 
 # A small fixed cycle so an open-ended set of category tags (derived from
 # market-slug prefixes, not a hardcoded sport enum) still gets a stable,
@@ -85,7 +123,7 @@ def api_summary() -> dict:
     real = stats.realized()
     go = stats.go_live_readiness()
     mk = stats.markout_stats()
-    fl = fleet_dash.fleet()
+    fl = _cached("fleet", fleet_dash.fleet)
     open_rows = fl["markets"]
 
     unrealized_total = sum(r["unrealized_pnl"] for r in open_rows)
@@ -119,7 +157,7 @@ def api_summary() -> dict:
     ]
 
     try:
-        pipe = fleet_dash.pipeline()
+        pipe = _cached("pipeline", fleet_dash.pipeline)
         fleet_alive = pipe.get("fleet_alive")
         counts = (pipe.get("snapshot") or {}).get("counts") or {}
     except Exception:
@@ -171,7 +209,7 @@ def api_summary() -> dict:
 
 @app.get("/api/markets")
 def api_markets() -> dict:
-    rows = fleet_dash.fleet()["markets"]
+    rows = _cached("fleet", fleet_dash.fleet)["markets"]
     out = []
     for r in rows:
         status = _market_status(r)
@@ -232,7 +270,7 @@ def api_settled() -> dict:
 @app.get("/api/funnel")
 def api_funnel() -> dict:
     try:
-        pipe = fleet_dash.pipeline()
+        pipe = _cached("pipeline", fleet_dash.pipeline)
     except Exception:
         pipe = {}
     snap = pipe.get("snapshot") or {}

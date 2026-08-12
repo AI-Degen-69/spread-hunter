@@ -189,8 +189,24 @@ function fmtUsd(v){ if(v===null||v===undefined) return "--"; const s=v<0?"-":"+"
 function fmtPct(v,d){ if(v===null||v===undefined) return "--"; d=d===undefined?1:d; const s=v>0?"+":""; return s+v.toFixed(d)+"%"; }
 
 async function load(){
-  const r = await fetch("/api/summary");
-  const s = await r.json();
+  let s;
+  try {
+    const r = await fetch("/api/summary");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    s = await r.json();
+  } catch (e) {
+    const nav = document.getElementById("nav-status");
+    nav.innerHTML = `<span class="size-1.5 bg-[#EF4444]"></span><span class="tracking-[0.12em] uppercase text-[13px]">Offline</span>`;
+    document.getElementById("hero-realized").textContent = "--";
+    document.getElementById("hero-unrealized").textContent = "--";
+    const list = document.getElementById("verdict-list");
+    list.innerHTML = `<div class="p-4 mono text-[13px] text-[#EF4444]">Could not load the live summary.</div>`;
+    const detail = document.createElement("div");
+    detail.className = "mono text-[12px] text-[#9CA3AF] mt-1";
+    detail.textContent = e && e.message ? e.message : String(e);
+    list.appendChild(detail);
+    return;
+  }
 
   document.getElementById("hero-realized").textContent = fmtUsd(s.realized_usd);
   document.getElementById("hero-realized-sub").textContent =
@@ -276,7 +292,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-5">
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <button data-toggle="sec-positions" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+    <button data-toggle="sec-positions" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
         <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">01</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Positions <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
@@ -287,7 +303,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </section>
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <button data-toggle="sec-verdict" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+    <button data-toggle="sec-verdict" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
         <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">02</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Verdict <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
@@ -298,7 +314,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </section>
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <button data-toggle="sec-gauges" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+    <button data-toggle="sec-gauges" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
         <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">03</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Readiness <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
@@ -309,7 +325,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </section>
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <button data-toggle="sec-evidence" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+    <button data-toggle="sec-evidence" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
         <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">04</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Evidence <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
@@ -321,20 +337,20 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
     <div class="w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937]">
-      <button data-toggle="sec-inspection" class="sh-open flex items-center gap-3 min-w-0 h-full flex-1 text-left hover:bg-[#1F2937] transition-colors">
+      <button data-toggle="sec-inspection" aria-expanded="true" class="sh-open flex items-center gap-3 min-w-0 h-full flex-1 text-left hover:bg-[#1F2937] transition-colors">
         <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">05</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Inspection <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </button>
-      <div class="flex items-center gap-1 shrink-0">
-        <button data-tab="markets" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] bg-[#10B981] text-white">Active Markets</button>
-        <button data-tab="settled" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937] text-[#9CA3AF]">Closed History</button>
-        <button data-tab="funnel" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937] text-[#9CA3AF]">Selection</button>
+      <div class="flex items-center gap-1 shrink-0" role="tablist" aria-label="Inspection views">
+        <button data-tab="markets" id="tab-btn-markets" role="tab" aria-selected="true" aria-controls="tab-markets" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] bg-[#10B981] text-white">Active Markets</button>
+        <button data-tab="settled" id="tab-btn-settled" role="tab" aria-selected="false" aria-controls="tab-settled" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937] text-[#9CA3AF]">Closed History</button>
+        <button data-tab="funnel" id="tab-btn-funnel" role="tab" aria-selected="false" aria-controls="tab-funnel" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937] text-[#9CA3AF]">Selection</button>
       </div>
     </div>
     <div id="sec-inspection">
-      <div id="tab-markets" class="tab-panel sh-fade"></div>
-      <div id="tab-settled" class="tab-panel sh-collapsed sh-fade"></div>
-      <div id="tab-funnel" class="tab-panel sh-collapsed sh-fade"></div>
+      <div id="tab-markets" role="tabpanel" aria-labelledby="tab-btn-markets" class="tab-panel sh-fade"></div>
+      <div id="tab-settled" role="tabpanel" aria-labelledby="tab-btn-settled" class="tab-panel sh-collapsed sh-fade"></div>
+      <div id="tab-funnel" role="tabpanel" aria-labelledby="tab-btn-funnel" class="tab-panel sh-collapsed sh-fade"></div>
     </div>
   </section>
 
@@ -355,7 +371,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </div>
 </main>
 
-<div id="dist-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-4" onclick="if(event.target===this)closeDistModal()">
+<div id="dist-modal" role="dialog" aria-modal="true" aria-label="Expanded distribution chart" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-4" onclick="if(event.target===this)closeDistModal()">
   <div class="bg-[#111827] border border-[#1F2937] max-w-[720px] w-full max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between px-4 h-11 border-b border-[#1F2937]">
       <span id="dist-modal-title" class="mono text-[13px] tracking-[0.14em] uppercase font-semibold"></span>
@@ -422,6 +438,7 @@ document.addEventListener("click", (e) => {
     const open = !el.classList.contains("sh-collapsed");
     el.classList.toggle("sh-collapsed", open);
     btn.classList.toggle("sh-open", !open);
+    btn.setAttribute("aria-expanded", open ? "false" : "true");
   }
   const tab = e.target.closest("[data-tab]");
   if (tab) {
@@ -429,6 +446,7 @@ document.addEventListener("click", (e) => {
       const active = b === tab;
       b.classList.toggle("bg-[#10B981]", active);
       b.classList.toggle("text-white", active);
+      b.setAttribute("aria-selected", active ? "true" : "false");
     });
     document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("sh-collapsed", p.id !== "tab-" + tab.dataset.tab));
   }
@@ -1074,13 +1092,49 @@ function renderFunnel(f){
 }
 
 // ---------- boot ----------
+async function fetchJSON(url){
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+function showSectionError(elId, err){
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const msg = err && err.message ? err.message : String(err);
+  el.innerHTML = `<div class="p-5 border border-[#EF4444]/40 bg-[#EF4444]/5 mono text-[13px] text-[#EF4444]">Could not load this section: ${esc(msg)}</div>`;
+}
+
+function fmtClock(ts){
+  if (!ts) return "--:--:--";
+  return new Date(ts * 1000).toLocaleTimeString();
+}
+
 async function boot(){
-  const [s, mk, st, fn] = await Promise.all([
-    fetch("/api/summary").then(r=>r.json()),
-    fetch("/api/markets").then(r=>r.json()),
-    fetch("/api/settled").then(r=>r.json()),
-    fetch("/api/funnel").then(r=>r.json()),
-  ]);
+  // Paint what is instant first and let the slower endpoints stream in --
+  // the summary bundle is the heaviest read, so it renders last. Every
+  // panel degrades to a visible error box instead of a silent blank section.
+  fetchJSON("/api/settled").then(st => renderSettled(st.settled, st.total_closes))
+    .catch(e => showSectionError("tab-settled", e));
+  fetchJSON("/api/funnel").then(renderFunnel)
+    .catch(e => showSectionError("tab-funnel", e));
+  fetchJSON("/api/markets").then(mk => renderMarkets(mk.markets))
+    .catch(e => showSectionError("tab-markets", e));
+
+  let s;
+  try {
+    s = await fetchJSON("/api/summary");
+  } catch (e) {
+    showSectionError("sec-positions", e);
+    showSectionError("sec-verdict", e);
+    showSectionError("sec-gauges", e);
+    showSectionError("sec-evidence", e);
+    document.getElementById("hdr-hinge").innerHTML =
+      `<span class="mono text-[13px] text-[#EF4444]">Summary unavailable</span>`;
+    document.getElementById("scope-tiles").innerHTML =
+      `<div class="col-span-3 border border-[#EF4444]/30 p-3 text-center mono text-[12px] text-[#EF4444]">Summary unavailable</div>`;
+    return;
+  }
   LAST_STATS = s;
 
   document.getElementById("hdr-pills").innerHTML = `
@@ -1099,12 +1153,9 @@ async function boot(){
   renderVerdict(s);
   renderGauges(s);
   renderEvidence(s);
-  renderMarkets(mk.markets);
-  renderSettled(st.settled, st.total_closes);
-  renderFunnel(fn);
 
   document.getElementById("scope-tiles").innerHTML = `
-    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">Now</div></div>
+    <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">${fmtClock(s.now)}</div></div>
     <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Sample</div><div class="font-semibold mt-1">${esc(s.status)}</div><div class="text-[#9CA3AF] mt-0.5">n = ${s.n_settled}</div></div>
     <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Lower bound</div><div class="font-bold mt-1">${fmtPct(s.ci90_lower_pct,2)}</div></div>`;
 }

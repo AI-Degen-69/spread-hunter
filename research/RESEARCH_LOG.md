@@ -1127,3 +1127,13 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Result.** Unified brutalist UI is now the canonical dashboard with the global taxonomy applied across widgets; `fleet_dash.py` is marked deprecated; `fleet.py` typo fixed. Zero strategy, gate, or risk change — all numbers come from existing `strategy.stats`/`fleet_dash.fleet()` functions.
 
 **Verdict.** LIVE — design unification shipped as the canonical dashboard; rendering only, no behavior change.
+
+### 2026-08-12 (design): dashboard performance pass — cache, progressive boot, honest freshness
+
+**Question.** The canonical dashboard took 9–12s to paint anything on every load: `boot()` awaited four endpoints in parallel, and the two heaviest (`/api/summary`, `/api/markets`) re-ran the full `stats.snapshot()` DB read per request (1.9s standalone, 9–12s under the live writer's lock traffic). Every load showed empty section bars; the landing page sat at "…" indefinitely; a failed endpoint left sections silently blank with the header stuck on "Loading"; and "Data as of: Now" was untruthful.
+
+**Method.** (1) 8s TTL cache in `spread_dash.py` around the two expensive payloads (`fleet()` → `stats.snapshot()`, `pipeline()`), per-process with a background warm-up thread — staleness is invisible because the fleet's own pulse is written every ~10s. (2) Progressive boot in the dashboard JS: settled/funnel/markets paint instantly from their own fetches, the summary streams in last; every section degrades to a visible red error box with the HTTP status/message instead of a silent blank. (3) Landing-page resilience: try/catch → "Offline" nav state + error message, no infinite "…". (4) Honest freshness: the scope tile shows the server's real `Data as of HH:MM:SS`. (5) A11y: `aria-expanded` on all 5 toggles, `tablist/tab/tabpanel` + `aria-selected` on the inspection tabs, `dialog/aria-modal` on the distribution modal.
+
+**Result.** Warm loads 9–12s → ~0.05s; the cold first load after restart is ~5s (one compute, primed by the warm-up thread). Verified live on :8805: all panels render with real freshness, tabs flip aria state and paginate, landing hero + verdict rows populate. 617/617 tests pass; embedded JS parses clean under node --check.
+
+**Verdict.** LIVE — the design pass's first slice shipped: the cache makes the dashboard instant, progressive boot + error states remove the silent-blank failure mode, and the a11y/freshness fixes make the page honest. Remaining audit items (not in this slice): 3–5× figure redundancy per screen, Tailwind CDN/Google Fonts (prod warning, offline dependency), auto-refresh polling (now cheap with the cache), mobile polish for the 7-column markets table, modal focus trap.
