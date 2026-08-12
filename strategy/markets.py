@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -43,6 +44,17 @@ class LiveMarket:
         return self.end_ts - (now if now is not None else time.time())
 
 
+# Slugs come from the venue API and are later embedded in dashboard HTML
+# attributes/links and persisted to the fleet DB. Restrict them to the
+# unreserved URL character set at the venue-data boundary so a hostile value
+# never reaches either place.
+_SAFE_SLUG_RE = re.compile(r"[^A-Za-z0-9._~-]")
+
+
+def _sanitize_slug(slug: str) -> str:
+    return _SAFE_SLUG_RE.sub("", slug or "")
+
+
 def _parse_market(market: dict) -> Optional[LiveMarket]:
     token_ids_raw = market.get("clobTokenIds")
     if not token_ids_raw:
@@ -62,7 +74,7 @@ def _parse_market(market: dict) -> Optional[LiveMarket]:
     end_ts = _iso_to_unix(end_iso)
     return LiveMarket(
         condition_id=market["conditionId"],
-        market_slug=market.get("slug", ""),
+        market_slug=_sanitize_slug(market.get("slug", "")),
         up_token=str(token_ids[0]),
         down_token=str(token_ids[1]),
         start_ts=start_ts,
@@ -146,7 +158,7 @@ def fetch_pinned_market(condition_id: str,
     end_ts = _iso_to_unix(end_iso) if end_iso else (time.time() + 365 * 86400)
     return LiveMarket(
         condition_id=condition_id,
-        market_slug=m.get("market_slug") or condition_id[:10],
+        market_slug=_sanitize_slug(m.get("market_slug") or condition_id[:10]),
         up_token=str(toks[0]),
         down_token=str(toks[1]),
         start_ts=time.time() - 1.0,

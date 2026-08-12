@@ -233,8 +233,6 @@ def fleet():
             "merged_shares": live.get("merged_shares", 0.0),
             "recycled_usd": live.get("recycled_usd", 0.0),
             "pairing_rate": live.get("pairing_rate"),
-            "paired": live.get("paired", 0.0),
-            "naked_sh": live.get("naked_sh", 0.0),
             "events": event_by_market.get(s["cid"], []),
         })
     rows.sort(key=lambda r: -r["income"])

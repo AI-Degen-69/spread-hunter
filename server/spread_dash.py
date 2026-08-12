@@ -35,6 +35,31 @@ def _cat_color(i: int) -> str:
     return _CAT_PALETTE[i % len(_CAT_PALETTE)]
 
 
+def _market_status(r: dict) -> str:
+    """Derive the reported posture of one fleet market row.
+
+    Mixed paired + one-sided exposure is reported explicitly -- a "Paired
+    (holding)" read would hide the naked inventory that can actually lose
+    money at resolution.
+    """
+    err = r.get("err") or r.get("why")
+    paired = r.get("paired", 0)
+    naked = r.get("naked_sh", 0)
+    has_quotes = len(r.get("quotes") or []) > 0
+
+    if err:
+        return err
+    if paired > 0 and naked > 0:
+        return "Paired + one side filled (15m window)"
+    if paired > 0:
+        return "Paired (holding)"
+    if naked > 0:
+        return "One side filled (15m window)"
+    if has_quotes:
+        return "Orders resting"
+    return r.get("close_why") or r.get("merge_why") or "Inactive"
+
+
 def _category(slug: str) -> str:
     parts = (slug or "?").split("-")
     tag = parts[0].lower()
@@ -149,21 +174,7 @@ def api_markets() -> dict:
     rows = fleet_dash.fleet()["markets"]
     out = []
     for r in rows:
-        err = r.get("err") or r.get("why")
-        paired = r.get("paired", 0)
-        naked = r.get("naked_sh", 0)
-        has_quotes = len(r.get("quotes") or []) > 0
-        
-        if err:
-            status = err
-        elif paired > 0:
-            status = "Paired (holding)"
-        elif naked > 0:
-            status = "One side filled (15m window)"
-        elif has_quotes:
-            status = "Orders resting"
-        else:
-            status = r.get("close_why") or r.get("merge_why") or "Inactive"
+        status = _market_status(r)
         out.append({
             "id": r["slug"] or r["title"],
             "market": r["slug"] or r["title"],

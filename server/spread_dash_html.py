@@ -320,17 +320,17 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
   </section>
 
   <section class="border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <button data-toggle="sec-inspection" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
-      <span class="flex items-center gap-3 min-w-0">
+    <div class="w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937]">
+      <button data-toggle="sec-inspection" class="sh-open flex items-center gap-3 min-w-0 h-full flex-1 text-left hover:bg-[#1F2937] transition-colors">
         <span class="hidden sm:inline-flex size-6 bg-[#090D16] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937]">05</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Inspection <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
-      </span>
-      <div class="flex items-center gap-1 shrink-0" onclick="event.stopPropagation()">
+      </button>
+      <div class="flex items-center gap-1 shrink-0">
         <button data-tab="markets" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] bg-[#10B981] text-white">Active Markets</button>
         <button data-tab="settled" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937] text-[#9CA3AF]">Closed History</button>
         <button data-tab="funnel" class="tab-btn h-7 px-3 mono text-[12px] font-bold tracking-widest uppercase border border-[#1F2937] hover:bg-[#1F2937] text-[#9CA3AF]">Selection</button>
       </div>
-    </button>
+    </div>
     <div id="sec-inspection">
       <div id="tab-markets" class="tab-panel sh-fade"></div>
       <div id="tab-settled" class="tab-panel sh-collapsed sh-fade"></div>
@@ -370,6 +370,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
 function fmtUsd(v){ if(v===null||v===undefined) return "--"; const s=v<0?"-":"+"; return s+"$"+Math.abs(v).toFixed(2); }
 function fmtPct(v,d){ if(v===null||v===undefined) return "--"; d=d===undefined?1:d; const s=v>0?"+":""; return s+v.toFixed(d)+"%"; }
 function esc(s){ return (s===null||s===undefined?"":String(s)).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function escAttr(s){ return (s===null||s===undefined?"":String(s)).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function fmtPnlHTML(v){
   if(v===null||v===undefined) return "--";
   if(Math.abs(v) < 0.005) return `<span class="text-[#9CA3AF] opacity-60">+$0.00</span>`;
@@ -430,6 +431,10 @@ document.addEventListener("click", (e) => {
       b.classList.toggle("text-white", active);
     });
     document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("sh-collapsed", p.id !== "tab-" + tab.dataset.tab));
+  }
+  const row = e.target.closest("[data-market]");
+  if (row) {
+    toggleMarketExpand(row.getAttribute("data-market"));
   }
 });
 
@@ -867,14 +872,12 @@ function renderSettled(rows, totalCloses) {
     if (!seen.has(r.market)) {
       seen.add(r.market);
       const g = groups[r.market];
-      let total_pct = 0, count_pct = 0;
-      for (const x of g.exits) {
-        if (typeof x.pnl_pct === 'number') {
-          total_pct += x.pnl_pct;
-          count_pct++;
-        }
-      }
-      g.avg_pnl_pct = count_pct > 0 ? (total_pct / count_pct) : null;
+      // Grouped return derived from the aggregate P&L and grouped cost basis,
+      // not a mean of per-exit percentages (which is only equal when every
+      // exit shares the same cost basis).
+      g.avg_pnl_pct = g.total_cost_basis > 0
+        ? 100 * g.total_pnl / g.total_cost_basis
+        : null;
       g.avg_cost = g.total_shares > 0 ? (g.total_cost_basis / g.total_shares) : null;
       g.win = g.total_pnl > 0;
       g.method = g.methods.size === 1 ? [...g.methods][0] : "MIXED";
@@ -1001,10 +1004,10 @@ function renderSettledTable() {
       ${shown.length ? shown.map(g => {
         const isExpanded = expanded[g.market];
         
-        let html = `<tr class="cursor-pointer hover:bg-[#1F2937] transition-colors" onclick="toggleMarketExpand('${g.market}')">
+        let html = `<tr class="cursor-pointer hover:bg-[#1F2937] transition-colors" data-market="${escAttr(g.market)}">
           <td class="px-3 py-2.5 whitespace-nowrap">${getMethodTag(g.method)}</td>
           <td class="px-3 py-2.5">
-            <div class="font-medium max-w-[280px] truncate text-[13px]"><a href="https://polymarket.com/event/${esc(g.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${formatMarketTitle(g.market)}</a></div>
+            <div class="font-medium max-w-[280px] truncate text-[13px]"><a href="https://polymarket.com/event/${encodeURIComponent(g.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${esc(formatMarketTitle(g.market))}</a></div>
             <div class="mt-1">${getCategoryTag(g.category)}</div>
           </td>
           <td class="px-3 py-2.5 text-right text-[13px] font-mono opacity-80">${g.avg_cost !== null ? '$' + g.avg_cost.toFixed(4) : '--'}</td>
@@ -1015,7 +1018,7 @@ function renderSettledTable() {
            for (const x of g.exits) {
              html += `<tr class="bg-[#090D16]/50">
                <td class="px-3 py-2 pl-8 whitespace-nowrap opacity-75">${getMethodTag(x.method)}</td>
-               <td class="px-3 py-2 max-w-[280px] truncate opacity-75 text-[13px]">${formatMarketTitle(x.market)}</td>
+               <td class="px-3 py-2 max-w-[280px] truncate opacity-75 text-[13px]">${esc(formatMarketTitle(x.market))}</td>
                <td class="px-3 py-2 text-right opacity-60 text-[12px] font-mono">${x.avg_cost !== null ? '$' + x.avg_cost.toFixed(4) : '--'}</td>
                <td class="px-3 py-2 text-right opacity-75">${plainPnlPctHTML(x.pnl, x.pnl_pct)}</td>
              </tr>`;

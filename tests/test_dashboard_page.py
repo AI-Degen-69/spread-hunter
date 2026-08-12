@@ -30,12 +30,13 @@ sys.path.insert(0, str(ROOT))
 # single-bot pipeline). Importing it here would point at the archive
 # snapshot, which is not what this regression test is for.
 from server.fleet_dash import PAGE as FLEET_PAGE  # noqa: E402
+from server.spread_dash_html import DASHBOARD_HTML  # noqa: E402
 
 NODE = shutil.which("node")
 
 # One page, one flatten, one parse: SyntaxError in any <script> renders a
 # fully blank dashboard, not a degraded one.
-PAGES = {"fleet": FLEET_PAGE}
+PAGES = {"fleet": FLEET_PAGE, "spread": DASHBOARD_HTML}
 
 
 def _script_blocks(page: str | None = None) -> list[str]:
@@ -68,6 +69,30 @@ def test_no_duplicate_top_level_consts_all_pages(name):
         names = re.findall(r"^const\s+([A-Za-z_$][\w$]*)\s*=", src, re.M)
         dupes = {n for n in names if names.count(n) > 1}
         assert not dupes, f"{name}: duplicate const declarations: {sorted(dupes)}"
+
+
+def test_settled_rows_harden_market_identifiers():
+    """PR #22 review: a persisted market slug must never reach an inline
+    handler, an unescaped attribute, or a raw link. The row carries
+    data-market (attribute-escaped) and a delegated DOM listener, the link
+    path is URL-encoded, and both formatted titles are HTML-escaped."""
+    page = DASHBOARD_HTML
+    assert 'data-market="${escAttr(g.market)}"' in page
+    assert 'onclick="toggleMarketExpand(' not in page
+    assert 'https://polymarket.com/event/${encodeURIComponent(g.market)}' in page
+    assert '${esc(formatMarketTitle(g.market))}' in page
+    assert '${esc(formatMarketTitle(x.market))}' in page
+    assert 'function escAttr(' in page
+    assert 'const row = e.target.closest("[data-market]");' in page
+
+
+def test_grouped_return_uses_aggregate_pnl_over_cost_basis():
+    """PR #22 review: the grouped return must be 100 * total_pnl /
+    total_cost_basis, not a mean of per-exit percentages -- the mean only
+    matches when every exit shares the same cost basis."""
+    page = DASHBOARD_HTML
+    assert '100 * g.total_pnl / g.total_cost_basis' in page
+    assert 'count_pct' not in page
 
 
 def test_order_depth_view_uses_live_orders_and_mid_axis():
