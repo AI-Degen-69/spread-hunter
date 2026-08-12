@@ -219,6 +219,10 @@ def api_summary() -> dict:
         # to `now` client-side when the cache has never filled.
         "fleet_ts": _cache_ts("fleet"),
         "fleet_alive": fleet_alive,
+        # The pairs-rule EV + the pending exit-card ladder (Sessions 44-51)
+        # -- the fleet payload already computes it; surface it so the
+        # verdict panel can render the exit-card progress tile.
+        "pairs_ev": (fl.get("totals") or {}).get("pairs_ev"),
         "status": go["status"],
         "n_settled": go["n_settled"],
         "signal_min_settled": go["signal_min_settled"],

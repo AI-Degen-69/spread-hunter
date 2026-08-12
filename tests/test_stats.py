@@ -289,3 +289,128 @@ def test_pairs_ev_distribution_and_outliers(monkeypatch, tmp_path):
     assert ev["outliers"]["fences"] == pytest.approx([0.0, 8.0])
     # The dashboard payload carries the same fields (the tile reads snapshot).
     assert stats.snapshot()["pairs_ev"]["dist"]["median"] == pytest.approx(5.0)
+
+
+def test_pairs_ev_exit_card_ladder(monkeypatch, tmp_path):
+    """The pending exit-card re-read (Sessions 49-51): every naked-exit close
+    gets an honest counterfactual state -- recorded (15m mid landed) / pending
+    (15m not elapsed) / no_markout (no markout row) / no_fill (no triggering
+    fill) -- plus the re-read threshold, so "exits since the last re-read" is
+    visible at a glance on the dashboard tile. Same windowed joins as
+    scripts/pairs_ev_report.py's exit_counterfactual (10s close->fill, 30s
+    fill->markout), so the tile and the report cannot disagree."""
+    import sqlite3
+
+    _env(monkeypatch, tmp_path)
+    from strategy import stats, store
+
+    db = tmp_path / "stats.db"
+    # Schema first via a real write; the seed event is deliberately NOT a
+    # pairs-rule kind so it cannot pollute the KPI denominator.
+    store.log_event(ts=999.0, market_slug="m0", condition_id="c0",
+                    kind="QUOTING", reason="r", size=1.0)
+
+    def seed_fill_markout(ts, cid, market, side, price, size, mid_h3):
+        c = sqlite3.connect(str(db))
+        try:
+            c.execute("INSERT INTO fills (ts, condition_id, market_slug, "
+                      "token_id, side, price, size, reason) "
+                      "VALUES (?,?,?,?,?,?,?,?)",
+                      (ts, cid, market, f"tok-{side}", side, price, size,
+                       "tape"))
+            c.execute("INSERT INTO markouts (ts, condition_id, market_slug, "
+                      "side, fill_price, size, ref_mid, ref_mid_source, "
+                      "mid_h0, mid_h1, mid_h2, mid_h3) "
+                      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (ts, cid, market, side, price, size, price + 0.02,
+                       "venue_clean", None, None, None, mid_h3))
+            c.commit()
+        finally:
+            c.close()
+
+    def seed_exit_close(ts, market, cid):
+        c = sqlite3.connect(str(db))
+        try:
+            c.execute("INSERT INTO closes (ts, condition_id, market_slug, "
+                      "method, gas, shares, up_price, dn_price, cost_basis, "
+                      "proceeds, fee, realized_pnl, forgone_vs_settlement, "
+                      "up_cost_removed, dn_cost_removed) "
+                      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (ts, cid, market, "naked_exit", None, 100.0, 0.37, None,
+                       0.0, 0.0, 0.0, -3.0, None, 0.0, 0.0))
+            c.commit()
+        finally:
+            c.close()
+
+    # exit 1 -- recorded: mid_h3 landed at 0.33 vs exit 0.37.
+    seed_fill_markout(1100.0, "c1", "m1", "UP", 0.40, 100.0, mid_h3=0.33)
+    seed_exit_close(1100.05, "m1", "c1")
+    # exit 2 -- pending: mid_h3 still NULL (15m not elapsed).
+    seed_fill_markout(1200.0, "c2", "m2", "UP", 0.20, 100.0, mid_h3=None)
+    seed_exit_close(1200.05, "m2", "c2")
+    # exit 3 -- no_markout: fill present, no markout row for it.
+    c = sqlite3.connect(str(db))
+    try:
+        c.execute("INSERT INTO fills (ts, condition_id, market_slug, "
+                  "token_id, side, price, size, reason) "
+                  "VALUES (1300.0,'c3','m3','t','UP',0.10,100.0,'tape')")
+        c.commit()
+    finally:
+        c.close()
+    seed_exit_close(1300.05, "m3", "c3")
+    # exit 4 -- no_fill: no triggering fill within 10s of the close.
+    seed_exit_close(1400.05, "m4", "c4")
+
+    ev = stats.pairs_ev()
+    card = ev["exit_card"]
+    assert card["n"] == 4
+    assert card["recorded"] == 1 and card["pending"] == 1
+    assert card["no_markout"] == 1 and card["no_fill"] == 1
+    assert card["no_column"] == 0
+    assert card["re_read_at"] == 10
+    # The dashboard payload carries the same ladder (the tile reads snapshot).
+    assert stats.snapshot()["pairs_ev"]["exit_card"]["recorded"] == 1
+    assert stats.snapshot()["pairs_ev"]["exit_card"]["re_read_at"] == 10
+
+
+def test_pairs_ev_exit_card_no_column(monkeypatch, tmp_path):
+    """A DB whose markouts table predates mid_h3 (the fleet has not restarted
+    since the Session 50 migration) must read every exit as 'no_column' -- not
+    silently claim the counterfactual is being captured."""
+    import sqlite3
+
+    _env(monkeypatch, tmp_path)
+    from strategy import stats, store
+    # The schema must exist before the raw inserts: `pairs_ev` reads the
+    # market_events KPI counts up front, and a missing table would swallow
+    # the whole read (it degrades to the empty card) -- which would make this
+    # test pass for the WRONG reason. Seed via a real write, then recreate
+    # the markouts table in its pre-mid_h3 shape.
+    store.log_event(ts=999.0, market_slug="m0", condition_id="c0",
+                    kind="QUOTING", reason="r", size=1.0)
+
+    db = tmp_path / "stats.db"
+    c = sqlite3.connect(str(db))
+    c.execute("DROP TABLE markouts")
+    c.executescript("""
+        CREATE TABLE markouts (id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ts REAL NOT NULL, condition_id TEXT, market_slug TEXT, side TEXT,
+          fill_price REAL, size REAL, ref_mid REAL, ref_mid_source TEXT,
+          mid_h0 REAL, mid_h1 REAL, mid_h2 REAL);
+    """)
+    c.execute("INSERT INTO fills (ts, condition_id, market_slug, side, price, "
+              "size) VALUES (1100.0,'c1','m1','UP',0.40,100.0)")
+    c.execute("INSERT INTO markouts (ts, condition_id, market_slug, side, "
+              "fill_price, size, ref_mid, ref_mid_source) "
+              "VALUES (1100.0,'c1','m1','UP',0.40,100.0,0.42,'venue_clean')")
+    c.execute("INSERT INTO closes (ts, condition_id, market_slug, method, "
+              "shares, up_price) VALUES (1100.05,'c1','m1','naked_exit',"
+              "100.0,0.37)")
+    c.commit()
+    c.close()
+
+    monkeypatch.setattr(stats, "DB", db)
+    card = stats.pairs_ev()["exit_card"]
+    assert card["n"] == 1
+    assert card["no_column"] == 1
+    assert card["recorded"] == 0 and card["pending"] == 0
