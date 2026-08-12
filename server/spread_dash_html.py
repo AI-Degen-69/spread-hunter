@@ -777,25 +777,129 @@ function renderMarkets(rows){
   document.getElementById("tab-markets").innerHTML = table;
 }
 
-function renderSettled(rows, totalCloses){
-  const shown = rows.slice(0, 60);
+let settledState = {
+  rows: [],
+  totalCloses: 0,
+  grouped: [],
+  page: 0,
+  perPage: 10,
+  expanded: {}
+};
+
+function renderSettled(rows, totalCloses) {
+  settledState.rows = rows;
+  settledState.totalCloses = totalCloses;
+  
+  const groups = {};
+  for (const r of rows) {
+    if (!groups[r.market]) {
+      groups[r.market] = { market: r.market, exits: [], total_pnl: 0, methods: new Set() };
+    }
+    groups[r.market].exits.push(r);
+    groups[r.market].total_pnl += r.pnl;
+    groups[r.market].methods.add(r.method);
+  }
+  
+  const orderedGroups = [];
+  const seen = new Set();
+  for (const r of rows) {
+    if (!seen.has(r.market)) {
+      seen.add(r.market);
+      const g = groups[r.market];
+      let total_pct = 0, count_pct = 0;
+      for (const x of g.exits) {
+        if (typeof x.pnl_pct === 'number') {
+          total_pct += x.pnl_pct;
+          count_pct++;
+        }
+      }
+      g.avg_pnl_pct = count_pct > 0 ? (total_pct / count_pct) : null;
+      g.win = g.total_pnl > 0;
+      g.method = g.methods.size === 1 ? [...g.methods][0] : "MIXED";
+      orderedGroups.push(g);
+    }
+  }
+  settledState.grouped = orderedGroups;
+  
+  renderSettledTable();
+}
+
+window.toggleMarketExpand = function(market) {
+  settledState.expanded[market] = !settledState.expanded[market];
+  renderSettledTable();
+};
+
+window.setSettledPage = function(p) {
+  settledState.page = p;
+  renderSettledTable();
+};
+
+window.setSettledPerPage = function(pp) {
+  settledState.perPage = pp;
+  settledState.page = 0;
+  renderSettledTable();
+};
+
+function getMethodIcon(method) {
+  if (method === "MERGE") return `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#3B82F6]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7l-3 3m3-3l3 3m4-4h.01M16 11h.01M16 15h.01" /></svg>`;
+  if (method === "RESOLVE") return `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#10B981]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>`;
+  return `<svg class="w-3.5 h-3.5 mr-1.5 inline-block text-[#9CA3AF]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>`;
+}
+
+function renderSettledTable() {
+  const { grouped, page, perPage, expanded, totalCloses } = settledState;
+  const start = page * perPage;
+  const shown = grouped.slice(start, start + perPage);
+  const totalPages = Math.ceil(grouped.length / perPage);
+  
   const table = `<div class="px-4 py-3 border-b border-[#1F2937] flex items-center justify-between">
       <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold">History &mdash; the sample that matters</span>
       <span class="mono text-[12px] tracking-widest uppercase px-2 py-1 bg-[#1F2937]">${totalCloses} closes</span>
     </div>
     <div class="overflow-x-auto"><table class="w-full text-left border-collapse">
     <thead><tr class="bg-[#090D16] mono text-[12px] tracking-[0.14em] uppercase border-b border-[#1F2937]">
-      <th class="px-3 py-2.5">Market</th><th class="px-2 py-2 text-right">Result</th><th class="px-2 py-2 text-right">Return</th><th class="px-3 py-2.5">Method</th><th class="px-2 py-2 text-center">Outcome</th>
+      <th class="px-3 py-2.5">Method</th><th class="px-3 py-2.5">Market</th><th class="px-3 py-2.5 text-right">Gain/Loss ($)</th><th class="px-3 py-2.5 text-right">Return (%)</th>
     </tr></thead>
     <tbody class="mono text-[14px] divide-y divide-[#1F2937]">
-      ${shown.length ? shown.map(r => `<tr class="hover:bg-[#1F2937] transition-colors">
-        <td class="px-3 py-2.5 font-medium max-w-[220px] truncate">${esc(r.market)}</td>
-        <td class="px-3 py-2.5 text-right font-bold ${r.win?'text-[#10B981]':'text-[#EF4444]'}">${fmtUsd(r.pnl)}</td>
-        <td class="px-3 py-2.5 text-right font-semibold ${(r.pnl_pct||0)<0?'text-[#EF4444]':''}">${fmtPct(r.pnl_pct)}</td>
-        <td class="px-3 py-2.5"><span class="px-2 py-0.5 text-[12px] tracking-widest uppercase border border-[#1F2937]">${esc(r.method)}</span></td>
-        <td class="px-2 py-2 text-center">${r.win?'<span class="inline-flex items-center gap-1 px-2 py-1 bg-[#10B981]/10 border border-[#10B981]/20 text-[#10B981] text-[12px] font-bold">Gain</span>':'<span class="inline-flex items-center gap-1 px-2 py-1 bg-[#EF4444]/10 border border-[#EF4444]/20 text-[#EF4444] text-[12px] font-bold">Loss</span>'}</td>
-      </tr>`).join("") : `<tr><td colspan="5" class="px-4 py-6 text-center mono text-[13px] text-[#9CA3AF]">No closed positions yet.</td></tr>`}
-    </tbody></table></div>`;
+      ${shown.length ? shown.map(g => {
+        const isExpanded = expanded[g.market];
+        const rowBg = g.win ? 'bg-[#10B981]/10' : 'bg-[#EF4444]/10';
+        
+        let html = `<tr class="cursor-pointer hover:bg-[#1F2937] transition-colors ${rowBg}" onclick="toggleMarketExpand('${g.market}')">
+          <td class="px-3 py-2.5 whitespace-nowrap"><span class="inline-flex items-center px-2 py-0.5 text-[12px] tracking-widest uppercase border border-[#1F2937]/50">${getMethodIcon(g.method)} ${esc(g.method)}</span></td>
+          <td class="px-3 py-2.5 font-medium max-w-[280px] truncate"><a href="https://polymarket.com/event/${esc(g.market)}" target="_blank" class="hover:underline text-blue-400" onclick="event.stopPropagation()">${esc(g.market)}</a></td>
+          <td class="px-3 py-2.5 text-right font-bold ${g.win?'text-[#10B981]':'text-[#EF4444]'}">${fmtUsd(g.total_pnl)}</td>
+          <td class="px-3 py-2.5 text-right font-semibold ${(g.avg_pnl_pct||0)<0?'text-[#EF4444]':''}">${g.avg_pnl_pct !== null ? fmtPct(g.avg_pnl_pct) : '--'}</td>
+        </tr>`;
+        
+        if (isExpanded) {
+           for (const x of g.exits) {
+             html += `<tr class="bg-[#090D16]/50">
+               <td class="px-3 py-2 pl-8 whitespace-nowrap opacity-75"><span class="inline-flex items-center px-2 py-0.5 text-[11px] tracking-widest uppercase border border-[#1F2937]">${getMethodIcon(x.method)} ${esc(x.method)}</span></td>
+               <td class="px-3 py-2 max-w-[280px] truncate opacity-75 text-[13px]">${esc(x.market)}</td>
+               <td class="px-3 py-2 text-right opacity-75 ${x.win?'text-[#10B981]':'text-[#EF4444]'}">${fmtUsd(x.pnl)}</td>
+               <td class="px-3 py-2 text-right opacity-75 ${(x.pnl_pct||0)<0?'text-[#EF4444]':''}">${fmtPct(x.pnl_pct)}</td>
+             </tr>`;
+           }
+        }
+        return html;
+      }).join("") : `<tr><td colspan="4" class="px-4 py-6 text-center mono text-[13px] text-[#9CA3AF]">No closed positions yet.</td></tr>`}
+    </tbody></table></div>
+    <div class="px-4 py-2.5 border-t border-[#1F2937] flex items-center justify-between text-[12px] mono uppercase tracking-widest">
+      <div class="flex items-center gap-2">
+        <span class="text-[#9CA3AF]">Rows per page:</span>
+        <select class="bg-[#1F2937] text-white outline-none px-2 py-1" onchange="setSettledPerPage(parseInt(this.value))">
+          <option value="10" ${perPage===10?'selected':''}>10</option>
+          <option value="20" ${perPage===20?'selected':''}>20</option>
+          <option value="50" ${perPage===50?'selected':''}>50</option>
+        </select>
+      </div>
+      <div class="flex items-center gap-3">
+        ${page > 0 ? `<button class="hover:text-white text-[#9CA3AF]" onclick="setSettledPage(${page - 1})">&lt; Prev</button>` : `<span class="opacity-50 text-[#9CA3AF]">&lt; Prev</span>`}
+        <span class="text-[#9CA3AF]">Page ${page + 1} of ${totalPages || 1}</span>
+        ${page < totalPages - 1 ? `<button class="hover:text-white text-[#9CA3AF]" onclick="setSettledPage(${page + 1})">Next &gt;</button>` : `<span class="opacity-50 text-[#9CA3AF]">Next &gt;</span>`}
+      </div>
+    </div>`;
   document.getElementById("tab-settled").innerHTML = table;
 }
 
