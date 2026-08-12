@@ -112,6 +112,25 @@ def test_dashboard_auto_refreshes_every_15s():
     assert "settledState.page = page;" in page
 
 
+def test_phase2_terminal_aesthetic_applied():
+    """Phase-2 visual upgrade: dark mesh gradient canvas, frosted-glass
+    panel overrides (blur 12px, rgba(15,23,42,.65) fill, faint white
+    hairlines), lifted secondary-label contrast (#94A3B8), Geist Mono as
+    the strict data face with tabular numerals, gold reserved for the mid
+    badge and the go-live call, and the hero KPI drop shadow."""
+    page = DASHBOARD_HTML
+    assert "linear-gradient(180deg,#080C14 0%,#0B111E 100%)" in page
+    assert "backdrop-filter:blur(12px)" in page
+    assert "rgba(15,23,42,.65)" in page
+    assert "rgba(255,255,255,.07)" in page
+    assert "#94A3B8" in page
+    assert "Geist+Mono" in page
+    assert "font-variant-numeric:tabular-nums" in page
+    assert "text-[#FBBF24]" in page
+    assert 'color:"#FBBF24"' in page
+    assert "hero-shadow" in page
+
+
 def test_data_change_cues_and_market_drawer_are_wired():
     """Phase-1 interactions: financial figures flash on change (data-kpi /
     data-v), hero numbers roll up (data-rollup), status cells fade+scale in

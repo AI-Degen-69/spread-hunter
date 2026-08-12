@@ -13,7 +13,7 @@ _HEAD = """
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Geist+Mono:wght@400;500;600;700&display=swap">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   /* Design tokens -- the operator-approved desk palette, codified as one
@@ -22,23 +22,39 @@ _HEAD = """
      carries the identity; IBM Plex Mono carries every number and label. */
   :root{
     color-scheme:dark;
-    --ink:#090D16;      /* canvas */
-    --panel:#111827;    /* panels */
-    --line:#1F2937;     /* hairlines */
+    --ink:#080C14;      /* canvas */
+    --panel:rgba(15,23,42,.65); /* frosted glass panel */
+    --line:rgba(255,255,255,.07); /* translucent hairline */
     --ink-soft:#F9FAFB; /* primary text */
-    --muted:#9CA3AF;    /* secondary text */
+    --muted:#94A3B8;    /* secondary text, lifted contrast */
     --signal:#10B981;   /* gains, thresholds, live */
     --loss:#EF4444;     /* losses, fails */
     --open:#3B82F6;     /* open exposure */
-    --warn:#F59E0B;     /* idle, caution */
+    --warn:#F59E0B;     /* warnings, idle, stale */
+    --gold:#FBBF24;     /* reserved: mid badge, go-live call */
   }
-  body{background:var(--ink);color:var(--ink-soft);
-       font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
-       -webkit-font-smoothing:antialiased;}
+  /* Dark mesh gradient canvas. */
+  body{
+    background:linear-gradient(180deg,#080C14 0%,#0B111E 100%) fixed;
+    color:var(--ink-soft);
+    font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace;
+    -webkit-font-smoothing:antialiased;}
   .font-display{font-family:"Big Shoulders Display",Impact,"Arial Narrow",sans-serif;
                 letter-spacing:0.015em;font-weight:700;}
-  .mono{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
-        font-variant-numeric:tabular-nums;}
+  .mono{font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace;
+        font-variant-numeric:tabular-nums;font-feature-settings:"tnum";}
+  /* Phase-2 terminal upgrade: every panel surface becomes frosted glass
+     over the mesh, hairlines become faint white, and secondary labels
+     gain contrast. These post-Tailwind overrides (with !important) let
+     both the static markup and every JS-rendered card inherit the look
+     without touching a single renderer. */
+  /* background-color only -- the shorthand would wipe the canvas gradient. */
+  .bg-\[\#111827\]{background-color:rgba(15,23,42,.65)!important;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);}
+  .bg-\[\#090D16\]{background-color:rgba(8,12,20,.55)!important;}
+  .border-\[\#1F2937\]{border-color:rgba(255,255,255,.07)!important;}
+  .bg-\[\#1F2937\]{background-color:rgba(148,163,184,.12)!important;}
+  .text-\[\#9CA3AF\]{color:#94A3B8!important;}
+  .hero-shadow{filter:drop-shadow(0 4px 12px rgba(0,0,0,.4));}
   ::selection{background:var(--signal);color:var(--ink-soft);}
   :focus-visible{outline:2px solid var(--signal);outline-offset:2px;}
   .sh-fade{transition:opacity .2s ease,transform .2s ease;}
@@ -338,7 +354,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
 
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-5">
 
-  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.05s">
+  <section class="sh-rise hero-shadow border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.05s">
     <button data-toggle="sec-positions" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
         <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">BOOK</span>
@@ -706,7 +722,7 @@ function orderDepthHtml(m){
       ${mark(bid,'#9CA3AF',1.5)}${mark(ask,'#9CA3AF',1.5)}
       ${mark(m.our_up,'#3B82F6',2)}
       ${mark(m.our_dn_as_up,'#EF4444',2)}
-      <span style="position:absolute;left:${x(mid)}%;top:16px;transform:translateX(-50%);white-space:nowrap" class="mono text-[10px] font-bold text-[#F9FAFB]">MID ${mid.toFixed(3)}</span>
+      <span style="position:absolute;left:${x(mid)}%;top:16px;transform:translateX(-50%);white-space:nowrap" class="mono text-[10px] font-bold text-[#FBBF24]">MID ${mid.toFixed(3)}</span>
     </div>`;
   }
   let cap = '<div class="mono text-[10px] text-[#9CA3AF] mt-1">No capital resting</div>';
@@ -811,7 +827,7 @@ function renderGauges(s){
     const pct = Math.min(100, Math.max(0,(g.value/g.max)*100));
     return `<div class="bg-[#111827] border border-[#1F2937] p-5 flex flex-col">
       <div class="flex items-start justify-between gap-3">
-        <div><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]">${g.label}</div><div class="font-display text-[13px] tracking-tight mt-0.5">${g.sub}</div></div>
+        <div><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]">${g.label}</div><div class="mono text-[13px] tracking-tight mt-0.5">${g.sub}</div></div>
         <span class="mono text-[12px] tracking-widest px-2 py-1 border font-semibold shrink-0" style="color:${g.color};background:${g.color}1A;border-color:${g.color}33">${pct.toFixed(1)}%</span>
       </div>
       <div class="mt-5 flex items-center gap-5">
@@ -1185,7 +1201,7 @@ function renderHinge(s){
   PULSE.alive = !!s.fleet_alive;
   const st = s.status || "NO_DATA";
   const call = {
-    READY_FOR_SMALL_LIVE_PILOT: { word:"GO",      color:"#10B981" },
+    READY_FOR_SMALL_LIVE_PILOT: { word:"GO",      color:"#FBBF24" },
     DIRECTIONAL_SIGNAL:         { word:"SIGNAL",  color:"#F59E0B" },
     COLLECTING:                 { word:"COLLECT", color:"#F59E0B" },
     NO_DATA:                    { word:"NO DATA", color:"#9CA3AF" },
