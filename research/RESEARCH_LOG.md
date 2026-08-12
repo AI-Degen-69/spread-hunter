@@ -1117,3 +1117,13 @@ Dashboard: `gateCard` renders the estimate under each example (`if adopted: ~2.4
 ### 2026-08-12 (design, minimal entry): isolated Spread Hunter dashboard
 
 Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8801), zero edits to `fleet_dash.py`/`dashboard.py`/`strategy/`, all numbers pulled from existing `strategy.stats`/`fleet_dash.fleet()` functions. No strategy, gate, or risk change. Per operator: design-only commits get this one-line form, not the full Question/Method/Result/Verdict entry (reserved for strategy/reasoning/functionality changes).
+
+### 2026-08-12 (design): dashboard unification and global taxonomy
+
+**Question.** Can the Spread Hunter dashboard present every widget in one unified brutalist layout with a global category taxonomy, without touching strategy, gates, or risk?
+
+**Method.** Design-only pass over `server/spread_dash.py`/`spread_dash_html.py`: consolidated component spacing, flattened accordion toggle headers, mapped specific sports/games to global categories ("Sports", "E-Sports", etc.), formally deprecated the old `fleet_dash.py`, and fixed a minor IDE syntax typo in `fleet.py`.
+
+**Result.** Unified brutalist UI is now the canonical dashboard with the global taxonomy applied across widgets; `fleet_dash.py` is marked deprecated; `fleet.py` typo fixed. Zero strategy, gate, or risk change — all numbers come from existing `strategy.stats`/`fleet_dash.fleet()` functions.
+
+**Verdict.** LIVE — design unification shipped as the canonical dashboard; rendering only, no behavior change.

@@ -1,5 +1,12 @@
 """One dashboard for the whole fleet: aggregate on top, per-market below.
 
+DEPRECATION NOTICE:
+Status: Deprecated as of 2026-08-12
+Replacement: server/spread_dash.py (Spread Hunter UI)
+Removal date: Advisory — no hard deadline yet
+Reason: The new Spread Hunter dashboard handles identical data with 
+a strictly unified, brutalist layout and faster, flattened navigation.
+
 Replaces four separate pages on four ports. The aggregate strip answers "is
 this working overall", the table answers "which market is carrying it" -- and
 with 20 markets the second question is the one that matters, because income is

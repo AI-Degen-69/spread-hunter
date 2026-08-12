@@ -104,6 +104,40 @@ def test_parse_book_raises_on_a_structural_failure():
         markets.parse_book({"bids": "nope", "asks": []}, "tok")
 
 
+# --- market slug sanitizing: venue data must never reach the DB/HTML raw --
+
+def test_sanitize_slug_keeps_normal_slugs():
+    assert markets._sanitize_slug("nfl-cardinals-vs-49ers-2026-09-29") == \
+        "nfl-cardinals-vs-49ers-2026-09-29"
+    assert markets._sanitize_slug("btc-up-or-down-2026") == \
+        "btc-up-or-down-2026"
+
+
+def test_sanitize_slug_strips_html_and_quotes():
+    """PR #22 review: a hostile venue-supplied slug used to pass through to
+    dashboard HTML attributes/links and the fleet DB. Only URL-safe
+    characters survive the venue-data boundary."""
+    assert markets._sanitize_slug('<img src=x onerror=alert(1)>') == "imgsrcxonerroralert1"
+    assert markets._sanitize_slug('x\" onmouseover=\"alert(1)') == "xonmouseoveralert1"
+    assert markets._sanitize_slug("x');alert(1);//") == "xalert1"
+    assert markets._sanitize_slug("") == ""
+
+
+def test_parse_market_sanitizes_the_slug(monkeypatch):
+    """The venue-data entry point applies the sanitizer before the slug can
+    be persisted by any caller."""
+    raw = {
+        "conditionId": "cond-1",
+        "clobTokenIds": '["tok-a", "tok-b"]',
+        "eventStartTime": "2026-09-29T16:00:00Z",
+        "endDate": "2026-09-29T18:00:00Z",
+        "slug": 'x" onmouseover="alert(1)',
+    }
+    m = markets._parse_market(raw)
+    assert m is not None
+    assert m.market_slug == "xonmouseoveralert1"
+
+
 def test_parse_book_handles_an_empty_book():
     book = markets.parse_book({"bids": [], "asks": []}, "tok")
     assert book["bids"] == {}

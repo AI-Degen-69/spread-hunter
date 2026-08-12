@@ -26,7 +26,7 @@ def test_watcher_is_a_supervised_child():
 
 def test_supervisor_owns_exactly_the_expected_stack():
     """One supervisor, one of each process -- the single-writer invariant."""
-    assert set(CHILDREN) == {"fleet", "dash", "rerank", "watch"}
+    assert set(CHILDREN) == {"fleet", "dash", "scan", "rerank", "watch"}
 
 
 def test_first_crash_restarts_promptly():

@@ -25,6 +25,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from strategy import (gate, markout, resolve, rewards, store)
 from strategy.allocate import (allocate_fundable, capital_scarcity, marginal,
@@ -804,7 +805,7 @@ def main() -> None:
     # before that turn retains it forever on the phantom position. Settle now,
     # before the first visit, so the process starts with the truth.
     try:
-        settled, freed = settle_startup_resolved(states, resolved_cids,
+        settled, freed = _settle_startup_resolved(states, resolved_cids,
                                                 time.time())
         if settled:
             log.info("STARTUP SETTLE %d market(s) already resolved; "
