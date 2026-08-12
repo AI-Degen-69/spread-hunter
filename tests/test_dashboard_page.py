@@ -131,6 +131,45 @@ def test_phase2_terminal_aesthetic_applied():
     assert "hero-shadow" in page
 
 
+def test_phase3_risk_depth_tooltips_applied():
+    """Phase-3 widgets: the naked-USD capacity bar (utilization bands with
+    pulsing red at 80%+), micro-depth washes behind the price levels in the
+    order-book strip, the gold mid marker with dark outline, and CSS tooltips
+    on the statistical headers. The server exposes the two naked fields the
+    bar needs."""
+    page = DASHBOARD_HTML
+    # Capacity bar: utilization bands + pulsing red high-exposure state.
+    assert "Naked USD Exposure" in page
+    assert "HIGH EXPOSURE" in page
+    assert "warn-bar" in page
+    assert "max_naked_usd" in page
+    # Micro-depth washes behind the price levels + gold mid marker outline.
+    assert "rgba(16,185,129,.13)" in page
+    assert "rgba(239,68,68,.12)" in page
+    assert "box-shadow:0 0 0 1px #090D16" in page
+    # Tooltip system: icon, popover card, formula/gate phrasing.
+    assert "function tip(key, body)" in page
+    assert "tip-pop" in page
+    assert "tip-ico" in page
+    assert "Kish's effective sample size" in page
+    assert "1.645" in page  # the 90% lower-bound formula
+    assert "1.35" in page  # depth-band half-width sizing
+
+
+def test_summary_exposes_naked_risk_fields():
+    """api_summary must carry the fleet-wide naked-USD figure and the cap so
+    the capacity bar has real numbers (computed in server/spread_dash.py, not
+    faked in the template)."""
+    from server.spread_dash import app
+    from starlette.testclient import TestClient
+
+    with TestClient(app) as c:
+        s = c.get("/api/summary").json()
+    assert "naked_usd" in s
+    assert "max_naked_usd" in s
+    assert s["max_naked_usd"] == 120.0
+
+
 def test_data_change_cues_and_market_drawer_are_wired():
     """Phase-1 interactions: financial figures flash on change (data-kpi /
     data-v), hero numbers roll up (data-rollup), status cells fade+scale in

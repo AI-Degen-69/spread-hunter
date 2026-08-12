@@ -80,9 +80,24 @@ _HEAD = """
   .status-in{animation:status-in .18s ease-out both;}
   @keyframes health-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.95)}}
   .health-pulse{animation:health-pulse 2s ease-in-out infinite;}
+  /* Naked-USD capacity bar at >=80% utilization: the fill pulses red to
+     demand attention, alongside the HIGH EXPOSURE badge. */
+  @keyframes warn-bar{0%,100%{opacity:1}50%{opacity:.45}}
+  .warn-bar{animation:warn-bar 1s ease-in-out infinite;}
+  /* Metric tooltips: a tiny info icon beside statistical headers opens a
+     styled card carrying the formula, the live value, and the gate meaning.
+     Pure CSS -- hover or keyboard focus (button inside the wrap) reveals it.
+     No tooltip dependency needed; matches the terminal's square language. */
+  .tip-wrap{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px;}
+  .tip-ico{width:14px;height:14px;border:1px solid rgba(148,163,184,.5);color:#94A3B8;background:transparent;border-radius:9999px;font-size:9px;font-weight:700;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:help;padding:0;}
+  .tip-ico:hover,.tip-wrap:focus-within .tip-ico{border-color:var(--gold);color:var(--gold);}
+  .tip-pop{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%) translateY(4px);width:252px;padding:10px 12px;background:rgba(8,12,20,.97);border:1px solid rgba(255,255,255,.16);box-shadow:0 8px 24px rgba(0,0,0,.55);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .15s ease,transform .15s ease,visibility .15s;z-index:70;text-align:left;}
+  .tip-pop .tip-k{display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:6px;}
+  .tip-pop .tip-t{display:block;font-size:11px;line-height:1.65;color:#94A3B8;font-weight:400;letter-spacing:0;text-transform:none;}
+  .tip-wrap:hover .tip-pop,.tip-wrap:focus-within .tip-pop{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);}
   @media (prefers-reduced-motion: reduce){
-    .sh-rise,.pulse-live,.flash-up,.flash-down,.status-in,.health-pulse{animation:none;}
-    .sh-fade,.sh-chev,main.sh-refreshing section,#drawer,#drawer-backdrop{transition:none;}
+    .sh-rise,.pulse-live,.flash-up,.flash-down,.status-in,.health-pulse,.warn-bar{animation:none;}
+    .sh-fade,.sh-chev,main.sh-refreshing section,#drawer,#drawer-backdrop,.tip-pop{transition:none;}
   }
   ::-webkit-scrollbar{height:8px;width:8px;}
   ::-webkit-scrollbar-thumb{background:var(--line);}
@@ -706,6 +721,19 @@ function donutSvg(categories){
 // mid/our-quote markers, then a YES/NO resting-notional split bar below it.
 function orderDepthHtml(m){
   const mid = m.mid_up, bid = m.up_bid, ask = m.up_ask;
+  // Resting notional per side -- the only real size data this fleet has.
+  // The venue book exposes prices only (mid/bid/ask), so the depth chart is
+  // scaled by OUR resting quotes, not fabricated venue volume.
+  const quotes = m.quotes || [];
+  let up = 0, dn = 0;
+  for(const o of quotes){
+    const remaining = o.remaining===null||o.remaining===undefined ? Math.max(0,(o.size||0)-(o.filled||0)) : o.remaining;
+    const notional = o.notional===null||o.notional===undefined ? (o.price||0)*remaining : o.notional;
+    if(o.side==='UP') up+=notional; else dn+=notional;
+  }
+  const total = up+dn;
+  const upShare = total>0 ? up/total : 0;
+  const dnShare = total>0 ? dn/total : 0;
   let band = '<span class="mono text-[11px] text-[#9CA3AF]">No two-sided book</span>';
   if(mid!==null && bid!==null && ask!==null && mid!==undefined && bid!==undefined && ask!==undefined){
     const v = m.max_spread || 0.045;
@@ -713,35 +741,32 @@ function orderDepthHtml(m){
     const lo = mid-half, hi = mid+half, W = hi-lo;
     const x = p => Math.max(0, Math.min(100, 100*(p-lo)/W));
     const wl = x(mid-v), wr = x(mid+v);
-    const mark = (p,color,w) => (p===null||p===undefined) ? "" :
-      `<span style="position:absolute;left:${x(p)}%;top:2px;bottom:2px;width:${w}px;background:${color};transform:translateX(-50%)"></span>`;
-    band = `<div style="position:relative;height:26px;width:100%;max-width:220px">
-      <div style="position:absolute;left:${wl}%;width:${Math.max(0,wr-wl)}%;top:9px;height:8px;background:#10B98122;border-left:1px solid #10B98155;border-right:1px solid #10B98155"></div>
-      <div style="position:absolute;left:0;right:0;top:13px;height:1px;background:#1F2937"></div>
-      ${mark(mid,'#F59E0B',3)}
+    const mark = (p,color,w,glow) => (p===null||p===undefined) ? "" :
+      `<span style="position:absolute;left:${x(p)}%;top:2px;bottom:2px;width:${w}px;background:${color};transform:translateX(-50%)${glow?';box-shadow:0 0 0 1px #090D16,0 0 5px rgba(251,191,36,.45)':''}"></span>`;
+    // Micro depth behind the price levels: the YES half (left of mid) gets a
+    // soft green wash and the NO half a soft red-brown one, each scaled by
+    // that side's share of resting notional. The gold mid marker overlays
+    // dead center with a dark outline; the bright MID badge sits beneath.
+    const depth = total>0 ? `
+      <div style="position:absolute;left:0;top:0;bottom:0;width:${(50*upShare).toFixed(1)}%;background:rgba(16,185,129,.13)"></div>
+      <div style="position:absolute;right:0;top:0;bottom:0;width:${(50*dnShare).toFixed(1)}%;background:rgba(239,68,68,.12)"></div>` : "";
+    band = `<div style="position:relative;height:30px;width:100%;max-width:220px">
+      ${depth}
+      <div style="position:absolute;left:${wl}%;width:${Math.max(0,wr-wl)}%;top:11px;height:8px;background:#10B98122;border-left:1px solid #10B98155;border-right:1px solid #10B98155"></div>
+      <div style="position:absolute;left:0;right:0;top:15px;height:1px;background:#1F2937"></div>
+      ${mark(mid,'#FBBF24',3,true)}
       ${mark(bid,'#9CA3AF',1.5)}${mark(ask,'#9CA3AF',1.5)}
       ${mark(m.our_up,'#3B82F6',2)}
       ${mark(m.our_dn_as_up,'#EF4444',2)}
-      <span style="position:absolute;left:${x(mid)}%;top:16px;transform:translateX(-50%);white-space:nowrap" class="mono text-[10px] font-bold text-[#FBBF24]">MID ${mid.toFixed(3)}</span>
+      <span style="position:absolute;left:${x(mid)}%;top:20px;transform:translateX(-50%);white-space:nowrap;background:#090D16;border:1px solid rgba(255,255,255,.2);padding:0 4px" class="mono text-[10px] font-bold text-[#FBBF24]">MID ${mid.toFixed(3)}</span>
     </div>`;
   }
+  // Dollar resting figures -- once per market. The wash above is the depth
+  // chart; this line is the money behind it. (Full quote detail lives in the
+  // market drawer.)
   let cap = '<div class="mono text-[10px] text-[#9CA3AF] mt-1">No capital resting</div>';
-  const quotes = m.quotes || [];
-  if(quotes.length){
-    let up=0, dn=0;
-    for(const o of quotes){
-      const remaining = o.remaining===null||o.remaining===undefined ? Math.max(0,(o.size||0)-(o.filled||0)) : o.remaining;
-      const notional = o.notional===null||o.notional===undefined ? (o.price||0)*remaining : o.notional;
-      if(o.side==='UP') up+=notional; else dn+=notional;
-    }
-    const total = up+dn;
-    if(total>0){
-      const upPct=100*up/total, dnPct=100*dn/total;
-      cap = `<div style="display:flex;height:12px;width:100%;max-width:220px;background:#090D16;overflow:hidden;margin-top:4px" class="mono text-[9px] font-bold">
-        <div style="width:${dnPct}%;background:#EF444433;color:#EF4444;display:flex;align-items:center;padding-left:4px;white-space:nowrap;overflow:hidden">$${dn.toFixed(0)} NO</div>
-        <div style="width:${upPct}%;background:#10B98133;color:#10B981;display:flex;align-items:center;justify-content:flex-end;padding-right:4px;white-space:nowrap;overflow:hidden">$${up.toFixed(0)} YES</div>
-      </div>`;
-    }
+  if(total>0){
+    cap = `<div class="mono text-[10px] mt-1 flex items-center justify-between max-w-[220px]"><span class="text-[#10B981]">$${up.toFixed(0)} YES</span><span class="text-[#9CA3AF]/60">resting</span><span class="text-[#EF4444]">$${dn.toFixed(0)} NO</span></div>`;
   }
   return `${band}${cap}`;
 }
@@ -782,14 +807,17 @@ function renderVerdict(s){
   const weightGap = (s.mean_return_pct!==null && s.realized_pct!==null) ? (s.mean_return_pct - s.realized_pct) : null;
   const tiles = [
     {label:"90% Lower Bound", value: fmtPct(s.ci90_lower_pct,2), accent: (s.ci90_lower_pct||0)>0?"#10B981":"#EF4444",
+     tip: `Formula: mean &minus; 1.645&middot;&sigma;/&radic;n_eff &mdash; the 90% one-sided lower bound on the pooled size-weighted mean drift. Current: ${fmtPct(s.ci90_lower_pct,2)}. Gate: must clear 0% for a GO call.`,
      chart: `<div class="cursor-pointer" title="Click to expand" onclick="openDistModal('ci')">${bellCurveSvg({min:-100,max:100,mean:s.mean_return_pct||0,stdev:s.stdev_return_pct,zero:0,
        ciLow:s.ci90_lower_pct,ciHigh:(s.mean_return_pct!==null&&s.ci90_lower_pct!==null)?(2*s.mean_return_pct-s.ci90_lower_pct):undefined,
        color:"#3B82F6",w:140,h:64})}</div>`,
      sub:`Mean ${fmtPct(s.mean_return_pct)} &middot; &sigma; ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}`},
     {label:"Markout Drift", value: s.markout_mean_per_share===null?"--":(s.markout_mean_per_share*100).toFixed(2)+"&cent;", accent:"#EF4444",
+     tip: `Formula: size-weighted mean of (reference mid &minus; fill mid) per filled share, in cents. Current: ${s.markout_mean_per_share===null?"--":(s.markout_mean_per_share*100).toFixed(2)+"&cent;"}. Negative = adverse selection: fills systematically arrive against us.`,
      chart: `<div class="cursor-pointer" title="Click to expand" onclick="openDistModal('markout')">${bellCurveSvg({min:-6,max:6,mean:(s.markout_mean_per_share||0)*100,stdev:2,zero:0,color:"#EF4444",w:140,h:64})}</div>`,
      sub:`n_eff ${s.markout_n_eff.toFixed(1)} &middot; measured`},
     {label:"Weighting Gap", value: weightGap===null?"--":weightGap.toFixed(1)+" pp", accent:"#F59E0B",
+     tip: `Formula: equal-weighted mean return &minus; cash-weighted realized return, in percentage points. Current: ${weightGap===null?"--":weightGap.toFixed(1)+" pp"}. A wide gap means per-settlement weighting changes the picture.`,
      chart: `<div class="space-y-1.5 pt-1"><div class="flex items-center gap-2"><span class="mono text-[12px] text-[#9CA3AF] w-[46px]">Equal</span><div class="flex-1 h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden"><div class="h-full bg-[#9CA3AF]" style="width:${Math.min(100,Math.abs(s.mean_return_pct||0))}%"></div></div></div><div class="flex items-center gap-2"><span class="mono text-[12px] text-[#9CA3AF] w-[46px]">Cash</span><div class="flex-1 h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden"><div class="h-full bg-[#3B82F6]" style="width:${Math.min(100,Math.abs(s.realized_pct||0))}%"></div></div></div></div>`,
      sub:`${fmtPct(s.mean_return_pct)} eq vs ${fmtPct(s.realized_pct)} $`},
     {label:"Concentration", value: s.categories.length?(s.categories[0].pct.toFixed(1)+"% "+s.categories[0].name):"--",
@@ -807,7 +835,7 @@ function renderVerdict(s){
   </div>`;
   const right = `<div class="col-span-12 lg:col-span-9 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 divide-y md:divide-y-0 md:divide-x divide-[#1F2937]">
     ${tiles.map((t,i)=>`<div class="p-3 flex flex-col gap-2 hover:bg-[#090D16] transition-colors">
-      <div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]">0${i+1} &mdash; ${t.label}</div>
+      <div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF] flex items-center">0${i+1} &mdash; ${t.label}${t.tip?tip(t.label,t.tip):""}</div>
       <div class="mono text-[19px] font-bold leading-none px-2 py-1.5 w-fit border" style="color:${t.accent};background:${t.accent}1A;border-color:${t.accent}33">${t.value}</div>
       ${t.chart}
       <div class="mono text-[12px] leading-4 text-[#9CA3AF]">${t.sub}</div>
@@ -817,17 +845,41 @@ function renderVerdict(s){
 }
 
 function renderGauges(s){
-  // Two threshold instruments. Settlement progress is not repeated here:
+  // Readiness instruments. Settlement progress is not repeated here:
   // the settled sample's home is the Verdict panel (Sample tile + note).
   const items = [
     {label:"Capital Committed", sub:`${s.committed_open_usd.toFixed(0)} of ${s.max_committed_usd.toFixed(0)}`, value:s.committed_open_usd, max:s.max_committed_usd, color:"#3B82F6"},
-    {label:"Markout Coverage", sub:`${s.markout_n_eff.toFixed(1)} fills &middot; threshold ${s.markout_min_sample}`, value:s.markout_n_eff, max:Math.max(s.markout_min_sample*2, s.markout_n_eff), color:"#10B981", threshold:s.markout_min_sample},
+    {label:"Markout Coverage", sub:`${s.markout_n_eff.toFixed(1)} fills &middot; threshold ${s.markout_min_sample}`, value:s.markout_n_eff, max:Math.max(s.markout_min_sample*2, s.markout_n_eff), color:"#10B981", threshold:s.markout_min_sample,
+     tip: `Kish's effective sample size &mdash; (&Sigma;w)&sup2;/&Sigma;w&sup2;. Current: ${s.markout_n_eff.toFixed(1)}. A size-weighted sample behaves like this many equal rows; the gate requires n_eff &ge; ${s.markout_min_sample}.`},
   ];
+  // Naked-USD capacity bar: the fleet-wide sum of per-market naked_cost
+  // against the $120 hard cap (strategy/config.py max_naked_usd). Utilization
+  // bands: <50% soft green, 50-80% amber, >=80% pulsing red + HIGH EXPOSURE.
+  const nakedUsd = s.naked_usd || 0;
+  const nakedCap = s.max_naked_usd || 0;
+  const nakedPct = nakedCap > 0 ? Math.min(100, 100*nakedUsd/nakedCap) : 0;
+  const barColor = nakedPct >= 80 ? "#EF4444" : nakedPct >= 50 ? "#F59E0B" : "#10B981";
+  const naked = `
+    <div class="bg-[#111827] border border-[#1F2937] p-5 lg:col-span-2">
+      <div class="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF] flex items-center">Naked USD Exposure${tip("Naked USD Exposure", `Formula: &Sigma; per-market naked_cost &mdash; USD in the unhedged leg, valued at average cost &mdash; against the ${nakedCap.toFixed(0)} hard cap (max_naked_usd). Current: $${nakedUsd.toFixed(2)} (${nakedPct.toFixed(1)}% of cap). Utilization bands: &lt;50% soft green &middot; 50&ndash;80% amber &middot; &ge;80% pulsing red HIGH EXPOSURE.`)}</div>
+          <div class="mt-2 flex items-baseline gap-2.5 flex-wrap">
+            <span class="mono text-[26px] font-bold leading-none tracking-tight" data-kpi="naked_usd" data-v="${nakedUsd.toFixed(2)}" data-fmt="usd">$${nakedUsd.toFixed(2)}</span>
+            <span class="mono text-[13px] text-[#9CA3AF]">of $${nakedCap.toFixed(0)} hard cap</span>
+            ${nakedPct >= 80 ? `<span class="mono text-[11px] font-bold tracking-widest px-2 py-1 bg-[#EF4444] text-white border border-[#EF4444]">HIGH EXPOSURE</span>` : ""}
+          </div>
+        </div>
+        <span class="mono text-[12px] tracking-widest px-2 py-1 border font-semibold shrink-0" style="color:${barColor};background:${barColor}1A;border-color:${barColor}33">${nakedPct.toFixed(1)}%</span>
+      </div>
+      <div class="mt-4 h-1.5 w-full bg-[#090D16] overflow-hidden"><div class="h-full ${nakedPct>=80?'warn-bar':''}" style="width:${nakedPct}%;background:${barColor}"></div></div>
+      <div class="mt-3 mono text-[13px] leading-5 text-[#9CA3AF] border-l-2 pl-3" style="border-color:${barColor}">Sum of naked cost across open markets &mdash; in DOLLARS of unhedged exposure. The $120 cap is per market; this is the fleet-wide view of the same number.</div>
+    </div>`;
   document.getElementById("sec-gauges").innerHTML = items.map(g => {
     const pct = Math.min(100, Math.max(0,(g.value/g.max)*100));
     return `<div class="bg-[#111827] border border-[#1F2937] p-5 flex flex-col">
       <div class="flex items-start justify-between gap-3">
-        <div><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF]">${g.label}</div><div class="mono text-[13px] tracking-tight mt-0.5">${g.sub}</div></div>
+        <div><div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF] flex items-center">${g.label}${g.tip?tip(g.label,g.tip):""}</div><div class="mono text-[13px] tracking-tight mt-0.5">${g.sub}</div></div>
         <span class="mono text-[12px] tracking-widest px-2 py-1 border font-semibold shrink-0" style="color:${g.color};background:${g.color}1A;border-color:${g.color}33">${pct.toFixed(1)}%</span>
       </div>
       <div class="mt-5 flex items-center gap-5">
@@ -843,7 +895,7 @@ function renderGauges(s){
         </div>
       </div>
     </div>`;
-  }).join("");
+  }).join("") + naked;
 }
 
 function renderEvidence(s){
@@ -1187,6 +1239,14 @@ function showSectionError(elId, err){
 function fmtClock(ts){
   if (!ts) return "--:--:--";
   return new Date(ts * 1000).toLocaleTimeString();
+}
+
+// Metric tooltip: an info icon beside a statistical header opens a card
+// with the formula, the live value, and the gate meaning. Pure CSS hover /
+// keyboard-focus (the button inside the wrap); no tooltip library needed.
+function tip(key, body){
+  return `<span class="tip-wrap"><button type="button" class="tip-ico" aria-label="About ${esc(key)}" tabindex="0">i</button>` +
+    `<span class="tip-pop" role="tooltip"><span class="tip-k">${esc(key)}</span><span class="tip-t">${body}</span></span></span>`;
 }
 
 // ---------- the call (decision hinge) ----------

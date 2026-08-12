@@ -130,6 +130,11 @@ def api_summary() -> dict:
     committed_open = sum(r["committed"] for r in open_rows)
     active_positions = sum(
         1 for r in open_rows if (r["paired"] or r["naked_sh"]))
+    # Fleet-wide naked exposure: the USD in the unhedged leg, valued at
+    # average cost per market (fleet_dash's `naked_cost`). The $120 cap is
+    # strategy/config.py's max_naked_usd -- the binding per-market dollar
+    # budget the quoting layer enforces. Shown as a utilization bar.
+    naked_usd = sum(r.get("naked_cost") or 0.0 for r in open_rows)
     cost = real["cost"] or 0.0
     realized_pct = (100.0 * real["realized"] / cost) if cost else None
 
@@ -200,6 +205,8 @@ def api_summary() -> dict:
         "total_liquidation_usd": total_liquidation_usd,
         "bankroll_usd": CFG.bankroll_usd,
         "max_committed_usd": CFG.max_committed_usd,
+        "naked_usd": naked_usd,
+        "max_naked_usd": CFG.max_naked_usd,
         "scanned": counts.get("attempted"),
         "scored": counts.get("scored"),
         "eligible": counts.get("eligible"),
