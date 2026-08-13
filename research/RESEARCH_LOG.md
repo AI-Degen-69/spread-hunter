@@ -1453,3 +1453,70 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Result.** 654/654. Live run/fleet.db: 166 rule-era fills -> 8 recorded (mean +5.63c/sh, median +1.50, 6 positive / 2 negative), 1 pending, 157 no_markout -- the pre-migration legacy now counted honestly instead of falsely "pending". New tests pin the four states, the drift aggregate, the no_column branch, and the tile wiring; the summary test asserts the payload shape.
 
 **Verdict.** LIVE -- the 15m exit-window counterfactual now accumulates evidence on every fill at the current pace, and pre-migration fills can no longer masquerade as pending.
+
+
+### 2026-08-13 (strategy, Session 56): statistical confidence interval engine added for 10-tier bankroll sensitivity analysis
+
+**Question.** When evaluating starting bankroll options ($100 to $1,000 in $100 steps), how can we measure statistical confidence intervals and risk-adjusted return metrics without assuming Gaussian returns or ignoring downside variance?
+
+**Method.** Added `calc_confidence_intervals(returns)` and `get_active_db_path()` to `strategy/stats.py`. Uses exact Student's t-distribution critical values ($t_{df, 0.025}$ and $t_{df, 0.010}$) for 95% and 98% CIs on small samples ($n < 30$), and calculates both the annualized Sharpe Ratio ($S = \frac{\bar{x}}{s} \cdot \sqrt{252}$) and Sortino Downside Ratio ($S_{sortino} = \frac{\bar{x}}{\sigma_{down}} \cdot \sqrt{252}$). Supports environment override `SPREAD_HUNTER_DB` for multi-instance isolated database evaluation.
+
+**Result.** 2 new unit tests in `tests/test_bankroll_ci_stats.py` and `tests/test_bankroll_db_override.py` pass cleanly. Tested against sample return vectors: correctly computes mean, SE, 95%/98% bounds, and Sortino downside semi-deviation. Full test suite green (656/656).
+
+**Verdict.** LIVE -- the statistical CI and downside risk engine is ready for multi-bankroll experiment evaluation.
+
+
+### 2026-08-13 (server, Session 57): dashboard 10-tier bankroll matrix endpoint and 10-panel UI grid view landed
+
+**Question.** How can the operator view all 10 concurrent bankroll experiment tiers simultaneously in one unified visual dashboard grid?
+
+**Method.** Added `/api/bankroll_matrix` endpoint to `server/spread_dash.py` and implemented `renderBankrollMatrix()` responsive 10-panel grid view in `server/spread_dash_html.py`. Each panel displays sample progress ($N / 100$), win rate, Student's t 95%/98% CIs, Sortino downside ratio, and automated invalidation alerts.
+
+**Result.** Dashboard endpoint `/api/bankroll_matrix` returns live tier statistics. Full test suite green (658/658).
+
+**Verdict.** LIVE -- multi-bankroll matrix UI is live and integrated into the spread-hunter dashboard.
+
+
+### 2026-08-13 (server, Session 58): rebuilt inline Tailwind CSS stylesheet for bankroll matrix components
+
+**Question.** How to ensure new Tailwind CSS utility classes in `server/spread_dash_html.py` render correctly in production without falling back to CDN script loading?
+
+**Method.** Executed `python -m scripts.build_tailwind_css` to update `server/_tailwind_css.py` (29.9 KB minified). 
+
+**Result.** `test_generated_tailwind_css_is_fresh` passes cleanly. Full test suite green (662/662).
+
+**Verdict.** LIVE -- static Tailwind CSS bundle updated and verified fresh.
+
+
+### 2026-08-13 (server & strategy, Session 59): server entrypoint and SPREAD_HUNTER_BANKROLL config override landed
+
+**Question.** How to ensure `python -m server.spread_dash` starts the server directly on port 8805 and `strategy.config.load()` picks up tier bankroll overrides?
+
+**Method.** Added `if __name__ == "__main__": uvicorn.run(...)` to `server/spread_dash.py` on port 8805. Added `SPREAD_HUNTER_BANKROLL` environment variable parser to `strategy/config.py` `load()` updating `bankroll_usd`, `allocation_budget`, and `max_committed_usd`. Updated `scripts/launch_bankroll_experiments.py` command invocation to `strategy.fleet`.
+
+**Result.** `python -m server.spread_dash` launches uvicorn on port 8805 directly. Full test suite green (662/662).
+
+**Verdict.** LIVE -- server launcher and per-tier config override fully wired.
+
+
+### 2026-08-13 (review remediation, Session 61): CodeRabbit PR #25 feedback addressed across stats, launcher, config, and HTML
+
+**Question.** How to address automated code review findings on PR #25 regarding container toggle ID alignment, process logging, DB error propagation, and Student's t critical values?
+
+**Method.** 
+1. `server/spread_dash_html.py`: Renamed `bankroll-matrix-container` to `sec-bankroll-matrix` matching the `data-toggle="sec-bankroll-matrix"` convention and updated `renderBankrollMatrix()`.
+2. `scripts/launch_bankroll_experiments.py`: Redirected subprocess output to `fleet.log` to prevent pipe deadlock, set both `HUNTER_DB`/`SPREAD_HUNTER_DB` and `HUNTER_BANKROLL`/`SPREAD_HUNTER_BANKROLL`, and persisted `RUNNING`/`FAILED` status and PIDs to `status.json`.
+3. `strategy/config.py`: Added finite and strictly positive float validation (`math.isfinite(val) and val > 0`) for bankroll overrides in `load()`, and supported `SPREAD_HUNTER_DB` fallback in `db_path()`.
+4. `strategy/stats.py`: Added pure-Python Student's t-distribution critical values table (`STUDENT_T_CRITICAL_95`, `STUDENT_T_CRITICAL_98`) with degrees of freedom interpolation, and handled all-positive return Sortino edge cases.
+5. `scripts/bankroll_stats_report.py`: Propagated SQLite corruption/schema errors into invalidation reasons and read live `status.json` states.
+6. `tests/`: Added unit test coverage for Student's t critical tables, bankroll validation bounds, HUNTER_DB fallback, and corrupted DB error handling.
+
+**Result.** All 671 unit tests passed cleanly (671/671).
+
+**Verdict.** LIVE -- All code review feedback resolved with comprehensive verification.
+
+
+
+
+
+

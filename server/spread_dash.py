@@ -270,6 +270,17 @@ def api_summary() -> dict:
     }
 
 
+@app.get("/api/bankroll_matrix")
+def api_bankroll_matrix() -> dict:
+    from scripts.bankroll_stats_report import generate_summary_report
+    reports = generate_summary_report()
+    return {
+        "now": time.time(),
+        "tiers": reports,
+    }
+
+
+
 @app.get("/api/markets")
 def api_markets() -> dict:
     rows = _cached("fleet", fleet_dash.fleet)["markets"]
@@ -400,3 +411,9 @@ def landing():
 def dashboard():
     return HTMLResponse(content=DASHBOARD_HTML, headers={
         "Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server.spread_dash:app", host="127.0.0.1", port=8805, reload=False)
+

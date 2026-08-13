@@ -210,3 +210,18 @@
 
 
 * **2026-08-12 (עיצוב, סשן 55): ה-counterfactual של 15 דקות מפסיק לחכות ליציאות -- לכידת fill-horizon על כל fill מתקופת-החוק.** `stats.pairs_ev()` קיבל סולם fill-horizon: כל fill מתקופת-החוק מסווג לפי ה-mid_h3 שלו (recorded עם drift / pending כל עוד חלון ה-900 שניות פתוח / no_markout אחרי שחלף בלי שנכתב / no_column מקדם-ההגירה) -- מבוסס-זמן, כך ש-fills מקדם-ההגירה מפסיקים להתחפש ל-pending. אריח הפסק מרנדר אותו כפס שני מתחת לכרטיס היציאה עם ממוצע ה-drift החתום. fleet.db החי: 166 fills -> 8 recorded בממוצע +5.63c/sh (+6/-2), 1 pending, 157 no_markout. 654/654.
+
+* **2026-08-13 (אסטרטגיה, סשן 56): מנוע רווחי סמך סטטיסטיים נוסף עבור ניתוח רגישות בנקרוֹל 10 דרגות.** הוספנו את `calc_confidence_intervals()` ואת `get_active_db_path()` ל-`strategy/stats.py`. מעריך רווחי סמך 95%/98% להתפלגות t של סטודנט, יחס שארפ ויחס סורטינו עם תמיכה בדריסת סביבה `SPREAD_HUNTER_DB`. 656/656 בדיקות עוברות.
+
+* **2026-08-13 (שרת, סשן 57): נקודת קצה של מטריצת בנקרוֹל 10 דרגות ותצוגת רשת UI בעלת 10 אריחים נחתו בדשבורד.** הוספנו את נקודת הקצה `/api/bankroll_matrix` ואת UI הרשת `renderBankrollMatrix()` ב-`server/spread_dash.py` וב-`server/spread_dash_html.py`. 658/658 בדיקות עוברות.
+
+* **2026-08-13 (שרת, סשן 58): בנייה מחדש של גיליון סגנונות Tailwind CSS פנימי.** עודכן `server/_tailwind_css.py` דרך `scripts/build_tailwind_css.py`. 662/662 בדיקות עוברות.
+
+* **2026-08-13 (שרת ואסטרטגיה, סשן 59): נקודת כניסה לשרת ודריסת תצורה ל-SPREAD_HUNTER_BANKROLL נחתו.** נוספה נקודת כניסה של uvicorn ל-`server/spread_dash.py` וטיפול ב-`SPREAD_HUNTER_BANKROLL` ב-`strategy/config.py`. 662/662 בדיקות עוברות.
+
+* **2026-08-13 (תיקון ביקורת, סשן 61): הערות CodeRabbit עבור PR #25 טופלו בסטטיסטיקה, במפעיל, בתצורה וב-HTML.** מזהה מכל המטריצה הותאם ל-`sec-bankroll-matrix`, פלטי תהליכי הבן נותבו ל-`fleet.log`, נאכף אימות בנקרוֹל סופי וחיובי ב-`strategy/config.py`, יושמה אינטרפולציית ערכים קריטיים של t של סטודנט וטיפול במקרי קצה ב-`strategy/stats.py`, נוסף טיפול בשגיאות DB ב-`scripts/bankroll_stats_report.py`, ונוספו בדיקות יחידה. כל 671/671 הבדיקות עוברות.
+
+
+
+
+
