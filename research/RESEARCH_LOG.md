@@ -1499,15 +1499,22 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Verdict.** LIVE -- server launcher and per-tier config override fully wired.
 
 
-### 2026-08-13 (server, Session 60): inserted 10-tier bankroll sensitivity matrix container into dashboard HTML
+### 2026-08-13 (review remediation, Session 61): CodeRabbit PR #25 feedback addressed across stats, launcher, config, and HTML
 
-**Question.** Why was the 10-panel grid view not displaying on `http://localhost:8805`?
+**Question.** How to address automated code review findings on PR #25 regarding container toggle ID alignment, process logging, DB error propagation, and Student's t critical values?
 
-**Method.** Added `<div id="bankroll-matrix-container">` section header into `DASHBOARD_HTML` in `server/spread_dash_html.py` right above the Positions panel. Rebuilt static Tailwind CSS bundle (`server/_tailwind_css.py`).
+**Method.** 
+1. `server/spread_dash_html.py`: Renamed `bankroll-matrix-container` to `sec-bankroll-matrix` matching the `data-toggle="sec-bankroll-matrix"` convention and updated `renderBankrollMatrix()`.
+2. `scripts/launch_bankroll_experiments.py`: Redirected subprocess output to `fleet.log` to prevent pipe deadlock, set both `HUNTER_DB`/`SPREAD_HUNTER_DB` and `HUNTER_BANKROLL`/`SPREAD_HUNTER_BANKROLL`, and persisted `RUNNING`/`FAILED` status and PIDs to `status.json`.
+3. `strategy/config.py`: Added finite and strictly positive float validation (`math.isfinite(val) and val > 0`) for bankroll overrides in `load()`, and supported `SPREAD_HUNTER_DB` fallback in `db_path()`.
+4. `strategy/stats.py`: Added pure-Python Student's t-distribution critical values table (`STUDENT_T_CRITICAL_95`, `STUDENT_T_CRITICAL_98`) with degrees of freedom interpolation, and handled all-positive return Sortino edge cases.
+5. `scripts/bankroll_stats_report.py`: Propagated SQLite corruption/schema errors into invalidation reasons and read live `status.json` states.
+6. `tests/`: Added unit test coverage for Student's t critical tables, bankroll validation bounds, HUNTER_DB fallback, and corrupted DB error handling.
 
-**Result.** `renderBankrollMatrix()` finds container element and paints the 10-panel grid cards live. Full test suite green (662/662).
+**Result.** All 671 unit tests passed cleanly (671/671).
 
-**Verdict.** LIVE -- 10-tier bankroll matrix section renders cleanly in the dashboard UI.
+**Verdict.** LIVE -- All code review feedback resolved with comprehensive verification.
+
 
 
 

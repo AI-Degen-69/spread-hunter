@@ -41,3 +41,25 @@ def test_evaluate_bankroll_invalidation(tmp_path):
     assert res["bankroll"] == 200
     assert res["is_invalid"] is True
     assert "95% CI upper bound < 0%" in res["invalidation_reasons"]
+
+def test_evaluate_bankroll_db_error(tmp_path):
+    tier_dir = tmp_path / "bankroll_300"
+    tier_dir.mkdir(parents=True, exist_ok=True)
+    db_path = tier_dir / "fleet.db"
+    # Write invalid non-SQLite content to trigger SQLite error
+    db_path.write_text("corrupted sqlite file content")
+
+    res = evaluate_bankroll_tier(bankroll=300, workdir=tier_dir)
+    assert res["bankroll"] == 300
+    assert res["is_invalid"] is True
+    assert any("Database error" in reason for reason in res["invalidation_reasons"])
+
+def test_generate_summary_report(tmp_path):
+    for amt in range(100, 1001, 100):
+        tdir = tmp_path / f"bankroll_{amt}"
+        tdir.mkdir(parents=True, exist_ok=True)
+    reports = generate_summary_report(run_dir=tmp_path)
+    assert len(reports) == 10
+    assert reports[0]["bankroll"] == 100
+    assert reports[-1]["bankroll"] == 1000
+

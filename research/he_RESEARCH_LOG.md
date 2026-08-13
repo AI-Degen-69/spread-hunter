@@ -1233,15 +1233,22 @@ deploy/run_service.py) למת פונקציונלית על המארח הזה. ה�
 **פסק דין.** LIVE -- מפעיל השרת ודריסת התצורה לכל דרגה מחוברים במלואם.
 
 
-### 2026-08-13 (שרת, סשן 60): הכנסת מכל מטריצת בנקרוֹל 10 דרגות ל-HTML של הדשבורד
+### 2026-08-13 (תיקון ביקורת, סשן 61): הערות CodeRabbit עבור PR #25 טופלו בסטטיסטיקה, במפעיל, בתצורה וב-HTML
 
-**שאלה.** מדוע תצוגת רשת 10 האריחים לא הוצגה ב-`http://localhost:8805`?
+**שאלה.** כיצד לטפל בממצאי סקירת הקוד האוטומטית ב-PR #25 בנוגע להתאמת מזהה המכל ל-toggle, תיעוד תהליכים, הפצת שגיאות DB וערכים קריטיים של התפלגות t של סטודנט?
 
-**שיטה.** הוספנו סקשן `<div id="bankroll-matrix-container">` ב-`DASHBOARD_HTML` ב-`server/spread_dash_html.py` מציב אותו בדיוק מעל לוח הפוזיציות. בנינו מחדש את גיליון הסגנונות Tailwind הסטטי (`server/_tailwind_css.py`).
+**שיטה.**
+1. `server/spread_dash_html.py`: שינוי שם `bankroll-matrix-container` ל-`sec-bankroll-matrix` בהתאמה לקונבנציית `data-toggle="sec-bankroll-matrix"` ועדכון `renderBankrollMatrix()`.
+2. `scripts/launch_bankroll_experiments.py`: ניתוב פלט תהליך הבן לקובץ `fleet.log` למניעת חסימת pipe, הגדרת משתני `HUNTER_DB`/`SPREAD_HUNTER_DB` ו-`HUNTER_BANKROLL`/`SPREAD_HUNTER_BANKROLL`, ושמירת סטטוס `RUNNING`/`FAILED` ומזהי PID ל-`status.json`.
+3. `strategy/config.py`: הוספת אימות מספר ממשי סופי וחיובי ממש (`math.isfinite(val) and val > 0`) עבור דריסות בנקרוֹל ב-`load()`, ותמיכה בנפילה ל-`SPREAD_HUNTER_DB` ב-`db_path()`.
+4. `strategy/stats.py`: הוספת טבלת ערכים קריטיים של התפלגות t של סטודנט בפייתון טהור (`STUDENT_T_CRITICAL_95`, `STUDENT_T_CRITICAL_98`) עם אינטרפולציית דרגות חופש וטיפול במקרי קצה של יחס סורטינו עבור תשואות חיוביות בלבד.
+5. `scripts/bankroll_stats_report.py`: הפצת שגיאות SQLite/סכמה לסיבות הפסילה וקריאת סטטוסי `status.json` חיים.
+6. `tests/`: הוספת כיסוי בדיקות יחידה עבור טבלאות t של סטודנט, גבולות אימות בנקרוֹל, נפילת HUNTER_DB וטיפול בשגיאות DB פגום.
 
-**תוצאה.** `renderBankrollMatrix()` מוצא את אלמנט המכל ומצייר את 10 כרטיסי הרשת בלייב. כל סוויטת הבדיקות ירוקה (662/662).
+**תוצאה.** כל 671 בדיקות היחידה עברו בנקיות (671/671).
 
-**פסק דין.** LIVE -- סקשן מטריצת הבנקרוֹל ב-10 דרגות מרונדר בנקיות ב-UI של הדשבורד.
+**פסק דין.** LIVE -- כל משובי ביקורת הקוד נפתרו עם אימות מקיף.
+
 
 
 

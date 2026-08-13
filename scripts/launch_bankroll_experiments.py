@@ -38,7 +38,9 @@ def setup_experiment_dirs(configs: list[dict]):
 def launch_tier_process(cfg: dict, dry_run: bool = False) -> subprocess.Popen | None:
     """Launch strategy process for a single bankroll tier in an isolated workdir."""
     env = os.environ.copy()
+    env["HUNTER_DB"] = str(cfg["db_path"])
     env["SPREAD_HUNTER_DB"] = str(cfg["db_path"])
+    env["HUNTER_BANKROLL"] = str(cfg["bankroll"])
     env["SPREAD_HUNTER_BANKROLL"] = str(cfg["bankroll"])
 
     cmd = [sys.executable, "-m", "strategy.fleet"]
@@ -46,14 +48,47 @@ def launch_tier_process(cfg: dict, dry_run: bool = False) -> subprocess.Popen | 
         print(f"[DRY RUN] Would execute: {' '.join(cmd)} (Workdir: {cfg['workdir']})")
         return None
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    return proc
+    status_path = cfg.get("status_path", cfg["workdir"] / "status.json")
+    log_path = cfg["workdir"] / "fleet.log"
+    log_file = open(log_path, "a", encoding="utf-8")
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=log_file,
+            stderr=log_file,
+        )
+        if status_path.exists():
+            try:
+                cur_status = json.loads(status_path.read_text())
+            except Exception:
+                cur_status = {}
+        else:
+            cur_status = {"bankroll": cfg["bankroll"]}
+        cur_status.update({
+            "status": "RUNNING",
+            "pid": proc.pid,
+            "started_at": time.time(),
+        })
+        status_path.write_text(json.dumps(cur_status, indent=2))
+        return proc
+    except Exception as e:
+        if status_path.exists():
+            try:
+                cur_status = json.loads(status_path.read_text())
+            except Exception:
+                cur_status = {}
+        else:
+            cur_status = {"bankroll": cfg["bankroll"]}
+        cur_status.update({
+            "status": "FAILED",
+            "error": str(e),
+            "failed_at": time.time(),
+        })
+        status_path.write_text(json.dumps(cur_status, indent=2))
+        raise
 
 def main():
     dry_run = "--dry-run" in sys.argv
@@ -69,12 +104,16 @@ def main():
 
     procs = []
     for cfg in configs:
-        proc = launch_tier_process(cfg)
-        if proc:
-            procs.append((cfg["bankroll"], proc))
-            print(f"Launched PID {proc.pid} for Bankroll ${cfg['bankroll']}")
+        try:
+            proc = launch_tier_process(cfg)
+            if proc:
+                procs.append((cfg["bankroll"], proc))
+                print(f"Launched PID {proc.pid} for Bankroll ${cfg['bankroll']}")
+        except Exception as e:
+            print(f"Failed to launch tier ${cfg['bankroll']}: {e}")
 
     print(f"Successfully launched {len(procs)} concurrent bankroll experiment instances.")
 
 if __name__ == "__main__":
     main()
+

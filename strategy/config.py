@@ -5,6 +5,7 @@ See research/powerwinner_analysis.md.
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -691,7 +692,7 @@ class MakerConfig:
     sim_only: bool = True
 
     def db_path(self) -> Path:
-        return Path(os.environ.get("HUNTER_DB", str(ROOT / "hunter.db")))
+        return Path(os.environ.get("SPREAD_HUNTER_DB") or os.environ.get("HUNTER_DB", str(ROOT / "hunter.db")))
 
 
     # --- pinned market (multi-bot mode) -----------------------------------
@@ -747,9 +748,12 @@ def load() -> MakerConfig:
         kw["marginal_return_floor"] = float(mf)
     bk = os.environ.get("SPREAD_HUNTER_BANKROLL") or os.environ.get("HUNTER_BANKROLL") or ""
     if bk.strip():
-        kw["bankroll_usd"] = float(bk)
-        kw["allocation_budget"] = float(bk) * 0.9
-        kw["max_committed_usd"] = float(bk)
+        val = float(bk)
+        if not math.isfinite(val) or val <= 0:
+            raise ValueError(f"Bankroll override must be finite and strictly positive, got: {val}")
+        kw["bankroll_usd"] = val
+        kw["allocation_budget"] = val * 0.9
+        kw["max_committed_usd"] = val
     return MakerConfig(**kw)
 
 # hook probe

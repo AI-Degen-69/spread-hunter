@@ -11,21 +11,36 @@ ROOT = Path(__file__).resolve().parent.parent
 def evaluate_bankroll_tier(bankroll: int, workdir: Path) -> dict:
     """Read tier DB, evaluate Student's t CIs, Sharpe/Sortino, and automated invalidation rules."""
     db_path = workdir / "fleet.db"
+    status_path = workdir / "status.json"
     returns = []
+    db_error = None
+
     if db_path.exists():
         try:
             conn = sqlite3.connect(db_path)
             rows = conn.execute("SELECT pnl_usd FROM settled").fetchall()
-            returns = [r[0] for r in rows]
+            returns = [float(r[0]) for r in rows if r[0] is not None]
             conn.close()
-        except Exception:
+        except Exception as e:
+            db_error = str(e)
             returns = []
+
+    tier_status = "INITIALIZED"
+    if status_path.exists():
+        try:
+            sdata = json.loads(status_path.read_text())
+            tier_status = sdata.get("status", tier_status)
+        except Exception:
+            pass
 
     stats = calc_confidence_intervals(returns)
     sample_count = stats["count"]
     win_rate = (len([r for r in returns if r > 0]) / sample_count * 100.0) if sample_count > 0 else 0.0
 
     invalidation_reasons = []
+    if db_error:
+        invalidation_reasons.append(f"Database error: {db_error}")
+
     if sample_count >= 30:
         if stats["ci_95"]["upper"] < 0:
             invalidation_reasons.append("95% CI upper bound < 0%")
@@ -50,6 +65,7 @@ def evaluate_bankroll_tier(bankroll: int, workdir: Path) -> dict:
 
     return {
         "bankroll": bankroll,
+        "status": tier_status if not is_invalid else "INVALID",
         "sample_count": sample_count,
         "win_rate": win_rate,
         "max_drawdown": max_drawdown,

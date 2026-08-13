@@ -1144,9 +1144,52 @@ def snapshot() -> dict:
     }
 
 
+# Student's t critical values for two-tailed alpha = 0.05 (95% CI) and alpha = 0.02 (98% CI)
+# Indexed by degrees of freedom df = n - 1 (df >= 1).
+STUDENT_T_CRITICAL_95 = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+    6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+    11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
+    16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
+    21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
+    26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
+    40: 2.021, 50: 2.009, 60: 2.000, 80: 1.990, 100: 1.984,
+    120: 1.980, 500: 1.965, 1000: 1.962,
+}
+
+STUDENT_T_CRITICAL_98 = {
+    1: 31.821, 2: 6.965, 3: 4.541, 4: 3.747, 5: 3.365,
+    6: 3.143, 7: 2.998, 8: 2.896, 9: 2.821, 10: 2.764,
+    11: 2.718, 12: 2.681, 13: 2.650, 14: 2.624, 15: 2.602,
+    16: 2.583, 17: 2.567, 18: 2.552, 19: 2.539, 20: 2.528,
+    21: 2.518, 22: 2.508, 23: 2.500, 24: 2.492, 25: 2.485,
+    26: 2.479, 27: 2.473, 28: 2.467, 29: 2.462, 30: 2.457,
+    40: 2.423, 50: 2.403, 60: 2.390, 80: 2.374, 100: 2.364,
+    120: 2.358, 500: 2.334, 1000: 2.330,
+}
+
+
+def get_student_t_critical(df: int, level: str = "95") -> float:
+    """Return Student's t critical value for df = n - 1 at 95% or 98% confidence level."""
+    if df < 1:
+        return 1.96 if level == "95" else 2.326
+    table = STUDENT_T_CRITICAL_95 if level == "95" else STUDENT_T_CRITICAL_98
+    if df in table:
+        return table[df]
+    if df > 1000:
+        return 1.960 if level == "95" else 2.326
+    keys = sorted(table.keys())
+    for i in range(len(keys) - 1):
+        if keys[i] <= df <= keys[i + 1]:
+            k0, k1 = keys[i], keys[i + 1]
+            v0, v1 = table[k0], table[k1]
+            return v0 + (v1 - v0) * (df - k0) / (k1 - k0)
+    return table[keys[-1]]
+
+
 def get_active_db_path() -> Path:
-    """Return configured DB path or environment override SPREAD_HUNTER_DB."""
-    override = os.getenv("SPREAD_HUNTER_DB")
+    """Return configured DB path or environment override SPREAD_HUNTER_DB / HUNTER_DB."""
+    override = os.getenv("SPREAD_HUNTER_DB") or os.getenv("HUNTER_DB")
     if override:
         return Path(override)
     return DB
@@ -1156,24 +1199,30 @@ def calc_confidence_intervals(returns: list[float]) -> dict:
     """Calculate sample mean, std dev, SE, 95%/98% CIs (Student's t), Sharpe & Sortino ratios."""
     n = len(returns)
     if n < 2:
+        val = returns[0] if n == 1 else 0.0
         return {
-            "count": n, "mean": (returns[0] if n == 1 else 0.0),
-            "std": 0.0, "se": 0.0, "sharpe": 0.0, "sortino": 0.0,
-            "ci_95": {"lower": 0.0, "upper": 0.0},
-            "ci_98": {"lower": 0.0, "upper": 0.0},
+            "count": n,
+            "mean": val,
+            "std": 0.0,
+            "se": 0.0,
+            "sharpe": 0.0,
+            "sortino": 0.0,
+            "ci_95": {"lower": val, "upper": val},
+            "ci_98": {"lower": val, "upper": val},
         }
     mean = statistics.mean(returns)
     std = statistics.stdev(returns)
     se = std / math.sqrt(n)
 
     downside_sq = [r ** 2 for r in returns if r < 0]
-    downside_dev = math.sqrt(sum(downside_sq) / n) if downside_sq else 1e-6
+    downside_dev = math.sqrt(sum(downside_sq) / len(downside_sq)) if downside_sq else 0.0
 
     sharpe = (mean / std) * math.sqrt(252) if std > 0 else 0.0
-    sortino = (mean / downside_dev) * math.sqrt(252) if downside_dev > 0 else 0.0
+    sortino = (mean / downside_dev) * math.sqrt(252) if downside_dev > 0 else (0.0 if mean <= 0 else 99.99)
 
-    z_95 = 1.96 if n >= 30 else (2.228 if n <= 10 else 2.042)
-    z_98 = 2.326 if n >= 30 else (2.764 if n <= 10 else 2.457)
+    df = n - 1
+    t_95 = get_student_t_critical(df, "95")
+    t_98 = get_student_t_critical(df, "98")
 
     return {
         "count": n,
@@ -1182,7 +1231,8 @@ def calc_confidence_intervals(returns: list[float]) -> dict:
         "se": se,
         "sharpe": sharpe,
         "sortino": sortino,
-        "ci_95": {"lower": mean - z_95 * se, "upper": mean + z_95 * se},
-        "ci_98": {"lower": mean - z_98 * se, "upper": mean + z_98 * se},
+        "ci_95": {"lower": mean - t_95 * se, "upper": mean + t_95 * se},
+        "ci_98": {"lower": mean - t_98 * se, "upper": mean + t_98 * se},
     }
+
 

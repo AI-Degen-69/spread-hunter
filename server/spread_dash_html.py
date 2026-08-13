@@ -561,7 +561,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
       </span>
       <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#FBBF24]">10 Concurrent Simultaneous Runs</span>
     </button>
-    <div id="bankroll-matrix-container" class="sh-fade grid grid-cols-12 gap-0 bg-[#090D16]"></div>
+    <div id="sec-bankroll-matrix" class="sh-fade grid grid-cols-12 gap-0 bg-[#090D16]"></div>
   </section>
 
   <section class="sh-rise hero-shadow border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.05s">
@@ -1861,7 +1861,7 @@ function renderDrawer(){
 let REFRESH_BUSY = false;
 
 function renderBankrollMatrix(matrix){
-  const el = document.getElementById("bankroll-matrix-container");
+  const el = document.getElementById("sec-bankroll-matrix");
   if (!el || !matrix || !matrix.tiers) return;
   
   const tiers = matrix.tiers;
