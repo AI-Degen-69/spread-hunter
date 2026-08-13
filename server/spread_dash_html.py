@@ -1848,11 +1848,58 @@ function renderDrawer(){
 // what reports staleness, turning amber after 45s.
 let REFRESH_BUSY = false;
 
+function renderBankrollMatrix(matrix){
+  const el = document.getElementById("bankroll-matrix-container");
+  if (!el || !matrix || !matrix.tiers) return;
+  
+  const tiers = matrix.tiers;
+  const cards = tiers.map(t => {
+    const isInv = t.is_invalid;
+    const isVal = !isInv && t.sample_count >= 30;
+    const statusColor = isInv ? "#EF4444" : (isVal ? "#10B981" : "#F59E0B");
+    const statusText = isInv ? "INVALID" : (isVal ? "VALID" : "COLLECTING");
+    const ci95Str = `[${t.ci_95.lower.toFixed(2)}, ${t.ci_95.upper.toFixed(2)}]`;
+    
+    return `
+      <div class="p-4 bg-[#111827] border border-[#1F2937] flex flex-col gap-3 relative overflow-hidden">
+        <div class="absolute top-0 left-0 w-full h-[2px]" style="background:${statusColor}"></div>
+        <div class="flex items-center justify-between">
+          <span class="mono text-[16px] font-bold text-[#F9FAFB]">$${t.bankroll} Bankroll</span>
+          <span class="mono text-[11px] font-bold px-2 py-0.5 border uppercase" style="color:${statusColor};background:${statusColor}1A;border-color:${statusColor}33">${statusText}</span>
+        </div>
+        <div class="grid grid-cols-2 gap-2 mono text-[12px]">
+          <div class="bg-[#090D16] p-2 border border-[#1F2937]">
+            <div class="text-[#9CA3AF] text-[10px] uppercase">Sample Count</div>
+            <div class="font-bold text-[#F9FAFB] mt-0.5">${t.sample_count} / 100</div>
+          </div>
+          <div class="bg-[#090D16] p-2 border border-[#1F2937]">
+            <div class="text-[#9CA3AF] text-[10px] uppercase">Win Rate</div>
+            <div class="font-bold text-[#F9FAFB] mt-0.5">${t.win_rate.toFixed(1)}%</div>
+          </div>
+        </div>
+        <div class="mono text-[12px] space-y-1">
+          <div class="flex justify-between text-[#9CA3AF]"><span class="uppercase text-[11px]">Mean Return:</span><span class="font-bold text-[#F9FAFB]">$${t.mean_return.toFixed(2)}</span></div>
+          <div class="flex justify-between text-[#9CA3AF]"><span class="uppercase text-[11px]">95% CI (Student t):</span><span class="font-semibold text-[#10B981]">${ci95Str}</span></div>
+          <div class="flex justify-between text-[#9CA3AF]"><span class="uppercase text-[11px]">Sortino Ratio:</span><span class="font-bold text-[#FBBF24]">${t.sortino.toFixed(2)}</span></div>
+        </div>
+        ${isInv ? `<div class="mono text-[11px] text-[#EF4444] bg-[#EF4444]/10 p-2 border border-[#EF4444]/20">${t.invalidation_reasons.join(", ")}</div>` : ''}
+      </div>
+    `;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="col-span-12 p-4 bg-[#090D16] border-b border-[#1F2937] flex items-center justify-between">
+      <div class="mono text-[14px] font-bold text-[#FBBF24] uppercase tracking-wider">10-Tier Bankroll Sensitivity Grid ($100 - $1,000)</div>
+      <div class="mono text-[12px] text-[#9CA3AF]">Simultaneous Untampered Polymarket Execution</div>
+    </div>
+    <div class="col-span-12 p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      ${cards}
+    </div>
+  `;
+}
+
 function renderSummary(s){
   LAST_STATS = s;
-  // The status string appears once on this screen -- right here in the
-  // header. The settled sample lives in the Verdict panel; the go-live
-  // readiness lives in the Gates panel.
   document.getElementById("hdr-pills").innerHTML = `
     <span class="mono text-[12px] tracking-[0.12em] uppercase px-2.5 py-1 bg-[#090D16] font-semibold border border-[#1F2937]">${esc(s.status)}</span>`;
   document.getElementById("hdr-live").innerHTML = `
@@ -1863,12 +1910,6 @@ function renderSummary(s){
   renderVerdict(s);
   renderGauges(s);
   renderEvidence(s);
-  // Scope keeps one thing the panels don't: honest freshness. The status,
-  // the settled sample, and the lower bound each have a single home above.
-  // "Data as of" is the fleet payload's load time (api_summary.fleet_ts), NOT
-  // the response time -- the payload inside can be up to the 8s cache TTL
-  // older than the response that carries it. Falls back to s.now for a
-  // process whose cache has never filled.
   document.getElementById("scope-tiles").innerHTML = `
     <div class="border border-[#1F2937] p-3 text-center"><div class="text-[#9CA3AF]">Data as of</div><div class="font-semibold mt-1">${fmtClock(s.fleet_ts || s.now)}</div></div>`;
 }
@@ -1879,18 +1920,18 @@ async function refresh(){
   const main = document.querySelector("main");
   if (main) main.classList.add("sh-refreshing");
   try {
-    const [st, fn, mk, s] = await Promise.all([
+    const [st, fn, mk, s, matrix] = await Promise.all([
       fetchJSON("/api/settled").catch(() => null),
       fetchJSON("/api/funnel").catch(() => null),
       fetchJSON("/api/markets").catch(() => null),
       fetchJSON("/api/summary").catch(() => null),
+      fetchJSON("/api/bankroll_matrix").catch(() => null),
     ]);
     if (st) renderSettled(st.settled, st.total_closes);
     if (fn) renderFunnel(fn);
     if (mk) renderMarkets(mk.markets);
     if (s) renderSummary(s);
-    // Flash changed figures, animate status transitions, and keep an open
-    // drawer live with the freshest data -- all after the re-render.
+    if (matrix) renderBankrollMatrix(matrix);
     animateChanges();
     if (DRAWER_SLUG) renderDrawer();
   } finally {
@@ -1900,22 +1941,19 @@ async function refresh(){
 }
 
 async function boot(){
-  // Paint what is instant first and let the slower endpoints stream in --
-  // the summary bundle is the heaviest read, so it renders last. Every
-  // panel degrades to a visible error box instead of a silent blank section.
   fetchJSON("/api/settled").then(st => renderSettled(st.settled, st.total_closes))
     .catch(e => showSectionError("tab-settled", e));
   fetchJSON("/api/funnel").then(renderFunnel)
     .catch(e => showSectionError("tab-funnel", e));
   fetchJSON("/api/markets").then(mk => renderMarkets(mk.markets))
     .catch(e => showSectionError("tab-markets", e));
+  fetchJSON("/api/bankroll_matrix").then(renderBankrollMatrix)
+    .catch(() => null);
 
   let s;
   try {
     s = await fetchJSON("/api/summary");
     renderSummary(s);
-    // Seed the previous-value maps so the FIRST poll flashes on real
-    // changes rather than treating the initial paint as a change.
     animateChanges();
   } catch (e) {
     showSectionError("sec-positions", e);
@@ -1929,10 +1967,9 @@ async function boot(){
     document.getElementById("scope-tiles").innerHTML =
       `<div class="col-span-3 border border-[#EF4444]/30 p-3 text-center mono text-[12px] text-[#EF4444]">Summary unavailable</div>`;
   }
-  // Poll every 15s from here on. A failed first load still gets recovery
-  // polls; a successful poll re-renders the whole desk in place.
   setInterval(refresh, 15000);
 }
 boot();
 </script>
 """)
+

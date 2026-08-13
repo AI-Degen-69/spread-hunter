@@ -230,3 +230,6 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
 
 * **2026-08-13 (strategy, Session 56): statistical confidence interval engine added for 10-tier bankroll sensitivity analysis.** Added `calc_confidence_intervals()` and `get_active_db_path()` to `strategy/stats.py`. Evaluates Student's t 95%/98% CIs, Sharpe ratio, and Sortino downside ratio with `SPREAD_HUNTER_DB` environment override support. 656/656 tests passing.
 
+* **2026-08-13 (server, Session 57): dashboard 10-tier bankroll matrix endpoint and 10-panel UI grid view landed.** Added `/api/bankroll_matrix` endpoint and `renderBankrollMatrix()` grid UI in `server/spread_dash.py` and `server/spread_dash_html.py`. 658/658 tests passing.
+
+

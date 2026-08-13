@@ -1465,3 +1465,15 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 
 **Verdict.** LIVE -- the statistical CI and downside risk engine is ready for multi-bankroll experiment evaluation.
 
+
+### 2026-08-13 (server, Session 57): dashboard 10-tier bankroll matrix endpoint and 10-panel UI grid view landed
+
+**Question.** How can the operator view all 10 concurrent bankroll experiment tiers simultaneously in one unified visual dashboard grid?
+
+**Method.** Added `/api/bankroll_matrix` endpoint to `server/spread_dash.py` and implemented `renderBankrollMatrix()` responsive 10-panel grid view in `server/spread_dash_html.py`. Each panel displays sample progress ($N / 100$), win rate, Student's t 95%/98% CIs, Sortino downside ratio, and automated invalidation alerts.
+
+**Result.** Dashboard endpoint `/api/bankroll_matrix` returns live tier statistics. Full test suite green (658/658).
+
+**Verdict.** LIVE -- multi-bankroll matrix UI is live and integrated into the spread-hunter dashboard.
+
+
