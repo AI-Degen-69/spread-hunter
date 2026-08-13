@@ -1,12 +1,11 @@
 # Ownership of Bankroll Sensitivity Experiment processes ($100 to $1,000 tiers).
 # Shared by bankroll-start.ps1 and bankroll-stop.ps1.
-#
-# Records PIDs in run/bankroll.pids.json and validates start times to prevent
-# killing recycled PIDs.
 
 $ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BankrollPidFile = Join-Path $ProjectPath "run/bankroll.pids.json"
 $BankrollPattern = "*strategy.fleet*"
+
+. (Join-Path $PSScriptRoot "theme-loader.ps1")
 
 function Save-BankrollInstance {
     <# Record all tier processes started for bankroll experiments. #>
@@ -31,7 +30,7 @@ function Get-BankrollInstance {
     try {
         $data = Get-Content $BankrollPidFile -Raw | ConvertFrom-Json
     } catch {
-        Write-Host "could not read $BankrollPidFile ($($_.Exception.Message))" -ForegroundColor Yellow
+        Write-ProfileWarning -Message "Could not read bankroll PID file:" -Detail "$BankrollPidFile ($($_.Exception.Message))"
         return @()
     }
 
@@ -59,7 +58,7 @@ function Stop-BankrollInstance {
     $stoppedCount = 0
 
     foreach ($r in $live) {
-        Write-Host "Stopping Tier `$$($r.bankroll) (PID $($r.pid))..." -ForegroundColor Yellow
+        Write-ProfileNeutral -Message "Stopping Tier `$$($r.bankroll):" -Detail "PID $($r.pid)"
         Stop-Process -Id $r.pid -Force -ErrorAction SilentlyContinue
         $stoppedCount++
 
@@ -130,3 +129,18 @@ function Find-BankrollStrays {
         }
 }
 
+function Show-BankrollStatus {
+    $inst = @(Get-BankrollInstance)
+    if ($inst.Count -gt 0) {
+        Write-ProfileSuccess -Message "Active Bankroll Experiment Bots" -Detail "$($inst.Count) tiers running"
+        $inst | ForEach-Object {
+            Write-ProfileKeyValue -Key "Tier `$$($_.bankroll)" -Value "PID $($_.pid) ($($_.workdir))" -Style "Info"
+        }
+    } else {
+        Write-ProfileError -Message "No active bankroll experiment bots running." -Suggestion "Run option 5 or 'bankroll-start' to launch the 10-tier experiments."
+    }
+}
+
+if ($MyInvocation.InvocationName -ne '.' -and $MyInvocation.InvocationName -ne '&' -and $MyInvocation.Line -like "*bankroll-procs*") {
+    Show-BankrollStatus
+}

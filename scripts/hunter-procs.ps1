@@ -10,6 +10,8 @@ $ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $HunterPidFile = Join-Path $ProjectPath "run/hunter.pids.json"
 $LegacyFleetPidFile = Join-Path $ProjectPath "run/fleet.pids.json"
 
+. (Join-Path $PSScriptRoot "theme-loader.ps1")
+
 # Reporting only -- never a kill list. Kept so an operator can be TOLD about a
 # hunter instance this script does not own, rather than silently killing it.
 $HunterPatterns = "*strategy.supervisor*", "*strategy.fleet*",
@@ -90,7 +92,7 @@ function Get-HunterInstance {
     try {
         $data = Get-Content $pidFile -Raw | ConvertFrom-Json
     } catch {
-        Write-Host "could not read $pidFile ($($_.Exception.Message))" -ForegroundColor Yellow
+        Write-ProfileWarning -Message "Could not read PID file:" -Detail "$pidFile ($($_.Exception.Message))"
         return @()
     }
 
@@ -99,7 +101,6 @@ function Get-HunterInstance {
         try { $p = Get-Process -Id $r.pid -ErrorAction Stop } catch { continue }
         $recorded = Get-HunterStartTicks -Record $r
         if ($null -eq $recorded -or $p.StartTime.ToUniversalTime().Ticks -ne $recorded) {
-            Write-Host "pid $($r.pid) was recycled; not touching it" -ForegroundColor DarkGray
             continue
         }
         $live += [pscustomobject]@{ name = $r.name; pid = $r.pid; proc = $p }
@@ -163,10 +164,10 @@ function Stop-HunterTree {
     $target = Assert-KillablePid -ProcessId $ProcessId -Context $Label
     foreach ($child in Get-DescendantPids -ParentId $target) {
         $safe = Assert-KillablePid -ProcessId $child -Context "(child of $target)"
-        Write-Host "  stopping child PID $safe" -ForegroundColor DarkYellow
+        Write-ProfileNeutral -Message "Stopping child PID:" -Detail $safe
         Stop-Process -Id $safe -Force -ErrorAction SilentlyContinue
     }
-    Write-Host "stopping PID $target $Label" -ForegroundColor Yellow
+    Write-ProfileNeutral -Message "Stopping PID:" -Detail "$target $Label"
     Stop-Process -Id $target -Force -ErrorAction SilentlyContinue
 }
 
@@ -222,4 +223,23 @@ function Find-HunterStrays {
 
 function Find-FleetStrays {
     Find-HunterStrays
+}
+
+function Show-HunterStatus {
+    $inst = @(Get-HunterInstance)
+    if ($inst.Count -gt 0) {
+        Write-ProfileSuccess -Message "Spread Hunter Active Process Tree"
+        $inst | ForEach-Object {
+            $desc = @(Get-DescendantPids -ParentId $_.pid)
+            Write-ProfileKeyValue -Key "Supervisor PID $($_.pid)" -Value "Child PIDs: $($desc -join ', ')" -Style "Info"
+        }
+        Write-ProfileKeyValue -Key "Main Dashboard" -Value "http://127.0.0.1:8800" -Style "Link"
+        Write-ProfileKeyValue -Key "Market Scan" -Value "http://127.0.0.1:8801/?view=scan" -Style "Link"
+    } else {
+        Write-ProfileError -Message "No active Spread Hunter instance running." -Suggestion "Run option 1 or 'hunter-start' to launch the strategy stack."
+    }
+}
+
+if ($MyInvocation.InvocationName -ne '.' -and $MyInvocation.InvocationName -ne '&' -and $MyInvocation.Line -like "*hunter-procs*") {
+    Show-HunterStatus
 }

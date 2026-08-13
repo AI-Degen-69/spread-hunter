@@ -9,27 +9,7 @@ $ErrorActionPreference = "Stop"
 $ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $ProjectPath
 
-$themeLoaded = $false
-$pcsPath = "C:\Program Files\PowerShell\7\scripts\Theme\Theme-ColorSystem.ps1"
-$tplPath = "C:\Program Files\PowerShell\7\scripts\Theme\Theme-Templates.ps1"
-
-if ((Test-Path $pcsPath) -and (Test-Path $tplPath)) {
-    try {
-        . $pcsPath
-        . $tplPath
-        $themeLoaded = $true
-    } catch {
-        $themeLoaded = $false
-    }
-}
-
-function Get-Color {
-    param([string]$Role, [ConsoleColor]$Fallback)
-    if ($themeLoaded -and (Get-Command Get-ProfileColor -ErrorAction SilentlyContinue)) {
-        return (Get-ProfileColor -Name $Role)
-    }
-    return $Fallback
-}
+. (Join-Path $PSScriptRoot "theme-loader.ps1")
 
 $MenuActions = [ordered]@{
     "1"  = @{ Name = "hunter-start";        Label = "Start Spread Hunter";           Desc = "Launch supervisor, maker engine & dashboards (:8800/:8801)" }
@@ -49,14 +29,9 @@ $MenuActions = [ordered]@{
 
 function Show-Header {
     Clear-Host
-    $titleColor   = Get-Color -Role "Info" -Fallback Cyan
-    $borderColor  = Get-Color -Role "Border" -Fallback DarkCyan
-    $neutralColor = Get-Color -Role "Neutral" -Fallback DarkGray
-
-    Write-Host "========================================================================================" -ForegroundColor $borderColor
-    Write-Host "                             SPREAD HUNTER - CONTROL CENTER                             " -ForegroundColor $titleColor
-    Write-Host "              Two-Sided Market Maker & 10-Tier Bankroll Sensitivity Matrix              " -ForegroundColor $neutralColor
-    Write-Host "========================================================================================" -ForegroundColor $borderColor
+    Write-ProfileBanner -Title "SPREAD HUNTER - CONTROL CENTER" `
+                        -Subtitle "Two-Sided Market Maker & 10-Tier Bankroll Sensitivity Matrix" `
+                        -Style "Info"
     Write-Host ""
 }
 
@@ -65,46 +40,79 @@ function Write-MenuItem {
     $item = $MenuActions[$Key]
     if (-not $item) { return }
 
-    $numColor   = Get-Color -Role "Highlight" -Fallback Yellow
-    $labelColor = Get-Color -Role "Strong" -Fallback White
-    $descColor  = Get-Color -Role "Neutral" -Fallback DarkGray
+    $numColor   = Get-ProfileColor -Name "Highlight"
+    $descColor  = Get-ProfileColor -Name "Neutral"
+    $kStr       = ("[{0}]" -f $Key).PadRight(6)
 
-    $kStr = ("[{0}]" -f $Key).PadRight(5)
-    $lbl  = $item.Label.PadRight(32)
-    Write-Host "   $kStr " -NoNewline -ForegroundColor $numColor
-    Write-Host "$lbl " -NoNewline -ForegroundColor $labelColor
+    Write-Host "   $kStr" -ForegroundColor $numColor -NoNewline
+
+    $fullLabel = $item.Label
+    $labelPadWidth = 34
+
+    if ($fullLabel -match '^(Start)\s+(.*)$') {
+        $verb = $Matches[1]
+        $rest = $Matches[2]
+        Write-Host "$verb " -ForegroundColor (Get-ProfileColor -Name 'Success') -NoNewline
+        $pad = $rest.PadRight($labelPadWidth - $verb.Length - 1)
+        Write-Host "$pad " -ForegroundColor (Get-ProfileColor -Name 'Strong') -NoNewline
+    }
+    elseif ($fullLabel -match '^(Stop)\s+(.*)$') {
+        $verb = $Matches[1]
+        $rest = $Matches[2]
+        Write-Host "$verb " -ForegroundColor (Get-ProfileColor -Name 'Error') -NoNewline
+        $pad = $rest.PadRight($labelPadWidth - $verb.Length - 1)
+        Write-Host "$pad " -ForegroundColor (Get-ProfileColor -Name 'Strong') -NoNewline
+    }
+    elseif ($fullLabel -match '^(Exit)\s+(.*)$') {
+        $verb = $Matches[1]
+        $rest = $Matches[2]
+        Write-Host "$verb " -ForegroundColor (Get-ProfileColor -Name 'Error') -NoNewline
+        $pad = $rest.PadRight($labelPadWidth - $verb.Length - 1)
+        Write-Host "$pad " -ForegroundColor (Get-ProfileColor -Name 'Strong') -NoNewline
+    }
+    elseif ($fullLabel -match '^(Run|Stream|Open)\s+(.*)$') {
+        $verb = $Matches[1]
+        $rest = $Matches[2]
+        Write-Host "$verb " -ForegroundColor (Get-ProfileColor -Name 'Info') -NoNewline
+        $pad = $rest.PadRight($labelPadWidth - $verb.Length - 1)
+        Write-Host "$pad " -ForegroundColor (Get-ProfileColor -Name 'Strong') -NoNewline
+    }
+    elseif ($fullLabel -match '^(.*?)\s+(Status)$') {
+        $prefix = $Matches[1]
+        $verb   = $Matches[2]
+        Write-Host "$prefix " -ForegroundColor (Get-ProfileColor -Name 'Strong') -NoNewline
+        $pad = $verb.PadRight($labelPadWidth - $prefix.Length - 1)
+        Write-Host "$pad " -ForegroundColor (Get-ProfileColor -Name 'Info') -NoNewline
+    }
+    else {
+        Write-Host ("{0,-$labelPadWidth} " -f $fullLabel) -ForegroundColor (Get-ProfileColor -Name 'Strong') -NoNewline
+    }
+
     Write-Host "$($item.Desc)" -ForegroundColor $descColor
 }
 
 function Show-MenuGrid {
-    $catColor     = Get-Color -Role "Info" -Fallback Cyan
-    $borderCol    = Get-Color -Role "Border" -Fallback DarkCyan
-
-    Write-Host "  [ SPREAD HUNTER STRATEGY ]" -ForegroundColor $catColor
-    Write-Host "  --------------------------------------------------------------------------------------" -ForegroundColor $borderCol
+    Write-ProfileRuleWithText -Text "SPREAD HUNTER STRATEGY" -Style "Border"
     Write-MenuItem "1"
     Write-MenuItem "2"
     Write-MenuItem "3"
     Write-MenuItem "4"
     Write-Host ""
 
-    Write-Host "  [ 10-TIER BANKROLL SENSITIVITY EXPERIMENTS ]" -ForegroundColor $catColor
-    Write-Host "  --------------------------------------------------------------------------------------" -ForegroundColor $borderCol
+    Write-ProfileRuleWithText -Text "10-TIER BANKROLL SENSITIVITY EXPERIMENTS" -Style "Border"
     Write-MenuItem "5"
     Write-MenuItem "6"
     Write-MenuItem "7"
     Write-MenuItem "8"
     Write-Host ""
 
-    Write-Host "  [ RESEARCH, DIAGNOSTICS & TELEMETRY ]" -ForegroundColor $catColor
-    Write-Host "  --------------------------------------------------------------------------------------" -ForegroundColor $borderCol
+    Write-ProfileRuleWithText -Text "RESEARCH, DIAGNOSTICS & TELEMETRY" -Style "Border"
     Write-MenuItem "9"
     Write-MenuItem "10"
     Write-MenuItem "11"
     Write-Host ""
 
-    Write-Host "  [ SHORTCUTS ]" -ForegroundColor $catColor
-    Write-Host "  --------------------------------------------------------------------------------------" -ForegroundColor $borderCol
+    Write-ProfileRuleWithText -Text "SHORTCUTS" -Style "Border"
     Write-MenuItem "d"
     Write-MenuItem "q"
     Write-Host ""
@@ -114,14 +122,14 @@ function Invoke-MenuAction {
     param([string]$Key)
     $item = $MenuActions[$Key]
     if (-not $item) {
-        Write-Host "Invalid selection: $Key" -ForegroundColor Red
+        Write-ProfileError -Message "Invalid selection:" -Detail $Key -Suggestion "Choose 1-11, 'd' for dashboard, or 'q' to quit."
         Start-Sleep -Seconds 1
         return
     }
 
     $act = $item.Name
     Write-Host ""
-    Write-Host ">>> Executing: $($item.Label)" -ForegroundColor Cyan
+    Write-ProfileInfo -Message "Executing: " -Detail $item.Label
     Write-Host ""
 
     switch ($act) {
@@ -138,15 +146,15 @@ function Invoke-MenuAction {
             . (Join-Path $PSScriptRoot "hunter-procs.ps1")
             $inst = @(Get-HunterInstance)
             if ($inst.Count -gt 0) {
-                Write-Host "Active Spread Hunter Process Tree:" -ForegroundColor Green
+                Write-ProfileSuccess -Message "Spread Hunter Active Process Tree"
                 $inst | ForEach-Object {
                     $desc = @(Get-DescendantPids -ParentId $_.pid)
-                    Write-Host "  Supervisor PID $($_.pid) ($($_.name)) | Child PIDs: $($desc -join ', ')" -ForegroundColor White
+                    Write-ProfileKeyValue -Key "Supervisor PID $($_.pid)" -Value "Child PIDs: $($desc -join ', ')" -Style "Info"
                 }
-                Write-Host "  Dashboard:    http://127.0.0.1:8800" -ForegroundColor Cyan
-                Write-Host "  Market Scan:  http://127.0.0.1:8801/?view=scan" -ForegroundColor Cyan
+                Write-ProfileKeyValue -Key "Main Dashboard" -Value "http://127.0.0.1:8800" -Style "Link"
+                Write-ProfileKeyValue -Key "Market Scan" -Value "http://127.0.0.1:8801/?view=scan" -Style "Link"
             } else {
-                Write-Host "No active Spread Hunter instance running." -ForegroundColor Yellow
+                Write-ProfileError -Message "No active Spread Hunter instance running." -Suggestion "Run option 1 or 'hunter-start' to launch the strategy stack."
             }
         }
         "bankroll-start" {
@@ -165,25 +173,25 @@ function Invoke-MenuAction {
             python -m scripts.pairs_ev_report
         }
         "test-suite" {
-            pytest
+            python -m pytest
         }
         "live-logs" {
-            Write-Host "Streaming logs/supervisor.err.log (Press Ctrl+C to exit)..." -ForegroundColor Yellow
+            Write-ProfileInfo -Message "Streaming logs/supervisor.err.log" -Detail "(Press Ctrl+C to exit)..."
             Get-Content (Join-Path $ProjectPath "logs/supervisor.err.log") -Wait -Tail 25
         }
         "open-dash" {
             Start-Process "http://127.0.0.1:8800"
-            Write-Host "Opened http://127.0.0.1:8800 in browser." -ForegroundColor Green
+            Write-ProfileSuccess -Message "Opened http://127.0.0.1:8800 in default browser."
         }
         "quit" {
-            Write-Host "Exiting Spread Hunter Menu." -ForegroundColor Cyan
+            Write-ProfileInfo -Message "Exiting Spread Hunter Menu."
             exit 0
         }
     }
 
     if ($act -ne "quit" -and -not $Action) {
         Write-Host ""
-        Write-Host "Press [Enter] to return to the menu..." -ForegroundColor DarkGray
+        Write-ProfileNeutral -Message "Press [Enter] to return to the menu..."
         [void][Console]::ReadLine()
     }
 }
@@ -198,52 +206,35 @@ if ($Action -ne "") {
         "bstart"       = "5"
         "bstart-fresh" = "6"
         "bstop"        = "7"
-        "report"       = "8"
         "breport"      = "8"
+        "report"       = "8"
         "ev"           = "9"
         "test"         = "10"
-        "tests"        = "10"
         "logs"         = "11"
         "dash"         = "d"
-        "dashboard"    = "d"
+        "exit"         = "q"
     }
-
-    $key = $null
-    if ($MenuActions.Contains($trimmed)) {
-        $key = $trimmed
-    } elseif ($aliasMap.ContainsKey($trimmed)) {
-        $key = $aliasMap[$trimmed]
-    }
-
-    if ($null -ne $key) {
-        Invoke-MenuAction -Key $key
-        return
+    if ($aliasMap.ContainsKey($trimmed)) {
+        Invoke-MenuAction $aliasMap[$trimmed]
+    } elseif ($MenuActions.Contains($trimmed)) {
+        Invoke-MenuAction $trimmed
     } else {
-        Write-Host "Unknown action: $Action" -ForegroundColor Red
-        return
+        Write-ProfileError -Message "Unknown action '$Action'" -Suggestion "Valid: 1-11, start, stop, status, bstart, bstop, report, test, logs, dash, exit"
+        exit 1
     }
+    exit 0
 }
 
 while ($true) {
     Show-Header
     Show-MenuGrid
 
-    $promptColor = Get-Color -Role "Command" -Fallback Cyan
-    Write-Host "Select option [1-11, d, q]: " -NoNewline -ForegroundColor $promptColor
-    $inputChoice = [Console]::ReadLine()
+    $promptColor = Get-ProfileColor -Name "Highlight"
+    Write-Host "   Select an option [1-11, d, q]: " -NoNewline -ForegroundColor $promptColor
+    $choice = [Console]::ReadLine()
+    if ($null -eq $choice) { break }
+    $choice = $choice.Trim()
+    if ($choice -eq "") { continue }
 
-    if ($null -eq $inputChoice) { break }
-    $choice = $inputChoice.Trim().ToLower()
-
-    if ($choice -eq "q" -or $choice -eq "exit" -or $choice -eq "quit") {
-        Write-Host "Exiting Spread Hunter Control Center." -ForegroundColor Cyan
-        break
-    }
-
-    if ($MenuActions.Contains($choice)) {
-        Invoke-MenuAction -Key $choice
-    } else {
-        Write-Host "Invalid option: $choice" -ForegroundColor Red
-        Start-Sleep -Milliseconds 800
-    }
+    Invoke-MenuAction $choice
 }

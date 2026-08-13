@@ -7,39 +7,44 @@
 param([switch]$Strays)
 
 $ProjectPath = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot "theme-loader.ps1")
 . (Join-Path $PSScriptRoot "hunter-procs.ps1")
 
-Write-Host "Stopping Spread Hunter..." -ForegroundColor Cyan
-Write-Host "[1/2] Terminating recorded supervisor and child processes..." -ForegroundColor DarkGray
+Write-ProfileBanner -Title "SPREAD HUNTER - SHUTDOWN" `
+                    -Subtitle "Terminating Strategy Supervisor and Child Process Trees" `
+                    -Style "Warning"
+Write-Host ""
+
+Write-ProfileInfo -Message "[1/2] Terminating recorded supervisor and child processes..."
 
 $stopped = Stop-HunterInstance
 if ($stopped -gt 0) {
-    Write-Host "      Stopped $stopped process tree(s)." -ForegroundColor Yellow
+    Write-ProfileWarning -Message "Stopped process tree(s):" -Detail "$stopped instance(s) terminated"
 }
 
 $unowned = @(Find-HunterStrays)
 
 if ($unowned.Count -eq 0) {
     if ($stopped -eq 0) { 
-        Write-Host "[2/2] No Spread Hunter processes were running." -ForegroundColor DarkGray 
+        Write-ProfileError -Message "No active Spread Hunter processes were running."
     } else {
-        Write-Host "[2/2] Spread Hunter stopped successfully." -ForegroundColor Green
+        Write-ProfileSuccess -Message "All Spread Hunter processes stopped successfully."
     }
     return
 }
 
 if (-not $Strays) {
     Write-Host ""
-    Write-Host "[2/2] Found $($unowned.Count) hunter-shaped process(es) NOT owned by this checkout:" -ForegroundColor Yellow
+    Write-ProfileWarning -Message "Found unowned hunter-shaped processes:" -Detail "$($unowned.Count) process(es) NOT owned by this checkout"
     $unowned | ForEach-Object {
         $cl = ($_.CommandLine -replace '\s+', ' ')
-        Write-Host "      PID $($_.ProcessId)  $($cl.Substring(0, [Math]::Min(80, $cl.Length)))" -ForegroundColor DarkGray
+        Write-ProfileNeutral -Message "PID $($_.ProcessId):" -Detail "$($cl.Substring(0, [Math]::Min(75, $cl.Length)))"
     }
-    Write-Host "      Left running. To stop them, run: hunter-stop -Strays" -ForegroundColor DarkGray
+    Write-ProfileInfo -Message "Left running." -Detail "To terminate unowned processes, run: hunter-stop -Strays"
     return
 }
 
-Write-Host "[2/2] -Strays specified: terminating $($unowned.Count) unowned process(es)..." -ForegroundColor Yellow
+Write-ProfileWarning -Message "[2/2] -Strays specified: terminating unowned processes..." -Detail "$($unowned.Count) process(es)"
 $sups = @($unowned | Where-Object { $_.CommandLine -like "*strategy.supervisor*" })
 $rest = @($unowned | Where-Object { $_.CommandLine -notlike "*strategy.supervisor*" })
 foreach ($p in ($sups + $rest)) {
@@ -50,7 +55,7 @@ foreach ($p in ($sups + $rest)) {
 Start-Sleep -Seconds 2
 $left = @(Find-HunterStrays)
 if ($left.Count -gt 0) {
-    Write-Host "WARNING: Still running: $(($left.ProcessId) -join ', ')" -ForegroundColor Red
+    Write-ProfileError -Message "Some processes still running:" -Detail "$(($left.ProcessId) -join ', ')"
 } else {
-    Write-Host "All Spread Hunter processes stopped successfully." -ForegroundColor Green
+    Write-ProfileSuccess -Message "All Spread Hunter and stray processes stopped successfully."
 }

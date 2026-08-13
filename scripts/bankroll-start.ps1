@@ -5,11 +5,6 @@
 #   .\scripts\bankroll-start.ps1              # launch the 10 bankroll tiers
 #   .\scripts\bankroll-start.ps1 -FreshRun    # archive existing tier data before starting
 #   .\scripts\bankroll-start.ps1 -DryRun      # validate paths and configs without launching
-#
-# Monitor with:
-#   Dashboard Matrix: http://127.0.0.1:8800
-#   Stats Report:     python -m scripts.bankroll_stats_report
-#   Stop Experiments: .\scripts\bankroll-stop.ps1
 param(
     [switch]$FreshRun,
     [switch]$DryRun,
@@ -22,20 +17,25 @@ $ErrorActionPreference = "Stop"
 $ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $ProjectPath
 
+. (Join-Path $PSScriptRoot "theme-loader.ps1")
 . (Join-Path $PSScriptRoot "bankroll-procs.ps1")
 
-Write-Host "10-Tier Bankroll Sensitivity Experiments Launcher" -ForegroundColor Cyan
-Write-Host "[1/4] Checking for prior bankroll experiment instances..." -ForegroundColor DarkGray
+Write-ProfileBanner -Title "10-TIER BANKROLL SENSITIVITY EXPERIMENTS" `
+                    -Subtitle "Parallel Paper Bots from `$100 to `$1,000 in `$100 increments" `
+                    -Style "Info"
+Write-Host ""
+
+Write-ProfileInfo -Message "[1/4] Checking for prior bankroll experiment instances..."
 
 # 1. Stop any currently running bankroll experiment instances
 $stopped = Stop-BankrollInstance
 if ($stopped -gt 0) {
-    Write-Host "      Stopped $stopped prior bankroll experiment process(es)." -ForegroundColor Yellow
+    Write-ProfileWarning -Message "Stopped prior instances:" -Detail "$stopped bankroll experiment process(es)"
 }
 
 # 2. Archive previous experiment directories if -FreshRun requested
 if ($FreshRun) {
-    Write-Host "[2/4] Archiving prior bankroll runs (-FreshRun active)..." -ForegroundColor DarkGray
+    Write-ProfileInfo -Message "[2/4] Archiving prior bankroll runs (-FreshRun active)..."
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $archive = Join-Path $ProjectPath "run/archive/bankroll_$stamp"
     New-Item -ItemType Directory -Force -Path $archive | Out-Null
@@ -56,12 +56,12 @@ if ($FreshRun) {
             }
         }
     }
-    Write-Host "      Archived prior runs to $archive" -ForegroundColor Yellow
+    Write-ProfileSuccess -Message "Archived prior runs to:" -Detail $archive
 } else {
-    Write-Host "[2/4] Preserving active experiment databases..." -ForegroundColor DarkGray
+    Write-ProfileInfo -Message "[2/4] Preserving active experiment databases..."
 }
 
-Write-Host "[3/4] Spawning 10 isolated fleet workers (`$$Start -> `$$End in `$$Step steps)..." -ForegroundColor DarkGray
+Write-ProfileInfo -Message "[3/4] Spawning 10 isolated fleet workers (`$$Start -> `$$End in `$$Step steps)..."
 
 # 3. Build tier configurations and launch
 $tierRecords = @()
@@ -75,7 +75,7 @@ for ($amount = $Start; $amount -le $End; $amount += $Step) {
     New-Item -ItemType Directory -Force -Path $workdir | Out-Null
 
     if ($DryRun) {
-        Write-Host "      [DRY RUN] Tier `$$amount -> $workdir" -ForegroundColor DarkGray
+        Write-ProfileNeutral -Message "[DRY RUN] Tier `$$amount:" -Detail $workdir
         continue
     }
 
@@ -122,18 +122,18 @@ for ($amount = $Start; $amount -le $End; $amount += $Step) {
             started       = $proc.StartTime.ToString("o")
             workdir       = $workdir
         }
-        Write-Host "      Started Tier `$$amount (PID $($proc.Id))" -ForegroundColor DarkGray
+        Write-ProfileNeutral -Message "Started Tier `$$amount:" -Detail "PID $($proc.Id)"
     }
 }
 
 if (-not $DryRun -and $tierRecords.Count -gt 0) {
-    Write-Host "[4/4] Saving PID registry and verifying processes..." -ForegroundColor DarkGray
+    Write-ProfileInfo -Message "[4/4] Saving PID registry and verifying processes..."
     Save-BankrollInstance -TierRecords $tierRecords
 }
 
 Write-Host ""
-Write-Host "All 10 bankroll experiment workers are ACTIVE!" -ForegroundColor Green
-Write-Host "  Dashboard Matrix: http://127.0.0.1:8800" -ForegroundColor Cyan
-Write-Host "  Stats Report:     python -m scripts.bankroll_stats_report" -ForegroundColor DarkGray
-Write-Host "  Stop Command:     bankroll-stop" -ForegroundColor DarkGray
+Write-ProfileSuccess -Message "All 10 bankroll experiment workers are ACTIVE!" -Detail "($($tierRecords.Count) bots launched)"
+Write-ProfileKeyValue -Key "Dashboard Matrix" -Value "http://127.0.0.1:8800" -Style "Link"
+Write-ProfileKeyValue -Key "Stats Report" -Value "python -m scripts.bankroll_stats_report" -Style "Command"
+Write-ProfileKeyValue -Key "Stop Command" -Value "bankroll-stop" -Style "Highlight"
 Write-Host ""

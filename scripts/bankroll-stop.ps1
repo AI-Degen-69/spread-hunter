@@ -5,25 +5,30 @@
 #   .\scripts\bankroll-stop.ps1
 
 $ProjectPath = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot "theme-loader.ps1")
 . (Join-Path $PSScriptRoot "bankroll-procs.ps1")
 
-Write-Host "Stopping 10-Tier Bankroll Sensitivity Experiments..." -ForegroundColor Cyan
-Write-Host "[1/2] Terminating recorded bankroll worker processes..." -ForegroundColor DarkGray
+Write-ProfileBanner -Title "10-TIER BANKROLL SENSITIVITY - SHUTDOWN" `
+                    -Subtitle "Terminating All Active Experiment Bots" `
+                    -Style "Warning"
+Write-Host ""
+
+Write-ProfileInfo -Message "[1/2] Terminating recorded bankroll worker processes..."
 
 $stopped = Stop-BankrollInstance
 
 if ($stopped -gt 0) {
-    Write-Host "      Terminated $stopped bankroll worker process(es)." -ForegroundColor Yellow
+    Write-ProfileWarning -Message "Terminated worker processes:" -Detail "$stopped process(es)"
 } else {
-    Write-Host "      No recorded bankroll experiment processes were running." -ForegroundColor DarkGray
+    Write-ProfileError -Message "No recorded bankroll experiment processes were running."
 }
 
 $strays = @(Find-BankrollStrays)
 if ($strays.Count -gt 0) {
-    Write-Host "[2/2] Warning: Found $($strays.Count) unowned bankroll process(es):" -ForegroundColor Yellow
+    Write-ProfileWarning -Message "[2/2] Warning: Detected unowned bankroll processes:" -Detail "$($strays.Count) process(es)"
     $strays | ForEach-Object {
-        Write-Host "      PID $($_.ProcessId)" -ForegroundColor DarkGray
+        Write-ProfileNeutral -Message "PID $($_.ProcessId):" -Detail "$($_.CommandLine)"
     }
 } else {
-    Write-Host "[2/2] All bankroll experiment processes stopped." -ForegroundColor Green
+    Write-ProfileSuccess -Message "[2/2] All bankroll experiment processes stopped."
 }
