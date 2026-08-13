@@ -149,10 +149,10 @@ function Invoke-MenuAction {
                 Write-ProfileSuccess -Message "Spread Hunter Active Process Tree"
                 $inst | ForEach-Object {
                     $desc = @(Get-DescendantPids -ParentId $_.pid)
-                    Write-ProfileKeyValue -Key "Supervisor PID $($_.pid)" -Value "Child PIDs: $($desc -join ', ')" -Style "Info"
+                    Write-ProfileKeyValue -Key "Supervisor PID $($_.pid)" -Value "Child PIDs: $($desc -join ', ')" -Style "Info" -KeyWidth 22
                 }
-                Write-ProfileKeyValue -Key "Main Dashboard" -Value "http://127.0.0.1:8800" -Style "Link"
-                Write-ProfileKeyValue -Key "Market Scan" -Value "http://127.0.0.1:8801/?view=scan" -Style "Link"
+                Write-ProfileKeyValue -Key "Main Dashboard" -Value "http://127.0.0.1:8800" -Style "Link" -KeyWidth 22
+                Write-ProfileKeyValue -Key "Market Scan" -Value "http://127.0.0.1:8801/?view=scan" -Style "Link" -KeyWidth 22
             } else {
                 Write-ProfileError -Message "No active Spread Hunter instance running." -Suggestion "Run option 1 or 'hunter-start' to launch the strategy stack."
             }

@@ -1,5 +1,6 @@
 # 10-TIER BANKROLL SENSITIVITY EXPERIMENT LAUNCHER
 # Starts 10 simultaneous paper-trading bots with isolated workdirs ($100 to $1,000 in $100 steps).
+# Serves the Spread Hunter dashboard on port 8800 and automatically opens it in the browser.
 #
 # Usage:
 #   .\scripts\bankroll-start.ps1              # launch the 10 bankroll tiers
@@ -16,16 +17,17 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $ProjectPath
+New-Item -ItemType Directory -Force -Path (Join-Path $ProjectPath "logs") | Out-Null
 
 . (Join-Path $PSScriptRoot "theme-loader.ps1")
 . (Join-Path $PSScriptRoot "bankroll-procs.ps1")
 
 Write-ProfileBanner -Title "10-TIER BANKROLL SENSITIVITY EXPERIMENTS" `
-                    -Subtitle "Parallel Paper Bots from `$100 to `$1,000 in `$100 increments" `
+                    -Subtitle "Parallel Paper Bots from `$100 to `$1,000 with Live Dashboard" `
                     -Style "Info"
 Write-Host ""
 
-Write-ProfileInfo -Message "[1/4] Checking for prior bankroll experiment instances..."
+Write-ProfileInfo -Message "[1/5] Checking for prior bankroll experiment instances..."
 
 # 1. Stop any currently running bankroll experiment instances
 $stopped = Stop-BankrollInstance
@@ -35,7 +37,7 @@ if ($stopped -gt 0) {
 
 # 2. Archive previous experiment directories if -FreshRun requested
 if ($FreshRun) {
-    Write-ProfileInfo -Message "[2/4] Archiving prior bankroll runs (-FreshRun active)..."
+    Write-ProfileInfo -Message "[2/5] Archiving prior bankroll runs (-FreshRun active)..."
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $archive = Join-Path $ProjectPath "run/archive/bankroll_$stamp"
     New-Item -ItemType Directory -Force -Path $archive | Out-Null
@@ -58,10 +60,10 @@ if ($FreshRun) {
     }
     Write-ProfileSuccess -Message "Archived prior runs to:" -Detail $archive
 } else {
-    Write-ProfileInfo -Message "[2/4] Preserving active experiment databases..."
+    Write-ProfileInfo -Message "[2/5] Preserving active experiment databases..."
 }
 
-Write-ProfileInfo -Message "[3/4] Spawning 10 isolated fleet workers (`$$Start -> `$$End in `$$Step steps)..."
+Write-ProfileInfo -Message "[3/5] Spawning 10 isolated fleet workers (`$$Start -> `$$End in `$$Step steps)..."
 
 # 3. Build tier configurations and launch
 $tierRecords = @()
@@ -75,7 +77,7 @@ for ($amount = $Start; $amount -le $End; $amount += $Step) {
     New-Item -ItemType Directory -Force -Path $workdir | Out-Null
 
     if ($DryRun) {
-        Write-ProfileNeutral -Message "[DRY RUN] Tier `$$amount:" -Detail $workdir
+        Write-ProfileNeutral -Message "[DRY RUN] Tier `$$($amount):" -Detail $workdir
         continue
     }
 
@@ -122,18 +124,56 @@ for ($amount = $Start; $amount -le $End; $amount += $Step) {
             started       = $proc.StartTime.ToString("o")
             workdir       = $workdir
         }
-        Write-ProfileNeutral -Message "Started Tier `$$amount:" -Detail "PID $($proc.Id)"
+        Write-ProfileNeutral -Message "Started Tier `$$($amount):" -Detail "PID $($proc.Id)"
+    }
+}
+
+# 4. Check / Start Dashboard Server on Port 8800
+$dashProc = $null
+Write-ProfileInfo -Message "[4/5] Checking dashboard server availability on port 8800..."
+
+if (Test-PortListening 8800) {
+    Write-ProfileInfo -Message "Dashboard server is already active on port 8800."
+} elseif (-not $DryRun) {
+    Write-ProfileInfo -Message "Launching dashboard server on http://127.0.0.1:8800..."
+    $dashPsi = New-Object System.Diagnostics.ProcessStartInfo
+    $dashPsi.FileName = "python"
+    $dashPsi.Arguments = "-m uvicorn server.spread_dash:app --host 127.0.0.1 --port 8800"
+    $dashPsi.WorkingDirectory = $ProjectPath
+    $dashPsi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $dashPsi.CreateNoWindow = $true
+    $dashPsi.UseShellExecute = $false
+    $dashPsi.RedirectStandardOutput = $true
+    $dashPsi.RedirectStandardError = $true
+
+    $dashProc = [System.Diagnostics.Process]::Start($dashPsi)
+
+    # Wait up to 5s for port 8800 to be live
+    for ($i = 0; $i -lt 10; $i++) {
+        Start-Sleep -Milliseconds 500
+        if (Test-PortListening 8800) { break }
     }
 }
 
 if (-not $DryRun -and $tierRecords.Count -gt 0) {
-    Write-ProfileInfo -Message "[4/4] Saving PID registry and verifying processes..."
-    Save-BankrollInstance -TierRecords $tierRecords
+    Write-ProfileInfo -Message "[5/5] Saving PID registry and verifying processes..."
+    Save-BankrollInstance -TierRecords $tierRecords -DashProcess $dashProc
 }
 
 Write-Host ""
 Write-ProfileSuccess -Message "All 10 bankroll experiment workers are ACTIVE!" -Detail "($($tierRecords.Count) bots launched)"
-Write-ProfileKeyValue -Key "Dashboard Matrix" -Value "http://127.0.0.1:8800" -Style "Link"
-Write-ProfileKeyValue -Key "Stats Report" -Value "python -m scripts.bankroll_stats_report" -Style "Command"
-Write-ProfileKeyValue -Key "Stop Command" -Value "bankroll-stop" -Style "Highlight"
+Write-ProfileKeyValue -Key "Dashboard Matrix" -Value "http://127.0.0.1:8800" -Style "Link" -KeyWidth 20
+Write-ProfileKeyValue -Key "Stats Report" -Value "python -m scripts.bankroll_stats_report" -Style "Command" -KeyWidth 20
+Write-ProfileKeyValue -Key "Stop Command" -Value "bankroll-stop" -Style "Highlight" -KeyWidth 20
+Write-Host ""
+
+# 5. Open dashboard in default browser
+if (-not $DryRun) {
+    try {
+        Start-Process "http://127.0.0.1:8800"
+        Write-ProfileSuccess -Message "Opened http://127.0.0.1:8800 in default browser."
+    } catch {
+        Write-ProfileWarning -Message "Could not open browser automatically:" -Detail "Navigate to http://127.0.0.1:8800"
+    }
+}
 Write-Host ""

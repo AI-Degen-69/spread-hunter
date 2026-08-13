@@ -7,18 +7,52 @@ $BankrollPattern = "*strategy.fleet*"
 
 . (Join-Path $PSScriptRoot "theme-loader.ps1")
 
+function Test-PortListening {
+    param([int]$Port = 8800)
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+        $success = $iar.AsyncWaitHandle.WaitOne(800, $false)
+        if ($success -and $client.Connected) {
+            $client.EndConnect($iar)
+            $client.Close()
+            return $true
+        }
+        $client.Close()
+        return $false
+    } catch {
+        return $false
+    }
+}
+
 function Save-BankrollInstance {
-    <# Record all tier processes started for bankroll experiments. #>
+    <# Record all tier processes and optional dashboard process started for bankroll experiments. #>
     param(
         [Parameter(Mandatory, Position = 0)]
         [Alias("Procs")]
-        [array]$TierRecords
+        [array]$TierRecords,
+        [Parameter(Position = 1)]
+        [object]$DashProcess = $null
     )
+
+    $dashRecord = $null
+    if ($DashProcess) {
+        try {
+            if (-not $DashProcess.HasExited) {
+                $dashRecord = [pscustomobject]@{
+                    pid           = $DashProcess.Id
+                    started_ticks = $DashProcess.StartTime.ToUniversalTime().Ticks
+                    started       = $DashProcess.StartTime.ToString("o")
+                }
+            }
+        } catch {}
+    }
 
     $payload = [pscustomobject]@{
         experiment = "bankroll-sensitivity-10-tier"
         saved      = (Get-Date).ToString("o")
         tiers      = $TierRecords
+        dash       = $dashRecord
     }
     New-Item -ItemType Directory -Force -Path (Split-Path $BankrollPidFile) | Out-Null
     $payload | ConvertTo-Json -Depth 4 | Set-Content -Path $BankrollPidFile -Encoding UTF8
@@ -52,8 +86,27 @@ function Get-BankrollInstance {
     return $live
 }
 
+function Get-BankrollDashInstance {
+    <# Retrieve active dashboard process if tracked in bankroll PID file. #>
+    if (-not (Test-Path $BankrollPidFile)) { return $null }
+    try {
+        $data = Get-Content $BankrollPidFile -Raw | ConvertFrom-Json
+        if ($data.dash -and $data.dash.pid) {
+            $p = Get-Process -Id $data.dash.pid -ErrorAction Stop
+            if ($null -ne $data.dash.started_ticks) {
+                if ($p.StartTime.ToUniversalTime().Ticks -eq [int64]$data.dash.started_ticks) {
+                    return $p
+                }
+            } else {
+                return $p
+            }
+        }
+    } catch {}
+    return $null
+}
+
 function Stop-BankrollInstance {
-    <# Stop all 10 running bankroll experiment processes and update status.json. #>
+    <# Stop all running bankroll experiment processes and dashboard server. #>
     $live = @(Get-BankrollInstance)
     $stoppedCount = 0
 
@@ -74,6 +127,14 @@ function Stop-BankrollInstance {
                 } catch {}
             }
         }
+    }
+
+    # Stop tracked dashboard server if started by bankroll
+    $dashProc = Get-BankrollDashInstance
+    if ($dashProc) {
+        Write-ProfileNeutral -Message "Stopping Bankroll Dashboard Server:" -Detail "PID $($dashProc.Id)"
+        Stop-Process -Id $dashProc.Id -Force -ErrorAction SilentlyContinue
+        $stoppedCount++
     }
 
     # Also inspect all run/bankroll_*/status.json in case pid file was missed
@@ -131,10 +192,14 @@ function Find-BankrollStrays {
 
 function Show-BankrollStatus {
     $inst = @(Get-BankrollInstance)
+    $dash = Get-BankrollDashInstance
     if ($inst.Count -gt 0) {
         Write-ProfileSuccess -Message "Active Bankroll Experiment Bots" -Detail "$($inst.Count) tiers running"
         $inst | ForEach-Object {
             Write-ProfileKeyValue -Key "Tier `$$($_.bankroll)" -Value "PID $($_.pid) ($($_.workdir))" -Style "Info"
+        }
+        if ($dash) {
+            Write-ProfileKeyValue -Key "Dashboard Server" -Value "PID $($dash.Id) (http://127.0.0.1:8800)" -Style "Link"
         }
     } else {
         Write-ProfileError -Message "No active bankroll experiment bots running." -Suggestion "Run option 5 or 'bankroll-start' to launch the 10-tier experiments."

@@ -94,8 +94,16 @@ $alive = @(Get-HunterInstance).Count + @(Get-DescendantPids -ParentId $sup.Id).C
 
 Write-Host ""
 Write-ProfileSuccess -Message "All systems operational!" -Detail "Supervisor PID $($sup.Id) | $alive processes active"
-Write-ProfileKeyValue -Key "Main Dashboard" -Value "http://127.0.0.1:8800" -Style "Link"
-Write-ProfileKeyValue -Key "Market Scan" -Value "http://127.0.0.1:8801/?view=scan" -Style "Link"
-Write-ProfileKeyValue -Key "Live Logs" -Value "Get-Content logs\supervisor.err.log -Wait -Tail 20" -Style "Command"
-Write-ProfileKeyValue -Key "Stop Command" -Value "hunter-stop" -Style "Highlight"
+Write-ProfileKeyValue -Key "Main Dashboard" -Value "http://127.0.0.1:8800" -Style "Link" -KeyWidth 20
+Write-ProfileKeyValue -Key "Market Scan" -Value "http://127.0.0.1:8801/?view=scan" -Style "Link" -KeyWidth 20
+Write-ProfileKeyValue -Key "Live Logs" -Value "Get-Content logs\supervisor.err.log -Wait -Tail 20" -Style "Command" -KeyWidth 20
+Write-ProfileKeyValue -Key "Stop Command" -Value "hunter-stop" -Style "Highlight" -KeyWidth 20
+Write-Host ""
+
+try {
+    Start-Process "http://127.0.0.1:8800"
+    Write-ProfileSuccess -Message "Opened http://127.0.0.1:8800 in default browser."
+} catch {
+    Write-ProfileWarning -Message "Could not open browser automatically:" -Detail "Navigate to http://127.0.0.1:8800"
+}
 Write-Host ""
