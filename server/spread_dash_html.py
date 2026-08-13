@@ -21,7 +21,7 @@ _HEAD = ("""
      keeps the first paint off the Google round trip. -->
 <link rel="preload" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600..800&family=Geist+Mono:wght@400..700&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600..800&family=Geist+Mono:wght@400..700&display=swap"></noscript>
-<style>""" + TAILWIND_CSS + """</style>
+<style>""" + TAILWIND_CSS + r"""</style>
 <script src="/capital.js"></script>
 <style>
   /* Design tokens -- the operator-approved desk palette, codified as one
