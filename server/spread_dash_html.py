@@ -383,7 +383,7 @@ def _NAVBAR(active_page: str = "fleet") -> str:
           <span class="text-[10px] text-[#9CA3AF]">&#9660;</span>
         </button>
 
-        <div id="nav-dropdown-menu" class="hidden absolute right-0 top-full mt-1.5 w-[320px] bg-[#090D16] border border-[#1F2937] shadow-2xl z-50 p-2 space-y-1">
+        <div id="nav-dropdown-menu" style="background-color:#090D16 !important; z-index:9999;" class="hidden absolute right-0 top-full mt-1.5 w-[320px] bg-[#090D16] border border-[#1F2937] shadow-[0_20px_50px_rgba(0,0,0,0.95)] p-2 space-y-1">
           <div class="px-3 py-1.5 mono text-[11px] font-bold tracking-widest text-[#9CA3AF] uppercase border-b border-[#1F2937]/50 mb-1 flex items-center justify-between">
             <span>Spread Hunter Suite</span>
             <span class="text-[10px] text-[#10B981]">v1.0</span>
@@ -407,7 +407,7 @@ def _NAVBAR(active_page: str = "fleet") -> str:
                 <span>10 Bankroll Bots</span>
                 {bankroll_pill}
               </div>
-              <div class="mono text-[11px] text-[#9CA3AF] leading-tight mt-0.5">10-Tier Matrix ($100-$1000) & Student-t CIs</div>
+              <div class="mono text-[11px] text-[#9CA3AF] leading-tight mt-0.5">10-Tier Matrix ($100-$1000) &amp; Statistical CIs</div>
             </div>
           </a>
 
@@ -2033,7 +2033,7 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
       <div class="mono text-[13px] tracking-[0.14em] uppercase font-bold text-[#FBBF24]">10-Tier Capital Allocation Sensitivity Matrix ($100 &ndash; $1,000 in $100 Steps)</div>
     </div>
     <div class="flex items-center gap-3 mono text-[12px] text-[#9CA3AF]">
-      <span>Automated Student-t Invalidation Protocol</span>
+      <span>Automated Invalidation Protocol</span>
       <span class="size-1 bg-[#FBBF24]"></span>
       <span id="bk-last-refresh">Connecting...</span>
     </div>
@@ -2042,7 +2042,7 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
 
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-6">
 
-  <!-- Interactive Filter Row -->
+  <!-- Interactive Filter Row with Integrated Fleet Status -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
     <div class="flex flex-wrap items-center gap-2">
       <span class="mono text-[12px] font-bold tracking-[0.14em] text-[#9CA3AF] uppercase flex items-center gap-1.5 mr-1 shrink-0">
@@ -2052,15 +2052,19 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
         <!-- Rendered by JS -->
       </div>
     </div>
-    <div class="flex items-center gap-2.5 shrink-0 self-end lg:self-auto">
-      <span id="bk-filter-status" class="mono text-[11px] px-2.5 py-1 bg-[#090D16] text-[#10B981] border border-[#10B981]/30 font-semibold">10 of 10 Tiers Selected</span>
+    <div class="flex flex-wrap items-center gap-2.5 shrink-0 self-end lg:self-auto">
+      <div class="flex items-center gap-2 px-3 py-1 bg-[#090D16] border border-[#10B981]/40 mono text-[12px] whitespace-nowrap shadow-[0_0_8px_rgba(16,185,129,0.15)]">
+        <span class="size-2 bg-[#10B981] rounded-full animate-pulse"></span>
+        <span id="bk-fleet-status-line" class="text-[#10B981] font-bold">-- / 10 ACTIVE</span>
+      </div>
+      <span id="bk-filter-status" class="mono text-[11px] px-2.5 py-1 bg-[#090D16] text-[#10B981] border border-[#10B981]/30 font-semibold whitespace-nowrap">10 of 10 Tiers Selected</span>
       <button onclick="toggleAllTiers()" type="button" class="mono text-[11px] font-semibold px-2.5 py-1 bg-[#1F2937] text-[#F9FAFB] hover:bg-[#10B981] hover:text-white border border-[#1F2937] transition-colors uppercase cursor-pointer">All</button>
       <button onclick="resetFilters()" type="button" class="mono text-[11px] px-2.5 py-1 bg-[#090D16] text-[#9CA3AF] hover:text-[#EF4444] border border-[#1F2937] hover:border-[#EF4444]/40 transition-colors uppercase cursor-pointer">Reset</button>
     </div>
   </section>
 
-  <!-- Hero KPI Strip (Dynamically Aggregated) -->
-  <section class="sh-rise grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+  <!-- Hero KPI Strip (4 High-Impact Cards) -->
+  <section class="sh-rise grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
       <div class="absolute inset-x-0 top-0 h-[2px] bg-[#3B82F6]"></div>
       <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
@@ -2068,7 +2072,7 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
         <span id="bk-kpi-tier-count" class="text-[#3B82F6] font-bold">10 TIERS</span>
       </div>
       <div id="bk-hero-capital" class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">$5,500 <span class="text-[14px] font-normal text-[#9CA3AF]">USD</span></div>
-      <div id="bk-hero-capital-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">$100 &rarr; $1,000 isolated pools</div>
+      <div id="bk-hero-capital-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">10 of 10 isolated pools</div>
     </div>
 
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
@@ -2082,23 +2086,13 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
     </div>
 
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
-      <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
-      <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
-        <span>FLEET RUNNING STATUS</span>
-        <span class="size-2 bg-[#10B981] rounded-full animate-ping"></span>
-      </div>
-      <div id="bk-hero-active" class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">-- / 10</div>
-      <div id="bk-hero-active-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">Selected background instances</div>
-    </div>
-
-    <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
       <div class="absolute inset-x-0 top-0 h-[2px] bg-[#FBBF24]"></div>
       <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
         <span>OPTIMAL SELECTED TIER</span>
         <span class="text-[#FBBF24] font-bold">BEST</span>
       </div>
       <div id="bk-hero-lead" class="mono text-[26px] font-bold tracking-tight text-[#FBBF24] mt-2">--</div>
-      <div id="bk-hero-lead-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">By Sortino &amp; Return in selection</div>
+      <div id="bk-hero-lead-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">By Risk-Adjusted Return (Downside Sortino)</div>
     </div>
 
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
@@ -2112,47 +2106,43 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
     </div>
   </section>
 
-  <!-- Section 1: Comparative Table (Filtered with Aggregate Footer) -->
+  <!-- Section 1: Comparative Table (Clean Single-Line Header) -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <div class="p-4 border-b border-[#1F2937] flex flex-wrap items-center justify-between gap-4 bg-[#090D16]">
-      <div>
-        <div class="mono text-[14px] font-bold text-[#FBBF24] uppercase tracking-wider flex items-center gap-2">
-          <span>10-Tier Comparative Matrix &amp; Invalidation Engine</span>
-        </div>
-        <div class="mono text-[12px] text-[#9CA3AF] mt-0.5">Direct reading from isolated SQLite databases (`run/bankroll_*/fleet.db`)</div>
+    <div class="px-4 py-3 border-b border-[#1F2937] flex flex-wrap items-center justify-between gap-3 bg-[#090D16]">
+      <div class="mono text-[13px] font-bold text-[#FBBF24] uppercase tracking-wider flex items-center gap-2">
+        <span>⚡ 10-Tier Comparative Matrix &amp; Invalidation Engine</span>
       </div>
       <div class="flex items-center gap-2">
-        <span id="bk-table-filter-badge" class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#10B981]/40 text-[#10B981] font-semibold">10 OF 10 TIERS</span>
-        <span class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">MIN GATE: 30</span>
-        <span class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">TARGET: 100</span>
+        <span id="bk-table-filter-badge" class="mono text-[11px] px-2 py-0.5 bg-[#1F2937] border border-[#10B981]/40 text-[#10B981] font-semibold">10 OF 10 TIERS</span>
+        <span class="mono text-[11px] px-2 py-0.5 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">MIN GATE: 30</span>
+        <span class="mono text-[11px] px-2 py-0.5 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">TARGET: 100</span>
       </div>
     </div>
 
     <div class="overflow-x-auto">
       <table class="w-full text-left border-collapse">
         <thead>
-          <tr class="border-b border-[#1F2937] bg-[#111827] mono text-[11px] tracking-[0.14em] uppercase text-[#9CA3AF]">
+          <tr class="border-b border-[#1F2937] bg-[#111827] mono text-[11px] tracking-[0.14em] uppercase text-[#9CA3AF] whitespace-nowrap">
             <th class="p-3.5 font-bold">Tier</th>
             <th class="p-3.5 font-bold">Status</th>
-            <th class="p-3.5 font-bold">PID</th>
             <th class="p-3.5 font-bold text-right">Realized P&amp;L</th>
             <th class="p-3.5 font-bold text-right">Return %</th>
             <th class="p-3.5 font-bold min-w-[140px]">Samples (30/100)</th>
             <th class="p-3.5 font-bold text-right">Win Rate</th>
             <th class="p-3.5 font-bold text-right">Mean $/Tr</th>
-            <th class="p-3.5 font-bold text-center">95% Student-t CI</th>
-            <th class="p-3.5 font-bold text-center">98% Student-t CI</th>
+            <th class="p-3.5 font-bold text-center">95% CI</th>
+            <th class="p-3.5 font-bold text-center">98% CI</th>
             <th class="p-3.5 font-bold text-right">Sortino</th>
             <th class="p-3.5 font-bold text-right">Max DD</th>
             <th class="p-3.5 font-bold text-center">Verdict</th>
           </tr>
         </thead>
-        <tbody id="bk-matrix-rows" class="divide-y divide-[#1F2937] mono text-[12px]">
+        <tbody id="bk-matrix-rows" class="divide-y divide-[#1F2937] mono text-[12px] whitespace-nowrap">
           <tr>
-            <td colspan="13" class="p-8 text-center text-[#9CA3AF]">Loading 10-tier bankroll matrix telemetry...</td>
+            <td colspan="12" class="p-8 text-center text-[#9CA3AF]">Loading 10-tier bankroll matrix telemetry...</td>
           </tr>
         </tbody>
-        <tfoot id="bk-matrix-tfoot" class="border-t-2 border-[#1F2937] bg-[#090D16] mono text-[12px] font-bold">
+        <tfoot id="bk-matrix-tfoot" class="border-t-2 border-[#1F2937] bg-[#090D16] mono text-[12px] font-bold whitespace-nowrap">
           <!-- Rendered by JS -->
         </tfoot>
       </table>
@@ -2161,8 +2151,8 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
 
   <!-- Section 2: Filtered Tier Cards Grid -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
-    <div class="p-4 border-b border-[#1F2937] bg-[#090D16] flex items-center justify-between">
-      <div class="mono text-[14px] font-bold text-[#F9FAFB] uppercase tracking-wider">Tier Telemetry &amp; Confidence Intervals</div>
+    <div class="px-4 py-3 border-b border-[#1F2937] bg-[#090D16] flex items-center justify-between">
+      <div class="mono text-[13px] font-bold text-[#F9FAFB] uppercase tracking-wider">Tier Telemetry &amp; Confidence Intervals</div>
       <div id="bk-cards-header-count" class="mono text-[12px] text-[#9CA3AF]">Showing 10 Parallel Experiments</div>
     </div>
     <div id="bk-cards-grid" class="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 bg-[#090D16]">
@@ -2181,7 +2171,7 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
           <span>01 &middot; Confidence Lower Gate</span>
         </div>
         <div class="text-[#9CA3AF] mt-2">
-          At &ge; 30 settled trade closes, if the upper bound of the 95% Student-t confidence interval falls below $0.00 (<span class="text-[#EF4444]">CI_95.upper &lt; 0</span>), the tier is flagged <span class="text-[#EF4444] font-bold">INVALID</span>.
+          At &ge; 30 settled trade closes, if the upper bound of the 95% confidence interval falls below $0.00 (<span class="text-[#EF4444]">CI_95.upper &lt; 0</span>), the tier is flagged <span class="text-[#EF4444] font-bold">INVALID</span>.
         </div>
       </div>
       <div class="border border-[#1F2937] bg-[#090D16] p-4">
@@ -2289,7 +2279,6 @@ function toggleTier(amount){
 
 function toggleAllTiers(){
   if (SELECTED_TIERS.size === ALL_AMOUNTS.length){
-    // Reset to tier 100 only if all are currently active
     SELECTED_TIERS = new Set([100]);
   } else {
     SELECTED_TIERS = new Set(ALL_AMOUNTS);
@@ -2322,12 +2311,16 @@ function renderBankrollPage(data){
   let totalWins = 0;
   let totalTradesCounted = 0;
 
+  // Calculate fleet-wide total active count (out of all 10 bots)
+  allTiers.forEach(t => {
+    if (t.status === "RUNNING") activeBots++;
+  });
+
   filteredTiers.forEach(t => {
     totalCapital += (t.bankroll || 0);
     totalPnl += (t.total_pnl || 0);
     const sCount = t.sample_count || 0;
     totalSamples += sCount;
-    if (t.status === "RUNNING") activeBots++;
     
     if (sCount > 0) {
       const wins = Math.round((t.win_rate || 0) * sCount / 100.0);
@@ -2351,7 +2344,13 @@ function renderBankrollPage(data){
   const aggWinRate = totalTradesCounted > 0 ? ((totalWins / totalTradesCounted) * 100.0) : 0.0;
   const aggMeanReturn = totalSamples > 0 ? (totalPnl / totalSamples) : 0.0;
 
-  // 1. Update Hero KPI Cards
+  // 1. Update Persistent Fleet Status in Filter Row (X / 10 ACTIVE)
+  const fleetStatusEl = document.getElementById("bk-fleet-status-line");
+  if (fleetStatusEl) {
+    fleetStatusEl.textContent = `${activeBots} / 10 ACTIVE`;
+  }
+
+  // 2. Update Hero KPI Cards (4 Cards)
   const capCountEl = document.getElementById("bk-kpi-tier-count");
   if (capCountEl) capCountEl.textContent = `${filteredTiers.length} TIERS`;
 
@@ -2376,12 +2375,6 @@ function renderBankrollPage(data){
   const pnlSub = document.getElementById("bk-hero-pnl-sub");
   if (pnlSub) pnlSub.textContent = `Across ${filteredTiers.length} selected sensitivity run${filteredTiers.length === 1 ? '' : 's'}`;
 
-  const activeEl = document.getElementById("bk-hero-active");
-  if (activeEl) activeEl.innerHTML = activeBots + ` <span class="text-[14px] font-normal text-[#9CA3AF]">/ ${filteredTiers.length} Active</span>`;
-
-  const activeSub = document.getElementById("bk-hero-active-sub");
-  if (activeSub) activeSub.textContent = `${activeBots} running of ${filteredTiers.length} selected`;
-
   const leadEl = document.getElementById("bk-hero-lead");
   if (leadEl) {
     if (bestTier) {
@@ -2405,10 +2398,10 @@ function renderBankrollPage(data){
     refreshEl.textContent = "Updated " + d.toLocaleTimeString();
   }
 
-  // 2. Render Comparative Table Rows (Only Filtered Tiers)
+  // 3. Render Comparative Table Rows (Only Filtered Tiers, PID removed)
   if (filteredTiers.length === 0) {
     const tbody = document.getElementById("bk-matrix-rows");
-    if (tbody) tbody.innerHTML = `<tr><td colspan="13" class="p-8 text-center text-[#9CA3AF]">No tiers selected. Click above to select tiers.</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="12" class="p-8 text-center text-[#9CA3AF]">No tiers selected. Click above to select tiers.</td></tr>`;
     const tfoot = document.getElementById("bk-matrix-tfoot");
     if (tfoot) tfoot.innerHTML = "";
   } else {
@@ -2420,30 +2413,29 @@ function renderBankrollPage(data){
       const target = t.target_samples || 100;
       const samplePct = Math.min(100, Math.round((samples / target) * 100));
       
-      let statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] font-semibold">INITIALIZED</span>';
+      let statusBadge = '<span class="mono text-[10px] px-2 py-0.5 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] font-semibold whitespace-nowrap">INITIALIZED</span>';
       if (t.is_invalid) {
-        statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/30 font-bold animate-pulse">INVALID</span>';
+        statusBadge = '<span class="mono text-[10px] px-2 py-0.5 bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/30 font-bold animate-pulse whitespace-nowrap">INVALID</span>';
       } else if (t.status === "RUNNING") {
-        statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold">RUNNING</span>';
+        statusBadge = '<span class="mono text-[10px] px-2 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold whitespace-nowrap">RUNNING</span>';
       } else if (t.status === "STOPPED") {
-        statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30 font-semibold">STOPPED</span>';
+        statusBadge = '<span class="mono text-[10px] px-2 py-0.5 bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30 font-semibold whitespace-nowrap">STOPPED</span>';
       }
 
-      let verdictBadge = '<span class="mono text-[11px] text-[#9CA3AF]">Collecting</span>';
+      let verdictBadge = '<span class="mono text-[11px] text-[#9CA3AF] whitespace-nowrap">Collecting</span>';
       if (t.is_invalid) {
-        verdictBadge = '<span class="mono text-[11px] text-[#EF4444] font-bold" title="' + esc(t.invalidation_reasons.join("; ")) + '">FAIL &#10006;</span>';
+        verdictBadge = '<span class="mono text-[11px] text-[#EF4444] font-bold whitespace-nowrap" title="' + esc(t.invalidation_reasons.join("; ")) + '">FAIL &#10006;</span>';
       } else if (samples >= 30) {
-        verdictBadge = '<span class="mono text-[11px] text-[#10B981] font-bold">PASS &#10004;</span>';
+        verdictBadge = '<span class="mono text-[11px] text-[#10B981] font-bold whitespace-nowrap">PASS &#10004;</span>';
       }
 
       const ci95 = t.ci_95 ? "[" + t.ci_95.lower.toFixed(2) + ", " + t.ci_95.upper.toFixed(2) + "]" : "--";
       const ci98 = t.ci_98 ? "[" + t.ci_98.lower.toFixed(2) + ", " + t.ci_98.upper.toFixed(2) + "]" : "--";
 
       return `
-        <tr class="hover:bg-[#111827] transition-colors">
+        <tr class="hover:bg-[#111827] transition-colors whitespace-nowrap">
           <td class="p-3.5 font-bold text-[#F9FAFB]">$${t.bankroll}</td>
           <td class="p-3.5">${statusBadge}</td>
-          <td class="p-3.5 text-[#9CA3AF] text-[11px]">${t.pid ? 'PID ' + t.pid : '--'}</td>
           <td class="p-3.5 text-right font-bold ${pnlColor}">${fmtUsd(pnl)}</td>
           <td class="p-3.5 text-right ${pnlColor}">${fmtPct(retPct)}</td>
           <td class="p-3.5">
@@ -2468,16 +2460,15 @@ function renderBankrollPage(data){
     const tbody = document.getElementById("bk-matrix-rows");
     if (tbody) tbody.innerHTML = rowsHtml;
 
-    // 3. Render Aggregate Summary Footer Row
+    // 4. Render Aggregate Summary Footer Row (Single-line row, no wrap)
     const tfoot = document.getElementById("bk-matrix-tfoot");
     if (tfoot) {
       const aggPnlColor = totalPnl > 0 ? "text-[#10B981]" : (totalPnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
       const aggSamplePct = targetSamples > 0 ? Math.min(100, Math.round((totalSamples / targetSamples) * 100)) : 0;
       tfoot.innerHTML = `
-        <tr class="bg-[#090D16] border-t-2 border-[#1F2937] text-[#F9FAFB]">
-          <td class="p-3.5 font-bold text-[#FBBF24]">AGGREGATE (${filteredTiers.length})</td>
-          <td class="p-3.5"><span class="mono text-[10px] px-2 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold">${activeBots} ACTIVE</span></td>
-          <td class="p-3.5 text-[#9CA3AF] text-[11px]">--</td>
+        <tr class="bg-[#090D16] border-t-2 border-[#1F2937] text-[#F9FAFB] whitespace-nowrap">
+          <td class="p-3.5 font-bold text-[#FBBF24] whitespace-nowrap">AGGREGATE (${filteredTiers.length})</td>
+          <td class="p-3.5 whitespace-nowrap"><span class="inline-flex items-center gap-1.5 whitespace-nowrap mono text-[11px] px-2.5 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold"><span class="size-1.5 bg-[#10B981] rounded-full"></span>${activeBots} / 10 ACTIVE</span></td>
           <td class="p-3.5 text-right font-bold ${aggPnlColor}">${fmtUsd(totalPnl)}</td>
           <td class="p-3.5 text-right font-bold ${aggPnlColor}">${fmtPct(totalReturnPct)}</td>
           <td class="p-3.5">
@@ -2490,17 +2481,17 @@ function renderBankrollPage(data){
           </td>
           <td class="p-3.5 text-right font-bold">${aggWinRate.toFixed(1)}%</td>
           <td class="p-3.5 text-right font-bold">${fmtUsd(aggMeanReturn)}</td>
-          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; Student-t</td>
-          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; Student-t</td>
+          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; CI</td>
+          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; CI</td>
           <td class="p-3.5 text-right font-semibold text-[#FBBF24]">${bestTier ? (bestTier.sortino || 0).toFixed(2) : '--'}</td>
           <td class="p-3.5 text-right text-[#EF4444] font-bold">${maxDrawdownWorst.toFixed(1)}%</td>
-          <td class="p-3.5 text-center"><span class="mono text-[11px] text-[#10B981] font-bold">TOTALS</span></td>
+          <td class="p-3.5 text-center"><span class="mono text-[11px] text-[#10B981] font-bold whitespace-nowrap">TOTALS</span></td>
         </tr>
       `;
     }
   }
 
-  // 4. Render Filtered Tier Cards Grid
+  // 5. Render Filtered Tier Cards Grid
   const cardsHtml = filteredTiers.map(t => {
     const pnl = t.total_pnl || 0;
     const retPct = t.return_pct || 0;
@@ -2555,7 +2546,7 @@ function renderBankrollPage(data){
             <div class="h-full ${samples >= 30 ? (t.is_invalid ? 'bg-[#EF4444]' : 'bg-[#10B981]') : 'bg-[#3B82F6]'}" style="width:${samplePct}%"></div>
           </div>
           <div class="mono text-[10px] text-[#9CA3AF] mt-2 flex items-center justify-between">
-            <span>${t.pid ? 'PID ' + t.pid : 'OFFLINE'}</span>
+            <span>${isLive ? '<span class="text-[#10B981] font-semibold">ACTIVE</span>' : '<span class="text-[#9CA3AF]">IDLE</span>'}</span>
             <span>${t.is_invalid ? '<span class="text-[#EF4444] font-bold">FAIL</span>' : (samples >= 30 ? '<span class="text-[#10B981]">PASS</span>' : 'COLLECTING')}</span>
           </div>
         </div>
@@ -2599,6 +2590,7 @@ refreshBankroll();
 setInterval(refreshBankroll, 5000);
 </script>
 """)
+
 
 
 
