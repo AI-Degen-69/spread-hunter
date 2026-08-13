@@ -32,13 +32,13 @@ sys.path.insert(0, str(ROOT))
 # single-bot pipeline). Importing it here would point at the archive
 # snapshot, which is not what this regression test is for.
 from server.fleet_dash import PAGE as FLEET_PAGE  # noqa: E402
-from server.spread_dash_html import DASHBOARD_HTML, LANDING_HTML  # noqa: E402
+from server.spread_dash_html import DASHBOARD_HTML, LANDING_HTML, BANKROLL_HTML  # noqa: E402
 
 NODE = shutil.which("node")
 
 # One page, one flatten, one parse: SyntaxError in any <script> renders a
 # fully blank dashboard, not a degraded one.
-PAGES = {"fleet": FLEET_PAGE, "spread": DASHBOARD_HTML, "landing": LANDING_HTML}
+PAGES = {"fleet": FLEET_PAGE, "spread": DASHBOARD_HTML, "landing": LANDING_HTML, "bankroll": BANKROLL_HTML}
 
 
 def _script_blocks(page: str | None = None) -> list[str]:
@@ -80,7 +80,7 @@ def test_static_tailwind_replaces_the_cdn_runtime():
     inlined into both pages. The CDN must never return -- re-adding it
     re-introduces the render-blocking dependency and breaks offline use."""
     from server._tailwind_css import TAILWIND_CSS
-    for page in (DASHBOARD_HTML, LANDING_HTML):
+    for page in (DASHBOARD_HTML, LANDING_HTML, BANKROLL_HTML):
         assert "cdn.tailwindcss.com" not in page
         assert TAILWIND_CSS in page
 

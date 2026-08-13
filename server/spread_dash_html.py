@@ -287,7 +287,6 @@ document.addEventListener("click", (e) => {
 });
 """
 
-
 def _wrap(title: str, body: str) -> str:
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -299,34 +298,149 @@ def _wrap(title: str, body: str) -> str:
 </body></html>"""
 
 
-LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
-<div class="h-[2px] w-full bg-[#10B981]"></div>
-<nav class="sticky top-0 z-40 bg-[#111827]/95 backdrop-blur border-b border-[#1F2937]">
-  <div class="mx-auto max-w-[1440px] px-6 lg:px-10 h-[72px] flex items-center justify-between">
-    <div class="flex items-center gap-5 min-w-0">
-      <div class="flex items-center gap-3 shrink-0">
-        <div class="size-[40px] bg-[#F9FAFB] text-[#090D16] grid place-items-center mono text-[13px] font-bold tracking-widest">SH<span class="text-[#EF4444]">&mdash;</span>01</div>
-        <div>
-          <div class="font-display text-[16px] leading-none">SPREAD HUNTER</div>
-          <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#9CA3AF] mt-0.5">Hunter fleet &middot; live desk</div>
+def _NAVBAR(active_page: str = "fleet") -> str:
+    badge_map = {
+        "fleet": ("FLEET DESK", "bg-[#10B981]/15 text-[#10B981] border-[#10B981]/30"),
+        "bankroll": ("10-TIER MATRIX", "bg-[#FBBF24]/15 text-[#FBBF24] border-[#FBBF24]/30"),
+        "landing": ("OVERVIEW", "bg-[#3B82F6]/15 text-[#3B82F6] border-[#3B82F6]/30"),
+        "scan": ("MARKET SCAN", "bg-[#9CA3AF]/15 text-[#9CA3AF] border-[#9CA3AF]/30"),
+    }
+    badge_text, badge_class = badge_map.get(active_page, ("LIVE DESK", "bg-[#10B981]/15 text-[#10B981] border-[#10B981]/30"))
+
+    def tab_cls(page: str) -> str:
+        if page == active_page:
+            return "bg-[#10B981] text-white border-[#10B981] shadow-[0_0_12px_rgba(16,185,129,0.3)]"
+        return "bg-[#090D16] text-[#94A3B8] border-[#1F2937] hover:text-[#F9FAFB] hover:border-[#10B981]/50 hover:bg-[#111827]"
+
+    def menu_active(page: str) -> str:
+        if page == active_page:
+            return "bg-[#1F2937] border-[#10B981]/50"
+        return ""
+
+    def menu_pill(page: str) -> str:
+        if page == active_page:
+            return '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#10B981] text-white font-bold tracking-widest uppercase">ACTIVE</span>'
+        return ''
+
+    fleet_tab = tab_cls("fleet")
+    bankroll_tab = tab_cls("bankroll")
+    scan_tab = tab_cls("scan")
+    landing_tab = tab_cls("landing")
+
+    fleet_menu = menu_active("fleet")
+    bankroll_menu = menu_active("bankroll")
+    landing_menu = menu_active("landing")
+
+    fleet_pill = menu_pill("fleet")
+    bankroll_pill = menu_pill("bankroll")
+    landing_pill = menu_pill("landing")
+
+    accent_bar = "#FBBF24" if active_page == "bankroll" else ("#3B82F6" if active_page == "landing" else "#10B981")
+
+    return f"""
+<div class="h-[2px] w-full" style="background-color:{accent_bar}"></div>
+<header class="sticky top-0 z-40 bg-[#090D16]/95 backdrop-blur border-b border-[#1F2937]">
+  <div class="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 h-[64px] flex items-center justify-between gap-4">
+    <!-- Brand / Identity -->
+    <div class="flex items-center gap-3.5 min-w-0">
+      <a href="/" class="size-10 bg-[#111827] text-[#F9FAFB] grid place-items-center mono text-[12px] font-bold shrink-0 border border-[#1F2937] hover:border-[#10B981] transition-colors">SH<span class="text-[#EF4444]">&mdash;</span>01</a>
+      <div class="hidden sm:block min-w-0">
+        <div class="font-display text-[16px] leading-none flex items-center gap-2">
+          SPREAD HUNTER <span class="mono text-[11px] font-bold px-1.5 py-0.5 border {badge_class}">{badge_text}</span>
+        </div>
+        <div class="mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF] mt-0.5 truncate">Two-Sided Polymarket Maker Fleet</div>
+      </div>
+      <div id="hdr-pills" class="hidden lg:flex items-center gap-1.5 ml-2"></div>
+    </div>
+
+    <!-- Desktop Navigation Tabs / Switcher -->
+    <nav class="hidden md:flex items-center gap-1.5 bg-[#111827] border border-[#1F2937] p-1">
+      <a href="/dashboard" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {fleet_tab}">
+        <span>📊</span> Fleet Desk
+      </a>
+      <a href="/bankroll" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {bankroll_tab}">
+        <span>⚡</span> 10 Bankroll Bots
+      </a>
+      <a href="http://127.0.0.1:8801/?view=scan" target="_blank" rel="noopener" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {scan_tab}">
+        <span>🎯</span> Market Scan <span class="text-[10px] text-[#9CA3AF]">&nearr;</span>
+      </a>
+      <a href="/landing" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {landing_tab}">
+        <span>🏠</span> Overview
+      </a>
+    </nav>
+
+    <!-- Right Controls: Status Indicator + Opening Menu Dropdown -->
+    <div class="flex items-center gap-2.5 shrink-0">
+      <div id="hdr-live" class="flex items-center gap-2 mono text-[12px] border border-[#1F2937] bg-[#111827] px-3 h-9">
+        <span class="size-1.5 bg-[#10B981] animate-pulse"></span>
+        <span class="tracking-[0.12em] uppercase text-[12px] text-[#10B981] font-bold">ONLINE</span>
+      </div>
+
+      <!-- Opening Menu / Page Switcher Dropdown -->
+      <div class="relative" id="nav-dropdown-wrap">
+        <button type="button" id="nav-dropdown-btn" aria-expanded="false" class="h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[12px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] hover:border-[#10B981]/50 transition-colors flex items-center gap-2">
+          <span>☰ PAGES</span>
+          <span class="text-[10px] text-[#9CA3AF]">&#9660;</span>
+        </button>
+
+        <div id="nav-dropdown-menu" class="hidden absolute right-0 top-full mt-1.5 w-[320px] bg-[#090D16] border border-[#1F2937] shadow-2xl z-50 p-2 space-y-1">
+          <div class="px-3 py-1.5 mono text-[11px] font-bold tracking-widest text-[#9CA3AF] uppercase border-b border-[#1F2937]/50 mb-1 flex items-center justify-between">
+            <span>Spread Hunter Suite</span>
+            <span class="text-[10px] text-[#10B981]">v1.0</span>
+          </div>
+          
+          <a href="/dashboard" class="flex items-start gap-3 p-2.5 border border-transparent hover:border-[#1F2937] hover:bg-[#111827] transition-colors {fleet_menu}">
+            <div class="text-[18px]">📊</div>
+            <div class="min-w-0 flex-1">
+              <div class="mono text-[13px] font-bold text-[#F9FAFB] flex items-center justify-between">
+                <span>Fleet Dashboard</span>
+                {fleet_pill}
+              </div>
+              <div class="mono text-[11px] text-[#9CA3AF] leading-tight mt-0.5">Real-time P&L, Active Positions & Readiness Verdict</div>
+            </div>
+          </a>
+
+          <a href="/bankroll" class="flex items-start gap-3 p-2.5 border border-transparent hover:border-[#1F2937] hover:bg-[#111827] transition-colors {bankroll_menu}">
+            <div class="text-[18px]">⚡</div>
+            <div class="min-w-0 flex-1">
+              <div class="mono text-[13px] font-bold text-[#F9FAFB] flex items-center justify-between">
+                <span>10 Bankroll Bots</span>
+                {bankroll_pill}
+              </div>
+              <div class="mono text-[11px] text-[#9CA3AF] leading-tight mt-0.5">10-Tier Matrix ($100-$1000) & Student-t CIs</div>
+            </div>
+          </a>
+
+          <a href="http://127.0.0.1:8801/?view=scan" target="_blank" rel="noopener" class="flex items-start gap-3 p-2.5 border border-transparent hover:border-[#1F2937] hover:bg-[#111827] transition-colors">
+            <div class="text-[18px]">🎯</div>
+            <div class="min-w-0 flex-1">
+              <div class="mono text-[13px] font-bold text-[#F9FAFB] flex items-center justify-between">
+                <span>Market Scan Funnel</span>
+                <span class="mono text-[10px] px-1.5 py-0.2 bg-[#3B82F6]/20 text-[#3B82F6] font-bold border border-[#3B82F6]/30">:8801 &nearr;</span>
+              </div>
+              <div class="mono text-[11px] text-[#9CA3AF] leading-tight mt-0.5">Raw venue pipeline to graduated universe</div>
+            </div>
+          </a>
+
+          <a href="/landing" class="flex items-start gap-3 p-2.5 border border-transparent hover:border-[#1F2937] hover:bg-[#111827] transition-colors {landing_menu}">
+            <div class="text-[18px]">🏠</div>
+            <div class="min-w-0 flex-1">
+              <div class="mono text-[13px] font-bold text-[#F9FAFB] flex items-center justify-between">
+                <span>Strategy Overview</span>
+                {landing_pill}
+              </div>
+              <div class="mono text-[11px] text-[#9CA3AF] leading-tight mt-0.5">Spread capture thesis, math & inception stats</div>
+            </div>
+          </a>
         </div>
       </div>
-      <div class="hidden lg:flex items-center gap-2 ml-6 pl-6 border-l border-[#1F2937] h-8">
-        <span class="mono text-[13px] tracking-[0.14em] uppercase text-[#9CA3AF]">Markets that resolve to $1.00</span>
-        <span class="size-1 bg-[#10B981] mx-1"></span>
-        <span class="mono text-[13px] tracking-[0.14em] uppercase text-[#9CA3AF]">Spread inconsistencies</span>
-      </div>
-    </div>
-    <div class="flex items-center gap-3 shrink-0">
-      <div id="nav-status" class="hidden md:flex items-center gap-2.5 mono text-[13px] border border-[#1F2937] bg-[#111827] px-3.5 h-9">
-        <span class="size-1.5 bg-[#F59E0B] animate-pulse"></span>
-        <span class="tracking-[0.12em] uppercase text-[13px]">Loading&hellip;</span>
-      </div>
-      <a href="/dashboard" class="bg-[#10B981] text-white px-5 h-9 inline-flex items-center justify-center mono text-[13px] font-semibold tracking-[0.07em] uppercase hover:bg-[#059669] transition-colors shadow-[0_1px_12px_rgba(16,185,129,0.25)]">Open Your Desk &nearr;</a>
     </div>
   </div>
-</nav>
+</header>
+"""
 
+
+LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", _NAVBAR("landing") + r"""
 <section class="mx-auto max-w-[1440px] px-6 lg:px-10">
   <div class="grid grid-cols-12 gap-0 border-x border-[#1F2937] border-b">
     <div class="col-span-12 lg:col-span-7 border-b lg:border-b-0 lg:border-r border-[#1F2937] p-8 lg:p-12 flex flex-col justify-between min-h-[600px] bg-[#111827]">
@@ -445,6 +559,20 @@ LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
 function fmtUsd(v){ if(v===null||v===undefined) return "--"; const s=v<0?"-":"+"; return s+"$"+Math.abs(v).toFixed(2); }
 function fmtPct(v,d){ if(v===null||v===undefined) return "--"; d=d===undefined?1:d; const s=v>0?"+":""; return s+v.toFixed(d)+"%"; }
 
+document.addEventListener("click", function(e){
+  const btn = document.getElementById("nav-dropdown-btn");
+  const menu = document.getElementById("nav-dropdown-menu");
+  if (!btn || !menu) return;
+  if (btn.contains(e.target)){
+    const isExp = btn.getAttribute("aria-expanded") === "true";
+    btn.setAttribute("aria-expanded", isExp ? "false" : "true");
+    menu.classList.toggle("hidden", isExp);
+  } else if (!menu.contains(e.target)){
+    btn.setAttribute("aria-expanded", "false");
+    menu.classList.add("hidden");
+  }
+});
+
 async function load(){
   let s;
   try {
@@ -452,16 +580,8 @@ async function load(){
     if (!r.ok){ let body = ""; try { body = (await r.text()).slice(0, 120); } catch(_){} throw new Error("HTTP " + r.status + (body ? " — " + body : "")); }
     s = await r.json();
   } catch (e) {
-    const nav = document.getElementById("nav-status");
-    nav.innerHTML = `<span class="size-1.5 bg-[#EF4444]"></span><span class="tracking-[0.12em] uppercase text-[13px]">Offline</span>`;
-    document.getElementById("hero-realized").textContent = "--";
-    renderCapitalPanel(document.getElementById("capital-panel"), null, []);
     const list = document.getElementById("verdict-list");
     list.innerHTML = `<div class="p-4 mono text-[13px] text-[#EF4444]">Could not load the live summary.</div>`;
-    const detail = document.createElement("div");
-    detail.className = "mono text-[12px] text-[#9CA3AF] mt-1";
-    detail.textContent = e && e.message ? e.message : String(e);
-    list.appendChild(detail);
     return;
   }
 
@@ -470,16 +590,8 @@ async function load(){
     (s.realized_pct===null?"":fmtPct(s.realized_pct)+" ") + "on " + (s.realized_cost||0).toFixed(0) + " committed";
   document.getElementById("hero-realized-rebate").textContent =
     fmtUsd(s.rebate_usd) + " rebates = " + fmtUsd(s.total_liquidation_usd) + " total liquidation P&L";
-  // The capital-since-inception curve: same settled closes the dashboard
-  // uses, rendered by the shared /capital.js widget.
   const st = await fetch("/api/settled").then(r => r.json()).catch(() => null);
   renderCapitalPanel(document.getElementById("capital-panel"), s, (st && st.settled) || []);
-
-  const nav = document.getElementById("nav-status");
-  nav.innerHTML = `<span class="size-1.5 ${s.fleet_alive ? 'bg-[#10B981] animate-pulse' : 'bg-[#F59E0B]'}"></span>
-    <span class="tracking-[0.12em] uppercase text-[13px]">${s.fleet_alive ? 'Live' : 'Idle'}</span>
-    <span class="text-[#1F2937]">&middot;</span>
-    <span class="text-[#9CA3AF] text-[13px]">${s.n_settled} of ${s.go_live_min_settled} settled</span>`;
 
   const rows = [
     {n:"01", label:"Confidence Bound", value: fmtPct(s.ci90_lower_pct,2),
@@ -519,37 +631,16 @@ load();
 </script>
 """)
 
-DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
-<div class="h-[2px] w-full bg-[#EF4444]"></div>
-<header class="sticky top-0 z-30 bg-[#111827]/90 backdrop-blur border-b border-[#1F2937]">
-  <div class="mx-auto max-w-[1440px] px-6 lg:px-8 h-[60px] flex items-center justify-between gap-4">
-    <div class="flex items-center gap-4 min-w-0">
-      <div class="size-10 px-1 bg-[#111827] text-[#F9FAFB] grid place-items-center mono text-[12px] font-bold whitespace-nowrap shrink-0 border border-[#1F2937]">SH<span class="text-[#EF4444]">&mdash;</span>01</div>
-      <div class="hidden md:block min-w-0">
-        <div class="font-display text-[16px] leading-none flex items-center gap-2">SPREAD HUNTER <span class="hidden lg:inline mono text-[12px] tracking-[0.14em] uppercase font-normal text-[#9CA3AF]">Fleet Desk</span></div>
-        <div class="mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF] truncate">Live fleet database &mdash; maker</div>
-      </div>
-      <div id="hdr-pills" class="hidden lg:flex items-center gap-1.5 ml-2"></div>
-    </div>
-    <div class="flex items-center gap-2 shrink-0">
-      <div id="hdr-live" class="hidden sm:flex items-center gap-2 mono text-[13px] border border-[#1F2937] bg-[#111827] px-3 h-9">
-        <span class="size-1.5 bg-[#9CA3AF]"></span>
-        <span class="tracking-[0.12em] uppercase text-[12px]">Loading</span>
-      </div>
-      <a href="http://127.0.0.1:8801/?view=scan" target="_blank" rel="noopener" title="The market-selection funnel: scan to graduated" class="hidden md:flex h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] transition-colors items-center gap-1.5">Market Scan &nearr;</a>
-      <a href="/" class="h-9 px-3.5 border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-widest uppercase hover:bg-[#1F2937] transition-colors flex items-center gap-1.5">&larr; Home</a>
+DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", _NAVBAR("fleet") + r"""
+<div class="bg-[#111827] border-b border-[#1F2937]">
+  <div class="mx-auto max-w-[1440px] px-6 lg:px-8 min-h-9 py-2.5 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+    <!-- The decision hinge: one line answering the desk's only question --
+         go or no-go -- rendered by renderHinge() from the live summary. -->
+    <div id="hdr-hinge" class="w-full flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+      <span class="mono text-[13px] tracking-[0.2em] uppercase text-[#9CA3AF]">Loading the call&hellip;</span>
     </div>
   </div>
-  <div class="bg-[#111827] border-y border-[#1F2937]">
-    <div class="mx-auto max-w-[1440px] px-6 lg:px-8 min-h-9 py-2.5 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-      <!-- The decision hinge: one line answering the desk's only question --
-           go or no-go -- rendered by renderHinge() from the live summary. -->
-      <div id="hdr-hinge" class="w-full flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-        <span class="mono text-[13px] tracking-[0.2em] uppercase text-[#9CA3AF]">Loading the call&hellip;</span>
-      </div>
-    </div>
-  </div>
-</header>
+</div>
 
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-5">
 
@@ -1979,9 +2070,417 @@ async function boot(){
     document.getElementById("scope-tiles").innerHTML =
       `<div class="col-span-3 border border-[#EF4444]/30 p-3 text-center mono text-[12px] text-[#EF4444]">Summary unavailable</div>`;
   }
+  document.addEventListener("click", function(e){
+    const btn = document.getElementById("nav-dropdown-btn");
+    const menu = document.getElementById("nav-dropdown-menu");
+    if (!btn || !menu) return;
+    if (btn.contains(e.target)){
+      const isExp = btn.getAttribute("aria-expanded") === "true";
+      btn.setAttribute("aria-expanded", isExp ? "false" : "true");
+      menu.classList.toggle("hidden", isExp);
+    } else if (!menu.contains(e.target)){
+      btn.setAttribute("aria-expanded", "false");
+      menu.classList.add("hidden");
+    }
+  });
   setInterval(refresh, 15000);
 }
 boot();
 </script>
 """)
+
+
+BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankroll") + r"""
+<div class="bg-[#111827] border-b border-[#1F2937]">
+  <div class="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <span class="size-2 bg-[#FBBF24] animate-pulse"></span>
+      <div class="mono text-[13px] tracking-[0.14em] uppercase font-bold text-[#FBBF24]">10-Tier Capital Allocation Sensitivity Matrix ($100 &ndash; $1,000 in $100 Steps)</div>
+    </div>
+    <div class="flex items-center gap-3 mono text-[12px] text-[#9CA3AF]">
+      <span>Automated Student-t Invalidation Protocol</span>
+      <span class="size-1 bg-[#FBBF24]"></span>
+      <span id="bk-last-refresh">Connecting...</span>
+    </div>
+  </div>
+</div>
+
+<main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-6">
+
+  <!-- Hero KPI Strip -->
+  <section class="sh-rise grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+    <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+      <div class="absolute inset-x-0 top-0 h-[2px] bg-[#3B82F6]"></div>
+      <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
+        <span>TOTAL MATRIX CAPITAL</span>
+        <span class="text-[#3B82F6]">10 TIERS</span>
+      </div>
+      <div class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">$5,500 <span class="text-[14px] font-normal text-[#9CA3AF]">USD</span></div>
+      <div class="mono text-[11px] text-[#9CA3AF] mt-1">$100 &rarr; $1,000 isolated pools</div>
+    </div>
+
+    <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+      <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
+      <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
+        <span>COMBINED REALIZED P&amp;L</span>
+        <span id="bk-kpi-ret-pill" class="mono text-[10px] px-1.5 py-0.2 bg-[#10B981]/20 text-[#10B981] font-bold border border-[#10B981]/30">0.0%</span>
+      </div>
+      <div id="bk-hero-pnl" class="mono text-[26px] font-bold tracking-tight text-[#10B981] mt-2">+$0.00</div>
+      <div id="bk-hero-pnl-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">Across all 10 sensitivity runs</div>
+    </div>
+
+    <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+      <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
+      <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
+        <span>FLEET RUNNING STATUS</span>
+        <span class="size-2 bg-[#10B981] rounded-full animate-ping"></span>
+      </div>
+      <div id="bk-hero-active" class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">-- / 10</div>
+      <div id="bk-hero-active-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">Concurrent background instances</div>
+    </div>
+
+    <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+      <div class="absolute inset-x-0 top-0 h-[2px] bg-[#FBBF24]"></div>
+      <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
+        <span>OPTIMAL BANKROLL TIER</span>
+        <span class="text-[#FBBF24] font-bold">BEST</span>
+      </div>
+      <div id="bk-hero-lead" class="mono text-[26px] font-bold tracking-tight text-[#FBBF24] mt-2">--</div>
+      <div id="bk-hero-lead-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">By Sortino &amp; Return</div>
+    </div>
+
+    <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+      <div class="absolute inset-x-0 top-0 h-[2px] bg-[#8B5CF6]"></div>
+      <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
+        <span>SAMPLE MATURITY</span>
+        <span class="text-[#8B5CF6]">TARGET 1,000</span>
+      </div>
+      <div id="bk-hero-samples" class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">0 <span class="text-[14px] font-normal text-[#9CA3AF]">/ 1,000</span></div>
+      <div id="bk-hero-samples-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">100 closes target per tier</div>
+    </div>
+  </section>
+
+  <!-- Section 1: Comparative Table -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <div class="p-4 border-b border-[#1F2937] flex flex-wrap items-center justify-between gap-4 bg-[#090D16]">
+      <div>
+        <div class="mono text-[14px] font-bold text-[#FBBF24] uppercase tracking-wider flex items-center gap-2">
+          <span>10-Tier Comparative Matrix &amp; Invalidation Engine</span>
+        </div>
+        <div class="mono text-[12px] text-[#9CA3AF] mt-0.5">Direct reading from all 10 isolated SQLite databases (`run/bankroll_*/fleet.db`)</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">MIN GATE: 30 SAMPLES</span>
+        <span class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">TARGET: 100 SAMPLES</span>
+      </div>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr class="border-b border-[#1F2937] bg-[#111827] mono text-[11px] tracking-[0.14em] uppercase text-[#9CA3AF]">
+            <th class="p-3.5 font-bold">Tier</th>
+            <th class="p-3.5 font-bold">Status</th>
+            <th class="p-3.5 font-bold">PID</th>
+            <th class="p-3.5 font-bold text-right">Realized P&amp;L</th>
+            <th class="p-3.5 font-bold text-right">Return %</th>
+            <th class="p-3.5 font-bold min-w-[140px]">Samples (30/100)</th>
+            <th class="p-3.5 font-bold text-right">Win Rate</th>
+            <th class="p-3.5 font-bold text-right">Mean $/Tr</th>
+            <th class="p-3.5 font-bold text-center">95% Student-t CI</th>
+            <th class="p-3.5 font-bold text-center">98% Student-t CI</th>
+            <th class="p-3.5 font-bold text-right">Sortino</th>
+            <th class="p-3.5 font-bold text-right">Max DD</th>
+            <th class="p-3.5 font-bold text-center">Verdict</th>
+          </tr>
+        </thead>
+        <tbody id="bk-matrix-rows" class="divide-y divide-[#1F2937] mono text-[12px]">
+          <tr>
+            <td colspan="13" class="p-8 text-center text-[#9CA3AF]">Loading 10-tier bankroll matrix telemetry...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Section 2: 10 Tier Cards Grid -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <div class="p-4 border-b border-[#1F2937] bg-[#090D16] flex items-center justify-between">
+      <div class="mono text-[14px] font-bold text-[#F9FAFB] uppercase tracking-wider">Tier Telemetry &amp; Confidence Intervals</div>
+      <div class="mono text-[12px] text-[#9CA3AF]">10 Independent Parallel Experiments</div>
+    </div>
+    <div id="bk-cards-grid" class="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 bg-[#090D16]">
+      <!-- Rendered by JS -->
+    </div>
+  </section>
+
+  <!-- Section 3: Automated Invalidation Protocol Info -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] p-6">
+    <div class="mono text-[12px] font-bold tracking-[0.16em] uppercase text-[#FBBF24] flex items-center gap-2">
+      <span class="size-2 bg-[#FBBF24]"></span> Automated Invalidation Protocol (AGENTS.md &amp; Strategy Specs)
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-4 mono text-[12px] leading-relaxed">
+      <div class="border border-[#1F2937] bg-[#090D16] p-4">
+        <div class="font-bold text-[#EF4444] uppercase tracking-wider flex items-center gap-2">
+          <span>01 &middot; Confidence Lower Gate</span>
+        </div>
+        <div class="text-[#9CA3AF] mt-2">
+          At &ge; 30 settled trade closes, if the upper bound of the 95% Student-t confidence interval falls below $0.00 (<span class="text-[#EF4444]">CI_95.upper &lt; 0</span>), the tier is flagged <span class="text-[#EF4444] font-bold">INVALID</span>.
+        </div>
+      </div>
+      <div class="border border-[#1F2937] bg-[#090D16] p-4">
+        <div class="font-bold text-[#EF4444] uppercase tracking-wider flex items-center gap-2">
+          <span>02 &middot; Win Rate Floor</span>
+        </div>
+        <div class="text-[#9CA3AF] mt-2">
+          At &ge; 30 settled closes, if the realized win rate is less than 35% (<span class="text-[#EF4444]">Win Rate &lt; 35%</span>), the run is halted and declared unprofitable against maker spread capture.
+        </div>
+      </div>
+      <div class="border border-[#1F2937] bg-[#090D16] p-4">
+        <div class="font-bold text-[#EF4444] uppercase tracking-wider flex items-center gap-2">
+          <span>03 &middot; Maximum Drawdown</span>
+        </div>
+        <div class="text-[#9CA3AF] mt-2">
+          If cumulative peak-to-trough drawdown exceeds 15% of starting capital (<span class="text-[#EF4444]">Max DD &gt; 15%</span>), the strategy automatically invalidates the tier for capital preservation.
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+function fmtUsd(v){
+  if (v === null || v === undefined) return "--";
+  const s = v < 0 ? "-" : "+";
+  return s + "$" + Math.abs(v).toFixed(2);
+}
+function fmtPct(v, d){
+  if (v === null || v === undefined) return "--";
+  d = d === undefined ? 1 : d;
+  const s = v > 0 ? "+" : "";
+  return s + v.toFixed(d) + "%";
+}
+function esc(s){
+  if (s === null || s === undefined) return "";
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+let REFRESH_BUSY = false;
+
+async function fetchJSON(url){
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return await r.json();
+}
+
+function renderBankrollPage(data){
+  if (!data || !data.tiers) return;
+  const tiers = data.tiers;
+  
+  let totalPnl = 0;
+  let totalSamples = 0;
+  let activeBots = 0;
+  let bestTier = null;
+  let bestScore = -Infinity;
+
+  tiers.forEach(t => {
+    totalPnl += (t.total_pnl || 0);
+    totalSamples += (t.sample_count || 0);
+    if (t.status === "RUNNING") activeBots++;
+    const score = (t.sortino || 0) * 10 + (t.return_pct || 0);
+    if (score > bestScore && t.sample_count > 0) {
+      bestScore = score;
+      bestTier = t;
+    }
+  });
+
+  const totalReturnPct = (totalPnl / 5500.0) * 100.0;
+  const pnlEl = document.getElementById("bk-hero-pnl");
+  if (pnlEl) {
+    pnlEl.textContent = fmtUsd(totalPnl);
+    pnlEl.className = "mono text-[26px] font-bold tracking-tight mt-2 " + (totalPnl >= 0 ? "text-[#10B981]" : "text-[#EF4444]");
+  }
+  const retPill = document.getElementById("bk-kpi-ret-pill");
+  if (retPill) {
+    retPill.textContent = fmtPct(totalReturnPct);
+    retPill.className = "mono text-[10px] px-1.5 py-0.2 font-bold border " + (totalReturnPct >= 0 ? "bg-[#10B981]/20 text-[#10B981] border-[#10B981]/30" : "bg-[#EF4444]/20 text-[#EF4444] border-[#EF4444]/30");
+  }
+  const activeEl = document.getElementById("bk-hero-active");
+  if (activeEl) activeEl.innerHTML = activeBots + ' <span class="text-[14px] font-normal text-[#9CA3AF]">/ 10 Active</span>';
+
+  const leadEl = document.getElementById("bk-hero-lead");
+  if (leadEl) {
+    if (bestTier) {
+      leadEl.textContent = "$" + bestTier.bankroll + " (" + fmtUsd(bestTier.total_pnl) + ")";
+    } else {
+      leadEl.textContent = "Collecting...";
+    }
+  }
+
+  const samplesEl = document.getElementById("bk-hero-samples");
+  if (samplesEl) {
+    samplesEl.innerHTML = totalSamples + ' <span class="text-[14px] font-normal text-[#9CA3AF]">/ 1,000</span>';
+  }
+
+  const refreshEl = document.getElementById("bk-last-refresh");
+  if (refreshEl) {
+    const d = new Date(data.now * 1000);
+    refreshEl.textContent = "Updated " + d.toLocaleTimeString();
+  }
+
+  const rowsHtml = tiers.map(t => {
+    const pnl = t.total_pnl || 0;
+    const retPct = t.return_pct || 0;
+    const pnlColor = pnl > 0 ? "text-[#10B981]" : (pnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
+    const samples = t.sample_count || 0;
+    const target = t.target_samples || 100;
+    const samplePct = Math.min(100, Math.round((samples / target) * 100));
+    
+    let statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] font-semibold">INITIALIZED</span>';
+    if (t.is_invalid) {
+      statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/30 font-bold animate-pulse">INVALID</span>';
+    } else if (t.status === "RUNNING") {
+      statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold">RUNNING</span>';
+    } else if (t.status === "STOPPED") {
+      statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30 font-semibold">STOPPED</span>';
+    }
+
+    let verdictBadge = '<span class="mono text-[11px] text-[#9CA3AF]">Collecting</span>';
+    if (t.is_invalid) {
+      verdictBadge = '<span class="mono text-[11px] text-[#EF4444] font-bold" title="' + esc(t.invalidation_reasons.join("; ")) + '">FAIL &#10006;</span>';
+    } else if (samples >= 30) {
+      verdictBadge = '<span class="mono text-[11px] text-[#10B981] font-bold">PASS &#10004;</span>';
+    }
+
+    const ci95 = t.ci_95 ? "[" + t.ci_95.lower.toFixed(2) + ", " + t.ci_95.upper.toFixed(2) + "]" : "--";
+    const ci98 = t.ci_98 ? "[" + t.ci_98.lower.toFixed(2) + ", " + t.ci_98.upper.toFixed(2) + "]" : "--";
+
+    return `
+      <tr class="hover:bg-[#111827] transition-colors">
+        <td class="p-3.5 font-bold text-[#F9FAFB]">$${t.bankroll}</td>
+        <td class="p-3.5">${statusBadge}</td>
+        <td class="p-3.5 text-[#9CA3AF] text-[11px]">${t.pid ? 'PID ' + t.pid : '--'}</td>
+        <td class="p-3.5 text-right font-bold ${pnlColor}">${fmtUsd(pnl)}</td>
+        <td class="p-3.5 text-right ${pnlColor}">${fmtPct(retPct)}</td>
+        <td class="p-3.5">
+          <div class="flex items-center gap-2">
+            <div class="w-full bg-[#090D16] border border-[#1F2937] h-2 relative overflow-hidden">
+              <div class="h-full ${samples >= 30 ? (t.is_invalid ? 'bg-[#EF4444]' : 'bg-[#10B981]') : 'bg-[#3B82F6]'}" style="width:${samplePct}%"></div>
+            </div>
+            <span class="text-[11px] text-[#9CA3AF] shrink-0">${samples}/${target}</span>
+          </div>
+        </td>
+        <td class="p-3.5 text-right">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</td>
+        <td class="p-3.5 text-right">${fmtUsd(t.mean_return)}</td>
+        <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">${ci95}</td>
+        <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">${ci98}</td>
+        <td class="p-3.5 text-right font-semibold text-[#FBBF24]">${(t.sortino || 0).toFixed(2)}</td>
+        <td class="p-3.5 text-right text-[#EF4444]">${(t.max_drawdown || 0).toFixed(1)}%</td>
+        <td class="p-3.5 text-center">${verdictBadge}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const tbody = document.getElementById("bk-matrix-rows");
+  if (tbody) tbody.innerHTML = rowsHtml;
+
+  const cardsHtml = tiers.map(t => {
+    const pnl = t.total_pnl || 0;
+    const retPct = t.return_pct || 0;
+    const pnlColor = pnl > 0 ? "text-[#10B981]" : (pnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
+    const isLive = t.status === "RUNNING";
+    const samples = t.sample_count || 0;
+    const target = t.target_samples || 100;
+    const samplePct = Math.min(100, Math.round((samples / target) * 100));
+
+    return `
+      <div class="border ${t.is_invalid ? 'border-[#EF4444]/40 bg-[#EF4444]/5' : (isLive ? 'border-[#10B981]/30 bg-[#111827]' : 'border-[#1F2937] bg-[#111827]')} p-4 relative overflow-hidden flex flex-col justify-between">
+        <div class="absolute inset-x-0 top-0 h-[2px] ${t.is_invalid ? 'bg-[#EF4444]' : (isLive ? 'bg-[#10B981]' : 'bg-[#1F2937]')}"></div>
+        
+        <div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-display text-[20px] leading-none text-[#F9FAFB]">$${t.bankroll}</span>
+            <span class="mono text-[10px] px-1.5 py-0.2 ${isLive ? 'bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold' : 'bg-[#1F2937] text-[#9CA3AF]'}">${t.status}</span>
+          </div>
+
+          <div class="mono text-[22px] font-bold tracking-tight ${pnlColor} mt-2.5">${fmtUsd(pnl)}</div>
+          <div class="flex items-center justify-between text-[11px] text-[#9CA3AF] mt-0.5">
+            <span>Return</span>
+            <span class="${pnlColor} font-semibold">${fmtPct(retPct)}</span>
+          </div>
+
+          <div class="mt-3 pt-2.5 border-t border-[#1F2937] space-y-1.5 text-[11px]">
+            <div class="flex items-center justify-between">
+              <span class="text-[#9CA3AF]">Win Rate</span>
+              <span class="text-[#F9FAFB] font-semibold">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-[#9CA3AF]">Sortino</span>
+              <span class="text-[#FBBF24] font-semibold">${(t.sortino || 0).toFixed(2)}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-[#9CA3AF]">Mean $/Tr</span>
+              <span class="text-[#F9FAFB]">${fmtUsd(t.mean_return)}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-[#9CA3AF]">Max DD</span>
+              <span class="text-[#EF4444] font-semibold">${(t.max_drawdown || 0).toFixed(1)}%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 pt-2.5 border-t border-[#1F2937]">
+          <div class="flex items-center justify-between text-[10px] text-[#9CA3AF] mb-1">
+            <span>Progress (30/100)</span>
+            <span>${samples}/${target}</span>
+          </div>
+          <div class="w-full bg-[#090D16] border border-[#1F2937] h-1.5 overflow-hidden">
+            <div class="h-full ${samples >= 30 ? (t.is_invalid ? 'bg-[#EF4444]' : 'bg-[#10B981]') : 'bg-[#3B82F6]'}" style="width:${samplePct}%"></div>
+          </div>
+          <div class="mono text-[10px] text-[#9CA3AF] mt-2 flex items-center justify-between">
+            <span>${t.pid ? 'PID ' + t.pid : 'OFFLINE'}</span>
+            <span>${t.is_invalid ? '<span class="text-[#EF4444] font-bold">FAIL</span>' : (samples >= 30 ? '<span class="text-[#10B981]">PASS</span>' : 'COLLECTING')}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  const gridEl = document.getElementById("bk-cards-grid");
+  if (gridEl) gridEl.innerHTML = cardsHtml;
+}
+
+async function refreshBankroll(){
+  if (REFRESH_BUSY) return;
+  REFRESH_BUSY = true;
+  try {
+    const data = await fetchJSON("/api/bankroll_matrix");
+    renderBankrollPage(data);
+  } catch (err) {
+    console.error("Bankroll matrix refresh error:", err);
+  } finally {
+    REFRESH_BUSY = false;
+  }
+}
+
+document.addEventListener("click", function(e){
+  const btn = document.getElementById("nav-dropdown-btn");
+  const menu = document.getElementById("nav-dropdown-menu");
+  if (!btn || !menu) return;
+  if (btn.contains(e.target)){
+    const isExp = btn.getAttribute("aria-expanded") === "true";
+    btn.setAttribute("aria-expanded", isExp ? "false" : "true");
+    menu.classList.toggle("hidden", isExp);
+  } else if (!menu.contains(e.target)){
+    btn.setAttribute("aria-expanded", "false");
+    menu.classList.add("hidden");
+  }
+});
+
+refreshBankroll();
+setInterval(refreshBankroll, 5000);
+</script>
+""")
+
 

@@ -37,10 +37,18 @@ def evaluate_bankroll_tier(bankroll: int, workdir: Path) -> dict:
             returns = []
 
     tier_status = "INITIALIZED"
+    pid = None
+    started_at = None
+    target_samples = 100
+    min_samples = 30
     if status_path.exists():
         try:
             sdata = json.loads(status_path.read_text())
             tier_status = sdata.get("status", tier_status)
+            pid = sdata.get("pid")
+            started_at = sdata.get("started_at")
+            target_samples = sdata.get("target_samples", 100)
+            min_samples = sdata.get("min_samples", 30)
         except Exception:
             pass
 
@@ -73,11 +81,15 @@ def evaluate_bankroll_tier(bankroll: int, workdir: Path) -> dict:
         invalidation_reasons.append("Max drawdown > 15%")
 
     is_invalid = len(invalidation_reasons) > 0
+    total_pnl = sum(returns)
+    return_pct = (total_pnl / bankroll * 100.0) if bankroll else 0.0
 
     return {
         "bankroll": bankroll,
         "status": tier_status if not is_invalid else "INVALID",
         "sample_count": sample_count,
+        "total_pnl": total_pnl,
+        "return_pct": return_pct,
         "win_rate": win_rate,
         "max_drawdown": max_drawdown,
         "mean_return": stats["mean"],
@@ -88,6 +100,10 @@ def evaluate_bankroll_tier(bankroll: int, workdir: Path) -> dict:
         "ci_98": stats["ci_98"],
         "is_invalid": is_invalid,
         "invalidation_reasons": invalidation_reasons,
+        "pid": pid,
+        "started_at": started_at,
+        "target_samples": target_samples,
+        "min_samples": min_samples,
     }
 
 def generate_summary_report(run_dir: Path = ROOT / "run") -> list[dict]:

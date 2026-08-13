@@ -385,7 +385,7 @@ def api_funnel() -> dict:
 
 
 from server.spread_dash_html import (  # noqa: E402
-    LANDING_HTML, DASHBOARD_HTML, _CAPITAL_JS)
+    LANDING_HTML, DASHBOARD_HTML, BANKROLL_HTML, _CAPITAL_JS)
 
 
 @app.get("/capital.js")
@@ -407,9 +407,21 @@ def landing():
         "Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
+@app.get("/landing", response_class=HTMLResponse)
+def landing_page():
+    return HTMLResponse(content=LANDING_HTML, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     return HTMLResponse(content=DASHBOARD_HTML, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+@app.get("/bankroll", response_class=HTMLResponse)
+def bankroll_page():
+    return HTMLResponse(content=BANKROLL_HTML, headers={
         "Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
