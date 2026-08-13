@@ -1488,4 +1488,16 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Verdict.** LIVE -- static Tailwind CSS bundle updated and verified fresh.
 
 
+### 2026-08-13 (server & strategy, Session 59): server entrypoint and SPREAD_HUNTER_BANKROLL config override landed
+
+**Question.** How to ensure `python -m server.spread_dash` starts the server directly on port 8805 and `strategy.config.load()` picks up tier bankroll overrides?
+
+**Method.** Added `if __name__ == "__main__": uvicorn.run(...)` to `server/spread_dash.py` on port 8805. Added `SPREAD_HUNTER_BANKROLL` environment variable parser to `strategy/config.py` `load()` updating `bankroll_usd`, `allocation_budget`, and `max_committed_usd`. Updated `scripts/launch_bankroll_experiments.py` command invocation to `strategy.fleet`.
+
+**Result.** `python -m server.spread_dash` launches uvicorn on port 8805 directly. Full test suite green (662/662).
+
+**Verdict.** LIVE -- server launcher and per-tier config override fully wired.
+
+
+
 

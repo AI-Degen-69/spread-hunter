@@ -217,5 +217,8 @@
 
 * **2026-08-13 (שרת, סשן 58): בנייה מחדש של גיליון סגנונות Tailwind CSS פנימי.** עודכן `server/_tailwind_css.py` דרך `scripts/build_tailwind_css.py`. 662/662 בדיקות עוברות.
 
+* **2026-08-13 (שרת ואסטרטגיה, סשן 59): נקודת כניסה לשרת ודריסת תצורה ל-SPREAD_HUNTER_BANKROLL נחתו.** נוספה נקודת כניסה של uvicorn ל-`server/spread_dash.py` וטיפול ב-`SPREAD_HUNTER_BANKROLL` ב-`strategy/config.py`. 662/662 בדיקות עוברות.
+
+
 
 

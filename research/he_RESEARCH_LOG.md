@@ -1222,4 +1222,16 @@ deploy/run_service.py) למת פונקציונלית על המארח הזה. ה�
 **פסק דין.** LIVE -- חבילת ה-Tailwind CSS הסטטית עודכנה ואומתה כטרייה.
 
 
+### 2026-08-13 (שרת ואסטרטגיה, סשן 59): נקודת כניסה לשרת ודריסת תצורה ל-SPREAD_HUNTER_BANKROLL נחתו
+
+**שאלה.** כיצד להבטיח ש-`python -m server.spread_dash` יפעיל את השרת ישירות על פורט 8805 וש-`strategy.config.load()` יקלוט דריסות בנקרוֹל לכל דרגה?
+
+**שיטה.** הוספנו `if __name__ == "__main__": uvicorn.run(...)` ל-`server/spread_dash.py` על פורט 8805. הוספנו מפענח משתנה סביבה `SPREAD_HUNTER_BANKROLL` ל-`strategy/config.py` `load()` המעדכן את `bankroll_usd`, `allocation_budget` ו-`max_committed_usd`. עודכן קריאת הפקודה ב-`scripts/launch_bankroll_experiments.py` ל-`strategy.fleet`.
+
+**תוצאה.** `python -m server.spread_dash` מפעיל את uvicorn על פורט 8805 ישירות. כל סוויטת הבדיקות ירוקה (662/662).
+
+**פסק דין.** LIVE -- מפעיל השרת ודריסת התצורה לכל דרגה מחוברים במלואם.
+
+
+
 

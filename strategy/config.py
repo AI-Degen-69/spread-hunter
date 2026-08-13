@@ -745,6 +745,12 @@ def load() -> MakerConfig:
     mf = os.environ.get("HUNTER_MARGINAL_FLOOR") or ""
     if mf.strip():
         kw["marginal_return_floor"] = float(mf)
+    bk = os.environ.get("SPREAD_HUNTER_BANKROLL") or os.environ.get("HUNTER_BANKROLL") or ""
+    if bk.strip():
+        kw["bankroll_usd"] = float(bk)
+        kw["allocation_budget"] = float(bk) * 0.9
+        kw["max_committed_usd"] = float(bk)
     return MakerConfig(**kw)
+
 # hook probe
 # hook probe

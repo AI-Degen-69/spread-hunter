@@ -411,3 +411,9 @@ def landing():
 def dashboard():
     return HTMLResponse(content=DASHBOARD_HTML, headers={
         "Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server.spread_dash:app", host="127.0.0.1", port=8805, reload=False)
+

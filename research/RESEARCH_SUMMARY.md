@@ -234,5 +234,8 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
 
 * **2026-08-13 (server, Session 58): rebuilt inline Tailwind CSS stylesheet.** Updated `server/_tailwind_css.py` via `scripts/build_tailwind_css.py`. 662/662 tests passing.
 
+* **2026-08-13 (server & strategy, Session 59): server entrypoint and SPREAD_HUNTER_BANKROLL config override landed.** Added uvicorn entrypoint to `server/spread_dash.py` and `SPREAD_HUNTER_BANKROLL` handling in `strategy/config.py`. 662/662 tests passing.
+
+
 
 

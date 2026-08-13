@@ -41,7 +41,7 @@ def launch_tier_process(cfg: dict, dry_run: bool = False) -> subprocess.Popen | 
     env["SPREAD_HUNTER_DB"] = str(cfg["db_path"])
     env["SPREAD_HUNTER_BANKROLL"] = str(cfg["bankroll"])
 
-    cmd = [sys.executable, "-m", "strategy.main", "--bankroll", str(cfg["bankroll"])]
+    cmd = [sys.executable, "-m", "strategy.fleet"]
     if dry_run:
         print(f"[DRY RUN] Would execute: {' '.join(cmd)} (Workdir: {cfg['workdir']})")
         return None
