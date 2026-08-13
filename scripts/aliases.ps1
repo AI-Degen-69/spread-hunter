@@ -4,6 +4,33 @@
 
 $Global:SpreadHunterScriptDir = $PSScriptRoot
 
+# --- UNIFIED CONTROL CENTER MENU ---
+function global:Show-HunterMenu {
+    param([string]$Action)
+    $script = Join-Path $Global:SpreadHunterScriptDir "hunter-menu.ps1"
+    if ($Action) { & $script $Action } else { & $script }
+}
+
+function global:hunter {
+    param([string]$Action)
+    Show-HunterMenu -Action $Action
+}
+
+function global:hunter-menu {
+    param([string]$Action)
+    Show-HunterMenu -Action $Action
+}
+
+function global:hmenu {
+    param([string]$Action)
+    Show-HunterMenu -Action $Action
+}
+
+function global:spread-hunter {
+    param([string]$Action)
+    Show-HunterMenu -Action $Action
+}
+
 # --- SPREAD HUNTER (MAIN MAKER STRATEGY) ---
 function global:Start-Hunter {
     param([switch]$FreshRun)
@@ -122,6 +149,7 @@ function global:report-bankroll {
 }
 
 Write-Host "Spread Hunter & Bankroll aliases loaded:" -ForegroundColor Cyan
+Write-Host "  Interactive Menu:    hunter (or hmenu / hunter-menu / spread-hunter)" -ForegroundColor Yellow
 Write-Host "  Spread Hunter:       hunter-start / hunter-stop (aliases: start-hunter / stop-hunter)"
 Write-Host "  Bankroll 10-Tier:    bankroll-start / bankroll-stop (aliases: start-bankroll / stop-bankroll)"
 Write-Host "  Bankroll Stats:      bankroll-report / report-bankroll"
