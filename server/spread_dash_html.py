@@ -356,7 +356,7 @@ def _NAVBAR(active_page: str = "fleet") -> str:
     <!-- Desktop Navigation Tabs / Switcher -->
     <nav class="hidden md:flex items-center gap-1.5 bg-[#111827] border border-[#1F2937] p-1">
       <a href="/dashboard" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {fleet_tab}">
-        <span>📊</span> Fleet Desk
+        <span>📊</span> Spread Hunter
       </a>
       <a href="/bankroll" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {bankroll_tab}">
         <span>⚡</span> 10 Bankroll Bots
@@ -643,17 +643,6 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", _NAVBAR("fleet") + 
 </div>
 
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-5">
-
-  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.02s">
-    <button data-toggle="sec-bankroll-matrix" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
-      <span class="flex items-center gap-3 min-w-0">
-        <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">MATRIX</span>
-        <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">10-Tier Bankroll Sensitivity Matrix ($100 &ndash; $1,000) <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
-      </span>
-      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#FBBF24]">10 Concurrent Simultaneous Runs</span>
-    </button>
-    <div id="sec-bankroll-matrix" class="sh-fade grid grid-cols-12 gap-0 bg-[#090D16]"></div>
-  </section>
 
   <section class="sh-rise hero-shadow border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.05s">
 
@@ -1951,56 +1940,6 @@ function renderDrawer(){
 // what reports staleness, turning amber after 45s.
 let REFRESH_BUSY = false;
 
-function renderBankrollMatrix(matrix){
-  const el = document.getElementById("sec-bankroll-matrix");
-  if (!el || !matrix || !matrix.tiers) return;
-  
-  const tiers = matrix.tiers;
-  const cards = tiers.map(t => {
-    const isInv = t.is_invalid;
-    const isVal = !isInv && t.sample_count >= 30;
-    const statusColor = isInv ? "#EF4444" : (isVal ? "#10B981" : "#F59E0B");
-    const statusText = isInv ? "INVALID" : (isVal ? "VALID" : "COLLECTING");
-    const ci95Str = `[${t.ci_95.lower.toFixed(2)}, ${t.ci_95.upper.toFixed(2)}]`;
-    
-    return `
-      <div class="p-4 bg-[#111827] border border-[#1F2937] flex flex-col gap-3 relative overflow-hidden">
-        <div class="absolute top-0 left-0 w-full h-[2px]" style="background:${statusColor}"></div>
-        <div class="flex items-center justify-between">
-          <span class="mono text-[16px] font-bold text-[#F9FAFB]">$${t.bankroll} Bankroll</span>
-          <span class="mono text-[11px] font-bold px-2 py-0.5 border uppercase" style="color:${statusColor};background:${statusColor}1A;border-color:${statusColor}33">${statusText}</span>
-        </div>
-        <div class="grid grid-cols-2 gap-2 mono text-[12px]">
-          <div class="bg-[#090D16] p-2 border border-[#1F2937]">
-            <div class="text-[#9CA3AF] text-[10px] uppercase">Sample Count</div>
-            <div class="font-bold text-[#F9FAFB] mt-0.5">${t.sample_count} / 100</div>
-          </div>
-          <div class="bg-[#090D16] p-2 border border-[#1F2937]">
-            <div class="text-[#9CA3AF] text-[10px] uppercase">Win Rate</div>
-            <div class="font-bold text-[#F9FAFB] mt-0.5">${t.win_rate.toFixed(1)}%</div>
-          </div>
-        </div>
-        <div class="mono text-[12px] space-y-1">
-          <div class="flex justify-between text-[#9CA3AF]"><span class="uppercase text-[11px]">Mean Return:</span><span class="font-bold text-[#F9FAFB]">$${t.mean_return.toFixed(2)}</span></div>
-          <div class="flex justify-between text-[#9CA3AF]"><span class="uppercase text-[11px]">95% CI (Student t):</span><span class="font-semibold text-[#10B981]">${ci95Str}</span></div>
-          <div class="flex justify-between text-[#9CA3AF]"><span class="uppercase text-[11px]">Sortino Ratio:</span><span class="font-bold text-[#FBBF24]">${t.sortino.toFixed(2)}</span></div>
-        </div>
-        ${isInv ? `<div class="mono text-[11px] text-[#EF4444] bg-[#EF4444]/10 p-2 border border-[#EF4444]/20">${t.invalidation_reasons.join(", ")}</div>` : ''}
-      </div>
-    `;
-  }).join("");
-
-  el.innerHTML = `
-    <div class="col-span-12 p-4 bg-[#090D16] border-b border-[#1F2937] flex items-center justify-between">
-      <div class="mono text-[14px] font-bold text-[#FBBF24] uppercase tracking-wider">10-Tier Bankroll Sensitivity Grid ($100 - $1,000)</div>
-      <div class="mono text-[12px] text-[#9CA3AF]">Simultaneous Untampered Polymarket Execution</div>
-    </div>
-    <div class="col-span-12 p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-      ${cards}
-    </div>
-  `;
-}
-
 function renderSummary(s){
   LAST_STATS = s;
   document.getElementById("hdr-pills").innerHTML = `
@@ -2023,18 +1962,16 @@ async function refresh(){
   const main = document.querySelector("main");
   if (main) main.classList.add("sh-refreshing");
   try {
-    const [st, fn, mk, s, matrix] = await Promise.all([
+    const [st, fn, mk, s] = await Promise.all([
       fetchJSON("/api/settled").catch(() => null),
       fetchJSON("/api/funnel").catch(() => null),
       fetchJSON("/api/markets").catch(() => null),
       fetchJSON("/api/summary").catch(() => null),
-      fetchJSON("/api/bankroll_matrix").catch(() => null),
     ]);
     if (st) renderSettled(st.settled, st.total_closes);
     if (fn) renderFunnel(fn);
     if (mk) renderMarkets(mk.markets);
     if (s) renderSummary(s);
-    if (matrix) renderBankrollMatrix(matrix);
     animateChanges();
     if (DRAWER_SLUG) renderDrawer();
   } finally {
@@ -2050,8 +1987,6 @@ async function boot(){
     .catch(e => showSectionError("tab-funnel", e));
   fetchJSON("/api/markets").then(mk => renderMarkets(mk.markets))
     .catch(e => showSectionError("tab-markets", e));
-  fetchJSON("/api/bankroll_matrix").then(renderBankrollMatrix)
-    .catch(() => null);
 
   let s;
   try {
@@ -2107,16 +2042,33 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
 
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-6">
 
-  <!-- Hero KPI Strip -->
+  <!-- Interactive Filter Row -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="mono text-[12px] font-bold tracking-[0.14em] text-[#9CA3AF] uppercase flex items-center gap-1.5 mr-1 shrink-0">
+        <span class="text-[#FBBF24]">⚡</span> FILTER TIERS:
+      </span>
+      <div id="bk-filter-buttons" class="flex flex-wrap items-center gap-1.5">
+        <!-- Rendered by JS -->
+      </div>
+    </div>
+    <div class="flex items-center gap-2.5 shrink-0 self-end lg:self-auto">
+      <span id="bk-filter-status" class="mono text-[11px] px-2.5 py-1 bg-[#090D16] text-[#10B981] border border-[#10B981]/30 font-semibold">10 of 10 Tiers Selected</span>
+      <button onclick="toggleAllTiers()" type="button" class="mono text-[11px] font-semibold px-2.5 py-1 bg-[#1F2937] text-[#F9FAFB] hover:bg-[#10B981] hover:text-white border border-[#1F2937] transition-colors uppercase cursor-pointer">All</button>
+      <button onclick="resetFilters()" type="button" class="mono text-[11px] px-2.5 py-1 bg-[#090D16] text-[#9CA3AF] hover:text-[#EF4444] border border-[#1F2937] hover:border-[#EF4444]/40 transition-colors uppercase cursor-pointer">Reset</button>
+    </div>
+  </section>
+
+  <!-- Hero KPI Strip (Dynamically Aggregated) -->
   <section class="sh-rise grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
       <div class="absolute inset-x-0 top-0 h-[2px] bg-[#3B82F6]"></div>
       <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
-        <span>TOTAL MATRIX CAPITAL</span>
-        <span class="text-[#3B82F6]">10 TIERS</span>
+        <span>SELECTED CAPITAL</span>
+        <span id="bk-kpi-tier-count" class="text-[#3B82F6] font-bold">10 TIERS</span>
       </div>
-      <div class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">$5,500 <span class="text-[14px] font-normal text-[#9CA3AF]">USD</span></div>
-      <div class="mono text-[11px] text-[#9CA3AF] mt-1">$100 &rarr; $1,000 isolated pools</div>
+      <div id="bk-hero-capital" class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">$5,500 <span class="text-[14px] font-normal text-[#9CA3AF]">USD</span></div>
+      <div id="bk-hero-capital-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">$100 &rarr; $1,000 isolated pools</div>
     </div>
 
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
@@ -2126,7 +2078,7 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
         <span id="bk-kpi-ret-pill" class="mono text-[10px] px-1.5 py-0.2 bg-[#10B981]/20 text-[#10B981] font-bold border border-[#10B981]/30">0.0%</span>
       </div>
       <div id="bk-hero-pnl" class="mono text-[26px] font-bold tracking-tight text-[#10B981] mt-2">+$0.00</div>
-      <div id="bk-hero-pnl-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">Across all 10 sensitivity runs</div>
+      <div id="bk-hero-pnl-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">Across selected sensitivity runs</div>
     </div>
 
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
@@ -2136,42 +2088,43 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
         <span class="size-2 bg-[#10B981] rounded-full animate-ping"></span>
       </div>
       <div id="bk-hero-active" class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">-- / 10</div>
-      <div id="bk-hero-active-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">Concurrent background instances</div>
+      <div id="bk-hero-active-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">Selected background instances</div>
     </div>
 
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
       <div class="absolute inset-x-0 top-0 h-[2px] bg-[#FBBF24]"></div>
       <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
-        <span>OPTIMAL BANKROLL TIER</span>
+        <span>OPTIMAL SELECTED TIER</span>
         <span class="text-[#FBBF24] font-bold">BEST</span>
       </div>
       <div id="bk-hero-lead" class="mono text-[26px] font-bold tracking-tight text-[#FBBF24] mt-2">--</div>
-      <div id="bk-hero-lead-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">By Sortino &amp; Return</div>
+      <div id="bk-hero-lead-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">By Sortino &amp; Return in selection</div>
     </div>
 
     <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
       <div class="absolute inset-x-0 top-0 h-[2px] bg-[#8B5CF6]"></div>
       <div class="mono text-[11px] font-bold tracking-[0.16em] uppercase text-[#9CA3AF] flex items-center justify-between">
         <span>SAMPLE MATURITY</span>
-        <span class="text-[#8B5CF6]">TARGET 1,000</span>
+        <span id="bk-kpi-sample-target" class="text-[#8B5CF6]">TARGET 1,000</span>
       </div>
       <div id="bk-hero-samples" class="mono text-[26px] font-bold tracking-tight text-[#F9FAFB] mt-2">0 <span class="text-[14px] font-normal text-[#9CA3AF]">/ 1,000</span></div>
       <div id="bk-hero-samples-sub" class="mono text-[11px] text-[#9CA3AF] mt-1">100 closes target per tier</div>
     </div>
   </section>
 
-  <!-- Section 1: Comparative Table -->
+  <!-- Section 1: Comparative Table (Filtered with Aggregate Footer) -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
     <div class="p-4 border-b border-[#1F2937] flex flex-wrap items-center justify-between gap-4 bg-[#090D16]">
       <div>
         <div class="mono text-[14px] font-bold text-[#FBBF24] uppercase tracking-wider flex items-center gap-2">
           <span>10-Tier Comparative Matrix &amp; Invalidation Engine</span>
         </div>
-        <div class="mono text-[12px] text-[#9CA3AF] mt-0.5">Direct reading from all 10 isolated SQLite databases (`run/bankroll_*/fleet.db`)</div>
+        <div class="mono text-[12px] text-[#9CA3AF] mt-0.5">Direct reading from isolated SQLite databases (`run/bankroll_*/fleet.db`)</div>
       </div>
       <div class="flex items-center gap-2">
-        <span class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">MIN GATE: 30 SAMPLES</span>
-        <span class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">TARGET: 100 SAMPLES</span>
+        <span id="bk-table-filter-badge" class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#10B981]/40 text-[#10B981] font-semibold">10 OF 10 TIERS</span>
+        <span class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">MIN GATE: 30</span>
+        <span class="mono text-[11px] px-2 py-1 bg-[#1F2937] border border-[#1F2937] text-[#9CA3AF]">TARGET: 100</span>
       </div>
     </div>
 
@@ -2199,15 +2152,18 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
             <td colspan="13" class="p-8 text-center text-[#9CA3AF]">Loading 10-tier bankroll matrix telemetry...</td>
           </tr>
         </tbody>
+        <tfoot id="bk-matrix-tfoot" class="border-t-2 border-[#1F2937] bg-[#090D16] mono text-[12px] font-bold">
+          <!-- Rendered by JS -->
+        </tfoot>
       </table>
     </div>
   </section>
 
-  <!-- Section 2: 10 Tier Cards Grid -->
+  <!-- Section 2: Filtered Tier Cards Grid -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
     <div class="p-4 border-b border-[#1F2937] bg-[#090D16] flex items-center justify-between">
       <div class="mono text-[14px] font-bold text-[#F9FAFB] uppercase tracking-wider">Tier Telemetry &amp; Confidence Intervals</div>
-      <div class="mono text-[12px] text-[#9CA3AF]">10 Independent Parallel Experiments</div>
+      <div id="bk-cards-header-count" class="mono text-[12px] text-[#9CA3AF]">Showing 10 Parallel Experiments</div>
     </div>
     <div id="bk-cards-grid" class="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 bg-[#090D16]">
       <!-- Rendered by JS -->
@@ -2266,6 +2222,9 @@ function esc(s){
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
+const ALL_AMOUNTS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+let SELECTED_TIERS = new Set(ALL_AMOUNTS);
+let LAST_BANKROLL_DATA = null;
 let REFRESH_BUSY = false;
 
 async function fetchJSON(url){
@@ -2274,40 +2233,154 @@ async function fetchJSON(url){
   return await r.json();
 }
 
+function renderFilterButtons(){
+  const container = document.getElementById("bk-filter-buttons");
+  if (!container) return;
+
+  const isAll = (SELECTED_TIERS.size === ALL_AMOUNTS.length);
+  const allCls = isAll
+    ? "bg-[#10B981] text-white border-[#10B981] font-bold shadow-[0_0_10px_rgba(16,185,129,0.35)]"
+    : "bg-[#090D16] text-[#9CA3AF] border-[#1F2937] hover:text-[#F9FAFB] hover:border-[#374151]";
+
+  let html = `<button onclick="toggleAllTiers()" type="button" class="mono text-[11px] px-2.5 py-1 border transition-all cursor-pointer uppercase ${allCls}">ALL (${ALL_AMOUNTS.length})</button>`;
+
+  ALL_AMOUNTS.forEach(amount => {
+    const isSel = SELECTED_TIERS.has(amount);
+    const btnCls = isSel
+      ? "bg-[#1F2937] text-[#10B981] border-[#10B981] font-bold shadow-[0_0_8px_rgba(16,185,129,0.25)]"
+      : "bg-[#090D16] text-[#9CA3AF] border-[#1F2937] hover:text-[#F9FAFB] hover:border-[#374151]";
+    html += `<button onclick="toggleTier(${amount})" type="button" class="mono text-[11px] px-2.5 py-1 border transition-all cursor-pointer ${btnCls}">$${amount}</button>`;
+  });
+
+  container.innerHTML = html;
+
+  const statusEl = document.getElementById("bk-filter-status");
+  if (statusEl) {
+    let selCap = 0;
+    SELECTED_TIERS.forEach(a => { selCap += a; });
+    statusEl.textContent = `${SELECTED_TIERS.size} of 10 Tiers ($${selCap.toLocaleString()} Total)`;
+  }
+
+  const tableBadge = document.getElementById("bk-table-filter-badge");
+  if (tableBadge) {
+    tableBadge.textContent = `${SELECTED_TIERS.size} OF 10 TIERS`;
+  }
+
+  const cardsCount = document.getElementById("bk-cards-header-count");
+  if (cardsCount) {
+    cardsCount.textContent = `Showing ${SELECTED_TIERS.size} of 10 Experiments`;
+  }
+}
+
+function toggleTier(amount){
+  if (SELECTED_TIERS.has(amount)){
+    if (SELECTED_TIERS.size > 1){
+      SELECTED_TIERS.delete(amount);
+    } else {
+      // If user unclicks the only selected tier, select all
+      SELECTED_TIERS = new Set(ALL_AMOUNTS);
+    }
+  } else {
+    SELECTED_TIERS.add(amount);
+  }
+  renderFilterButtons();
+  if (LAST_BANKROLL_DATA) renderBankrollPage(LAST_BANKROLL_DATA);
+}
+
+function toggleAllTiers(){
+  if (SELECTED_TIERS.size === ALL_AMOUNTS.length){
+    // Reset to tier 100 only if all are currently active
+    SELECTED_TIERS = new Set([100]);
+  } else {
+    SELECTED_TIERS = new Set(ALL_AMOUNTS);
+  }
+  renderFilterButtons();
+  if (LAST_BANKROLL_DATA) renderBankrollPage(LAST_BANKROLL_DATA);
+}
+
+function resetFilters(){
+  SELECTED_TIERS = new Set(ALL_AMOUNTS);
+  renderFilterButtons();
+  if (LAST_BANKROLL_DATA) renderBankrollPage(LAST_BANKROLL_DATA);
+}
+
 function renderBankrollPage(data){
   if (!data || !data.tiers) return;
-  const tiers = data.tiers;
+  LAST_BANKROLL_DATA = data;
   
+  // Filter tiers based on active selection
+  const allTiers = data.tiers;
+  const filteredTiers = allTiers.filter(t => SELECTED_TIERS.has(t.bankroll));
+
+  let totalCapital = 0;
   let totalPnl = 0;
   let totalSamples = 0;
   let activeBots = 0;
   let bestTier = null;
   let bestScore = -Infinity;
+  let maxDrawdownWorst = 0;
+  let totalWins = 0;
+  let totalTradesCounted = 0;
 
-  tiers.forEach(t => {
+  filteredTiers.forEach(t => {
+    totalCapital += (t.bankroll || 0);
     totalPnl += (t.total_pnl || 0);
-    totalSamples += (t.sample_count || 0);
+    const sCount = t.sample_count || 0;
+    totalSamples += sCount;
     if (t.status === "RUNNING") activeBots++;
+    
+    if (sCount > 0) {
+      const wins = Math.round((t.win_rate || 0) * sCount / 100.0);
+      totalWins += wins;
+      totalTradesCounted += sCount;
+    }
+
+    if ((t.max_drawdown || 0) > maxDrawdownWorst) {
+      maxDrawdownWorst = t.max_drawdown;
+    }
+
     const score = (t.sortino || 0) * 10 + (t.return_pct || 0);
-    if (score > bestScore && t.sample_count > 0) {
+    if (score > bestScore && sCount > 0) {
       bestScore = score;
       bestTier = t;
     }
   });
 
-  const totalReturnPct = (totalPnl / 5500.0) * 100.0;
+  const totalReturnPct = totalCapital > 0 ? ((totalPnl / totalCapital) * 100.0) : 0.0;
+  const targetSamples = filteredTiers.length * 100;
+  const aggWinRate = totalTradesCounted > 0 ? ((totalWins / totalTradesCounted) * 100.0) : 0.0;
+  const aggMeanReturn = totalSamples > 0 ? (totalPnl / totalSamples) : 0.0;
+
+  // 1. Update Hero KPI Cards
+  const capCountEl = document.getElementById("bk-kpi-tier-count");
+  if (capCountEl) capCountEl.textContent = `${filteredTiers.length} TIERS`;
+
+  const capEl = document.getElementById("bk-hero-capital");
+  if (capEl) capEl.innerHTML = `$${totalCapital.toLocaleString()} <span class="text-[14px] font-normal text-[#9CA3AF]">USD</span>`;
+
+  const capSubEl = document.getElementById("bk-hero-capital-sub");
+  if (capSubEl) capSubEl.textContent = `${filteredTiers.length} of 10 isolated pools`;
+
   const pnlEl = document.getElementById("bk-hero-pnl");
   if (pnlEl) {
     pnlEl.textContent = fmtUsd(totalPnl);
     pnlEl.className = "mono text-[26px] font-bold tracking-tight mt-2 " + (totalPnl >= 0 ? "text-[#10B981]" : "text-[#EF4444]");
   }
+
   const retPill = document.getElementById("bk-kpi-ret-pill");
   if (retPill) {
     retPill.textContent = fmtPct(totalReturnPct);
     retPill.className = "mono text-[10px] px-1.5 py-0.2 font-bold border " + (totalReturnPct >= 0 ? "bg-[#10B981]/20 text-[#10B981] border-[#10B981]/30" : "bg-[#EF4444]/20 text-[#EF4444] border-[#EF4444]/30");
   }
+
+  const pnlSub = document.getElementById("bk-hero-pnl-sub");
+  if (pnlSub) pnlSub.textContent = `Across ${filteredTiers.length} selected sensitivity run${filteredTiers.length === 1 ? '' : 's'}`;
+
   const activeEl = document.getElementById("bk-hero-active");
-  if (activeEl) activeEl.innerHTML = activeBots + ' <span class="text-[14px] font-normal text-[#9CA3AF]">/ 10 Active</span>';
+  if (activeEl) activeEl.innerHTML = activeBots + ` <span class="text-[14px] font-normal text-[#9CA3AF]">/ ${filteredTiers.length} Active</span>`;
+
+  const activeSub = document.getElementById("bk-hero-active-sub");
+  if (activeSub) activeSub.textContent = `${activeBots} running of ${filteredTiers.length} selected`;
 
   const leadEl = document.getElementById("bk-hero-lead");
   if (leadEl) {
@@ -2318,9 +2391,12 @@ function renderBankrollPage(data){
     }
   }
 
+  const sampleTargetEl = document.getElementById("bk-kpi-sample-target");
+  if (sampleTargetEl) sampleTargetEl.textContent = `TARGET ${targetSamples.toLocaleString()}`;
+
   const samplesEl = document.getElementById("bk-hero-samples");
   if (samplesEl) {
-    samplesEl.innerHTML = totalSamples + ' <span class="text-[14px] font-normal text-[#9CA3AF]">/ 1,000</span>';
+    samplesEl.innerHTML = totalSamples.toLocaleString() + ` <span class="text-[14px] font-normal text-[#9CA3AF]">/ ${targetSamples.toLocaleString()}</span>`;
   }
 
   const refreshEl = document.getElementById("bk-last-refresh");
@@ -2329,63 +2405,103 @@ function renderBankrollPage(data){
     refreshEl.textContent = "Updated " + d.toLocaleTimeString();
   }
 
-  const rowsHtml = tiers.map(t => {
-    const pnl = t.total_pnl || 0;
-    const retPct = t.return_pct || 0;
-    const pnlColor = pnl > 0 ? "text-[#10B981]" : (pnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
-    const samples = t.sample_count || 0;
-    const target = t.target_samples || 100;
-    const samplePct = Math.min(100, Math.round((samples / target) * 100));
-    
-    let statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] font-semibold">INITIALIZED</span>';
-    if (t.is_invalid) {
-      statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/30 font-bold animate-pulse">INVALID</span>';
-    } else if (t.status === "RUNNING") {
-      statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold">RUNNING</span>';
-    } else if (t.status === "STOPPED") {
-      statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30 font-semibold">STOPPED</span>';
-    }
+  // 2. Render Comparative Table Rows (Only Filtered Tiers)
+  if (filteredTiers.length === 0) {
+    const tbody = document.getElementById("bk-matrix-rows");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="13" class="p-8 text-center text-[#9CA3AF]">No tiers selected. Click above to select tiers.</td></tr>`;
+    const tfoot = document.getElementById("bk-matrix-tfoot");
+    if (tfoot) tfoot.innerHTML = "";
+  } else {
+    const rowsHtml = filteredTiers.map(t => {
+      const pnl = t.total_pnl || 0;
+      const retPct = t.return_pct || 0;
+      const pnlColor = pnl > 0 ? "text-[#10B981]" : (pnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
+      const samples = t.sample_count || 0;
+      const target = t.target_samples || 100;
+      const samplePct = Math.min(100, Math.round((samples / target) * 100));
+      
+      let statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] font-semibold">INITIALIZED</span>';
+      if (t.is_invalid) {
+        statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/30 font-bold animate-pulse">INVALID</span>';
+      } else if (t.status === "RUNNING") {
+        statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold">RUNNING</span>';
+      } else if (t.status === "STOPPED") {
+        statusBadge = '<span class="mono text-[10px] px-1.5 py-0.5 bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30 font-semibold">STOPPED</span>';
+      }
 
-    let verdictBadge = '<span class="mono text-[11px] text-[#9CA3AF]">Collecting</span>';
-    if (t.is_invalid) {
-      verdictBadge = '<span class="mono text-[11px] text-[#EF4444] font-bold" title="' + esc(t.invalidation_reasons.join("; ")) + '">FAIL &#10006;</span>';
-    } else if (samples >= 30) {
-      verdictBadge = '<span class="mono text-[11px] text-[#10B981] font-bold">PASS &#10004;</span>';
-    }
+      let verdictBadge = '<span class="mono text-[11px] text-[#9CA3AF]">Collecting</span>';
+      if (t.is_invalid) {
+        verdictBadge = '<span class="mono text-[11px] text-[#EF4444] font-bold" title="' + esc(t.invalidation_reasons.join("; ")) + '">FAIL &#10006;</span>';
+      } else if (samples >= 30) {
+        verdictBadge = '<span class="mono text-[11px] text-[#10B981] font-bold">PASS &#10004;</span>';
+      }
 
-    const ci95 = t.ci_95 ? "[" + t.ci_95.lower.toFixed(2) + ", " + t.ci_95.upper.toFixed(2) + "]" : "--";
-    const ci98 = t.ci_98 ? "[" + t.ci_98.lower.toFixed(2) + ", " + t.ci_98.upper.toFixed(2) + "]" : "--";
+      const ci95 = t.ci_95 ? "[" + t.ci_95.lower.toFixed(2) + ", " + t.ci_95.upper.toFixed(2) + "]" : "--";
+      const ci98 = t.ci_98 ? "[" + t.ci_98.lower.toFixed(2) + ", " + t.ci_98.upper.toFixed(2) + "]" : "--";
 
-    return `
-      <tr class="hover:bg-[#111827] transition-colors">
-        <td class="p-3.5 font-bold text-[#F9FAFB]">$${t.bankroll}</td>
-        <td class="p-3.5">${statusBadge}</td>
-        <td class="p-3.5 text-[#9CA3AF] text-[11px]">${t.pid ? 'PID ' + t.pid : '--'}</td>
-        <td class="p-3.5 text-right font-bold ${pnlColor}">${fmtUsd(pnl)}</td>
-        <td class="p-3.5 text-right ${pnlColor}">${fmtPct(retPct)}</td>
-        <td class="p-3.5">
-          <div class="flex items-center gap-2">
-            <div class="w-full bg-[#090D16] border border-[#1F2937] h-2 relative overflow-hidden">
-              <div class="h-full ${samples >= 30 ? (t.is_invalid ? 'bg-[#EF4444]' : 'bg-[#10B981]') : 'bg-[#3B82F6]'}" style="width:${samplePct}%"></div>
+      return `
+        <tr class="hover:bg-[#111827] transition-colors">
+          <td class="p-3.5 font-bold text-[#F9FAFB]">$${t.bankroll}</td>
+          <td class="p-3.5">${statusBadge}</td>
+          <td class="p-3.5 text-[#9CA3AF] text-[11px]">${t.pid ? 'PID ' + t.pid : '--'}</td>
+          <td class="p-3.5 text-right font-bold ${pnlColor}">${fmtUsd(pnl)}</td>
+          <td class="p-3.5 text-right ${pnlColor}">${fmtPct(retPct)}</td>
+          <td class="p-3.5">
+            <div class="flex items-center gap-2">
+              <div class="w-full bg-[#090D16] border border-[#1F2937] h-2 relative overflow-hidden">
+                <div class="h-full ${samples >= 30 ? (t.is_invalid ? 'bg-[#EF4444]' : 'bg-[#10B981]') : 'bg-[#3B82F6]'}" style="width:${samplePct}%"></div>
+              </div>
+              <span class="text-[11px] text-[#9CA3AF] shrink-0">${samples}/${target}</span>
             </div>
-            <span class="text-[11px] text-[#9CA3AF] shrink-0">${samples}/${target}</span>
-          </div>
-        </td>
-        <td class="p-3.5 text-right">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</td>
-        <td class="p-3.5 text-right">${fmtUsd(t.mean_return)}</td>
-        <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">${ci95}</td>
-        <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">${ci98}</td>
-        <td class="p-3.5 text-right font-semibold text-[#FBBF24]">${(t.sortino || 0).toFixed(2)}</td>
-        <td class="p-3.5 text-right text-[#EF4444]">${(t.max_drawdown || 0).toFixed(1)}%</td>
-        <td class="p-3.5 text-center">${verdictBadge}</td>
-      </tr>
-    `;
-  }).join("");
+          </td>
+          <td class="p-3.5 text-right">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</td>
+          <td class="p-3.5 text-right">${fmtUsd(t.mean_return)}</td>
+          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">${ci95}</td>
+          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">${ci98}</td>
+          <td class="p-3.5 text-right font-semibold text-[#FBBF24]">${(t.sortino || 0).toFixed(2)}</td>
+          <td class="p-3.5 text-right text-[#EF4444]">${(t.max_drawdown || 0).toFixed(1)}%</td>
+          <td class="p-3.5 text-center">${verdictBadge}</td>
+        </tr>
+      `;
+    }).join("");
 
-  const tbody = document.getElementById("bk-matrix-rows");
-  if (tbody) tbody.innerHTML = rowsHtml;
+    const tbody = document.getElementById("bk-matrix-rows");
+    if (tbody) tbody.innerHTML = rowsHtml;
 
-  const cardsHtml = tiers.map(t => {
+    // 3. Render Aggregate Summary Footer Row
+    const tfoot = document.getElementById("bk-matrix-tfoot");
+    if (tfoot) {
+      const aggPnlColor = totalPnl > 0 ? "text-[#10B981]" : (totalPnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
+      const aggSamplePct = targetSamples > 0 ? Math.min(100, Math.round((totalSamples / targetSamples) * 100)) : 0;
+      tfoot.innerHTML = `
+        <tr class="bg-[#090D16] border-t-2 border-[#1F2937] text-[#F9FAFB]">
+          <td class="p-3.5 font-bold text-[#FBBF24]">AGGREGATE (${filteredTiers.length})</td>
+          <td class="p-3.5"><span class="mono text-[10px] px-2 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/30 font-bold">${activeBots} ACTIVE</span></td>
+          <td class="p-3.5 text-[#9CA3AF] text-[11px]">--</td>
+          <td class="p-3.5 text-right font-bold ${aggPnlColor}">${fmtUsd(totalPnl)}</td>
+          <td class="p-3.5 text-right font-bold ${aggPnlColor}">${fmtPct(totalReturnPct)}</td>
+          <td class="p-3.5">
+            <div class="flex items-center gap-2">
+              <div class="w-full bg-[#111827] border border-[#1F2937] h-2 relative overflow-hidden">
+                <div class="h-full bg-[#10B981]" style="width:${aggSamplePct}%"></div>
+              </div>
+              <span class="text-[11px] text-[#9CA3AF] shrink-0">${totalSamples}/${targetSamples}</span>
+            </div>
+          </td>
+          <td class="p-3.5 text-right font-bold">${aggWinRate.toFixed(1)}%</td>
+          <td class="p-3.5 text-right font-bold">${fmtUsd(aggMeanReturn)}</td>
+          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; Student-t</td>
+          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; Student-t</td>
+          <td class="p-3.5 text-right font-semibold text-[#FBBF24]">${bestTier ? (bestTier.sortino || 0).toFixed(2) : '--'}</td>
+          <td class="p-3.5 text-right text-[#EF4444] font-bold">${maxDrawdownWorst.toFixed(1)}%</td>
+          <td class="p-3.5 text-center"><span class="mono text-[11px] text-[#10B981] font-bold">TOTALS</span></td>
+        </tr>
+      `;
+    }
+  }
+
+  // 4. Render Filtered Tier Cards Grid
+  const cardsHtml = filteredTiers.map(t => {
     const pnl = t.total_pnl || 0;
     const retPct = t.return_pct || 0;
     const pnlColor = pnl > 0 ? "text-[#10B981]" : (pnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
@@ -2395,7 +2511,7 @@ function renderBankrollPage(data){
     const samplePct = Math.min(100, Math.round((samples / target) * 100));
 
     return `
-      <div class="border ${t.is_invalid ? 'border-[#EF4444]/40 bg-[#EF4444]/5' : (isLive ? 'border-[#10B981]/30 bg-[#111827]' : 'border-[#1F2937] bg-[#111827]')} p-4 relative overflow-hidden flex flex-col justify-between">
+      <div class="border ${t.is_invalid ? 'border-[#EF4444]/40 bg-[#EF4444]/5' : (isLive ? 'border-[#10B981]/30 bg-[#111827]' : 'border-[#1F2937] bg-[#111827]')} p-4 relative overflow-hidden flex flex-col justify-between transition-all">
         <div class="absolute inset-x-0 top-0 h-[2px] ${t.is_invalid ? 'bg-[#EF4444]' : (isLive ? 'bg-[#10B981]' : 'bg-[#1F2937]')}"></div>
         
         <div>
@@ -2478,9 +2594,11 @@ document.addEventListener("click", function(e){
   }
 });
 
+renderFilterButtons();
 refreshBankroll();
 setInterval(refreshBankroll, 5000);
 </script>
 """)
+
 
 
