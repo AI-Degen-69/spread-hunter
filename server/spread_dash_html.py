@@ -99,13 +99,18 @@ _HEAD = ("""
   .tip-wrap{position:relative;display:inline-flex;vertical-align:middle;margin-left:4px;}
   .tip-ico{width:13px;height:13px;border:1px solid rgba(148,163,184,.5);color:#94A3B8;background:transparent;border-radius:9999px;font-size:9px;font-weight:700;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:help;padding:0;}
   .tip-ico:hover,.tip-wrap:focus-within .tip-ico{border-color:var(--gold);color:var(--gold);}
-  .tip-pop{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%) translateY(4px);width:270px;padding:10px 12px;background:rgba(8,12,20,.98);border:1px solid rgba(255,255,255,.16);box-shadow:0 12px 30px rgba(0,0,0,.85);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .15s ease,transform .15s ease,visibility .15s;z-index:9999;text-align:left;}
+  .tip-pop{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%) translateY(4px);width:280px;padding:10px 12px;background:#090D16;border:1px solid rgba(255,255,255,.2);box-shadow:0 16px 36px rgba(0,0,0,.95);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .15s ease,transform .15s ease,visibility .15s;z-index:9999;text-align:left;}
   .tip-pop-right{left:auto!important;right:0!important;transform:translateX(0) translateY(4px)!important;}
   .tip-pop .tip-k{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:4px;}
   .tip-pop .tip-t{display:block;font-size:11px;line-height:1.5;color:#94A3B8;font-weight:400;letter-spacing:0;text-transform:none;}
   .tip-pop .tip-g{display:block;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.1);font-size:10.5px;line-height:1.5;color:#D1D5DB;letter-spacing:0;text-transform:none;}
   .tip-wrap:hover .tip-pop,.tip-wrap:focus-within .tip-pop{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);}
   .tip-wrap:hover .tip-pop-right,.tip-wrap:focus-within .tip-pop-right{opacity:1;visibility:visible;transform:translateX(0) translateY(0)!important;}
+  /* In table headers, tooltips pop downward so they are never clipped by the upper card border or overflow containers */
+  thead .tip-pop{bottom:auto!important;top:calc(100% + 6px)!important;transform:translateX(-50%) translateY(-4px)!important;}
+  thead .tip-pop-right{left:auto!important;right:0!important;transform:translateX(0) translateY(-4px)!important;}
+  thead .tip-wrap:hover .tip-pop,thead .tip-wrap:focus-within .tip-pop{transform:translateX(-50%) translateY(0)!important;}
+  thead .tip-wrap:hover .tip-pop-right,thead .tip-wrap:focus-within .tip-pop-right{transform:translateX(0) translateY(0)!important;}
   /* The call is a split-flap instrument: when the verdict word changes, the
      old letter halves flap away and the new halves flip in from behind --
      the desk's only question answered with an odds-board commit. Plays only
