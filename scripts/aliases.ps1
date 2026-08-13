@@ -26,6 +26,11 @@ function global:hmenu {
     Show-HunterMenu -Action $Action
 }
 
+function global:menu {
+    param([string]$Action)
+    Show-HunterMenu -Action $Action
+}
+
 function global:spread-hunter {
     param([string]$Action)
     Show-HunterMenu -Action $Action
