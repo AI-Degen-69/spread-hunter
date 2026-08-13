@@ -236,6 +236,9 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
 
 * **2026-08-13 (server & strategy, Session 59): server entrypoint and SPREAD_HUNTER_BANKROLL config override landed.** Added uvicorn entrypoint to `server/spread_dash.py` and `SPREAD_HUNTER_BANKROLL` handling in `strategy/config.py`. 662/662 tests passing.
 
+* **2026-08-13 (server, Session 60): inserted bankroll matrix container in DASHBOARD_HTML.** Updated `server/spread_dash_html.py` with matrix container element. 662/662 tests passing.
+
+
 
 
 

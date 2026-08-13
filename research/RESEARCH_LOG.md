@@ -1499,5 +1499,17 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Verdict.** LIVE -- server launcher and per-tier config override fully wired.
 
 
+### 2026-08-13 (server, Session 60): inserted 10-tier bankroll sensitivity matrix container into dashboard HTML
+
+**Question.** Why was the 10-panel grid view not displaying on `http://localhost:8805`?
+
+**Method.** Added `<div id="bankroll-matrix-container">` section header into `DASHBOARD_HTML` in `server/spread_dash_html.py` right above the Positions panel. Rebuilt static Tailwind CSS bundle (`server/_tailwind_css.py`).
+
+**Result.** `renderBankrollMatrix()` finds container element and paints the 10-panel grid cards live. Full test suite green (662/662).
+
+**Verdict.** LIVE -- 10-tier bankroll matrix section renders cleanly in the dashboard UI.
+
+
+
 
 

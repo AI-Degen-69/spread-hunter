@@ -553,7 +553,19 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", r"""
 
 <main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-6 space-y-5">
 
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.02s">
+    <button data-toggle="sec-bankroll-matrix" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
+      <span class="flex items-center gap-3 min-w-0">
+        <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">MATRIX</span>
+        <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">10-Tier Bankroll Sensitivity Matrix ($100 &ndash; $1,000) <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
+      </span>
+      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#FBBF24]">10 Concurrent Simultaneous Runs</span>
+    </button>
+    <div id="bankroll-matrix-container" class="sh-fade grid grid-cols-12 gap-0 bg-[#090D16]"></div>
+  </section>
+
   <section class="sh-rise hero-shadow border border-[#1F2937] bg-[#111827] overflow-hidden" style="animation-delay:.05s">
+
     <button data-toggle="sec-positions" aria-expanded="true" class="sh-open w-full flex items-center justify-between gap-4 px-4 h-11 border-b border-[#1F2937] hover:bg-[#1F2937] transition-colors text-left">
       <span class="flex items-center gap-3 min-w-0">
         <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">BOOK</span>
