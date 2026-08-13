@@ -227,3 +227,6 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
 
 
 * **2026-08-12 (design, Session 55): the 15m counterfactual stops waiting on exits -- fill-horizon capture on every rule-era fill.** `stats.pairs_ev()` gained a fill-horizon ladder: every rule-era fill is classified by its mid_h3 (recorded with drift / pending while the 900s window is open / no_markout after it elapsed unwritten / no_column pre-migration) -- TIME-based, so pre-migration fills stop masquerading as pending. The verdict tile renders it as a second bar under the exit card with the signed drift mean. Live fleet.db: 166 fills -> 8 recorded at +5.63c/sh mean (+6/-2), 1 pending, 157 no_markout. 654/654.
+
+* **2026-08-13 (strategy, Session 56): statistical confidence interval engine added for 10-tier bankroll sensitivity analysis.** Added `calc_confidence_intervals()` and `get_active_db_path()` to `strategy/stats.py`. Evaluates Student's t 95%/98% CIs, Sharpe ratio, and Sortino downside ratio with `SPREAD_HUNTER_DB` environment override support. 656/656 tests passing.
+

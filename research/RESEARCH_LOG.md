@@ -1453,3 +1453,15 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Result.** 654/654. Live run/fleet.db: 166 rule-era fills -> 8 recorded (mean +5.63c/sh, median +1.50, 6 positive / 2 negative), 1 pending, 157 no_markout -- the pre-migration legacy now counted honestly instead of falsely "pending". New tests pin the four states, the drift aggregate, the no_column branch, and the tile wiring; the summary test asserts the payload shape.
 
 **Verdict.** LIVE -- the 15m exit-window counterfactual now accumulates evidence on every fill at the current pace, and pre-migration fills can no longer masquerade as pending.
+
+
+### 2026-08-13 (strategy, Session 56): statistical confidence interval engine added for 10-tier bankroll sensitivity analysis
+
+**Question.** When evaluating starting bankroll options ($100 to $1,000 in $100 steps), how can we measure statistical confidence intervals and risk-adjusted return metrics without assuming Gaussian returns or ignoring downside variance?
+
+**Method.** Added `calc_confidence_intervals(returns)` and `get_active_db_path()` to `strategy/stats.py`. Uses exact Student's t-distribution critical values ($t_{df, 0.025}$ and $t_{df, 0.010}$) for 95% and 98% CIs on small samples ($n < 30$), and calculates both the annualized Sharpe Ratio ($S = \frac{\bar{x}}{s} \cdot \sqrt{252}$) and Sortino Downside Ratio ($S_{sortino} = \frac{\bar{x}}{\sigma_{down}} \cdot \sqrt{252}$). Supports environment override `SPREAD_HUNTER_DB` for multi-instance isolated database evaluation.
+
+**Result.** 2 new unit tests in `tests/test_bankroll_ci_stats.py` and `tests/test_bankroll_db_override.py` pass cleanly. Tested against sample return vectors: correctly computes mean, SE, 95%/98% bounds, and Sortino downside semi-deviation. Full test suite green (656/656).
+
+**Verdict.** LIVE -- the statistical CI and downside risk engine is ready for multi-bankroll experiment evaluation.
+

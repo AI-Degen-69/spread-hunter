@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import sqlite3
 import statistics
 import threading
@@ -1141,3 +1142,47 @@ def snapshot() -> dict:
         "markout_stats": markout_stats(),
         "pairs_ev": pairs_ev(),
     }
+
+
+def get_active_db_path() -> Path:
+    """Return configured DB path or environment override SPREAD_HUNTER_DB."""
+    override = os.getenv("SPREAD_HUNTER_DB")
+    if override:
+        return Path(override)
+    return DB
+
+
+def calc_confidence_intervals(returns: list[float]) -> dict:
+    """Calculate sample mean, std dev, SE, 95%/98% CIs (Student's t), Sharpe & Sortino ratios."""
+    n = len(returns)
+    if n < 2:
+        return {
+            "count": n, "mean": (returns[0] if n == 1 else 0.0),
+            "std": 0.0, "se": 0.0, "sharpe": 0.0, "sortino": 0.0,
+            "ci_95": {"lower": 0.0, "upper": 0.0},
+            "ci_98": {"lower": 0.0, "upper": 0.0},
+        }
+    mean = statistics.mean(returns)
+    std = statistics.stdev(returns)
+    se = std / math.sqrt(n)
+
+    downside_sq = [r ** 2 for r in returns if r < 0]
+    downside_dev = math.sqrt(sum(downside_sq) / n) if downside_sq else 1e-6
+
+    sharpe = (mean / std) * math.sqrt(252) if std > 0 else 0.0
+    sortino = (mean / downside_dev) * math.sqrt(252) if downside_dev > 0 else 0.0
+
+    z_95 = 1.96 if n >= 30 else (2.228 if n <= 10 else 2.042)
+    z_98 = 2.326 if n >= 30 else (2.764 if n <= 10 else 2.457)
+
+    return {
+        "count": n,
+        "mean": mean,
+        "std": std,
+        "se": se,
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "ci_95": {"lower": mean - z_95 * se, "upper": mean + z_95 * se},
+        "ci_98": {"lower": mean - z_98 * se, "upper": mean + z_98 * se},
+    }
+
