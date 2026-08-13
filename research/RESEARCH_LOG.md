@@ -1513,7 +1513,19 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 
 **Result.** All 671 unit tests passed cleanly (671/671).
 
-**Verdict.** LIVE -- All code review feedback resolved with comprehensive verification.
+### 2026-08-13 (ops/scripts, Session 62): Spread Hunter launcher re-centering, 10-tier bankroll experiment scripts, and PowerShell aliases
+
+**Question.** How to align launcher scripts with Spread Hunter terminology, create dedicated start/stop scripts for the 10-tier bankroll experiments, and provide ergonomic start/stop aliases?
+
+**Method.**
+1. Recreated `hunter-start.ps1`, `hunter-stop.ps1`, and `hunter-procs.ps1` explicitly defining the Spread Hunter two-sided maker feature and managing process ownership in `run/hunter.pids.json` with fast python-only process querying.
+2. Created `bankroll-start.ps1`, `bankroll-stop.ps1`, and `bankroll-procs.ps1` for the 10-tier bankroll sensitivity experiments ($100 to $1,000 in $100 steps) with `-DryRun`, `-FreshRun`, status tracking, and clean shutdown.
+3. Created `scripts/aliases.ps1` defining global shell functions (`start-hunter`, `stop-hunter`, `hunter-start`, `hunter-stop`, `start-bankroll`, `stop-bankroll`, `bankroll-start`, `bankroll-stop`, `bankroll-report`).
+4. Updated legacy `fleet-start.ps1`, `fleet-stop.ps1`, `fleet-procs.ps1` as transparent forwarders.
+
+**Result.** All launcher scripts execute cleanly in sub-second time. Full test suite passes 671/671.
+
+**Verdict.** LIVE -- process orchestration and CLI aliases ready.
 
 
 

@@ -236,7 +236,7 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
 
 * **2026-08-13 (server & strategy, Session 59): server entrypoint and SPREAD_HUNTER_BANKROLL config override landed.** Added uvicorn entrypoint to `server/spread_dash.py` and `SPREAD_HUNTER_BANKROLL` handling in `strategy/config.py`. 662/662 tests passing.
 
-* **2026-08-13 (review remediation, Session 61): CodeRabbit PR #25 feedback addressed across stats, launcher, config, and HTML.** Aligned matrix container ID to `sec-bankroll-matrix`, redirected child process logs to `fleet.log`, enforced finite and positive bankroll validation in `strategy/config.py`, implemented pure-Python Student's t critical values interpolation with edge-case handling in `strategy/stats.py`, added DB error handling in `scripts/bankroll_stats_report.py`, and added unit tests. All 671/671 tests passing.
+* **2026-08-13 (ops/scripts, Session 62): Spread Hunter launcher re-centering, 10-tier bankroll experiment scripts, and PowerShell aliases.** Recreated `hunter-start.ps1`, `hunter-stop.ps1`, and `hunter-procs.ps1` for Spread Hunter with PID tracking in `run/hunter.pids.json`. Built `bankroll-start.ps1`, `bankroll-stop.ps1`, and `bankroll-procs.ps1` for the 10-tier bankroll experiments ($100-$1,000). Created `scripts/aliases.ps1` with global `start-hunter`/`stop-hunter` and `start-bankroll`/`stop-bankroll` aliases. 671/671 tests passing.
 
 
 

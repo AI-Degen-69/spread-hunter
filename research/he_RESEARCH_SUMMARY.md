@@ -219,7 +219,7 @@
 
 * **2026-08-13 (שרת ואסטרטגיה, סשן 59): נקודת כניסה לשרת ודריסת תצורה ל-SPREAD_HUNTER_BANKROLL נחתו.** נוספה נקודת כניסה של uvicorn ל-`server/spread_dash.py` וטיפול ב-`SPREAD_HUNTER_BANKROLL` ב-`strategy/config.py`. 662/662 בדיקות עוברות.
 
-* **2026-08-13 (תיקון ביקורת, סשן 61): הערות CodeRabbit עבור PR #25 טופלו בסטטיסטיקה, במפעיל, בתצורה וב-HTML.** מזהה מכל המטריצה הותאם ל-`sec-bankroll-matrix`, פלטי תהליכי הבן נותבו ל-`fleet.log`, נאכף אימות בנקרוֹל סופי וחיובי ב-`strategy/config.py`, יושמה אינטרפולציית ערכים קריטיים של t של סטודנט וטיפול במקרי קצה ב-`strategy/stats.py`, נוסף טיפול בשגיאות DB ב-`scripts/bankroll_stats_report.py`, ונוספו בדיקות יחידה. כל 671/671 הבדיקות עוברות.
+* **2026-08-13 (תפעול וסקריפטים, סשן 62): מיקוד מחדש של משגרי Spread Hunter, סקריפטים לניסוי 10 דרגות בנקרוֹל וכינויי PowerShell.** נבנו מחדש `hunter-start.ps1`, `hunter-stop.ps1` ו-`hunter-procs.ps1` עבור Spread Hunter עם מעקב PIDs ב-`run/hunter.pids.json`. נוצרו `bankroll-start.ps1`, `bankroll-stop.ps1` ו-`bankroll-procs.ps1` עבור 10 דרגות ניסויי הבנקרוֹל ($100-$1,000). נוצר `scripts/aliases.ps1` עם כינויים גלובליים `start-hunter`/`stop-hunter` ו-`start-bankroll`/`stop-bankroll`. 671/671 בדיקות עוברות.
 
 
 
