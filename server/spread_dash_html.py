@@ -96,13 +96,16 @@ _HEAD = ("""
      styled card carrying the formula, the live value, and the gate meaning.
      Pure CSS -- hover or keyboard focus (button inside the wrap) reveals it.
      No tooltip dependency needed; matches the terminal's square language. */
-  .tip-wrap{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px;}
-  .tip-ico{width:14px;height:14px;border:1px solid rgba(148,163,184,.5);color:#94A3B8;background:transparent;border-radius:9999px;font-size:9px;font-weight:700;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:help;padding:0;}
+  .tip-wrap{position:relative;display:inline-flex;vertical-align:middle;margin-left:4px;}
+  .tip-ico{width:13px;height:13px;border:1px solid rgba(148,163,184,.5);color:#94A3B8;background:transparent;border-radius:9999px;font-size:9px;font-weight:700;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:help;padding:0;}
   .tip-ico:hover,.tip-wrap:focus-within .tip-ico{border-color:var(--gold);color:var(--gold);}
-  .tip-pop{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%) translateY(4px);width:252px;padding:10px 12px;background:rgba(8,12,20,.97);border:1px solid rgba(255,255,255,.16);box-shadow:0 8px 24px rgba(0,0,0,.55);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .15s ease,transform .15s ease,visibility .15s;z-index:70;text-align:left;}
-  .tip-pop .tip-k{display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:6px;}
-  .tip-pop .tip-t{display:block;font-size:11px;line-height:1.65;color:#94A3B8;font-weight:400;letter-spacing:0;text-transform:none;}
+  .tip-pop{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%) translateY(4px);width:270px;padding:10px 12px;background:rgba(8,12,20,.98);border:1px solid rgba(255,255,255,.16);box-shadow:0 12px 30px rgba(0,0,0,.85);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .15s ease,transform .15s ease,visibility .15s;z-index:9999;text-align:left;}
+  .tip-pop-right{left:auto!important;right:0!important;transform:translateX(0) translateY(4px)!important;}
+  .tip-pop .tip-k{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:4px;}
+  .tip-pop .tip-t{display:block;font-size:11px;line-height:1.5;color:#94A3B8;font-weight:400;letter-spacing:0;text-transform:none;}
+  .tip-pop .tip-g{display:block;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.1);font-size:10.5px;line-height:1.5;color:#D1D5DB;letter-spacing:0;text-transform:none;}
   .tip-wrap:hover .tip-pop,.tip-wrap:focus-within .tip-pop{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);}
+  .tip-wrap:hover .tip-pop-right,.tip-wrap:focus-within .tip-pop-right{opacity:1;visibility:visible;transform:translateX(0) translateY(0)!important;}
   /* The call is a split-flap instrument: when the verdict word changes, the
      old letter halves flap away and the new halves flip in from behind --
      the desk's only question answered with an odds-board commit. Plays only
@@ -2128,13 +2131,92 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
             <th class="p-3.5 font-bold text-right">Realized P&amp;L</th>
             <th class="p-3.5 font-bold text-right">Return %</th>
             <th class="p-3.5 font-bold min-w-[140px]">Samples (30/100)</th>
-            <th class="p-3.5 font-bold text-right">Win Rate</th>
-            <th class="p-3.5 font-bold text-right">Mean $/Tr</th>
-            <th class="p-3.5 font-bold text-center">95% CI</th>
-            <th class="p-3.5 font-bold text-center">98% CI</th>
-            <th class="p-3.5 font-bold text-right">Sortino</th>
-            <th class="p-3.5 font-bold text-right">Max DD</th>
-            <th class="p-3.5 font-bold text-center">Verdict</th>
+            <th class="p-3.5 font-bold text-right">
+              <span>Win Rate</span>
+              <span class="tip-wrap">
+                <span class="tip-ico">?</span>
+                <span class="tip-pop">
+                  <span class="tip-k">Win Rate Gate (&ge; 35%)</span>
+                  <span class="tip-t">Percentage of closed paired inventory cycles ending profitable. In maker spread capture, a win rate below 35% indicates severe adverse selection.</span>
+                  <span class="tip-g">&bull; &lt; 35% at &ge;30 samples &rarr; <span class="text-[#EF4444] font-bold">FAIL / INVALID</span></span>
+                </span>
+              </span>
+            </th>
+            <th class="p-3.5 font-bold text-right">
+              <span>Mean $/Tr</span>
+              <span class="tip-wrap">
+                <span class="tip-ico">?</span>
+                <span class="tip-pop">
+                  <span class="tip-k">Mean Return per Trade (&gt; $0.00)</span>
+                  <span class="tip-t">Average net dollar profit captured per settled trade close.</span>
+                  <span class="tip-g">&bull; &gt; $0.00: Positive edge<br>&bull; &le; $0.00: Negative edge (spread fails to cover adverse selection)</span>
+                </span>
+              </span>
+            </th>
+            <th class="p-3.5 font-bold text-center">
+              <span>95% CI</span>
+              <span class="tip-wrap">
+                <span class="tip-ico">?</span>
+                <span class="tip-pop">
+                  <span class="tip-k">95% Confidence Interval</span>
+                  <span class="tip-t">Statistical range of expected mean return per trade at 95% confidence level.</span>
+                  <span class="tip-g">&bull; Upper &lt; $0.00 &rarr; <span class="text-[#EF4444] font-bold">FAIL / INVALID</span> (97.5% certainty of net loss)<br>&bull; Lower &gt; $0.00 &rarr; <span class="text-[#10B981] font-bold">PROVEN PROFIT</span></span>
+                </span>
+              </span>
+            </th>
+            <th class="p-3.5 font-bold text-center">
+              <span>98% CI</span>
+              <span class="tip-wrap">
+                <span class="tip-ico">?</span>
+                <span class="tip-pop">
+                  <span class="tip-k">98% Confidence Interval</span>
+                  <span class="tip-t">Higher rigor statistical bounds at 98% confidence level.</span>
+                  <span class="tip-g">&bull; Upper &gt; $0.00 required<br>&bull; Lower &gt; $0.00 = 99% one-tailed statistical certainty of profit</span>
+                </span>
+              </span>
+            </th>
+            <th class="p-3.5 font-bold text-right">
+              <span>Sortino</span>
+              <span class="tip-wrap">
+                <span class="tip-ico">?</span>
+                <span class="tip-pop tip-pop-right">
+                  <span class="tip-k">Downside Sortino Ratio</span>
+                  <span class="tip-t">Downside risk-adjusted return ratio. Penalizes ONLY loss volatility, not winning spreads. Range: [-&infin;, +&infin;].</span>
+                  <span class="tip-g">
+                    &bull; &lt; 0.0: <span class="text-[#EF4444] font-bold">Bad / Losing</span><br>
+                    &bull; 0.0 &ndash; 1.0: Marginal / Weak<br>
+                    &bull; 1.0 &ndash; 2.0: Good Edge<br>
+                    &bull; &gt; 2.0: <span class="text-[#10B981] font-bold">Optimal / Exceptional</span>
+                  </span>
+                </span>
+              </span>
+            </th>
+            <th class="p-3.5 font-bold text-right">
+              <span>Max DD</span>
+              <span class="tip-wrap">
+                <span class="tip-ico">?</span>
+                <span class="tip-pop tip-pop-right">
+                  <span class="tip-k">Maximum Drawdown (&le; 15%)</span>
+                  <span class="tip-t">Peak-to-trough capital loss percentage.</span>
+                  <span class="tip-g">&bull; &gt; 15% &rarr; <span class="text-[#EF4444] font-bold">FAIL / INVALID</span> (Capital preservation stop)</span>
+                </span>
+              </span>
+            </th>
+            <th class="p-3.5 font-bold text-center">
+              <span>Verdict</span>
+              <span class="tip-wrap">
+                <span class="tip-ico">?</span>
+                <span class="tip-pop tip-pop-right">
+                  <span class="tip-k">Automated Strategy Verdict</span>
+                  <span class="tip-t">Evaluates all 3 statistical gates at &ge; 30 samples: 95% CI upper &gt; 0, Win Rate &ge; 35%, Max DD &le; 15%.</span>
+                  <span class="tip-g">
+                    &bull; <span class="text-[#9CA3AF]">COLLECTING</span>: &lt; 30 samples<br>
+                    &bull; <span class="text-[#10B981] font-bold">PASS</span>: All 3 gates passed<br>
+                    &bull; <span class="text-[#EF4444] font-bold">FAIL</span>: Breached any gate
+                  </span>
+                </span>
+              </span>
+            </th>
           </tr>
         </thead>
         <tbody id="bk-matrix-rows" class="divide-y divide-[#1F2937] mono text-[12px] whitespace-nowrap">
@@ -2424,9 +2506,9 @@ function renderBankrollPage(data){
 
       let verdictBadge = '<span class="mono text-[11px] text-[#9CA3AF] whitespace-nowrap">Collecting</span>';
       if (t.is_invalid) {
-        verdictBadge = '<span class="mono text-[11px] text-[#EF4444] font-bold whitespace-nowrap" title="' + esc(t.invalidation_reasons.join("; ")) + '">FAIL &#10006;</span>';
+        verdictBadge = '<span class="mono text-[11px] text-[#EF4444] font-bold whitespace-nowrap cursor-help" title="' + esc(t.invalidation_reasons.join("; ")) + '">FAIL &#10006;</span>';
       } else if (samples >= 30) {
-        verdictBadge = '<span class="mono text-[11px] text-[#10B981] font-bold whitespace-nowrap">PASS &#10004;</span>';
+        verdictBadge = '<span class="mono text-[11px] text-[#10B981] font-bold whitespace-nowrap cursor-help" title="Passed all 3 statistical gates (95% CI upper > 0, Win Rate >= 35%, Max DD <= 15%)">PASS &#10004;</span>';
       }
 
       const ci95 = t.ci_95 ? "[" + t.ci_95.lower.toFixed(2) + ", " + t.ci_95.upper.toFixed(2) + "]" : "--";
@@ -2446,12 +2528,12 @@ function renderBankrollPage(data){
               <span class="text-[11px] text-[#9CA3AF] shrink-0">${samples}/${target}</span>
             </div>
           </td>
-          <td class="p-3.5 text-right">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</td>
-          <td class="p-3.5 text-right">${fmtUsd(t.mean_return)}</td>
-          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">${ci95}</td>
-          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">${ci98}</td>
-          <td class="p-3.5 text-right font-semibold text-[#FBBF24]">${(t.sortino || 0).toFixed(2)}</td>
-          <td class="p-3.5 text-right text-[#EF4444]">${(t.max_drawdown || 0).toFixed(1)}%</td>
+          <td class="p-3.5 text-right cursor-help" title="Win Rate: ${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'} (Min threshold: >= 35.0% at >= 30 samples)">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</td>
+          <td class="p-3.5 text-right cursor-help" title="Mean Return: ${fmtUsd(t.mean_return)} per trade (Optimal: > $0.00)">${fmtUsd(t.mean_return)}</td>
+          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px] cursor-help" title="95% CI: ${ci95} (Invalid if upper bound < $0.00)">${ci95}</td>
+          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px] cursor-help" title="98% CI: ${ci98} (Higher rigor statistical bounds)">${ci98}</td>
+          <td class="p-3.5 text-right font-semibold text-[#FBBF24] cursor-help" title="Sortino: ${(t.sortino || 0).toFixed(2)} (Optimal: > 2.0, Good: 1.0-2.0, Weak: 0.0-1.0, Bad: < 0.0)">${(t.sortino || 0).toFixed(2)}</td>
+          <td class="p-3.5 text-right text-[#EF4444] cursor-help" title="Max Drawdown: ${(t.max_drawdown || 0).toFixed(1)}% (Threshold: <= 15.0%)">${(t.max_drawdown || 0).toFixed(1)}%</td>
           <td class="p-3.5 text-center">${verdictBadge}</td>
         </tr>
       `;
@@ -2479,12 +2561,12 @@ function renderBankrollPage(data){
               <span class="text-[11px] text-[#9CA3AF] shrink-0">${totalSamples}/${targetSamples}</span>
             </div>
           </td>
-          <td class="p-3.5 text-right font-bold">${aggWinRate.toFixed(1)}%</td>
-          <td class="p-3.5 text-right font-bold">${fmtUsd(aggMeanReturn)}</td>
+          <td class="p-3.5 text-right font-bold" title="Combined Win Rate">${aggWinRate.toFixed(1)}%</td>
+          <td class="p-3.5 text-right font-bold" title="Combined Mean Return per Trade">${fmtUsd(aggMeanReturn)}</td>
           <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; CI</td>
           <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; CI</td>
-          <td class="p-3.5 text-right font-semibold text-[#FBBF24]">${bestTier ? (bestTier.sortino || 0).toFixed(2) : '--'}</td>
-          <td class="p-3.5 text-right text-[#EF4444] font-bold">${maxDrawdownWorst.toFixed(1)}%</td>
+          <td class="p-3.5 text-right font-semibold text-[#FBBF24]" title="Best Selected Tier Sortino">${bestTier ? (bestTier.sortino || 0).toFixed(2) : '--'}</td>
+          <td class="p-3.5 text-right text-[#EF4444] font-bold" title="Worst Selected Max Drawdown">${maxDrawdownWorst.toFixed(1)}%</td>
           <td class="p-3.5 text-center"><span class="mono text-[11px] text-[#10B981] font-bold whitespace-nowrap">TOTALS</span></td>
         </tr>
       `;
@@ -2518,19 +2600,19 @@ function renderBankrollPage(data){
           </div>
 
           <div class="mt-3 pt-2.5 border-t border-[#1F2937] space-y-1.5 text-[11px]">
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between cursor-help" title="Win Rate (Minimum threshold: >= 35.0% at >= 30 samples)">
               <span class="text-[#9CA3AF]">Win Rate</span>
               <span class="text-[#F9FAFB] font-semibold">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</span>
             </div>
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between cursor-help" title="Sortino: Downside risk-adjusted return (Optimal: > 2.0, Good: 1.0-2.0, Bad: < 0.0)">
               <span class="text-[#9CA3AF]">Sortino</span>
               <span class="text-[#FBBF24] font-semibold">${(t.sortino || 0).toFixed(2)}</span>
             </div>
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between cursor-help" title="Mean Return per Trade (Optimal: > $0.00)">
               <span class="text-[#9CA3AF]">Mean $/Tr</span>
               <span class="text-[#F9FAFB]">${fmtUsd(t.mean_return)}</span>
             </div>
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between cursor-help" title="Maximum Drawdown (Threshold: <= 15.0%)">
               <span class="text-[#9CA3AF]">Max DD</span>
               <span class="text-[#EF4444] font-semibold">${(t.max_drawdown || 0).toFixed(1)}%</span>
             </div>
