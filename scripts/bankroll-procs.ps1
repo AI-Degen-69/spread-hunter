@@ -10,7 +10,11 @@ $BankrollPattern = "*strategy.fleet*"
 
 function Save-BankrollInstance {
     <# Record all tier processes started for bankroll experiments. #>
-    param([Parameter(Mandatory)][array]$TierRecords)
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [Alias("Procs")]
+        [array]$TierRecords
+    )
 
     $payload = [pscustomobject]@{
         experiment = "bankroll-sensitivity-10-tier"

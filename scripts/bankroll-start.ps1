@@ -64,12 +64,14 @@ for ($amount = $Start; $amount -le $End; $amount += $Step) {
         continue
     }
 
-    $statusData = [pscustomobject]@{
+    $statusData = @{
         bankroll       = $amount
         status         = "INITIALIZING"
         created_at     = [double](Get-Date -UFormat %s)
         target_samples = 100
         min_samples    = 30
+        pid            = $null
+        started_at     = $null
     }
     $statusData | ConvertTo-Json -Depth 4 | Set-Content -Path $statusPath -Encoding UTF8
 
@@ -93,9 +95,9 @@ for ($amount = $Start; $amount -le $End; $amount += $Step) {
     $proc = [System.Diagnostics.Process]::Start($psi)
 
     if ($proc) {
-        $statusData.status = "RUNNING"
-        $statusData.pid = $proc.Id
-        $statusData.started_at = [double](Get-Date -UFormat %s)
+        $statusData["status"] = "RUNNING"
+        $statusData["pid"] = $proc.Id
+        $statusData["started_at"] = [double](Get-Date -UFormat %s)
         $statusData | ConvertTo-Json -Depth 4 | Set-Content -Path $statusPath -Encoding UTF8
 
         $tierRecords += [pscustomobject]@{
@@ -111,7 +113,7 @@ for ($amount = $Start; $amount -le $End; $amount += $Step) {
 
 if (-not $DryRun -and $tierRecords.Count -gt 0) {
     Write-Host "[4/4] Saving PID registry and verifying processes..." -ForegroundColor DarkGray
-    Save-BankrollInstance -Procs $tierRecords
+    Save-BankrollInstance -TierRecords $tierRecords
 }
 
 Write-Host ""
