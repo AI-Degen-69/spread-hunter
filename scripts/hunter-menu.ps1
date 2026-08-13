@@ -10,14 +10,16 @@ $ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $ProjectPath
 
 . (Join-Path $PSScriptRoot "theme-loader.ps1")
+. (Join-Path $PSScriptRoot "hunter-procs.ps1")
+. (Join-Path $PSScriptRoot "bankroll-procs.ps1")
 
 $MenuActions = [ordered]@{
     "1"  = @{ Name = "hunter-start";        Label = "Start Spread Hunter";           Desc = "Launch supervisor, maker engine & dashboards (:8800/:8801)" }
     "2"  = @{ Name = "hunter-start-fresh";  Label = "Start Spread Hunter (Fresh)";   Desc = "Archive active DB (fleet.db) and start clean sample" }
     "3"  = @{ Name = "hunter-stop";         Label = "Stop Spread Hunter";            Desc = "Gracefully terminate supervisor and 5 child processes" }
     "4"  = @{ Name = "hunter-procs";        Label = "Spread Hunter Status";          Desc = "Inspect running process tree and active port health" }
-    "5"  = @{ Name = "bankroll-start";      Label = "Start 10 Bankroll Bots";        Desc = "Launch 10 simultaneous bots ($100-$1000 in isolated dirs)" }
-    "6"  = @{ Name = "bankroll-start-fresh";Label = "Start 10 Bots (Fresh Run)";     Desc = "Archive existing bankroll runs and launch fresh sample" }
+    "5"  = @{ Name = "bankroll-start";      Label = "Start 10 Bankroll Bots";        Desc = 'Launch 10 simultaneous bots ($100-$1000 in isolated dirs)' }
+    "6"  = @{ Name = "bankroll-start-fresh";Label = "Start 10 Bots (Fresh Run)";     Desc = 'Archive existing bankroll runs and launch fresh sample' }
     "7"  = @{ Name = "bankroll-stop";       Label = "Stop 10 Bankroll Bots";         Desc = "Terminate all 10 running bankroll experiment workers" }
     "8"  = @{ Name = "bankroll-report";     Label = "Bankroll Stats Report";         Desc = "Compute Student t 95%/98% CIs, Sharpe, and Sortino" }
     "9"  = @{ Name = "pairs-ev-report";     Label = "Pairs EV Analysis";             Desc = "Empirical EV of pairs completion vs naked exit counterfactual" }
@@ -27,11 +29,40 @@ $MenuActions = [ordered]@{
     "q"  = @{ Name = "quit";                Label = "Exit Menu";                     Desc = "Return to PowerShell command line" }
 }
 
+function Get-StrategyOnlineState {
+    $hunterLive = @(Get-HunterInstance)
+    $bankrollLive = @(Get-BankrollInstance)
+    $portActive = if (Get-Command Test-PortListening -ErrorAction SilentlyContinue) { Test-PortListening 8800 } else { $false }
+    return ($hunterLive.Count -gt 0 -or $bankrollLive.Count -gt 0 -or $portActive)
+}
+
 function Show-Header {
     Clear-Host
-    Write-ProfileBanner -Title "SPREAD HUNTER - CONTROL CENTER" `
-                        -Subtitle "Two-Sided Market Maker & 10-Tier Bankroll Sensitivity Matrix" `
-                        -Style "Info"
+    $width = if (Get-Command Get-ProfileContentWidth -ErrorAction SilentlyContinue) { Get-ProfileContentWidth } else { 80 }
+    $title = "SPREAD HUNTER - CONTROL CENTER"
+    $subtitle = "Two-Sided Market Maker & 10-Tier Bankroll Sensitivity Matrix"
+    $isOnline = Get-StrategyOnlineState
+
+    $statusLabel = if ($isOnline) { "● ONLINE" } else { "○ OFFLINE" }
+    $spaces = [Math]::Max(2, $width - $title.Length - $statusLabel.Length)
+
+    $heavy = if (Get-Command Get-ProfileSectionSeparator -ErrorAction SilentlyContinue) { Get-ProfileSectionSeparator } else { "=" }
+    $borderColor = if (Get-Command Get-ProfileColor -ErrorAction SilentlyContinue) { Get-ProfileColor -Name "Border" } else { [ConsoleColor]::DarkCyan }
+    $titleColor  = if (Get-Command Get-ProfileColor -ErrorAction SilentlyContinue) { Get-ProfileColor -Name "Info" } else { [ConsoleColor]::Cyan }
+    $subColor    = if (Get-Command Get-ProfileColor -ErrorAction SilentlyContinue) { Get-ProfileColor -Name "Neutral" } else { [ConsoleColor]::DarkGray }
+
+    Write-Host ($heavy * $width) -ForegroundColor $borderColor
+    Write-Host $title -ForegroundColor $titleColor -NoNewline
+    Write-Host (" " * $spaces) -NoNewline
+    if ($isOnline) {
+        Write-Host "$([char]27)[1m" -NoNewline
+        Write-Host $statusLabel -ForegroundColor Green -NoNewline
+        Write-Host "$([char]27)[0m"
+    } else {
+        Write-Host $statusLabel -ForegroundColor DarkGray
+    }
+    Write-Host $subtitle -ForegroundColor $subColor
+    Write-Host ($heavy * $width) -ForegroundColor $borderColor
     Write-Host ""
 }
 
