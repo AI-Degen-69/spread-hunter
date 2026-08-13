@@ -786,17 +786,11 @@ def volume_near_miss_stats() -> dict:
     }
 
 
-# The scan page polls /api/pipeline every 10s, and building the payload
-# re-reads the fleet DB plus the near-miss JSONL logs -- measured 4-5s per
-# request under the live writer's lock traffic, which makes the page look
-# dead between every poll. Cache the payload and refresh it on a background
-# thread instead, exactly as spread_dash caches its fleet/pipeline reads;
-# the endpoint returns the freshest snapshot instantly and only falls back
-# to an on-demand build when the snapshot is missing or the thread is dead.
-#
-# The cache is keyed by the RUN path so direct calls in tests (which
-# monkeypatch RUN to per-test tmp dirs and never start the serving loop)
-# never serve another test's snapshot.
+# The scan page polls /api/pipeline every 10s, and a build re-reads the
+# fleet DB plus the near-miss logs (4-5s under live lock traffic). Cache
+# the payload on a background thread, as spread_dash does; the endpoint
+# only falls back to an on-demand build when the snapshot is missing or
+# stale. Keyed by RUN so tests never serve another run dir's snapshot.
 PIPELINE_REFRESH_SEC = 10.0
 _PIPELINE: dict[str, dict] = {}
 _PIPELINE_LOCK = threading.Lock()
@@ -838,7 +832,7 @@ def pipeline():
     from run/fleet_state.json so the last lane shows what the fleet is
     actually working right now, not just what the latest rank chose.
 
-    All three files are telemetry; nothing here writes anything.
+    All of it is read-only telemetry; nothing here writes anything.
     """
     now = time.time()
     key = _pipeline_cache_key()
@@ -990,7 +984,7 @@ PAGE = r"""<!doctype html>
       -webkit-font-smoothing:antialiased}
  a{color:inherit}
  a:focus-visible,button:focus-visible{outline:2px solid var(--proj);outline-offset:2px}
- .up{color:var(--up)}.down{color:var(--down)}.gold{color:var(--gold)}
+ .up{color:var(--up)}.down{color:var(--down)}
  .proj{color:var(--proj)}.alert-tx{color:var(--alert)}.dim{color:var(--tx-dim)}
  .bold{font-weight:600}.mono{font-family:var(--mono)}
 
@@ -1007,7 +1001,6 @@ PAGE = r"""<!doctype html>
  .legend span{display:inline-flex;align-items:center;gap:5px}
  .legend i{width:7px;height:7px;border-radius:50%;display:inline-block}
  .live{font-size:12px;font-weight:600}
- .clock{font-family:var(--mono);font-size:12px;color:var(--tx-dim)}
 
 
 
@@ -1109,7 +1102,6 @@ PAGE = r"""<!doctype html>
   <span style="flex:1"></span>
   <span id="live" class="live"></span>
   <span id="health" class="live"></span>
-  <span id="clock" class="clock"></span>
 </header>
 <section id="view-pipeline" class="pipe-view">
   <details class="pipe-guide" id="pipeGuide">
@@ -1147,7 +1139,7 @@ const hms=s=>{s=Math.max(0,Math.floor(s));
   return h?`${h}h ${p(m)}m ${p(x)}s`:`${m}m ${p(x)}s`;};
 
 
-// ---------- market pipeline view: the selection funnel, live ----------
+// ---------- market pipeline: the selection funnel, live ----------
 // Four lanes mirror the ranker's actual funnel -- RAW (what the venue
 // lists) -> FILTERS (the selector gates, bucketed by refusal cause) ->
 // FINAL (eligible, ranked by return per dollar) -> GRADUATED (what the
@@ -1321,10 +1313,10 @@ async function tickPipeline(){
   const snap=s.snapshot||null;
   // Mast liveness, previously driven by the fleet-page tick (removed): the
   // pipeline payload carries the fleet heartbeat and the snapshot age.
-  const alive=s.fleet_alive;
-  $('live').innerHTML = alive===true?'<span class="up">● FLEET ALIVE</span>':alive===false?'<span class="down">● FLEET DOWN</span>':'<span class="dim">● fleet status unknown</span>';
+  // The fleet heartbeat and the snapshot age were previously driven by the
+  // removed fleet-page tick; the pipeline payload carries both now.
+  $('live').innerHTML = s.fleet_alive===true?'<span class="up">● FLEET ALIVE</span>':s.fleet_alive===false?'<span class="down">● FLEET DOWN</span>':'<span class="dim">● fleet status unknown</span>';
   $('health').innerHTML = s.snapshot_age==null?'<span class="dim">● NO SNAPSHOT</span>':(s.snapshot_age>900?'<span class="alert-tx">● STALE SNAPSHOT</span>':'<span class="up">● RANK FRESH</span>');
-  $('clock').textContent = s.snapshot_age==null?'':hms(s.snapshot_age)+' old';
   $('pipeStrip').innerHTML=pipeStrip(s,snap);
   const nm=s.near_miss||null, vn=s.volume_near_miss||null;
   const tcEl=$('trialCallout'), tc=trialCallout(nm,vn);

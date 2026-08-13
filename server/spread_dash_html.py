@@ -371,7 +371,7 @@ LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", r"""
 
     <div id="verdict" class="col-span-12 lg:col-span-5 bg-[#090D16] flex flex-col">
       <div class="p-7 lg:p-8 border-b border-[#1F2937] bg-[#111827]">
-        <div class="mono text-[13px] tracking-[0.18em] uppercase text-[#9CA3AF]">The Five Readings That Determine the Outcome</div>
+        <div class="mono text-[13px] tracking-[0.18em] uppercase text-[#9CA3AF]">The Six Readings That Determine the Outcome</div>
         <div class="font-display text-[22px] leading-none mt-2 tracking-tight">Live from the fleet database</div>
         <div class="mono text-[14px] text-[#9CA3AF] mt-2 leading-5">The go / no-go decision rests on the sign of the confidence bound. Everything else provides context.</div>
       </div>
@@ -1034,6 +1034,18 @@ function renderPositions(s){
 
 function renderVerdict(s){
   const weightGap = (s.mean_return_pct!==null && s.realized_pct!==null) ? (s.mean_return_pct - s.realized_pct) : null;
+  // Exit card (Sessions 49-51): the pending re-read of the naked-exit cost
+  // constant. n exits since the last re-read; the ladder states (recorded /
+  // pending / no_markout / no_fill / no_column) describe whether the 15m
+  // mid-h3 counterfactual is being captured. Ready when n >= re_read_at:
+  // the re-read is one command -- python -m scripts.pairs_ev_report.
+  const ec = (s.pairs_ev||{}).exit_card || null;
+  const ecReady = !!(ec && ec.n > 0 && ec.n >= ec.re_read_at);
+  // Fill-horizon capture (Session 55): the exit-window counterfactual on
+  // EVERY rule-era fill, not just exits -- the exit card waits on an event
+  // that almost never fires, this read accumulates on the current pace.
+  const fh = (s.pairs_ev||{}).fill_horizon || null;
+  const fhBar = (fh&&fh.n>0) ? Math.min(100,100*fh.recorded/Math.max(1,fh.n)) : 0;
   const tiles = [
     {label:"90% Lower Bound", value: fmtPct(s.ci90_lower_pct,2), accent: (s.ci90_lower_pct||0)>0?"#10B981":"#EF4444",
      tip: `Formula: mean &minus; 1.645&middot;&sigma;/&radic;n_eff &mdash; the 90% one-sided lower bound on the pooled size-weighted mean drift. Current: ${fmtPct(s.ci90_lower_pct,2)}. Gate: must clear 0% for a GO call.`,
@@ -1056,13 +1068,18 @@ function renderVerdict(s){
     {label:"Sample", value: `${s.n_settled} / ${s.go_live_min_settled}`, accent:"#9CA3AF",
      chart: `<div class="h-[36px] flex items-center"><div class="w-full h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden relative"><div class="absolute left-0 top-0 bottom-0 bg-[#3B82F6]" style="width:${Math.min(100,100*s.n_settled/s.go_live_min_settled)}%"></div><div class="absolute top-0 bottom-0 w-px bg-[#F59E0B]" style="left:${100*s.signal_min_settled/s.go_live_min_settled}%"></div></div></div>`,
      sub:`${s.wins}W &middot; ${s.losses}L &middot; ${s.closes} closes`},
+    {label:"Exit Card", value: ec?`${ec.n} / ${ec.re_read_at}`:"--",
+     accent: ecReady?"#10B981":(ec&&ec.n>0?"#F59E0B":"#9CA3AF"),
+     tip: `The pairs-rule exit counterfactual (Sessions 49-51): for each naked exit, the recorded 15m mid (mid_h3) vs the exit price -- did waiting beat the exit? States: recorded (mid_h3 landed) / pending (15m not elapsed) / no_markout / no_fill / no_column (fleet not restarted since the mid_h3 migration). Current: ${ec?ec.n+' exits, '+ec.recorded+' recorded, '+ec.pending+' pending':'none'}. Re-read at ${ec?ec.re_read_at:'10'} exits: python -m scripts.pairs_ev_report. Below it, the 15m fill capture (Session 55) classifies every rule-era fill's mid_h3 so the instrument accumulates on the current pace: recorded / pending (window open) / no_markout (window elapsed, never written -- pre-migration or sampler gap).`,
+     chart: `<div class="h-[36px] flex flex-col justify-center gap-1.5"><div class="flex items-center"><div class="w-full h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden relative"><div class="absolute left-0 top-0 bottom-0 ${ecReady?"bg-[#10B981]":"bg-[#F59E0B]"}" style="width:${ec?Math.min(100,100*ec.n/ec.re_read_at):0}%"></div></div></div><div class="flex items-center"><div class="w-full h-[7px] bg-[#090D16] border border-[#1F2937] overflow-hidden relative"><div class="absolute left-0 top-0 bottom-0 bg-[#3B82F6]" style="width:${fhBar}%"></div></div></div></div>`,
+     sub: !ec?"no exits yet":(ecReady?`<span class="font-bold text-[#10B981]">READY &mdash; re-read now</span>`:`${ec.recorded} recorded &middot; ${ec.pending} pending`+(ec.no_markout?` &middot; ${ec.no_markout} no markout`:"")+(ec.no_column?` &middot; ${ec.no_column} no column`:"")+(ec.no_fill?` &middot; ${ec.no_fill} no fill`:""))+"<br>15m capture: "+(fh?`${fh.recorded} / ${fh.n} fills`+(fh.drift?` &middot; drift <span style="color:${fh.drift.mean_c>0?"#10B981":"#EF4444"}">${fh.drift.mean_c>0?"+":""}${fh.drift.mean_c.toFixed(2)}&cent;</span>`:` &middot; ${fh.pending} pending &middot; ${fh.no_markout} unwritten`):"--")},
   ];
   const left = `<div class="col-span-12 lg:col-span-3 p-6 flex flex-col justify-center border-b lg:border-b-0 lg:border-r border-[#1F2937]">
     <div class="mono text-[12px] tracking-[0.18em] uppercase text-[#9CA3AF]">Go or no-go</div>
     <div class="font-display text-[26px] leading-none mt-2">Determined by<br><span class="text-[#10B981]">the lower bound</span></div>
-    <div class="mono text-[13px] leading-5 text-[#9CA3AF] mt-3">Not the mean. Not win rate. Bound, drift, gap, concentration, and sample.</div>
+    <div class="mono text-[13px] leading-5 text-[#9CA3AF] mt-3">Not the mean. Not win rate. Bound, drift, gap, concentration, sample -- and the pending exit card.</div>
   </div>`;
-  const right = `<div class="col-span-12 lg:col-span-9 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 divide-y md:divide-y-0 md:divide-x divide-[#1F2937]">
+  const right = `<div class="col-span-12 lg:col-span-9 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 divide-y md:divide-y-0 md:divide-x divide-[#1F2937]">
     ${tiles.map((t,i)=>`<div class="p-3 flex flex-col gap-2 hover:bg-[#090D16] transition-colors">
       <div class="mono text-[12px] tracking-[0.14em] uppercase text-[#9CA3AF] flex items-center">0${i+1} &mdash; ${t.label}${t.tip?tip(t.label,t.tip):""}</div>
       <div class="mono text-[19px] font-bold leading-none px-2 py-1.5 w-fit border" style="color:${t.accent};background:${t.accent}1A;border-color:${t.accent}33">${t.value}</div>

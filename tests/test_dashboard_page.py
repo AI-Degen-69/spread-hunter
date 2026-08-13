@@ -187,10 +187,22 @@ def test_phase3_risk_depth_tooltips_applied():
     assert "1.35" in page  # depth-band half-width sizing
 
 
-def test_summary_exposes_naked_risk_fields():
+def test_summary_exposes_naked_risk_fields(monkeypatch, tmp_path):
     """api_summary must carry the fleet-wide naked-USD figure and the cap so
     the capacity bar has real numbers (computed in server/spread_dash.py, not
     faked in the template)."""
+    # Seed a real temp DB so the pairs-EV leg of the summary is populated
+    # (a missing DB reads as None, which the verdict panel treats as "not
+    # measured" -- the tile contract needs an actual dict here).
+    monkeypatch.setenv("HUNTER_DB", str(tmp_path / "dash.db"))
+    from strategy import stats, store
+    # `store` resolves its DB via CFG.db_path() (env-driven) while `stats`
+    # uses a module-level path -- redirect both to the same temp file so the
+    # summary's pairs-EV leg reads the seeded DB, not the live run/fleet.db.
+    monkeypatch.setattr(stats, "DB", tmp_path / "dash.db")
+    store.log_event(ts=999.0, market_slug="m0", condition_id="c0",
+                    kind="QUOTING", reason="r", size=1.0)
+
     from server.spread_dash import CFG, app
     from starlette.testclient import TestClient
 
@@ -201,6 +213,36 @@ def test_summary_exposes_naked_risk_fields():
     # The contract is "the configured cap", not a magic number: the next
     # retune of strategy/config.py must not break this test (coderabbit).
     assert s["max_naked_usd"] == CFG.max_naked_usd
+    # The pairs-rule EV and the pending exit-card ladder ride the same
+    # summary -- the verdict panel's Exit Card tile reads them.
+    assert "pairs_ev" in s and s["pairs_ev"] is not None
+    card = s["pairs_ev"]["exit_card"]
+    for key in ("n", "recorded", "pending", "no_markout", "no_fill",
+                "no_column", "re_read_at"):
+        assert key in card
+    # The 15m fill-horizon ladder rides the same payload: the verdict tile
+    # renders it under the exit card (Session 55).
+    fh = s["pairs_ev"]["fill_horizon"]
+    for key in ("n", "recorded", "pending", "no_markout", "no_column",
+                "drift", "window_sec"):
+        assert key in fh
+
+
+def test_verdict_panel_has_exit_card_tile():
+    """The pending exit-card re-read (Sessions 49-51) is visible at a glance:
+    the verdict panel renders an Exit Card tile driven by
+    s.pairs_ev.exit_card, so the operator sees exits-to-re-read (and whether
+    the 15m mid counterfactual is being captured) without opening the report.
+    """
+    from server.spread_dash_html import DASHBOARD_HTML
+    assert "Exit Card" in DASHBOARD_HTML
+    assert "exit_card" in DASHBOARD_HTML
+    assert "re_read_at" in DASHBOARD_HTML
+    assert "python -m scripts.pairs_ev_report" in DASHBOARD_HTML
+    # The tile also renders the 15m fill capture (Session 55) driven by
+    # s.pairs_ev.fill_horizon.
+    assert "fill_horizon" in DASHBOARD_HTML
+    assert "15m capture:" in DASHBOARD_HTML
 
 
 def test_markets_payload_carries_phase4_fields(monkeypatch):
