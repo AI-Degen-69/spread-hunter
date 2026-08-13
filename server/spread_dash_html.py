@@ -99,11 +99,12 @@ _HEAD = ("""
   .tip-wrap{position:relative;display:inline-flex;vertical-align:middle;margin-left:4px;}
   .tip-ico{width:13px;height:13px;border:1px solid rgba(148,163,184,.5);color:#94A3B8;background:transparent;border-radius:9999px;font-size:9px;font-weight:700;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:help;padding:0;}
   .tip-ico:hover,.tip-wrap:focus-within .tip-ico{border-color:var(--gold);color:var(--gold);}
-  .tip-pop{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%) translateY(4px);width:280px;padding:10px 12px;background:#090D16;border:1px solid rgba(255,255,255,.2);box-shadow:0 16px 36px rgba(0,0,0,.95);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .15s ease,transform .15s ease,visibility .15s;z-index:9999;text-align:left;}
+  .tip-pop{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%) translateY(4px);width:290px;max-width:calc(100vw - 32px);padding:10px 12px;background:#090D16;border:1px solid rgba(255,255,255,.2);box-shadow:0 16px 36px rgba(0,0,0,.95);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .15s ease,transform .15s ease,visibility .15s;z-index:9999;text-align:left;white-space:normal!important;word-break:normal!important;overflow-wrap:break-word!important;}
+  .tip-pop *{white-space:normal!important;word-break:normal!important;overflow-wrap:break-word!important;}
   .tip-pop-right{left:auto!important;right:0!important;transform:translateX(0) translateY(4px)!important;}
-  .tip-pop .tip-k{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:4px;}
-  .tip-pop .tip-t{display:block;font-size:11px;line-height:1.5;color:#94A3B8;font-weight:400;letter-spacing:0;text-transform:none;}
-  .tip-pop .tip-g{display:block;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.1);font-size:10.5px;line-height:1.5;color:#D1D5DB;letter-spacing:0;text-transform:none;}
+  .tip-pop .tip-k{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:4px;white-space:normal!important;}
+  .tip-pop .tip-t{display:block;font-size:11px;line-height:1.5;color:#94A3B8;font-weight:400;letter-spacing:0;text-transform:none;white-space:normal!important;}
+  .tip-pop .tip-g{display:block;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.1);font-size:10.5px;line-height:1.5;color:#D1D5DB;letter-spacing:0;text-transform:none;white-space:normal!important;}
   .tip-wrap:hover .tip-pop,.tip-wrap:focus-within .tip-pop{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);}
   .tip-wrap:hover .tip-pop-right,.tip-wrap:focus-within .tip-pop-right{opacity:1;visibility:visible;transform:translateX(0) translateY(0)!important;}
   /* In table headers, tooltips pop downward so they are never clipped by the upper card border or overflow containers */
@@ -2299,6 +2300,41 @@ function esc(s){
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
+function getSortinoStyle(v, samples){
+  if (v === null || v === undefined) return { cls: "text-[#9CA3AF]", text: "--" };
+  if (samples === 0 || v === 0) return { cls: "text-[#9CA3AF]", text: "0.00" };
+  if (v < 0) return { cls: "text-[#EF4444] font-bold", text: v.toFixed(2) };
+  if (v < 1.0) return { cls: "text-[#FBBF24] font-semibold", text: v.toFixed(2) };
+  if (v <= 2.0) return { cls: "text-[#38BDF8] font-semibold", text: v.toFixed(2) };
+  return { cls: "text-[#10B981] font-bold", text: v.toFixed(2) };
+}
+function getWinRateStyle(wr, samples){
+  if (samples === 0 || wr === null || wr === undefined) return { cls: "text-[#9CA3AF]", text: "0.0%" };
+  const text = wr.toFixed(1) + "%";
+  if (samples >= 30 && wr < 35.0) return { cls: "text-[#EF4444] font-bold", text };
+  if (wr < 35.0) return { cls: "text-[#EF4444]/80", text };
+  if (wr < 50.0) return { cls: "text-[#FBBF24]", text };
+  return { cls: "text-[#10B981] font-semibold", text };
+}
+function getMeanStyle(m, samples){
+  if (samples === 0 || m === null || m === undefined || m === 0) return { cls: "text-[#9CA3AF]", text: "$0.00" };
+  if (m < 0) return { cls: "text-[#EF4444]", text: fmtUsd(m) };
+  return { cls: "text-[#10B981]", text: fmtUsd(m) };
+}
+function getCiStyle(ci){
+  if (!ci) return { cls: "text-[#9CA3AF]", text: "--" };
+  const text = "[" + ci.lower.toFixed(2) + ", " + ci.upper.toFixed(2) + "]";
+  if (ci.upper < 0) return { cls: "text-[#EF4444] font-bold", text };
+  if (ci.lower > 0) return { cls: "text-[#10B981] font-bold", text };
+  return { cls: "text-[#9CA3AF]", text };
+}
+function getMaxDdStyle(dd, samples){
+  if (samples === 0 || dd === null || dd === undefined || dd === 0) return { cls: "text-[#9CA3AF]", text: "0.0%" };
+  const text = dd.toFixed(1) + "%";
+  if (dd > 15.0) return { cls: "text-[#EF4444] font-bold", text };
+  return { cls: "text-[#FBBF24]", text };
+}
+
 const ALL_AMOUNTS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
 let SELECTED_TIERS = new Set(ALL_AMOUNTS);
 let LAST_BANKROLL_DATA = null;
@@ -2516,8 +2552,12 @@ function renderBankrollPage(data){
         verdictBadge = '<span class="mono text-[11px] text-[#10B981] font-bold whitespace-nowrap cursor-help" title="Passed all 3 statistical gates (95% CI upper > 0, Win Rate >= 35%, Max DD <= 15%)">PASS &#10004;</span>';
       }
 
-      const ci95 = t.ci_95 ? "[" + t.ci_95.lower.toFixed(2) + ", " + t.ci_95.upper.toFixed(2) + "]" : "--";
-      const ci98 = t.ci_98 ? "[" + t.ci_98.lower.toFixed(2) + ", " + t.ci_98.upper.toFixed(2) + "]" : "--";
+      const sortinoInfo = getSortinoStyle(t.sortino, samples);
+      const wrInfo = getWinRateStyle(t.win_rate, samples);
+      const meanInfo = getMeanStyle(t.mean_return, samples);
+      const ci95Info = getCiStyle(t.ci_95);
+      const ci98Info = getCiStyle(t.ci_98);
+      const maxDdInfo = getMaxDdStyle(t.max_drawdown, samples);
 
       return `
         <tr class="hover:bg-[#111827] transition-colors whitespace-nowrap">
@@ -2533,12 +2573,12 @@ function renderBankrollPage(data){
               <span class="text-[11px] text-[#9CA3AF] shrink-0">${samples}/${target}</span>
             </div>
           </td>
-          <td class="p-3.5 text-right cursor-help" title="Win Rate: ${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'} (Min threshold: >= 35.0% at >= 30 samples)">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</td>
-          <td class="p-3.5 text-right cursor-help" title="Mean Return: ${fmtUsd(t.mean_return)} per trade (Optimal: > $0.00)">${fmtUsd(t.mean_return)}</td>
-          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px] cursor-help" title="95% CI: ${ci95} (Invalid if upper bound < $0.00)">${ci95}</td>
-          <td class="p-3.5 text-center text-[#9CA3AF] text-[11px] cursor-help" title="98% CI: ${ci98} (Higher rigor statistical bounds)">${ci98}</td>
-          <td class="p-3.5 text-right font-semibold text-[#FBBF24] cursor-help" title="Sortino: ${(t.sortino || 0).toFixed(2)} (Optimal: > 2.0, Good: 1.0-2.0, Weak: 0.0-1.0, Bad: < 0.0)">${(t.sortino || 0).toFixed(2)}</td>
-          <td class="p-3.5 text-right text-[#EF4444] cursor-help" title="Max Drawdown: ${(t.max_drawdown || 0).toFixed(1)}% (Threshold: <= 15.0%)">${(t.max_drawdown || 0).toFixed(1)}%</td>
+          <td class="p-3.5 text-right cursor-help ${wrInfo.cls}" title="Win Rate: ${wrInfo.text} (Min threshold: >= 35.0% at >= 30 samples)">${wrInfo.text}</td>
+          <td class="p-3.5 text-right cursor-help ${meanInfo.cls}" title="Mean Return: ${meanInfo.text} per trade (Optimal: > $0.00)">${meanInfo.text}</td>
+          <td class="p-3.5 text-center text-[11px] cursor-help ${ci95Info.cls}" title="95% CI: ${ci95Info.text} (Invalid if upper bound < $0.00)">${ci95Info.text}</td>
+          <td class="p-3.5 text-center text-[11px] cursor-help ${ci98Info.cls}" title="98% CI: ${ci98Info.text} (Higher rigor statistical bounds)">${ci98Info.text}</td>
+          <td class="p-3.5 text-right cursor-help ${sortinoInfo.cls}" title="Sortino: ${sortinoInfo.text} (Optimal: > 2.0, Good: 1.0-2.0, Weak: 0.0-1.0, Bad: < 0.0)">${sortinoInfo.text}</td>
+          <td class="p-3.5 text-right cursor-help ${maxDdInfo.cls}" title="Max Drawdown: ${maxDdInfo.text} (Threshold: <= 15.0%)">${maxDdInfo.text}</td>
           <td class="p-3.5 text-center">${verdictBadge}</td>
         </tr>
       `;
@@ -2552,6 +2592,11 @@ function renderBankrollPage(data){
     if (tfoot) {
       const aggPnlColor = totalPnl > 0 ? "text-[#10B981]" : (totalPnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
       const aggSamplePct = targetSamples > 0 ? Math.min(100, Math.round((totalSamples / targetSamples) * 100)) : 0;
+      const aggWrInfo = getWinRateStyle(aggWinRate, totalSamples);
+      const aggMeanInfo = getMeanStyle(aggMeanReturn, totalSamples);
+      const aggBestSortinoInfo = bestTier ? getSortinoStyle(bestTier.sortino, bestTier.sample_count || 0) : { cls: "text-[#9CA3AF]", text: "--" };
+      const aggWorstDdInfo = getMaxDdStyle(maxDrawdownWorst, totalSamples);
+
       tfoot.innerHTML = `
         <tr class="bg-[#090D16] border-t-2 border-[#1F2937] text-[#F9FAFB] whitespace-nowrap">
           <td class="p-3.5 font-bold text-[#FBBF24] whitespace-nowrap">AGGREGATE (${filteredTiers.length})</td>
@@ -2566,12 +2611,12 @@ function renderBankrollPage(data){
               <span class="text-[11px] text-[#9CA3AF] shrink-0">${totalSamples}/${targetSamples}</span>
             </div>
           </td>
-          <td class="p-3.5 text-right font-bold" title="Combined Win Rate">${aggWinRate.toFixed(1)}%</td>
-          <td class="p-3.5 text-right font-bold" title="Combined Mean Return per Trade">${fmtUsd(aggMeanReturn)}</td>
+          <td class="p-3.5 text-right font-bold ${aggWrInfo.cls}" title="Combined Win Rate">${aggWrInfo.text}</td>
+          <td class="p-3.5 text-right font-bold ${aggMeanInfo.cls}" title="Combined Mean Return per Trade">${aggMeanInfo.text}</td>
           <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; CI</td>
           <td class="p-3.5 text-center text-[#9CA3AF] text-[11px]">&plusmn; CI</td>
-          <td class="p-3.5 text-right font-semibold text-[#FBBF24]" title="Best Selected Tier Sortino">${bestTier ? (bestTier.sortino || 0).toFixed(2) : '--'}</td>
-          <td class="p-3.5 text-right text-[#EF4444] font-bold" title="Worst Selected Max Drawdown">${maxDrawdownWorst.toFixed(1)}%</td>
+          <td class="p-3.5 text-right font-semibold ${aggBestSortinoInfo.cls}" title="Best Selected Tier Sortino">${aggBestSortinoInfo.text}</td>
+          <td class="p-3.5 text-right font-bold ${aggWorstDdInfo.cls}" title="Worst Selected Max Drawdown">${aggWorstDdInfo.text}</td>
           <td class="p-3.5 text-center"><span class="mono text-[11px] text-[#10B981] font-bold whitespace-nowrap">TOTALS</span></td>
         </tr>
       `;
@@ -2587,6 +2632,11 @@ function renderBankrollPage(data){
     const samples = t.sample_count || 0;
     const target = t.target_samples || 100;
     const samplePct = Math.min(100, Math.round((samples / target) * 100));
+
+    const sortinoInfo = getSortinoStyle(t.sortino, samples);
+    const wrInfo = getWinRateStyle(t.win_rate, samples);
+    const meanInfo = getMeanStyle(t.mean_return, samples);
+    const maxDdInfo = getMaxDdStyle(t.max_drawdown, samples);
 
     return `
       <div class="border ${t.is_invalid ? 'border-[#EF4444]/40 bg-[#EF4444]/5' : (isLive ? 'border-[#10B981]/30 bg-[#111827]' : 'border-[#1F2937] bg-[#111827]')} p-4 relative overflow-hidden flex flex-col justify-between transition-all">
@@ -2607,19 +2657,19 @@ function renderBankrollPage(data){
           <div class="mt-3 pt-2.5 border-t border-[#1F2937] space-y-1.5 text-[11px]">
             <div class="flex items-center justify-between cursor-help" title="Win Rate (Minimum threshold: >= 35.0% at >= 30 samples)">
               <span class="text-[#9CA3AF]">Win Rate</span>
-              <span class="text-[#F9FAFB] font-semibold">${t.win_rate ? t.win_rate.toFixed(1) + '%' : '0.0%'}</span>
+              <span class="${wrInfo.cls} font-semibold">${wrInfo.text}</span>
             </div>
             <div class="flex items-center justify-between cursor-help" title="Sortino: Downside risk-adjusted return (Optimal: > 2.0, Good: 1.0-2.0, Bad: < 0.0)">
               <span class="text-[#9CA3AF]">Sortino</span>
-              <span class="text-[#FBBF24] font-semibold">${(t.sortino || 0).toFixed(2)}</span>
+              <span class="${sortinoInfo.cls}">${sortinoInfo.text}</span>
             </div>
             <div class="flex items-center justify-between cursor-help" title="Mean Return per Trade (Optimal: > $0.00)">
               <span class="text-[#9CA3AF]">Mean $/Tr</span>
-              <span class="text-[#F9FAFB]">${fmtUsd(t.mean_return)}</span>
+              <span class="${meanInfo.cls}">${meanInfo.text}</span>
             </div>
             <div class="flex items-center justify-between cursor-help" title="Maximum Drawdown (Threshold: <= 15.0%)">
               <span class="text-[#9CA3AF]">Max DD</span>
-              <span class="text-[#EF4444] font-semibold">${(t.max_drawdown || 0).toFixed(1)}%</span>
+              <span class="${maxDdInfo.cls} font-semibold">${maxDdInfo.text}</span>
             </div>
           </div>
         </div>
