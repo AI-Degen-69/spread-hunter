@@ -1,166 +1,92 @@
 # Research Summary — Maker
 
-
-
-
-
-
-
 Condensed, dated view of [RESEARCH_LOG.md](RESEARCH_LOG.md). Newest at the
-
-
 
 bottom. One bullet per concrete thing done, tried, found, or broken.
 
-
-
-
-
-
-
 ---
-
-
-
-
-
-
 
 ## 21/07/2026
 
-
-
-
-
 * Pulled **56,768 of @powerwinner's BTC/ETH 5-min fills** (14–21 Jul, 2,970 markets) to test whether his smooth equity curve came from doing our strategy better.
-
 
 * Found he does the **opposite**: enters at 0.30–0.70 (we use 0.80–0.99), in the **first** 40% of the window (we use the last 40%), and has **zero** trades at 0.98+.
 
-
 * His market win rate is **41.4%** against a 56.1% breakeven — on direction alone he loses. He is not a predictor.
-
 
 * Decomposed his P&L: gross **+$39,884/week**, but **−$32,501** if charged our taker fee. The entire difference is that he pays no taker fee — he rests limit orders. His volume concentrates where `fee ∝ p(1−p)` peaks.
 
-
 * **Tested and rejected** the theory that his both-sides buying is locked arbitrage: the pair costs 0.9990 for a $1.00 payout and is favourable only 51.1% of the time. Spread capture is ~68% of his gross.
-
 
 * Caught my own analysis error first: BTC resolution coverage was 59.1% vs ETH 98.2% (rate-limit failures, dropped non-randomly), which produced a plausible but wrong −$23,828. After recovery, computed payout matched his on-chain redeems to **0.1%**.
 
-
 * Built a Hunter sim with a **queue-aware fill model**. First attempt keyed off the trade tape's `side`, but 194/200 rows read "BUY" — data-api reports each participant's own side, not the aggressor's. Rebuilt on **book deltas**, where queue movement is directly observable.
-
 
 * Documented the fill model's optimistic biases in the module rather than hiding them; output is an upper bound. Seven unit tests cover queue precedence, sweeps and overfill.
 
-
 * Found **balance is the dominant P&L driver** across 44 settled markets: perfectly hedged +$30.70/market, badly unbalanced −$50.95. Hedged total +$409, unbalanced −$848 — that gap is the whole loss. Unbalanced markets lose *consistently* (swing 7.3), which is adverse selection, not luck.
-
 
 * Fixed two guards that were blocking the balancing trade: the cost cap returned no quotes at all (×1043), and the pair cap rejected the hedge at $1.00.
 
-
 * **OPEN regression:** that fix now lets pair costs exceed $1.00 (1.09, 1.07, 1.03) for a $1.00 payout — a guaranteed loss on the hedged portion. Deliberately not fixed during the repo migration; needs its own change and a fresh run.
-
 
 * Added a single-instance pid guard after finding **four concurrent bots** writing to one database, summing independent inventories into silently invalid data.
 
-
 * Split the repo out of the taker's, with identical structure and its own EN/HE research.
-
-
 
 * Deployed online: own Railway service, own volume at `/data`, own domain. Preflight verified the region (Binance reachable) and that the volume is writable before the bot starts.
 
-
-
 ## 22/07/2026
-
-
 
 * The OPEN pair-cost regression is now **confirmed and quantified** over 53 settled markets: median pair cost **1.0419** for a $1.00 payout, only **4%** of pairs clearing under $1.00, realized **−$1,172.07**, ROI **−4.1%**.
 
-
 * The proof is that those two numbers match: paying 1.0419 for a $1.00 payout is a ~4.2% guaranteed loss on the hedged portion, and observed ROI is −4.1%. This is **not** adverse selection or variance — the bot is systematically overpaying for its hedge.
-
 
 * Everything else is working: fill rate **37.6%** against real queue depth (median 72 shares ahead), **0.48¢** captured versus a 0.50¢ theoretical half-spread, inventory balance **0.99** against a 0.92 target. Execution is sound; price discipline is not.
 
-
 * Root cause is the earlier fix that let the balancing side bypass the pair-cost cap. It achieved balance (0.99) at the cost of price discipline (4% of pairs under $1.00). Fix direction: cap the hedge at a price keeping the pair under $1.00, and skip the hedge when no such price exists — accept some imbalance rather than guaranteed loss.
-
 
 * The dashboard reports 90/95/99% confidence **reached** at n=53 (mean −$22.11, σ $16.01). Arithmetically correct, but what is proven is that **the bug loses money** — already known. It says nothing about whether market making works here. **Verdict: DEAD for this configuration; the strategy itself remains OPEN** pending a fresh run after the fix.
 
-
-
 ## 22/07/2026 (afternoon)
-
-
 
 * **Fixed the pair-cost cap bug that caused the 53-market loss.** In `strategy/quotes.py` the hedge exemption was removed — `max_pair_cost = 0.995` now applies to EVERY side, and a fresh-market guard blocks opening any position unless BOTH sides fill into a sub-$1.00 pair at ask−1tick. The bot now sits out wide markets instead of taking a guaranteed-loss leg.
 
-
 * **Added the decisive census instrumentation.** `hedge_census` table records, per distinct market, whether a fillable sub-$1.00 pair existed at touch. `kpi` aggregates the fillable rate + median pair-at-touch; this was the one number never measured on clean data.
-
 
 * **Defined where the experiment ends** in `strategy/config.py`: Phase A census of 60 markets — if fillable-sub-$1.00 rate `< 50%`, stop (DEAD); else Phase B settles 120 markets and reads P&L sign + confidence. The dashboard renders the phase banner + census progress live.
 
-
 * **Started a fresh run** (single instance, fresh `hunter.db`, local bot + dashboard). First census market came back **fillable at 0.99** — i.e. makeable — directly contradicting the contaminated run's 4% figure. That is the hypothesis now under test.
-
 
 * **Instrumentation bug fixed:** a Hermes `PYTHONPATH` leak shadowed the project `.venv`, so `pip` "satisfied" deps into Hermes's site-packages while runtime import-failed. Fixed by launching with `env -u PYTHONPATH ./.venv/Scripts/python.exe ...`. General lesson on this Windows host: always unset `PYTHONPATH` before invoking a project venv.
 
-
-
 ## 22/07/2026 (night)
-
-
 
 * **Built the balance enforcer** — the actual loss driver was PARTIAL fills (one side fills, the other never does before the 5-min window closes → one-sided settlement loss), not the entry cap bug. In `strategy/main.py`, when `t_remaining ≤ 20s` and balance `< 0.92`, the bot cancels rests and CROSSES the spread to buy the missing leg, exactly matching the held side. Every settled market now settles balanced by construction.
 
-
 * **Crossed fills tagged** `crossed=1` in `store` (self-healing column) so `kpi`/`settlements` separate a settlement hedge from a maker fill. Dashboard gained a **HEDGE X** card (settlement-crossing count) — the leading indicator of whether partial-fill was the driver.
-
 
 * **Clean re-run after the code change** (AGENTS.md: params change → sample invalid). Archived the 4 partial-DB runs, wiped `hunter.db`, relaunched fresh. Verified: equity $5,000, realized $0, hedges 0, Phase A_CENSUS, census median pair 0.995 (cap fix holding).
 
-
 * **Two bugs caught:** (1) `kpi.report()` referenced a bare `c` cursor out of scope → dashboard silently returned `{"error": ...}` under HTTP 200; fixed via `_rows()`. (2) MSYS `ps`/`kill` PIDs are translated and `taskkill` rejects them — the reliable kill path is `powershell Get-CimInstance Win32_Process` for the native PID, then `taskkill /F /PID <native>`.
-
-
 
 ## 28/07/2026
 
-
-
 * **The fill rate was overstated 16x, and the old number measured nothing.** Built `scripts/record_books.py` (raw live books to a standalone `books.db`) and `scripts/measure_fill_rate.py` (replay any quoting rule against the same books). The book-only model reported a **50%** share fill rate — and **100% of those fills came from one branch**: "the level emptied, so credit our whole remaining order". From bid-side deltas a mass cancel is indistinguishable from a mass trade, so that branch was an assumption carrying the entire result.
-
 
 * **Fixed by measuring instead of assuming.** `scripts/fetch_trades.py` backfills the trade tape (~1,800 prints per 5-min window); `QueueFillEngine.on_book` now takes a `traded` map. Book delta = trades + cancels (seen only as the sum); the tape gives trades alone. Both advance queue position, only trades fill us. **Tape-confirmed fill rate: 3.1%** vs 50.0% book-only, same windows, same books, same strategy.
 
-
 * **The balance hedge never worked.** It posted a *bid at the ask* — passive, not a cross. Reproduced: **0 of 150 shares** fill even as the book trades straight down through the level. It only ever looked like it worked because of the phantom-fill bug. So every unbalanced market stayed unbalanced, and partial fills are the documented main loss driver.
-
 
 * **Fixing it costs more than the edge it protects.** Added `QueueFillEngine.cross()` (walks real ask depth, partial fills are a real outcome, `max_price` caps the walk). But a cross is a TAKER order: `taker_fee = shares * 0.07 * p * (1-p)` = **1.75c/share at p=0.50, against a ~1c pair edge** — the fee peaks exactly where this strategy trades. `kpi.py` was charging zero for it, so P&L would have read high; it now charges the fee, excludes crossed shares from the fill-rate numerator, and pays them no maker rebate.
 
-
 * **Added powerwinner's two missing rules** — price band 0.30-0.70 and quoting only in the first 40% of the window — each behind its own switch so they can be measured one at a time.
-
 
 * **Dashboard now shows maker metrics:** fill rate vs queue depth, fill provenance (tape-confirmed vs inferred vs crossed), pair-cost distribution, quote uptime + top skip reasons, partial-fill exposure, taker fees, spread capture per share. `fills.reason` is persisted so provenance traces to a real row.
 
-
 * **Two bugs in this session's own tooling, caught before they produced a finding:** the replay harness stopped quoting a side after a complete fill (a filled order is done, not resting); the tape cursor advanced after `continue` paths and would have re-credited prints. Tests 8 -> 31; the harness is verified against scripted books with hand-computed answers before touching real data.
 
-
-
 ## 31/07/2026
-
 
 * **Parked the port-8788 single-bot pipeline on a sibling git branch
   (`archive/legacy-bot-8788`).** The fleet on port 8800 has rendered
@@ -177,323 +103,188 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
   single commit, so the live branch is clean and the historical version
   is recoverable.
 
-
 * **Prepared a fresh $1,000 paper run and simplified the dashboard.** Configured a $1,000 simulated wallet with $900 allocation headroom, a $1,000 committed-cap ceiling, and a $400 fleet naked-risk ceiling. The dashboard now foregrounds liquidation P&L, projected reward, committed wallet, naked risk, realized P&L, and heartbeat health; projected return uses total committed capital instead of offers alone. The startup script gained `-FreshRun` to archive the old DB/sidecars and stale state file before restart.
-
 
 * **Caught and bounded a $1,036.80 committed-cap overshoot.** The first fresh sweep retained old-size orders and reserved new offers against a stale total. Post-cancellation reservation now resizes existing orders, caps new resting notional, and caps emergency crossed hedges; validation fell to $367 then $256 committed, below the $1,000 ceiling.
 
-
 * **Made fleet-wide cap scope explicit.** `visit()` now accepts the complete fleet state list from `main()` for emergency-hedge and resting-order affordability, while direct single-market calls remain safely bounded to one state; the undefined-local scope bug is gone.
-
 
 * **Aligned dashboard heartbeat health with observed sweep cadence.** Raised the stale threshold from 45 to 120 seconds because a normal 20-market sweep takes roughly 50–70 seconds; state age and DB age remain visible for diagnosis.
 
-
 * **Kept cancellation lifecycle in the ledger.** Simulated orders now retain their quote IDs so hard-cap releases and requotes mark database rows cancelled; shallow emergency hedges also close their unfilled residual quote row.
-
 
 * **Linked maker fills back to their quote rows.** Tape-confirmed resting fills now carry the originating quote ID, and cancellation preserves partial fill quantities while closing the remaining quote lifecycle.
 
-
 * **Hardened the launch path:** `fleet-start.ps1` מחשב את ה-checkout מתוך `$PSScriptRoot` וממתין שתהליכי-הבן ופורט 8800 יתפנו לפני הפעלה מחדש, ונכשל-סגור אם אחד מהם נשאר. נוספה בדיקת רגרסיה לשימור מזהה ההצעה המקורי במילויי טייפ מאושרים.
-
 
 * **התנהגות ביטול הצעה שמולאה חלקית קיבלה כיסוי ישיר.** בדיקת store מוודאת ש־25 מניות שמולאו נשארות ב־`filled` כאשר שורת ההצעה מסומנת `cancelled = 1`.
 
-
-
 ## 03/08/2026
-
-
 
 * **Hardened process ownership, database recreation handling, and ranking concurrency.** Updated `fleet-procs.ps1` to require exact start-time tick matching. Added per-run unique temp files, try/finally cleanup, and marker ownership checks to `rank_markets.py`. Updated `store.py` schema-readiness tracking to compare file stat identities so DB file recreation triggers schema init. Extracted `_atomic_write_json` helper in `fleet.py` and exposed `stale_after_sec` in `fleet_dash.py`.
 
-
 * **Added Unrealized P&L and Realized P&L columns to fleet dashboard.** Computed per-market `unrealized_pnl` in `server/fleet_dash.py` (combining paired float and unhedged exit float) and added explicit Unrealized P&L and Realized P&L columns to the dashboard table for per-position floating loss breakdown.
-
 
 ## 05/08/2026
 
-
-
 * **Audited the unhedged P&L snapshot.** The read-only report covered 23 live markets, 57 fills, 10,853 quotes, 9 closes, 16 resolutions, $2,063.56 filled notional, and 40.9 hours of history. Realized P&L was **+$116.33**, paired float **−$32.61**, unhedged float **−$223.32**, and total liquidation P&L **−$139.59**; the unhedged drag was concentrated in **3 markets** and the largest loss was **−$190.26**.
-
 
 * **Separated mark convention from economic outcome.** The dashboard marks unreadable books at $0, while binary settlement is $1/$0. The $345.33 naked cost spans **+$168.59 all-win** to **−$345.33 all-lose**, so risk controls should use `naked_cost`, age, and readability—not `unhedged_float` alone. The gate marked **23/23** markets WIDENED, including **18 with no inventory**.
 
-
 * **Confirmed a tail-shaped adverse-selection pattern.** Mean drift moved from **−1.21c at 5m** to **−5.86c at 1h** and **−12.83c at 6h** (`n=5` at 6h); **9/52** fills worse than −20c contributed **−$165.07** of size-weighted drift versus **−$29.94** overall. The central distribution is mostly healthy; the left tail carries the loss.
-
 
 * **Flagged the 40–60c price band.** It had `n=19`, mean drift **−10.68c**, and **−$122.00** of size-weighted drift; other bands were positive or near flat. This supports a controlled notional/offset experiment, not a universal conclusion.
 
-
 * **Traced the inventory failure.** **7/18** filled markets never paired, while successful markets reached roughly **79–92%** pairing. In `lol-maz-mg1`, exposure grew from **98** to **233 UP shares** because the skew was only about **0.6c** at 98 exposed shares. All **57/57** fills were tape-confirmed, **0** crossed, and mean spread capture was **+2.40c/share**.
-
 
 * **Audit verdict: OPEN.** Test two isolated controls first—readable two-sided-book entry filtering and never adding to the heavy leg—then separately measure the 40–60c cap and a size-weighted/tail markout gate. Park time cutoffs until more six-hour observations exist; do not use a broad offset increase or market exit as the current fix.
 
-
-
 * **Added dollar-denominated risk primitives (`strategy/risk.py`).** `naked_usd` values the excess leg at average cost, reproducing the observed **$190.26** on 233.40 UP shares at 0.8152 — a position a 360-share cap never flagged. `book_health` refuses one-sided, settled (0.999/0.001), too-wide (0.26/0.42) and too-thin books, and reports depth as unevaluated rather than passed when no depth was recorded. New config: `max_naked_usd: 120.0`, `decided_price: 0.02`, `max_book_spread: 0.06`, `min_book_depth_sh: 200.0`. Pure module, no callers yet, so live behaviour is unchanged. 344 tests pass.
-
-
 
 * **Wired the dollar cap and the hedge-side gate into the live quoting path.** `risk.hard_block` now replaces the share cap in `_decide_quotes_rewards`: hedge-token health, own-book health, then `max_naked_usd`, in that order, with the exposure-reducing side exempt. A market at **$114.80 of $120** rests nothing on the heavy side and full size on the light one; a healthy book paired with an unhedgeable **0.999-bid/no-ask** partner now rests nothing on either side. `max_naked_shares` was removed rather than kept alongside the dollar cap, and the emergency stop-loss trigger was restated in dollars. `enable_hard_blocks` isolates the change. 359 tests pass, up from 344.
 
-
-
 * **Replaced the size cliff and the share-denominated skew with dollar-driven versions.** `risk.size_for` decays resting size as `base * (1 - utilization)^2`, capped at the remaining budget divided by price and floored to zero under the 50-share venue minimum; the light side never tapers. `risk.skew_offset` winds the spring by `risk_utilization`, so 100 naked shares at a **0.85** average is pushed further from mid than the same 100 shares at **0.15** — the reading the old fixed 240-share ramp could not produce, and the reason it was still ramping at 233 shares while **$190.26** was at stake. `skew_full_shares` removed. 385 tests pass, up from 359.
-
 
 * **Flagged for replay:** with a 120-share base and a 50-share floor, the ladder reaches zero at roughly **35% utilization (~$42 of $120)**, so the heavy side stops resting well before the nominal budget. Whether that cuts toxic or profitable flow is dollar gate replay validation's question, not a settled result.
 
-
-
 * **Made the price band and the pair-cost cap reachable on the live `rewards` path.** Both sat below the line where `_decide_quotes_rewards` returns and had never executed — fills averaged **0.8152** against a nominal **0.30-0.70** band, and `wta-kalinsk-kessler` bought 14 pairs at **$1.0200** against a **$0.995** cap. Now arms of `risk.hard_block`, with values unchanged. A **0.95/0.96** market rests nothing and names the band; a 0.52 bid against a 0.49 held average is refused at **$1.01**.
-
 
 * **Added price-dependent risk treatment (price-dependent risk treatment).** `risk.band_risk_factor` cuts size toward the coin flip (`coinflip_size_cut: 0.10`, `coinflip_halfwidth: 0.20`) and widens the offset with the price paid (`price_risk_widen: 0.010`). Per KTD3 the offset truncated by the 4.5c reward window is converted into a proportional size cut, so risk aversion still has somewhere to go under `WIDENED`. 408 tests pass, up from 385.
 
-
 * **Fixed a latent clamp bug.** An offset clamped exactly to `max_spread_from_mid` was dropped for exceeding it (`0.525 - 0.48 = 0.04500000000000004`). Unreachable while the clamp never bound; routine now.
-
-
 
 * **Made markout size-weighted, with Kish''s effective sample size (size-weighted markout with Kish effective sample size).** The unweighted mean let the two prints carrying **233 shares** vote with the weight of two 50-share prints. `_stats_from_rows` now returns a size-weighted mean and `n` = `sum(w)^2 / sum(w^2)`, with the raw count kept as `n_rows`; Kish equals the row count exactly on equal sizes, so `markout_min_sample` and the doubling rule keep their tuned meaning and `strategy/gate.py` needed no change. Decisive case: ten 200-share fills at −5c against ten 10-share fills at +1c reads **exactly −2.00c** unweighted — landing *on* the catastrophic threshold, so the strict `<` left the market in the book — and **−4.71c** weighted, which fires the magnitude bypass. 415 tests pass, up from 408.
 
-
-
 * **Added a fleet-level circuit breaker (fleet-level circuit breaker).** `gate.fleet_posture` derives NORMAL / WIDENED / HALTED from the pooled markout alone, separate from `next_state`. The recorded pooled reading of **−0.052375 on n=52** — 2.6× the catastrophic threshold, answered today by widening quotes 1.5c — now returns **HALTED**, which blocks the heavy side in every market while the light side rests at an identical size, a flat market still quotes both, and the emergency cross still fires. Derived fresh each sweep and never persisted, so it lifts on recovery; a failed read holds the previous posture rather than silently lifting a live halt. The same pool still caps a borrowed per-market verdict at WIDENED, which is the KTD5 distinction. 433 tests pass, up from 415.
-
 
 * **Replayed the dollar risk gates against recorded paper fills (replay dollar risk gates).** Added a read-only `scripts/replay_risk_gates.py` plus fixture-backed tests for the observed dollar-cap and pair-cost failures, healthy flow, missing depth, empty/absent databases, and market-level P&L attribution. Against `run/fleet.db` (67 fills, 23 markets), the live path refused 15 fills (22.4%), avoided **$729.88** of incremental naked cost, and attributed **$26.19** of realized P&L forgone; the profitable-market stop check refused 6/40 (15.0%), so it stayed clear. Depth and per-fill P&L remain explicitly OPEN because the record does not contain them. 440 tests pass.
 
-
 * **Added operator-facing action telemetry.** Durable per-market events now cover fills, quotes, blocks, hedges, exits, merges, waits, and errors, with stable gate reason codes. The dashboard adds last action plus two prior events, fleet naked-risk utilization, active quoting ratio, structured refusal counters, and a high-contrast gold mid marker. 444 tests pass.
-
 
 * **Added a realized exits table.** Every `closes` row now appears below the live market table with sell/merge method, shares, average cost, effective exit price, return on cost basis, net P&L, fees/gas, and leg details. 447 tests pass.
 
-
 * **Added a hard primary-market selector.** Dynamic esports submarkets and live/handicap names are refused; candidates require explicit Moneyline/Main Line/Outright or Politics/Macro/Economics identity, at least **$250,000** 24h volume, **>$5,000** top-three bid notional independently on YES and NO, and a **<=4c** book spread. The fleet repeats the check and cancels stale simulated quotes. Full suite: **452 tests**.
-
 
 * **Prepared a clean paper sample.** The existing supervised launcher archives the prior DB and SQLite sidecars instead of deleting evidence, then starts the fleet, dashboard, and ranker against a fresh `run/fleet.db`. The clean run remains OPEN until the process tree and filtered universe are confirmed.
 
-
 * **Extended resolution horizon to 30 days (resolution horizon extension).** Changed `select_max_days_to_resolve` from 7 to 30 days in `strategy/config.py`. The ranker selected 3 liquid primary markets (up from 1), admitting liquid tournaments and macro events. 452 tests pass.
-
-
 
 * **Root-caused the frozen STALE/ERROR dashboard rows and fixed the empty-universe state file (empty-universe state publishing).** The Aug 5-6 events the fleet held were delisted by the venue — live probe confirms the CLOB returns 404 for their tokens and `closed: true` on metadata — so the 404s were correct; the real bug was that a fleet restarted into zero markets never completes a sweep and therefore never rewrites `run/fleet_state.json`, leaving the dashboard serving the pre-restart snapshot (six dead rows, frozen) for the life of the process. Extracted `_publish_state(states)` as the single atomic state-write site and added `_idle_empty()` which publishes `[]` on the empty-universe transition, so the dashboard clears to "no markets reporting" instead of zombie rows. 6 new tests in `tests/test_fleet_state_publish.py`; full suite 467/467 pass. Startup settle pass for markets already in `resolutions` (startup settlement pass) and the idle sweep banner remain open.
 
-
 * **Cut re-rank cadence from 60 to 10 minutes (re-rank cadence optimization).** `scripts/rerank_loop.py` `INTERVAL_SEC` and `strategy/config.py` `rerank_interval_sec` both 3600 -> 600s. The fleet already adopts `run/markets.json` within ~1s of an mtime change, so the generator was the real bottleneck; worst-case wait for a newly-listed market drops from an hour to ~10 minutes plus the ~2min ranker pass. Live rejection census confirms the sports-only universe is a liquidity fact, not selector prejudice: 997 funded markets, 199 scored, 199 rejected (98 YES-depth, 17 NO-depth, ~27 spread, 53 volume, 6 keyword), matching Sessions 11/13. 467 tests pass.
-
 
 * **Startup settle pass for already-resolved markets (startup settlement pass).** `MarketState.__init__` rebuilds inventory from the fills ledger, which never learns about resolutions — so a market that settled while the fleet was down restarted holding phantom shares and committed capital until its first rotation (or forever, if the ranker dropped it first, via the "still holding inventory" retention rule). Added `_settle_startup_resolved()` calling the existing `_settle_resolved` for every market already in `resolutions`, wired into `main()` after the startup `resolved_cids` load, with a `STARTUP SETTLE` log line. 6 new tests in `tests/test_fleet_startup_settle.py`; full suite 473/473. Verified against `run/fleet.db`: 8 resolved markets hold fills (WTA + White Sox among them); only those two (~$104 of the ~$306) are releasable — the other four have no resolution row.
 
-
 * **One start script, background only (background launcher consolidation).** Deleted the foreground `fleet-start.ps1` variant and made the single `scripts/fleet-start.ps1` the background-only launcher (the old `fleet-bg.ps1` body, which stops recorded duplicates via `fleet-procs.ps1` ownership, warns about strays, and refuses on an occupied 8800). Updated all references (fleet-procs.ps1, rerank_loop.py, supervisor.py, both SKILL.md copies, maker-instincts.yaml). Consolidation only — no runtime behavior change.
-
 
 * **Fixed the phantom 49-minute sweep on an empty universe (sweep clock timing fix).** `_Pulse.idle()` rolls the in-progress sweep clock on each empty-universe pass without recording a measured sweep (`sweep_sec` stays None); `_idle_empty` calls it every pass. Before, `sweep_elapsed` measured from process boot (only `sweep_done()` rolled it) so an idle 0-market fleet reported "a full sweep is taking 49m35s" via the dashboard banner. Fleet was healthy throughout (`fleet_stale: False`). 3 new tests; 476/476 pass.
 
-
 * **Fixed my own audit side-effect (market universe audit).** A loosened-bars ranker audit I ran overwrote `run/markets.json` with trial picks (no `--dry-run`). Fleet self-corrected at the next strict re-rank (~1 min later); I deleted the 30 polluted `reward_samples` rows (backup saved), verified zero residue, and restored the strict empty universe. No fills/markouts/P&L were affected; the 2 trial markets never scored (0/2) which is why nothing was quoted. Config unchanged.
-
 
 * **watch_universe.py is now a supervised child (supervised universe watcher).** Added "watch" to `CHILDREN` in `strategy/supervisor.py` so the evening-slate observer (picked count, ranker census, esports book depth/spread every 5 min to logs/universe_watch.log) auto-restarts with the stack and survives reboots. Killed the detached instance; new supervisor (9112) verified spawning all four children incl. watch (17940); first supervised sample 16:45:36. 2 new tests; 478/478 pass.
 
-
 * **market pipeline selection funnel — Market-pipeline view (Session 20):** the ranker now persists the whole selection funnel to `run/pipeline.json` on every rank (`_write_pipeline_snapshot`: raw pools, per-gate rejection buckets with example markets, scored/eligible/picked counts, census+gates lines); the dashboard gained a Fleet / Market scan switcher and a four-lane kanban (RAW → FILTERS → FINAL → GRADUATED) served by `/api/pipeline` with live fleet state on the last lane. Spread-gate census buckets collapsed from per-value to "YES spread"/"NO spread". Verified live: RAW 1010 → scored 198 → rejected 198 → eligible 0 → picked 0 on Saturday's thin universe. 483/483 tests.
-
 
 * **book gate hysteresis window (2026-08-08):** transient book blips no longer cancel quotes or flash STALE/ERROR — the LoL SK/NV market was dipping under the $1K depth bar for ~1s per poll, and each dip cancelled orders, blanked the last-known bids, and stamped err, so the dashboard flashed STALE/ERROR + a fake -$66.34 loss every 4-5s. Added a `BOOK_GATE_CONFIRM_SEC = 15.0` confirmation window to the depth/spread gate and the fetch path in `visit`: the first failure records a timestamp and returns early with orders/marks/err untouched; only a persistent failure gets the full cancel+stamp treatment; a recovered book resets the clock. 5 new tests (`tests/test_book_gate_hysteresis.py`), 488/488 suite pass.
 
-
 * **allocator marginal return verdict (2026-08-08):** allocator verdict on the Market scan view — `reallocate` now stores a per-market verdict (`_alloc_verdict`, pure: marginal %/day at the decided size, first-dollar marginal, competition avg, 2%/day floor, pot, and a reason string derived from the same comparison the water-fill made), carried on `_live["alloc"]` through fleet_state.json into `/api/pipeline` and rendered on each GRADUATED card ("funded 135 shares · marginal 2.07%/day · competition 46,969 · floor 2%/day" / "unfunded: below 2.00%/day floor"). k==0 guarded against NaN. 5 new tests in `tests/test_allocator_verdict.py` + endpoint assertion; 493/493 pass; verified live on 8800.
-
 
 * **filters lane allocator verdict (2026-08-08):** allocator verdict on the FILTERS lane — every rejected market now carries an estimate of what the allocator would have said had the ranker admitted it. `_if_adopted` in `scripts/rank_markets.py` reuses the fleet's exact admission math (first-dollar marginal %/day = pot/T, `T = their_score/k` from the venue's own score reading, spread pots reconstructed via `spread_capture_daily`), pinned to `_alloc_verdict`'s refusal path by test; the book-gate reject dict now records its score reading so depth/spread rejects are estimable (identity rejects carry none). `_write_pipeline_snapshot` attaches the verdict to each example and a per-bucket `would_fund` count; `gateCard` renders "if adopted: ~2.45%/day · would clear the floor" (green) or "below floor" (red) per example plus a near-miss summary line per bucket. 6 new tests (`tests/test_if_adopted_verdict.py`) + extended funnel test; 500/500 pass; verified live on 8800.
 
-
 * **near-miss tracker (2026-08-08):** near-miss tracker — the ranker now appends `run/near_misses.jsonl` (one line per rank, non-dry-run: scored/rejected + the full green list with cause, marg, pot, competition, and top-3 depth measured+bar parsed from the reason), and `near_miss_stats()` in fleet_dash.py accumulates it into a READY_TO_TRIAL / COLLECTING / NO_DATA verdict against four documented bars (≥3 days, ≥25 unique markets, ≥5 small-margin depth markets measured ≥50% of the bar, ≥50% stability over the last 72 ranks). Framed as licensing a CONTROLLED trial, not a gate change — the log validates estimate consistency; the trial measures profitability. Served on /api/pipeline and rendered as a NEAR-MISS TRACKER panel on the Market scan view. 8 new tests; 508/508 pass. Verified live: 2 ranks seeded, 20 unique greens, $183/day pot on the table, stability 100%, COLLECTING — and the first real finding: every green depth-reject measured ≤$434 (under 50% of the $1,000 bar), so a $750 loosening would have admitted none of today's near-misses.
-
 
 * **near-miss tracker follow-up (2026-08-08):** the tracker's pot tile now sums the CREDIBLE set only — `_is_trap` (depth < 50% of bar, or marg > 10%/day) excludes the empty-window mirages per unique-cid last reading, so the Yankees $15,768/day-on-$22 trap no longer inflates the number: tile reads $3/d (was $16,124/d) with an "excl. traps 29 ($16,121/d)" companion tile keeping the gap visible. 3 tests added/updated; 510/510 pass; verified live on 8800.
 
-
 * **empty-book mirage filter (2026-08-09):** the empty-book mirage is labeled, not counted. First-dollar marginal is pot/T, so a book with ~nothing resting in the reward window divides by ~zero competition and reports absurd estimates (890%/day Dem-retirees, 4,938%/day UK inflation) — the same empty-book shape as the Yankees $15,768/day trap, not blocked opportunity. `_if_adopted` now classifies `trap` (depth < 50% of gate bar, or marg > 10%/day); `would_fund` counts credible verdicts only with a per-bucket traps count; the near-miss tracker bases EVERY decision bar (days/unique/small-margin/stability) on the credible set, renders traps amber "EMPTY-BOOK MIRAGE", and shows "mirages seen: N (not counted)". Live: 34 credible observations across 6 unique markets vs 406 mirages excluded; pot tile $23/d credible (raw $21,010/d); YES-depth would_fund fell to 0 with 82 traps labeled. 5 new tests (3 trap + 1 bars + 1 zero-depth); 515/515 pass; verified live on 8800.
-
 
 * **mirage structural audit (2026-08-09):** structural-vs-measurement audit of the empty-book mirages. Formula is venue-exact (validated 37.04 match, docs confirm per-minute sampling over 7-day epochs). Live book reconstruction reproduces the ranker's reading (UK inflation 0.9 = 0.9); the windows are genuinely empty of TIGHT quotes (orders parked 3.8–4.3c out where the quadratic weight is ~1%, or penny bids 13c out). "Big pots = empty books" is FALSE — inverted: Spearman(rate, their_score) = +0.59 over 50 markets, 0% empty above $30/day pot, 20% below; the mirages are the small-pot tail ($3–54/day). But a single snapshot is time-of-day biased: UK inflation's competition swings 0.1→99 between 19:00 and 22:00 UTC (1000x), stable over 60s yet trough-hour. The 4,938%/day estimate is a trough-hour fantasy; the venue's epoch averages all samples. Next step (measurement, not gate change): average several book samples per rank or feed the tracker's accumulated readings back so the estimate judges the day-average, not the luckiest snapshot.
 
-
-
 * **sweep module extraction (2026-08-10):** first slice of the sweep extraction (issue #11) -- the settle-and-cancel step moved out of the engine's 630-line per-market function into a new `strategy/sweep.py` module behind a small interface (`settle_resolved` / `cancel_live_orders` / `record_event` / `settle_startup_resolved`), bodies verbatim, `visit`'s call sites renamed. Safety net: existing fleet tests (startup settle, state publish, gate fallback, resolutions) pass unchanged; 4 new tests in `tests/test_sweep.py` drive the step directly (settle zeroes both legs and refreshes the payload fresh; cancel blanks and persists; record_event dedup + force). Full suite 524/524. Architecture work, no strategy-parameter change, so no new sample needed. Next slice: gate/decide steps (issue #12).
-
-
 
 * **unified sweep interface (2026-08-10):** the whole market sweep behind one interface (issue #12) — `strategy/sweep.py` now exposes `sweep(state, ctx) → SweepOutcome` over the gate/decide steps (identity gate, market load, book gate with hysteresis, fills, gate advance, exits, requote, reward sample), each early exit mapped to a status (SETTLED / IDENTITY_BLOCKED / COOLDOWN / UNLOADABLE / BOOK_HOLDING / BOOK_FAILED / QUOTING / BLOCKED / WAITING) with `prev_gate`/`gate`/`why`/`fills`/`requoted`/`released`. `visit` is a thin backward-compatible alias; `fleet.py` shrank from 1,983 to ~1,100 lines. Step helpers' bare `now` reads converted to `ctx.now` (19 sites); tests moved to the sweep module's namespaces and 4 new tests drive the one interface (settled releases cost, identity-blocked cancels quotes, book-holding→failed two-phase, quoting rests both sides). Full suite 528/528. Architecture only, no strategy-parameter change — no new sample. #14's plan noted: sweep.py now imports the fetchers.
 
-
-
 * **KPI read-side module (2026-08-10):** one read-side module for the fleet's KPIs (issue #13) — new `strategy/stats.py` owns every read query that used to live in `kpi.py` (report), `fleet_dash.py` (page, including its RO connection and the incremental maker-rebate cache+lock) and `fleet.py` (`inventory_from_db`). `kpi.py` kept its pure math and calls the state reader; `fleet_dash.py` kept HTTP + HTML and `fleet()` pulls the whole DB-derived payload with one `snapshot()`; no SQL remains in either. Tests moved to `strategy.stats` imports; 4 new tests pin the surface. Full suite 532/532. Criterion-4 interpretation documented: `scripts/` tools keep their own DBs. Architecture only, no strategy-parameter change — no new sample.
-
-
 
 * **entry point modularization (2026-08-10):** un-merged the entry point (issue #14) -- `full_book` and `recent_trades` moved verbatim from the retired `strategy/main.py` into `strategy/markets.py` (with `TRADES_API`/`BOOK_TIMEOUT`/`TAPE_TIMEOUT` and a module logger); `sweep.py` and `live_test.py` import from `strategy.markets`, and sweep re-exports the same objects so the existing monkeypatch seams hold. Five comments updated; `strategy/main.py` deleted. 2 new tests pin the relocation (importability + identity of the re-exported objects); full suite 534/534. Architecture only, no strategy-parameter change -- no new sample.
 
-
 * **scorer gate offline test harness (2026-08-10):** the fetch seam under the market scorer (issue #15) -- `evaluate` already receives its HTTP session across the seam like the universe fetchers; what was missing was offline coverage. New `tests/test_scorer_gates.py` (14 tests) drives every scorer gate against a stub CLOB session that serves canned books and refuses any other request: seam lock (monkeypatched `requests.Session`/`requests.get` prove the scorer opens no connection itself, exactly two book GETs), no-verdict drops (fetch failure, one-sided book, near-settled mid, token count, window narrower than our offset), verdict rejects (identity without fetching, depth with its reading, spread, volume, horizon, reward payout floor, spread-source exemption), and the admission path with income/capital recomputed from the score formula. Full suite 548/548. Test-only -- no production code, no new sample.
-
 
 * **volume reader offline test harness (2026-08-10):** offline coverage for the volume reader (issue #15 follow-on) -- `gamma_volume` got the same stub-session treatment as the scorer: 4 new tests in `tests/test_selection.py` pin chunking (45 ids → 3 requests of 20/20/5 with matching `limit`, URL pinned to GAMMA), error tolerance (a failed chunk drops only its own ids), response-shape tolerance (`{"data":[...]}` wrap, no-id rows skipped, null volume → 0), and the empty-candidate edge (no requests, empty result). Full suite 552/552. Test-only.
 
-
 * **venue book parser (2026-08-10):** the venue-payload parse seam (architecture review C1+C2) -- new `strategy.markets.parse_book` is the ONE place venue /book rows become typed levels. Contract: row-level garbage is skipped and counted in `malformed`; a structurally wrong payload raises as a fetch-shaped failure. Five call sites converged: `full_book` (a bad level can no longer masquerade as a network failure and cancel quotes on a healthy venue), `recent_trades` (bad tape rows skipped + non-list guard; previously one bad price silently vanished a market from every sweep), the ranker's `evaluate` (fails closed on `malformed > 0` -- an under-counted competitor inflates income; previously one bad row crashed the whole ranking run), and `watch_universe`/`record_books`. `resolve.py` confirmed already fail-closed, untouched. 9 new tests; full suite 561/561. CONTEXT.md gained the Book adapter term.
-
 
 * **per-worker HTTP session pool (2026-08-10):** one session per worker thread (architecture review C3) -- `requests.Session` is documented as not thread-safe, and the ranker's 12-worker ThreadPoolExecutor was fed ONE shared session from `main`. New `_worker_session()` lazy thread-local factory (one keep-alive pool per thread) plus a `score_pool(jobs, *, session_factory, max_workers=12)` seam that `main` now calls instead of the inline `ex.map` loop; `evaluate` still takes a session per #15. Two tests pin it: 12 barrier-synced threads get the same session within a thread and 12 distinct sessions across threads; and the real pool path with a counting Session patch (each job's stub `get` sleeps to hold all 12 workers alive mid-fetch -- the executor never guarantees one thread per job, so an instantly-finishing worker would go idle and collapse the count) creates exactly one session per worker, never one shared. Full suite 563/563.
 
-
 * **depth-gate trial (2026-08-10):** the depth-gate trial the near-miss tracker licenses (READY_TO_TRIAL: 29/25 unique, 19/5 small-margin depth, 69% stability) -- a trial bar that never touches the permanent config: `select_min_top3_depth_usd_trial` (env HUNTER_DEPTH_TRIAL_USD) + `--trial-depth` on the ranker (CLI > config > permanent), `evaluate`/`score_pool` take `min_depth_usd`, trial-adopted markets are tagged `trial_depth_usd` in run/markets.json, and pipeline.json records `depth_gate_usd`/`trial_depth_usd`. New `scripts/trial_depth_gate.py` replays the recorded near-miss log (214 ranks, 3,605 greens, 98 depth-rejects) against a trial bar with the mirage rule re-derived for that bar. Honest result: at $750 exactly ONE market graduates -- mlb-cle-cws-2026-08-09 ($760 depth, $1,667.47/day pot, 2.57%/day marginal) -- but checking its slug shows that game has already resolved: the recorded greens carry no end date, and $750 currently adopts NOTHING actionable. The $500 sweep admits 6 markets ($1,913.47/day) — 5 live (~$246/day: MN-02 Governor GOP primary $97, WI-01 House $55, an Extended-FDV crypto launch $50, Republican Senate count $41, a $2B crypto launch $3) plus the stale MLB game; $1,000 → 0. The depth-reject population is mostly empty-book mirages (91/98 at the current bar; 89 at $750, 83 at $500), and the last-reading basis is stricter than the dashboard's any-reading 19, so READY_TO_TRIAL overstates what a trial adopts today. 10 new tests; full suite 573/573.
-
 
 * **mirage triage and live trial (2026-08-10):** mirage triage + the live $500 trial. New `scripts/mirage_triage.py` triages the recorded depth-reject population (220 ranks, 110 markets): mirages are tiny-depth/near-zero-volume (median ~$71 depth, $232 vol vs $7,183 for near-misses); the >= 2-readings signal filters 18/104 mirages with zero near-miss loss (volume floors would lose 5/6); and the dominant finding is the VOLUME gate — 83/110 depth-rejects (and 5/6 near-misses, 5/6 recorded $500 graduates) fail the live $250k/24h volume bar. The live trial confirms it: `--trial-depth 500` adopted exactly one market (the same spread market the permanent bar picks; spread is depth-exempt) and zero reward markets — the recorded "graduates" fail live on volume by 1–3 orders of magnitude. Depth was never the binding gate; volume is the next frontier. Trial stays staged; permanent $1,000 bar untouched. 5 new tests; full suite 578/578.
 
-
 * **volume near-miss tracker (2026-08-10):** the volume near-miss tracker — the population the depth tracker was blind to. New `_log_rank_volume_near_misses` in the ranker appends run/volume_near_misses.jsonl (one line per rank, mirroring the depth log), recording every volume-rejected market whose reason carries a measured "24h volume $X < $Y" reading (unknown counted as a gap and skipped), with the allocator verdict (pot/competition/marg) attached. New `volume_near_miss_stats()` in the dashboard mirrors `near_miss_stats()` with the same bars — 3 days / 25 unique / 5 small-margin (volume >= half the $250k bar) / 50% stability over 72 ranks — plus `watched` (the whole measured population, the ~80/rank the gate refuses) and a `closest` list (top 5 by last-reading ratio); deliberately no marg-trap arm, because a volume-reject has already cleared depth so its book is real. The Market scan view gains a VOLUME NEAR-MISS TRACKER panel under the depth one. The log began filling the same afternoon: the supervised ranker spawns a fresh process per cycle, so the 16:34 rank ran the new code — one rank in, 55 markets watched, closest at 42.2% of the bar (House-control $106k/24h) and all five closest long-dated (50–143 days, so the 30-day horizon gate would refuse them next). small_margin_volume (>= $125k) 0/5 — COLLECTING, the binding bar at zero as predicted. The half-bar trial it would license is not implemented — that changes what the live fleet quotes. 7 new tests; full suite 585/585.
-
 
 * **pairs-only completion and exit rule (2026-08-10):** the pairs-only rule — the fill-economics verdict (Session 36) turned into a staged behavioural rule. On a one-sided fill inside a 15-minute window (where measured drift is still ~0, +0.09c/share at 5m), the sweep now either COMPLETES the pair — cross the missing leg at ask via `engine.cross`, pair cost capped by `max_pair_cost` 0.995 and committed room — or EXITS the naked leg at best bid (the ~3c half-spread instead of the −18.5c/share 1h drift); expired windows record PAIR_WINDOW_EXPIRED once per fill. `record_hedge_census` (the built-but-never-switched-on seam that measures P(completes under $1) at touch) now runs EVERY sweep. Closes carry a side (naked-exit closes one leg), so realized/settled/inventory accounting rebuild per-side instead of assuming every close removes both legs. Dashboard totals gain a PAIRS-ONLY RULE tile with the EV formula as the KPI — completion_rate × 16.3¢ − exit_rate × 3.0¢ per one-sided fill — so the next sample decides whether it's positive. Config block default ON, env `HUNTER_PAIRS_RULE` disables. 8 new tests (complete/exit/expiry/disabled/census/side-aware stats); full suite 593/593. One caught bug: the EV tooltip's JS string had a mismatched closing quote — the page-parse test caught it as a blank-page-class error before it ever shipped.
 
-
 * **volume-gate trial (2026-08-10):** universe expansion is a GATE problem, not a fetch problem — the pipeline scores 205 live markets and picks 2. Full-funnel audit + dry-run trials showed the licensed depth loosening ($1,000→$750/$500) admits 0 additional eligible markets (the depth near-miss population is 3–25x thin on volume — e.g. $433 YES depth on a $10,696-volume market — so loosening depth merely relabels rejects into the volume bucket), while volume loosening is the only lever with positive yield (+2 would-fund at $235–242k; 91% of volume rejects are < $50k junk, correctly excluded). Implemented the VOLUME-GATE TRIAL mirroring the depth trial exactly: `--trial-volume`, `_effective_volume_bar` (CLI > HUNTER_VOLUME_TRIAL_USD > permanent), `min_volume_usd` threaded through tradable/evaluate/score_pool/gamma_spread_universe, adopted markets tagged `trial_volume_usd`, pipeline gains volume_gate_usd/trial_volume_usd, rerank_loop passes both trial flags from config, and fleet-start.ps1 activates both trials (depth 750 / volume $200k — the honest trial bar, NOT the half-bar $125k mirage triage and live trial showed admits nothing). max_open_markets (3) is dead config — never read. 8 new tests; full suite 601/601.
-
 
 * **U36b (2026-08-10):** trial bars re-armed per operator decision — depth $750→$500, volume $200k→$125k (fleet-start.ps1). First supervised cycle under the new bars: pipeline eligible 2→7 — the additions are spread-universe markets (Navi/3DMAX CS, Jodar/Fils tennis, Red Sox, Orioles, Mets), all tagged `trial_*`; the reward-market picks are unchanged and the depth-exempt spread path dominates. Pipeline confirms `depth_gate_usd: 500 / volume_gate_usd: 125000`, both tagged trial. Trial markets stay tagged and watched — permanent bars untouched, sample unmixed.
 
-
 * **U36c (2026-08-11):** three-cycle composition watch on the re-armed trial bars (depth $500 / volume $125k). A two-cycle compare first showed count stability (picked identical 8→8, rejections ±3 noise, would_fund flat), but the watched cycles changed composition on the FIRST one: Todi: Maxim Mrva vs Pierluigi Basile (tennis) admitted 23:54 → dropped 00:04 → re-admitted 00:14 (7→8→7→8), while the other 7 picks were zero-churn throughout. Todi is a real near-threshold market (volume $468k, 3.7× over the trial bar; 1¢ spread; projected income 10.1%/day on $120) whose top-3 bid depth straddles the $500 line on a live match — the trial admitted exactly the borderline population it exists to watch, and its markouts are now being sampled. n=1 market: a fresh event slate is needed before the admission generalizes.
-
 
 * **U36f (2026-08-11):** the "it's been hours and nothing happens" diagnosis — the refusal chain, measured. Ground-truth audit (no guessing): fleet up and sweeping every ~10s but quoting NOTHING (`0/8 scoring | offers $0 | est $0.00/day` for over an hour); sqlite market_events showed 5,304 BLOCKED vs 4 FILLED in 24h, 82% "unfunded by the allocator", 17% "outside band", 1% depth ERROR. Three stacked defects found: (1) **bug** — the fleet's LIVE book gate read the PERMANENT $1,000 depth bar while the ranker admitted at trial $500, re-blocking every trial admission (fixed: gate honors the spec's `trial_depth_usd`); (2) **legacy bug** — the price band 0.30–0.70 (BTC coin-flip era; its own docstring says it exists to refuse near-settled 0.95+ outcomes) blocked funded markets at 0.25/0.75 (widened to 0.10–0.90); (3) **the gate that actually binds** — the allocator's 2%/day marginal-return floor defunded all 7 live markets (0.04–1.84%/day): at boot with the fixes live the fleet quoted all 7, then the first reallocate defunded every one. Dashboard was blind to all of it (cards showed the alloc verdict, not the refusal reason) — every card now surfaces the live `err` ("unfunded: below 2.00%/day floor"). 3 new tests + replay fixture 0.90→0.95; full suite 603/603. Verdict: two plain bugs fixed; the 2%/day floor is a POLICY gate that now needs an operator decision (staged trial floor for real-book markets at 1.0%/day marginal, same tagged/watched discipline) rather than a silent loosening.
 
-
 * **U36g (2026-08-11):** the operator's answer — "I don't care about the reason. I want it to work" — settled the floor question. Measured first-dollar marginal of every eligible market with the allocator's own math (`marginal(0, pot, T)`, `T = theirs/k`): Shnaider 3.997%, Jodar 0.825%, Falcons 0.771%, Navi 0.306%, Red Sox 0.125%, Orioles 0.085%, Mets 0.046%. The four refused at the 0.5%/day trial floor are NOT junk (mirage triage removed the empty-book population; real depth 56k–880k, tight spreads, live volume — deep-competition books only). Implemented `HUNTER_MARGINAL_FLOOR` (env override for `marginal_return_floor` in `config.load()`, mirroring the trial env pattern), armed at 0.0001 (0.01%/day) in fleet-start.ps1; `max_market_frac` 0.15 still caps concentration, permanent default stays 2%/day. Sweep log: `funded 3/7 | offers $335` at 0.5% → **`funded 7/7 | offers $674 | committed $674/1000`** at 0.01% — the WHOLE eligible universe now rests two-sided quotes, dashboard reads `7/7 scoring · LIVE`, verified 100.0% (30v/0u). 1 new test; full suite 604/604. Verdict: the floor is operator-settled — samples over selectivity, because the measured edge (pairs-only rule, +16.3¢/completed pair) needs fills, fills need quotes, quotes need funding; the markout gate and pairs rule still watch what these quotes earn.
-
 
 * **2026-08-12 (design, /design-review):** fixed color-swatch legend in spread_dash_html.py Design Principles section — swatch squares were splitting from their labels on line-wrap (flex-wrap without an atomic wrapper per pair); now each swatch+label is one inline-flex whitespace-nowrap unit.
 
-
-
 * **2026-08-12 (design, /design-review):** fixed dashboard header logo overflow (SH-01 wrapped to 3 lines, busting its box), low-contrast white-on-green decision-hinge badge (near-white text on solid #10B981 failed WCAG AA), and redundant "separate ledgers" copy repeated twice in the Unrealized P&L card.
-
-
 
 * **2026-08-12 (design, /design-review):** added click-to-expand on the CI-bound and markout-drift distribution charts (both the Verdict-tile minis and the Performance-section versions) -- opens a modal with a larger axis-labeled normal-approximation chart (mean marker, +/-1 sigma band, 90% CI band, x-axis ticks), a real-numbers stats readout, and an explicit caption that it is a fitted approximation from the real mean/stdev, not a histogram of actual outcomes.
 
-
-
 * **2026-08-12 (design, /design-review):** fixed 3 issues in the expanded distribution-chart modal per operator review: (1) chart domain now centers on the actual mean (+/-3.5 sigma, expanding only as needed to keep zero/CI markers visible) instead of a fixed -100..100% range that only looked centered when mean was near zero; grid ticks now sit at real mean+/-n*sigma steps; (2) "STDEV (Sigma)" was rendering literally as capital Sigma (summation symbol) instead of lowercase sigma (std dev) because CSS text-transform:uppercase was recasing the HTML entity -- wrapped it in a normal-case span; (3) the CI band caption now reads "mu in [lower, upper] (90% confidence)" with each bound colored red/green by its own sign, replacing the flat all-green "90% CI [x,y]" text.
-
-
 
 * **2026-08-12 (design):** promoted server/spread_dash.py (port 8801) to the primary dashboard -- README updated to point at :8801 first, :8800 documented as the legacy dashboard kept alive for the market-scan view. Added a "Market Scan" header link on the new dashboard pointing at http://127.0.0.1:8800/?view=scan (opens in new tab) so the scan view stays reachable until it gets the same design pass later.
 
-
-
 * **2026-08-12 (design/ops):** spread_dash is now the ONE canonical dashboard -- strategy/supervisor.py's "dash" child launches server.spread_dash:app on the default port 8800 (was fleet_dash); fleet_dash is demoted to a new "scan" child on 8801, kept alive only because its market-scan view (?view=scan) has not been redesigned yet. Updated fleet-procs.ps1 stray-detection patterns, fleet-start.ps1's status printout, the dashboard's Market Scan link, README, and .claude/launch.json to match. No strategy/gate/risk change -- port and process-launch config only.
-
-
 
 * **2026-08-12 (design):** Unified Spread Hunter UI -- consolidated component spacing, flattened accordion toggle headers, mapped global taxonomy ("Sports", "E-Sports") replacing specific games/sports for widgets. Old fleet_dash.py formally marked as deprecated. Fixed a minor syntax typo in fleet.py.
 
-
-
 * **2026-08-12 (fix):** Resolved PR #22 review comments -- removed duplicate "paired"/"naked_sh" dict keys in fleet_dash.py (Ruff F601), added a combined "Paired + one side filled (15m window)" status in spread_dash.py, un-nested the Inspection tab buttons from the section toggle (valid HTML), derived the grouped return % from aggregate P&L over grouped cost basis instead of a mean of per-exit percentages, hardened settled-market rows against injection (data-market attribute + delegated DOM listener, attribute-safe escaping, URL-encoded Polymarket links), and sanitized market slugs to URL-safe characters at the venue-parse boundary.
-
-
 
 * **2026-08-12 (design, phase 1):** real-time cues + market drawer on spread_dash, vanilla CSS/JS (not React/Framer Motion — flagged and resolved: the dashboard is a server-rendered page and every requested interaction is a CSS/JS primitive). (1) Figures flash on change — 15 cells instrumented with data-kpi/data-v flash green rgba(34,197,94,.2)/red over 300ms; status cells fade+scale in (opacity/scale .98, 180ms). (2) 400ms ease-out number roll-up in tabular mono on realized, unrealized, and win rate (schema has no "Hold Rate" — closest real KPI, flagged). (3) "Data health" badge with continuously pulsing dot (opacity 1→.4, scale 1→.95), amber idle, red offline. (4) Market rows open a 520px right-edge drawer (translate-x 100%→0, 300ms) with live book/mid, commit/resting/fills/age, P&L, per-market markout mean, and the real execution log from settled exits; closes via x/backdrop/Esc, re-renders each poll. All cues respect prefers-reduced-motion. 619/619 tests; verified live on :8805 (flash-up + kpi-flash-up animation, status-in, roll-up mid-flight +$137.05 → +$150.00, drawer with "Execution log · 3 exits"). No backend/risk code touched.
 
-
-
 * **2026-08-12 (design, phase 4):** high-density market table on spread_dash, native JS. (1) api_markets now passes the raw classification inputs (paired/naked_sh/err/why/close_why/merge_why), the stable gate refusal code from strategy/store.py reason_code, the persisted market_events list, and a per-row telemetry anchor ts — no risk logic touched. (2) classifyStatus(r) maps posture onto the brief's four buckets with the exact hexes (QUOTING blue #172554/#60A5FA/#1E40AF, FILLED emerald #022C22/#34D399/#065F46, BLOCKED amber #451A03/#FBBF24/#92400E, MERGED purple #3B0764/#C084FC/#6B21A8; CLOSED/INACTIVE neutral gray); BLOCKED pills carry the refusal code in 9px micro-text (RISK_GATE fallback). (3) Lifecycle dots come from the REAL market_events telemetry (kind + reason_code + ts in the title), never client-side fabrication. (4) Quick-filter bar: category chips derived from categories present in the live rows (a hardcoded enum would have missed the "Bitcoin" category live data surfaced) + state chips (Actively Quoting / Blocked by Risk / Has Active Inventory), instant re-render, Clear chip, explicit empty-filter state, and the selection survives the 15s poll. (5) Freshness: data-age badges tick every second via the existing pulse ticker ("Ns ago" → "STALE Mm" past 60s) and stale rows dim to opacity 0.6; the status cell keeps data-state so the phase-1 status-in transition still fires on bucket flips. 624/624 tests (2 new: payload contract + page pins); verified live on :8805 — 5 Quoting/3 Blocked pills, ONE_SIDED_BOOK + PRICE_BAND + RISK_GATE codes, dots on 5 rows, age ticking (18s→21s) and a real STALE 5m row at opacity 0.6, filters (3 of 8 blocked, 2 E-Sports, empty-filter state, Clear restores 8), drawer + status-in intact, console clean. No strategy/risk code touched.
-
-
 
 * **2026-08-12 (design, phase 3):** risk/order-book widgets on spread_dash. (1) api_summary now exposes naked_usd (Σ per-market naked_cost, the USD in the unhedged leg at average cost) + max_naked_usd ($120 hard cap from strategy/config.py), feeding a full-width Naked-USD capacity bar in GATES: $used/$cap with data-kpi flash, utilization badge, a thin bar colored by the three bands (<50% soft green, 50–80% amber, >=80% pulsing red + HIGH EXPOSURE badge via a warn-bar keyframe), all off under prefers-reduced-motion. (2) The order-book strip's standalone split bar was replaced by micro-depth washes BEHIND the price levels — soft green on the YES half / red-brown on the NO half, each 50% × that side's share of resting notional — with the gold mid marker dead center (dark outline + glow) and a dark-backed MID badge; the $ resting figures stay once per market in a slim legend below. Truthfulness flag: the venue book exposes prices only, so depth is scaled by OUR resting notional, not fabricated venue volume. (3) A tip(key, body) helper adds pure-CSS tooltip cards (hover or keyboard focus, no dependency) with formula + live value + gate meaning on the 90% Lower Bound (mean − 1.645·σ/√n_eff), Markout Drift, Weighting Gap, the Markout Coverage gauge (Kish's (Σw)²/Σw² vs markout_min_sample), and the naked-risk card. 622/622 tests (2 new: widget pins + an api_summary naked-field contract check); verified live on :8805 (green at 0%, amber at 60%, pulsing red + HIGH EXPOSURE at 83.3%, proportional washes, gold marker, tooltips reveal on focus, drawer re-renders, console clean). No strategy/risk code touched.
 
-
-
 * **2026-08-12 (design, phase 2):** frosted terminal aesthetic on spread_dash — dark mesh canvas (fixed linear-gradient #080C14 → #0B111E), glassmorphism via post-Tailwind !important overrides on the panel/hairline utilities (rgba(15,23,42,.65) + backdrop-filter blur(12px) + rgba(255,255,255,.07) borders) so every static shell AND JS-rendered card inherits the look with zero renderer churn; gold #FBBF24 reserved for the MID badge and the hinge GO call (amber #F59E0B stays on true warnings: stale pulse, idle, side-filled, weighting gap); data face switched to Geist Mono (one of the three named) with tabular-nums + tnum enforced and the last display-face numbers (gauge subs) moved to mono; secondary labels lifted #9CA3AF → #94A3B8 via override; hero BOOK panel gets drop-shadow(0 4px 12px rgba(0,0,0,.4)). Bug caught live: background shorthand + !important wiped the canvas gradient (reset to background-color only). 620/620 tests; verified live on :8805 by computed style (gradient image, glass rgba/blur/border, #94A3B8, #FBBF24 mid, Geist Mono, shadow) — console clean, no overflow.
-
-
 
 * **2026-08-12 (design):** the decision hinge is now a split-flap instrument on spread_dash -- per-letter .flap cells (Big Shoulders, 28/36px) where a verdict change plays a mechanical odds-board flip: old letter halves flap away (rotateX +/-90, 300ms), new halves flip in, and the word stays static on first paint and on every same-word 15s poll (the flip fires only when MOTION_OK && HINGE_WORD !== word; plain text, no flap layers, under prefers-reduced-motion; an sr-only span announces the word once). Also fixed the code-review finds: the stale token comment now names Geist Mono (the real data face) instead of IBM Plex Mono, and the market drawer traps Tab/Shift+Tab inside it so focus cannot wander behind the modal. 625/625 tests (1 new); verified live on :8805 -- SIGNAL first paint static, the COLLECT flip fired through the real renderHinge path (6 cells flipping, old letters in flap layers, flap-top-out computed), same-word render static, COLLECT to GO flips one letter in gold, focus trap wraps both directions, Esc closes, console clean, no overflow. No strategy/risk code touched.
 
-
-
 * **2026-08-12 (design):** the hero's Unrealized P&L tile (never moves above 0) was replaced by a capital-since-inception equity curve on spread_dash, built client-side from the REAL settled closes already in settledState.rows (per-exit ts + pnl from api_settled) stacked on the starting bankroll (api_summary bankroll_usd) -- zero backend changes. capitalChartSvg(): hairline $ grid, dashed "start $1,000" baseline, green-above/red-below line with one point per close, aria-label, mono en-US dates (the first probe caught the browser's Hebrew locale leaking into the x-axis -- fixed with an explicit locale). The right half shows current capital (data-kpi flash), a green/red "+$X since inception" chip, the close count, and the note that open positions stay a separate ledger. Also fixed the stale JetBrains Mono font refs in the expanded-bell SVG labels (the face is Geist Mono). 626/626 tests (1 new); verified live on :8805 -- $1,424.94 = bankroll + the sum of 163 closes computed independently, one point per close, +$424.94 chip, empty state, flash on change, poll re-renders in place, console clean. No strategy/risk code touched.
-
-
 
 * **2026-08-12 (knowledge): the research org code — autoresearch campaign (Session 43).** Applied karpathy/autoresearch's premise — research speed comes from the agent instructions (program.md), not the code — to our own methods. Census (measured): 1,242 EN / 976 HE lines, 42 sessions in TWO sequences (S1–13 then S14–42) + 13 dated design entries, ~40 LIVE / 5 DEAD / 1 PARKED / ~10 OPEN verdicts, span 21 Jul–12 Aug. Gaps: no program.md (the experiment card is re-invented per session; deciding metrics mostly implicit), the replay harnesses (our fixed budget) never codified as replay-first, and three parallel ID schemes. Fix: root `PROGRAM.md` — experiment card (Question → Single metric → Keep/discard → Budget → Verdict), replay-first rule, design-minimal scope form, one canonical Session-N sequence. No strategy/ or server/ code touched; in-flight design pass untouched; no sample invalidated.
 
-
-
 * **2026-08-12 (strategy, Session 44): the pairs-only EV measured — rule KEPT, KPI corrected.** First experiment under PROGRAM.md's card. Sample: 148 one-sided fills (08-10→08-12), 144 completions (97.3%), 4 exits, 0 expired. Pre-registered KPI positive (+15.78¢/share) → KEEP. But both payoff constants were stale: rule-era merge capture is **+3.68¢/share** (144 closes, +$368.25 on 10,010.7 shares) not 16.3¢ (a 302.5-share pre-spread-era sample, 4.4× off), and exits cost **−3.67¢/share** (n=4; corrected from a Session-44 mis-added 3.89) not ~3.0¢. Corrected EV: +3.48¢/share, **+$2.37 per one-sided fill** (+$351.32 realized). Beats riding (−18.5¢/share at 1h) and immediate exit. Fix: `strategy/config.py` constants 16.3→3.68 / 3.0→3.67 with re-measured comments; test pin updated; 633/633 tests. Display-only — no quoting change, no sample invalidation; the dashboard PAIRS-ONLY tile is now honest via the same code path.
-
-
 
 * **2026-08-12 (strategy, Session 45): exit cost re-read — no new exits, constant corrected.** The exit sample is still n=4 (none after 08-12 01:01), but re-auditing against the SQL aggregate caught a Session 44 arithmetic error: the exits sum to **−$16.93** not −$17.93 → **−3.67¢/share**, not −3.89¢ (median −2.70¢, one −10.70¢ outlier). `pairs_exit_cost_cents` 3.89 → **3.67**; corrected EV still +3.48¢/share, realized **+$351.32 / 148 fills = +$2.37/fill**. Session 44's log figures corrected; test pin 0.868 → 0.923; 634/634 pass (re-verified). Display-only — no quoting change, no sample invalidation. Re-read the constant past ~10 exits.
 
-
-
 * **2026-08-12 (strategy, Session 46): completion payoff re-check — constant HOLDS (n=145).** Rule-era merge capture re-measured: **+3.679¢/share on 145 closes / 10,037.1 shares / +$369.26** — unchanged from Session 44's 3.68¢ (the sample grew by one merge, +3.81¢/share, right at the mean). Reading did not move → `pairs_complete_gain_cents` **kept at 3.68**, no code change. Distribution: 145/145 merges positive, median 3.83¢, p25 2.96¢ / p75 3.96¢, min 0.18¢ / max 16.5¢, per-market 1.96–7.93¢ — the old "7/7 at +16.3c zero variance" claim fully debunked (16.3¢ was a small-sample artifact). EV unchanged: +3.48¢/share, realized **+$352.33 / 149 fills = +$2.36/fill**. Next re-check at ~2× the sample or on a new market class.
-
-
 
 * **2026-08-12 (tools, Session 47): the pairs-rule EV is one command — `scripts/pairs_ev_report.py`.** Read-only report (modeled on `replay_risk_gates.py`) printing the whole Sessions 44-46 measurement: KPI (mirrors `stats.pairs_ev`, in-force constants), decisions by market, naked-exit economics, rule-era merge capture with mean/median/quantiles + IQR outlier flags + per-market, realized EV $/fill, and the merges-vs-completions attribution check; `--json` output. 6 fixture-backed tests; full suite 640/640. Live run: 150 one-sided fills, 146 completions (97.3%), 0 expired, EV **+3.484¢ PASS**, realized **+$2.35/fill**, 16 outliers flagged, attribution shows exactly the two known natural-pair mismatches — the Session 46 reading holds at n=146. A fixture bug (a schema-seeding PAIR_COMPLETE polluting the KPI) caught and fixed — the measuring code is a suspect too.
 
-
-
 * **2026-08-12 (strategy, Session 49): exit-timing card — exits fire at age ~0 and BEAT waiting, 4/4 (KEEP).** All four exits were "pair not fillable under 0.995" events firing the same second as the triggering tape fill (market moved into our resting bid; pair non-completable at birth). All four exited UP legs resolved LOST. Exit vs hold-to-settlement: −$16.93 vs −$107.40 → **exit saved $90.47 (19.6¢/share weighted)**, saves of 17.3 / 34.3 / 7.3 / 26.3¢/share per exit. Post-exit fills confirm continued decline (0.21→0.16→0.13 in 25 min), so waiting would have exited lower. The 0.10¢/fill exit drag is insurance that paid ~5× back on this sample. **Verdict: KEEP, no code change.** Limits: n=4, all UP, all lost; the window-edge bid is inferred (no 15m markout horizon recorded). Re-check at ~10 exits.
-
-
 
 * **2026-08-12 (design): float-marks telemetry.** The Total equity view became a true historical series: the fleet writes one fleet-wide open-position mark per sweep (float_marks table, at the sweep boundary of fleet.py main() beside log_income_sample), totals derived exactly as the dashboard derives them from `_live` (unrealized = paired×1 − pair_paid + naked_exit_value − naked_cost; committed = capital + naked_cost + pair_paid; naked = naked_cost). api_summary exposes float_history (≤1 pt/min, 1,000 cap); the widget time-merges closes + marks and falls back to today's float when no marks exist. 90-day retention pruned on the write path (float_mark_retention_days knob). First `strategy/` change of the design pass, deliberately fleet-side — server-side marks only exist while the dashboard is polled. 633/633 tests (4 new); docs/explanation-fleet-data-flow.md updated from open decision to landed.
 
-
-
 * **2026-08-12 (strategy, Session 50): 15-minute markout horizon (mid_h3, 900s) — the exit counterfactual becomes recorded, not inferred.** Added the 900s horizon Session 49 needed: `markout_horizons` is now (300, 3600, 21600, 900) — **appended last, never sorted**, because a horizon maps to its column by position and inserting it would relabel existing mid_h1/mid_h2 readings. `mid_h3` lands in the schema AND `_MIGRATIONS` (ALTER TABLE) so the live run/fleet.db gets it on next restart. Two ordering assumptions that held while the tuple was monotonic were fixed rather than silently broken: `_matured` now returns drift longest-first **by duration** (the 6h reading beats a matured 15m one in the gate), and `sample_due` sets `done` only when every horizon is recorded (the 15m matures BEFORE 1h/6h, so done-at-last-column would have orphaned them). The dashboard readers derive their horizon order from config durations and resolve columns against the live schema, so a not-yet-restarted fleet's 3-column DB reads correctly instead of erroring. Verified read-only against the live DB (n=174, pooled −1.37¢ unchanged) and by migrating a full copy (all 179 rows preserved, `fleet_stats` == `pooled_markout_neff` exactly). 5 new tests; full suite **646/646**. **Exit-card re-run pending at ~10 exits** (n=4 today): join naked_exit closes → fills → mid_h3, replacing the inferred bid ladder. No quoting/risk change; live DB untouched until the fleet's next restart.
-
-
 
 * **2026-08-12 (strategy, Session 51): the exit counterfactual is one command — `pairs_ev_report` prints recorded 15m mid vs exit price.** The pending exit card's join (naked_exit closes → fills → mid_h3) is now a printed section of the report. Two window-based joins (close→fill within 10s, fill→markout within 30s — needed because `log_fill` stamps time.time() at insert while `log_markout_open` uses the sweep's `now`, ~0.3s apart; an exact match silently finds nothing), validated by reproducing Session 49's fills exactly (0.19/0.45/0.10/0.29, deltas 0.08–0.17s). Five honest states per exit: recorded / pending (15m not elapsed) / no_markout / no_fill / no_column (mid_h3 missing — fleet not restarted since Session 50). A mid BELOW the exit price is decisive (exit beat waiting); a mid above by less than a spread is "waiting may have been better" (exit sold at the bid, mid_h3 is a mid). Live: all four exits read no_column on the unmigrated DB; after migrating a full copy, all four read pending. 2 new tests; full suite **648/648**. **When ~10 exits accumulate, the card is one command** — the four historical exits will stay `pending` forever (mid_h3 can't be backfilled); the instrument records going forward only.
 
-
-
 * **2026-08-12 (design, Session 53): :8801 becomes the funnel product -- the fleet page is gone and the pipeline payload is cached.** fleet_dash.PAGE is now ONLY the market-selection funnel (RAW -> FILTERS -> FINAL -> GRADUATED, census strip, both near-miss trackers, trial callout); mast liveness moved into the pipeline payload (fleet_alive + snapshot_age). /api/pipeline builds on a background thread every 10s -- keyed by the run dir, lock-guarded -- so the page's 10s polls are instant instead of 4-5s rebuilds, falling back to an on-demand build only when the snapshot is stale. Both apps gzip their large inline blobs; capital.js gets a public 1h cache; the fonts stylesheet is preload+onload so first paint never waits on Google; a data:, favicon kills the 404. Tests pinning the deleted fleet page (settled table, node hero-arithmetic) removed; a new test pins cache identity + per-RUN keying. 650/650. The demotion's test half had already landed in PR #23's review round; this is the implementation half.
-
-
 
 * **2026-08-12 (design, Session 54): the pending exit card becomes a verdict-panel tile.** The exit-wait counterfactual (Sessions 49-51) now rides the dashboard: `stats.pairs_ev()` gained a five-state exit-card ladder (recorded / pending / no_markout / no_fill / no_column -- same 10s/30s windowed joins as `pairs_ev_report`, so the tile and the report cannot disagree), the summary endpoint surfaces it from the fleet payload's `totals`, and the verdict panel renders a sixth tile with a progress bar that flips to READY at the `PAIRS_EXIT_CARD_RE_READ_AT` (10) threshold. Along the way: the no-column test was passing for the wrong reason (a missing `market_events` table swallowed the whole pairs_ev read) and now seeds the schema first; the summary test patches BOTH the store's env path and `stats.DB`; Tailwind CSS rebuilt for the 6-column verdict grid. 652/652.
 
-
-
-
 * **2026-08-13 (strategy, Session 56): statistical confidence interval engine added for 10-tier bankroll sensitivity analysis.** Added `calc_confidence_intervals()` and `get_active_db_path()` to `strategy/stats.py`. Evaluates Student's t 95%/98% CIs, Sharpe ratio, and Sortino downside ratio with `SPREAD_HUNTER_DB` environment override support. 656/656 tests passing.
 
-
-
 * **2026-08-13 (server & strategy, Session 59): server entrypoint and SPREAD_HUNTER_BANKROLL config override landed.** Added uvicorn entrypoint to `server/spread_dash.py` and `SPREAD_HUNTER_BANKROLL` handling in `strategy/config.py`. 662/662 tests passing.
-
-
 
 * **2026-08-13 (review remediation, Session 61): CodeRabbit PR #25 feedback addressed across stats, launcher, config, and HTML.** Enforced finite and strictly positive bankroll validation in `strategy/config.py`, added exact Student's t critical values table with degrees of freedom interpolation in `strategy/stats.py`, redirected background process subprocess output to `fleet.log` preventing pipe deadlock, and added corrupted SQLite error propagation in `scripts/bankroll_stats_report.py`. 671/671 tests passing.
