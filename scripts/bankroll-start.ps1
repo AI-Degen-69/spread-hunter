@@ -39,8 +39,23 @@ if ($FreshRun) {
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $archive = Join-Path $ProjectPath "run/archive/bankroll_$stamp"
     New-Item -ItemType Directory -Force -Path $archive | Out-Null
-    Get-ChildItem -Path (Join-Path $ProjectPath "run") -Directory -Filter "bankroll_*" -ErrorAction SilentlyContinue |
-        Move-Item -Destination $archive -Force
+    $items = Get-ChildItem -Path (Join-Path $ProjectPath "run") -Directory -Filter "bankroll_*" -ErrorAction SilentlyContinue
+    foreach ($item in $items) {
+        $dest = Join-Path $archive $item.Name
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Move-Item -Path $item.FullName -Destination $dest -Force -ErrorAction Stop
+                break
+            } catch {
+                if ($attempt -eq 3) {
+                    Copy-Item -Path $item.FullName -Destination $dest -Recurse -Force -ErrorAction SilentlyContinue
+                    Remove-Item -Path $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                } else {
+                    Start-Sleep -Milliseconds 400
+                }
+            }
+        }
+    }
     Write-Host "      Archived prior runs to $archive" -ForegroundColor Yellow
 } else {
     Write-Host "[2/4] Preserving active experiment databases..." -ForegroundColor DarkGray

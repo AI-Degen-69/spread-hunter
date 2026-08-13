@@ -85,7 +85,7 @@ function Stop-BankrollInstance {
             if (Test-Path $statusFile) {
                 try {
                     $st = Get-Content $statusFile -Raw | ConvertFrom-Json
-                    if ($st.status -eq "RUNNING" -and $st.pid) {
+                    if ($st.pid) {
                         try {
                             $p = Get-Process -Id $st.pid -ErrorAction Stop
                             if ($p.ProcessName -match "python") {
@@ -93,16 +93,26 @@ function Stop-BankrollInstance {
                                 $stoppedCount++
                             }
                         } catch {}
-                        $st.status = "STOPPED"
-                        $st.stopped_at = [double](Get-Date -UFormat %s)
-                        $st | ConvertTo-Json -Depth 4 | Set-Content -Path $statusFile -Encoding UTF8
                     }
+                    $st.status = "STOPPED"
+                    $st.stopped_at = [double](Get-Date -UFormat %s)
+                    $st | ConvertTo-Json -Depth 4 | Set-Content -Path $statusFile -Encoding UTF8
                 } catch {}
             }
         }
     }
 
+    # Clean up any unowned strays executing bankroll fleet
+    $strays = @(Find-BankrollStrays)
+    foreach ($stray in $strays) {
+        try {
+            Stop-Process -Id $stray.ProcessId -Force -ErrorAction SilentlyContinue
+            $stoppedCount++
+        } catch {}
+    }
+
     Remove-Item $BankrollPidFile -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
     return $stoppedCount
 }
 
@@ -116,6 +126,7 @@ function Find-BankrollStrays {
         Where-Object {
             $cl = $_.CommandLine
             $cl -and ($ownedPids -notcontains $_.ProcessId) -and
-            ($cl -like "*strategy.fleet*" -and $cl -like "*bankroll_*")
+            ($cl -match "strategy\.fleet" -or $cl -match "bankroll_")
         }
 }
+
