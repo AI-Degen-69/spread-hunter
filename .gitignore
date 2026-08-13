@@ -78,3 +78,6 @@ run/ranking.marker
 .buffy-state*
 diagrams/
 run/*.txt
+run/bankroll_*/
+.superpowers/
+
