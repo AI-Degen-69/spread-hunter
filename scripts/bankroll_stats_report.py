@@ -17,9 +17,20 @@ def evaluate_bankroll_tier(bankroll: int, workdir: Path) -> dict:
 
     if db_path.exists():
         try:
-            conn = sqlite3.connect(db_path)
-            rows = conn.execute("SELECT pnl_usd FROM settled").fetchall()
-            returns = [float(r[0]) for r in rows if r[0] is not None]
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            tables = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "closes" in tables:
+                rows = conn.execute("SELECT realized_pnl FROM closes WHERE realized_pnl IS NOT NULL").fetchall()
+                returns = [float(r[0]) for r in rows if r[0] is not None]
+            elif "settled" in tables:
+                rows = conn.execute("SELECT pnl_usd FROM settled WHERE pnl_usd IS NOT NULL").fetchall()
+                returns = [float(r[0]) for r in rows if r[0] is not None]
+            else:
+                returns = []
             conn.close()
         except Exception as e:
             db_error = str(e)
