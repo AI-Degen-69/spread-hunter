@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
-# Refuse a commit that changes strategy or server code without also updating
-# research/. Research that is only written when someone remembers gets written
-# rarely -- this makes the rule agent-agnostic and survives across sessions.
+# Refuse a commit that changes core strategy logic, parameters, or architecture
+# without also updating research/.
+#
+# Design changes, UI styling/colors, dashboard templates, and helper scripts
+# do NOT require research log entries.
 #
 # Escape hatch:  git commit --no-verify   (typos, formatting, non-substantive)
 set -e
 
 staged=$(git diff --cached --name-only)
-code=$(echo "$staged" | grep -E '^(strategy|server)/' || true)
+
+# Match core strategy files or algorithmic ranking logic (exclude server/design/scripts/tests)
+strategy_changes=$(echo "$staged" | grep -E '^(strategy/|scripts/rank_markets\.py|scripts/rerank_loop\.py)' || true)
 research=$(echo "$staged" | grep -E '^research/' || true)
 
-if [ -n "$code" ] && [ -z "$research" ]; then
+if [ -n "$strategy_changes" ] && [ -z "$research" ]; then
   cat >&2 <<'MSG'
 
-  COMMIT BLOCKED -- code changed but research/ did not.
+  COMMIT BLOCKED -- core strategy logic, parameters, or architecture changed without research/ update.
 
-  This repo keeps a running lab notebook. Add an entry describing what you
-  changed and what you learned, in BOTH languages:
+  Modified strategy file(s):
+MSG
+  echo "$strategy_changes" | sed 's/^/    - /' >&2
+  cat >&2 <<'MSG'
+
+  Strategy, parameter, and algorithmic changes require a research log entry in BOTH languages:
 
       research/RESEARCH_LOG.md         Question -> Method -> Result -> Verdict
       research/RESEARCH_SUMMARY.md     one dated bullet

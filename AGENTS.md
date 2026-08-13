@@ -8,11 +8,14 @@ A maker strategy on the same market. It rests bids on BOTH outcomes rather than 
 
 Simulation only. It never places a real order.
 
-## Non-negotiable: keep the research log current
+## Non-negotiable: keep the research log current on strategy changes
 
-Any commit touching `strategy/` or `server/` MUST also update `research/`
-in the same commit. A pre-commit hook enforces this — it is not a convention
-you can quietly skip.
+Any commit touching core strategy logic, parameters, or architecture
+(`strategy/`, `scripts/rank_markets.py`, `scripts/rerank_loop.py`) MUST also
+update `research/` in the same commit. A pre-commit hook enforces this.
+
+Design changes, theme/UI styling, dashboard templates, and helper scripts
+do NOT require research log entries.
 
 Run once after cloning (git does not install hooks automatically):
 
