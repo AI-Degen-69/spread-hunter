@@ -10,6 +10,7 @@ copy carried over from the design source.
 """
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -267,6 +268,275 @@ def api_summary() -> dict:
         "scored": counts.get("scored"),
         "eligible": counts.get("eligible"),
         "picked": counts.get("picked"),
+    }
+
+
+BANKROLL_RUN_DIR = Path(__file__).resolve().parent.parent / "run"
+
+
+@app.get("/api/trade_history")
+def api_trade_history(tier: str | None = None) -> dict:
+    now = time.time()
+    all_tiers = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+    if tier:
+        try:
+            target_tiers = [int(x.strip()) for x in tier.split(",") if x.strip()]
+        except Exception:
+            target_tiers = all_tiers
+    else:
+        target_tiers = all_tiers
+
+    markets_out = []
+    total_trades_count = 0
+
+    for t in target_tiers:
+        tier_db = BANKROLL_RUN_DIR / f"bankroll_{t}" / "fleet.db"
+        if not tier_db.exists():
+            continue
+        try:
+            try:
+                conn = sqlite3.connect(f"file:///{tier_db.resolve().as_posix()}?mode=ro", uri=True)
+            except Exception:
+                conn = sqlite3.connect(str(tier_db))
+            conn.row_factory = sqlite3.Row
+            tables = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+
+            market_map: dict[str, dict] = {}
+
+            # 1. Read closes (Realized closes, merges, sells, resolutions)
+            if "closes" in tables:
+                for r in conn.execute(
+                    "SELECT id, ts, market_slug, condition_id, method, gas, shares, "
+                    "up_price, dn_price, cost_basis, proceeds, fee, realized_pnl, "
+                    "forgone_vs_settlement FROM closes ORDER BY ts DESC, id DESC"
+                ):
+                    total_trades_count += 1
+                    cid = r["condition_id"] or r["market_slug"] or "unknown"
+                    slug = r["market_slug"] or cid
+                    m = market_map.setdefault(cid, {
+                        "tier": t,
+                        "condition_id": cid,
+                        "market_slug": slug,
+                        "category": _category(slug),
+                        "total_shares": 0.0,
+                        "cost_basis": 0.0,
+                        "proceeds": 0.0,
+                        "realized_pnl": 0.0,
+                        "unrealized_pnl": 0.0,
+                        "open_orders_count": 0,
+                        "fills_count": 0,
+                        "closes_count": 0,
+                        "method": "MERGE",
+                        "status": "CLOSED",
+                        "latest_ts": 0.0,
+                        "orders": [],
+                    })
+                    shares = float(r["shares"] or 0.0)
+                    cost = float(r["cost_basis"] or 0.0)
+                    proceeds = float(r["proceeds"] or 0.0)
+                    pnl = float(r["realized_pnl"] or 0.0)
+                    fee = float((r["gas"] if (r["method"] or "").upper() == "MERGE" else r["fee"]) or 0.0)
+                    ts = float(r["ts"] or now)
+
+                    m["total_shares"] += shares
+                    m["cost_basis"] += cost
+                    m["proceeds"] += proceeds
+                    m["realized_pnl"] += pnl
+                    m["closes_count"] += 1
+                    if ts > m["latest_ts"]:
+                        m["latest_ts"] = ts
+
+                    method_raw = (r["method"] or "MERGE").upper()
+                    if method_raw == "MERGE":
+                        m["method"] = "MERGE"
+                        m["status"] = "MERGED (SPREAD CAPTURE)"
+                        label = "MERGE (SPREAD CAPTURE)"
+                        up_p = float(r["up_price"] or 0.0)
+                        dn_p = float(r["dn_price"] or 0.0)
+                        detail = f"${up_p:.2f} YES + ${dn_p:.2f} NO = ${up_p+dn_p:.2f} (captured +${1.0-(up_p+dn_p):.2f}/sh)"
+                    elif method_raw == "SELL":
+                        m["method"] = "SELL"
+                        m["status"] = "SOLD"
+                        label = "SELL EXIT"
+                        detail = f"Voluntary exit at ${(proceeds/shares if shares else 0):.2f}/sh"
+                    elif method_raw == "RESOLVE":
+                        m["method"] = "RESOLVE"
+                        m["status"] = "SETTLED (RESOLUTION)"
+                        label = "RESOLUTION PAYOUT"
+                        detail = "Settled at venue resolution"
+                    else:
+                        label = method_raw
+                        detail = f"Method: {method_raw}"
+
+                    m["orders"].append({
+                        "id": f"close_{r['id']}",
+                        "ts": ts,
+                        "kind": "CLOSE",
+                        "label": label,
+                        "side": "PAIR (YES+NO)" if method_raw == "MERGE" else "EXIT",
+                        "price": (proceeds / shares) if shares else 1.0,
+                        "shares": shares,
+                        "value": proceeds,
+                        "fee": fee,
+                        "pnl": pnl,
+                        "detail": detail,
+                    })
+
+            # 2. Read fills
+            if "fills" in tables:
+                for r in conn.execute(
+                    "SELECT id, ts, market_slug, condition_id, token_id, side, size, price, fee, order_id "
+                    "FROM fills ORDER BY ts DESC, id DESC"
+                ):
+                    cid = r["condition_id"] or r["market_slug"] or "unknown"
+                    slug = r["market_slug"] or cid
+                    m = market_map.setdefault(cid, {
+                        "tier": t,
+                        "condition_id": cid,
+                        "market_slug": slug,
+                        "category": _category(slug),
+                        "total_shares": 0.0,
+                        "cost_basis": 0.0,
+                        "proceeds": 0.0,
+                        "realized_pnl": 0.0,
+                        "unrealized_pnl": 0.0,
+                        "open_orders_count": 0,
+                        "fills_count": 0,
+                        "closes_count": 0,
+                        "method": "OPEN",
+                        "status": "OPEN",
+                        "latest_ts": 0.0,
+                        "orders": [],
+                    })
+                    size = float(r["size"] or 0.0)
+                    price = float(r["price"] or 0.0)
+                    fee = float(r["fee"] or 0.0)
+                    ts = float(r["ts"] or now)
+                    side_raw = (r["side"] or "").upper()
+                    side_label = "UP / YES" if side_raw in ["UP", "YES", "BUY_YES"] else ("DN / NO" if side_raw in ["DN", "NO", "BUY_NO"] else side_raw)
+
+                    m["fills_count"] += 1
+                    if ts > m["latest_ts"]:
+                        m["latest_ts"] = ts
+
+                    m["orders"].append({
+                        "id": f"fill_{r['id']}",
+                        "ts": ts,
+                        "kind": "FILL",
+                        "label": f"MAKER FILL ({side_label})",
+                        "side": side_label,
+                        "price": price,
+                        "shares": size,
+                        "value": size * price,
+                        "fee": fee,
+                        "pnl": None,
+                        "detail": f"Filled {size:.1f} shares @ ${price:.2f}",
+                    })
+
+            # 3. Read live_state & quotes for open positions
+            if "live_state" in tables:
+                for r in conn.execute(
+                    "SELECT market_slug, condition_id, up_shares, dn_shares, up_cost, dn_cost, state, last_seen "
+                    "FROM live_state"
+                ):
+                    up_sh = float(r["up_shares"] or 0.0)
+                    dn_sh = float(r["dn_shares"] or 0.0)
+                    if up_sh > 0 or dn_sh > 0:
+                        cid = r["condition_id"] or r["market_slug"] or "unknown"
+                        slug = r["market_slug"] or cid
+                        m = market_map.setdefault(cid, {
+                            "tier": t,
+                            "condition_id": cid,
+                            "market_slug": slug,
+                            "category": _category(slug),
+                            "total_shares": 0.0,
+                            "cost_basis": 0.0,
+                            "proceeds": 0.0,
+                            "realized_pnl": 0.0,
+                            "unrealized_pnl": 0.0,
+                            "open_orders_count": 0,
+                            "fills_count": 0,
+                            "closes_count": 0,
+                            "method": "OPEN",
+                            "status": "OPEN",
+                            "latest_ts": 0.0,
+                            "orders": [],
+                        })
+                        m["status"] = "OPEN"
+                        m["method"] = "OPEN"
+
+            if "quotes" in tables:
+                for r in conn.execute(
+                    "SELECT id, ts, market_slug, condition_id, token_id, side, price, size, status "
+                    "FROM quotes WHERE status IN ('LIVE', 'RESTING', 'PENDING')"
+                ):
+                    cid = r["condition_id"] or r["market_slug"] or "unknown"
+                    slug = r["market_slug"] or cid
+                    m = market_map.setdefault(cid, {
+                        "tier": t,
+                        "condition_id": cid,
+                        "market_slug": slug,
+                        "category": _category(slug),
+                        "total_shares": 0.0,
+                        "cost_basis": 0.0,
+                        "proceeds": 0.0,
+                        "realized_pnl": 0.0,
+                        "unrealized_pnl": 0.0,
+                        "open_orders_count": 0,
+                        "fills_count": 0,
+                        "closes_count": 0,
+                        "method": "OPEN",
+                        "status": "OPEN",
+                        "latest_ts": 0.0,
+                        "orders": [],
+                    })
+                    ts = float(r["ts"] or now)
+                    size = float(r["size"] or 0.0)
+                    price = float(r["price"] or 0.0)
+                    side_raw = (r["side"] or "").upper()
+                    side_label = "UP / YES" if side_raw in ["UP", "YES"] else ("DN / NO" if side_raw in ["DN", "NO"] else side_raw)
+
+                    m["open_orders_count"] += 1
+                    m["status"] = "OPEN"
+                    if ts > m["latest_ts"]:
+                        m["latest_ts"] = ts
+
+                    m["orders"].append({
+                        "id": f"quote_{r['id']}",
+                        "ts": ts,
+                        "kind": "QUOTE",
+                        "label": f"RESTING BID ({side_label})",
+                        "side": side_label,
+                        "price": price,
+                        "shares": size,
+                        "value": size * price,
+                        "fee": 0.0,
+                        "pnl": None,
+                        "detail": f"Resting maker quote: {size:.1f} sh @ ${price:.2f}",
+                    })
+
+            conn.close()
+
+            for cid, m in market_map.items():
+                m["orders"].sort(key=lambda o: -o["ts"])
+                m["total_pnl"] = m["realized_pnl"] + m["unrealized_pnl"]
+                m["pnl_pct"] = (m["total_pnl"] / m["cost_basis"] * 100.0) if m["cost_basis"] > 0 else 0.0
+                markets_out.append(m)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+
+    markets_out.sort(key=lambda m: -m["latest_ts"])
+    return {
+        "now": now,
+        "markets": markets_out,
+        "total_markets": len(markets_out),
+        "total_trades": total_trades_count,
     }
 
 

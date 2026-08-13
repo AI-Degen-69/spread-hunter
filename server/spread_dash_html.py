@@ -2248,7 +2248,70 @@ BANKROLL_HTML = _wrap("10 Bankroll Bots Matrix -- Spread Hunter", _NAVBAR("bankr
     </div>
   </section>
 
-  <!-- Section 3: Automated Invalidation Protocol Info -->
+  <!-- Section 3: Trade History & Multi-Bot Market Order Explorer -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <div class="px-5 py-4 border-b border-[#1F2937] bg-[#090D16] flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="size-2 bg-[#10B981] rounded-full"></span>
+          <span class="mono text-[13px] font-bold text-[#F9FAFB] uppercase tracking-wider">Trade History &amp; Market Order Explorer</span>
+          <span id="bk-trade-count-badge" class="mono text-[10px] px-2 py-0.5 border bg-[#1F2937] text-[#10B981] border-[#10B981]/30 font-bold">0 TRADES</span>
+        </div>
+        <div class="mono text-[11px] text-[#9CA3AF] mt-1">
+          Isolated maker spread captures, voluntary exits, open inventory &amp; order-level drilldowns
+        </div>
+      </div>
+
+      <!-- Controls: Status tabs, Method dropdown/buttons, and Search -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <!-- Status Tabs -->
+        <div class="flex items-center border border-[#1F2937] bg-[#090D16] p-0.5">
+          <button type="button" onclick="setTradeStateFilter('all')" id="trade-tab-all" class="mono text-[11px] px-2.5 py-1 font-bold transition-all bg-[#10B981] text-white cursor-pointer">ALL</button>
+          <button type="button" onclick="setTradeStateFilter('open')" id="trade-tab-open" class="mono text-[11px] px-2.5 py-1 transition-all text-[#9CA3AF] hover:text-[#F9FAFB] cursor-pointer">OPEN &amp; QUOTING</button>
+          <button type="button" onclick="setTradeStateFilter('closed')" id="trade-tab-closed" class="mono text-[11px] px-2.5 py-1 transition-all text-[#9CA3AF] hover:text-[#F9FAFB] cursor-pointer">CLOSED (SETTLED)</button>
+        </div>
+
+        <!-- Method Filter -->
+        <select id="trade-method-select" onchange="setTradeMethodFilter(this.value)" class="mono text-[11px] bg-[#090D16] text-[#F9FAFB] border border-[#1F2937] px-2 py-1 outline-none cursor-pointer hover:border-[#374151]">
+          <option value="all">ALL METHODS</option>
+          <option value="MERGE">MERGE (SPREAD CAPTURE)</option>
+          <option value="SELL">SELL (EXIT)</option>
+          <option value="RESOLVE">RESOLUTION</option>
+        </select>
+
+        <!-- Search Input -->
+        <div class="relative">
+          <input type="text" id="trade-search-input" oninput="setTradeSearch(this.value)" placeholder="Search market or slug..." class="mono text-[11px] bg-[#090D16] text-[#F9FAFB] border border-[#1F2937] pl-2.5 pr-6 py-1 outline-none focus:border-[#10B981] w-44 md:w-56" />
+          <span class="absolute right-2 top-1/2 -translate-y-1/2 text-[#9CA3AF] text-[10px] pointer-events-none">&search;</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trade History Table -->
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse">
+        <thead>
+          <tr class="bg-[#090D16] border-b border-[#1F2937] mono text-[11px] font-bold tracking-[0.14em] uppercase text-[#9CA3AF] whitespace-nowrap">
+            <th class="p-3.5">Bot Tier</th>
+            <th class="p-3.5">Market &amp; Category</th>
+            <th class="p-3.5">Status &amp; Method</th>
+            <th class="p-3.5 text-right">Shares</th>
+            <th class="p-3.5 text-right">Cost Basis</th>
+            <th class="p-3.5 text-right">Proceeds</th>
+            <th class="p-3.5 text-right">P&amp;L ($ / %)</th>
+            <th class="p-3.5 text-center">Orders Drilldown</th>
+          </tr>
+        </thead>
+        <tbody id="bk-trade-rows" class="divide-y divide-[#1F2937] mono text-[12px]">
+          <tr>
+            <td colspan="8" class="p-8 text-center text-[#9CA3AF]">Loading trade history across active tiers...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Section 4: Automated Invalidation Protocol Info -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] p-6">
     <div class="mono text-[12px] font-bold tracking-[0.16em] uppercase text-[#FBBF24] flex items-center gap-2">
       <span class="size-2 bg-[#FBBF24]"></span> Automated Invalidation Protocol (AGENTS.md &amp; Strategy Specs)
@@ -2299,6 +2362,10 @@ function esc(s){
   if (s === null || s === undefined) return "";
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
+function fmtClock(ts){
+  if (!ts) return "--:--:--";
+  return new Date(ts * 1000).toLocaleTimeString();
+}
 
 function getSortinoStyle(v, samples){
   if (v === null || v === undefined) return { cls: "text-[#9CA3AF]", text: "--" };
@@ -2335,15 +2402,81 @@ function getMaxDdStyle(dd, samples){
   return { cls: "text-[#FBBF24]", text };
 }
 
+function getCategoryBadge(cat){
+  const c = (cat || "OTHER").toUpperCase();
+  let cls = "bg-[#1F2937] text-[#9CA3AF] border-[#374151]";
+  if (c === "CRYPTO") cls = "bg-[#3B82F6]/15 text-[#60A5FA] border-[#3B82F6]/30";
+  else if (c === "POLITICS") cls = "bg-[#EC4899]/15 text-[#F472B6] border-[#EC4899]/30";
+  else if (c === "SPORTS" || c === "E-SPORTS") cls = "bg-[#10B981]/15 text-[#34D399] border-[#10B981]/30";
+  else if (c === "BUSINESS") cls = "bg-[#F59E0B]/15 text-[#FBBF24] border-[#F59E0B]/30";
+  else if (c === "POP CULTURE") cls = "bg-[#A855F7]/15 text-[#C084FC] border-[#A855F7]/30";
+  return `<span class="mono text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 border ${cls}">${esc(cat || "Market")}</span>`;
+}
+
+function getStatusBadge(status, method){
+  const s = (status || "").toUpperCase();
+  if (s === "OPEN") {
+    return `<span class="mono text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 border bg-[#172554] text-[#60A5FA] border-[#1E40AF] whitespace-nowrap"><span class="size-1.5 bg-[#60A5FA] rounded-full inline-block mr-1 animate-pulse"></span>OPEN (QUOTING)</span>`;
+  }
+  if (s.includes("MERGE") || method === "MERGE") {
+    return `<span class="mono text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 border bg-[#3B0764] text-[#C084FC] border-[#6B21A8] whitespace-nowrap"><span class="size-1.5 bg-[#C084FC] rounded-full inline-block mr-1"></span>MERGED (SPREAD CAPTURE)</span>`;
+  }
+  if (s.includes("SOLD") || method === "SELL") {
+    return `<span class="mono text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 border bg-[#451A03] text-[#FBBF24] border-[#92400E] whitespace-nowrap">SOLD (EXIT)</span>`;
+  }
+  if (s.includes("RESOLV") || method === "RESOLVE") {
+    return `<span class="mono text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 border bg-[#022C22] text-[#34D399] border-[#065F46] whitespace-nowrap">SETTLED (RESOLUTION)</span>`;
+  }
+  return `<span class="mono text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 border bg-[#1F2937] text-[#9CA3AF] border-[#374151] whitespace-nowrap">${esc(status || "CLOSED")}</span>`;
+}
+
 const ALL_AMOUNTS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
 let SELECTED_TIERS = new Set(ALL_AMOUNTS);
 let LAST_BANKROLL_DATA = null;
+let TRADE_HISTORY_DATA = null;
+let TRADE_EXPANDED_KEYS = new Set();
+let TRADE_STATE_FILTER = "all";
+let TRADE_METHOD_FILTER = "all";
+let TRADE_SEARCH_QUERY = "";
 let REFRESH_BUSY = false;
 
 async function fetchJSON(url){
   const r = await fetch(url);
   if (!r.ok) throw new Error("HTTP " + r.status);
   return await r.json();
+}
+
+function setTradeStateFilter(state){
+  TRADE_STATE_FILTER = state;
+  ["all", "open", "closed"].forEach(s => {
+    const btn = document.getElementById("trade-tab-" + s);
+    if (!btn) return;
+    if (s === state) {
+      btn.className = "mono text-[11px] px-2.5 py-1 font-bold transition-all bg-[#10B981] text-white cursor-pointer";
+    } else {
+      btn.className = "mono text-[11px] px-2.5 py-1 transition-all text-[#9CA3AF] hover:text-[#F9FAFB] cursor-pointer";
+    }
+  });
+  renderTradeHistoryTable();
+}
+
+function setTradeMethodFilter(method){
+  TRADE_METHOD_FILTER = method;
+  renderTradeHistoryTable();
+}
+
+function setTradeSearch(q){
+  TRADE_SEARCH_QUERY = (q || "").trim().toLowerCase();
+  renderTradeHistoryTable();
+}
+
+function toggleMarketExpand(key){
+  if (TRADE_EXPANDED_KEYS.has(key)) {
+    TRADE_EXPANDED_KEYS.delete(key);
+  } else {
+    TRADE_EXPANDED_KEYS.add(key);
+  }
+  renderTradeHistoryTable();
 }
 
 function renderFilterButtons(){
@@ -2390,7 +2523,6 @@ function toggleTier(amount){
     if (SELECTED_TIERS.size > 1){
       SELECTED_TIERS.delete(amount);
     } else {
-      // If user unclicks the only selected tier, select all
       SELECTED_TIERS = new Set(ALL_AMOUNTS);
     }
   } else {
@@ -2398,6 +2530,7 @@ function toggleTier(amount){
   }
   renderFilterButtons();
   if (LAST_BANKROLL_DATA) renderBankrollPage(LAST_BANKROLL_DATA);
+  renderTradeHistoryTable();
 }
 
 function toggleAllTiers(){
@@ -2408,19 +2541,13 @@ function toggleAllTiers(){
   }
   renderFilterButtons();
   if (LAST_BANKROLL_DATA) renderBankrollPage(LAST_BANKROLL_DATA);
-}
-
-function resetFilters(){
-  SELECTED_TIERS = new Set(ALL_AMOUNTS);
-  renderFilterButtons();
-  if (LAST_BANKROLL_DATA) renderBankrollPage(LAST_BANKROLL_DATA);
+  renderTradeHistoryTable();
 }
 
 function renderBankrollPage(data){
   if (!data || !data.tiers) return;
   LAST_BANKROLL_DATA = data;
   
-  // Filter tiers based on active selection
   const allTiers = data.tiers;
   const filteredTiers = allTiers.filter(t => SELECTED_TIERS.has(t.bankroll));
 
@@ -2434,7 +2561,6 @@ function renderBankrollPage(data){
   let totalWins = 0;
   let totalTradesCounted = 0;
 
-  // Calculate fleet-wide total active count (out of all 10 bots)
   allTiers.forEach(t => {
     if (t.status === "RUNNING") activeBots++;
   });
@@ -2467,13 +2593,11 @@ function renderBankrollPage(data){
   const aggWinRate = totalTradesCounted > 0 ? ((totalWins / totalTradesCounted) * 100.0) : 0.0;
   const aggMeanReturn = totalSamples > 0 ? (totalPnl / totalSamples) : 0.0;
 
-  // 1. Update Persistent Fleet Status in Filter Row (X / 10 ACTIVE)
   const fleetStatusEl = document.getElementById("bk-fleet-status-line");
   if (fleetStatusEl) {
     fleetStatusEl.textContent = `${activeBots} / 10 ACTIVE`;
   }
 
-  // 2. Update Hero KPI Cards (4 Cards)
   const capCountEl = document.getElementById("bk-kpi-tier-count");
   if (capCountEl) capCountEl.textContent = `${filteredTiers.length} TIERS`;
 
@@ -2521,7 +2645,6 @@ function renderBankrollPage(data){
     refreshEl.textContent = "Updated " + d.toLocaleTimeString();
   }
 
-  // 3. Render Comparative Table Rows (Only Filtered Tiers, PID removed)
   if (filteredTiers.length === 0) {
     const tbody = document.getElementById("bk-matrix-rows");
     if (tbody) tbody.innerHTML = `<tr><td colspan="12" class="p-8 text-center text-[#9CA3AF]">No tiers selected. Click above to select tiers.</td></tr>`;
@@ -2587,7 +2710,6 @@ function renderBankrollPage(data){
     const tbody = document.getElementById("bk-matrix-rows");
     if (tbody) tbody.innerHTML = rowsHtml;
 
-    // 4. Render Aggregate Summary Footer Row (Single-line row, no wrap)
     const tfoot = document.getElementById("bk-matrix-tfoot");
     if (tfoot) {
       const aggPnlColor = totalPnl > 0 ? "text-[#10B981]" : (totalPnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
@@ -2623,7 +2745,6 @@ function renderBankrollPage(data){
     }
   }
 
-  // 5. Render Filtered Tier Cards Grid
   const cardsHtml = filteredTiers.map(t => {
     const pnl = t.total_pnl || 0;
     const retPct = t.return_pct || 0;
@@ -2695,14 +2816,171 @@ function renderBankrollPage(data){
   if (gridEl) gridEl.innerHTML = cardsHtml;
 }
 
+function renderOrderSubRow(o){
+  const kind = (o.kind || "").toUpperCase();
+  let typeBadge = `<span class="mono text-[9px] font-bold px-1.5 py-0.2 border bg-[#1F2937] text-[#9CA3AF] border-[#374151]">${esc(o.label || kind)}</span>`;
+  if (kind === "CLOSE") {
+    if ((o.label || "").includes("MERGE")) {
+      typeBadge = `<span class="mono text-[9px] font-bold px-1.5 py-0.2 border bg-[#3B0764] text-[#C084FC] border-[#6B21A8]">MERGE CLOSE</span>`;
+    } else {
+      typeBadge = `<span class="mono text-[9px] font-bold px-1.5 py-0.2 border bg-[#F59E0B]/20 text-[#F59E0B] border-[#F59E0B]/30">${esc(o.label)}</span>`;
+    }
+  } else if (kind === "FILL") {
+    typeBadge = `<span class="mono text-[9px] font-bold px-1.5 py-0.2 border bg-[#10B981]/20 text-[#10B981] border-[#10B981]/30">MAKER FILL</span>`;
+  } else if (kind === "QUOTE") {
+    typeBadge = `<span class="mono text-[9px] font-bold px-1.5 py-0.2 border bg-[#3B82F6]/20 text-[#60A5FA] border-[#3B82F6]/30">RESTING BID</span>`;
+  }
+
+  const pnlHtml = o.pnl !== null && o.pnl !== undefined
+    ? `<span class="mono text-[11px] font-bold ${o.pnl > 0 ? 'text-[#10B981]' : (o.pnl < 0 ? 'text-[#EF4444]' : 'text-[#9CA3AF]')}">${fmtUsd(o.pnl)}</span>`
+    : `<span class="mono text-[11px] text-[#6B7280]">--</span>`;
+
+  return `
+    <tr class="bg-[#090D16]/90 border-b border-[#1F2937]/50 text-[11px] mono hover:bg-[#0E131F] transition-colors">
+      <td class="py-2.5 px-3 text-[#9CA3AF] whitespace-nowrap">${fmtClock(o.ts)}</td>
+      <td class="py-2.5 px-3 whitespace-nowrap">${typeBadge}</td>
+      <td class="py-2.5 px-3 text-[#F9FAFB] font-semibold whitespace-nowrap">${esc(o.side || "--")}</td>
+      <td class="py-2.5 px-3 text-right text-[#F9FAFB] whitespace-nowrap">$${Number(o.price || 0).toFixed(2)}</td>
+      <td class="py-2.5 px-3 text-right text-[#9CA3AF] whitespace-nowrap">${Number(o.shares || 0).toFixed(1)}</td>
+      <td class="py-2.5 px-3 text-right text-[#F9FAFB] font-medium whitespace-nowrap">$${Number(o.value || 0).toFixed(2)}</td>
+      <td class="py-2.5 px-3 text-right text-[#9CA3AF] whitespace-nowrap">${o.fee ? '$' + Number(o.fee).toFixed(4) : '$0.00'}</td>
+      <td class="py-2.5 px-3 text-right whitespace-nowrap">${pnlHtml}</td>
+      <td class="py-2.5 px-3 text-[#9CA3AF] truncate max-w-[280px]" title="${esc(o.detail)}">${esc(o.detail || "")}</td>
+    </tr>
+  `;
+}
+
+function renderTradeHistoryTable(){
+  if (!TRADE_HISTORY_DATA || !TRADE_HISTORY_DATA.markets) return;
+
+  const allMarkets = TRADE_HISTORY_DATA.markets;
+  // Filter by selected bankroll tiers (guarantees strict isolation)
+  let filtered = allMarkets.filter(m => SELECTED_TIERS.has(m.tier));
+
+  // Filter by state tab
+  if (TRADE_STATE_FILTER === "open") {
+    filtered = filtered.filter(m => m.status === "OPEN");
+  } else if (TRADE_STATE_FILTER === "closed") {
+    filtered = filtered.filter(m => m.status !== "OPEN");
+  }
+
+  // Filter by method
+  if (TRADE_METHOD_FILTER !== "all") {
+    filtered = filtered.filter(m => (m.method || "").toUpperCase() === TRADE_METHOD_FILTER);
+  }
+
+  // Filter by search query
+  if (TRADE_SEARCH_QUERY) {
+    filtered = filtered.filter(m =>
+      (m.market_slug || "").toLowerCase().includes(TRADE_SEARCH_QUERY) ||
+      (m.condition_id || "").toLowerCase().includes(TRADE_SEARCH_QUERY) ||
+      (m.category || "").toLowerCase().includes(TRADE_SEARCH_QUERY)
+    );
+  }
+
+  const badgeEl = document.getElementById("bk-trade-count-badge");
+  if (badgeEl) {
+    badgeEl.textContent = `${filtered.length} MARKETS / ${TRADE_HISTORY_DATA.total_trades || 0} TRADES`;
+  }
+
+  const tbody = document.getElementById("bk-trade-rows");
+  if (!tbody) return;
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-[#9CA3AF]">No trades matching active filters. Try adjusting tier selection, method, or search query.</td></tr>`;
+    return;
+  }
+
+  let html = "";
+  filtered.forEach(m => {
+    const key = `${m.tier}_${m.condition_id}`;
+    const isExpanded = TRADE_EXPANDED_KEYS.has(key);
+    const pnl = m.total_pnl || 0;
+    const pnlCls = pnl > 0 ? "text-[#10B981]" : (pnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
+    const retPct = m.pnl_pct || 0;
+
+    html += `
+      <tr class="hover:bg-[#111827] transition-colors border-b border-[#1F2937]">
+        <td class="p-3.5">
+          <span class="mono text-[11px] font-bold px-2 py-0.5 border bg-[#1F2937] text-[#10B981] border-[#10B981]/40 shadow-[0_0_6px_rgba(16,185,129,0.15)]">$${m.tier}</span>
+        </td>
+        <td class="p-3.5">
+          <div class="font-medium max-w-[280px] truncate text-[13px] text-[#F9FAFB]">
+            <a href="https://polymarket.com/event/${encodeURIComponent(m.market_slug)}" target="_blank" rel="noopener" class="hover:underline hover:text-[#38BDF8]">${esc(m.market_slug)}</a>
+          </div>
+          <div class="mt-1 flex items-center gap-2">${getCategoryBadge(m.category)} <span class="text-[#6B7280] text-[10px]">${fmtClock(m.latest_ts)}</span></div>
+        </td>
+        <td class="p-3.5">${getStatusBadge(m.status, m.method)}</td>
+        <td class="p-3.5 text-right font-medium text-[#F9FAFB]">${m.total_shares.toFixed(1)}</td>
+        <td class="p-3.5 text-right text-[#9CA3AF]">$${m.cost_basis.toFixed(2)}</td>
+        <td class="p-3.5 text-right text-[#9CA3AF]">$${m.proceeds.toFixed(2)}</td>
+        <td class="p-3.5 text-right">
+          <div class="font-bold ${pnlCls}">${fmtUsd(pnl)}</div>
+          <div class="text-[10px] ${pnlCls}">${fmtPct(retPct)}</div>
+        </td>
+        <td class="p-3.5 text-center">
+          <button type="button" onclick="toggleMarketExpand('${key}')" class="mono text-[11px] px-2.5 py-1 bg-[#1F2937] hover:bg-[#374151] border border-[#374151] text-[#F9FAFB] cursor-pointer inline-flex items-center gap-1.5 transition-all">
+            <span>${isExpanded ? 'Hide ▲' : `${(m.orders || []).length} Orders ▼`}</span>
+          </button>
+        </td>
+      </tr>
+    `;
+
+    if (isExpanded) {
+      const orderRows = (m.orders || []).map(o => renderOrderSubRow(o)).join("");
+      html += `
+        <tr class="bg-[#090D16]">
+          <td colspan="8" class="p-0">
+            <div class="p-4 border-l-2 border-[#10B981] bg-[#090D16]/60">
+              <div class="mono text-[11px] font-bold text-[#F9FAFB] uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span>Order Execution Ledger &middot; ${m.market_slug} (Tier $${m.tier})</span>
+                <span class="text-[#9CA3AF] text-[10px] font-normal">${(m.orders || []).length} Recorded Event${(m.orders || []).length === 1 ? '' : 's'}</span>
+              </div>
+              <div class="overflow-x-auto border border-[#1F2937]">
+                <table class="w-full text-left border-collapse">
+                  <thead>
+                    <tr class="bg-[#111827] mono text-[10px] font-bold uppercase tracking-wider text-[#9CA3AF] border-b border-[#1F2937]">
+                      <th class="py-2 px-3">Time</th>
+                      <th class="py-2 px-3">Type</th>
+                      <th class="py-2 px-3">Side</th>
+                      <th class="py-2 px-3 text-right">Price</th>
+                      <th class="py-2 px-3 text-right">Shares</th>
+                      <th class="py-2 px-3 text-right">Value</th>
+                      <th class="py-2 px-3 text-right">Fee/Gas</th>
+                      <th class="py-2 px-3 text-right">P&amp;L</th>
+                      <th class="py-2 px-3">Execution Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-[#1F2937]">
+                    ${orderRows || `<tr><td colspan="9" class="p-4 text-center text-[#9CA3AF] text-[11px]">No order events recorded yet.</td></tr>`}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+  });
+
+  tbody.innerHTML = html;
+}
+
 async function refreshBankroll(){
   if (REFRESH_BUSY) return;
   REFRESH_BUSY = true;
   try {
-    const data = await fetchJSON("/api/bankroll_matrix");
-    renderBankrollPage(data);
+    const [matrixData, tradeData] = await Promise.all([
+      fetchJSON("/api/bankroll_matrix").catch(() => null),
+      fetchJSON("/api/trade_history").catch(() => null),
+    ]);
+    if (matrixData) renderBankrollPage(matrixData);
+    if (tradeData) {
+      TRADE_HISTORY_DATA = tradeData;
+      renderTradeHistoryTable();
+    }
   } catch (err) {
-    console.error("Bankroll matrix refresh error:", err);
+    console.error("Bankroll refresh error:", err);
   } finally {
     REFRESH_BUSY = false;
   }
