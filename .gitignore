@@ -6,6 +6,8 @@
 # runtime
 maker.db
 maker.db-*
+hunter.db
+hunter.db-*
 # live fleet state: a 2MB binary that churns every sweep, plus the state
 # snapshot the dashboard reads. Both are run output, not source.
 # run/markets.json (fleet input) and run/live_test_*.json (pre-registered
