@@ -9,32 +9,37 @@ param([switch]$Strays)
 $ProjectPath = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot "hunter-procs.ps1")
 
+Write-Host "Stopping Spread Hunter..." -ForegroundColor Cyan
+Write-Host "[1/2] Terminating recorded supervisor and child processes..." -ForegroundColor DarkGray
+
 $stopped = Stop-HunterInstance
 if ($stopped -gt 0) {
-    Write-Host "Spread Hunter stopped ($stopped process tree(s))." -ForegroundColor Green
+    Write-Host "      Stopped $stopped process tree(s)." -ForegroundColor Yellow
 }
 
 $unowned = @(Find-HunterStrays)
 
 if ($unowned.Count -eq 0) {
-    if ($stopped -eq 0) { Write-Host "Spread Hunter was not running." -ForegroundColor DarkGray }
+    if ($stopped -eq 0) { 
+        Write-Host "[2/2] No Spread Hunter processes were running." -ForegroundColor DarkGray 
+    } else {
+        Write-Host "[2/2] Spread Hunter stopped successfully." -ForegroundColor Green
+    }
     return
 }
 
 if (-not $Strays) {
     Write-Host ""
-    Write-Host "$($unowned.Count) hunter-shaped process(es) NOT started by this checkout:" -ForegroundColor Yellow
+    Write-Host "[2/2] Found $($unowned.Count) hunter-shaped process(es) NOT owned by this checkout:" -ForegroundColor Yellow
     $unowned | ForEach-Object {
         $cl = ($_.CommandLine -replace '\s+', ' ')
-        Write-Host "  PID $($_.ProcessId)  $($cl.Substring(0, [Math]::Min(90, $cl.Length)))" -ForegroundColor DarkGray
+        Write-Host "      PID $($_.ProcessId)  $($cl.Substring(0, [Math]::Min(80, $cl.Length)))" -ForegroundColor DarkGray
     }
-    Write-Host "  Left running -- they may belong to another checkout or user." -ForegroundColor DarkGray
-    Write-Host "  If they are yours: .\scripts\hunter-stop.ps1 -Strays" -ForegroundColor DarkGray
+    Write-Host "      Left running. To stop them, run: hunter-stop -Strays" -ForegroundColor DarkGray
     return
 }
 
-Write-Host ""
-Write-Host "-Strays given: stopping $($unowned.Count) unowned process(es)" -ForegroundColor Yellow
+Write-Host "[2/2] -Strays specified: terminating $($unowned.Count) unowned process(es)..." -ForegroundColor Yellow
 $sups = @($unowned | Where-Object { $_.CommandLine -like "*strategy.supervisor*" })
 $rest = @($unowned | Where-Object { $_.CommandLine -notlike "*strategy.supervisor*" })
 foreach ($p in ($sups + $rest)) {
@@ -45,7 +50,7 @@ foreach ($p in ($sups + $rest)) {
 Start-Sleep -Seconds 2
 $left = @(Find-HunterStrays)
 if ($left.Count -gt 0) {
-    Write-Host "still running: $(($left.ProcessId) -join ', ')" -ForegroundColor Red
+    Write-Host "WARNING: Still running: $(($left.ProcessId) -join ', ')" -ForegroundColor Red
 } else {
-    Write-Host "Spread Hunter stopped." -ForegroundColor Green
+    Write-Host "All Spread Hunter processes stopped successfully." -ForegroundColor Green
 }

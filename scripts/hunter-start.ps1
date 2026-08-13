@@ -1,9 +1,6 @@
 # SPREAD HUNTER START SCRIPT
 # Starts the Spread Hunter strategy stack in the background with windowless execution.
 #
-# Spread Hunter: Two-sided Polymarket maker strategy resting bids on BOTH outcomes
-# to capture the bid-ask spread and liquidity rewards while maintaining inventory balance.
-#
 # Process Hierarchy:
 #   strategy.supervisor (Parent)
 #     ├── strategy.fleet (Maker engine)
@@ -29,22 +26,21 @@ New-Item -ItemType Directory -Force -Path (Join-Path $ProjectPath "logs") | Out-
 
 . (Join-Path $PSScriptRoot "hunter-procs.ps1")
 
+Write-Host "Spread Hunter Startup" -ForegroundColor Cyan
+Write-Host "[1/5] Checking for prior instances and port availability..." -ForegroundColor DarkGray
+
 # 1. Stop any previously recorded Spread Hunter instance (including child processes)
 $stopped = Stop-HunterInstance
-if ($stopped -gt 0) { Write-Host "stopped $stopped prior Spread Hunter process tree(s)" -ForegroundColor Yellow }
+if ($stopped -gt 0) { Write-Host "      Stopped $stopped prior Spread Hunter process tree(s)" -ForegroundColor Yellow }
 
 # 2. Check for unowned stray processes
 $strays = @(Find-HunterStrays)
 if ($strays.Count -gt 0) {
-    Write-Host ""
-    Write-Host "WARNING: $($strays.Count) hunter-shaped process(es) not started by this script:" -ForegroundColor Red
+    Write-Host "      WARNING: $($strays.Count) hunter-shaped process(es) not started by this script:" -ForegroundColor Red
     $strays | ForEach-Object {
         $cl = ($_.CommandLine -replace '\s+', ' ')
-        Write-Host "  PID $($_.ProcessId)  $($cl.Substring(0, [Math]::Min(90, $cl.Length)))" -ForegroundColor DarkGray
+        Write-Host "      PID $($_.ProcessId)  $($cl.Substring(0, [Math]::Min(80, $cl.Length)))" -ForegroundColor DarkGray
     }
-    Write-Host "  Not stopping them -- they may belong to another checkout or user." -ForegroundColor DarkGray
-    Write-Host "  If they are yours, stop them first: .\scripts\hunter-stop.ps1 -Strays" -ForegroundColor DarkGray
-    Write-Host ""
 }
 
 # 3. Check for port 8800 conflict
@@ -54,6 +50,7 @@ if (netstat -ano | Select-String ":8800\s+.*LISTENING") {
 
 # 4. Archive prior database if -FreshRun requested
 if ($FreshRun) {
+    Write-Host "[2/5] Archiving prior run data (-FreshRun active)..." -ForegroundColor DarkGray
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $archive = Join-Path $ProjectPath "run/archive/hunter_$stamp"
     New-Item -ItemType Directory -Force -Path $archive | Out-Null
@@ -61,7 +58,9 @@ if ($FreshRun) {
         Move-Item -Destination $archive -Force
     $state = Join-Path $ProjectPath "run/fleet_state.json"
     if (Test-Path $state) { Move-Item -Path $state -Destination $archive -Force }
-    Write-Host "archived prior run to $archive" -ForegroundColor Yellow
+    Write-Host "      Archived prior run to $archive" -ForegroundColor Yellow
+} else {
+    Write-Host "[2/5] Preserving active database run/fleet.db..." -ForegroundColor DarkGray
 }
 
 # Environment setup
@@ -80,7 +79,13 @@ $sup = Start-Process -FilePath "python" `
 
 Save-HunterInstance -Procs @{ supervisor = $sup }
 
-Start-Sleep -Seconds 6
+Write-Host "[3/5] Supervisor launched (PID $($sup.Id)). Spawning fleet, dashboards, and watchers..." -ForegroundColor DarkGray
+Write-Host "[4/5] Waiting 6 seconds for FastAPI servers (ports 8800/8801) and workers to boot..." -ForegroundColor DarkGray
+
+for ($i = 6; $i -gt 0; $i--) {
+    Write-Host "      Booting stack... ($i s remaining)" -ForegroundColor DarkGray
+    Start-Sleep -Seconds 1
+}
 
 # 6. Verify supervisor is alive
 $sup.Refresh()
@@ -89,9 +94,12 @@ if ($sup.HasExited) {
 }
 
 $alive = @(Get-HunterInstance).Count + @(Get-DescendantPids -ParentId $sup.Id).Count
+
+Write-Host "[5/5] All systems operational!" -ForegroundColor Green
 Write-Host ""
-Write-Host "Spread Hunter supervisor PID $($sup.Id) | $alive processes up (fleet, dash, scan, rerank, watch)" -ForegroundColor Green
-Write-Host "Dashboard:    http://127.0.0.1:8800"
-Write-Host "Market Scan:  http://127.0.0.1:8801/?view=scan"
-Write-Host "Logs:         Get-Content logs\supervisor.log -Wait -Tail 20"
-Write-Host "Stop:         .\scripts\hunter-stop.ps1"
+Write-Host "Spread Hunter supervisor PID $($sup.Id) | $alive processes active" -ForegroundColor Green
+Write-Host "  Main Dashboard: http://127.0.0.1:8800" -ForegroundColor Cyan
+Write-Host "  Market Scan:    http://127.0.0.1:8801/?view=scan" -ForegroundColor Cyan
+Write-Host "  Live Logs:      Get-Content logs\supervisor.err.log -Wait -Tail 20" -ForegroundColor DarkGray
+Write-Host "  Stop Command:   hunter-stop" -ForegroundColor DarkGray
+Write-Host ""
