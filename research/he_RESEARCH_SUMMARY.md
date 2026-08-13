@@ -215,4 +215,7 @@
 
 * **2026-08-13 (שרת, סשן 57): נקודת קצה של מטריצת בנקרוֹל 10 דרגות ותצוגת רשת UI בעלת 10 אריחים נחתו בדשבורד.** הוספנו את נקודת הקצה `/api/bankroll_matrix` ואת UI הרשת `renderBankrollMatrix()` ב-`server/spread_dash.py` וב-`server/spread_dash_html.py`. 658/658 בדיקות עוברות.
 
+* **2026-08-13 (שרת, סשן 58): בנייה מחדש של גיליון סגנונות Tailwind CSS פנימי.** עודכן `server/_tailwind_css.py` דרך `scripts/build_tailwind_css.py`. 662/662 בדיקות עוברות.
+
+
 

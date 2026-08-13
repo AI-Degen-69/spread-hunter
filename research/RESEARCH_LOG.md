@@ -1477,3 +1477,15 @@ Visual reskin only — new `server/spread_dash.py`/`spread_dash_html.py` (port 8
 **Verdict.** LIVE -- multi-bankroll matrix UI is live and integrated into the spread-hunter dashboard.
 
 
+### 2026-08-13 (server, Session 58): rebuilt inline Tailwind CSS stylesheet for bankroll matrix components
+
+**Question.** How to ensure new Tailwind CSS utility classes in `server/spread_dash_html.py` render correctly in production without falling back to CDN script loading?
+
+**Method.** Executed `python -m scripts.build_tailwind_css` to update `server/_tailwind_css.py` (29.9 KB minified). 
+
+**Result.** `test_generated_tailwind_css_is_fresh` passes cleanly. Full test suite green (662/662).
+
+**Verdict.** LIVE -- static Tailwind CSS bundle updated and verified fresh.
+
+
+

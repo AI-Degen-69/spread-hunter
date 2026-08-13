@@ -232,4 +232,7 @@ bottom. One bullet per concrete thing done, tried, found, or broken.
 
 * **2026-08-13 (server, Session 57): dashboard 10-tier bankroll matrix endpoint and 10-panel UI grid view landed.** Added `/api/bankroll_matrix` endpoint and `renderBankrollMatrix()` grid UI in `server/spread_dash.py` and `server/spread_dash_html.py`. 658/658 tests passing.
 
+* **2026-08-13 (server, Session 58): rebuilt inline Tailwind CSS stylesheet.** Updated `server/_tailwind_css.py` via `scripts/build_tailwind_css.py`. 662/662 tests passing.
+
+
 
