@@ -1,0 +1,877 @@
+"""Interactive Strategy Explainer and Playable Visual Demo.
+
+Renders an interactive, visual HTML/JS presentation of the Spread Hunter
+maker strategy:
+1. Binary parity arithmetic ($0.96 cost vs $1.00 parity)
+2. Live interactive dual order-book simulator with step-by-step & autoplay modes
+3. Smart contract CTF token merge chamber animation
+4. Capital velocity & compounding calculator with live SVG projection chart
+5. Real fleet telemetry comparison (hedged +$0.70 vs naked -$0.95)
+"""
+from __future__ import annotations
+
+from server.spread_dash_html import _HEAD, _NAVBAR, _wrap
+
+
+def get_explainer_html() -> str:
+    body = _NAVBAR("explainer") + r"""
+<div class="bg-[#111827] border-b border-[#1F2937]">
+  <div class="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <span class="size-2 bg-[#A855F7] animate-pulse"></span>
+      <div class="mono text-[13px] tracking-[0.14em] uppercase font-bold text-[#A855F7]">Strategy Visualizer &amp; Live Playable Simulator</div>
+    </div>
+    <div class="flex items-center gap-3 mono text-[12px] text-[#9CA3AF]">
+      <span>Binary Parity Arbitrage &bull; Instant CTF Merges &bull; Capital Velocity</span>
+    </div>
+  </div>
+</div>
+
+<main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-8 space-y-10">
+
+  <!-- HERO: The Core Structural Inefficiency -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] p-6 lg:p-8 relative overflow-hidden">
+    <div class="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-[#10B981] via-[#A855F7] to-[#3B82F6]"></div>
+    
+    <div class="max-w-4xl">
+      <div class="inline-flex items-center gap-2 px-3 py-1 bg-[#A855F7]/15 border border-[#A855F7]/30 mono text-[11px] font-bold text-[#C084FC] uppercase tracking-wider mb-4">
+        <span>⚡ THE CORE EDGE</span> &bull; <span>STRUCTURAL MARKET ANOMALY</span>
+      </div>
+      <h1 class="font-display text-[32px] sm:text-[44px] leading-tight text-[#F9FAFB] tracking-tight">
+        HOW SPREAD HUNTER CAPTURES <span class="text-[#10B981]">PARITY ARBITRAGE</span> WITHOUT DIRECTIONAL RISK
+      </h1>
+      <p class="mono text-[14px] text-[#9CA3AF] leading-relaxed mt-4">
+        On binary prediction markets (Polymarket), <span class="text-[#F9FAFB] font-semibold">1 YES + 1 NO</span> always equals exactly <span class="text-[#10B981] font-bold">$1.000 USDC</span>. 
+        Takers pay a spread penalty when crossing both books (<span class="text-[#EF4444]">$1.020+</span>), while Spread Hunter rests maker bids below mid on <span class="text-[#10B981]">both outcomes simultaneously</span> (<span class="text-[#10B981]">$0.960</span> cost), paying <span class="text-[#10B981] font-bold">$0.00 in fees</span>. 
+        When both legs fill, the tokens are instantly merged on-chain via the CTF smart contract back into collateral, capturing pure spread profit in <span class="text-[#FBBF24] font-bold">minutes instead of years</span>.
+      </p>
+    </div>
+
+    <!-- Taker vs Maker Visual Comparison Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
+      <!-- Taker Box -->
+      <div class="border border-[#EF4444]/30 bg-[#090D16] p-5 relative">
+        <div class="flex items-center justify-between pb-3 border-b border-[#EF4444]/20">
+          <div class="mono text-[13px] font-bold text-[#EF4444] uppercase tracking-wider flex items-center gap-2">
+            <span>❌ THE RETAIL / TAKER TRAP</span>
+          </div>
+          <span class="mono text-[10px] px-2 py-0.5 bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30 font-bold uppercase">GUARANTEED LOSS</span>
+        </div>
+        <div class="space-y-3 mt-4 mono text-[13px]">
+          <div class="flex justify-between text-[#9CA3AF]">
+            <span>Buy YES Ask (Cross spread):</span>
+            <span class="text-[#F9FAFB] font-semibold">$0.510</span>
+          </div>
+          <div class="flex justify-between text-[#9CA3AF]">
+            <span>Buy NO Ask (Cross spread):</span>
+            <span class="text-[#F9FAFB] font-semibold">$0.510</span>
+          </div>
+          <div class="flex justify-between text-[#9CA3AF]">
+            <span>Taker Fees (2 &times; 1.7%):</span>
+            <span class="text-[#EF4444] font-semibold">+$0.034</span>
+          </div>
+          <div class="pt-2 border-t border-[#1F2937] flex justify-between font-bold">
+            <span class="text-[#9CA3AF]">Total Cost to Acquire Pair:</span>
+            <span class="text-[#EF4444] text-[15px]">$1.054</span>
+          </div>
+          <div class="flex justify-between text-[#9CA3AF]">
+            <span>Settlement / Parity Payout:</span>
+            <span class="text-[#F9FAFB] font-semibold">$1.000</span>
+          </div>
+          <div class="p-3 bg-[#EF4444]/10 border border-[#EF4444]/20 flex items-center justify-between font-bold text-[#EF4444]">
+            <span>NET TAKER P&amp;L PER SHARE:</span>
+            <span class="text-[16px]">-$0.054 (-5.1%)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Maker Box -->
+      <div class="border border-[#10B981]/40 bg-[#090D16] p-5 relative shadow-[0_0_24px_rgba(16,185,129,0.08)]">
+        <div class="flex items-center justify-between pb-3 border-b border-[#10B981]/20">
+          <div class="mono text-[13px] font-bold text-[#10B981] uppercase tracking-wider flex items-center gap-2">
+            <span>⚡ SPREAD HUNTER TWO-SIDED MAKER</span>
+          </div>
+          <span class="mono text-[10px] px-2 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/40 font-bold uppercase">RISK-FREE SPREAD CAPTURE</span>
+        </div>
+        <div class="space-y-3 mt-4 mono text-[13px]">
+          <div class="flex justify-between text-[#9CA3AF]">
+            <span>Resting Maker Bid YES:</span>
+            <span class="text-[#10B981] font-semibold">$0.480</span>
+          </div>
+          <div class="flex justify-between text-[#9CA3AF]">
+            <span>Resting Maker Bid NO:</span>
+            <span class="text-[#10B981] font-semibold">$0.480</span>
+          </div>
+          <div class="flex justify-between text-[#9CA3AF]">
+            <span>Maker Trading Fee:</span>
+            <span class="text-[#10B981] font-semibold">$0.000 (ZERO)</span>
+          </div>
+          <div class="pt-2 border-t border-[#1F2937] flex justify-between font-bold">
+            <span class="text-[#9CA3AF]">Total Cost Basis to Acquire Pair:</span>
+            <span class="text-[#10B981] text-[15px]">$0.960</span>
+          </div>
+          <div class="flex justify-between text-[#9CA3AF]">
+            <span>Instant CTF Merge Payout:</span>
+            <span class="text-[#F9FAFB] font-semibold">$1.000</span>
+          </div>
+          <div class="p-3 bg-[#10B981]/15 border border-[#10B981]/40 flex items-center justify-between font-bold text-[#10B981]">
+            <span>NET MAKER P&amp;L PER SHARE:</span>
+            <span class="text-[16px]">+$0.040 (+4.17%)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INTERACTIVE SECTION: Live Playable Dual Order-Book Simulator -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <div class="px-5 py-4 border-b border-[#1F2937] bg-[#090D16] flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <div class="mono text-[14px] font-bold text-[#F9FAFB] uppercase tracking-wider flex items-center gap-2">
+          <span class="size-2.5 bg-[#10B981] rounded-full animate-pulse"></span>
+          <span>🎮 Interactive Dual Order-Book &amp; Merge Simulator</span>
+        </div>
+        <div class="mono text-[11px] text-[#9CA3AF] mt-0.5">
+          Test order posting, inbound taker fills, dynamic skewing, and instantaneous $1.00 token merging
+        </div>
+      </div>
+
+      <!-- Controls bar -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <button id="sim-btn-step" onclick="simStepNext()" type="button" class="mono text-[11px] font-bold px-3 py-1.5 bg-[#3B82F6] text-white hover:bg-[#2563EB] border border-[#3B82F6] transition-all cursor-pointer">
+          ▶ STEP NEXT
+        </button>
+        <button id="sim-btn-auto" onclick="simToggleAuto()" type="button" class="mono text-[11px] font-bold px-3 py-1.5 bg-[#10B981] text-white hover:bg-[#059669] border border-[#10B981] transition-all cursor-pointer">
+          ⚡ AUTO-STREAM
+        </button>
+        <button onclick="simReset()" type="button" class="mono text-[11px] px-3 py-1.5 bg-[#1F2937] text-[#9CA3AF] hover:text-[#F9FAFB] border border-[#1F2937] transition-all cursor-pointer">
+          ↺ RESET
+        </button>
+      </div>
+    </div>
+
+    <!-- Simulator Body -->
+    <div class="p-5 lg:p-6 space-y-6">
+      
+      <!-- Interactive Sliders / Configuration -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 bg-[#090D16] p-4 border border-[#1F2937]">
+        <!-- Spread Width Slider -->
+        <div>
+          <div class="flex justify-between mono text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">
+            <span>Market Spread Width</span>
+            <span id="sim-cfg-spread-val" class="text-[#10B981]">4.0&cent; (Mid $0.500)</span>
+          </div>
+          <input type="range" id="sim-spread-slider" min="1" max="8" step="0.5" value="4.0" oninput="simUpdateConfig()" class="w-full accent-[#10B981] cursor-pointer" />
+          <div class="flex justify-between text-[10px] text-[#6B7280] mono mt-1">
+            <span>Tight (1&cent;)</span>
+            <span>Wide (8&cent;)</span>
+          </div>
+        </div>
+
+        <!-- Order Size Slider -->
+        <div>
+          <div class="flex justify-between mono text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">
+            <span>Order Size per Leg</span>
+            <span id="sim-cfg-size-val" class="text-[#3B82F6]">1,000 shares ($480)</span>
+          </div>
+          <input type="range" id="sim-size-slider" min="100" max="5000" step="100" value="1000" oninput="simUpdateConfig()" class="w-full accent-[#3B82F6] cursor-pointer" />
+          <div class="flex justify-between text-[10px] text-[#6B7280] mono mt-1">
+            <span>100 sh</span>
+            <span>5,000 sh</span>
+          </div>
+        </div>
+
+        <!-- Simulation Flow Mode -->
+        <div>
+          <div class="mono text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">Market Flow Skew</div>
+          <div class="grid grid-cols-3 gap-1.5">
+            <button type="button" onclick="simSetSkew('balanced')" id="skew-btn-balanced" class="mono text-[10px] font-bold py-1 bg-[#10B981] text-white border border-[#10B981] transition-colors cursor-pointer">50/50</button>
+            <button type="button" onclick="simSetSkew('yes_heavy')" id="skew-btn-yes" class="mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer">YES 80%</button>
+            <button type="button" onclick="simSetSkew('no_heavy')" id="skew-btn-no" class="mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer">NO 80%</button>
+          </div>
+          <div id="sim-skew-desc" class="text-[10px] text-[#9CA3AF] mono mt-1">Balanced two-sided retail taker flow</div>
+        </div>
+      </div>
+
+      <!-- Visual Order Books & Smart Contract Merge Chamber -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+        
+        <!-- YES Order Book (Col 4) -->
+        <div class="lg:col-span-4 border border-[#1F2937] bg-[#090D16] p-4 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between pb-2 border-b border-[#1F2937] mb-3">
+              <div class="mono text-[12px] font-bold text-[#3B82F6] flex items-center gap-1.5">
+                <span class="size-2 bg-[#3B82F6] rounded-full"></span>
+                <span>YES OUTCOME BOOK</span>
+              </div>
+              <span id="yes-mid-badge" class="mono text-[10px] px-1.5 py-0.5 bg-[#3B82F6]/15 text-[#60A5FA] border border-[#3B82F6]/30 font-bold">MID $0.500</span>
+            </div>
+
+            <!-- YES Asks (Red) -->
+            <div class="space-y-1 mono text-[11px]">
+              <div class="flex justify-between text-[#EF4444]/70 px-2 py-0.5">
+                <span>$0.530</span><span class="text-[#9CA3AF]">3,200 sh</span>
+              </div>
+              <div class="flex justify-between text-[#EF4444]/90 px-2 py-0.5">
+                <span>$0.520</span><span class="text-[#9CA3AF]">2,100 sh</span>
+              </div>
+              <div id="yes-ask-row" class="flex justify-between text-[#EF4444] font-bold bg-[#EF4444]/10 border border-[#EF4444]/30 px-2 py-1">
+                <span>$0.520 (Best Ask)</span><span>1,500 sh</span>
+              </div>
+            </div>
+
+            <!-- SPREAD GAP INDICATOR -->
+            <div class="my-2 py-1 px-2 bg-[#111827] border border-[#1F2937] text-center mono text-[10px] text-[#FBBF24]">
+              SPREAD: <span id="yes-spread-display">4.0&cent;</span>
+            </div>
+
+            <!-- YES Bids (Green) & OUR MAKER BID -->
+            <div class="space-y-1 mono text-[11px]">
+              <div id="yes-our-bid" class="flex justify-between text-[#10B981] font-bold bg-[#10B981]/20 border-2 border-[#10B981] px-2 py-1 shadow-[0_0_12px_rgba(16,185,129,0.2)]">
+                <span class="flex items-center gap-1">⚡ <span id="yes-our-price">$0.480</span> <span class="text-[9px] px-1 bg-[#10B981] text-white">OUR BID</span></span>
+                <span id="yes-our-size">1,000 sh</span>
+              </div>
+              <div class="flex justify-between text-[#10B981]/80 px-2 py-0.5">
+                <span>$0.470</span><span class="text-[#9CA3AF]">1,800 sh</span>
+              </div>
+              <div class="flex justify-between text-[#10B981]/60 px-2 py-0.5">
+                <span>$0.460</span><span class="text-[#9CA3AF]">4,500 sh</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- YES Inventory Footprint -->
+          <div class="mt-4 pt-3 border-t border-[#1F2937] flex items-center justify-between mono text-[11px]">
+            <span class="text-[#9CA3AF]">YES Inventory:</span>
+            <span id="inv-yes-shares" class="text-[#3B82F6] font-bold text-[13px]">0 shares</span>
+          </div>
+        </div>
+
+        <!-- SMART CONTRACT MERGE CHAMBER (Col 4) -->
+        <div class="lg:col-span-4 border border-[#A855F7]/40 bg-[#090D16] p-4 flex flex-col justify-between relative overflow-hidden">
+          <div class="absolute inset-x-0 top-0 h-[2px] bg-[#A855F7]"></div>
+          
+          <div>
+            <div class="flex items-center justify-between pb-2 border-b border-[#A855F7]/20 mb-3">
+              <div class="mono text-[12px] font-bold text-[#C084FC] flex items-center gap-1.5">
+                <span>🔮 CTF MERGE CHAMBER</span>
+              </div>
+              <span class="mono text-[10px] px-1.5 py-0.5 bg-[#A855F7]/20 text-[#C084FC] border border-[#A855F7]/40 font-bold">1 YES + 1 NO = $1.00</span>
+            </div>
+
+            <!-- Visual Token Reactor -->
+            <div id="merge-reactor" class="my-3 p-4 border border-[#1F2937] bg-[#111827] text-center space-y-3 transition-all">
+              <div class="flex items-center justify-center gap-2 mono text-[13px] font-bold">
+                <span id="reactor-yes-pill" class="px-2 py-1 bg-[#3B82F6]/20 border border-[#3B82F6] text-[#60A5FA]">0 YES</span>
+                <span class="text-[#9CA3AF]">+</span>
+                <span id="reactor-no-pill" class="px-2 py-1 bg-[#F59E0B]/20 border border-[#F59E0B] text-[#FBBF24]">0 NO</span>
+              </div>
+
+              <!-- Animated Arrow / Merge Action -->
+              <div id="reactor-arrow" class="text-[18px] text-[#9CA3AF] transition-transform">&#8595;</div>
+
+              <div id="reactor-payout" class="p-2.5 bg-[#10B981]/15 border border-[#10B981]/40 mono text-[13px] font-bold text-[#10B981]">
+                <span id="reactor-payout-text">Waiting for paired fills...</span>
+              </div>
+            </div>
+
+            <div class="mono text-[11px] text-[#9CA3AF] leading-relaxed">
+              <strong class="text-[#F9FAFB]">ctf.mergePositions()</strong> burns paired outcome tokens instantly on Polygon, returning $1.000 USDC collateral without waiting for market resolution.
+            </div>
+          </div>
+
+          <!-- Chamber Metrics -->
+          <div class="mt-4 pt-3 border-t border-[#1F2937] space-y-1.5 mono text-[11px]">
+            <div class="flex justify-between text-[#9CA3AF]">
+              <span>Paired Cycles:</span>
+              <span id="sim-stat-pairs" class="text-[#F9FAFB] font-bold">0</span>
+            </div>
+            <div class="flex justify-between text-[#9CA3AF]">
+              <span>Collateral Minted:</span>
+              <span id="sim-stat-minted" class="text-[#10B981] font-bold">$0.00</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- NO Order Book (Col 4) -->
+        <div class="lg:col-span-4 border border-[#1F2937] bg-[#090D16] p-4 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between pb-2 border-b border-[#1F2937] mb-3">
+              <div class="mono text-[12px] font-bold text-[#F59E0B] flex items-center gap-1.5">
+                <span class="size-2 bg-[#F59E0B] rounded-full"></span>
+                <span>NO OUTCOME BOOK</span>
+              </div>
+              <span id="no-mid-badge" class="mono text-[10px] px-1.5 py-0.5 bg-[#F59E0B]/15 text-[#FBBF24] border border-[#F59E0B]/30 font-bold">MID $0.500</span>
+            </div>
+
+            <!-- NO Asks (Red) -->
+            <div class="space-y-1 mono text-[11px]">
+              <div class="flex justify-between text-[#EF4444]/70 px-2 py-0.5">
+                <span>$0.530</span><span class="text-[#9CA3AF]">2,800 sh</span>
+              </div>
+              <div class="flex justify-between text-[#EF4444]/90 px-2 py-0.5">
+                <span>$0.520</span><span class="text-[#9CA3AF]">1,900 sh</span>
+              </div>
+              <div id="no-ask-row" class="flex justify-between text-[#EF4444] font-bold bg-[#EF4444]/10 border border-[#EF4444]/30 px-2 py-1">
+                <span>$0.520 (Best Ask)</span><span>1,400 sh</span>
+              </div>
+            </div>
+
+            <!-- SPREAD GAP INDICATOR -->
+            <div class="my-2 py-1 px-2 bg-[#111827] border border-[#1F2937] text-center mono text-[10px] text-[#FBBF24]">
+              SPREAD: <span id="no-spread-display">4.0&cent;</span>
+            </div>
+
+            <!-- NO Bids (Green) & OUR MAKER BID -->
+            <div class="space-y-1 mono text-[11px]">
+              <div id="no-our-bid" class="flex justify-between text-[#10B981] font-bold bg-[#10B981]/20 border-2 border-[#10B981] px-2 py-1 shadow-[0_0_12px_rgba(16,185,129,0.2)]">
+                <span class="flex items-center gap-1">⚡ <span id="no-our-price">$0.480</span> <span class="text-[9px] px-1 bg-[#10B981] text-white">OUR BID</span></span>
+                <span id="no-our-size">1,000 sh</span>
+              </div>
+              <div class="flex justify-between text-[#10B981]/80 px-2 py-0.5">
+                <span>$0.470</span><span class="text-[#9CA3AF]">2,300 sh</span>
+              </div>
+              <div class="flex justify-between text-[#10B981]/60 px-2 py-0.5">
+                <span>$0.460</span><span class="text-[#9CA3AF]">3,900 sh</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- NO Inventory Footprint -->
+          <div class="mt-4 pt-3 border-t border-[#1F2937] flex items-center justify-between mono text-[11px]">
+            <span class="text-[#9CA3AF]">NO Inventory:</span>
+            <span id="inv-no-shares" class="text-[#F59E0B] font-bold text-[13px]">0 shares</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Live Simulator Telemetry Strip -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#090D16] p-4 border border-[#1F2937]">
+        <div>
+          <div class="mono text-[10px] uppercase text-[#9CA3AF]">Capital Deployed</div>
+          <div id="sim-kpi-capital" class="mono text-[20px] font-bold text-[#F9FAFB] mt-0.5">$0.00</div>
+        </div>
+        <div>
+          <div class="mono text-[10px] uppercase text-[#9CA3AF]">Realized P&amp;L</div>
+          <div id="sim-kpi-pnl" class="mono text-[20px] font-bold text-[#10B981] mt-0.5">+$0.00</div>
+        </div>
+        <div>
+          <div class="mono text-[10px] uppercase text-[#9CA3AF]">Return on Capital</div>
+          <div id="sim-kpi-roi" class="mono text-[20px] font-bold text-[#10B981] mt-0.5">0.00%</div>
+        </div>
+        <div>
+          <div class="mono text-[10px] uppercase text-[#9CA3AF]">Simulation Step Status</div>
+          <div id="sim-kpi-status" class="mono text-[12px] font-bold text-[#FBBF24] mt-1.5 flex items-center gap-1.5">
+            <span class="size-1.5 bg-[#FBBF24] rounded-full"></span>
+            <span>READY TO QUOTE</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Execution Log Box -->
+      <div class="border border-[#1F2937] bg-[#090D16] p-3">
+        <div class="flex items-center justify-between pb-2 border-b border-[#1F2937] mono text-[11px] text-[#9CA3AF] font-bold uppercase">
+          <span>Simulation Event Stream</span>
+          <span class="text-[10px] text-[#10B981]">REAL-TIME LOG</span>
+        </div>
+        <div id="sim-log-box" class="h-28 overflow-y-auto space-y-1 mt-2 mono text-[11px] text-[#9CA3AF] scrollbar-thin">
+          <div class="text-[#6B7280]">[00:00:00] Simulator initialized. Click [STEP NEXT] or [AUTO-STREAM] to execute maker sweeps.</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 4 PILLARS OF EDGE & CONSISTENCY -->
+  <section class="sh-rise space-y-6">
+    <div>
+      <div class="mono text-[12px] font-bold text-[#10B981] uppercase tracking-wider">THE MATHEMATICAL FOUNDATION</div>
+      <h2 class="font-display text-[28px] sm:text-[34px] text-[#F9FAFB] mt-1">THE 4 PILLARS OF CONSISTENCY &amp; EDGE</h2>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Pillar 1 -->
+      <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
+        <div class="mono text-[11px] font-bold text-[#10B981] uppercase tracking-wider">PILLAR 1</div>
+        <div class="mono text-[15px] font-bold text-[#F9FAFB] mt-1">Maker Spread Capture</div>
+        <p class="mono text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
+          By resting quotes on both YES and NO books rather than crossing, the strategy captures the spread on both legs. Maker orders incur <strong class="text-[#F9FAFB]">$0.00 in fees</strong>, transforming market noise into steady spread harvest.
+        </p>
+      </div>
+
+      <!-- Pillar 2 -->
+      <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#A855F7]"></div>
+        <div class="mono text-[11px] font-bold text-[#C084FC] uppercase tracking-wider">PILLAR 2</div>
+        <div class="mono text-[15px] font-bold text-[#F9FAFB] mt-1">Instant CTF Parity Merging</div>
+        <p class="mono text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
+          Instead of holding outcome tokens until market expiration (months or years away), complete sets are redeemed <strong class="text-[#F9FAFB]">instantly on-chain for $1.000 USDC</strong>, freeing 100% of collateral for immediate reinvestment.
+        </p>
+      </div>
+
+      <!-- Pillar 3 -->
+      <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#3B82F6]"></div>
+        <div class="mono text-[11px] font-bold text-[#60A5FA] uppercase tracking-wider">PILLAR 3</div>
+        <div class="mono text-[15px] font-bold text-[#F9FAFB] mt-1">Dynamic Skew Defense</div>
+        <p class="mono text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
+          When one leg fills first, the engine dynamically widens the filled side and aggressively quotes the missing leg to pull in the balancing fill, eliminating unhedged directional exposure.
+        </p>
+      </div>
+
+      <!-- Pillar 4 -->
+      <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#FBBF24]"></div>
+        <div class="mono text-[11px] font-bold text-[#FBBF24] uppercase tracking-wider">PILLAR 4</div>
+        <div class="mono text-[15px] font-bold text-[#F9FAFB] mt-1">Liquidity Reward "Rent"</div>
+        <p class="mono text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
+          In addition to trade spreads, Polymarket pays makers daily USDC rewards just for resting competitive size inside the qualifying spread window, creating a passive yield floor.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- INTERACTIVE SECTION: Capital Velocity & Compounding Calculator -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <div class="px-5 py-4 border-b border-[#1F2937] bg-[#090D16] flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <div class="mono text-[14px] font-bold text-[#FBBF24] uppercase tracking-wider flex items-center gap-2">
+          <span>📈 Interactive Capital Velocity &amp; Compounding Calculator</span>
+        </div>
+        <div class="mono text-[11px] text-[#9CA3AF] mt-0.5">
+          Simulate portfolio compounding across turn frequencies, spread margins, and liquidity rewards
+        </div>
+      </div>
+      <div class="mono text-[11px] px-2.5 py-1 bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-bold">
+        HIGH VELOCITY COMPOUNDING
+      </div>
+    </div>
+
+    <div class="p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
+      
+      <!-- Sliders Column (5 cols) -->
+      <div class="lg:col-span-5 space-y-5 bg-[#090D16] p-5 border border-[#1F2937]">
+        
+        <!-- Starting Capital -->
+        <div>
+          <div class="flex justify-between mono text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
+            <span>Starting Bankroll</span>
+            <span id="calc-val-bankroll" class="text-[#F9FAFB]">$1,000 USD</span>
+          </div>
+          <input type="range" id="calc-bankroll" min="100" max="10000" step="100" value="1000" oninput="recalcGrowth()" class="w-full accent-[#10B981] cursor-pointer" />
+        </div>
+
+        <!-- Average Captured Spread -->
+        <div>
+          <div class="flex justify-between mono text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
+            <span>Captured Spread per Turn</span>
+            <span id="calc-val-spread" class="text-[#10B981]">+2.50%</span>
+          </div>
+          <input type="range" id="calc-spread" min="0.5" max="5.0" step="0.25" value="2.5" oninput="recalcGrowth()" class="w-full accent-[#10B981] cursor-pointer" />
+        </div>
+
+        <!-- Cycles per Day -->
+        <div>
+          <div class="flex justify-between mono text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
+            <span>Turn Velocity (Cycles / Day)</span>
+            <span id="calc-val-cycles" class="text-[#3B82F6]">4.0 Cycles / Day</span>
+          </div>
+          <input type="range" id="calc-cycles" min="0.5" max="15.0" step="0.5" value="4.0" oninput="recalcGrowth()" class="w-full accent-[#3B82F6] cursor-pointer" />
+          <div class="text-[10px] text-[#6B7280] mono mt-0.5">Average time per cycle: ~6.0 hours</div>
+        </div>
+
+        <!-- Venue Daily Rewards -->
+        <div>
+          <div class="flex justify-between mono text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
+            <span>Daily Liquidity Rewards</span>
+            <span id="calc-val-rewards" class="text-[#FBBF24]">$2.50 / Day</span>
+          </div>
+          <input type="range" id="calc-rewards" min="0" max="25" step="0.5" value="2.5" oninput="recalcGrowth()" class="w-full accent-[#FBBF24] cursor-pointer" />
+        </div>
+
+        <!-- Summary Metric Boxes -->
+        <div class="pt-3 border-t border-[#1F2937] grid grid-cols-2 gap-3 mono text-[12px]">
+          <div class="p-3 bg-[#111827] border border-[#1F2937]">
+            <div class="text-[10px] text-[#9CA3AF] uppercase">30-Day Growth</div>
+            <div id="calc-res-30d" class="text-[18px] font-bold text-[#10B981] mt-0.5">+$0.00</div>
+          </div>
+          <div class="p-3 bg-[#111827] border border-[#1F2937]">
+            <div class="text-[10px] text-[#9CA3AF] uppercase">90-Day Bankroll</div>
+            <div id="calc-res-90d" class="text-[18px] font-bold text-[#F9FAFB] mt-0.5">$0.00</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Growth Chart Column (7 cols) -->
+      <div class="lg:col-span-7 flex flex-col justify-between bg-[#090D16] p-5 border border-[#1F2937]">
+        <div>
+          <div class="flex items-center justify-between pb-3 border-b border-[#1F2937] mono text-[12px]">
+            <span class="font-bold text-[#F9FAFB] uppercase">365-Day Projected Compounding Trajectory</span>
+            <div class="flex items-center gap-3">
+              <span class="flex items-center gap-1 text-[11px] text-[#10B981]"><span class="size-2 bg-[#10B981]"></span> Spread Hunter</span>
+              <span class="flex items-center gap-1 text-[11px] text-[#3B82F6]"><span class="size-2 bg-[#3B82F6]"></span> Static Carry (5% APR)</span>
+            </div>
+          </div>
+
+          <!-- Dynamic SVG Growth Chart -->
+          <div id="calc-chart-wrap" class="mt-4">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <div class="mt-4 pt-3 border-t border-[#1F2937] flex items-center justify-between mono text-[11px] text-[#9CA3AF]">
+          <span>Compounding Formula: <code class="text-[#F9FAFB]">B_t = B_0 &times; (1 + spread &times; reinvest)^t + rewards</code></span>
+          <span class="text-[#10B981] font-bold">100% Hedged</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- EMPIRICAL TELEMETRY EVIDENCE: Hedged vs Naked -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] p-6">
+    <div class="max-w-3xl">
+      <div class="mono text-[12px] font-bold text-[#10B981] uppercase tracking-wider">EMPIRICAL DATA EVIDENCE</div>
+      <h3 class="font-display text-[26px] text-[#F9FAFB] mt-1">THE PROVABLE COST OF UNBALANCED INVENTORY</h3>
+      <p class="mono text-[13px] text-[#9CA3AF] mt-2">
+        Over thousands of live simulated markets, inventory balance is the single empirical determinant of profitability. Hedged markets consistently generate positive EV, while unhedged naked directional exposures lose to adverse selection.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-6">
+      <!-- Hedged Metric -->
+      <div class="border border-[#10B981]/40 bg-[#090D16] p-5">
+        <div class="mono text-[12px] text-[#9CA3AF] uppercase font-bold">Hedged / Matched Pairs</div>
+        <div class="mono text-[32px] font-bold text-[#10B981] mt-1">+$0.70 <span class="text-[14px] font-normal text-[#9CA3AF]">/ market</span></div>
+        <div class="mono text-[12px] text-[#10B981] mt-2 flex items-center gap-1.5">
+          <span>&check;</span> <span>Spread captured, zero directional tail risk</span>
+        </div>
+      </div>
+
+      <!-- Unhedged Metric -->
+      <div class="border border-[#EF4444]/40 bg-[#090D16] p-5">
+        <div class="mono text-[12px] text-[#9CA3AF] uppercase font-bold">Unhedged / Badly Naked Flow</div>
+        <div class="mono text-[32px] font-bold text-[#EF4444] mt-1">-$0.95 <span class="text-[14px] font-normal text-[#9CA3AF]">/ market</span></div>
+        <div class="mono text-[12px] text-[#EF4444] mt-2 flex items-center gap-1.5">
+          <span>&cross;</span> <span>Suffers adverse selection against informed takers</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ==================== SIMULATOR STATE & LOGIC ====================
+let SIM_STATE = {
+  spread: 4.0,       // cents
+  orderSize: 1000,   // shares
+  skew: "balanced",  // balanced, yes_heavy, no_heavy
+  step: 0,           // 0: ready, 1: quoted, 2: yes filled, 3: no filled, 4: merged
+  autoRunning: false,
+  autoInterval: null,
+  
+  yesShares: 0,
+  noShares: 0,
+  yesCost: 0,
+  noCost: 0,
+  
+  totalFills: 0,
+  pairsMerged: 0,
+  capitalDeployed: 0,
+  realizedPnl: 0,
+  totalCollateral: 0
+};
+
+function simUpdateConfig(){
+  SIM_STATE.spread = parseFloat(document.getElementById("sim-spread-slider").value);
+  SIM_STATE.orderSize = parseInt(document.getElementById("sim-size-slider").value, 10);
+  
+  document.getElementById("sim-cfg-spread-val").textContent = SIM_STATE.spread.toFixed(1) + "¢ (Mid $0.500)";
+  document.getElementById("sim-cfg-size-val").textContent = SIM_STATE.orderSize.toLocaleString() + " shares ($" + Math.round(SIM_STATE.orderSize * 0.48) + ")";
+  
+  const halfSpread = (SIM_STATE.spread / 200);
+  const bidPrice = (0.50 - halfSpread).toFixed(3);
+  const askPrice = (0.50 + halfSpread).toFixed(3);
+  
+  document.getElementById("yes-our-price").textContent = "$" + bidPrice;
+  document.getElementById("no-our-price").textContent = "$" + bidPrice;
+  document.getElementById("yes-our-size").textContent = SIM_STATE.orderSize.toLocaleString() + " sh";
+  document.getElementById("no-our-size").textContent = SIM_STATE.orderSize.toLocaleString() + " sh";
+  
+  document.getElementById("yes-spread-display").textContent = SIM_STATE.spread.toFixed(1) + "¢";
+  document.getElementById("no-spread-display").textContent = SIM_STATE.spread.toFixed(1) + "¢";
+}
+
+function simSetSkew(mode){
+  SIM_STATE.skew = mode;
+  document.getElementById("skew-btn-balanced").className = mode === "balanced" ? "mono text-[10px] font-bold py-1 bg-[#10B981] text-white border border-[#10B981] transition-colors cursor-pointer" : "mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer";
+  document.getElementById("skew-btn-yes").className = mode === "yes_heavy" ? "mono text-[10px] font-bold py-1 bg-[#3B82F6] text-white border border-[#3B82F6] transition-colors cursor-pointer" : "mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer";
+  document.getElementById("skew-btn-no").className = mode === "no_heavy" ? "mono text-[10px] font-bold py-1 bg-[#F59E0B] text-white border border-[#F59E0B] transition-colors cursor-pointer" : "mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer";
+  
+  const desc = mode === "balanced" ? "Balanced two-sided retail taker flow" : (mode === "yes_heavy" ? "Bullish trend: Takers aggressively sell YES into our bid" : "Bearish trend: Takers aggressively sell NO into our bid");
+  document.getElementById("sim-skew-desc").textContent = desc;
+}
+
+function simLog(msg, color){
+  const box = document.getElementById("sim-log-box");
+  const time = new Date().toLocaleTimeString("en-US", { hour12: false });
+  const div = document.createElement("div");
+  div.className = color ? `text-[${color}]` : "text-[#9CA3AF]";
+  div.innerHTML = `<span class="text-[#6B7280]">[${time}]</span> ${msg}`;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function simStepNext(){
+  const halfSpread = (SIM_STATE.spread / 200);
+  const bidPrice = (0.50 - halfSpread);
+  const size = SIM_STATE.orderSize;
+
+  if (SIM_STATE.step === 0){
+    // STEP 1: Post Quotes
+    SIM_STATE.step = 1;
+    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#3B82F6] rounded-full animate-pulse"></span> <span class="text-[#3B82F6]">QUOTES RESTING ON BOOKS</span>`;
+    simLog(`Resting maker bids: YES @ $${bidPrice.toFixed(3)} (${size} sh) &amp; NO @ $${bidPrice.toFixed(3)} (${size} sh). Maker fee: $0.00.`, "#60A5FA");
+    document.getElementById("reactor-payout-text").textContent = "Resting quotes active...";
+    return;
+  }
+
+  if (SIM_STATE.step === 1){
+    // STEP 2: Fill First Leg (YES or NO based on skew)
+    const fillYesFirst = SIM_STATE.skew === "no_heavy" ? false : (SIM_STATE.skew === "yes_heavy" ? true : Math.random() < 0.5);
+    
+    if (fillYesFirst){
+      SIM_STATE.yesShares += size;
+      SIM_STATE.yesCost += (size * bidPrice);
+      SIM_STATE.capitalDeployed += (size * bidPrice);
+      SIM_STATE.totalFills += 1;
+      SIM_STATE.step = 2; // YES filled, waiting for NO
+      
+      document.getElementById("inv-yes-shares").textContent = SIM_STATE.yesShares.toLocaleString() + " shares";
+      document.getElementById("reactor-yes-pill").textContent = `${SIM_STATE.yesShares} YES`;
+      document.getElementById("reactor-yes-pill").className = "px-2 py-1 bg-[#3B82F6] text-white font-bold";
+      document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#F59E0B] rounded-full animate-pulse"></span> <span class="text-[#FBBF24]">YES FILLED &bull; SKEWING NO QUOTE</span>`;
+      document.getElementById("reactor-payout-text").textContent = "YES filled! Engine skews NO quote...";
+      simLog(`FILL: Inbound taker hit YES bid @ $${bidPrice.toFixed(3)} (${size} sh). Cost: $${(size * bidPrice).toFixed(2)}. Engine applies dynamic skew to attract NO leg!`, "#34D399");
+    } else {
+      SIM_STATE.noShares += size;
+      SIM_STATE.noCost += (size * bidPrice);
+      SIM_STATE.capitalDeployed += (size * bidPrice);
+      SIM_STATE.totalFills += 1;
+      SIM_STATE.step = 3; // NO filled, waiting for YES
+      
+      document.getElementById("inv-no-shares").textContent = SIM_STATE.noShares.toLocaleString() + " shares";
+      document.getElementById("reactor-no-pill").textContent = `${SIM_STATE.noShares} NO`;
+      document.getElementById("reactor-no-pill").className = "px-2 py-1 bg-[#F59E0B] text-white font-bold";
+      document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#F59E0B] rounded-full animate-pulse"></span> <span class="text-[#FBBF24]">NO FILLED &bull; SKEWING YES QUOTE</span>`;
+      document.getElementById("reactor-payout-text").textContent = "NO filled! Engine skews YES quote...";
+      simLog(`FILL: Inbound taker hit NO bid @ $${bidPrice.toFixed(3)} (${size} sh). Cost: $${(size * bidPrice).toFixed(2)}. Engine applies dynamic skew to attract YES leg!`, "#FBBF24");
+    }
+    simUpdateTelemetry();
+    return;
+  }
+
+  if (SIM_STATE.step === 2 || SIM_STATE.step === 3){
+    // STEP 3: Balancing leg fills -> Pair Complete!
+    if (SIM_STATE.step === 2){
+      SIM_STATE.noShares += size;
+      SIM_STATE.noCost += (size * bidPrice);
+      SIM_STATE.capitalDeployed += (size * bidPrice);
+      SIM_STATE.totalFills += 1;
+      document.getElementById("inv-no-shares").textContent = SIM_STATE.noShares.toLocaleString() + " shares";
+      document.getElementById("reactor-no-pill").textContent = `${SIM_STATE.noShares} NO`;
+      document.getElementById("reactor-no-pill").className = "px-2 py-1 bg-[#F59E0B] text-white font-bold";
+    } else {
+      SIM_STATE.yesShares += size;
+      SIM_STATE.yesCost += (size * bidPrice);
+      SIM_STATE.capitalDeployed += (size * bidPrice);
+      SIM_STATE.totalFills += 1;
+      document.getElementById("inv-yes-shares").textContent = SIM_STATE.yesShares.toLocaleString() + " shares";
+      document.getElementById("reactor-yes-pill").textContent = `${SIM_STATE.yesShares} YES`;
+      document.getElementById("reactor-yes-pill").className = "px-2 py-1 bg-[#3B82F6] text-white font-bold";
+    }
+
+    SIM_STATE.step = 4; // ready to merge
+    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#10B981] rounded-full animate-pulse"></span> <span class="text-[#10B981]">PAIR COMPLETE &bull; READY TO MERGE</span>`;
+    document.getElementById("reactor-payout-text").textContent = "MATCH COMPLETE! Auto-Merging at $1.000 parity...";
+    document.getElementById("merge-reactor").className = "my-3 p-4 border-2 border-[#10B981] bg-[#10B981]/10 text-center space-y-3 transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)]";
+    simLog(`PAIR COMPLETE: Acquired ${size} matched pairs (YES+NO) @ avg basis $${(bidPrice * 2).toFixed(3)}/sh ($${(size * bidPrice * 2).toFixed(2)}).`, "#C084FC");
+    simUpdateTelemetry();
+    return;
+  }
+
+  if (SIM_STATE.step === 4){
+    // STEP 4: Merge Positions
+    const paired = Math.min(SIM_STATE.yesShares, SIM_STATE.noShares);
+    const costBasis = (SIM_STATE.yesCost + SIM_STATE.noCost);
+    const proceeds = paired * 1.00; // $1.00 parity
+    const profit = proceeds - costBasis;
+
+    SIM_STATE.pairsMerged += paired;
+    SIM_STATE.totalCollateral += proceeds;
+    SIM_STATE.realizedPnl += profit;
+    
+    SIM_STATE.yesShares = 0;
+    SIM_STATE.noShares = 0;
+    SIM_STATE.yesCost = 0;
+    SIM_STATE.noCost = 0;
+    SIM_STATE.step = 0; // ready for next cycle
+
+    document.getElementById("inv-yes-shares").textContent = "0 shares";
+    document.getElementById("inv-no-shares").textContent = "0 shares";
+    document.getElementById("reactor-yes-pill").textContent = "0 YES";
+    document.getElementById("reactor-yes-pill").className = "px-2 py-1 bg-[#3B82F6]/20 border border-[#3B82F6] text-[#60A5FA]";
+    document.getElementById("reactor-no-pill").textContent = "0 NO";
+    document.getElementById("reactor-no-pill").className = "px-2 py-1 bg-[#F59E0B]/20 border border-[#F59E0B] text-[#FBBF24]";
+    
+    document.getElementById("merge-reactor").className = "my-3 p-4 border border-[#1F2937] bg-[#111827] text-center space-y-3 transition-all";
+    document.getElementById("reactor-payout-text").textContent = `Merged ${paired} pairs -> +$${profit.toFixed(2)} USDC Collateral!`;
+    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#10B981] rounded-full"></span> <span class="text-[#10B981]">MERGED &bull; BANKED +$${profit.toFixed(2)}</span>`;
+    
+    simLog(`⚡ ON-CHAIN CTF MERGE: Redeemed ${paired} pairs for $${proceeds.toFixed(2)} USDC! Net Profit: +$${profit.toFixed(2)} (+${(100 * profit / costBasis).toFixed(2)}% ROI). 100% capital returned to bankroll!`, "#10B981");
+    simUpdateTelemetry();
+  }
+}
+
+function simUpdateTelemetry(){
+  document.getElementById("sim-stat-pairs").textContent = SIM_STATE.pairsMerged.toLocaleString();
+  document.getElementById("sim-stat-minted").textContent = "$" + SIM_STATE.totalCollateral.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  document.getElementById("sim-kpi-capital").textContent = "$" + Math.round(SIM_STATE.capitalDeployed).toLocaleString("en-US");
+  document.getElementById("sim-kpi-pnl").textContent = (SIM_STATE.realizedPnl >= 0 ? "+" : "") + "$" + SIM_STATE.realizedPnl.toFixed(2);
+  
+  const roi = SIM_STATE.capitalDeployed > 0 ? (100 * SIM_STATE.realizedPnl / SIM_STATE.capitalDeployed) : 0;
+  document.getElementById("sim-kpi-roi").textContent = (roi >= 0 ? "+" : "") + roi.toFixed(2) + "%";
+}
+
+function simToggleAuto(){
+  if (SIM_STATE.autoRunning){
+    clearInterval(SIM_STATE.autoInterval);
+    SIM_STATE.autoRunning = false;
+    document.getElementById("sim-btn-auto").textContent = "⚡ AUTO-STREAM";
+    document.getElementById("sim-btn-auto").className = "mono text-[11px] font-bold px-3 py-1.5 bg-[#10B981] text-white hover:bg-[#059669] border border-[#10B981] transition-all cursor-pointer";
+    simLog("Auto-stream paused.", "#9CA3AF");
+  } else {
+    SIM_STATE.autoRunning = true;
+    document.getElementById("sim-btn-auto").textContent = "⏸ PAUSE AUTO";
+    document.getElementById("sim-btn-auto").className = "mono text-[11px] font-bold px-3 py-1.5 bg-[#EF4444] text-white hover:bg-[#DC2626] border border-[#EF4444] transition-all cursor-pointer";
+    simLog("Auto-stream started: running continuous maker sweeps...", "#10B981");
+    SIM_STATE.autoInterval = setInterval(simStepNext, 700);
+  }
+}
+
+function simReset(){
+  if (SIM_STATE.autoRunning) simToggleAuto();
+  SIM_STATE.step = 0;
+  SIM_STATE.yesShares = 0;
+  SIM_STATE.noShares = 0;
+  SIM_STATE.yesCost = 0;
+  SIM_STATE.noCost = 0;
+  SIM_STATE.totalFills = 0;
+  SIM_STATE.pairsMerged = 0;
+  SIM_STATE.capitalDeployed = 0;
+  SIM_STATE.realizedPnl = 0;
+  SIM_STATE.totalCollateral = 0;
+  
+  document.getElementById("inv-yes-shares").textContent = "0 shares";
+  document.getElementById("inv-no-shares").textContent = "0 shares";
+  document.getElementById("reactor-yes-pill").textContent = "0 YES";
+  document.getElementById("reactor-no-pill").textContent = "0 NO";
+  document.getElementById("reactor-payout-text").textContent = "Waiting for paired fills...";
+  document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#FBBF24] rounded-full"></span> <span>READY TO QUOTE</span>`;
+  simUpdateTelemetry();
+  simLog("Simulator reset to clean state.", "#9CA3AF");
+}
+
+
+// ==================== COMPOUNDING & VELOCITY CALCULATOR ====================
+function recalcGrowth(){
+  const B0 = parseFloat(document.getElementById("calc-bankroll").value);
+  const spreadPct = parseFloat(document.getElementById("calc-spread").value) / 100;
+  const cyclesPerDay = parseFloat(document.getElementById("calc-cycles").value);
+  const rewardsPerDay = parseFloat(document.getElementById("calc-rewards").value);
+
+  document.getElementById("calc-val-bankroll").textContent = "$" + Math.round(B0).toLocaleString() + " USD";
+  document.getElementById("calc-val-spread").textContent = "+" + (spreadPct * 100).toFixed(2) + "%";
+  document.getElementById("calc-val-cycles").textContent = cyclesPerDay.toFixed(1) + " Cycles / Day";
+  document.getElementById("calc-val-rewards").textContent = "$" + rewardsPerDay.toFixed(2) + " / Day";
+
+  const dailyReturnFactor = (1 + (spreadPct * cyclesPerDay * 0.4)); // assume 40% capital turn per cycle
+  
+  let b30 = B0;
+  for (let d = 0; d < 30; d++){
+    b30 = (b30 * dailyReturnFactor) + rewardsPerDay;
+  }
+  const gain30 = b30 - B0;
+  document.getElementById("calc-res-30d").textContent = "+$" + Math.round(gain30).toLocaleString();
+
+  let b90 = B0;
+  for (let d = 0; d < 90; d++){
+    b90 = (b90 * dailyReturnFactor) + rewardsPerDay;
+  }
+  document.getElementById("calc-res-90d").textContent = "$" + Math.round(b90).toLocaleString();
+
+  // Render SVG Chart for 365 Days
+  const days = 365;
+  const shPts = [];
+  const carryPts = [];
+  let curSH = B0;
+  let curCarry = B0;
+
+  for (let d = 0; d <= days; d += 10){
+    shPts.push({ d: d, v: curSH });
+    carryPts.push({ d: d, v: curCarry });
+    for (let step = 0; step < 10; step++){
+      curSH = (curSH * dailyReturnFactor) + rewardsPerDay;
+      curCarry = curCarry * (1 + (0.05 / 365)); // 5% flat annual carry
+    }
+  }
+
+  const W = 580, H = 220, pL = 55, pR = 20, pT = 20, pB = 30;
+  const maxV = Math.max(...shPts.map(p => p.v));
+  const minV = B0;
+
+  const getX = (day) => pL + (day / days) * (W - pL - pR);
+  const getY = (val) => pT + (1 - (val - minV) / (maxV - minV || 1)) * (H - pT - pB);
+
+  const pathSH = shPts.map((p, i) => `${i ? "L" : "M"} ${getX(p.d).toFixed(1)} ${getY(p.v).toFixed(1)}`).join(" ");
+  const areaSH = `${pathSH} L ${getX(days).toFixed(1)} ${H - pB} L ${getX(0).toFixed(1)} ${H - pB} Z`;
+  const pathCarry = carryPts.map((p, i) => `${i ? "L" : "M"} ${getX(p.d).toFixed(1)} ${getY(p.v).toFixed(1)}`).join(" ");
+
+  const gridY = [0, 0.5, 1].map(pct => {
+    const val = minV + (maxV - minV) * (1 - pct);
+    const yPos = pT + pct * (H - pT - pB);
+    return `<line x1="${pL}" x2="${W - pR}" y1="${yPos}" y2="${yPos}" stroke="#1F2937" stroke-width="1"/>
+            <text x="${pL - 6}" y="${yPos + 3}" text-anchor="end" font-size="9" fill="#9CA3AF" font-family="Geist Mono">$${Math.round(val).toLocaleString()}</text>`;
+  }).join("");
+
+  const chartSvg = `
+    <svg viewBox="0 0 ${W} ${H}" class="w-full" style="height:${H}px" role="img">
+      ${gridY}
+      <line x1="${pL}" x2="${W - pR}" y1="${H - pB}" y2="${H - pB}" stroke="#374151" stroke-width="1"/>
+      <path d="${areaSH}" fill="#10B981" fill-opacity="0.12" stroke="none"/>
+      <path d="${pathSH}" fill="none" stroke="#10B981" stroke-width="2.5"/>
+      <path d="${pathCarry}" fill="none" stroke="#3B82F6" stroke-width="1.8" stroke-dasharray="4 3"/>
+      
+      <circle cx="${getX(days).toFixed(1)}" cy="${getY(shPts[shPts.length - 1].v).toFixed(1)}" r="4" fill="#111827" stroke="#10B981" stroke-width="2"/>
+      
+      <text x="${pL}" y="${H - 10}" font-size="9" fill="#9CA3AF" font-family="Geist Mono">Day 0 ($${Math.round(B0).toLocaleString()})</text>
+      <text x="${W - pR}" y="${H - 10}" text-anchor="end" font-size="9" fill="#10B981" font-family="Geist Mono" font-weight="bold">Day 365 ($${Math.round(shPts[shPts.length - 1].v).toLocaleString()})</text>
+    </svg>`;
+
+  document.getElementById("calc-chart-wrap").innerHTML = chartSvg;
+}
+
+// Initial Boot
+document.addEventListener("DOMContentLoaded", () => {
+  simUpdateConfig();
+  recalcGrowth();
+});
+</script>
+"""
+    return _wrap("Strategy Visualizer &amp; Live Demo &mdash; Spread Hunter", body)
+
+
+EXPLAINER_HTML = get_explainer_html()

@@ -311,6 +311,7 @@ def _NAVBAR(active_page: str = "fleet") -> str:
     badge_map = {
         "fleet": ("FLEET DESK", "bg-[#10B981]/15 text-[#10B981] border-[#10B981]/30"),
         "bankroll": ("10-TIER MATRIX", "bg-[#FBBF24]/15 text-[#FBBF24] border-[#FBBF24]/30"),
+        "explainer": ("STRATEGY DEMO", "bg-[#A855F7]/15 text-[#C084FC] border-[#A855F7]/30"),
         "landing": ("OVERVIEW", "bg-[#3B82F6]/15 text-[#3B82F6] border-[#3B82F6]/30"),
         "scan": ("MARKET SCAN", "bg-[#9CA3AF]/15 text-[#9CA3AF] border-[#9CA3AF]/30"),
     }
@@ -333,18 +334,21 @@ def _NAVBAR(active_page: str = "fleet") -> str:
 
     fleet_tab = tab_cls("fleet")
     bankroll_tab = tab_cls("bankroll")
+    explainer_tab = tab_cls("explainer")
     scan_tab = tab_cls("scan")
     landing_tab = tab_cls("landing")
 
     fleet_menu = menu_active("fleet")
     bankroll_menu = menu_active("bankroll")
+    explainer_menu = menu_active("explainer")
     landing_menu = menu_active("landing")
 
     fleet_pill = menu_pill("fleet")
     bankroll_pill = menu_pill("bankroll")
+    explainer_pill = menu_pill("explainer")
     landing_pill = menu_pill("landing")
 
-    accent_bar = "#FBBF24" if active_page == "bankroll" else ("#3B82F6" if active_page == "landing" else "#10B981")
+    accent_bar = "#A855F7" if active_page == "explainer" else ("#FBBF24" if active_page == "bankroll" else ("#3B82F6" if active_page == "landing" else "#10B981"))
 
     return f"""
 <div class="h-[2px] w-full" style="background-color:{accent_bar}"></div>
@@ -369,6 +373,9 @@ def _NAVBAR(active_page: str = "fleet") -> str:
       </a>
       <a href="/bankroll" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {bankroll_tab}">
         <span>⚡</span> 10 Bankroll Bots
+      </a>
+      <a href="/explainer" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {explainer_tab}">
+        <span>✨</span> Strategy Demo
       </a>
       <a href="http://127.0.0.1:8801/?view=scan" target="_blank" rel="noopener" class="h-8 px-3 inline-flex items-center gap-1.5 mono text-[12px] font-semibold tracking-wider uppercase border transition-colors {scan_tab}">
         <span>🎯</span> Market Scan <span class="text-[10px] text-[#9CA3AF]">&nearr;</span>
@@ -417,6 +424,17 @@ def _NAVBAR(active_page: str = "fleet") -> str:
                 {bankroll_pill}
               </div>
               <div class="mono text-[11px] text-[#9CA3AF] leading-tight mt-0.5">10-Tier Matrix ($100-$1000) &amp; Statistical CIs</div>
+            </div>
+          </a>
+
+          <a href="/explainer" class="flex items-start gap-3 p-2.5 border border-transparent hover:border-[#1F2937] hover:bg-[#111827] transition-colors {explainer_menu}">
+            <div class="text-[18px]">✨</div>
+            <div class="min-w-0 flex-1">
+              <div class="mono text-[13px] font-bold text-[#F9FAFB] flex items-center justify-between">
+                <span>Strategy Visualizer &amp; Demo</span>
+                {explainer_pill}
+              </div>
+              <div class="mono text-[11px] text-[#9CA3AF] leading-tight mt-0.5">Interactive Dual-Book &amp; CTF Merge Simulator</div>
             </div>
           </a>
 

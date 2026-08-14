@@ -656,6 +656,7 @@ def api_funnel() -> dict:
 
 from server.spread_dash_html import (  # noqa: E402
     LANDING_HTML, DASHBOARD_HTML, BANKROLL_HTML, _CAPITAL_JS)
+from server.explainer_html import EXPLAINER_HTML  # noqa: E402
 
 
 @app.get("/capital.js")
@@ -695,7 +696,14 @@ def bankroll_page():
         "Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
+@app.get("/explainer", response_class=HTMLResponse)
+def explainer_page():
+    return HTMLResponse(content=EXPLAINER_HTML, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("server.spread_dash:app", host="127.0.0.1", port=8805, reload=False)
+
 
