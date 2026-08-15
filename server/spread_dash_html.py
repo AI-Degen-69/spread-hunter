@@ -233,8 +233,8 @@ function capitalSeries(rows, bankroll, marks, floatNow){
   };
 }
 
-function capitalChartSvg(ser){
-  const { pts, bankroll, now } = ser;
+function capitalGeometry(ser){
+  const { pts, bankroll } = ser;
   const W = 800, H = 220, padL = 56, padR = 24, padT = 22, padB = 28;
   const t0 = pts[0].ts;
   const t1 = pts[pts.length - 1].ts === t0 ? t0 + 3600 : pts[pts.length - 1].ts;
@@ -243,8 +243,16 @@ function capitalChartSvg(ser){
   const hi = Math.max(bankroll, ...pts.map(p => p.v));
   const pad = Math.max((hi - lo) * 0.16, 1);
   const minY = lo - pad, maxY = hi + pad;
-  const x = v => padL + ((v - t0) / span) * (W - padL - padR);
-  const y = v => padT + (1 - (v - minY) / (maxY - minY)) * (H - padT - padB);
+  return {
+    W, H, padL, padR, padT, padB, t0, t1, span, minY, maxY,
+    x: v => padL + ((v - t0) / span) * (W - padL - padR),
+    y: v => padT + (1 - (v - minY) / (maxY - minY)) * (H - padT - padB),
+  };
+}
+
+function capitalChartSvg(ser){
+  const { pts, bankroll, now } = ser;
+  const { W, H, padL, padR, padT, padB, t0, t1, span, minY, maxY, x, y } = capitalGeometry(ser);
 
   const gridCount = 3;
   const grid = [0, 1, 2, 3].map(i => {
@@ -314,16 +322,7 @@ function initCapitalChartInteractivity(ser){
   if (!svg || !hit || !group || !ser || !ser.pts || !ser.pts.length) return;
 
   const { pts, bankroll } = ser;
-  const W = 800, H = 220, padL = 56, padR = 24, padT = 22, padB = 28;
-  const t0 = pts[0].ts;
-  const t1 = pts[pts.length - 1].ts === t0 ? t0 + 3600 : pts[pts.length - 1].ts;
-  const span = Math.max(1, t1 - t0);
-  const lo = Math.min(bankroll, ...pts.map(p => p.v));
-  const hi = Math.max(bankroll, ...pts.map(p => p.v));
-  const pad = Math.max((hi - lo) * 0.16, 1);
-  const minY = lo - pad, maxY = hi + pad;
-  const x = v => padL + ((v - t0) / span) * (W - padL - padR);
-  const y = v => padT + (1 - (v - minY) / (maxY - minY)) * (H - padT - padB);
+  const { W, H, padL, padR, padT, padB, t0, t1, span, minY, maxY, x, y } = capitalGeometry(ser);
 
   const resetHud = () => {
     group.style.display = "none";
@@ -416,8 +415,9 @@ function initCapitalChartInteractivity(ser){
         const tradePnlColor = best.pnl >= 0 ? "#10B981" : "#EF4444";
         extra = ` &middot; <span class="text-[#9CA3AF]">Nearest:</span> <span style="color:${tradePnlColor}" class="font-bold">${best.pnl>=0?'+':''}$${best.pnl.toFixed(2)}</span>`;
         if (best.market) {
-          const mSlug = best.market.length > 20 ? best.market.slice(0, 18) + "…" : best.market;
-          extra += ` <span class="text-[#9CA3AF]/70">(${mSlug})</span>`;
+          const mSlug = best.market.length > 20 ? best.market.slice(0, 18) + "\u2026" : best.market;
+          const safeSlug = mSlug.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+          extra += ` <span class="text-[#9CA3AF]/70">(${safeSlug})</span>`;
         }
       } else if (best.type === "mark") {
         extra = ` &middot; <span class="text-[#3B82F6]">Float mark</span>`;
@@ -776,7 +776,6 @@ LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", _NAVBAR("landing") + r"""
     </div>
   </div>
 
-</section>
 
   <div class="grid grid-cols-12 gap-0 border-x border-[#1F2937] border-b bg-[#111827]">
     <div class="col-span-12 p-6 lg:p-8 flex flex-col lg:flex-row lg:items-end justify-between gap-4 border-b border-[#1F2937] bg-[#090D16]">
@@ -865,12 +864,6 @@ async function load(){
     return;
   }
 
-  const heroReal = document.getElementById("hero-realized");
-  if (heroReal) heroReal.textContent = fmtUsd(s.realized_usd);
-  const heroSub = document.getElementById("hero-realized-sub");
-  if (heroSub) heroSub.textContent = (s.realized_pct===null?"":fmtPct(s.realized_pct)+" ") + "on " + (s.realized_cost||0).toFixed(0) + " committed";
-  const heroReb = document.getElementById("hero-realized-rebate");
-  if (heroReb) heroReb.textContent = fmtUsd(s.rebate_usd) + " rebates = " + fmtUsd(s.total_liquidation_usd) + " total liquidation P&L";
 
   const st = await fetch("/api/settled").then(r => r.json()).catch(() => null);
   renderCapitalPanel(document.getElementById("capital-panel"), s, (st && st.settled) || []);
@@ -943,7 +936,7 @@ async function load(){
         document.getElementById("landing-bk-pnl").textContent = fmtUsd(totalPnl);
         document.getElementById("landing-bk-pnl").className = "mono text-[24px] font-bold mt-1 " + (totalPnl >= 0 ? "text-[#10B981]" : "text-[#EF4444]");
         document.getElementById("landing-bk-pnl-sub").textContent = `${totalCloses} closes recorded fleet-wide`;
-        document.getElementById("landing-bk-status").textContent = `${activeCount || tiers.length} / ${tiers.length} Active`;
+        document.getElementById("landing-bk-status").textContent = `${activeCount !== undefined ? activeCount : tiers.length} / ${tiers.length} Active`;
         document.getElementById("landing-bk-samples").textContent = `${totalCloses} / 1,000 target samples`;
 
         if (bestTier) {

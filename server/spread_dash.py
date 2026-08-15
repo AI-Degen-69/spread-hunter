@@ -11,6 +11,7 @@ copy carried over from the design source.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -480,8 +481,10 @@ def api_trade_history(tier: str | None = None) -> dict:
                                 })
                                 m["status"] = "OPEN"
                                 m["method"] = "OPEN"
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logging.getLogger(__name__).warning(
+                                "live_state payload parse error in tier %s: %s", t, exc
+                            )
                     elif "up_shares" in r:
                         up_sh = float(r.get("up_shares") or 0.0)
                         dn_sh = float(r.get("dn_shares") or 0.0)

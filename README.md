@@ -40,7 +40,7 @@ holding to resolution or voluntary merge.
 
 ## Layout
 
-```
+```text
 strategy/   Core engine: fleet sweep, allocator, quoting, queue-aware fills, risk gates, store & stats
 server/     spread_dash.py (canonical dashboard, :8800), fleet_dash.py (market scan funnel, :8801)
 scripts/    Market ranker, pairs EV report, bankroll sensitivity, replay harnesses, process supervisors

@@ -382,6 +382,7 @@ def test_capital_widget_served_and_parses(tmp_path):
     src = r.text
     assert "function capitalSeries(rows, bankroll, marks, floatNow)" in src
     assert "function capitalChartSvg(ser)" in src
+    assert "function capitalGeometry(ser)" in src
     assert "let CAP_VIEW = \"realized\"" in src
     assert 'data-capview="${id}"' in src
     assert 'aria-label="Capital view"' in src

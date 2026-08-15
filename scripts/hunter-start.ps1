@@ -33,7 +33,9 @@ if ($stopped -gt 0) {
 
 # 2. Check for unowned stray processes (excluding bankroll bots)
 $strays = @(Find-HunterStrays)
-# Noisy PID listing silenced per operator configuration
+if ($strays.Count -gt 0) {
+    Write-ProfileWarning -Message "Stray Processes:" -Detail "Found $($strays.Count) unowned hunter process(es). Run hunter-stop -Strays to clean up."
+}
 
 # 3. Check for port 8800 conflict
 if (netstat -ano | Select-String ":8800\s+.*LISTENING") {
