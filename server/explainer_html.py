@@ -1,12 +1,13 @@
-"""Interactive Strategy Explainer and Playable Visual Demo.
+"""Interactive Strategy Explainer and Playable Visual Demo in Hebrew.
 
 Renders an interactive, visual HTML/JS presentation of the Spread Hunter
 maker strategy:
-1. Binary parity arithmetic ($0.96 cost vs $1.00 parity)
-2. Live interactive dual order-book simulator with step-by-step & autoplay modes
-3. Smart contract CTF token merge chamber animation
-4. Capital velocity & compounding calculator with live SVG projection chart
-5. Real fleet telemetry comparison (hedged +$0.70 vs naked -$0.95)
+1. Binary parity arithmetic ($0.96 cost vs $1.00 parity, zero maker fees)
+2. Detailed decision flowchart of the bot's mind and execution steps
+3. Empirical success metrics (Hedged +$0.70 vs Naked -$0.95, Capital Velocity)
+4. Live interactive dual order-book simulator with step-by-step & autoplay modes
+5. Smart contract CTF token merge chamber animation
+6. Capital velocity & compounding calculator with live SVG projection chart
 """
 from __future__ import annotations
 
@@ -15,35 +16,62 @@ from server.spread_dash_html import _HEAD, _NAVBAR, _wrap
 
 def get_explainer_html() -> str:
     body = _NAVBAR("explainer") + r"""
-<div class="bg-[#111827] border-b border-[#1F2937]">
+<style>
+  /* Hebrew & RTL Support Enhancements */
+  .rtl-mode { direction: rtl; text-align: right; }
+  .ltr-box { direction: ltr; text-align: left; }
+  .hebrew-font { font-family: "Geist Mono", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Heebo", "Assistant", sans-serif; }
+  .mono-nums { font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+  
+  /* Flowchart Connectors */
+  .flow-step-card {
+    position: relative;
+    transition: all 0.25s ease;
+  }
+  .flow-step-card:hover {
+    border-color: rgba(16, 185, 129, 0.4);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .flow-badge {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10B981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+  }
+</style>
+
+<!-- Sub-Header Top Bar -->
+<div class="bg-[#111827] border-b border-[#1F2937]" dir="rtl">
   <div class="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
     <div class="flex items-center gap-3">
       <span class="size-2 bg-[#A855F7] animate-pulse"></span>
-      <div class="mono text-[13px] tracking-[0.14em] uppercase font-bold text-[#A855F7]">Strategy Visualizer &amp; Live Playable Simulator</div>
+      <div class="hebrew-font text-[13px] tracking-wide uppercase font-bold text-[#A855F7]">
+        מדריך האסטרטגיה &amp; סימולטור חי &mdash; Strategy Visualizer &amp; Live Playable Simulator
+      </div>
     </div>
-    <div class="flex items-center gap-3 mono text-[12px] text-[#9CA3AF]">
+    <div class="flex items-center gap-3 mono text-[12px] text-[#9CA3AF] ltr-box">
       <span>Binary Parity Arbitrage &bull; Instant CTF Merges &bull; Capital Velocity</span>
     </div>
   </div>
 </div>
 
-<main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-8 space-y-10">
+<main class="mx-auto max-w-[1440px] px-3 sm:px-6 lg:px-8 py-8 space-y-10 rtl-mode hebrew-font">
 
-  <!-- HERO: The Core Structural Inefficiency -->
+  <!-- ==================== HERO: The Core Structural Inefficiency ==================== -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] p-6 lg:p-8 relative overflow-hidden">
     <div class="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-[#10B981] via-[#A855F7] to-[#3B82F6]"></div>
     
     <div class="max-w-4xl">
-      <div class="inline-flex items-center gap-2 px-3 py-1 bg-[#A855F7]/15 border border-[#A855F7]/30 mono text-[11px] font-bold text-[#C084FC] uppercase tracking-wider mb-4">
+      <div class="inline-flex items-center gap-2 px-3 py-1 bg-[#A855F7]/15 border border-[#A855F7]/30 mono text-[11px] font-bold text-[#C084FC] uppercase tracking-wider mb-4 ltr-box">
         <span>⚡ THE CORE EDGE</span> &bull; <span>STRUCTURAL MARKET ANOMALY</span>
       </div>
-      <h1 class="font-display text-[32px] sm:text-[44px] leading-tight text-[#F9FAFB] tracking-tight">
-        HOW SPREAD HUNTER CAPTURES <span class="text-[#10B981]">PARITY ARBITRAGE</span> WITHOUT DIRECTIONAL RISK
+      <h1 class="text-[28px] sm:text-[38px] leading-tight font-extrabold text-[#F9FAFB] tracking-tight">
+        כיצד SPREAD HUNTER לוכד <span class="text-[#10B981]">ארביטראז' פריטטיבי (PARITY ARBITRAGE)</span> ללא הימור כיווני
       </h1>
-      <p class="mono text-[14px] text-[#9CA3AF] leading-relaxed mt-4">
-        On binary prediction markets (Polymarket), <span class="text-[#F9FAFB] font-semibold">1 YES + 1 NO</span> always equals exactly <span class="text-[#10B981] font-bold">$1.000 USDC</span>. 
-        Takers pay a spread penalty when crossing both books (<span class="text-[#EF4444]">$1.020+</span>), while Spread Hunter rests maker bids below mid on <span class="text-[#10B981]">both outcomes simultaneously</span> (<span class="text-[#10B981]">$0.960</span> cost), paying <span class="text-[#10B981] font-bold">$0.00 in fees</span>. 
-        When both legs fill, the tokens are instantly merged on-chain via the CTF smart contract back into collateral, capturing pure spread profit in <span class="text-[#FBBF24] font-bold">minutes instead of years</span>.
+      <p class="text-[14px] sm:text-[15px] text-[#9CA3AF] leading-relaxed mt-4">
+        בשווקי חיזוי בינאריים (Polymarket), מתקיים חוק מתמטי מוחלט: <span class="text-[#F9FAFB] font-bold ltr-box inline-block">1 YES + 1 NO</span> שווה תמיד בדיוק <span class="text-[#10B981] font-bold ltr-box inline-block">$1.000 USDC</span>. 
+        סוחרים רגילים (Takers) שחוצים את ספר הפקודות משלמים עמלות ומרווח יקר (<span class="text-[#EF4444] font-semibold ltr-box inline-block">$1.020+</span>), בעוד ש-Spread Hunter פועל כ-Maker דו-צדדי: מציב הצעות קנייה (Bids) מתחת למחיר השוק ב-<span class="text-[#10B981] font-bold">שני החוזים במקביל</span> (עלות כוללת של <span class="text-[#10B981] font-bold ltr-box inline-block">$0.960</span> לזוג), ומשלם <span class="text-[#10B981] font-bold ltr-box inline-block">$0.00 in fees</span>. 
+        ברגע ששתי הרגליים מתמלאות, החוזים מאוחדים מיידית בחוזה החכם של ה-CTF בחזרה לבטוחת מזומן – ונועלים את רווח המרווח בתוך <span class="text-[#FBBF24] font-bold">דקות במקום חודשים</span>.
       </p>
     </div>
 
@@ -52,35 +80,35 @@ def get_explainer_html() -> str:
       <!-- Taker Box -->
       <div class="border border-[#EF4444]/30 bg-[#090D16] p-5 relative">
         <div class="flex items-center justify-between pb-3 border-b border-[#EF4444]/20">
-          <div class="mono text-[13px] font-bold text-[#EF4444] uppercase tracking-wider flex items-center gap-2">
-            <span>❌ THE RETAIL / TAKER TRAP</span>
+          <div class="text-[13px] font-bold text-[#EF4444] uppercase tracking-wider flex items-center gap-2">
+            <span>❌ מלכודת הטייקר / הקהל הרחב</span>
           </div>
-          <span class="mono text-[10px] px-2 py-0.5 bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30 font-bold uppercase">GUARANTEED LOSS</span>
+          <span class="mono text-[10px] px-2 py-0.5 bg-[#EF4444]/15 text-[#EF4444] border border-[#EF4444]/30 font-bold uppercase ltr-box">THE TAKER TRAP</span>
         </div>
-        <div class="space-y-3 mt-4 mono text-[13px]">
+        <div class="space-y-3 mt-4 text-[13px]">
           <div class="flex justify-between text-[#9CA3AF]">
-            <span>Buy YES Ask (Cross spread):</span>
-            <span class="text-[#F9FAFB] font-semibold">$0.510</span>
+            <span>קניית YES מה-Ask (חציית מרווח):</span>
+            <span class="text-[#F9FAFB] font-semibold mono-nums ltr-box">$0.510</span>
           </div>
           <div class="flex justify-between text-[#9CA3AF]">
-            <span>Buy NO Ask (Cross spread):</span>
-            <span class="text-[#F9FAFB] font-semibold">$0.510</span>
+            <span>קניית NO מה-Ask (חציית מרווח):</span>
+            <span class="text-[#F9FAFB] font-semibold mono-nums ltr-box">$0.510</span>
           </div>
           <div class="flex justify-between text-[#9CA3AF]">
-            <span>Taker Fees (2 &times; 1.7%):</span>
-            <span class="text-[#EF4444] font-semibold">+$0.034</span>
+            <span>עמלות Taker לשני הצדדים (2 &times; 1.7%):</span>
+            <span class="text-[#EF4444] font-semibold mono-nums ltr-box">+$0.034</span>
           </div>
           <div class="pt-2 border-t border-[#1F2937] flex justify-between font-bold">
-            <span class="text-[#9CA3AF]">Total Cost to Acquire Pair:</span>
-            <span class="text-[#EF4444] text-[15px]">$1.054</span>
+            <span class="text-[#9CA3AF]">עלות כוללת לרכישת זוג:</span>
+            <span class="text-[#EF4444] text-[15px] mono-nums ltr-box">$1.054</span>
           </div>
           <div class="flex justify-between text-[#9CA3AF]">
-            <span>Settlement / Parity Payout:</span>
-            <span class="text-[#F9FAFB] font-semibold">$1.000</span>
+            <span>פדיון פריטטיבי בסיום השוק:</span>
+            <span class="text-[#F9FAFB] font-semibold mono-nums ltr-box">$1.000</span>
           </div>
           <div class="p-3 bg-[#EF4444]/10 border border-[#EF4444]/20 flex items-center justify-between font-bold text-[#EF4444]">
-            <span>NET TAKER P&amp;L PER SHARE:</span>
-            <span class="text-[16px]">-$0.054 (-5.1%)</span>
+            <span>הפסד נקי למניה:</span>
+            <span class="text-[16px] mono-nums ltr-box">-$0.054 (-5.1%)</span>
           </div>
         </div>
       </div>
@@ -88,64 +116,237 @@ def get_explainer_html() -> str:
       <!-- Maker Box -->
       <div class="border border-[#10B981]/40 bg-[#090D16] p-5 relative shadow-[0_0_24px_rgba(16,185,129,0.08)]">
         <div class="flex items-center justify-between pb-3 border-b border-[#10B981]/20">
-          <div class="mono text-[13px] font-bold text-[#10B981] uppercase tracking-wider flex items-center gap-2">
-            <span>⚡ SPREAD HUNTER TWO-SIDED MAKER</span>
+          <div class="text-[13px] font-bold text-[#10B981] uppercase tracking-wider flex items-center gap-2">
+            <span>⚡ יתרון ה-MAKER של SPREAD HUNTER</span>
           </div>
-          <span class="mono text-[10px] px-2 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/40 font-bold uppercase">RISK-FREE SPREAD CAPTURE</span>
+          <span class="mono text-[10px] px-2 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/40 font-bold uppercase ltr-box">TWO-SIDED MAKER</span>
         </div>
-        <div class="space-y-3 mt-4 mono text-[13px]">
+        <div class="space-y-3 mt-4 text-[13px]">
           <div class="flex justify-between text-[#9CA3AF]">
-            <span>Resting Maker Bid YES:</span>
-            <span class="text-[#10B981] font-semibold">$0.480</span>
+            <span>הצעת קנייה (Bid) ב-YES:</span>
+            <span class="text-[#10B981] font-semibold mono-nums ltr-box">$0.480</span>
           </div>
           <div class="flex justify-between text-[#9CA3AF]">
-            <span>Resting Maker Bid NO:</span>
-            <span class="text-[#10B981] font-semibold">$0.480</span>
+            <span>הצעת קנייה (Bid) ב-NO:</span>
+            <span class="text-[#10B981] font-semibold mono-nums ltr-box">$0.480</span>
           </div>
           <div class="flex justify-between text-[#9CA3AF]">
-            <span>Maker Trading Fee:</span>
-            <span class="text-[#10B981] font-semibold">$0.000 (ZERO)</span>
+            <span>עמלת מסחר Maker:</span>
+            <span class="text-[#10B981] font-semibold mono-nums ltr-box">$0.000 (אפס עמלות)</span>
           </div>
           <div class="pt-2 border-t border-[#1F2937] flex justify-between font-bold">
-            <span class="text-[#9CA3AF]">Total Cost Basis to Acquire Pair:</span>
-            <span class="text-[#10B981] text-[15px]">$0.960</span>
+            <span class="text-[#9CA3AF]">עלות כוללת לרכישת זוג מושלם:</span>
+            <span class="text-[#10B981] text-[15px] mono-nums ltr-box">$0.960</span>
           </div>
           <div class="flex justify-between text-[#9CA3AF]">
-            <span>Instant CTF Merge Payout:</span>
-            <span class="text-[#F9FAFB] font-semibold">$1.000</span>
+            <span>פדיון מיידי באיחוד CTF (ללא המתנה):</span>
+            <span class="text-[#F9FAFB] font-semibold mono-nums ltr-box">$1.000</span>
           </div>
           <div class="p-3 bg-[#10B981]/15 border border-[#10B981]/40 flex items-center justify-between font-bold text-[#10B981]">
-            <span>NET MAKER P&amp;L PER SHARE:</span>
-            <span class="text-[16px]">+$0.040 (+4.17%)</span>
+            <span>רווח נקי לזוג מניות:</span>
+            <span class="text-[16px] mono-nums ltr-box">+$0.040 (+4.17%)</span>
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- INTERACTIVE SECTION: Live Playable Dual Order-Book Simulator -->
+  <!-- ==================== FLOWCHART: The Bot's Mind & Decision Tree ==================== -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] p-6 lg:p-8 relative">
+    <div class="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[#1F2937] mb-6">
+      <div>
+        <div class="inline-flex items-center gap-2 px-2.5 py-0.5 bg-[#3B82F6]/15 border border-[#3B82F6]/30 mono text-[11px] font-bold text-[#60A5FA] uppercase tracking-wider mb-2">
+          <span>🧠 ARCHITECTURE &amp; EXECUTION LOGIC</span>
+        </div>
+        <h2 class="text-[24px] sm:text-[30px] font-extrabold text-[#F9FAFB]">
+          תהליך המחשבה ותרשים הזרימה של הבוט
+        </h2>
+        <p class="text-[13px] text-[#9CA3AF] mt-1">
+          איך המערכת מזהה שווקים, מציבה ציטוטים דו-צדדיים, מגיבה למילוי חד-צדדי ב-Skew דינמי, ופודה הון באופן אוטומטי
+        </p>
+      </div>
+      <div class="mono text-[11px] px-3 py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#374151]">
+        DECISION ENGINE v2.4
+      </div>
+    </div>
+
+    <!-- Interactive Grid of Flowchart Steps -->
+    <div class="grid grid-cols-1 md:grid-cols-5 gap-4 relative">
+      
+      <!-- Step 1 -->
+      <div class="flow-step-card border border-[#1F2937] bg-[#090D16] p-4 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="mono text-[10px] px-2 py-0.5 bg-[#3B82F6]/20 text-[#60A5FA] border border-[#3B82F6]/40 font-bold">שלב 1</span>
+            <span class="text-[16px]">🔍</span>
+          </div>
+          <div class="font-bold text-[14px] text-[#F9FAFB] mb-2">סריקה וסינון שווקים</div>
+          <p class="text-[11px] text-[#9CA3AF] leading-relaxed">
+            סריקה אוטומטית של כל שווקי Polymarket. סינון שווקים עם מחזור מסחר אמיתי (<span class="text-[#F9FAFB] mono-nums ltr-box">Volume &ge; $200k</span>), עומק ספר פקודות ממשי, ומרווח רחב מספיק (<span class="text-[#F9FAFB] mono-nums ltr-box">Spread &ge; 3¢</span>) ללא ציטוטי Mirage.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[#1F2937] text-[10px] text-[#3B82F6] font-bold">
+          &bull; סינון שווקים דלילים או כוזבים
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="flow-step-card border border-[#1F2937] bg-[#090D16] p-4 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="mono text-[10px] px-2 py-0.5 bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/40 font-bold">שלב 2</span>
+            <span class="text-[16px]">⚡</span>
+          </div>
+          <div class="font-bold text-[14px] text-[#F9FAFB] mb-2">תמחור והצבת Maker Bids</div>
+          <p class="text-[11px] text-[#9CA3AF] leading-relaxed">
+            חישוב מחיר האמצע (<span class="text-[#F9FAFB] mono-nums">Mid-Price</span>). הצבת פקודות קנייה (Bids) מתחת ל-Mid ב-YES וב-NO בו-זמנית. העלות המשוקללת נשמרת תמיד מתחת ל-$1.00, עם <span class="text-[#10B981] font-bold">0% עמלות Maker</span>.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[#1F2937] text-[10px] text-[#10B981] font-bold">
+          &bull; נעילת מרווח דו-צדדי
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="flow-step-card border border-[#1F2937] bg-[#090D16] p-4 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="mono text-[10px] px-2 py-0.5 bg-[#F59E0B]/20 text-[#FBBF24] border border-[#F59E0B]/40 font-bold">שלב 3</span>
+            <span class="text-[16px]">🎯</span>
+          </div>
+          <div class="font-bold text-[14px] text-[#F9FAFB] mb-2">זיהוי מילוי ראשון (Fill)</div>
+          <p class="text-[11px] text-[#9CA3AF] leading-relaxed">
+            טייקר בשוק מוכר לתוך אחת מההצעות שלנו (למשל YES נתפס ראשון). הבוט רושם את הרכישה במלאי ומזהה מיד חשיפה כיוונית זמנית (<span class="text-[#FBBF24] font-semibold">Naked Inventory</span>) הדורשת איזון מהיר.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[#1F2937] text-[10px] text-[#FBBF24] font-bold">
+          &bull; ניטור מלאי רציף בזמן אמת
+        </div>
+      </div>
+
+      <!-- Step 4 -->
+      <div class="flow-step-card border border-[#1F2937] bg-[#090D16] p-4 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="mono text-[10px] px-2 py-0.5 bg-[#A855F7]/20 text-[#C084FC] border border-[#A855F7]/40 font-bold">שלב 4</span>
+            <span class="text-[16px]">🛡️</span>
+          </div>
+          <div class="font-bold text-[14px] text-[#F9FAFB] mb-2">הטיית מחיר דינמית (Skew)</div>
+          <p class="text-[11px] text-[#9CA3AF] leading-relaxed">
+            המנוע מפעיל את קפיץ ה-Skew: מרחיק/מוריד את הצעת ה-YES כדי לא להעמיק סיכון, ובמקביל <span class="text-[#C084FC] font-bold">מקרב באגרסיביות את הצעת ה-NO</span> אל ה-Mid כדי לפתות טייקרים לסגור את הזוג. אם החשיפה עוברת תקרה &mdash; מופעל Hard Block.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[#1F2937] text-[10px] text-[#C084FC] font-bold">
+          &bull; הגנה מפני Adverse Selection
+        </div>
+      </div>
+
+      <!-- Step 5 -->
+      <div class="flow-step-card border border-[#10B981]/40 bg-[#090D16] p-4 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="mono text-[10px] px-2 py-0.5 bg-[#10B981] text-white font-bold">שלב 5</span>
+            <span class="text-[16px]">🔮</span>
+          </div>
+          <div class="font-bold text-[14px] text-[#10B981] mb-2">איחוד CTF ופדיון מזומן</div>
+          <p class="text-[11px] text-[#9CA3AF] leading-relaxed">
+            ברגע שהרגל השנייה (NO) מתמלאת, נוצר זוג מושלם! הבוט קורא ישירות לחוזה <code class="text-[#F9FAFB] ltr-box inline-block">ctf.mergePositions()</code> ברשת Polygon, שורף את החוזים, מקבל $1.000 USDC כבטוחה, ומחזיר 100% מההון + הרווח לסבב הבא.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[#10B981]/30 text-[10px] text-[#10B981] font-bold">
+          &bull; נעילת רווח ומחזור הון מיידי
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ==================== EMPIRICAL SUCCESS METRICS ==================== -->
+  <section class="sh-rise border border-[#1F2937] bg-[#111827] p-6 lg:p-8">
+    <div class="max-w-4xl pb-4 border-b border-[#1F2937] mb-6">
+      <div class="inline-flex items-center gap-2 px-2.5 py-0.5 bg-[#10B981]/15 border border-[#10B981]/30 mono text-[11px] font-bold text-[#10B981] uppercase tracking-wider mb-2">
+        <span>📊 EMPIRICAL METRICS &amp; GO-LIVE GATES</span>
+      </div>
+      <h2 class="text-[24px] sm:text-[30px] font-extrabold text-[#F9FAFB]">
+        מדדי ההצלחה והתנאים לפעילות
+      </h2>
+      <p class="text-[13px] text-[#9CA3AF] mt-1">
+        המדדים האמפיריים שנמדדו לאורך אלפי שווקים בסימולציה, המבדילים בין רווחיות עקבית להפסד
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      
+      <!-- Metric 1: Hedged EV -->
+      <div class="border border-[#10B981]/40 bg-[#090D16] p-5 relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
+        <div class="text-[11px] text-[#9CA3AF] uppercase font-bold mono">Hedged / Matched Pairs</div>
+        <div class="text-[14px] font-bold text-[#F9FAFB] mt-1">תוחלת רווח לשוק מאוזן</div>
+        <div class="mono text-[30px] font-extrabold text-[#10B981] mt-2 ltr-box">+$0.70 <span class="text-[13px] font-normal text-[#9CA3AF]">/ שוק</span></div>
+        <div class="text-[11px] text-[#10B981] mt-3 flex items-center gap-1.5">
+          <span>✔</span> <span>לכידת מרווח מלאה, אפס סיכון כיווני</span>
+        </div>
+      </div>
+
+      <!-- Metric 2: Unhedged Penalty -->
+      <div class="border border-[#EF4444]/40 bg-[#090D16] p-5 relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#EF4444]"></div>
+        <div class="text-[11px] text-[#9CA3AF] uppercase font-bold mono">Unhedged / Naked Flow</div>
+        <div class="text-[14px] font-bold text-[#F9FAFB] mt-1">הפסד בחוסר איזון מלאי</div>
+        <div class="mono text-[30px] font-extrabold text-[#EF4444] mt-2 ltr-box">-$0.95 <span class="text-[13px] font-normal text-[#9CA3AF]">/ שוק</span></div>
+        <div class="text-[11px] text-[#EF4444] mt-3 flex items-center gap-1.5">
+          <span>✖</span> <span>פגיעה מ-Adverse Selection בפוזיציה חשופה</span>
+        </div>
+      </div>
+
+      <!-- Metric 3: Capital Velocity -->
+      <div class="border border-[#3B82F6]/40 bg-[#090D16] p-5 relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#3B82F6]"></div>
+        <div class="text-[11px] text-[#9CA3AF] uppercase font-bold mono">Capital Velocity</div>
+        <div class="text-[14px] font-bold text-[#F9FAFB] mt-1">מהירות מחזור ההון</div>
+        <div class="mono text-[30px] font-extrabold text-[#3B82F6] mt-2 ltr-box">4 &ndash; 8 <span class="text-[13px] font-normal text-[#9CA3AF]">סבבים/יום</span></div>
+        <div class="text-[11px] text-[#60A5FA] mt-3 flex items-center gap-1.5">
+          <span>⚡</span> <span>שחרור בטוחות תוך דקות ע"י CTF Merge</span>
+        </div>
+      </div>
+
+      <!-- Metric 4: Net Spread Margin -->
+      <div class="border border-[#FBBF24]/40 bg-[#090D16] p-5 relative overflow-hidden">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#FBBF24]"></div>
+        <div class="text-[11px] text-[#9CA3AF] uppercase font-bold mono">Net Spread Capture</div>
+        <div class="text-[14px] font-bold text-[#F9FAFB] mt-1">מרווח רווח נקי לסבב</div>
+        <div class="mono text-[30px] font-extrabold text-[#FBBF24] mt-2 ltr-box">+2.5% &ndash; 4.5%</div>
+        <div class="text-[11px] text-[#FBBF24] mt-3 flex items-center gap-1.5">
+          <span>📈</span> <span>רווח נטו ללא עמלות + תמריצי נזילות יומיים</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ==================== INTERACTIVE LIVE SIMULATOR ==================== -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
     <div class="px-5 py-4 border-b border-[#1F2937] bg-[#090D16] flex flex-wrap items-center justify-between gap-4">
       <div>
-        <div class="mono text-[14px] font-bold text-[#F9FAFB] uppercase tracking-wider flex items-center gap-2">
+        <div class="text-[15px] font-bold text-[#F9FAFB] uppercase tracking-wider flex items-center gap-2">
           <span class="size-2.5 bg-[#10B981] rounded-full animate-pulse"></span>
-          <span>🎮 Interactive Dual Order-Book &amp; Merge Simulator</span>
+          <span>🎮 סימולטור אינטראקטיבי &mdash; Interactive Dual Order-Book &amp; Merge Simulator</span>
         </div>
-        <div class="mono text-[11px] text-[#9CA3AF] mt-0.5">
-          Test order posting, inbound taker fills, dynamic skewing, and instantaneous $1.00 token merging
+        <div class="text-[12px] text-[#9CA3AF] mt-0.5">
+          בחן הצבת הצעות, מילוי פקודות ע"י טייקרים, מנגנון Skew אוטומטי, ומיזוג חוזים מיידי ב-$1.00
         </div>
       </div>
 
       <!-- Controls bar -->
-      <div class="flex items-center gap-2 flex-wrap">
-        <button id="sim-btn-step" onclick="simStepNext()" type="button" class="mono text-[11px] font-bold px-3 py-1.5 bg-[#3B82F6] text-white hover:bg-[#2563EB] border border-[#3B82F6] transition-all cursor-pointer">
-          ▶ STEP NEXT
+      <div class="flex items-center gap-2 flex-wrap ltr-box">
+        <button id="sim-btn-step" onclick="simStepNext()" type="button" class="mono text-[11px] font-bold px-3.5 py-1.5 bg-[#3B82F6] text-white hover:bg-[#2563EB] border border-[#3B82F6] transition-all cursor-pointer">
+          ▶ STEP NEXT (צעד הבא)
         </button>
-        <button id="sim-btn-auto" onclick="simToggleAuto()" type="button" class="mono text-[11px] font-bold px-3 py-1.5 bg-[#10B981] text-white hover:bg-[#059669] border border-[#10B981] transition-all cursor-pointer">
-          ⚡ AUTO-STREAM
+        <button id="sim-btn-auto" onclick="simToggleAuto()" type="button" class="mono text-[11px] font-bold px-3.5 py-1.5 bg-[#10B981] text-white hover:bg-[#059669] border border-[#10B981] transition-all cursor-pointer">
+          ⚡ AUTO-STREAM (הזרמה רציפה)
         </button>
-        <button onclick="simReset()" type="button" class="mono text-[11px] px-3 py-1.5 bg-[#1F2937] text-[#9CA3AF] hover:text-[#F9FAFB] border border-[#1F2937] transition-all cursor-pointer">
-          ↺ RESET
+        <button onclick="simReset()" type="button" class="mono text-[11px] px-3.5 py-1.5 bg-[#1F2937] text-[#9CA3AF] hover:text-[#F9FAFB] border border-[#1F2937] transition-all cursor-pointer">
+          ↺ RESET (איפוס)
         </button>
       </div>
     </div>
@@ -157,44 +358,44 @@ def get_explainer_html() -> str:
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 bg-[#090D16] p-4 border border-[#1F2937]">
         <!-- Spread Width Slider -->
         <div>
-          <div class="flex justify-between mono text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">
-            <span>Market Spread Width</span>
-            <span id="sim-cfg-spread-val" class="text-[#10B981]">4.0&cent; (Mid $0.500)</span>
+          <div class="flex justify-between text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">
+            <span>רוחב מרווח השוק (Spread Width)</span>
+            <span id="sim-cfg-spread-val" class="text-[#10B981] mono ltr-box">4.0¢ (Mid $0.500)</span>
           </div>
-          <input type="range" id="sim-spread-slider" min="1" max="8" step="0.5" value="4.0" oninput="simUpdateConfig()" class="w-full accent-[#10B981] cursor-pointer" />
+          <input type="range" id="sim-spread-slider" min="1" max="8" step="0.5" value="4.0" oninput="simUpdateConfig()" class="w-full accent-[#10B981] cursor-pointer ltr-box" />
           <div class="flex justify-between text-[10px] text-[#6B7280] mono mt-1">
-            <span>Tight (1&cent;)</span>
-            <span>Wide (8&cent;)</span>
+            <span>צפוף (1¢)</span>
+            <span>רחב (8¢)</span>
           </div>
         </div>
 
         <!-- Order Size Slider -->
         <div>
-          <div class="flex justify-between mono text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">
-            <span>Order Size per Leg</span>
-            <span id="sim-cfg-size-val" class="text-[#3B82F6]">1,000 shares ($480)</span>
+          <div class="flex justify-between text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">
+            <span>גודל פקודה לכל רגל (Order Size)</span>
+            <span id="sim-cfg-size-val" class="text-[#3B82F6] mono ltr-box">1,000 shares ($480)</span>
           </div>
-          <input type="range" id="sim-size-slider" min="100" max="5000" step="100" value="1000" oninput="simUpdateConfig()" class="w-full accent-[#3B82F6] cursor-pointer" />
+          <input type="range" id="sim-size-slider" min="100" max="5000" step="100" value="1000" oninput="simUpdateConfig()" class="w-full accent-[#3B82F6] cursor-pointer ltr-box" />
           <div class="flex justify-between text-[10px] text-[#6B7280] mono mt-1">
-            <span>100 sh</span>
-            <span>5,000 sh</span>
+            <span>100 מניות</span>
+            <span>5,000 מניות</span>
           </div>
         </div>
 
         <!-- Simulation Flow Mode -->
         <div>
-          <div class="mono text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">Market Flow Skew</div>
-          <div class="grid grid-cols-3 gap-1.5">
+          <div class="text-[11px] text-[#9CA3AF] font-bold uppercase mb-1.5">הטיית זרימת שוק (Market Flow Skew)</div>
+          <div class="grid grid-cols-3 gap-1.5 ltr-box">
             <button type="button" onclick="simSetSkew('balanced')" id="skew-btn-balanced" class="mono text-[10px] font-bold py-1 bg-[#10B981] text-white border border-[#10B981] transition-colors cursor-pointer">50/50</button>
             <button type="button" onclick="simSetSkew('yes_heavy')" id="skew-btn-yes" class="mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer">YES 80%</button>
             <button type="button" onclick="simSetSkew('no_heavy')" id="skew-btn-no" class="mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer">NO 80%</button>
           </div>
-          <div id="sim-skew-desc" class="text-[10px] text-[#9CA3AF] mono mt-1">Balanced two-sided retail taker flow</div>
+          <div id="sim-skew-desc" class="text-[10px] text-[#9CA3AF] mono mt-1">זרימת טייקרים מאוזנת לשני הצדדים (50/50)</div>
         </div>
       </div>
 
       <!-- Visual Order Books & Smart Contract Merge Chamber -->
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch ltr-box">
         
         <!-- YES Order Book (Col 4) -->
         <div class="lg:col-span-4 border border-[#1F2937] bg-[#090D16] p-4 flex flex-col justify-between">
@@ -222,7 +423,7 @@ def get_explainer_html() -> str:
 
             <!-- SPREAD GAP INDICATOR -->
             <div class="my-2 py-1 px-2 bg-[#111827] border border-[#1F2937] text-center mono text-[10px] text-[#FBBF24]">
-              SPREAD: <span id="yes-spread-display">4.0&cent;</span>
+              SPREAD: <span id="yes-spread-display">4.0¢</span>
             </div>
 
             <!-- YES Bids (Green) & OUR MAKER BID -->
@@ -319,7 +520,7 @@ def get_explainer_html() -> str:
 
             <!-- SPREAD GAP INDICATOR -->
             <div class="my-2 py-1 px-2 bg-[#111827] border border-[#1F2937] text-center mono text-[10px] text-[#FBBF24]">
-              SPREAD: <span id="no-spread-display">4.0&cent;</span>
+              SPREAD: <span id="no-spread-display">4.0¢</span>
             </div>
 
             <!-- NO Bids (Green) & OUR MAKER BID -->
@@ -349,20 +550,20 @@ def get_explainer_html() -> str:
       <!-- Live Simulator Telemetry Strip -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#090D16] p-4 border border-[#1F2937]">
         <div>
-          <div class="mono text-[10px] uppercase text-[#9CA3AF]">Capital Deployed</div>
-          <div id="sim-kpi-capital" class="mono text-[20px] font-bold text-[#F9FAFB] mt-0.5">$0.00</div>
+          <div class="text-[10px] uppercase text-[#9CA3AF] font-bold">הון מושקע (Capital Deployed)</div>
+          <div id="sim-kpi-capital" class="mono text-[20px] font-bold text-[#F9FAFB] mt-0.5 ltr-box">$0.00</div>
         </div>
         <div>
-          <div class="mono text-[10px] uppercase text-[#9CA3AF]">Realized P&amp;L</div>
-          <div id="sim-kpi-pnl" class="mono text-[20px] font-bold text-[#10B981] mt-0.5">+$0.00</div>
+          <div class="text-[10px] uppercase text-[#9CA3AF] font-bold">רווח ממומש (Realized P&amp;L)</div>
+          <div id="sim-kpi-pnl" class="mono text-[20px] font-bold text-[#10B981] mt-0.5 ltr-box">+$0.00</div>
         </div>
         <div>
-          <div class="mono text-[10px] uppercase text-[#9CA3AF]">Return on Capital</div>
-          <div id="sim-kpi-roi" class="mono text-[20px] font-bold text-[#10B981] mt-0.5">0.00%</div>
+          <div class="text-[10px] uppercase text-[#9CA3AF] font-bold">תשואה על ההון (ROI)</div>
+          <div id="sim-kpi-roi" class="mono text-[20px] font-bold text-[#10B981] mt-0.5 ltr-box">0.00%</div>
         </div>
         <div>
-          <div class="mono text-[10px] uppercase text-[#9CA3AF]">Simulation Step Status</div>
-          <div id="sim-kpi-status" class="mono text-[12px] font-bold text-[#FBBF24] mt-1.5 flex items-center gap-1.5">
+          <div class="text-[10px] uppercase text-[#9CA3AF] font-bold">סטטוס צעד (Step Status)</div>
+          <div id="sim-kpi-status" class="mono text-[12px] font-bold text-[#FBBF24] mt-1.5 flex items-center gap-1.5 ltr-box">
             <span class="size-1.5 bg-[#FBBF24] rounded-full"></span>
             <span>READY TO QUOTE</span>
           </div>
@@ -371,11 +572,11 @@ def get_explainer_html() -> str:
 
       <!-- Live Execution Log Box -->
       <div class="border border-[#1F2937] bg-[#090D16] p-3">
-        <div class="flex items-center justify-between pb-2 border-b border-[#1F2937] mono text-[11px] text-[#9CA3AF] font-bold uppercase">
-          <span>Simulation Event Stream</span>
-          <span class="text-[10px] text-[#10B981]">REAL-TIME LOG</span>
+        <div class="flex items-center justify-between pb-2 border-b border-[#1F2937] text-[11px] text-[#9CA3AF] font-bold uppercase">
+          <span>יומן אירועי סימולציה בזמן אמת (Simulation Event Stream)</span>
+          <span class="mono text-[10px] text-[#10B981] ltr-box">REAL-TIME LOG</span>
         </div>
-        <div id="sim-log-box" class="h-28 overflow-y-auto space-y-1 mt-2 mono text-[11px] text-[#9CA3AF] scrollbar-thin">
+        <div id="sim-log-box" class="h-28 overflow-y-auto space-y-1 mt-2 mono text-[11px] text-[#9CA3AF] scrollbar-thin ltr-box">
           <div class="text-[#6B7280]">[00:00:00] Simulator initialized. Click [STEP NEXT] or [AUTO-STREAM] to execute maker sweeps.</div>
         </div>
       </div>
@@ -383,11 +584,11 @@ def get_explainer_html() -> str:
     </div>
   </section>
 
-  <!-- 4 PILLARS OF EDGE & CONSISTENCY -->
+  <!-- ==================== 4 PILLARS OF EDGE & CONSISTENCY ==================== -->
   <section class="sh-rise space-y-6">
     <div>
       <div class="mono text-[12px] font-bold text-[#10B981] uppercase tracking-wider">THE MATHEMATICAL FOUNDATION</div>
-      <h2 class="font-display text-[28px] sm:text-[34px] text-[#F9FAFB] mt-1">THE 4 PILLARS OF CONSISTENCY &amp; EDGE</h2>
+      <h2 class="text-[24px] sm:text-[30px] font-extrabold text-[#F9FAFB] mt-1">4 עמודי התווך של היתרון והעקביות</h2>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -395,9 +596,9 @@ def get_explainer_html() -> str:
       <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
         <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
         <div class="mono text-[11px] font-bold text-[#10B981] uppercase tracking-wider">PILLAR 1</div>
-        <div class="mono text-[15px] font-bold text-[#F9FAFB] mt-1">Maker Spread Capture</div>
-        <p class="mono text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
-          By resting quotes on both YES and NO books rather than crossing, the strategy captures the spread on both legs. Maker orders incur <strong class="text-[#F9FAFB]">$0.00 in fees</strong>, transforming market noise into steady spread harvest.
+        <div class="text-[15px] font-bold text-[#F9FAFB] mt-1">לכידת מרווח Maker באפס עמלות</div>
+        <p class="text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
+          ע"י הצבת ציטוטים בשני ספרי הפקודות במקום חצייתם, הבוט קוטף את המרווח משני הצדדים. פקודות Maker פטורות לחלוטין מעמלות (<strong class="text-[#F9FAFB] ltr-box inline-block">$0.00 fees</strong>), מה שהופך תנודתיות שוק להכנסה יציבה.
         </p>
       </div>
 
@@ -405,9 +606,9 @@ def get_explainer_html() -> str:
       <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
         <div class="absolute inset-x-0 top-0 h-[2px] bg-[#A855F7]"></div>
         <div class="mono text-[11px] font-bold text-[#C084FC] uppercase tracking-wider">PILLAR 2</div>
-        <div class="mono text-[15px] font-bold text-[#F9FAFB] mt-1">Instant CTF Parity Merging</div>
-        <p class="mono text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
-          Instead of holding outcome tokens until market expiration (months or years away), complete sets are redeemed <strong class="text-[#F9FAFB]">instantly on-chain for $1.000 USDC</strong>, freeing 100% of collateral for immediate reinvestment.
+        <div class="text-[15px] font-bold text-[#F9FAFB] mt-1">מיזוג פריטטיבי מיידי (CTF Merge)</div>
+        <p class="text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
+          במקום להמתין לפקיעת השוק (חודשים או שנים), סטים מלאים של YES+NO נפדים <strong class="text-[#F9FAFB] ltr-box inline-block">מיידית בבלוקצ'יין ב-$1.000 USDC</strong>, ומשחררים 100% מהבטוחה לשימוש מיידי בסבב הבא.
         </p>
       </div>
 
@@ -415,9 +616,9 @@ def get_explainer_html() -> str:
       <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
         <div class="absolute inset-x-0 top-0 h-[2px] bg-[#3B82F6]"></div>
         <div class="mono text-[11px] font-bold text-[#60A5FA] uppercase tracking-wider">PILLAR 3</div>
-        <div class="mono text-[15px] font-bold text-[#F9FAFB] mt-1">Dynamic Skew Defense</div>
-        <p class="mono text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
-          When one leg fills first, the engine dynamically widens the filled side and aggressively quotes the missing leg to pull in the balancing fill, eliminating unhedged directional exposure.
+        <div class="text-[15px] font-bold text-[#F9FAFB] mt-1">הגנת Skew דינמית מול טרנדים</div>
+        <p class="text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
+          כשצד אחד מתמלא קודם, המנוע מרחיק את הצד המלא ומצטט באגרסיביות את הרגל החסרה כדי לפתות מילוי מאזן, ומחסל חשיפה כיוונית לא מגודרת.
         </p>
       </div>
 
@@ -425,26 +626,26 @@ def get_explainer_html() -> str:
       <div class="border border-[#1F2937] bg-[#111827] p-5 relative overflow-hidden">
         <div class="absolute inset-x-0 top-0 h-[2px] bg-[#FBBF24]"></div>
         <div class="mono text-[11px] font-bold text-[#FBBF24] uppercase tracking-wider">PILLAR 4</div>
-        <div class="mono text-[15px] font-bold text-[#F9FAFB] mt-1">Liquidity Reward "Rent"</div>
-        <p class="mono text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
-          In addition to trade spreads, Polymarket pays makers daily USDC rewards just for resting competitive size inside the qualifying spread window, creating a passive yield floor.
+        <div class="text-[15px] font-bold text-[#F9FAFB] mt-1">שכר דירה מתמריצי נזילות</div>
+        <p class="text-[12px] text-[#9CA3AF] leading-relaxed mt-2.5">
+          בנוסף לרווחי המרווח, Polymarket מעניקה תגמולי USDC יומיים למייקרים שמציבים נזילות בתוך חלון המרווח המזכה, מה שיוצר רצפת תשואה פסיבית קבועה.
         </p>
       </div>
     </div>
   </section>
 
-  <!-- INTERACTIVE SECTION: Capital Velocity & Compounding Calculator -->
+  <!-- ==================== COMPOUNDING CALCULATOR ==================== -->
   <section class="sh-rise border border-[#1F2937] bg-[#111827] overflow-hidden">
     <div class="px-5 py-4 border-b border-[#1F2937] bg-[#090D16] flex flex-wrap items-center justify-between gap-4">
       <div>
-        <div class="mono text-[14px] font-bold text-[#FBBF24] uppercase tracking-wider flex items-center gap-2">
-          <span>📈 Interactive Capital Velocity &amp; Compounding Calculator</span>
+        <div class="text-[15px] font-bold text-[#FBBF24] uppercase tracking-wider flex items-center gap-2">
+          <span>📈 מחשבון מהירות הון וריבית דריבית &mdash; Interactive Capital Velocity &amp; Compounding Calculator</span>
         </div>
-        <div class="mono text-[11px] text-[#9CA3AF] mt-0.5">
-          Simulate portfolio compounding across turn frequencies, spread margins, and liquidity rewards
+        <div class="text-[12px] text-[#9CA3AF] mt-0.5">
+          הדמיית צמיחת תיק לפי תדירות סבבים, מרווח ממוצע שנלכד, ותמריצי נזילות יומיים
         </div>
       </div>
-      <div class="mono text-[11px] px-2.5 py-1 bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-bold">
+      <div class="mono text-[11px] px-2.5 py-1 bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-bold ltr-box">
         HIGH VELOCITY COMPOUNDING
       </div>
     </div>
@@ -456,56 +657,56 @@ def get_explainer_html() -> str:
         
         <!-- Starting Capital -->
         <div>
-          <div class="flex justify-between mono text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
-            <span>Starting Bankroll</span>
-            <span id="calc-val-bankroll" class="text-[#F9FAFB]">$1,000 USD</span>
+          <div class="flex justify-between text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
+            <span>בנקרוול התחלתי (Starting Bankroll)</span>
+            <span id="calc-val-bankroll" class="text-[#F9FAFB] mono ltr-box">$1,000 USD</span>
           </div>
-          <input type="range" id="calc-bankroll" min="100" max="10000" step="100" value="1000" oninput="recalcGrowth()" class="w-full accent-[#10B981] cursor-pointer" />
+          <input type="range" id="calc-bankroll" min="100" max="10000" step="100" value="1000" oninput="recalcGrowth()" class="w-full accent-[#10B981] cursor-pointer ltr-box" />
         </div>
 
         <!-- Average Captured Spread -->
         <div>
-          <div class="flex justify-between mono text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
-            <span>Captured Spread per Turn</span>
-            <span id="calc-val-spread" class="text-[#10B981]">+2.50%</span>
+          <div class="flex justify-between text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
+            <span>מרווח נלכד לסבב (Captured Spread)</span>
+            <span id="calc-val-spread" class="text-[#10B981] mono ltr-box">+2.50%</span>
           </div>
-          <input type="range" id="calc-spread" min="0.5" max="5.0" step="0.25" value="2.5" oninput="recalcGrowth()" class="w-full accent-[#10B981] cursor-pointer" />
+          <input type="range" id="calc-spread" min="0.5" max="5.0" step="0.25" value="2.5" oninput="recalcGrowth()" class="w-full accent-[#10B981] cursor-pointer ltr-box" />
         </div>
 
         <!-- Cycles per Day -->
         <div>
-          <div class="flex justify-between mono text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
-            <span>Turn Velocity (Cycles / Day)</span>
-            <span id="calc-val-cycles" class="text-[#3B82F6]">4.0 Cycles / Day</span>
+          <div class="flex justify-between text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
+            <span>מהירות מחזור (סבבים / יום)</span>
+            <span id="calc-val-cycles" class="text-[#3B82F6] mono ltr-box">4.0 Cycles / Day</span>
           </div>
-          <input type="range" id="calc-cycles" min="0.5" max="15.0" step="0.5" value="4.0" oninput="recalcGrowth()" class="w-full accent-[#3B82F6] cursor-pointer" />
-          <div class="text-[10px] text-[#6B7280] mono mt-0.5">Average time per cycle: ~6.0 hours</div>
+          <input type="range" id="calc-cycles" min="0.5" max="15.0" step="0.5" value="4.0" oninput="recalcGrowth()" class="w-full accent-[#3B82F6] cursor-pointer ltr-box" />
+          <div class="text-[10px] text-[#6B7280] mono mt-0.5">זמן ממוצע לסבב מלא: כ-6.0 שעות</div>
         </div>
 
         <!-- Venue Daily Rewards -->
         <div>
-          <div class="flex justify-between mono text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
-            <span>Daily Liquidity Rewards</span>
-            <span id="calc-val-rewards" class="text-[#FBBF24]">$2.50 / Day</span>
+          <div class="flex justify-between text-[12px] text-[#9CA3AF] font-bold uppercase mb-1">
+            <span>תמריצי נזילות יומיים (Daily Rewards)</span>
+            <span id="calc-val-rewards" class="text-[#FBBF24] mono ltr-box">$2.50 / Day</span>
           </div>
-          <input type="range" id="calc-rewards" min="0" max="25" step="0.5" value="2.5" oninput="recalcGrowth()" class="w-full accent-[#FBBF24] cursor-pointer" />
+          <input type="range" id="calc-rewards" min="0" max="25" step="0.5" value="2.5" oninput="recalcGrowth()" class="w-full accent-[#FBBF24] cursor-pointer ltr-box" />
         </div>
 
         <!-- Summary Metric Boxes -->
-        <div class="pt-3 border-t border-[#1F2937] grid grid-cols-2 gap-3 mono text-[12px]">
+        <div class="pt-3 border-t border-[#1F2937] grid grid-cols-2 gap-3 text-[12px]">
           <div class="p-3 bg-[#111827] border border-[#1F2937]">
-            <div class="text-[10px] text-[#9CA3AF] uppercase">30-Day Growth</div>
-            <div id="calc-res-30d" class="text-[18px] font-bold text-[#10B981] mt-0.5">+$0.00</div>
+            <div class="text-[10px] text-[#9CA3AF] uppercase">צמיחה משוערת ב-30 יום</div>
+            <div id="calc-res-30d" class="text-[18px] font-bold text-[#10B981] mt-0.5 mono ltr-box">+$0.00</div>
           </div>
           <div class="p-3 bg-[#111827] border border-[#1F2937]">
-            <div class="text-[10px] text-[#9CA3AF] uppercase">90-Day Bankroll</div>
-            <div id="calc-res-90d" class="text-[18px] font-bold text-[#F9FAFB] mt-0.5">$0.00</div>
+            <div class="text-[10px] text-[#9CA3AF] uppercase">יתרת בנקרוול ב-90 יום</div>
+            <div id="calc-res-90d" class="text-[18px] font-bold text-[#F9FAFB] mt-0.5 mono ltr-box">$0.00</div>
           </div>
         </div>
       </div>
 
       <!-- Growth Chart Column (7 cols) -->
-      <div class="lg:col-span-7 flex flex-col justify-between bg-[#090D16] p-5 border border-[#1F2937]">
+      <div class="lg:col-span-7 flex flex-col justify-between bg-[#090D16] p-5 border border-[#1F2937] ltr-box">
         <div>
           <div class="flex items-center justify-between pb-3 border-b border-[#1F2937] mono text-[12px]">
             <span class="font-bold text-[#F9FAFB] uppercase">365-Day Projected Compounding Trajectory</span>
@@ -527,37 +728,6 @@ def get_explainer_html() -> str:
         </div>
       </div>
 
-    </div>
-  </section>
-
-  <!-- EMPIRICAL TELEMETRY EVIDENCE: Hedged vs Naked -->
-  <section class="sh-rise border border-[#1F2937] bg-[#111827] p-6">
-    <div class="max-w-3xl">
-      <div class="mono text-[12px] font-bold text-[#10B981] uppercase tracking-wider">EMPIRICAL DATA EVIDENCE</div>
-      <h3 class="font-display text-[26px] text-[#F9FAFB] mt-1">THE PROVABLE COST OF UNBALANCED INVENTORY</h3>
-      <p class="mono text-[13px] text-[#9CA3AF] mt-2">
-        Over thousands of live simulated markets, inventory balance is the single empirical determinant of profitability. Hedged markets consistently generate positive EV, while unhedged naked directional exposures lose to adverse selection.
-      </p>
-    </div>
-
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-6">
-      <!-- Hedged Metric -->
-      <div class="border border-[#10B981]/40 bg-[#090D16] p-5">
-        <div class="mono text-[12px] text-[#9CA3AF] uppercase font-bold">Hedged / Matched Pairs</div>
-        <div class="mono text-[32px] font-bold text-[#10B981] mt-1">+$0.70 <span class="text-[14px] font-normal text-[#9CA3AF]">/ market</span></div>
-        <div class="mono text-[12px] text-[#10B981] mt-2 flex items-center gap-1.5">
-          <span>&check;</span> <span>Spread captured, zero directional tail risk</span>
-        </div>
-      </div>
-
-      <!-- Unhedged Metric -->
-      <div class="border border-[#EF4444]/40 bg-[#090D16] p-5">
-        <div class="mono text-[12px] text-[#9CA3AF] uppercase font-bold">Unhedged / Badly Naked Flow</div>
-        <div class="mono text-[32px] font-bold text-[#EF4444] mt-1">-$0.95 <span class="text-[14px] font-normal text-[#9CA3AF]">/ market</span></div>
-        <div class="mono text-[12px] text-[#EF4444] mt-2 flex items-center gap-1.5">
-          <span>&cross;</span> <span>Suffers adverse selection against informed takers</span>
-        </div>
-      </div>
     </div>
   </section>
 
@@ -611,7 +781,7 @@ function simSetSkew(mode){
   document.getElementById("skew-btn-yes").className = mode === "yes_heavy" ? "mono text-[10px] font-bold py-1 bg-[#3B82F6] text-white border border-[#3B82F6] transition-colors cursor-pointer" : "mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer";
   document.getElementById("skew-btn-no").className = mode === "no_heavy" ? "mono text-[10px] font-bold py-1 bg-[#F59E0B] text-white border border-[#F59E0B] transition-colors cursor-pointer" : "mono text-[10px] font-bold py-1 bg-[#1F2937] text-[#9CA3AF] border border-[#1F2937] hover:text-[#F9FAFB] transition-colors cursor-pointer";
   
-  const desc = mode === "balanced" ? "Balanced two-sided retail taker flow" : (mode === "yes_heavy" ? "Bullish trend: Takers aggressively sell YES into our bid" : "Bearish trend: Takers aggressively sell NO into our bid");
+  const desc = mode === "balanced" ? "זרימת טייקרים מאוזנת לשני הצדדים (50/50)" : (mode === "yes_heavy" ? "מגמה שורית: טייקרים מוכרים YES לתוך הצעת הקנייה שלנו באגרסיביות" : "מגמה דובית: טייקרים מוכרים NO לתוך הצעת הקנייה שלנו באגרסיביות");
   document.getElementById("sim-skew-desc").textContent = desc;
 }
 
@@ -633,9 +803,9 @@ function simStepNext(){
   if (SIM_STATE.step === 0){
     // STEP 1: Post Quotes
     SIM_STATE.step = 1;
-    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#3B82F6] rounded-full animate-pulse"></span> <span class="text-[#3B82F6]">QUOTES RESTING ON BOOKS</span>`;
-    simLog(`Resting maker bids: YES @ $${bidPrice.toFixed(3)} (${size} sh) &amp; NO @ $${bidPrice.toFixed(3)} (${size} sh). Maker fee: $0.00.`, "#60A5FA");
-    document.getElementById("reactor-payout-text").textContent = "Resting quotes active...";
+    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#3B82F6] rounded-full animate-pulse"></span> <span class="text-[#3B82F6]">ציטוטים מוצבים בספרים</span>`;
+    simLog(`הצבת פקודות Maker Bids: YES @ $${bidPrice.toFixed(3)} (${size} מניות) &amp; NO @ $${bidPrice.toFixed(3)} (${size} מניות). עמלת Maker: $0.00.`, "#60A5FA");
+    document.getElementById("reactor-payout-text").textContent = "הצעות מחיר פעילות בספר הפקודות...";
     return;
   }
 
@@ -653,9 +823,9 @@ function simStepNext(){
       document.getElementById("inv-yes-shares").textContent = SIM_STATE.yesShares.toLocaleString() + " shares";
       document.getElementById("reactor-yes-pill").textContent = `${SIM_STATE.yesShares} YES`;
       document.getElementById("reactor-yes-pill").className = "px-2 py-1 bg-[#3B82F6] text-white font-bold";
-      document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#F59E0B] rounded-full animate-pulse"></span> <span class="text-[#FBBF24]">YES FILLED &bull; SKEWING NO QUOTE</span>`;
-      document.getElementById("reactor-payout-text").textContent = "YES filled! Engine skews NO quote...";
-      simLog(`FILL: Inbound taker hit YES bid @ $${bidPrice.toFixed(3)} (${size} sh). Cost: $${(size * bidPrice).toFixed(2)}. Engine applies dynamic skew to attract NO leg!`, "#34D399");
+      document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#F59E0B] rounded-full animate-pulse"></span> <span class="text-[#FBBF24]">YES נתפס &bull; הסטת ציטוט NO</span>`;
+      document.getElementById("reactor-payout-text").textContent = "YES התמלא! המנוע מפעיל Skew להצעת ה-NO...";
+      simLog(`מילוי (FILL): טייקר מכר לתוך הצעת ה-YES ב-$${bidPrice.toFixed(3)} (${size} מניות). עלות: $${(size * bidPrice).toFixed(2)}. המנוע מקרב את הצעת ה-NO למילוי מאזן!`, "#34D399");
     } else {
       SIM_STATE.noShares += size;
       SIM_STATE.noCost += (size * bidPrice);
@@ -666,9 +836,9 @@ function simStepNext(){
       document.getElementById("inv-no-shares").textContent = SIM_STATE.noShares.toLocaleString() + " shares";
       document.getElementById("reactor-no-pill").textContent = `${SIM_STATE.noShares} NO`;
       document.getElementById("reactor-no-pill").className = "px-2 py-1 bg-[#F59E0B] text-white font-bold";
-      document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#F59E0B] rounded-full animate-pulse"></span> <span class="text-[#FBBF24]">NO FILLED &bull; SKEWING YES QUOTE</span>`;
-      document.getElementById("reactor-payout-text").textContent = "NO filled! Engine skews YES quote...";
-      simLog(`FILL: Inbound taker hit NO bid @ $${bidPrice.toFixed(3)} (${size} sh). Cost: $${(size * bidPrice).toFixed(2)}. Engine applies dynamic skew to attract YES leg!`, "#FBBF24");
+      document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#F59E0B] rounded-full animate-pulse"></span> <span class="text-[#FBBF24]">NO נתפס &bull; הסטת ציטוט YES</span>`;
+      document.getElementById("reactor-payout-text").textContent = "NO התמלא! המנוע מפעיל Skew להצעת ה-YES...";
+      simLog(`מילוי (FILL): טייקר מכר לתוך הצעת ה-NO ב-$${bidPrice.toFixed(3)} (${size} מניות). עלות: $${(size * bidPrice).toFixed(2)}. המנוע מקרב את הצעת ה-YES למילוי מאזן!`, "#FBBF24");
     }
     simUpdateTelemetry();
     return;
@@ -695,10 +865,10 @@ function simStepNext(){
     }
 
     SIM_STATE.step = 4; // ready to merge
-    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#10B981] rounded-full animate-pulse"></span> <span class="text-[#10B981]">PAIR COMPLETE &bull; READY TO MERGE</span>`;
-    document.getElementById("reactor-payout-text").textContent = "MATCH COMPLETE! Auto-Merging at $1.000 parity...";
+    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#10B981] rounded-full animate-pulse"></span> <span class="text-[#10B981]">הזוג הושלם &bull; מוכן למיזוג CTF</span>`;
+    document.getElementById("reactor-payout-text").textContent = "הזוג הושלם! מבצע איחוד אוטומטי בפריטט $1.000...";
     document.getElementById("merge-reactor").className = "my-3 p-4 border-2 border-[#10B981] bg-[#10B981]/10 text-center space-y-3 transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)]";
-    simLog(`PAIR COMPLETE: Acquired ${size} matched pairs (YES+NO) @ avg basis $${(bidPrice * 2).toFixed(3)}/sh ($${(size * bidPrice * 2).toFixed(2)}).`, "#C084FC");
+    simLog(`הזוג הושלם: נרכשו ${size} זוגות תואמים (YES+NO) במחיר ממוצע של $${(bidPrice * 2).toFixed(3)} לזוג ($${(size * bidPrice * 2).toFixed(2)} סה"כ).`, "#C084FC");
     simUpdateTelemetry();
     return;
   }
@@ -728,10 +898,10 @@ function simStepNext(){
     document.getElementById("reactor-no-pill").className = "px-2 py-1 bg-[#F59E0B]/20 border border-[#F59E0B] text-[#FBBF24]";
     
     document.getElementById("merge-reactor").className = "my-3 p-4 border border-[#1F2937] bg-[#111827] text-center space-y-3 transition-all";
-    document.getElementById("reactor-payout-text").textContent = `Merged ${paired} pairs -> +$${profit.toFixed(2)} USDC Collateral!`;
-    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#10B981] rounded-full"></span> <span class="text-[#10B981]">MERGED &bull; BANKED +$${profit.toFixed(2)}</span>`;
+    document.getElementById("reactor-payout-text").textContent = `אוחדו ${paired} זוגות -> +$${profit.toFixed(2)} USDC בטוחה נפדתה!`;
+    document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#10B981] rounded-full"></span> <span class="text-[#10B981]">אוחד &bull; ננעל רווח +$${profit.toFixed(2)}</span>`;
     
-    simLog(`⚡ ON-CHAIN CTF MERGE: Redeemed ${paired} pairs for $${proceeds.toFixed(2)} USDC! Net Profit: +$${profit.toFixed(2)} (+${(100 * profit / costBasis).toFixed(2)}% ROI). 100% capital returned to bankroll!`, "#10B981");
+    simLog(`⚡ מיזוג CTF בבלוקצ'יין: נפדו ${paired} זוגות עבור $${proceeds.toFixed(2)} USDC! רווח נקי: +$${profit.toFixed(2)} (+${(100 * profit / costBasis).toFixed(2)}% ROI). 100% מההון שוחרר לבנקרוול!`, "#10B981");
     simUpdateTelemetry();
   }
 }
@@ -750,14 +920,14 @@ function simToggleAuto(){
   if (SIM_STATE.autoRunning){
     clearInterval(SIM_STATE.autoInterval);
     SIM_STATE.autoRunning = false;
-    document.getElementById("sim-btn-auto").textContent = "⚡ AUTO-STREAM";
-    document.getElementById("sim-btn-auto").className = "mono text-[11px] font-bold px-3 py-1.5 bg-[#10B981] text-white hover:bg-[#059669] border border-[#10B981] transition-all cursor-pointer";
-    simLog("Auto-stream paused.", "#9CA3AF");
+    document.getElementById("sim-btn-auto").textContent = "⚡ AUTO-STREAM (הזרמה רציפה)";
+    document.getElementById("sim-btn-auto").className = "mono text-[11px] font-bold px-3.5 py-1.5 bg-[#10B981] text-white hover:bg-[#059669] border border-[#10B981] transition-all cursor-pointer";
+    simLog("ההזרמה האוטומטית הושהתה.", "#9CA3AF");
   } else {
     SIM_STATE.autoRunning = true;
-    document.getElementById("sim-btn-auto").textContent = "⏸ PAUSE AUTO";
-    document.getElementById("sim-btn-auto").className = "mono text-[11px] font-bold px-3 py-1.5 bg-[#EF4444] text-white hover:bg-[#DC2626] border border-[#EF4444] transition-all cursor-pointer";
-    simLog("Auto-stream started: running continuous maker sweeps...", "#10B981");
+    document.getElementById("sim-btn-auto").textContent = "⏸ PAUSE AUTO (השהה)";
+    document.getElementById("sim-btn-auto").className = "mono text-[11px] font-bold px-3.5 py-1.5 bg-[#EF4444] text-white hover:bg-[#DC2626] border border-[#EF4444] transition-all cursor-pointer";
+    simLog("הזרמה אוטומטית החלה: מריץ סבבי Maker רציפים...", "#10B981");
     SIM_STATE.autoInterval = setInterval(simStepNext, 700);
   }
 }
@@ -782,7 +952,7 @@ function simReset(){
   document.getElementById("reactor-payout-text").textContent = "Waiting for paired fills...";
   document.getElementById("sim-kpi-status").innerHTML = `<span class="size-1.5 bg-[#FBBF24] rounded-full"></span> <span>READY TO QUOTE</span>`;
   simUpdateTelemetry();
-  simLog("Simulator reset to clean state.", "#9CA3AF");
+  simLog("הסימולטור אופס למצב התחלתי נקי.", "#9CA3AF");
 }
 
 
@@ -871,7 +1041,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 </script>
 """
-    return _wrap("Strategy Visualizer &amp; Live Demo &mdash; Spread Hunter", body)
+    return _wrap("הסבר האסטרטגיה &mdash; Spread Hunter", body)
 
 
 EXPLAINER_HTML = get_explainer_html()

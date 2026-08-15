@@ -172,7 +172,7 @@ function fmtShortDate(ts){
 }
 
 function capitalSeries(rows, bankroll, marks, floatNow){
-  const sorted = rows.slice().sort((a, b) => a.ts - b.ts);
+  const sorted = (rows || []).slice().sort((a, b) => a.ts - b.ts);
   const ms = (marks || []).slice().sort((a, b) => a.ts - b.ts);
   const useTotal = CAP_VIEW === "total";
   const pts = [];
@@ -186,20 +186,21 @@ function capitalSeries(rows, bankroll, marks, floatNow){
   const advanceMarks = (t) => {
     while (mi < ms.length && ms[mi].ts <= t){
       float = ms[mi].unrealized_usd || 0;
-      if (useTotal) pts.push({ ts: ms[mi].ts, v: eq + float });
+      if (useTotal) pts.push({ ts: ms[mi].ts, v: eq + float, type: "mark" });
       mi++;
     }
   };
-  for (const r of sorted){
+  for (let i = 0; i < sorted.length; i++){
+    const r = sorted[i];
     advanceMarks(r.ts);
     eq += (r.pnl || 0);
-    pts.push({ ts: r.ts, v: useTotal ? eq + float : eq });
+    pts.push({ ts: r.ts, v: useTotal ? eq + float : eq, type: "close", pnl: r.pnl, market: r.market, tradeIdx: i + 1 });
   }
   // Trailing marks after the last close: the curve keeps stepping with the
   // float that was open, ending on the most recent recorded mark.
   while (mi < ms.length){
     float = ms[mi].unrealized_usd || 0;
-    if (useTotal) pts.push({ ts: ms[mi].ts, v: eq + float });
+    if (useTotal) pts.push({ ts: ms[mi].ts, v: eq + float, type: "mark" });
     mi++;
   }
   // No recorded marks yet (a DB the fleet has not swept since this shipped):
@@ -208,81 +209,271 @@ function capitalSeries(rows, bankroll, marks, floatNow){
   if (useTotal && ms.length === 0 && pts.length && floatNow){
     for (const p of pts) p.v += floatNow;
   }
-  return { pts, bankroll, now: Math.floor(Date.now() / 1000),
-           label: useTotal ? "Total equity since inception" : "Capital since inception" };
+
+  let peak = bankroll;
+  let maxDd = 0;
+  let maxDdPval = 0;
+  for (const p of pts) {
+    if (p.v > peak) peak = p.v;
+    const dd = peak - p.v;
+    if (dd > maxDd) {
+      maxDd = dd;
+      maxDdPval = peak > 0 ? (dd / peak) * 100 : 0;
+    }
+  }
+
+  return {
+    pts,
+    bankroll,
+    peak,
+    maxDd,
+    maxDdPval,
+    now: Math.floor(Date.now() / 1000),
+    label: useTotal ? "Total equity since inception" : "Capital since inception"
+  };
 }
 
 function capitalChartSvg(ser){
   const { pts, bankroll, now } = ser;
-  const W = 560, H = 200, padL = 52, padR = 14, padT = 16, padB = 24;
+  const W = 800, H = 220, padL = 56, padR = 24, padT = 22, padB = 28;
   const t0 = pts[0].ts;
-  const t1 = Math.max(now, pts[pts.length - 1].ts);
+  const t1 = pts[pts.length - 1].ts === t0 ? t0 + 3600 : pts[pts.length - 1].ts;
   const span = Math.max(1, t1 - t0);
   const lo = Math.min(bankroll, ...pts.map(p => p.v));
   const hi = Math.max(bankroll, ...pts.map(p => p.v));
-  const pad = Math.max((hi - lo) * 0.12, 1);
+  const pad = Math.max((hi - lo) * 0.16, 1);
   const minY = lo - pad, maxY = hi + pad;
   const x = v => padL + ((v - t0) / span) * (W - padL - padR);
   const y = v => padT + (1 - (v - minY) / (maxY - minY)) * (H - padT - padB);
-  const grid = [0, 1, 2].map(i => {
-    const v = minY + ((maxY - minY) * (2 - i)) / 2;
-    return `<line x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}" stroke="#1F2937" stroke-width="1"/>` +
-      `<text x="${padL - 6}" y="${y(v) + 3}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Geist Mono">$${Math.round(v).toLocaleString("en-US")}</text>`;
+
+  const gridCount = 3;
+  const grid = [0, 1, 2, 3].map(i => {
+    const v = minY + ((maxY - minY) * (gridCount - i)) / gridCount;
+    return `<line x1="${padL}" x2="${W - padR}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="#1F2937" stroke-width="1"/>` +
+      `<text x="${padL - 8}" y="${(y(v) + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Geist Mono">$${v.toFixed(1)}</text>`;
   }).join("");
+
   const path = pts.map((p, i) => `${i ? "L" : "M"} ${x(p.ts).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
   const area = `${path} L ${x(pts[pts.length - 1].ts).toFixed(1)} ${H - padB} L ${x(t0).toFixed(1)} ${H - padB} Z`;
   const up = pts[pts.length - 1].v >= bankroll;
   const line = up ? "#10B981" : "#EF4444";
+  const gradId = up ? "capGradUp" : "capGradDn";
   const last = pts[pts.length - 1];
-  return `<svg viewBox="0 0 ${W} ${H}" class="w-full" style="height:${H}px" role="img" aria-label="${ser.label}: from $${bankroll.toFixed(0)} to $${last.v.toFixed(2)}">
+
+  return `<svg id="cap-chart-svg" viewBox="0 0 ${W} ${H}" class="w-full select-none" style="height:${H}px" role="img" aria-label="${ser.label}: from $${bankroll.toFixed(0)} to $${last.v.toFixed(2)}">
+    <defs>
+      <linearGradient id="capGradUp" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#10B981" stop-opacity="0.25"/>
+        <stop offset="70%" stop-color="#10B981" stop-opacity="0.04"/>
+        <stop offset="100%" stop-color="#10B981" stop-opacity="0.00"/>
+      </linearGradient>
+      <linearGradient id="capGradDn" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#EF4444" stop-opacity="0.25"/>
+        <stop offset="70%" stop-color="#EF4444" stop-opacity="0.04"/>
+        <stop offset="100%" stop-color="#EF4444" stop-opacity="0.00"/>
+      </linearGradient>
+    </defs>
     ${grid}
-    <line x1="${x(t0)}" x2="${x(t1)}" y1="${y(bankroll)}" y2="${y(bankroll)}" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3 3"/>
-    <path d="${area}" fill="${line}" fill-opacity="0.08" stroke="none"/>
-    <path d="${path}" fill="none" stroke="${line}" stroke-width="1.6"/>
+    <line x1="${x(t0).toFixed(1)}" x2="${x(t1).toFixed(1)}" y1="${y(bankroll).toFixed(1)}" y2="${y(bankroll).toFixed(1)}" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>
+    <path d="${area}" fill="url(#${gradId})" stroke="none"/>
+    <path d="${path}" fill="none" stroke="${line}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- Start & End Anchor Nodes -->
+    <circle cx="${x(t0).toFixed(1)}" cy="${y(pts[0].v).toFixed(1)}" r="3" fill="#111827" stroke="${line}" stroke-width="1.5"/>
+    <circle cx="${x(last.ts).toFixed(1)}" cy="${y(last.v).toFixed(1)}" r="6" fill="${line}" fill-opacity="0.25"/>
     <circle cx="${x(last.ts).toFixed(1)}" cy="${y(last.v).toFixed(1)}" r="3.5" fill="#111827" stroke="${line}" stroke-width="2"/>
-    <text x="${x(t0)}" y="${H - 6}" font-size="10" fill="#9CA3AF" font-family="Geist Mono">${fmtShortDate(t0)}</text>
-    <text x="${W - padR}" y="${H - 6}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Geist Mono">${fmtShortDate(now)}</text>
-    <text x="${x(t0) + 4}" y="${y(bankroll) - 4}" font-size="9" fill="#94A3B8" font-family="Geist Mono">start $${Math.round(bankroll).toLocaleString("en-US")}</text>
+    
+    <!-- Time Axis Ticks -->
+    <text x="${x(t0).toFixed(1)}" y="${H - 6}" font-size="10" fill="#9CA3AF" font-family="Geist Mono">${fmtShortDate(t0)}</text>
+    ${span > 86400 ? `<text x="${((x(t0) + x(t1)) / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="#9CA3AF" font-family="Geist Mono">${fmtShortDate((t0 + t1) / 2)}</text>` : ''}
+    <text x="${(W - padR).toFixed(1)}" y="${H - 6}" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Geist Mono">${fmtShortDate(t1)}</text>
+    <text x="${(x(t0) + 4).toFixed(1)}" y="${(y(bankroll) - 4).toFixed(1)}" font-size="9" fill="#94A3B8" font-family="Geist Mono">start $${Math.round(bankroll).toLocaleString("en-US")}</text>
+    
+    <!-- Interactive Crosshair & Cursor Marker (Hidden until hover) -->
+    <g id="cap-crosshair-group" style="display:none; pointer-events:none;">
+      <line id="cap-cross-v" y1="${padT}" y2="${H - padB}" stroke="#94A3B8" stroke-width="1.2" stroke-dasharray="3 3" opacity="0.8"/>
+      <line id="cap-cross-h" x1="${padL}" x2="${W - padR}" stroke="#94A3B8" stroke-width="1" stroke-dasharray="2 2" opacity="0.4"/>
+      <circle id="cap-cross-ring" r="9" fill="${line}" fill-opacity="0.25"/>
+      <circle id="cap-cross-pt" r="4.5" fill="#090D16" stroke="${line}" stroke-width="2.5"/>
+    </g>
+
+    <!-- Invisible Interactive Hover Hit Area with cursor:none -->
+    <rect id="cap-hit-area" x="${padL}" y="${padT}" width="${W - padL - padR}" height="${H - padT - padB}" fill="transparent" style="cursor:none; pointer-events:all;"/>
   </svg>`;
 }
 
-function capitalPanelHtml(s, rows){
+function initCapitalChartInteractivity(ser){
+  const svg = document.getElementById("cap-chart-svg");
+  const hit = document.getElementById("cap-hit-area");
+  const hud = document.getElementById("cap-hover-hud");
+  const group = document.getElementById("cap-crosshair-group");
+  const lineV = document.getElementById("cap-cross-v");
+  const lineH = document.getElementById("cap-cross-h");
+  const ptDot = document.getElementById("cap-cross-pt");
+  const ptRing = document.getElementById("cap-cross-ring");
+  if (!svg || !hit || !group || !ser || !ser.pts || !ser.pts.length) return;
+
+  const { pts, bankroll } = ser;
+  const W = 800, H = 220, padL = 56, padR = 24, padT = 22, padB = 28;
+  const t0 = pts[0].ts;
+  const t1 = pts[pts.length - 1].ts === t0 ? t0 + 3600 : pts[pts.length - 1].ts;
+  const span = Math.max(1, t1 - t0);
+  const lo = Math.min(bankroll, ...pts.map(p => p.v));
+  const hi = Math.max(bankroll, ...pts.map(p => p.v));
+  const pad = Math.max((hi - lo) * 0.16, 1);
+  const minY = lo - pad, maxY = hi + pad;
+  const x = v => padL + ((v - t0) / span) * (W - padL - padR);
+  const y = v => padT + (1 - (v - minY) / (maxY - minY)) * (H - padT - padB);
+
+  const resetHud = () => {
+    group.style.display = "none";
+    if (hud) {
+      const last = pts[pts.length - 1];
+      const pnl = last.v - bankroll;
+      const pnlPct = bankroll > 0 ? (pnl / bankroll) * 100 : 0;
+      const pnlColor = pnl >= 0 ? "#10B981" : "#EF4444";
+      hud.innerHTML = `<span class="text-[#9CA3AF]">Current:</span> <span class="font-bold text-[#F9FAFB]">$${last.v.toFixed(2)}</span> <span class="font-semibold" style="color:${pnlColor}">(${pnl>=0?'+':''}$${pnl.toFixed(2)} &middot; ${pnl>=0?'+':''}${pnlPct.toFixed(1)}%)</span> <span class="text-[#9CA3AF]/60 hidden sm:inline">&middot; Hover chart to inspect</span>`;
+    }
+  };
+
+  resetHud();
+
+  const getSvgCoordinates = (clientX, clientY) => {
+    try {
+      const pt = svg.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const ctm = svg.getScreenCTM();
+      if (ctm) {
+        return pt.matrixTransform(ctm.inverse());
+      }
+    } catch (_) {}
+    const rect = svg.getBoundingClientRect();
+    return {
+      x: ((clientX - rect.left) / rect.width) * W,
+      y: ((clientY - rect.top) / rect.height) * H
+    };
+  };
+
+  const handleMove = (evt) => {
+    const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+    const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+    const svgPt = getSvgCoordinates(clientX, clientY);
+
+    if (svgPt.x < padL || svgPt.x > W - padR) {
+      resetHud();
+      return;
+    }
+
+    const targetTs = t0 + ((svgPt.x - padL) / (W - padL - padR)) * span;
+
+    let best = pts[0];
+    let minDiff = Math.abs(pts[0].ts - targetTs);
+    for (let i = 1; i < pts.length; i++) {
+      const diff = Math.abs(pts[i].ts - targetTs);
+      if (diff < minDiff) {
+        minDiff = diff;
+        best = pts[i];
+      }
+    }
+
+    const curX = Math.max(padL, Math.min(W - padR, svgPt.x));
+    let curVal = best.v;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p1 = pts[i], p2 = pts[i + 1];
+      const x1 = x(p1.ts), x2 = x(p2.ts);
+      if (curX >= x1 && curX <= x2) {
+        const ratio = x2 === x1 ? 0 : (curX - x1) / (x2 - x1);
+        curVal = p1.v + ratio * (p2.v - p1.v);
+        break;
+      }
+    }
+    const curY = y(curVal);
+
+    group.style.display = "";
+    if (lineV) { lineV.setAttribute("x1", curX); lineV.setAttribute("x2", curX); }
+    if (lineH) { lineH.setAttribute("y1", curY); lineH.setAttribute("y2", curY); }
+    const isUp = curVal >= bankroll;
+    const ptColor = isUp ? "#10B981" : "#EF4444";
+    if (ptDot) {
+      ptDot.setAttribute("cx", curX);
+      ptDot.setAttribute("cy", curY);
+      ptDot.setAttribute("stroke", ptColor);
+    }
+    if (ptRing) {
+      ptRing.setAttribute("cx", curX);
+      ptRing.setAttribute("cy", curY);
+      ptRing.setAttribute("fill", ptColor);
+    }
+
+    if (hud) {
+      const pnl = curVal - bankroll;
+      const pnlPct = bankroll > 0 ? (pnl / bankroll) * 100 : 0;
+      const pnlColor = pnl >= 0 ? "#10B981" : "#EF4444";
+      const dateStr = new Date(targetTs * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      let extra = "";
+      if (best.type === "close" && best.pnl !== undefined) {
+        const tradePnlColor = best.pnl >= 0 ? "#10B981" : "#EF4444";
+        extra = ` &middot; <span class="text-[#9CA3AF]">Nearest:</span> <span style="color:${tradePnlColor}" class="font-bold">${best.pnl>=0?'+':''}$${best.pnl.toFixed(2)}</span>`;
+        if (best.market) {
+          const mSlug = best.market.length > 20 ? best.market.slice(0, 18) + "…" : best.market;
+          extra += ` <span class="text-[#9CA3AF]/70">(${mSlug})</span>`;
+        }
+      } else if (best.type === "mark") {
+        extra = ` &middot; <span class="text-[#3B82F6]">Float mark</span>`;
+      }
+      hud.innerHTML = `<span class="text-[#9CA3AF]">${dateStr}</span> &middot; <span class="text-[#F9FAFB] font-bold">$${curVal.toFixed(2)}</span> <span class="font-bold" style="color:${pnlColor}">(${pnl>=0?'+':''}$${pnl.toFixed(2)} &middot; ${pnl>=0?'+':''}${pnlPct.toFixed(1)}%)</span>${extra}`;
+    }
+  };
+
+  hit.onmousemove = handleMove;
+  hit.onmouseleave = resetHud;
+  hit.ontouchmove = (e) => { e.preventDefault(); handleMove(e); };
+  hit.ontouchend = resetHud;
+}
+
+function capitalPanelHtml(s, rows, heroMode){
   const bankroll = (s && s.bankroll_usd) || 0;
   if (!rows || !rows.length){
     return `<div class="border border-[#1F2937] bg-[#090D16] px-3 py-4 mono text-[12px] leading-5 text-[#9CA3AF]">No closes recorded yet &mdash; the capital curve starts with the first settled position.</div>`;
   }
-  const total = CAP_VIEW === "total";
   const marks = (s && s.float_history) || [];
   const ser = capitalSeries(rows, bankroll, marks, s && s.unrealized_usd);
-  const last = ser.pts[ser.pts.length - 1];
-  const delta = last.v - bankroll;
-  const up = delta >= 0;
   const toggleBtn = (id, label) => `<button type="button" data-capview="${id}" aria-pressed="${CAP_VIEW === id}" class="h-6 px-2.5 mono text-[11px] font-bold tracking-[0.14em] uppercase border transition-colors ${CAP_VIEW === id ? "bg-[#10B981] text-white border-[#10B981]" : "bg-[#090D16] text-[#94A3B8] border-[#1F2937] hover:text-[#F9FAFB] hover:border-[#10B981]/50"}">${label}</button>`;
-  return `
-    <div class="flex items-baseline gap-2.5 flex-wrap">
-      <div class="mono text-[28px] font-bold leading-none tracking-[-0.02em]" data-kpi="capital_now" data-v="${last.v.toFixed(2)}">$${last.v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-      <div class="mono text-[12px] font-semibold px-2 py-1 border ${up ? "bg-[#10B981]/10 border-[#10B981]/20 text-[#10B981]" : "bg-[#EF4444]/10 border-[#EF4444]/20 text-[#EF4444]"}">${up ? "+" : ""}$${Math.abs(delta).toFixed(2)} since inception</div>
-    </div>
-    <div class="mt-2 flex items-center justify-between gap-3 flex-wrap">
-      <div class="flex items-center gap-1" role="group" aria-label="Capital view">
-        ${toggleBtn("realized", "Realized")}
-        ${toggleBtn("total", "Total")}
+  
+  const statsChips = `<div class="hidden sm:flex items-center gap-2 mono text-[11px] text-[#9CA3AF]">
+    <span class="px-2 py-0.5 border border-[#1F2937] bg-[#090D16]">Peak: <strong class="text-[#F9FAFB]">$${ser.peak.toFixed(2)}</strong></span>
+    <span class="px-2 py-0.5 border border-[#1F2937] bg-[#090D16]">Max DD: <strong class="${ser.maxDd>0?'text-[#EF4444]':'text-[#10B981]'}">-${ser.maxDdPval.toFixed(1)}%</strong></span>
+    <span class="px-2 py-0.5 border border-[#1F2937] bg-[#090D16]">${rows.length} Closes</span>
+  </div>`;
+
+  const toggleRow = `<div class="flex items-center justify-between gap-3 flex-wrap">
+      <div class="flex items-center gap-2 flex-wrap">
+        <div class="flex items-center gap-1" role="group" aria-label="Capital view">
+          ${toggleBtn("realized", "Realized")}
+          ${toggleBtn("total", "Total")}
+        </div>
+        ${statsChips}
       </div>
-      <div class="mono text-[11px] tracking-widest uppercase text-[#9CA3AF]">Bankroll $${Math.round(bankroll).toLocaleString("en-US")} &middot; ${rows.length} closes</div>
-    </div>
-    <div class="mt-3">${capitalChartSvg(ser)}</div>
-    <div class="mt-1.5 mono text-[11px] leading-4 text-[#9CA3AF]">${total
-      ? (marks.length
-          ? `Total equity: the realized curve marked by the open float recorded once per sweep, so each point reflects the float that was actually open then. Before the first recorded mark the line carries no float shift.`
-          : `Total equity: the realized curve shifted by today's open float (${fmtUsd(s.unrealized_usd)}). No per-sweep float marks recorded yet, so this is the trajectory marked at current float, not a per-point mark.`)
-      : `Cumulative realized P&amp;L on top of the starting bankroll. Open positions stay a separate ledger &mdash; not marked to market here.`}</div>`;
+      <div id="cap-hover-hud" class="mono text-[11px] px-2.5 py-1 bg-[#090D16] border border-[#1F2937] text-[#9CA3AF] flex items-center gap-1.5 flex-wrap min-h-[26px]">
+        <span class="text-[#9CA3AF]">Bankroll $${Math.round(bankroll).toLocaleString("en-US")}</span> &middot; <span>${rows.length} closes</span>
+      </div>
+    </div>`;
+  const chart = `<div class="mt-2.5 bg-[#090D16] border border-[#1F2937] p-2 relative overflow-hidden">${capitalChartSvg(ser)}</div>`;
+  return `${toggleRow}${chart}`;
 }
 
-function renderCapitalPanel(el, s, rows){
+function renderCapitalPanel(el, s, rows, heroMode){
   if (!el) return;
   CAPITAL_TARGET = el.id;
-  CAPITAL_DATA = { s, rows };
-  el.innerHTML = capitalPanelHtml(s, rows);
+  CAPITAL_DATA = { s, rows, heroMode: !!heroMode };
+  el.innerHTML = capitalPanelHtml(s, rows, heroMode);
+  const bankroll = (s && s.bankroll_usd) || 0;
+  if (rows && rows.length){
+    const marks = (s && s.float_history) || [];
+    const ser = capitalSeries(rows, bankroll, marks, s && s.unrealized_usd);
+    initCapitalChartInteractivity(ser);
+  }
 }
 
 // The view toggle re-renders the panel in place; the choice survives the
@@ -291,7 +482,7 @@ document.addEventListener("click", (e) => {
   const capv = e.target.closest("[data-capview]");
   if (capv && capv.getAttribute("data-capview") !== CAP_VIEW){
     CAP_VIEW = capv.getAttribute("data-capview");
-    if (CAPITAL_TARGET) renderCapitalPanel(document.getElementById(CAPITAL_TARGET), CAPITAL_DATA.s, CAPITAL_DATA.rows);
+    if (CAPITAL_TARGET) renderCapitalPanel(document.getElementById(CAPITAL_TARGET), CAPITAL_DATA.s, CAPITAL_DATA.rows, CAPITAL_DATA.heroMode);
   }
 });
 """
@@ -468,62 +659,124 @@ def _NAVBAR(active_page: str = "fleet") -> str:
 
 
 LANDING_HTML = _wrap("Spread Hunter -- Hunter fleet", _NAVBAR("landing") + r"""
-<section class="mx-auto max-w-[1440px] px-6 lg:px-10">
-  <div class="grid grid-cols-12 gap-0 border-x border-[#1F2937] border-b">
-    <div class="col-span-12 lg:col-span-7 border-b lg:border-b-0 lg:border-r border-[#1F2937] p-8 lg:p-12 flex flex-col justify-between min-h-[600px] bg-[#111827]">
+<section class="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-10 py-4 space-y-4">
+
+  <!-- HERO TOP ROW: Title & Short Desc (Left) + Full-Width Capital Since Inception Chart (Right) -->
+  <div class="grid grid-cols-12 gap-0 border border-[#1F2937] bg-[#111827]">
+    
+    <!-- Left Hero Title & CTA -->
+    <div class="col-span-12 lg:col-span-5 border-b lg:border-b-0 lg:border-r border-[#1F2937] p-6 lg:p-8 flex flex-col justify-between bg-[#111827]">
       <div>
-        <div class="mono text-[14px] tracking-[0.16em] uppercase text-[#3B82F6] flex items-center gap-3"><span class="h-px w-9 bg-[#3B82F6]"></span> Your private desk for spread capture</div>
-        <h1 class="font-display text-[46px] lg:text-[64px] leading-[0.9] tracking-[-0.01em] mt-6">
+        <div class="mono text-[13px] tracking-[0.16em] uppercase text-[#3B82F6] flex items-center gap-2">
+          <span class="h-px w-6 bg-[#3B82F6]"></span> Your Private Desk For Spread Capture
+        </div>
+        <h1 class="font-display text-[38px] sm:text-[46px] lg:text-[52px] leading-[0.92] tracking-[-0.01em] mt-4">
           Find the<br><span class="text-[#10B981]">spread</span> others<br>leave <span class="text-[#EF4444]">behind</span>.
         </h1>
-        <p class="mt-6 max-w-[540px] text-[17px] leading-7 text-[#9CA3AF]">
-          Spread Hunter identifies pricing inconsistencies in markets that settle at $1.00 and measures whether resting orders can systematically capture them &mdash; after adverse selection and hedging costs. This desk reads the live fleet database directly; nothing here is a mockup number.
-        </p>
-        <p class="mt-4 max-w-[540px] mono text-[14px] leading-6 text-[#9CA3AF] border-l-2 border-[#1F2937] pl-3">
-          Profit and loss, and a clear go / no-go signal &mdash; the evidence you need to decide, not a portfolio dashboard.
+        <p class="mt-4 text-[15px] leading-6 text-[#9CA3AF]">
+          Spread Hunter captures pricing spreads in $1.00 Polymarket orderbooks, measuring real maker performance after adverse selection directly from live fleet telemetry.
         </p>
       </div>
 
-      <div class="mt-10 grid grid-cols-2 gap-0 border border-[#1F2937] bg-[#090D16] overflow-hidden">
-        <div class="p-5 border-r border-[#1F2937] bg-[#111827] relative">
-          <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
-          <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#9CA3AF] flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Realized P&amp;L &mdash; Closed Positions</div>
-          <div id="hero-realized" class="mono text-[26px] font-bold tracking-tight leading-none mt-3 text-[#10B981]">&hellip;</div>
-          <div id="hero-realized-sub" class="mono text-[13px] text-[#9CA3AF] mt-1">&nbsp;</div>
-          <div id="hero-realized-rebate" class="mono text-[12px] text-[#9CA3AF] mt-1">&nbsp;</div>
-        </div>
-        <div class="p-5 bg-[#111827] relative overflow-hidden">
-          <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
-          <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#10B981] flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Capital Since Inception</div>
-          <!-- Filled by the shared /capital.js widget (renderCapitalPanel). -->
-          <div id="capital-panel" class="mt-2.5"></div>
-        </div>
-        <div class="col-span-2 border-t border-[#1F2937] px-5 py-3 flex items-center justify-between bg-[#090D16]">
-          <span class="mono text-[13px] tracking-[0.12em] uppercase text-[#9CA3AF]">Realized P&amp;L and the capital curve it has built</span>
-          <span class="hidden sm:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF] border border-[#1F2937] bg-[#111827] px-2 py-1">Since inception</span>
-        </div>
-      </div>
-
-      <div class="flex gap-3 mt-6">
-        <a href="/dashboard" class="flex-1 bg-[#10B981] text-white h-11 inline-flex items-center justify-center mono text-[13px] font-semibold tracking-[0.07em] uppercase hover:bg-[#059669] transition-colors shadow-[0_4px_16px_rgba(16,185,129,0.2)]">View Your Dashboard &rarr;</a>
-        <a href="#verdict" class="px-6 h-11 inline-flex items-center justify-center border border-[#1F2937] bg-[#111827] mono text-[13px] font-semibold tracking-[0.07em] uppercase hover:bg-[#1F2937] transition-colors text-[#9CA3AF]">How the decision is made</a>
+      <div class="flex flex-wrap gap-3 mt-6">
+        <a href="/dashboard" class="flex-1 min-w-[140px] bg-[#10B981] text-white h-10 inline-flex items-center justify-center mono text-[12px] font-bold tracking-[0.07em] uppercase hover:bg-[#059669] transition-colors shadow-[0_4px_16px_rgba(16,185,129,0.2)]">View Dashboard &rarr;</a>
+        <a href="/bankroll" class="px-5 h-10 inline-flex items-center justify-center border border-[#FBBF24]/40 bg-[#FBBF24]/10 mono text-[12px] font-bold tracking-[0.07em] uppercase hover:bg-[#FBBF24] hover:text-[#090D16] transition-colors text-[#FBBF24]">10 Bankroll Matrix &rarr;</a>
       </div>
     </div>
 
-    <div id="verdict" class="col-span-12 lg:col-span-5 bg-[#090D16] flex flex-col">
-      <div class="p-7 lg:p-8 border-b border-[#1F2937] bg-[#111827]">
-        <div class="mono text-[13px] tracking-[0.18em] uppercase text-[#9CA3AF]">The Six Readings That Determine the Outcome</div>
-        <div class="font-display text-[22px] leading-none mt-2 tracking-tight">Live from the fleet database</div>
-        <div class="mono text-[14px] text-[#9CA3AF] mt-2 leading-5">The go / no-go decision rests on the sign of the confidence bound. Everything else provides context.</div>
-      </div>
-      <div id="verdict-list" class="divide-y divide-[#1F2937]"></div>
-      <div class="p-4 bg-[#111827] border-t border-[#1F2937] flex gap-3">
-        <div class="mono text-[13px] leading-5 text-[#9CA3AF]">
-          <span class="font-bold uppercase tracking-widest text-[#F9FAFB]">Interpret with care:</span> yields and projections are context only and are never added to settled profit. Only settled markets determine the outcome.
+    <!-- Right Capital Since Inception Chart (Stretched Full Width) -->
+    <div class="col-span-12 lg:col-span-7 p-6 bg-[#090D16] flex flex-col justify-between relative overflow-hidden">
+      <div>
+        <div class="mono text-[13px] tracking-[0.14em] uppercase text-[#10B981] flex items-center gap-2">
+          <span class="size-2 bg-[#10B981] rounded-full animate-pulse"></span> Capital Since Inception
         </div>
+        <!-- Filled by shared /capital.js widget (renderCapitalPanel) -->
+        <div id="capital-panel" class="mt-2"></div>
+      </div>
+      <div class="mt-4 pt-3 border-t border-[#1F2937] flex items-center justify-between mono text-[12px] text-[#9CA3AF]">
+        <span>Realized P&amp;L and the capital curve it has built</span>
+        <span class="px-2 py-0.5 border border-[#1F2937] bg-[#111827] text-[#9CA3AF] uppercase">Live Fleet Ledger</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- MIDDLE ROW: 5 Core Verdict Parameters in Single Horizontal Row (5 Columns) -->
+  <div class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <div class="px-4 py-2 bg-[#090D16] border-b border-[#1F2937] flex items-center justify-between">
+      <div class="mono text-[12px] font-bold tracking-[0.14em] uppercase text-[#9CA3AF] flex items-center gap-2">
+        <span class="size-1.5 bg-[#3B82F6]"></span> Live Fleet Verdict &mdash; Five Core Readings
+      </div>
+      <span class="mono text-[11px] text-[#9CA3AF] hidden sm:inline">Confidence Bound &middot; Markout &middot; Ledgers &middot; Cap &middot; Signal</span>
+    </div>
+    <div id="verdict-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 divide-y sm:divide-y-0 lg:divide-x divide-[#1F2937]">
+      <!-- Rendered by JS -->
+    </div>
+  </div>
+
+  <!-- BOTTOM ROW: 10-Tier Bankroll Allocation Matrix Overview (Full Width) -->
+  <div class="border border-[#1F2937] bg-[#111827] overflow-hidden">
+    <div class="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-[#1F2937] bg-[#090D16]">
+      <div>
+        <div class="mono text-[13px] tracking-[0.16em] uppercase text-[#FBBF24] flex items-center gap-2">
+          <span class="size-2 bg-[#FBBF24] animate-pulse"></span> 10-Tier Capital Allocation Matrix Overview ($100 &ndash; $1,000)
+        </div>
+        <div class="font-display text-[22px] sm:text-[26px] leading-none tracking-tight mt-1.5">Simultaneous Multi-Tier Sensitivity Experiment</div>
+        <div class="mono text-[12px] text-[#9CA3AF] mt-1">
+          10 isolated capital tiers ($100 to $1,000 in $100 steps) testing scale resilience, fill rates, and adverse selection.
+        </div>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        <a href="/bankroll" class="h-9 px-4 inline-flex items-center justify-center bg-[#FBBF24] text-[#090D16] mono text-[12px] font-bold tracking-wider uppercase hover:bg-[#F59E0B] transition-colors shadow-[0_0_12px_rgba(251,191,36,0.25)]">
+          Open 10-Tier Matrix &rarr;
+        </a>
+      </div>
+    </div>
+
+    <!-- 4 High-Level KPI Summary Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 lg:divide-x divide-[#1F2937]">
+      <div class="p-4 bg-[#111827] relative">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#3B82F6]"></div>
+        <div class="mono text-[11px] font-bold tracking-[0.14em] uppercase text-[#9CA3AF]">Allocated Capital</div>
+        <div id="landing-bk-capital" class="mono text-[22px] font-bold text-[#F9FAFB] mt-1">$5,500 <span class="text-[12px] font-normal text-[#9CA3AF]">USD</span></div>
+        <div class="mono text-[11px] text-[#9CA3AF] mt-0.5">10 isolated bankroll pools</div>
+      </div>
+
+      <div class="p-4 bg-[#111827] relative">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#10B981]"></div>
+        <div class="mono text-[11px] font-bold tracking-[0.14em] uppercase text-[#9CA3AF]">Combined Realized P&amp;L</div>
+        <div id="landing-bk-pnl" class="mono text-[22px] font-bold text-[#10B981] mt-1">+$0.00</div>
+        <div id="landing-bk-pnl-sub" class="mono text-[11px] text-[#9CA3AF] mt-0.5">Across all 10 active tiers</div>
+      </div>
+
+      <div class="p-4 bg-[#111827] relative">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#FBBF24]"></div>
+        <div class="mono text-[11px] font-bold tracking-[0.14em] uppercase text-[#9CA3AF]">Optimal Tier (Sortino)</div>
+        <div id="landing-bk-best" class="mono text-[22px] font-bold text-[#FBBF24] mt-1">--</div>
+        <div id="landing-bk-best-sub" class="mono text-[11px] text-[#9CA3AF] mt-0.5">Highest risk-adjusted score</div>
+      </div>
+
+      <div class="p-4 bg-[#111827] relative">
+        <div class="absolute inset-x-0 top-0 h-[2px] bg-[#8B5CF6]"></div>
+        <div class="mono text-[11px] font-bold tracking-[0.14em] uppercase text-[#9CA3AF]">Active Fleet Status</div>
+        <div id="landing-bk-status" class="mono text-[22px] font-bold text-[#8B5CF6] mt-1">10 / 10 Active</div>
+        <div id="landing-bk-samples" class="mono text-[11px] text-[#9CA3AF] mt-0.5">0 / 1,000 target samples</div>
+      </div>
+    </div>
+
+    <!-- 10-Tier Mini Interactive Strip -->
+    <div class="p-4 bg-[#090D16] border-t border-[#1F2937]">
+      <div class="flex items-center justify-between mb-2 px-1">
+        <span class="mono text-[11px] text-[#9CA3AF] uppercase font-bold tracking-wider">Live Tier Status Strip ($100 to $1,000):</span>
+        <span class="mono text-[11px] text-[#10B981]">AUTOMATED INVALIDATION PROTOCOL</span>
+      </div>
+      <div id="landing-tier-pills" class="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2">
+        <!-- Rendered by JS -->
       </div>
     </div>
   </div>
+
+</section>
 
   <div class="grid grid-cols-12 gap-0 border-x border-[#1F2937] border-b bg-[#111827]">
     <div class="col-span-12 p-6 lg:p-8 flex flex-col lg:flex-row lg:items-end justify-between gap-4 border-b border-[#1F2937] bg-[#090D16]">
@@ -612,50 +865,125 @@ async function load(){
     return;
   }
 
-  document.getElementById("hero-realized").textContent = fmtUsd(s.realized_usd);
-  document.getElementById("hero-realized-sub").textContent =
-    (s.realized_pct===null?"":fmtPct(s.realized_pct)+" ") + "on " + (s.realized_cost||0).toFixed(0) + " committed";
-  document.getElementById("hero-realized-rebate").textContent =
-    fmtUsd(s.rebate_usd) + " rebates = " + fmtUsd(s.total_liquidation_usd) + " total liquidation P&L";
+  const heroReal = document.getElementById("hero-realized");
+  if (heroReal) heroReal.textContent = fmtUsd(s.realized_usd);
+  const heroSub = document.getElementById("hero-realized-sub");
+  if (heroSub) heroSub.textContent = (s.realized_pct===null?"":fmtPct(s.realized_pct)+" ") + "on " + (s.realized_cost||0).toFixed(0) + " committed";
+  const heroReb = document.getElementById("hero-realized-rebate");
+  if (heroReb) heroReb.textContent = fmtUsd(s.rebate_usd) + " rebates = " + fmtUsd(s.total_liquidation_usd) + " total liquidation P&L";
+
   const st = await fetch("/api/settled").then(r => r.json()).catch(() => null);
   renderCapitalPanel(document.getElementById("capital-panel"), s, (st && st.settled) || []);
 
   const rows = [
     {n:"01", label:"Confidence Bound", value: fmtPct(s.ci90_lower_pct,2),
-     sub:`Mean ${fmtPct(s.mean_return_pct)} &middot; Stdev ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'} &middot; n=${s.n_settled}`,
-     accent: (s.ci90_lower_pct||0) > 0 ? "neutral":"red",
-     note:"90% lower bound on realized return. Below zero means the sample cannot yet rule out no edge."},
+     sub:`Mean ${fmtPct(s.mean_return_pct)} &middot; Stdev ${s.stdev_return_pct===null?'--':s.stdev_return_pct.toFixed(1)+'%'}`,
+     accent: (s.ci90_lower_pct||0) > 0 ? "green" : "red",
+     note:"90% lower bound on return."},
     {n:"02", label:"Markout Drift", value: s.markout_mean_per_share===null?"--":(s.markout_mean_per_share*100).toFixed(2)+"&cent;",
-     sub:`Effective sample ${s.markout_n_eff.toFixed(1)} &middot; directly measured`, accent:"blue",
-     note:"Price movement against filled orders, pooled fleet-wide."},
+     sub:`Sample ${s.markout_n_eff.toFixed(1)} eff`,
+     accent: (s.markout_mean_per_share !== null && s.markout_mean_per_share >= 0) ? "green" : "red",
+     note:"Price movement after fills."},
     {n:"03", label:"Realized vs Unrealized", value: fmtUsd(s.realized_usd) + " / " + fmtUsd(s.unrealized_usd),
-     sub:`${s.wins} wins &middot; ${s.losses} losses`, accent:"neutral",
-     note:"Two independent ledgers, never summed."},
+     sub:`${s.wins}W / ${s.losses}L`,
+     accent: (s.realized_usd || 0) >= 0 ? "green" : "red",
+     note:"Two independent ledgers."},
     {n:"04", label:"Category Concentration", value: s.categories.length ? (s.categories[0].pct.toFixed(1)+"% "+s.categories[0].name) : "--",
-     sub: s.categories.map(c=>c.name+" "+c.n).join(" / ") + ` &middot; Cap ${(s.go_live_max_category_share*100).toFixed(0)}%`,
-     accent: (s.max_category_share||0) > s.go_live_max_category_share ? "red":"neutral",
-     note:"Concentration above the cap alone prevents go-live."},
+     sub: `Cap ${(s.go_live_max_category_share*100).toFixed(0)}%`,
+     accent: (s.max_category_share||0) > s.go_live_max_category_share ? "red" : "green",
+     note:"Over cap blocks go-live."},
     {n:"05", label:"Settled Positions", value: `${s.n_settled} of ${s.go_live_min_settled}`,
-     sub:`${s.closes} total closes recorded &middot; status ${s.status}`, accent:"neutral",
-     note:`Signal floor is ${s.signal_min_settled} settled markets.`},
+     sub:`${s.closes} total closes &middot; ${s.status}`,
+     accent: (s.n_settled || 0) >= (s.go_live_min_settled || 100) ? "green" : "red",
+     note:`Signal floor is ${s.signal_min_settled}.`},
   ];
-  document.getElementById("verdict-list").innerHTML = rows.map(row => `
-    <div class="grid grid-cols-12 gap-0 hover:bg-[#111827] transition-colors">
-      <div class="col-span-2 border-r border-[#1F2937] p-4 grid place-items-center bg-[#111827]/50">
-        <span class="mono text-[13px] font-bold tracking-widest text-[#9CA3AF]">${row.n}</span>
-      </div>
-      <div class="col-span-10 p-4 bg-[#111827]">
-        <div class="flex items-start justify-between gap-3">
-          <div class="mono text-[13px] tracking-[0.14em] uppercase font-semibold">${row.label}</div>
-          <div class="mono text-[13px] font-bold tracking-tight px-2 py-1 leading-none shrink-0 border ${row.accent==='red'?'bg-[#EF4444] text-white border-[#EF4444]':row.accent==='blue'?'bg-[#3B82F6] text-white border-[#3B82F6]':'bg-[#1F2937] text-[#F9FAFB] border-[#1F2937]'}">${row.value}</div>
+
+  const vList = document.getElementById("verdict-list");
+  if (vList) {
+    vList.innerHTML = rows.map(row => `
+      <div class="p-4 bg-[#111827] flex flex-col justify-between hover:bg-[#161F30] transition-colors min-h-[135px]">
+        <div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="mono text-[11px] font-bold text-[#9CA3AF]">${row.n}</span>
+            <div class="mono text-[12px] font-bold px-2 py-0.5 leading-none shrink-0 border ${row.accent==='green'?'bg-[#10B981] text-white border-[#10B981]':'bg-[#EF4444] text-white border-[#EF4444]'}">${row.value}</div>
+          </div>
+          <div class="mono text-[12px] tracking-wider uppercase font-semibold text-[#F9FAFB] mt-2.5">${row.label}</div>
+          <div class="mono text-[11px] text-[#9CA3AF] mt-1">${row.sub}</div>
         </div>
-        <div class="mono text-[13px] text-[#9CA3AF] mt-1.5">${row.sub}</div>
-        <div class="mono text-[13px] leading-5 text-[#9CA3AF] mt-2 border-l-2 pl-2.5" style="border-color:${row.accent==='red'?'#EF4444':row.accent==='blue'?'#3B82F6':'#374151'}">${row.note}</div>
-      </div>
-    </div>`).join("");
+        <div class="mono text-[10px] text-[#9CA3AF] mt-2 border-l-2 pl-2" style="border-color:${row.accent==='green'?'#10B981':'#EF4444'}">${row.note}</div>
+      </div>`).join("");
+  }
+
+  // Load 10-Tier Bankroll Matrix Overview
+  try {
+    const bkRes = await fetch("/api/bankroll_matrix");
+    if (bkRes.ok) {
+      const bkData = await bkRes.json();
+      const tiers = bkData.tiers || [];
+      if (tiers.length > 0) {
+        let totalPnl = 0, totalCloses = 0, activeCount = 0;
+        let bestTier = null, maxSortino = -999;
+        
+        tiers.forEach(t => {
+          const bankroll = t.bankroll || t.bankroll_usd || 0;
+          const pnl = t.total_pnl !== undefined ? t.total_pnl : (t.realized_pnl || 0);
+          const samples = t.sample_count !== undefined ? t.sample_count : (t.n_closes || 0);
+          const sortino = t.sortino !== undefined ? t.sortino : (t.downside_sortino || 0);
+          const isRunning = t.status === "RUNNING" || t.is_running;
+
+          totalPnl += pnl;
+          totalCloses += samples;
+          if (isRunning || samples > 0) activeCount++;
+          if (sortino > maxSortino && samples >= 5) {
+            maxSortino = sortino;
+            bestTier = t;
+          }
+        });
+
+        document.getElementById("landing-bk-pnl").textContent = fmtUsd(totalPnl);
+        document.getElementById("landing-bk-pnl").className = "mono text-[24px] font-bold mt-1 " + (totalPnl >= 0 ? "text-[#10B981]" : "text-[#EF4444]");
+        document.getElementById("landing-bk-pnl-sub").textContent = `${totalCloses} closes recorded fleet-wide`;
+        document.getElementById("landing-bk-status").textContent = `${activeCount || tiers.length} / ${tiers.length} Active`;
+        document.getElementById("landing-bk-samples").textContent = `${totalCloses} / 1,000 target samples`;
+
+        if (bestTier) {
+          const bVal = bestTier.bankroll || bestTier.bankroll_usd;
+          const retVal = bestTier.return_pct !== undefined ? bestTier.return_pct : bestTier.return_on_capital_pct;
+          document.getElementById("landing-bk-best").textContent = `$${bVal}`;
+          document.getElementById("landing-bk-best-sub").textContent = `Sortino ${maxSortino.toFixed(2)} (${fmtPct(retVal)})`;
+        } else if (tiers.length > 0) {
+          const lead = tiers[0];
+          const bVal = lead.bankroll || lead.bankroll_usd || 100;
+          const sCount = lead.sample_count !== undefined ? lead.sample_count : (lead.n_closes || 0);
+          document.getElementById("landing-bk-best").textContent = `$${bVal}`;
+          document.getElementById("landing-bk-best-sub").textContent = `Tracking ${sCount} closes`;
+        }
+
+        // Render 10 mini pills
+        const pillsWrap = document.getElementById("landing-tier-pills");
+        if (pillsWrap) {
+          pillsWrap.innerHTML = tiers.map(t => {
+            const bVal = t.bankroll || t.bankroll_usd || 0;
+            const pnl = t.total_pnl !== undefined ? t.total_pnl : (t.realized_pnl || 0);
+            const samples = t.sample_count !== undefined ? t.sample_count : (t.n_closes || 0);
+            const pnlColor = pnl > 0 ? "text-[#10B981]" : (pnl < 0 ? "text-[#EF4444]" : "text-[#9CA3AF]");
+            return `
+              <a href="/bankroll" class="p-2 bg-[#111827] border border-[#1F2937] hover:border-[#FBBF24] transition-all block text-center group">
+                <div class="mono text-[10px] text-[#9CA3AF] group-hover:text-[#FBBF24] font-bold uppercase">$${bVal}</div>
+                <div class="mono text-[11px] font-bold ${pnlColor} mt-0.5">${fmtUsd(pnl)}</div>
+                <div class="mono text-[9px] text-[#6B7280] mt-0.5">${samples} cls</div>
+              </a>`;
+          }).join("");
+        }
+      }
+    }
+  } catch(err) {
+    console.error("Bankroll matrix load error:", err);
+  }
 }
 load();
 </script>
+
 """)
 
 DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", _NAVBAR("fleet") + r"""
@@ -678,7 +1006,7 @@ DASHBOARD_HTML = _wrap("Fleet Desk -- Spread Hunter design", _NAVBAR("fleet") + 
         <span class="hidden sm:inline-flex h-6 items-center px-1.5 bg-[#090D16] mono text-[11px] font-bold tracking-[0.18em] shrink-0 border border-[#1F2937]">BOOK</span>
         <span class="mono text-[13px] tracking-[0.14em] uppercase font-semibold flex items-center gap-2">Positions <span class="sh-chev size-4 border border-[#1F2937] grid place-items-center">&#9660;</span></span>
       </span>
-      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Realized P&amp;L &mdash; capital since inception</span>
+      <span class="hidden md:inline mono text-[12px] tracking-widest uppercase text-[#9CA3AF]">Performance summary &mdash; capital &amp; P&amp;L</span>
     </button>
     <div id="sec-positions" class="sh-fade grid grid-cols-12 gap-0"></div>
   </section>
@@ -1126,29 +1454,65 @@ function orderDepthHtml(m){
 // the 15s poll. The curve is built from the REAL closed positions already
 // in settledState.rows, stacked on the starting bankroll.
 function renderPositions(s){
+  const bankroll = (s && s.bankroll_usd) || 0;
+  const capital = bankroll + s.realized_usd;
+  const pnlUp = s.realized_usd >= 0;
+  const pnlColor = pnlUp ? "#10B981" : "#EF4444";
   document.getElementById("sec-positions").innerHTML = `
-    <div class="col-span-12 lg:col-span-6 p-6 lg:p-7 border-b lg:border-b-0 lg:border-r border-[#1F2937] relative">
+    <div class="col-span-12 p-5 lg:p-6 relative bg-[#111827]">
       <div class="absolute top-0 left-0 w-full h-[2px] bg-[#10B981]"></div>
-      <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#10B981] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Realized P&amp;L &mdash; Settled Positions</div>
-      <div class="mono text-[13px] tracking-[0.08em] uppercase text-[#9CA3AF] mt-1">Booked closes plus resolutions on markets held to settlement</div>
-      <div class="mt-6 flex items-baseline gap-3 flex-wrap">
-        <div class="mono text-[44px] font-bold leading-none tracking-[-0.03em]" data-kpi="hero_realized" data-v="${s.realized_usd}" data-rollup data-fmt="usd">${fmtPnlHTML(s.realized_usd)}</div>
-        <div class="mono text-[14px] font-semibold px-2 py-1 bg-[#10B981]/10 border border-[#10B981]/20 text-[#10B981]">${fmtPct(s.realized_pct)}</div>
-        <div class="mono text-[13px] text-[#9CA3AF]">on ${s.realized_cost.toFixed(0)} committed</div>
+
+      <!-- Top Row: 4 Metric Cards in Single Row (Total Capital + Rebates + Closes + Liquidation) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+
+        <!-- Card 1: Capital Since Inception / Total Capital -->
+        <div class="p-3.5 bg-[#090D16] border border-[#10B981]/30 relative overflow-hidden flex flex-col justify-between">
+          <div class="absolute top-0 left-0 right-0 h-[2px] bg-[#10B981]"></div>
+          <div>
+            <div class="mono text-[11px] tracking-[0.14em] uppercase text-[#10B981] font-semibold flex items-center gap-1.5">
+              <span class="size-1.5 bg-[#10B981]"></span> Total Capital
+            </div>
+            <div class="mono text-[24px] sm:text-[26px] font-bold mt-1 leading-tight tracking-tight" data-kpi="hero_realized" data-v="${capital}" data-rollup data-fmt="usd">$${capital.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+          </div>
+          <div class="mt-2 pt-2 border-t border-[#1F2937]/50 flex items-center justify-between gap-1 flex-wrap">
+            <div class="mono text-[11px] font-semibold px-1.5 py-0.5 border inline-block" style="background:${pnlColor}1A;border-color:${pnlColor}33;color:${pnlColor}">${fmtPnlHTML(s.realized_usd)} (${fmtPct(s.realized_pct)})</div>
+            <div class="mono text-[10px] text-[#9CA3AF]">on $${Math.round(bankroll).toLocaleString("en-US")} bank</div>
+          </div>
+        </div>
+
+        <!-- Card 2: Rebates Earned -->
+        <div class="p-3.5 bg-[#10B981]/10 border border-[#10B981]/20 flex flex-col justify-between">
+          <div>
+            <div class="mono text-[11px] tracking-[0.14em] uppercase text-[#10B981]">Rebates Earned</div>
+            <div class="mono text-[22px] sm:text-[24px] font-bold mt-1 leading-tight text-[#10B981]">${fmtUsd(s.rebate_usd)}</div>
+          </div>
+          <div class="mono text-[11px] text-[#10B981]/80 mt-2 pt-2 border-t border-[#10B981]/20">${s.rebate_fills} fills${s.rebate_cps===null?'':' &middot; '+s.rebate_cps.toFixed(2)+'c/sh'}</div>
+        </div>
+
+        <!-- Card 3: Total Closes -->
+        <div class="p-3.5 bg-[#090D16] border border-[#1F2937] flex flex-col justify-between">
+          <div>
+            <div class="mono text-[11px] tracking-[0.14em] uppercase text-[#9CA3AF]">Total Closes</div>
+            <div class="mono text-[22px] sm:text-[24px] font-bold mt-1 leading-tight text-[#F9FAFB]">${s.closes}</div>
+          </div>
+          <div class="mono text-[11px] text-[#9CA3AF] mt-2 pt-2 border-t border-[#1F2937]/50 truncate">${fmtUsd(s.closed_pnl)} &middot; $${(s.capital_cycled_usd||s.realized_cost||0).toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:0})} circ &middot; ${s.wins}W/${s.losses}L</div>
+        </div>
+
+        <!-- Card 4: Liquidation Value -->
+        <div class="p-3.5 bg-[#090D16] border border-[#1F2937] flex flex-col justify-between">
+          <div>
+            <div class="mono text-[11px] tracking-[0.14em] uppercase text-[#9CA3AF]">Liquidation Value</div>
+            <div class="mono text-[22px] sm:text-[24px] font-bold mt-1 leading-tight text-[#F9FAFB]">${fmtUsd(s.total_liquidation_usd)}</div>
+          </div>
+          <div class="mono text-[11px] text-[#9CA3AF] mt-2 pt-2 border-t border-[#1F2937]/50">realized + rebates + float</div>
+        </div>
+
       </div>
-      <div class="mt-3 mono text-[12px] leading-5 text-[#9CA3AF] bg-[#090D16] border border-[#1F2937] px-3 py-2">
-        ${fmtUsd(s.realized_usd)} Realized &nbsp;|&nbsp; ${fmtUsd(s.rebate_usd)} Earned Rebates &nbsp;|&nbsp; ${fmtUsd(s.unrealized_usd)} Unrealized &nbsp;=&nbsp; <span class="font-bold text-[#F9FAFB]">${fmtUsd(s.total_liquidation_usd)} Total Liquidation P&amp;L</span>
-      </div>
-      <div class="mt-3 grid grid-cols-2 gap-2">
-        <div class="p-3.5 bg-[#111827] border border-[#1F2937]"><div class="mono text-[12px] tracking-[0.12em] uppercase text-[#9CA3AF]">Total closes</div><div class="mono text-[17px] font-bold mt-1">${s.closes}</div><div class="mono text-[12px] text-[#9CA3AF] mt-0.5">${fmtUsd(s.closed_pnl)} booked</div></div>
-        <div class="p-3.5 bg-[#10B981]/10 border border-[#10B981]/20"><div class="mono text-[12px] tracking-[0.12em] uppercase text-[#10B981]">Rebates earned</div><div class="mono text-[17px] font-bold mt-1 text-[#10B981]">${fmtUsd(s.rebate_usd)}</div><div class="mono text-[12px] text-[#10B981]/70 mt-0.5">${s.rebate_fills} fills${s.rebate_cps===null?'':' &middot; '+s.rebate_cps.toFixed(2)+'c/sh'}</div></div>
-      </div>
-    </div>
-    <div class="col-span-12 lg:col-span-6 p-6 lg:p-7 relative border-l border-[#1F2937]">
-      <div class="mono text-[12px] tracking-[0.16em] uppercase text-[#10B981] font-semibold flex items-center gap-2"><span class="size-1.5 bg-[#10B981]"></span> Capital Since Inception</div>
+
+      <!-- Full-width equity chart (heroMode: toggle + chart only) -->
       <div id="capital-panel" class="mt-4"></div>
     </div>`;
-  renderCapitalPanel(document.getElementById("capital-panel"), s, settledState.rows);
+  renderCapitalPanel(document.getElementById("capital-panel"), s, settledState.rows, true);
 }
 
 function renderVerdict(s){
