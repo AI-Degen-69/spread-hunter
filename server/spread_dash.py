@@ -10,6 +10,8 @@ copy carried over from the design source.
 """
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 import threading
 import time
@@ -162,6 +164,20 @@ def _category(slug: str) -> str:
         return tag.title()
 
 
+def _total_fill_cost_usd() -> float:
+    """Total capital used across all fills in the fleet database."""
+    db = stats.DB
+    if not db.exists():
+        return 0.0
+    try:
+        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        row = c.execute("SELECT SUM(size * price) FROM fills").fetchone()
+        c.close()
+        return float(row[0] or 0.0) if row else 0.0
+    except Exception:
+        return 0.0
+
+
 @app.get("/api/summary")
 def api_summary() -> dict:
     real = stats.realized()
@@ -244,6 +260,7 @@ def api_summary() -> dict:
         "realized_usd": real["realized"],
         "realized_pct": realized_pct,
         "realized_cost": cost,
+        "capital_cycled_usd": _total_fill_cost_usd(),
         "wins": real["wins"], "losses": real["losses"],
         "closes": real["closes"], "closed_pnl": real["closed_pnl"],
         "unrealized_usd": unrealized_total,
@@ -309,14 +326,11 @@ def api_trade_history(tier: str | None = None) -> dict:
 
             # 1. Read closes (Realized closes, merges, sells, resolutions)
             if "closes" in tables:
-                for r in conn.execute(
-                    "SELECT id, ts, market_slug, condition_id, method, gas, shares, "
-                    "up_price, dn_price, cost_basis, proceeds, fee, realized_pnl, "
-                    "forgone_vs_settlement FROM closes ORDER BY ts DESC, id DESC"
-                ):
+                for row in conn.execute("SELECT * FROM closes ORDER BY ts DESC, id DESC"):
+                    r = dict(row)
                     total_trades_count += 1
-                    cid = r["condition_id"] or r["market_slug"] or "unknown"
-                    slug = r["market_slug"] or cid
+                    cid = r.get("condition_id") or r.get("market_slug") or "unknown"
+                    slug = r.get("market_slug") or cid
                     m = market_map.setdefault(cid, {
                         "tier": t,
                         "condition_id": cid,
@@ -335,12 +349,12 @@ def api_trade_history(tier: str | None = None) -> dict:
                         "latest_ts": 0.0,
                         "orders": [],
                     })
-                    shares = float(r["shares"] or 0.0)
-                    cost = float(r["cost_basis"] or 0.0)
-                    proceeds = float(r["proceeds"] or 0.0)
-                    pnl = float(r["realized_pnl"] or 0.0)
-                    fee = float((r["gas"] if (r["method"] or "").upper() == "MERGE" else r["fee"]) or 0.0)
-                    ts = float(r["ts"] or now)
+                    shares = float(r.get("shares") or 0.0)
+                    cost = float(r.get("cost_basis") or 0.0)
+                    proceeds = float(r.get("proceeds") or 0.0)
+                    pnl = float(r.get("realized_pnl") or 0.0)
+                    fee = float((r.get("gas") if (r.get("method") or "").upper() == "MERGE" else r.get("fee")) or 0.0)
+                    ts = float(r.get("ts") or now)
 
                     m["total_shares"] += shares
                     m["cost_basis"] += cost
@@ -350,13 +364,13 @@ def api_trade_history(tier: str | None = None) -> dict:
                     if ts > m["latest_ts"]:
                         m["latest_ts"] = ts
 
-                    method_raw = (r["method"] or "MERGE").upper()
+                    method_raw = (r.get("method") or "MERGE").upper()
                     if method_raw == "MERGE":
                         m["method"] = "MERGE"
                         m["status"] = "MERGED (SPREAD CAPTURE)"
                         label = "MERGE (SPREAD CAPTURE)"
-                        up_p = float(r["up_price"] or 0.0)
-                        dn_p = float(r["dn_price"] or 0.0)
+                        up_p = float(r.get("up_price") or 0.0)
+                        dn_p = float(r.get("dn_price") or 0.0)
                         detail = f"${up_p:.2f} YES + ${dn_p:.2f} NO = ${up_p+dn_p:.2f} (captured +${1.0-(up_p+dn_p):.2f}/sh)"
                     elif method_raw == "SELL":
                         m["method"] = "SELL"
@@ -373,7 +387,7 @@ def api_trade_history(tier: str | None = None) -> dict:
                         detail = f"Method: {method_raw}"
 
                     m["orders"].append({
-                        "id": f"close_{r['id']}",
+                        "id": f"close_{r.get('id')}",
                         "ts": ts,
                         "kind": "CLOSE",
                         "label": label,
@@ -388,12 +402,10 @@ def api_trade_history(tier: str | None = None) -> dict:
 
             # 2. Read fills
             if "fills" in tables:
-                for r in conn.execute(
-                    "SELECT id, ts, market_slug, condition_id, token_id, side, size, price, fee, order_id "
-                    "FROM fills ORDER BY ts DESC, id DESC"
-                ):
-                    cid = r["condition_id"] or r["market_slug"] or "unknown"
-                    slug = r["market_slug"] or cid
+                for row in conn.execute("SELECT * FROM fills ORDER BY ts DESC, id DESC"):
+                    r = dict(row)
+                    cid = r.get("condition_id") or r.get("market_slug") or "unknown"
+                    slug = r.get("market_slug") or cid
                     m = market_map.setdefault(cid, {
                         "tier": t,
                         "condition_id": cid,
@@ -412,11 +424,11 @@ def api_trade_history(tier: str | None = None) -> dict:
                         "latest_ts": 0.0,
                         "orders": [],
                     })
-                    size = float(r["size"] or 0.0)
-                    price = float(r["price"] or 0.0)
-                    fee = float(r["fee"] or 0.0)
-                    ts = float(r["ts"] or now)
-                    side_raw = (r["side"] or "").upper()
+                    size = float(r.get("size") or 0.0)
+                    price = float(r.get("price") or 0.0)
+                    fee = float(r.get("fee") or 0.0)
+                    ts = float(r.get("ts") or now)
+                    side_raw = (r.get("side") or "").upper()
                     side_label = "UP / YES" if side_raw in ["UP", "YES", "BUY_YES"] else ("DN / NO" if side_raw in ["DN", "NO", "BUY_NO"] else side_raw)
 
                     m["fills_count"] += 1
@@ -424,7 +436,7 @@ def api_trade_history(tier: str | None = None) -> dict:
                         m["latest_ts"] = ts
 
                     m["orders"].append({
-                        "id": f"fill_{r['id']}",
+                        "id": f"fill_{r.get('id')}",
                         "ts": ts,
                         "kind": "FILL",
                         "label": f"MAKER FILL ({side_label})",
@@ -439,43 +451,75 @@ def api_trade_history(tier: str | None = None) -> dict:
 
             # 3. Read live_state & quotes for open positions
             if "live_state" in tables:
-                for r in conn.execute(
-                    "SELECT market_slug, condition_id, up_shares, dn_shares, up_cost, dn_cost, state, last_seen "
-                    "FROM live_state"
-                ):
-                    up_sh = float(r["up_shares"] or 0.0)
-                    dn_sh = float(r["dn_shares"] or 0.0)
-                    if up_sh > 0 or dn_sh > 0:
-                        cid = r["condition_id"] or r["market_slug"] or "unknown"
-                        slug = r["market_slug"] or cid
-                        m = market_map.setdefault(cid, {
-                            "tier": t,
-                            "condition_id": cid,
-                            "market_slug": slug,
-                            "category": _category(slug),
-                            "total_shares": 0.0,
-                            "cost_basis": 0.0,
-                            "proceeds": 0.0,
-                            "realized_pnl": 0.0,
-                            "unrealized_pnl": 0.0,
-                            "open_orders_count": 0,
-                            "fills_count": 0,
-                            "closes_count": 0,
-                            "method": "OPEN",
-                            "status": "OPEN",
-                            "latest_ts": 0.0,
-                            "orders": [],
-                        })
-                        m["status"] = "OPEN"
-                        m["method"] = "OPEN"
+                for row in conn.execute("SELECT * FROM live_state"):
+                    r = dict(row)
+                    if "payload" in r and r["payload"]:
+                        try:
+                            d = json.loads(r["payload"]) if isinstance(r["payload"], str) else r["payload"]
+                            up_sh = float(d.get("up_shares") or 0.0)
+                            dn_sh = float(d.get("dn_shares") or 0.0)
+                            if up_sh > 0 or dn_sh > 0:
+                                cid = d.get("condition_id") or d.get("slug") or "unknown"
+                                slug = d.get("slug") or d.get("market") or cid
+                                m = market_map.setdefault(cid, {
+                                    "tier": t,
+                                    "condition_id": cid,
+                                    "market_slug": slug,
+                                    "category": _category(slug),
+                                    "total_shares": 0.0,
+                                    "cost_basis": 0.0,
+                                    "proceeds": 0.0,
+                                    "realized_pnl": 0.0,
+                                    "unrealized_pnl": 0.0,
+                                    "open_orders_count": 0,
+                                    "fills_count": 0,
+                                    "closes_count": 0,
+                                    "method": "OPEN",
+                                    "status": "OPEN",
+                                    "latest_ts": 0.0,
+                                    "orders": [],
+                                })
+                                m["status"] = "OPEN"
+                                m["method"] = "OPEN"
+                        except Exception as exc:
+                            logging.getLogger(__name__).warning(
+                                "live_state payload parse error in tier %s: %s", t, exc
+                            )
+                    elif "up_shares" in r:
+                        up_sh = float(r.get("up_shares") or 0.0)
+                        dn_sh = float(r.get("dn_shares") or 0.0)
+                        if up_sh > 0 or dn_sh > 0:
+                            cid = r.get("condition_id") or r.get("market_slug") or "unknown"
+                            slug = r.get("market_slug") or cid
+                            m = market_map.setdefault(cid, {
+                                "tier": t,
+                                "condition_id": cid,
+                                "market_slug": slug,
+                                "category": _category(slug),
+                                "total_shares": 0.0,
+                                "cost_basis": 0.0,
+                                "proceeds": 0.0,
+                                "realized_pnl": 0.0,
+                                "unrealized_pnl": 0.0,
+                                "open_orders_count": 0,
+                                "fills_count": 0,
+                                "closes_count": 0,
+                                "method": "OPEN",
+                                "status": "OPEN",
+                                "latest_ts": 0.0,
+                                "orders": [],
+                            })
+                            m["status"] = "OPEN"
+                            m["method"] = "OPEN"
 
             if "quotes" in tables:
-                for r in conn.execute(
-                    "SELECT id, ts, market_slug, condition_id, token_id, side, price, size, status "
-                    "FROM quotes WHERE status IN ('LIVE', 'RESTING', 'PENDING')"
-                ):
-                    cid = r["condition_id"] or r["market_slug"] or "unknown"
-                    slug = r["market_slug"] or cid
+                for row in conn.execute("SELECT * FROM quotes"):
+                    r = dict(row)
+                    is_active = (r.get("status") in ("LIVE", "RESTING", "PENDING")) if "status" in r else (not r.get("cancelled", 0) and ((r.get("size") or 0) - (r.get("filled") or 0)) > 0.001)
+                    if not is_active:
+                        continue
+                    cid = r.get("condition_id") or r.get("market_slug") or "unknown"
+                    slug = r.get("market_slug") or cid
                     m = market_map.setdefault(cid, {
                         "tier": t,
                         "condition_id": cid,
@@ -494,10 +538,10 @@ def api_trade_history(tier: str | None = None) -> dict:
                         "latest_ts": 0.0,
                         "orders": [],
                     })
-                    ts = float(r["ts"] or now)
-                    size = float(r["size"] or 0.0)
-                    price = float(r["price"] or 0.0)
-                    side_raw = (r["side"] or "").upper()
+                    ts = float(r.get("ts") or now)
+                    size = float(r.get("size") or 0.0)
+                    price = float(r.get("price") or 0.0)
+                    side_raw = (r.get("side") or "").upper()
                     side_label = "UP / YES" if side_raw in ["UP", "YES"] else ("DN / NO" if side_raw in ["DN", "NO"] else side_raw)
 
                     m["open_orders_count"] += 1
@@ -506,7 +550,7 @@ def api_trade_history(tier: str | None = None) -> dict:
                         m["latest_ts"] = ts
 
                     m["orders"].append({
-                        "id": f"quote_{r['id']}",
+                        "id": f"quote_{r.get('id')}",
                         "ts": ts,
                         "kind": "QUOTE",
                         "label": f"RESTING BID ({side_label})",
@@ -704,6 +748,6 @@ def explainer_page():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server.spread_dash:app", host="127.0.0.1", port=8805, reload=False)
+    uvicorn.run("server.spread_dash:app", host="127.0.0.1", port=8805, reload=True, reload_dirs=["server"])
 
 

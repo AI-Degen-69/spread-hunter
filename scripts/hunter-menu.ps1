@@ -159,8 +159,18 @@ function Invoke-MenuAction {
     }
 
     $act = $item.Name
+    $paramNote = ""
+    if ($act -eq "hunter-start") { $paramNote = " [Param: Default Run (-FreshRun=$false)]" }
+    elseif ($act -eq "hunter-start-fresh") { $paramNote = " [Param: -FreshRun=$true (Archive prior DB)]" }
+    elseif ($act -eq "bankroll-start") { $paramNote = " [Param: Default Run (-FreshRun=$false)]" }
+    elseif ($act -eq "bankroll-start-fresh") { $paramNote = " [Param: -FreshRun=$true (Archive experiment DBs)]" }
+
+    if ($Action -ne "") {
+        $paramNote += " (Invoked via CLI parameter: '$Action')"
+    }
+
     Write-Host ""
-    Write-ProfileInfo -Message "Executing: " -Detail $item.Label
+    Write-ProfileInfo -Message "Executing: " -Detail "$($item.Label)$paramNote"
     Write-Host ""
 
     switch ($act) {

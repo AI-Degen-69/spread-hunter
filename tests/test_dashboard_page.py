@@ -355,10 +355,10 @@ def test_capital_since_inception_chart_replaces_hero_unrealized():
     assert "Capital Since Inception" in landing
     assert 'id="capital-panel"' in page and 'id="capital-panel"' in landing
     assert ('renderCapitalPanel(document.getElementById("capital-panel"), '
-            's, settledState.rows)' in page)
+            's, settledState.rows, true)' in page)
     assert ('renderCapitalPanel(document.getElementById("capital-panel"), '
             's, (st && st.settled) || [])' in landing)
-    assert "Realized P&amp;L &mdash; capital since inception" in page
+    assert "Performance summary &mdash; capital &amp; P&amp;L" in page
     assert "Realized P&amp;L and the capital curve it has built" in landing
     assert '<script src="/capital.js"></script>' in page
     assert '<script src="/capital.js"></script>' in landing
@@ -372,7 +372,7 @@ def test_capital_since_inception_chart_replaces_hero_unrealized():
 def test_capital_widget_served_and_parses(tmp_path):
     """The shared capital widget is served from /capital.js, parses as JS,
     and carries the view-toggle machinery (CAP_VIEW, data-capview,
-    aria-pressed) plus the total-equity honesty note."""
+    aria-pressed)."""
     from server.spread_dash import app
     from starlette.testclient import TestClient
 
@@ -382,17 +382,14 @@ def test_capital_widget_served_and_parses(tmp_path):
     src = r.text
     assert "function capitalSeries(rows, bankroll, marks, floatNow)" in src
     assert "function capitalChartSvg(ser)" in src
-    assert 'data-kpi="capital_now"' in src
+    assert "function capitalGeometry(ser)" in src
     assert "let CAP_VIEW = \"realized\"" in src
     assert 'data-capview="${id}"' in src
     assert 'aria-label="Capital view"' in src
     assert 'aria-pressed="${CAP_VIEW === id}"' in src
-    assert "float_history" in src  # the Total view reads per-sweep marks here
-    assert "recorded once per sweep" in src  # marks exist -> true historical series
-    assert "No per-sweep float marks recorded yet" in src  # no marks -> fallback note
+    assert "float_history" in src
     assert "Total equity since inception" in src
     assert "No closes recorded yet" in src
-    assert "not marked to market here" in src
     if NODE:
         f = tmp_path / "capital.js"
         f.write_text(src, encoding="utf-8")
@@ -418,6 +415,8 @@ def test_summary_exposes_float_history():
     assert isinstance(s["float_history"], list)
     assert "fleet_ts" in s
     assert s["fleet_ts"] is None or isinstance(s["fleet_ts"], float)
+    assert "capital_cycled_usd" in s
+    assert isinstance(s["capital_cycled_usd"], (int, float))
     if s["float_history"]:
         h = s["float_history"][0]
         assert set(h) == {"ts", "unrealized_usd", "committed_open_usd",

@@ -22,12 +22,17 @@ New-Item -ItemType Directory -Force -Path (Join-Path $ProjectPath "logs") | Out-
 . (Join-Path $PSScriptRoot "theme-loader.ps1")
 . (Join-Path $PSScriptRoot "bankroll-procs.ps1")
 
+$modeFlags = @()
+if ($FreshRun) { $modeFlags += "-FreshRun (Archive Runs)" }
+if ($DryRun) { $modeFlags += "-DryRun" }
+$modeSubtitle = if ($modeFlags.Count -gt 0) { ($modeFlags -join " | ") } else { "Standard Run (Preserve Runs)" }
+
 Write-ProfileBanner -Title "10-TIER BANKROLL SENSITIVITY EXPERIMENTS" `
-                    -Subtitle "Parallel Paper Bots from `$100 to `$1,000 with Live Dashboard" `
+                    -Subtitle "Parallel Paper Bots (`$$Start-`$$End in `$$Step steps) | Mode: $modeSubtitle" `
                     -Style "Info"
 Write-Host ""
 
-Write-ProfileInfo -Message "[1/5] Checking for prior bankroll experiment instances..."
+Write-ProfileInfo -Message "[1/5] Checking for prior bankroll experiment instances..." -Detail "(FreshRun = $FreshRun, DryRun = $DryRun)"
 
 # 1. Stop any currently running bankroll experiment instances
 $stopped = Stop-BankrollInstance
@@ -138,7 +143,7 @@ if (Test-PortListening 8800) {
     Write-ProfileInfo -Message "Launching dashboard server on http://127.0.0.1:8800..."
     $dashPsi = New-Object System.Diagnostics.ProcessStartInfo
     $dashPsi.FileName = "python"
-    $dashPsi.Arguments = "-m uvicorn server.spread_dash:app --host 127.0.0.1 --port 8800"
+    $dashPsi.Arguments = "-m uvicorn server.spread_dash:app --host 127.0.0.1 --port 8800 --reload --reload-dir server"
     $dashPsi.WorkingDirectory = $ProjectPath
     $dashPsi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     $dashPsi.CreateNoWindow = $true

@@ -213,10 +213,22 @@ function Find-HunterStrays {
         $ownedPids += $r.pid
         $ownedPids += @(Get-DescendantPids -ParentId $r.pid)
     }
+
+    # Exclude active bankroll experiment processes from hunter strays
+    $bankrollPidFile = Join-Path $ProjectPath "run/bankroll.pids.json"
+    if (Test-Path $bankrollPidFile) {
+        try {
+            $bData = Get-Content $bankrollPidFile -Raw | ConvertFrom-Json
+            foreach ($t in @($bData.tiers)) { if ($t.pid) { $ownedPids += $t.pid } }
+            if ($bData.dash -and $bData.dash.pid) { $ownedPids += $bData.dash.pid }
+        } catch {}
+    }
+
     Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue |
         Where-Object {
             $cl = $_.CommandLine
             $cl -and ($ownedPids -notcontains $_.ProcessId) -and
+            ($cl -notmatch "bankroll_") -and
             ($HunterPatterns | Where-Object { $cl -like $_ })
         }
 }
