@@ -5,142 +5,94 @@ Paper-trading simulation of a **maker** strategy on Polymarket, run as a
 markets** (liquidity-reward rent for resting size) alongside liquid unfunded
 **spread markets** (income from the spread on fills), and the **allocator**
 sizes the winners on a water-fill over each market's projected income. The
-maker mechanism itself is unchanged — instead of crossing the spread the
-strategy rests bids on **both** outcomes of each market, aiming to earn the
-spread and stay inventory-balanced, and holds to resolution.
+maker mechanism itself rests bids on **both** outcomes (YES/NO) of each market,
+aiming to earn the spread, claim liquidity rewards, and stay inventory-balanced,
+holding to resolution or voluntary merge.
 
-**Dashboard:** http://localhost:8800 — the canonical dashboard, started by
-`.\scripts\fleet-start.ps1` as a supervised child (`uvicorn
-server.spread_dash:app --port 8800`). Design migrated from the
-`spread-hunter` mockup onto real fleet data — see `server/spread_dash.py`.
-The prior dashboard (`server/fleet_dash.py`) now serves **only** the
-**market scan** funnel (http://localhost:8801/?view=scan, linked from the
-dashboard's header): RAW → FILTERS → FINAL → GRADUATED plus the two
-near-miss trackers. The old fleet page there was removed as redundant with
-:8800 — don't use :8801 as "the dashboard". The old public URL
-(https://Spread Hunter-production.up.railway.app) is dead: this checkout
-was never deployed to Railway.
+> **Simulation only:** Spread Hunter never places real orders and loads no wallet
+> credentials — see [AGENTS.md](AGENTS.md).
 
-> Simulation only. It never places a real order and loads no wallet
-> credentials at all — see [AGENTS.md](AGENTS.md).
+---
 
-## Why this exists
+## Dashboards
 
-Measured from 56,768 of @powerwinner's fills: he wins only **41.4%** of markets
-against a 56.1% breakeven, so he has no directional edge. His gross is
-**+$39,884/week** — but **−$32,501** if charged a taker fee. The entire
-difference is that he rests orders instead of crossing. That is the mechanism
-this repo tests — now spread across a fleet of markets the ranker scores and
-the allocator sizes, rather than one fixed market.
+- **Canonical Dashboard (`:8800`):** [http://localhost:8800](http://localhost:8800)  
+  Served by `server/spread_dash.py`. Provides real-time telemetry, capital curve, interactive market drawer, risk utilization gauges, markout drift distributions, split-flap verdict signals, and statistical confidence tracking.
+- **Market Scan Funnel (`:8801`):** [http://localhost:8801/?view=scan](http://localhost:8801/?view=scan)  
+  Served by `server/fleet_dash.py` (accessible from the header of the main dashboard). Displays the multi-stage market selection funnel (`RAW → FILTERS → FINAL → GRADUATED`) and near-miss trackers.
 
-## The honest caveat
+---
 
-A Hunter simulation lives or dies on its fill model. Ours is **queue-aware**,
-driven by observed order-book deltas, and its optimistic biases are documented
-in [`strategy/fills.py`](strategy/fills.py) rather than hidden. Treat its
-output as an **upper bound**. The dashboard shows live progress toward
-90/95/99% statistical confidence so the sample size cannot be quietly ignored.
+## Strategy Thesis & Core Controls
+
+1. **Zero Maker Fees & Spread Capture:**  
+   Resting limit orders on both outcomes captures spread and maker rebates without incurring taker fees.
+2. **Strict Pair-Cost Discipline:**  
+   Every pair acquisition is constrained by a hard ceiling (`max_pair_cost <= 0.995`). Because resolution pays exactly $1.00, hedged pairs have a guaranteed positive payoff.
+3. **Queue-Aware Fill Modeling:**  
+   Simulation fills are driven by observed order-book deltas and queue depth precedence rather than naive trade tape assumptions (documented in [`strategy/fills.py`](strategy/fills.py)).
+4. **Dollar-Denominated Risk Controls:**  
+   Real-time risk gates enforce `max_naked_usd` limits to bound unhedged inventory exposure.
+5. **Pairs-Only EV & Defensive Exits:**  
+   One-sided fills evaluate completion EV dynamically. Uncompletable pairs trigger an immediate defensive exit to protect against adverse selection.
+
+---
 
 ## Layout
 
-    strategy/   engine: fleet + per-market sweep, ranker gates, quotes,
-                queue-aware fills, risk, store/stats
-    server/     spread_dash.py (canonical dashboard, :8800)
-                fleet_dash.py (market scan funnel only, :8801)
-    research/   lab notebook, EN + HE
-    docs/       explanation + agent/plan docs (fleet data flow:
-                [docs/explanation-fleet-data-flow.md](docs/explanation-fleet-data-flow.md),
-                pairs-rule EV report: [docs/explanation-pairs-ev-report.md](docs/explanation-pairs-ev-report.md),
-                markout horizons: [docs/explanation-markout-horizons.md](docs/explanation-markout-horizons.md),
-                dashboard CSS: [docs/howto-regenerate-dashboard-css.md](docs/howto-regenerate-dashboard-css.md))
+```
+strategy/   Core engine: fleet sweep, allocator, quoting, queue-aware fills, risk gates, store & stats
+server/     spread_dash.py (canonical dashboard, :8800), fleet_dash.py (market scan funnel, :8801)
+scripts/    Market ranker, pairs EV report, bankroll sensitivity, replay harnesses, process supervisors
+research/   Lab notebook & experiment logs (RESEARCH_LOG.md, RESEARCH_SUMMARY.md in EN & HE)
+docs/       Architecture records, data flow specs, markout horizons, and CSS documentation
+```
 
-The sibling repo [`polymarket-taker`](https://github.com/AI-Degen-69/polymarket-taker)
-uses the same layout.
+The sibling repo [`polymarket-taker`](https://github.com/AI-Degen-69/polymarket-taker) uses the same layout.
 
-## Running locally
+---
+
+## Quickstart & Local Execution
+
+### Setup
 
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-bash scripts/setup-hooks.sh        # required once: research-log enforcement
-.\scripts\fleet-start.ps1                  # supervised paper fleet + BOTH dashboards (keep the current sample)
-.\scripts\fleet-start.ps1 -FreshRun        # ... or archive the DB and start a fresh sample
-
-# fleet-start.ps1 already brings both of these up as supervised children.
-# Run them standalone only for dashboard-only development, without the fleet:
-.venv/bin/uvicorn server.spread_dash:app --port 8800  # canonical dashboard
-.venv/bin/uvicorn server.fleet_dash:app --port 8801   # market scan funnel (?view=scan)
-.venv/bin/python -m scripts.rank_markets   # ranker (writes run/markets.json)
-.venv/bin/python -m scripts.pairs_ev_report      # pairs-rule EV stack, read-only (see docs/explanation-pairs-ev-report.md)
-.venv/bin/python -m scripts.build_tailwind_css   # regenerate static dashboard CSS after editing classes (see docs/howto-regenerate-dashboard-css.md)
+bash scripts/setup-hooks.sh        # Required once: research-log enforcement hook
 ```
 
-## Current state — post-fix run too small to judge; the old verdict was about a fixed bug
+### Running the Fleet
 
-Updated 2026-08-10. **The "conclusively losing" verdict below is historical, and
-it measured a bug, not the strategy.** The fix has landed, been validated, and
-the fleet has run clean since — but the post-fix sample is far too small to
-prove anything yet. The finish line is the dashboard's **go-live readiness**
-panel, not a date.
+```powershell
+.\scripts\fleet-start.ps1           # Supervised paper fleet + BOTH dashboards
+.\scripts\fleet-start.ps1 -FreshRun # Archive DB and start a fresh sample
+```
 
-### What changed (2026-08-05/06)
+### Standalone Dashboard & Analysis Tools
 
-The risk gates were restated in dollars (`max_naked_usd`, new
-`strategy/risk.py`), and the price-band and pair-cost caps — previously dead
-code in a legacy branch that never executed on the live path — were made
-reachable (research Sessions 19–22). A bid at 0.52 against a held 0.49 average
-is now refused at a $1.01 pair against the $0.995 cap: the exact shape that
-bought 14 pairs at $1.0200 on an instrument paying $1.00. The gates were
-validated by replay against the recorded pre-fix database (Session 25): 15 of
-67 fills refused (22.4%), avoiding **$729.88** of incremental naked cost against
-**$26.19** of realized P&L forgone.
+```bash
+# Dashboards (standalone development):
+.venv/bin/uvicorn server.spread_dash:app --port 8800  # Canonical dashboard
+.venv/bin/uvicorn server.fleet_dash:app --port 8801   # Market scan funnel (?view=scan)
 
-The pre-fix fleet's real performance was also confirmed negative — not the rosy
-closes-only view (+16.5% mean, all voluntary merges), but resolution-implied
-P&L on the archived sample: **−16.0% mean, 90% CI lower bound −51.5%** (Session
-12). That is the bug's footprint, and it is closed.
+# Strategy & Diagnostics:
+.venv/bin/python -m scripts.rank_markets              # Score and rank candidate markets
+.venv/bin/python -m scripts.pairs_ev_report           # Pairs-rule EV & execution report
+.venv/bin/python -m scripts.bankroll_stats_report     # 10-tier bankroll sensitivity & CI report
+.venv/bin/python -m scripts.build_tailwind_css        # Regenerate static dashboard CSS
+```
 
-### The live run (as of 2026-08-10)
+---
 
-The database was archived and the fleet restarted clean on 2026-08-06 (Session
-12); the current process has been sweeping since 2026-08-09. The post-fix
-sample is **28 fills across 13 markets** (7 closes, 13 resolution rows) — below
-the 30-settled directional floor, let alone the 100 needed even to consider a
-small live pilot. It is not growing right now either: today's ranker funnel
-scored 200 markets and admitted **0** (120 depth rejects, 51 volume rejects,
-against ≥$250k/24h volume, ≥$1k depth, ≤0.06 spread, ≤30d horizon), so the
-fleet is running but idle. The public dashboard below is unreachable (404 as of
-2026-08-10); a local instance serves on :8800.
+## Statistical Readiness & Research
 
-### The finish line
+Go-live readiness is evaluated via statistical confidence thresholds tracked on the dashboard:
 
-The dashboard's **go-live readiness** panel is the repo's own definition of
-done: `READY_FOR_SMALL_LIVE_PILOT` requires n_settled ≥ 100, a positive 90% CI
-lower bound, ≥ 14 calendar days of coverage, and no single category over 50% of
-the sample. The 53-market "statistically conclusive" verdict proved the bug
-loses money; it says nothing about whether the fixed strategy works. Watch that
-panel — and this section being rewritten again with real numbers.
+- **`READY_FOR_SMALL_LIVE_PILOT` Requirements:**
+  - Settled markets: $n \ge 100$
+  - Positive 90% confidence interval lower bound
+  - Minimum 14 calendar days of continuous operation
+  - Maximum single-category concentration $\le 50\%$
 
-### Historical baseline — the pre-fix bug run (2026-07-22)
-
-| metric | value |
-|---|---|
-| settled markets | 53 (3W / 50L) |
-| win rate | 5.7% |
-| realized P&L | **−$1,172.07** (equity $3,827.93 from $5,000) |
-| ROI on capital | −4.1% |
-| median pair cost | **1.0419** (instrument pays $1.00) |
-| pairs under $1.00 | **4%** |
-| spread capture | +$263.81 |
-| adverse selection | −$1,435.88 |
-| fill rate | 37.6% (median 72 shares queued ahead) |
-| avg edge vs mid | 0.48¢ (theory: 0.50¢) |
-
-Execution was fine in that run — fill rate against real queue depth, 0.48¢
-captured versus a 0.50¢ theoretical half-spread, inventory balance 0.99. The
-loss was one thing: **median pair cost 1.0419 for a payout of exactly $1.00** —
-a guaranteed ~4% loss on the hedged portion, matching the −4.1% observed ROI.
-The balancing side had been allowed to bypass the pair-cost cap so inventory
-could always be hedged; it achieved balance and broke price discipline (only 4%
-of pairs cleared under $1.00). That bypass is the bug the 2026-08-05 gates
-close.
+For detailed experiment logs, historical test results, and empirical findings, refer to [`research/RESEARCH_LOG.md`](research/RESEARCH_LOG.md) and [`PROGRAM.md`](PROGRAM.md).
