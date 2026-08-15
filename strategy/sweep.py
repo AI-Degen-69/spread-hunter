@@ -1149,7 +1149,7 @@ def _requote(st: "MarketState", m, up, dn, cfg, ctx: SweepContext,
                 and o.size == qi.size):
             keep.add(o.side)      # leave it alone: requoting loses queue position
         else:
-            o.cancelled = True
+            o.cancel(ts=ctx.now, reason="requote")
             cancelled.append(o.quote_id)
     store.mark_cancelled([qid for qid in cancelled if qid is not None])
 

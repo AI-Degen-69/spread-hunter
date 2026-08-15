@@ -311,7 +311,10 @@ class MarketState:
         # market is funded or not, with the numbers). None until the first
         # sweep has measured the market. Surfaced on the pipeline view.
         self.alloc_verdict: dict | None = None
-        self.engine = QueueFillEngine()
+        self.engine = QueueFillEngine(
+            cancel_net_oneway_ms=self.cfg.cancel_net_oneway_ms,
+            cancel_venue_ack_ms=self.cfg.cancel_venue_ack_ms,
+        )
         # Rehydrate from the fills table instead of starting at zero. Fills are
         # persisted, inventory was not, so every restart silently dropped the
         # position while the DB kept the fills -- the dashboard then reported

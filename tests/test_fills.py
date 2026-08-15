@@ -8,6 +8,8 @@ result recorded so far, so those numbers should not be trusted.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategy.fills import QueueFillEngine
@@ -509,3 +511,102 @@ def test_cancel_and_repost_loses_position_the_same_way_an_amendment_does():
     b = eng.post("T", "UP", 0.49, 120, {0.50: 60.0, 0.49: 800.0}, 3.0)
     assert b.queue_ahead == 800.0
     assert eng.open_orders() == [b]
+
+
+# --- the cancellation race (Phase 1, component 2) --------------------------
+#
+# A cancel sent at t_c takes tau_cancel = net_oneway + venue_ack to acknowledge.
+# In-flight trades landing during [t_c, t_c + tau_cancel] are credited as
+# reason="race", outcome="race_loss" at expected-value p_race = min(1.0, tau / dt).
+
+def test_cancel_sets_timestamp_and_reason():
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    assert not o.cancelled
+    assert o.cancelled_ts is None
+    assert o.cancel_reason == ""
+
+    eng.cancel("T", ts=1.5, reason="stale_quote")
+    assert o.cancelled
+    assert o.cancelled_ts == 1.5
+    assert o.cancel_reason == "stale_quote"
+    assert eng.open_orders("T") == []
+
+
+def test_trade_within_cancel_race_window_credits_race_loss():
+    # tau = 100ms + 150ms = 250ms = 0.25s
+    eng = QueueFillEngine(cancel_net_oneway_ms=100.0, cancel_venue_ack_ms=150.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})             # establishes prev at t=1.0
+
+    eng.cancel("T", ts=1.0, reason="requote")                # cancelled at t=1.0
+
+    # Snapshot arrives at t=2.1.
+    # dt_poll = 2.1 - 1.0 = 1.1s. overlap = min(2.1, 1.25) - 1.0 = 0.25s.
+    # p_race = 0.25 / 1.1 = 0.2272727...
+    # Tape trades 80 shares. qty_exposed = 80. qty_race = 80 * (0.25 / 1.1)
+    fills = eng.on_book("T", {0.50: 0.0}, 2.1, traded={0.50: 80.0})
+    assert len(fills) == 1
+    f = fills[0]
+    expected_qty = 80.0 * (0.25 / 1.1)
+    assert f.reason == "race"
+    assert f.size == pytest.approx(expected_qty)
+    assert o.filled == pytest.approx(expected_qty)
+    assert eng.reconciliation[-1].outcome == "race_loss"
+    assert eng.reconciliation[-1].credited == pytest.approx(expected_qty)
+
+
+def test_trade_after_cancel_race_window_is_clean_cancel_no_fill():
+    eng = QueueFillEngine(cancel_net_oneway_ms=100.0, cancel_venue_ack_ms=150.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+
+    eng.cancel("T", ts=1.0, reason="requote")
+    # Poll at t=1.5 processes the in-flight window [1.0, 1.25]
+    eng.on_book("T", {0.50: 0.0}, 1.5, traded={})
+
+    # Snapshot at t=2.5 (prev_ts=1.5 > 1.25 ack) -> order no longer race-eligible
+    fills = eng.on_book("T", {0.50: 0.0}, 2.5, traded={0.50: 80.0})
+    assert fills == []
+    assert o.filled == 0.0
+    assert eng.filled_shares() == 0.0
+
+
+def test_cancelled_order_not_double_counted():
+    """An order undergoing a race loss must not also be in open_orders."""
+    eng = QueueFillEngine(cancel_net_oneway_ms=100.0, cancel_venue_ack_ms=150.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    eng.cancel("T", ts=1.0, reason="requote")
+
+    assert eng.open_orders("T") == []
+    assert len(eng.race_eligible_orders("T", ts=1.2, prev_ts=1.0)) == 1
+
+    fills = eng.on_book("T", {0.50: 0.0}, 1.2, traded={0.50: 50.0})
+    assert len(fills) == 1
+    assert fills[0].reason == "race"
+
+
+def test_zero_tau_cancels_with_zero_race_exposure():
+    eng = QueueFillEngine(cancel_net_oneway_ms=0.0, cancel_venue_ack_ms=0.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    eng.cancel("T", ts=1.0, reason="requote")
+
+    # At tau=0, snapshot at t=2.01 has overlap=0 -> race_eligible_orders is empty
+    fills = eng.on_book("T", {0.50: 0.0}, 2.01, traded={0.50: 50.0})
+    assert fills == []
+    assert o.filled == 0.0
+
+
+def test_sub_tau_poll_interval_sets_p_race_to_one():
+    # tau = 0.25s. dt_poll = 0.20s <= tau -> p_race = 1.0
+    eng = QueueFillEngine(cancel_net_oneway_ms=100.0, cancel_venue_ack_ms=150.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    eng.cancel("T", ts=1.0, reason="requote")
+
+    fills = eng.on_book("T", {0.50: 0.0}, 1.2, traded={0.50: 40.0})
+    assert len(fills) == 1
+    assert fills[0].size == pytest.approx(40.0)    # p_race = 1.0 -> 100% credited
+    assert fills[0].reason == "race"

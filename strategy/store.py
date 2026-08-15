@@ -534,7 +534,8 @@ def recon_summary() -> dict:
     total = sum(v["n"] for v in by.values())
     # None, not 0.0: an empty run must not read as a measured zero.
     saw_trade = by.get("credited", {}).get("n", 0) + \
-        by.get("behind_queue", {}).get("n", 0)
+        by.get("behind_queue", {}).get("n", 0) + \
+        by.get("race_loss", {}).get("n", 0)
     # ONLY ROWS WHERE THE TAPE WAS ACTUALLY READ CAN ANSWER THE QUESTION.
     #
     # `tape_unavailable` is a gap in evidence, not an observation that the

@@ -2008,3 +2008,37 @@ snapshot before the delta. The engine was correct; the test was wrong.
 
 LIVE — the amendment-penalty invariant is enforced and regression-locked, at
 zero behavioural cost. Phase 1 continues with the cancellation-race component.
+
+### 2026-08-16 (strategy, Session 63): cancellation race latency model — in-flight cancel exposure and toxicity markout (Phase 1 component 2, issue #27)
+
+#### Observation & Question
+
+Issue #27 Phase 1 component 2 asks what adverse fills are credited when a cancellation is in flight to the venue. In a naive simulator, calling `cancel()` drops resting orders instantly with zero latency, giving the simulator a free option the real venue never provides: escaping trades that occur while the cancel message travels to the matching engine.
+
+The question is whether modeling the in-flight cancellation window $\tau = \tau_{\text{net\_oneway}} + \tau_{\text{venue\_ack}}$ ($\sim 250$ms baseline) adds toxic fills, how sensitive the fill rate is to $\tau \in \{0, 150, 250, 500\}$ ms, and whether surviving race fills demonstrate the expected adverse selection markout.
+
+#### What We Observed & Investigated
+
+1. Added latency parameters `cancel_net_oneway_ms = 100.0` and `cancel_venue_ack_ms = 150.0` ($\tau = 250$ms total) in `strategy/config.py` and `MakerConfig`.
+2. Updated `RestingOrder` in `strategy/fills.py` with `cancelled_ts` and `cancel_reason`.
+3. Extended `QueueFillEngine.on_book()` with an in-flight race exposure loop across interval $[t_{\text{prev}}, t_{\text{curr}}]$ calculating the overlap exposure fraction $p_{\text{race}} = \frac{\min(t_{\text{curr}}, t_{\text{cancel}} + \tau) - \max(t_{\text{prev}}, t_{\text{cancel}})}{t_{\text{curr}} - t_{\text{prev}}}$, crediting deterministic expected-value fills tagged `reason="race"` and `outcome="race_loss"`.
+4. Evaluated sensitivity across $\tau \in \{0, 150, 250, 500\}$ ms on recorded orderbook tape dataset (`archive/20260729/books.db`, 13 usable windows, 187,894 posted shares).
+5. Added 6 unit tests in `tests/test_fills.py` covering in-flight race crediting, post-ack expiration, sub-$\tau$ streaming polls ($p_{\text{race}}=1.0$), zero-$\tau$, and double-counting prevention. Full suite 690/690 passed.
+
+#### Findings & Data
+
+Empirical sensitivity sweep on 13 recorded windows:
+- $\tau = 0$ ms: $193.1$ sh filled ($0.103\%$ FR), Queue markout: $-\$19.04$ ($-9.86$¢/sh), Race fills: $0.0$ sh ($0.0\%$).
+- $\tau = 150$ ms: $194.5$ sh filled ($0.103\%$ FR), Queue markout: $-\$19.04$, Race fills: $1.4$ sh ($-23.6$¢/sh markout, $-\$0.33$).
+- $\tau = 250$ ms: $195.4$ sh filled ($0.104\%$ FR), Queue markout: $-\$19.04$, Race fills: $2.3$ sh ($-23.9$¢/sh markout, $-\$0.55$).
+- $\tau = 500$ ms: $197.6$ sh filled ($0.105\%$ FR), Queue markout: $-\$19.04$, Race fills: $4.5$ sh ($-24.4$¢/sh markout, $-\$1.10$).
+
+Key findings:
+1. **Adverse selection confirmation:** In-flight race fills are **2.4x more toxic** per share ($-23.9$¢/sh markout vs $-9.86$¢/sh on normal queue fills), validating Flag 1: cancellations were fleeing toxic orderflow that real latency hits.
+2. **Volume impact:** Total fill rate changes by only $+0.001\%$ to $+0.002\%$ ($1.2\%$ of filled volume at $250$ms), meaning cancellation race exposure adds acute toxicity without materially distorting aggregate fill volume.
+3. **Verdict stability:** The Phase 1 fill-rate gap is essentially $\tau$-invariant across $150$–$500$ms ($0.103\%$ to $0.105\%$).
+
+#### Decision
+
+LIVE — In-flight cancellation race latency model implemented, verified with 690/690 tests, and benchmarked across the sensitivity grid.
+

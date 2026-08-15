@@ -689,6 +689,14 @@ class MakerConfig:
     rebate_rate: float = 0.20
     fee_rate: float = 0.07          # taker fee rate, for the rebate estimate
 
+    # CANCELLATION-RACE PENALTY (issue #27, Phase 1 component 2).
+    # ESTIMATES, not measurements -- we never send a real cancel, so no ack
+    # timestamp exists to fit against. Replace net_oneway with median(RTT)/2
+    # from the instrumented fetch seam; venue_ack cannot be measured without
+    # placing orders and stays an assumption until it can.
+    cancel_net_oneway_ms: float = 100.0
+    cancel_venue_ack_ms: float = 150.0
+
     sim_only: bool = True
 
     def db_path(self) -> Path:
@@ -743,6 +751,12 @@ def load() -> MakerConfig:
     pr = os.environ.get("HUNTER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
+    cno = os.environ.get("HUNTER_CANCEL_NET_ONEWAY_MS")
+    if cno and cno.strip():
+        kw["cancel_net_oneway_ms"] = float(cno)
+    cva = os.environ.get("HUNTER_CANCEL_VENUE_ACK_MS")
+    if cva and cva.strip():
+        kw["cancel_venue_ack_ms"] = float(cva)
     mf = os.environ.get("HUNTER_MARGINAL_FLOOR") or ""
     if mf.strip():
         kw["marginal_return_floor"] = float(mf)
