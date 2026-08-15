@@ -424,3 +424,88 @@ def test_no_reconciliation_row_before_the_first_delta():
     eng.post("T", "UP", 0.50, 120, {0.50: 10.0}, 0.0)
     eng.on_book("T", {0.50: 10.0}, 1.0, traded={})
     assert eng.reconciliation == []
+
+
+# --- the amendment penalty (Phase 1, component 1) ---------------------------
+#
+# A repriced order is a NEW order at the back of the new level's queue. The
+# rule has no free parameter, so unlike the other two haircut components it is
+# asserted outright rather than estimated -- and nothing here may assert on the
+# fill-rate gap, or the test would re-encode the joint fit the spec forbids.
+
+def test_amendment_resets_queue_to_the_new_level_depth():
+    """P1 -> P2 joins the back of P2's queue. No seniority is inherited."""
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 300.0}, 0.0)
+    eng.on_book("T", {0.50: 300.0}, 1.0, traded={})             # establishes prev
+    eng.on_book("T", {0.50: 60.0}, 2.0, traded={0.50: 240.0})   # worked down to 60
+    assert o.queue_ahead == 60.0
+
+    eng.amend(o, 0.49, {0.50: 60.0, 0.49: 800.0}, 3.0)
+    assert o.price == 0.49
+    assert o.queue_ahead == 800.0        # NOT 60 -- the earned position is gone
+
+
+def test_amendment_to_an_empty_level_still_starts_from_zero_not_seniority():
+    """An empty new level means nothing is ahead of us -- which is a fact about
+    the level, not a carried-over privilege. The distinction matters because
+    both readings produce 0.0 here and only one of them is a rule."""
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 300.0}, 0.0)
+    eng.amend(o, 0.51, {0.50: 300.0}, 1.0)
+    assert o.price == 0.51
+    assert o.queue_ahead == 0.0
+
+
+def test_amendment_keeps_filled_shares_and_requeues_only_the_remainder():
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 100.0}, 0.0)
+    eng.on_book("T", {0.50: 100.0}, 1.0, traded={})
+    eng.on_book("T", {0.50: 100.0}, 2.0, traded={0.50: 150.0})   # 150 - 100 = 50
+    assert o.filled == 50.0
+
+    eng.amend(o, 0.48, {0.48: 400.0}, 3.0)
+    assert o.filled == 50.0              # done is done
+    assert o.remaining == 70.0           # only the rest goes back in the queue
+    assert o.queue_ahead == 400.0
+
+
+def test_same_price_amendment_is_not_an_amendment():
+    """The sweep deliberately leaves an unchanged order alone because
+    requoting loses queue position. A no-op call must not punish that path."""
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 300.0}, 0.0)
+    eng.on_book("T", {0.50: 300.0}, 1.0, traded={})
+    eng.on_book("T", {0.50: 60.0}, 2.0, traded={0.50: 240.0})
+    assert o.queue_ahead == 60.0
+
+    eng.amend(o, 0.50, {0.50: 60.0}, 3.0)
+    assert o.queue_ahead == 60.0         # position held, not reset to 60 by luck
+    assert o.posted_ts == 0.0            # untouched: no new order was created
+
+
+def test_amended_order_fills_only_past_the_new_queue():
+    """The penalty has to bite in the crediting path, not just in the field."""
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 0.0}, 0.0)
+    assert o.queue_ahead == 0.0          # front of an empty level
+
+    eng.amend(o, 0.49, {0.49: 500.0}, 1.0)
+    eng.on_book("T", {0.49: 500.0}, 2.0, traded={})
+    assert eng.on_book("T", {0.49: 500.0}, 3.0, traded={0.49: 400.0}) == []
+    assert eng.filled_shares() == 0.0    # 400 traded, 500 ahead: nothing is ours
+
+
+def test_cancel_and_repost_loses_position_the_same_way_an_amendment_does():
+    """The path the sweep actually takes today. Locked so a future reprice
+    cannot start inheriting seniority through the back door."""
+    eng = QueueFillEngine()
+    a = eng.post("T", "UP", 0.50, 120, {0.50: 300.0}, 0.0)
+    eng.on_book("T", {0.50: 300.0}, 1.0, traded={})
+    eng.on_book("T", {0.50: 60.0}, 2.0, traded={0.50: 240.0})
+    assert a.queue_ahead == 60.0
+
+    a.cancelled = True
+    b = eng.post("T", "UP", 0.49, 120, {0.50: 60.0, 0.49: 800.0}, 3.0)
+    assert b.queue_ahead == 800.0
+    assert eng.open_orders() == [b]

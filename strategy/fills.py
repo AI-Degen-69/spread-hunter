@@ -171,6 +171,42 @@ class QueueFillEngine:
         self.orders.append(o)
         return o
 
+    def amend(self, order: RestingOrder, price: float,
+              book_bids: dict[float, float], ts: float) -> RestingOrder:
+        """Move a resting order to `price`, losing 100% of its queue position.
+
+        THE AMENDMENT PENALTY (Phase 1, component 1). A repriced order is a new
+        order at the back of the new level's queue. No venue carries seniority
+        across a price change, and modelling one that did is the cheapest way
+        to manufacture fills: an order could chase the touch all day and keep
+        arriving at the front, which is exactly the free edge the tape-only
+        rule was built to withdraw.
+
+        This is a RULE, not a fitted parameter. There is nothing here to tune
+        against the fill-rate residual, which is why it is the one haircut
+        component that can be asserted outright rather than estimated.
+
+        The engine has no in-place reprice today -- the sweep cancels and
+        reposts, and `post()` already reads the new level's depth -- so this
+        method changes no current behaviour. It exists so the invariant has a
+        single enforced home: a caller that reprices through here cannot
+        inherit seniority, and one that sets `order.price` directly is now
+        visibly bypassing the rule rather than quietly satisfying it.
+
+        Already-filled shares survive the amendment -- they are done, and the
+        remainder is what gets requeued. A same-price call is not an amendment
+        and is left alone; resetting on it would penalise the sweep's
+        keep-the-order path, which is the one path that legitimately holds its
+        position.
+        """
+        new_price = round(price, 4)
+        if new_price == order.price:
+            return order
+        order.price = new_price
+        order.queue_ahead = float(book_bids.get(new_price, 0.0))
+        order.posted_ts = ts
+        return order
+
     def cross(self, token_id: str, side: str, size: float,
               book_asks: dict[float, float], ts: float,
               max_price: float = 1.0) -> list[Fill]:

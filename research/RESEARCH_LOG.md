@@ -1947,3 +1947,64 @@ How to address automated code review findings on PR #25 regarding container togg
 #### Findings & Data
 
 All 671 unit tests passed cleanly (671/671).
+
+### 2026-08-16 (strategy, Session 62): the amendment penalty — 100% queue loss on reprice, locked (Phase 1 component 1, issue #27)
+
+#### Observation & Question
+
+Issue #27 Phase 1 asks what haircut the paper fill model needs before any of
+its profit numbers can be trusted. The first of its three components is the
+amendment penalty: when a resting order is repriced, does the simulator let it
+keep its queue position?
+
+A model that carried seniority across a price change would be the cheapest way
+to manufacture fills — an order could chase the touch all day and keep arriving
+at the front of the new level. The question is whether this engine does that,
+and if not, whether anything prevents it from starting to.
+
+#### What We Observed & Investigated
+
+1. Searched every call site of `post`, `cancel`, and `queue_ahead` outside the
+   fill model. There is no in-place reprice anywhere in `strategy/` or
+   `scripts/`: no code mutates `RestingOrder.price`.
+2. Read the requote path. `sweep.py` cancels an order whose price or size no
+   longer matches the intent and posts a fresh one; `post()` sets
+   `queue_ahead` from the depth at the NEW price. The order whose price and
+   size both still match is deliberately left alone, because requoting loses
+   queue position — that path is correct and must not be penalised.
+3. Concluded the invariant already holds by construction, and that nothing
+   enforces it. A future amend path could set `order.price` directly and
+   silently inherit seniority; no test would have caught it.
+4. Added `QueueFillEngine.amend()` as the single enforced home for the rule:
+   on a price change it resets `queue_ahead` to the depth at the new level,
+   keeps `filled` (done is done, only the remainder requeues), and stamps a new
+   `posted_ts`. A same-price call is not an amendment and is a no-op.
+5. Added six tests. Three assert the rule (reset to new-level depth, empty new
+   level starts at zero, filled shares survive). One asserts the penalty bites
+   in the CREDITING path rather than only in the field: an amended order with
+   500 ahead credits nothing on a 400-share print. One pins the same-price
+   no-op. One locks cancel-and-repost, the path the sweep actually takes.
+6. No test in this set asserts on the fill-rate gap. Per the issue #27
+   constraint, a test that did would re-encode the joint fit the spec forbids —
+   this component has no free parameter and is asserted outright.
+
+#### Findings & Data
+
+**Delta versus the current engine: 0.0%.** No simulated fill changes, because
+cancel-and-repost already read the new level's depth. The measured contribution
+of component 1 to the Phase 1 haircut is expected to be zero.
+
+That is a result, not a null: the optimism this component was written to remove
+was never present. The two remaining components — the cancellation race and the
+latency penalty — are where the Phase 1 haircut, if any, has to come from.
+
+Full suite 684/684 (was 678; six new). Three of the six failed on first run for
+a test-authoring reason worth recording: the first `on_book` call only
+establishes `prev`, so a single snapshot never advances the queue and
+`queue_ahead` still read its posted value. The fixtures needed a priming
+snapshot before the delta. The engine was correct; the test was wrong.
+
+#### Decision
+
+LIVE — the amendment-penalty invariant is enforced and regression-locked, at
+zero behavioural cost. Phase 1 continues with the cancellation-race component.
