@@ -44,9 +44,9 @@ CHILDREN = {
     # prior dashboard) is demoted to 8801 and serves ONLY its market-scan
     # funnel (?view=scan); the fleet page there was removed as redundant.
     "dash": [sys.executable, "-m", "uvicorn", "server.spread_dash:app",
-             "--host", "127.0.0.1", "--port", "8800"],
+             "--host", "127.0.0.1", "--port", "8800", "--reload", "--reload-dir", "server"],
     "scan": [sys.executable, "-m", "uvicorn", "server.fleet_dash:app",
-             "--host", "127.0.0.1", "--port", "8801"],
+             "--host", "127.0.0.1", "--port", "8801", "--reload", "--reload-dir", "server"],
     # THE RANKER, which `fleet-start.ps1` used to start as an UNSUPERVISED
     # sibling. It died on 2026-08-03 at 17:08 and nothing restarted it, so
     # run/markets.json went 28.5 hours without a rewrite while the fleet
