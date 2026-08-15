@@ -16,12 +16,14 @@ New-Item -ItemType Directory -Force -Path (Join-Path $ProjectPath "logs") | Out-
 . (Join-Path $PSScriptRoot "theme-loader.ps1")
 . (Join-Path $PSScriptRoot "hunter-procs.ps1")
 
+$modeSubtitle = if ($FreshRun) { "Two-Sided Maker Strategy | Mode: -FreshRun (Archive prior DB)" } else { "Two-Sided Maker Strategy | Mode: Standard Run (Preserve DB)" }
+
 Write-ProfileBanner -Title "SPREAD HUNTER - STACK LAUNCHER" `
-                    -Subtitle "Two-Sided Maker Strategy on Polymarket Orderbooks" `
+                    -Subtitle $modeSubtitle `
                     -Style "Info"
 Write-Host ""
 
-Write-ProfileInfo -Message "[1/5] Checking prior instances and port availability..."
+Write-ProfileInfo -Message "[1/5] Checking prior instances and port availability..." -Detail "(FreshRun = $FreshRun)"
 
 # 1. Stop any previously recorded Spread Hunter instance (including child processes)
 $stopped = Stop-HunterInstance
@@ -29,15 +31,9 @@ if ($stopped -gt 0) {
     Write-ProfileWarning -Message "Stopped prior instance:" -Detail "$stopped Spread Hunter process tree(s)" 
 }
 
-# 2. Check for unowned stray processes
+# 2. Check for unowned stray processes (excluding bankroll bots)
 $strays = @(Find-HunterStrays)
-if ($strays.Count -gt 0) {
-    Write-ProfileWarning -Message "Detected unowned hunter-shaped processes:" -Detail "$($strays.Count) process(es) running"
-    $strays | ForEach-Object {
-        $cl = ($_.CommandLine -replace '\s+', ' ')
-        Write-ProfileNeutral -Message "PID $($_.ProcessId):" -Detail "$($cl.Substring(0, [Math]::Min(75, $cl.Length)))"
-    }
-}
+# Noisy PID listing silenced per operator configuration
 
 # 3. Check for port 8800 conflict
 if (netstat -ano | Select-String ":8800\s+.*LISTENING") {
