@@ -2080,6 +2080,52 @@ The questions are:
 
 OPEN — Post latency model invariant and crediting mechanics verified with 696/696 tests. Magnitudes are small-sample artifacts ($n = 4$ fills across 13 windows). Marked OPEN; Phase 2 requires collecting additional windows to satisfy the activity quorum ($\ge 500$ filled shares).
 
+### 2026-08-16 (instrumentation & governance, Session 65): observation layer rebuild to CLOB WebSocket feed, interval timestamps, and archive closed-cohort rule
+
+#### Observation & Question
+
+Session 64 identified that the 1,727.8 ms median poll interval in `archive/20260729/books.db` was 11.5x wider than the 150 ms post-latency window $\tau_{\text{post}}$, making $\tau_{\text{post}}$ unobservable and reducing the model to a linear assumption over a 1.73s blind window. The audit revealed that this latency was an artifact of sequential synchronous HTTP requests and a fixed sleep.
+
+The objectives were:
+1. Rebuild the recorder on the Polymarket CLOB WebSocket market feed (`wss://ws-subscriptions-clob.polymarket.com/ws/market`) to achieve sub-50ms sampling resolution (below the 150ms latency window).
+2. Persist interval timestamps (`ts_request_sent`, `ts_response_recv`, `ts_venue`) so network RTT and book staleness are directly measured rather than assumed.
+3. Audit the fill engine for small-$\Delta t$ behavior ($\Delta t \le \tau_{\text{post}}$ and $\Delta t \to 0$).
+4. Formally designate `archive/20260729/books.db` as a closed cohort ($n=4$ fills, 193.1 shares) and reset the $\ge 500$ filled-share quorum to fast-cadence windows only.
+
+#### What We Observed & Investigated
+
+1. Upgraded `scripts/record_books.py` with `WSMarketRecorder` maintaining live in-memory books across WebSocket event streams with automatic window rollover and async REST fallback.
+2. Extended `snapshots` schema with columns `ts_request_sent`, `ts_response_recv`, and `ts_venue` (converting venue epoch ms to unix seconds).
+3. Executed a live WebSocket recording test against active BTC 5-min markets (`btc-updown-5m-1786835700` and `btc-updown-5m-1786836000`), recording 150 consecutive book states and measuring the empirical interval and staleness distributions.
+4. Audited `QueueFillEngine.on_book()` for small-$\Delta t$ edge cases. Added 3 unit tests in `tests/test_fills.py` covering multi-interval arrival progression, cumulative volume conservation across small-interval slices vs single large intervals, and duplicate/sub-millisecond timestamp guards. Full suite: 699/699 passed.
+
+#### Findings & Data
+
+1. **Measured Sampling Cadence Before vs After:**
+
+| Metric | REST Baseline (`archive/20260729/books.db`) | CLOB WebSocket (`test_ws_books.db`) | Improvement |
+| :--- | :--- | :--- | :--- |
+| **Sample Size ($N$)** | 2,060 polls | 149 events | - |
+| **Min Interval** | 1,246.8 ms | **3.00 ms** | $415\times$ faster |
+| **P25 Interval** | 1,529.3 ms | **4.63 ms** | $330\times$ faster |
+| **Median Interval** | **1,727.8 ms** | **5.84 ms** | **$295\times$ faster** |
+| **Mean Interval** | 1,796.6 ms | **11.11 ms** | $161\times$ faster |
+| **P75 Interval** | 1,889.1 ms | **7.26 ms** | $260\times$ faster |
+| **P95 Interval** | 2,404.5 ms | **28.68 ms** | $83\times$ faster |
+| **Max Interval** | 14,818.2 ms | **392.53 ms** (window rollover) | $37\times$ faster |
+
+2. **Measured Staleness & Network RTT:**
+   - Client-received to venue-timestamp staleness ($t_{\text{recv}} - t_{\text{venue}}$): Median **684.52 ms**, P25 593.00 ms, P75 819.93 ms, P95 882.07 ms (incorporates client-to-venue NTP clock difference + transport).
+   - WS connect/handshake RTT: ~382 ms (~191 ms one-way).
+3. **Closed-Cohort Protocol:**
+   - `archive/20260729/books.db` is frozen at $n=4$ fills / 193.1 shares.
+   - The Phase 2 activity quorum ($\ge 500$ filled shares) resets and must be cleared exclusively on newly collected fast-cadence WebSocket windows. Fast and slow cohorts must never be pooled.
+
+#### Decision
+
+LIVE — Observation layer upgraded to CLOB WebSocket streaming (median 5.84 ms interval, $295\times$ resolution gain). Fill engine small-$\Delta t$ verified with 699/699 passing tests. Session 64 verdict remains OPEN pending fast-cadence dataset collection.
+
+
 
 
 

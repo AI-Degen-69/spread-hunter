@@ -694,3 +694,82 @@ def test_refactored_config_latency_windows():
     assert eng.tau_cancel_sec == pytest.approx(0.25)
     assert eng.tau_post_sec == pytest.approx(0.15)
 
+
+def test_small_dt_multi_interval_arrival_progression():
+    """At 50ms poll cadence and tau_post=150ms, order spans multiple intervals before arriving."""
+    # tau_post = 0.15s (150ms)
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 0.0}, 1.000, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.000) # arrival at 1.150s
+
+    # Poll 1 at t=1.050 (ts <= arrival) -> f = 0.0, not_yet_arrived
+    f1 = eng.on_book("T", {0.50: 0.0}, 1.050, traded={0.50: 20.0})
+    assert f1 == []
+    assert o.filled == 0.0
+    assert eng.reconciliation[-1].outcome == "not_yet_arrived"
+
+    # Poll 2 at t=1.100 (ts <= arrival) -> f = 0.0, not_yet_arrived
+    f2 = eng.on_book("T", {0.50: 0.0}, 1.100, traded={0.50: 20.0})
+    assert f2 == []
+    assert o.filled == 0.0
+    assert eng.reconciliation[-1].outcome == "not_yet_arrived"
+
+    # Poll 3 at t=1.200 (prev=1.100 < 1.150 < curr=1.200, dt=0.100s, eligible=(1.200-1.150)/0.100 = 0.50)
+    f3 = eng.on_book("T", {0.50: 0.0}, 1.200, traded={0.50: 40.0})
+    assert len(f3) == 1
+    assert f3[0].size == pytest.approx(20.0) # 0.50 * 40 = 20
+    assert o.filled == pytest.approx(20.0)
+    assert eng.reconciliation[-1].outcome == "credited"
+
+    # Poll 4 at t=1.250 (prev=1.200 >= arrival=1.150 -> f = 1.0)
+    f4 = eng.on_book("T", {0.50: 0.0}, 1.250, traded={0.50: 30.0})
+    assert len(f4) == 1
+    assert f4[0].size == pytest.approx(30.0)
+    assert o.filled == pytest.approx(50.0)
+    assert eng.reconciliation[-1].outcome == "credited"
+
+
+def test_small_dt_cumulative_volume_conservation():
+    """Cumulative volume credited across multi-interval arrival matches single-interval path."""
+    # Scenario: 200 shares trade uniformly over [1.0, 1.25] (0.8 sh/ms)
+    # Order posted at t=1.000 with tau_post = 150ms -> arrival at t=1.150
+    # Over [1.0, 1.25], 100ms is eligible (1.150 to 1.250) -> 100ms * 0.8 sh/ms = 80 shares.
+
+    # 1. Multi-interval path: 5 intervals of 50ms
+    eng_multi = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng_multi.on_book("T", {0.50: 0.0}, 1.000, traded={})
+    o_multi = eng_multi.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.000)
+
+    eng_multi.on_book("T", {0.50: 0.0}, 1.050, traded={0.50: 40.0}) # f=0.0 -> 0
+    eng_multi.on_book("T", {0.50: 0.0}, 1.100, traded={0.50: 40.0}) # f=0.0 -> 0
+    eng_multi.on_book("T", {0.50: 0.0}, 1.150, traded={0.50: 40.0}) # ts=arrival -> f=0.0 -> 0
+    eng_multi.on_book("T", {0.50: 0.0}, 1.200, traded={0.50: 40.0}) # prev=1.150 >= arrival -> f=1.0 -> 40
+    eng_multi.on_book("T", {0.50: 0.0}, 1.250, traded={0.50: 40.0}) # prev=1.200 >= arrival -> f=1.0 -> 40
+    assert o_multi.filled == pytest.approx(80.0)
+
+    # 2. Single interval path: 1 interval of 250ms
+    eng_single = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng_single.on_book("T", {0.50: 0.0}, 1.000, traded={})
+    o_single = eng_single.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.000)
+    # interval [1.000, 1.250], dt=0.250, arrival=1.150 -> f = (1.250 - 1.150)/0.250 = 0.100/0.250 = 0.40
+    eng_single.on_book("T", {0.50: 0.0}, 1.250, traded={0.50: 200.0}) # 0.40 * 200 = 80
+    assert o_single.filled == pytest.approx(80.0)
+
+
+def test_small_dt_zero_and_negative_interval_guard():
+    """Duplicate timestamps (dt <= 0) must not cause division-by-zero or crash."""
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 0.0}, 1.000, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.000)
+
+    # Duplicate timestamp
+    f_dup = eng.on_book("T", {0.50: 0.0}, 1.000, traded={0.50: 50.0})
+    assert f_dup == []
+    assert o.filled == 0.0
+
+    # Rapid micro-burst dt=1ms
+    f_burst = eng.on_book("T", {0.50: 0.0}, 1.001, traded={0.50: 50.0})
+    assert f_burst == []
+    assert o.filled == 0.0
+
+
