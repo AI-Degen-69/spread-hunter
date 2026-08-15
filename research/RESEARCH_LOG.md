@@ -2027,18 +2027,19 @@ The question is whether modeling the in-flight cancellation window $\tau = \tau_
 
 #### Findings & Data
 
-Empirical sensitivity sweep on 13 recorded windows:
+Empirical sensitivity sweep on 13 recorded windows (187,894 shares posted):
 - $\tau = 0$ ms: $193.1$ sh filled ($0.103\%$ FR), Queue markout: $-\$19.04$ ($-9.86$¢/sh), Race fills: $0.0$ sh ($0.0\%$).
 - $\tau = 150$ ms: $194.5$ sh filled ($0.103\%$ FR), Queue markout: $-\$19.04$, Race fills: $1.4$ sh ($-23.6$¢/sh markout, $-\$0.33$).
 - $\tau = 250$ ms: $195.4$ sh filled ($0.104\%$ FR), Queue markout: $-\$19.04$, Race fills: $2.3$ sh ($-23.9$¢/sh markout, $-\$0.55$).
 - $\tau = 500$ ms: $197.6$ sh filled ($0.105\%$ FR), Queue markout: $-\$19.04$, Race fills: $4.5$ sh ($-24.4$¢/sh markout, $-\$1.10$).
 
-Key findings:
-1. **Adverse selection confirmation:** In-flight race fills are **2.4x more toxic** per share ($-23.9$¢/sh markout vs $-9.86$¢/sh on normal queue fills), validating Flag 1: cancellations were fleeing toxic orderflow that real latency hits.
-2. **Volume impact:** Total fill rate changes by only $+0.001\%$ to $+0.002\%$ ($1.2\%$ of filled volume at $250$ms), meaning cancellation race exposure adds acute toxicity without materially distorting aggregate fill volume.
-3. **Verdict stability:** The Phase 1 fill-rate gap is essentially $\tau$-invariant across $150$–$500$ms ($0.103\%$ to $0.105\%$).
+Methodological and empirical caveats:
+1. **Single measurement, not three:** Because race crediting scales linearly as $p_{\text{race}} \times \text{qty}_{\text{exposed}}$ over identical exposed shares and prices, per-share markout ($-23.6$¢ / $-23.9$¢ / $-24.4$¢) is invariant in $\tau$ by construction (differences reflect window-boundary eligibility noise). The fill-rate gap is flat because race fills represent only $1.2\%$ of volume, so queue fills dominate.
+2. **Small-sample magnitude:** The $2.4\times$ toxicity ratio ($-23.9$¢/sh race vs $-9.86$¢/sh queue) rests on $n \approx 2.3$ shares. The adverse selection mechanism is confirmed, but the exact magnitude remains an estimate.
+3. **Tension with PROGRAM.md Rule 4:** The fill-rate metric barely moves ($+0.001\%$), putting the component in tension with the "discard if it does not move the metric" rule. The metric is insensitive because the component's effect is compositional (adding toxicity) rather than aggregate volume-reducing.
 
 #### Decision
 
-LIVE — In-flight cancellation race latency model implemented, verified with 690/690 tests, and benchmarked across the sensitivity grid.
+OPEN — Mechanism confirmed and invariant implemented with 690/690 tests, but magnitude is an estimate on $n \approx 2.3$ shares. Kept open pending combined Phase 1 markout evaluation.
+
 
