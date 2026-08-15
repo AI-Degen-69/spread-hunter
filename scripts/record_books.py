@@ -55,13 +55,12 @@ CREATE TABLE IF NOT EXISTS snapshots (
     asks TEXT NOT NULL,
     ts_request_sent REAL,       -- request/event dispatch ts
     ts_response_recv REAL,      -- response arrival ts
-    ts_venue REAL               -- venue-supplied timestamp
+    ts_venue REAL,              -- venue-supplied timestamp
+    is_rollover INTEGER DEFAULT 0 -- 1 if during rollover/init phase, 0 steady state
 );
 CREATE INDEX IF NOT EXISTS idx_s_cond ON snapshots(condition_id, ts);
 CREATE INDEX IF NOT EXISTS idx_s_ts ON snapshots(ts);
 
--- One row per window we saw, so replay knows the full market list even for
--- windows where every poll happened to fail.
 CREATE TABLE IF NOT EXISTS windows (
     condition_id TEXT PRIMARY KEY,
     market_slug TEXT,
@@ -73,46 +72,90 @@ CREATE TABLE IF NOT EXISTS windows (
     last_seen REAL,
     polls INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS ntp_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    server TEXT NOT NULL,
+    offset_ms REAL NOT NULL,
+    rtt_ms REAL NOT NULL
+);
 """
 
 
+def sample_ntp(server: str = "time.cloudflare.com", timeout: float = 2.0) -> Optional[tuple[float, float]]:
+    """Sample NTP offset and RTT via RFC 4330 RTT-compensated formula:
+    offset = ((T2 - T1) + (T3 - T4)) / 2
+    rtt = (T4 - T1) - (T3 - T2)
+    """
+    import socket
+    import struct
+    NTP_DELTA = 2208988800
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.settimeout(timeout)
+    data = bytearray(48)
+    data[0] = 0x1B
+    try:
+        t0 = time.time()  # T1
+        client.sendto(data, (server, 123))
+        msg, _ = client.recvfrom(1024)
+        t3 = time.time()  # T4
+        recv_s, recv_f = struct.unpack("!II", msg[32:40])
+        trans_s, trans_f = struct.unpack("!II", msg[40:48])
+        t1 = (recv_s - NTP_DELTA) + (recv_f / 2**32)  # T2
+        t2 = (trans_s - NTP_DELTA) + (trans_f / 2**32)  # T3
+        rtt_ms = ((t3 - t0) - (t2 - t1)) * 1000.0
+        offset_ms = (((t1 - t0) + (t2 - t3)) / 2.0) * 1000.0
+        return offset_ms, rtt_ms
+    except Exception:
+        return None
+    finally:
+        client.close()
+
+
 def db(path: Path) -> sqlite3.Connection:
-    c = sqlite3.connect(str(path))
-    c.executescript(SCHEMA)
-    # Check and migrate columns if opening existing DB
-    cur = c.cursor()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.executescript(SCHEMA)
+    cur = conn.cursor()
     cur.execute("PRAGMA table_info(snapshots)")
     cols = {row[1] for row in cur.fetchall()}
-    for col in ("ts_request_sent", "ts_response_recv", "ts_venue"):
+    for col, ctype in (("ts_request_sent", "REAL"),
+                       ("ts_response_recv", "REAL"),
+                       ("ts_venue", "REAL"),
+                       ("is_rollover", "INTEGER DEFAULT 0")):
         if col not in cols:
-            c.execute(f"ALTER TABLE snapshots ADD COLUMN {col} REAL")
-    c.commit()
-    return c
+            conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} {ctype}")
+    conn.commit()
+    return conn
 
 
 def book(clob_host: str, token_id: str) -> tuple[dict, float, float]:
-    """One book via the shared parse with request sent / response recv timestamps."""
-    t0 = time.time()
-    r = requests.get(f"{clob_host}/book", params={"token_id": token_id}, timeout=10)
-    t1 = time.time()
+    url = f"{clob_host}/book"
+    t_sent = time.time()
+    r = _SESSION.get(url, params={"token_id": token_id}, timeout=MARKET_TIMEOUT)
+    t_recv = time.time()
     r.raise_for_status()
-    parsed = parse_book(r.json(), token_id)
-    return {"bids": parsed["bids"], "asks": parsed["asks"]}, t0, t1
+    return parse_book(r.json(), token_id), t_sent, t_recv
 
 
 class WSMarketRecorder:
-    def __init__(self, out: Path, interval: float, minutes: float, fallback_rest: bool = True):
+    def __init__(self, out: Path, interval: float, minutes: float):
         self.out = out
-        self.conn = db(out)
         self.interval = interval
         self.minutes = minutes
-        self.fallback_rest = fallback_rest
+        self.conn = db(out)
         self.net = load_net()
         self.deadline = time.time() + minutes * 60 if minutes > 0 else float("inf")
+        self.books: Dict[str, Dict[str, Dict[float, float]]] = {}
         self.market: Optional[LiveMarket] = None
-        self.books: Dict[str, Dict[str, Dict[float, float]]] = {}  # token_id -> {"bids": {}, "asks": {}}
         self.polls = 0
         self.windows = set()
+        self.write_queue: asyncio.Queue = asyncio.Queue()
+        self.current_window_opened_at = 0.0
+        self.latest_ntp_offset_ms = -541.31  # fallback default
 
     def parse_initial_book(self, token_data: dict) -> tuple[dict[float, float], dict[float, float]]:
         bids, asks = {}, {}
@@ -139,7 +182,7 @@ class WSMarketRecorder:
         else:
             target[price] = size
 
-    def save_snapshot(self, t_sent: float, t_recv: float, t_venue: Optional[float]):
+    def queue_snapshot(self, t_sent: float, t_recv: float, t_venue: Optional[float]):
         if not self.market:
             return
         m = self.market
@@ -148,92 +191,154 @@ class WSMarketRecorder:
         up_asks = self.books.get(m.up_token, {}).get("asks", {})
         dn_bids = self.books.get(m.down_token, {}).get("bids", {})
         dn_asks = self.books.get(m.down_token, {}).get("asks", {})
+        is_rollover = 1 if (ts - self.current_window_opened_at) < 5.0 else 0
 
         rows = [
             (ts, m.condition_id, m.market_slug, m.start_ts, m.end_ts,
              m.up_token, "UP", json.dumps(up_bids), json.dumps(up_asks),
-             t_sent, t_recv, t_venue),
+             t_sent, t_recv, t_venue, is_rollover),
             (ts, m.condition_id, m.market_slug, m.start_ts, m.end_ts,
              m.down_token, "DOWN", json.dumps(dn_bids), json.dumps(dn_asks),
-             t_sent, t_recv, t_venue),
+             t_sent, t_recv, t_venue, is_rollover),
         ]
-        self.conn.executemany(
-            "INSERT INTO snapshots (ts, condition_id, market_slug, start_ts, "
-            "end_ts, token_id, side, bids, asks, ts_request_sent, ts_response_recv, ts_venue) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-        self.conn.execute(
-            "INSERT INTO windows (condition_id, market_slug, start_ts, end_ts, "
-            "up_token, down_token, first_seen, last_seen, polls) "
-            "VALUES (?,?,?,?,?,?,?,?,1) "
-            "ON CONFLICT(condition_id) DO UPDATE SET last_seen=excluded.last_seen, "
-            "polls = polls + 1",
-            (m.condition_id, m.market_slug, m.start_ts, m.end_ts,
-             m.up_token, m.down_token, ts, ts))
-        self.conn.commit()
+        win_row = (m.condition_id, m.market_slug, m.start_ts, m.end_ts,
+                   m.up_token, m.down_token, ts, ts)
+        self.write_queue.put_nowait((rows, win_row))
         self.polls += 1
         self.windows.add(m.condition_id)
-        if self.polls % 300 == 0:
-            log.info("%d events/snapshots | %d windows", self.polls, len(self.windows))
+        if self.polls % 500 == 0:
+            log.info("%d events/snapshots queued | %d windows", self.polls, len(self.windows))
+
+    async def db_writer_loop(self):
+        batch = []
+        win_updates = {}
+        last_flush = time.time()
+        while True:
+            try:
+                try:
+                    item = await asyncio.wait_for(self.write_queue.get(), timeout=0.2)
+                    rows, win_row = item
+                    batch.extend(rows)
+                    win_updates[win_row[0]] = win_row
+                    self.write_queue.task_done()
+                except asyncio.TimeoutError:
+                    pass
+
+                now = time.time()
+                if batch and ((now - last_flush) >= 0.5 or len(batch) >= 200):
+                    self.conn.executemany(
+                        "INSERT INTO snapshots (ts, condition_id, market_slug, start_ts, "
+                        "end_ts, token_id, side, bids, asks, ts_request_sent, ts_response_recv, "
+                        "ts_venue, is_rollover) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+                    for w in win_updates.values():
+                        self.conn.execute(
+                            "INSERT INTO windows (condition_id, market_slug, start_ts, end_ts, "
+                            "up_token, down_token, first_seen, last_seen, polls) "
+                            "VALUES (?,?,?,?,?,?,?,?,1) "
+                            "ON CONFLICT(condition_id) DO UPDATE SET last_seen=excluded.last_seen, "
+                            "polls = polls + 1", w)
+                    self.conn.commit()
+                    batch.clear()
+                    win_updates.clear()
+                    last_flush = now
+            except asyncio.CancelledError:
+                if batch:
+                    self.conn.executemany(
+                        "INSERT INTO snapshots (ts, condition_id, market_slug, start_ts, "
+                        "end_ts, token_id, side, bids, asks, ts_request_sent, ts_response_recv, "
+                        "ts_venue, is_rollover) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+                    self.conn.commit()
+                break
+            except Exception as e:
+                log.error("DB writer error: %s", e)
+
+    async def ntp_sampler_loop(self):
+        servers = ["time.cloudflare.com", "time.google.com", "pool.ntp.org"]
+        while True:
+            for s in servers:
+                res = sample_ntp(s)
+                if res:
+                    offset_ms, rtt_ms = res
+                    self.latest_ntp_offset_ms = offset_ms
+                    ts = time.time()
+                    try:
+                        self.conn.execute(
+                            "INSERT INTO ntp_samples (ts, server, offset_ms, rtt_ms) VALUES (?,?,?,?)",
+                            (ts, s, offset_ms, rtt_ms))
+                        self.conn.commit()
+                    except Exception:
+                        pass
+                    break
+            await asyncio.sleep(60.0)
 
     async def run_ws(self):
-        log.info("Starting WS stream recording to %s for %s",
+        log.info("Starting non-blocking WS stream recording to %s for %s",
                  self.out, f"{self.minutes:.0f}m" if self.minutes > 0 else "ever")
         last_market_fetch = 0.0
 
-        while time.time() < self.deadline:
-            now = time.time()
-            if self.market is None or now >= self.market.end_ts or (now - last_market_fetch) > 60:
+        writer_task = asyncio.create_task(self.db_writer_loop())
+        ntp_task = asyncio.create_task(self.ntp_sampler_loop())
+
+        try:
+            while time.time() < self.deadline:
+                now = time.time()
+                if self.market is None or now >= self.market.end_ts or (now - last_market_fetch) > 60:
+                    try:
+                        m = fetch_live_market(self.net.gamma_host, self.net.series_slug)
+                        last_market_fetch = now
+                        if m and (self.market is None or m.condition_id != self.market.condition_id):
+                            log.info("window %s  t_remaining=%.0fs", m.market_slug, m.end_ts - now)
+                            self.current_window_opened_at = now
+                        self.market = m
+                    except Exception as e:
+                        log.warning("market fetch failed: %s", e)
+
+                if self.market is None:
+                    await asyncio.sleep(1.0)
+                    continue
+
+                m = self.market
                 try:
-                    m = fetch_live_market(self.net.gamma_host, self.net.series_slug)
-                    last_market_fetch = now
-                    if m and (self.market is None or m.condition_id != self.market.condition_id):
-                        log.info("window %s  t_remaining=%.0fs", m.market_slug, m.end_ts - now)
-                    self.market = m
+                    t0 = time.time()
+                    async with websockets.connect(WS_MARKET_URL, ping_interval=20, ping_timeout=20) as ws:
+                        t1 = time.time()
+                        log.info("Connected to CLOB WS (handshake: %.1fms)", (t1 - t0) * 1000)
+                        sub = {"type": "market", "assets_ids": [m.up_token, m.down_token]}
+                        t_sub_sent = time.time()
+                        await ws.send(json.dumps(sub))
+
+                        while time.time() < self.deadline and time.time() < m.end_ts:
+                            t_sent = time.time()
+                            msg = await asyncio.wait_for(ws.recv(), timeout=10.0)
+                            t_recv = time.time()
+                            data = json.loads(msg)
+                            t_venue = None
+
+                            if isinstance(data, list):
+                                for item in data:
+                                    asset_id = str(item.get("asset_id"))
+                                    bids, asks = self.parse_initial_book(item)
+                                    self.books[asset_id] = {"bids": bids, "asks": asks}
+                                    if item.get("timestamp"):
+                                        t_venue = float(item["timestamp"]) / 1000.0
+                                self.queue_snapshot(t_sub_sent, t_recv, t_venue)
+                            elif isinstance(data, dict):
+                                if "timestamp" in data:
+                                    t_venue = float(data["timestamp"]) / 1000.0
+                                changes = data.get("price_changes", [])
+                                if not changes and "price" in data:
+                                    changes = [data]
+                                for ch in changes:
+                                    self.apply_price_change(ch)
+                                self.queue_snapshot(t_sent, t_recv, t_venue)
+
                 except Exception as e:
-                    log.warning("market fetch failed: %s", e)
-
-            if self.market is None:
-                await asyncio.sleep(1.0)
-                continue
-
-            m = self.market
-            try:
-                t0 = time.time()
-                async with websockets.connect(WS_MARKET_URL, ping_interval=20, ping_timeout=20) as ws:
-                    t1 = time.time()
-                    log.info("Connected to CLOB WS (handshake: %.1fms)", (t1 - t0) * 1000)
-                    sub = {"type": "market", "assets_ids": [m.up_token, m.down_token]}
-                    t_sub_sent = time.time()
-                    await ws.send(json.dumps(sub))
-
-                    while time.time() < self.deadline and time.time() < m.end_ts:
-                        t_sent = time.time()
-                        msg = await asyncio.wait_for(ws.recv(), timeout=10.0)
-                        t_recv = time.time()
-                        data = json.loads(msg)
-                        t_venue = None
-
-                        if isinstance(data, list):
-                            for item in data:
-                                asset_id = str(item.get("asset_id"))
-                                bids, asks = self.parse_initial_book(item)
-                                self.books[asset_id] = {"bids": bids, "asks": asks}
-                                if item.get("timestamp"):
-                                    t_venue = float(item["timestamp"]) / 1000.0
-                            self.save_snapshot(t_sub_sent, t_recv, t_venue)
-                        elif isinstance(data, dict):
-                            if "timestamp" in data:
-                                t_venue = float(data["timestamp"]) / 1000.0
-                            changes = data.get("price_changes", [])
-                            if not changes and "price" in data:
-                                changes = [data]
-                            for ch in changes:
-                                self.apply_price_change(ch)
-                            self.save_snapshot(t_sent, t_recv, t_venue)
-
-            except Exception as e:
-                log.warning("WS stream dropped (%s), reconnecting in 0.5s...", e)
-                await asyncio.sleep(0.5)
+                    log.warning("WS stream dropped (%s), reconnecting in 0.5s...", e)
+                    await asyncio.sleep(0.5)
+        finally:
+            writer_task.cancel()
+            ntp_task.cancel()
+            await asyncio.gather(writer_task, ntp_task, return_exceptions=True)
 
         log.info("done: %d events over %d windows", self.polls, len(self.windows))
 

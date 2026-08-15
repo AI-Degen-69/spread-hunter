@@ -32,12 +32,18 @@ Multi-model pairing organizes two or more AI models into a high-leverage partner
 
 ### Step 1: Discover Models and Establish Roles
 
-When setting up or starting a multi-model session, verify the pairing roles. If not already specified in project rules, determine:
+**No model identity is assumed by this skill.** Either seat can be filled by any model, and the pairing changes between sessions and between projects. Never infer the participants from prior sessions, memory, project history, or the example text in this document.
 
-1. **What model is running locally (Self)?**
-2. **What partner model is collaborating (Partner)?**
-3. **What are the operational constraints (quota limits, rate limits, tool capabilities)?**
-4. **Who is the Orchestrator / Architect, and who is the Working Agent / Executor?**
+**On invocation, ask the Owner before generating anything** — before the handshake, before any directive, before reading the codebase. Ask in one round, as a compact set of questions:
+
+1. **Which model is the partner**, and through what environment does it run (IDE agent, CLI, chat window, API)?
+2. **Which seat does each model take** — Orchestrator / Architect, or Working Agent / Executor? Offer a recommendation based on the criteria below, but let the Owner decide.
+3. **What are the operational constraints** on each side (quota limits, rate limits, tool access, context size)?
+4. **What is the current objective** the pair is working toward?
+
+Skip a question only when the Owner has already answered it in this session or a project rules file states it explicitly. If the Owner is unsure about the seat assignment, apply the criteria below, state the recommendation in one line, and proceed once they confirm.
+
+Record the answers and use them to fill every `[Orchestrator Name]` / `[Working Agent Name]` placeholder downstream. If a model's capabilities are unfamiliar, look them up rather than guessing.
 
 #### Determining Role Assignment
 
@@ -111,6 +117,74 @@ When operating as the **Orchestrator / Architect**:
 
 ---
 
+### Step 4: Dual-Channel Output (Mandatory)
+
+The Owner relays messages but should never have to decode machine-oriented prose to know what they are relaying. Every Orchestrator turn therefore ships **two channels in a single response**, in this order:
+
+1. **Channel 1 — Owner Brief.** Plain-English explanation, written for the human.
+2. **Channel 2 — Agent Directive.** The technical message, in a fenced block, for copy-paste to the Working Agent.
+
+Never emit only one channel. A directive without a brief leaves the Owner relaying instructions they cannot evaluate; a brief without a directive produces nothing to relay.
+
+#### Channel 1 — Owner Brief (human-facing)
+
+Written as a stakeholder update, not a transcript. Constraints:
+
+- **Emoji-titled headings**, mapped to content, never decorative.
+- **Structure over prose:** headings, short paragraphs, a table when the directive carries more than two items.
+- **No jargon without translation.** If a technical term is unavoidable, define it inline in everyday words the first time it appears.
+- **Explain the reasoning, not just the content.** For each directive item, say what it asks for *and* why it helps or what failure it prevents. The Owner should be able to judge whether the plan is sound.
+- **Lead with the decision.** If the Orchestrator is approving, halting, or reversing something, that is the first line.
+- **Length ceiling:** shorter than the directive it explains. Cut filler, recaps, and closers.
+
+Recommended skeleton:
+
+```markdown
+## ✅ What the Working Agent delivered
+[One or two sentences. Concrete outcomes only.]
+
+## 🛑 The decision and why
+[What is being approved, blocked, or redirected — reasoning in everyday language.]
+
+## 📤 What I sent back — N items
+| # | Directive | Why |
+|---|---|---|
+| 1 | [plain-English restatement] | [what it prevents or unlocks] |
+
+## 🎯 Status
+[Current verdict, what is gated on what, what happens next.]
+```
+
+#### Channel 2 — Agent Directive (model-facing)
+
+Optimized for another model's comprehension, not human readability. Any format is acceptable — prose, numbered specs, tables, pseudo-schema, JSON — chosen for whatever transmits the specification most precisely.
+
+- **Precision over politeness.** Exact figures, units, sample sizes, file paths, thresholds, and pass/fail criteria.
+- **State the reasoning chain**, so the Executor can detect when its own findings contradict the premise.
+- **Bound the scope explicitly.** Name what must *not* change as clearly as what must.
+- **Close with the expected report shape**, so the return message is directly comparable to the request.
+- Do not simplify, soften, or translate for the human here. That work belongs in Channel 1.
+
+#### Worked Micro-Example
+
+> **Channel 1 (Owner Brief):**
+>
+> ## 🛑 Holding the data collection
+> The new recorder reads 300× faster, which fixes the original problem. But it also revealed that every reading carries a timing error larger than the effect we are trying to measure. Collecting more data now would give us a confident-looking answer built on a broken ruler — so I asked the Executor to calibrate the clock before gathering anything else.
+>
+> **Channel 2 (Agent Directive):**
+>
+> ```markdown
+> Cadence resolved: 1,727.8 ms -> 5.84 ms median. Do not begin collection.
+> Blocker: staleness `ts_recv - ts_venue` median 684.52 ms, IQR 226.93 ms, vs `tau_post = 150 ms`.
+> Jitter exceeds the modeled effect; the quorum clock does not start until it is decomposed.
+> 1. Separate host clock offset from true venue publish latency. Report offset-corrected
+>    distribution with N and IQR. Tag every value MEASURED / ASSUMED / DERIVED.
+> ...
+> ```
+
+---
+
 ## Anti-Patterns
 
 | Anti-Pattern | Why It Fails | Correct Action |
@@ -119,3 +193,6 @@ When operating as the **Orchestrator / Architect**:
 | **Orchestrator doing mechanical coding** | Burns expensive tokens and quota on boilerplate that a faster model can write and test locally. | Orchestrator specifies invariants; Executor writes and tests code. |
 | **Unverified claims** | Promising results before executing test suites or reading DB rows causes hallucinated progress. | Executor runs the tool/script first, then reports exact terminal output. |
 | **Nuance negotiation** | Long, conversational debates about minor styling. | Follow bounded, numbered checklists and strict ADHD-style summaries. |
+| **Assuming who is in the pairing** | Model seats change between sessions and projects. Guessing from memory or a previous session produces a handshake addressed to the wrong model with the wrong constraints. | Ask the Owner on invocation (Step 1); never infer the participants from history or from this document's examples. |
+| **Single-channel output** | Emitting only the technical directive forces the Owner to relay decisions they cannot evaluate; emitting only the human brief leaves nothing to relay. | Ship both channels every turn: Owner Brief first, then the fenced Agent Directive (Step 4). |
+| **Jargon leaking into the Owner Brief** | The brief exists so the Owner can approve or veto. Untranslated terms turn it into a second copy of the directive. | Translate every term inline; explain the *why* behind each item, not just its content. |
