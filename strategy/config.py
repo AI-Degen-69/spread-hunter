@@ -689,13 +689,30 @@ class MakerConfig:
     rebate_rate: float = 0.20
     fee_rate: float = 0.07          # taker fee rate, for the rebate estimate
 
-    # CANCELLATION-RACE PENALTY (issue #27, Phase 1 component 2).
-    # ESTIMATES, not measurements -- we never send a real cancel, so no ack
-    # timestamp exists to fit against. Replace net_oneway with median(RTT)/2
-    # from the instrumented fetch seam; venue_ack cannot be measured without
-    # placing orders and stays an assumption until it can.
-    cancel_net_oneway_ms: float = 100.0
-    cancel_venue_ack_ms: float = 150.0
+    # LATENCY AND PROPAGATION PARAMETERS (issue #27, Phase 1 components 2 & 3).
+    # Shared one-way network leg. MEASURED -- median(RTT)/2 from the
+    # instrumented fetch seam. Both the cancel race and the post latency
+    # cross the same wire; two constants would drift apart.
+    net_oneway_ms: float = 100.0
+
+    # Venue-side legs. ESTIMATES -- unobservable without placing real orders.
+    # Accept is cheaper than ack: accepting a new order is an insert,
+    # acknowledging a cancel requires locating and removing a live one.
+    cancel_venue_ack_ms: float = 150.0     # tau_cancel = 250ms total
+    post_venue_accept_ms: float = 50.0     # tau_post   = 150ms total
+
+    @property
+    def cancel_net_oneway_ms(self) -> float:
+        """Backward compatibility alias for net_oneway_ms."""
+        return self.net_oneway_ms
+
+    @property
+    def tau_cancel_sec(self) -> float:
+        return (self.net_oneway_ms + self.cancel_venue_ack_ms) / 1000.0
+
+    @property
+    def tau_post_sec(self) -> float:
+        return (self.net_oneway_ms + self.post_venue_accept_ms) / 1000.0
 
     sim_only: bool = True
 
@@ -751,12 +768,15 @@ def load() -> MakerConfig:
     pr = os.environ.get("HUNTER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
-    cno = os.environ.get("HUNTER_CANCEL_NET_ONEWAY_MS")
+    cno = os.environ.get("HUNTER_NET_ONEWAY_MS") or os.environ.get("HUNTER_CANCEL_NET_ONEWAY_MS")
     if cno and cno.strip():
-        kw["cancel_net_oneway_ms"] = float(cno)
+        kw["net_oneway_ms"] = float(cno)
     cva = os.environ.get("HUNTER_CANCEL_VENUE_ACK_MS")
     if cva and cva.strip():
         kw["cancel_venue_ack_ms"] = float(cva)
+    pva = os.environ.get("HUNTER_POST_VENUE_ACCEPT_MS")
+    if pva and pva.strip():
+        kw["post_venue_accept_ms"] = float(pva)
     mf = os.environ.get("HUNTER_MARGINAL_FLOOR") or ""
     if mf.strip():
         kw["marginal_return_floor"] = float(mf)

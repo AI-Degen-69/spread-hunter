@@ -312,8 +312,9 @@ class MarketState:
         # sweep has measured the market. Surfaced on the pipeline view.
         self.alloc_verdict: dict | None = None
         self.engine = QueueFillEngine(
-            cancel_net_oneway_ms=self.cfg.cancel_net_oneway_ms,
+            net_oneway_ms=self.cfg.net_oneway_ms,
             cancel_venue_ack_ms=self.cfg.cancel_venue_ack_ms,
+            post_venue_accept_ms=self.cfg.post_venue_accept_ms,
         )
         # Rehydrate from the fills table instead of starting at zero. Fills are
         # persisted, inventory was not, so every restart silently dropped the

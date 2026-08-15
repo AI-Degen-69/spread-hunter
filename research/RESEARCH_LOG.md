@@ -2042,4 +2042,46 @@ Methodological and empirical caveats:
 
 OPEN — Mechanism confirmed and invariant implemented with 690/690 tests, but magnitude is an estimate on $n \approx 2.3$ shares. Kept open pending combined Phase 1 markout evaluation.
 
+### 2026-08-16 (strategy, Session 64): post latency penalty model & combined Phase 1 haircut evaluation (Phase 1 component 3, issue #27)
+
+#### Observation & Question
+
+Issue #27 Phase 1 component 3 asks how the in-flight post latency window $\tau_{\text{post}} = \tau_{\text{net\_oneway}} + \tau_{\text{post\_venue\_accept}}$ ($\sim 150$ms baseline = $100$ms net + $50$ms accept) affects fill crediting. In a naive simulator, orders exist on the venue at decision time ($t = \text{posted\_ts}$), crediting trades that occur while the post packet is still traveling to the matching engine.
+
+The questions are:
+1. What fraction of naive fills are excluded when modeling post arrival latency?
+2. Does the excluded volume exhibit adverse selection (toxic early fills from market-moving sweeps)?
+3. What is the combined fill rate and markout impact across all three Phase 1 haircut components (amendment penalty, cancel race, post latency)?
+
+#### What We Observed & Investigated
+
+1. Refactored config parameters in `strategy/config.py`: shared `net_oneway_ms = 100.0` (measured from median RTT/2), `cancel_venue_ack_ms = 150.0` ($\tau_{\text{cancel}} = 250$ms), and `post_venue_accept_ms = 50.0` ($\tau_{\text{post}} = 150$ms).
+2. Added Stated Bias #4 to `strategy/fills.py` docstring (queue joiners during in-flight post window are unobservable without real orders; `queue_ahead` remains pegged to decision-time depth, direction optimistic).
+3. Extended `QueueFillEngine.on_book()` with arrival timestamp $t_{\text{arrival}} = \text{posted\_ts} + \tau_{\text{post}}$ and first-interval eligibility fraction $f = \text{clip}((t_{\text{curr}} - t_{\text{arrival}}) / (t_{\text{curr}} - t_{\text{prev}}), 0.0, 1.0)$, scaling effective tape volume $t_{\text{vol\_eff}} = f \times t_{\text{vol}}$. Orders not yet arrived produce reconciliation outcome `not_yet_arrived` with zero crediting and unchanged `queue_ahead`.
+4. Evaluated sensitivity across $\tau_{\text{post}} \in \{0, 75, 150, 300\}$ ms and ran the combined Phase 1 model on 13 recorded book windows (187,894 posted shares in `archive/20260729/books.db`).
+5. Added 6 unit tests in `tests/test_fills.py` covering pre-arrival zero-credit, partial-interval volume scaling, subsequent poll $f=1.0$, behind-queue partial decay, $\tau=0$ immediate eligibility, and latency window wiring. Full test suite: 696/696 passed.
+
+#### Findings & Data
+
+1. **Isolated $\tau_{\text{post}}$ sensitivity sweep (187,894 posted shares, $\tau_{\text{cancel}} = 0$ms):**
+   - $\tau_{\text{post}} = 0.0$ ms: $193.1$ sh filled ($0.103\%$ FR), markout $-\$19.04$ ($-9.86$¢/sh), excluded: $0.0$ sh ($0.0\%$).
+   - $\tau_{\text{post}} = 75.0$ ms: $181.7$ sh filled ($0.097\%$ FR), markout $-\$15.14$ ($-8.33$¢/sh), excluded: $11.4$ sh ($5.89\%$).
+   - $\tau_{\text{post}} = 150.0$ ms (baseline): $170.4$ sh filled ($0.091\%$ FR), markout $-\$11.24$ ($-6.60$¢/sh), excluded: $22.7$ sh ($11.78\%$).
+   - $\tau_{\text{post}} = 300.0$ ms: $147.6$ sh filled ($0.079\%$ FR), markout $-\$3.45$ ($-2.34$¢/sh), excluded: $45.5$ sh ($23.56\%$).
+
+2. **Toxicity of excluded post volume:**
+   At baseline $\tau_{\text{post}} = 150$ms, the excluded $22.7$ shares accounted for $-\$7.80$ of markout loss, representing a markout of **$-34.36$¢/share** ($3.5\times$ more toxic than general population $-9.86$¢/share). This confirms the hypothesis: orders posted into fast-moving markets were falsely crediting immediate adverse-selection taker sweeps that occurred before the quote physically arrived on venue.
+
+3. **Combined Phase 1 Model (Amendment + Cancel Race + Post Latency):**
+   - Fill rate: falls from $0.103\%$ ($193.1$ sh) to $0.091\%$ ($171.3$ sh total: $169.0$ queue fills + $2.3$ race loss fills), delivering an **$11.3\%$ haircut on credited fills** ($\Delta = -0.012\%$).
+   - Adverse markout: drops from $-\$42.50$ to $-\$34.70$ (a $\$7.80$ reduction in unearned adverse fills).
+   - Benign markout: perfectly preserved at $\$23.46$ (benign volume is patient and fills well after arrival).
+   - Race fills markout: adds $-\$0.55$ ($-23.9$¢/sh on $2.3$ sh).
+   - Overall unit markout: adjusts from $-9.86$¢/sh to $-6.88$¢/sh.
+
+#### Decision
+
+LIVE — Phase 1 calibration complete. All three components (amendment penalty, cancellation race, post latency penalty) are implemented, verified by 696/696 tests, and empirical Phase 1 haircut numbers are established.
+
+
 

@@ -47,6 +47,10 @@ STATED BIASES (each makes us OPTIMISTIC -- treat output as an upper bound)
      someone wants to sell to us, which is disproportionately when the market
      is about to move against us. That cost shows up in the resolution outcome,
      which is the honest place for it.
+  4. Joiners during flight: We do not model queue depth changes during the
+     in-flight post window tau_post. Orders queueing ahead would raise
+     queue_ahead; trades would lower it. Both are unobservable without real
+     orders; queue_ahead stays set from decision-time depth (direction optimistic).
 """
 from __future__ import annotations
 
@@ -137,6 +141,7 @@ class Recon:
       'credited'          -- tape volume beyond the queue reached our order.
       'behind_queue'      -- it traded at our price; the shares ahead took it.
       'no_trade_at_price' -- tape was read; nothing traded at our price.
+      'not_yet_arrived'   -- order was still in flight (ts <= posted_ts + tau_post).
       'tape_unavailable'  -- tape could not be read; nothing is claimed.
       'race_loss'         -- trade landed during in-flight cancellation window (latency race loss).
     """
@@ -170,14 +175,25 @@ class QueueFillEngine:
     _last_book: dict[str, dict[float, float]] = field(default_factory=dict)
     # token_id -> timestamp as of the previous poll (for poll interval estimation)
     _last_ts: dict[str, float] = field(default_factory=dict)
-    # Cancellation-race latency parameters (issue #27 Phase 1 component 2)
-    cancel_net_oneway_ms: float = 100.0
+    # Latency and propagation parameters (issue #27 Phase 1 components 2 & 3)
+    net_oneway_ms: float = 100.0
     cancel_venue_ack_ms: float = 150.0
+    post_venue_accept_ms: float = 50.0
+    cancel_net_oneway_ms: Optional[float] = None
+
+    def __post_init__(self):
+        if self.cancel_net_oneway_ms is not None:
+            self.net_oneway_ms = self.cancel_net_oneway_ms
 
     @property
     def tau_cancel_sec(self) -> float:
         """Total cancel acknowledgment latency window in seconds."""
-        return (self.cancel_net_oneway_ms + self.cancel_venue_ack_ms) / 1000.0
+        return (self.net_oneway_ms + self.cancel_venue_ack_ms) / 1000.0
+
+    @property
+    def tau_post_sec(self) -> float:
+        """Total post arrival latency window in seconds."""
+        return (self.net_oneway_ms + self.post_venue_accept_ms) / 1000.0
 
     # -- order management --------------------------------------------------
     def post(self, token_id: str, side: str, price: float, size: float,
@@ -283,14 +299,26 @@ class QueueFillEngine:
         _live = [p for p, s in bids.items() if s > 1e-9]
         best_bid = max(_live) if _live else 0.0
         made: list[Fill] = []
+        tau_post = self.tau_post_sec
 
-        # 1. Normal crediting loop for open resting orders
+        # 1. Normal crediting loop for open resting orders (with post latency tau_post)
         for o in self.open_orders(token_id):
             before = prev.get(o.price, 0.0)
             now = bids.get(o.price, 0.0)
 
+            # Eligibility fraction f based on arrival timestamp o.posted_ts + tau_post
+            arrival_ts = o.posted_ts + tau_post
+            if tau_post <= 0 or prev_ts is None or prev_ts >= arrival_ts:
+                f = 1.0
+            elif ts <= arrival_ts:
+                f = 0.0
+            else:
+                dt_poll = max(1e-4, ts - prev_ts)
+                f = min(1.0, max(0.0, (ts - arrival_ts) / dt_poll))
+
             t_vol = tape.get(o.price, 0.0) if tape is not None else 0.0
-            qty = min(o.remaining, max(0.0, t_vol - o.queue_ahead))
+            t_vol_eff = f * t_vol
+            qty = min(o.remaining, max(0.0, t_vol_eff - o.queue_ahead))
             left = max(0.0, before - now)          # trades + cancels
 
             if tape is None:
@@ -305,6 +333,8 @@ class QueueFillEngine:
 
             if tape is None:
                 outcome = "tape_unavailable"
+            elif f <= 1e-9:
+                outcome = "not_yet_arrived"
             elif t_vol <= 1e-9:
                 outcome = "no_trade_at_price"
             elif qty > 1e-9:
@@ -319,7 +349,8 @@ class QueueFillEngine:
 
             if qty > 1e-9:
                 made.append(self._fill(o, qty, ts, reason="tape"))
-            o.queue_ahead = max(0.0, o.queue_ahead - max(left, t_vol))
+            if f > 1e-9:
+                o.queue_ahead = max(0.0, o.queue_ahead - max(left, t_vol_eff))
 
         # 2. Race crediting loop for in-flight cancelled orders (issue #27 Phase 1 component 2)
         for o, p_race in self.race_eligible_orders(token_id, ts, prev_ts):

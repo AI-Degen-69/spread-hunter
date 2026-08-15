@@ -610,3 +610,87 @@ def test_sub_tau_poll_interval_sets_p_race_to_one():
     assert len(fills) == 1
     assert fills[0].size == pytest.approx(40.0)    # p_race = 1.0 -> 100% credited
     assert fills[0].reason == "race"
+
+
+# --- Post latency penalty tests (issue #27 Phase 1 component 3) -----------
+
+def test_trade_before_arrival_yields_not_yet_arrived_and_zero_fill():
+    # tau_post = 100ms net + 50ms accept = 150ms = 0.15s
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 100.0}, 1.0, traded={})      # prime at t=1.0
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.0)  # arrival_ts = 1.15
+
+    # Snapshot at t=1.10 (ts <= 1.15 arrival) -> f = 0.0
+    fills = eng.on_book("T", {0.50: 100.0}, 1.10, traded={0.50: 50.0})
+    assert fills == []
+    assert o.filled == 0.0
+    assert o.queue_ahead == 0.0                         # queue_ahead unchanged
+    assert eng.reconciliation[-1].outcome == "not_yet_arrived"
+    assert eng.reconciliation[-1].credited == 0.0
+
+
+def test_trade_overlapping_arrival_scales_effective_volume():
+    # tau_post = 0.15s. posted at t=1.0 -> arrival_ts = 1.15
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})       # prev_ts = 1.0
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.0)
+
+    # Snapshot at t=2.0 (dt_poll = 1.0s, overlap = 2.0 - 1.15 = 0.85s -> f = 0.85)
+    fills = eng.on_book("T", {0.50: 0.0}, 2.0, traded={0.50: 100.0})
+    assert len(fills) == 1
+    assert fills[0].size == pytest.approx(85.0)
+    assert fills[0].reason == "tape"                    # ordinary queue fill, not split
+    assert o.filled == pytest.approx(85.0)
+    assert eng.reconciliation[-1].outcome == "credited"
+    assert eng.reconciliation[-1].credited == pytest.approx(85.0)
+
+
+def test_subsequent_poll_has_f_equals_one():
+    # tau_post = 0.15s. posted at t=1.0 -> arrival_ts = 1.15
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.0)
+
+    # First poll at t=2.0 (credits 85 shares, leaving 15)
+    eng.on_book("T", {0.50: 0.0}, 2.0, traded={0.50: 100.0})
+    assert o.remaining == pytest.approx(15.0)
+
+    # Second poll at t=3.0 (prev_ts = 2.0 >= arrival_ts 1.15 -> f = 1.0)
+    fills2 = eng.on_book("T", {0.50: 0.0}, 3.0, traded={0.50: 20.0})
+    assert len(fills2) == 1
+    assert fills2[0].size == pytest.approx(15.0)        # fills remaining 15 at 100% f
+    assert o.remaining == 0.0
+
+
+def test_partial_interval_behind_queue_remains_behind_queue():
+    # tau_post = 0.15s. posted at t=1.0 -> arrival_ts = 1.15. queue_ahead = 100.
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 100.0}, 1.0, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 100.0}, ts=1.0)
+
+    # Snapshot at t=2.0: f = 0.85. t_vol = 100 -> t_vol_eff = 85.
+    # 85 < 100 queue_ahead -> qty = 0, outcome = behind_queue
+    fills = eng.on_book("T", {0.50: 100.0}, 2.0, traded={0.50: 100.0})
+    assert fills == []
+    assert o.filled == 0.0
+    assert o.queue_ahead == pytest.approx(15.0)         # 100 - 85 = 15 ahead
+    assert eng.reconciliation[-1].outcome == "behind_queue"
+
+
+def test_zero_tau_post_gives_full_immediate_eligibility():
+    eng = QueueFillEngine(net_oneway_ms=0.0, post_venue_accept_ms=0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.0)
+
+    # Snapshot at t=1.1 with tau_post=0 -> f = 1.0
+    fills = eng.on_book("T", {0.50: 0.0}, 1.1, traded={0.50: 50.0})
+    assert len(fills) == 1
+    assert fills[0].size == pytest.approx(50.0)
+    assert o.filled == pytest.approx(50.0)
+
+
+def test_refactored_config_latency_windows():
+    eng = QueueFillEngine(net_oneway_ms=100.0, cancel_venue_ack_ms=150.0, post_venue_accept_ms=50.0)
+    assert eng.tau_cancel_sec == pytest.approx(0.25)
+    assert eng.tau_post_sec == pytest.approx(0.15)
+
