@@ -5,11 +5,15 @@ spread capture merge / sell classification, and order-level drilldown fidelity.
 """
 from __future__ import annotations
 
+import sys
 import sqlite3
 import pytest
 from pathlib import Path
-from fastapi.testclient import TestClient
 
+# Ensure repo root is on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from fastapi.testclient import TestClient
 from server.spread_dash import app
 
 
@@ -163,3 +167,59 @@ def test_api_trade_history_tier_filter(test_client):
     data500 = resp500.json()
     assert len(data500["markets"]) == 1
     assert data500["markets"][0]["tier"] == 500
+
+
+def test_api_trade_history_production_schema(tmp_path: Path, monkeypatch):
+    """Test /api/trade_history against true strategy/store.py schemas."""
+    import json
+    run_dir = tmp_path / "prod_run"
+    tier200_dir = run_dir / "bankroll_200"
+    tier200_dir.mkdir(parents=True, exist_ok=True)
+    db = tier200_dir / "fleet.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("""
+        CREATE TABLE closes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, market_slug TEXT, condition_id TEXT,
+            method TEXT, gas REAL, shares REAL, up_price REAL, dn_price REAL,
+            cost_basis REAL, proceeds REAL, fee REAL, realized_pnl REAL, forgone_vs_settlement REAL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE fills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, quote_id INTEGER, market_slug TEXT,
+            condition_id TEXT, token_id TEXT, side TEXT, price REAL, size REAL,
+            mid_at_post REAL, edge_vs_mid REAL, queue_waited REAL, seconds_to_fill REAL, crossed INTEGER, reason TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, market_slug TEXT, condition_id TEXT,
+            token_id TEXT, side TEXT, price REAL, size REAL, queue_ahead REAL, mid REAL,
+            edge_vs_mid REAL, t_remaining REAL, filled REAL DEFAULT 0, fill_ts REAL, cancelled INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE live_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1), ts REAL, payload TEXT
+        )
+    """)
+    # Insert a closed market (MERGE) and an active quote
+    conn.execute("INSERT INTO closes (ts, market_slug, condition_id, method, gas, shares, up_price, dn_price, cost_basis, proceeds, fee, realized_pnl) VALUES (100.0, 'will-btc-hit-100k', '0xbtc', 'MERGE', 0.0, 50.0, 0.48, 0.49, 48.5, 50.0, 0.0, 1.5)")
+    conn.execute("INSERT INTO fills (ts, quote_id, market_slug, condition_id, token_id, side, price, size) VALUES (90.0, 1, 'will-btc-hit-100k', '0xbtc', 'tok1', 'UP', 0.48, 50.0)")
+    conn.execute("INSERT INTO fills (ts, quote_id, market_slug, condition_id, token_id, side, price, size) VALUES (95.0, 2, 'will-btc-hit-100k', '0xbtc', 'tok2', 'DOWN', 0.49, 50.0)")
+    conn.execute("INSERT INTO quotes (ts, market_slug, condition_id, token_id, side, price, size, filled, cancelled) VALUES (110.0, 'will-sol-hit-300', '0xsol', 'tok3', 'UP', 0.35, 20.0, 0.0, 0)")
+    conn.execute("INSERT INTO live_state (id, ts, payload) VALUES (1, 115.0, ?)", (json.dumps({"slug": "will-sol-hit-300", "condition_id": "0xsol", "up_shares": 10.0, "dn_shares": 0.0}),))
+    conn.commit()
+    conn.close()
+
+    from server import spread_dash
+    monkeypatch.setattr(spread_dash, "BANKROLL_RUN_DIR", run_dir)
+    client = TestClient(app)
+    resp = client.get("/api/trade_history?tier=200")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["markets"]) == 2
+    slugs = {m["market_slug"] for m in data["markets"]}
+    assert "will-btc-hit-100k" in slugs
+    assert "will-sol-hit-300" in slugs
+
