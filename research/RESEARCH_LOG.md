@@ -2063,25 +2063,23 @@ The questions are:
 
 #### Findings & Data
 
-1. **Isolated $\tau_{\text{post}}$ sensitivity sweep (187,894 posted shares, $\tau_{\text{cancel}} = 0$ms):**
-   - $\tau_{\text{post}} = 0.0$ ms: $193.1$ sh filled ($0.103\%$ FR), markout $-\$19.04$ ($-9.86$¢/sh), excluded: $0.0$ sh ($0.0\%$).
-   - $\tau_{\text{post}} = 75.0$ ms: $181.7$ sh filled ($0.097\%$ FR), markout $-\$15.14$ ($-8.33$¢/sh), excluded: $11.4$ sh ($5.89\%$).
-   - $\tau_{\text{post}} = 150.0$ ms (baseline): $170.4$ sh filled ($0.091\%$ FR), markout $-\$11.24$ ($-6.60$¢/sh), excluded: $22.7$ sh ($11.78\%$).
-   - $\tau_{\text{post}} = 300.0$ ms: $147.6$ sh filled ($0.079\%$ FR), markout $-\$3.45$ ($-2.34$¢/sh), excluded: $45.5$ sh ($23.56\%$).
+1. **Diagnostic verification of Check 1 (poll rate & order age distribution):**
+   - Measured $\Delta t_{\text{poll}}$ across all 2,060 polls in 13 windows: Median = **1,727.8 ms (1.73s)**, Mean = 1,796.6 ms, IQR = [1,529.1 ms, 1,888.5 ms].
+   - Order age breakdown: Out of 4 total baseline fills (193.1 shares), 3 fills (133.1 shares, 68.9%) occurred on **poll 1 immediately after post** (age = 1), while 1 fill (60.0 shares, 31.1%) occurred on an old resting order (age = 14 polls).
+   - No leak detected: Age-14 fill retained $f = 1.0$ (60.0 shares) at all $\tau$. The linear scaling $(1 - \tau / \Delta t)$ cleanly scaled the 68.9% poll-1 fills.
 
-2. **Toxicity of excluded post volume:**
-   At baseline $\tau_{\text{post}} = 150$ms, the excluded $22.7$ shares accounted for $-\$7.80$ of markout loss, representing a markout of **$-34.36$¢/share** ($3.5\times$ more toxic than general population $-9.86$¢/share). This confirms the hypothesis: orders posted into fast-moving markets were falsely crediting immediate adverse-selection taker sweeps that occurred before the quote physically arrived on venue.
+2. **Diagnostic verification of Check 2 (adverse/benign split of excluded set):**
+   - The singular benign fill in the entire dataset (Win 0, 60.0 shares, $+\$23.46$ markout) occurred at **age 14**, so $f = 1.0$ preserved it entirely ($+\$23.46 \to +\$23.46$).
+   - All 3 poll-1 fills (Win 2, Win 4, Win 7) were **100% adverse** (sweeps into 0.015-0.025 resolving loss).
+   - Consequently, 100% of the 24.1 excluded shares came from adverse sweep fills.
 
-3. **Combined Phase 1 Model (Amendment + Cancel Race + Post Latency):**
-   - Fill rate: falls from $0.103\%$ ($193.1$ sh) to $0.091\%$ ($171.3$ sh total: $169.0$ queue fills + $2.3$ race loss fills), delivering an **$11.3\%$ haircut on credited fills** ($\Delta = -0.012\%$).
-   - Adverse markout: drops from $-\$42.50$ to $-\$34.70$ (a $\$7.80$ reduction in unearned adverse fills).
-   - Benign markout: perfectly preserved at $\$23.46$ (benign volume is patient and fills well after arrival).
-   - Race fills markout: adds $-\$0.55$ ($-23.9$¢/sh on $2.3$ sh).
-   - Overall unit markout: adjusts from $-9.86$¢/sh to $-6.88$¢/sh.
+3. **Check 3 & Small-Sample Limitation:**
+   - The entire archive contains only $n = 4$ fills (193.1 shares). The markout "improvement" from $-9.86$¢ to $-6.88$¢/sh is a mechanical consequence of clipping toxic poll-1 fills in a 4-fill sample.
 
 #### Decision
 
-LIVE — Phase 1 calibration complete. All three components (amendment penalty, cancellation race, post latency penalty) are implemented, verified by 696/696 tests, and empirical Phase 1 haircut numbers are established.
+OPEN — Post latency model invariant and crediting mechanics verified with 696/696 tests. Magnitudes are small-sample artifacts ($n = 4$ fills across 13 windows). Marked OPEN; Phase 2 requires collecting additional windows to satisfy the activity quorum ($\ge 500$ filled shares).
+
 
 
 
