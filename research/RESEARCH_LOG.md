@@ -2125,6 +2125,67 @@ The objectives were:
 
 LIVE — Observation layer upgraded to CLOB WebSocket streaming (median 5.84 ms interval, $295\times$ resolution gain). Fill engine small-$\Delta t$ verified with 699/699 passing tests. Session 64 verdict remains OPEN pending fast-cadence dataset collection.
 
+### 2026-08-16 (live execution & infrastructure, Session 66): on-chain Polygon balance audit, account onboarding architecture, and live-execution readiness checklist
+
+#### Observation & Question
+
+The owner's Polymarket account displays a $6.49 portfolio ($4.45 cash + $2.04 positions), but `py-clob-client` `get_balance_allowance` against the signing EOA returned `{'balance': '0', 'allowances': {...: '0'}}`. Because simulation results are only viable if live order placement can execute, this was prioritized as a program-level blocker.
+
+Objectives:
+1. Audit on-chain balances on Polygon for all three candidate addresses: Signer EOA (`0xD2C7F5514580184d32C70F6FEA95B69C5Cd72fa0`), Proxy wallet (`0xBa7c21Ac8968983e90BEcB989fe978889FEC266b`), and Deposit address (`0xF495052dA3a06eB189f6619e8eE197fe5EdC4c82`) across Native USDC (`0x3c49...`), Bridged USDC.e (`0x2791...`), and native POL.
+2. Determine the onboarding architecture and verify `py-clob-client` / `py_order_utils` signature type capabilities.
+3. Identify the three CLOB allowance target contracts and inspect on-chain approvals.
+4. Produce a canonical Live-Execution Readiness Checklist.
+5. Review and harden `strategy/live_exec.py`.
+
+#### What We Observed & Investigated
+
+1. Queried Polygon RPC JSON-RPC endpoints (`https://polygon.drpc.org`, `https://1rpc.io/matic`) for `eth_getBalance`, `eth_getCode`, and ERC-20 `balanceOf` / `allowance` calls.
+2. Queried Polymarket Data-API (`data-api.polymarket.com/positions` and `activity`) to reconcile the portfolio value and position ownership.
+3. Inspected `py-clob-client 0.34.6` and `py_order_utils 0.3.2` source code for signature type implementations.
+4. Hardened `strategy/live_exec.py` with `.env` auto-loading, optional `--funder` override, and dict allowance parsing.
+
+#### Findings & Data
+
+1. **On-Chain Balance Matrix:**
+
+| Address | Type & Bytecode | Native POL | Native USDC (`0x3c49...`) | Bridged USDC.e (`0x2791...`) | CTF Positions |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Signer EOA (`0xD2C7...`)** | EOA (0 bytes) | `0.000000 POL` | `$0.000000` | `$0.000000` | 0 |
+| **Proxy (`0xBa7c...`)** | Gnosis Safe (294 bytes) | `0.000000 POL` | `$0.000000` | `$0.000000` | 1 ($2.04 BTC 5m Down, redeemable) |
+| **Deposit Addr (`0xF495...`)** | EIP-1167 Proxy (48 bytes) | `0.000000 POL` | `$0.000000` | `$0.000000` | 0 |
+
+*Reconciliation:* On-chain liquid USDC balance across all three Polygon addresses is strictly `$0.00`. The $2.04 is held as an unredeemed winning conditional token position inside the Gnosis Safe proxy `0xBa7c...`. The $4.45 cash in UI is not liquid USDC on Polygon.
+
+2. **Onboarding Architecture & Signature Scheme:**
+   - Proxy `0xBa7c...` is a Gnosis Safe proxy created via MetaMask browser onboarding.
+   - Required signature scheme: `POLY_SIG_TYPE=2` (`signature_type=2`, `POLY_GNOSIS_SAFE`), with `POLY_FUNDER=0xBa7c21Ac8968983e90BEcB989fe978889FEC266b`.
+   - `py-clob-client 0.34.6` and `py_order_utils 0.3.2` natively support `POLY_GNOSIS_SAFE=2` (and `EOA=0`, `POLY_PROXY=1`). Neither library supports `signature_type=3` (`POLY_1271`), but `signature_type=2` is the correct match for this Gnosis Safe contract.
+
+3. **Allowance Targets & On-Chain Status:**
+   - `0xE111180000d2663C0091e4f400237545B87B996B`: Legacy Binary Exchange (allowance = $0.00).
+   - `0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296`: Neg Risk CTF Exchange (the active CLOB matching contract). **On-chain allowance for USDC.e is already $\infty$ ($1.1579 \times 10^{71}$)** on proxy `0xBa7c...`.
+   - `0xe2222d279d744050d28e00520010520000310F59`: Neg Risk Adapter (allowance = $0.00).
+   - Setting allowances through Polymarket UI is gasless (sponsored by Polymarket relayer). Direct on-chain approval requires ~0.02 POL.
+
+4. **Live-Execution Readiness Checklist:**
+
+| Check | Requirement | Current Value | Status |
+| :--- | :--- | :--- | :--- |
+| **1. Signer EOA** | Private key derives to verified EOA | `0xD2C7F5514580184d32C70F6FEA95B69C5Cd72fa0` | **PASS** |
+| **2. Funder Account** | Points to Gnosis Safe holding collateral | `0xBa7c21Ac8968983e90BEcB989fe978889FEC266b` | **PASS** |
+| **3. Signature Type** | `POLY_SIG_TYPE=2` (POLY_GNOSIS_SAFE) | Configured in `.env` | **PASS** |
+| **4. Client Library** | Version supports `POLY_GNOSIS_SAFE` | `py-clob-client 0.34.6` + `py_order_utils 0.3.2` | **PASS** |
+| **5. Exchange Allowance** | Infinite approval on `0xd91E...` | `1.1579e71` USDC.e approved on-chain | **PASS** |
+| **6. Collateral Balance** | $\ge \$5.00$ liquid USDC in funder | `$0.00` liquid ($2.04 unredeemed CTF) | **FAIL** (insufficient balance) |
+| **7. Gas Balance** | POL balance for direct on-chain fallback | `0.000000 POL` | **FAIL** (relayer dependent) |
+| **8. Safety Rails** | Caps & dry-run enforcement in `live_exec.py` | `MAX_ORDER_USD=25.0`, `MAX_TOTAL_USD=100.0` | **PASS** |
+
+#### Decision
+
+OPEN — Architecture and allowances verified (`POLY_SIG_TYPE=2`, `POLY_FUNDER=0xBa7c...`, infinite exchange approval active). Execution blocked strictly on liquid collateral funding ($\ge \$5.00$ USDC). Ready to trade immediately once wallet is funded.
+
+
 
 
 

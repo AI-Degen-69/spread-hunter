@@ -43,8 +43,17 @@ import os
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "run"
+
+# This module is a __main__ entry point and deliberately imports nothing from
+# the fleet, so net_config -- the only other place that reads .env -- never
+# runs here. Without this line a correct .env is invisible and the missing-key
+# error below fires anyway, which sends you hunting for a problem in the file
+# rather than in the loader.
+load_dotenv(ROOT / ".env")
 
 # Hard ceilings. Not configuration -- this is the difference between a POC and
 # an unbounded loss, so they live in code where a stray env var cannot raise
@@ -53,11 +62,16 @@ MAX_ORDER_USD = 25.0
 MAX_TOTAL_USD = 100.0
 
 
-def _client():
+def _client(funder: str | None = None):
     """Build a CLOB client from the environment. Raises if anything is absent.
 
     The key is read and passed on in a single expression: never bound to a
     module global, never returned, never in a log line.
+
+    `funder` overrides POLY_FUNDER for one call. That exists so a candidate
+    address can be balance-checked before it is committed to .env -- see the
+    signature-type note in the module docstring for why guessing it is the
+    expensive mistake.
     """
     from py_clob_client.client import ClobClient
 
@@ -66,7 +80,7 @@ def _client():
         raise SystemExit(
             "POLY_PRIVATE_KEY not set. Put it in .env -- and confirm .env is "
             "in .gitignore before you paste anything into it.")
-    funder = os.environ.get("POLY_FUNDER")
+    funder = funder or os.environ.get("POLY_FUNDER")
     sig_type = int(os.environ.get("POLY_SIG_TYPE", "1"))
     host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
 
@@ -116,6 +130,51 @@ def status() -> None:
         print(f"open orders    ERROR {type(e).__name__}: {e}")
     print("\nConfirm the address above is the account holding your USDC "
           "BEFORE sending anything.")
+
+
+def balance(funder: str | None) -> None:
+    """USDC the venue will actually let an order draw on. Read-only, no order.
+
+    A key that signs correctly against an account holding nothing is the
+    failure this command exists to catch: `status` looks perfectly healthy,
+    every order is rejected or unfillable, and nothing in the error text says
+    "wrong address". Pass --funder to test a candidate before editing .env.
+    """
+    from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+
+    who = funder or os.environ.get("POLY_FUNDER") or "(signer address)"
+    sig_type = int(os.environ.get("POLY_SIG_TYPE", "1"))
+    print(f"funder     {who}")
+    try:
+        # signature_type defaults to -1 in BalanceAllowanceParams, which asks
+        # about the signing EOA rather than the proxy that actually holds the
+        # money. On a proxy account that returns a truthful $0.00 about the
+        # wrong address -- indistinguishable from a misconfigured funder.
+        r = _client(funder).get_balance_allowance(
+            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL,
+                                   signature_type=sig_type))
+    except Exception as e:
+        print(f"           ERROR {type(e).__name__}: {e}")
+        return
+    print(f"raw        {r}")
+
+    # USDC on Polygon is 6dp and the API returns integer base units as strings.
+    bal = float(r.get("balance", 0) or 0) / 1e6
+    print(f"balance    ${bal:,.2f} USDC")
+    
+    allowances = r.get("allowances")
+    if isinstance(allowances, dict):
+        print("allowances:")
+        for target, amt in allowances.items():
+            allow_val = float(amt or 0) / 1e6
+            print(f"  {target[:10]}...: ${allow_val:,.2f}")
+    else:
+        allow = float(r.get("allowance", 0) or 0) / 1e6
+        print(f"allowance  ${allow:,.2f}")
+
+    if bal == 0:
+        print("\nZero. If your money is on Polymarket, POLY_FUNDER points at "
+              "the wrong address -- try the other candidate before trading.")
 
 
 def quote(condition_id: str, price: float, size: float, live: bool) -> None:
@@ -182,6 +241,9 @@ def main() -> None:
                     help="actually send. Without it, everything is a dry run.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
+    b = sub.add_parser("balance")
+    b.add_argument("--funder", default=None,
+                   help="test a candidate funder without editing .env")
     q = sub.add_parser("quote")
     q.add_argument("condition_id")
     q.add_argument("--price", type=float, required=True)
@@ -191,6 +253,8 @@ def main() -> None:
 
     if a.cmd == "status":
         status()
+    elif a.cmd == "balance":
+        balance(a.funder)
     elif a.cmd == "quote":
         quote(a.condition_id, a.price, a.size, a.live)
     else:
