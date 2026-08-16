@@ -233,6 +233,58 @@ def encode_redeem_positions(collateral_token: str, parent_collection_id: str,
     return "0x" + selector + p_col + p_parent + p_cond + offset + len_idx + elem_idx
 
 
+def build_redeem_typed_data(funder: str, nonce: int, deadline: int, call_data: str) -> tuple[dict, dict, dict]:
+    """Build EIP-712 typed data structures for DepositWallet.Batch."""
+    domain = {
+        "name": "DepositWallet",
+        "version": "1",
+        "chainId": 137,
+        "verifyingContract": funder,
+    }
+    types = {
+        "Call": [
+            {"name": "target", "type": "address"},
+            {"name": "value", "type": "uint256"},
+            {"name": "data", "type": "bytes"},
+        ],
+        "Batch": [
+            {"name": "wallet", "type": "address"},
+            {"name": "nonce", "type": "uint256"},
+            {"name": "deadline", "type": "uint256"},
+            {"name": "calls", "type": "Call[]"},
+        ],
+    }
+    call_bytes = bytes.fromhex(call_data[2:] if call_data.startswith("0x") else call_data)
+    message = {
+        "wallet": funder,
+        "nonce": int(nonce),
+        "deadline": int(deadline),
+        "calls": [
+            {
+                "target": CTF_CONTRACT,
+                "value": 0,
+                "data": call_bytes,
+            }
+        ],
+    }
+    return domain, types, message
+
+
+def sign_redeem_transaction(key: str, funder: str, nonce: int, deadline: int, call_data: str) -> tuple[str, str]:
+    """Sign DepositWallet EIP-712 Batch transaction with EOA key."""
+    from eth_account import Account
+    from eth_account.messages import encode_typed_data
+
+    domain, types, message = build_redeem_typed_data(funder, nonce, deadline, call_data)
+    typed = encode_typed_data(domain_data=domain, message_types=types, message_data=message)
+    signer_acc = Account.from_key(key)
+    signed = signer_acc.sign_message(typed)
+    sig = signed.signature.hex()
+    if not sig.startswith("0x"):
+        sig = "0x" + sig
+    return signer_acc.address, sig
+
+
 def redeem(condition_id: str, index_sets: list[int] | None = None,
            collateral: str = USDC_E_CONTRACT,
            parent_collection_id: str = ZERO_BYTES32,
@@ -283,25 +335,52 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
 
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "spread-hunter/1.0",
-        "x-api-key": relayer_key,
-        "x-api-key-address": relayer_addr,
+        "User-Agent": "Mozilla/5.0",
+        "RELAYER_API_KEY": relayer_key,
+        "RELAYER_API_KEY_ADDRESS": relayer_addr,
     }
 
+    # 1. Fetch transaction nonce from relayer
+    nonce_url = f"{relayer_url}/v1/account/transactions/params?address={signer}&type=WALLET"
+    req_nonce = urllib.request.Request(nonce_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req_nonce, timeout=10) as resp:
+            nonce_data = json.loads(resp.read().decode("utf-8"))
+            nonce = int(nonce_data.get("nonce", 0))
+    except Exception as exc:
+        raise SystemExit(f"Failed to fetch nonce from relayer: {exc}")
+
+    # 2. Sign EIP-712 Batch transaction
+    deadline = int(time.time()) + 3600
+    signer_addr, signature = sign_redeem_transaction(key, funder, nonce, deadline, call_data)
+
+    # 3. Construct relayer submit payload
     payload = {
-        "to": CTF_CONTRACT,
-        "data": call_data,
-        "value": "0",
-        "from": funder,
-        "signer": signer,
+        "type": "WALLET",
+        "from": signer_addr,
+        "to": "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07",
+        "nonce": nonce,
+        "signature": signature,
+        "metadata": "",
+        "depositWalletParams": {
+            "depositWallet": funder,
+            "deadline": deadline,
+            "calls": [
+                {
+                    "target": CTF_CONTRACT,
+                    "value": "0",
+                    "data": call_data,
+                }
+            ],
+        },
     }
 
-    req = urllib.request.Request(
+    req_submit = urllib.request.Request(
         f"{relayer_url}/submit",
         data=json.dumps(payload).encode("utf-8"),
         headers=headers,
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req_submit, timeout=30) as resp:
         res = json.loads(resp.read().decode("utf-8"))
 
     _log_order({
@@ -309,13 +388,14 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         "action": "REDEEM",
         "condition_id": condition_id,
         "safe_funder": funder,
-        "signer": signer,
+        "signer": signer_addr,
         "target": CTF_CONTRACT,
         "call_data": call_data,
         "response": str(res)[:400],
     })
     print(f"  RELAYER RESPONSE: {res}")
     print(f"\nlogged to {RUN / 'live_orders.json'}")
+
 
 
 def probe(series: str = "btc-up-or-down-5m",

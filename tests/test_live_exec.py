@@ -1,9 +1,13 @@
 import argparse
+import io
+import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from eth_account import Account
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -34,14 +38,132 @@ def test_live_exec_arg_parsing():
 
 
 def test_encode_redeem_positions():
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     res = le.encode_redeem_positions(
         le.USDC_E_CONTRACT,
         le.ZERO_BYTES32,
-        "0x" + "11" * 32,
+        cond_id,
         [1, 2]
     )
     assert res.startswith("0x01b7037c")
-    assert len(res) > 200
+    assert len(res) == 458  # 2 + 8 (selector) + 7 * 64 (params)
+    assert le.USDC_E_CONTRACT.lower().replace("0x", "") in res
+    assert cond_id.lower().replace("0x", "") in res
+
+
+def test_build_redeem_typed_data():
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    nonce = 121
+    deadline = 1786855000
+    call_data = "0x01b7037c" + "00" * 224
+
+    domain, types, message = le.build_redeem_typed_data(funder, nonce, deadline, call_data)
+    assert domain["name"] == "DepositWallet"
+    assert domain["version"] == "1"
+    assert domain["chainId"] == 137
+    assert domain["verifyingContract"] == funder
+
+    assert "Call" in types and "Batch" in types
+    assert len(types["Call"]) == 3
+    assert len(types["Batch"]) == 4
+
+    assert message["wallet"] == funder
+    assert message["nonce"] == nonce
+    assert message["deadline"] == deadline
+    assert len(message["calls"]) == 1
+    assert message["calls"][0]["target"] == le.CTF_CONTRACT
+    assert message["calls"][0]["value"] == 0
+
+
+def test_sign_redeem_transaction():
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    nonce = 121
+    deadline = 1786855000
+    call_data = "0x01b7037c" + "00" * 224
+
+    signer_addr, sig = le.sign_redeem_transaction(
+        acc.key.hex(),
+        funder,
+        nonce,
+        deadline,
+        call_data
+    )
+    assert signer_addr == acc.address
+    assert sig.startswith("0x")
+    assert len(sig) == 132  # 0x + 130 hex chars
+
+
+def test_redeem_dry_run():
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    # Should not throw and should print dry run message
+    le.redeem(cond_id, live=False)
+
+
+def test_redeem_live_mock():
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+    env_vars = {
+        "POLY_PRIVATE_KEY": acc.key.hex(),
+        "POLY_FUNDER": funder,
+        "RELAYER_API_KEY": "test_key",
+        "RELAYER_API_KEY_ADDRESS": "0x1234567890123456789012345678901234567890",
+        "RELAYER_URL": "https://relayer-v2.polymarket.com",
+    }
+
+    class MockResponse:
+        def __init__(self, data):
+            self.data = json.dumps(data).encode("utf-8")
+
+        def read(self):
+            return self.data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    recorded_requests = []
+
+    def mock_urlopen(req, timeout=30):
+        recorded_requests.append(req)
+        if "params" in req.full_url:
+            return MockResponse({"address": acc.address, "nonce": 121})
+        elif "submit" in req.full_url:
+            return MockResponse({"transactionHash": "0xabcdef1234567890", "status": "PENDING"})
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        le.redeem(cond_id, live=True)
+
+    assert len(recorded_requests) == 2
+    req_nonce, req_submit = recorded_requests
+
+    # Verify nonce request
+    assert "params" in req_nonce.full_url
+    assert req_nonce.headers["User-agent"] == "Mozilla/5.0"
+    assert req_nonce.headers["Relayer_api_key"] == "test_key"
+    assert req_nonce.headers["Relayer_api_key_address"] == "0x1234567890123456789012345678901234567890"
+
+    # Verify submit request payload
+    assert "submit" in req_submit.full_url
+    body = json.loads(req_submit.data.decode("utf-8"))
+    assert body["type"] == "WALLET"
+    assert body["from"] == acc.address
+    assert body["to"] == "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07"
+    assert body["nonce"] == 121
+    assert body["signature"].startswith("0x")
+    assert len(body["signature"]) == 132
+    assert "depositWalletParams" in body
+    params = body["depositWalletParams"]
+    assert params["depositWallet"] == funder
+    assert len(params["calls"]) == 1
+    assert params["calls"][0]["target"] == le.CTF_CONTRACT
+    assert len(params["calls"][0]["data"]) == 458
 
 
 def test_dry_run_probe():
@@ -52,5 +174,4 @@ def test_dry_run_probe():
             up_token="token_up_123",
             down_token="token_down_456",
         )
-        # probe dry run should return cleanly without making network calls or orders
         le.probe(series="btc-up-or-down-5m", cycles=5, live=False)
