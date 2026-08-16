@@ -824,3 +824,21 @@ def test_update_order_status_fails_closed_on_missing_row(registry: OrderRegistry
         registry.update_order_status(
             "00000000-0000-0000-0000-000000000000", "cancelled", 1723840000000
         )
+
+
+def test_get_trades_type_error_propagates(registry: OrderRegistry):
+    """TypeError raised during get_trades must propagate and not fall back to unfiltered get_trades."""
+    now_ms = 1723840000000
+    mock_client = MagicMock()
+    mock_client.get_open_orders.return_value = []
+    # If a fallback existed, the second call would return unfiltered trades instead of failing
+    mock_client.get_trades.side_effect = [
+        TypeError("internal parsing failure"),
+        [{"id": "unfiltered_1", "price": 0.5, "size": 10.0}],
+    ]
+
+    with pytest.raises(TypeError, match="internal parsing failure"):
+        reconcile_orders(mock_client, registry, current_ts_ms=now_ms)
+
+    assert mock_client.get_trades.call_count == 1
+

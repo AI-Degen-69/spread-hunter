@@ -555,17 +555,14 @@ def reconcile_orders(
 
     after_sec = max(0, int((earliest_polled_ts - TRADE_OVERLAP_MS) / 1000))
 
-    # Only a signature mismatch is caught. A 429, a 5xx or a socket error must
-    # propagate to the poll loop's backoff: returning an empty trade list here
-    # would let section 4 mark a filled order `cancelled` on absence alone,
-    # which is the same failure as marking one `filled` on absence alone.
-    try:
-        from py_clob_client_v2.clob_types import TradeParams
+    # Any query error (429, 5xx, socket error, or response parsing TypeError)
+    # must propagate to the poll loop's backoff: returning an empty trade list
+    # or falling back to an unbounded query here would corrupt attribution.
+    from py_clob_client_v2.clob_types import TradeParams
 
-        p = TradeParams(maker_address=maker_address, after=after_sec)
-        trades_raw = client.get_trades(params=p)
-    except TypeError:
-        trades_raw = client.get_trades()
+    p = TradeParams(maker_address=maker_address, after=after_sec)
+    trades_raw = client.get_trades(params=p)
+
 
     summary.trades_polled = len(trades_raw) if trades_raw else 0
     if trades_raw:
