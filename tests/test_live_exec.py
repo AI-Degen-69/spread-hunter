@@ -68,10 +68,13 @@ def test_build_redeem_typed_data():
     assert len(types["Batch"]) == 4
 
     assert message["wallet"] == funder
+    assert isinstance(message["nonce"], int)
     assert message["nonce"] == nonce
+    assert isinstance(message["deadline"], int)
     assert message["deadline"] == deadline
     assert len(message["calls"]) == 1
     assert message["calls"][0]["target"] == le.CTF_CONTRACT
+    assert isinstance(message["calls"][0]["value"], int)
     assert message["calls"][0]["value"] == 0
 
 
@@ -101,6 +104,9 @@ def test_redeem_dry_run():
 
 
 def test_redeem_live_mock():
+    """Verify gasless redemption request construction and wire types against
+    official client schema @polymarket/builder-relayer-client@0.0.10 dist/types.d.ts:147-154.
+    """
     acc = Account.create()
     funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
@@ -136,9 +142,19 @@ def test_redeem_live_mock():
             return MockResponse({"transactionHash": "0xabcdef1234567890", "status": "PENDING"})
         return MockResponse({})
 
+    import time
+    t_before = int(time.time())
     with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "sign_redeem_transaction", wraps=le.sign_redeem_transaction) as mock_sign, \
          patch("urllib.request.urlopen", side_effect=mock_urlopen):
         le.redeem(cond_id, live=True)
+    t_after = int(time.time())
+
+    # Assert EIP-712 signer arguments remain integer types for typed data hashing
+    mock_sign.assert_called_once()
+    sign_args = mock_sign.call_args[0]
+    assert isinstance(sign_args[2], int), "EIP-712 nonce passed to signer must be int"
+    assert isinstance(sign_args[3], int), "EIP-712 deadline passed to signer must be int"
 
     assert len(recorded_requests) == 2
     req_nonce, req_submit = recorded_requests
@@ -149,20 +165,27 @@ def test_redeem_live_mock():
     assert req_nonce.headers["Relayer_api_key"] == "test_key"
     assert req_nonce.headers["Relayer_api_key_address"] == "0x1234567890123456789012345678901234567890"
 
-    # Verify submit request payload
+    # Verify submit request payload wire types against @polymarket/builder-relayer-client@0.0.10 dist/types.d.ts:147-154
     assert "submit" in req_submit.full_url
     body = json.loads(req_submit.data.decode("utf-8"))
     assert body["type"] == "WALLET"
     assert body["from"] == acc.address
-    assert body["to"] == "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07"
-    assert body["nonce"] == 121
+    assert body["to"] == le.DEPOSIT_WALLET_FACTORY
+    assert isinstance(body["nonce"], str)
+    assert body["nonce"] == "121"
     assert body["signature"].startswith("0x")
     assert len(body["signature"]) == 132
+    assert "metadata" not in body
+
     assert "depositWalletParams" in body
     params = body["depositWalletParams"]
     assert params["depositWallet"] == funder
+    assert isinstance(params["deadline"], str)
+    assert t_before + le.REDEEM_DEADLINE_SECONDS <= int(params["deadline"]) <= t_after + le.REDEEM_DEADLINE_SECONDS
     assert len(params["calls"]) == 1
     assert params["calls"][0]["target"] == le.CTF_CONTRACT
+    assert isinstance(params["calls"][0]["value"], str)
+    assert params["calls"][0]["value"] == "0"
     assert len(params["calls"][0]["data"]) == 458
 
 

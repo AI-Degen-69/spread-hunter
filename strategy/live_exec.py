@@ -216,6 +216,11 @@ def quote(condition_id: str, price: float, size: float, live: bool) -> None:
 CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000"
+# Provenance: matches the 598s delta measured on transaction 0x66bc709b1a1d515d813e9d191a84b8863d8f2a251e1698a85d452152c7602135, block 92098496.
+REDEEM_DEADLINE_SECONDS = 600
+# Polymarket DepositWalletFactory address used by @polymarket/builder-relayer-client (config.DepositWalletFactory),
+# confirmed as outer 'to' of reference transaction 0x66bc709b1a1d515d813e9d191a84b8863d8f2a251e1698a85d452152c7602135.
+DEPOSIT_WALLET_FACTORY = "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07"
 
 
 def encode_redeem_positions(collateral_token: str, parent_collection_id: str,
@@ -351,20 +356,19 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         raise SystemExit(f"Failed to fetch nonce from relayer: {exc}")
 
     # 2. Sign EIP-712 Batch transaction
-    deadline = int(time.time()) + 3600
+    deadline = int(time.time()) + REDEEM_DEADLINE_SECONDS
     signer_addr, signature = sign_redeem_transaction(key, funder, nonce, deadline, call_data)
 
     # 3. Construct relayer submit payload
     payload = {
         "type": "WALLET",
         "from": signer_addr,
-        "to": "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07",
-        "nonce": nonce,
+        "to": DEPOSIT_WALLET_FACTORY,
+        "nonce": str(nonce),
         "signature": signature,
-        "metadata": "",
         "depositWalletParams": {
             "depositWallet": funder,
-            "deadline": deadline,
+            "deadline": str(deadline),
             "calls": [
                 {
                     "target": CTF_CONTRACT,
