@@ -40,8 +40,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -91,20 +93,125 @@ def _client(funder: str | None = None):
     return c
 
 
-def _log_order(rec: dict) -> None:
+def _atomic_write_json(file_path: Path, data: list) -> bool:
+    """Atomically writes JSON data to file_path via sibling temp file + os.fsync + os.replace."""
+    tmp_path = file_path.with_name(f"{file_path.name}.tmp.{uuid.uuid4()}")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as tf:
+            tf.write(json.dumps(data, indent=2))
+            tf.flush()
+            os.fsync(tf.fileno())
+        os.replace(tmp_path, file_path)
+        return True
+    except Exception as exc:
+        print(f"WARNING: _atomic_write_json failed for {file_path}: {exc}", file=sys.stderr)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def _log_order(rec: dict) -> str:
     RUN.mkdir(exist_ok=True)
     f = RUN / "live_orders.json"
     hist = []
     if f.exists():
         try:
             hist = json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
-            hist = []
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
+            corrupt_path = f.parent / f"live_orders.corrupt.{int(time.time())}.json"
+            try:
+                os.replace(f, corrupt_path)
+                print(f"WARNING: unreadable log file renamed to {corrupt_path}: {exc}", file=sys.stderr)
+                hist = []
+            except OSError as rename_exc:
+                print(
+                    f"ERROR: could not rename corrupt log file {f} to {corrupt_path}: {rename_exc}\n"
+                    f"Refusing to overwrite corrupted log file. Aborting.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(f"Refusing to overwrite corrupted log file {f}: {rename_exc}")
+    if "id" not in rec:
+        rec["id"] = str(uuid.uuid4())
     hist.append(rec)
-    f.write_text(json.dumps(hist, indent=2), encoding="utf-8")
+    if not _atomic_write_json(f, hist):
+        print(f"ERROR: failed to write log entry {rec['id']} to {f}", file=sys.stderr)
+        raise SystemExit(f"Failed to record pending log entry to {f}. Nothing was submitted.")
+    return rec["id"]
+
+
+
+
+def _update_order_log(entry_id: str, updates: dict) -> bool:
+    RUN.mkdir(exist_ok=True)
+    f = RUN / "live_orders.json"
+    if not f.exists():
+        return False
+    try:
+        hist = json.loads(f.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
+        print(f"WARNING: _update_order_log failed to read {f}: {exc}", file=sys.stderr)
+        return False
+
+    updated = False
+    for item in hist:
+        if isinstance(item, dict) and item.get("id") == entry_id:
+            item.update(updates)
+            updated = True
+            break
+
+    if updated:
+        return _atomic_write_json(f, hist)
+    return False
+
+
+def _check_idempotency_guard(condition_id: str, force: bool = False) -> None:
+    """Scan run/live_orders.json for prior pending/submitted/interrupted orders matching condition_id.
+    Refuses execution unless force is True.
+    """
+    if force:
+        return
+    f = RUN / "live_orders.json"
+    if not f.exists():
+        return
+    # Only the read and the parse belong inside the guard. Keeping the scan loop
+    # here too would report any error raised while walking the entries as
+    # "cannot read the order log", which is the wrong diagnosis for a file that
+    # read and parsed perfectly well.
+    try:
+        entries = json.loads(f.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
+        # Fail closed. An unreadable log is not an empty one. If it holds a
+        # pending row for this condition and we return quietly here, _log_order
+        # then quarantines the corrupt file and starts a fresh log, so that row
+        # leaves the active set and a second on-chain settlement goes out for a
+        # condition already in flight. _log_order treats the same condition as
+        # serious enough to abort the command; this guard must agree.
+        raise SystemExit(
+            f"Refusing to execute: cannot read the order log at {f} ({exc!r}). "
+            f"A prior in-flight order for {condition_id} cannot be ruled out. "
+            f"Inspect the file, or use --force to override."
+        ) from exc
+
+    if not isinstance(entries, list):
+        return
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        cid = entry.get("condition_id")
+        status = entry.get("status")
+        if cid and cid.lower() == condition_id.lower() and status in ("pending", "submitted", "interrupted"):
+            entry_id = entry.get("id", "unknown")
+            raise SystemExit(
+                f"Refusing to execute: prior order {entry_id} with condition_id {condition_id} "
+                f"has status='{status}'. Use --force to override."
+            )
 
 
 def _open_notional(c) -> float:
+
     try:
         orders = c.get_open_orders() or []
         return sum(float(o.get("price", 0) or 0)
@@ -238,7 +345,108 @@ def encode_redeem_positions(collateral_token: str, parent_collection_id: str,
     return "0x" + selector + p_col + p_parent + p_cond + offset + len_idx + elem_idx
 
 
+ALT_BN128_P = 21888242871839275222246405745257275088696311157297823662689037894645226208583
+ALT_BN128_B = 3
+
+
+def _alt_bn128_sqrt(x: int) -> int:
+    """Modular square root on F_P for alt_bn128 (P % 4 == 3)."""
+    return pow(x, (ALT_BN128_P + 1) // 4, ALT_BN128_P)
+
+
+def _alt_bn128_add(x1: int, y1: int, x2: int, y2: int) -> tuple[int, int]:
+    """Affine point addition on alt_bn128 (E: y^2 = x^3 + 3 over F_P).
+    Equivalent to EVM ecAdd precompile at address(6).
+    """
+    p = ALT_BN128_P
+    if x1 == 0 and y1 == 0:
+        return x2, y2
+    if x2 == 0 and y2 == 0:
+        return x1, y1
+    if x1 == x2:
+        if (y1 + y2) % p == 0:
+            return 0, 0
+        slope = (3 * x1 * x1) * pow(2 * y1, p - 2, p) % p
+    else:
+        slope = (y2 - y1) * pow(x2 - x1, p - 2, p) % p
+    x3 = (slope * slope - x1 - x2) % p
+    y3 = (slope * (x1 - x3) - y1) % p
+    return x3, y3
+
+
+def get_collection_id(parent_collection_id: str, condition_id: str, index_set: int) -> str:
+    """Construct an outcome collection ID from a parent collection and an outcome collection.
+    Canonical port of CTHelpers.sol:392-424 (gnosis/conditional-tokens-contracts).
+    """
+    from eth_utils import keccak
+    p = ALT_BN128_P
+    b = ALT_BN128_B
+
+    cond_bytes = bytes.fromhex(condition_id.lower().replace("0x", "").zfill(64))
+    idx_bytes = int(index_set).to_bytes(32, byteorder="big")
+    raw_hash = keccak(cond_bytes + idx_bytes)
+    x1 = int.from_bytes(raw_hash, byteorder="big")
+    odd = (x1 >> 255) != 0
+
+    while True:
+        x1 = (x1 + 1) % p
+        yy = (pow(x1, 3, p) + b) % p
+        y1 = _alt_bn128_sqrt(yy)
+        if (y1 * y1) % p == yy:
+            break
+
+    if (odd and y1 % 2 == 0) or (not odd and y1 % 2 == 1):
+        y1 = p - y1
+
+    x2 = int(parent_collection_id, 16) if parent_collection_id else 0
+    if x2 != 0:
+        odd_parent = (x2 >> 254) != 0
+        x2 = x2 & ((1 << 254) - 1)
+        yy_parent = (pow(x2, 3, p) + b) % p
+        y2 = _alt_bn128_sqrt(yy_parent)
+        if (odd_parent and y2 % 2 == 0) or (not odd_parent and y2 % 2 == 1):
+            y2 = p - y2
+        if (y2 * y2) % p != yy_parent:
+            raise ValueError("invalid parent collection ID")
+        x1, y1 = _alt_bn128_add(x1, y1, x2, y2)
+
+    if y1 % 2 == 1:
+        x1 ^= 1 << 254
+
+    return "0x" + hex(x1)[2:].zfill(64)
+
+
+
+def get_position_id(collateral_token: str, collection_id: str) -> str:
+    """Compute positionId = uint256(keccak256(abi.encodePacked(collateralToken, collectionId))).
+    Source: CTHelpers.sol getPositionId (gnosis/conditional-tokens-contracts).
+    """
+    from eth_utils import keccak
+    col_bytes = bytes.fromhex(collateral_token.lower().replace("0x", "").zfill(40))
+    coll_bytes = bytes.fromhex(collection_id.lower().replace("0x", "").zfill(64))
+    return str(int.from_bytes(keccak(col_bytes + coll_bytes), byteorder="big"))
+
+
+def encode_merge_positions(collateral_token: str, parent_collection_id: str,
+                           condition_id: str, index_sets: list[int],
+                           amount: int) -> str:
+    """Encode ABI call for ConditionalTokens.mergePositions(address,bytes32,bytes32,uint256[],uint256)
+    Selector: 0x9e7212ad (keccak256(b"mergePositions(address,bytes32,bytes32,uint256[],uint256)")[:4])
+    Source: ConditionalTokens.sol:165-171 (gnosis/conditional-tokens-contracts).
+    """
+    selector = "9e7212ad"
+    p_col = collateral_token.lower().replace("0x", "").zfill(64)
+    p_parent = parent_collection_id.lower().replace("0x", "").zfill(64)
+    p_cond = condition_id.lower().replace("0x", "").zfill(64)
+    offset = hex(160)[2:].zfill(64)  # 5 static words in head * 32 bytes = 160 = 0xa0
+    p_amount = hex(int(amount))[2:].zfill(64)
+    len_idx = hex(len(index_sets))[2:].zfill(64)
+    elem_idx = "".join(hex(int(idx))[2:].zfill(64) for idx in index_sets)
+    return "0x" + selector + p_col + p_parent + p_cond + offset + p_amount + len_idx + elem_idx
+
+
 def build_redeem_typed_data(funder: str, nonce: int, deadline: int, call_data: str) -> tuple[dict, dict, dict]:
+
     """Build EIP-712 typed data structures for DepositWallet.Batch."""
     domain = {
         "name": "DepositWallet",
@@ -368,14 +576,185 @@ def build_redeem_submit_payload(from_addr: str, funder: str, nonce: int | str,
     }
 
 
+def _submit_and_log(
+    action: str,
+    condition_id: str,
+    funder: str,
+    signer_addr: str,
+    call_data: str,
+    nonce: int | str,
+    deadline: int | str,
+    payload: dict,
+    headers: dict,
+    relayer_url: str,
+) -> None:
+    """Submit EIP-712 batch transaction to relayer with crash-safe pre-logging and atomic status updates."""
+    import urllib.request
+
+    req_submit = urllib.request.Request(
+        f"{relayer_url}/submit",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+    )
+
+    entry_id = _log_order({
+        "ts": time.time(),
+        "action": action,
+        "condition_id": condition_id,
+        "safe_funder": funder,
+        "signer": signer_addr,
+        "target": CTF_CONTRACT,
+        "call_data": call_data,
+        "nonce": nonce,
+        "deadline": deadline,
+        "payload": payload,
+        "status": "pending",
+    })
+
+    try:
+        with urllib.request.urlopen(req_submit, timeout=30) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+    except KeyboardInterrupt:
+        try:
+            log_ok = _update_order_log(entry_id, {
+                "status": "interrupted",
+                "error_type": "KeyboardInterrupt",
+                "error": "Execution interrupted by user during submit",
+            })
+        except Exception:
+            log_ok = False
+
+        record_dump = json.dumps({
+            "id": entry_id,
+            "action": action,
+            "condition_id": condition_id,
+            "safe_funder": funder,
+            "signer": signer_addr,
+            "target": CTF_CONTRACT,
+            "call_data": call_data,
+            "nonce": nonce,
+            "deadline": deadline,
+            "payload": payload,
+            "status": "interrupted",
+            "error_type": "KeyboardInterrupt",
+        }, indent=2)
+        print(
+            f"ERROR: Relayer submit interrupted by user (KeyboardInterrupt).\n"
+            f"Transaction was signed and may have been broadcast to relayer.\n"
+            f"Full in-flight transaction record:\n{record_dump}",
+            file=sys.stderr,
+        )
+        raise SystemExit(
+            f"Relayer submit interrupted (KeyboardInterrupt).\n"
+            f"Transaction was signed and may have been broadcast (nonce={nonce}, id={entry_id}).\n"
+            f"On-chain status must be checked manually before any retry."
+        )
+    except Exception as exc:
+        try:
+            log_ok = _update_order_log(entry_id, {
+                "status": "unknown",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            })
+        except Exception:
+            log_ok = False
+
+        if not log_ok:
+            record_dump = json.dumps({
+                "id": entry_id,
+                "action": action,
+                "condition_id": condition_id,
+                "safe_funder": funder,
+                "signer": signer_addr,
+                "target": CTF_CONTRACT,
+                "call_data": call_data,
+                "nonce": nonce,
+                "deadline": deadline,
+                "payload": payload,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }, indent=2)
+            print(
+                f"ERROR: Failed to update live_orders.json for entry_id={entry_id}.\n"
+                f"Full in-flight transaction record:\n{record_dump}",
+                file=sys.stderr,
+            )
+            raise SystemExit(
+                f"Relayer submit failed with {type(exc).__name__}: {exc}\n"
+                f"Transaction was signed and sent (nonce={nonce}, id={entry_id}).\n"
+                f"WARNING: Audit row in live_orders.json could NOT be updated (see stderr dump).\n"
+                f"On-chain status must be checked manually before any retry."
+            )
+        raise SystemExit(
+            f"Relayer submit failed with {type(exc).__name__}: {exc}\n"
+            f"Transaction was signed and sent (nonce={nonce}, id={entry_id}).\n"
+            f"On-chain status must be checked manually before any retry."
+        )
+
+    tx_hash = None
+    if isinstance(res, dict):
+        tx_hash = res.get("transactionHash") or res.get("transactionID") or res.get("id")
+
+    update_fields = {
+        "status": "submitted",
+        "response": json.dumps(res)[:400],
+    }
+    if tx_hash:
+        update_fields["tx_hash"] = tx_hash
+
+    try:
+        log_ok = _update_order_log(entry_id, update_fields)
+    except Exception as update_exc:
+        log_ok = False
+        update_err = str(update_exc)
+    else:
+        update_err = None
+
+    if not log_ok:
+        record_dump = json.dumps({
+            "id": entry_id,
+            "action": action,
+            "condition_id": condition_id,
+            "safe_funder": funder,
+            "signer": signer_addr,
+            "target": CTF_CONTRACT,
+            "call_data": call_data,
+            "nonce": nonce,
+            "deadline": deadline,
+            "payload": payload,
+            "tx_hash": tx_hash,
+            "status": "submitted",
+            "response": json.dumps(res)[:400],
+            "update_error": update_err,
+        }, indent=2)
+        print(
+            f"ERROR: Relayer accepted transaction (tx_hash={tx_hash}) but live_orders.json entry {entry_id} "
+            f"could NOT be updated to status='submitted' (row remains pending or missing in log).\n"
+            f"Full transaction record:\n{record_dump}",
+            file=sys.stderr,
+        )
+        raise SystemExit(
+            f"Relayer accepted transaction (tx_hash={tx_hash}), but audit log update failed.\n"
+            f"Transaction was signed and submitted (nonce={nonce}, id={entry_id}).\n"
+            f"On-chain status must be verified before any retry. See stderr for full transaction record."
+        )
+
+    print(f"  RELAYER RESPONSE: {json.dumps(res)[:400]}")
+    print(f"\nlogged to {RUN / 'live_orders.json'}")
+
+
 def redeem(condition_id: str, index_sets: list[int] | None = None,
            collateral: str = USDC_E_CONTRACT,
            parent_collection_id: str = ZERO_BYTES32,
            skip_resolution_check: bool = False,
+           force: bool = False,
            live: bool = False) -> None:
     """Gasless redemption of winning conditional tokens via Polymarket Relayer."""
     if index_sets is None:
         index_sets = [1, 2]
+
+    # Pre-flight Guard: Idempotency check
+    _check_idempotency_guard(condition_id, force=force)
 
     funder = os.environ.get("POLY_FUNDER", "")
     key = os.environ.get("POLY_PRIVATE_KEY")
@@ -396,6 +775,19 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         resolved_str = "unknown (RPC unreachable)"
     else:
         resolved_str = "yes" if denom > 0 else "no"
+
+    # Evaluated before the dry-run preview so the preview matches what --live does.
+    guard_failures: list[str] = []
+    if denom is None:
+        if not skip_resolution_check:
+            guard_failures.append(
+                f"Cannot determine resolution status for {condition_id}: all RPC endpoints failed. "
+                f"The market may well be resolved. Retry, or pass --skip-resolution-check to bypass."
+            )
+    elif denom == 0:
+        guard_failures.append(
+            f"Condition {condition_id} is not resolved yet (payoutDenominator == 0)."
+        )
 
     print("action          REDEEM (gasless via Polymarket Relayer)")
     print(f"target_ctf      {CTF_CONTRACT}")
@@ -421,18 +813,16 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         )
         print("\nsubmit_payload_preview (dry run - placeholder nonce/signature):")
         print(json.dumps(preview_payload, indent=2))
+        if guard_failures:
+            print("\nPRE-FLIGHT FAILED -- --live would refuse:")
+            for msg in guard_failures:
+                print(f"  - {msg}")
+            raise SystemExit(1)
         print("\nDRY RUN -- nothing sent. Re-run with --live to sign and submit to relayer.")
         return
 
-    # Pre-flight on-chain resolution guard
-    if denom is None:
-        if not skip_resolution_check:
-            raise SystemExit(
-                f"Cannot determine resolution status for {condition_id}: all RPC endpoints failed. "
-                f"The market may well be resolved. Retry, or pass --skip-resolution-check to bypass."
-            )
-    elif denom == 0:
-        raise SystemExit(f"Condition {condition_id} is not resolved yet (payoutDenominator == 0).")
+    if guard_failures:
+        raise SystemExit(guard_failures[0])
 
     relayer_key = os.environ.get("RELAYER_API_KEY")
     relayer_addr = os.environ.get("RELAYER_API_KEY_ADDRESS")
@@ -478,26 +868,246 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         call_data=call_data,
     )
 
-    req_submit = urllib.request.Request(
-        f"{relayer_url}/submit",
-        data=json.dumps(payload).encode("utf-8"),
+    # 4. Submit and log
+    _submit_and_log(
+        action="REDEEM",
+        condition_id=condition_id,
+        funder=funder,
+        signer_addr=signer_addr,
+        call_data=call_data,
+        nonce=nonce,
+        deadline=deadline,
+        payload=payload,
         headers=headers,
+        relayer_url=relayer_url,
     )
-    with urllib.request.urlopen(req_submit, timeout=30) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
 
-    _log_order({
-        "ts": time.time(),
-        "action": "REDEEM",
-        "condition_id": condition_id,
-        "safe_funder": funder,
-        "signer": signer_addr,
-        "target": CTF_CONTRACT,
-        "call_data": call_data,
-        "response": str(res)[:400],
-    })
-    print(f"  RELAYER RESPONSE: {res}")
-    print(f"\nlogged to {RUN / 'live_orders.json'}")
+
+def merge(condition_id: str,
+          amount: float,
+          index_sets: list[int] | None = None,
+          collateral: str = USDC_E_CONTRACT,
+          parent_collection_id: str = ZERO_BYTES32,
+          force: bool = False,
+          live: bool = False) -> None:
+    """Gasless merge of full outcome sets (UP + DOWN) back into USDC.e collateral."""
+    from strategy.config import MakerConfig
+    if index_sets is None:
+        index_sets = [1, 2]
+    amount_base_units = int(round(amount * 1e6))
+
+    # Pre-flight Guard 3: MAX_ORDER_USD ceiling
+    cost = amount * 1.0
+    if cost > MAX_ORDER_USD:
+        raise SystemExit(f"${cost:.2f} exceeds MAX_ORDER_USD ${MAX_ORDER_USD:.2f}")
+
+    # Pre-flight Guard 4: Idempotency check
+    _check_idempotency_guard(condition_id, force=force)
+
+    # Derive token IDs deterministically via CTF
+    token_ids = [
+        get_position_id(collateral, get_collection_id(parent_collection_id, condition_id, idx))
+        for idx in index_sets
+    ]
+    up_tok_id = token_ids[0] if len(token_ids) > 0 else ""
+    dn_tok_id = token_ids[1] if len(token_ids) > 1 else ""
+
+    funder = os.environ.get("POLY_FUNDER", "")
+    key = os.environ.get("POLY_PRIVATE_KEY")
+    signer = ""
+    if key:
+        from eth_account import Account
+        signer = Account.from_key(key).address
+
+    call_data = encode_merge_positions(
+        collateral_token=collateral,
+        parent_collection_id=parent_collection_id,
+        condition_id=condition_id,
+        index_sets=index_sets,
+        amount=amount_base_units,
+    )
+
+    denom = get_payout_denominator(condition_id)
+    if denom is None:
+        resolved_str = "unknown (RPC unreachable)"
+    else:
+        resolved_str = "yes" if denom > 0 else "no"
+
+    merge_gas = MakerConfig().merge_gas_usd
+    expected_collateral = amount * 1.00
+    net_collateral = expected_collateral - merge_gas
+
+
+    up_bal = 0.0
+    dn_bal = 0.0
+    # A balance we failed to read is not a balance of zero. Both fail closed,
+    # but only one of them tells the operator the truth: an RPC error, an auth
+    # failure and an unset POLY_FUNDER all rendered as "holds 0.00", which reads
+    # as "you do not own these tokens". Same rule reconcile_orders follows --
+    # a failed read must not be laundered into a state verdict.
+    balance_error: str | None = None
+    if not (key and funder):
+        balance_error = (
+            "Conditional token balances not queried: "
+            f"{'POLY_PRIVATE_KEY' if not key else 'POLY_FUNDER'} is unset"
+        )
+
+    # Query conditional token balances if client credentials available
+    if key and funder:
+        try:
+            from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
+            sig_type = int(os.environ.get("POLY_SIG_TYPE", "3"))
+            c = _client(funder)
+            if up_tok_id:
+                r_up = c.get_balance_allowance(
+                    BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=up_tok_id, signature_type=sig_type)
+                )
+                up_bal = float(r_up.get("balance", 0) or 0) / 1e6
+            if dn_tok_id:
+                r_dn = c.get_balance_allowance(
+                    BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=dn_tok_id, signature_type=sig_type)
+                )
+                dn_bal = float(r_dn.get("balance", 0) or 0) / 1e6
+        except Exception as exc:
+            balance_error = f"Conditional token balance query failed: {exc!r}"
+
+    # Pre-flight guards are evaluated HERE, before the dry-run preview, so the
+    # preview reports exactly what --live would do. A preview that succeeds where
+    # --live refuses manufactures false confidence in the operator.
+    guard_failures: list[str] = []
+    if balance_error is not None:
+        guard_failures.append(
+            f"{balance_error}. Holdings are unknown, not zero -- refusing rather "
+            f"than reporting a balance we did not read."
+        )
+    else:
+        if up_bal < amount:
+            guard_failures.append(
+                f"Insufficient balance on UP token ({up_tok_id}): holds {up_bal:.2f}, needs {amount:.2f} (short by {amount - up_bal:.2f})"
+            )
+        if dn_bal < amount:
+            guard_failures.append(
+                f"Insufficient balance on DOWN token ({dn_tok_id}): holds {dn_bal:.2f}, needs {amount:.2f} (short by {amount - dn_bal:.2f})"
+            )
+    if denom is None:
+        # `redeem` already refuses here unless --skip-resolution-check is passed.
+        # `merge` had neither the branch nor the flag, so an all-endpoints-down
+        # RPC read let a merge go out against a market that may already be
+        # resolved: a reverted relayer submission and an ambiguous audit row.
+        guard_failures.append(
+            f"Cannot determine resolution status for {condition_id}: every RPC endpoint failed. "
+            f"The condition may already be resolved, in which case merge is the wrong action."
+        )
+    elif denom > 0:
+        guard_failures.append(
+            f"Condition {condition_id} is already resolved (payoutDenominator == {denom} > 0). Use redeem instead."
+        )
+
+    print("action          MERGE (gasless via Polymarket Relayer)")
+    print(f"target_ctf      {CTF_CONTRACT}")
+    print(f"safe_funder     {funder or '(POLY_FUNDER not set)'}")
+    print(f"signer_eoa      {signer or '(POLY_PRIVATE_KEY not set)'}")
+    print(f"condition_id    {condition_id}")
+    print(f"resolved        {resolved_str}")
+    print(f"collateral      {collateral}")
+    print(f"index_sets      {index_sets}")
+    print(f"amount          {amount:.2f} shares ({amount_base_units} base units)")
+    # `up_bal` and `dn_bal` are still at their 0.0 initialisers when the balance
+    # query failed. Formatting them here would print "held: 0.00" directly above
+    # the guard line saying holdings are unknown, not zero -- the operator reads
+    # two contradictory statements and believes the number.
+    held_up = "unknown" if balance_error is not None else f"{up_bal:.2f}"
+    held_dn = "unknown" if balance_error is not None else f"{dn_bal:.2f}"
+    print(f"token_up        {up_tok_id} (held: {held_up})")
+    print(f"token_down      {dn_tok_id} (held: {held_dn})")
+    print(f"expected_usdc   ${expected_collateral:,.2f}")
+    print(f"estimated_gas   ${merge_gas:,.2f} (config.merge_gas_usd)")
+    print(f"net_collateral  ${net_collateral:,.2f}")
+    print(f"encoded_call    {call_data[:42]}... ({len(call_data)} chars)")
+
+    if not live:
+        preview_nonce = 0
+        preview_deadline = int(time.time()) + REDEEM_DEADLINE_SECONDS
+        preview_sig = "0x" + "00" * 65
+        preview_payload = build_redeem_submit_payload(
+            from_addr=signer or "0x0000000000000000000000000000000000000000",
+            funder=funder or "0x0000000000000000000000000000000000000000",
+            nonce=preview_nonce,
+            deadline=preview_deadline,
+            signature=preview_sig,
+            call_data=call_data,
+        )
+        print("\nsubmit_payload_preview (dry run - placeholder nonce/signature):")
+        print(json.dumps(preview_payload, indent=2))
+        if guard_failures:
+            print("\nPRE-FLIGHT FAILED -- --live would refuse:")
+            for msg in guard_failures:
+                print(f"  - {msg}")
+            raise SystemExit(1)
+        print("\nDRY RUN -- nothing sent. Re-run with --live to sign and submit to relayer.")
+        return
+
+    if guard_failures:
+        raise SystemExit(guard_failures[0])
+
+    relayer_key = os.environ.get("RELAYER_API_KEY")
+    relayer_addr = os.environ.get("RELAYER_API_KEY_ADDRESS")
+    if not relayer_key or not relayer_addr:
+        raise SystemExit(
+            "RELAYER_API_KEY and RELAYER_API_KEY_ADDRESS must be set in .env "
+            "for gasless live merge."
+        )
+    if not key or not funder:
+        raise SystemExit("POLY_PRIVATE_KEY and POLY_FUNDER must be set in .env")
+
+    import urllib.request
+    relayer_url = os.environ.get("RELAYER_URL", "https://relayer-v2.polymarket.com")
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0",
+        "RELAYER_API_KEY": relayer_key,
+        "RELAYER_API_KEY_ADDRESS": relayer_addr,
+    }
+
+    # 1. Fetch transaction nonce from relayer
+    nonce_url = f"{relayer_url}/v1/account/transactions/params?address={signer}&type=WALLET"
+    req_nonce = urllib.request.Request(nonce_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req_nonce, timeout=10) as resp:
+            nonce_data = json.loads(resp.read().decode("utf-8"))
+            nonce = int(nonce_data.get("nonce", 0))
+    except Exception as exc:
+        raise SystemExit(f"Failed to fetch nonce from relayer: {exc}")
+
+    # 2. Sign EIP-712 Batch transaction
+    deadline = int(time.time()) + REDEEM_DEADLINE_SECONDS
+    signer_addr, signature = sign_redeem_transaction(key, funder, nonce, deadline, call_data)
+
+    # 3. Construct relayer submit payload
+    payload = build_redeem_submit_payload(
+        from_addr=signer_addr,
+        funder=funder,
+        nonce=nonce,
+        deadline=deadline,
+        signature=signature,
+        call_data=call_data,
+    )
+
+    # 4. Submit and log
+    _submit_and_log(
+        action="MERGE",
+        condition_id=condition_id,
+        funder=funder,
+        signer_addr=signer_addr,
+        call_data=call_data,
+        nonce=nonce,
+        deadline=deadline,
+        payload=payload,
+        headers=headers,
+        relayer_url=relayer_url,
+    )
+
 
 
 
@@ -863,6 +1473,186 @@ def probe(series: str = "btc-up-or-down-5m",
             print(f"  - Cycle {g['cycle']}: {g['gap_duration_s']:.2f}s gap before window '{g['market_slug']}'")
 
 
+def poll(
+    interval: float = 5.0,
+    once: bool = False,
+    db_path: str | Path | None = None,
+    client=None,
+) -> None:
+    """Poll CLOB for open orders and fills, reconciling into order registry.
+
+    Operability features:
+    - Status line printed every cycle.
+    - Append-only event log (run/live_events.log).
+    - Atomic heartbeat (run/live_poll_heartbeat.json).
+    - Exponential backoff on 429 / 5xx capped at 60s.
+    - Clean SIGTERM / KeyboardInterrupt exit.
+    """
+    import datetime
+    import signal
+    from strategy.order_registry import (
+        OrderRegistry,
+        reconcile_orders,
+        compute_backoff_delay,
+        DEFAULT_DB_PATH,
+        ReconcileInProgress,
+    )
+
+    db_p = Path(db_path) if db_path else DEFAULT_DB_PATH
+    registry = OrderRegistry(db_path=db_p)
+
+    if client is None:
+        client = _client()
+
+    funder = os.environ.get("POLY_FUNDER")
+
+    stop_requested = False
+
+    def _sig_handler(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    try:
+        signal.signal(signal.SIGTERM, _sig_handler)
+    except (ValueError, AttributeError):
+        pass
+
+    event_log_path = RUN / "live_events.log"
+    heartbeat_path = RUN / "live_poll_heartbeat.json"
+    RUN.mkdir(exist_ok=True)
+
+    def _log_event(msg: str) -> None:
+        """Append one line to the event log. Never raises into the poll loop."""
+        try:
+            with open(event_log_path, "a", encoding="utf-8") as ef:
+                ef.write(f"{msg}\n")
+        except OSError as exc:
+            print(f"WARNING: event log write failed: {exc}", file=sys.stderr)
+
+    # START and STOP are written unconditionally, so the log exists from the
+    # first second of a run. Without them a quiet session leaves no file at all,
+    # and "it never started" is indistinguishable from "it ran and saw nothing"
+    # -- which is exactly the question the log is here to answer.
+    _boot_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _log_event(
+        f"[{_boot_iso}] START pid={os.getpid()} interval={interval}s once={once} db={db_p}"
+    )
+
+    consecutive_errors = 0
+    cycle = 0
+    last_cycle_failed = False
+
+    while not stop_requested:
+        cycle += 1
+        cycle_start = time.time()
+        now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        try:
+            summary = reconcile_orders(client, registry, maker_address=funder)
+            consecutive_errors = 0
+
+            # Log any state transitions to event log
+            if summary.transitions:
+                for t in summary.transitions:
+                    _log_event(f"[{now_iso}] {t}")
+
+            active = registry.get_active_orders()
+            open_count = sum(1 for o in active if o.status == "open")
+            partial_count = sum(1 for o in active if o.status == "partial")
+            pending_count = sum(1 for o in active if o.status == "pending")
+
+            elapsed = time.time() - cycle_start
+            print(
+                f"[POLL {now_iso}] orders={len(active)} (open={open_count} partial={partial_count} pending={pending_count}) | "
+                f"fills=+{summary.fills_recorded} (dup={summary.duplicates_ignored}) | "
+                f"open_orders={summary.open_orders_count} trades={summary.trades_polled} | "
+                f"cycle={elapsed:.2f}s | errors=0"
+            )
+
+        except KeyboardInterrupt:
+            # Ctrl-C is not an error. It is a BaseException, so the handler
+            # below never sees it, and the operator would get a traceback
+            # instead of a clean stop on the one process meant to run for hours.
+            stop_requested = True
+            _log_event(f"[{now_iso}] STOP KeyboardInterrupt during cycle {cycle}")
+            print(f"[POLL {now_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
+            break
+
+        except ReconcileInProgress as exc:
+            # Another pass holds the lock -- most often the operator running a
+            # one-shot reconcile from a second shell. That is contention, not a
+            # venue failure: counting it as an error would drive the exponential
+            # backoff to 60s and degrade the poller for something that resolves
+            # itself in milliseconds. Skip the cycle, keep the normal interval,
+            # leave consecutive_errors alone.
+            #
+            # A --once run still reports failure, because it genuinely did not
+            # reconcile and the caller must not read exit 0 as "state checked".
+            skip_msg = f"[POLL {now_iso}] SKIPPED cycle {cycle}: {exc}"
+            print(skip_msg, file=sys.stderr)
+            _log_event(skip_msg)
+            if once:
+                last_cycle_failed = True
+                break
+            if not stop_requested:
+                try:
+                    time.sleep(max(0.0, interval - (time.time() - cycle_start)))
+                except KeyboardInterrupt:
+                    stop_requested = True
+                    break
+                continue
+
+        except Exception as exc:
+            consecutive_errors += 1
+            last_cycle_failed = True
+            backoff_s = compute_backoff_delay(consecutive_errors, base_sec=2.0, max_sec=60.0)
+            err_msg = f"[POLL {now_iso}] ERROR (count={consecutive_errors}, backoff={backoff_s:.1f}s): {exc}"
+            print(err_msg, file=sys.stderr)
+            _log_event(err_msg)
+            if not once and not stop_requested:
+                try:
+                    time.sleep(backoff_s)
+                except KeyboardInterrupt:
+                    stop_requested = True
+                    break
+                continue
+
+        # Write heartbeat
+        hb_data = {
+            "ts": int(time.time() * 1000),
+            "iso": now_iso,
+            "pid": os.getpid(),
+            "cycle": cycle,
+            "errors": consecutive_errors,
+        }
+        _atomic_write_json(heartbeat_path, [hb_data])
+
+        if once or stop_requested:
+            break
+
+        sleep_time = max(0.0, interval - (time.time() - cycle_start))
+        try:
+            time.sleep(sleep_time)
+        except KeyboardInterrupt:
+            # Ctrl-C almost always lands here rather than mid-reconcile, since
+            # the loop spends nearly all its time asleep. It must announce
+            # itself the same way the mid-cycle handler does.
+            stop_requested = True
+            stop_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _log_event(f"[{stop_iso}] STOP KeyboardInterrupt while idle after cycle {cycle}")
+            print(f"[POLL {stop_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
+            break
+
+    exit_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _log_event(f"[{exit_iso}] EXIT cycles={cycle} errors={consecutive_errors}")
+
+    # A --once run that failed its only cycle must exit non-zero. Returning 0
+    # after printing an error to stderr makes the failure invisible to any
+    # supervisor, cron entry or shell check that reads the exit status.
+    if once and last_cycle_failed:
+        sys.exit(1)
+
+
 def cancel_all(live: bool) -> None:
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
@@ -891,7 +1681,18 @@ def main() -> None:
     r.add_argument("--collateral", default=USDC_E_CONTRACT, help="Collateral token (default: USDC.e)")
     r.add_argument("--skip-resolution-check", action="store_true",
                    help="Bypass RPC resolution guard if RPC endpoints are unreachable (does not bypass denom == 0).")
+    r.add_argument("--force", action="store_true",
+                   help="Bypass idempotency guard against prior pending/submitted/interrupted orders.")
     r.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                  help="actually send.")
+    m = sub.add_parser("merge", help="Gasless merge of full outcome sets via Relayer.")
+    m.add_argument("condition_id", help="Condition ID to merge")
+    m.add_argument("--amount", type=float, required=True, help="Number of shares / pairs to merge")
+    m.add_argument("--index-sets", default="1,2", help="Comma-separated index sets (default: 1,2)")
+    m.add_argument("--collateral", default=USDC_E_CONTRACT, help="Collateral token (default: USDC.e)")
+    m.add_argument("--force", action="store_true",
+                   help="Bypass idempotency guard against prior pending/submitted/interrupted orders.")
+    m.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
     p = sub.add_parser("probe", help="Multi-cycle live latency probe across dynamic series windows.")
     p.add_argument("--series", default="btc-up-or-down-5m", help="Series slug (default: btc-up-or-down-5m)")
@@ -903,6 +1704,10 @@ def main() -> None:
     p.add_argument("--max-fills", type=int, default=1, help="Max allowable fills before abort (default: 1)")
     p.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
+    pl = sub.add_parser("poll", help="Poll CLOB and reconcile orders and fills.")
+    pl.add_argument("--interval", type=float, default=5.0, help="Cadence in seconds (default: 5.0)")
+    pl.add_argument("--once", action="store_true", help="Reconcile once and exit")
+    pl.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -923,6 +1728,17 @@ def main() -> None:
             index_sets=idx_sets,
             collateral=a.collateral,
             skip_resolution_check=a.skip_resolution_check,
+            force=a.force,
+            live=is_live,
+        )
+    elif a.cmd == "merge":
+        idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
+        merge(
+            a.condition_id,
+            amount=a.amount,
+            index_sets=idx_sets,
+            collateral=a.collateral,
+            force=a.force,
             live=is_live,
         )
     elif a.cmd == "probe":
@@ -936,6 +1752,8 @@ def main() -> None:
             max_fills=a.max_fills,
             live=is_live,
         )
+    elif a.cmd == "poll":
+        poll(interval=a.interval, once=a.once, db_path=a.db)
     else:
         cancel_all(is_live)
 

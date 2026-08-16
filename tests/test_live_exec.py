@@ -175,9 +175,10 @@ def test_build_redeem_submit_payload():
     assert params["calls"][0]["data"] == call_data
 
 
-def test_redeem_dry_run():
+def test_redeem_dry_run(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=1) as mock_denom, \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1) as mock_denom, \
          patch("urllib.request.urlopen") as mock_url, \
          patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
         le.redeem(cond_id, live=False)
@@ -194,19 +195,35 @@ def test_redeem_dry_run():
     mock_denom.assert_called_once_with(cond_id)
 
 
-def test_redeem_dry_run_rpc_unreachable():
+def test_redeem_dry_run_rpc_unreachable(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=None), \
+    # Guards run in dry-run too, so an unreachable RPC is reported as a pre-flight
+    # failure rather than a clean preview: the dry run must match what --live does.
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=None), \
          patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
-        le.redeem(cond_id, live=False)
+        with pytest.raises(SystemExit):
+            le.redeem(cond_id, live=False)
 
     out = mock_stdout.getvalue()
     assert "resolved        unknown (RPC unreachable)" in out
+    assert "PRE-FLIGHT FAILED -- --live would refuse:" in out
+    assert "Cannot determine resolution status" in out
+
+    # With the bypass flag the same dry run previews cleanly.
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=None), \
+         patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+        le.redeem(cond_id, live=False, skip_resolution_check=True)
+
+    out = mock_stdout.getvalue()
+    assert "DRY RUN -- nothing sent" in out
 
 
-def test_redeem_live_unresolved_raises():
+def test_redeem_live_unresolved_raises(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=0), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=0), \
          patch("urllib.request.urlopen") as mock_url:
         with pytest.raises(SystemExit) as exc_info:
             le.redeem(cond_id, live=True)
@@ -214,9 +231,10 @@ def test_redeem_live_unresolved_raises():
     mock_url.assert_not_called()
 
 
-def test_redeem_live_unresolved_skip_check_still_raises():
+def test_redeem_live_unresolved_skip_check_still_raises(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=0), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=0), \
          patch("urllib.request.urlopen") as mock_url:
         with pytest.raises(SystemExit) as exc_info:
             le.redeem(cond_id, skip_resolution_check=True, live=True)
@@ -224,9 +242,10 @@ def test_redeem_live_unresolved_skip_check_still_raises():
     mock_url.assert_not_called()
 
 
-def test_redeem_live_unknown_resolution_raises():
+def test_redeem_live_unknown_resolution_raises(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=None), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=None), \
          patch("urllib.request.urlopen") as mock_url:
         with pytest.raises(SystemExit) as exc_info:
             le.redeem(cond_id, live=True)
@@ -237,7 +256,7 @@ def test_redeem_live_unknown_resolution_raises():
     mock_url.assert_not_called()
 
 
-def test_redeem_live_unknown_resolution_skip_check_proceeds():
+def test_redeem_live_unknown_resolution_skip_check_proceeds(tmp_path):
     acc = Account.create()
     funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
@@ -245,7 +264,8 @@ def test_redeem_live_unknown_resolution_skip_check_proceeds():
     recorded_requests = []
     mock_urlopen = make_mock_urlopen(recorded_requests)
 
-    with patch.dict(os.environ, env_vars, clear=False), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.dict(os.environ, env_vars, clear=False), \
          patch.object(le, "get_payout_denominator", return_value=None), \
          patch("urllib.request.urlopen", side_effect=mock_urlopen):
         le.redeem(cond_id, skip_resolution_check=True, live=True)
@@ -254,7 +274,7 @@ def test_redeem_live_unknown_resolution_skip_check_proceeds():
     assert "submit" in recorded_requests[1].full_url
 
 
-def test_redeem_live_mock():
+def test_redeem_live_mock(tmp_path):
     """Verify gasless redemption request construction and wire types against
     official client schema @polymarket/builder-relayer-client@0.0.10 dist/types.d.ts:147-154.
     """
@@ -267,7 +287,8 @@ def test_redeem_live_mock():
 
     import time
     t_before = int(time.time())
-    with patch.dict(os.environ, env_vars, clear=False), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.dict(os.environ, env_vars, clear=False), \
          patch.object(le, "get_payout_denominator", return_value=1), \
          patch.object(le, "sign_redeem_transaction", wraps=le.sign_redeem_transaction) as mock_sign, \
          patch("urllib.request.urlopen", side_effect=mock_urlopen):
@@ -314,7 +335,7 @@ def test_redeem_live_mock():
     assert len(params["calls"][0]["data"]) == 458
 
 
-def test_redeem_ignores_params_response_address():
+def test_redeem_ignores_params_response_address(tmp_path):
     """Regression guard: verify that the pool-worker address in the params response
     appears nowhere in the submitted batch payload.
     """
@@ -325,7 +346,8 @@ def test_redeem_ignores_params_response_address():
     recorded_requests = []
     mock_urlopen = make_mock_urlopen(recorded_requests)
 
-    with patch.dict(os.environ, env_vars, clear=False), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.dict(os.environ, env_vars, clear=False), \
          patch.object(le, "get_payout_denominator", return_value=1), \
          patch("urllib.request.urlopen", side_effect=mock_urlopen):
         le.redeem(cond_id, live=True)
@@ -337,6 +359,7 @@ def test_redeem_ignores_params_response_address():
     body = json.loads(raw_json)
     assert body["from"] != POOL_WORKER
     assert body["depositWalletParams"]["depositWallet"] != POOL_WORKER
+
 
 
 def test_get_payout_denominator_failover():
@@ -406,3 +429,449 @@ def test_dry_run_probe():
             down_token="token_down_456",
         )
         le.probe(series="btc-up-or-down-5m", cycles=5, live=False)
+
+
+def test_redeem_submit_http_error_logs_unknown(tmp_path):
+    """1. Submit raises HTTPError -> row exists with status='unknown', exception type and message recorded, non-zero exit."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    import urllib.error
+    def mock_urlopen_http_err(req, timeout=30):
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 504, "Gateway Timeout", {}, None)
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_http_err):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "signed and sent" in msg
+    assert "HTTPError" in msg
+
+    log_file = tmp_path / "live_orders.json"
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    rec = entries[0]
+    assert rec["action"] == "REDEEM"
+    assert rec["condition_id"] == cond_id
+    assert rec["status"] == "unknown"
+    assert rec["nonce"] == 121
+    assert "error_type" in rec and rec["error_type"] == "HTTPError"
+    assert "error" in rec and "504" in rec["error"]
+    assert "payload" in rec
+
+
+def test_redeem_submit_timeout_logs_unknown(tmp_path):
+    """2. Submit raises a timeout -> same outcome, distinct exception detail."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    import urllib.error
+    def mock_urlopen_timeout(req, timeout=30):
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            raise urllib.error.URLError("timed out")
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_timeout):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "signed and sent" in msg
+    assert "URLError" in msg
+
+    log_file = tmp_path / "live_orders.json"
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    rec = entries[0]
+    assert rec["action"] == "REDEEM"
+    assert rec["status"] == "unknown"
+    assert rec["error_type"] == "URLError"
+    assert "timed out" in rec["error"]
+
+
+def test_redeem_submit_success_single_row_submitted(tmp_path):
+    """3. Submit succeeds -> exactly one row, transitioning pending -> submitted, not two rows.
+    Asserts status is 'submitted' against a mock relayer response whose body says PENDING."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+    recorded_requests = []
+    # make_mock_urlopen returns {"transactionID": ..., "status": "PENDING"}
+    mock_urlopen = make_mock_urlopen(recorded_requests, submit_hash="0xdeadbeef12345678")
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        le.redeem(cond_id, live=True)
+
+    log_file = tmp_path / "live_orders.json"
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    rec = entries[0]
+    assert rec["action"] == "REDEEM"
+    assert rec["status"] == "submitted"
+    assert "0xdeadbeef12345678" in rec["response"]
+    assert rec["tx_hash"] == "0xdeadbeef12345678"
+    assert len(rec["response"]) <= 400
+    assert rec["nonce"] == 121
+    assert "payload" in rec
+
+
+def test_redeem_dry_run_writes_no_row(tmp_path):
+    """4. Dry-run writes no row at all."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+    def mock_urlopen_rpc(req, timeout=5):
+        return MockResponse({"jsonrpc": "2.0", "id": 1, "result": "0x0000000000000000000000000000000000000000000000000000000000000001"})
+
+    with patch.dict(os.environ, {}, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_rpc):
+        os.environ.pop("POLYGON_RPC", None)
+        le.redeem(cond_id, live=False)
+
+    log_file = tmp_path / "live_orders.json"
+    assert not log_file.exists()
+
+
+def test_audit_settlement_relayer_log_reader_finds_redeem_fixture(tmp_path):
+    """5. audit_settlement.py's relayer-log reader finds a REDEEM record in a fixture written by _log_order itself."""
+    import scripts.audit_settlement as audit
+
+    # Build the fixture using _log_order itself
+    log_file = tmp_path / "live_orders.json"
+    with patch.object(le, "RUN", tmp_path):
+        le._log_order({
+            "ts": 1723812345.67,
+            "action": "REDEEM",
+            "condition_id": "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f",
+            "safe_funder": "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b",
+            "signer": "0xD2C7F5514580184d32C70F6FEA95B69C5Cd72fa0",
+            "target": le.CTF_CONTRACT,
+            "call_data": "0x01b7037c...",
+            "nonce": 121,
+            "deadline": 1723812945,
+            "payload": {"type": "WALLET"},
+            "status": "submitted",
+            "tx_hash": "0x9876543210fedcba",
+            "response": json.dumps({"transactionHash": "0x9876543210fedcba", "status": "CONFIRMED"}),
+        })
+
+    def mock_relayer_get(req, timeout=5):
+        return MockResponse({"transactionHash": "0x9876543210fedcba", "state": "MINED", "status": "CONFIRMED"})
+
+    with patch("urllib.request.urlopen", side_effect=mock_relayer_get):
+        res = audit.check_relayer_status(log_file=log_file)
+
+    assert res.get("transactionHash") == "0x9876543210fedcba"
+    assert res.get("status") == "CONFIRMED"
+
+
+def test_redeem_submit_exception_log_update_failure_dumps_to_stderr(tmp_path, capsys):
+    """R9 Item 1: When submit fails AND _update_order_log fails (returns False),
+    SystemExit message states log update failed, and full transaction record reaches stderr."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    import urllib.error
+    def mock_urlopen_http_err(req, timeout=30):
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 504, "Gateway Timeout", {}, None)
+        return MockResponse({})
+
+    # Mock _update_order_log to simulate log file update failure
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch.object(le, "_update_order_log", return_value=False), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_http_err):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "signed and sent" in msg
+    assert "could NOT be updated" in msg
+
+    captured = capsys.readouterr()
+    assert "ERROR: Failed to update live_orders.json" in captured.err
+    assert "REDEEM" in captured.err
+    assert cond_id in captured.err
+    assert "121" in captured.err
+
+
+def test_log_order_corrupted_file_renamed_not_destroyed(tmp_path):
+    """R9 Item 2: Malformed live_orders.json is preserved under a .corrupt. name
+    and not overwritten on parse failure."""
+    corrupt_content = '{"broken": json['
+    log_file = tmp_path / "live_orders.json"
+    log_file.write_text(corrupt_content, encoding="utf-8")
+
+    with patch.object(le, "RUN", tmp_path):
+        entry_id = le._log_order({
+            "action": "REDEEM",
+            "condition_id": "0x1234",
+            "status": "pending",
+        })
+
+    # New log file exists and contains the new entry
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    assert entries[0]["id"] == entry_id
+
+    # The corrupted file was renamed and preserved
+    corrupt_files = list(tmp_path.glob("live_orders.corrupt.*.json"))
+    assert len(corrupt_files) == 1
+    assert corrupt_files[0].read_text(encoding="utf-8") == corrupt_content
+
+
+def test_atomic_write_json_interrupted_leaves_file_intact(tmp_path):
+    """R10 Item 1: Atomic write interrupted midway leaves the original file intact and valid."""
+    log_file = tmp_path / "live_orders.json"
+    original_data = [
+        {"id": "entry-1", "action": "REDEEM", "status": "pending"},
+        {"id": "entry-2", "action": "REDEEM", "status": "submitted"},
+    ]
+    log_file.write_text(json.dumps(original_data, indent=2), encoding="utf-8")
+
+    # Patch os.fsync to raise an IOError simulating an interrupted write
+    with patch("os.fsync", side_effect=IOError("Simulated disk error during fsync")):
+        res = le._atomic_write_json(log_file, [{"id": "entry-3", "action": "NEW"}])
+
+    assert res is False
+    # Original file is intact, uncorrupted, and parses cleanly
+    assert log_file.exists()
+    recovered = json.loads(log_file.read_text(encoding="utf-8"))
+    assert recovered == original_data
+
+
+def test_redeem_submit_success_log_update_failure_dumps_to_stderr(tmp_path, capsys):
+    """R10 Item 2: When submit succeeds but _update_order_log fails, SystemExit is raised,
+    stderr carries the transaction record and tx_hash, and message names the ambiguity."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+    mock_urlopen = make_mock_urlopen([], submit_hash="0xabcdef1234567890")
+
+    original_update = le._update_order_log
+
+    def mock_update_order_log(entry_id, updates):
+        # Allow pending write, fail submitted update
+        if updates.get("status") == "submitted":
+            return False
+        return original_update(entry_id, updates)
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch.object(le, "_update_order_log", side_effect=mock_update_order_log), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "Relayer accepted transaction" in msg
+    assert "audit log update failed" in msg
+    assert "0xabcdef1234567890" in msg
+
+    captured = capsys.readouterr()
+    assert "ERROR: Relayer accepted transaction" in captured.err
+    assert "0xabcdef1234567890" in captured.err
+    assert "submitted" in captured.err
+
+
+def test_redeem_submit_keyboard_interrupt_logs_interrupted(tmp_path, capsys):
+    """R10 Item 2: KeyboardInterrupt during submit stamps status='interrupted' and exits with warning."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    def mock_urlopen_interrupt(req, timeout=30):
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            raise KeyboardInterrupt()
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_interrupt):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "KeyboardInterrupt" in msg
+    assert "may have been broadcast" in msg
+
+    log_file = tmp_path / "live_orders.json"
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    assert entries[0]["status"] == "interrupted"
+    assert entries[0]["error_type"] == "KeyboardInterrupt"
+
+
+def test_log_order_corrupt_rename_failure_aborts_without_overwriting(tmp_path):
+    """R10 Item 4.1: If corrupt log file cannot be renamed, _log_order aborts via SystemExit rather than overwriting."""
+    corrupt_content = '{"broken": json['
+    log_file = tmp_path / "live_orders.json"
+    log_file.write_text(corrupt_content, encoding="utf-8")
+
+    # Patch os.replace to raise OSError when renaming corrupt file
+    with patch.object(le, "RUN", tmp_path), \
+         patch("os.replace", side_effect=OSError("Access denied during rename")):
+        with pytest.raises(SystemExit) as exc_info:
+            le._log_order({
+                "action": "REDEEM",
+                "condition_id": "0x1234",
+                "status": "pending",
+            })
+
+    assert "Refusing to overwrite corrupted log file" in str(exc_info.value)
+    # The file still has its original corrupt content, NOT overwritten
+    assert log_file.read_text(encoding="utf-8") == corrupt_content
+
+
+def test_log_order_write_failure_aborts_without_submitting(tmp_path):
+    """R11 Item 0a: If _atomic_write_json fails in _log_order, SystemExit is raised
+    naming the path, and submit urlopen is never reached."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    urls_called = []
+    def mock_urlopen(req, timeout=30):
+        urls_called.append(req.full_url)
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch.object(le, "_atomic_write_json", return_value=False), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "Failed to record pending log entry" in msg
+    assert "Nothing was submitted" in msg
+    # Crucial invariant: submit endpoint is NEVER called when pending log write fails
+    assert not any("submit" in u for u in urls_called)
+
+
+def test_derived_position_ids_match_canonical_cthelpers():
+    """Round-trip test verifying get_collection_id and get_position_id against real Polymarket CLOB token IDs.
+
+    Provenance:
+      Fetched from live Gamma API (https://gamma-api.polymarket.com/markets)
+      Market: 'Xi Jinping out before 2027?'
+      conditionId: '0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7'
+      clobTokenIds:
+        indexSet 1 (Yes): '32338220190071351435772801779725302244575775216413325951443816017994629993401'
+        indexSet 2 (No):  '25659310674993675562345759665114759892400026242514633218387667107987341231962'
+    """
+    cond_id = "0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7"
+    expected_token_id_1 = "32338220190071351435772801779725302244575775216413325951443816017994629993401"
+    expected_token_id_2 = "25659310674993675562345759665114759892400026242514633218387667107987341231962"
+
+    collection_id_1 = le.get_collection_id(le.ZERO_BYTES32, cond_id, 1)
+    pos_id_1 = le.get_position_id(le.USDC_E_CONTRACT, collection_id_1)
+
+    collection_id_2 = le.get_collection_id(le.ZERO_BYTES32, cond_id, 2)
+    pos_id_2 = le.get_position_id(le.USDC_E_CONTRACT, collection_id_2)
+
+    assert pos_id_1 == expected_token_id_1
+    assert pos_id_2 == expected_token_id_2
+
+
+# The round-trip test above only ever passes ZERO_BYTES32 as the parent, which is
+# all Polymarket itself uses. That leaves the entire `x2 != 0` branch of
+# get_collection_id — parent point decode, parity restore, curve check, and the
+# alt_bn128 point addition — with no coverage at all. The three tests below enter
+# that branch. Constants are conditionId-shaped but synthetic: the branch is pure
+# curve arithmetic and does not care whether a condition exists on chain.
+
+_COND_A = "0x" + "11" * 32
+_COND_B = "0x" + "22" * 32
+
+
+def test_non_zero_parent_collection_id_is_distinct_and_deterministic():
+    """A non-zero parent must change the result and must do so reproducibly."""
+    parent = le.get_collection_id(le.ZERO_BYTES32, _COND_A, 1)
+
+    with_parent = le.get_collection_id(parent, _COND_B, 1)
+    without_parent = le.get_collection_id(le.ZERO_BYTES32, _COND_B, 1)
+
+    # Well-formed: 0x + 64 hex chars, parseable as a 256-bit integer.
+    assert with_parent.startswith("0x")
+    assert len(with_parent) == 66
+    int(with_parent, 16)
+
+    # The parent point was actually added, not silently dropped.
+    assert with_parent != without_parent
+
+    # Same inputs, same output — no dependence on iteration order or state.
+    assert le.get_collection_id(parent, _COND_B, 1) == with_parent
+
+
+def test_collection_id_point_addition_is_order_independent():
+    """P_A + P_B == P_B + P_A: which condition acts as parent must not matter.
+
+    Each outcome point derives from (conditionId, indexSet) alone, so combining
+    two of them is commutative. If this fails, the parent decode or the point
+    addition is wrong, not the test.
+    """
+    parent_a = le.get_collection_id(le.ZERO_BYTES32, _COND_A, 1)
+    parent_b = le.get_collection_id(le.ZERO_BYTES32, _COND_B, 1)
+
+    a_then_b = le.get_collection_id(parent_a, _COND_B, 1)
+    b_then_a = le.get_collection_id(parent_b, _COND_A, 1)
+
+    assert a_then_b == b_then_a
+
+
+def test_parent_collection_id_off_the_curve_is_rejected():
+    """A parent x-coordinate with no square root must raise, not silently add garbage.
+
+    x = 4 is the smallest positive integer for which x^3 + 3 is a non-residue mod
+    the alt_bn128 field prime, so it cannot be the x-coordinate of any curve point.
+    """
+    off_curve_parent = "0x" + hex(4)[2:].zfill(64)
+
+    with pytest.raises(ValueError, match="invalid parent collection ID"):
+        le.get_collection_id(off_curve_parent, _COND_A, 1)
+
+
+

@@ -80,8 +80,8 @@ def fetch_data_api(addr: str) -> dict:
 
 def check_clob_balance_allowance(funder: str, sig_type: int) -> dict:
     try:
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        from py_clob_client_v2.client import ClobClient
+        from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
         from dotenv import load_dotenv
 
         load_dotenv()
@@ -104,23 +104,50 @@ def check_clob_balance_allowance(funder: str, sig_type: int) -> dict:
         return {"error": str(e)}
 
 
-def check_relayer_status(tx_id: str = None) -> dict:
+def check_relayer_status(tx_id: str | None = None, log_file: Path | str | None = None) -> dict:
+    last_status = None
     if not tx_id:
-        log_file = Path("run/live_orders.json")
-        if log_file.exists():
+        p = Path(log_file) if log_file is not None else Path("run/live_orders.json")
+        if p.exists():
             try:
-                for line in reversed(log_file.read_text().splitlines()):
-                    if line.strip():
-                        entry = json.loads(line)
-                        if entry.get("action") == "redeem_positions" and "relayer_response" in entry:
-                            resp = entry["relayer_response"]
-                            tx_id = resp.get("transactionID") or resp.get("id")
+                content = p.read_text(encoding="utf-8")
+                entries = json.loads(content)
+                if isinstance(entries, list):
+                    for entry in reversed(entries):
+                        if not isinstance(entry, dict):
+                            continue
+                        action = entry.get("action")
+                        if action in ("REDEEM", "redeem_positions"):
+                            last_status = entry.get("status")
+                            tx_id = entry.get("tx_hash") or entry.get("transactionHash") or entry.get("tx_id")
+                            if not tx_id:
+                                resp = entry.get("response") or entry.get("relayer_response")
+                                if isinstance(resp, dict):
+                                    tx_id = resp.get("transactionHash") or resp.get("transactionID") or resp.get("id")
+                                elif isinstance(resp, str):
+                                    try:
+                                        parsed = json.loads(resp)
+                                        if isinstance(parsed, dict):
+                                            tx_id = parsed.get("transactionHash") or parsed.get("transactionID") or parsed.get("id")
+                                    except (json.JSONDecodeError, ValueError):
+                                        pass
+                                    if not tx_id:
+                                        import re
+                                        m = re.search(r"['\"](?:transactionHash|transactionID|id)['\"]\s*:\s*['\"]([^'\"]+)['\"]", resp)
+                                        if m:
+                                            tx_id = m.group(1)
                             if tx_id:
                                 break
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                return {"error": f"Failed to parse {p}: {e}"}
+            except OSError as e:
+                return {"error": f"Failed to read {p}: {e}"}
+
     if not tx_id:
-        return {"status": "NO_RELAYER_TX_FOUND"}
+        res = {"status": "NO_RELAYER_TX_FOUND"}
+        if last_status:
+            res["log_status"] = last_status
+        return res
 
     url = f"https://relayer-v2.polymarket.com/transaction/{tx_id}"
     try:
