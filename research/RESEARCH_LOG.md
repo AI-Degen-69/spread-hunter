@@ -2800,3 +2800,32 @@ What happens when an exception inside `get_trades` is caught broadly, or when `g
 
 **LIVE** — Read-correctness defects fixed and verified against venue data; full suite at 764 passed.
 
+
+#### Addendum — three diagnostics defects from the follow-up review
+
+The re-review of the pushed commits raised four findings. Three were real and are fixed here; the
+fourth was rejected.
+
+`merge`'s report block formatted `up_bal` and `dn_bal` from their `0.0` initialisers regardless of
+whether the balance query had succeeded, so a failed read printed `token_up <id> (held: 0.00)`
+directly above the guard line stating that holdings are unknown, not zero. Two contradictory
+statements, and the number is the one an operator believes. The report now prints `unknown` when
+`balance_error` is set. The guard itself was already correct — this was the diagnostic lying, not
+the decision.
+
+The idempotency guard's `try` block wrapped the entry scan as well as the read and parse, so any
+error raised while walking the entries would have been reported as "cannot read the order log" —
+the wrong diagnosis for a file that read and parsed perfectly well. The `try` now covers only the
+read and the parse, and the re-raise chains the original exception (`raise ... from exc`).
+
+`test_get_trades_type_error_propagates` asserted only that `get_trades` was called once. That
+passes just as well if the implementation regresses to a single *unfiltered* `get_trades()`: a call
+count cannot tell a bounded query that raised from an unbounded one that raised. It now also
+asserts `params` is present in the call kwargs.
+
+**Rejected:** the review flagged this entry's `2026-08-17` date as future-dated against an
+August 16 review date. The commit is stamped `Mon Aug 17 01:31:08 2026 +0300`; the reviewer read
+the UTC instant, which falls on August 16. This log dates entries in local time — the two entries
+above it are dated `2026-08-16` on the same convention — so the date stands.
+
+Suite unchanged at **764 passed**.

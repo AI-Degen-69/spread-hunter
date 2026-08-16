@@ -841,4 +841,8 @@ def test_get_trades_type_error_propagates(registry: OrderRegistry):
         reconcile_orders(mock_client, registry, current_ts_ms=now_ms)
 
     assert mock_client.get_trades.call_count == 1
+    # Without this the test still passes if the implementation regresses to a
+    # single unfiltered get_trades() -- the count alone cannot tell a bounded
+    # query that raised from an unbounded one that raised.
+    assert "params" in mock_client.get_trades.call_args.kwargs
 

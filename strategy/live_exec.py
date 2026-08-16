@@ -176,21 +176,12 @@ def _check_idempotency_guard(condition_id: str, force: bool = False) -> None:
     f = RUN / "live_orders.json"
     if not f.exists():
         return
+    # Only the read and the parse belong inside the guard. Keeping the scan loop
+    # here too would report any error raised while walking the entries as
+    # "cannot read the order log", which is the wrong diagnosis for a file that
+    # read and parsed perfectly well.
     try:
         entries = json.loads(f.read_text(encoding="utf-8"))
-        if not isinstance(entries, list):
-            return
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            cid = entry.get("condition_id")
-            status = entry.get("status")
-            if cid and cid.lower() == condition_id.lower() and status in ("pending", "submitted", "interrupted"):
-                entry_id = entry.get("id", "unknown")
-                raise SystemExit(
-                    f"Refusing to execute: prior order {entry_id} with condition_id {condition_id} "
-                    f"has status='{status}'. Use --force to override."
-                )
     except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
         # Fail closed. An unreadable log is not an empty one. If it holds a
         # pending row for this condition and we return quietly here, _log_order
@@ -202,7 +193,21 @@ def _check_idempotency_guard(condition_id: str, force: bool = False) -> None:
             f"Refusing to execute: cannot read the order log at {f} ({exc!r}). "
             f"A prior in-flight order for {condition_id} cannot be ruled out. "
             f"Inspect the file, or use --force to override."
-        )
+        ) from exc
+
+    if not isinstance(entries, list):
+        return
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        cid = entry.get("condition_id")
+        status = entry.get("status")
+        if cid and cid.lower() == condition_id.lower() and status in ("pending", "submitted", "interrupted"):
+            entry_id = entry.get("id", "unknown")
+            raise SystemExit(
+                f"Refusing to execute: prior order {entry_id} with condition_id {condition_id} "
+                f"has status='{status}'. Use --force to override."
+            )
 
 
 def _open_notional(c) -> float:
@@ -1007,8 +1012,14 @@ def merge(condition_id: str,
     print(f"collateral      {collateral}")
     print(f"index_sets      {index_sets}")
     print(f"amount          {amount:.2f} shares ({amount_base_units} base units)")
-    print(f"token_up        {up_tok_id} (held: {up_bal:.2f})")
-    print(f"token_down      {dn_tok_id} (held: {dn_bal:.2f})")
+    # `up_bal` and `dn_bal` are still at their 0.0 initialisers when the balance
+    # query failed. Formatting them here would print "held: 0.00" directly above
+    # the guard line saying holdings are unknown, not zero -- the operator reads
+    # two contradictory statements and believes the number.
+    held_up = "unknown" if balance_error is not None else f"{up_bal:.2f}"
+    held_dn = "unknown" if balance_error is not None else f"{dn_bal:.2f}"
+    print(f"token_up        {up_tok_id} (held: {held_up})")
+    print(f"token_down      {dn_tok_id} (held: {held_dn})")
     print(f"expected_usdc   ${expected_collateral:,.2f}")
     print(f"estimated_gas   ${merge_gas:,.2f} (config.merge_gas_usd)")
     print(f"net_collateral  ${net_collateral:,.2f}")
