@@ -2613,3 +2613,45 @@ the reporting behaviour.
 
 **LIVE** — a preview that succeeds where the live path refuses is an instrumentation defect, not a
 convenience. Dry run and `--live` now share one guard evaluation.
+
+---
+
+### Session 72 — Stage 2: Order Registry and Live Fill Detection Loop (2026-08-16)
+
+#### Question
+
+How can live orders and trades be tracked and reconciled durably across process crashes and restarts without opening venue exposure?
+
+#### Method
+
+1. **Isolated SQLite Order Registry (`strategy/order_registry.py`):**
+   - Stored in `run/live.db` (strictly isolated from `run/fleet.db` simulator state).
+   - Local `uuid4` primary key generated and inserted before venue dispatch (`status='pending'`); venue `order_id` attached post-response.
+   - `size_matched` is strictly derived from `SUM(fills.size)` (no mutable column in `orders`), exposed via helper and `order_summary` SQL VIEW.
+   - `PRAGMA foreign_keys=ON` set per-connection on every connection to enforce `fills.order_uuid -> orders.id`.
+   - `PRAGMA journal_mode=WAL` for non-blocking concurrent reads during poll writes.
+   - `BEGIN IMMEDIATE` write transactions to prevent race conditions during reconcile passes.
+   - Float accumulation protected with `SIZE_EPS = 1e-9`; schema `CHECK` constraints on `status` and `side`.
+
+2. **Reconciliation & Orphan Adoption (`reconcile_orders`):**
+   - Single `get_open_orders()` fetch per cycle.
+   - 60-second trade query overlap (`after = min_polled_ts - 60s`) deduplicating idempotently on venue `trade_id`.
+   - Orphan adoption matching resting venue orders against pending local orders on `(token_id, price, original_size, posted_ts +/- 30s)`; unmatched orphans recorded as `unattributed`.
+   - Rows transition to `filled` strictly on trade evidence, never on absence alone (absence without trade evidence marks `cancelled`).
+
+3. **Operability & Long-Running Poll Subcommand (`strategy/live_exec.py`):**
+   - Added `poll` CLI subcommand with `--interval` (default 5.0s), `--once`, and custom `--db`.
+   - Exponential backoff sequence (`[2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0]`s) on 429/5xx errors without crashing.
+   - Per-cycle status line, append-only event logging (`run/live_events.log`), atomic heartbeat (`run/live_poll_heartbeat.json`), and clean `SIGTERM`/`KeyboardInterrupt` exit.
+
+4. **TDD Unit Testing (`tests/test_order_registry.py`):**
+   - 13 comprehensive tests covering all three schema invariants, replayed fill sequences, mid-sequence restart equivalence from disk, boundary-second trade deduplication, duplicate trade handling across poll cycles, orphan adoption, backoff arithmetic, and absence disambiguation.
+
+#### Result
+
+All 13 order registry tests pass. Entire test suite passes at **752/752** (up from 739 baseline, delta +13). `python -m strategy.live_exec poll --once` executed read-only against venue, printed structured status line, and exited cleanly.
+
+#### Decision
+
+**LIVE** — Stage 2 order registry and fill detection loop complete, read-only against venue, crash-safe, and locked.
+

@@ -1365,6 +1365,115 @@ def probe(series: str = "btc-up-or-down-5m",
             print(f"  - Cycle {g['cycle']}: {g['gap_duration_s']:.2f}s gap before window '{g['market_slug']}'")
 
 
+def poll(
+    interval: float = 5.0,
+    once: bool = False,
+    db_path: str | Path | None = None,
+    client=None,
+) -> None:
+    """Poll CLOB for open orders and fills, reconciling into order registry.
+
+    Operability features:
+    - Status line printed every cycle.
+    - Append-only event log (run/live_events.log).
+    - Atomic heartbeat (run/live_poll_heartbeat.json).
+    - Exponential backoff on 429 / 5xx capped at 60s.
+    - Clean SIGTERM / KeyboardInterrupt exit.
+    """
+    import datetime
+    import signal
+    from strategy.order_registry import (
+        OrderRegistry,
+        reconcile_orders,
+        compute_backoff_delay,
+        DEFAULT_DB_PATH,
+    )
+
+    db_p = Path(db_path) if db_path else DEFAULT_DB_PATH
+    registry = OrderRegistry(db_path=db_p)
+
+    if client is None:
+        client = _client()
+
+    funder = os.environ.get("POLY_FUNDER")
+
+    stop_requested = False
+
+    def _sig_handler(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    try:
+        signal.signal(signal.SIGTERM, _sig_handler)
+    except (ValueError, AttributeError):
+        pass
+
+    event_log_path = RUN / "live_events.log"
+    heartbeat_path = RUN / "live_poll_heartbeat.json"
+    RUN.mkdir(exist_ok=True)
+
+    consecutive_errors = 0
+    cycle = 0
+
+    while not stop_requested:
+        cycle += 1
+        cycle_start = time.time()
+        now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        try:
+            summary = reconcile_orders(client, registry, maker_address=funder)
+            consecutive_errors = 0
+
+            # Log any state transitions to event log
+            if summary.transitions:
+                with open(event_log_path, "a", encoding="utf-8") as ef:
+                    for t in summary.transitions:
+                        ef.write(f"[{now_iso}] {t}\n")
+
+            active = registry.get_active_orders()
+            open_count = sum(1 for o in active if o.status == "open")
+            partial_count = sum(1 for o in active if o.status == "partial")
+            pending_count = sum(1 for o in active if o.status == "pending")
+
+            elapsed = time.time() - cycle_start
+            print(
+                f"[POLL {now_iso}] orders={len(active)} (open={open_count} partial={partial_count} pending={pending_count}) | "
+                f"fills=+{summary.fills_recorded} (dup={summary.duplicates_ignored}) | "
+                f"open_orders={summary.open_orders_count} trades={summary.trades_polled} | "
+                f"cycle={elapsed:.2f}s | errors=0"
+            )
+
+        except Exception as exc:
+            consecutive_errors += 1
+            backoff_s = compute_backoff_delay(consecutive_errors, base_sec=2.0, max_sec=60.0)
+            err_msg = f"[POLL {now_iso}] ERROR (count={consecutive_errors}, backoff={backoff_s:.1f}s): {exc}"
+            print(err_msg, file=sys.stderr)
+            with open(event_log_path, "a", encoding="utf-8") as ef:
+                ef.write(f"{err_msg}\n")
+            if not once and not stop_requested:
+                time.sleep(backoff_s)
+                continue
+
+        # Write heartbeat
+        hb_data = {
+            "ts": int(time.time() * 1000),
+            "iso": now_iso,
+            "pid": os.getpid(),
+            "cycle": cycle,
+            "errors": consecutive_errors,
+        }
+        _atomic_write_json(heartbeat_path, [hb_data])
+
+        if once or stop_requested:
+            break
+
+        sleep_time = max(0.0, interval - (time.time() - cycle_start))
+        try:
+            time.sleep(sleep_time)
+        except KeyboardInterrupt:
+            break
+
+
 def cancel_all(live: bool) -> None:
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
@@ -1416,6 +1525,10 @@ def main() -> None:
     p.add_argument("--max-fills", type=int, default=1, help="Max allowable fills before abort (default: 1)")
     p.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
+    pl = sub.add_parser("poll", help="Poll CLOB and reconcile orders and fills.")
+    pl.add_argument("--interval", type=float, default=5.0, help="Cadence in seconds (default: 5.0)")
+    pl.add_argument("--once", action="store_true", help="Reconcile once and exit")
+    pl.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -1450,7 +1563,6 @@ def main() -> None:
             live=is_live,
         )
     elif a.cmd == "probe":
-
         probe(
             series=a.series,
             token_id=a.token_id,
@@ -1461,6 +1573,8 @@ def main() -> None:
             max_fills=a.max_fills,
             live=is_live,
         )
+    elif a.cmd == "poll":
+        poll(interval=a.interval, once=a.once, db_path=a.db)
     else:
         cancel_all(is_live)
 
