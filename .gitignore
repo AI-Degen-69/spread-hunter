@@ -16,6 +16,7 @@ run/*.db
 run/*.db-*
 run/*.db.bak-*
 run/fleet_state.json
+run/live_orders.json
 # ranker output, same class as fleet_state.json above. near_misses.jsonl is
 # appended once per rank -- at a 600s rerank interval that is 144 lines/day,
 # each embedding every green card of that pass -- and pipeline.json is
@@ -43,10 +44,16 @@ archive/*
 # The i-have-adhd skill is tracked once, at .agents/skills/i-have-adhd/, which
 # is the path AGENTS.md cites. Its .claude/ twin is a symlink to an ABSOLUTE
 # path on the machine that installed it, so committing it would store one
-# developer's home directory and resolve nowhere else. The sibling
-# .claude/skills/maker/ is a real duplicated file rather than a link, which is
-# the convention to follow if this one ever needs a tracked twin.
+# developer's home directory and resolve nowhere else.
 .claude/skills/i-have-adhd
+
+# ECC (Extended Claude Capabilities) plugin output — auto-generated instincts,
+# identity profiles, tool manifests, and Codex configs. All superseded by
+# AGENTS.md and provide no value to this repo.
+.claude/homunculus/
+.claude/ecc-tools.json
+.claude/identity.json
+.codex/
 
 # python
 .venv/
