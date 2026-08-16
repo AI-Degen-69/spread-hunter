@@ -6,7 +6,10 @@ A maker strategy on the same market. It rests bids on BOTH outcomes rather than 
 
 **Measured against:** spread capture versus adverse selection, fill rate against real queue depth, and inventory balance — hedged markets have measured +\0.70/market versus -\0.95 when badly unbalanced.
 
-Simulation only. It never places a real order.
+Strategy decisions are simulated. The live path is not a stub: `strategy/live_exec.py` talks to the
+venue for real — one order was accepted on the live CLOB (`status='live'`,
+`research/RESEARCH_LOG.md:2203`) and gasless `redeem` submits through the relayer. What is forbidden
+is *opening exposure*; see Safety.
 
 ## Non-negotiable: keep the research log current on strategy changes
 
@@ -53,7 +56,17 @@ difference between the repos should be strategy-specific.
 
 ## Safety
 
-- **Never place a real order.** Paper simulation only.
+- **Staged exposure rule.** Venue calls are permitted only in the order that *closing*
+  capabilities land, and only where they cannot open exposure.
+  1. **Allowed now:** read-only queries, and `redeem` — it closes a position, never opens one.
+  2. **Dry-run is the default.** Every subcommand that can reach the venue takes `--live` through
+     `argparse.SUPPRESS`; without that flag nothing is sent.
+  3. **Forbidden until Stages 1–4 land and the Owner approves:** any order that opens or increases
+     exposure — resting a quote, crossing to complete a pair, the automated loop. A one-sided fill
+     with no live stop-loss rides unhedged to resolution at up to 100% loss of that leg.
+  4. `--live` on a newly built command needs Owner sign-off for that command, not once per session.
+
+  Stage list and current status: `.claude/reviews/SESSION-66-BRIEF.md` §5.
 - Hosted credentials are placeholders. Never deploy a real `PRIVATE_KEY`.
 - Deploy only to a **non-US region**: Binance returns HTTP 451 to US IPs, and
   the preflight will refuse to start rather than run blind.
