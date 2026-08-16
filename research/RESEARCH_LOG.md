@@ -2719,3 +2719,16 @@ an unmatched trade is counted rather than dropped; an unauthenticated client is 
 **LIVE** — Stage 2 hardened. Every venue read failure now reaches the poll loop's backoff instead of
 being laundered into a row transition.
 
+#### Addendum — operability, from a live 4-cycle run
+
+Running `poll --interval 5` for four cycles and interrupting it exposed two gaps, neither
+algorithmic. `run/live_events.log` did not exist at all: the file was only opened on a transition or
+an error, so a quiet session left nothing on disk and "it never started" was indistinguishable from
+"it ran and saw nothing" — the exact question the log exists to answer. And Ctrl-C during the idle
+sleep, which is where it lands almost every time since the loop is asleep for 96% of a 5-second
+cycle, exited silently rather than announcing itself the way the mid-cycle handler does. `START`,
+`STOP` and `EXIT` lines are now written unconditionally through a single `_log_event` helper that
+swallows `OSError` rather than killing the loop over a log write. Verified: a `--once` run now
+produces `START pid=47196 interval=5.0s once=True db=run\live.db` and `EXIT cycles=1 errors=0`.
+Heartbeat confirmed live at cycle 4 with `ts=1786912508948`. Suite unchanged at **756/756**.
+

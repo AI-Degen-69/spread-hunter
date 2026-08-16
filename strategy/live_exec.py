@@ -1412,6 +1412,23 @@ def poll(
     heartbeat_path = RUN / "live_poll_heartbeat.json"
     RUN.mkdir(exist_ok=True)
 
+    def _log_event(msg: str) -> None:
+        """Append one line to the event log. Never raises into the poll loop."""
+        try:
+            with open(event_log_path, "a", encoding="utf-8") as ef:
+                ef.write(f"{msg}\n")
+        except OSError as exc:
+            print(f"WARNING: event log write failed: {exc}", file=sys.stderr)
+
+    # START and STOP are written unconditionally, so the log exists from the
+    # first second of a run. Without them a quiet session leaves no file at all,
+    # and "it never started" is indistinguishable from "it ran and saw nothing"
+    # -- which is exactly the question the log is here to answer.
+    _boot_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _log_event(
+        f"[{_boot_iso}] START pid={os.getpid()} interval={interval}s once={once} db={db_p}"
+    )
+
     consecutive_errors = 0
     cycle = 0
     last_cycle_failed = False
@@ -1487,8 +1504,17 @@ def poll(
         try:
             time.sleep(sleep_time)
         except KeyboardInterrupt:
+            # Ctrl-C almost always lands here rather than mid-reconcile, since
+            # the loop spends nearly all its time asleep. It must announce
+            # itself the same way the mid-cycle handler does.
             stop_requested = True
+            stop_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _log_event(f"[{stop_iso}] STOP KeyboardInterrupt while idle after cycle {cycle}")
+            print(f"[POLL {stop_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
             break
+
+    exit_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _log_event(f"[{exit_iso}] EXIT cycles={cycle} errors={consecutive_errors}")
 
     # A --once run that failed its only cycle must exit non-zero. Returning 0
     # after printing an error to stderr makes the failure invisible to any
