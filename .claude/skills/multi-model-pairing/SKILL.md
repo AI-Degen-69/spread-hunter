@@ -1,25 +1,34 @@
 ---
 name: multi-model-pairing
-description: Use when setting up, coordinating, or operating a multi-model or dual-agent workflow where two or more AI models collaborate with distinct roles (architect vs executor), quota boundaries, and relay protocols.
+description: Use when setting up, coordinating, or operating a multi-model or dual-agent workflow where two or more AI models collaborate with distinct roles (Prime architect vs Sub executor), quota boundaries, and relay protocols.
 ---
 
 # Multi-Model Pairing
 
 ## Overview
 
-Multi-model pairing organizes two or more AI models into a high-leverage partnership across an asymmetric division of labor:
-- **The Owner (Human):** Oversees the project, resolves ambiguities, and relays messages.
-- **The Orchestrator / Architect:** Higher-reasoning model with strict quota or higher cost. Responsible for architecture, mathematical design, edge case critique, and strategic decisions.
-- **The Working Agent / Executor:** Tool-heavy, execution-focused model. Responsible for writing code, executing terminal commands, running test suites, querying databases, handling git flow, and generating empirical reports.
+Multi-model pairing organizes two or more AI models into a high-leverage partnership across an asymmetric division of labor.
+
+## Terminology
+
+These three names are used throughout this skill and in every message it generates. Use them consistently; do not substitute synonyms mid-session.
+
+| Name | Who | Responsibility |
+| :--- | :--- | :--- |
+| **Owner** | The human | Oversees the project, resolves ambiguities, relays messages between models, approves or vetoes direction. |
+| **Prime** | Higher-reasoning model, usually under strict quota or higher cost | Architecture, mathematical design, invariant definition, edge-case critique, strategic decisions. Issues directives. |
+| **Sub** | Tool-heavy, execution-focused model | Writes code, runs terminal commands and test suites, queries databases, manages git flow, produces empirical reports. Executes directives. |
+
+`Prime : Sub` follows the prime-contractor / subcontractor sense: an authority split, not a capability ranking. Sub is frequently the more capable *operator* — it holds the tools. Prime holds the decision.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                      Human Owner                        │
+│                          Owner                          │
 │                (Observes, Relays, Approves)             │
 └───────────────▲─────────────────────────▲───────────────┘
                 │ (Copy-Paste)            │ (Copy-Paste)
 ┌───────────────▼─────────────┐   ┌───────▼───────────────┐
-│   Orchestrator / Architect  │   │     Working Agent     │
+│            Prime            │   │          Sub          │
 │  - Strategic directives     │   │  - Direct tool access │
 │  - Math & anomaly critique  │   │  - File edits & tests │
 │  - Quota conservation       │   │  - Git & PR management│
@@ -30,71 +39,69 @@ Multi-model pairing organizes two or more AI models into a high-leverage partner
 
 ## Workflow
 
-### Step 1: Discover Models and Establish Roles
+### Step 1: Discover Models and Assign Seats
 
 **No model identity is assumed by this skill.** Either seat can be filled by any model, and the pairing changes between sessions and between projects. Never infer the participants from prior sessions, memory, project history, or the example text in this document.
 
 **On invocation, ask the Owner before generating anything** — before the handshake, before any directive, before reading the codebase. Ask in one round, as a compact set of questions:
 
 1. **Which model is the partner**, and through what environment does it run (IDE agent, CLI, chat window, API)?
-2. **Which seat does each model take** — Orchestrator / Architect, or Working Agent / Executor? Offer a recommendation based on the criteria below, but let the Owner decide.
+2. **Which seat does each model take — Prime or Sub?** Offer a recommendation based on the criteria below, but let the Owner decide.
 3. **What are the operational constraints** on each side (quota limits, rate limits, tool access, context size)?
 4. **What is the current objective** the pair is working toward?
 
 Skip a question only when the Owner has already answered it in this session or a project rules file states it explicitly. If the Owner is unsure about the seat assignment, apply the criteria below, state the recommendation in one line, and proceed once they confirm.
 
-Record the answers and use them to fill every `[Orchestrator Name]` / `[Working Agent Name]` placeholder downstream. If a model's capabilities are unfamiliar, look them up rather than guessing.
+Record the answers and use them to fill every `[Prime Model Name]` / `[Sub Model Name]` placeholder downstream. If a model's capabilities are unfamiliar, look them up rather than guessing.
 
-#### Determining Role Assignment
+#### Seat Assignment Criteria
 
-If the user is unsure how to split roles, evaluate the models based on functional capabilities and constraints (using general knowledge or web search if unfamiliar with a specific model):
+- **Prime:**
+  - Higher abstract reasoning depth, complex synthesis, or mathematical formulation capacity.
+  - Operates under strict rate limits, daily usage quotas, or higher compute cost.
+  - Focus: system design, strategic directives, invariant definitions, anomaly critique.
 
-- **Orchestrator / Architect Assignment:**
-  - Has higher abstract reasoning depth, complex synthesis, or mathematical formulation capacity.
-  - Operates under strict rate limits, daily usage quotas, or higher compute costs.
-  - Focus: High-level system design, strategic directives, invariant definitions, anomaly critique.
-
-- **Working Agent / Executor Assignment:**
-  - Has direct environment access (file system, terminal, test runners, git, databases).
-  - Has higher token availability, lower latency, or more flexible quota.
-  - Focus: Implementation, script writing, test fixture creation, database queries, execution and empirical reporting.
+- **Sub:**
+  - Direct environment access (file system, terminal, test runners, git, databases).
+  - Higher token availability, lower latency, or more flexible quota.
+  - Focus: implementation, script writing, test fixtures, database queries, execution and empirical reporting.
 
 ### Step 2: Generate the Partner Handshake Message
 
-Whenever a new model enters the loop or when initializing a partnership, generate a handshake introduction message for the human to copy-paste.
+Whenever a new model enters the loop or a partnership is initialized, generate a handshake message for the Owner to copy-paste. Fill the placeholders with the names captured in Step 1.
 
-#### Template A: From Working Agent / Executor POV (to Orchestrator)
+#### Template A: Sub POV (message to Prime)
 
 ```markdown
-Hey [Orchestrator Name],
+Hey [Prime Model Name],
 
-I am [Self Model Name] (operating as the local Working Agent / Executor).
+I am [Self Model Name], operating as **Sub** in this pairing.
 
-Our user has set up our collaboration with a clear division of labor:
-1. **Roles:** You are the lead Architect / Orchestrator. I am your engineering and execution counterpart.
-2. **Command Authority:** You provide strategy, directives, and specifications. I execute the code, run tests, query local databases, manage Git/PRs, and report findings back to you.
-3. **Quota Conservation:** Delegate all mechanical tasks, scripts, diagnostics, test runs, and data checks to me so you can save your reasoning quota for high-leverage architectural and mathematical decisions.
-4. **Communication:** We communicate via our user (relayed via copy-paste) in clean, structured, ADHD-compliant format (data first, bounded steps, <5 items).
+Our Owner has set up our collaboration with a clear division of labor:
+1. **Roles:** You are **Prime** — architecture and strategy. I am **Sub** — engineering and execution.
+2. **Command authority:** You provide strategy, directives, and specifications. I execute code, run tests, query local databases, manage git/PRs, and report findings back to you.
+3. **Quota conservation:** Delegate all mechanical work — scripts, diagnostics, test runs, data checks — to me, so your quota goes to architectural and mathematical decisions.
+4. **Communication:** Relayed by our Owner via copy-paste. Data first, bounded steps, under 5 items per message.
 
-[Optional: Add initial status, environment summary, or diagnostic report here]
+[Optional: initial status, environment summary, or diagnostic report]
 
-Awaiting your strategic directive for the next step.
+Awaiting your directive.
 ```
 
-#### Template B: From Orchestrator / Architect POV (to Working Agent)
+#### Template B: Prime POV (message to Sub)
 
 ```markdown
-Hey [Working Agent Name],
+Hey [Sub Model Name],
 
-I am [Self Model Name] (operating as the lead Architect / Orchestrator).
+I am [Self Model Name], operating as **Prime** in this pairing.
 
-Our user has paired us to optimize our workflow and execution speed:
-1. **Roles:** I focus on strategy, system architecture, mathematical models, anomaly critique, and high-level decision-making. You are the hands-on engineering executor with direct tool access.
-2. **Execution Authority:** When I issue a specification or diagnostic request, you own the implementation, script runs, local database queries, test suite execution, and git workflow. Do not wait for me to write boilerplate.
-3. **Reporting Protocol:** Report your findings in clean, data-first ADHD format (headline numbers, empirical tables, test results, and blockers). Never smooth over anomalies or small sample limitations.
-4. **Communication:** Relayed directly through our user. I will issue the strategic directives; you execute and report back the results.
+Our Owner has paired us to optimize workflow and execution speed:
+1. **Roles:** I am **Prime** — strategy, system architecture, mathematical models, anomaly critique, decisions. You are **Sub** — the hands-on executor with direct tool access.
+2. **Execution authority:** When I issue a specification or diagnostic request, you own implementation, script runs, database queries, test execution, and git workflow. Do not wait on me for boilerplate.
+3. **Reporting protocol:** Report data-first — headline numbers, empirical tables, test counts, blockers. Never smooth over anomalies or small-sample limitations.
+4. **Communication:** Relayed by our Owner. I issue directives; you execute and report results.
 
-[Optional: State the initial objective or first task specification here]
+[Optional: initial objective or first task specification]
 
 Ready for your confirmation on current environment state and baseline results.
 ```
@@ -103,26 +110,27 @@ Ready for your confirmation on current environment state and baseline results.
 
 ### Step 3: Operational Execution Protocol
 
-When operating as the **Working Agent / Executor**:
+When operating as **Sub**:
 
-1. **Never instruct the Orchestrator:** Do not give commands to the Architect. Report data, confirm results, present choices, and ask for their directive.
-2. **Run before reporting:** If the Orchestrator asks for a diagnostic, test, or check, execute the scripts and query the database first. Report the completed findings, not a promise to run them.
-3. **Highlight anomalies honestly:** If the Orchestrator's hypothesis or prediction fails or produces counter-intuitive metrics (e.g. sample size limitations, linear artifacts), report the exact numbers and underlying mechanics without smoothing over the data.
-4. **Maintain complete traceability:** Keep research logs, documentation mirrors, and PR branches fully synchronized and committed.
+1. **Never instruct Prime.** Report data, confirm results, present choices, request a directive.
+2. **Run before reporting.** If Prime asks for a diagnostic, test, or check, execute it first. Report completed findings, never a promise to run them.
+3. **Highlight anomalies honestly.** If Prime's hypothesis fails or produces counter-intuitive metrics (sample-size limits, linear artifacts), report the exact numbers and the mechanism without smoothing.
+4. **Maintain traceability.** Keep research logs, documentation mirrors, and branches synchronized and committed.
 
-When operating as the **Orchestrator / Architect**:
+When operating as **Prime**:
 
-1. **Delegate mechanics:** Avoid writing long boilerplate code blocks or doing manual string processing in chat. Specify the requirements, invariants, and edge cases, and instruct the Working Agent to implement and verify.
-2. **Focus on invariants and metrics:** Review the reported data against pre-registered criteria, look for sample size biases or instrumentation bugs, and issue clear next actions.
+1. **Delegate mechanics.** Do not write long boilerplate or hand-process strings in chat. Specify requirements, invariants, and edge cases; Sub implements and verifies.
+2. **Focus on invariants and metrics.** Review reported data against pre-registered criteria, hunt for sample-size bias and instrumentation bugs, issue clear next actions.
+3. **Ship both channels.** Every Prime turn follows Step 4.
 
 ---
 
-### Step 4: Dual-Channel Output (Mandatory)
+### Step 4: Dual-Channel Output (Mandatory for Prime)
 
-The Owner relays messages but should never have to decode machine-oriented prose to know what they are relaying. Every Orchestrator turn therefore ships **two channels in a single response**, in this order:
+The Owner relays messages but should never have to decode machine-oriented prose to know what they are relaying. Every Prime turn therefore ships **two channels in a single response**, in this order:
 
 1. **Channel 1 — Owner Brief.** Plain-English explanation, written for the human.
-2. **Channel 2 — Agent Directive.** The technical message, in a fenced block, for copy-paste to the Working Agent.
+2. **Channel 2 — Sub Directive.** The technical message, in a fenced block, for copy-paste to Sub.
 
 Never emit only one channel. A directive without a brief leaves the Owner relaying instructions they cannot evaluate; a brief without a directive produces nothing to relay.
 
@@ -134,13 +142,13 @@ Written as a stakeholder update, not a transcript. Constraints:
 - **Structure over prose:** headings, short paragraphs, a table when the directive carries more than two items.
 - **No jargon without translation.** If a technical term is unavoidable, define it inline in everyday words the first time it appears.
 - **Explain the reasoning, not just the content.** For each directive item, say what it asks for *and* why it helps or what failure it prevents. The Owner should be able to judge whether the plan is sound.
-- **Lead with the decision.** If the Orchestrator is approving, halting, or reversing something, that is the first line.
+- **Lead with the decision.** If Prime is approving, halting, or reversing something, that is the first line.
 - **Length ceiling:** shorter than the directive it explains. Cut filler, recaps, and closers.
 
 Recommended skeleton:
 
 ```markdown
-## ✅ What the Working Agent delivered
+## ✅ What Sub delivered
 [One or two sentences. Concrete outcomes only.]
 
 ## 🛑 The decision and why
@@ -155,12 +163,12 @@ Recommended skeleton:
 [Current verdict, what is gated on what, what happens next.]
 ```
 
-#### Channel 2 — Agent Directive (model-facing)
+#### Channel 2 — Sub Directive (model-facing)
 
 Optimized for another model's comprehension, not human readability. Any format is acceptable — prose, numbered specs, tables, pseudo-schema, JSON — chosen for whatever transmits the specification most precisely.
 
 - **Precision over politeness.** Exact figures, units, sample sizes, file paths, thresholds, and pass/fail criteria.
-- **State the reasoning chain**, so the Executor can detect when its own findings contradict the premise.
+- **State the reasoning chain**, so Sub can detect when its own findings contradict the premise.
 - **Bound the scope explicitly.** Name what must *not* change as clearly as what must.
 - **Close with the expected report shape**, so the return message is directly comparable to the request.
 - Do not simplify, soften, or translate for the human here. That work belongs in Channel 1.
@@ -170,9 +178,9 @@ Optimized for another model's comprehension, not human readability. Any format i
 > **Channel 1 (Owner Brief):**
 >
 > ## 🛑 Holding the data collection
-> The new recorder reads 300× faster, which fixes the original problem. But it also revealed that every reading carries a timing error larger than the effect we are trying to measure. Collecting more data now would give us a confident-looking answer built on a broken ruler — so I asked the Executor to calibrate the clock before gathering anything else.
+> The new recorder reads 300× faster, which fixes the original problem. But it also revealed that every reading carries a timing error larger than the effect we are trying to measure. Collecting more data now would give us a confident-looking answer built on a broken ruler — so I asked Sub to calibrate the clock before gathering anything else.
 >
-> **Channel 2 (Agent Directive):**
+> **Channel 2 (Sub Directive):**
 >
 > ```markdown
 > Cadence resolved: 1,727.8 ms -> 5.84 ms median. Do not begin collection.
@@ -189,10 +197,11 @@ Optimized for another model's comprehension, not human readability. Any format i
 
 | Anti-Pattern | Why It Fails | Correct Action |
 | :--- | :--- | :--- |
-| **Executor commanding the Orchestrator** | Inverts authority and wastes reasoning quota on conversational ping-pong. | Executor presents data and asks: "Awaiting your directive." |
-| **Orchestrator doing mechanical coding** | Burns expensive tokens and quota on boilerplate that a faster model can write and test locally. | Orchestrator specifies invariants; Executor writes and tests code. |
-| **Unverified claims** | Promising results before executing test suites or reading DB rows causes hallucinated progress. | Executor runs the tool/script first, then reports exact terminal output. |
-| **Nuance negotiation** | Long, conversational debates about minor styling. | Follow bounded, numbered checklists and strict ADHD-style summaries. |
-| **Assuming who is in the pairing** | Model seats change between sessions and projects. Guessing from memory or a previous session produces a handshake addressed to the wrong model with the wrong constraints. | Ask the Owner on invocation (Step 1); never infer the participants from history or from this document's examples. |
-| **Single-channel output** | Emitting only the technical directive forces the Owner to relay decisions they cannot evaluate; emitting only the human brief leaves nothing to relay. | Ship both channels every turn: Owner Brief first, then the fenced Agent Directive (Step 4). |
+| **Sub commanding Prime** | Inverts authority and burns reasoning quota on conversational ping-pong. | Sub presents data and asks: "Awaiting your directive." |
+| **Prime doing mechanical coding** | Spends expensive quota on boilerplate a faster model can write and test locally. | Prime specifies invariants; Sub writes and tests the code. |
+| **Unverified claims** | Reporting results before running the suite or reading the rows produces hallucinated progress. | Sub runs the tool first, then reports exact output. |
+| **Nuance negotiation** | Long conversational debates over minor styling. | Bounded numbered checklists, under 5 items. |
+| **Assuming who is in the pairing** | Seats change between sessions and projects. Guessing from memory produces a handshake addressed to the wrong model with the wrong constraints. | Ask the Owner on invocation (Step 1); never infer participants from history or from this document's examples. |
+| **Single-channel output** | Emitting only the directive forces the Owner to relay decisions they cannot evaluate; emitting only the brief produces nothing to relay. | Ship both channels every Prime turn (Step 4). |
 | **Jargon leaking into the Owner Brief** | The brief exists so the Owner can approve or veto. Untranslated terms turn it into a second copy of the directive. | Translate every term inline; explain the *why* behind each item, not just its content. |
+| **Reading Prime : Sub as a skill ranking** | Sub usually holds better tools and more context budget; treating it as "the junior" wastes its capability and invites Prime to re-do its work. | The split is authority, not competence. Prime decides; Sub operates. |
