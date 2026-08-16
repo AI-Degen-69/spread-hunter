@@ -700,6 +700,19 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
     else:
         resolved_str = "yes" if denom > 0 else "no"
 
+    # Evaluated before the dry-run preview so the preview matches what --live does.
+    guard_failures: list[str] = []
+    if denom is None:
+        if not skip_resolution_check:
+            guard_failures.append(
+                f"Cannot determine resolution status for {condition_id}: all RPC endpoints failed. "
+                f"The market may well be resolved. Retry, or pass --skip-resolution-check to bypass."
+            )
+    elif denom == 0:
+        guard_failures.append(
+            f"Condition {condition_id} is not resolved yet (payoutDenominator == 0)."
+        )
+
     print("action          REDEEM (gasless via Polymarket Relayer)")
     print(f"target_ctf      {CTF_CONTRACT}")
     print(f"safe_funder     {funder or '(POLY_FUNDER not set)'}")
@@ -724,18 +737,16 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         )
         print("\nsubmit_payload_preview (dry run - placeholder nonce/signature):")
         print(json.dumps(preview_payload, indent=2))
+        if guard_failures:
+            print("\nPRE-FLIGHT FAILED -- --live would refuse:")
+            for msg in guard_failures:
+                print(f"  - {msg}")
+            raise SystemExit(1)
         print("\nDRY RUN -- nothing sent. Re-run with --live to sign and submit to relayer.")
         return
 
-    # Pre-flight on-chain resolution guard
-    if denom is None:
-        if not skip_resolution_check:
-            raise SystemExit(
-                f"Cannot determine resolution status for {condition_id}: all RPC endpoints failed. "
-                f"The market may well be resolved. Retry, or pass --skip-resolution-check to bypass."
-            )
-    elif denom == 0:
-        raise SystemExit(f"Condition {condition_id} is not resolved yet (payoutDenominator == 0).")
+    if guard_failures:
+        raise SystemExit(guard_failures[0])
 
     relayer_key = os.environ.get("RELAYER_API_KEY")
     relayer_addr = os.environ.get("RELAYER_API_KEY_ADDRESS")
@@ -873,6 +884,23 @@ def merge(condition_id: str,
         except Exception:
             pass
 
+    # Pre-flight guards are evaluated HERE, before the dry-run preview, so the
+    # preview reports exactly what --live would do. A preview that succeeds where
+    # --live refuses manufactures false confidence in the operator.
+    guard_failures: list[str] = []
+    if up_bal < amount:
+        guard_failures.append(
+            f"Insufficient balance on UP token ({up_tok_id}): holds {up_bal:.2f}, needs {amount:.2f} (short by {amount - up_bal:.2f})"
+        )
+    if dn_bal < amount:
+        guard_failures.append(
+            f"Insufficient balance on DOWN token ({dn_tok_id}): holds {dn_bal:.2f}, needs {amount:.2f} (short by {amount - dn_bal:.2f})"
+        )
+    if denom is not None and denom > 0:
+        guard_failures.append(
+            f"Condition {condition_id} is already resolved (payoutDenominator == {denom} > 0). Use redeem instead."
+        )
+
     print("action          MERGE (gasless via Polymarket Relayer)")
     print(f"target_ctf      {CTF_CONTRACT}")
     print(f"safe_funder     {funder or '(POLY_FUNDER not set)'}")
@@ -903,22 +931,16 @@ def merge(condition_id: str,
         )
         print("\nsubmit_payload_preview (dry run - placeholder nonce/signature):")
         print(json.dumps(preview_payload, indent=2))
+        if guard_failures:
+            print("\nPRE-FLIGHT FAILED -- --live would refuse:")
+            for msg in guard_failures:
+                print(f"  - {msg}")
+            raise SystemExit(1)
         print("\nDRY RUN -- nothing sent. Re-run with --live to sign and submit to relayer.")
         return
 
-    # Pre-flight Guard 1: Held balances check (Live mode)
-    if up_bal < amount:
-        raise SystemExit(
-            f"Insufficient balance on UP token ({up_tok_id}): holds {up_bal:.2f}, needs {amount:.2f} (short by {amount - up_bal:.2f})"
-        )
-    if dn_bal < amount:
-        raise SystemExit(
-            f"Insufficient balance on DOWN token ({dn_tok_id}): holds {dn_bal:.2f}, needs {amount:.2f} (short by {amount - dn_bal:.2f})"
-        )
-
-    # Pre-flight Guard 2: Resolution check (Live mode)
-    if denom is not None and denom > 0:
-        raise SystemExit(f"Condition {condition_id} is already resolved (payoutDenominator == {denom} > 0). Use redeem instead.")
+    if guard_failures:
+        raise SystemExit(guard_failures[0])
 
     relayer_key = os.environ.get("RELAYER_API_KEY")
     relayer_addr = os.environ.get("RELAYER_API_KEY_ADDRESS")

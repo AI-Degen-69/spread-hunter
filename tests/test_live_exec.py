@@ -197,13 +197,27 @@ def test_redeem_dry_run(tmp_path):
 
 def test_redeem_dry_run_rpc_unreachable(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    # Guards run in dry-run too, so an unreachable RPC is reported as a pre-flight
+    # failure rather than a clean preview: the dry run must match what --live does.
     with patch.object(le, "RUN", tmp_path), \
          patch.object(le, "get_payout_denominator", return_value=None), \
          patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
-        le.redeem(cond_id, live=False)
+        with pytest.raises(SystemExit):
+            le.redeem(cond_id, live=False)
 
     out = mock_stdout.getvalue()
     assert "resolved        unknown (RPC unreachable)" in out
+    assert "PRE-FLIGHT FAILED -- --live would refuse:" in out
+    assert "Cannot determine resolution status" in out
+
+    # With the bypass flag the same dry run previews cleanly.
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=None), \
+         patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+        le.redeem(cond_id, live=False, skip_resolution_check=True)
+
+    out = mock_stdout.getvalue()
+    assert "DRY RUN -- nothing sent" in out
 
 
 def test_redeem_live_unresolved_raises(tmp_path):

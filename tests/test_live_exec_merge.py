@@ -3,6 +3,7 @@ pre-flight guards, idempotency protection, and dry-run safety.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -124,10 +125,25 @@ def test_merge_guard_idempotency_force_override(tmp_path):
         {"id": "order-123", "condition_id": cond_id, "action": "MERGE", "status": "submitted"}
     ]), encoding="utf-8")
 
-    with patch.object(le, "RUN", tmp_path), \
-         patch.object(le, "get_payout_denominator", return_value=0):
-        # Should not raise SystemExit when force=True
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.return_value = {"balance": "10000000"}  # 10 shares
+
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    env_vars = make_live_env(acc, funder)
+
+    # --force must clear the idempotency guard specifically; with balances funded
+    # and the condition unresolved, every other guard passes and the dry run is clean.
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "get_payout_denominator", return_value=0), \
+         patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
         le.merge(cond_id, amount=1.0, force=True, live=False)
+
+    out = mock_stdout.getvalue()
+    assert "DRY RUN -- nothing sent" in out
+    assert "PRE-FLIGHT FAILED" not in out
 
 
 def test_merge_guard_resolved_condition_refuses(tmp_path):
@@ -213,7 +229,16 @@ def test_merge_dry_run_touches_no_network(tmp_path, capsys):
     and calldata without sending any network request."""
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
 
-    with patch.object(le, "RUN", tmp_path), \
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.return_value = {"balance": "10000000"}  # 10 shares
+
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    env_vars = make_live_env(acc, funder)
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "get_payout_denominator", return_value=0), \
          patch("urllib.request.urlopen") as mock_urlopen:
         le.merge(cond_id, amount=1.0, live=False)
@@ -226,6 +251,27 @@ def test_merge_dry_run_touches_no_network(tmp_path, capsys):
     assert "net_collateral  $0.95" in captured.out
     assert "0x9e7212ad" in captured.out
     assert "DRY RUN -- nothing sent" in captured.out
+
+
+def test_merge_dry_run_reports_guard_failures_and_exits_nonzero(tmp_path, capsys):
+    """A dry run must refuse exactly where --live refuses: unfunded legs and a
+    resolved condition are reported as PRE-FLIGHT FAILED, not previewed as ready."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen") as mock_urlopen:
+        with pytest.raises(SystemExit) as exc_info:
+            le.merge(cond_id, amount=1.0, live=False)
+
+    mock_urlopen.assert_not_called()
+    assert exc_info.value.code != 0
+    out = capsys.readouterr().out
+    assert "PRE-FLIGHT FAILED -- --live would refuse:" in out
+    assert "Insufficient balance on UP token" in out
+    assert "Insufficient balance on DOWN token" in out
+    assert "already resolved (payoutDenominator == 1 > 0). Use redeem instead." in out
+    assert "DRY RUN -- nothing sent" not in out
 
 
 def test_redeem_idempotency_guard_refuses_prior_submitted(tmp_path):

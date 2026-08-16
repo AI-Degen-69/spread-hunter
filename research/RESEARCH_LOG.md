@@ -2571,3 +2571,45 @@ All 39 `live_exec` tests pass; entire repo test suite passes at 738/738 (up from
 
 **LIVE** — Stage 1 (`mergePositions`) complete, verified across all safety guards and test assertions, and locked.
 
+
+---
+
+### Session 71 — Stage 1 correction: pre-flight guards must run in dry-run mode (2026-08-16)
+
+#### Question
+
+Does the `merge`/`redeem` dry-run preview report what `--live` would actually do?
+
+#### Method
+
+Decoded the Stage 1 dry-run transcript against the guard placement in `strategy/live_exec.py`. The
+transcript printed `resolved yes`, `held: 0.00` on both legs, and `net_collateral $0.95` — a clean,
+ready-looking preview. Traced why: `merge()` returned from the `if not live:` block *before* the
+balance guards and the resolution guard, so only two of the four guards were reachable in dry run.
+`redeem()` had the same shape, with its resolution guards after the dry-run return.
+
+Moved all guard evaluation above the preview in both functions. Chose report-all-verdicts over
+raise-on-first: the dry run now prints `PRE-FLIGHT FAILED -- --live would refuse:` followed by every
+failing guard and exits non-zero, while `--live` still raises on the first failure with its original
+message, so existing live-path assertions are unchanged.
+
+Independently re-derived the `mergePositions` selector rather than accepting the reported value:
+`keccak256("mergePositions(address,bytes32,bytes32,uint256[],uint256)")` =
+`9e7212adc5e7c32011f71e609b50480abac7cc657f1af13efab4cfdd471125d4`, selector `0x9e7212ad`. The same
+method on `redeemPositions(address,bytes32,bytes32,uint256[])` yields `01b7037c…`, matching the
+selector already shipped in `encode_redeem_positions`, which validates the derivation. Note: the
+Session 70 log entry reported a full hash whose first four bytes are correct and whose remaining 28
+bytes do not match the true digest — the shipped selector is correct, the transcribed digest was not.
+
+#### Result
+
+The same dry run that previously previewed as ready now reports three pre-flight failures and exits
+non-zero. Calldata verified word-by-word: collateral `2791bca1…`, zero parent collection id,
+condition id, offset `0xa0`, amount `0xf4240`, tail `[2, 1, 2]`. Full suite **739/739 passed** (up
+from 738); three tests that encoded the old dry-run contract were updated and one new test asserts
+the reporting behaviour.
+
+#### Decision
+
+**LIVE** — a preview that succeeds where the live path refuses is an instrumentation defect, not a
+convenience. Dry run and `--live` now share one guard evaluation.
