@@ -51,6 +51,10 @@ STATED BIASES (each makes us OPTIMISTIC -- treat output as an upper bound)
      in-flight post window tau_post. Orders queueing ahead would raise
      queue_ahead; trades would lower it. Both are unobservable without real
      orders; queue_ahead stays set from decision-time depth (direction optimistic).
+  5. Feed broadcast latency (tau_pubsub): At median feed lag (~120ms, N=90 across
+     3 windows), touch depth drifts only 4.46% (queue model survives at typical lag).
+     In the P95 tail (~1.1s), depth drift expands to 44.20% and touch price moves in
+     54.8% of intervals (direction optimistic in the tail).
 """
 from __future__ import annotations
 
@@ -176,9 +180,9 @@ class QueueFillEngine:
     # token_id -> timestamp as of the previous poll (for poll interval estimation)
     _last_ts: dict[str, float] = field(default_factory=dict)
     # Latency and propagation parameters (issue #27 Phase 1 components 2 & 3)
-    net_oneway_ms: float = 100.0
+    net_oneway_ms: float = 3.93
     cancel_venue_ack_ms: float = 150.0
-    post_venue_accept_ms: float = 50.0
+    post_venue_accept_ms: float = 81.0
     cancel_net_oneway_ms: Optional[float] = None
 
     def __post_init__(self):

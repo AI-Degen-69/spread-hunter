@@ -690,16 +690,17 @@ class MakerConfig:
     fee_rate: float = 0.07          # taker fee rate, for the rebate estimate
 
     # LATENCY AND PROPAGATION PARAMETERS (issue #27, Phase 1 components 2 & 3).
-    # Shared one-way network leg. MEASURED -- median(RTT)/2 from the
-    # instrumented fetch seam. Both the cancel race and the post latency
-    # cross the same wire; two constants would drift apart.
-    net_oneway_ms: float = 100.0
+    # Shared one-way network leg. MEASURED -- median(RTT)/2 = 7.85ms/2 (N=250)
+    # from TCP connect probe to CLOB gateway.
+    net_oneway_ms: float = 3.93
 
-    # Venue-side legs. ESTIMATES -- unobservable without placing real orders.
-    # Accept is cheaper than ack: accepting a new order is an insert,
-    # acknowledging a cancel requires locating and removing a live one.
-    cancel_venue_ack_ms: float = 150.0     # tau_cancel = 250ms total
-    post_venue_accept_ms: float = 50.0     # tau_post   = 150ms total
+    # Venue-side legs. MEASURED / ESTIMATE.
+    # post_venue_accept_ms: MEASURED -- mean of window medians from live CLOB probe
+    # (N=90 across 3 windows: 85.00, 75.51, 82.89ms; mean 81.13ms, between-window SD 4.98ms).
+    # Per-window draw, not a fixed venue property.
+    cancel_venue_ack_ms: float = 150.0     # tau_cancel = 153.93ms total (estimate)
+    post_venue_accept_ms: float = 81.0     # tau_post   = 84.93ms total (~1.8x lower than 150ms estimate) [MEASURED]
+
 
     @property
     def cancel_net_oneway_ms(self) -> float:

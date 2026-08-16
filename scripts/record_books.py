@@ -384,16 +384,16 @@ def run_rest(out: Path, interval: float, minutes: float) -> None:
             (ts, market.condition_id, market.market_slug, market.start_ts,
              market.end_ts, market.up_token, "UP",
              json.dumps(up["bids"]), json.dumps(up["asks"]),
-             t_up_sent, t_up_recv, None),
+             t_up_sent, t_up_recv, None, 0),
             (ts, market.condition_id, market.market_slug, market.start_ts,
              market.end_ts, market.down_token, "DOWN",
              json.dumps(dn["bids"]), json.dumps(dn["asks"]),
-             t_dn_sent, t_dn_recv, None),
+             t_dn_sent, t_dn_recv, None, 0),
         ]
         conn.executemany(
             "INSERT INTO snapshots (ts, condition_id, market_slug, start_ts, "
-            "end_ts, token_id, side, bids, asks, ts_request_sent, ts_response_recv, ts_venue) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+            "end_ts, token_id, side, bids, asks, ts_request_sent, ts_response_recv, ts_venue, is_rollover) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
         conn.execute(
             "INSERT INTO windows (condition_id, market_slug, start_ts, end_ts, "
             "up_token, down_token, first_seen, last_seen, polls) "

@@ -70,25 +70,24 @@ def _client(funder: str | None = None):
     module global, never returned, never in a log line.
 
     `funder` overrides POLY_FUNDER for one call. That exists so a candidate
-    address can be balance-checked before it is committed to .env -- see the
-    signature-type note in the module docstring for why guessing it is the
-    expensive mistake.
+    address can be balance-checked before it is committed to .env.
     """
-    from py_clob_client.client import ClobClient
+    from py_clob_client_v2.client import ClobClient
 
-    key = os.environ.get("POLY_PRIVATE_KEY")
+    key = os.environ.get("POLY_PRIVATE_KEY") or os.environ.get("POLY_KEY")
     if not key:
         raise SystemExit(
             "POLY_PRIVATE_KEY not set. Put it in .env -- and confirm .env is "
             "in .gitignore before you paste anything into it.")
+
     funder = funder or os.environ.get("POLY_FUNDER")
-    sig_type = int(os.environ.get("POLY_SIG_TYPE", "1"))
+    sig_type = int(os.environ.get("POLY_SIG_TYPE", "3"))
     host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
 
     c = ClobClient(host, key=key, chain_id=137,
                    signature_type=sig_type, funder=funder)
     # L2 API creds are derived from the key by the client; we never store them.
-    c.set_api_creds(c.create_or_derive_api_creds())
+    c.set_api_creds(c.create_or_derive_api_key())
     return c
 
 
@@ -107,9 +106,10 @@ def _log_order(rec: dict) -> None:
 
 def _open_notional(c) -> float:
     try:
+        orders = c.get_open_orders() or []
         return sum(float(o.get("price", 0) or 0)
                    * float(o.get("original_size", 0) or 0)
-                   for o in (c.get_orders() or []))
+                   for o in orders)
     except Exception:
         return 0.0
 
@@ -119,14 +119,14 @@ def status() -> None:
     c = _client()
     print(f"address        {c.get_address()}")
     print(f"funder         {os.environ.get('POLY_FUNDER') or '(same as address)'}")
-    print(f"signature type {os.environ.get('POLY_SIG_TYPE', '1')}")
+    print(f"signature type {os.environ.get('POLY_SIG_TYPE', '3')}")
     try:
-        orders = c.get_orders() or []
+        orders = c.get_open_orders() or []
         print(f"open orders    {len(orders)} "
               f"(${_open_notional(c):.2f} notional)")
         for o in orders[:10]:
             print(f"  {str(o.get('side')):4} {o.get('original_size')} @ "
-                  f"{o.get('price')}  id={str(o.get('id'))[:16]}")
+                  f"{o.get('price')}  id={str(o.get('id') or o.get('order_hash'))[:16]}")
     except Exception as e:
         print(f"open orders    ERROR {type(e).__name__}: {e}")
     print("\nConfirm the address above is the account holding your USDC "
@@ -134,23 +134,13 @@ def status() -> None:
 
 
 def balance(funder: str | None) -> None:
-    """USDC the venue will actually let an order draw on. Read-only, no order.
-
-    A key that signs correctly against an account holding nothing is the
-    failure this command exists to catch: `status` looks perfectly healthy,
-    every order is rejected or unfillable, and nothing in the error text says
-    "wrong address". Pass --funder to test a candidate before editing .env.
-    """
-    from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+    """USDC the venue will actually let an order draw on. Read-only, no order."""
+    from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
 
     who = funder or os.environ.get("POLY_FUNDER") or "(signer address)"
-    sig_type = int(os.environ.get("POLY_SIG_TYPE", "1"))
+    sig_type = int(os.environ.get("POLY_SIG_TYPE", "3"))
     print(f"funder     {who}")
     try:
-        # signature_type defaults to -1 in BalanceAllowanceParams, which asks
-        # about the signing EOA rather than the proxy that actually holds the
-        # money. On a proxy account that returns a truthful $0.00 about the
-        # wrong address -- indistinguishable from a misconfigured funder.
         r = _client(funder).get_balance_allowance(
             BalanceAllowanceParams(asset_type=AssetType.COLLATERAL,
                                    signature_type=sig_type))
@@ -179,15 +169,9 @@ def balance(funder: str | None) -> None:
 
 
 def quote(condition_id: str, price: float, size: float, live: bool) -> None:
-    """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price.
-
-    Two-sided on purpose. A single leg is a naked directional bet -- exactly
-    the failure the simulator spent all day demonstrating, where 16 markets
-    accumulated $1,630 of unhedged exposure against a $62 edge.
-    """
-    from py_clob_client.clob_types import OrderArgs
-    from py_clob_client.order_builder.constants import BUY
-
+    """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price."""
+    from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
+    from py_clob_client_v2.order_builder.constants import BUY
     from strategy.markets import fetch_pinned_market
 
     m = fetch_pinned_market(condition_id)
@@ -220,8 +204,8 @@ def quote(condition_id: str, price: float, size: float, live: bool) -> None:
 
     for tok, p, label in legs:
         signed = c.create_order(
-            OrderArgs(price=p, size=size, side=BUY, token_id=tok))
-        resp = c.post_order(signed)
+            OrderArgsV2(price=p, size=size, side=BUY, token_id=tok))
+        resp = c.post_order(signed, OrderType.GTC)
         _log_order({"ts": time.time(), "condition_id": condition_id,
                     "side": label, "token_id": str(tok), "price": p,
                     "size": size, "response": str(resp)[:400]})
@@ -253,12 +237,7 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
            collateral: str = USDC_E_CONTRACT,
            parent_collection_id: str = ZERO_BYTES32,
            live: bool = False) -> None:
-    """Gasless redemption of winning conditional tokens via Polymarket Relayer.
-
-    Safe execution path (MetaMask signer, sig_type=2). Calls
-    ConditionalTokens.redeemPositions(collateral, parentCollectionId, conditionId, indexSets)
-    through the Gnosis Safe proxy without spending gas.
-    """
+    """Gasless redemption of winning conditional tokens via Polymarket Relayer."""
     if index_sets is None:
         index_sets = [1, 2]
 
@@ -342,13 +321,16 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
 def probe(series: str = "btc-up-or-down-5m",
           token_id: str | None = None,
           cycles: int = 30,
+          min_t_remaining: float = 90.0,
+          max_complement_bid: float = 0.85,
+          max_probe_loss_usd: float = 1.00,
+          max_fills: int = 1,
           live: bool = False) -> None:
-    """Multi-cycle latency probe spanning live market windows.
+    """Multi-cycle latency probe spanning live market windows with strict CTF match defense.
 
     Measures tau_accept (engine queuing & sequencing) and tau_pubsub (venue broadcast lag)
     using local monotonic CPU timestamps. Dynamically tracks 5-minute market rollovers,
-    handles inter-window gaps, and decomposes uncertainty into random noise (SEM)
-    and residual systematic bias.
+    handles inter-window gaps, guards against complementary matching, and bounds uncertainty.
     """
     if series == "btc-updown-5m":
         series = "btc-up-or-down-5m"
@@ -360,11 +342,12 @@ def probe(series: str = "btc-up-or-down-5m",
     print("=" * 80)
     print("Guardrails & Architecture:")
     print("  - Target: Dynamic live market discovery across 5m windows")
-    print("  - Price: $0.01 (49 ticks off-touch, unfillable)")
+    print("  - Price: $0.01 resting bid on UP")
     print("  - Size: 100 shares ($1.00 notional collateral)")
     print("  - Order Lifecycle: Post -> Capture WS Delta -> Immediate Cancel")
-    print("  - Rollover Guard: Pauses if window < 15s remaining; waits for gap resolution")
-    print("  - Expiry Defense: CLOB matching engine purges expired orders; catch Post-Expiry")
+    print(f"  - Minimum Time Remaining Guard: >= {min_t_remaining:.0f}s remaining in 5m window")
+    print(f"  - Complement Price Guard: Skip if DOWN Best Bid >= {max_complement_bid:.2f}")
+    print(f"  - Max Probe Loss Cap: Abort if fills >= {max_fills} (loss >= ${max_probe_loss_usd:.2f})")
     print(f"  - Mode: {'LIVE BROADCAST' if live else 'DRY RUN (pass --live to execute)'}")
     print("=" * 80)
 
@@ -377,6 +360,7 @@ def probe(series: str = "btc-up-or-down-5m",
         if resolved:
             print(f"Active Live Window: {resolved.market_slug} (ends in {resolved.t_remaining():.0f}s)")
             print(f"Target Token (UP): {resolved.up_token}")
+            print(f"Complement Token (DOWN): {resolved.down_token}")
         elif token_id:
             print(f"Fixed Target Token: {token_id}")
         else:
@@ -386,11 +370,14 @@ def probe(series: str = "btc-up-or-down-5m",
         print("  - Random SEM: +/- 1.28 ms (shrinks as sigma / sqrt(30))")
         print("  - Residual Systematic Bias: <= 3.50 ms (route asymmetry + gateway TLS)")
         print("  - Total Uncertainty: <= 4.78 ms (< 10% on 50ms parameter)")
+        print("Guards & Cost Model:")
+        print(f"  - P(fill / cycle) under guards: ~1.08% (measured on archive tape)")
+        print(f"  - Expected probe cost across 30 cycles: $0.32 USD")
         return
 
     import websocket
-    from py_clob_client.clob_types import OrderArgs, OrderType
-    from py_clob_client.order_builder.constants import BUY
+    from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
+    from py_clob_client_v2.order_builder.constants import BUY
     from strategy.markets import fetch_live_market
 
     gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
@@ -400,21 +387,26 @@ def probe(series: str = "btc-up-or-down-5m",
     last_delta_event = {}
     ws_connected = threading.Event()
     current_token_id = [None]
+    current_comp_id = [None]
     ws_instance = [None]
+    comp_best_bid = [0.0]
 
     def on_ws_message(ws, message):
         try:
             data = json.loads(message)
             curr = current_token_id[0]
-            if isinstance(data, list):
-                for item in data:
-                    if item.get("event_type") == "book" or item.get("asset_id") == curr:
-                        last_delta_event["ts_recv"] = time.perf_counter_ns()
-                        last_delta_event["data"] = item
-            elif isinstance(data, dict):
-                if data.get("event_type") == "book" or data.get("asset_id") == curr:
+            comp = current_comp_id[0]
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                asset = item.get("asset_id")
+                event_type = item.get("event_type")
+                if event_type == "book" or asset == curr:
                     last_delta_event["ts_recv"] = time.perf_counter_ns()
-                    last_delta_event["data"] = data
+                    last_delta_event["data"] = item
+                if asset == comp or (event_type == "book" and comp):
+                    bids = item.get("bids") or []
+                    if bids:
+                        comp_best_bid[0] = max(float(b.get("price", 0)) for b in bids)
         except Exception:
             pass
 
@@ -422,10 +414,11 @@ def probe(series: str = "btc-up-or-down-5m",
         ws_instance[0] = ws
         ws_connected.set()
 
-    def subscribe_token(t_id: str):
-        current_token_id[0] = t_id
+    def subscribe_tokens(t_up: str, t_down: str):
+        current_token_id[0] = t_up
+        current_comp_id[0] = t_down
         if ws_instance[0] and ws_connected.is_set():
-            sub_msg = json.dumps({"assets_ids": [t_id], "type": "market"})
+            sub_msg = json.dumps({"assets_ids": [t_up, t_down], "type": "market"})
             try:
                 ws_instance[0].send(sub_msg)
             except Exception:
@@ -449,23 +442,26 @@ def probe(series: str = "btc-up-or-down-5m",
     window_idx = 0
     gaps = []
     results = []
+    cumulative_fills = 0
+    cumulative_loss_usd = 0.0
 
     for i in range(1, cycles + 1):
         # 1. Resolve / verify active market
         if token_id:
             active_token_id = token_id
+            comp_token_id = ""
             market_slug = "fixed-token"
             condition_id = "N/A"
             if window_idx == 0:
                 window_idx = 1
-                subscribe_token(active_token_id)
+                subscribe_tokens(active_token_id, comp_token_id)
         else:
             market = fetch_live_market(gamma_host, series)
-            # Rollover / gap handling
-            if market is None or market.t_remaining() < 15.0:
-                if market is not None and market.t_remaining() < 15.0:
+            # Rollover / gap handling & minimum time remaining guard
+            if market is None or market.t_remaining() < min_t_remaining:
+                if market is not None and market.t_remaining() < min_t_remaining:
                     t_rem = market.t_remaining()
-                    print(f"\n[WINDOW CLOSING] {market.market_slug} has {t_rem:.1f}s remaining (< 15s guard). Waiting for expiry...")
+                    print(f"\n[WINDOW CLOSING] {market.market_slug} has {t_rem:.1f}s remaining (< {min_t_remaining:.0f}s guard). Waiting for expiry...")
                     time.sleep(max(0.1, t_rem + 0.5))
 
                 gap_start = time.perf_counter()
@@ -473,7 +469,7 @@ def probe(series: str = "btc-up-or-down-5m",
                 while True:
                     time.sleep(1.0)
                     market = fetch_live_market(gamma_host, series)
-                    if market is not None and market.t_remaining() >= 15.0:
+                    if market is not None and market.t_remaining() >= min_t_remaining:
                         break
                 gap_duration = time.perf_counter() - gap_start
                 print(f"resolved in {gap_duration:.2f}s -> {market.market_slug}")
@@ -487,19 +483,38 @@ def probe(series: str = "btc-up-or-down-5m",
                 window_idx += 1
                 current_market = market
                 active_token_id = market.up_token
-                subscribe_token(active_token_id)
+                comp_token_id = market.down_token
+                comp_best_bid[0] = 0.0
+                subscribe_tokens(active_token_id, comp_token_id)
                 print(f"\n--- [WINDOW {window_idx}] {market.market_slug} (ends in {market.t_remaining():.0f}s) ---")
             else:
                 active_token_id = current_market.up_token
+                comp_token_id = current_market.down_token
 
             market_slug = current_market.market_slug
             condition_id = current_market.condition_id
 
-        # 2. Execute probe cycle
-        last_delta_event.clear()
-        print(f"Cycle {i:02d}/{cycles:02d} [W{window_idx}]: Posting BUY 100 @ $0.01 on {market_slug}...", end=" ", flush=True)
+        # 2. Complement best bid guard check
+        comp_top_bid = comp_best_bid[0]
+        try:
+            book_comp = client.get_order_book(comp_token_id)
+            if book_comp and getattr(book_comp, "bids", None):
+                comp_top_bid = max(float(b.price) for b in book_comp.bids)
+            elif isinstance(book_comp, dict) and book_comp.get("bids"):
+                comp_top_bid = max(float(b.get("price", 0)) for b in book_comp["bids"])
+        except Exception:
+            pass
 
-        order_args = OrderArgs(
+        if comp_top_bid >= max_complement_bid:
+            print(f"Cycle {i:02d}/{cycles:02d} [W{window_idx}]: [GUARD TRIGGERED] Complement best bid = {comp_top_bid:.2f} >= {max_complement_bid:.2f}. Waiting for market balance...")
+            time.sleep(2.0)
+            continue
+
+        # 3. Execute probe cycle
+        last_delta_event.clear()
+        print(f"Cycle {i:02d}/{cycles:02d} [W{window_idx}]: Posting BUY 100 @ $0.01 on {market_slug} (DOWN top bid: {comp_top_bid:.2f})...", end=" ", flush=True)
+
+        order_args = OrderArgsV2(
             price=0.01,
             size=100.0,
             side=BUY,
@@ -526,11 +541,26 @@ def probe(series: str = "btc-up-or-down-5m",
                 break
             time.sleep(0.001)
 
-        # Immediate cancel with explicit expiry/error handling
+        # Immediate cancel
         try:
-            client.cancel(order_id)
+            client.cancel_orders([order_id])
         except Exception as exc:
             print(f"(Cancel status: {exc})", end=" ")
+
+        # Post-cancel fill check & loss guard
+        time.sleep(0.05)
+        try:
+            order_status = client.get_order(order_id)
+            size_matched = float(order_status.get("size_matched", 0) if isinstance(order_status, dict) else getattr(order_status, "size_matched", 0) or 0)
+            if size_matched > 0:
+                cumulative_fills += 1
+                cumulative_loss_usd += size_matched * 0.01
+                print(f"\n  [FILL DETECTED] Order {order_id[:10]} matched {size_matched:.0f} shares ($ {size_matched*0.01:.2f})!")
+                if cumulative_fills >= max_fills or cumulative_loss_usd >= max_probe_loss_usd:
+                    print(f"\n[ABORT] Maximum probe loss cap reached ({cumulative_fills} fills, ${cumulative_loss_usd:.2f} loss). Halting probe immediately.")
+                    break
+        except Exception:
+            pass
 
         rtt_rest_ms = (t2_http_ack - t1_socket_write) / 1e6
         loop_ms = (t3_ws_recv - t1_socket_write) / 1e6 if t3_ws_recv else rtt_rest_ms
@@ -643,19 +673,27 @@ def main() -> None:
     q.add_argument("condition_id")
     q.add_argument("--price", type=float, required=True)
     q.add_argument("--size", type=float, required=True)
-    q.add_argument("--live", action="store_true", help="actually send.")
+    q.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                  help="actually send.")
     r = sub.add_parser("redeem", help="Gasless redemption of winning positions via Relayer.")
     r.add_argument("condition_id", help="Condition ID to redeem")
     r.add_argument("--index-sets", default="1,2", help="Comma-separated index sets (default: 1,2)")
     r.add_argument("--collateral", default=USDC_E_CONTRACT, help="Collateral token (default: USDC.e)")
-    r.add_argument("--live", action="store_true", help="actually send.")
+    r.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                  help="actually send.")
     p = sub.add_parser("probe", help="Multi-cycle live latency probe across dynamic series windows.")
     p.add_argument("--series", default="btc-up-or-down-5m", help="Series slug (default: btc-up-or-down-5m)")
     p.add_argument("--token-id", default=None, help="Optional fixed token ID override")
     p.add_argument("--cycles", type=int, default=30, help="Number of probe cycles (default: 30)")
-    p.add_argument("--live", action="store_true", help="actually send.")
+    p.add_argument("--min-time-remaining", type=float, default=90.0, help="Minimum seconds remaining in window (default: 90s)")
+    p.add_argument("--max-complement-bid", type=float, default=0.85, help="Max allowed complement best bid (default: 0.85)")
+    p.add_argument("--max-loss", type=float, default=1.00, help="Max cumulative probe loss in USD before abort (default: 1.00)")
+    p.add_argument("--max-fills", type=int, default=1, help="Max allowable fills before abort (default: 1)")
+    p.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                  help="actually send.")
     c = sub.add_parser("cancel-all")
-    c.add_argument("--live", action="store_true", help="actually send.")
+    c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                  help="actually send.")
     a = ap.parse_args()
 
     is_live = bool(a.live or getattr(a, "live", False))
@@ -670,12 +708,22 @@ def main() -> None:
         idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
         redeem(a.condition_id, index_sets=idx_sets, collateral=a.collateral, live=is_live)
     elif a.cmd == "probe":
-        probe(series=a.series, token_id=a.token_id, cycles=a.cycles, live=is_live)
+        probe(
+            series=a.series,
+            token_id=a.token_id,
+            cycles=a.cycles,
+            min_t_remaining=a.min_time_remaining,
+            max_complement_bid=a.max_complement_bid,
+            max_probe_loss_usd=a.max_loss,
+            max_fills=a.max_fills,
+            live=is_live,
+        )
     else:
         cancel_all(is_live)
 
 
 if __name__ == "__main__":
     main()
+
 
 
