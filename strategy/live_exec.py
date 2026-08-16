@@ -1711,6 +1711,32 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
         )
 
 
+def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = None) -> None:
+    """Stage 4 — cross the book to complete a one-sided pair.
+
+    Closes exposure rather than opening it: the half-open leg is already at
+    risk, and completing it yields a pair worth $1.00 at merge. Refuses any
+    cross that would push the pair to or past max_pair_cost -- that case
+    belongs to `exit`, and this path must not do the stop-loss's job badly.
+    """
+    from strategy.live_pairs import complete_pair, PairCompletionRefused
+    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from strategy.config import Config
+
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    try:
+        result = complete_pair(
+            _client(), registry, pair_id,
+            max_pair_cost=Config().max_pair_cost,
+            live=live,
+            max_order_usd=MAX_ORDER_USD,
+        )
+    except PairCompletionRefused as exc:
+        raise SystemExit(f"COMPLETION REFUSED: {exc}") from exc
+
+    print(json.dumps(result, indent=2, default=str))
+
+
 def cancel_all(live: bool) -> None:
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
@@ -1773,6 +1799,11 @@ def main() -> None:
                     help="Act without the Data API registry/venue cross-check. Only when the endpoint is down.")
     ex.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                     help="actually send.")
+    cp = sub.add_parser("complete", help="Stage 4: cross the book to complete a one-sided pair.")
+    cp.add_argument("pair_id", help="pair_id as recorded in the order registry")
+    cp.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    cp.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                    help="actually send.")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -1822,6 +1853,8 @@ def main() -> None:
     elif a.cmd == "exit":
         exit_pair(a.pair_id, is_live, db_path=a.db,
                   skip_positions_check=a.skip_positions_check)
+    elif a.cmd == "complete":
+        complete_pair_cmd(a.pair_id, is_live, db_path=a.db)
     else:
         cancel_all(is_live)
 

@@ -62,20 +62,23 @@ class FakeClient:
     """Records every venue call. No network."""
 
     def __init__(self, best_ask=0.40, best_bid=0.55, cancel_ok=True,
-                 bid_depth=100.0):
+                 bid_depth=100.0, ask_depth=100.0):
         self.best_ask = best_ask
         self.best_bid = best_bid
         self.cancel_ok = cancel_ok
         self.bid_depth = bid_depth
+        self.ask_depth = ask_depth
         self.calls: list[str] = []
         self.creds = object()
 
     def get_order_book(self, token_id):
         self.calls.append(f"book:{token_id}")
+        asks = ([] if self.best_ask is None
+                else [{"price": str(self.best_ask), "size": str(self.ask_depth)}])
         return {
             "asset_id": token_id,
             "bids": [{"price": str(self.best_bid), "size": str(self.bid_depth)}],
-            "asks": [{"price": str(self.best_ask), "size": "100"}],
+            "asks": asks,
         }
 
     def cancel_order(self, payload):
@@ -86,10 +89,11 @@ class FakeClient:
 
     def create_and_post_market_order(self, order_args, options=None,
                                      order_type="FOK", defer_exec=False):
+        verb = "sell" if order_args.side == "SELL" else "buy"
         self.calls.append(
-            f"sell:{order_args.token_id}:{order_args.amount}:{order_args.side}"
+            f"{verb}:{order_args.token_id}:{order_args.amount}:{order_args.side}"
         )
-        return {"success": True, "orderID": "venue-sell"}
+        return {"success": True, "orderID": f"venue-{verb}"}
 
 
 # ---------------------------------------------------------------------------
@@ -290,3 +294,154 @@ def test_a_balanced_pair_is_not_an_exit_candidate(registry: OrderRegistry):
 
     assert result["action"] == "balanced"
     assert not any(c.startswith(("cancel:", "sell:")) for c in client.calls)
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — second-leg completion
+#
+# Crossing to complete a half-open pair reduces exposure: the result is worth
+# $1.00 at merge. It must never do the stop-loss's job badly, so it refuses any
+# cross that would push the pair past the cap.
+# ---------------------------------------------------------------------------
+
+
+def test_completion_crosses_when_the_pair_stays_under_the_cap(registry: OrderRegistry):
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30)  # 0.60 + 0.30 = 0.90 < 0.995
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert result["action"] == "completed"
+    assert result["size"] == pytest.approx(10.0)
+    assert result["pair_cost"] == pytest.approx(0.90)
+    buy = next(c for c in client.calls if c.startswith("buy:"))
+    assert buy.split(":")[1] == TOK_DN
+
+
+def test_completion_refuses_a_cross_that_breaches_the_cap(registry: OrderRegistry):
+    """That is the stop-loss's job, and this path must not do it badly."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.40)  # 0.60 + 0.40 = 1.00 >= 0.995
+
+    with pytest.raises(lp.PairCompletionRefused, match="max_pair_cost"):
+        lp.complete_pair(client, registry, pair_id,
+                         max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_completion_sizes_from_fills_not_from_intent(registry: OrderRegistry):
+    """A leg that filled 4 of 10 is a 4-share position.
+
+    Completing 10 would open 6 shares of fresh exposure on the other side --
+    the opposite of what this path is for.
+    """
+    pair_id = "pair-partial"
+    now = 1_000_000
+    heavy = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-heavy-p", condition_id=COND,
+        token_id=TOK_UP, side="BUY", price=0.60, original_size=10.0,
+        status="partial", posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(heavy)
+    registry.record_fill(FillRecord(
+        trade_id="trade-partial", order_uuid=heavy.id, size=4.0,
+        price=0.60, venue_ts=now,
+    ))
+    light = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-light-p", condition_id=COND,
+        token_id=TOK_DN, side="BUY", price=0.30, original_size=10.0,
+        status="open", posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(light)
+
+    client = FakeClient(best_ask=0.30)
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert result["size"] == pytest.approx(4.0)
+
+
+def test_completion_is_capped_by_max_order_usd(registry: OrderRegistry):
+    """The Stage 1 notional cap applies to this order like any other."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30)
+
+    with pytest.raises(lp.PairCompletionRefused, match="MAX_ORDER_USD"):
+        lp.complete_pair(client, registry, pair_id,
+                         max_pair_cost=MAX_PAIR_COST, live=True,
+                         max_order_usd=1.00)  # 10 * 0.30 = $3.00
+
+
+def test_completion_is_capped_by_ask_depth(registry: OrderRegistry):
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, ask_depth=3.0)
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+    assert result["size"] == pytest.approx(3.0)
+
+
+def test_completion_refuses_without_an_ask(registry: OrderRegistry):
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=None)
+
+    with pytest.raises(lp.PairCompletionRefused, match="no ask"):
+        lp.complete_pair(client, registry, pair_id,
+                         max_pair_cost=MAX_PAIR_COST, live=True)
+
+
+def test_completion_dry_run_sends_nothing(registry: OrderRegistry):
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30)
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=False)
+
+    assert result["action"] == "would_complete"
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_a_balanced_pair_needs_no_completion(registry: OrderRegistry):
+    pair_id = _one_sided_pair(registry)
+    light = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)
+    registry.record_fill(FillRecord(
+        trade_id="trade-light-done", order_uuid=light.id, size=10.0,
+        price=0.30, venue_ts=1_000_050,
+    ))
+    registry.update_order_status(light.id, "filled", 1_000_050)
+
+    client = FakeClient(best_ask=0.30)
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert result["action"] == "balanced"
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_a_completed_pair_reads_as_held_on_both_legs(registry: OrderRegistry):
+    """The acceptance condition: merge's pre-flight must see both legs.
+
+    Completion is only worth doing if the result is mergeable, so the check is
+    on the registry's own view of holdings per token, which is what the merge
+    pre-flight reconciles against.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    light = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)
+    client = FakeClient(best_ask=0.30)
+
+    lp.complete_pair(client, registry, pair_id,
+                     max_pair_cost=MAX_PAIR_COST, live=True)
+    # The venue fill arrives through reconcile; simulate that landing.
+    registry.record_fill(FillRecord(
+        trade_id="trade-completion", order_uuid=light.id, size=10.0,
+        price=0.30, venue_ts=1_000_200,
+    ))
+
+    pair = lp.load_pair(registry, pair_id)
+    assert pair["naked"] == pytest.approx(0.0)
+    assert pair["heavy"]["matched"] == pytest.approx(10.0)
+    assert pair["light"]["matched"] == pytest.approx(10.0)

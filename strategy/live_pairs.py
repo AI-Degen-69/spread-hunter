@@ -56,6 +56,15 @@ class PairExitRefused(RuntimeError):
     """
 
 
+class PairCompletionRefused(RuntimeError):
+    """The completion did not happen, and nothing was sent.
+
+    Separate from PairExitRefused because the two paths fail for opposite
+    reasons: an exit refuses when it cannot safely close, a completion refuses
+    when crossing would make the pair worse than holding it.
+    """
+
+
 def should_exit(fill_cost: float, light_ask: Optional[float],
                 max_pair_cost: float) -> bool:
     """Port of the sim trigger: exit when the pair cannot complete under the cap.
@@ -334,5 +343,110 @@ def exit_naked_leg(
         "bid": bid,
         "cancelled": cancelled,
         "positions_checked": positions_checked,
+        "response": resp,
+    }
+
+
+def ask_depth(book) -> float:
+    return sum(s for _, s in _book_levels(book, "asks"))
+
+
+def complete_pair(
+    client,
+    registry: OrderRegistry,
+    pair_id: str,
+    max_pair_cost: float,
+    live: bool = False,
+    max_order_usd: float = 25.0,
+) -> dict:
+    """Stage 4 — cross the book to complete a one-sided pair.
+
+    This closes exposure rather than opening it: the half-open leg is already
+    at risk, and completing it produces a pair worth $1.00 at merge. That is
+    why it sits inside the staged exposure rule alongside the exit.
+
+    The cap is the whole discipline. A cross that pushes the pair to or past
+    `max_pair_cost` is a guaranteed loss after gas, and closing it that way is
+    the stop-loss's job -- this path must not do that job badly. So it refuses
+    rather than crossing anyway.
+
+    `action` is one of: balanced, would_complete, completed.
+    Raises PairCompletionRefused when crossing would be worse than holding.
+    """
+    pair = load_pair(registry, pair_id)
+
+    if pair["naked"] <= SIZE_EPS:
+        return {"action": "balanced", "pair_id": pair_id, "size": 0.0}
+
+    light_token = pair["light"]["token_id"]
+    if not light_token:
+        raise PairCompletionRefused(
+            f"Pair {pair_id} has only one leg on record, so there is no token "
+            f"to complete into."
+        )
+
+    book = client.get_order_book(light_token)
+    ask = best_ask(book)
+    if ask is None or ask <= 0:
+        raise PairCompletionRefused(
+            f"Cannot complete {pair_id}: no ask on {light_token}. With nothing "
+            f"to cross into, the leg stays naked and the exit rule owns it."
+        )
+
+    pair_cost = pair["fill_cost"] + ask
+    if pair_cost >= max_pair_cost:
+        raise PairCompletionRefused(
+            f"Completing {pair_id} at ask {ask:.4f} against a fill cost of "
+            f"{pair['fill_cost']:.4f} gives pair_cost {pair_cost:.4f}, at or "
+            f"above max_pair_cost {max_pair_cost:.4f}. That pair loses money "
+            f"after gas; the exit path owns this case, not completion."
+        )
+
+    # Size from what actually filled, never from the intended size. Completing
+    # the intended size against a partial fill would open fresh exposure on the
+    # other side -- the opposite of this path's purpose.
+    size = min(pair["naked"], ask_depth(book))
+    if size < MIN_SELL_SHARES:
+        raise PairCompletionRefused(
+            f"Completable size {size:.4f} is below the venue minimum of "
+            f"{MIN_SELL_SHARES}. Naked {pair['naked']:.4f}, ask depth "
+            f"{ask_depth(book):.4f}."
+        )
+
+    notional = size * ask
+    if notional > max_order_usd:
+        raise PairCompletionRefused(
+            f"Completion notional ${notional:.2f} exceeds MAX_ORDER_USD "
+            f"${max_order_usd:.2f}. The Stage 1 cap applies to this order like "
+            f"any other."
+        )
+
+    if not live:
+        return {
+            "action": "would_complete",
+            "pair_id": pair_id,
+            "token_id": light_token,
+            "size": size,
+            "ask": ask,
+            "pair_cost": pair_cost,
+            "notional": notional,
+        }
+
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    resp = client.create_and_post_market_order(
+        MarketOrderArgsV2(token_id=light_token, amount=size, side="BUY",
+                          price=ask)
+    )
+
+    return {
+        "action": "completed",
+        "pair_id": pair_id,
+        "condition_id": pair["condition_id"],
+        "token_id": light_token,
+        "size": size,
+        "ask": ask,
+        "pair_cost": pair_cost,
+        "notional": notional,
         "response": resp,
     }

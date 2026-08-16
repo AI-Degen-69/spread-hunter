@@ -2946,3 +2946,44 @@ sends nothing, and a balanced pair is not a candidate. Full suite **786 passed**
 
 **LIVE** — Stage 3 closes exposure and opens none. The `exit` subcommand is dry-run by default like
 every other command here.
+
+---
+
+### 2026-08-17 — Stage 4: completing the pair, and why the cap is the whole discipline
+
+#### Question
+
+When one leg fills and the pair still completes under the cap, crossing for the other leg turns a
+half-open position into one worth $1.00 at merge. What stops that path from quietly becoming a way to
+open exposure instead of closing it?
+
+#### Method
+
+Ported the completion half of the same sim rule and wrote nine tests before the implementation.
+
+#### Result
+
+1. **The cap is the discipline, and it refuses rather than degrading.** A cross that puts `pair_cost`
+   at or above `max_pair_cost` is a guaranteed loss after gas. Closing that position is the exit
+   path's job, and completion must not do that job badly, so it raises `PairCompletionRefused` rather
+   than crossing anyway. `>=`, matching the exit trigger exactly — the two paths partition the space
+   at the same boundary, with no gap and no overlap.
+2. **Size comes from `size_matched`, never from the intended size.** A leg that filled 4 of 10 is a
+   4-share position. Completing 10 against it would open 6 shares of fresh exposure on the other
+   side — precisely the inversion this path must never make. Capped again by ask depth, so thin books
+   produce a partial completion rather than a walk up the ladder.
+3. **`MAX_ORDER_USD` applies here like anywhere else.** The Stage 1 notional cap is not waived because
+   the order reduces exposure.
+4. **No ask refuses.** With nothing to cross into, the leg stays naked and the exit rule owns it. The
+   two paths hand the same condition to each other consistently: `should_exit` fires on a missing ask,
+   `complete_pair` refuses on it.
+
+Nine tests: crosses under the cap, refuses at the cap, sizes from fills against a partial fill, capped
+by `MAX_ORDER_USD`, capped by ask depth, refuses without an ask, dry run sends nothing, a balanced pair
+is not a candidate, and the acceptance condition — a completed pair reads as held on both legs, which
+is what `merge`'s pre-flight reconciles against. Full suite **795 passed**.
+
+#### Decision
+
+**LIVE** — Stages 2, 3 and 4 are complete and none of them opens a position. Stage 4.5, the first real
+order, is gated on explicit Owner sign-off and is not part of this work.
