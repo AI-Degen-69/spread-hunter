@@ -1,0 +1,6 @@
+interface:
+  display_name: "Spread Hunter"
+  short_description: "Repo-specific patterns and workflows for spread-hunter"
+  default_prompt: "Use the spread-hunter repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
