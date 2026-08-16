@@ -339,22 +339,49 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
     print(f"\nlogged to {RUN / 'live_orders.json'}")
 
 
-def probe(token_id: str, cycles: int = 30, live: bool = False) -> None:
+def probe(series: str = "btc-up-or-down-5m",
+          token_id: str | None = None,
+          cycles: int = 30,
+          live: bool = False) -> None:
+    """Multi-cycle latency probe spanning live market windows.
+
+    Measures tau_accept (engine queuing & sequencing) and tau_pubsub (venue broadcast lag)
+    using local monotonic CPU timestamps. Dynamically tracks 5-minute market rollovers,
+    handles inter-window gaps, and decomposes uncertainty into random noise (SEM)
+    and residual systematic bias.
+    """
+    if series == "btc-updown-5m":
+        series = "btc-up-or-down-5m"
+
     NET_ONEWAY_MS = 3.93  # Measured median one-way TCP transit (RTT/2 = 7.85ms / 2)
 
     print("=" * 80)
-    print(f"SPREAD-HUNTER LIVE LATENCY PROBE (N={cycles} cycles on token {token_id})")
+    print(f"SPREAD-HUNTER LIVE LATENCY PROBE (N={cycles} cycles on series '{series}')")
     print("=" * 80)
-    print("Guardrails:")
+    print("Guardrails & Architecture:")
+    print("  - Target: Dynamic live market discovery across 5m windows")
     print("  - Price: $0.01 (49 ticks off-touch, unfillable)")
     print("  - Size: 100 shares ($1.00 notional collateral)")
-    print("  - Action: Post -> Capture WS Delta -> Immediate Cancel")
+    print("  - Order Lifecycle: Post -> Capture WS Delta -> Immediate Cancel")
+    print("  - Rollover Guard: Pauses if window < 15s remaining; waits for gap resolution")
+    print("  - Expiry Defense: CLOB matching engine purges expired orders; catch Post-Expiry")
     print(f"  - Mode: {'LIVE BROADCAST' if live else 'DRY RUN (pass --live to execute)'}")
     print("=" * 80)
 
     if not live:
+        from strategy.markets import fetch_live_market
+        gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
+        resolved = fetch_live_market(gamma_host, series) if not token_id else None
         print("\n[DRY-RUN] Probe execution plan validated.")
-        print(f"Would execute {cycles} consecutive cycles of $1.00 notional resting bids.")
+        print(f"Series: {series}")
+        if resolved:
+            print(f"Active Live Window: {resolved.market_slug} (ends in {resolved.t_remaining():.0f}s)")
+            print(f"Target Token (UP): {resolved.up_token}")
+        elif token_id:
+            print(f"Fixed Target Token: {token_id}")
+        else:
+            print("Active Live Window: Currently in rollover gap (would wait for next window).")
+        print(f"Would execute {cycles} consecutive cycles of $1.00 notional resting bids across dynamic market windows.")
         print("Expected Error Budget at N=30:")
         print("  - Random SEM: +/- 1.28 ms (shrinks as sigma / sqrt(30))")
         print("  - Residual Systematic Bias: <= 3.50 ms (route asymmetry + gateway TLS)")
@@ -364,33 +391,45 @@ def probe(token_id: str, cycles: int = 30, live: bool = False) -> None:
     import websocket
     from py_clob_client.clob_types import OrderArgs, OrderType
     from py_clob_client.order_builder.constants import BUY
+    from strategy.markets import fetch_live_market
 
+    gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
     client = _client()
 
-    # Shared state between WS and probe loop
+    # Dynamic WebSocket subscription state
     last_delta_event = {}
     ws_connected = threading.Event()
-    stop_ws = threading.Event()
+    current_token_id = [None]
+    ws_instance = [None]
 
     def on_ws_message(ws, message):
         try:
             data = json.loads(message)
+            curr = current_token_id[0]
             if isinstance(data, list):
                 for item in data:
-                    if item.get("event_type") == "book" or item.get("asset_id") == token_id:
+                    if item.get("event_type") == "book" or item.get("asset_id") == curr:
                         last_delta_event["ts_recv"] = time.perf_counter_ns()
                         last_delta_event["data"] = item
             elif isinstance(data, dict):
-                if data.get("event_type") == "book" or data.get("asset_id") == token_id:
+                if data.get("event_type") == "book" or data.get("asset_id") == curr:
                     last_delta_event["ts_recv"] = time.perf_counter_ns()
                     last_delta_event["data"] = data
         except Exception:
             pass
 
     def on_ws_open(ws):
-        sub_msg = json.dumps({"assets_ids": [token_id], "type": "market"})
-        ws.send(sub_msg)
+        ws_instance[0] = ws
         ws_connected.set()
+
+    def subscribe_token(t_id: str):
+        current_token_id[0] = t_id
+        if ws_instance[0] and ws_connected.is_set():
+            sub_msg = json.dumps({"assets_ids": [t_id], "type": "market"})
+            try:
+                ws_instance[0].send(sub_msg)
+            except Exception:
+                pass
 
     ws_app = websocket.WebSocketApp(
         "wss://ws-subscriptions-clob.polymarket.com/ws/market",
@@ -404,19 +443,67 @@ def probe(token_id: str, cycles: int = 30, live: bool = False) -> None:
         print("ERROR: WebSocket connection to market stream timed out.")
         return
 
-    print("WebSocket connected and subscribed. Starting probe cycles...\n")
+    print("WebSocket connected. Starting multi-window probe cycles...\n")
 
+    current_market = None
+    window_idx = 0
+    gaps = []
     results = []
 
     for i in range(1, cycles + 1):
+        # 1. Resolve / verify active market
+        if token_id:
+            active_token_id = token_id
+            market_slug = "fixed-token"
+            condition_id = "N/A"
+            if window_idx == 0:
+                window_idx = 1
+                subscribe_token(active_token_id)
+        else:
+            market = fetch_live_market(gamma_host, series)
+            # Rollover / gap handling
+            if market is None or market.t_remaining() < 15.0:
+                if market is not None and market.t_remaining() < 15.0:
+                    t_rem = market.t_remaining()
+                    print(f"\n[WINDOW CLOSING] {market.market_slug} has {t_rem:.1f}s remaining (< 15s guard). Waiting for expiry...")
+                    time.sleep(max(0.1, t_rem + 0.5))
+
+                gap_start = time.perf_counter()
+                print(f"[ROLLOVER GAP] Polling for next window in series '{series}'...", end=" ", flush=True)
+                while True:
+                    time.sleep(1.0)
+                    market = fetch_live_market(gamma_host, series)
+                    if market is not None and market.t_remaining() >= 15.0:
+                        break
+                gap_duration = time.perf_counter() - gap_start
+                print(f"resolved in {gap_duration:.2f}s -> {market.market_slug}")
+                gaps.append({
+                    "cycle": i,
+                    "gap_duration_s": gap_duration,
+                    "market_slug": market.market_slug,
+                })
+
+            if current_market is None or current_market.condition_id != market.condition_id:
+                window_idx += 1
+                current_market = market
+                active_token_id = market.up_token
+                subscribe_token(active_token_id)
+                print(f"\n--- [WINDOW {window_idx}] {market.market_slug} (ends in {market.t_remaining():.0f}s) ---")
+            else:
+                active_token_id = current_market.up_token
+
+            market_slug = current_market.market_slug
+            condition_id = current_market.condition_id
+
+        # 2. Execute probe cycle
         last_delta_event.clear()
-        print(f"Cycle {i:02d}/{cycles:02d}: Posting BUY 100 @ $0.01...", end=" ", flush=True)
+        print(f"Cycle {i:02d}/{cycles:02d} [W{window_idx}]: Posting BUY 100 @ $0.01 on {market_slug}...", end=" ", flush=True)
 
         order_args = OrderArgs(
             price=0.01,
             size=100.0,
             side=BUY,
-            token_id=token_id,
+            token_id=active_token_id,
         )
         signed_order = client.create_order(order_args)
 
@@ -430,17 +517,20 @@ def probe(token_id: str, cycles: int = 30, live: bool = False) -> None:
             time.sleep(1.0)
             continue
 
-        # Wait for WS delta or 5.0s timeout
+        # Wait for WS delta or 2.0s timeout
         t3_ws_recv = None
         start_wait = time.perf_counter()
-        while time.perf_counter() - start_wait < 5.0:
+        while time.perf_counter() - start_wait < 2.0:
             if "ts_recv" in last_delta_event and last_delta_event["ts_recv"] >= t1_socket_write:
                 t3_ws_recv = last_delta_event["ts_recv"]
                 break
             time.sleep(0.001)
 
-        # Immediate cancel
-        client.cancel(order_id)
+        # Immediate cancel with explicit expiry/error handling
+        try:
+            client.cancel(order_id)
+        except Exception as exc:
+            print(f"(Cancel status: {exc})", end=" ")
 
         rtt_rest_ms = (t2_http_ack - t1_socket_write) / 1e6
         loop_ms = (t3_ws_recv - t1_socket_write) / 1e6 if t3_ws_recv else rtt_rest_ms
@@ -449,6 +539,10 @@ def probe(token_id: str, cycles: int = 30, live: bool = False) -> None:
 
         results.append({
             "cycle": i,
+            "window_idx": window_idx,
+            "market_slug": market_slug,
+            "condition_id": condition_id,
+            "token_id": active_token_id,
             "rtt_rest_ms": rtt_rest_ms,
             "tau_accept_ms": tau_accept_ms,
             "tau_pubsub_ms": tau_pubsub_ms,
@@ -488,7 +582,7 @@ def probe(token_id: str, cycles: int = 30, live: bool = False) -> None:
     pubsub_stats = stats_dict([r["tau_pubsub_ms"] for r in results])
 
     print("\n" + "=" * 80)
-    print(f"PROBE DISTRIBUTION RESULTS (N={accept_stats['n']} successful cycles)")
+    print(f"PROBE DISTRIBUTION RESULTS (N={accept_stats['n']} successful cycles across {window_idx} windows)")
     print("=" * 80)
     print(f"{'Metric':<20} | {'tau_accept (Engine)':<25} | {'tau_pubsub (Venue Broadcast)':<25}")
     print("-" * 75)
@@ -506,6 +600,27 @@ def probe(token_id: str, cycles: int = 30, live: bool = False) -> None:
     print("  - Residual Systematic Bias: <= 3.50 ms (route asymmetry + gateway TLS)")
     print(f"  - Total Bound: <= {accept_stats['sem'] + 3.50:.2f} ms")
     print("=" * 80)
+
+    # Per-window breakdown
+    windows = sorted(list(set(r["window_idx"] for r in results)))
+    if len(windows) > 1:
+        print("\n" + "-" * 75)
+        print("PER-WINDOW BREAKDOWN")
+        print("-" * 75)
+        print(f"{'Window':<8} | {'Market Slug':<30} | {'Cycles':<8} | {'tau_accept (Med)':<18} | {'tau_pubsub (Med)':<18}")
+        print("-" * 75)
+        for w in windows:
+            w_res = [r for r in results if r["window_idx"] == w]
+            w_slug = w_res[0]["market_slug"]
+            w_accept = statistics.median([r["tau_accept_ms"] for r in w_res])
+            w_pubsub = statistics.median([r["tau_pubsub_ms"] for r in w_res])
+            print(f"W{w:<7} | {w_slug:<30} | {len(w_res):<8} | {w_accept:<15.2f} ms | {w_pubsub:<15.2f} ms")
+        print("-" * 75)
+
+    if gaps:
+        print("\nROLLOVER GAP LOG:")
+        for g in gaps:
+            print(f"  - Cycle {g['cycle']}: {g['gap_duration_s']:.2f}s gap before window '{g['market_slug']}'")
 
 
 def cancel_all(live: bool) -> None:
@@ -528,29 +643,36 @@ def main() -> None:
     q.add_argument("condition_id")
     q.add_argument("--price", type=float, required=True)
     q.add_argument("--size", type=float, required=True)
+    q.add_argument("--live", action="store_true", help="actually send.")
     r = sub.add_parser("redeem", help="Gasless redemption of winning positions via Relayer.")
     r.add_argument("condition_id", help="Condition ID to redeem")
     r.add_argument("--index-sets", default="1,2", help="Comma-separated index sets (default: 1,2)")
     r.add_argument("--collateral", default=USDC_E_CONTRACT, help="Collateral token (default: USDC.e)")
-    p = sub.add_parser("probe", help="Multi-cycle live latency probe.")
-    p.add_argument("token_id", help="Token ID to probe with resting bids")
+    r.add_argument("--live", action="store_true", help="actually send.")
+    p = sub.add_parser("probe", help="Multi-cycle live latency probe across dynamic series windows.")
+    p.add_argument("--series", default="btc-up-or-down-5m", help="Series slug (default: btc-up-or-down-5m)")
+    p.add_argument("--token-id", default=None, help="Optional fixed token ID override")
     p.add_argument("--cycles", type=int, default=30, help="Number of probe cycles (default: 30)")
-    sub.add_parser("cancel-all")
+    p.add_argument("--live", action="store_true", help="actually send.")
+    c = sub.add_parser("cancel-all")
+    c.add_argument("--live", action="store_true", help="actually send.")
     a = ap.parse_args()
+
+    is_live = bool(a.live or getattr(a, "live", False))
 
     if a.cmd == "status":
         status()
     elif a.cmd == "balance":
         balance(a.funder)
     elif a.cmd == "quote":
-        quote(a.condition_id, a.price, a.size, a.live)
+        quote(a.condition_id, a.price, a.size, is_live)
     elif a.cmd == "redeem":
         idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
-        redeem(a.condition_id, index_sets=idx_sets, collateral=a.collateral, live=a.live)
+        redeem(a.condition_id, index_sets=idx_sets, collateral=a.collateral, live=is_live)
     elif a.cmd == "probe":
-        probe(a.token_id, cycles=a.cycles, live=a.live)
+        probe(series=a.series, token_id=a.token_id, cycles=a.cycles, live=is_live)
     else:
-        cancel_all(a.live)
+        cancel_all(is_live)
 
 
 if __name__ == "__main__":

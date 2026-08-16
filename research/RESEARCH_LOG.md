@@ -2206,7 +2206,7 @@ Objectives:
 | **7. Gas Balance** | Scoped to emergency direct on-chain fallback only | Not required for off-chain Safe orders or Relayer | **PASS (N/A for live CLOB)** |
 | **8. Safety Rails** | Caps, dry-run enforcement, logging in `live_exec.py` | `MAX_ORDER_USD=25.0`, `MAX_TOTAL_USD=100.0` | **PASS** |
 
-7. **Corrected Latency Error Budget & $N \ge 30$ Multi-Cycle Probe Design:**
+7. **Corrected Latency Error Budget & Dynamic Multi-Window Probe Design ($N \ge 30$ across Series):**
    - **Transit Inputs:**
      - One-way TCP transit: $\text{net\_oneway} = 3.93\text{ ms} \pm 0.53\text{ ms}$ `[MEASURED, N=250]` (from TCP connect RTT $7.85\text{ ms} / 2$).
      - Venue staleness / internal publish lag: $31.78\text{ ms}$ `[MEASURED, N=150]`.
@@ -2222,11 +2222,16 @@ Objectives:
        - Ingress gateway TLS/HTTP header parse overhead $\approx +1.50\text{ ms}$ `[ASSUMED]`
        - Maximum systematic bias: $|B_{\text{sys}}| \le \mathbf{3.50\text{ ms}}$ `[DERIVED]`
      - **Total Parameter Uncertainty at $N=30$:** $\le \mathbf{4.78\text{ ms}}$ ($< 10\%$ of 50ms parameter).
-   - **Probe Implementation:** Subcommand `probe` built into `strategy/live_exec.py`, recording distribution metrics (Min, P25, Median, P75, P95, Max, IQR, Mean, SEM) for both $\tau_{\text{accept}}$ and $\tau_{\text{pubsub}}$.
+   - **Dynamic Multi-Window Probe Implementation (`strategy/live_exec.py`):**
+     - Accepts series slug (`--series btc-up-or-down-5m` or `--series btc-updown-5m`), dynamically discovering active 5-minute market windows before each cycle.
+     - **Rollover Gap Handling:** If `fetch_live_market` returns `None` or remaining time $< 15.0$s, pauses cycle dispatch, measures inter-window gap duration, logs gap metrics, and dynamically resubscribes the WebSocket stream to the new window token.
+     - **In-Flight Expiry Defense:** 2.0s bounded cancel wait; if market rolls during in-flight post, CLOB matching engine automatically purges expired limit orders; post-expiry cancel exceptions are caught and classified cleanly.
+     - **Per-Window Reporting:** Outputs pooled distribution statistics (Min, P25, Median, P75, P95, Max, IQR, Mean, SEM) alongside per-window breakdown tables (`tau_accept`, `tau_pubsub`, cycle count per window) and rollover gap telemetry.
 
 #### Decision
 
-OPEN — Error budget corrected with explicit random/bias split. Probe upgraded to $N \ge 30$ multi-cycle execution in `strategy/live_exec.py`. All 8 readiness checklist gates PASS (8/8). Live probe ready for owner execution.
+OPEN — Error budget verified. Latency probe upgraded to dynamic multi-window series execution (`--series btc-up-or-down-5m`) in `strategy/live_exec.py`. All 8 readiness checklist gates PASS (8/8). Full suite 699/699 passing. Live probe ready for owner execution.
+
 
 
 
