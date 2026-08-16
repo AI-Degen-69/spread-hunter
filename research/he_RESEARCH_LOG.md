@@ -2168,3 +2168,39 @@ CodeRabbit פרסם 15 הערות בנות-פעולה על PR #31, אחת מהן
 #### החלטה
 
 **LIVE** — הקשחת שלב 0 הושלמה, אומתה מול כל קריטריוני הקבלה, ונעולה.
+
+---
+
+## מפגש 70 — שלב 1: מיזוג פוזיציות ללא גז (`mergePositions`) בנתיב החי עם מנגנוני הגנה על יתרה, אידמפוטנטיות ותקרת הזמנה (2026-08-16)
+
+#### שאלה
+
+כיצד ניתן לממש במנוע הביצוע החי (`strategy/live_exec.py`) מיזוג פוזיציות ללא גז של סטים מלאים (UP + DOWN) בחזרה לביטחונות USDC.e דרך ה-Relayer של Polymarket, תוך מניעת חריגת ערך נקוב, כניסה חוזרת (re-entrancy), חוסר סנכרון מצב, וביצוע על תנאים שכבר הוכרעו או יתרות חסרות?
+
+#### שיטה
+
+1. **קידוד ABI דטרמיניסטי וחישוב מזהה פוזיציה (`strategy/live_exec.py`):**
+   - גזירת הסלקטור הקנוני עבור `mergePositions(address,bytes32,bytes32,uint256[],uint256)`: `0x9e7212ad` (מתוך `keccak256(b"mergePositions(address,bytes32,bytes32,uint256[],uint256)")[:4]`, אומת מול `ConditionalTokens.sol:165-171`).
+   - יישום `get_collection_id(parent_collection_id, condition_id, index_set)` ו-`get_position_id(collateral_token, collection_id)` לפי חוזה Gnosis `CTHelpers.sol`.
+   - יישום `encode_merge_positions(collateral_token, parent_collection_id, condition_id, index_sets, amount)` המייצר calldata באורך 260 בתים (522 תווים הקסדצימליים) הכולל 5 מילים סטטיות וזנב של 3 מילים עבור המערך הדינמי.
+2. **מנגנוני הגנה טרום-ביצוע ואידמפוטנטיות (`strategy/live_exec.py`):**
+   - **שער אידמפוטנטיות (`_check_idempotency_guard`):** סריקת `run/live_orders.json` להזמנות קודמות עם אותו `condition_id` בעלות סטטוס `pending`, `submitted`, או `interrupted`. דחיית ביצוע ב-`SystemExit` תוך ציון מזהה ההזמנה הקודמת אלא אם צוין דגל `--force`. חל הן על `redeem` והן על `merge`.
+   - **תקרת ערך נקוב מקסימלי:** אכיפת `amount * 1.0 <= MAX_ORDER_USD` (תקרה של $25.00).
+   - **בדיקת הכרעה:** דחיית `merge` אם `payoutDenominator > 0` (והפניית המפעיל לפדיון `redeem` במקום).
+   - **בדיקת יתרות:** במצב חי, אימות שיתרות ה-ERC1155 על השרשרת עבור שתי הרגליים (UP ו-DOWN) $\ge \text{amount}$, תוך דיווח מדויק על הרגל החסרה וגודל החוסר.
+   - **בטיחות בריצה יבשה (Dry Run):** ריצה יבשה מדפיסה מזהי טוקנים, יתרות, צפי קבלת ביטחונות ($1.00 למניה), הערכת עלות גז ($0.05 מתוך `MakerConfig.merge_gas_usd`), ביטחונות נטו, ותצוגה מקדימה של ה-payload ללא שידור ברשת.
+3. **תת-מערכת שליחה ורישום מאוחדת (`_submit_and_log`):**
+   - חילוץ פונקציית עזר משותפת `_submit_and_log` לשליחה ל-relayer ורישום ביקורת, תוך שמירה על אותה עמידות בפני קריסות, קדם-רישום, עדכונים אטומיים ופליטה ל-stderr הן עבור `redeem` והן עבור `merge`.
+   - הוספת תת-הפקודה `merge` ודגלי `--force` בממשק ה-CLI ב-`main()`.
+4. **בדיקות יחידה ואינטגרציה TDD (`tests/test_live_exec_merge.py`, `tests/test_live_exec.py`):**
+   - הוספת 10 בדיקות ב-`test_live_exec_merge.py` המכסות גזירת סלקטור, השוואת בתי ABI מובנים ידנית, תקרת הזמנה מקסימלית, שער אידמפוטנטיות להזמנות כפולות, עקיפה עם force, דחיית שוק שהוכרע, בדיקת יתרות חסרות (UP/DOWN), בידוד ריצה יבשה מרשת, ואידמפוטנטיות של redeem.
+   - הוספת `test_log_order_write_failure_aborts_without_submitting` ב-`test_live_exec.py` לאימות עצירה בטוחה לפני שידור בעת כשל בכתיבת יומן.
+
+#### תוצאה
+
+כל 39 בדיקות `live_exec` עוברות בהצלחה; סך הבדיקות במאגר עומד על 738/738 עוברות (עלייה מ-727). ריצה יבשה ב-CLI על שוק הבדיקה `0x26b64228...` אימתה דיווח יתרות, הפקת calldata מדויקת, ושער אידמפוטנטיות.
+
+#### החלטה
+
+**LIVE** — שלב 1 (`mergePositions`) הושלם, אומת מול כל מנגנוני הבטיחות ומערך הבדיקות, ונעול.
+

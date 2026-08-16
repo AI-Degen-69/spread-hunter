@@ -175,9 +175,10 @@ def test_build_redeem_submit_payload():
     assert params["calls"][0]["data"] == call_data
 
 
-def test_redeem_dry_run():
+def test_redeem_dry_run(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=1) as mock_denom, \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1) as mock_denom, \
          patch("urllib.request.urlopen") as mock_url, \
          patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
         le.redeem(cond_id, live=False)
@@ -194,9 +195,10 @@ def test_redeem_dry_run():
     mock_denom.assert_called_once_with(cond_id)
 
 
-def test_redeem_dry_run_rpc_unreachable():
+def test_redeem_dry_run_rpc_unreachable(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=None), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=None), \
          patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
         le.redeem(cond_id, live=False)
 
@@ -204,9 +206,10 @@ def test_redeem_dry_run_rpc_unreachable():
     assert "resolved        unknown (RPC unreachable)" in out
 
 
-def test_redeem_live_unresolved_raises():
+def test_redeem_live_unresolved_raises(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=0), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=0), \
          patch("urllib.request.urlopen") as mock_url:
         with pytest.raises(SystemExit) as exc_info:
             le.redeem(cond_id, live=True)
@@ -214,9 +217,10 @@ def test_redeem_live_unresolved_raises():
     mock_url.assert_not_called()
 
 
-def test_redeem_live_unresolved_skip_check_still_raises():
+def test_redeem_live_unresolved_skip_check_still_raises(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=0), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=0), \
          patch("urllib.request.urlopen") as mock_url:
         with pytest.raises(SystemExit) as exc_info:
             le.redeem(cond_id, skip_resolution_check=True, live=True)
@@ -224,9 +228,10 @@ def test_redeem_live_unresolved_skip_check_still_raises():
     mock_url.assert_not_called()
 
 
-def test_redeem_live_unknown_resolution_raises():
+def test_redeem_live_unknown_resolution_raises(tmp_path):
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    with patch.object(le, "get_payout_denominator", return_value=None), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=None), \
          patch("urllib.request.urlopen") as mock_url:
         with pytest.raises(SystemExit) as exc_info:
             le.redeem(cond_id, live=True)
@@ -237,7 +242,7 @@ def test_redeem_live_unknown_resolution_raises():
     mock_url.assert_not_called()
 
 
-def test_redeem_live_unknown_resolution_skip_check_proceeds():
+def test_redeem_live_unknown_resolution_skip_check_proceeds(tmp_path):
     acc = Account.create()
     funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
@@ -245,7 +250,8 @@ def test_redeem_live_unknown_resolution_skip_check_proceeds():
     recorded_requests = []
     mock_urlopen = make_mock_urlopen(recorded_requests)
 
-    with patch.dict(os.environ, env_vars, clear=False), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.dict(os.environ, env_vars, clear=False), \
          patch.object(le, "get_payout_denominator", return_value=None), \
          patch("urllib.request.urlopen", side_effect=mock_urlopen):
         le.redeem(cond_id, skip_resolution_check=True, live=True)
@@ -254,7 +260,7 @@ def test_redeem_live_unknown_resolution_skip_check_proceeds():
     assert "submit" in recorded_requests[1].full_url
 
 
-def test_redeem_live_mock():
+def test_redeem_live_mock(tmp_path):
     """Verify gasless redemption request construction and wire types against
     official client schema @polymarket/builder-relayer-client@0.0.10 dist/types.d.ts:147-154.
     """
@@ -267,7 +273,8 @@ def test_redeem_live_mock():
 
     import time
     t_before = int(time.time())
-    with patch.dict(os.environ, env_vars, clear=False), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.dict(os.environ, env_vars, clear=False), \
          patch.object(le, "get_payout_denominator", return_value=1), \
          patch.object(le, "sign_redeem_transaction", wraps=le.sign_redeem_transaction) as mock_sign, \
          patch("urllib.request.urlopen", side_effect=mock_urlopen):
@@ -314,7 +321,7 @@ def test_redeem_live_mock():
     assert len(params["calls"][0]["data"]) == 458
 
 
-def test_redeem_ignores_params_response_address():
+def test_redeem_ignores_params_response_address(tmp_path):
     """Regression guard: verify that the pool-worker address in the params response
     appears nowhere in the submitted batch payload.
     """
@@ -325,7 +332,8 @@ def test_redeem_ignores_params_response_address():
     recorded_requests = []
     mock_urlopen = make_mock_urlopen(recorded_requests)
 
-    with patch.dict(os.environ, env_vars, clear=False), \
+    with patch.object(le, "RUN", tmp_path), \
+         patch.dict(os.environ, env_vars, clear=False), \
          patch.object(le, "get_payout_denominator", return_value=1), \
          patch("urllib.request.urlopen", side_effect=mock_urlopen):
         le.redeem(cond_id, live=True)
@@ -337,6 +345,7 @@ def test_redeem_ignores_params_response_address():
     body = json.loads(raw_json)
     assert body["from"] != POOL_WORKER
     assert body["depositWalletParams"]["depositWallet"] != POOL_WORKER
+
 
 
 def test_get_payout_denominator_failover():
@@ -736,3 +745,35 @@ def test_log_order_corrupt_rename_failure_aborts_without_overwriting(tmp_path):
     assert "Refusing to overwrite corrupted log file" in str(exc_info.value)
     # The file still has its original corrupt content, NOT overwritten
     assert log_file.read_text(encoding="utf-8") == corrupt_content
+
+
+def test_log_order_write_failure_aborts_without_submitting(tmp_path):
+    """R11 Item 0a: If _atomic_write_json fails in _log_order, SystemExit is raised
+    naming the path, and submit urlopen is never reached."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    urls_called = []
+    def mock_urlopen(req, timeout=30):
+        urls_called.append(req.full_url)
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch.object(le, "_atomic_write_json", return_value=False), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "Failed to record pending log entry" in msg
+    assert "Nothing was submitted" in msg
+    # Crucial invariant: submit endpoint is NEVER called when pending log write fails
+    assert not any("submit" in u for u in urls_called)
+
+

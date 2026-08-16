@@ -2535,3 +2535,39 @@ All 11 Stage 0 unit tests pass; full test suite increases from 716 to 727 passed
 #### Decision
 
 **LIVE** — Stage 0 hardening complete, verified across all acceptance criteria, and locked.
+
+---
+
+### Session 70 — Stage 1: Gasless `mergePositions` on Live Path with Pre-Flight Balance, Idempotency, and Max-Notional Guards (2026-08-16)
+
+#### Question
+
+How can the live execution engine (`strategy/live_exec.py`) safely execute gasless merges of full outcome sets (UP + DOWN) back into USDC.e collateral via the Polymarket Relayer, preventing over-notional execution, re-entrancy, state desynchronization, and execution on resolved conditions or short balances?
+
+#### Method
+
+1. **Deterministic Position ID & Calldata Encoding (`strategy/live_exec.py`):**
+   - Derived canonical ABI selector for `mergePositions(address,bytes32,bytes32,uint256[],uint256)`: `0x9e7212ad` (from `keccak256(b"mergePositions(address,bytes32,bytes32,uint256[],uint256)")[:4]`, verified against `ConditionalTokens.sol:165-171`).
+   - Implemented `get_collection_id(parent_collection_id, condition_id, index_set)` and `get_position_id(collateral_token, collection_id)` per Gnosis `CTHelpers.sol`.
+   - Implemented `encode_merge_positions(collateral_token, parent_collection_id, condition_id, index_sets, amount)` producing 260-byte (522 hex char) calldata with 5-word head and 3-word dynamic array tail.
+2. **Pre-flight Execution Guards & Idempotency (`strategy/live_exec.py`):**
+   - **Idempotency Guard (`_check_idempotency_guard`):** Scans `run/live_orders.json` for prior entries matching `condition_id` with `status` in `("pending", "submitted", "interrupted")`. Refuses with `SystemExit` naming prior entry ID and status unless `--force` is passed. Wired into both `redeem` and `merge`.
+   - **Max Notional Ceiling:** Enforces `amount * 1.0 <= MAX_ORDER_USD` ($25.00 ceiling).
+   - **Resolution Guard:** Refuses `merge` if `payoutDenominator > 0` (directs operator to `redeem` instead).
+   - **Balance Guard:** In live mode, verifies on-chain conditional token balances for both UP and DOWN legs $\ge \text{amount}$, reporting exact shortfall on any failing leg.
+   - **Dry-Run Safety:** Dry-run prints token IDs, balances, expected collateral returned ($1.00/share), estimated gas ($0.05 from `MakerConfig.merge_gas_usd`), net collateral, and EIP-712 payload preview without network transmission.
+3. **Unified Submission Subsystem (`_submit_and_log`):**
+   - Extracted shared relayer submission and audit logging helper `_submit_and_log`, maintaining identical Stage 0 crash safety, pre-logging, atomic updates, and stderr fallback dumps for both `redeem` and `merge`.
+   - Added `merge` subcommand and `--force` CLI flags to `main()`.
+4. **TDD Unit & Integration Testing (`tests/test_live_exec_merge.py`, `tests/test_live_exec.py`):**
+   - Added 10 tests in `test_live_exec_merge.py` covering selector derivation, hand-constructed ABI byte comparison, max order ceiling, duplicate order idempotency guard, force override, resolved market refusal, insufficient balance guards (UP/DOWN), dry-run network isolation, and redeem idempotency.
+   - Added `test_log_order_write_failure_aborts_without_submitting` in `test_live_exec.py` verifying fail-closed abort on log write failure before `urlopen`.
+
+#### Result
+
+All 39 `live_exec` tests pass; entire repo test suite passes at 738/738 (up from 727 baseline). Dry-run CLI execution on reference condition `0x26b64228...` confirmed accurate balance reporting, calldata generation, and idempotency refusal.
+
+#### Decision
+
+**LIVE** — Stage 1 (`mergePositions`) complete, verified across all safety guards and test assertions, and locked.
+
