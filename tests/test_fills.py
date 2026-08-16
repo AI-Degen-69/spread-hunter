@@ -8,6 +8,8 @@ result recorded so far, so those numbers should not be trusted.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from strategy.fills import QueueFillEngine
@@ -424,3 +426,350 @@ def test_no_reconciliation_row_before_the_first_delta():
     eng.post("T", "UP", 0.50, 120, {0.50: 10.0}, 0.0)
     eng.on_book("T", {0.50: 10.0}, 1.0, traded={})
     assert eng.reconciliation == []
+
+
+# --- the amendment penalty (Phase 1, component 1) ---------------------------
+#
+# A repriced order is a NEW order at the back of the new level's queue. The
+# rule has no free parameter, so unlike the other two haircut components it is
+# asserted outright rather than estimated -- and nothing here may assert on the
+# fill-rate gap, or the test would re-encode the joint fit the spec forbids.
+
+def test_amendment_resets_queue_to_the_new_level_depth():
+    """P1 -> P2 joins the back of P2's queue. No seniority is inherited."""
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 300.0}, 0.0)
+    eng.on_book("T", {0.50: 300.0}, 1.0, traded={})             # establishes prev
+    eng.on_book("T", {0.50: 60.0}, 2.0, traded={0.50: 240.0})   # worked down to 60
+    assert o.queue_ahead == 60.0
+
+    eng.amend(o, 0.49, {0.50: 60.0, 0.49: 800.0}, 3.0)
+    assert o.price == 0.49
+    assert o.queue_ahead == 800.0        # NOT 60 -- the earned position is gone
+
+
+def test_amendment_to_an_empty_level_still_starts_from_zero_not_seniority():
+    """An empty new level means nothing is ahead of us -- which is a fact about
+    the level, not a carried-over privilege. The distinction matters because
+    both readings produce 0.0 here and only one of them is a rule."""
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 300.0}, 0.0)
+    eng.amend(o, 0.51, {0.50: 300.0}, 1.0)
+    assert o.price == 0.51
+    assert o.queue_ahead == 0.0
+
+
+def test_amendment_keeps_filled_shares_and_requeues_only_the_remainder():
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 100.0}, 0.0)
+    eng.on_book("T", {0.50: 100.0}, 1.0, traded={})
+    eng.on_book("T", {0.50: 100.0}, 2.0, traded={0.50: 150.0})   # 150 - 100 = 50
+    assert o.filled == 50.0
+
+    eng.amend(o, 0.48, {0.48: 400.0}, 3.0)
+    assert o.filled == 50.0              # done is done
+    assert o.remaining == 70.0           # only the rest goes back in the queue
+    assert o.queue_ahead == 400.0
+
+
+def test_same_price_amendment_is_not_an_amendment():
+    """The sweep deliberately leaves an unchanged order alone because
+    requoting loses queue position. A no-op call must not punish that path."""
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 300.0}, 0.0)
+    eng.on_book("T", {0.50: 300.0}, 1.0, traded={})
+    eng.on_book("T", {0.50: 60.0}, 2.0, traded={0.50: 240.0})
+    assert o.queue_ahead == 60.0
+
+    eng.amend(o, 0.50, {0.50: 60.0}, 3.0)
+    assert o.queue_ahead == 60.0         # position held, not reset to 60 by luck
+    assert o.posted_ts == 0.0            # untouched: no new order was created
+
+
+def test_amended_order_fills_only_past_the_new_queue():
+    """The penalty has to bite in the crediting path, not just in the field."""
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 120, {0.50: 0.0}, 0.0)
+    assert o.queue_ahead == 0.0          # front of an empty level
+
+    eng.amend(o, 0.49, {0.49: 500.0}, 1.0)
+    eng.on_book("T", {0.49: 500.0}, 2.0, traded={})
+    assert eng.on_book("T", {0.49: 500.0}, 3.0, traded={0.49: 400.0}) == []
+    assert eng.filled_shares() == 0.0    # 400 traded, 500 ahead: nothing is ours
+
+
+def test_cancel_and_repost_loses_position_the_same_way_an_amendment_does():
+    """The path the sweep actually takes today. Locked so a future reprice
+    cannot start inheriting seniority through the back door."""
+    eng = QueueFillEngine()
+    a = eng.post("T", "UP", 0.50, 120, {0.50: 300.0}, 0.0)
+    eng.on_book("T", {0.50: 300.0}, 1.0, traded={})
+    eng.on_book("T", {0.50: 60.0}, 2.0, traded={0.50: 240.0})
+    assert a.queue_ahead == 60.0
+
+    a.cancelled = True
+    b = eng.post("T", "UP", 0.49, 120, {0.50: 60.0, 0.49: 800.0}, 3.0)
+    assert b.queue_ahead == 800.0
+    assert eng.open_orders() == [b]
+
+
+# --- the cancellation race (Phase 1, component 2) --------------------------
+#
+# A cancel sent at t_c takes tau_cancel = net_oneway + venue_ack to acknowledge.
+# In-flight trades landing during [t_c, t_c + tau_cancel] are credited as
+# reason="race", outcome="race_loss" at expected-value p_race = min(1.0, tau / dt).
+
+def test_cancel_sets_timestamp_and_reason():
+    eng = QueueFillEngine()
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    assert not o.cancelled
+    assert o.cancelled_ts is None
+    assert o.cancel_reason == ""
+
+    eng.cancel("T", ts=1.5, reason="stale_quote")
+    assert o.cancelled
+    assert o.cancelled_ts == 1.5
+    assert o.cancel_reason == "stale_quote"
+    assert eng.open_orders("T") == []
+
+
+def test_trade_within_cancel_race_window_credits_race_loss():
+    # tau = 100ms + 150ms = 250ms = 0.25s
+    eng = QueueFillEngine(cancel_net_oneway_ms=100.0, cancel_venue_ack_ms=150.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})             # establishes prev at t=1.0
+
+    eng.cancel("T", ts=1.0, reason="requote")                # cancelled at t=1.0
+
+    # Snapshot arrives at t=2.1.
+    # dt_poll = 2.1 - 1.0 = 1.1s. overlap = min(2.1, 1.25) - 1.0 = 0.25s.
+    # p_race = 0.25 / 1.1 = 0.2272727...
+    # Tape trades 80 shares. qty_exposed = 80. qty_race = 80 * (0.25 / 1.1)
+    fills = eng.on_book("T", {0.50: 0.0}, 2.1, traded={0.50: 80.0})
+    assert len(fills) == 1
+    f = fills[0]
+    expected_qty = 80.0 * (0.25 / 1.1)
+    assert f.reason == "race"
+    assert f.size == pytest.approx(expected_qty)
+    assert o.filled == pytest.approx(expected_qty)
+    assert eng.reconciliation[-1].outcome == "race_loss"
+    assert eng.reconciliation[-1].credited == pytest.approx(expected_qty)
+
+
+def test_trade_after_cancel_race_window_is_clean_cancel_no_fill():
+    eng = QueueFillEngine(cancel_net_oneway_ms=100.0, cancel_venue_ack_ms=150.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+
+    eng.cancel("T", ts=1.0, reason="requote")
+    # Poll at t=1.5 processes the in-flight window [1.0, 1.25]
+    eng.on_book("T", {0.50: 0.0}, 1.5, traded={})
+
+    # Snapshot at t=2.5 (prev_ts=1.5 > 1.25 ack) -> order no longer race-eligible
+    fills = eng.on_book("T", {0.50: 0.0}, 2.5, traded={0.50: 80.0})
+    assert fills == []
+    assert o.filled == 0.0
+    assert eng.filled_shares() == 0.0
+
+
+def test_cancelled_order_not_double_counted():
+    """An order undergoing a race loss must not also be in open_orders."""
+    eng = QueueFillEngine(cancel_net_oneway_ms=100.0, cancel_venue_ack_ms=150.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    eng.cancel("T", ts=1.0, reason="requote")
+
+    assert eng.open_orders("T") == []
+    assert len(eng.race_eligible_orders("T", ts=1.2, prev_ts=1.0)) == 1
+
+    fills = eng.on_book("T", {0.50: 0.0}, 1.2, traded={0.50: 50.0})
+    assert len(fills) == 1
+    assert fills[0].reason == "race"
+
+
+def test_zero_tau_cancels_with_zero_race_exposure():
+    eng = QueueFillEngine(cancel_net_oneway_ms=0.0, cancel_venue_ack_ms=0.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    eng.cancel("T", ts=1.0, reason="requote")
+
+    # At tau=0, snapshot at t=2.01 has overlap=0 -> race_eligible_orders is empty
+    fills = eng.on_book("T", {0.50: 0.0}, 2.01, traded={0.50: 50.0})
+    assert fills == []
+    assert o.filled == 0.0
+
+
+def test_sub_tau_poll_interval_sets_p_race_to_one():
+    # tau = 0.25s. dt_poll = 0.20s <= tau -> p_race = 1.0
+    eng = QueueFillEngine(cancel_net_oneway_ms=100.0, cancel_venue_ack_ms=150.0)
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, 0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    eng.cancel("T", ts=1.0, reason="requote")
+
+    fills = eng.on_book("T", {0.50: 0.0}, 1.2, traded={0.50: 40.0})
+    assert len(fills) == 1
+    assert fills[0].size == pytest.approx(40.0)    # p_race = 1.0 -> 100% credited
+    assert fills[0].reason == "race"
+
+
+# --- Post latency penalty tests (issue #27 Phase 1 component 3) -----------
+
+def test_trade_before_arrival_yields_not_yet_arrived_and_zero_fill():
+    # tau_post = 100ms net + 50ms accept = 150ms = 0.15s
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 100.0}, 1.0, traded={})      # prime at t=1.0
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.0)  # arrival_ts = 1.15
+
+    # Snapshot at t=1.10 (ts <= 1.15 arrival) -> f = 0.0
+    fills = eng.on_book("T", {0.50: 100.0}, 1.10, traded={0.50: 50.0})
+    assert fills == []
+    assert o.filled == 0.0
+    assert o.queue_ahead == 0.0                         # queue_ahead unchanged
+    assert eng.reconciliation[-1].outcome == "not_yet_arrived"
+    assert eng.reconciliation[-1].credited == 0.0
+
+
+def test_trade_overlapping_arrival_scales_effective_volume():
+    # tau_post = 0.15s. posted at t=1.0 -> arrival_ts = 1.15
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})       # prev_ts = 1.0
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.0)
+
+    # Snapshot at t=2.0 (dt_poll = 1.0s, overlap = 2.0 - 1.15 = 0.85s -> f = 0.85)
+    fills = eng.on_book("T", {0.50: 0.0}, 2.0, traded={0.50: 100.0})
+    assert len(fills) == 1
+    assert fills[0].size == pytest.approx(85.0)
+    assert fills[0].reason == "tape"                    # ordinary queue fill, not split
+    assert o.filled == pytest.approx(85.0)
+    assert eng.reconciliation[-1].outcome == "credited"
+    assert eng.reconciliation[-1].credited == pytest.approx(85.0)
+
+
+def test_subsequent_poll_has_f_equals_one():
+    # tau_post = 0.15s. posted at t=1.0 -> arrival_ts = 1.15
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.0)
+
+    # First poll at t=2.0 (credits 85 shares, leaving 15)
+    eng.on_book("T", {0.50: 0.0}, 2.0, traded={0.50: 100.0})
+    assert o.remaining == pytest.approx(15.0)
+
+    # Second poll at t=3.0 (prev_ts = 2.0 >= arrival_ts 1.15 -> f = 1.0)
+    fills2 = eng.on_book("T", {0.50: 0.0}, 3.0, traded={0.50: 20.0})
+    assert len(fills2) == 1
+    assert fills2[0].size == pytest.approx(15.0)        # fills remaining 15 at 100% f
+    assert o.remaining == 0.0
+
+
+def test_partial_interval_behind_queue_remains_behind_queue():
+    # tau_post = 0.15s. posted at t=1.0 -> arrival_ts = 1.15. queue_ahead = 100.
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 100.0}, 1.0, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 100.0}, ts=1.0)
+
+    # Snapshot at t=2.0: f = 0.85. t_vol = 100 -> t_vol_eff = 85.
+    # 85 < 100 queue_ahead -> qty = 0, outcome = behind_queue
+    fills = eng.on_book("T", {0.50: 100.0}, 2.0, traded={0.50: 100.0})
+    assert fills == []
+    assert o.filled == 0.0
+    assert o.queue_ahead == pytest.approx(15.0)         # 100 - 85 = 15 ahead
+    assert eng.reconciliation[-1].outcome == "behind_queue"
+
+
+def test_zero_tau_post_gives_full_immediate_eligibility():
+    eng = QueueFillEngine(net_oneway_ms=0.0, post_venue_accept_ms=0.0)
+    eng.on_book("T", {0.50: 0.0}, 1.0, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.0)
+
+    # Snapshot at t=1.1 with tau_post=0 -> f = 1.0
+    fills = eng.on_book("T", {0.50: 0.0}, 1.1, traded={0.50: 50.0})
+    assert len(fills) == 1
+    assert fills[0].size == pytest.approx(50.0)
+    assert o.filled == pytest.approx(50.0)
+
+
+def test_refactored_config_latency_windows():
+    eng = QueueFillEngine(net_oneway_ms=100.0, cancel_venue_ack_ms=150.0, post_venue_accept_ms=50.0)
+    assert eng.tau_cancel_sec == pytest.approx(0.25)
+    assert eng.tau_post_sec == pytest.approx(0.15)
+
+
+def test_small_dt_multi_interval_arrival_progression():
+    """At 50ms poll cadence and tau_post=150ms, order spans multiple intervals before arriving."""
+    # tau_post = 0.15s (150ms)
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 0.0}, 1.000, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.000) # arrival at 1.150s
+
+    # Poll 1 at t=1.050 (ts <= arrival) -> f = 0.0, not_yet_arrived
+    f1 = eng.on_book("T", {0.50: 0.0}, 1.050, traded={0.50: 20.0})
+    assert f1 == []
+    assert o.filled == 0.0
+    assert eng.reconciliation[-1].outcome == "not_yet_arrived"
+
+    # Poll 2 at t=1.100 (ts <= arrival) -> f = 0.0, not_yet_arrived
+    f2 = eng.on_book("T", {0.50: 0.0}, 1.100, traded={0.50: 20.0})
+    assert f2 == []
+    assert o.filled == 0.0
+    assert eng.reconciliation[-1].outcome == "not_yet_arrived"
+
+    # Poll 3 at t=1.200 (prev=1.100 < 1.150 < curr=1.200, dt=0.100s, eligible=(1.200-1.150)/0.100 = 0.50)
+    f3 = eng.on_book("T", {0.50: 0.0}, 1.200, traded={0.50: 40.0})
+    assert len(f3) == 1
+    assert f3[0].size == pytest.approx(20.0) # 0.50 * 40 = 20
+    assert o.filled == pytest.approx(20.0)
+    assert eng.reconciliation[-1].outcome == "credited"
+
+    # Poll 4 at t=1.250 (prev=1.200 >= arrival=1.150 -> f = 1.0)
+    f4 = eng.on_book("T", {0.50: 0.0}, 1.250, traded={0.50: 30.0})
+    assert len(f4) == 1
+    assert f4[0].size == pytest.approx(30.0)
+    assert o.filled == pytest.approx(50.0)
+    assert eng.reconciliation[-1].outcome == "credited"
+
+
+def test_small_dt_cumulative_volume_conservation():
+    """Cumulative volume credited across multi-interval arrival matches single-interval path."""
+    # Scenario: 200 shares trade uniformly over [1.0, 1.25] (0.8 sh/ms)
+    # Order posted at t=1.000 with tau_post = 150ms -> arrival at t=1.150
+    # Over [1.0, 1.25], 100ms is eligible (1.150 to 1.250) -> 100ms * 0.8 sh/ms = 80 shares.
+
+    # 1. Multi-interval path: 5 intervals of 50ms
+    eng_multi = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng_multi.on_book("T", {0.50: 0.0}, 1.000, traded={})
+    o_multi = eng_multi.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.000)
+
+    eng_multi.on_book("T", {0.50: 0.0}, 1.050, traded={0.50: 40.0}) # f=0.0 -> 0
+    eng_multi.on_book("T", {0.50: 0.0}, 1.100, traded={0.50: 40.0}) # f=0.0 -> 0
+    eng_multi.on_book("T", {0.50: 0.0}, 1.150, traded={0.50: 40.0}) # ts=arrival -> f=0.0 -> 0
+    eng_multi.on_book("T", {0.50: 0.0}, 1.200, traded={0.50: 40.0}) # prev=1.150 >= arrival -> f=1.0 -> 40
+    eng_multi.on_book("T", {0.50: 0.0}, 1.250, traded={0.50: 40.0}) # prev=1.200 >= arrival -> f=1.0 -> 40
+    assert o_multi.filled == pytest.approx(80.0)
+
+    # 2. Single interval path: 1 interval of 250ms
+    eng_single = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng_single.on_book("T", {0.50: 0.0}, 1.000, traded={})
+    o_single = eng_single.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.000)
+    # interval [1.000, 1.250], dt=0.250, arrival=1.150 -> f = (1.250 - 1.150)/0.250 = 0.100/0.250 = 0.40
+    eng_single.on_book("T", {0.50: 0.0}, 1.250, traded={0.50: 200.0}) # 0.40 * 200 = 80
+    assert o_single.filled == pytest.approx(80.0)
+
+
+def test_small_dt_zero_and_negative_interval_guard():
+    """Duplicate timestamps (dt <= 0) must not cause division-by-zero or crash."""
+    eng = QueueFillEngine(net_oneway_ms=100.0, post_venue_accept_ms=50.0)
+    eng.on_book("T", {0.50: 0.0}, 1.000, traded={})
+    o = eng.post("T", "UP", 0.50, 100.0, {0.50: 0.0}, ts=1.000)
+
+    # Duplicate timestamp
+    f_dup = eng.on_book("T", {0.50: 0.0}, 1.000, traded={0.50: 50.0})
+    assert f_dup == []
+    assert o.filled == 0.0
+
+    # Rapid micro-burst dt=1ms
+    f_burst = eng.on_book("T", {0.50: 0.0}, 1.001, traded={0.50: 50.0})
+    assert f_burst == []
+    assert o.filled == 0.0
+
+

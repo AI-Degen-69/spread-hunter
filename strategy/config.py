@@ -689,6 +689,32 @@ class MakerConfig:
     rebate_rate: float = 0.20
     fee_rate: float = 0.07          # taker fee rate, for the rebate estimate
 
+    # LATENCY AND PROPAGATION PARAMETERS (issue #27, Phase 1 components 2 & 3).
+    # Shared one-way network leg. MEASURED -- median(RTT)/2 = 7.85ms/2 (N=250)
+    # from TCP connect probe to CLOB gateway.
+    net_oneway_ms: float = 3.93
+
+    # Venue-side legs. MEASURED / ESTIMATE.
+    # post_venue_accept_ms: MEASURED -- mean of window medians from live CLOB probe
+    # (N=90 across 3 windows: 85.00, 75.51, 82.89ms; mean 81.13ms, between-window SD 4.98ms).
+    # Per-window draw, not a fixed venue property.
+    cancel_venue_ack_ms: float = 150.0     # tau_cancel = 153.93ms total (estimate)
+    post_venue_accept_ms: float = 81.0     # tau_post   = 84.93ms total (~1.8x lower than 150ms estimate) [MEASURED]
+
+
+    @property
+    def cancel_net_oneway_ms(self) -> float:
+        """Backward compatibility alias for net_oneway_ms."""
+        return self.net_oneway_ms
+
+    @property
+    def tau_cancel_sec(self) -> float:
+        return (self.net_oneway_ms + self.cancel_venue_ack_ms) / 1000.0
+
+    @property
+    def tau_post_sec(self) -> float:
+        return (self.net_oneway_ms + self.post_venue_accept_ms) / 1000.0
+
     sim_only: bool = True
 
     def db_path(self) -> Path:
@@ -743,6 +769,15 @@ def load() -> MakerConfig:
     pr = os.environ.get("HUNTER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
+    cno = os.environ.get("HUNTER_NET_ONEWAY_MS") or os.environ.get("HUNTER_CANCEL_NET_ONEWAY_MS")
+    if cno and cno.strip():
+        kw["net_oneway_ms"] = float(cno)
+    cva = os.environ.get("HUNTER_CANCEL_VENUE_ACK_MS")
+    if cva and cva.strip():
+        kw["cancel_venue_ack_ms"] = float(cva)
+    pva = os.environ.get("HUNTER_POST_VENUE_ACCEPT_MS")
+    if pva and pva.strip():
+        kw["post_venue_accept_ms"] = float(pva)
     mf = os.environ.get("HUNTER_MARGINAL_FLOOR") or ""
     if mf.strip():
         kw["marginal_return_floor"] = float(mf)

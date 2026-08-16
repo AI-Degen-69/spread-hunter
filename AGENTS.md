@@ -62,6 +62,12 @@ difference between the repos should be strategy-specific.
 - Run one instance at a time. Concurrent bots writing one database sum their
   independent inventories into silently invalid data.
 
+## Workspace hygiene & temporary files
+
+- **Delete temporary/scratch files immediately:** Scratch scripts, diagnostic dumps, one-off analysis snippets, and temporary mockups must be deleted as soon as their output has been verified.
+- **Never commit generated output or debug logs:** Telemetry, audit reports, browser logs, and intermediate test artifacts must be cleaned up and kept out of the repository.
+- **Zero dead weight:** If a file, skill, or configuration becomes obsolete or redundant, delete it immediately.
+
 ## Output style
 
 The reader has ADHD. Shape every response so it can be acted on:

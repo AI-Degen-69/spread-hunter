@@ -47,6 +47,14 @@ STATED BIASES (each makes us OPTIMISTIC -- treat output as an upper bound)
      someone wants to sell to us, which is disproportionately when the market
      is about to move against us. That cost shows up in the resolution outcome,
      which is the honest place for it.
+  4. Joiners during flight: We do not model queue depth changes during the
+     in-flight post window tau_post. Orders queueing ahead would raise
+     queue_ahead; trades would lower it. Both are unobservable without real
+     orders; queue_ahead stays set from decision-time depth (direction optimistic).
+  5. Feed broadcast latency (tau_pubsub): At median feed lag (~120ms, N=90 across
+     3 windows), touch depth drifts only 4.46% (queue model survives at typical lag).
+     In the P95 tail (~1.1s), depth drift expands to 44.20% and touch price moves in
+     54.8% of intervals (direction optimistic in the tail).
 """
 from __future__ import annotations
 
@@ -76,6 +84,13 @@ class RestingOrder:
     # order; otherwise the dashboard would report cancelled offers as open.
     quote_id: int | None = None
     cancelled: bool = False
+    cancelled_ts: float | None = None
+    cancel_reason: str = ""
+
+    def cancel(self, ts: float = 0.0, reason: str = "") -> None:
+        self.cancelled = True
+        self.cancelled_ts = ts
+        self.cancel_reason = reason
 
     @property
     def remaining(self) -> float:
@@ -109,6 +124,7 @@ class Fill:
     #              optimistic bias #1, and it is the branch that can silently
     #              manufacture an edge: from the bid side alone a mass
     #              cancellation looks identical to a mass trade.
+    #   'race'  -- trade occurred within cancel-propagation window (adverse race loss).
     # Reporting must be able to split these, or a fill rate carried mostly by
     # 'sweep' reads exactly like one earned in the queue.
     reason: str = "queue"
@@ -129,7 +145,9 @@ class Recon:
       'credited'          -- tape volume beyond the queue reached our order.
       'behind_queue'      -- it traded at our price; the shares ahead took it.
       'no_trade_at_price' -- tape was read; nothing traded at our price.
+      'not_yet_arrived'   -- order was still in flight (ts <= posted_ts + tau_post).
       'tape_unavailable'  -- tape could not be read; nothing is claimed.
+      'race_loss'         -- trade landed during in-flight cancellation window (latency race loss).
     """
     ts: float
     token_id: str
@@ -159,6 +177,27 @@ class QueueFillEngine:
     unverified: list[Fill] = field(default_factory=list)
     # token_id -> {price: size} as of the previous poll
     _last_book: dict[str, dict[float, float]] = field(default_factory=dict)
+    # token_id -> timestamp as of the previous poll (for poll interval estimation)
+    _last_ts: dict[str, float] = field(default_factory=dict)
+    # Latency and propagation parameters (issue #27 Phase 1 components 2 & 3)
+    net_oneway_ms: float = 3.93
+    cancel_venue_ack_ms: float = 150.0
+    post_venue_accept_ms: float = 81.0
+    cancel_net_oneway_ms: Optional[float] = None
+
+    def __post_init__(self):
+        if self.cancel_net_oneway_ms is not None:
+            self.net_oneway_ms = self.cancel_net_oneway_ms
+
+    @property
+    def tau_cancel_sec(self) -> float:
+        """Total cancel acknowledgment latency window in seconds."""
+        return (self.net_oneway_ms + self.cancel_venue_ack_ms) / 1000.0
+
+    @property
+    def tau_post_sec(self) -> float:
+        """Total post arrival latency window in seconds."""
+        return (self.net_oneway_ms + self.post_venue_accept_ms) / 1000.0
 
     # -- order management --------------------------------------------------
     def post(self, token_id: str, side: str, price: float, size: float,
@@ -171,31 +210,21 @@ class QueueFillEngine:
         self.orders.append(o)
         return o
 
+    def amend(self, order: RestingOrder, price: float,
+              book_bids: dict[float, float], ts: float) -> RestingOrder:
+        """Move a resting order to `price`, losing 100% of its queue position."""
+        new_price = round(price, 4)
+        if new_price == order.price:
+            return order
+        order.price = new_price
+        order.queue_ahead = float(book_bids.get(new_price, 0.0))
+        order.posted_ts = ts
+        return order
+
     def cross(self, token_id: str, side: str, size: float,
               book_asks: dict[float, float], ts: float,
               max_price: float = 1.0) -> list[Fill]:
-        """TAKE liquidity now, walking the ask book upwards. Not a resting order.
-
-        The balance hedge near settlement is a CROSS, and it was being expressed
-        as `engine.post()` at the best ask -- a passive bid. Under the fixed
-        model that fills 0 of 150 shares even as the book trades straight
-        through the level, because a bid sitting alone at the ask has nothing
-        queued at its price, so no bid-side delta can ever be attributed to it.
-        Before the phantom-fill fix it filled instantly and completely, which is
-        why the hedge looked like it worked. It never did.
-
-        Crossing is a different act and is modelled as one: consume real ask
-        depth, at the real prices, in order, and stop when the book runs out.
-        A partial cross is a REAL outcome -- if the depth is not there, the leg
-        stays unhedged and the caller has to live with that.
-
-        `max_price` caps how far up the book we are willing to walk, so a thin
-        book cannot drag the hedge to 0.99 and turn a 1c edge into a 40c loss.
-
-        These fills are tagged 'cross'. They are the only fills in this whole
-        strategy that pay the Polymarket taker fee, so nothing downstream may
-        treat them as maker fills.
-        """
+        """TAKE liquidity now, walking the ask book upwards. Not a resting order."""
         remaining = float(size)
         made: list[Fill] = []
         for price in sorted(book_asks):
@@ -212,92 +241,91 @@ class QueueFillEngine:
             remaining -= qty
         return made
 
-    def cancel(self, token_id: Optional[str] = None) -> int:
+    def cancel(self, token_id: Optional[str] = None, ts: float = 0.0,
+               reason: str = "") -> int:
+        """Cancel open orders matching `token_id`, recording cancellation timestamp and reason."""
         n = 0
         for o in self.orders:
             if o.is_open and (token_id is None or o.token_id == token_id):
-                o.cancelled = True
+                o.cancel(ts=ts, reason=reason)
                 n += 1
         return n
 
     def open_orders(self, token_id: Optional[str] = None) -> list[RestingOrder]:
+        """Orders that are currently open (not cancelled) and have remaining size."""
         return [o for o in self.orders
                 if o.is_open and (token_id is None or o.token_id == token_id)]
+
+    def race_eligible_orders(self, token_id: Optional[str] = None,
+                             ts: float = 0.0,
+                             prev_ts: Optional[float] = None) -> list[tuple[RestingOrder, float]]:
+        """Orders cancelled whose in-flight window overlapped with [prev_ts, ts].
+
+        THE CANCELLATION RACE (Phase 1, component 2). In real execution, a cancel
+        sent at t_c takes tau_cancel = net_oneway + venue_ack to acknowledge.
+        Any taker trades arriving during that in-flight window fill our resting
+        bid rather than getting cancelled.
+        Returns list of (order, p_race).
+        """
+        tau = self.tau_cancel_sec
+        if tau <= 0 or prev_ts is None:
+            return []
+        dt_poll = max(1e-4, ts - prev_ts)
+        eligible: list[tuple[RestingOrder, float]] = []
+        for o in self.orders:
+            if not o.cancelled or o.cancelled_ts is None or o.remaining <= 1e-9:
+                continue
+            if token_id is not None and o.token_id != token_id:
+                continue
+            c_start = o.cancelled_ts
+            c_end = c_start + tau
+            # Overlap between [prev_ts, ts] and [c_start, c_end]
+            overlap = min(ts, c_end) - max(prev_ts, c_start)
+            if overlap > 1e-9:
+                p_race = min(1.0, max(0.0, overlap / dt_poll))
+                eligible.append((o, p_race))
+        return eligible
 
     # -- the core ----------------------------------------------------------
     def on_book(self, token_id: str, bids: dict[float, float], ts: float,
                 traded: Optional[dict[float, float]] = None) -> list[Fill]:
-        """Feed a fresh bid-side snapshot; returns any fills it implies.
-
-        `traded` is {price: volume that actually TRADED at that price since the
-        last snapshot}, from the tape. When supplied it replaces the guesswork
-        entirely, because it settles the one thing the book cannot:
-
-          book delta  = trades + cancellations   (we see only the sum)
-          tape        = trades                   (measured)
-
-        Both trades and cancels move us up the queue, but only trades can fill
-        us. Without the tape a level that empties is credited to us in full --
-        measured on the first recorded windows, that single branch produced
-        100% of all simulated fills, so the whole fill rate rested on the one
-        assumption nobody could check. With the tape, a level that vanishes on
-        cancellations correctly fills us nothing.
-
-        It also fixes the opposite error. Resting alone inside the spread
-        produces no bid-side delta at all, so those fills used to be invisible;
-        tape volume at our price is visible whether or not the book moved.
-
-        Remaining bias, still optimistic: the tape does not say which side of
-        the book a trade hit, so volume printed at our price while that price
-        was on the ASK is counted as if it could have filled our bid. Over a
-        ~2s poll interval on a 1-tick market that is a small over-count, and it
-        is far smaller than the branch it replaces.
-        """
+        """Feed a fresh bid-side snapshot; returns any fills it implies."""
         bids = {round(p, 4): float(s) for p, s in bids.items()}
         tape = (None if traded is None
                 else {round(p, 4): float(v) for p, v in traded.items()})
         prev = self._last_book.get(token_id)
+        prev_ts = self._last_ts.get(token_id)
         self._last_book[token_id] = bids
+        self._last_ts[token_id] = ts
         if prev is None:
             return []          # need two snapshots to see a delta
 
-        # Only levels that still hold size count. `max(bids)` alone treated a
-        # drained level ({0.50: 0.0}) as the best bid, so the "market moved
-        # below us" test could never become true at the very price that had
-        # just been swept -- the one case it exists to catch.
         _live = [p for p, s in bids.items() if s > 1e-9]
         best_bid = max(_live) if _live else 0.0
         made: list[Fill] = []
+        tau_post = self.tau_post_sec
 
+        # 1. Normal crediting loop for open resting orders (with post latency tau_post)
         for o in self.open_orders(token_id):
             before = prev.get(o.price, 0.0)
             now = bids.get(o.price, 0.0)
 
-            # THE ONLY CREDITING PATH (U1). Trades hit the front of the queue,
-            # so only volume beyond the shares ahead of us can be ours. Cancels
-            # still advance our queue position -- they just never fill us.
-            #
-            # Absent tape is modelled as zero traded volume, NOT as licence to
-            # infer fills from the book delta. The two cases differ in what we
-            # know, not in what we may credit: `{}` means the tape was read and
-            # nothing traded; `None` means we could not read it. Both credit
-            # nothing. Only the second records an unverified candidate, because
-            # only the second leaves a gap somebody might later close.
-            #
-            # Measured on the 18.7h run, the delta path this replaces produced
-            # 246 of 282 fills against 2 tape-backed ones -- so the entire
-            # fill rate, and every profit number derived from it, rested on the
-            # one branch that could not be checked.
+            # Eligibility fraction f based on arrival timestamp o.posted_ts + tau_post
+            arrival_ts = o.posted_ts + tau_post
+            if tau_post <= 0 or prev_ts is None or prev_ts >= arrival_ts:
+                f = 1.0
+            elif ts <= arrival_ts:
+                f = 0.0
+            else:
+                dt_poll = max(1e-4, ts - prev_ts)
+                f = min(1.0, max(0.0, (ts - arrival_ts) / dt_poll))
+
             t_vol = tape.get(o.price, 0.0) if tape is not None else 0.0
-            qty = min(o.remaining, max(0.0, t_vol - o.queue_ahead))
+            t_vol_eff = f * t_vol
+            qty = min(o.remaining, max(0.0, t_vol_eff - o.queue_ahead))
             left = max(0.0, before - now)          # trades + cancels
 
             if tape is None:
-                # Shadow accounting. Computed from queue state as it stands
-                # BEFORE the advance below, so it sees exactly what the old
-                # logic saw. Pure: it must never touch `o`, or measuring the
-                # gap would change the fills we credit and the ratio would be
-                # measuring itself.
                 shadow, kind = self._delta_would_have_filled(
                     o, before, now, best_bid)
                 if shadow > 1e-9:
@@ -307,13 +335,10 @@ class QueueFillEngine:
                         size=shadow, ts=ts, queue_waited=o.queue_ahead,
                         reason=kind))
 
-            # Recorded BEFORE the queue advance, so `queue_ahead` is the
-            # position the order actually held when this tape was applied --
-            # after the advance it reads as though we had always been at the
-            # front, which is the one number that makes 'behind_queue'
-            # meaningful.
             if tape is None:
                 outcome = "tape_unavailable"
+            elif f <= 1e-9:
+                outcome = "not_yet_arrived"
             elif t_vol <= 1e-9:
                 outcome = "no_trade_at_price"
             elif qty > 1e-9:
@@ -328,6 +353,35 @@ class QueueFillEngine:
 
             if qty > 1e-9:
                 made.append(self._fill(o, qty, ts, reason="tape"))
+            if f > 1e-9:
+                o.queue_ahead = max(0.0, o.queue_ahead - max(left, t_vol_eff))
+
+        # 2. Race crediting loop for in-flight cancelled orders (issue #27 Phase 1 component 2)
+        for o, p_race in self.race_eligible_orders(token_id, ts, prev_ts):
+            before = prev.get(o.price, 0.0)
+            now = bids.get(o.price, 0.0)
+
+            t_vol = tape.get(o.price, 0.0) if tape is not None else 0.0
+            qty_exposed = min(o.remaining, max(0.0, t_vol - o.queue_ahead))
+            qty_race = p_race * qty_exposed
+            left = max(0.0, before - now)
+
+            if tape is None:
+                outcome = "tape_unavailable"
+            elif t_vol <= 1e-9:
+                outcome = "no_trade_at_price"
+            elif qty_race > 1e-9:
+                outcome = "race_loss"
+            else:
+                outcome = "behind_queue"
+            self.reconciliation.append(Recon(
+                ts=ts, token_id=o.token_id, price=o.price, side=o.side,
+                tape_volume=t_vol, queue_ahead=o.queue_ahead,
+                remaining=o.remaining, credited=max(0.0, qty_race),
+                outcome=outcome))
+
+            if qty_race > 1e-9:
+                made.append(self._fill(o, qty_race, ts, reason="race"))
             o.queue_ahead = max(0.0, o.queue_ahead - max(left, t_vol))
 
         return [f for f in made if f is not None and f.size > 1e-9]

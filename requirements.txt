@@ -3,3 +3,4 @@ websocket-client>=1.7
 python-dotenv>=1.0
 fastapi>=0.110
 uvicorn[standard]>=0.27
+py-clob-client-v2>=1.1.0

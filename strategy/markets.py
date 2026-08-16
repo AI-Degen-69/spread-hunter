@@ -24,6 +24,7 @@ EVENTS_TIMEOUT = (3.05, 5.0)
 # failed load is handled by the caller (the market is skipped for this visit)
 # and retrying here would spend the loop's time budget silently.
 _SESSION = requests.Session()
+_SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 for _scheme in ("https://", "http://"):
     _SESSION.mount(_scheme, requests.adapters.HTTPAdapter(
         pool_connections=8, pool_maxsize=8, max_retries=0))
