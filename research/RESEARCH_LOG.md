@@ -2719,6 +2719,49 @@ an unmatched trade is counted rather than dropped; an unauthenticated client is 
 **LIVE** — Stage 2 hardened. Every venue read failure now reaches the poll loop's backoff instead of
 being laundered into a row transition.
 
+#### Addendum — seven more, from the PR #32 review
+
+CodeRabbit raised 17 findings on PR #32. Seven were real code defects and all seven share the shape
+this session keeps finding: a read that failed, or a key that was not unique, converted into a
+confident state verdict.
+
+**Two critical, both in orphan handling.**
+
+`reconcile_orders` read the candidate pool once and never consumed it. The adoption predicate is
+`(token_id, price, original_size, posted_ts ± 30 s)` and nothing in that tuple is unique — two legs
+quoted at the same price and size inside the window is our *normal* pattern, not an edge case. Both
+venue orders therefore selected the same `pending` row; the second `attach_venue_order_id` matched
+one row, raised no `KeyError`, and committed, moving `order_id` off the first. That first venue
+order then rested with real money and nothing in the registry referencing it, and every later pass
+re-recorded it as `unattributed` instead of tracking its fills. The pool is now consumed on adoption.
+
+`t_id = str(t.get("id") or t.get("trade_id") or "")` fell back to `""`, which then became a
+`trade_id` primary key. The first id-less trade inserted; every later one — for any order — matched
+the existence probe in `record_fill`, returned `False`, and was counted as a duplicate and dropped.
+Executed volume vanishing into `duplicates_ignored`, with `size_matched` understated for the orders
+it belonged to. A trade with no venue id has no dedupe key, so it is now surfaced as unmatched.
+
+**Five major.** `update_order_status` committed without checking `rowcount`, so a vanished row was
+reported as a completed transition — the same rule already applied to `attach_venue_order_id`.
+Three event-log writes bypassed `_log_event`: the transition write turned a read-only log directory
+into a permanent backoff loop, and the mid-cycle `STOP` write could throw out of the very handler
+added to make shutdown clean. `merge`'s balance query caught every exception and left `up_bal` and
+`dn_bal` at their `0.0` initialisers, so an RPC error, an auth failure and an unset `POLY_FUNDER`
+all reached the operator as "holds 0.00" — fails closed, reports the wrong reason. `merge` gated its
+resolution check on `denom is not None`, so when every RPC endpoint failed no guard was appended and
+`--live` proceeded; `redeem` already treats that as a pre-flight failure. And the redeem/merge
+idempotency guard caught `JSONDecodeError`/`OSError` and returned normally, so a corrupt
+`run/live_orders.json` holding a `pending` row read as "no prior orders" — after which `_log_order`
+quarantines the file and a second on-chain settlement goes out. It now refuses.
+
+Three tests added: two venue orders cannot adopt the same pending row; two id-less trades do not
+collapse into one fills row; a zero-row status update raises. **759/759 passed.**
+
+Also corrected two contradictions in this architecture document that the review caught: section 2
+said orders are keyed by venue order id while the schema below it defines the local UUID as primary
+key, and the documented status set omitted `unattributed`, which the implementation writes and the
+`CHECK` constraint permits.
+
 #### Addendum — operability, from a live 4-cycle run
 
 Running `poll --interval 5` for four cycles and interrupting it exposed two gaps, neither

@@ -338,10 +338,16 @@ class OrderRegistry:
     def update_order_status(
         self, local_id: str, status: str, last_polled_ts: int
     ) -> None:
-        """Update order status and last_polled_ts."""
+        """Update order status and last_polled_ts.
+
+        Raises `KeyError` when no row matches. Same rule as
+        `attach_venue_order_id`: an UPDATE that must affect exactly one row
+        asserts its `rowcount`, or a vanished row is reported as a successful
+        transition and the reconcile pass believes it moved state it did not.
+        """
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE orders
                 SET status = ?, last_polled_ts = ?
@@ -349,6 +355,12 @@ class OrderRegistry:
                 """,
                 (status, last_polled_ts, local_id),
             )
+            if cur.rowcount != 1:
+                conn.rollback()
+                raise KeyError(
+                    f"update_order_status: no order row {local_id!r} "
+                    f"(status={status!r}); {cur.rowcount} rows matched"
+                )
             conn.commit()
 
     def get_active_orders(self) -> list[OrderRecord]:
@@ -454,8 +466,17 @@ def reconcile_orders(
             if v_id:
                 venue_order_map[v_id] = item
 
-    # 2. Orphan adoption: check venue open orders not currently in registry
+    # 2. Orphan adoption: check venue open orders not currently in registry.
+    #
+    # The candidate pool is consumed as it is matched. The match predicate is
+    # (token, price, size, posted_ts +/- window) -- nothing in it is unique, and
+    # two legs quoted at the same price and size inside the window is a normal
+    # pattern, not an edge case. Without removal both venue orders select the
+    # same pending row, the second adoption moves order_id off the first, and
+    # that first venue order is left resting with real money and nothing in the
+    # registry referencing it.
     active_orders = registry.get_active_orders()
+    pending_pool = [o for o in active_orders if o.status == "pending"]
     for v_id, item in venue_order_map.items():
         existing = registry.get_order_by_venue_id(v_id)
         if existing is None:
@@ -468,23 +489,23 @@ def reconcile_orders(
                 v_ts *= 1000
 
             matched_pending = None
-            for pending in active_orders:
-                if pending.status == "pending":
-                    token_match = (not v_token) or (pending.token_id == v_token)
-                    price_match = abs(pending.price - v_price) <= 1e-6
-                    size_match = abs(pending.original_size - v_size) <= SIZE_EPS
-                    ts_match = True
-                    if v_ts is not None:
-                        ts_match = abs(v_ts - pending.posted_ts) <= orphan_window_ms
-                    if token_match and price_match and size_match and ts_match:
-                        matched_pending = pending
-                        break
+            for pending in pending_pool:
+                token_match = (not v_token) or (pending.token_id == v_token)
+                price_match = abs(pending.price - v_price) <= 1e-6
+                size_match = abs(pending.original_size - v_size) <= SIZE_EPS
+                ts_match = True
+                if v_ts is not None:
+                    ts_match = abs(v_ts - pending.posted_ts) <= orphan_window_ms
+                if token_match and price_match and size_match and ts_match:
+                    matched_pending = pending
+                    break
 
             if matched_pending is not None:
                 try:
                     registry.attach_venue_order_id(
                         matched_pending.id, v_id, status="open", last_polled_ts=now_ms
                     )
+                    pending_pool.remove(matched_pending)
                     summary.orphans_adopted += 1
                     summary.transitions.append(f"ADOPT {matched_pending.id[:8]} -> {v_id}")
                 except KeyError:
@@ -550,6 +571,17 @@ def reconcile_orders(
     if trades_raw:
         for t in trades_raw:
             t_id = str(t.get("id") or t.get("trade_id") or "")
+            if not t_id:
+                # No venue trade id means no dedupe key. Keying on "" would let
+                # the first id-less trade insert and every later one collide
+                # with it, so each would be counted as a duplicate and dropped:
+                # real executed volume vanishing into duplicates_ignored, with
+                # size_matched understated for the orders it belonged to.
+                summary.unmatched_trades += 1
+                summary.transitions.append(
+                    f"UNMATCHED_TRADE <no id> size={t.get('size')} @ {t.get('price')}"
+                )
+                continue
             # taker_order_id first: when we cross the spread our order is the
             # taker, and matching only on maker ids silently drops every
             # aggressive fill we ever make.

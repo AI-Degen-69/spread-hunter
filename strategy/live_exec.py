@@ -191,8 +191,18 @@ def _check_idempotency_guard(condition_id: str, force: bool = False) -> None:
                     f"Refusing to execute: prior order {entry_id} with condition_id {condition_id} "
                     f"has status='{status}'. Use --force to override."
                 )
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
-        pass
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
+        # Fail closed. An unreadable log is not an empty one. If it holds a
+        # pending row for this condition and we return quietly here, _log_order
+        # then quarantines the corrupt file and starts a fresh log, so that row
+        # leaves the active set and a second on-chain settlement goes out for a
+        # condition already in flight. _log_order treats the same condition as
+        # serious enough to abort the command; this guard must agree.
+        raise SystemExit(
+            f"Refusing to execute: cannot read the order log at {f} ({exc!r}). "
+            f"A prior in-flight order for {condition_id} cannot be ruled out. "
+            f"Inspect the file, or use --force to override."
+        )
 
 
 def _open_notional(c) -> float:
@@ -864,6 +874,17 @@ def merge(condition_id: str,
 
     up_bal = 0.0
     dn_bal = 0.0
+    # A balance we failed to read is not a balance of zero. Both fail closed,
+    # but only one of them tells the operator the truth: an RPC error, an auth
+    # failure and an unset POLY_FUNDER all rendered as "holds 0.00", which reads
+    # as "you do not own these tokens". Same rule reconcile_orders follows --
+    # a failed read must not be laundered into a state verdict.
+    balance_error: str | None = None
+    if not (key and funder):
+        balance_error = (
+            "Conditional token balances not queried: "
+            f"{'POLY_PRIVATE_KEY' if not key else 'POLY_FUNDER'} is unset"
+        )
 
     # Query conditional token balances if client credentials available
     if key and funder:
@@ -881,22 +902,37 @@ def merge(condition_id: str,
                     BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=dn_tok_id, signature_type=sig_type)
                 )
                 dn_bal = float(r_dn.get("balance", 0) or 0) / 1e6
-        except Exception:
-            pass
+        except Exception as exc:
+            balance_error = f"Conditional token balance query failed: {exc!r}"
 
     # Pre-flight guards are evaluated HERE, before the dry-run preview, so the
     # preview reports exactly what --live would do. A preview that succeeds where
     # --live refuses manufactures false confidence in the operator.
     guard_failures: list[str] = []
-    if up_bal < amount:
+    if balance_error is not None:
         guard_failures.append(
-            f"Insufficient balance on UP token ({up_tok_id}): holds {up_bal:.2f}, needs {amount:.2f} (short by {amount - up_bal:.2f})"
+            f"{balance_error}. Holdings are unknown, not zero -- refusing rather "
+            f"than reporting a balance we did not read."
         )
-    if dn_bal < amount:
+    else:
+        if up_bal < amount:
+            guard_failures.append(
+                f"Insufficient balance on UP token ({up_tok_id}): holds {up_bal:.2f}, needs {amount:.2f} (short by {amount - up_bal:.2f})"
+            )
+        if dn_bal < amount:
+            guard_failures.append(
+                f"Insufficient balance on DOWN token ({dn_tok_id}): holds {dn_bal:.2f}, needs {amount:.2f} (short by {amount - dn_bal:.2f})"
+            )
+    if denom is None:
+        # `redeem` already refuses here unless --skip-resolution-check is passed.
+        # `merge` had neither the branch nor the flag, so an all-endpoints-down
+        # RPC read let a merge go out against a market that may already be
+        # resolved: a reverted relayer submission and an ambiguous audit row.
         guard_failures.append(
-            f"Insufficient balance on DOWN token ({dn_tok_id}): holds {dn_bal:.2f}, needs {amount:.2f} (short by {amount - dn_bal:.2f})"
+            f"Cannot determine resolution status for {condition_id}: every RPC endpoint failed. "
+            f"The condition may already be resolved, in which case merge is the wrong action."
         )
-    if denom is not None and denom > 0:
+    elif denom > 0:
         guard_failures.append(
             f"Condition {condition_id} is already resolved (payoutDenominator == {denom} > 0). Use redeem instead."
         )
@@ -1444,9 +1480,8 @@ def poll(
 
             # Log any state transitions to event log
             if summary.transitions:
-                with open(event_log_path, "a", encoding="utf-8") as ef:
-                    for t in summary.transitions:
-                        ef.write(f"[{now_iso}] {t}\n")
+                for t in summary.transitions:
+                    _log_event(f"[{now_iso}] {t}")
 
             active = registry.get_active_orders()
             open_count = sum(1 for o in active if o.status == "open")
@@ -1466,8 +1501,7 @@ def poll(
             # below never sees it, and the operator would get a traceback
             # instead of a clean stop on the one process meant to run for hours.
             stop_requested = True
-            with open(event_log_path, "a", encoding="utf-8") as ef:
-                ef.write(f"[{now_iso}] STOP KeyboardInterrupt during cycle {cycle}\n")
+            _log_event(f"[{now_iso}] STOP KeyboardInterrupt during cycle {cycle}")
             print(f"[POLL {now_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
             break
 
@@ -1477,8 +1511,7 @@ def poll(
             backoff_s = compute_backoff_delay(consecutive_errors, base_sec=2.0, max_sec=60.0)
             err_msg = f"[POLL {now_iso}] ERROR (count={consecutive_errors}, backoff={backoff_s:.1f}s): {exc}"
             print(err_msg, file=sys.stderr)
-            with open(event_log_path, "a", encoding="utf-8") as ef:
-                ef.write(f"{err_msg}\n")
+            _log_event(err_msg)
             if not once and not stop_requested:
                 try:
                     time.sleep(backoff_s)

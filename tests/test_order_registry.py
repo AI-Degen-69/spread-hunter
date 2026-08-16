@@ -731,3 +731,96 @@ def test_unauthenticated_client_refuses_to_reconcile(registry: OrderRegistry):
         reconcile_orders(client, registry, current_ts_ms=now_ms + 5000)
 
     assert registry.get_order(local_id).status == "open"
+
+
+def _pending(registry: OrderRegistry, token: str, price: float, size: float, ts: int) -> str:
+    local_id = str(uuid.uuid4())
+    registry.create_order(
+        OrderRecord(
+            id=local_id,
+            order_id=None,
+            condition_id="0xcond_pool",
+            token_id=token,
+            side="BUY",
+            price=price,
+            original_size=size,
+            status="pending",
+            posted_ts=ts,
+            last_polled_ts=ts,
+        )
+    )
+    return local_id
+
+
+def test_two_venue_orders_cannot_adopt_the_same_pending_row(registry: OrderRegistry):
+    """Identical quotes must not collapse onto one local row.
+
+    The match predicate is (token, price, size, posted_ts +/- window) and none
+    of it is unique. Two legs quoted at the same price and size inside the
+    window is a normal pattern. If the pool is not consumed, both venue orders
+    select the same pending row, the second adoption moves `order_id` off the
+    first, and that first venue order rests with real money and nothing in the
+    registry pointing at it.
+    """
+    now_ms = 1723840000000
+    a = _pending(registry, "0xtok_same", 0.50, 25.0, now_ms)
+    b = _pending(registry, "0xtok_same", 0.50, 25.0, now_ms)
+
+    venue = [
+        {"id": "0xvenue_A", "asset_id": "0xtok_same", "price": 0.50, "size": 25.0, "timestamp": now_ms},
+        {"id": "0xvenue_B", "asset_id": "0xtok_same", "price": 0.50, "size": 25.0, "timestamp": now_ms},
+    ]
+    client = MockClobClient(open_orders=venue, trades=[])
+    summary = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000)
+
+    assert summary.orphans_adopted == 2, "each venue order needs its own pending row"
+    assert summary.unattributed_recorded == 0
+
+    bound = {registry.get_order(a).order_id, registry.get_order(b).order_id}
+    assert bound == {"0xvenue_A", "0xvenue_B"}, f"one venue order lost its binding: {bound}"
+
+
+def test_trade_without_any_id_is_not_deduped_against_another(registry: OrderRegistry):
+    """Two distinct id-less trades must not collapse into one fills row.
+
+    An empty `trade_id` is not a dedupe key. Keying on "" lets the first id-less
+    trade insert and every later one collide with it, so real executed volume
+    disappears into `duplicates_ignored`.
+    """
+    now_ms = 1723840000000
+    local_id = str(uuid.uuid4())
+    venue_order_id = "0xvenue_noid"
+    registry.create_order(
+        OrderRecord(
+            id=local_id,
+            order_id=venue_order_id,
+            condition_id="0xcond_noid",
+            token_id="0xtok_noid",
+            side="BUY",
+            price=0.50,
+            original_size=20.0,
+            status="open",
+            posted_ts=now_ms,
+            last_polled_ts=now_ms,
+        )
+    )
+
+    trades = [
+        {"order_id": venue_order_id, "size": 4.0, "price": 0.50, "timestamp": now_ms + 1000},
+        {"order_id": venue_order_id, "size": 6.0, "price": 0.50, "timestamp": now_ms + 2000},
+    ]
+    client = MockClobClient(open_orders=[{"id": venue_order_id}], trades=trades)
+    summary = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000)
+
+    assert summary.unmatched_trades == 2, "both id-less trades must be surfaced"
+    assert summary.duplicates_ignored == 0, "an id-less trade is not a duplicate"
+    assert summary.fills_recorded == 0
+    assert registry.get_size_matched(local_id) == 0.0
+
+
+def test_update_order_status_fails_closed_on_missing_row(registry: OrderRegistry):
+    """A zero-row status UPDATE must raise, not report a transition it never made."""
+    with pytest.raises(KeyError):
+        registry.update_order_status(
+            "00000000-0000-0000-0000-000000000000", "cancelled", 1723840000000
+        )

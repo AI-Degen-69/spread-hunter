@@ -58,7 +58,9 @@ reason to add it later. Not latency.
 ## 2. Shared foundation: the order registry
 
 All three stages depend on one thing that does not exist yet — a durable record of *our* live
-orders, keyed by venue order id.
+orders, keyed by a **local UUID**. The venue `order_id` is a nullable unique binding attached after
+submission, never the primary key; "Why the key is local" below explains the reasoning, and the
+shipped `OrderRegistry` implements exactly that.
 
 `run/live_orders.json` is an append-and-update audit log for relayer transactions. It is the wrong
 shape for order state: it is a flat array scanned linearly, and it has no concept of an order's
@@ -77,7 +79,7 @@ database produces silently invalid data. Live-money state and simulated state mu
 | `condition_id`, `token_id`, `side` | what and where |
 | `price`, `original_size` | as posted |
 | `size_matched` | **derived: `SELECT SUM(size) FROM fills WHERE order_uuid = id`. Never written directly.** |
-| `status` | `pending` / `open` / `partial` / `filled` / `cancelled` / `unknown` |
+| `status` | `pending` / `open` / `partial` / `filled` / `cancelled` / `unattributed` — enforced by a `CHECK` constraint, and `unattributed` is what orphan adoption writes when no local row matches |
 | `posted_ts`, `last_polled_ts` | staleness and reconciliation windows |
 | `pair_id` | groups the UP and DOWN legs of one intended pair |
 | `max_pair_cost_at_post` | the threshold this pair was quoted under |
