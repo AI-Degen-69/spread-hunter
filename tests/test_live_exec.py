@@ -14,6 +14,48 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import strategy.live_exec as le
 
 
+# Response shape MEASURED against live relayer 2026-08-16:
+#   {"address":"0x6987f531981c95fc998ab20c0935154e9f509a87","nonce":"122"}
+# `address` is a ROTATING RELAYER POOL WORKER, never our account. Deliberately
+# set to an unrelated address so any code that trusts this field fails the test.
+POOL_WORKER = "0x6987f531981c95fc998ab20c0935154e9f509a87"
+
+
+class MockResponse:
+    def __init__(self, data):
+        self.data = json.dumps(data).encode("utf-8")
+
+    def read(self):
+        return self.data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+def make_mock_urlopen(recorded_requests, pool_worker: str = POOL_WORKER, nonce: str = "121", submit_hash: str = "0xabcdef1234567890"):
+    def mock_urlopen(req, timeout=30):
+        recorded_requests.append(req)
+        if "params" in req.full_url:
+            return MockResponse({"address": pool_worker, "nonce": nonce})
+        elif "submit" in req.full_url:
+            return MockResponse({"transactionHash": submit_hash, "status": "PENDING"})
+        return MockResponse({})
+    return mock_urlopen
+
+
+def make_live_env(acc: Account, funder: str) -> dict:
+    return {
+        "POLY_PRIVATE_KEY": acc.key.hex(),
+        "POLY_FUNDER": funder,
+        "RELAYER_API_KEY": "test_key",
+        "RELAYER_API_KEY_ADDRESS": "0x1234567890123456789012345678901234567890",
+        "RELAYER_URL": "https://relayer-v2.polymarket.com",
+    }
+
+
 def test_live_exec_arg_parsing():
     ap = argparse.ArgumentParser(description="LIVE Polymarket execution.")
     ap.add_argument("--live", action="store_true")
@@ -28,6 +70,10 @@ def test_live_exec_arg_parsing():
     p.add_argument("--max-fills", type=int, default=1)
     p.add_argument("--live", action="store_true", default=argparse.SUPPRESS)
 
+    r = sub.add_parser("redeem")
+    r.add_argument("condition_id")
+    r.add_argument("--skip-resolution-check", action="store_true")
+
     args = ap.parse_args(["probe", "--cycles", "10", "--min-time-remaining", "120", "--max-complement-bid", "0.80"])
     assert args.cmd == "probe"
     assert args.cycles == 10
@@ -35,6 +81,10 @@ def test_live_exec_arg_parsing():
     assert args.max_complement_bid == 0.80
     assert args.max_loss == 1.00
     assert args.max_fills == 1
+
+    args_redeem = ap.parse_args(["redeem", "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f", "--skip-resolution-check"])
+    assert args_redeem.cmd == "redeem"
+    assert args_redeem.skip_resolution_check is True
 
 
 def test_encode_redeem_positions():
@@ -140,9 +190,18 @@ def test_redeem_dry_run():
     assert '"signature"' in out
     assert "DRY RUN -- nothing sent" in out
 
-    # Verify no network calls occur to relayer in dry run
     mock_url.assert_not_called()
     mock_denom.assert_called_once_with(cond_id)
+
+
+def test_redeem_dry_run_rpc_unreachable():
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    with patch.object(le, "get_payout_denominator", return_value=None), \
+         patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+        le.redeem(cond_id, live=False)
+
+    out = mock_stdout.getvalue()
+    assert "resolved        unknown (RPC unreachable)" in out
 
 
 def test_redeem_live_unresolved_raises():
@@ -151,9 +210,48 @@ def test_redeem_live_unresolved_raises():
          patch("urllib.request.urlopen") as mock_url:
         with pytest.raises(SystemExit) as exc_info:
             le.redeem(cond_id, live=True)
-        assert f"Condition {cond_id} has not been resolved yet (payoutDenominator == 0)" in str(exc_info.value)
-    # Ensure no relayer request occurred before aborting
+        assert f"Condition {cond_id} is not resolved yet (payoutDenominator == 0)" in str(exc_info.value)
     mock_url.assert_not_called()
+
+
+def test_redeem_live_unresolved_skip_check_still_raises():
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    with patch.object(le, "get_payout_denominator", return_value=0), \
+         patch("urllib.request.urlopen") as mock_url:
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, skip_resolution_check=True, live=True)
+        assert f"Condition {cond_id} is not resolved yet (payoutDenominator == 0)" in str(exc_info.value)
+    mock_url.assert_not_called()
+
+
+def test_redeem_live_unknown_resolution_raises():
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    with patch.object(le, "get_payout_denominator", return_value=None), \
+         patch("urllib.request.urlopen") as mock_url:
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+        msg = str(exc_info.value)
+        assert f"Cannot determine resolution status for {cond_id}" in msg
+        assert "all RPC endpoints failed" in msg
+        assert "pass --skip-resolution-check to bypass" in msg
+    mock_url.assert_not_called()
+
+
+def test_redeem_live_unknown_resolution_skip_check_proceeds():
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+    recorded_requests = []
+    mock_urlopen = make_mock_urlopen(recorded_requests)
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "get_payout_denominator", return_value=None), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        le.redeem(cond_id, skip_resolution_check=True, live=True)
+
+    assert len(recorded_requests) == 2
+    assert "submit" in recorded_requests[1].full_url
 
 
 def test_redeem_live_mock():
@@ -163,43 +261,9 @@ def test_redeem_live_mock():
     acc = Account.create()
     funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-
-    env_vars = {
-        "POLY_PRIVATE_KEY": acc.key.hex(),
-        "POLY_FUNDER": funder,
-        "RELAYER_API_KEY": "test_key",
-        "RELAYER_API_KEY_ADDRESS": "0x1234567890123456789012345678901234567890",
-        "RELAYER_URL": "https://relayer-v2.polymarket.com",
-    }
-
-    class MockResponse:
-        def __init__(self, data):
-            self.data = json.dumps(data).encode("utf-8")
-
-        def read(self):
-            return self.data
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
+    env_vars = make_live_env(acc, funder)
     recorded_requests = []
-
-    # Response shape MEASURED against live relayer 2026-08-16:
-    #   {"address":"0x6987f531981c95fc998ab20c0935154e9f509a87","nonce":"122"}
-    # `address` is a ROTATING RELAYER POOL WORKER, never our account. Deliberately
-    # set to an unrelated address so any code that trusts this field fails the test.
-    POOL_WORKER = "0x6987f531981c95fc998ab20c0935154e9f509a87"
-
-    def mock_urlopen(req, timeout=30):
-        recorded_requests.append(req)
-        if "params" in req.full_url:
-            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
-        elif "submit" in req.full_url:
-            return MockResponse({"transactionHash": "0xabcdef1234567890", "status": "PENDING"})
-        return MockResponse({})
+    mock_urlopen = make_mock_urlopen(recorded_requests)
 
     import time
     t_before = int(time.time())
@@ -257,38 +321,9 @@ def test_redeem_ignores_params_response_address():
     acc = Account.create()
     funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-
-    env_vars = {
-        "POLY_PRIVATE_KEY": acc.key.hex(),
-        "POLY_FUNDER": funder,
-        "RELAYER_API_KEY": "test_key",
-        "RELAYER_API_KEY_ADDRESS": "0x1234567890123456789012345678901234567890",
-        "RELAYER_URL": "https://relayer-v2.polymarket.com",
-    }
-
-    class MockResponse:
-        def __init__(self, data):
-            self.data = json.dumps(data).encode("utf-8")
-
-        def read(self):
-            return self.data
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
+    env_vars = make_live_env(acc, funder)
     recorded_requests = []
-    POOL_WORKER = "0x6987f531981c95fc998ab20c0935154e9f509a87"
-
-    def mock_urlopen(req, timeout=30):
-        recorded_requests.append(req)
-        if "params" in req.full_url:
-            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
-        elif "submit" in req.full_url:
-            return MockResponse({"transactionHash": "0xabcdef1234567890", "status": "PENDING"})
-        return MockResponse({})
+    mock_urlopen = make_mock_urlopen(recorded_requests)
 
     with patch.dict(os.environ, env_vars, clear=False), \
          patch.object(le, "get_payout_denominator", return_value=1), \
@@ -302,6 +337,26 @@ def test_redeem_ignores_params_response_address():
     body = json.loads(raw_json)
     assert body["from"] != POOL_WORKER
     assert body["depositWalletParams"]["depositWallet"] != POOL_WORKER
+
+
+def test_get_payout_denominator_failover():
+    """Failover test: first endpoint raises URLError, second returns valid 0x01, third never consulted."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    calls = []
+
+    def mock_failover_urlopen(req, timeout=5):
+        calls.append(req.full_url)
+        if len(calls) == 1:
+            raise OSError("RPC endpoint unreachable")
+        return MockResponse({"jsonrpc": "2.0", "id": 1, "result": "0x0000000000000000000000000000000000000000000000000000000000000001"})
+
+    with patch("urllib.request.urlopen", side_effect=mock_failover_urlopen):
+        val = le.get_payout_denominator(cond_id)
+
+    assert val == 1
+    assert len(calls) == 2
+    assert calls[0] == le.POLYGON_RPC_ENDPOINTS[0]
+    assert calls[1] == le.POLYGON_RPC_ENDPOINTS[1]
 
 
 def test_dry_run_probe():

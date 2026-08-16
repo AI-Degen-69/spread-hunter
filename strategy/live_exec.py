@@ -290,14 +290,22 @@ def sign_redeem_transaction(key: str, funder: str, nonce: int, deadline: int, ca
     return signer_acc.address, sig
 
 
-def get_payout_denominator(condition_id: str, rpc_url: str | None = None) -> int:
+# Origin: scripts/audit_settlement.py:19-24
+POLYGON_RPC_ENDPOINTS = [
+    "https://polygon.drpc.org",
+    "https://1rpc.io/matic",
+    "https://polygon-bor-rpc.publicnode.com",
+    "https://rpc.ankr.com/polygon",
+]
+
+
+def get_payout_denominator(condition_id: str, rpc_url: str | None = None) -> int | None:
     """Query payoutDenominator(bytes32) on CTF contract (0x4D97DCd97eC945f40cF65F87097ACe5EA0476045).
     Selector: 0xdd34de67
-    Returns non-zero integer if condition is resolved, 0 if unresolved.
+    Returns integer (non-zero if resolved, 0 if unresolved) on success, or None if all RPC endpoints fail.
     """
-    if rpc_url is None:
-        rpc_url = os.environ.get("POLYGON_RPC", "https://polygon.drpc.org")
     import urllib.request
+
     clean_cond = condition_id.lower().replace("0x", "").zfill(64)
     call_data = "0xdd34de67" + clean_cond
     req_body = json.dumps({
@@ -306,16 +314,28 @@ def get_payout_denominator(condition_id: str, rpc_url: str | None = None) -> int
         "method": "eth_call",
         "params": [{"to": CTF_CONTRACT, "data": call_data}, "latest"],
     }).encode("utf-8")
-    req = urllib.request.Request(
-        rpc_url,
-        data=req_body,
-        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
-    if "result" in res and res["result"] != "0x":
-        return int(res["result"], 16)
-    return 0
+
+    endpoints = []
+    if rpc_url:
+        endpoints.append(rpc_url)
+    elif os.environ.get("POLYGON_RPC"):
+        endpoints.append(os.environ["POLYGON_RPC"])
+    endpoints.extend([ep for ep in POLYGON_RPC_ENDPOINTS if ep not in endpoints])
+
+    for ep in endpoints:
+        try:
+            req = urllib.request.Request(
+                ep,
+                data=req_body,
+                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                if "result" in res and res["result"] != "0x":
+                    return int(res["result"], 16)
+        except Exception:
+            continue
+    return None
 
 
 def build_redeem_submit_payload(from_addr: str, funder: str, nonce: int | str,
@@ -346,6 +366,7 @@ def build_redeem_submit_payload(from_addr: str, funder: str, nonce: int | str,
 def redeem(condition_id: str, index_sets: list[int] | None = None,
            collateral: str = USDC_E_CONTRACT,
            parent_collection_id: str = ZERO_BYTES32,
+           skip_resolution_check: bool = False,
            live: bool = False) -> None:
     """Gasless redemption of winning conditional tokens via Polymarket Relayer."""
     if index_sets is None:
@@ -365,12 +386,11 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         index_sets=index_sets,
     )
 
-    try:
-        denom = get_payout_denominator(condition_id)
+    denom = get_payout_denominator(condition_id)
+    if denom is None:
+        resolved_str = "unknown (RPC unreachable)"
+    else:
         resolved_str = "yes" if denom > 0 else "no"
-    except Exception as exc:
-        denom = 0
-        resolved_str = f"unknown ({exc})"
 
     print("action          REDEEM (gasless via Polymarket Relayer)")
     print(f"target_ctf      {CTF_CONTRACT}")
@@ -400,10 +420,14 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         return
 
     # Pre-flight on-chain resolution guard
-    if denom == 0:
-        raise SystemExit(
-            f"Condition {condition_id} has not been resolved yet (payoutDenominator == 0)."
-        )
+    if denom is None:
+        if not skip_resolution_check:
+            raise SystemExit(
+                f"Cannot determine resolution status for {condition_id}: all RPC endpoints failed. "
+                f"The market may well be resolved. Retry, or pass --skip-resolution-check to bypass."
+            )
+    elif denom == 0:
+        raise SystemExit(f"Condition {condition_id} is not resolved yet (payoutDenominator == 0).")
 
     relayer_key = os.environ.get("RELAYER_API_KEY")
     relayer_addr = os.environ.get("RELAYER_API_KEY_ADDRESS")
@@ -833,6 +857,8 @@ def main() -> None:
     r.add_argument("condition_id", help="Condition ID to redeem")
     r.add_argument("--index-sets", default="1,2", help="Comma-separated index sets (default: 1,2)")
     r.add_argument("--collateral", default=USDC_E_CONTRACT, help="Collateral token (default: USDC.e)")
+    r.add_argument("--skip-resolution-check", action="store_true",
+                   help="Bypass RPC resolution guard if RPC endpoints are unreachable (does not bypass denom == 0).")
     r.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
     p = sub.add_parser("probe", help="Multi-cycle live latency probe across dynamic series windows.")
@@ -860,7 +886,13 @@ def main() -> None:
         quote(a.condition_id, a.price, a.size, is_live)
     elif a.cmd == "redeem":
         idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
-        redeem(a.condition_id, index_sets=idx_sets, collateral=a.collateral, live=is_live)
+        redeem(
+            a.condition_id,
+            index_sets=idx_sets,
+            collateral=a.collateral,
+            skip_resolution_check=a.skip_resolution_check,
+            live=is_live,
+        )
     elif a.cmd == "probe":
         probe(
             series=a.series,
