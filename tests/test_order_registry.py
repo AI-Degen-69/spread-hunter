@@ -32,6 +32,7 @@ from strategy.order_registry import (
     reconcile_orders,
     ReconcileSummary,
     compute_backoff_delay,
+    TRADE_OVERLAP_MS,
     ReconcileInProgress,
     RECONCILE_LOCK_STALE_MS,
 )
@@ -841,13 +842,18 @@ def test_get_trades_type_error_propagates(registry: OrderRegistry):
     ]
 
     with pytest.raises(TypeError, match="internal parsing failure"):
-        reconcile_orders(mock_client, registry, current_ts_ms=now_ms)
+        reconcile_orders(mock_client, registry, maker_address="0xmaker", current_ts_ms=now_ms)
 
     assert mock_client.get_trades.call_count == 1
-    # Without this the test still passes if the implementation regresses to a
-    # single unfiltered get_trades() -- the count alone cannot tell a bounded
-    # query that raised from an unbounded one that raised.
-    assert "params" in mock_client.get_trades.call_args.kwargs
+    # The count alone cannot tell a bounded query that raised from an unbounded
+    # one that raised, and the presence of the keyword alone cannot either --
+    # get_trades(params=None) is an unfiltered query that satisfies both. Assert
+    # the bound itself.
+    sent = mock_client.get_trades.call_args.kwargs.get("params")
+    assert sent is not None
+    assert sent.maker_address == "0xmaker"
+    expected_after_sec = max(0, int((now_ms - TRADE_OVERLAP_MS) / 1000))
+    assert sent.after == expected_after_sec
 
 
 
