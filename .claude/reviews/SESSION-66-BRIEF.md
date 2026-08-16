@@ -178,6 +178,22 @@ Self-evaluation scored 3.8/5. The three that cost real cycles:
 | `.claude/reviews/pr-31-review.md` | The HIGH finding, in full. |
 | `AGENTS.md:65-70` | Workspace hygiene policy — delete scratch scripts. |
 
+## 9b. CODERABBIT ITEMS DEFERRED FROM PR #31 — pick these up in Session 66
+
+9 of 15 resolved on `session-65-ws-recorder` (commit `1ca28fc`). Six deferred, all verified real.
+**Two of them matter for this session's work:**
+
+| Item | Why it matters here |
+| --- | --- |
+| `scripts/audit_settlement.py` imports legacy `py_clob_client` while `requirements.txt` declares only `py_clob_client_v2` | The script fails at import in a clean environment and reports an error for every signature type instead of balances. This is the diagnostic you will reach for when a live balance looks wrong. |
+| `scripts/audit_settlement.py` relayer-log reader is format-incompatible with `_log_order` | `_log_order` writes one pretty-printed JSON array (`indent=2`) with `"action": "REDEEM"` and the response under `"response"`. The reader does JSON-Lines parsing and matches `"redeem_positions"` / `"relayer_response"`, inside a bare `except: pass`. Section 4 therefore always prints `NO_RELAYER_TX_FOUND`. Stage 0 touches the same log file — fix both together. |
+
+The other four sit in the PARKED latency path and can stay deferred: NTP sampling blocking the
+recorder's event loop, `analyze_ws_staleness.py`'s broad `except` around its NTP fallback,
+`websockets` undeclared in `requirements.txt`, and latency-override validation in
+`strategy/config.py:780`. One comment was **declined** — removing the record of an accepted live
+order from the research log would falsify the evidence base later verdicts rest on.
+
 ## 10. FIRST ACTION IN THE NEW SESSION
 
 1. Check whether PR #31 merged and whether CodeRabbit's comments were resolved.
