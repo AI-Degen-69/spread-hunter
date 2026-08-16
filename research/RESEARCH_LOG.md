@@ -2440,3 +2440,65 @@ A funded live pilot before those land would leave a one-sided fill riding unhedg
 at up to 100% loss of that leg. Build sequenced on branch `session-66-live-exec-loop` under the
 invariant that no stage which OPENS exposure ships before the stages that CLOSE it: merge → fill
 detection → stop-loss → second-leg completion → automated quoting.
+
+---
+
+## Session 68b — 2026-08-16 — PR #31 review remediation
+
+#### Question
+
+CodeRabbit posted 15 actionable comments on PR #31, one Critical. Which are real defects against
+current code, and which are stale or conflict with the project's direction?
+
+#### Method
+
+Each claim verified against the file before acting. Fixes applied only where the defect reproduced.
+
+#### Result
+
+1. **CRITICAL, confirmed.** `scripts/record_books.py:138` referenced `_SESSION` and
+   `MARKET_TIMEOUT`; neither was defined or imported (Ruff F821). `--rest` mode raised `NameError`
+   on its first fetch. Both now defined at module level, mirroring `strategy/markets.py` — a
+   `(connect, read)` timeout pair and a pooled keep-alive session, so a TLS handshake per poll
+   cannot dominate the inter-arrival timing the recorder exists to measure.
+
+2. **Confirmed.** `strategy/live_exec.py` WebSocket handler admitted any `event_type == "book"`
+   frame regardless of `asset_id`. A complement snapshot stamped `ts_recv` on the target, so
+   `tau_pubsub_ms` timed an unrelated broadcast, and `comp_best_bid` could be filled from the
+   target's own book — the price the probe's loss guard compares against. Both branches now key on
+   `asset_id` alone.
+
+3. **Confirmed.** `strategy/live_exec.py` order-status poll wrapped `client.get_order` in a bare
+   `except Exception: pass`. `size_matched` is the only thing that advances `cumulative_fills` and
+   `cumulative_loss_usd`, so a transient failure silently stopped `--max-fills` and `--max-loss`
+   from counting — precisely when the venue is unhealthy and a fill is most likely. Now fails
+   closed: one retry, then abort rather than post further orders blind.
+
+4. **Confirmed, resolved by deletion.** Five scripts removed —
+   `query_onchain_balances.py` (duplicated `audit_settlement.py` and imported an undeclared
+   `httpx`), `diagnose_phase1_checks.py` (printed a heading for a comparison it never performed),
+   `eval_tau_sensitivity.py`, `eval_post_latency_sensitivity.py` and `inspect_fill_diffs.py` (all
+   swept `net_oneway_ms`, a shared leg of both `tau_post` and `tau_cancel`, so none isolated the
+   window it claimed to). All five measured parameters this session marked PARKED. `AGENTS.md:69`
+   requires deleting redundant files; an independent PR review reached the same conclusion.
+
+5. **Confirmed.** `research/QUANT_QUESTIONS.md` carried no verdicts and stated the Binance
+   100–300 ms lead as fact. Verdicts added from this session's measurements, and the lead-lag
+   figure is now explicitly tagged an estimate that was never measured on this venue pair.
+
+6. **Declined.** One comment asked to remove the record of a live order the venue accepted, citing
+   a "paper simulation only" invariant. The research log is a record of what happened; the order
+   was placed, `status='live'`, and it never filled. Altering the log to match a policy would
+   falsify the evidence base every later verdict rests on. The invariant it cites is also no longer
+   the project's direction — the owner is building toward a funded pilot under a staged
+   exposure-ordering rule.
+
+#### Decision
+
+**LIVE** — three real defects fixed, five redundant scripts deleted, research verdicts recorded.
+One comment declined with reason. Remaining CodeRabbit items (NTP sampling blocking the recorder's
+event loop, `analyze_ws_staleness.py` catching broad exceptions around its NTP fallback,
+`audit_settlement.py`'s legacy client import and its `run/live_orders.json` reader format mismatch,
+latency-override validation in `config.py`) are **PARKED**: every one of them sits in the `books.db`
+/ latency measurement path, which produced no realised income and is superseded by the live
+execution build.

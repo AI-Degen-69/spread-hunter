@@ -41,6 +41,19 @@ log = logging.getLogger("recorder")
 
 WS_MARKET_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
+# `book()` below reaches for both of these on every REST poll and neither was
+# defined, so `--rest` raised NameError on its first fetch. Mirrors
+# strategy/markets.py: a (connect, read) pair rather than a scalar, so an
+# unreachable host cannot hold a poll for the whole read budget, and a pooled
+# keep-alive session rather than a TLS handshake per poll -- at this cadence the
+# handshake would dominate the very inter-arrival timing the recorder measures.
+MARKET_TIMEOUT = (3.05, 5.0)
+_SESSION = requests.Session()
+_SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
+for _scheme in ("https://", "http://"):
+    _SESSION.mount(_scheme, requests.adapters.HTTPAdapter(
+        pool_connections=8, pool_maxsize=8, max_retries=0))
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

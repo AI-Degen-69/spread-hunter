@@ -582,11 +582,16 @@ def probe(series: str = "btc-up-or-down-5m",
             items = data if isinstance(data, list) else [data]
             for item in items:
                 asset = item.get("asset_id")
-                event_type = item.get("event_type")
-                if event_type == "book" or asset == curr:
+                # Both branches key on asset_id alone. They previously admitted
+                # ANY `event_type == "book"` frame regardless of which token it
+                # described, so a snapshot for the complement stamped ts_recv on
+                # the target -- tau_pubsub_ms then timed an unrelated broadcast,
+                # and comp_best_bid could be filled from the target's own book,
+                # which is the price the loss guard below compares against.
+                if curr and asset == curr:
                     last_delta_event["ts_recv"] = time.perf_counter_ns()
                     last_delta_event["data"] = item
-                if asset == comp or (event_type == "book" and comp):
+                if comp and asset == comp:
                     bids = item.get("bids") or []
                     if bids:
                         comp_best_bid[0] = max(float(b.get("price", 0)) for b in bids)
@@ -742,8 +747,30 @@ def probe(series: str = "btc-up-or-down-5m",
                 if cumulative_fills >= max_fills or cumulative_loss_usd >= max_probe_loss_usd:
                     print(f"\n[ABORT] Maximum probe loss cap reached ({cumulative_fills} fills, ${cumulative_loss_usd:.2f} loss). Halting probe immediately.")
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            # Fail closed. `size_matched` is the only thing that advances
+            # cumulative_fills and cumulative_loss_usd, so swallowing this made
+            # --max-fills and --max-loss silently stop counting -- and they stop
+            # counting precisely when the venue is unhealthy, which is when a
+            # fill is most likely and the cap matters most. One retry against a
+            # transient blip, then abort rather than keep posting blind.
+            try:
+                time.sleep(0.25)
+                order_status = client.get_order(order_id)
+                size_matched = float(order_status.get("size_matched", 0)
+                                     if isinstance(order_status, dict)
+                                     else getattr(order_status, "size_matched", 0) or 0)
+                if size_matched > 0:
+                    cumulative_fills += 1
+                    cumulative_loss_usd += size_matched * 0.01
+                    print(f"\n  [FILL DETECTED on retry] Order {order_id[:10]} "
+                          f"matched {size_matched:.0f} shares.")
+            except Exception as exc2:
+                print(f"\n[ABORT] Cannot read status of order {order_id[:10]}: "
+                      f"{type(exc).__name__}: {exc} (retry: {type(exc2).__name__}). "
+                      f"The loss cap cannot be enforced without it, so the probe "
+                      f"stops here rather than posting further orders blind.")
+                break
 
         rtt_rest_ms = (t2_http_ack - t1_socket_write) / 1e6
         loop_ms = (t3_ws_recv - t1_socket_write) / 1e6 if t3_ws_recv else rtt_rest_ms
