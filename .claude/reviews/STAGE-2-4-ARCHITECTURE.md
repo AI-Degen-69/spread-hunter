@@ -265,11 +265,18 @@ purpose of 4.5 is to make it 1 under supervision rather than discovering the ans
 `py_clob_client_v2` does not wrap it. It exposes user-level post-trade activity:
 `/trades` (200 req / 10 s) and `/positions`, `/closed-positions` (150 req / 10 s each).
 
-Two consequences for Stage 2:
+Two consequences:
 
 1. **`/positions` is an independent check on the registry.** The registry records what we believe we
    hold; the Data API reports what the venue says we hold. Reconciling the two catches a whole class
    of bug that neither source can catch alone — and `merge`'s pre-flight already needs a truthful
    balance, which it currently gets from the CLOB balance endpoint (200 req / 10 s).
-2. It is a plain REST call with no SDK wrapper, so it costs a `urllib` request and a parse. Add it
-   as a reconciliation cross-check in Stage 2, not as the primary fill signal.
+2. It is a plain REST call with no SDK wrapper, so it costs a `urllib` request and a parse. It is a
+   reconciliation cross-check, never the primary fill signal.
+
+**Scope correction (2026-08-17).** An earlier revision of this section placed the `/positions`
+cross-check in Stage 2. It is not in Stage 2 and was never built there: `reconcile_orders()` in
+`strategy/order_registry.py` reconciles CLOB open orders and trades only, and no test covers
+registry/venue divergence. The cross-check moves to **Stage 3**, alongside the reconcile lock
+carried forward in `c37179b`. Stage 3 owes: the `/positions` call, explicit divergence handling,
+and divergence tests.
