@@ -2502,3 +2502,34 @@ event loop, `analyze_ws_staleness.py` catching broad exceptions around its NTP f
 latency-override validation in `config.py`) are **PARKED**: every one of them sits in the `books.db`
 / latency measurement path, which produced no realised income and is superseded by the live
 execution build.
+
+---
+
+### Session 69 — Stage 0: Relayer Error-Handling Hardening, Settlement Log Audit, and Forensic Corrupt Log Preservation (2026-08-16)
+
+#### Question
+
+How can ambiguous relayer submit outcomes in `strategy/live_exec.py` be prevented from causing duplicate redemptions, unrecorded transactions, or corrupted audit logs on network errors, timeouts, or parse failures, and how can `scripts/audit_settlement.py` robustly parse the updated relayer audit log?
+
+#### Method
+
+1. **Pre-Submit Order Logging & Forensic Safety (`strategy/live_exec.py`):**
+   - Refactored `_log_order` to generate a stable `id` and return it. On encountering corrupted/unparseable log files, renames the file to `live_orders.corrupt.<unix_ts>.json` before recreating, preserving forensic evidence.
+   - Added companion helper `_update_order_log(entry_id, updates)` to rewrite matching entries in `run/live_orders.json` in place with narrow `(json.JSONDecodeError, OSError)` handling and boolean return status.
+   - Updated `redeem` to persist a `status="pending"` row containing the signed EIP-712 payload, nonce, and deadline *before* calling the relayer submit endpoint.
+   - Wrapped the submit HTTP call in `try/except`:
+     - On exception: updates row to `status="unknown"` with error details. If log update fails, dumps full in-flight transaction record to `stderr` and includes warning in `SystemExit` instructing manual on-chain verification.
+     - On success: lifts `tx_hash` into its own top-level field, records `json.dumps(res)[:400]`, and sets `status="confirmed"`, warning on `stderr` if the file update fails.
+2. **Audit Settlement Script Fixes (`scripts/audit_settlement.py`):**
+   - Migrated legacy `py_clob_client` imports to declared `py_clob_client_v2`.
+   - Updated `check_relayer_status(tx_id, log_file)` to accept an explicit `log_file` path, parse `run/live_orders.json` as a JSON array, prioritize top-level `tx_hash`, match `REDEEM` actions, extract IDs from structured/string formats, and report log `status`.
+3. **Unit Testing (`tests/test_live_exec.py`):**
+   - Added tests for HTTP error handling, timeout handling, single-row pending->confirmed transitions, dry-run zero-write invariant, fixture-backed audit log reading, corrupt log renaming preservation, and stderr dump on log update failure.
+
+#### Result
+
+All 7 Stage 0 unit tests pass; full test suite increases from 716 to 723 passed `[MEASURED]`. In-flight and ambiguous submits are durably recorded as `status="unknown"`, eliminating untracked in-flight transactions while preserving unparseable history.
+
+#### Decision
+
+**LIVE** — Stage 0 hardening complete and verified across all acceptance criteria.

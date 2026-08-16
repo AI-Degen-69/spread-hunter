@@ -406,3 +406,220 @@ def test_dry_run_probe():
             down_token="token_down_456",
         )
         le.probe(series="btc-up-or-down-5m", cycles=5, live=False)
+
+
+def test_redeem_submit_http_error_logs_unknown(tmp_path):
+    """1. Submit raises HTTPError -> row exists with status='unknown', exception type and message recorded, non-zero exit."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    import urllib.error
+    def mock_urlopen_http_err(req, timeout=30):
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 504, "Gateway Timeout", {}, None)
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_http_err):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "signed and sent" in msg
+    assert "HTTPError" in msg
+
+    log_file = tmp_path / "live_orders.json"
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    rec = entries[0]
+    assert rec["action"] == "REDEEM"
+    assert rec["condition_id"] == cond_id
+    assert rec["status"] == "unknown"
+    assert rec["nonce"] == 121
+    assert "error_type" in rec and rec["error_type"] == "HTTPError"
+    assert "error" in rec and "504" in rec["error"]
+    assert "payload" in rec
+
+
+def test_redeem_submit_timeout_logs_unknown(tmp_path):
+    """2. Submit raises a timeout -> same outcome, distinct exception detail."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    import urllib.error
+    def mock_urlopen_timeout(req, timeout=30):
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            raise urllib.error.URLError("timed out")
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_timeout):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "signed and sent" in msg
+    assert "URLError" in msg
+
+    log_file = tmp_path / "live_orders.json"
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    rec = entries[0]
+    assert rec["action"] == "REDEEM"
+    assert rec["status"] == "unknown"
+    assert rec["error_type"] == "URLError"
+    assert "timed out" in rec["error"]
+
+
+def test_redeem_submit_success_single_row_confirmed(tmp_path):
+    """3. Submit succeeds -> exactly one row, transitioning pending -> confirmed, not two rows."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+    recorded_requests = []
+    mock_urlopen = make_mock_urlopen(recorded_requests, submit_hash="0xdeadbeef12345678")
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        le.redeem(cond_id, live=True)
+
+    log_file = tmp_path / "live_orders.json"
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    rec = entries[0]
+    assert rec["action"] == "REDEEM"
+    assert rec["status"] == "confirmed"
+    assert "0xdeadbeef12345678" in rec["response"]
+    assert len(rec["response"]) <= 400
+    assert rec["nonce"] == 121
+    assert "payload" in rec
+
+
+def test_redeem_dry_run_writes_no_row(tmp_path):
+    """4. Dry-run writes no row at all."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+    def mock_urlopen_rpc(req, timeout=5):
+        return MockResponse({"jsonrpc": "2.0", "id": 1, "result": "0x0000000000000000000000000000000000000000000000000000000000000001"})
+
+    with patch.dict(os.environ, {}, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_rpc):
+        os.environ.pop("POLYGON_RPC", None)
+        le.redeem(cond_id, live=False)
+
+    log_file = tmp_path / "live_orders.json"
+    assert not log_file.exists()
+
+
+def test_audit_settlement_relayer_log_reader_finds_redeem_fixture(tmp_path):
+    """5. audit_settlement.py's relayer-log reader finds a REDEEM record in a fixture written by _log_order itself."""
+    import scripts.audit_settlement as audit
+
+    # Build the fixture using _log_order itself
+    log_file = tmp_path / "live_orders.json"
+    with patch.object(le, "RUN", tmp_path):
+        le._log_order({
+            "ts": 1723812345.67,
+            "action": "REDEEM",
+            "condition_id": "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f",
+            "safe_funder": "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b",
+            "signer": "0xD2C7F5514580184d32C70F6FEA95B69C5Cd72fa0",
+            "target": le.CTF_CONTRACT,
+            "call_data": "0x01b7037c...",
+            "nonce": 121,
+            "deadline": 1723812945,
+            "payload": {"type": "WALLET"},
+            "status": "confirmed",
+            "tx_hash": "0x9876543210fedcba",
+            "response": json.dumps({"transactionHash": "0x9876543210fedcba", "status": "CONFIRMED"}),
+        })
+
+    def mock_relayer_get(req, timeout=5):
+        return MockResponse({"transactionHash": "0x9876543210fedcba", "state": "MINED", "status": "CONFIRMED"})
+
+    with patch("urllib.request.urlopen", side_effect=mock_relayer_get):
+        res = audit.check_relayer_status(log_file=log_file)
+
+    assert res.get("transactionHash") == "0x9876543210fedcba"
+    assert res.get("status") == "CONFIRMED"
+
+
+def test_redeem_submit_exception_log_update_failure_dumps_to_stderr(tmp_path, capsys):
+    """R9 Item 1: When submit fails AND _update_order_log fails (returns False),
+    SystemExit message states log update failed, and full transaction record reaches stderr."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    import urllib.error
+    def mock_urlopen_http_err(req, timeout=30):
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 504, "Gateway Timeout", {}, None)
+        return MockResponse({})
+
+    # Mock _update_order_log to simulate log file update failure
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch.object(le, "_update_order_log", return_value=False), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_http_err):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "signed and sent" in msg
+    assert "could NOT be updated" in msg
+
+    captured = capsys.readouterr()
+    assert "ERROR: Failed to update live_orders.json" in captured.err
+    assert "REDEEM" in captured.err
+    assert cond_id in captured.err
+    assert "121" in captured.err
+
+
+def test_log_order_corrupted_file_renamed_not_destroyed(tmp_path):
+    """R9 Item 2: Malformed live_orders.json is preserved under a .corrupt. name
+    and not overwritten on parse failure."""
+    corrupt_content = '{"broken": json['
+    log_file = tmp_path / "live_orders.json"
+    log_file.write_text(corrupt_content, encoding="utf-8")
+
+    with patch.object(le, "RUN", tmp_path):
+        entry_id = le._log_order({
+            "action": "REDEEM",
+            "condition_id": "0x1234",
+            "status": "pending",
+        })
+
+    # New log file exists and contains the new entry
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    assert entries[0]["id"] == entry_id
+
+    # The corrupted file was renamed and preserved
+    corrupt_files = list(tmp_path.glob("live_orders.corrupt.*.json"))
+    assert len(corrupt_files) == 1
+    assert corrupt_files[0].read_text(encoding="utf-8") == corrupt_content

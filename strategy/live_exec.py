@@ -40,8 +40,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -91,17 +93,53 @@ def _client(funder: str | None = None):
     return c
 
 
-def _log_order(rec: dict) -> None:
+def _log_order(rec: dict) -> str:
     RUN.mkdir(exist_ok=True)
     f = RUN / "live_orders.json"
     hist = []
     if f.exists():
         try:
             hist = json.loads(f.read_text(encoding="utf-8"))
-        except Exception:
+        except (json.JSONDecodeError, OSError) as exc:
+            corrupt_path = f.parent / f"live_orders.corrupt.{int(time.time())}.json"
+            try:
+                f.rename(corrupt_path)
+                print(f"WARNING: unreadable log file renamed to {corrupt_path}: {exc}", file=sys.stderr)
+            except OSError:
+                pass
             hist = []
+    if "id" not in rec:
+        rec["id"] = str(uuid.uuid4())
     hist.append(rec)
     f.write_text(json.dumps(hist, indent=2), encoding="utf-8")
+    return rec["id"]
+
+
+def _update_order_log(entry_id: str, updates: dict) -> bool:
+    RUN.mkdir(exist_ok=True)
+    f = RUN / "live_orders.json"
+    if not f.exists():
+        return False
+    try:
+        hist = json.loads(f.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"WARNING: _update_order_log failed to read {f}: {exc}", file=sys.stderr)
+        return False
+
+    updated = False
+    for item in hist:
+        if isinstance(item, dict) and item.get("id") == entry_id:
+            item.update(updates)
+            updated = True
+            break
+
+    if updated:
+        try:
+            f.write_text(json.dumps(hist, indent=2), encoding="utf-8")
+        except OSError as exc:
+            print(f"WARNING: _update_order_log failed to write {f}: {exc}", file=sys.stderr)
+            return False
+    return updated
 
 
 def _open_notional(c) -> float:
@@ -483,10 +521,8 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         data=json.dumps(payload).encode("utf-8"),
         headers=headers,
     )
-    with urllib.request.urlopen(req_submit, timeout=30) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
 
-    _log_order({
+    entry_id = _log_order({
         "ts": time.time(),
         "action": "REDEEM",
         "condition_id": condition_id,
@@ -494,9 +530,73 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         "signer": signer_addr,
         "target": CTF_CONTRACT,
         "call_data": call_data,
-        "response": str(res)[:400],
+        "nonce": nonce,
+        "deadline": deadline,
+        "payload": payload,
+        "status": "pending",
     })
-    print(f"  RELAYER RESPONSE: {res}")
+
+    try:
+        with urllib.request.urlopen(req_submit, timeout=30) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        log_ok = _update_order_log(entry_id, {
+            "status": "unknown",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        })
+        if not log_ok:
+            record_dump = json.dumps({
+                "id": entry_id,
+                "action": "REDEEM",
+                "condition_id": condition_id,
+                "safe_funder": funder,
+                "signer": signer_addr,
+                "target": CTF_CONTRACT,
+                "call_data": call_data,
+                "nonce": nonce,
+                "deadline": deadline,
+                "payload": payload,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }, indent=2)
+            print(
+                f"ERROR: Failed to update live_orders.json for entry_id={entry_id}.\n"
+                f"Full in-flight transaction record:\n{record_dump}",
+                file=sys.stderr,
+            )
+            raise SystemExit(
+                f"Relayer submit failed with {type(exc).__name__}: {exc}\n"
+                f"Transaction was signed and sent (nonce={nonce}, id={entry_id}).\n"
+                f"WARNING: Audit row in live_orders.json could NOT be updated (see stderr dump).\n"
+                f"On-chain status must be checked manually before any retry."
+            )
+        raise SystemExit(
+            f"Relayer submit failed with {type(exc).__name__}: {exc}\n"
+            f"Transaction was signed and sent (nonce={nonce}, id={entry_id}).\n"
+            f"On-chain status must be checked manually before any retry."
+        )
+
+    tx_hash = None
+    if isinstance(res, dict):
+        tx_hash = res.get("transactionHash") or res.get("transactionID") or res.get("id")
+
+    update_fields = {
+        "status": "confirmed",
+        "response": json.dumps(res)[:400],
+    }
+    if tx_hash:
+        update_fields["tx_hash"] = tx_hash
+
+    log_ok = _update_order_log(entry_id, update_fields)
+    if not log_ok:
+        print(
+            f"WARNING: Failed to update live_orders.json entry {entry_id} to status='confirmed' "
+            f"(row remains pending in log). Response: {json.dumps(res)[:400]}",
+            file=sys.stderr,
+        )
+
+    print(f"  RELAYER RESPONSE: {json.dumps(res)[:400]}")
     print(f"\nlogged to {RUN / 'live_orders.json'}")
 
 
