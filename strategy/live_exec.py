@@ -290,6 +290,59 @@ def sign_redeem_transaction(key: str, funder: str, nonce: int, deadline: int, ca
     return signer_acc.address, sig
 
 
+def get_payout_denominator(condition_id: str, rpc_url: str | None = None) -> int:
+    """Query payoutDenominator(bytes32) on CTF contract (0x4D97DCd97eC945f40cF65F87097ACe5EA0476045).
+    Selector: 0xdd34de67
+    Returns non-zero integer if condition is resolved, 0 if unresolved.
+    """
+    if rpc_url is None:
+        rpc_url = os.environ.get("POLYGON_RPC", "https://polygon.drpc.org")
+    import urllib.request
+    clean_cond = condition_id.lower().replace("0x", "").zfill(64)
+    call_data = "0xdd34de67" + clean_cond
+    req_body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [{"to": CTF_CONTRACT, "data": call_data}, "latest"],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        rpc_url,
+        data=req_body,
+        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        res = json.loads(resp.read().decode("utf-8"))
+    if "result" in res and res["result"] != "0x":
+        return int(res["result"], 16)
+    return 0
+
+
+def build_redeem_submit_payload(from_addr: str, funder: str, nonce: int | str,
+                                deadline: int | str, signature: str, call_data: str) -> dict:
+    """Construct relayer /submit JSON payload for DepositWalletBatchRequest.
+    Wire types follow @polymarket/builder-relayer-client@0.0.10 dist/types.d.ts:147-154.
+    """
+    return {
+        "type": "WALLET",
+        "from": from_addr,
+        "to": DEPOSIT_WALLET_FACTORY,
+        "nonce": str(nonce),
+        "signature": signature,
+        "depositWalletParams": {
+            "depositWallet": funder,
+            "deadline": str(deadline),
+            "calls": [
+                {
+                    "target": CTF_CONTRACT,
+                    "value": "0",
+                    "data": call_data,
+                }
+            ],
+        },
+    }
+
+
 def redeem(condition_id: str, index_sets: list[int] | None = None,
            collateral: str = USDC_E_CONTRACT,
            parent_collection_id: str = ZERO_BYTES32,
@@ -312,18 +365,45 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         index_sets=index_sets,
     )
 
+    try:
+        denom = get_payout_denominator(condition_id)
+        resolved_str = "yes" if denom > 0 else "no"
+    except Exception as exc:
+        denom = 0
+        resolved_str = f"unknown ({exc})"
+
     print("action          REDEEM (gasless via Polymarket Relayer)")
     print(f"target_ctf      {CTF_CONTRACT}")
     print(f"safe_funder     {funder or '(POLY_FUNDER not set)'}")
     print(f"signer_eoa      {signer or '(POLY_PRIVATE_KEY not set)'}")
     print(f"condition_id    {condition_id}")
+    print(f"resolved        {resolved_str}")
     print(f"collateral      {collateral}")
     print(f"index_sets      {index_sets}")
     print(f"encoded_call    {call_data[:42]}... ({len(call_data)} chars)")
 
     if not live:
+        preview_nonce = 0
+        preview_deadline = int(time.time()) + REDEEM_DEADLINE_SECONDS
+        preview_sig = "0x" + "00" * 65
+        preview_payload = build_redeem_submit_payload(
+            from_addr=signer or "0x0000000000000000000000000000000000000000",
+            funder=funder or "0x0000000000000000000000000000000000000000",
+            nonce=preview_nonce,
+            deadline=preview_deadline,
+            signature=preview_sig,
+            call_data=call_data,
+        )
+        print("\nsubmit_payload_preview (dry run - placeholder nonce/signature):")
+        print(json.dumps(preview_payload, indent=2))
         print("\nDRY RUN -- nothing sent. Re-run with --live to sign and submit to relayer.")
         return
+
+    # Pre-flight on-chain resolution guard
+    if denom == 0:
+        raise SystemExit(
+            f"Condition {condition_id} has not been resolved yet (payoutDenominator == 0)."
+        )
 
     relayer_key = os.environ.get("RELAYER_API_KEY")
     relayer_addr = os.environ.get("RELAYER_API_KEY_ADDRESS")
@@ -360,24 +440,14 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
     signer_addr, signature = sign_redeem_transaction(key, funder, nonce, deadline, call_data)
 
     # 3. Construct relayer submit payload
-    payload = {
-        "type": "WALLET",
-        "from": signer_addr,
-        "to": DEPOSIT_WALLET_FACTORY,
-        "nonce": str(nonce),
-        "signature": signature,
-        "depositWalletParams": {
-            "depositWallet": funder,
-            "deadline": str(deadline),
-            "calls": [
-                {
-                    "target": CTF_CONTRACT,
-                    "value": "0",
-                    "data": call_data,
-                }
-            ],
-        },
-    }
+    payload = build_redeem_submit_payload(
+        from_addr=signer_addr,
+        funder=funder,
+        nonce=nonce,
+        deadline=deadline,
+        signature=signature,
+        call_data=call_data,
+    )
 
     req_submit = urllib.request.Request(
         f"{relayer_url}/submit",

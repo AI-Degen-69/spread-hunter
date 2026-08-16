@@ -97,10 +97,63 @@ def test_sign_redeem_transaction():
     assert len(sig) == 132  # 0x + 130 hex chars
 
 
+def test_build_redeem_submit_payload():
+    from_addr = "0xD2C7F5514580184d32C70F6FEA95B69C5Cd72fa0"
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    nonce = 121
+    deadline = 1786855000
+    signature = "0x" + "aa" * 65
+    call_data = "0x01b7037c" + "00" * 224
+
+    payload = le.build_redeem_submit_payload(from_addr, funder, nonce, deadline, signature, call_data)
+    assert payload["type"] == "WALLET"
+    assert payload["from"] == from_addr
+    assert payload["to"] == le.DEPOSIT_WALLET_FACTORY
+    assert payload["nonce"] == "121"
+    assert isinstance(payload["nonce"], str)
+    assert payload["signature"] == signature
+    assert "metadata" not in payload
+
+    params = payload["depositWalletParams"]
+    assert params["depositWallet"] == funder
+    assert params["deadline"] == str(deadline)
+    assert isinstance(params["deadline"], str)
+    assert len(params["calls"]) == 1
+    assert params["calls"][0]["target"] == le.CTF_CONTRACT
+    assert params["calls"][0]["value"] == "0"
+    assert isinstance(params["calls"][0]["value"], str)
+    assert params["calls"][0]["data"] == call_data
+
+
 def test_redeem_dry_run():
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
-    # Should not throw and should print dry run message
-    le.redeem(cond_id, live=False)
+    with patch.object(le, "get_payout_denominator", return_value=1) as mock_denom, \
+         patch("urllib.request.urlopen") as mock_url, \
+         patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+        le.redeem(cond_id, live=False)
+
+    out = mock_stdout.getvalue()
+    assert "resolved        yes" in out
+    assert "submit_payload_preview" in out
+    assert '"nonce": "0"' in out
+    assert '"depositWalletParams"' in out
+    assert '"signature"' in out
+    assert "DRY RUN -- nothing sent" in out
+
+    # Verify no network calls occur to relayer in dry run
+    mock_url.assert_not_called()
+    mock_denom.assert_called_once_with(cond_id)
+
+
+def test_redeem_live_unresolved_raises():
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    with patch.object(le, "get_payout_denominator", return_value=0), \
+         patch("urllib.request.urlopen") as mock_url:
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+        assert f"Condition {cond_id} has not been resolved yet (payoutDenominator == 0)" in str(exc_info.value)
+    # Ensure no relayer request occurred before aborting
+    mock_url.assert_not_called()
 
 
 def test_redeem_live_mock():
@@ -134,10 +187,16 @@ def test_redeem_live_mock():
 
     recorded_requests = []
 
+    # Response shape MEASURED against live relayer 2026-08-16:
+    #   {"address":"0x6987f531981c95fc998ab20c0935154e9f509a87","nonce":"122"}
+    # `address` is a ROTATING RELAYER POOL WORKER, never our account. Deliberately
+    # set to an unrelated address so any code that trusts this field fails the test.
+    POOL_WORKER = "0x6987f531981c95fc998ab20c0935154e9f509a87"
+
     def mock_urlopen(req, timeout=30):
         recorded_requests.append(req)
         if "params" in req.full_url:
-            return MockResponse({"address": acc.address, "nonce": 121})
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
         elif "submit" in req.full_url:
             return MockResponse({"transactionHash": "0xabcdef1234567890", "status": "PENDING"})
         return MockResponse({})
@@ -145,6 +204,7 @@ def test_redeem_live_mock():
     import time
     t_before = int(time.time())
     with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
          patch.object(le, "sign_redeem_transaction", wraps=le.sign_redeem_transaction) as mock_sign, \
          patch("urllib.request.urlopen", side_effect=mock_urlopen):
         le.redeem(cond_id, live=True)
@@ -169,6 +229,7 @@ def test_redeem_live_mock():
     assert "submit" in req_submit.full_url
     body = json.loads(req_submit.data.decode("utf-8"))
     assert body["type"] == "WALLET"
+    # Proves the submit body carries our EOA and not the worker address echoed by the params endpoint
     assert body["from"] == acc.address
     assert body["to"] == le.DEPOSIT_WALLET_FACTORY
     assert isinstance(body["nonce"], str)
@@ -187,6 +248,60 @@ def test_redeem_live_mock():
     assert isinstance(params["calls"][0]["value"], str)
     assert params["calls"][0]["value"] == "0"
     assert len(params["calls"][0]["data"]) == 458
+
+
+def test_redeem_ignores_params_response_address():
+    """Regression guard: verify that the pool-worker address in the params response
+    appears nowhere in the submitted batch payload.
+    """
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+    env_vars = {
+        "POLY_PRIVATE_KEY": acc.key.hex(),
+        "POLY_FUNDER": funder,
+        "RELAYER_API_KEY": "test_key",
+        "RELAYER_API_KEY_ADDRESS": "0x1234567890123456789012345678901234567890",
+        "RELAYER_URL": "https://relayer-v2.polymarket.com",
+    }
+
+    class MockResponse:
+        def __init__(self, data):
+            self.data = json.dumps(data).encode("utf-8")
+
+        def read(self):
+            return self.data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    recorded_requests = []
+    POOL_WORKER = "0x6987f531981c95fc998ab20c0935154e9f509a87"
+
+    def mock_urlopen(req, timeout=30):
+        recorded_requests.append(req)
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            return MockResponse({"transactionHash": "0xabcdef1234567890", "status": "PENDING"})
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        le.redeem(cond_id, live=True)
+
+    assert len(recorded_requests) == 2
+    req_submit = recorded_requests[1]
+    raw_json = req_submit.data.decode("utf-8")
+    assert POOL_WORKER.lower() not in raw_json.lower(), "Pool worker address must never leak into submit payload"
+    body = json.loads(raw_json)
+    assert body["from"] != POOL_WORKER
+    assert body["depositWalletParams"]["depositWallet"] != POOL_WORKER
 
 
 def test_dry_run_probe():
