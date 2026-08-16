@@ -8,11 +8,28 @@
 
 ## 1. THE OBJECTIVE, IN ONE PARAGRAPH
 
-The strategy is validated in simulation and **cannot be run for real**, because four of the six
-capabilities it depends on exist only inside the simulator. Session 66 builds them, in a fixed
-order, on this branch, with no live orders until every one of them is proven. The objective is not
-"make money" and not "analyse anything" — it is **make the live code able to execute the loop the
-simulator already proved profitable.**
+**The brain exists and works. The hands do not.** The decision engine already runs against real
+live order books: it reads real books, decides when to quote, recognises when a pair is complete,
+decides when to merge, and decides when to cut a one-sided position. That logic is written, tested,
+and validated across 26,777 pairs of real market data. It is the hard part and it is finished.
+
+What is missing is narrower than "four capabilities." No order was ever **sent**, so nothing was
+ever built to talk to the venue about one:
+
+| The decision | State | What is actually absent |
+| --- | --- | --- |
+| "my order filled" | works — inferred from the real tape | no code asks the venue *"did **mine** fill?"* — there was never an order to ask about |
+| "cut this position" | works — fired correctly 16 times | no code **sends** the cancel or the sell |
+| "merge this pair" | works — `merge.py` decides | no code **calls** the contract |
+
+So Session 66 is **not** rebuilding strategy logic. It is wiring existing, proven decisions to the
+venue — turning *"the model concluded I filled"* into *"the exchange told me I filled,"* and *"the
+model booked a merge"* into *"the contract burned the pair and paid me $1.00."*
+
+Anything that looks like re-deriving strategy behaviour is out of scope and is a sign of drift.
+
+The build order below still holds, for one reason: **the moment orders become real, the exit must
+be real too.** Otherwise the first one-sided fill sits there with nothing able to close it.
 
 ## 2. WHAT THE BUSINESS ACTUALLY IS
 
@@ -59,6 +76,10 @@ stands and why every proposal to raise it was rejected.
 mechanisms never fired. Losing $42.71 against $926.85 gained is the stop-loss doing its job.
 
 ## 4. THE CAPABILITY GAP — THIS IS THE WORK
+
+Read this table as *"the decision exists; the venue call does not."* Every `ABSENT` below is a
+missing conversation with the exchange, not a missing strategy rule — the rule already ran 368
+times against live books and produced the numbers in section 3.
 
 | step | live path | evidence |
 | --- | --- | --- |
