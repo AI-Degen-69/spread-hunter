@@ -1653,6 +1653,64 @@ def poll(
         sys.exit(1)
 
 
+def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
+              skip_positions_check: bool = False) -> None:
+    """Stage 3 — close a one-sided pair: cancel the resting leg, sell the filled one.
+
+    The Data API positions read is a pre-flight, not decoration: it is the only
+    independent check that the venue agrees with the registry about what we
+    hold, and selling a size the venue does not agree we hold is an oversell.
+    It fails closed -- an unreadable endpoint refuses the exit rather than
+    proceeding unchecked. `--skip-positions-check` exists for the case where the
+    Data API is down and the operator has decided to act anyway, and it says so
+    on the record.
+    """
+    from strategy.live_pairs import exit_naked_leg, fetch_positions, PairExitRefused
+    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from strategy.config import Config
+
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    client = _client()
+    funder = os.environ.get("POLY_FUNDER")
+
+    venue_positions = None
+    if not skip_positions_check:
+        if not funder:
+            raise SystemExit(
+                "Refusing to exit: POLY_FUNDER is not set, so the venue's "
+                "position cannot be read and the registry's view cannot be "
+                "checked. Set it, or pass --skip-positions-check to act "
+                "without the cross-check."
+            )
+        try:
+            venue_positions = fetch_positions(funder)
+        except Exception as exc:
+            raise SystemExit(
+                f"Refusing to exit: the Data API positions read failed "
+                f"({exc!r}). An unreadable endpoint is not an empty portfolio. "
+                f"Pass --skip-positions-check to act without the cross-check."
+            ) from exc
+
+    try:
+        result = exit_naked_leg(
+            client, registry, pair_id,
+            max_pair_cost=Config().max_pair_cost,
+            live=live,
+            venue_positions=venue_positions,
+        )
+    except PairExitRefused as exc:
+        raise SystemExit(f"EXIT REFUSED: {exc}") from exc
+
+    print(json.dumps(result, indent=2, default=str))
+    if result["action"] == "route_to_merge":
+        print(
+            f"\nThe pair completed between the cancel and the sell. It is now "
+            f"worth $1.00 at merge -- run:\n"
+            f"  python -m strategy.live_exec merge {result['condition_id']} "
+            f"--amount <shares> --live"
+        )
+
+
 def cancel_all(live: bool) -> None:
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
@@ -1708,6 +1766,13 @@ def main() -> None:
     pl.add_argument("--interval", type=float, default=5.0, help="Cadence in seconds (default: 5.0)")
     pl.add_argument("--once", action="store_true", help="Reconcile once and exit")
     pl.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    ex = sub.add_parser("exit", help="Stage 3: close a one-sided pair (cancel resting leg, sell filled leg).")
+    ex.add_argument("pair_id", help="pair_id as recorded in the order registry")
+    ex.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    ex.add_argument("--skip-positions-check", action="store_true",
+                    help="Act without the Data API registry/venue cross-check. Only when the endpoint is down.")
+    ex.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                    help="actually send.")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -1754,6 +1819,9 @@ def main() -> None:
         )
     elif a.cmd == "poll":
         poll(interval=a.interval, once=a.once, db_path=a.db)
+    elif a.cmd == "exit":
+        exit_pair(a.pair_id, is_live, db_path=a.db,
+                  skip_positions_check=a.skip_positions_check)
     else:
         cancel_all(is_live)
 

@@ -467,6 +467,36 @@ class OrderRegistry:
                 )
             conn.commit()
 
+    def get_matched_notional(self, order_uuid: str) -> float:
+        """SUM(size * price) over this order's fills.
+
+        Paired with get_size_matched this gives the volume-weighted fill price,
+        which is the only honest cost basis for a leg filled across several
+        trades at different prices. Derived from the fills rows for the same
+        reason size_matched is: a stored average drifts from its evidence.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(size * price), 0.0) AS notional "
+                "FROM fills WHERE order_uuid = ?",
+                (order_uuid,),
+            ).fetchone()
+        return float(row["notional"]) if row else 0.0
+
+    def get_orders_by_pair(self, pair_id: str) -> list[OrderRecord]:
+        """Every order carrying this pair_id, whatever its status.
+
+        Unlike get_active_orders this includes filled and cancelled rows: a
+        pair's exit decision depends on what filled, not only on what is still
+        working.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM orders WHERE pair_id = ? ORDER BY posted_ts",
+                (pair_id,),
+            ).fetchall()
+        return [self._row_to_order(r) for r in rows]
+
     def get_active_orders(self) -> list[OrderRecord]:
         """Return all orders in pending, open, or partial status."""
         with self._conn() as conn:

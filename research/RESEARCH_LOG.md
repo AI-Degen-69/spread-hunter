@@ -2885,3 +2885,64 @@ the poll-loop skip. Full suite **772 passed**.
 
 **LIVE** — the gate named in the Stage 2-4 architecture document is closed. Stage 3 may now issue a
 cancel, since a cancel decided from raced state was the specific harm this blocked.
+
+---
+
+### 2026-08-17 — Stage 3: the naked exit, and the three things that are only dangerous live
+
+#### Question
+
+The pairs rule is already proven in simulation (`strategy/sweep.py:700-830`): the trigger fired 16
+times across 26,777 pairs, always on `pair_cost >= max_pair_cost`, costing 3.67c per exit against
+3.68c gained per completed pair. What has to change to run it against a real venue?
+
+#### Method
+
+Ported the trigger unchanged and rewrote only the sequencing around it, then wrote fourteen tests
+before the implementation. Every test mocks the client at the boundary; none reaches the network.
+
+#### Result
+
+**The rule did not change. The sequence did.** In simulation a cancel always succeeds, a book read is
+free, and nobody else can fill our order between two statements. Each of those is a place to lose
+money live, so the live path is `cancel -> re-read -> sell`, and each arrow is load-bearing:
+
+1. **Cancel before sell.** Selling first leaves a live resting order that can fill into the position
+   we just closed, re-opening exposure at the worst moment.
+2. **A failed cancel aborts.** No sell is attempted. The alternative is selling with a live order
+   still working, which is the same exposure with extra steps.
+3. **Re-read between cancel and sell.** A successful cancel does not mean the pair is still
+   one-sided — the cancel may have raced a match that already happened. If the other leg filled, the
+   pair is complete and worth $1.00 at merge, and market-selling one leg converts that into a
+   realized loss. The exit routes it to `merge` instead. This is the worst outcome available on the
+   path and the reason the re-read is not optional.
+
+**Sizing comes from the fills, never from intent.** An order that filled 4 of 10 is a 4-share
+position; sizing an exit off the intended 10 would sell shares that do not exist. Size is
+`min(registry naked size, bid depth)` — depth below the holding is a partial exit, not an oversized
+one — with a redundant refusal above the registry's number, because an oversell is the one error here
+that cannot be undone.
+
+**The Data API `/positions` cross-check landed here, as scoped in `b22eada`.** It is the only
+independent view of what the venue says we hold, and it runs *before* any venue write, so a
+divergence costs nothing rather than being discovered after a cancel has gone out. It fails closed
+twice over: an unreadable endpoint refuses the exit rather than passing by knowing nothing, and an
+unset `POLY_FUNDER` refuses rather than skipping the check silently. `--skip-positions-check` exists
+for a genuine Data API outage and puts that decision on the record. Tolerance is `1e-6` — sized for
+float dust from summing fills, since a real divergence is a share or more and at that scale one of
+the two views is wrong and neither is safe to trade on.
+
+**A missing ask fires the trigger rather than holding it.** No ask means there is nothing to complete
+against, so the leg stays naked for as long as that is true. Holding on the hope that a quote appears
+is the exact position the rule exists to close.
+
+Fourteen tests: fires at exactly 0.995 and holds at 0.994 (`>=`, not `>`), fires on a missing ask,
+cancel ordered before sell, failed cancel aborts with no sell sent, a leg that fills during the
+cancel routes to merge, size capped by the registry and separately by bid depth, divergence refuses
+before any venue call, matching positions proceed, float dust tolerated, under-cap holds, dry run
+sends nothing, and a balanced pair is not a candidate. Full suite **786 passed**.
+
+#### Decision
+
+**LIVE** — Stage 3 closes exposure and opens none. The `exit` subcommand is dry-run by default like
+every other command here.
