@@ -28,6 +28,20 @@ BUSY_TIMEOUT_SEC = 5.0
 # while preventing false-positive matches against sequential order updates.
 DEFAULT_ORPHAN_MATCH_WINDOW_MS: int = 30_000
 
+# The deliberate re-read window on every trade query. Our clock and the venue's
+# differ, and `after`'s inclusivity is unverified, so we overlap rather than
+# chase an exact boundary and let the trade_id dedupe absorb the repeats.
+TRADE_OVERLAP_MS: int = 60_000
+
+# Floor on how far back a trade query may reach. Without it a single order left
+# pending for an hour drags `after` back an hour on every 5-second cycle.
+MAX_TRADE_LOOKBACK_MS: int = 15 * 60 * 1000
+
+# Sentinel for "this client does not expose a creds attribute at all", which is
+# the normal case for the test doubles. Only an explicit `creds is None` -- a
+# real client that failed to authenticate -- is treated as a refusal.
+_CREDS_UNCHECKED = object()
+
 # Sizes are REAL, so size_matched accumulates float error across partial fills.
 # Never compare it to original_size with == or >=: forty fills summing to 100.0
 # in decimal can land at 99.99999999999999 in binary, and an order that is full
@@ -379,6 +393,7 @@ class ReconcileSummary:
     orders_cancelled: int = 0
     orphans_adopted: int = 0
     unattributed_recorded: int = 0
+    unmatched_trades: int = 0
     transitions: list[str] = None
 
     def __post_init__(self):
@@ -410,12 +425,26 @@ def reconcile_orders(
     now_ms = current_ts_ms if current_ts_ms is not None else int(time.time() * 1000)
     summary = ReconcileSummary(polled_ts=now_ms)
 
-    # 1. Fetch open orders from venue
-    try:
-        from py_clob_client_v2.clob_types import OpenOrderParams
-        venue_open_orders_raw = client.get_open_orders()
-    except Exception:
-        venue_open_orders_raw = client.get_open_orders()
+    # Absence of open orders is evidence only if we know we asked and were
+    # answered. The SDK already raises from assert_level_2_auth when creds are
+    # missing, so this is belt-and-braces -- but it fails fast with a legible
+    # message instead of deep inside header construction, and it stops a
+    # degraded or stubbed client from cancelling the whole registry by
+    # answering "no open orders" to a question it never sent.
+    creds = getattr(client, "creds", _CREDS_UNCHECKED)
+    if creds is None:
+        raise PermissionError(
+            "reconcile_orders: client has no L2 API credentials. Refusing to "
+            "reconcile -- an unauthenticated client cannot distinguish 'no "
+            "open orders' from 'never asked'."
+        )
+
+    # 1. Fetch open orders from venue.
+    #
+    # No try/except here on purpose. A failed fetch must reach the poll loop so
+    # it can back off; swallowing it and continuing with an empty list would
+    # make every resting order look absent, and section 4 would cancel them all.
+    venue_open_orders_raw = client.get_open_orders()
 
     summary.open_orders_count = len(venue_open_orders_raw) if venue_open_orders_raw else 0
     venue_order_map: dict[str, dict] = {}
@@ -491,32 +520,45 @@ def reconcile_orders(
                 summary.unattributed_recorded += 1
                 summary.transitions.append(f"UNATTRIBUTED {v_id}")
 
-    # 3. Poll trades with 60s overlap
-    earliest_polled_ts = now_ms - 60_000
+    # 3. Poll trades with the 60s overlap.
+    #
+    # The overlap is exactly 60s from the oldest cursor we care about, not 60s
+    # subtracted twice. It is also floored at MAX_TRADE_LOOKBACK_MS: a single
+    # order left pending for an hour would otherwise drag `after` back an hour
+    # on every 5s cycle, and the query grows without bound for no benefit.
+    earliest_polled_ts = now_ms
     current_active = registry.get_active_orders()
     if current_active:
-        min_active_ts = min(o.last_polled_ts for o in current_active)
-        earliest_polled_ts = min(earliest_polled_ts, min_active_ts)
+        earliest_polled_ts = min(o.last_polled_ts for o in current_active)
+    earliest_polled_ts = max(earliest_polled_ts, now_ms - MAX_TRADE_LOOKBACK_MS)
 
-    after_sec = max(0, int((earliest_polled_ts - 60_000) / 1000))
-    trades_raw = []
+    after_sec = max(0, int((earliest_polled_ts - TRADE_OVERLAP_MS) / 1000))
+
+    # Only a signature mismatch is caught. A 429, a 5xx or a socket error must
+    # propagate to the poll loop's backoff: returning an empty trade list here
+    # would let section 4 mark a filled order `cancelled` on absence alone,
+    # which is the same failure as marking one `filled` on absence alone.
     try:
         from py_clob_client_v2.clob_types import TradeParams
+
         p = TradeParams(maker_address=maker_address, after=after_sec)
         trades_raw = client.get_trades(params=p)
     except TypeError:
         trades_raw = client.get_trades()
-    except Exception:
-        try:
-            trades_raw = client.get_trades()
-        except Exception:
-            trades_raw = []
 
     summary.trades_polled = len(trades_raw) if trades_raw else 0
     if trades_raw:
         for t in trades_raw:
             t_id = str(t.get("id") or t.get("trade_id") or "")
-            t_order_id = str(t.get("order_id") or t.get("maker_order_id") or "")
+            # taker_order_id first: when we cross the spread our order is the
+            # taker, and matching only on maker ids silently drops every
+            # aggressive fill we ever make.
+            t_order_id = str(
+                t.get("taker_order_id")
+                or t.get("order_id")
+                or t.get("maker_order_id")
+                or ""
+            )
             t_size = float(t.get("size", 0.0))
             t_price = float(t.get("price", 0.0))
             t_ts_raw = t.get("timestamp") or t.get("venue_ts") or t.get("created_at")
@@ -525,11 +567,29 @@ def reconcile_orders(
                 t_ts *= 1000
 
             order = None
-            if t_order_id:
-                order = registry.get_order_by_venue_id(t_order_id)
+            for candidate in (
+                t_order_id,
+                str(t.get("maker_order_id") or ""),
+                str(t.get("order_id") or ""),
+            ):
+                if not candidate:
+                    continue
+                order = registry.get_order_by_venue_id(candidate)
                 if order is None:
-                    order = registry.get_order(t_order_id)
-            if order is not None:
+                    order = registry.get_order(candidate)
+                if order is not None:
+                    break
+
+            if order is None:
+                # A trade we cannot attribute is not nothing. Dropping it
+                # silently loses real executed volume and leaves size_matched
+                # understated, which Stage 4 would then size money from.
+                summary.unmatched_trades += 1
+                summary.transitions.append(
+                    f"UNMATCHED_TRADE {t_id} order_id={t_order_id or 'none'} "
+                    f"size={t_size} @ {t_price}"
+                )
+            else:
                 fill_rec = FillRecord(
                     trade_id=t_id,
                     order_uuid=order.id,

@@ -1414,6 +1414,7 @@ def poll(
 
     consecutive_errors = 0
     cycle = 0
+    last_cycle_failed = False
 
     while not stop_requested:
         cycle += 1
@@ -1443,15 +1444,30 @@ def poll(
                 f"cycle={elapsed:.2f}s | errors=0"
             )
 
+        except KeyboardInterrupt:
+            # Ctrl-C is not an error. It is a BaseException, so the handler
+            # below never sees it, and the operator would get a traceback
+            # instead of a clean stop on the one process meant to run for hours.
+            stop_requested = True
+            with open(event_log_path, "a", encoding="utf-8") as ef:
+                ef.write(f"[{now_iso}] STOP KeyboardInterrupt during cycle {cycle}\n")
+            print(f"[POLL {now_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
+            break
+
         except Exception as exc:
             consecutive_errors += 1
+            last_cycle_failed = True
             backoff_s = compute_backoff_delay(consecutive_errors, base_sec=2.0, max_sec=60.0)
             err_msg = f"[POLL {now_iso}] ERROR (count={consecutive_errors}, backoff={backoff_s:.1f}s): {exc}"
             print(err_msg, file=sys.stderr)
             with open(event_log_path, "a", encoding="utf-8") as ef:
                 ef.write(f"{err_msg}\n")
             if not once and not stop_requested:
-                time.sleep(backoff_s)
+                try:
+                    time.sleep(backoff_s)
+                except KeyboardInterrupt:
+                    stop_requested = True
+                    break
                 continue
 
         # Write heartbeat
@@ -1471,7 +1487,14 @@ def poll(
         try:
             time.sleep(sleep_time)
         except KeyboardInterrupt:
+            stop_requested = True
             break
+
+    # A --once run that failed its only cycle must exit non-zero. Returning 0
+    # after printing an error to stderr makes the failure invisible to any
+    # supervisor, cron entry or shell check that reads the exit status.
+    if once and last_cycle_failed:
+        sys.exit(1)
 
 
 def cancel_all(live: bool) -> None:

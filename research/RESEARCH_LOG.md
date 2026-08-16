@@ -2655,3 +2655,67 @@ All 13 order registry tests pass. Entire test suite passes at **752/752** (up fr
 
 **LIVE** — Stage 2 order registry and fill detection loop complete, read-only against venue, crash-safe, and locked.
 
+---
+
+### 2026-08-16 — Stage 2 hardening: reconcile must not infer state from a question it never asked (Session 72)
+
+#### Question
+
+The Stage 2 reconcile loop decides an order's fate from two venue reads. What does it conclude when
+one of those reads fails?
+
+#### Method
+
+Read the committed `reconcile_orders` and `poll` at `60ed1c7` directly from disk rather than from a
+summary, and traced each error path to the row transition it produces.
+
+#### Result
+
+Seven defects, all of which write a wrong row rather than raising:
+
+1. **A failed `get_trades` degraded into an empty list.** `except Exception: ... trades_raw = []`
+   turned a 429, a 5xx or a socket timeout into "no trades." Section 4 then marks every order absent
+   from `get_open_orders` and not full as `cancelled`. An order that filled while we were rate-limited
+   was recorded as cancelled, and Stage 4 would size real money from that row. This is the mirror of
+   the guard the stage was written around: never mark `filled` on absence alone, and equally never
+   mark `cancelled` on a trade query that never returned. It also made the backoff unreachable — the
+   poll loop could not observe a 429 that reconcile had already swallowed. Now only `TypeError` is
+   caught, for the SDK signature fallback.
+2. **Taker fills were dropped silently.** Trades were matched on `order_id`/`maker_order_id` only,
+   with no `else` branch. Every fill where we crossed the spread produced no row, no counter and no
+   log line, understating `size_matched` with nothing anywhere recording the loss. Now matched across
+   taker, maker and generic ids; an unattributable trade increments
+   `ReconcileSummary.unmatched_trades` and writes an `UNMATCHED_TRADE` transition.
+3. **The trade overlap was 120 s and unbounded.** 60 s was subtracted twice, and the floor was the
+   oldest active order's `last_polled_ts`, so a single row left `pending` for an hour dragged `after`
+   back an hour on every 5-second cycle. Now `TRADE_OVERLAP_MS = 60_000` applied once, floored by
+   `MAX_TRADE_LOOKBACK_MS = 900_000`.
+4. **`get_open_orders` was wrapped in a handler that retried the identical call**, doubling requests
+   against a venue that may have just rate-limited us. Removed.
+5. **No authentication pre-flight.** `reconcile_orders` now raises `PermissionError` when
+   `client.creds is None`. Absence of open orders is evidence only when we know we asked and were
+   answered.
+6. **`KeyboardInterrupt` escaped as a traceback.** `poll` caught `Exception`; `KeyboardInterrupt` is
+   a `BaseException`, so Ctrl-C during a reconcile produced a stack trace on the one process intended
+   to run unattended for hours. Caught, logged as `STOP`, clean exit.
+7. **`poll --once` exited 0 after a failed cycle**, hiding the failure from any supervisor reading
+   exit status. Exits 1 now.
+
+Separately, the startup line `status=400 {"error":"Could not create api key"}` is **benign** and has
+been present on every command in this repo's history. `ClobClient.create_or_derive_api_key` attempts
+`create_api_key`, swallows the failure in a bare `except Exception: pass`, and falls back to
+`derive_api_key`; credentials are set either way. Confirmed from the installed SDK source, not
+inferred from the message. `get_open_orders` calls `_l2_headers`, which calls `assert_level_2_auth`
+and raises `PolyException` when creds are absent — so an unauthenticated client cannot silently
+return an empty list. The pre-flight in defect 5 is belt-and-braces against a degraded or stubbed
+client, not a fix for an observed hole.
+
+Four new tests: trade-fetch failure propagates and transitions nothing; a taker fill is attributed;
+an unmatched trade is counted rather than dropped; an unauthenticated client is refused. Full suite
+**756/756 passed** (739 pre-Stage-2 baseline + 17 registry tests).
+
+#### Decision
+
+**LIVE** — Stage 2 hardened. Every venue read failure now reaches the poll loop's backoff instead of
+being laundered into a row transition.
+

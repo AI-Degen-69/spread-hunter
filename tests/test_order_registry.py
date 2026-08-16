@@ -595,3 +595,139 @@ def test_absence_without_trade_evidence_marks_cancelled_not_filled(registry: Ord
     assert registry.get_size_matched(local_id) == 0.0
     assert summary.orders_cancelled == 1
     assert summary.orders_filled == 0
+
+
+class RaisingTradesClient(MockClobClient):
+    """A client whose trade query fails, as a 429 or a 5xx would."""
+
+    def get_trades(self, params=None, only_first_page=False, next_cursor=None):
+        raise RuntimeError("429 Too Many Requests")
+
+
+def test_trade_fetch_failure_propagates_and_cancels_nothing(registry: OrderRegistry):
+    """A failed trade query must raise, never degrade into an empty trade list.
+
+    Swallowing the error and continuing is the mirror image of marking a row
+    filled on absence alone: the order vanished from open orders, we failed to
+    ask whether it filled, and reconcile would record `cancelled` for an order
+    that actually executed. Stage 4 would then size real money from it.
+    """
+    local_id = str(uuid.uuid4())
+    now_ms = 1723840000000
+
+    registry.create_order(
+        OrderRecord(
+            id=local_id,
+            order_id="0xvenue_during_429",
+            condition_id="0xcond_429",
+            token_id="0xtok_429",
+            side="BUY",
+            price=0.50,
+            original_size=20.0,
+            status="open",
+            posted_ts=now_ms,
+            last_polled_ts=now_ms,
+        )
+    )
+
+    client = RaisingTradesClient(open_orders=[], trades=[])
+    with pytest.raises(RuntimeError, match="429"):
+        reconcile_orders(client, registry, current_ts_ms=now_ms + 5000)
+
+    # The row must be untouched, so the poll loop can back off and retry.
+    order = registry.get_order(local_id)
+    assert order.status == "open", "a failed trade fetch must not transition any row"
+
+
+def test_taker_fill_is_attributed(registry: OrderRegistry):
+    """A trade carrying only `taker_order_id` must still find its order.
+
+    When we cross the spread our order is the taker. Matching on maker ids alone
+    drops every aggressive fill, and `size_matched` silently understates.
+    """
+    local_id = str(uuid.uuid4())
+    venue_order_id = "0xvenue_taker"
+    now_ms = 1723840000000
+
+    registry.create_order(
+        OrderRecord(
+            id=local_id,
+            order_id=venue_order_id,
+            condition_id="0xcond_taker",
+            token_id="0xtok_taker",
+            side="BUY",
+            price=0.50,
+            original_size=30.0,
+            status="open",
+            posted_ts=now_ms,
+            last_polled_ts=now_ms,
+        )
+    )
+
+    trade = {
+        "id": "0xtrade_taker_1",
+        "taker_order_id": venue_order_id,
+        "size": 12.0,
+        "price": 0.50,
+        "timestamp": now_ms + 1000,
+    }
+    client = MockClobClient(open_orders=[{"id": venue_order_id}], trades=[trade])
+    summary = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000)
+
+    assert summary.fills_recorded == 1
+    assert summary.unmatched_trades == 0
+    assert registry.get_size_matched(local_id) == 12.0
+    assert registry.get_order(local_id).status == "partial"
+
+
+def test_unmatched_trade_is_counted_not_dropped(registry: OrderRegistry):
+    """A trade we cannot attribute is surfaced, never discarded silently."""
+    now_ms = 1723840000000
+    trade = {
+        "id": "0xtrade_from_nowhere",
+        "taker_order_id": "0xventure_we_never_saw",
+        "size": 7.5,
+        "price": 0.61,
+        "timestamp": now_ms + 1000,
+    }
+    client = MockClobClient(open_orders=[], trades=[trade])
+    summary = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000)
+
+    assert summary.unmatched_trades == 1
+    assert summary.fills_recorded == 0
+    assert any("UNMATCHED_TRADE" in t for t in summary.transitions)
+
+
+def test_unauthenticated_client_refuses_to_reconcile(registry: OrderRegistry):
+    """A client with no L2 creds must be refused before any transition is written.
+
+    `create_or_derive_api_key` swallows the create failure and falls back to
+    derive, so a 400 on /auth/api-key is normal and creds are still set. But a
+    client that ends up with `creds is None` cannot tell 'no open orders' from
+    'never asked', and reconcile would cancel every resting row.
+    """
+    local_id = str(uuid.uuid4())
+    now_ms = 1723840000000
+
+    registry.create_order(
+        OrderRecord(
+            id=local_id,
+            order_id="0xvenue_unauth",
+            condition_id="0xcond_unauth",
+            token_id="0xtok_unauth",
+            side="BUY",
+            price=0.50,
+            original_size=20.0,
+            status="open",
+            posted_ts=now_ms,
+            last_polled_ts=now_ms,
+        )
+    )
+
+    client = MockClobClient(open_orders=[], trades=[])
+    client.creds = None
+
+    with pytest.raises(PermissionError, match="L2 API credentials"):
+        reconcile_orders(client, registry, current_ts_ms=now_ms + 5000)
+
+    assert registry.get_order(local_id).status == "open"
