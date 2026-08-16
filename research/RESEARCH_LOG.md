@@ -2829,3 +2829,59 @@ the UTC instant, which falls on August 16. This log dates entries in local time 
 above it are dated `2026-08-16` on the same convention — so the date stands.
 
 Suite unchanged at **764 passed**.
+
+---
+
+### 2026-08-17 — The reconcile pass-level lock: one pass in flight per database, across processes
+
+#### Question
+
+Every `OrderRegistry` write path takes `BEGIN IMMEDIATE`, so no individual write races. Does that make a
+reconcile pass safe?
+
+#### Method
+
+Read `reconcile_orders` as a whole rather than write by write. One pass spans several independent
+transactions with two network round trips between them: `get_open_orders`, then the orphan/adoption
+writes, then `get_trades`, then the fill and status writes. Traced what two concurrent passes do to a
+single row across that span, then built the lock and wrote seven tests against it before implementing.
+
+#### Result
+
+1. **The race is real and the per-write lock does not touch it.** Two passes both read a row as `open`,
+   both decide a transition from that same stale read, and the later write wins. The registry then holds
+   a state no single pass ever decided. The configuration that produces it is ordinary: an operator
+   running `poll` in one shell while firing a one-shot reconcile from another.
+2. **The lock is a row in `live.db`, not a `threading.Lock`.** A process-local lock passes a same-object
+   test and still lets two processes race — and two processes is the case that bites. `reconcile_lock`
+   holds one row, `id = 1` enforced by CHECK, with `holder` and `acquired_ts`.
+3. **Rejected: holding one transaction across the pass.** It is the obvious alternative and it is wrong.
+   SQLite's write lock would be held for the duration of the venue calls, so every reader blocks for as
+   long as the venue takes to answer.
+4. **Contention refuses rather than queues.** `ReconcileInProgress` is raised. A pass that waited its
+   turn would begin with venue reads taken before the pass ahead of it wrote its decisions — the same
+   stale-read race, arrived at politely. The poll loop's interval is the correct retry.
+5. **Staleness threshold: 300 s.** A legitimate pass is two venue round trips and a handful of local
+   writes — seconds, not minutes, even with SDK retries. Five minutes is two orders of magnitude beyond
+   the honest case, so reclaiming can only follow a genuine crash and never a slow venue. Setting it too
+   low reintroduces the race; too high lengthens the outage after a `kill -9`. The outage is the cheaper
+   failure.
+6. **Release is unconditional, and scoped to our own holder.** A venue error mid-pass that left the row
+   behind would turn one transient 429 into a stuck poller for the whole window. Deleting by holder
+   means a pass that was already reclaimed as stale cannot delete the live holder's row and hand out a
+   second slot.
+7. **The poll loop no longer treats contention as a venue error.** It previously would have: a held lock
+   raised into `except Exception`, incrementing `consecutive_errors` and driving the exponential backoff
+   to 60 s because another shell held the lock for a few milliseconds. It now logs `SKIPPED`, keeps the
+   normal interval, and leaves the error count alone. `--once` still exits non-zero, because it
+   genuinely did not reconcile and the caller must not read exit 0 as "state checked".
+
+Seven tests: refusal while in flight, visibility from a second registry object against the same file,
+release on exception, stale reclaim, fresh lock held one millisecond inside the threshold, a re-entrant
+pass attempted from inside the outer pass's venue call, and restart recovery after a killed holder. Plus
+the poll-loop skip. Full suite **772 passed**.
+
+#### Decision
+
+**LIVE** — the gate named in the Stage 2-4 architecture document is closed. Stage 3 may now issue a
+cancel, since a cancel decided from raced state was the specific harm this blocked.

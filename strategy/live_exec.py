@@ -1495,6 +1495,7 @@ def poll(
         reconcile_orders,
         compute_backoff_delay,
         DEFAULT_DB_PATH,
+        ReconcileInProgress,
     )
 
     db_p = Path(db_path) if db_path else DEFAULT_DB_PATH
@@ -1576,6 +1577,30 @@ def poll(
             _log_event(f"[{now_iso}] STOP KeyboardInterrupt during cycle {cycle}")
             print(f"[POLL {now_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
             break
+
+        except ReconcileInProgress as exc:
+            # Another pass holds the lock -- most often the operator running a
+            # one-shot reconcile from a second shell. That is contention, not a
+            # venue failure: counting it as an error would drive the exponential
+            # backoff to 60s and degrade the poller for something that resolves
+            # itself in milliseconds. Skip the cycle, keep the normal interval,
+            # leave consecutive_errors alone.
+            #
+            # A --once run still reports failure, because it genuinely did not
+            # reconcile and the caller must not read exit 0 as "state checked".
+            skip_msg = f"[POLL {now_iso}] SKIPPED cycle {cycle}: {exc}"
+            print(skip_msg, file=sys.stderr)
+            _log_event(skip_msg)
+            if once:
+                last_cycle_failed = True
+                break
+            if not stop_requested:
+                try:
+                    time.sleep(max(0.0, interval - (time.time() - cycle_start)))
+                except KeyboardInterrupt:
+                    stop_requested = True
+                    break
+                continue
 
         except Exception as exc:
             consecutive_errors += 1

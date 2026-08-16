@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,27 @@ SIZE_EPS: float = 1e-9
 # get_active_orders: a resting order, real money, and nothing tracking it.
 ORDER_STATUSES = ("pending", "open", "partial", "filled", "cancelled", "unattributed")
 
+# How long a held reconcile lock stays credible before a later pass reclaims it.
+#
+# A legitimate pass makes two venue round trips and a handful of local writes;
+# with the SDK's own timeouts and retries that is seconds, not minutes. Five
+# minutes is two orders of magnitude beyond the honest case, so reclaiming can
+# only follow a genuine crash -- never a slow venue. The cost of setting it too
+# low is two passes racing, which is the defect this lock exists to prevent; the
+# cost of setting it too high is a longer outage after a kill -9. Prefer the
+# outage.
+RECONCILE_LOCK_STALE_MS: int = 300_000
+
+
+class ReconcileInProgress(RuntimeError):
+    """Raised when a reconcile pass is already in flight against this database.
+
+    Refusal, not queueing. A pass that waited its turn would begin with venue
+    reads taken before the pass ahead of it wrote its decisions, which is the
+    same stale-read race the lock exists to prevent. The poll loop's own
+    interval is the correct retry mechanism.
+    """
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY,
@@ -80,6 +102,17 @@ CREATE TABLE IF NOT EXISTS fills (
     price REAL NOT NULL,
     venue_ts INTEGER NOT NULL,
     FOREIGN KEY (order_uuid) REFERENCES orders(id)
+);
+
+-- At most one reconcile pass may be in flight against this database. The row
+-- is the lock; `id = 1` makes that a schema guarantee rather than a convention.
+-- It lives here, and not in a threading.Lock, because the contention that
+-- actually bites is an operator running `poll` in one shell while firing a
+-- one-shot reconcile from another -- two processes, one file.
+CREATE TABLE IF NOT EXISTS reconcile_lock (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    holder TEXT NOT NULL,
+    acquired_ts INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);
@@ -198,6 +231,77 @@ class OrderRegistry:
                 raise
             finally:
                 conn.close()
+
+    def _write_reconcile_lock(self, holder: str, acquired_ts: int) -> None:
+        """Force the lock row. Test and recovery seam -- not a public acquire."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR REPLACE INTO reconcile_lock (id, holder, acquired_ts) "
+                "VALUES (1, ?, ?)",
+                (holder, int(acquired_ts)),
+            )
+            conn.commit()
+
+    @contextmanager
+    def reconcile_lock(self, now_ms: int) -> Iterator[str]:
+        """Hold the single reconcile slot for this database, or refuse.
+
+        The lock is taken and released in their own short transactions. Holding
+        one transaction open across the whole pass would be the obvious
+        alternative and is the wrong fix: it keeps SQLite's write lock for the
+        duration of the venue calls, so every reader blocks for as long as the
+        venue takes to answer.
+        """
+        holder = f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT holder, acquired_ts FROM reconcile_lock WHERE id = 1"
+            ).fetchone()
+            if row is not None:
+                age_ms = int(now_ms) - int(row["acquired_ts"])
+                if age_ms < RECONCILE_LOCK_STALE_MS:
+                    conn.rollback()
+                    raise ReconcileInProgress(
+                        f"A reconcile pass is already in flight against "
+                        f"{self.db_path} (holder={row['holder']}, held for "
+                        f"{age_ms} ms). Refusing rather than deciding "
+                        f"transitions from reads the other pass is about to "
+                        f"invalidate."
+                    )
+                # Past the threshold the holder is presumed dead. Reclaiming is
+                # the difference between a restart recovering and a killed
+                # process bricking every future pass.
+            conn.execute(
+                "INSERT OR REPLACE INTO reconcile_lock (id, holder, acquired_ts) "
+                "VALUES (1, ?, ?)",
+                (holder, int(now_ms)),
+            )
+            conn.commit()
+
+        try:
+            yield holder
+        finally:
+            # Release on every path, exceptions included. A venue error that
+            # left the row behind would turn one transient 429 into a stuck
+            # poller for the whole staleness window.
+            #
+            # Scoped to our own holder: if we were already reclaimed as stale,
+            # the row belongs to a live pass and deleting it would hand out a
+            # second slot.
+            try:
+                with self._conn() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(
+                        "DELETE FROM reconcile_lock WHERE id = 1 AND holder = ?",
+                        (holder,),
+                    )
+                    conn.commit()
+            except sqlite3.Error:
+                # An unreleasable lock self-heals at RECONCILE_LOCK_STALE_MS.
+                # Masking the original exception with this one would be worse.
+                pass
 
     def create_order(self, order: OrderRecord) -> None:
         """Insert a new order row before sending to venue."""
@@ -430,11 +534,36 @@ def reconcile_orders(
     current_ts_ms: Optional[int] = None,
     orphan_window_ms: int = DEFAULT_ORPHAN_MATCH_WINDOW_MS,
 ) -> ReconcileSummary:
-    """Reconcile registry state against venue open orders and trades."""
+    """Reconcile registry state against venue open orders and trades.
+
+    Serialised behind the database-level reconcile lock. The lock is taken here,
+    at the only public entry point, rather than at each call site: the poll
+    loop, a one-shot CLI call, and whatever Stage 3 adds are all covered by
+    construction, and a future caller cannot forget to take it.
+
+    Raises ReconcileInProgress when another pass already holds the slot.
+    """
     import time
-    import uuid
 
     now_ms = current_ts_ms if current_ts_ms is not None else int(time.time() * 1000)
+    with registry.reconcile_lock(now_ms):
+        return _reconcile_pass(
+            client,
+            registry,
+            maker_address=maker_address,
+            now_ms=now_ms,
+            orphan_window_ms=orphan_window_ms,
+        )
+
+
+def _reconcile_pass(
+    client,
+    registry: OrderRegistry,
+    maker_address: Optional[str],
+    now_ms: int,
+    orphan_window_ms: int,
+) -> ReconcileSummary:
+    """One reconcile pass. Callers must already hold the reconcile lock."""
     summary = ReconcileSummary(polled_ts=now_ms)
 
     # Absence of open orders is evidence only if we know we asked and were

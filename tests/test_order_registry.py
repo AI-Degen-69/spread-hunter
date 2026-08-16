@@ -14,6 +14,7 @@ Stage 2 Invariant Tests:
 """
 
 import contextlib
+import time
 import sqlite3
 import uuid
 import pytest
@@ -31,6 +32,8 @@ from strategy.order_registry import (
     reconcile_orders,
     ReconcileSummary,
     compute_backoff_delay,
+    ReconcileInProgress,
+    RECONCILE_LOCK_STALE_MS,
 )
 
 
@@ -846,3 +849,170 @@ def test_get_trades_type_error_propagates(registry: OrderRegistry):
     # query that raised from an unbounded one that raised.
     assert "params" in mock_client.get_trades.call_args.kwargs
 
+
+
+# ---------------------------------------------------------------------------
+# Invariant 11: at most one reconcile pass in flight per live.db, across
+# processes.
+#
+# Every write path takes BEGIN IMMEDIATE, so no individual write races. But one
+# reconcile pass spans several of those transactions with two network round
+# trips in between, so two concurrent passes interleave: both read a row as
+# `open`, both decide a transition from that stale read, and the later write
+# wins. The registry then reports a state no single pass ever decided.
+#
+# The lock lives in live.db rather than in the process, because the
+# configuration that actually bites is an operator running `poll` in one shell
+# while firing a one-shot reconcile from another.
+# ---------------------------------------------------------------------------
+
+
+def test_second_reconcile_is_refused_while_one_is_in_flight(temp_db: Path):
+    """A pass holding the lock refuses the next one, loudly."""
+    registry = OrderRegistry(temp_db)
+    client = MockClobClient()
+
+    with registry.reconcile_lock(now_ms=1_000_000):
+        with pytest.raises(ReconcileInProgress):
+            reconcile_orders(client, registry, current_ts_ms=1_000_001)
+
+    # No venue call was made by the refused pass -- it must refuse before
+    # spending a round trip, not after.
+    assert client.get_open_orders_calls == []
+
+
+def test_reconcile_lock_is_visible_to_a_second_registry_object(temp_db: Path):
+    """The lock is in the database, not in the object.
+
+    A threading.Lock would pass a same-object test and still let a second
+    process race, which is the case that actually bites.
+    """
+    holder = OrderRegistry(temp_db)
+    observer = OrderRegistry(temp_db)
+
+    with holder.reconcile_lock(now_ms=2_000_000):
+        with pytest.raises(ReconcileInProgress):
+            with observer.reconcile_lock(now_ms=2_000_001):
+                pass
+
+
+def test_reconcile_releases_the_lock_when_the_pass_raises(temp_db: Path):
+    """A venue error mid-pass must not leave the poller permanently stuck.
+
+    This is the failure that turns a transient 429 into a dead process.
+    """
+    registry = OrderRegistry(temp_db)
+    failing = MagicMock()
+    failing.get_open_orders.side_effect = RuntimeError("venue 429")
+
+    with pytest.raises(RuntimeError, match="venue 429"):
+        reconcile_orders(failing, registry, current_ts_ms=3_000_000)
+
+    # The next pass must get the lock.
+    summary = reconcile_orders(MockClobClient(), registry, current_ts_ms=3_000_001)
+    assert isinstance(summary, ReconcileSummary)
+
+
+def test_a_stale_reconcile_lock_is_reclaimed(temp_db: Path):
+    """A process killed mid-pass must not brick every future reconcile."""
+    registry = OrderRegistry(temp_db)
+    registry._write_reconcile_lock(holder="dead-process", acquired_ts=1_000)
+
+    stale_ts = 1_000 + RECONCILE_LOCK_STALE_MS + 1
+    summary = reconcile_orders(MockClobClient(), registry, current_ts_ms=stale_ts)
+    assert isinstance(summary, ReconcileSummary)
+
+
+def test_a_fresh_reconcile_lock_is_not_reclaimed(temp_db: Path):
+    """One millisecond inside the threshold is still held."""
+    registry = OrderRegistry(temp_db)
+    registry._write_reconcile_lock(holder="live-process", acquired_ts=1_000)
+
+    fresh_ts = 1_000 + RECONCILE_LOCK_STALE_MS - 1
+    with pytest.raises(ReconcileInProgress):
+        reconcile_orders(MockClobClient(), registry, current_ts_ms=fresh_ts)
+
+
+def test_reconcile_passes_do_not_interleave_their_writes(temp_db: Path):
+    """The acceptance condition: refused or serialised, never interleaved.
+
+    The inner pass is attempted from inside the outer pass's venue call, which
+    is exactly the window where two passes would otherwise both read a row as
+    `open` and both decide a transition from it.
+    """
+    registry = OrderRegistry(temp_db)
+    order = OrderRecord(
+        id=str(uuid.uuid4()),
+        order_id="venue-1",
+        condition_id="0xcond",
+        token_id="tok-1",
+        side="BUY",
+        price=0.5,
+        original_size=10.0,
+        status="open",
+        posted_ts=4_000_000,
+        last_polled_ts=4_000_000,
+    )
+    registry.create_order(order)
+
+    inner_attempt = {}
+
+    class ReentrantClient(MockClobClient):
+        def get_open_orders(self, params=None, only_first_page=False, next_cursor=None):
+            try:
+                reconcile_orders(MockClobClient(), registry, current_ts_ms=4_000_002)
+                inner_attempt["refused"] = False
+            except ReconcileInProgress:
+                inner_attempt["refused"] = True
+            return super().get_open_orders(params, only_first_page, next_cursor)
+
+    reconcile_orders(ReentrantClient(), registry, current_ts_ms=4_000_001)
+
+    assert inner_attempt["refused"] is True
+    # And the outer pass still completed its own decision on the row.
+    assert registry.get_order(order.id) is not None
+
+
+def test_reconcile_lock_does_not_survive_as_a_blocker_across_restart(temp_db: Path):
+    """Restart equivalence for the poll loop.
+
+    A poller killed mid-pass leaves a lock row on disk. A fresh process opening
+    the same file must reclaim it once stale, so a restart is a recovery rather
+    than a permanent outage.
+    """
+    dead = OrderRegistry(temp_db)
+    dead._write_reconcile_lock(holder="killed-poller", acquired_ts=5_000)
+    del dead
+
+    restarted = OrderRegistry(temp_db)
+    summary = reconcile_orders(
+        MockClobClient(), restarted, current_ts_ms=5_000 + RECONCILE_LOCK_STALE_MS + 1
+    )
+    assert isinstance(summary, ReconcileSummary)
+
+
+def test_poll_skips_a_contended_cycle_without_arming_the_backoff(temp_db: Path, capsys):
+    """A held lock must not look like a 429 to the poll loop.
+
+    Counting contention as an error would drive the exponential backoff to 60s
+    for something that clears in milliseconds, degrading the poller because a
+    second shell ran a one-shot reconcile.
+    """
+    from strategy import live_exec
+
+    registry = OrderRegistry(temp_db)
+    blocker = OrderRegistry(temp_db)
+    blocker._write_reconcile_lock(holder="other-shell", acquired_ts=int(time.time() * 1000))
+
+    client = MockClobClient()
+    # --once genuinely did not reconcile, so it must not report success.
+    with pytest.raises(SystemExit) as exc_info:
+        live_exec.poll(interval=0.01, once=True, db_path=temp_db, client=client)
+    assert exc_info.value.code != 0
+
+    err = capsys.readouterr().err
+    assert "SKIPPED" in err
+    # Contention is not a venue error: the backoff message must not appear.
+    assert "backoff" not in err
+    # And it refused before spending a venue round trip.
+    assert client.get_open_orders_calls == []
