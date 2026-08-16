@@ -42,8 +42,8 @@ python -m strategy.live_exec redeem 0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab25
 |---|---|---|
 | `action` | Target action | Must display `REDEEM (gasless via Polymarket Relayer)`. |
 | `target_ctf` | Contract receiving call | Must be ConditionalTokens: `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`. |
-| `safe_funder` | Deposit Wallet | Must match `POLY_FUNDER` (`0xBa7c...`). |
-| `signer_eoa` | Signing EOA | Must match `RELAYER_API_KEY_ADDRESS` (`0xD2C7...`). |
+| `safe_funder` | Deposit Wallet | Must match `POLY_FUNDER` (`0xBa7c21Ac8968983e90BEcB989fe978889FEC266b`). |
+| `signer_eoa` | Signing EOA | Must match `RELAYER_API_KEY_ADDRESS` (`0xD2C7F5514580184d32C70F6FEA95B69C5Cd72fa0`). |
 | `condition_id` | Target market condition | Must match the target market condition hash. |
 | `resolved` | Resolution status | **`yes`**: Market is resolved on-chain (`payoutDenominator > 0`). Proceed to inspect payload preview.<br>**`no`**: Market is not resolved yet (`payoutDenominator == 0`). Do not submit live; wait for oracle settlement.<br>**`unknown (RPC unreachable)`**: All Polygon RPCs timed out or failed. Check network connectivity or specify `POLYGON_RPC`. |
 | `collateral` | Collateral token | Bridged USDC.e: `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174`. |
@@ -86,7 +86,7 @@ In dry-run mode, inspect the generated `submit_payload_preview` JSON structure. 
 5. **`data`**: Must be 458 characters in length and start with `0x01b7037c` (`redeemPositions` method selector).
 6. **Wire Types**: `nonce`, `deadline`, and `value` must be string literals in the JSON payload.
 7. **`metadata` field**: Must be completely absent from the payload.
-8. *Note on preview placeholders*: In dry-run preview, `nonce` is displayed as `"0"` and `signature` as 65 zero bytes. These are populated dynamically with live relayer nonce and ECDSA signature during live submission.
+8. *Note on preview placeholders*: In dry-run preview, `nonce` is displayed as `"0"` and `signature` as 65 zero bytes (`0x` followed by 130 hex zeros, 132 chars total). These are populated dynamically with live relayer nonce and ECDSA signature during live submission.
 
 ---
 
@@ -100,10 +100,10 @@ python -m strategy.live_exec redeem <condition_id> --live
 
 ### Execution Flow
 1. Verifies on-chain resolution via Polygon RPC failover pool (`payoutDenominator > 0`).
-2. Fetches next valid user transaction nonce from Relayer (`GET /v1/account/transactions/params`).
-3. Constructs EIP-712 `DepositWalletBatch` typed data structure with current epoch deadline (+300s).
+2. Fetches next valid user transaction nonce from Relayer (`GET /v1/account/transactions/params?address={signer}&type=WALLET`).
+3. Constructs EIP-712 `DepositWalletBatch` typed data structure with current epoch deadline (+600s, `REDEEM_DEADLINE_SECONDS = 600`).
 4. Signs EIP-712 typed data with `POLY_PRIVATE_KEY`.
-5. Submits signed transaction payload to Relayer (`POST /v1/account/transactions/submit`).
+5. Submits signed transaction payload to Relayer endpoint `POST /submit` (Note: `/v1/submit` returns 404 and must not be used).
 6. Prints Relayer transaction hash and initial status.
 
 > **Nonce Behavior:** A rejected or invalid submission does **not** consume a transaction nonce on the relayer. The nonce counter advances only upon successful transaction acceptance.
@@ -118,10 +118,15 @@ python -m strategy.live_exec redeem <condition_id> --live
    Verify that `redeemPositions` executed successfully on ConditionalTokens (`0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`) and collateral was credited to `POLY_FUNDER`.
 
 2. **Verify Nonce Increment:**
-   Verify that the relayer nonce advanced by one:
+   Query the **signing EOA** — not the deposit wallet. The deposit wallet's WALLET-type nonce is always `0`; the counter that advances belongs to the address derived from `POLY_PRIVATE_KEY`.
+
    ```bash
-   python -c "import urllib.request, json; print(json.loads(urllib.request.urlopen('https://relayer-v2.polymarket.com/v1/account/transactions/params?address=0xBa7c21Ac8968983e90BEcB989fe978889FEC266b').read().decode()))"
+   python -c "import os,urllib.request,json; u='https://relayer-v2.polymarket.com/v1/account/transactions/params?address='+os.environ['RELAYER_API_KEY_ADDRESS']+'&type=WALLET'; r=urllib.request.Request(u, headers={'User-Agent':'Mozilla/5.0','RELAYER_API_KEY':os.environ['RELAYER_API_KEY'],'RELAYER_API_KEY_ADDRESS':os.environ['RELAYER_API_KEY_ADDRESS']}); print(urllib.request.urlopen(r).read().decode())"
    ```
+
+   Expect the `nonce` field, a **string**, to read one higher than before submission. The `address` field in the response is a rotating relayer worker and carries no meaning here — ignore it.
+
+   *(Reference: this counter was observed at `121` before the reference redemption and `122` after).*
 
 3. **Verify Balance:**
    Check updated USDC.e balance:
@@ -139,6 +144,7 @@ python -m strategy.live_exec redeem <condition_id> --live
 | `Cannot determine resolution status for <id>: all RPC endpoints failed. The market may well be resolved. Retry, or pass --skip-resolution-check to bypass.` | All configured Polygon RPC endpoints timed out or failed to respond. | Verify internet connection or specify a working endpoint via `POLYGON_RPC`. If resolution is verified externally on Polygonscan, pass `--skip-resolution-check` to bypass the RPC guard. *(Note: `--skip-resolution-check` will still hard-abort if any RPC reports `payoutDenominator == 0`).* |
 | `Failed to fetch nonce from relayer: <exc>` | Network error or invalid API key / authentication header when calling `/v1/account/transactions/params`. | Check `RELAYER_API_KEY`, `RELAYER_API_KEY_ADDRESS`, and `RELAYER_URL` in `.env`. Ensure API key is active. |
 | `eth_call to CTF contract 0x4D97... returned empty data. The contract address may be wrong or the RPC may be on the wrong chain.` | The RPC answered `0x` to `eth_call`, indicating the contract address does not exist on that chain or reverted immediately. | Check RPC URL and chain ID (must be Polygon Mainnet, chain ID 137). Verify `CTF_CONTRACT` address. |
+| `RELAYER_API_KEY and RELAYER_API_KEY_ADDRESS must be set in .env for gasless live redemption.` | Missing relayer credentials in execution environment. | Export `RELAYER_API_KEY` and `RELAYER_API_KEY_ADDRESS` in `.env`. |
 
 ---
 
