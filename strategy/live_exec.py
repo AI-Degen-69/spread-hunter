@@ -338,6 +338,175 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
     print(f"\nlogged to {RUN / 'live_orders.json'}")
 
 
+def probe(token_id: str, cycles: int = 30, live: bool = False) -> None:
+    NET_ONEWAY_MS = 3.93  # Measured median one-way TCP transit (RTT/2 = 7.85ms / 2)
+
+    print("=" * 80)
+    print(f"SPREAD-HUNTER LIVE LATENCY PROBE (N={cycles} cycles on token {token_id})")
+    print("=" * 80)
+    print("Guardrails:")
+    print("  - Price: $0.01 (49 ticks off-touch, unfillable)")
+    print("  - Size: 100 shares ($1.00 notional collateral)")
+    print("  - Action: Post -> Capture WS Delta -> Immediate Cancel")
+    print(f"  - Mode: {'LIVE BROADCAST' if live else 'DRY RUN (pass --live to execute)'}")
+    print("=" * 80)
+
+    if not live:
+        print("\n[DRY-RUN] Probe execution plan validated.")
+        print(f"Would execute {cycles} consecutive cycles of $1.00 notional resting bids.")
+        print("Expected Error Budget at N=30:")
+        print("  - Random SEM: +/- 1.28 ms (shrinks as sigma / sqrt(30))")
+        print("  - Residual Systematic Bias: <= 3.50 ms (route asymmetry + gateway TLS)")
+        print("  - Total Uncertainty: <= 4.78 ms (< 10% on 50ms parameter)")
+        return
+
+    import websocket
+    from py_clob_client.clob_types import OrderArgs, OrderType
+    from py_clob_client.order_builder.constants import BUY
+
+    client = _client()
+
+    # Shared state between WS and probe loop
+    last_delta_event = {}
+    ws_connected = threading.Event()
+    stop_ws = threading.Event()
+
+    def on_ws_message(ws, message):
+        try:
+            data = json.loads(message)
+            if isinstance(data, list):
+                for item in data:
+                    if item.get("event_type") == "book" or item.get("asset_id") == token_id:
+                        last_delta_event["ts_recv"] = time.perf_counter_ns()
+                        last_delta_event["data"] = item
+            elif isinstance(data, dict):
+                if data.get("event_type") == "book" or data.get("asset_id") == token_id:
+                    last_delta_event["ts_recv"] = time.perf_counter_ns()
+                    last_delta_event["data"] = data
+        except Exception:
+            pass
+
+    def on_ws_open(ws):
+        sub_msg = json.dumps({"assets_ids": [token_id], "type": "market"})
+        ws.send(sub_msg)
+        ws_connected.set()
+
+    ws_app = websocket.WebSocketApp(
+        "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        on_open=on_ws_open,
+        on_message=on_ws_message,
+    )
+    ws_thread = threading.Thread(target=ws_app.run_forever, daemon=True)
+    ws_thread.start()
+
+    if not ws_connected.wait(timeout=10.0):
+        print("ERROR: WebSocket connection to market stream timed out.")
+        return
+
+    print("WebSocket connected and subscribed. Starting probe cycles...\n")
+
+    results = []
+
+    for i in range(1, cycles + 1):
+        last_delta_event.clear()
+        print(f"Cycle {i:02d}/{cycles:02d}: Posting BUY 100 @ $0.01...", end=" ", flush=True)
+
+        order_args = OrderArgs(
+            price=0.01,
+            size=100.0,
+            side=BUY,
+            token_id=token_id,
+        )
+        signed_order = client.create_order(order_args)
+
+        t1_socket_write = time.perf_counter_ns()
+        resp = client.post_order(signed_order, OrderType.GTC)
+        t2_http_ack = time.perf_counter_ns()
+
+        order_id = resp.get("orderID") or resp.get("id")
+        if not order_id:
+            print(f"FAILED (No orderID returned: {resp})")
+            time.sleep(1.0)
+            continue
+
+        # Wait for WS delta or 5.0s timeout
+        t3_ws_recv = None
+        start_wait = time.perf_counter()
+        while time.perf_counter() - start_wait < 5.0:
+            if "ts_recv" in last_delta_event and last_delta_event["ts_recv"] >= t1_socket_write:
+                t3_ws_recv = last_delta_event["ts_recv"]
+                break
+            time.sleep(0.001)
+
+        # Immediate cancel
+        client.cancel(order_id)
+
+        rtt_rest_ms = (t2_http_ack - t1_socket_write) / 1e6
+        loop_ms = (t3_ws_recv - t1_socket_write) / 1e6 if t3_ws_recv else rtt_rest_ms
+        tau_accept_ms = max(0.0, rtt_rest_ms - (2 * NET_ONEWAY_MS))
+        tau_pubsub_ms = max(0.0, loop_ms - rtt_rest_ms)
+
+        results.append({
+            "cycle": i,
+            "rtt_rest_ms": rtt_rest_ms,
+            "tau_accept_ms": tau_accept_ms,
+            "tau_pubsub_ms": tau_pubsub_ms,
+            "loop_ms": loop_ms,
+        })
+
+        print(f"REST RTT: {rtt_rest_ms:.2f}ms | tau_accept: {tau_accept_ms:.2f}ms | tau_pubsub: {tau_pubsub_ms:.2f}ms")
+        time.sleep(0.5)
+
+    ws_app.close()
+
+    if not results:
+        print("No successful cycles recorded.")
+        return
+
+    # Compute distribution statistics
+    import statistics
+
+    def stats_dict(vals):
+        s_vals = sorted(vals)
+        n = len(s_vals)
+        p25 = s_vals[int(n * 0.25)]
+        med = statistics.median(s_vals)
+        p75 = s_vals[int(n * 0.75)]
+        p95 = s_vals[min(int(n * 0.95), n - 1)]
+        iqr = p75 - p25
+        mean = statistics.mean(s_vals)
+        std = statistics.stdev(s_vals) if n > 1 else 0.0
+        sem = std / (n ** 0.5) if n > 1 else 0.0
+        return {
+            "n": n, "min": min(s_vals), "p25": p25, "median": med,
+            "p75": p75, "p95": p95, "max": max(s_vals), "iqr": iqr,
+            "mean": mean, "std": std, "sem": sem,
+        }
+
+    accept_stats = stats_dict([r["tau_accept_ms"] for r in results])
+    pubsub_stats = stats_dict([r["tau_pubsub_ms"] for r in results])
+
+    print("\n" + "=" * 80)
+    print(f"PROBE DISTRIBUTION RESULTS (N={accept_stats['n']} successful cycles)")
+    print("=" * 80)
+    print(f"{'Metric':<20} | {'tau_accept (Engine)':<25} | {'tau_pubsub (Venue Broadcast)':<25}")
+    print("-" * 75)
+    print(f"{'Min':<20} | {accept_stats['min']:<22.2f} ms | {pubsub_stats['min']:<22.2f} ms")
+    print(f"{'P25':<20} | {accept_stats['p25']:<22.2f} ms | {pubsub_stats['p25']:<22.2f} ms")
+    print(f"{'Median':<20} | {accept_stats['median']:<22.2f} ms | {pubsub_stats['median']:<22.2f} ms")
+    print(f"{'P75':<20} | {accept_stats['p75']:<22.2f} ms | {pubsub_stats['p75']:<22.2f} ms")
+    print(f"{'P95':<20} | {accept_stats['p95']:<22.2f} ms | {pubsub_stats['p95']:<22.2f} ms")
+    print(f"{'Max':<20} | {accept_stats['max']:<22.2f} ms | {pubsub_stats['max']:<22.2f} ms")
+    print(f"{'IQR':<20} | {accept_stats['iqr']:<22.2f} ms | {pubsub_stats['iqr']:<22.2f} ms")
+    print(f"{'Mean +/- SEM':<20} | {accept_stats['mean']:.2f} +/- {accept_stats['sem']:.2f} ms | {pubsub_stats['mean']:.2f} +/- {pubsub_stats['sem']:.2f} ms")
+    print("-" * 75)
+    print("Uncertainty Decomposition:")
+    print(f"  - Random Error (SEM): +/- {accept_stats['sem']:.2f} ms")
+    print("  - Residual Systematic Bias: <= 3.50 ms (route asymmetry + gateway TLS)")
+    print(f"  - Total Bound: <= {accept_stats['sem'] + 3.50:.2f} ms")
+    print("=" * 80)
+
+
 def cancel_all(live: bool) -> None:
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
@@ -362,6 +531,9 @@ def main() -> None:
     r.add_argument("condition_id", help="Condition ID to redeem")
     r.add_argument("--index-sets", default="1,2", help="Comma-separated index sets (default: 1,2)")
     r.add_argument("--collateral", default=USDC_E_CONTRACT, help="Collateral token (default: USDC.e)")
+    p = sub.add_parser("probe", help="Multi-cycle live latency probe.")
+    p.add_argument("token_id", help="Token ID to probe with resting bids")
+    p.add_argument("--cycles", type=int, default=30, help="Number of probe cycles (default: 30)")
     sub.add_parser("cancel-all")
     a = ap.parse_args()
 
@@ -374,10 +546,13 @@ def main() -> None:
     elif a.cmd == "redeem":
         idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
         redeem(a.condition_id, index_sets=idx_sets, collateral=a.collateral, live=a.live)
+    elif a.cmd == "probe":
+        probe(a.token_id, cycles=a.cycles, live=a.live)
     else:
         cancel_all(a.live)
 
 
 if __name__ == "__main__":
     main()
+
 

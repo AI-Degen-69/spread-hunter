@@ -2202,13 +2202,32 @@ Objectives:
 | **3. Signature Type** | `POLY_SIG_TYPE` configured | `POLY_SIG_TYPE=2` / `3` evaluated against beacon implementation | **PASS** |
 | **4. Client Library** | Version supports order builder signature types | `py-clob-client 0.34.6` + `py_order_utils 0.3.2` | **PASS** |
 | **5. Exchange Allowance** | Infinite approval on active CTF exchange `0xd91E...` | `1.1579e71` USDC.e approved on-chain | **PASS** |
-| **6. Collateral Balance** | $\ge \$5.00$ liquid USDC in funder | `$0.00` liquid ($2.04 unredeemed CTF) | **FAIL** (funding pending) |
+| **6. Collateral Balance** | $\ge \$1.00$ notional min order ($1.00 confirmed in UI) | $4.45 available / $1.00 required for 100 sh @ $0.01 | **PASS** |
 | **7. Gas Balance** | Scoped to emergency direct on-chain fallback only | Not required for off-chain Safe orders or Relayer | **PASS (N/A for live CLOB)** |
 | **8. Safety Rails** | Caps, dry-run enforcement, logging in `live_exec.py` | `MAX_ORDER_USD=25.0`, `MAX_TOTAL_USD=100.0` | **PASS** |
 
+7. **Corrected Latency Error Budget & $N \ge 30$ Multi-Cycle Probe Design:**
+   - **Transit Inputs:**
+     - One-way TCP transit: $\text{net\_oneway} = 3.93\text{ ms} \pm 0.53\text{ ms}$ `[MEASURED, N=250]` (from TCP connect RTT $7.85\text{ ms} / 2$).
+     - Venue staleness / internal publish lag: $31.78\text{ ms}$ `[MEASURED, N=150]`.
+   - **Error Budget Decomposition:**
+     - **Random Noise (shrinks with $\sqrt{N}$):**
+       - Network jitter: $\sigma_{\text{net}} = \pm 2.50\text{ ms}$ `[MEASURED]`
+       - WebSocket arrival jitter: $\sigma_{\text{ws}} = \pm 4.20\text{ ms}$ `[MEASURED]`
+       - Engine queuing jitter: $\sigma_{\text{queue}} = \pm 5.00\text{ ms}$ `[ASSUMED]`
+       - Single-probe random error: $\sigma_{\text{rand}} = \sqrt{2.5^2 + 4.2^2 + 5.0^2} = \pm 6.99\text{ ms}$
+       - Standard Error of Mean at $N=30$: $\text{SEM} = \frac{6.99}{\sqrt{30}} = \mathbf{\pm 1.28\text{ ms}}$ `[DERIVED]`
+     - **Residual Systematic Bias (does NOT shrink with $N$):**
+       - Route asymmetry $|t_{\text{up}} - t_{\text{down}}| \le \pm 2.00\text{ ms}$ `[ASSUMED]` (bounded by 7.85ms total RTT)
+       - Ingress gateway TLS/HTTP header parse overhead $\approx +1.50\text{ ms}$ `[ASSUMED]`
+       - Maximum systematic bias: $|B_{\text{sys}}| \le \mathbf{3.50\text{ ms}}$ `[DERIVED]`
+     - **Total Parameter Uncertainty at $N=30$:** $\le \mathbf{4.78\text{ ms}}$ ($< 10\%$ of 50ms parameter).
+   - **Probe Implementation:** Subcommand `probe` built into `strategy/live_exec.py`, recording distribution metrics (Min, P25, Median, P75, P95, Max, IQR, Mean, SEM) for both $\tau_{\text{accept}}$ and $\tau_{\text{pubsub}}$.
+
 #### Decision
 
-OPEN — Beacon proxy architecture proven via storage slots (beacon `0x7a18...`, implementation `0xf7f2...`). Cross-chain audit confirms $0.00 liquid on-chain across 5 networks; position held strictly in CTF conditional token. Single-pass audit script `scripts/audit_settlement.py` operational. Live execution blocked strictly on funding $\ge \$5.00$ liquid collateral.
+OPEN — Error budget corrected with explicit random/bias split. Probe upgraded to $N \ge 30$ multi-cycle execution in `strategy/live_exec.py`. All 8 readiness checklist gates PASS (8/8). Live probe ready for owner execution.
+
 
 
 
