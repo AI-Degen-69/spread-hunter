@@ -16,7 +16,7 @@ Verdicts were assigned in Session 68 (2026-08-16) against `run/fleet.db`, and th
 ---
 
 ### Question 2: Sim-to-Real Queue Decay & Adverse Selection Transfer Function
-> **Verdict:** LIVE on the tail, MOOT on the median — deciding number: median depth change over $\tau_{\text{post}}$ is 0.00 shares, but conditional on a >50% queue collapse the sim credits a fill at 0.3352% versus a 0.0836% baseline, a **4.01× surge** across 21,477 collapse ticks `[MEASURED]`. The median cannot see the risk the question asks about.
+> **Verdict:** LIVE — deciding number: conditional on a >50% queue collapse the sim credits a fill at 0.3352% versus a 0.0836% baseline, a **4.01× surge** across 21,477 collapse ticks `[MEASURED]`. The median is not what keeps this open: median depth change over $\tau_{\text{post}}$ is 0.00 shares, so a median-based haircut would read as zero. The tail is the whole question, and it is unresolved.
 >
 > **Context:** Polymarket operates an off-chain central limit order book (CLOB) with WebSocket order flow and variable network/processing latency. In paper simulation, queue priority is estimated from observed trade tape prints and book depth.
 >
@@ -37,7 +37,7 @@ Verdicts were assigned in Session 68 (2026-08-16) against `run/fleet.db`, and th
 ---
 
 ### Question 4: Optimal Signal Fusion for Toxic Flow Detection
-> **Verdict:** MOOT — deciding number: **zero sub-second book gaps across 762,911 samples**; the minimum observed inter-update interval is 1,194.5 ms `[MEASURED]`. A sub-50 ms circuit breaker cannot act on a book that cannot change faster than 1.19 s.
+> **Verdict:** PARKED — deciding number: **zero sub-second book gaps across 762,911 samples**; the minimum observed inter-update interval is 1,194.5 ms `[MEASURED]`. A sub-50 ms circuit breaker cannot act on a book that cannot change faster than 1.19 s. PARKED rather than DEAD because the constraint is a property of this venue's sports and esports books, not of the strategy: the BTC 5-minute series updates at 630/s, so the question returns intact the moment a fast series enters the traded universe.
 >
 > **Context:** Adverse selection in binary markets often stems from informed flow reacting to external spot market moves (e.g., Binance BTC/ETH spot or fast sports data feeds).
 >

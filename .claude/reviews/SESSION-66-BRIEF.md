@@ -174,7 +174,7 @@ Self-evaluation scored 3.8/5. The three that cost real cycles:
 | `strategy/sweep.py:798-825` | The stop-loss to port to live (Stage 3). Reference only. |
 | `strategy/fills.py` | `queue_ahead` derivation; reference for Stage 2. |
 | `tests/test_live_exec.py` | Fixture style to follow. |
-| `research/QUANT_QUESTIONS.md` | Q1 and Q3 remain LIVE; Q2 tail is LIVE; Q4 is MOOT. |
+| `research/QUANT_QUESTIONS.md` | Q1, Q2, Q3 LIVE; Q4 PARKED. |
 | `.claude/reviews/pr-31-review.md` | The HIGH finding, in full. |
 | `AGENTS.md:65-70` | Workspace hygiene policy — delete scratch scripts. |
 
