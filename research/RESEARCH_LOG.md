@@ -2348,3 +2348,95 @@ LIVE — Latency parameters locked at `net_oneway_ms = 3.93` and `post_venue_acc
 
 
 
+
+---
+
+## Session 68 — 2026-08-16 — Where the money actually comes from, and the live-path capability gap
+
+#### Question
+
+Two questions, the second discovered while answering the first.
+
+1. Is `GO_LIVE_MIN_CALENDAR_DAYS = 14.0` a criterion worth blocking on, given every other
+   readiness gate passes?
+2. Prior sessions calibrated `spread_capture_frac`, markout horizons, $\tau_{\text{post}}$ and
+   queue-decay haircuts. Do any of those parameters govern realised income?
+
+#### Method
+
+Direct query of `run/fleet.db` (`closes`, `fill_recon`, `markouts`) and the existing
+`strategy/stats.py` readers, rather than re-derivation. Live-path capability traced by reading
+`strategy/live_exec.py` against `strategy/sweep.py` step by step. Executed as a Prime/Sub
+multi-model pairing over seven directive rounds; every decision-bearing figure carries an
+interval.
+
+#### Result
+
+1. **Realised income decomposes into exactly one mechanism** `[MEASURED, n=376 closes]`:
+
+| method | realised PnL |
+| --- | --- |
+| `merge` | **+$926.85** |
+| `naked_exit` | −$42.71 |
+| `sell` | **$0.00** |
+
+   Net +$884.13 over 26,777 pairs. The `sell` path — cross the book, capture the spread — has
+   earned nothing across the entire run. `spread_capture_frac`, the `mid_h0`–`mid_h3` markout
+   horizons and every latency parameter describe that path.
+
+2. **Pooled markout is negative**: −1.13¢/share on $n_{\text{eff}} = 260$ `[MEASURED]`. Three
+   successive proposals to raise `spread_capture_frac` (2.25×, then 1.87×) were rejected: the
+   first used `ref_mid` (fill-time mid, structurally blind to adverse selection), the second an
+   unmatched cohort that is survivorship-selected on market longevity. The matched cohort
+   ($N=81$) decays 81.0% → 65.3% → 52.1% at 5 m / 15 m / 1 h and has not converged; extrapolated
+   to the 2–4 h resolution horizon it brackets 26–39%. **`spread_capture_frac = 0.25` stands.**
+
+3. **Pair economics** `[MEASURED, stats.pairs_ev()]`: 368 one-sided fills, 95.65% completion
+   (Wilson 95% CI [93.05%, 97.31%]), 4.35% cut by stop-loss. Completion gains 3.68¢, exit costs
+   3.67¢, EV **+3.36¢/attempt**. Break-even completion holding exit cost fixed is **49.93%**; the
+   two are driven by the same variable (how far the second leg's ask moved), so the coupled
+   surface gives **66.61%** at 2× exit loss and **80.30%** at 15¢. All 16 exits trace to one
+   trigger, `strategy/sweep.py:798-825` (`pair_cost >= 0.995`); the other four risk mechanisms
+   never fired. Daily rates show no significant drift (08-15 outlier: exact binomial $p=0.0103$,
+   Šidák-adjusted $p=0.0600$ across six days).
+
+4. **The live path cannot execute the business** `[MEASURED, code trace]`:
+
+| step | live | note |
+| --- | --- | --- |
+| quote both legs | manual CLI only | `live_exec.py:171-214`; automated loop is sim-only |
+| detect one-leg fill | **ABSENT** | no fill listener, no user-channel stream, no order polling |
+| complete second leg | **ABSENT** | no taker crossing |
+| **merge at parity** | **ABSENT** | no `mergePositions` encoder or contract call anywhere |
+| collect proceeds | post-resolution only | `redeem` works; pre-resolution merge cannot settle |
+| stop-loss exit | **ABSENT** | `sweep.py:798-825` is inside the simulator loop |
+
+   `mergePositions` occurs repo-wide only in `server/explainer_html.py:253,480` (marketing copy
+   asserting the bot calls it), `strategy/config.py:247` (a gas constant), and a test asserting
+   that marketing string. `strategy/merge.py` states it in its own header: *"Pure arithmetic. It
+   decides; the caller applies and persists."* It decides. Nothing applies. `merge` and `redeem`
+   are distinct contract methods; the live path implements only the latter.
+
+5. **Calendar gate.** At retirement: `n_settled` 165 (gate 100), `ci90_lower_pct` +2.73%
+   (excludes zero), `max_category_share` 0.382 (cap 0.50), `calendar_days` 10.44 (gate 14.0) —
+   the only failing criterion. It proxies regime diversity by wall-clock elapsed rather than by
+   how many distinct conditions the sample spans, and `GO_LIVE_MAX_CATEGORY_SHARE` addresses
+   that concentration risk directly. Constant and reported field retained; only the gate
+   condition dropped. Status moves to `READY_FOR_SMALL_LIVE_PILOT`, which is display-only —
+   every consumer is a dashboard renderer, nothing under `strategy/` reads it, and
+   `strategy/live_exec.py` never consults it. 716 tests pass.
+
+#### Decision
+
+**LIVE** — calendar gate retired by owner decision; three criteria remain. **`spread_capture_frac`
+calibration, markout horizons, $\tau_{\text{post}}$, queue-decay haircut and the `books.db` BTC
+recording are PARKED**: they govern the `sell` path, which has produced $0.00, while 100% of
+realised profit comes from `merge`. Crypto is 2.0% of realised PnL across 6 closes and was never
+graduated by the scanner.
+
+**OPEN** — $N_{\text{real}} = 0$. Every figure above is simulation. Four of six live capabilities
+are absent, including both the profit action (`mergePositions`) and the downside cap (stop-loss).
+A funded live pilot before those land would leave a one-sided fill riding unhedged to resolution
+at up to 100% loss of that leg. Build sequenced on branch `session-66-live-exec-loop` under the
+invariant that no stage which OPENS exposure ships before the stages that CLOSE it: merge → fill
+detection → stop-loss → second-leg completion → automated quoting.

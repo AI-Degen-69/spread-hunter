@@ -633,6 +633,14 @@ def realized() -> dict:
 # confidence interval sign as the actual gate in both cases.
 SIGNAL_MIN_SETTLED = 30
 GO_LIVE_MIN_SETTLED = 100
+# RETIRED as a gate 2026-08-16 by owner decision. It was a proxy for regime
+# diversity -- "165 settlements could all come from one week of one sport" --
+# but a crude one: it measures wall-clock elapsed, not how many distinct
+# conditions the sample spans, and GO_LIVE_MAX_CATEGORY_SHARE already catches
+# the concentration case it was aimed at. `calendar_days` is still computed and
+# still reported, so the dashboard reads unchanged and the number stays visible;
+# it simply no longer blocks the pilot verdict. Kept as a constant rather than
+# deleted so the reported field keeps its documented meaning.
 GO_LIVE_MIN_CALENDAR_DAYS = 14.0
 GO_LIVE_MAX_CATEGORY_SHARE = 0.5
 
@@ -747,8 +755,11 @@ def go_live_readiness() -> dict:
         category_counts[tag] = category_counts.get(tag, 0) + 1
     max_category_share = (max(category_counts.values()) / n) if n else None
 
+    # Three gates, not four: settled count, a confidence interval that excludes
+    # zero, and category concentration. The calendar minimum was retired by
+    # owner decision (see GO_LIVE_MIN_CALENDAR_DAYS above); `calendar_days` is
+    # still reported so the figure remains on the dashboard.
     if n >= GO_LIVE_MIN_SETTLED and ci_low is not None and ci_low > 0 \
-            and (calendar_days or 0) >= GO_LIVE_MIN_CALENDAR_DAYS \
             and (max_category_share or 1.0) <= GO_LIVE_MAX_CATEGORY_SHARE:
         status = "READY_FOR_SMALL_LIVE_PILOT"
     elif n >= SIGNAL_MIN_SETTLED:
