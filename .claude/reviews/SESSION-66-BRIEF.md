@@ -142,6 +142,42 @@ Claude Opus 5 in Claude Code. The Owner relays by copy-paste.
 clause where the *why* prevents a wrong answer. Directives go in a file; the Owner pastes only a
 short pointer prompt.
 
+### 6b. Ceremony is not uniform across stages
+
+Stages 0 and 1 are already specced, small, and exposure-closing. They need no planning ceremony —
+build them. **Stages 2 through 4 are not specced and contain the real design forks**, so they get
+the full treatment before a line is written.
+
+| Phase | What runs |
+| --- | --- |
+| **Stages 0–1** | Nothing extra. Spec exists, scope is small, both are safe. Build, review, approve. |
+| **Before Stage 2** | `superpowers:brainstorming` → Prime writes the Stage 2–4 architecture → `/plan-eng-review` **and** `/plan-devex-review` on that architecture → only then build |
+| **Every stage** | TDD → `superpowers:verification-before-completion` → `ecc:python-review` (+ `compound-engineering:ce-code-review` as a second lens) → Prime approves |
+| **Phase end** | `ecc:pr` → Owner runs `/code-review <PR#>` |
+
+Why each of those is not optional at the Stage 2 boundary:
+
+- **`brainstorming`** — fill detection has a genuine fork: WebSocket user-channel versus order
+  polling. Different failure modes, different reconnect semantics, different state to persist
+  across a restart. That is a design decision, not an implementation detail, and picking wrong is
+  expensive to unwind once Stages 3 and 4 sit on top of it.
+- **`/plan-eng-review`** — Stages 2–4 are where the risk concentrates. Reviewing the shape before
+  the code is the cheapest possible place to catch a wrong one.
+- **`/plan-devex-review`** — these stages produce a long-running process the Owner has to operate:
+  start it, watch it, kill it, know what it did overnight. That is a first-class requirement here,
+  not polish.
+
+**One planning family only.** `superpowers` (`writing-plans` / `executing-plans`) and
+`compound-engineering` (`ce-plan` / `ce-work`) both own plan-then-execute. Running both produces two
+plan formats and two execution protocols for the same stage. **superpowers is the spine** — Sub
+already ran `superpowers:verification-before-completion` successfully this session — and
+`ce-code-review` is pulled in only as an additional review lens.
+
+**Deliberately not used:** `/plan-ceo-review` asks *whether to build this*, which the Owner has
+already decided; running it re-litigates a closed call. gstack `/review` would be a third PR-review
+layer on top of `ecc:python-review` per stage and `/code-review` on the PR, which is already more
+coverage than the work warrants.
+
 **Standing rules for Sub, carried forward:**
 1. Tag every figure MEASURED / DERIVED / ASSUMED. MEASURED means the measurement exists *at the
    stated resolution*.
