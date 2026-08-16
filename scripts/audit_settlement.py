@@ -104,7 +104,7 @@ def check_clob_balance_allowance(funder: str, sig_type: int) -> dict:
         return {"error": str(e)}
 
 
-def check_relayer_status(tx_id: str = None, log_file: Path | str | None = None) -> dict:
+def check_relayer_status(tx_id: str | None = None, log_file: Path | str | None = None) -> dict:
     last_status = None
     if not tx_id:
         p = Path(log_file) if log_file is not None else Path("run/live_orders.json")

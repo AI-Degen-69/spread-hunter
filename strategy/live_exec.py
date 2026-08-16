@@ -93,6 +93,26 @@ def _client(funder: str | None = None):
     return c
 
 
+def _atomic_write_json(file_path: Path, data: list) -> bool:
+    """Atomically writes JSON data to file_path via sibling temp file + os.fsync + os.replace."""
+    tmp_path = file_path.with_name(f"{file_path.name}.tmp.{uuid.uuid4()}")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as tf:
+            tf.write(json.dumps(data, indent=2))
+            tf.flush()
+            os.fsync(tf.fileno())
+        os.replace(tmp_path, file_path)
+        return True
+    except Exception as exc:
+        print(f"WARNING: _atomic_write_json failed for {file_path}: {exc}", file=sys.stderr)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        return False
+
+
 def _log_order(rec: dict) -> str:
     RUN.mkdir(exist_ok=True)
     f = RUN / "live_orders.json"
@@ -100,18 +120,24 @@ def _log_order(rec: dict) -> str:
     if f.exists():
         try:
             hist = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
             corrupt_path = f.parent / f"live_orders.corrupt.{int(time.time())}.json"
             try:
-                f.rename(corrupt_path)
+                os.replace(f, corrupt_path)
                 print(f"WARNING: unreadable log file renamed to {corrupt_path}: {exc}", file=sys.stderr)
-            except OSError:
-                pass
-            hist = []
+                hist = []
+            except OSError as rename_exc:
+                print(
+                    f"ERROR: could not rename corrupt log file {f} to {corrupt_path}: {rename_exc}\n"
+                    f"Refusing to overwrite corrupted log file. Aborting.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(f"Refusing to overwrite corrupted log file {f}: {rename_exc}")
     if "id" not in rec:
         rec["id"] = str(uuid.uuid4())
     hist.append(rec)
-    f.write_text(json.dumps(hist, indent=2), encoding="utf-8")
+    if not _atomic_write_json(f, hist):
+        print(f"ERROR: failed to write log entry {rec['id']} to {f}", file=sys.stderr)
     return rec["id"]
 
 
@@ -122,7 +148,7 @@ def _update_order_log(entry_id: str, updates: dict) -> bool:
         return False
     try:
         hist = json.loads(f.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
         print(f"WARNING: _update_order_log failed to read {f}: {exc}", file=sys.stderr)
         return False
 
@@ -134,12 +160,8 @@ def _update_order_log(entry_id: str, updates: dict) -> bool:
             break
 
     if updated:
-        try:
-            f.write_text(json.dumps(hist, indent=2), encoding="utf-8")
-        except OSError as exc:
-            print(f"WARNING: _update_order_log failed to write {f}: {exc}", file=sys.stderr)
-            return False
-    return updated
+        return _atomic_write_json(f, hist)
+    return False
 
 
 def _open_notional(c) -> float:
@@ -539,12 +561,51 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
     try:
         with urllib.request.urlopen(req_submit, timeout=30) as resp:
             res = json.loads(resp.read().decode("utf-8"))
+    except KeyboardInterrupt:
+        try:
+            log_ok = _update_order_log(entry_id, {
+                "status": "interrupted",
+                "error_type": "KeyboardInterrupt",
+                "error": "Execution interrupted by user during submit",
+            })
+        except Exception:
+            log_ok = False
+
+        record_dump = json.dumps({
+            "id": entry_id,
+            "action": "REDEEM",
+            "condition_id": condition_id,
+            "safe_funder": funder,
+            "signer": signer_addr,
+            "target": CTF_CONTRACT,
+            "call_data": call_data,
+            "nonce": nonce,
+            "deadline": deadline,
+            "payload": payload,
+            "status": "interrupted",
+            "error_type": "KeyboardInterrupt",
+        }, indent=2)
+        print(
+            f"ERROR: Relayer submit interrupted by user (KeyboardInterrupt).\n"
+            f"Transaction was signed and may have been broadcast to relayer.\n"
+            f"Full in-flight transaction record:\n{record_dump}",
+            file=sys.stderr,
+        )
+        raise SystemExit(
+            f"Relayer submit interrupted (KeyboardInterrupt).\n"
+            f"Transaction was signed and may have been broadcast (nonce={nonce}, id={entry_id}).\n"
+            f"On-chain status must be checked manually before any retry."
+        )
     except Exception as exc:
-        log_ok = _update_order_log(entry_id, {
-            "status": "unknown",
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-        })
+        try:
+            log_ok = _update_order_log(entry_id, {
+                "status": "unknown",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            })
+        except Exception:
+            log_ok = False
+
         if not log_ok:
             record_dump = json.dumps({
                 "id": entry_id,
@@ -582,18 +643,47 @@ def redeem(condition_id: str, index_sets: list[int] | None = None,
         tx_hash = res.get("transactionHash") or res.get("transactionID") or res.get("id")
 
     update_fields = {
-        "status": "confirmed",
+        "status": "submitted",
         "response": json.dumps(res)[:400],
     }
     if tx_hash:
         update_fields["tx_hash"] = tx_hash
 
-    log_ok = _update_order_log(entry_id, update_fields)
+    try:
+        log_ok = _update_order_log(entry_id, update_fields)
+    except Exception as update_exc:
+        log_ok = False
+        update_err = str(update_exc)
+    else:
+        update_err = None
+
     if not log_ok:
+        record_dump = json.dumps({
+            "id": entry_id,
+            "action": "REDEEM",
+            "condition_id": condition_id,
+            "safe_funder": funder,
+            "signer": signer_addr,
+            "target": CTF_CONTRACT,
+            "call_data": call_data,
+            "nonce": nonce,
+            "deadline": deadline,
+            "payload": payload,
+            "tx_hash": tx_hash,
+            "status": "submitted",
+            "response": json.dumps(res)[:400],
+            "update_error": update_err,
+        }, indent=2)
         print(
-            f"WARNING: Failed to update live_orders.json entry {entry_id} to status='confirmed' "
-            f"(row remains pending in log). Response: {json.dumps(res)[:400]}",
+            f"ERROR: Relayer accepted transaction (tx_hash={tx_hash}) but live_orders.json entry {entry_id} "
+            f"could NOT be updated to status='submitted' (row remains pending or missing in log).\n"
+            f"Full transaction record:\n{record_dump}",
             file=sys.stderr,
+        )
+        raise SystemExit(
+            f"Relayer accepted transaction (tx_hash={tx_hash}), but audit log update failed.\n"
+            f"Transaction was signed and submitted (nonce={nonce}, id={entry_id}).\n"
+            f"On-chain status must be verified before any retry. See stderr for full transaction record."
         )
 
     print(f"  RELAYER RESPONSE: {json.dumps(res)[:400]}")

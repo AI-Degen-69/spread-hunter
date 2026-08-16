@@ -485,13 +485,15 @@ def test_redeem_submit_timeout_logs_unknown(tmp_path):
     assert "timed out" in rec["error"]
 
 
-def test_redeem_submit_success_single_row_confirmed(tmp_path):
-    """3. Submit succeeds -> exactly one row, transitioning pending -> confirmed, not two rows."""
+def test_redeem_submit_success_single_row_submitted(tmp_path):
+    """3. Submit succeeds -> exactly one row, transitioning pending -> submitted, not two rows.
+    Asserts status is 'submitted' against a mock relayer response whose body says PENDING."""
     acc = Account.create()
     funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     env_vars = make_live_env(acc, funder)
     recorded_requests = []
+    # make_mock_urlopen returns {"transactionID": ..., "status": "PENDING"}
     mock_urlopen = make_mock_urlopen(recorded_requests, submit_hash="0xdeadbeef12345678")
 
     with patch.dict(os.environ, env_vars, clear=False), \
@@ -506,8 +508,9 @@ def test_redeem_submit_success_single_row_confirmed(tmp_path):
     assert len(entries) == 1
     rec = entries[0]
     assert rec["action"] == "REDEEM"
-    assert rec["status"] == "confirmed"
+    assert rec["status"] == "submitted"
     assert "0xdeadbeef12345678" in rec["response"]
+    assert rec["tx_hash"] == "0xdeadbeef12345678"
     assert len(rec["response"]) <= 400
     assert rec["nonce"] == 121
     assert "payload" in rec
@@ -548,7 +551,7 @@ def test_audit_settlement_relayer_log_reader_finds_redeem_fixture(tmp_path):
             "nonce": 121,
             "deadline": 1723812945,
             "payload": {"type": "WALLET"},
-            "status": "confirmed",
+            "status": "submitted",
             "tx_hash": "0x9876543210fedcba",
             "response": json.dumps({"transactionHash": "0x9876543210fedcba", "status": "CONFIRMED"}),
         })
@@ -623,3 +626,113 @@ def test_log_order_corrupted_file_renamed_not_destroyed(tmp_path):
     corrupt_files = list(tmp_path.glob("live_orders.corrupt.*.json"))
     assert len(corrupt_files) == 1
     assert corrupt_files[0].read_text(encoding="utf-8") == corrupt_content
+
+
+def test_atomic_write_json_interrupted_leaves_file_intact(tmp_path):
+    """R10 Item 1: Atomic write interrupted midway leaves the original file intact and valid."""
+    log_file = tmp_path / "live_orders.json"
+    original_data = [
+        {"id": "entry-1", "action": "REDEEM", "status": "pending"},
+        {"id": "entry-2", "action": "REDEEM", "status": "submitted"},
+    ]
+    log_file.write_text(json.dumps(original_data, indent=2), encoding="utf-8")
+
+    # Patch os.fsync to raise an IOError simulating an interrupted write
+    with patch("os.fsync", side_effect=IOError("Simulated disk error during fsync")):
+        res = le._atomic_write_json(log_file, [{"id": "entry-3", "action": "NEW"}])
+
+    assert res is False
+    # Original file is intact, uncorrupted, and parses cleanly
+    assert log_file.exists()
+    recovered = json.loads(log_file.read_text(encoding="utf-8"))
+    assert recovered == original_data
+
+
+def test_redeem_submit_success_log_update_failure_dumps_to_stderr(tmp_path, capsys):
+    """R10 Item 2: When submit succeeds but _update_order_log fails, SystemExit is raised,
+    stderr carries the transaction record and tx_hash, and message names the ambiguity."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+    mock_urlopen = make_mock_urlopen([], submit_hash="0xabcdef1234567890")
+
+    original_update = le._update_order_log
+
+    def mock_update_order_log(entry_id, updates):
+        # Allow pending write, fail submitted update
+        if updates.get("status") == "submitted":
+            return False
+        return original_update(entry_id, updates)
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch.object(le, "_update_order_log", side_effect=mock_update_order_log), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "Relayer accepted transaction" in msg
+    assert "audit log update failed" in msg
+    assert "0xabcdef1234567890" in msg
+
+    captured = capsys.readouterr()
+    assert "ERROR: Relayer accepted transaction" in captured.err
+    assert "0xabcdef1234567890" in captured.err
+    assert "submitted" in captured.err
+
+
+def test_redeem_submit_keyboard_interrupt_logs_interrupted(tmp_path, capsys):
+    """R10 Item 2: KeyboardInterrupt during submit stamps status='interrupted' and exits with warning."""
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    env_vars = make_live_env(acc, funder)
+
+    def mock_urlopen_interrupt(req, timeout=30):
+        if "params" in req.full_url:
+            return MockResponse({"address": POOL_WORKER, "nonce": "121"})
+        elif "submit" in req.full_url:
+            raise KeyboardInterrupt()
+        return MockResponse({})
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "get_payout_denominator", return_value=1), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen_interrupt):
+        with pytest.raises(SystemExit) as exc_info:
+            le.redeem(cond_id, live=True)
+
+    msg = str(exc_info.value)
+    assert "KeyboardInterrupt" in msg
+    assert "may have been broadcast" in msg
+
+    log_file = tmp_path / "live_orders.json"
+    assert log_file.exists()
+    entries = json.loads(log_file.read_text(encoding="utf-8"))
+    assert len(entries) == 1
+    assert entries[0]["status"] == "interrupted"
+    assert entries[0]["error_type"] == "KeyboardInterrupt"
+
+
+def test_log_order_corrupt_rename_failure_aborts_without_overwriting(tmp_path):
+    """R10 Item 4.1: If corrupt log file cannot be renamed, _log_order aborts via SystemExit rather than overwriting."""
+    corrupt_content = '{"broken": json['
+    log_file = tmp_path / "live_orders.json"
+    log_file.write_text(corrupt_content, encoding="utf-8")
+
+    # Patch os.replace to raise OSError when renaming corrupt file
+    with patch.object(le, "RUN", tmp_path), \
+         patch("os.replace", side_effect=OSError("Access denied during rename")):
+        with pytest.raises(SystemExit) as exc_info:
+            le._log_order({
+                "action": "REDEEM",
+                "condition_id": "0x1234",
+                "status": "pending",
+            })
+
+    assert "Refusing to overwrite corrupted log file" in str(exc_info.value)
+    # The file still has its original corrupt content, NOT overwritten
+    assert log_file.read_text(encoding="utf-8") == corrupt_content
