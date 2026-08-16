@@ -816,4 +816,62 @@ def test_derived_position_ids_match_canonical_cthelpers():
     assert pos_id_2 == expected_token_id_2
 
 
+# The round-trip test above only ever passes ZERO_BYTES32 as the parent, which is
+# all Polymarket itself uses. That leaves the entire `x2 != 0` branch of
+# get_collection_id — parent point decode, parity restore, curve check, and the
+# alt_bn128 point addition — with no coverage at all. The three tests below enter
+# that branch. Constants are conditionId-shaped but synthetic: the branch is pure
+# curve arithmetic and does not care whether a condition exists on chain.
+
+_COND_A = "0x" + "11" * 32
+_COND_B = "0x" + "22" * 32
+
+
+def test_non_zero_parent_collection_id_is_distinct_and_deterministic():
+    """A non-zero parent must change the result and must do so reproducibly."""
+    parent = le.get_collection_id(le.ZERO_BYTES32, _COND_A, 1)
+
+    with_parent = le.get_collection_id(parent, _COND_B, 1)
+    without_parent = le.get_collection_id(le.ZERO_BYTES32, _COND_B, 1)
+
+    # Well-formed: 0x + 64 hex chars, parseable as a 256-bit integer.
+    assert with_parent.startswith("0x")
+    assert len(with_parent) == 66
+    int(with_parent, 16)
+
+    # The parent point was actually added, not silently dropped.
+    assert with_parent != without_parent
+
+    # Same inputs, same output — no dependence on iteration order or state.
+    assert le.get_collection_id(parent, _COND_B, 1) == with_parent
+
+
+def test_collection_id_point_addition_is_order_independent():
+    """P_A + P_B == P_B + P_A: which condition acts as parent must not matter.
+
+    Each outcome point derives from (conditionId, indexSet) alone, so combining
+    two of them is commutative. If this fails, the parent decode or the point
+    addition is wrong, not the test.
+    """
+    parent_a = le.get_collection_id(le.ZERO_BYTES32, _COND_A, 1)
+    parent_b = le.get_collection_id(le.ZERO_BYTES32, _COND_B, 1)
+
+    a_then_b = le.get_collection_id(parent_a, _COND_B, 1)
+    b_then_a = le.get_collection_id(parent_b, _COND_A, 1)
+
+    assert a_then_b == b_then_a
+
+
+def test_parent_collection_id_off_the_curve_is_rejected():
+    """A parent x-coordinate with no square root must raise, not silently add garbage.
+
+    x = 4 is the smallest positive integer for which x^3 + 3 is a non-residue mod
+    the alt_bn128 field prime, so it cannot be the x-coordinate of any curve point.
+    """
+    off_curve_parent = "0x" + hex(4)[2:].zfill(64)
+
+    with pytest.raises(ValueError, match="invalid parent collection ID"):
+        le.get_collection_id(off_curve_parent, _COND_A, 1)
+
+
 
