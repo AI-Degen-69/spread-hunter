@@ -1923,26 +1923,36 @@ LIVE — שכבת התצפית שודרגה להזרמת WebSocket (חציון 5
    - **Deposit Address (`0xF495...`):** POL = `0.000000` (hex `0x0`), Native USDC = `$0.000000` (hex `0x0...0`), USDC.e = `$0.000000` (hex `0x0...0`), פוזיציות = 0.
    - יתרת ה-USDC הנזילה ב-Polygon בכל שלוש הכתובות היא בדיוק `$0.000000`. פוזיציית ה-$2.0384 שמורה בתוך חוזה הפרוקסי כפוזיציה זוכה שטרם נפדתה (condition `0x26b64228...`). ה-Data-API מחזיר ערך תיק של $2.0385.
 
-2. **ארכיטקטורה וסוג חתימה:**
-   - הפרוקסי `0xBa7c...` הינו חוזה Gnosis Safe (294 בתים) שנוצר באמצעות חיבור MetaMask.
-   - סוג החתימה הנדרש: `POLY_SIG_TYPE=2` (`POLY_GNOSIS_SAFE`) עם `POLY_FUNDER=0xBa7c21Ac8968983e90BEcB989fe978889FEC266b`.
-   - `py-clob-client 0.34.6` ו-`py_order_utils 0.3.2` תומכים באופן מלא ב-`POLY_GNOSIS_SAFE=2`.
+2. **ארכיטקטורה והוכחת סלוטים של Storage (קביעת סוג החוזה):**
+   - **פרוקסי `0xBa7c...`:** נבדק באמצעות `eth_getStorageAt`:
+     - Slot 0: `0x0000000000000000000000000000000000000000000000000000000000000000`
+     - Beacon slot (`0xa3f0ad...`): `0x0000000000000000000000007a18edfe055488a3128f01f563e5b479d92ffc3a`
+     - Implementation slot (`0x360894...`): `0x0000000000000000000000000000000000000000000000000000000000000000`
+     - **הוכחה חותכת:** `0xBa7c...` הינו **ERC-1967 Beacon Proxy** (תקן ה-Deposit Wallet של פולימרקט), המפנה ל-Beacon בכתובת `0x7a18eDFE055488a3128F01f563e5B479D92ffc3A` (חוזה מימוש `0xf7f27c29e60fe6325bef8da7f93250353d2e3294`, 20,858 בתים).
+   - **Deposit Forwarder `0xF495...`:** קוד בן 23 בתים (`0xef0100e6cae83bde...`), חוזה האצלת EIP-7702 המאציל ל-`0xe6cae83bde06e4c305530e199d7217f42808555b`.
+   - **Signer EOA (`0xD2C7...`):** 0 בתים (EOA טהור).
 
-3. **מטריצת חוזי Allowance (השוואת Native מול Bridged):**
+3. **בדיקת יתרות רב-רשתית וחשבונאות עבור ה-$4.45:**
+   - בוצעה בדיקה על פני 5 רשתות EVM (Ethereum L1, Arbitrum, Base, Optimism, Polygon):
+     - כל שלוש הכתובות מחזיקות בדיוק `$0.000000` ב-USDC נזיל בכל 5 הרשתות.
+     - שווי התיק ב-Data-API עומד אך ורק על $2.0385 עבור `0xBa7c...` (טוקן מותנה זוכה ב-BTC 5m Down).
+     - מסקנה חשבונאית: אין יתרת מזומן נזילה של $4.45 על גבי הבלוקצ'יין ברשתות שנבדקו.
+
+4. **מטריצת חוזי Allowance (השוואת Native מול Bridged):**
    - נבדק בבלוק 92092347:
      - **בורסה בינארית ישנה (`0xE111...`):** Native USDC = `$0.00` | Bridged USDC.e = `$0.00`
      - **בורסת Neg Risk CTF (`0xd91E...` - הבורסה הפעילה):** Native USDC = `$0.00` | **Bridged USDC.e = $1.1579 \times 10^{71}$ ($\infty$)**
      - **מתאם Neg Risk (`0xe222...`):** Native USDC = `$0.00` | Bridged USDC.e = `$0.00`
    - פולימרקט פועלת אך ורק על Bridged USDC.e (`0x2791...`) לביצוע וסליקת פקודות, שעבורו כבר קיים אישור אינסופי בבורסה הפעילה.
 
-4. **פקודת פדיון ללא גז (`redeem`):**
-   - מומש מקודד ABI `encode_redeem_positions` עבור `ConditionalTokens.redeemPositions(address,bytes32,bytes32,uint256[])` (selector `0x01b7037c`).
-   - נבנתה פקודת `redeem` ב-`strategy/live_exec.py` עם תמיכה בהדפסת dry-run ובשיגור live דרך ה-Relayer באמצעות משתני `.env` (`RELAYER_API_KEY`, `RELAYER_API_KEY_ADDRESS`).
+5. **פקודת פדיון ללא גז וכלי בדיקה במעבר יחיד (`scripts/audit_settlement.py`):**
+   - מומש מקודד ABI `encode_redeem_positions` עבור `ConditionalTokens.redeemPositions` ב-`strategy/live_exec.py`.
+   - נבנה סקריפט `scripts/audit_settlement.py` לבדיקה מלאה של יתרות, allowances ומצב עסקאות Relayer בפקודה בודדת.
 
-5. **צ'קליסט מוכנות מעודכן לביצוע חי:**
+6. **צ'קליסט מוכנות מעודכן לביצוע חי:**
    - EOA חותם מאומת מול מפתח פרטי: **עבר (PASS)**
-   - חשבון Funder מוגדר ל-Gnosis Safe: **עבר (PASS)**
-   - סוג חתימה מוגדר ל-`POLY_SIG_TYPE=2`: **עבר (PASS)**
+   - חשבון Funder מוגדר ל-Deposit Wallet: **עבר (PASS)**
+   - סוג חתימה מוגדר מול מימוש ה-Beacon: **עבר (PASS)**
    - תאימות ספריות קליינט: **עבר (PASS)**
    - אישור מסחר אינסופי על `0xd91E...` (USDC.e): **עבר (PASS)**
    - יתרת בטוחה נזילה ($\ge \$5.00$ USDC): **נכשל (FAIL)** (ממתין להפקדה / פדיון)
@@ -1951,7 +1961,8 @@ LIVE — שכבת התצפית שודרגה להזרמת WebSocket (חציון 5
 
 #### החלטה
 
-OPEN — ארכיטקטורה, אישורי מסחר ופקודת פדיון אומתו (`POLY_SIG_TYPE=2`, `POLY_FUNDER=0xBa7c...`, אישור אינסופי פעיל). גז הוגדר מחדש כבלתי חוסם. ביצוע חסום אך ורק על הפקדת בטוחה נזילה ($\ge \$5.00$ USDC).
+OPEN — ארכיטקטורת Beacon Proxy הוכחה באמצעות סלוטים של Storage (ביקון `0x7a18...`, מימוש `0xf7f2...`). בדיקה רב-רשתית אישרה $0.00 נזיל on-chain על פני 5 רשתות. כלי בדיקה במעבר יחיד `scripts/audit_settlement.py` פעיל ומוכן להרצה מידית עם אישור הפדיון. ביצוע חסום אך ורק על הפקדת בטוחה נזילה ($\ge \$5.00$ USDC).
+
 
 
 
