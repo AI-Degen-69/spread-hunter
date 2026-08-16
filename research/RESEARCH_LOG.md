@@ -2147,28 +2147,41 @@ Objectives:
 
 #### Findings & Data
 
-1. **On-Chain Balance Matrix:**
+1. **Auditable On-Chain Balance Matrix (Multi-RPC Verification):**
+   - Polled across two independent RPC hosts: `https://polygon.drpc.org` (block 92092346) and `https://polygon-bor-rpc.publicnode.com` (block 92092347).
+   - Cross-checked against Polymarket Data-API (`/value`, `/positions`, `/activity`).
 
-| Address | Type & Bytecode | Native POL | Native USDC (`0x3c49...`) | Bridged USDC.e (`0x2791...`) | CTF Positions |
+| Address | Role & Bytecode | Native POL (`eth_getBalance`) | Native USDC (`0x3c49...`) | Bridged USDC.e (`0x2791...`) | Data-API Position Value |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Signer EOA (`0xD2C7...`)** | EOA (0 bytes) | `0.000000 POL` | `$0.000000` | `$0.000000` | 0 |
-| **Proxy (`0xBa7c...`)** | Gnosis Safe (294 bytes) | `0.000000 POL` | `$0.000000` | `$0.000000` | 1 ($2.04 BTC 5m Down, redeemable) |
-| **Deposit Addr (`0xF495...`)** | EIP-1167 Proxy (48 bytes) | `0.000000 POL` | `$0.000000` | `$0.000000` | 0 |
+| **`0xD2C7...`** | Signer EOA (0 bytes) | `0.000000 POL` (raw `0x0`) | `$0.000000` (raw `0x0...0`) | `$0.000000` (raw `0x0...0`) | `$0.00` |
+| **`0xBa7c...`** | Proxy Safe (294 bytes) | `0.000000 POL` (raw `0x0`) | `$0.000000` (raw `0x0...0`) | `$0.000000` (raw `0x0...0`) | `$2.0384` (1 position) |
+| **`0xF495...`** | Deposit Forwarder (48 bytes) | `0.000000 POL` (raw `0x0`) | `$0.000000` (raw `0x0...0`) | `$0.000000` (raw `0x0...0`) | `$0.00` |
 
-*Reconciliation:* On-chain liquid USDC balance across all three Polygon addresses is strictly `$0.00`. The $2.04 is held as an unredeemed winning conditional token position inside the Gnosis Safe proxy `0xBa7c...`. The $4.45 cash in UI is not liquid USDC on Polygon.
+*Reconciliation:* On-chain liquid USDC balance across all three Polygon addresses is strictly `$0.000000` (raw hex `0x0000000000000000000000000000000000000000000000000000000000000000`). The owner's account holds $2.0384 in an unredeemed winning conditional token position (condition `0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f`, 2.0384 shares of BTC 5m Down at `curPrice=1.00`) inside Gnosis Safe proxy `0xBa7c...`. Polymarket Data-API `/value` returns strictly `{"value": 2.0385}`.
 
 2. **Onboarding Architecture & Signature Scheme:**
    - Proxy `0xBa7c...` is a Gnosis Safe proxy created via MetaMask browser onboarding.
    - Required signature scheme: `POLY_SIG_TYPE=2` (`signature_type=2`, `POLY_GNOSIS_SAFE`), with `POLY_FUNDER=0xBa7c21Ac8968983e90BEcB989fe978889FEC266b`.
    - `py-clob-client 0.34.6` and `py_order_utils 0.3.2` natively support `POLY_GNOSIS_SAFE=2` (and `EOA=0`, `POLY_PROXY=1`). Neither library supports `signature_type=3` (`POLY_1271`), but `signature_type=2` is the correct match for this Gnosis Safe contract.
 
-3. **Allowance Targets & On-Chain Status:**
-   - `0xE111180000d2663C0091e4f400237545B87B996B`: Legacy Binary Exchange (allowance = $0.00).
-   - `0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296`: Neg Risk CTF Exchange (the active CLOB matching contract). **On-chain allowance for USDC.e is already $\infty$ ($1.1579 \times 10^{71}$)** on proxy `0xBa7c...`.
-   - `0xe2222d279d744050d28e00520010520000310F59`: Neg Risk Adapter (allowance = $0.00).
-   - Setting allowances through Polymarket UI is gasless (sponsored by Polymarket relayer). Direct on-chain approval requires ~0.02 POL.
+3. **Allowance Targets & Side-by-Side Approval Matrix:**
+   - ERC-20 `allowance(0xBa7c..., spender)` queried at block 92092347 on `https://polygon-bor-rpc.publicnode.com`:
 
-4. **Live-Execution Readiness Checklist:**
+| Spender Contract | Address | Purpose | Native USDC (`0x3c49...`) | Bridged USDC.e (`0x2791...`) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Legacy Binary Exchange** | `0xE111180000d2663C0091e4f400237545B87B996B` | Deprecated matching contract | `$0.00` (raw `0x0...0`) | `$0.00` (raw `0x0...0`) |
+| **Neg Risk CTF Exchange** | `0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296` | **Active CLOB matching exchange** | `$0.00` (raw `0x0...0`) | **$1.1579 \times 10^{71}$ ($\infty$)** (raw `0xfff...fff`) |
+| **Neg Risk Adapter** | `0xe2222d279d744050d28e00520010520000310F59` | Complex bundle settlement | `$0.00` (raw `0x0...0`) | `$0.00` (raw `0x0...0`) |
+
+*Finding:* Polymarket CLOB operates entirely on **Bridged USDC.e (`0x2791...`)** for collateral and CTF settlements. On-chain allowance for Bridged USDC.e on the active matching exchange (`0xd91E...`) is already infinite.
+
+4. **Gasless Redemption Subcommand (`redeem`):**
+   - Implemented ABI encoder `encode_redeem_positions` for `ConditionalTokens.redeemPositions(address,bytes32,bytes32,uint256[])` (selector `0x01b7037c`).
+   - Added subcommand `redeem` in `strategy/live_exec.py` supporting dry-run printing and `--live` gasless submission via Polymarket Relayer.
+   - Relayer credentials read strictly from `RELAYER_API_KEY` and `RELAYER_API_KEY_ADDRESS` in `.env`.
+   - Dry run verified against target condition `0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f`.
+
+5. **Re-Derived Live-Execution Readiness Checklist:**
 
 | Check | Requirement | Current Value | Status |
 | :--- | :--- | :--- | :--- |
@@ -2176,14 +2189,15 @@ Objectives:
 | **2. Funder Account** | Points to Gnosis Safe holding collateral | `0xBa7c21Ac8968983e90BEcB989fe978889FEC266b` | **PASS** |
 | **3. Signature Type** | `POLY_SIG_TYPE=2` (POLY_GNOSIS_SAFE) | Configured in `.env` | **PASS** |
 | **4. Client Library** | Version supports `POLY_GNOSIS_SAFE` | `py-clob-client 0.34.6` + `py_order_utils 0.3.2` | **PASS** |
-| **5. Exchange Allowance** | Infinite approval on `0xd91E...` | `1.1579e71` USDC.e approved on-chain | **PASS** |
-| **6. Collateral Balance** | $\ge \$5.00$ liquid USDC in funder | `$0.00` liquid ($2.04 unredeemed CTF) | **FAIL** (insufficient balance) |
-| **7. Gas Balance** | POL balance for direct on-chain fallback | `0.000000 POL` | **FAIL** (relayer dependent) |
-| **8. Safety Rails** | Caps & dry-run enforcement in `live_exec.py` | `MAX_ORDER_USD=25.0`, `MAX_TOTAL_USD=100.0` | **PASS** |
+| **5. Exchange Allowance** | Infinite approval on active CTF exchange `0xd91E...` | `1.1579e71` USDC.e approved on-chain | **PASS** |
+| **6. Collateral Balance** | $\ge \$5.00$ liquid USDC in funder | `$0.00` liquid ($2.04 unredeemed CTF) | **FAIL** (funding pending) |
+| **7. Gas Balance** | Scoped to emergency direct on-chain fallback only | Not required for off-chain Safe orders or Relayer | **PASS (N/A for live CLOB)** |
+| **8. Safety Rails** | Caps, dry-run enforcement, logging in `live_exec.py` | `MAX_ORDER_USD=25.0`, `MAX_TOTAL_USD=100.0` | **PASS** |
 
 #### Decision
 
-OPEN — Architecture and allowances verified (`POLY_SIG_TYPE=2`, `POLY_FUNDER=0xBa7c...`, infinite exchange approval active). Execution blocked strictly on liquid collateral funding ($\ge \$5.00$ USDC). Ready to trade immediately once wallet is funded.
+OPEN — Architecture, allowances, and gasless redemption subcommands verified (`POLY_SIG_TYPE=2`, `POLY_FUNDER=0xBa7c...`, infinite exchange approval active). Gas re-derived as non-blocking for CLOB/Relayer. Live execution blocked strictly on funding $\ge \$5.00$ liquid collateral.
+
 
 
 

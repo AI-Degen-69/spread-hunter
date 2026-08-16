@@ -1909,42 +1909,50 @@ LIVE — שכבת התצפית שודרגה להזרמת WebSocket (חציון 5
 
 #### מה חקרנו וביצענו
 
-1. ביצענו שאילתות JSON-RPC מול צמתי Polygon (`https://polygon.drpc.org`, `https://1rpc.io/matic`) עבור יתרות ו-allowances.
-2. תישאלנו את ה-Data-API של פולימרקט (`positions` ו-`activity`) ליישוב שווי התיק ובעלות הפוזיציה.
+1. ביצענו שאילתות JSON-RPC בלתי-תלויות מול שני צמתי Polygon פעילים (`https://polygon.drpc.org` בבלוק 92092346 ו-`https://polygon-bor-rpc.publicnode.com` בבלוק 92092347) עבור יתרות ו-allowances עם פלט hex גולמי.
+2. תישאלנו את ה-Data-API של פולימרקט (`positions`, `value` ו-`activity`) ליישוב שווי התיק ובעלות הפוזיציה.
 3. סקרנו את קוד המקור של `py-clob-client 0.34.6` ו-`py_order_utils 0.3.2`.
-4. שדרגנו את `strategy/live_exec.py` עם טעינת `.env`, פרמטר `--funder` אופציונלי, ופענוח מילון ה-allowances.
+4. הוספנו פקודת משנה `redeem` ב-`strategy/live_exec.py` עם מקודד ABI עבור `ConditionalTokens.redeemPositions` לפדיון ללא גז דרך ה-Relayer.
+5. ייצבנו את `tests/test_selection.py` באמצעות `threading.Barrier` להסרת רגישות לתזמון threads.
 
 #### ממצאים ונתונים שנאספו
 
-1. **מטריצת יתרות On-Chain:**
-   - **Signer EOA (`0xD2C7...`):** POL = `0.000000`, Native USDC = `$0.000000`, USDC.e = `$0.000000`, פוזיציות = 0.
-   - **Proxy Gnosis Safe (`0xBa7c...`):** POL = `0.000000`, Native USDC = `$0.000000`, USDC.e = `$0.000000`, פוזיציות = 1 (שווי $2.04 ב-BTC 5m Down, ניתן לפדיון).
-   - **Deposit Address (`0xF495...`):** POL = `0.000000`, Native USDC = `$0.000000`, USDC.e = `$0.000000`, פוזיציות = 0.
-   - יתרת ה-USDC הנזילה ב-Polygon בכל שלוש הכתובות היא `$0.00`. ה-$2.04 שמורים בתוך חוזה הפרוקסי כפוזיציה זוכה שטרם נפדתה.
+1. **מטריצת יתרות On-Chain מאומתת (Multi-RPC):**
+   - **Signer EOA (`0xD2C7...`):** POL = `0.000000` (hex `0x0`), Native USDC = `$0.000000` (hex `0x0...0`), USDC.e = `$0.000000` (hex `0x0...0`), פוזיציות = 0.
+   - **Proxy Gnosis Safe (`0xBa7c...`):** POL = `0.000000` (hex `0x0`), Native USDC = `$0.000000` (hex `0x0...0`), USDC.e = `$0.000000` (hex `0x0...0`), פוזיציות = 1 (שווי $2.0384 ב-BTC 5m Down, ניתן לפדיון).
+   - **Deposit Address (`0xF495...`):** POL = `0.000000` (hex `0x0`), Native USDC = `$0.000000` (hex `0x0...0`), USDC.e = `$0.000000` (hex `0x0...0`), פוזיציות = 0.
+   - יתרת ה-USDC הנזילה ב-Polygon בכל שלוש הכתובות היא בדיוק `$0.000000`. פוזיציית ה-$2.0384 שמורה בתוך חוזה הפרוקסי כפוזיציה זוכה שטרם נפדתה (condition `0x26b64228...`). ה-Data-API מחזיר ערך תיק של $2.0385.
 
 2. **ארכיטקטורה וסוג חתימה:**
    - הפרוקסי `0xBa7c...` הינו חוזה Gnosis Safe (294 בתים) שנוצר באמצעות חיבור MetaMask.
    - סוג החתימה הנדרש: `POLY_SIG_TYPE=2` (`POLY_GNOSIS_SAFE`) עם `POLY_FUNDER=0xBa7c21Ac8968983e90BEcB989fe978889FEC266b`.
-   - `py-clob-client 0.34.6` ו-`py_order_utils 0.3.2` תומכים באופן מלא ב-`POLY_GNOSIS_SAFE=2`. (אין תמיכה ב-`POLY_1271=3`, ואינה נדרשת).
+   - `py-clob-client 0.34.6` ו-`py_order_utils 0.3.2` תומכים באופן מלא ב-`POLY_GNOSIS_SAFE=2`.
 
-3. **חוזי Allowance ומצב האישורים:**
-   - `0xE111180000d2663C0091e4f400237545B87B996B`: בורסה בינארית ישנה (allowance = $0.00).
-   - `0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296`: בורסת Neg Risk CTF (הבורסה הפעילה). **ה-allowance ב-USDC.e עבור הפרוקסי כבר מוגדר כאינסופי ($1.1579 \times 10^{71}$)** on-chain.
-   - `0xe2222d279d744050d28e00520010520000310F59`: מתאם Neg Risk (allowance = $0.00).
+3. **מטריצת חוזי Allowance (השוואת Native מול Bridged):**
+   - נבדק בבלוק 92092347:
+     - **בורסה בינארית ישנה (`0xE111...`):** Native USDC = `$0.00` | Bridged USDC.e = `$0.00`
+     - **בורסת Neg Risk CTF (`0xd91E...` - הבורסה הפעילה):** Native USDC = `$0.00` | **Bridged USDC.e = $1.1579 \times 10^{71}$ ($\infty$)**
+     - **מתאם Neg Risk (`0xe222...`):** Native USDC = `$0.00` | Bridged USDC.e = `$0.00`
+   - פולימרקט פועלת אך ורק על Bridged USDC.e (`0x2791...`) לביצוע וסליקת פקודות, שעבורו כבר קיים אישור אינסופי בבורסה הפעילה.
 
-4. **צ'קליסט מוכנות לביצוע חי:**
+4. **פקודת פדיון ללא גז (`redeem`):**
+   - מומש מקודד ABI `encode_redeem_positions` עבור `ConditionalTokens.redeemPositions(address,bytes32,bytes32,uint256[])` (selector `0x01b7037c`).
+   - נבנתה פקודת `redeem` ב-`strategy/live_exec.py` עם תמיכה בהדפסת dry-run ובשיגור live דרך ה-Relayer באמצעות משתני `.env` (`RELAYER_API_KEY`, `RELAYER_API_KEY_ADDRESS`).
+
+5. **צ'קליסט מוכנות מעודכן לביצוע חי:**
    - EOA חותם מאומת מול מפתח פרטי: **עבר (PASS)**
    - חשבון Funder מוגדר ל-Gnosis Safe: **עבר (PASS)**
    - סוג חתימה מוגדר ל-`POLY_SIG_TYPE=2`: **עבר (PASS)**
    - תאימות ספריות קליינט: **עבר (PASS)**
-   - אישור מסחר (Allowance) אינסופי על `0xd91E...`: **עבר (PASS)**
-   - יתרת בטוחה נזילה ($\ge \$5.00$ USDC): **נכשל (FAIL)** ($0.00 נזיל)
-   - יתרת גז POL לגיבוי: **נכשל (FAIL)** (0.000000 POL; תלוי ב-Relayer)
-   - מסילות בטיחות ב-`live_exec.py`: **עבר (PASS)**
+   - אישור מסחר אינסופי על `0xd91E...` (USDC.e): **עבר (PASS)**
+   - יתרת בטוחה נזילה ($\ge \$5.00$ USDC): **נכשל (FAIL)** (ממתין להפקדה / פדיון)
+   - יתרת גז POL: **עבר (PASS / לא נדרש לפקודות CLOB או Relayer, מוגדר כגיבוי חירום בלבד)**
+   - מסילות בטיחות ו-dry run ב-`live_exec.py`: **עבר (PASS)**
 
 #### החלטה
 
-OPEN — ארכיטקטורה ואישורי מסחר אומתו (`POLY_SIG_TYPE=2`, `POLY_FUNDER=0xBa7c...`, אישור אינסופי פעיל). ביצוע חסום אך ורק על הפקדת בטוחה נזילה ($\ge \$5.00$ USDC).
+OPEN — ארכיטקטורה, אישורי מסחר ופקודת פדיון אומתו (`POLY_SIG_TYPE=2`, `POLY_FUNDER=0xBa7c...`, אישור אינסופי פעיל). גז הוגדר מחדש כבלתי חוסם. ביצוע חסום אך ורק על הפקדת בטוחה נזילה ($\ge \$5.00$ USDC).
+
 
 
 

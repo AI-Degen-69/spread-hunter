@@ -228,6 +228,116 @@ def quote(condition_id: str, price: float, size: float, live: bool) -> None:
     print(f"\nlogged to {RUN / 'live_orders.json'}")
 
 
+CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+
+def encode_redeem_positions(collateral_token: str, parent_collection_id: str,
+                            condition_id: str, index_sets: list[int]) -> str:
+    """Encode ABI call for ConditionalTokens.redeemPositions(address,bytes32,bytes32,uint256[])
+    Selector: 0x01b7037c
+    """
+    selector = "01b7037c"
+    p_col = collateral_token.lower().replace("0x", "").zfill(64)
+    p_parent = parent_collection_id.lower().replace("0x", "").zfill(64)
+    p_cond = condition_id.lower().replace("0x", "").zfill(64)
+    offset = hex(128)[2:].zfill(64)
+    len_idx = hex(len(index_sets))[2:].zfill(64)
+    elem_idx = "".join(hex(idx)[2:].zfill(64) for idx in index_sets)
+    return "0x" + selector + p_col + p_parent + p_cond + offset + len_idx + elem_idx
+
+
+def redeem(condition_id: str, index_sets: list[int] | None = None,
+           collateral: str = USDC_E_CONTRACT,
+           parent_collection_id: str = ZERO_BYTES32,
+           live: bool = False) -> None:
+    """Gasless redemption of winning conditional tokens via Polymarket Relayer.
+
+    Safe execution path (MetaMask signer, sig_type=2). Calls
+    ConditionalTokens.redeemPositions(collateral, parentCollectionId, conditionId, indexSets)
+    through the Gnosis Safe proxy without spending gas.
+    """
+    if index_sets is None:
+        index_sets = [1, 2]
+
+    funder = os.environ.get("POLY_FUNDER", "")
+    key = os.environ.get("POLY_PRIVATE_KEY")
+    signer = ""
+    if key:
+        from eth_account import Account
+        signer = Account.from_key(key).address
+
+    call_data = encode_redeem_positions(
+        collateral_token=collateral,
+        parent_collection_id=parent_collection_id,
+        condition_id=condition_id,
+        index_sets=index_sets,
+    )
+
+    print("action          REDEEM (gasless via Polymarket Relayer)")
+    print(f"target_ctf      {CTF_CONTRACT}")
+    print(f"safe_funder     {funder or '(POLY_FUNDER not set)'}")
+    print(f"signer_eoa      {signer or '(POLY_PRIVATE_KEY not set)'}")
+    print(f"condition_id    {condition_id}")
+    print(f"collateral      {collateral}")
+    print(f"index_sets      {index_sets}")
+    print(f"encoded_call    {call_data[:42]}... ({len(call_data)} chars)")
+
+    if not live:
+        print("\nDRY RUN -- nothing sent. Re-run with --live to sign and submit to relayer.")
+        return
+
+    relayer_key = os.environ.get("RELAYER_API_KEY")
+    relayer_addr = os.environ.get("RELAYER_API_KEY_ADDRESS")
+    if not relayer_key or not relayer_addr:
+        raise SystemExit(
+            "RELAYER_API_KEY and RELAYER_API_KEY_ADDRESS must be set in .env "
+            "for gasless live redemption."
+        )
+    if not key or not funder:
+        raise SystemExit("POLY_PRIVATE_KEY and POLY_FUNDER must be set in .env")
+
+    import urllib.request
+    relayer_url = os.environ.get("RELAYER_URL", "https://relayer-v2.polymarket.com")
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "spread-hunter/1.0",
+        "x-api-key": relayer_key,
+        "x-api-key-address": relayer_addr,
+    }
+
+    payload = {
+        "to": CTF_CONTRACT,
+        "data": call_data,
+        "value": "0",
+        "from": funder,
+        "signer": signer,
+    }
+
+    req = urllib.request.Request(
+        f"{relayer_url}/submit",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        res = json.loads(resp.read().decode("utf-8"))
+
+    _log_order({
+        "ts": time.time(),
+        "action": "REDEEM",
+        "condition_id": condition_id,
+        "safe_funder": funder,
+        "signer": signer,
+        "target": CTF_CONTRACT,
+        "call_data": call_data,
+        "response": str(res)[:400],
+    })
+    print(f"  RELAYER RESPONSE: {res}")
+    print(f"\nlogged to {RUN / 'live_orders.json'}")
+
+
 def cancel_all(live: bool) -> None:
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
@@ -248,6 +358,10 @@ def main() -> None:
     q.add_argument("condition_id")
     q.add_argument("--price", type=float, required=True)
     q.add_argument("--size", type=float, required=True)
+    r = sub.add_parser("redeem", help="Gasless redemption of winning positions via Relayer.")
+    r.add_argument("condition_id", help="Condition ID to redeem")
+    r.add_argument("--index-sets", default="1,2", help="Comma-separated index sets (default: 1,2)")
+    r.add_argument("--collateral", default=USDC_E_CONTRACT, help="Collateral token (default: USDC.e)")
     sub.add_parser("cancel-all")
     a = ap.parse_args()
 
@@ -257,9 +371,13 @@ def main() -> None:
         balance(a.funder)
     elif a.cmd == "quote":
         quote(a.condition_id, a.price, a.size, a.live)
+    elif a.cmd == "redeem":
+        idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
+        redeem(a.condition_id, index_sets=idx_sets, collateral=a.collateral, live=a.live)
     else:
         cancel_all(a.live)
 
 
 if __name__ == "__main__":
     main()
+

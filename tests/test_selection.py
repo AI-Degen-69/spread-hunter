@@ -369,13 +369,17 @@ def test_the_scoring_pool_creates_one_session_per_worker(monkeypatch):
     reused, collapsing the session count. Sleeping makes the 12-worker
     count deterministic."""
     created = []
+    barrier = threading.Barrier(12)
 
     class _CountingSession:
         def __init__(self):
             created.append(self)
 
         def get(self, *args, **kwargs):
-            time.sleep(0.2)              # hold every worker alive mid-fetch
+            try:
+                barrier.wait(timeout=2.0)    # hold all 12 workers alive until all dispatched
+            except threading.BrokenBarrierError:
+                pass
             raise AssertionError("no network in the scoring-pool test")
 
     monkeypatch.setattr(rank_markets.requests, "Session", _CountingSession)
