@@ -331,7 +331,12 @@ def get_payout_denominator(condition_id: str, rpc_url: str | None = None) -> int
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 res = json.loads(resp.read().decode("utf-8"))
-                if "result" in res and res["result"] != "0x":
+                if "result" in res:
+                    if res["result"] == "0x":
+                        raise SystemExit(
+                            f"eth_call to CTF contract {CTF_CONTRACT} returned empty data. "
+                            f"The contract address may be wrong or the RPC may be on the wrong chain."
+                        )
                     return int(res["result"], 16)
         except Exception:
             continue

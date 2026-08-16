@@ -340,7 +340,8 @@ def test_redeem_ignores_params_response_address():
 
 
 def test_get_payout_denominator_failover():
-    """Failover test: first endpoint raises URLError, second returns valid 0x01, third never consulted."""
+    """First endpoint raises, second returns 0x01, third never consulted.
+    POLYGON_RPC is cleared so the built-in list order is deterministic."""
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     calls = []
 
@@ -350,13 +351,50 @@ def test_get_payout_denominator_failover():
             raise OSError("RPC endpoint unreachable")
         return MockResponse({"jsonrpc": "2.0", "id": 1, "result": "0x0000000000000000000000000000000000000000000000000000000000000001"})
 
-    with patch("urllib.request.urlopen", side_effect=mock_failover_urlopen):
+    with patch.dict(os.environ, {}, clear=False), \
+         patch("urllib.request.urlopen", side_effect=mock_failover_urlopen):
+        os.environ.pop("POLYGON_RPC", None)
         val = le.get_payout_denominator(cond_id)
 
     assert val == 1
     assert len(calls) == 2
     assert calls[0] == le.POLYGON_RPC_ENDPOINTS[0]
     assert calls[1] == le.POLYGON_RPC_ENDPOINTS[1]
+
+
+def test_get_payout_denominator_env_override_tried_first():
+    """POLYGON_RPC from env takes precedence over the built-in endpoint list."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    calls = []
+
+    def mock_urlopen(req, timeout=5):
+        calls.append(req.full_url)
+        return MockResponse({"jsonrpc": "2.0", "id": 1, "result": "0x0000000000000000000000000000000000000000000000000000000000000001"})
+
+    with patch.dict(os.environ, {"POLYGON_RPC": "https://private.example/rpc"}, clear=False), \
+         patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        val = le.get_payout_denominator(cond_id)
+
+    assert val == 1
+    assert len(calls) == 1
+    assert calls[0] == "https://private.example/rpc"
+
+
+def test_get_payout_denominator_empty_result_raises():
+    """Empty eth_call return (0x) indicates contract misconfiguration or wrong chain, raising SystemExit."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+    def mock_empty_urlopen(req, timeout=5):
+        return MockResponse({"jsonrpc": "2.0", "id": 1, "result": "0x"})
+
+    with patch.dict(os.environ, {}, clear=False), \
+         patch("urllib.request.urlopen", side_effect=mock_empty_urlopen):
+        os.environ.pop("POLYGON_RPC", None)
+        with pytest.raises(SystemExit) as exc_info:
+            le.get_payout_denominator(cond_id)
+        msg = str(exc_info.value)
+        assert le.CTF_CONTRACT in msg
+        assert "returned empty data" in msg
 
 
 def test_dry_run_probe():
