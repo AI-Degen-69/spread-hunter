@@ -170,9 +170,25 @@ worst outcome available on this path.
 So: cancel → re-read the pair from the registry and the venue → if the pair completed, **abort the
 sell and hand it to `merge`**. Only sell if the pair is still genuinely one-sided.
 
+**Carried over from the PR #32 review — a single-call invariant on `reconcile_orders()`.** Each
+`OrderRegistry` write path takes `BEGIN IMMEDIATE`, so no individual write races. But a full
+reconcile pass spans several of those transactions with two network round trips in between, and two
+concurrent passes can therefore interleave: both read a row as `open`, both decide a transition,
+and the later write wins. Holding one transaction across the whole pass is the wrong fix — it would
+keep the SQLite write lock for the duration of the venue calls, blocking every reader for as long as
+the venue takes to answer.
+
+The right fix is at the public API: exactly one reconcile may be in flight at a time, enforced for
+every entry point — the `poll` loop, a direct call, and whatever Stage 3 adds. A process-level lock
+covers the single-process case we have; a lock row or an advisory lock in `live.db` covers two
+processes, which is the configuration that actually bites (an operator running `poll` while a
+one-shot reconcile is running from another shell). Build this before Stage 3 issues its first
+cancel, since a cancel decided from raced state is a real order cancelled for the wrong reason.
+
 **Acceptance:** a fixture at `pair_cost = 0.995` fires; at `0.994` does not; a cancel that fails
 aborts before the sell and leaves a recoverable state; **and a fixture where the second leg fills
-between cancel and sell aborts the sell and routes to merge.**
+between cancel and sell aborts the sell and routes to merge.** Plus: a second concurrent reconcile
+is refused or serialised, never interleaved.
 
 ---
 
