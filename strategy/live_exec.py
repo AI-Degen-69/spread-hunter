@@ -340,15 +340,76 @@ def encode_redeem_positions(collateral_token: str, parent_collection_id: str,
     return "0x" + selector + p_col + p_parent + p_cond + offset + len_idx + elem_idx
 
 
+ALT_BN128_P = 21888242871839275222246405745257275088696311157297823662689037894645226208583
+ALT_BN128_B = 3
+
+
+def _alt_bn128_sqrt(x: int) -> int:
+    """Modular square root on F_P for alt_bn128 (P % 4 == 3)."""
+    return pow(x, (ALT_BN128_P + 1) // 4, ALT_BN128_P)
+
+
+def _alt_bn128_add(x1: int, y1: int, x2: int, y2: int) -> tuple[int, int]:
+    """Affine point addition on alt_bn128 (E: y^2 = x^3 + 3 over F_P).
+    Equivalent to EVM ecAdd precompile at address(6).
+    """
+    p = ALT_BN128_P
+    if x1 == 0 and y1 == 0:
+        return x2, y2
+    if x2 == 0 and y2 == 0:
+        return x1, y1
+    if x1 == x2:
+        if (y1 + y2) % p == 0:
+            return 0, 0
+        slope = (3 * x1 * x1) * pow(2 * y1, p - 2, p) % p
+    else:
+        slope = (y2 - y1) * pow(x2 - x1, p - 2, p) % p
+    x3 = (slope * slope - x1 - x2) % p
+    y3 = (slope * (x1 - x3) - y1) % p
+    return x3, y3
+
+
 def get_collection_id(parent_collection_id: str, condition_id: str, index_set: int) -> str:
-    """Compute collectionId = keccak256(abi.encodePacked(parentCollectionId, conditionId, indexSet)).
-    Source: CTHelpers.sol getCollectionId (gnosis/conditional-tokens-contracts).
+    """Construct an outcome collection ID from a parent collection and an outcome collection.
+    Canonical port of CTHelpers.sol:392-424 (gnosis/conditional-tokens-contracts).
     """
     from eth_utils import keccak
-    parent_bytes = bytes.fromhex(parent_collection_id.lower().replace("0x", "").zfill(64))
+    p = ALT_BN128_P
+    b = ALT_BN128_B
+
     cond_bytes = bytes.fromhex(condition_id.lower().replace("0x", "").zfill(64))
     idx_bytes = int(index_set).to_bytes(32, byteorder="big")
-    return "0x" + keccak(parent_bytes + cond_bytes + idx_bytes).hex()
+    raw_hash = keccak(cond_bytes + idx_bytes)
+    x1 = int.from_bytes(raw_hash, byteorder="big")
+    odd = (x1 >> 255) != 0
+
+    while True:
+        x1 = (x1 + 1) % p
+        yy = (pow(x1, 3, p) + b) % p
+        y1 = _alt_bn128_sqrt(yy)
+        if (y1 * y1) % p == yy:
+            break
+
+    if (odd and y1 % 2 == 0) or (not odd and y1 % 2 == 1):
+        y1 = p - y1
+
+    x2 = int(parent_collection_id, 16) if parent_collection_id else 0
+    if x2 != 0:
+        odd_parent = (x2 >> 254) != 0
+        x2 = x2 & ((1 << 254) - 1)
+        yy_parent = (pow(x2, 3, p) + b) % p
+        y2 = _alt_bn128_sqrt(yy_parent)
+        if (odd_parent and y2 % 2 == 0) or (not odd_parent and y2 % 2 == 1):
+            y2 = p - y2
+        if (y2 * y2) % p != yy_parent:
+            raise ValueError("invalid parent collection ID")
+        x1, y1 = _alt_bn128_add(x1, y1, x2, y2)
+
+    if y1 % 2 == 1:
+        x1 ^= 1 << 254
+
+    return "0x" + hex(x1)[2:].zfill(64)
+
 
 
 def get_position_id(collateral_token: str, collection_id: str) -> str:

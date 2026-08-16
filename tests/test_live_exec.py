@@ -791,3 +791,29 @@ def test_log_order_write_failure_aborts_without_submitting(tmp_path):
     assert not any("submit" in u for u in urls_called)
 
 
+def test_derived_position_ids_match_canonical_cthelpers():
+    """Round-trip test verifying get_collection_id and get_position_id against real Polymarket CLOB token IDs.
+
+    Provenance:
+      Fetched from live Gamma API (https://gamma-api.polymarket.com/markets)
+      Market: 'Xi Jinping out before 2027?'
+      conditionId: '0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7'
+      clobTokenIds:
+        indexSet 1 (Yes): '32338220190071351435772801779725302244575775216413325951443816017994629993401'
+        indexSet 2 (No):  '25659310674993675562345759665114759892400026242514633218387667107987341231962'
+    """
+    cond_id = "0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7"
+    expected_token_id_1 = "32338220190071351435772801779725302244575775216413325951443816017994629993401"
+    expected_token_id_2 = "25659310674993675562345759665114759892400026242514633218387667107987341231962"
+
+    collection_id_1 = le.get_collection_id(le.ZERO_BYTES32, cond_id, 1)
+    pos_id_1 = le.get_position_id(le.USDC_E_CONTRACT, collection_id_1)
+
+    collection_id_2 = le.get_collection_id(le.ZERO_BYTES32, cond_id, 2)
+    pos_id_2 = le.get_position_id(le.USDC_E_CONTRACT, collection_id_2)
+
+    assert pos_id_1 == expected_token_id_1
+    assert pos_id_2 == expected_token_id_2
+
+
+
