@@ -3189,3 +3189,36 @@ refuses: sizing an exit against a position a dropped leg partly offsets is an ov
 
 Five new tests, including the reduction in isolation and an end-to-end overtaking-light-leg case.
 Suite **819 passed**.
+
+#### Addendum — the sign, and comparing two different populations
+
+The previous round made `_naked_after` return a signed difference and then ignored the sign: both
+paths still treated `naked <= SIZE_EPS` as "nothing left to do". With the heavy leg at 10 and the
+light leg at 12, the difference is -2 — the position is still one-sided, just on the other token —
+and the exit reported `route_to_merge` while the completion reported `balanced`. The regression test
+written that round asserted the wrong answer, which is how a fix for a lying result shipped with the
+lie relocated rather than removed.
+
+The sign now decides: zero is closed, positive means the original heavy token is naked, negative means
+the original *light* token is. The negative case refuses and names the token and the size, because this
+command was invoked for one leg and must not quietly sell the other.
+
+Second, the post-cancel cap still could not see a live heavy fill. `complete_pair` cancels the heavy
+leg's working orders now, but only the light orders were re-read from the venue, and `fill_cost_after`
+came from the registry — which lags by a poll cycle. A heavy order filling while its own cancel was in
+flight was therefore invisible to the very check meant to catch it. Both legs are re-read now, and
+when the venue reports heavy size the registry has not priced, the completion refuses: a matched-size
+read carries no execution price, and the cap is a statement about price. Refusing beats crossing
+against an average we cannot compute.
+
+Fixing that surfaced a third defect in the fix itself. `_venue_matched` sums only the *working* orders,
+while the registry's leg figure covers every order on that token, so `max(leg_total, working_sum)`
+compared two different populations — the same "two aggregates that do not mean the same thing" mistake
+as the leg-ranking bug one round earlier. The comparison is now per order: for each cancelled order,
+the venue's matched size minus what the registry recorded for that same order, summed. The venue
+figures are extras that add to the leg totals rather than competing with them.
+
+Three tests changed or added, including one where only the venue moves and the registry is left
+untouched — the actual live race, which a test that writes to the registry does not exercise.
+
+Suite **821 passed**.

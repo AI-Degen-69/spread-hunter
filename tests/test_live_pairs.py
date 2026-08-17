@@ -899,12 +899,14 @@ def test_exit_survives_the_light_leg_overtaking_the_heavy_one(
             return out
 
     client = OvertakingClient(best_ask=0.40)
-    result = lp.exit_naked_leg(client, registry, pair_id,
-                               max_pair_cost=MAX_PAIR_COST, live=True)
 
-    # UP 10 against DOWN 12: the UP leg is fully covered, so there is nothing
-    # naked on the token this exit owns, and no sell may go out.
-    assert result["action"] == "route_to_merge"
+    # UP 10 against DOWN 12 is NOT a closed pair -- two DOWN shares are naked.
+    # Reporting route_to_merge here would tell the operator to merge 10 pairs
+    # and walk away from an open position on the other token.
+    with pytest.raises(lp.PairExitRefused, match="changed token"):
+        lp.exit_naked_leg(client, registry, pair_id,
+                          max_pair_cost=MAX_PAIR_COST, live=True)
+
     assert not any(c.startswith("sell:") for c in client.calls)
 
 
@@ -914,13 +916,23 @@ def test_naked_after_keys_on_tokens_not_on_rank():
         TOK_UP: {"token_id": TOK_UP, "matched": 10.0, "notional": 6.0},
         TOK_DN: {"token_id": TOK_DN, "matched": 12.0, "notional": 3.6},
     }}
-    naked, fill_cost = lp._naked_after(after, TOK_UP, TOK_DN, venue_light_matched=12.0)
+    naked, fill_cost, unpriced = lp._naked_after(
+        after, TOK_UP, TOK_DN, venue_light_extra=0.0)
+    # Signed: negative means the ORIGINAL LIGHT token is the naked one.
     assert naked == pytest.approx(-2.0)
     assert fill_cost == pytest.approx(0.60)
+    assert unpriced == pytest.approx(0.0)
 
     # And with the roles as originally ranked, the arithmetic is unchanged.
-    naked2, _ = lp._naked_after(after, TOK_DN, TOK_UP, venue_light_matched=10.0)
+    naked2, _, _ = lp._naked_after(after, TOK_DN, TOK_UP, venue_light_extra=0.0)
     assert naked2 == pytest.approx(2.0)
+
+    # Venue-only heavy size is reported as unpriced: we can see the shares but
+    # not what they cost, so nothing that needs an average may use them.
+    naked3, _, unpriced3 = lp._naked_after(
+        after, TOK_UP, TOK_DN, venue_light_extra=0.0, venue_heavy_extra=3.0)
+    assert naked3 == pytest.approx(1.0)   # (10 + 3) - 12
+    assert unpriced3 == pytest.approx(3.0)
 
 
 def test_completion_cancels_the_working_heavy_leg_too(registry: OrderRegistry):
@@ -985,3 +997,50 @@ def test_a_pair_spanning_three_tokens_refuses(registry: OrderRegistry):
 
     with pytest.raises(lp.PairExitRefused, match="token ids"):
         lp.load_pair(registry, pair_id)
+
+
+def test_completion_refuses_when_a_heavy_fill_is_visible_only_at_the_venue(
+    registry: OrderRegistry,
+):
+    """A matched-size read carries no execution price, and the cap is about price.
+
+    Only the venue moves here; the registry is untouched, which is the actual
+    live race. Simulating it by writing to the registry would test the wrong
+    thing, because the registry is exactly the source that lags.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    now = 1_000_500
+    extra = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-heavy-2", condition_id=COND,
+        token_id=TOK_UP, side="BUY", price=0.60, original_size=5.0,
+        status="partial", posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(extra)
+
+    client = FakeClient(best_ask=0.30, venue_matched={"venue-heavy-2": 5.0})
+
+    with pytest.raises(lp.PairCompletionRefused, match="has none yet"):
+        lp.complete_pair(client, registry, pair_id,
+                         max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_completion_refuses_when_the_light_leg_overtakes(registry: OrderRegistry):
+    """Stage 4 mirror of the exit case: negative naked is not `balanced`."""
+    pair_id = _overfilling_light_pair(registry)
+
+    class OvertakingClient(FakeClient):
+        def cancel_order(self, payload):
+            out = super().cancel_order(payload)
+            self.venue_matched["venue-light"] = 12.0
+            return out
+
+    client = OvertakingClient(best_ask=0.30)
+
+    with pytest.raises(lp.PairCompletionRefused, match="exceeds"):
+        lp.complete_pair(client, registry, pair_id,
+                         max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("buy:") for c in client.calls)

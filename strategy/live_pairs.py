@@ -242,6 +242,23 @@ def _cancel_orders(client, orders: list, leg_name: str,
     return cancelled
 
 
+def _venue_extra(client, registry: OrderRegistry, orders: list,
+                 refusal: type = PairExitRefused) -> float:
+    """Matched size the venue reports beyond what the registry has recorded.
+
+    Compared per order, never leg total against leg total: `orders` is only the
+    working subset, while the registry's leg figure includes every order on that
+    token. Subtracting one from the other compares two different populations and
+    silently understates or overstates the difference.
+    """
+    total_extra = 0.0
+    for o in orders:
+        venue = _venue_matched(client, [o], refusal=refusal)
+        recorded = registry.get_size_matched(o.id)
+        total_extra += max(0.0, venue - recorded)
+    return total_extra
+
+
 def _venue_matched(client, orders: list, refusal: type = PairExitRefused) -> float:
     """Total matched size for these orders, read from the venue right now.
 
@@ -421,22 +438,36 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]]) ->
 
 
 def _naked_after(after: dict, heavy_token: str, light_token: Optional[str],
-                 venue_light_matched: float) -> tuple[float, float]:
-    """Recompute (naked, heavy fill cost) for two FIXED tokens.
+                 venue_light_extra: float,
+                 venue_heavy_extra: float = 0.0) -> tuple[float, float, float]:
+    """Recompute (signed naked, heavy fill cost, unpriced heavy size) for two
+    FIXED tokens.
 
     Never re-derive heavy and light from the post-action ranking. If the light
     leg filled past the heavy one, `after["heavy"]` is the other token, and
     comparing it against a venue reading taken on the original light orders
     mixes two different positions into one subtraction.
+
+    The result is SIGNED and callers must respect the sign. Positive means the
+    original heavy token is naked; negative means the original *light* token is,
+    by that many shares. Treating a negative as zero would report a pair as
+    complete while the other side is exposed.
+
+    `unpriced` is heavy size the venue reports and the registry does not. We
+    know it exists but not what it cost, so any decision needing an average
+    heavy price is unsafe while it is non-zero.
     """
     legs = after["legs"]
     heavy_leg = legs.get(heavy_token, {"matched": 0.0, "notional": 0.0})
     light_registry = legs.get(light_token, {"matched": 0.0})["matched"] if light_token else 0.0
 
-    heavy_matched = heavy_leg["matched"]
-    light_matched = max(light_registry, venue_light_matched)
-    fill_cost = (heavy_leg["notional"] / heavy_matched) if heavy_matched > 0 else 0.0
-    return heavy_matched - light_matched, fill_cost
+    heavy_registry = heavy_leg["matched"]
+    # The venue figures are *extras* over the registry, computed per order, so
+    # they add rather than compete with the leg totals.
+    heavy_matched = heavy_registry + venue_heavy_extra
+    light_matched = light_registry + venue_light_extra
+    fill_cost = (heavy_leg["notional"] / heavy_registry) if heavy_registry > 0 else 0.0
+    return heavy_matched - light_matched, fill_cost, venue_heavy_extra
 
 
 def exit_naked_leg(
@@ -512,10 +543,24 @@ def exit_naked_leg(
     #    leg during the cancel is invisible there until the next cycle. Reading
     #    the registry here would confirm what we already believed and sell into
     #    the exact race this step exists to catch.
-    venue_light_matched = _venue_matched(client, light_working)
+    venue_light_matched = _venue_extra(client, registry, light_working)
+    venue_heavy_matched = _venue_extra(client, registry, heavy_working)
     after = load_pair(registry, pair_id)
     heavy_token = pair["heavy"]["token_id"]
-    naked, _ = _naked_after(after, heavy_token, light_token, venue_light_matched)
+    naked, _, _ = _naked_after(after, heavy_token, light_token,
+                               venue_light_matched, venue_heavy_matched)
+
+    if naked < -SIZE_EPS:
+        # The light leg overtook the heavy one during the cancel. The position
+        # is still one-sided, just on the other token -- so this is neither
+        # mergeable nor closed, and selling the heavy token would deepen it.
+        raise PairExitRefused(
+            f"The light leg {light_token} now exceeds {heavy_token} by "
+            f"{-naked:.4f} shares, so the naked side has changed token. This "
+            f"exit was invoked for {heavy_token} and will not sell the other "
+            f"leg on its own. Re-run the exit against the pair once the "
+            f"registry reflects the fill, or close {light_token} deliberately."
+        )
 
     if naked <= SIZE_EPS:
         return {
@@ -688,12 +733,34 @@ def complete_pair(
     # Then re-read from the venue, for the same reason the exit does: the cancel
     # can race a match, and the registry will not know about it until the next
     # poll cycle. If the leg already filled, crossing now would overshoot.
-    venue_light_matched = _venue_matched(client, light_working,
-                                         refusal=PairCompletionRefused)
+    venue_light_matched = _venue_extra(client, registry, light_working,
+                                       refusal=PairCompletionRefused)
+    venue_heavy_matched = _venue_extra(client, registry, heavy_working,
+                                       refusal=PairCompletionRefused)
     after = load_pair(registry, pair_id)
     heavy_token = pair["heavy"]["token_id"]
-    naked, fill_cost_after = _naked_after(after, heavy_token, light_token,
-                                          venue_light_matched)
+    naked, fill_cost_after, unpriced_heavy = _naked_after(
+        after, heavy_token, light_token, venue_light_matched,
+        venue_heavy_matched,
+    )
+
+    if naked < -SIZE_EPS:
+        raise PairCompletionRefused(
+            f"The light leg {light_token} now exceeds {heavy_token} by "
+            f"{-naked:.4f} shares. There is nothing to complete on this side; "
+            f"crossing again would deepen the imbalance."
+        )
+
+    if unpriced_heavy > SIZE_EPS:
+        # We can see the shares but not what they cost: a matched-size read
+        # carries no execution price, and the cap is a statement about price.
+        # Refusing beats crossing against an average we cannot compute.
+        raise PairCompletionRefused(
+            f"The venue reports {unpriced_heavy:.4f} more shares of "
+            f"{heavy_token} than the registry has priced. The pair-cost cap "
+            f"needs an average heavy price and that fill has none yet. Let the "
+            f"poll loop reconcile it, then re-run."
+        )
 
     # Re-check the cap against the heavy cost as it stands now. The figure the
     # guard above approved was taken before the cancel, and a heavy order that
