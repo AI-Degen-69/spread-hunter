@@ -1680,7 +1680,12 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
     # `naked` is derived from the registry, and registry fills only arrive
     # through the poll loop, so an immediate second run cannot see the first
     # sell and would happily send it again.
-    condition_id = load_pair(registry, pair_id)["condition_id"]
+    # load_pair raises when the id is unknown -- an operator typo is the most
+    # likely cause, and a traceback is the wrong way to say "no such pair".
+    try:
+        condition_id = load_pair(registry, pair_id)["condition_id"]
+    except PairExitRefused as exc:
+        raise SystemExit(f"EXIT REFUSED: {exc}") from exc
     if live:
         _check_idempotency_guard(condition_id, force=force)
 
@@ -1765,12 +1770,19 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
     """
     from strategy.live_pairs import (
         complete_pair, fetch_positions, load_pair, PairCompletionRefused,
+        PairExitRefused,
     )
     from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
     from strategy import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
-    pair = load_pair(registry, pair_id)
+    # load_pair signals an unknown pair with the exit path's exception, which
+    # this command does not otherwise catch. Without this an operator typo
+    # escapes as a traceback rather than the refusal message.
+    try:
+        pair = load_pair(registry, pair_id)
+    except PairExitRefused as exc:
+        raise SystemExit(f"COMPLETION REFUSED: {exc}") from exc
     condition_id = pair["condition_id"]
 
     # Same pre-flight discipline as every other live write path here. This

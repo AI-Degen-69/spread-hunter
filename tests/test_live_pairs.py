@@ -820,3 +820,25 @@ def test_complete_pair_cmd_does_not_hold_the_condition_when_nothing_crossed(
                                 skip_positions_check=True)
 
     live_exec._check_idempotency_guard(COND, force=False)
+
+
+def test_an_unknown_pair_id_refuses_cleanly_on_both_commands(tmp_path, monkeypatch):
+    """A typo must produce the refusal message, not a traceback.
+
+    Found by running the commands rather than by a test: `load_pair` raises
+    before either command's try block, and the completion path does not
+    otherwise catch the exit path's exception type.
+    """
+    from strategy import live_exec
+
+    monkeypatch.setattr(live_exec, "RUN", tmp_path)
+    monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
+    db = tmp_path / "empty.db"
+
+    with pytest.raises(SystemExit, match="EXIT REFUSED"):
+        live_exec.exit_pair("no-such-pair", live=False, db_path=db,
+                            skip_positions_check=True)
+
+    with pytest.raises(SystemExit, match="COMPLETION REFUSED"):
+        live_exec.complete_pair_cmd("no-such-pair", live=False, db_path=db,
+                                    skip_positions_check=True)

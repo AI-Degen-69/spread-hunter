@@ -3121,3 +3121,31 @@ point will report full health on a program that cannot start. The two new tests 
 `live_exec.exit_pair` end to end.
 
 Suite **811 passed**.
+
+#### Addendum — round five: what running the commands found that the tests did not
+
+After the config `ImportError` was fixed, I ran both commands without `--live` against a pair id that
+does not exist — the cheapest possible smoke test, and one that should have existed before either
+command was called finished.
+
+It confirmed the fix: both now reach the registry read, which is the first real work either of them
+does. It also found two things forty-one tests had not.
+
+`load_pair` raises when the id is unknown, and it is called *before* either command's `try` block, so
+an operator typo produced a traceback instead of the refusal message. On the completion path it was
+worse: `load_pair` signals with `PairExitRefused`, which `complete_pair_cmd` does not catch at all —
+the same mismatch found one round earlier in the helpers, surviving in a different spot because the
+fix was applied where the review pointed rather than everywhere the pattern occurred.
+
+Both now exit with `EXIT REFUSED` / `COMPLETION REFUSED` and the reason.
+
+The registry holds no pairs, so nothing deeper than the argument path could be exercised. A real
+dry run against a live `pair_id` remains untested, and Stage 4.5 is the first time these commands
+will meet one.
+
+Suite **814 passed**.
+
+#### Decision
+
+**LIVE** — with the caveat recorded above: every path here is verified against fixtures and an
+argument-level smoke run, never against a real pair.
