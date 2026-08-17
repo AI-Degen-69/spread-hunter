@@ -1654,7 +1654,7 @@ def poll(
 
 
 def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
-              skip_positions_check: bool = False) -> None:
+              skip_positions_check: bool = False, force: bool = False) -> None:
     """Stage 3 — close a one-sided pair: cancel the resting leg, sell the filled one.
 
     The Data API positions read is a pre-flight, not decoration: it is the only
@@ -1665,13 +1665,24 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
     Data API is down and the operator has decided to act anyway, and it says so
     on the record.
     """
-    from strategy.live_pairs import exit_naked_leg, fetch_positions, PairExitRefused
+    from strategy.live_pairs import (
+        exit_naked_leg, fetch_positions, load_pair, PairExitRefused,
+    )
     from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
     from strategy.config import Config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     client = _client()
     funder = os.environ.get("POLY_FUNDER")
+
+    # Same discipline as merge, redeem and complete: this sends a real market
+    # SELL, so a repeat invocation must be refused rather than sell twice.
+    # `naked` is derived from the registry, and registry fills only arrive
+    # through the poll loop, so an immediate second run cannot see the first
+    # sell and would happily send it again.
+    condition_id = load_pair(registry, pair_id)["condition_id"]
+    if live:
+        _check_idempotency_guard(condition_id, force=force)
 
     venue_positions = None
     if not skip_positions_check:
@@ -1691,6 +1702,15 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
                 f"Pass --skip-positions-check to act without the cross-check."
             ) from exc
 
+    entry_id = None
+    if live:
+        entry_id = _log_order({
+            "kind": "exit",
+            "pair_id": pair_id,
+            "condition_id": condition_id,
+            "status": "pending",
+        })
+
     try:
         result = exit_naked_leg(
             client, registry, pair_id,
@@ -1699,7 +1719,22 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
             venue_positions=venue_positions,
         )
     except PairExitRefused as exc:
+        # A refusal sent nothing, so the row closes rather than blocking later
+        # attempts. Only genuine uncertainty warrants `interrupted`.
+        if entry_id:
+            _update_order_log(entry_id, {"status": "cancelled", "error": str(exc)})
         raise SystemExit(f"EXIT REFUSED: {exc}") from exc
+    except BaseException as exc:
+        if entry_id:
+            _update_order_log(entry_id, {"status": "interrupted", "error": repr(exc)})
+        raise
+
+    if entry_id:
+        _update_order_log(entry_id, {
+            "status": "submitted",
+            "action": result.get("action"),
+            "size": result.get("size"),
+        })
 
     print(json.dumps(result, indent=2, default=str))
     if result["action"] == "route_to_merge":
@@ -1869,6 +1904,8 @@ def main() -> None:
     ex.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     ex.add_argument("--skip-positions-check", action="store_true",
                     help="Act without the Data API registry/venue cross-check. Only when the endpoint is down.")
+    ex.add_argument("--force", action="store_true",
+                    help="Bypass idempotency guard against prior pending/submitted/interrupted orders.")
     ex.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                     help="actually send.")
     cp = sub.add_parser("complete", help="Stage 4: cross the book to complete a one-sided pair.")
@@ -1928,7 +1965,7 @@ def main() -> None:
         poll(interval=a.interval, once=a.once, db_path=a.db)
     elif a.cmd == "exit":
         exit_pair(a.pair_id, is_live, db_path=a.db,
-                  skip_positions_check=a.skip_positions_check)
+                  skip_positions_check=a.skip_positions_check, force=a.force)
     elif a.cmd == "complete":
         complete_pair_cmd(a.pair_id, is_live, db_path=a.db,
                           skip_positions_check=a.skip_positions_check,

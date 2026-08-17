@@ -645,3 +645,62 @@ def test_a_token_absent_from_the_positions_read_refuses(registry: OrderRegistry)
                           venue_positions={"some-other-token": 5.0})
 
     assert not any(c.startswith("cancel:") for c in client.calls)
+
+
+# ---------------------------------------------------------------------------
+# Review round 3
+# ---------------------------------------------------------------------------
+
+
+def test_tick_floor_does_not_drop_a_whole_tick_on_binary_float_error():
+    """`0.29 / 0.01` is 28.999999999999996 in binary floating point.
+
+    A bare int() floors an already-aligned price one whole tick lower, which
+    moves the sell bound below what we chose and lets depth_at_or_above count an
+    extra level. Safe in direction, wrong in value.
+    """
+    assert lp._floor_to_tick(0.29, 0.01) == pytest.approx(0.29)
+    assert lp._floor_to_tick(0.53, 0.01) == pytest.approx(0.53)
+    assert lp._floor_to_tick(0.535, 0.01) == pytest.approx(0.53)
+    assert lp._floor_to_tick(0.07, 0.001) == pytest.approx(0.07)
+
+
+def test_completion_refusals_use_the_completion_exception(registry: OrderRegistry):
+    """A failed cancel on the completion path must not raise the exit's type.
+
+    `complete_pair_cmd` catches only PairCompletionRefused. An escaping
+    PairExitRefused would fall to its generic handler, mark the audit row
+    `interrupted` although nothing was sent, and block every later completion on
+    that condition until --force.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, cancel_ok=False)
+
+    with pytest.raises(lp.PairCompletionRefused, match="Cancel"):
+        lp.complete_pair(client, registry, pair_id,
+                         max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_completion_venue_read_failure_uses_the_completion_exception(
+    registry: OrderRegistry,
+):
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, get_order_ok=False)
+
+    with pytest.raises(lp.PairCompletionRefused, match="venue state"):
+        lp.complete_pair(client, registry, pair_id,
+                         max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_exit_refusals_still_use_the_exit_exception(registry: OrderRegistry):
+    """The default is unchanged; only the completion path overrides it."""
+    pair_id = _one_sided_pair(registry)
+    client = FakeClient(best_ask=0.40, cancel_ok=False)
+
+    with pytest.raises(lp.PairExitRefused):
+        lp.exit_naked_leg(client, registry, pair_id,
+                          max_pair_cost=MAX_PAIR_COST, live=True)

@@ -217,8 +217,15 @@ def _working_orders(leg: dict) -> list:
             if o.status in WORKING_STATUSES and o.order_id]
 
 
-def _cancel_orders(client, orders: list, leg_name: str) -> list[str]:
-    """Cancel every working order on a leg, or refuse having sent nothing more."""
+def _cancel_orders(client, orders: list, leg_name: str,
+                   refusal: type = PairExitRefused) -> list[str]:
+    """Cancel every working order on a leg, or refuse having sent nothing more.
+
+    `refusal` is parameterised because the completion path calls this too, and a
+    caller that catches only PairCompletionRefused would otherwise see this
+    refusal escape as an unexpected exception -- marking its audit row
+    `interrupted` and blocking every later completion on that condition.
+    """
     from py_clob_client_v2.clob_types import OrderPayload
 
     cancelled: list[str] = []
@@ -226,7 +233,7 @@ def _cancel_orders(client, orders: list, leg_name: str) -> list[str]:
         try:
             client.cancel_order(OrderPayload(orderID=o.order_id))
         except Exception as exc:
-            raise PairExitRefused(
+            raise refusal(
                 f"Cancel of {leg_name} order {o.order_id} failed ({exc!r}). "
                 f"Aborting -- acting while that order is still live risks "
                 f"refilling the position we are closing."
@@ -235,7 +242,7 @@ def _cancel_orders(client, orders: list, leg_name: str) -> list[str]:
     return cancelled
 
 
-def _venue_matched(client, orders: list) -> float:
+def _venue_matched(client, orders: list, refusal: type = PairExitRefused) -> float:
     """Total matched size for these orders, read from the venue right now.
 
     The registry cannot answer this question. Fills reach `run/live.db` only
@@ -254,14 +261,14 @@ def _venue_matched(client, orders: list) -> float:
         try:
             raw = client.get_order(o.order_id)
         except Exception as exc:
-            raise PairExitRefused(
+            raise refusal(
                 f"Could not read venue state for {o.order_id} ({exc!r}) after "
                 f"cancelling. Refusing to sell -- if that leg filled in the "
                 f"meantime the pair is complete and worth $1.00 at merge."
             ) from exc
 
         if raw is None:
-            raise PairExitRefused(
+            raise refusal(
                 f"Venue returned nothing for order {o.order_id} after the "
                 f"cancel. Refusing to sell on an unknown state."
             )
@@ -275,14 +282,14 @@ def _venue_matched(client, orders: list) -> float:
                 matched = getattr(raw, key)
                 break
         if matched is None:
-            raise PairExitRefused(
+            raise refusal(
                 f"Venue response for {o.order_id} carries no matched-size "
                 f"field. Refusing to sell rather than assuming it is zero."
             )
         try:
             total += float(matched)
         except (TypeError, ValueError) as exc:
-            raise PairExitRefused(
+            raise refusal(
                 f"Venue matched size for {o.order_id} is not numeric "
                 f"({matched!r}). Refusing to sell on an unreadable state."
             ) from exc
@@ -299,8 +306,15 @@ def _tick_size(book) -> float:
 
 
 def _floor_to_tick(price: float, tick: float) -> float:
-    """Round down onto the venue's grid. Off-grid prices are rejected orders."""
-    steps = int(price / tick)
+    """Round down onto the venue's grid. Off-grid prices are rejected orders.
+
+    The nudge before truncating is not cosmetic: in binary floating point
+    `0.29 / 0.01` is 28.999999999999996, so a bare `int()` floors an
+    already-aligned price a whole tick lower. The sell bound would sit a tick
+    below what we chose and `depth_at_or_above` would count one extra level --
+    safe in direction, wrong in value.
+    """
+    steps = int(round(price / tick, 9))
     return round(steps * tick, 10)
 
 
@@ -629,12 +643,14 @@ def complete_pair(
     # naked exposure on the opposite side, created by the path whose entire
     # purpose is to remove naked exposure.
     light_working = _working_orders(pair["light"])
-    cancelled = _cancel_orders(client, light_working, "resting light leg")
+    cancelled = _cancel_orders(client, light_working, "resting light leg",
+                               refusal=PairCompletionRefused)
 
     # Then re-read from the venue, for the same reason the exit does: the cancel
     # can race a match, and the registry will not know about it until the next
     # poll cycle. If the leg already filled, crossing now would overshoot.
-    venue_light_matched = _venue_matched(client, light_working)
+    venue_light_matched = _venue_matched(client, light_working,
+                                         refusal=PairCompletionRefused)
     after = load_pair(registry, pair_id)
     light_matched = max(after["light"]["matched"], venue_light_matched)
     naked = after["heavy"]["matched"] - light_matched
