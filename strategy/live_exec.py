@@ -336,9 +336,25 @@ def quote(condition_id: str, price: float, size: float, live: bool,
     from py_clob_client_v2.order_builder.constants import BUY
     from strategy.markets import fetch_pinned_market
 
+    # fetch_pinned_market returns None for two unrelated reasons: the market
+    # does not exist, or it exists and pays no rewards. Reporting both as "not
+    # found" sends the operator hunting for a typo in a condition_id that is
+    # perfectly correct.
     m = fetch_pinned_market(condition_id)
     if m is None:
-        raise SystemExit(f"market {condition_id[:12]} not found")
+        unfunded = fetch_pinned_market(condition_id, require_rewards=False)
+        if unfunded is not None:
+            raise SystemExit(
+                f"market {unfunded.market_slug} exists but pays no maker "
+                f"rewards (rewards.rates is empty). Quoting it earns nothing "
+                f"for resting, which is this bot's only income. Pick a "
+                f"reward-funded market, or quote it deliberately through the "
+                f"fleet path that passes require_rewards=False."
+            )
+        raise SystemExit(
+            f"no market at condition_id {condition_id[:12]}... on the CLOB. "
+            f"Check the id."
+        )
 
     dn_price = round(1.0 - price, 4)
     cost = price * size + dn_price * size

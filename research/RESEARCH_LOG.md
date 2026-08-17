@@ -3272,3 +3272,48 @@ Suite **824 passed**.
 
 **OPEN** — Stage 4.5 is not ready. This closes the largest gap, but the gate also requires Stages 3
 and 4 approved, and their PR is unmerged. No path here has met a real pair.
+
+---
+
+### 2026-08-17 — The Stage 4.5 dry run: five steps against a real market, one more lying diagnostic
+
+#### Question
+
+Stages 2, 3 and 4 are merged and 824 tests pass, all against fixtures. Does the chain hold against a
+live venue with nothing sent?
+
+#### Method
+
+Five steps on a real reward-funded market (`xi-jinping-out-before-2027`), no `--live` anywhere:
+`quote` dry, a registry check, `poll --once` against the venue, `pairs`, and `exit`/`complete` on an
+unknown pair id.
+
+#### Result
+
+1. **`quote` dry** printed the market, tick 0.001, both legs at 0.480 / 0.520 and $5.00 committed
+   against a `MAX_ORDER_USD` of $25, then sent nothing. The two token ids it derived are the same
+   pair the `getCollectionId` regression test pins for this condition — an independent confirmation
+   that the alt_bn128 port is right for a market we did not choose for that purpose.
+2. **The registry stayed empty**, which is correct: the rows are written inside the `live` branch, so
+   a dry run leaves no trace to clean up.
+3. **`poll --once`** authenticated, reconciled and exited 0 with `orders=0 ... errors=0`, writing
+   `START` and `EXIT` to the event log. The familiar `400 "Could not create api key"` line appeared
+   and is benign — the SDK swallows the create failure and derives instead, as recorded on 2026-08-16.
+4. **`pairs`** reported no pairs, which is the honest answer for an empty registry.
+5. **`exit` and `complete`** on an unknown id returned `EXIT REFUSED` and `COMPLETION REFUSED` with
+   the reason, no traceback.
+
+**The one defect the dry run found was a diagnostic that lies.** The first market tried was not
+reward-funded, and `quote` reported `market 0x7d0aaf81bb not found`. The id was perfectly correct;
+`fetch_pinned_market` returns `None` both when a market does not exist and when it exists but pays no
+maker rewards, and the command collapsed the two. That sends an operator hunting for a typo that is
+not there — the same shape as reporting an unread balance as `0.00`. The two cases are now separated:
+an unfunded market is named and the reason given, and a genuinely absent id says so.
+
+Suite **825 passed**.
+
+#### Decision
+
+**LIVE** for the chain as far as it can be exercised without an order, and **OPEN** for Stage 4.5
+itself: every step above is a read. Nothing here has yet met a real fill, which is precisely what 4.5
+exists to produce.
