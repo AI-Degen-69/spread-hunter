@@ -1181,13 +1181,23 @@ def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
         return None if require_rewards else Market()
 
     monkeypatch.setattr("strategy.markets.fetch_pinned_market", unfunded)
-    with pytest.raises(SystemExit, match="pays no maker rewards"):
+    with pytest.raises(SystemExit, match="pays no maker rewards") as exc_info:
         live_exec.quote(COND, price=0.48, size=5.0, live=False,
                         db_path=tmp_path / "live.db")
+    # Maker-rewards failure must include market slug, rewards.rates explanation,
+    # and resting-income explanation.
+    msg = str(exc_info.value)
+    assert "some-unfunded-market" in msg  # market slug
+    assert "rewards.rates" in msg  # rewards explanation
+    assert "resting" in msg  # resting-income explanation
 
     # Genuinely absent: None either way.
     monkeypatch.setattr("strategy.markets.fetch_pinned_market",
                         lambda cid, require_rewards=True: None)
-    with pytest.raises(SystemExit, match="no market at condition_id"):
+    with pytest.raises(SystemExit, match="no market at condition_id") as exc_info:
         live_exec.quote(COND, price=0.48, size=5.0, live=False,
                         db_path=tmp_path / "live.db")
+    # Absent-market failure must include condition ID and CLOB wording.
+    msg = str(exc_info.value)
+    assert COND[:12] in msg  # condition ID
+    assert "CLOB" in msg  # CLOB wording
