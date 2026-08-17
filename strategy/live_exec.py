@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import contextlib
 import os
 import sys
 import threading
@@ -275,7 +276,61 @@ def balance(funder: str | None) -> None:
               "the wrong address -- try the other candidate before trading.")
 
 
-def quote(condition_id: str, price: float, size: float, live: bool) -> None:
+def pairs(db_path: str | Path | None = None) -> None:
+    """List every pair the registry knows, with what is actually held.
+
+    Stage 3 and Stage 4 both take a pair_id, and without this the only way to
+    find one is to open live.db by hand -- which is exactly the sort of step an
+    operator skips at the moment it matters.
+    """
+    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH, get_connection
+    from strategy.live_pairs import load_pair, PairExitRefused
+
+    db = Path(db_path) if db_path else DEFAULT_DB_PATH
+    registry = OrderRegistry(db_path=db)
+    with contextlib.closing(get_connection(db)) as conn:
+        rows = conn.execute(
+            "SELECT pair_id, MIN(posted_ts) AS first_ts FROM orders "
+            "WHERE pair_id IS NOT NULL GROUP BY pair_id ORDER BY first_ts"
+        ).fetchall()
+
+    if not rows:
+        print(f"no pairs in {db}")
+        return
+
+    print(f"{'pair_id':<20} {'condition':<14} {'naked':>9}  legs")
+    for r in rows:
+        pid = r["pair_id"]
+        try:
+            pair = load_pair(registry, pid)
+        except PairExitRefused as exc:
+            print(f"{pid:<20} {'?':<14} {'?':>9}  UNREADABLE: {exc}")
+            continue
+        legs = "  ".join(
+            f"{tok[:10]}..={leg['matched']:.2f}" for tok, leg in pair["legs"].items()
+        )
+        print(f"{pid:<20} {pair['condition_id'][:12]:<14} "
+              f"{pair['naked']:>9.2f}  {legs}")
+
+
+def _venue_order_id(resp) -> str | None:
+    """Pull the venue order id out of a post_order response.
+
+    Several spellings are accepted because the field name has moved across SDK
+    versions, and a missing id is reported rather than guessed: attaching the
+    wrong id would bind our row to somebody else's order.
+    """
+    if resp is None:
+        return None
+    for key in ("orderID", "orderId", "order_id", "id"):
+        value = resp.get(key) if isinstance(resp, dict) else getattr(resp, key, None)
+        if value:
+            return str(value)
+    return None
+
+
+def quote(condition_id: str, price: float, size: float, live: bool,
+          db_path: str | Path | None = None) -> None:
     """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price."""
     from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
     from py_clob_client_v2.order_builder.constants import BUY
@@ -309,15 +364,59 @@ def quote(condition_id: str, price: float, size: float, live: bool) -> None:
         raise SystemExit(f"open ${already:.2f} + ${cost:.2f} exceeds "
                          f"MAX_TOTAL_USD ${MAX_TOTAL_USD:.2f}")
 
+    # The registry is what every later stage reads. Without a row here the poll
+    # loop has nothing to reconcile, `exit` and `complete` have no pair_id to
+    # act on, and the two legs rest at the venue with real money and nothing
+    # tracking them -- the exact failure the registry exists to prevent.
+    import uuid as _uuid
+    from strategy.order_registry import (
+        OrderRegistry, OrderRecord, DEFAULT_DB_PATH,
+    )
+    from strategy import config as strategy_config
+
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    pair_id = f"pair-{_uuid.uuid4().hex[:12]}"
+    max_pair_cost = strategy_config.load().max_pair_cost
+    now_ms = int(time.time() * 1000)
+
     for tok, p, label in legs:
+        local_id = str(_uuid.uuid4())
+        # Row first, then send. A row written after a successful send would be
+        # lost to a crash in between, leaving a live order untracked; a row
+        # written before is at worst a `pending` with no venue id, which
+        # reconcile's orphan adoption is built to claim.
+        registry.create_order(OrderRecord(
+            id=local_id, order_id=None, condition_id=condition_id,
+            token_id=str(tok), side="BUY", price=p, original_size=size,
+            status="pending", posted_ts=now_ms, last_polled_ts=now_ms,
+            pair_id=pair_id, max_pair_cost_at_post=max_pair_cost,
+        ))
+
         signed = c.create_order(
             OrderArgsV2(price=p, size=size, side=BUY, token_id=tok))
         resp = c.post_order(signed, OrderType.GTC)
         _log_order({"ts": time.time(), "condition_id": condition_id,
+                    "pair_id": pair_id, "local_id": local_id,
                     "side": label, "token_id": str(tok), "price": p,
                     "size": size, "response": str(resp)[:400]})
+
+        venue_id = _venue_order_id(resp)
+        if venue_id:
+            registry.attach_venue_order_id(local_id, venue_id, status="open")
+        else:
+            # The order may well be live; we simply cannot name it. Leave the
+            # row `pending` for orphan adoption rather than guessing an id or
+            # marking a status we cannot support, and say so loudly.
+            print(f"  WARNING: no order id in the {label} response; row "
+                  f"{local_id} stays pending for reconcile to adopt.",
+                  file=sys.stderr)
         print(f"  SENT {label}: {resp}")
+
     print(f"\nlogged to {RUN / 'live_orders.json'}")
+    print(f"pair_id  {pair_id}")
+    print(f"  poll:     python -m strategy.live_exec poll --interval 5")
+    print(f"  exit:     python -m strategy.live_exec exit {pair_id}")
+    print(f"  complete: python -m strategy.live_exec complete {pair_id}")
 
 
 CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
@@ -1888,6 +1987,7 @@ def main() -> None:
     q.add_argument("condition_id")
     q.add_argument("--price", type=float, required=True)
     q.add_argument("--size", type=float, required=True)
+    q.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     q.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
     r = sub.add_parser("redeem", help="Gasless redemption of winning positions via Relayer.")
@@ -1941,6 +2041,8 @@ def main() -> None:
                     help="Bypass idempotency guard against prior pending/submitted/interrupted orders.")
     cp.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                     help="actually send.")
+    pr = sub.add_parser("pairs", help="List pair_ids in the registry with held sizes.")
+    pr.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -1953,7 +2055,7 @@ def main() -> None:
     elif a.cmd == "balance":
         balance(a.funder)
     elif a.cmd == "quote":
-        quote(a.condition_id, a.price, a.size, is_live)
+        quote(a.condition_id, a.price, a.size, is_live, db_path=a.db)
     elif a.cmd == "redeem":
         idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
         redeem(
@@ -1987,6 +2089,8 @@ def main() -> None:
         )
     elif a.cmd == "poll":
         poll(interval=a.interval, once=a.once, db_path=a.db)
+    elif a.cmd == "pairs":
+        pairs(db_path=a.db)
     elif a.cmd == "exit":
         exit_pair(a.pair_id, is_live, db_path=a.db,
                   skip_positions_check=a.skip_positions_check, force=a.force)

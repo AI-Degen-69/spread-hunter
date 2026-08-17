@@ -1044,3 +1044,115 @@ def test_completion_refuses_when_the_light_leg_overtakes(registry: OrderRegistry
                          max_pair_cost=MAX_PAIR_COST, live=True)
 
     assert not any(c.startswith("buy:") for c in client.calls)
+
+
+# ---------------------------------------------------------------------------
+# Stage 4.5 pre-flight — `quote` must be visible to everything downstream
+# ---------------------------------------------------------------------------
+
+
+def test_quote_writes_both_legs_to_the_registry_under_one_pair_id(
+    tmp_path, monkeypatch, capsys
+):
+    """Without this the poll loop has nothing to reconcile and exit/complete
+    have no pair_id, so the two legs rest at the venue with real money and
+    nothing tracking them."""
+    from strategy import live_exec
+
+    monkeypatch.setattr(live_exec, "RUN", tmp_path)
+    db = tmp_path / "live.db"
+
+    class Market:
+        market_slug = "btc-up-or-down-5m-x"
+        up_token = "tok-up-live"
+        down_token = "tok-dn-live"
+        tick_size = "0.01"
+        neg_risk = False
+
+    monkeypatch.setattr("strategy.markets.fetch_pinned_market", lambda cid: Market())
+
+    posted = []
+
+    class Client:
+        creds = object()
+
+        def create_order(self, args):
+            return {"signed": True, "token": args.token_id}
+
+        def post_order(self, signed, order_type):
+            posted.append(signed["token"])
+            return {"orderID": f"venue-{signed['token']}", "success": True}
+
+        def get_open_orders(self, *a, **k):
+            return []
+
+    monkeypatch.setattr(live_exec, "_client", lambda *a, **k: Client())
+
+    live_exec.quote(COND, price=0.48, size=5.0, live=True, db_path=db)
+
+    registry = OrderRegistry(db_path=db)
+    pair_ids = {o.pair_id for o in registry.get_active_orders()}
+    assert len(pair_ids) == 1, "both legs must share one pair_id"
+    pair_id = pair_ids.pop()
+
+    orders = registry.get_orders_by_pair(pair_id)
+    assert len(orders) == 2
+    assert {o.token_id for o in orders} == {"tok-up-live", "tok-dn-live"}
+    # The venue id came back, so each row is `open` and reconcilable by id.
+    assert all(o.order_id and o.status == "open" for o in orders)
+    # And the operator is told the id rather than having to open live.db.
+    assert pair_id in capsys.readouterr().out
+
+
+def test_quote_leaves_the_row_pending_when_the_venue_returns_no_id(
+    tmp_path, monkeypatch
+):
+    """The order may be live and simply unnamed.
+
+    Guessing an id would bind our row to somebody else's order; `pending` is
+    what reconcile's orphan adoption is built to claim.
+    """
+    from strategy import live_exec
+
+    monkeypatch.setattr(live_exec, "RUN", tmp_path)
+    db = tmp_path / "live.db"
+
+    class Market:
+        market_slug = "m"
+        up_token = "tok-up-live"
+        down_token = "tok-dn-live"
+        tick_size = "0.01"
+        neg_risk = False
+
+    monkeypatch.setattr("strategy.markets.fetch_pinned_market", lambda cid: Market())
+
+    class Client:
+        creds = object()
+
+        def create_order(self, args):
+            return {"token": args.token_id}
+
+        def post_order(self, signed, order_type):
+            return {"success": True}          # no id of any spelling
+
+        def get_open_orders(self, *a, **k):
+            return []
+
+    monkeypatch.setattr(live_exec, "_client", lambda *a, **k: Client())
+
+    live_exec.quote(COND, price=0.48, size=5.0, live=True, db_path=db)
+
+    registry = OrderRegistry(db_path=db)
+    orders = registry.get_active_orders()
+    assert len(orders) == 2
+    assert all(o.order_id is None and o.status == "pending" for o in orders)
+
+
+def test_venue_order_id_accepts_the_spellings_and_refuses_to_guess():
+    from strategy import live_exec
+
+    assert live_exec._venue_order_id({"orderID": "a"}) == "a"
+    assert live_exec._venue_order_id({"orderId": "b"}) == "b"
+    assert live_exec._venue_order_id({"order_id": "c"}) == "c"
+    assert live_exec._venue_order_id({"success": True}) is None
+    assert live_exec._venue_order_id(None) is None

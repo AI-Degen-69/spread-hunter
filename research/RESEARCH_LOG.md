@@ -3222,3 +3222,53 @@ Three tests changed or added, including one where only the venue moves and the r
 untouched — the actual live race, which a test that writes to the registry does not exercise.
 
 Suite **821 passed**.
+
+---
+
+### 2026-08-17 — Stage 4.5 pre-flight: the command that opens the position never told the registry
+
+#### Question
+
+Stage 4.5 is one supervised live order proving the whole chain: post -> detect -> complete -> merge ->
+cash. Before placing it, does each link actually see the one before it?
+
+#### Method
+
+Read `quote` — the command 4.5 begins with — against what Stages 2, 3 and 4 read.
+
+#### Result
+
+**The chain was broken at the first arrow.** `quote` posted both legs and appended to
+`run/live_orders.json`, and that was all. It never created an `OrderRecord`, so it never assigned a
+`pair_id` either. Every consequence follows from that one omission:
+
+- `reconcile_orders` had no rows to reconcile, so Stage 2 could not detect a fill on an order this
+  command placed.
+- `exit` and `complete` both take a `pair_id`, and none existed, so `load_pair` would refuse.
+- The two legs would rest at the venue with real money against them and nothing in the registry
+  tracking them — the precise failure the registry was built to prevent, sitting in the one command
+  Stage 4.5 depends on.
+
+Stage 4.5 would have proved nothing. The order would have gone out and no stage after it could have
+seen the order.
+
+`quote` now writes a row per leg under one shared `pair_id`, **before** sending. A row written after a
+successful send is lost to any crash in the window between; a row written before is at worst a
+`pending` with no venue id, which is exactly what reconcile's orphan adoption exists to claim. On a
+response the venue id is attached and the row becomes `open`; when the response carries no id under
+any of its known spellings, the row stays `pending` and the command says so on stderr rather than
+guessing — attaching the wrong id would bind our row to somebody else's order.
+
+The command now also prints the `pair_id` and the three follow-up commands, because the alternative
+was opening `live.db` by hand, which is the sort of step an operator skips at the moment it matters.
+A `pairs` subcommand lists every pair with its held sizes for the same reason.
+
+Five tests: both legs share one `pair_id` and end `open`; a response without an id leaves both rows
+`pending`; the id extractor accepts each spelling and returns `None` rather than guessing.
+
+Suite **824 passed**.
+
+#### Decision
+
+**OPEN** — Stage 4.5 is not ready. This closes the largest gap, but the gate also requires Stages 3
+and 4 approved, and their PR is unmerged. No path here has met a real pair.
