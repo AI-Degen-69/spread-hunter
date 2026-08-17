@@ -2987,3 +2987,24 @@ is what `merge`'s pre-flight reconciles against. Full suite **795 passed**.
 
 **LIVE** — Stages 2, 3 and 4 are complete and none of them opens a position. Stage 4.5, the first real
 order, is gated on explicit Owner sign-off and is not part of this work.
+
+#### Addendum — the completion BUY was denominated in shares, not USDC
+
+The follow-up review caught a unit error in Stage 4 that every guard above the send would have
+missed. `MarketOrderArgsV2.amount` is the *maker* amount — the thing we give — so on a SELL it is a
+share count and on a BUY it is USDC. Confirmed by reading `get_market_order_amounts` in the installed
+SDK: for BUY it sets `maker_amount = amount` and `taker_amount = amount / price`; for SELL,
+`maker_amount = amount` and `taker_amount = amount * price`.
+
+The Stage 3 sell passed shares and was correct. The Stage 4 completion passed shares too, and was
+not: a 10-share completion at an ask of $0.30 would have submitted a $10.00 buy and acquired about
+33 shares — 23 shares of fresh exposure on the leg this path exists to close, which is the exact
+inversion Stage 4 is written to prevent. Every guard validated the $3.00 we meant, so none of them
+could see it, and the fake client accepted a share count without complaint.
+
+Fixed by passing `notional`. Two tests now pin the unit on both sides: the BUY amount must equal
+`size * ask` and must not equal the share count, and the SELL amount must stay a share count. The
+fake client records the order arguments structurally rather than only as a string, because a test
+that reads a formatted number cannot tell dollars from shares.
+
+Suite **797 passed**.

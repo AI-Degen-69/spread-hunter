@@ -434,8 +434,18 @@ def complete_pair(
 
     from py_clob_client_v2.clob_types import MarketOrderArgsV2
 
+    # `amount` is NOT a share count on a BUY. The SDK's
+    # get_market_order_amounts treats it as the maker amount -- the thing we
+    # give -- so on a BUY it is USDC and the shares received are amount / price,
+    # while on a SELL it is shares and the USDC received is amount * price.
+    #
+    # Passing the share count here would have submitted a $10.00 buy for a
+    # 10-share completion at $0.30, acquiring about 33 shares: 23 shares of
+    # fresh exposure on the leg this path exists to close. None of the guards
+    # above would have caught it, because every one of them validated the
+    # $3.00 we meant.
     resp = client.create_and_post_market_order(
-        MarketOrderArgsV2(token_id=light_token, amount=size, side="BUY",
+        MarketOrderArgsV2(token_id=light_token, amount=notional, side="BUY",
                           price=ask)
     )
 

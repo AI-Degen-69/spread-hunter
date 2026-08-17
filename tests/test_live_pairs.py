@@ -69,6 +69,7 @@ class FakeClient:
         self.bid_depth = bid_depth
         self.ask_depth = ask_depth
         self.calls: list[str] = []
+        self.orders: list[dict] = []
         self.creds = object()
 
     def get_order_book(self, token_id):
@@ -93,6 +94,15 @@ class FakeClient:
         self.calls.append(
             f"{verb}:{order_args.token_id}:{order_args.amount}:{order_args.side}"
         )
+        # Kept structured as well as stringified: `amount` means shares on a
+        # SELL and USDC on a BUY, and a test that only reads the string cannot
+        # tell those apart.
+        self.orders.append({
+            "side": order_args.side,
+            "token_id": order_args.token_id,
+            "amount": order_args.amount,
+            "price": getattr(order_args, "price", None),
+        })
         return {"success": True, "orderID": f"venue-{verb}"}
 
 
@@ -445,3 +455,41 @@ def test_a_completed_pair_reads_as_held_on_both_legs(registry: OrderRegistry):
     assert pair["naked"] == pytest.approx(0.0)
     assert pair["heavy"]["matched"] == pytest.approx(10.0)
     assert pair["light"]["matched"] == pytest.approx(10.0)
+
+
+def test_completion_buy_amount_is_usdc_not_shares(registry: OrderRegistry):
+    """MarketOrderArgsV2.amount is the maker amount -- USDC on a BUY.
+
+    The SDK computes shares received as amount / price, so passing a share
+    count submits a much larger buy than intended: 10 shares at $0.30 becomes a
+    $10.00 order acquiring ~33 shares, which is 23 shares of fresh exposure on
+    the leg this path exists to close. Every guard above the send validates the
+    $3.00 we meant, so nothing else catches the unit.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30)
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+
+    sent = next(o for o in client.orders if o["side"] == "BUY")
+    assert sent["amount"] == pytest.approx(3.00)            # 10 shares * $0.30
+    assert sent["amount"] == pytest.approx(result["size"] * result["ask"])
+    assert sent["amount"] != pytest.approx(result["size"])  # not the share count
+    assert sent["price"] == pytest.approx(0.30)
+
+
+def test_exit_sell_amount_stays_in_shares(registry: OrderRegistry):
+    """The mirror of the BUY case: on a SELL, amount is the share count.
+
+    Same field, opposite unit. Asserted so a future fix to one side cannot
+    quietly convert the other.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0)
+    client = FakeClient(best_ask=0.40)
+
+    lp.exit_naked_leg(client, registry, pair_id,
+                      max_pair_cost=MAX_PAIR_COST, live=True)
+
+    sent = next(o for o in client.orders if o["side"] == "SELL")
+    assert sent["amount"] == pytest.approx(10.0)
