@@ -1156,3 +1156,38 @@ def test_venue_order_id_accepts_the_spellings_and_refuses_to_guess():
     assert live_exec._venue_order_id({"order_id": "c"}) == "c"
     assert live_exec._venue_order_id({"success": True}) is None
     assert live_exec._venue_order_id(None) is None
+
+
+def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
+    """`fetch_pinned_market` returns None for two unrelated reasons.
+
+    Reporting an unfunded market as "not found" sends the operator hunting for
+    a typo in a condition_id that is perfectly correct -- the same class of
+    misleading diagnostic as reporting an unread balance as 0.00.
+    """
+    from strategy import live_exec
+
+    monkeypatch.setattr(live_exec, "RUN", tmp_path)
+
+    class Market:
+        market_slug = "some-unfunded-market"
+        up_token = "u"
+        down_token = "d"
+        tick_size = "0.01"
+        neg_risk = False
+
+    # Exists, but pays no rewards: None with the default, a market without it.
+    def unfunded(cid, require_rewards=True):
+        return None if require_rewards else Market()
+
+    monkeypatch.setattr("strategy.markets.fetch_pinned_market", unfunded)
+    with pytest.raises(SystemExit, match="pays no maker rewards"):
+        live_exec.quote(COND, price=0.48, size=5.0, live=False,
+                        db_path=tmp_path / "live.db")
+
+    # Genuinely absent: None either way.
+    monkeypatch.setattr("strategy.markets.fetch_pinned_market",
+                        lambda cid, require_rewards=True: None)
+    with pytest.raises(SystemExit, match="no market at condition_id"):
+        live_exec.quote(COND, price=0.48, size=5.0, live=False,
+                        db_path=tmp_path / "live.db")
