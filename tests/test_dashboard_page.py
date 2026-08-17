@@ -13,6 +13,7 @@ dashboard. The archived kanban / single-bot page validation lived alongside
 this on the now-moved ``archive/legacy-bot-8788`` branch; the kanban page
 itself is no longer importable on this branch.
 """
+import json
 import re
 import shutil
 import subprocess
@@ -85,6 +86,12 @@ def test_static_tailwind_replaces_the_cdn_runtime():
         assert TAILWIND_CSS in page
 
 
+def _normalize_css(css: str) -> str:
+    # Normalize minor floating-point precision jitter in oklab(...) color math
+    # produced across different OS/toolchains (Windows MSVC vs Linux glibc).
+    return re.sub(r'(\d*\.\d{4})\d+', r'\1', css)
+
+
 @pytest.mark.skipif(shutil.which("npm") is None, reason="npm not installed")
 def test_generated_tailwind_css_is_fresh():
     """The committed stylesheet must equal a fresh build from the template's
@@ -97,7 +104,7 @@ def test_generated_tailwind_css_is_fresh():
     from server._tailwind_css import TAILWIND_CSS
 
     fresh = build()
-    assert fresh == TAILWIND_CSS, (
+    assert _normalize_css(fresh) == _normalize_css(TAILWIND_CSS), (
         "server/_tailwind_css.py is stale -- run "
         "python -m scripts.build_tailwind_css from the repo root")
 
@@ -203,8 +210,17 @@ def test_summary_exposes_naked_risk_fields(monkeypatch, tmp_path):
     store.log_event(ts=999.0, market_slug="m0", condition_id="c0",
                     kind="QUOTING", reason="r", size=1.0)
 
+    from server import fleet_dash, spread_dash
     from server.spread_dash import CFG, app
     from starlette.testclient import TestClient
+
+    # Isolate RUN directory so fleet_dash reads a hermetic state file rather
+    # than failing on a clean checkout where run/fleet_state.json is untracked.
+    monkeypatch.setattr(fleet_dash, "RUN", tmp_path)
+    (tmp_path / "fleet_state.json").write_text(json.dumps([
+        {"cid": "c0", "title": "m0", "daily": 0, "min_size": 1.0, "max_spread": 4.5}
+    ]), encoding="utf-8")
+    monkeypatch.setattr(spread_dash, "_DASH_CACHE", {})
 
     with TestClient(app) as c:
         s = c.get("/api/summary").json()

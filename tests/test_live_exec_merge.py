@@ -257,8 +257,17 @@ def test_merge_dry_run_reports_guard_failures_and_exits_nonzero(tmp_path, capsys
     """A dry run must refuse exactly where --live refuses: unfunded legs and a
     resolved condition are reported as PRE-FLIGHT FAILED, not previewed as ready."""
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    acc = Account.create()
+    funder = "0xBa7c21Ac8968983e90BEcB989fe978889FEC266b"
+    env_vars = make_live_env(acc, funder)
 
-    with patch.object(le, "RUN", tmp_path), \
+    mock_client = MagicMock()
+    # Zero balances for both legs -> underfunded
+    mock_client.get_balance_allowance.return_value = {"balance": "0"}
+
+    with patch.dict(os.environ, env_vars, clear=False), \
+         patch.object(le, "RUN", tmp_path), \
+         patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "get_payout_denominator", return_value=1), \
          patch("urllib.request.urlopen") as mock_urlopen:
         with pytest.raises(SystemExit) as exc_info:
