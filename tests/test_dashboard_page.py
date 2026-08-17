@@ -210,7 +210,7 @@ def test_summary_exposes_naked_risk_fields(monkeypatch, tmp_path):
     store.log_event(ts=999.0, market_slug="m0", condition_id="c0",
                     kind="QUOTING", reason="r", size=1.0)
 
-    from server import fleet_dash
+    from server import fleet_dash, spread_dash
     from server.spread_dash import CFG, app
     from starlette.testclient import TestClient
 
@@ -220,6 +220,7 @@ def test_summary_exposes_naked_risk_fields(monkeypatch, tmp_path):
     (tmp_path / "fleet_state.json").write_text(json.dumps([
         {"cid": "c0", "title": "m0", "daily": 0, "min_size": 1.0, "max_spread": 4.5}
     ]), encoding="utf-8")
+    monkeypatch.setattr(spread_dash, "_DASH_CACHE", {})
 
     with TestClient(app) as c:
         s = c.get("/api/summary").json()
