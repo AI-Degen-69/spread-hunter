@@ -1669,7 +1669,7 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
         exit_naked_leg, fetch_positions, load_pair, PairExitRefused,
     )
     from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
-    from strategy.config import Config
+    from strategy import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     client = _client()
@@ -1714,7 +1714,7 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
     try:
         result = exit_naked_leg(
             client, registry, pair_id,
-            max_pair_cost=Config().max_pair_cost,
+            max_pair_cost=strategy_config.load().max_pair_cost,
             live=live,
             venue_positions=venue_positions,
         )
@@ -1730,8 +1730,16 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
         raise
 
     if entry_id:
+        # Only a result that actually sent a SELL may hold the condition open.
+        #
+        # `route_to_merge`, `balanced` and `hold` send nothing, and marking them
+        # `submitted` would leave the idempotency guard blocking the very
+        # recovery this command prints two lines below: the operator is told to
+        # run `merge`, and `merge` then refuses the condition until --force.
+        # A guard that blocks the recovery it recommends is worse than no guard.
+        sent = result.get("action") == "exited"
         _update_order_log(entry_id, {
-            "status": "submitted",
+            "status": "submitted" if sent else "cancelled",
             "action": result.get("action"),
             "size": result.get("size"),
         })
@@ -1759,7 +1767,7 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
         complete_pair, fetch_positions, load_pair, PairCompletionRefused,
     )
     from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
-    from strategy.config import Config
+    from strategy import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     pair = load_pair(registry, pair_id)
@@ -1818,7 +1826,7 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
     try:
         result = complete_pair(
             _client(), registry, pair_id,
-            max_pair_cost=Config().max_pair_cost,
+            max_pair_cost=strategy_config.load().max_pair_cost,
             live=live,
             max_order_usd=MAX_ORDER_USD,
         )
@@ -1835,8 +1843,12 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
         raise
 
     if entry_id:
+        # Same rule as the exit: `balanced` crossed nothing, so it must not hold
+        # the condition against a later merge or completion.
+        sent = result.get("action") == "completed"
         _update_order_log(entry_id, {
-            "status": "submitted",
+            "status": "submitted" if sent else "cancelled",
+            "action": result.get("action"),
             "size": result.get("size"),
             "notional": result.get("notional"),
         })

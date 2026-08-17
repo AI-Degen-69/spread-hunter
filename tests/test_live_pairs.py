@@ -704,3 +704,62 @@ def test_exit_refusals_still_use_the_exit_exception(registry: OrderRegistry):
     with pytest.raises(lp.PairExitRefused):
         lp.exit_naked_leg(client, registry, pair_id,
                           max_pair_cost=MAX_PAIR_COST, live=True)
+
+
+# ---------------------------------------------------------------------------
+# Review round 4 — the audit row must not block the recovery it recommends
+# ---------------------------------------------------------------------------
+
+
+def test_route_to_merge_does_not_leave_the_condition_blocked(
+    registry: OrderRegistry, tmp_path, monkeypatch
+):
+    """`route_to_merge` sends no SELL, so it must not hold the condition open.
+
+    `exit_pair` prints "now run merge" on this branch. If the audit row were
+    marked `submitted`, `_check_idempotency_guard` would then refuse that merge
+    until --force -- a guard blocking the recovery it just recommended.
+    """
+    from strategy import live_exec
+
+    monkeypatch.setattr(live_exec, "RUN", tmp_path)
+    monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
+
+    pair_id = _one_sided_pair(registry)
+    light = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)
+
+    def fake_exit(*args, **kwargs):
+        return {"action": "route_to_merge", "pair_id": pair_id,
+                "condition_id": COND, "cancelled": [light.order_id], "size": 0.0}
+
+    monkeypatch.setattr(live_exec, "exit_naked_leg", fake_exit, raising=False)
+    monkeypatch.setattr("strategy.live_pairs.exit_naked_leg", fake_exit)
+
+    live_exec.exit_pair(pair_id, live=True, db_path=registry.db_path,
+                        skip_positions_check=True)
+
+    # The guard must let the recommended merge through without --force.
+    live_exec._check_idempotency_guard(COND, force=False)
+
+
+def test_a_real_exit_does_hold_the_condition(registry: OrderRegistry, tmp_path,
+                                             monkeypatch):
+    """The mirror: a sell that actually went out must block a second one."""
+    from strategy import live_exec
+
+    monkeypatch.setattr(live_exec, "RUN", tmp_path)
+    monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
+
+    pair_id = _one_sided_pair(registry)
+
+    def fake_exit(*args, **kwargs):
+        return {"action": "exited", "pair_id": pair_id, "condition_id": COND,
+                "size": 10.0, "cancelled": []}
+
+    monkeypatch.setattr("strategy.live_pairs.exit_naked_leg", fake_exit)
+
+    live_exec.exit_pair(pair_id, live=True, db_path=registry.db_path,
+                        skip_positions_check=True)
+
+    with pytest.raises(SystemExit):
+        live_exec._check_idempotency_guard(COND, force=False)

@@ -3095,3 +3095,29 @@ what we chose and `depth_at_or_above` counted an extra level. Safe in direction,
 Rounding to nine places before truncating fixes it.
 
 Four new tests. Suite **805 passed**.
+
+#### Addendum — round four: the guard blocked the recovery it recommended, and neither CLI path ran
+
+Two findings, one of them mine to have caught long ago.
+
+**The audit row marked every non-exception result `submitted`.** But `exit_naked_leg` returns
+`route_to_merge` when the resting leg fills during the cancel, and that branch sends no SELL at all.
+`exit_pair` then prints "the pair completed — now run `merge`", and `_check_idempotency_guard` refuses
+that exact merge because the condition carries a `submitted` row. The guard blocked the recovery the
+same command had just recommended, and the only way through was `merge --force`, which is precisely
+the flag an operator should not be reaching for on a normal path. Only a result that actually sent —
+`exited` for the exit, `completed` for the completion — now holds the condition open; every non-send
+outcome closes the row as `cancelled`.
+
+**Neither CLI path had ever been executed.** Writing the test for the above raised
+`ImportError: cannot import name 'Config' from 'strategy.config'`. There is no `Config` class in that
+module; the accessor is `config.load()` returning a `MakerConfig`. Both `exit_pair` and
+`complete_pair_cmd` would have crashed on their first line of real work, on every invocation, since
+the moment they were written. Thirty-seven tests passed over this code because every one of them
+called into `live_pairs` directly and none went through the command that operators actually type.
+
+That is the more useful lesson of the round: a suite that exercises the library and never the entry
+point will report full health on a program that cannot start. The two new tests drive
+`live_exec.exit_pair` end to end.
+
+Suite **811 passed**.
