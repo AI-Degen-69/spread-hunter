@@ -3008,3 +3008,62 @@ fake client records the order arguments structurally rather than only as a strin
 that reads a formatted number cannot tell dollars from shares.
 
 Suite **797 passed**.
+
+---
+
+### 2026-08-17 — Stage 3/4 review round two: six real holes, and one claim the code did not honour
+
+#### Question
+
+Stages 3 and 4 shipped with fourteen and nine tests and a full green suite. What did the tests not
+ask?
+
+#### Method
+
+A follow-up review raised eight findings. Each was checked against the code and the installed SDK
+before acting; seven were real, and the eighth had already been fixed.
+
+#### Result
+
+1. **The re-read did not read what the docstring said it read.** `load_pair` queries `run/live.db`,
+   and fills arrive there only through `reconcile_orders` in the poll loop. A match that completed the
+   light leg during the cancel is therefore invisible until the next poll cycle — so the step
+   documented as "the re-read is not optional" confirmed what we already believed and sold straight
+   into the race it was written to catch. The read now goes to the venue via `get_order`, and every
+   failure mode refuses rather than selling: an unreadable order, a missing matched-size field, a
+   non-numeric value. The prose was the defect as much as the code, and the prior entry overstated it.
+2. **Both live paths left working orders behind.** The exit cancelled only the light leg, so a heavy
+   leg at `partial` kept working size that could refill the token immediately after the sell. The
+   completion cancelled nothing at all, so its own resting maker BUY and the taker BUY it sends could
+   both fill and double the light leg — naked exposure created by the path whose purpose is to remove
+   it. Both now cancel every working order on the legs they touch before anything is sent.
+3. **The divergence gate refused in the wrong direction.** It compared `abs(observed - believed)`, so
+   a venue *surplus* — the same token held by another pair, or a position partly merged already —
+   blocked the exit. That refused the one action that closes exposure, over a discrepancy that cannot
+   cause an oversell. It now refuses only when the venue reports less. A token missing from the
+   response still refuses: absence is not zero, and it is equally consistent with a filtered read.
+4. **The sell had no worst-price bound.** `bid_depth` summed every level, and with no `price` the SDK
+   derives one from the requested amount and will walk the ladder down to whatever clears. A
+   tick-aligned floor at `best_bid - 0.02` now bounds it, and depth is counted only at levels at or
+   above that floor, so size and price agree. Two cents is absolute rather than proportional because
+   these are probability prices in [0, 1] — a percentage would tighten to under a tick near zero —
+   and it is roughly the 3.67c average exit cost measured in simulation.
+5. **`/positions` was under-fetching.** The endpoint defaults to `sizeThreshold=1` and `limit=100`, so
+   sub-share holdings were dropped and long portfolios truncated, and the gate then read the omission
+   as "the venue says we hold nothing". Now `sizeThreshold=0` with pagination.
+6. **`complete_pair_cmd` had none of the pre-flight the other live write paths have.** It sent a real
+   BUY with no idempotency guard and no positions cross-check, so a repeated invocation crossed twice.
+   It now takes `_check_idempotency_guard`, writes a `pending` row before sending and resolves it
+   after, and marks the row `interrupted` on an unexpected exception — the state the guard refuses on,
+   which is the right posture when we do not know whether the order landed.
+7. `MIN_SELL_SHARES` gated a BUY. Renamed to `MIN_ORDER_SHARES`, alias kept.
+
+Eight new tests cover the round: heavy-leg cancellation, refusal on a failed venue read, the slippage
+floor against a three-level book, completion cancelling before crossing, completion shrinking to the
+remainder after a partial race, completion becoming a no-op when the leg filled during the cancel, a
+venue surplus proceeding, and a missing token refusing. Full suite **805 passed**.
+
+#### Decision
+
+**LIVE** — with the correction recorded: the previous entry's claim that the re-read detected the
+cancel/fill race was wrong at the time it was written.

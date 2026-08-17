@@ -62,12 +62,20 @@ class FakeClient:
     """Records every venue call. No network."""
 
     def __init__(self, best_ask=0.40, best_bid=0.55, cancel_ok=True,
-                 bid_depth=100.0, ask_depth=100.0):
+                 bid_depth=100.0, ask_depth=100.0, bid_levels=None,
+                 venue_matched=None, get_order_ok=True, tick_size="0.01"):
         self.best_ask = best_ask
         self.best_bid = best_bid
         self.cancel_ok = cancel_ok
         self.bid_depth = bid_depth
         self.ask_depth = ask_depth
+        self.bid_levels = bid_levels
+        self.tick_size = tick_size
+        # What the VENUE says each order has matched. Deliberately separate from
+        # the registry: the whole point of the post-cancel read is that the two
+        # can disagree until a reconcile pass lands.
+        self.venue_matched = dict(venue_matched or {})
+        self.get_order_ok = get_order_ok
         self.calls: list[str] = []
         self.orders: list[dict] = []
         self.creds = object()
@@ -76,11 +84,21 @@ class FakeClient:
         self.calls.append(f"book:{token_id}")
         asks = ([] if self.best_ask is None
                 else [{"price": str(self.best_ask), "size": str(self.ask_depth)}])
+        bids = (self.bid_levels if self.bid_levels is not None
+                else [{"price": str(self.best_bid), "size": str(self.bid_depth)}])
         return {
             "asset_id": token_id,
-            "bids": [{"price": str(self.best_bid), "size": str(self.bid_depth)}],
+            "bids": bids,
             "asks": asks,
+            "tick_size": self.tick_size,
         }
+
+    def get_order(self, order_id):
+        self.calls.append(f"get_order:{order_id}")
+        if not self.get_order_ok:
+            raise RuntimeError("venue order read failed")
+        return {"orderID": order_id,
+                "size_matched": self.venue_matched.get(order_id, 0.0)}
 
     def cancel_order(self, payload):
         self.calls.append(f"cancel:{getattr(payload, 'orderID', payload)}")
@@ -176,15 +194,14 @@ def test_a_pair_that_completed_between_cancel_and_sell_routes_to_merge(
     class RacingClient(FakeClient):
         def cancel_order(self, payload):
             out = super().cancel_order(payload)
-            # The other leg filled while the cancel was in flight.
-            registry.record_fill(FillRecord(
-                trade_id="trade-light", order_uuid=light.id, size=10.0,
-                price=0.38, venue_ts=1_000_100,
-            ))
-            registry.update_order_status(light.id, "filled", 1_000_100)
+            # The other leg filled while the cancel was in flight. Only the
+            # VENUE knows -- the registry learns at the next reconcile pass,
+            # which is exactly the window this test covers.
+            self.venue_matched["venue-light"] = 10.0
             return out
 
     client = RacingClient(best_ask=0.40)
+    assert light is not None
     result = lp.exit_naked_leg(client, registry, pair_id,
                                max_pair_cost=MAX_PAIR_COST, live=True)
 
@@ -493,3 +510,138 @@ def test_exit_sell_amount_stays_in_shares(registry: OrderRegistry):
 
     sent = next(o for o in client.orders if o["side"] == "SELL")
     assert sent["amount"] == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------
+# Review round 2 — the holes the first pass left
+# ---------------------------------------------------------------------------
+
+
+def test_exit_cancels_working_orders_on_the_heavy_leg_too(registry: OrderRegistry):
+    """A `partial` heavy leg still has working size that can refill after the sell."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0)
+    now = 1_000_500
+    extra = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-heavy-2", condition_id=COND,
+        token_id=TOK_UP, side="BUY", price=0.60, original_size=5.0,
+        status="partial", posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(extra)
+
+    client = FakeClient(best_ask=0.40)
+    result = lp.exit_naked_leg(client, registry, pair_id,
+                               max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert "venue-heavy-2" in result["cancelled"]
+    cancel_idx = [i for i, c in enumerate(client.calls) if c.startswith("cancel:")]
+    sell_idx = next(i for i, c in enumerate(client.calls) if c.startswith("sell:"))
+    assert max(cancel_idx) < sell_idx, "every working order must be quiet before the sell"
+
+
+def test_exit_refuses_when_the_venue_order_read_fails(registry: OrderRegistry):
+    """An unreadable order is not an unfilled one."""
+    pair_id = _one_sided_pair(registry)
+    client = FakeClient(best_ask=0.40, get_order_ok=False)
+
+    with pytest.raises(lp.PairExitRefused, match="venue state"):
+        lp.exit_naked_leg(client, registry, pair_id,
+                          max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("sell:") for c in client.calls)
+
+
+def test_exit_bounds_the_sell_price_and_counts_only_acceptable_depth(
+    registry: OrderRegistry,
+):
+    """Depth below the slippage floor is not depth we would accept.
+
+    Best bid 0.55, floor 0.53. The 40 shares resting at 0.40 must not be
+    counted, and the submitted price must be the floor, not the best bid.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0)
+    client = FakeClient(best_ask=0.40, bid_levels=[
+        {"price": "0.55", "size": "3"},
+        {"price": "0.54", "size": "2"},
+        {"price": "0.40", "size": "40"},
+    ])
+
+    result = lp.exit_naked_leg(client, registry, pair_id,
+                               max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert result["size"] == pytest.approx(5.0)        # 3 + 2, not 45
+    assert result["min_price"] == pytest.approx(0.53)  # 0.55 - 0.02, on tick
+    sent = next(o for o in client.orders if o["side"] == "SELL")
+    assert sent["price"] == pytest.approx(0.53)
+
+
+def test_completion_cancels_the_resting_light_buy_before_crossing(
+    registry: OrderRegistry,
+):
+    """Otherwise the maker BUY and the taker BUY can both fill and double the leg."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30)
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert "venue-light" in result["cancelled"]
+    cancel_i = next(i for i, c in enumerate(client.calls) if c.startswith("cancel:"))
+    buy_i = next(i for i, c in enumerate(client.calls) if c.startswith("buy:"))
+    assert cancel_i < buy_i
+
+
+def test_completion_shrinks_to_the_remainder_after_a_partial_race(
+    registry: OrderRegistry,
+):
+    """If the light leg partly filled during the cancel, cross only the rest."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, venue_matched={"venue-light": 6.0})
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert result["size"] == pytest.approx(4.0)
+    sent = next(o for o in client.orders if o["side"] == "BUY")
+    assert sent["amount"] == pytest.approx(4.0 * 0.30)
+
+
+def test_completion_is_a_no_op_when_the_leg_filled_during_the_cancel(
+    registry: OrderRegistry,
+):
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, venue_matched={"venue-light": 10.0})
+
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert result["action"] == "balanced"
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_a_venue_surplus_does_not_block_the_exit(registry: OrderRegistry):
+    """Holding more than the registry believes cannot cause an oversell.
+
+    The same token may be held by another pair, or part of a position already
+    merged. Refusing here would block the one action that closes exposure.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0)
+    client = FakeClient(best_ask=0.40)
+
+    result = lp.exit_naked_leg(client, registry, pair_id,
+                               max_pair_cost=MAX_PAIR_COST, live=True,
+                               venue_positions={TOK_UP: 25.0})
+    assert result["action"] == "exited"
+
+
+def test_a_token_absent_from_the_positions_read_refuses(registry: OrderRegistry):
+    """Absence is not zero -- it is equally consistent with a filtered read."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0)
+    client = FakeClient(best_ask=0.40)
+
+    with pytest.raises(lp.PairExitRefused, match="no position at all"):
+        lp.exit_naked_leg(client, registry, pair_id,
+                          max_pair_cost=MAX_PAIR_COST, live=True,
+                          venue_positions={"some-other-token": 5.0})
+
+    assert not any(c.startswith("cancel:") for c in client.calls)

@@ -11,16 +11,26 @@ cancel always succeeds, a book read is free, and nobody else can fill our order
 between two statements. Live, each of those is a place to lose money, so the
 sequence is written around them:
 
-    cancel  ->  re-read state  ->  sell (only if still one-sided)
+    cancel  ->  re-read the venue  ->  sell (only if still one-sided)
 
-**Cancel before sell.** Selling first leaves a live resting order that can fill
-into a position we just closed, re-opening exposure at the worst moment.
+**Cancel before acting, on both legs.** Selling while an order rests lets it
+fill into the position we just closed. That includes the heavy leg: an order at
+`partial` still has working size, and leaving it there re-opens exposure on the
+token being sold. The completion path cancels too, or its own resting maker BUY
+and the taker BUY it is about to send can both fill and double the leg.
 
-**Re-read between them.** A successful cancel does not mean the pair is still
-one-sided: the cancel may have raced a match that already happened. If the
-other leg filled, the pair is complete and worth $1.00 at merge, and
-market-selling one leg of it converts that into a realized loss. That is the
-worst outcome available on this path, so the re-read is not optional.
+**Re-read the venue between them, not the registry.** A successful cancel does
+not mean the pair is still one-sided: the cancel may have raced a match that
+already happened. If the other leg filled, the pair is complete and worth $1.00
+at merge, and market-selling one leg converts that into a realized loss -- the
+worst outcome available here.
+
+The registry cannot answer that question. Fills reach `run/live.db` only through
+`reconcile_orders` in the poll loop, so a match from seconds ago is invisible
+there until the next cycle -- exactly the window this step covers. An earlier
+version of this module read the registry and claimed to detect the race; it
+could not. The read goes to the venue, and a failed read refuses rather than
+sells.
 
 Every refusal raises rather than returning a value that reads like success --
 the same fail-closed shape `merge` uses.
@@ -43,9 +53,34 @@ DATA_API_BASE = "https://data-api.polymarket.com"
 # of the two views is wrong and neither is safe to trade on.
 POSITION_DIVERGENCE_TOLERANCE: float = 1e-6
 
-# Venue minimum. A sell below this is rejected by the venue anyway, and
-# attempting it burns a round trip to learn what we already know.
-MIN_SELL_SHARES: float = 1.0
+# Venue minimum, in shares. An order below this is rejected by the venue anyway,
+# and attempting it burns a round trip to learn what we already know. It gates
+# both directions -- the venue rule is about order size, not about side.
+MIN_ORDER_SHARES: float = 1.0
+
+# Backwards-compatible alias. The constant was sell-only when Stage 3 landed;
+# the name outlived the scope.
+MIN_SELL_SHARES: float = MIN_ORDER_SHARES
+
+# How far below the best bid a market sell may be filled, in absolute price.
+#
+# Absolute rather than proportional: these are probability prices in [0, 1],
+# where a 2c give-up means the same thing at 0.10 as at 0.90, and a percentage
+# would silently tighten to under a tick down there. Two cents is roughly the
+# 3.67c average exit cost measured in simulation, so a fill worse than this is
+# outside the behaviour the rule was validated against.
+#
+# Without a bound the SDK derives the sell price from the requested amount and
+# will happily walk the book down to whatever level clears it.
+MAX_SELL_SLIPPAGE: float = 0.02
+
+# Fallback venue tick when the book does not carry one. The venue rejects prices
+# off its tick grid, so a limit computed at full float precision is a rejected
+# order rather than a careful one.
+DEFAULT_TICK_SIZE: float = 0.01
+
+# Page size for the Data API positions read.
+POSITIONS_PAGE_SIZE: int = 500
 
 
 class PairExitRefused(RuntimeError):
@@ -134,23 +169,148 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
     portfolio, and treating it as one would let the divergence check pass by
     knowing nothing.
     """
-    url = f"{DATA_API_BASE}/positions?user={funder}"
-    req = urllib.request.Request(url, headers={"User-Agent": "spread-hunter"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-
     positions: dict[str, float] = {}
-    for row in payload or []:
-        if not isinstance(row, dict):
-            continue
-        token = str(row.get("asset") or row.get("tokenId") or row.get("token_id") or "")
-        if not token:
+    offset = 0
+    while True:
+        # sizeThreshold=0 because the endpoint defaults to 1 and would drop
+        # every sub-share holding -- a silent omission that the divergence gate
+        # would then read as "the venue says we hold nothing". Paginated for the
+        # same reason: the default limit is 100, and a truncated page is not an
+        # empty portfolio either.
+        url = (
+            f"{DATA_API_BASE}/positions?user={funder}"
+            f"&sizeThreshold=0&limit={POSITIONS_PAGE_SIZE}&offset={offset}"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "spread-hunter"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+
+        rows = payload or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            token = str(row.get("asset") or row.get("tokenId") or row.get("token_id") or "")
+            if not token:
+                continue
+            try:
+                positions[token] = float(row.get("size", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+
+        if len(rows) < POSITIONS_PAGE_SIZE:
+            break
+        offset += POSITIONS_PAGE_SIZE
+
+    return positions
+
+
+WORKING_STATUSES = ("open", "partial", "pending")
+
+
+def _working_orders(leg: dict) -> list:
+    """Orders on this leg that can still fill at the venue.
+
+    `partial` counts. A partially filled order still has working size resting,
+    and leaving it there is the same hazard as leaving an untouched one.
+    """
+    return [o for o in leg.get("orders", [])
+            if o.status in WORKING_STATUSES and o.order_id]
+
+
+def _cancel_orders(client, orders: list, leg_name: str) -> list[str]:
+    """Cancel every working order on a leg, or refuse having sent nothing more."""
+    from py_clob_client_v2.clob_types import OrderPayload
+
+    cancelled: list[str] = []
+    for o in orders:
+        try:
+            client.cancel_order(OrderPayload(orderID=o.order_id))
+        except Exception as exc:
+            raise PairExitRefused(
+                f"Cancel of {leg_name} order {o.order_id} failed ({exc!r}). "
+                f"Aborting -- acting while that order is still live risks "
+                f"refilling the position we are closing."
+            ) from exc
+        cancelled.append(o.order_id)
+    return cancelled
+
+
+def _venue_matched(client, orders: list) -> float:
+    """Total matched size for these orders, read from the venue right now.
+
+    The registry cannot answer this question. Fills reach `run/live.db` only
+    through `reconcile_orders` in the poll loop, so a match that landed seconds
+    ago is invisible there until the next cycle -- which is precisely the window
+    this read exists to cover.
+
+    Raises rather than returning 0.0 on a failed or unrecognised read. An
+    unreadable order is not an unfilled one, and the whole point of the check is
+    that we do not sell into uncertainty.
+    """
+    total = 0.0
+    for o in orders:
+        if not o.order_id:
             continue
         try:
-            positions[token] = float(row.get("size", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            continue
-    return positions
+            raw = client.get_order(o.order_id)
+        except Exception as exc:
+            raise PairExitRefused(
+                f"Could not read venue state for {o.order_id} ({exc!r}) after "
+                f"cancelling. Refusing to sell -- if that leg filled in the "
+                f"meantime the pair is complete and worth $1.00 at merge."
+            ) from exc
+
+        if raw is None:
+            raise PairExitRefused(
+                f"Venue returned nothing for order {o.order_id} after the "
+                f"cancel. Refusing to sell on an unknown state."
+            )
+
+        matched = None
+        for key in ("size_matched", "sizeMatched", "matched_size", "filled_size"):
+            if isinstance(raw, dict) and key in raw:
+                matched = raw[key]
+                break
+            if not isinstance(raw, dict) and hasattr(raw, key):
+                matched = getattr(raw, key)
+                break
+        if matched is None:
+            raise PairExitRefused(
+                f"Venue response for {o.order_id} carries no matched-size "
+                f"field. Refusing to sell rather than assuming it is zero."
+            )
+        try:
+            total += float(matched)
+        except (TypeError, ValueError) as exc:
+            raise PairExitRefused(
+                f"Venue matched size for {o.order_id} is not numeric "
+                f"({matched!r}). Refusing to sell on an unreadable state."
+            ) from exc
+    return total
+
+
+def _tick_size(book) -> float:
+    raw = book.get("tick_size") if isinstance(book, dict) else getattr(book, "tick_size", None)
+    try:
+        tick = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_TICK_SIZE
+    return tick if tick > 0 else DEFAULT_TICK_SIZE
+
+
+def _floor_to_tick(price: float, tick: float) -> float:
+    """Round down onto the venue's grid. Off-grid prices are rejected orders."""
+    steps = int(price / tick)
+    return round(steps * tick, 10)
+
+
+def depth_at_or_above(book, limit: float) -> float:
+    """Bid size available at or above a price floor.
+
+    Summing the whole ladder would size an order against depth we have already
+    decided is too cheap to accept.
+    """
+    return sum(s for p, s in _book_levels(book, "bids") if p >= limit)
 
 
 def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
@@ -205,13 +365,28 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]]) ->
 
     token = pair["heavy"]["token_id"]
     believed = pair["heavy"]["matched"]
-    observed = float(venue_positions.get(token, 0.0))
-    if abs(observed - believed) > POSITION_DIVERGENCE_TOLERANCE:
+    if token not in venue_positions:
+        raise PairExitRefused(
+            f"The venue reports no position at all in {token}, while the "
+            f"registry holds {believed:.6f}. Absence is not zero here -- it is "
+            f"equally consistent with a truncated or filtered positions read, "
+            f"and selling against either reading is unsafe."
+        )
+    observed = float(venue_positions[token])
+
+    # Direction matters. An oversell is only possible when the venue holds LESS
+    # than the registry believes, so that is the only direction that refuses.
+    #
+    # A surplus is ordinary: the same token can be held by another pair, or part
+    # of a position may already have been merged. Refusing on it would block the
+    # one action that closes exposure, over a discrepancy that cannot cause the
+    # harm the gate exists to prevent.
+    if observed < believed - POSITION_DIVERGENCE_TOLERANCE:
         raise PairExitRefused(
             f"Registry and venue diverge on {token}: registry holds "
-            f"{believed:.6f}, Data API reports {observed:.6f}. Refusing to "
-            f"exit -- selling a size the venue does not agree we hold is "
-            f"either an oversell or an exit of the wrong position."
+            f"{believed:.6f}, Data API reports only {observed:.6f}. Refusing to "
+            f"exit -- selling a size the venue does not agree we hold is an "
+            f"oversell."
         )
     return True
 
@@ -270,68 +445,81 @@ def exit_naked_leg(
             "positions_checked": positions_checked,
         }
 
-    # 1. Cancel the resting leg FIRST. Selling first would leave a live order
-    #    that can fill into the position we are closing.
-    from py_clob_client_v2.clob_types import OrderPayload
+    # 1. Cancel every working order on BOTH legs, light first.
+    #
+    #    The light leg is the obvious one -- selling while it rests lets it fill
+    #    into the position we are closing. But a heavy leg sitting at `partial`
+    #    still has working size of its own, and leaving that resting re-opens
+    #    exposure on the very token we are about to sell. Both must be quiet
+    #    before anything is sent.
+    light_working = _working_orders(pair["light"])
+    heavy_working = _working_orders(pair["heavy"])
+    cancelled = _cancel_orders(client, light_working, "resting light leg")
+    cancelled += _cancel_orders(client, heavy_working, "working heavy leg")
 
-    cancelled: list[str] = []
-    for o in pair["light"]["orders"]:
-        if o.status not in ("open", "partial", "pending") or not o.order_id:
-            continue
-        try:
-            client.cancel_order(OrderPayload(orderID=o.order_id))
-        except Exception as exc:
-            raise PairExitRefused(
-                f"Cancel of resting leg {o.order_id} failed ({exc!r}). "
-                f"Aborting before the sell -- selling while that order is "
-                f"still live risks refilling the position we are closing."
-            ) from exc
-        cancelled.append(o.order_id)
-
-    # 2. Re-read. The cancel may have raced a match that already happened, in
-    #    which case the pair is complete and worth $1.00 at merge.
+    # 2. Re-read from the VENUE, not from the registry.
+    #
+    #    load_pair reads run/live.db, and fills only reach that file through
+    #    reconcile_orders in the poll loop -- so a match that completed the light
+    #    leg during the cancel is invisible there until the next cycle. Reading
+    #    the registry here would confirm what we already believed and sell into
+    #    the exact race this step exists to catch.
+    venue_light_matched = _venue_matched(client, light_working)
     after = load_pair(registry, pair_id)
-    if after["naked"] <= SIZE_EPS:
+    light_matched = max(after["light"]["matched"], venue_light_matched)
+    naked = after["heavy"]["matched"] - light_matched
+
+    if naked <= SIZE_EPS:
         return {
             "action": "route_to_merge",
             "pair_id": pair_id,
             "condition_id": after["condition_id"],
             "cancelled": cancelled,
             "size": 0.0,
+            "venue_light_matched": venue_light_matched,
             "positions_checked": positions_checked,
         }
 
-    # 3. Sell, sized by the registry and capped by the depth actually there.
+    # 3. Sell, sized by the registry and bounded by a price we will accept.
     heavy_token = after["heavy"]["token_id"]
     heavy_book = client.get_order_book(heavy_token)
     bid = best_bid(heavy_book)
     if bid is None or bid <= 0:
         raise PairExitRefused(
-            f"No bid on {heavy_token}: the resting leg is cancelled and the "
+            f"No bid on {heavy_token}: the resting orders are cancelled and the "
             f"position is naked, but there is nothing to sell into. Retry when "
             f"the book returns."
         )
 
-    depth = bid_depth(heavy_book)
-    size = min(after["naked"], depth)
-    if size < MIN_SELL_SHARES:
+    # Without a floor the SDK derives the price from the requested amount and
+    # will walk the ladder down to whatever clears it. Depth is counted only at
+    # levels we would actually accept, so size and price agree.
+    tick = _tick_size(heavy_book)
+    min_price = _floor_to_tick(max(bid - MAX_SELL_SLIPPAGE, tick), tick)
+    depth = depth_at_or_above(heavy_book, min_price)
+
+    size = min(naked, depth)
+    if size < MIN_ORDER_SHARES:
         raise PairExitRefused(
             f"Sellable size {size:.4f} is below the venue minimum of "
-            f"{MIN_SELL_SHARES}. Registry holds {after['naked']:.4f}, bid depth "
-            f"is {depth:.4f}."
+            f"{MIN_ORDER_SHARES}. Naked {naked:.4f}, depth at or above "
+            f"{min_price:.4f} is {depth:.4f}. Best bid is {bid:.4f}; the book "
+            f"below the slippage floor was not counted."
         )
-    if size > after["naked"] + SIZE_EPS:
+    if size > naked + SIZE_EPS:
         # Unreachable by construction. Asserted anyway because an oversell is
         # the one error on this path that cannot be undone.
         raise PairExitRefused(
-            f"Refusing to sell {size:.4f} against a registry holding of "
-            f"{after['naked']:.4f}."
+            f"Refusing to sell {size:.4f} against a holding of {naked:.4f}."
         )
 
     from py_clob_client_v2.clob_types import MarketOrderArgsV2
 
+    # `amount` is the maker amount: shares on a SELL. `price` is the worst
+    # fill we accept, tick-aligned so the venue does not reject it outright.
     resp = client.create_and_post_market_order(
-        MarketOrderArgsV2(token_id=heavy_token, amount=size, side="SELL")
+        MarketOrderArgsV2(token_id=heavy_token, amount=size, side="SELL",
+                          price=min_price)
     )
 
     return {
@@ -341,7 +529,9 @@ def exit_naked_leg(
         "token_id": heavy_token,
         "size": size,
         "bid": bid,
+        "min_price": min_price,
         "cancelled": cancelled,
+        "venue_light_matched": venue_light_matched,
         "positions_checked": positions_checked,
         "response": resp,
     }
@@ -406,10 +596,10 @@ def complete_pair(
     # the intended size against a partial fill would open fresh exposure on the
     # other side -- the opposite of this path's purpose.
     size = min(pair["naked"], ask_depth(book))
-    if size < MIN_SELL_SHARES:
+    if size < MIN_ORDER_SHARES:
         raise PairCompletionRefused(
             f"Completable size {size:.4f} is below the venue minimum of "
-            f"{MIN_SELL_SHARES}. Naked {pair['naked']:.4f}, ask depth "
+            f"{MIN_ORDER_SHARES}. Naked {pair['naked']:.4f}, ask depth "
             f"{ask_depth(book):.4f}."
         )
 
@@ -431,6 +621,44 @@ def complete_pair(
             "pair_cost": pair_cost,
             "notional": notional,
         }
+
+    # Cancel the light leg's own resting BUY before crossing for it.
+    #
+    # Without this the original maker BUY and the completion taker BUY are both
+    # live on the same token, and if both fill the light leg is double-sized --
+    # naked exposure on the opposite side, created by the path whose entire
+    # purpose is to remove naked exposure.
+    light_working = _working_orders(pair["light"])
+    cancelled = _cancel_orders(client, light_working, "resting light leg")
+
+    # Then re-read from the venue, for the same reason the exit does: the cancel
+    # can race a match, and the registry will not know about it until the next
+    # poll cycle. If the leg already filled, crossing now would overshoot.
+    venue_light_matched = _venue_matched(client, light_working)
+    after = load_pair(registry, pair_id)
+    light_matched = max(after["light"]["matched"], venue_light_matched)
+    naked = after["heavy"]["matched"] - light_matched
+
+    if naked <= SIZE_EPS:
+        return {
+            "action": "balanced",
+            "pair_id": pair_id,
+            "condition_id": after["condition_id"],
+            "cancelled": cancelled,
+            "size": 0.0,
+            "venue_light_matched": venue_light_matched,
+        }
+
+    if naked < size:
+        # Part of the leg filled during the cancel. Complete only the remainder;
+        # the original size would buy shares we no longer need.
+        size = naked
+        notional = size * ask
+        if size < MIN_ORDER_SHARES:
+            raise PairCompletionRefused(
+                f"After the cancel only {size:.4f} shares remain to complete, "
+                f"below the venue minimum of {MIN_ORDER_SHARES}."
+            )
 
     from py_clob_client_v2.clob_types import MarketOrderArgsV2
 
@@ -458,5 +686,7 @@ def complete_pair(
         "ask": ask,
         "pair_cost": pair_cost,
         "notional": notional,
+        "cancelled": cancelled,
+        "venue_light_matched": venue_light_matched,
         "response": resp,
     }

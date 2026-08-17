@@ -1711,7 +1711,8 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
         )
 
 
-def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = None) -> None:
+def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = None,
+                      skip_positions_check: bool = False, force: bool = False) -> None:
     """Stage 4 — cross the book to complete a one-sided pair.
 
     Closes exposure rather than opening it: the half-open leg is already at
@@ -1719,11 +1720,66 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
     cross that would push the pair to or past max_pair_cost -- that case
     belongs to `exit`, and this path must not do the stop-loss's job badly.
     """
-    from strategy.live_pairs import complete_pair, PairCompletionRefused
+    from strategy.live_pairs import (
+        complete_pair, fetch_positions, load_pair, PairCompletionRefused,
+    )
     from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
     from strategy.config import Config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    pair = load_pair(registry, pair_id)
+    condition_id = pair["condition_id"]
+
+    # Same pre-flight discipline as every other live write path here. This
+    # sends a real BUY, so it gets the same two guards `merge` and `redeem`
+    # have: a repeat invocation must not cross twice for the same pair, and no
+    # order goes out on a registry view the venue has not corroborated.
+    if live:
+        _check_idempotency_guard(condition_id, force=force)
+
+    venue_positions = None
+    if not skip_positions_check:
+        funder = os.environ.get("POLY_FUNDER")
+        if not funder:
+            raise SystemExit(
+                "Refusing to complete: POLY_FUNDER is not set, so the venue's "
+                "position cannot be read. Set it, or pass "
+                "--skip-positions-check to act without the cross-check."
+            )
+        try:
+            venue_positions = fetch_positions(funder)
+        except Exception as exc:
+            raise SystemExit(
+                f"Refusing to complete: the Data API positions read failed "
+                f"({exc!r}). An unreadable endpoint is not an empty portfolio."
+            ) from exc
+
+        token = pair["heavy"]["token_id"]
+        believed = pair["heavy"]["matched"]
+        if token not in venue_positions:
+            raise SystemExit(
+                f"Refusing to complete: the venue reports no position at all "
+                f"in {token} while the registry holds {believed:.6f}. Absence "
+                f"is not zero -- it is equally consistent with a filtered read."
+            )
+        observed = float(venue_positions[token])
+        if observed < believed - 1e-6:
+            raise SystemExit(
+                f"Refusing to complete: registry holds {believed:.6f} of "
+                f"{token} but the venue reports only {observed:.6f}. Completing "
+                f"against a leg the venue does not agree we hold would open "
+                f"exposure rather than close it."
+            )
+
+    entry_id = None
+    if live:
+        entry_id = _log_order({
+            "kind": "complete",
+            "pair_id": pair_id,
+            "condition_id": condition_id,
+            "status": "pending",
+        })
+
     try:
         result = complete_pair(
             _client(), registry, pair_id,
@@ -1732,7 +1788,23 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
             max_order_usd=MAX_ORDER_USD,
         )
     except PairCompletionRefused as exc:
+        if entry_id:
+            _update_order_log(entry_id, {"status": "cancelled", "error": str(exc)})
         raise SystemExit(f"COMPLETION REFUSED: {exc}") from exc
+    except BaseException as exc:
+        # Anything else left the order in an unknown state at the venue.
+        # `interrupted` is what the idempotency guard refuses on, which is the
+        # correct posture when we do not know whether the BUY landed.
+        if entry_id:
+            _update_order_log(entry_id, {"status": "interrupted", "error": repr(exc)})
+        raise
+
+    if entry_id:
+        _update_order_log(entry_id, {
+            "status": "submitted",
+            "size": result.get("size"),
+            "notional": result.get("notional"),
+        })
 
     print(json.dumps(result, indent=2, default=str))
 
@@ -1802,6 +1874,10 @@ def main() -> None:
     cp = sub.add_parser("complete", help="Stage 4: cross the book to complete a one-sided pair.")
     cp.add_argument("pair_id", help="pair_id as recorded in the order registry")
     cp.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    cp.add_argument("--skip-positions-check", action="store_true",
+                    help="Act without the Data API registry/venue cross-check. Only when the endpoint is down.")
+    cp.add_argument("--force", action="store_true",
+                    help="Bypass idempotency guard against prior pending/submitted/interrupted orders.")
     cp.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                     help="actually send.")
     c = sub.add_parser("cancel-all")
@@ -1854,7 +1930,9 @@ def main() -> None:
         exit_pair(a.pair_id, is_live, db_path=a.db,
                   skip_positions_check=a.skip_positions_check)
     elif a.cmd == "complete":
-        complete_pair_cmd(a.pair_id, is_live, db_path=a.db)
+        complete_pair_cmd(a.pair_id, is_live, db_path=a.db,
+                          skip_positions_check=a.skip_positions_check,
+                          force=a.force)
     else:
         cancel_all(is_live)
 
