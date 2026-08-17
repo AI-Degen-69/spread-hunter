@@ -763,3 +763,60 @@ def test_a_real_exit_does_hold_the_condition(registry: OrderRegistry, tmp_path,
 
     with pytest.raises(SystemExit):
         live_exec._check_idempotency_guard(COND, force=False)
+
+
+def test_complete_pair_cmd_runs_end_to_end_and_holds_after_a_cross(
+    registry: OrderRegistry, tmp_path, monkeypatch
+):
+    """The Stage 4 command has its own config load, audit row and result handling.
+
+    It carried the same `from strategy.config import Config` failure as the exit
+    and was fixed alongside it, but the round-four tests only drove `exit_pair`.
+    Fixing one entry point and testing the other is how that defect survived
+    thirty-seven passing tests in the first place.
+    """
+    from strategy import live_exec
+
+    monkeypatch.setattr(live_exec, "RUN", tmp_path)
+    monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
+
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+
+    def fake_complete(*args, **kwargs):
+        # Proves the call site was reached with a real max_pair_cost, which is
+        # what the missing config import used to break before any work started.
+        assert kwargs["max_pair_cost"] > 0
+        return {"action": "completed", "pair_id": pair_id, "condition_id": COND,
+                "size": 10.0, "notional": 3.0}
+
+    monkeypatch.setattr("strategy.live_pairs.complete_pair", fake_complete)
+
+    live_exec.complete_pair_cmd(pair_id, live=True, db_path=registry.db_path,
+                                skip_positions_check=True)
+
+    # A cross went out, so the condition is held against a second unforced one.
+    with pytest.raises(SystemExit):
+        live_exec._check_idempotency_guard(COND, force=False)
+
+
+def test_complete_pair_cmd_does_not_hold_the_condition_when_nothing_crossed(
+    registry: OrderRegistry, tmp_path, monkeypatch
+):
+    """`balanced` sends no BUY, so it must not block a later merge or completion."""
+    from strategy import live_exec
+
+    monkeypatch.setattr(live_exec, "RUN", tmp_path)
+    monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
+
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+
+    def fake_complete(*args, **kwargs):
+        return {"action": "balanced", "pair_id": pair_id, "condition_id": COND,
+                "size": 0.0}
+
+    monkeypatch.setattr("strategy.live_pairs.complete_pair", fake_complete)
+
+    live_exec.complete_pair_cmd(pair_id, live=True, db_path=registry.db_path,
+                                skip_positions_check=True)
+
+    live_exec._check_idempotency_guard(COND, force=False)
