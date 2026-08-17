@@ -3149,3 +3149,43 @@ Suite **814 passed**.
 
 **LIVE** — with the caveat recorded above: every path here is verified against fixtures and an
 argument-level smoke run, never against a real pair.
+
+#### Addendum — self-review: heavy and light are a ranking, and rankings flip
+
+A careful pass over the whole diff, independent of the external review, found five issues. Two are the
+same defect in two places and are the serious ones.
+
+**`heavy` and `light` are positions in a sort, not identities.** `load_pair` ranks the two legs by
+matched size, so a second call after the light leg fills past the heavy one returns them swapped. Both
+`exit_naked_leg` and `complete_pair` re-derived the roles from that post-cancel ranking and then
+subtracted `venue_light_matched` — a number read against the *original* light orders — from it. The
+subtraction therefore mixed a venue reading for one token with a registry reading for another.
+
+Concretely: heavy UP holds 10, the light DOWN order is for 12 and fills fully during the cancel, and a
+reconcile pass lands before the re-read. `after["heavy"]` is now DOWN at 12 and `after["light"]` is UP
+at 10, while `venue_light_matched` is DOWN's 12. `max(10, 12)` gives 12, `naked` computes as zero, and
+the exit reports `route_to_merge` — "the pair completed, go and merge it" — while two DOWN shares sit
+naked. The completion path returns `balanced` on the same arithmetic and crosses nothing. Neither
+sends a wrong order, but both tell the operator a position is closed when it is not.
+
+The fix is to stop asking which leg is larger after the fact. `load_pair` now also returns the legs
+keyed by token, and `_naked_after` reduces the position for two *fixed* token ids. Anything comparing
+a value taken before an action with one taken after keys on the token, never on the ranking.
+
+**The completion cap was measured before the cancel and never re-checked.** `complete_pair` leaves the
+heavy leg's working orders resting, so the heavy average can move in the window between the guard and
+the send. A heavy order filling at a worse price there pushes the real pair cost past `max_pair_cost`,
+and the cross went out anyway — creating exactly the guaranteed-loss pair the cap exists to refuse.
+The cap is now re-evaluated against the heavy cost as it stands after the cancel.
+
+**The completion quieted only one leg.** The exit cancels both; the completion cancelled only the
+light. A resting heavy order keeps filling during and after the cross, so the pair this path had just
+balanced goes one-sided again moments later, under an audit row reading `completed`. It now cancels
+both, as the exit does.
+
+**`load_pair` silently dropped a third leg.** `light` was `legs[1]` and anything beyond was discarded,
+so a `pair_id` spanning three token ids was reduced to its two largest legs with no diagnostic. It now
+refuses: sizing an exit against a position a dropped leg partly offsets is an oversell.
+
+Five new tests, including the reduction in isolation and an end-to-end overtaking-light-leg case.
+Suite **819 passed**.

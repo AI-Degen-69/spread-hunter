@@ -842,3 +842,146 @@ def test_an_unknown_pair_id_refuses_cleanly_on_both_commands(tmp_path, monkeypat
     with pytest.raises(SystemExit, match="COMPLETION REFUSED"):
         live_exec.complete_pair_cmd("no-such-pair", live=False, db_path=db,
                                     skip_positions_check=True)
+
+
+# ---------------------------------------------------------------------------
+# Self-review round — heavy/light is a ranking, and rankings flip
+# ---------------------------------------------------------------------------
+
+
+def _overfilling_light_pair(registry: OrderRegistry) -> str:
+    """Heavy UP 10 filled; light DOWN order for 12, not yet filled."""
+    pair_id = "pair-overfill"
+    now = 1_000_000
+    heavy = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-heavy", condition_id=COND,
+        token_id=TOK_UP, side="BUY", price=0.60, original_size=10.0,
+        status="filled", posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(heavy)
+    registry.record_fill(FillRecord(trade_id="t-heavy", order_uuid=heavy.id,
+                                    size=10.0, price=0.60, venue_ts=now))
+    light = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-light", condition_id=COND,
+        token_id=TOK_DN, side="BUY", price=0.30, original_size=12.0,
+        status="open", posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(light)
+    return pair_id
+
+
+def test_exit_survives_the_light_leg_overtaking_the_heavy_one(
+    registry: OrderRegistry,
+):
+    """`heavy` and `light` are a ranking, and the ranking flips.
+
+    If the light leg fills past the heavy one and reconcile records it, a second
+    load_pair swaps the two. Deriving `naked` from the post-cancel ranking then
+    subtracts a venue reading for one token from a registry reading for another,
+    and the exit reports a complete pair while shares are still naked.
+    """
+    pair_id = _overfilling_light_pair(registry)
+    light = next(o for o in registry.get_active_orders() if o.token_id == TOK_DN)
+
+    class OvertakingClient(FakeClient):
+        def cancel_order(self, payload):
+            out = super().cancel_order(payload)
+            # The light leg fills 12 -- more than the heavy leg's 10 -- and a
+            # reconcile pass lands before the re-read.
+            self.venue_matched["venue-light"] = 12.0
+            registry.record_fill(FillRecord(
+                trade_id="t-light", order_uuid=light.id, size=12.0,
+                price=0.30, venue_ts=1_000_100,
+            ))
+            registry.update_order_status(light.id, "filled", 1_000_100)
+            return out
+
+    client = OvertakingClient(best_ask=0.40)
+    result = lp.exit_naked_leg(client, registry, pair_id,
+                               max_pair_cost=MAX_PAIR_COST, live=True)
+
+    # UP 10 against DOWN 12: the UP leg is fully covered, so there is nothing
+    # naked on the token this exit owns, and no sell may go out.
+    assert result["action"] == "route_to_merge"
+    assert not any(c.startswith("sell:") for c in client.calls)
+
+
+def test_naked_after_keys_on_tokens_not_on_rank():
+    """The reduction itself, isolated from the venue plumbing."""
+    after = {"legs": {
+        TOK_UP: {"token_id": TOK_UP, "matched": 10.0, "notional": 6.0},
+        TOK_DN: {"token_id": TOK_DN, "matched": 12.0, "notional": 3.6},
+    }}
+    naked, fill_cost = lp._naked_after(after, TOK_UP, TOK_DN, venue_light_matched=12.0)
+    assert naked == pytest.approx(-2.0)
+    assert fill_cost == pytest.approx(0.60)
+
+    # And with the roles as originally ranked, the arithmetic is unchanged.
+    naked2, _ = lp._naked_after(after, TOK_DN, TOK_UP, venue_light_matched=10.0)
+    assert naked2 == pytest.approx(2.0)
+
+
+def test_completion_cancels_the_working_heavy_leg_too(registry: OrderRegistry):
+    """A resting heavy order refills the pair right after the cross balances it."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    now = 1_000_500
+    extra = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-heavy-2", condition_id=COND,
+        token_id=TOK_UP, side="BUY", price=0.60, original_size=5.0,
+        status="partial", posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(extra)
+
+    client = FakeClient(best_ask=0.30)
+    result = lp.complete_pair(client, registry, pair_id,
+                              max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert "venue-heavy-2" in result["cancelled"]
+
+
+def test_completion_rechecks_the_cap_after_the_cancel(registry: OrderRegistry):
+    """The approved pair_cost was measured before the cancel.
+
+    A heavy order filling at a worse price in that window pushes the real pair
+    past the cap, and the cross must refuse rather than create the losing pair
+    the cap exists to prevent.
+    """
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    heavy = next(o for o in registry.get_orders_by_pair(pair_id)
+                 if o.token_id == TOK_UP)
+
+    class WorseningClient(FakeClient):
+        def cancel_order(self, payload):
+            out = super().cancel_order(payload)
+            # 5 more heavy shares at 0.90 lift the average well past the cap.
+            registry.record_fill(FillRecord(
+                trade_id="t-heavy-2", order_uuid=heavy.id, size=5.0,
+                price=0.90, venue_ts=1_000_200,
+            ))
+            return out
+
+    client = WorseningClient(best_ask=0.30)
+    with pytest.raises(lp.PairCompletionRefused, match="max_pair_cost"):
+        lp.complete_pair(client, registry, pair_id,
+                         max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert not any(c.startswith("buy:") for c in client.calls)
+
+
+def test_a_pair_spanning_three_tokens_refuses(registry: OrderRegistry):
+    """Reducing three legs to the largest two would size against a partial view."""
+    pair_id = _one_sided_pair(registry)
+    now = 1_000_600
+    third = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-third", condition_id=COND,
+        token_id="tok-third", side="BUY", price=0.20, original_size=5.0,
+        status="open", posted_ts=now, last_polled_ts=now, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(third)
+
+    with pytest.raises(lp.PairExitRefused, match="token ids"):
+        lp.load_pair(registry, pair_id)

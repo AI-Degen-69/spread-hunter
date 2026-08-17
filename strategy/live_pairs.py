@@ -348,6 +348,15 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
         slot["notional"] += registry.get_matched_notional(o.id)
         slot["orders"].append(o)
 
+    if len(by_token) > 2:
+        # A pair is two tokens. Silently reducing three to the largest two would
+        # size an exit against a position a dropped leg partly offsets.
+        raise PairExitRefused(
+            f"pair_id={pair_id!r} spans {len(by_token)} token ids "
+            f"({sorted(by_token)}). A pair is two legs; refusing rather than "
+            f"acting on a reduced view of the position."
+        )
+
     legs = sorted(by_token.values(), key=lambda s: s["matched"], reverse=True)
     heavy = legs[0]
     light = legs[1] if len(legs) > 1 else {
@@ -362,6 +371,12 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
         "condition_id": orders[0].condition_id,
         "heavy": heavy,
         "light": light,
+        # Keyed by token as well as by rank. `heavy` and `light` are a ranking,
+        # and a ranking flips: once the light leg fills past the heavy one, a
+        # second load_pair call swaps them. Anything comparing a value taken
+        # before an action with one taken after must key on the token, not on
+        # which side happened to be larger at the time.
+        "legs": by_token,
         "naked": naked,
         "fill_cost": fill_cost,
     }
@@ -403,6 +418,25 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]]) ->
             f"oversell."
         )
     return True
+
+
+def _naked_after(after: dict, heavy_token: str, light_token: Optional[str],
+                 venue_light_matched: float) -> tuple[float, float]:
+    """Recompute (naked, heavy fill cost) for two FIXED tokens.
+
+    Never re-derive heavy and light from the post-action ranking. If the light
+    leg filled past the heavy one, `after["heavy"]` is the other token, and
+    comparing it against a venue reading taken on the original light orders
+    mixes two different positions into one subtraction.
+    """
+    legs = after["legs"]
+    heavy_leg = legs.get(heavy_token, {"matched": 0.0, "notional": 0.0})
+    light_registry = legs.get(light_token, {"matched": 0.0})["matched"] if light_token else 0.0
+
+    heavy_matched = heavy_leg["matched"]
+    light_matched = max(light_registry, venue_light_matched)
+    fill_cost = (heavy_leg["notional"] / heavy_matched) if heavy_matched > 0 else 0.0
+    return heavy_matched - light_matched, fill_cost
 
 
 def exit_naked_leg(
@@ -480,8 +514,8 @@ def exit_naked_leg(
     #    the exact race this step exists to catch.
     venue_light_matched = _venue_matched(client, light_working)
     after = load_pair(registry, pair_id)
-    light_matched = max(after["light"]["matched"], venue_light_matched)
-    naked = after["heavy"]["matched"] - light_matched
+    heavy_token = pair["heavy"]["token_id"]
+    naked, _ = _naked_after(after, heavy_token, light_token, venue_light_matched)
 
     if naked <= SIZE_EPS:
         return {
@@ -495,7 +529,6 @@ def exit_naked_leg(
         }
 
     # 3. Sell, sized by the registry and bounded by a price we will accept.
-    heavy_token = after["heavy"]["token_id"]
     heavy_book = client.get_order_book(heavy_token)
     bid = best_bid(heavy_book)
     if bid is None or bid <= 0:
@@ -642,9 +675,15 @@ def complete_pair(
     # live on the same token, and if both fill the light leg is double-sized --
     # naked exposure on the opposite side, created by the path whose entire
     # purpose is to remove naked exposure.
+    # Quiet BOTH legs, as the exit does. A working heavy order left resting
+    # keeps filling during and after the cross, so the pair this path just
+    # balanced goes one-sided again moments later.
     light_working = _working_orders(pair["light"])
+    heavy_working = _working_orders(pair["heavy"])
     cancelled = _cancel_orders(client, light_working, "resting light leg",
                                refusal=PairCompletionRefused)
+    cancelled += _cancel_orders(client, heavy_working, "working heavy leg",
+                                refusal=PairCompletionRefused)
 
     # Then re-read from the venue, for the same reason the exit does: the cancel
     # can race a match, and the registry will not know about it until the next
@@ -652,8 +691,23 @@ def complete_pair(
     venue_light_matched = _venue_matched(client, light_working,
                                          refusal=PairCompletionRefused)
     after = load_pair(registry, pair_id)
-    light_matched = max(after["light"]["matched"], venue_light_matched)
-    naked = after["heavy"]["matched"] - light_matched
+    heavy_token = pair["heavy"]["token_id"]
+    naked, fill_cost_after = _naked_after(after, heavy_token, light_token,
+                                          venue_light_matched)
+
+    # Re-check the cap against the heavy cost as it stands now. The figure the
+    # guard above approved was taken before the cancel, and a heavy order that
+    # filled in the meantime at a worse price can push the real pair cost past
+    # the cap -- which is precisely the pair this path must never create.
+    pair_cost_after = fill_cost_after + ask
+    if pair_cost_after >= max_pair_cost:
+        raise PairCompletionRefused(
+            f"Between the guard and the send, the heavy fill cost moved to "
+            f"{fill_cost_after:.4f}; at ask {ask:.4f} the pair would cost "
+            f"{pair_cost_after:.4f}, at or above max_pair_cost "
+            f"{max_pair_cost:.4f}. Refusing the cross."
+        )
+    pair_cost = pair_cost_after
 
     if naked <= SIZE_EPS:
         return {
