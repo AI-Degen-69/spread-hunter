@@ -1,0 +1,47 @@
+name: tests
+
+# Runs the suite on a clean checkout — no .env, no run/*.db, no archive/.
+# That is deliberate. Before this workflow existed the suite had only ever been
+# run on developer machines that already carried untracked local state, so a
+# test could depend on that state and still report green forever. Anything that
+# fails here and passes locally is a test coupled to untracked files, not a
+# flake.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same PR cancels the run still in flight for it.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        # No network, no wallet, no venue. Any test that needs those is either
+        # mocked or non-hermetic, and this is where that shows up.
+        run: pytest -q

@@ -1,0 +1,6 @@
+# Test-only dependencies. Runtime deps live in requirements.txt.
+-r requirements.txt
+
+pytest>=8.0
+# starlette's TestClient is httpx-backed; server/ tests fail to import without it.
+httpx>=0.27
