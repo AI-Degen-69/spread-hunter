@@ -2885,3 +2885,390 @@ the poll-loop skip. Full suite **772 passed**.
 
 **LIVE** — the gate named in the Stage 2-4 architecture document is closed. Stage 3 may now issue a
 cancel, since a cancel decided from raced state was the specific harm this blocked.
+
+---
+
+### 2026-08-17 — Stage 3: the naked exit, and the three things that are only dangerous live
+
+#### Question
+
+The pairs rule is already proven in simulation (`strategy/sweep.py:700-830`): the trigger fired 16
+times across 26,777 pairs, always on `pair_cost >= max_pair_cost`, costing 3.67c per exit against
+3.68c gained per completed pair. What has to change to run it against a real venue?
+
+#### Method
+
+Ported the trigger unchanged and rewrote only the sequencing around it, then wrote fourteen tests
+before the implementation. Every test mocks the client at the boundary; none reaches the network.
+
+#### Result
+
+**The rule did not change. The sequence did.** In simulation a cancel always succeeds, a book read is
+free, and nobody else can fill our order between two statements. Each of those is a place to lose
+money live, so the live path is `cancel -> re-read -> sell`, and each arrow is load-bearing:
+
+1. **Cancel before sell.** Selling first leaves a live resting order that can fill into the position
+   we just closed, re-opening exposure at the worst moment.
+2. **A failed cancel aborts.** No sell is attempted. The alternative is selling with a live order
+   still working, which is the same exposure with extra steps.
+3. **Re-read between cancel and sell.** A successful cancel does not mean the pair is still
+   one-sided — the cancel may have raced a match that already happened. If the other leg filled, the
+   pair is complete and worth $1.00 at merge, and market-selling one leg converts that into a
+   realized loss. The exit routes it to `merge` instead. This is the worst outcome available on the
+   path and the reason the re-read is not optional.
+
+**Sizing comes from the fills, never from intent.** An order that filled 4 of 10 is a 4-share
+position; sizing an exit off the intended 10 would sell shares that do not exist. Size is
+`min(registry naked size, bid depth)` — depth below the holding is a partial exit, not an oversized
+one — with a redundant refusal above the registry's number, because an oversell is the one error here
+that cannot be undone.
+
+**The Data API `/positions` cross-check landed here, as scoped in `b22eada`.** It is the only
+independent view of what the venue says we hold, and it runs *before* any venue write, so a
+divergence costs nothing rather than being discovered after a cancel has gone out. It fails closed
+twice over: an unreadable endpoint refuses the exit rather than passing by knowing nothing, and an
+unset `POLY_FUNDER` refuses rather than skipping the check silently. `--skip-positions-check` exists
+for a genuine Data API outage and puts that decision on the record. Tolerance is `1e-6` — sized for
+float dust from summing fills, since a real divergence is a share or more and at that scale one of
+the two views is wrong and neither is safe to trade on.
+
+**A missing ask fires the trigger rather than holding it.** No ask means there is nothing to complete
+against, so the leg stays naked for as long as that is true. Holding on the hope that a quote appears
+is the exact position the rule exists to close.
+
+Fourteen tests: fires at exactly 0.995 and holds at 0.994 (`>=`, not `>`), fires on a missing ask,
+cancel ordered before sell, failed cancel aborts with no sell sent, a leg that fills during the
+cancel routes to merge, size capped by the registry and separately by bid depth, divergence refuses
+before any venue call, matching positions proceed, float dust tolerated, under-cap holds, dry run
+sends nothing, and a balanced pair is not a candidate. Full suite **786 passed**.
+
+#### Decision
+
+**LIVE** — Stage 3 closes exposure and opens none. The `exit` subcommand is dry-run by default like
+every other command here.
+
+---
+
+### 2026-08-17 — Stage 4: completing the pair, and why the cap is the whole discipline
+
+#### Question
+
+When one leg fills and the pair still completes under the cap, crossing for the other leg turns a
+half-open position into one worth $1.00 at merge. What stops that path from quietly becoming a way to
+open exposure instead of closing it?
+
+#### Method
+
+Ported the completion half of the same sim rule and wrote nine tests before the implementation.
+
+#### Result
+
+1. **The cap is the discipline, and it refuses rather than degrading.** A cross that puts `pair_cost`
+   at or above `max_pair_cost` is a guaranteed loss after gas. Closing that position is the exit
+   path's job, and completion must not do that job badly, so it raises `PairCompletionRefused` rather
+   than crossing anyway. `>=`, matching the exit trigger exactly — the two paths partition the space
+   at the same boundary, with no gap and no overlap.
+2. **Size comes from `size_matched`, never from the intended size.** A leg that filled 4 of 10 is a
+   4-share position. Completing 10 against it would open 6 shares of fresh exposure on the other
+   side — precisely the inversion this path must never make. Capped again by ask depth, so thin books
+   produce a partial completion rather than a walk up the ladder.
+3. **`MAX_ORDER_USD` applies here like anywhere else.** The Stage 1 notional cap is not waived because
+   the order reduces exposure.
+4. **No ask refuses.** With nothing to cross into, the leg stays naked and the exit rule owns it. The
+   two paths hand the same condition to each other consistently: `should_exit` fires on a missing ask,
+   `complete_pair` refuses on it.
+
+Nine tests: crosses under the cap, refuses at the cap, sizes from fills against a partial fill, capped
+by `MAX_ORDER_USD`, capped by ask depth, refuses without an ask, dry run sends nothing, a balanced pair
+is not a candidate, and the acceptance condition — a completed pair reads as held on both legs, which
+is what `merge`'s pre-flight reconciles against. Full suite **795 passed**.
+
+#### Decision
+
+**LIVE** — Stages 2, 3 and 4 are complete and none of them opens a position. Stage 4.5, the first real
+order, is gated on explicit Owner sign-off and is not part of this work.
+
+#### Addendum — the completion BUY was denominated in shares, not USDC
+
+The follow-up review caught a unit error in Stage 4 that every guard above the send would have
+missed. `MarketOrderArgsV2.amount` is the *maker* amount — the thing we give — so on a SELL it is a
+share count and on a BUY it is USDC. Confirmed by reading `get_market_order_amounts` in the installed
+SDK: for BUY it sets `maker_amount = amount` and `taker_amount = amount / price`; for SELL,
+`maker_amount = amount` and `taker_amount = amount * price`.
+
+The Stage 3 sell passed shares and was correct. The Stage 4 completion passed shares too, and was
+not: a 10-share completion at an ask of $0.30 would have submitted a $10.00 buy and acquired about
+33 shares — 23 shares of fresh exposure on the leg this path exists to close, which is the exact
+inversion Stage 4 is written to prevent. Every guard validated the $3.00 we meant, so none of them
+could see it, and the fake client accepted a share count without complaint.
+
+Fixed by passing `notional`. Two tests now pin the unit on both sides: the BUY amount must equal
+`size * ask` and must not equal the share count, and the SELL amount must stay a share count. The
+fake client records the order arguments structurally rather than only as a string, because a test
+that reads a formatted number cannot tell dollars from shares.
+
+Suite **797 passed**.
+
+---
+
+### 2026-08-17 — Stage 3/4 review round two: six real holes, and one claim the code did not honour
+
+#### Question
+
+Stages 3 and 4 shipped with fourteen and nine tests and a full green suite. What did the tests not
+ask?
+
+#### Method
+
+A follow-up review raised eight findings. Each was checked against the code and the installed SDK
+before acting; seven were real, and the eighth had already been fixed.
+
+#### Result
+
+1. **The re-read did not read what the docstring said it read.** `load_pair` queries `run/live.db`,
+   and fills arrive there only through `reconcile_orders` in the poll loop. A match that completed the
+   light leg during the cancel is therefore invisible until the next poll cycle — so the step
+   documented as "the re-read is not optional" confirmed what we already believed and sold straight
+   into the race it was written to catch. The read now goes to the venue via `get_order`, and every
+   failure mode refuses rather than selling: an unreadable order, a missing matched-size field, a
+   non-numeric value. The prose was the defect as much as the code, and the prior entry overstated it.
+2. **Both live paths left working orders behind.** The exit cancelled only the light leg, so a heavy
+   leg at `partial` kept working size that could refill the token immediately after the sell. The
+   completion cancelled nothing at all, so its own resting maker BUY and the taker BUY it sends could
+   both fill and double the light leg — naked exposure created by the path whose purpose is to remove
+   it. Both now cancel every working order on the legs they touch before anything is sent.
+3. **The divergence gate refused in the wrong direction.** It compared `abs(observed - believed)`, so
+   a venue *surplus* — the same token held by another pair, or a position partly merged already —
+   blocked the exit. That refused the one action that closes exposure, over a discrepancy that cannot
+   cause an oversell. It now refuses only when the venue reports less. A token missing from the
+   response still refuses: absence is not zero, and it is equally consistent with a filtered read.
+4. **The sell had no worst-price bound.** `bid_depth` summed every level, and with no `price` the SDK
+   derives one from the requested amount and will walk the ladder down to whatever clears. A
+   tick-aligned floor at `best_bid - 0.02` now bounds it, and depth is counted only at levels at or
+   above that floor, so size and price agree. Two cents is absolute rather than proportional because
+   these are probability prices in [0, 1] — a percentage would tighten to under a tick near zero —
+   and it is roughly the 3.67c average exit cost measured in simulation.
+5. **`/positions` was under-fetching.** The endpoint defaults to `sizeThreshold=1` and `limit=100`, so
+   sub-share holdings were dropped and long portfolios truncated, and the gate then read the omission
+   as "the venue says we hold nothing". Now `sizeThreshold=0` with pagination.
+6. **`complete_pair_cmd` had none of the pre-flight the other live write paths have.** It sent a real
+   BUY with no idempotency guard and no positions cross-check, so a repeated invocation crossed twice.
+   It now takes `_check_idempotency_guard`, writes a `pending` row before sending and resolves it
+   after, and marks the row `interrupted` on an unexpected exception — the state the guard refuses on,
+   which is the right posture when we do not know whether the order landed.
+7. `MIN_SELL_SHARES` gated a BUY. Renamed to `MIN_ORDER_SHARES`, alias kept.
+
+Eight new tests cover the round: heavy-leg cancellation, refusal on a failed venue read, the slippage
+floor against a three-level book, completion cancelling before crossing, completion shrinking to the
+remainder after a partial race, completion becoming a no-op when the leg filled during the cancel, a
+venue surplus proceeding, and a missing token refusing. Full suite **805 passed**.
+
+#### Decision
+
+**LIVE** — with the correction recorded: the previous entry's claim that the re-read detected the
+cancel/fill race was wrong at the time it was written.
+
+#### Addendum — round three: the guard I added to one path and not the other
+
+Three more findings, all real.
+
+`exit_pair` sent a live market SELL with neither the idempotency guard nor an audit row, while
+`merge`, `redeem` and the freshly-guarded `complete_pair_cmd` all had both. The gap matters for the
+same reason the venue re-read does: `naked` is derived from the registry, and registry fills arrive
+only through the poll loop, so an immediate second `exit --live` cannot see the first sell and sends
+it again. The Data API cross-check caught this only while `--skip-positions-check` was absent — which
+is to say, exactly not in the case where an operator is already working around a broken endpoint. It
+now takes `_check_idempotency_guard`, writes a `pending` row before sending, closes it `cancelled` on
+a refusal (nothing was sent, so later attempts must not be blocked) and `interrupted` on anything
+else.
+
+`_cancel_orders` and `_venue_matched` raised `PairExitRefused` unconditionally, including when called
+from the completion path. `complete_pair_cmd` catches only `PairCompletionRefused`, so a failed
+cancel or an unreadable venue order escaped into the generic handler: the audit row was marked
+`interrupted` although nothing had been sent, and every later completion on that condition was then
+refused until `--force`. A refusal that blocks the next attempt is worse than the failure it reports.
+The refusal type is now a parameter, defaulting to the exit's.
+
+`_floor_to_tick` used a bare `int(price / tick)`. In binary floating point `0.29 / 0.01` is
+28.999999999999996, so an already-aligned price floored a whole tick lower — the sell bound sat below
+what we chose and `depth_at_or_above` counted an extra level. Safe in direction, wrong in value.
+Rounding to nine places before truncating fixes it.
+
+Four new tests. Suite **805 passed**.
+
+#### Addendum — round four: the guard blocked the recovery it recommended, and neither CLI path ran
+
+Two findings, one of them mine to have caught long ago.
+
+**The audit row marked every non-exception result `submitted`.** But `exit_naked_leg` returns
+`route_to_merge` when the resting leg fills during the cancel, and that branch sends no SELL at all.
+`exit_pair` then prints "the pair completed — now run `merge`", and `_check_idempotency_guard` refuses
+that exact merge because the condition carries a `submitted` row. The guard blocked the recovery the
+same command had just recommended, and the only way through was `merge --force`, which is precisely
+the flag an operator should not be reaching for on a normal path. Only a result that actually sent —
+`exited` for the exit, `completed` for the completion — now holds the condition open; every non-send
+outcome closes the row as `cancelled`.
+
+**Neither CLI path had ever been executed.** Writing the test for the above raised
+`ImportError: cannot import name 'Config' from 'strategy.config'`. There is no `Config` class in that
+module; the accessor is `config.load()` returning a `MakerConfig`. Both `exit_pair` and
+`complete_pair_cmd` would have crashed on their first line of real work, on every invocation, since
+the moment they were written. Thirty-seven tests passed over this code because every one of them
+called into `live_pairs` directly and none went through the command that operators actually type.
+
+That is the more useful lesson of the round: a suite that exercises the library and never the entry
+point will report full health on a program that cannot start. The two new tests drive
+`live_exec.exit_pair` end to end.
+
+Suite **811 passed**.
+
+#### Addendum — round five: what running the commands found that the tests did not
+
+After the config `ImportError` was fixed, I ran both commands without `--live` against a pair id that
+does not exist — the cheapest possible smoke test, and one that should have existed before either
+command was called finished.
+
+It confirmed the fix: both now reach the registry read, which is the first real work either of them
+does. It also found two things forty-one tests had not.
+
+`load_pair` raises when the id is unknown, and it is called *before* either command's `try` block, so
+an operator typo produced a traceback instead of the refusal message. On the completion path it was
+worse: `load_pair` signals with `PairExitRefused`, which `complete_pair_cmd` does not catch at all —
+the same mismatch found one round earlier in the helpers, surviving in a different spot because the
+fix was applied where the review pointed rather than everywhere the pattern occurred.
+
+Both now exit with `EXIT REFUSED` / `COMPLETION REFUSED` and the reason.
+
+The registry holds no pairs, so nothing deeper than the argument path could be exercised. A real
+dry run against a live `pair_id` remains untested, and Stage 4.5 is the first time these commands
+will meet one.
+
+Suite **814 passed**.
+
+#### Decision
+
+**LIVE** — with the caveat recorded above: every path here is verified against fixtures and an
+argument-level smoke run, never against a real pair.
+
+#### Addendum — self-review: heavy and light are a ranking, and rankings flip
+
+A careful pass over the whole diff, independent of the external review, found five issues. Two are the
+same defect in two places and are the serious ones.
+
+**`heavy` and `light` are positions in a sort, not identities.** `load_pair` ranks the two legs by
+matched size, so a second call after the light leg fills past the heavy one returns them swapped. Both
+`exit_naked_leg` and `complete_pair` re-derived the roles from that post-cancel ranking and then
+subtracted `venue_light_matched` — a number read against the *original* light orders — from it. The
+subtraction therefore mixed a venue reading for one token with a registry reading for another.
+
+Concretely: heavy UP holds 10, the light DOWN order is for 12 and fills fully during the cancel, and a
+reconcile pass lands before the re-read. `after["heavy"]` is now DOWN at 12 and `after["light"]` is UP
+at 10, while `venue_light_matched` is DOWN's 12. `max(10, 12)` gives 12, `naked` computes as zero, and
+the exit reports `route_to_merge` — "the pair completed, go and merge it" — while two DOWN shares sit
+naked. The completion path returns `balanced` on the same arithmetic and crosses nothing. Neither
+sends a wrong order, but both tell the operator a position is closed when it is not.
+
+The fix is to stop asking which leg is larger after the fact. `load_pair` now also returns the legs
+keyed by token, and `_naked_after` reduces the position for two *fixed* token ids. Anything comparing
+a value taken before an action with one taken after keys on the token, never on the ranking.
+
+**The completion cap was measured before the cancel and never re-checked.** `complete_pair` leaves the
+heavy leg's working orders resting, so the heavy average can move in the window between the guard and
+the send. A heavy order filling at a worse price there pushes the real pair cost past `max_pair_cost`,
+and the cross went out anyway — creating exactly the guaranteed-loss pair the cap exists to refuse.
+The cap is now re-evaluated against the heavy cost as it stands after the cancel.
+
+**The completion quieted only one leg.** The exit cancels both; the completion cancelled only the
+light. A resting heavy order keeps filling during and after the cross, so the pair this path had just
+balanced goes one-sided again moments later, under an audit row reading `completed`. It now cancels
+both, as the exit does.
+
+**`load_pair` silently dropped a third leg.** `light` was `legs[1]` and anything beyond was discarded,
+so a `pair_id` spanning three token ids was reduced to its two largest legs with no diagnostic. It now
+refuses: sizing an exit against a position a dropped leg partly offsets is an oversell.
+
+Five new tests, including the reduction in isolation and an end-to-end overtaking-light-leg case.
+Suite **819 passed**.
+
+#### Addendum — the sign, and comparing two different populations
+
+The previous round made `_naked_after` return a signed difference and then ignored the sign: both
+paths still treated `naked <= SIZE_EPS` as "nothing left to do". With the heavy leg at 10 and the
+light leg at 12, the difference is -2 — the position is still one-sided, just on the other token —
+and the exit reported `route_to_merge` while the completion reported `balanced`. The regression test
+written that round asserted the wrong answer, which is how a fix for a lying result shipped with the
+lie relocated rather than removed.
+
+The sign now decides: zero is closed, positive means the original heavy token is naked, negative means
+the original *light* token is. The negative case refuses and names the token and the size, because this
+command was invoked for one leg and must not quietly sell the other.
+
+Second, the post-cancel cap still could not see a live heavy fill. `complete_pair` cancels the heavy
+leg's working orders now, but only the light orders were re-read from the venue, and `fill_cost_after`
+came from the registry — which lags by a poll cycle. A heavy order filling while its own cancel was in
+flight was therefore invisible to the very check meant to catch it. Both legs are re-read now, and
+when the venue reports heavy size the registry has not priced, the completion refuses: a matched-size
+read carries no execution price, and the cap is a statement about price. Refusing beats crossing
+against an average we cannot compute.
+
+Fixing that surfaced a third defect in the fix itself. `_venue_matched` sums only the *working* orders,
+while the registry's leg figure covers every order on that token, so `max(leg_total, working_sum)`
+compared two different populations — the same "two aggregates that do not mean the same thing" mistake
+as the leg-ranking bug one round earlier. The comparison is now per order: for each cancelled order,
+the venue's matched size minus what the registry recorded for that same order, summed. The venue
+figures are extras that add to the leg totals rather than competing with them.
+
+Three tests changed or added, including one where only the venue moves and the registry is left
+untouched — the actual live race, which a test that writes to the registry does not exercise.
+
+Suite **821 passed**.
+
+---
+
+### 2026-08-17 — Stage 4.5 pre-flight: the command that opens the position never told the registry
+
+#### Question
+
+Stage 4.5 is one supervised live order proving the whole chain: post -> detect -> complete -> merge ->
+cash. Before placing it, does each link actually see the one before it?
+
+#### Method
+
+Read `quote` — the command 4.5 begins with — against what Stages 2, 3 and 4 read.
+
+#### Result
+
+**The chain was broken at the first arrow.** `quote` posted both legs and appended to
+`run/live_orders.json`, and that was all. It never created an `OrderRecord`, so it never assigned a
+`pair_id` either. Every consequence follows from that one omission:
+
+- `reconcile_orders` had no rows to reconcile, so Stage 2 could not detect a fill on an order this
+  command placed.
+- `exit` and `complete` both take a `pair_id`, and none existed, so `load_pair` would refuse.
+- The two legs would rest at the venue with real money against them and nothing in the registry
+  tracking them — the precise failure the registry was built to prevent, sitting in the one command
+  Stage 4.5 depends on.
+
+Stage 4.5 would have proved nothing. The order would have gone out and no stage after it could have
+seen the order.
+
+`quote` now writes a row per leg under one shared `pair_id`, **before** sending. A row written after a
+successful send is lost to any crash in the window between; a row written before is at worst a
+`pending` with no venue id, which is exactly what reconcile's orphan adoption exists to claim. On a
+response the venue id is attached and the row becomes `open`; when the response carries no id under
+any of its known spellings, the row stays `pending` and the command says so on stderr rather than
+guessing — attaching the wrong id would bind our row to somebody else's order.
+
+The command now also prints the `pair_id` and the three follow-up commands, because the alternative
+was opening `live.db` by hand, which is the sort of step an operator skips at the moment it matters.
+A `pairs` subcommand lists every pair with its held sizes for the same reason.
+
+Five tests: both legs share one `pair_id` and end `open`; a response without an id leaves both rows
+`pending`; the id extractor accepts each spelling and returns `None` rather than guessing.
+
+Suite **824 passed**.
+
+#### Decision
+
+**OPEN** — Stage 4.5 is not ready. This closes the largest gap, but the gate also requires Stages 3
+and 4 approved, and their PR is unmerged. No path here has met a real pair.

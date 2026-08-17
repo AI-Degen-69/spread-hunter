@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import contextlib
 import os
 import sys
 import threading
@@ -275,7 +276,61 @@ def balance(funder: str | None) -> None:
               "the wrong address -- try the other candidate before trading.")
 
 
-def quote(condition_id: str, price: float, size: float, live: bool) -> None:
+def pairs(db_path: str | Path | None = None) -> None:
+    """List every pair the registry knows, with what is actually held.
+
+    Stage 3 and Stage 4 both take a pair_id, and without this the only way to
+    find one is to open live.db by hand -- which is exactly the sort of step an
+    operator skips at the moment it matters.
+    """
+    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH, get_connection
+    from strategy.live_pairs import load_pair, PairExitRefused
+
+    db = Path(db_path) if db_path else DEFAULT_DB_PATH
+    registry = OrderRegistry(db_path=db)
+    with contextlib.closing(get_connection(db)) as conn:
+        rows = conn.execute(
+            "SELECT pair_id, MIN(posted_ts) AS first_ts FROM orders "
+            "WHERE pair_id IS NOT NULL GROUP BY pair_id ORDER BY first_ts"
+        ).fetchall()
+
+    if not rows:
+        print(f"no pairs in {db}")
+        return
+
+    print(f"{'pair_id':<20} {'condition':<14} {'naked':>9}  legs")
+    for r in rows:
+        pid = r["pair_id"]
+        try:
+            pair = load_pair(registry, pid)
+        except PairExitRefused as exc:
+            print(f"{pid:<20} {'?':<14} {'?':>9}  UNREADABLE: {exc}")
+            continue
+        legs = "  ".join(
+            f"{tok[:10]}..={leg['matched']:.2f}" for tok, leg in pair["legs"].items()
+        )
+        print(f"{pid:<20} {pair['condition_id'][:12]:<14} "
+              f"{pair['naked']:>9.2f}  {legs}")
+
+
+def _venue_order_id(resp) -> str | None:
+    """Pull the venue order id out of a post_order response.
+
+    Several spellings are accepted because the field name has moved across SDK
+    versions, and a missing id is reported rather than guessed: attaching the
+    wrong id would bind our row to somebody else's order.
+    """
+    if resp is None:
+        return None
+    for key in ("orderID", "orderId", "order_id", "id"):
+        value = resp.get(key) if isinstance(resp, dict) else getattr(resp, key, None)
+        if value:
+            return str(value)
+    return None
+
+
+def quote(condition_id: str, price: float, size: float, live: bool,
+          db_path: str | Path | None = None) -> None:
     """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price."""
     from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
     from py_clob_client_v2.order_builder.constants import BUY
@@ -309,15 +364,59 @@ def quote(condition_id: str, price: float, size: float, live: bool) -> None:
         raise SystemExit(f"open ${already:.2f} + ${cost:.2f} exceeds "
                          f"MAX_TOTAL_USD ${MAX_TOTAL_USD:.2f}")
 
+    # The registry is what every later stage reads. Without a row here the poll
+    # loop has nothing to reconcile, `exit` and `complete` have no pair_id to
+    # act on, and the two legs rest at the venue with real money and nothing
+    # tracking them -- the exact failure the registry exists to prevent.
+    import uuid as _uuid
+    from strategy.order_registry import (
+        OrderRegistry, OrderRecord, DEFAULT_DB_PATH,
+    )
+    from strategy import config as strategy_config
+
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    pair_id = f"pair-{_uuid.uuid4().hex[:12]}"
+    max_pair_cost = strategy_config.load().max_pair_cost
+    now_ms = int(time.time() * 1000)
+
     for tok, p, label in legs:
+        local_id = str(_uuid.uuid4())
+        # Row first, then send. A row written after a successful send would be
+        # lost to a crash in between, leaving a live order untracked; a row
+        # written before is at worst a `pending` with no venue id, which
+        # reconcile's orphan adoption is built to claim.
+        registry.create_order(OrderRecord(
+            id=local_id, order_id=None, condition_id=condition_id,
+            token_id=str(tok), side="BUY", price=p, original_size=size,
+            status="pending", posted_ts=now_ms, last_polled_ts=now_ms,
+            pair_id=pair_id, max_pair_cost_at_post=max_pair_cost,
+        ))
+
         signed = c.create_order(
             OrderArgsV2(price=p, size=size, side=BUY, token_id=tok))
         resp = c.post_order(signed, OrderType.GTC)
         _log_order({"ts": time.time(), "condition_id": condition_id,
+                    "pair_id": pair_id, "local_id": local_id,
                     "side": label, "token_id": str(tok), "price": p,
                     "size": size, "response": str(resp)[:400]})
+
+        venue_id = _venue_order_id(resp)
+        if venue_id:
+            registry.attach_venue_order_id(local_id, venue_id, status="open")
+        else:
+            # The order may well be live; we simply cannot name it. Leave the
+            # row `pending` for orphan adoption rather than guessing an id or
+            # marking a status we cannot support, and say so loudly.
+            print(f"  WARNING: no order id in the {label} response; row "
+                  f"{local_id} stays pending for reconcile to adopt.",
+                  file=sys.stderr)
         print(f"  SENT {label}: {resp}")
+
     print(f"\nlogged to {RUN / 'live_orders.json'}")
+    print(f"pair_id  {pair_id}")
+    print(f"  poll:     python -m strategy.live_exec poll --interval 5")
+    print(f"  exit:     python -m strategy.live_exec exit {pair_id}")
+    print(f"  complete: python -m strategy.live_exec complete {pair_id}")
 
 
 CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
@@ -1653,6 +1752,221 @@ def poll(
         sys.exit(1)
 
 
+def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
+              skip_positions_check: bool = False, force: bool = False) -> None:
+    """Stage 3 — close a one-sided pair: cancel the resting leg, sell the filled one.
+
+    The Data API positions read is a pre-flight, not decoration: it is the only
+    independent check that the venue agrees with the registry about what we
+    hold, and selling a size the venue does not agree we hold is an oversell.
+    It fails closed -- an unreadable endpoint refuses the exit rather than
+    proceeding unchecked. `--skip-positions-check` exists for the case where the
+    Data API is down and the operator has decided to act anyway, and it says so
+    on the record.
+    """
+    from strategy.live_pairs import (
+        exit_naked_leg, fetch_positions, load_pair, PairExitRefused,
+    )
+    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from strategy import config as strategy_config
+
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    client = _client()
+    funder = os.environ.get("POLY_FUNDER")
+
+    # Same discipline as merge, redeem and complete: this sends a real market
+    # SELL, so a repeat invocation must be refused rather than sell twice.
+    # `naked` is derived from the registry, and registry fills only arrive
+    # through the poll loop, so an immediate second run cannot see the first
+    # sell and would happily send it again.
+    # load_pair raises when the id is unknown -- an operator typo is the most
+    # likely cause, and a traceback is the wrong way to say "no such pair".
+    try:
+        condition_id = load_pair(registry, pair_id)["condition_id"]
+    except PairExitRefused as exc:
+        raise SystemExit(f"EXIT REFUSED: {exc}") from exc
+    if live:
+        _check_idempotency_guard(condition_id, force=force)
+
+    venue_positions = None
+    if not skip_positions_check:
+        if not funder:
+            raise SystemExit(
+                "Refusing to exit: POLY_FUNDER is not set, so the venue's "
+                "position cannot be read and the registry's view cannot be "
+                "checked. Set it, or pass --skip-positions-check to act "
+                "without the cross-check."
+            )
+        try:
+            venue_positions = fetch_positions(funder)
+        except Exception as exc:
+            raise SystemExit(
+                f"Refusing to exit: the Data API positions read failed "
+                f"({exc!r}). An unreadable endpoint is not an empty portfolio. "
+                f"Pass --skip-positions-check to act without the cross-check."
+            ) from exc
+
+    entry_id = None
+    if live:
+        entry_id = _log_order({
+            "kind": "exit",
+            "pair_id": pair_id,
+            "condition_id": condition_id,
+            "status": "pending",
+        })
+
+    try:
+        result = exit_naked_leg(
+            client, registry, pair_id,
+            max_pair_cost=strategy_config.load().max_pair_cost,
+            live=live,
+            venue_positions=venue_positions,
+        )
+    except PairExitRefused as exc:
+        # A refusal sent nothing, so the row closes rather than blocking later
+        # attempts. Only genuine uncertainty warrants `interrupted`.
+        if entry_id:
+            _update_order_log(entry_id, {"status": "cancelled", "error": str(exc)})
+        raise SystemExit(f"EXIT REFUSED: {exc}") from exc
+    except BaseException as exc:
+        if entry_id:
+            _update_order_log(entry_id, {"status": "interrupted", "error": repr(exc)})
+        raise
+
+    if entry_id:
+        # Only a result that actually sent a SELL may hold the condition open.
+        #
+        # `route_to_merge`, `balanced` and `hold` send nothing, and marking them
+        # `submitted` would leave the idempotency guard blocking the very
+        # recovery this command prints two lines below: the operator is told to
+        # run `merge`, and `merge` then refuses the condition until --force.
+        # A guard that blocks the recovery it recommends is worse than no guard.
+        sent = result.get("action") == "exited"
+        _update_order_log(entry_id, {
+            "status": "submitted" if sent else "cancelled",
+            "action": result.get("action"),
+            "size": result.get("size"),
+        })
+
+    print(json.dumps(result, indent=2, default=str))
+    if result["action"] == "route_to_merge":
+        print(
+            f"\nThe pair completed between the cancel and the sell. It is now "
+            f"worth $1.00 at merge -- run:\n"
+            f"  python -m strategy.live_exec merge {result['condition_id']} "
+            f"--amount <shares> --live"
+        )
+
+
+def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = None,
+                      skip_positions_check: bool = False, force: bool = False) -> None:
+    """Stage 4 — cross the book to complete a one-sided pair.
+
+    Closes exposure rather than opening it: the half-open leg is already at
+    risk, and completing it yields a pair worth $1.00 at merge. Refuses any
+    cross that would push the pair to or past max_pair_cost -- that case
+    belongs to `exit`, and this path must not do the stop-loss's job badly.
+    """
+    from strategy.live_pairs import (
+        complete_pair, fetch_positions, load_pair, PairCompletionRefused,
+        PairExitRefused,
+    )
+    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from strategy import config as strategy_config
+
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    # load_pair signals an unknown pair with the exit path's exception, which
+    # this command does not otherwise catch. Without this an operator typo
+    # escapes as a traceback rather than the refusal message.
+    try:
+        pair = load_pair(registry, pair_id)
+    except PairExitRefused as exc:
+        raise SystemExit(f"COMPLETION REFUSED: {exc}") from exc
+    condition_id = pair["condition_id"]
+
+    # Same pre-flight discipline as every other live write path here. This
+    # sends a real BUY, so it gets the same two guards `merge` and `redeem`
+    # have: a repeat invocation must not cross twice for the same pair, and no
+    # order goes out on a registry view the venue has not corroborated.
+    if live:
+        _check_idempotency_guard(condition_id, force=force)
+
+    venue_positions = None
+    if not skip_positions_check:
+        funder = os.environ.get("POLY_FUNDER")
+        if not funder:
+            raise SystemExit(
+                "Refusing to complete: POLY_FUNDER is not set, so the venue's "
+                "position cannot be read. Set it, or pass "
+                "--skip-positions-check to act without the cross-check."
+            )
+        try:
+            venue_positions = fetch_positions(funder)
+        except Exception as exc:
+            raise SystemExit(
+                f"Refusing to complete: the Data API positions read failed "
+                f"({exc!r}). An unreadable endpoint is not an empty portfolio."
+            ) from exc
+
+        token = pair["heavy"]["token_id"]
+        believed = pair["heavy"]["matched"]
+        if token not in venue_positions:
+            raise SystemExit(
+                f"Refusing to complete: the venue reports no position at all "
+                f"in {token} while the registry holds {believed:.6f}. Absence "
+                f"is not zero -- it is equally consistent with a filtered read."
+            )
+        observed = float(venue_positions[token])
+        if observed < believed - 1e-6:
+            raise SystemExit(
+                f"Refusing to complete: registry holds {believed:.6f} of "
+                f"{token} but the venue reports only {observed:.6f}. Completing "
+                f"against a leg the venue does not agree we hold would open "
+                f"exposure rather than close it."
+            )
+
+    entry_id = None
+    if live:
+        entry_id = _log_order({
+            "kind": "complete",
+            "pair_id": pair_id,
+            "condition_id": condition_id,
+            "status": "pending",
+        })
+
+    try:
+        result = complete_pair(
+            _client(), registry, pair_id,
+            max_pair_cost=strategy_config.load().max_pair_cost,
+            live=live,
+            max_order_usd=MAX_ORDER_USD,
+        )
+    except PairCompletionRefused as exc:
+        if entry_id:
+            _update_order_log(entry_id, {"status": "cancelled", "error": str(exc)})
+        raise SystemExit(f"COMPLETION REFUSED: {exc}") from exc
+    except BaseException as exc:
+        # Anything else left the order in an unknown state at the venue.
+        # `interrupted` is what the idempotency guard refuses on, which is the
+        # correct posture when we do not know whether the BUY landed.
+        if entry_id:
+            _update_order_log(entry_id, {"status": "interrupted", "error": repr(exc)})
+        raise
+
+    if entry_id:
+        # Same rule as the exit: `balanced` crossed nothing, so it must not hold
+        # the condition against a later merge or completion.
+        sent = result.get("action") == "completed"
+        _update_order_log(entry_id, {
+            "status": "submitted" if sent else "cancelled",
+            "action": result.get("action"),
+            "size": result.get("size"),
+            "notional": result.get("notional"),
+        })
+
+    print(json.dumps(result, indent=2, default=str))
+
+
 def cancel_all(live: bool) -> None:
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
@@ -1673,6 +1987,7 @@ def main() -> None:
     q.add_argument("condition_id")
     q.add_argument("--price", type=float, required=True)
     q.add_argument("--size", type=float, required=True)
+    q.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     q.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
     r = sub.add_parser("redeem", help="Gasless redemption of winning positions via Relayer.")
@@ -1708,6 +2023,26 @@ def main() -> None:
     pl.add_argument("--interval", type=float, default=5.0, help="Cadence in seconds (default: 5.0)")
     pl.add_argument("--once", action="store_true", help="Reconcile once and exit")
     pl.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    ex = sub.add_parser("exit", help="Stage 3: close a one-sided pair (cancel resting leg, sell filled leg).")
+    ex.add_argument("pair_id", help="pair_id as recorded in the order registry")
+    ex.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    ex.add_argument("--skip-positions-check", action="store_true",
+                    help="Act without the Data API registry/venue cross-check. Only when the endpoint is down.")
+    ex.add_argument("--force", action="store_true",
+                    help="Bypass idempotency guard against prior pending/submitted/interrupted orders.")
+    ex.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                    help="actually send.")
+    cp = sub.add_parser("complete", help="Stage 4: cross the book to complete a one-sided pair.")
+    cp.add_argument("pair_id", help="pair_id as recorded in the order registry")
+    cp.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    cp.add_argument("--skip-positions-check", action="store_true",
+                    help="Act without the Data API registry/venue cross-check. Only when the endpoint is down.")
+    cp.add_argument("--force", action="store_true",
+                    help="Bypass idempotency guard against prior pending/submitted/interrupted orders.")
+    cp.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                    help="actually send.")
+    pr = sub.add_parser("pairs", help="List pair_ids in the registry with held sizes.")
+    pr.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -1720,7 +2055,7 @@ def main() -> None:
     elif a.cmd == "balance":
         balance(a.funder)
     elif a.cmd == "quote":
-        quote(a.condition_id, a.price, a.size, is_live)
+        quote(a.condition_id, a.price, a.size, is_live, db_path=a.db)
     elif a.cmd == "redeem":
         idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
         redeem(
@@ -1754,6 +2089,15 @@ def main() -> None:
         )
     elif a.cmd == "poll":
         poll(interval=a.interval, once=a.once, db_path=a.db)
+    elif a.cmd == "pairs":
+        pairs(db_path=a.db)
+    elif a.cmd == "exit":
+        exit_pair(a.pair_id, is_live, db_path=a.db,
+                  skip_positions_check=a.skip_positions_check, force=a.force)
+    elif a.cmd == "complete":
+        complete_pair_cmd(a.pair_id, is_live, db_path=a.db,
+                          skip_positions_check=a.skip_positions_check,
+                          force=a.force)
     else:
         cancel_all(is_live)
 
