@@ -38,14 +38,12 @@ def resolve_db_path(custom_path: str | Path | None = None) -> Path:
     env_path = os.environ.get("LIVE_DB_PATH")
     if env_path:
         return Path(env_path)
-    # Prefer run/live.db at root if present, else live/run/live.db
-    p_run = ROOT / "run" / "live.db"
-    if p_run.exists():
-        return p_run
-    p_live = ROOT / "live" / "run" / "live.db"
-    if p_live.exists():
-        return p_live
-    return p_run
+    # live/run/live.db is THE live registry -- order_registry.py anchors
+    # DEFAULT_DB_PATH there off its own location, and nothing writes anywhere
+    # else. The repo root still holds a run/live.db left over from before the
+    # live path was extracted; preferring it pointed this dashboard at a dead
+    # pre-extraction file that will never receive a fill.
+    return ROOT / "live" / "run" / "live.db"
 
 
 def query_db_state(db_path: Path | str) -> dict[str, Any]:

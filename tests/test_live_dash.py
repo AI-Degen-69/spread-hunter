@@ -429,3 +429,16 @@ def test_database_values_are_escaped_before_innerhtml():
         assert interpolation in PAGE_HTML, interpolation
     # A status from the database must not become a CSS class unchecked.
     assert "KNOWN_STATUSES.includes(o.status)" in PAGE_HTML
+
+
+def test_dashboard_reads_exactly_where_the_registry_writes():
+    """One live registry, one path. A dashboard aimed elsewhere reports a calm lie.
+
+    The repo root still carries a run/live.db from before the live path was
+    extracted. Preferring it pointed this page at a dead file that never
+    receives a fill, which reads identically to a healthy idle cycle.
+    """
+    from live.strategy.order_registry import DEFAULT_DB_PATH
+
+    assert resolve_db_path() == DEFAULT_DB_PATH
+    assert resolve_db_path().parent.parent.name == "live"
