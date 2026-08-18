@@ -6,13 +6,26 @@ Operational guide for the Owner during a single supervised live maker cycle on P
 
 ## 0. Choosing the Market and the Size
 
-Two constraints decide this before any command runs, and both were discovered the hard way in
+**Do not hand-pick a market. Take one the ranker already graduated.**
+
+`scripts/rank_markets.py` runs the real funnel every cycle -- volume, top-3 bid depth on both
+sides, spread, horizon, submarket and moneyline gates -- and writes the survivors to
+`run/markets.json`, eight spots, refreshed continuously. Those eight are the universe the fleet
+is quoting right now, and they arrive with `min_size`, `tick`, `max_spread`, `days_to_resolve`
+and `cid` already on them. Re-deriving a market by hand queries the same venue for a worse
+answer. The scan view at `http://127.0.0.1:8801/?view=scan` shows the same four lanes.
+
+Two constraints then decide which of the eight, and both were discovered the hard way in
 the Milestone 2 dry run.
 
-**The market must pay maker rewards.** `quote` refuses any market whose `rewards.rates` is
-empty, at `live/engine/markets.py` via `require_rewards=True`. There is no CLI override. A BTC
-5-minute market was tried first and refused for exactly this reason. Resting on an unrewarded
-market earns nothing, which is why the guard exists -- do not route around it.
+**The CLI's rewards guard is stricter than the strategy it serves.** `quote` refuses any
+market whose `rewards.rates` is empty (`fetch_pinned_market(..., require_rewards=True)`,
+`live/engine/markets.py:118`). All eight currently graduated markets are `source: spread` with
+`daily: 0.00`, so the CLI refuses the entire live universe. The function's own docstring records
+why the fleet passes `False`: once spread capture landed, "pays no rewards" stopped being
+disqualifying, because those are the markets that actually trade. Funding is the allocator's
+call, made from `run/markets.json` -- not this function's. The CLI needs the same opt-in the
+fleet already has.
 
 **The market must outlive the cycle.** The 5-minute BTC market resolved between two commands
 issued 16 seconds apart during the dry run: `merge` read `resolved no`, `redeem` read
@@ -29,9 +42,10 @@ baseball and esports, not crypto.
 | Per-order ceiling | $25.00 | `MAX_ORDER_USD`, `live/engine/live_exec.py:97` |
 | Total open ceiling | $100.00 | `MAX_TOTAL_USD` |
 
-Among eligible markets, choose the one with the **lowest `min_size`**. Cheapest complete cycle
-wins; better economics with a larger minimum is the wrong trade here, because this cycle is a
-mechanics test and its PnL is not a result anyone is measuring.
+Among the graduated eight, choose the lowest `min_size` -- as of 2026-08-19 all eight carry
+`min_size: 5.0` and `tick: 0.01`, so the tiebreak is horizon and spread. Prefer a multi-day
+market with a 0.01 spread. This cycle is a mechanics test; its PnL is not a result anyone is
+measuring.
 
 Record before going live -- market, `min_size`, both leg prices, cost per leg, total pair cost,
 and the worst-case loss if one leg fills and the other never completes. If the minimum breaches
