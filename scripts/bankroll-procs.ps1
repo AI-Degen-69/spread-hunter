@@ -72,7 +72,9 @@ function Get-BankrollInstance {
     foreach ($r in @($data.tiers)) {
         try { $p = Get-Process -Id $r.pid -ErrorAction Stop } catch { continue }
         if ($null -ne $r.started_ticks) {
-            if ($p.StartTime.ToUniversalTime().Ticks -ne [int64]$r.started_ticks) {
+            $pStartTime = $null
+            try { $pStartTime = $p.StartTime } catch {}
+            if ($null -eq $pStartTime -or $pStartTime.ToUniversalTime().Ticks -ne [int64]$r.started_ticks) {
                 continue
             }
         }
@@ -94,7 +96,9 @@ function Get-BankrollDashInstance {
         if ($data.dash -and $data.dash.pid) {
             $p = Get-Process -Id $data.dash.pid -ErrorAction Stop
             if ($null -ne $data.dash.started_ticks) {
-                if ($p.StartTime.ToUniversalTime().Ticks -eq [int64]$data.dash.started_ticks) {
+                $pStartTime = $null
+                try { $pStartTime = $p.StartTime } catch {}
+                if ($null -ne $pStartTime -and $pStartTime.ToUniversalTime().Ticks -eq [int64]$data.dash.started_ticks) {
                     return $p
                 }
             } else {

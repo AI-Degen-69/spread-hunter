@@ -26,6 +26,7 @@ run/near_misses.jsonl
 run/volume_near_misses.jsonl
 run/pipeline.json
 run/trial_depth_report.json
+run/live_poll_heartbeat.json
 # recorded market data + backfilled tape (scripts/record_books.py,
 # scripts/fetch_trades.py). Regenerable, and large after a long run.
 books.db
@@ -100,4 +101,8 @@ diagrams/
 run/*.txt
 run/bankroll_*/
 .superpowers/
+# One-off analysis scripts written against run/fleet.db. AGENTS.md requires
+# these be deleted once their output is verified; ignoring the directory means
+# a forgotten one can never reach a commit in the meantime.
+scratch/
 
