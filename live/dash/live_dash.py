@@ -1189,7 +1189,7 @@ PAGE_HTML = """<!DOCTYPE html>
         return `
           <tr>
             <td>
-              <div>${f.venue_time_str || formatTime(f.venue_ts)}</div>
+              <div>${esc(f.venue_time_str || formatTime(f.venue_ts))}</div>
               <div style="font-size:10px;color:var(--text-muted);">${formatDuration(f.age_sec)} ago</div>
             </td>
             <td><span style="font-size:11px;color:var(--text-secondary);">${esc((f.trade_id || '').slice(0, 12))}</span></td>
