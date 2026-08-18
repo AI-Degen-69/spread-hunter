@@ -3317,3 +3317,56 @@ Suite **825 passed**.
 **LIVE** for the chain as far as it can be exercised without an order, and **OPEN** for Stage 4.5
 itself: every step above is a read. Nothing here has yet met a real fill, which is precisely what 4.5
 exists to produce.
+
+---
+
+### 2026-08-18 — Direct ledger reconciliation: sell path unexercised, real-population EV economics, markout telemetry fix, and 10-tier bankroll replication
+
+#### Question
+
+Do the headline economics, adverse selection markouts, and exit parameters recorded in Sessions 62–68 match the full measured population across `run/fleet.db` and the 10-tier bankroll replication suite?
+
+#### Method
+
+1. Direct read-only reconciliation of all 494 closes, 1,059 fills, and 66,336 float marks in `run/fleet.db` (split at 2026-08-13 00:00 UTC boundary: Era 1 pre-08-13, Era 2 post-08-13).
+2. Deep forensic trace of the `sell` closes cohort in `closes` and `profit_take.py:100`.
+3. Re-computation of completion gain, exit cost, completion rate, and 2x break-even on the full Era 2 population ($n=319$).
+4. Pooled markout drift analysis with 95% confidence intervals against the `mid_h3` telemetry column added in commit `4f4ba99`.
+5. Cross-sectional replication analysis across all ten bankroll databases (`run/bankroll_100` through `run/bankroll_1000`), measuring pairwise market universe overlap, tier scaling, and completion rate predictability.
+
+#### Result
+
+1. **The sell path was never exercised — float dust artifact in `profit_take.py`:**
+   - All 4 `sell` rows in the Session 68 cohort (and 6 rows total in the ledger) represent floating-point dust below $10^{-13}$ shares ($1.05 \times 10^{-13}$ shares total, yielding $+\$0.0013$).
+   - `profit_take.py:100` lacks an epsilon clamp (`if size > 0` instead of `if size > SIZE_EPS`), causing sub-atomic residual float dust to trigger voluntary sell execution.
+   - *Correction:* The sell path was **untested**, not disproven. "Earned nothing" was an unexercised branch, not a measured negative edge. Fixing the epsilon clamp is **PARKED** until a sample reset to preserve dataset continuity under `AGENTS.md`.
+
+2. **EV magnitudes in `config.py:657-658` updated from $n=4$ constants to real-population measures:**
+   - `config.py` constants (`pairs_complete_gain_cents = 3.68`, `pairs_exit_cost_cents = 3.67`) were derived from an $n=4$ sample in early sessions.
+   - Measured on the real Era 2 population ($n=319$ decisions: 292 complete, 18 exit, 9 expired):
+     - **Completion Gain ($G_{\text{comp}}$):** $3.3705\text{ ¢/sh}$ `[MEASURED, n=286 merges, 19,229 sh, pnl +$648.13]`.
+     - **Exit Cost ($C_{\text{exit}}$):** $2.5136\text{ ¢/sh}$ `[MEASURED, n=18 exits, 1,290 sh, pnl -$32.43]`.
+     - **Completion Rate:** $\mathbf{91.54\%}$ (292 / 319).
+     - **Uncoupled Break-Even:** $\frac{C_{\text{exit}}}{G_{\text{comp}} + C_{\text{exit}}} = \mathbf{42.72\%}$ (down from 49.93%).
+     - **Break-Even at 2x Exit Loss:** $\frac{2 \cdot C_{\text{exit}}}{G_{\text{comp}} + 2 \cdot C_{\text{exit}}} = \mathbf{59.86\%}$ (down from 66.61%).
+     - **Measured Safety Margin @ 2x:** $\mathbf{+31.68\text{ pp}}$ ($91.54\% - 59.86\%$, up from $+27.49\text{ pp}$).
+
+3. **Adverse selection markout telemetry fix & wide confidence interval:**
+   - 69.6% of markout samples prior to 2026-08-13 lacked 15m horizon tracking due to missing `mid_h3` column. Telemetry landed on 2026-08-12 20:39 UTC (commit `4f4ba99`), resolving missingness.
+   - Pooled markout drift at 15m ($n_{\text{eff}} = 323.4$): $\mathbf{-0.809\text{ ¢/sh}}$ with 95% CI of $[\mathbf{-3.170\text{ ¢/sh}}, \mathbf{+1.552\text{ ¢/sh}}]$.
+   - *Finding:* Because the 95% CI brackets zero, adverse selection is **not statistically distinguishable from zero** at this sample size.
+
+4. **10-Tier bankroll replication suite — NEARLY IDENTICAL market universe:**
+   - All 10 bankroll databases (`bankroll_100` to `bankroll_1000`) were created at 2026-08-13 21:22 UTC and share $\mathbf{91.91\%}$ mean pairwise Jaccard market overlap (84.2% universal overlap across all 10) driven by a shared rerank feed.
+   - They represent **one experiment across ten sizing scales**, not ten independent market experiments.
+   - Bankroll scale linearly scales share volume ($r = +0.9759$) and predicts completion rate ($r = +0.6228, R^2 = 0.3879$) by relieving capital starvation on resting pair windows (window expiration falls from 13.8% at $100 to 2.8% in main).
+   - OLS regression on bankroll predicts main's completion rate at $85.80\%$ ($95\%$ PI $[76.16\%, 95.45\%]$); main's measured $91.54\%$ sits within the prediction interval.
+
+#### Decision
+
+- **PARKED** on sell-path parameters and float dust artifact; `profit_take.py:100` epsilon clamp parked until sample reset.
+- **LIVE** on real-population EV economics: break-even at 2x exit loss is **59.86%** against a **91.54%** completion rate (+31.68 pp margin).
+- **PARKED** on claims of measured adverse selection: pooled markout 95% CI $[-3.170, +1.552]\text{ ¢/sh}$ brackets zero.
+- **LIVE** on bankroll scaling dynamics: 10-tier suite establishes scale-driven completion efficiency under 91.9% market overlap.
+- **OPEN** on Stage 4.5 supervised execution.
+
