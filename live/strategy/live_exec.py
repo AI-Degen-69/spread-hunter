@@ -77,6 +77,11 @@ if _env_file is not None:
 # an unbounded loss, so they live in code where a stray env var cannot raise
 # them. Edit deliberately, never to "just get this order through".
 MAX_ORDER_USD = 25.0
+
+# The venue's four time-in-force values. Named here so quote() can reject an
+# unknown one outright: OrderType is a plain constants class, not an Enum, so a
+# getattr default would silently downgrade an unrecognised tif to a resting GTC.
+_TIF_CHOICES = ("GTC", "GTD", "FOK", "FAK")
 MAX_TOTAL_USD = 100.0
 
 
@@ -421,7 +426,13 @@ def quote(condition_id: str, price: float, size: float, live: bool,
     max_pair_cost = strategy_config.load().max_pair_cost
     now_ms = int(time.time() * 1000)
 
-    order_type_enum = getattr(OrderType, tif, OrderType.GTC)
+    # Indexed, not getattr-with-default. A silent fallback to GTC would turn a
+    # FOK the caller asked for into an order that RESTS -- exposure the caller
+    # explicitly declined. argparse constrains the CLI, but quote() is called
+    # directly by tests and by future callers, and this path opens positions.
+    if tif not in _TIF_CHOICES:
+        raise SystemExit(f"unknown --tif {tif!r}; expected one of {', '.join(_TIF_CHOICES)}")
+    order_type_enum = getattr(OrderType, tif)
     exp_val = int(expiration) if expiration is not None else 0
 
     for tok, p, label in legs:
@@ -1465,7 +1476,11 @@ def probe(series: str = "btc-up-or-down-5m",
         signed_order = client.create_order(order_args)
 
         t1_socket_write = time.perf_counter_ns()
-        resp = client.post_order(signed_order, OrderType.GTC)
+        # post_only: the probe measures ACCEPT latency, so the order must rest.
+        # A fill would corrupt the measurement and open a position the probe
+        # never intended -- $0.01 is far from the book, but "far" is a market
+        # condition and post_only is a venue guarantee.
+        resp = client.post_order(signed_order, OrderType.GTC, post_only=True)
         t2_http_ack = time.perf_counter_ns()
 
         order_id = resp.get("orderID") or resp.get("id")

@@ -3445,4 +3445,27 @@ What capabilities does the Polymarket CLOB venue expose for order execution and 
 - **OPEN** on Milestone 4 implementation (all code, CLI verbs, and tests landed in `live-extraction`, PR #41; venue contact remains gated on Stage 4.5 Owner approval).
 - **OPEN** on Milestone 5 (batch order placement and two-leg row attribution).
 
+#### Addendum (Prime review, same day)
 
+Two fail-open defects found while verifying the milestone and fixed in the same branch:
+
+1. `quote()` resolved the time-in-force with `getattr(OrderType, tif, OrderType.GTC)`.
+   `OrderType` in `py_clob_client_v2` is a plain constants class, not an `Enum`, so an
+   unrecognised `tif` silently became **GTC** — an order the caller asked to be
+   immediate-or-cancel would instead REST on the book, holding exposure the caller had
+   explicitly declined. `argparse` constrains the CLI, but `quote()` is called directly by
+   tests and by any future programmatic caller. Replaced with an explicit allow-list check
+   that raises `SystemExit` on an unknown value.
+
+2. `probe()` posted its measurement order with `post_only` left at the SDK default of
+   `False` (`live_exec.py`, probe cycle). The probe rests a BUY 100 @ $0.01 purely to
+   measure venue accept latency and never wants a fill; a fill would both corrupt the
+   measurement and open an unintended position. $0.01 is far from the book, but "far" is a
+   market condition, not a guarantee. Now posts with `post_only=True`, which makes the
+   no-fill property a venue-enforced invariant rather than a bet on the spread.
+
+Note on classification: `probe` posts a resting BUY and is therefore an **opening** command
+under the amended `AGENTS.md` direction rule. It is not in the pre-approved closing set and
+must not be treated as benign because it is read-shaped in intent.
+
+Live suite after both fixes: **143 passed** (exit 0).
