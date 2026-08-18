@@ -387,24 +387,25 @@ def quote(condition_id: str, price: float, size: float, live: bool,
             "--expiration (UTC epoch seconds) is required when --tif GTD."
         )
 
-    # fetch_pinned_market returns None for two unrelated reasons: the market
-    # does not exist, or it exists and pays no rewards. Reporting both as "not
-    # found" sends the operator hunting for a typo in a condition_id that is
-    # perfectly correct.
-    m = fetch_pinned_market(condition_id)
+    # Rewards are not the income. Measured on run/fleet.db: 476 merge closes
+    # earned +$1,172.35 at an average pair cost of $0.96006, while maker rebate
+    # accrual over the same run ran about $0.22/day against $566 committed --
+    # four hundredths of a percent. The income is buying UP+DOWN below $1.00 and
+    # merging, which is what "spread hunter" names.
+    #
+    # This path used to demand rewards, a default left over from the rebate-
+    # farming phase. `sweep.py:507` -- the fleet, the thing that actually trades
+    # -- passes require_rewards=False and has since spread capture landed, so the
+    # CLI was refusing every market the fleet quotes: all eight currently in
+    # run/markets.json are source=spread with daily=0.00. The guard is gone here
+    # for the same reason it is off there. Whether a market is worth funding is
+    # the allocator's call, made from run/markets.json, not this function's.
+    m = fetch_pinned_market(condition_id, require_rewards=False)
     if m is None:
-        unfunded = fetch_pinned_market(condition_id, require_rewards=False)
-        if unfunded is not None:
-            raise SystemExit(
-                f"market {unfunded.market_slug} exists but pays no maker "
-                f"rewards (rewards.rates is empty). Quoting it earns nothing "
-                f"for resting, which is this bot's only income. Pick a "
-                f"reward-funded market, or quote it deliberately through the "
-                f"fleet path that passes require_rewards=False."
-            )
         raise SystemExit(
-            f"no market at condition_id {condition_id[:12]}... on the CLOB. "
-            f"Check the id."
+            f"no tradeable market at condition_id {condition_id[:12]}... -- it "
+            f"is missing, closed, not accepting orders, or does not carry "
+            f"exactly two tokens. Check the id."
         )
 
     dn_price = round(1.0 - price, 4)

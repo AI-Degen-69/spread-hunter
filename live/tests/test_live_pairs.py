@@ -1070,7 +1070,8 @@ def test_quote_writes_both_legs_to_the_registry_under_one_pair_id(
         tick_size = "0.01"
         neg_risk = False
 
-    monkeypatch.setattr("engine.markets.fetch_pinned_market", lambda cid: Market())
+    monkeypatch.setattr("engine.markets.fetch_pinned_market",
+                        lambda cid, require_rewards=True: Market())
 
     posted = []
 
@@ -1133,7 +1134,8 @@ def test_quote_leaves_the_row_pending_when_the_venue_returns_no_id(
         tick_size = "0.01"
         neg_risk = False
 
-    monkeypatch.setattr("engine.markets.fetch_pinned_market", lambda cid: Market())
+    monkeypatch.setattr("engine.markets.fetch_pinned_market",
+                        lambda cid, require_rewards=True: Market())
 
     class Client:
         creds = object()
@@ -1168,11 +1170,15 @@ def test_venue_order_id_accepts_the_spellings_and_refuses_to_guess():
 
 
 def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
-    """`fetch_pinned_market` returns None for two unrelated reasons.
+    """An unfunded market quotes; an unusable one is refused, and says why.
 
-    Reporting an unfunded market as "not found" sends the operator hunting for
-    a typo in a condition_id that is perfectly correct -- the same class of
-    misleading diagnostic as reporting an unread balance as 0.00.
+    Rewards are not the income. Measured on run/fleet.db: 476 merge closes,
+    +$1,172.35, mean pair cost $0.96006, against rebate accrual of roughly
+    $0.22/day. Every market the ranker graduates pays zero rewards, so demanding
+    them here refused the fleet's entire universe. What still earns a refusal is
+    a market that is missing, closed, not accepting orders, or does not carry
+    exactly two tokens -- and the message must say so rather than sending the
+    operator hunting for a typo in a condition_id that is perfectly correct.
     """
     from engine import live_exec
 
@@ -1185,31 +1191,29 @@ def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
         tick_size = "0.01"
         neg_risk = False
 
-    # Exists, but pays no rewards: None with the default, a market without it.
+    # Pays no rewards -- which is every market the ranker graduates. It quotes,
+    # and the dry run prints the legs it would rest.
+    seen = {}
+
     def unfunded(cid, require_rewards=True):
+        seen["require_rewards"] = require_rewards
         return None if require_rewards else Market()
 
     monkeypatch.setattr("engine.markets.fetch_pinned_market", unfunded)
-    with pytest.raises(SystemExit, match="pays no maker rewards") as exc_info:
-        live_exec.quote(COND, price=0.48, size=5.0, live=False,
-                        db_path=tmp_path / "live.db")
-    # Maker-rewards failure must include market slug, rewards.rates explanation,
-    # and resting-income explanation.
-    msg = str(exc_info.value)
-    assert "some-unfunded-market" in msg  # market slug
-    assert "rewards.rates" in msg  # rewards explanation
-    assert "resting" in msg  # resting-income explanation
+    live_exec.quote(COND, price=0.48, size=5.0, live=False,
+                    db_path=tmp_path / "live.db")
+    assert seen["require_rewards"] is False
 
-    # Genuinely absent: None either way.
+    # Unusable for a reason that is not funding: refused, and the message names
+    # the causes that are left rather than blaming the id.
     monkeypatch.setattr("engine.markets.fetch_pinned_market",
                         lambda cid, require_rewards=True: None)
-    with pytest.raises(SystemExit, match="no market at condition_id") as exc_info:
+    with pytest.raises(SystemExit, match="no tradeable market") as exc_info:
         live_exec.quote(COND, price=0.48, size=5.0, live=False,
                         db_path=tmp_path / "live.db")
-    # Absent-market failure must include condition ID and CLOB wording.
     msg = str(exc_info.value)
-    assert COND[:12] in msg  # condition ID
-    assert "CLOB" in msg  # CLOB wording
+    assert COND[:12] in msg
+    assert "not accepting orders" in msg
 
 
 def test_taker_paths_never_set_post_only(registry):

@@ -3634,3 +3634,46 @@ directory cannot decide whether a live order is placeable?
 - **OPEN**: `live/` has no `.env` of its own — `_find_env_file` still walks up to the repo
   root. Deliberate for now (one credential file, not two), but it is the last remaining
   read across the boundary.
+
+
+### 2026-08-19 - Does the live path earn rent, or does it earn the merge?
+
+**Question.** `live_exec.quote()` refused any market whose `rewards.rates` was empty, calling
+maker rebates "this bot's only income." The ranker's eight graduated markets are all
+`source: spread`, `daily: 0.00`. Either the guard is right and the funnel graduates markets the
+bot cannot trade, or the guard encodes an income model the strategy left behind. Which?
+
+**Method.** Read `run/fleet.db` directly - `closes` grouped by method, pair cost recovered as
+`cost_basis / shares` because `up_price`/`dn_price` are null on merge rows; `reward_samples` and
+`income_samples` for the rebate side. Then traced the two call sites of `fetch_pinned_market`.
+
+**Result.**
+
+| method | n | realised PnL | mean pair cost |
+| --- | --- | --- | --- |
+| `merge` | 476 | **+$1,172.35** | **$0.96006** (min 0.68, max 0.9901) |
+| `naked_exit` | 22 | -$49.35 | - |
+| `sell` | 7 | $0.00 | 0.9901 |
+
+Mean realised PnL per merge close is $2.4629 against $23.80 of gas across all 476. Rebate
+accrual over the same run: `income_samples` most recent rows read $0.2237/day against $566.29
+committed, and `reward_samples` puts our share of the market score at 2.8e-4 on the one market
+where it is non-zero and 0.0 on the others. Rewards are about four hundredths of one percent of
+committed capital per day; the merge is the income, and it is earned by resting both legs,
+filling both, and buying the pair below $1.00.
+
+Call sites: `strategy/sweep.py:507` passes `require_rewards=False`, with a comment recording
+that funding stopped being a rejection cause when spread capture landed. `live_exec.quote()`
+used the `True` default. The fleet and the CLI therefore disagreed about what was tradeable, and
+the CLI's answer excluded all eight graduated markets - the entire live universe.
+
+**Verdict.** **DEAD** - the rewards requirement on the live quote path. It is a leftover from the
+rebate-farming phase, contradicted by the measured income and by the fleet's own call site.
+`quote()` now loads with `require_rewards=False`. The refusal that remains is the one that means
+something: missing, closed, not accepting orders, or not exactly two tokens. **LIVE** on the
+merge-below-$1.00 model as the live path's income, on 476 closes.
+
+**OPEN** - the live tree still has no port of the quote *decision*. `decide_quotes()`
+(`strategy/quotes.py:517`) and the `_requote` orchestration (`strategy/sweep.py:1038`) choose
+price and size in the simulation; the CLI takes `--price` and `--size` by hand. Until that is
+forked into `live/engine/`, a live cycle proves the plumbing, not the strategy.

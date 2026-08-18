@@ -908,6 +908,39 @@ def test_quote_passes_post_only_default_true(tmp_path):
     assert batch_args[1].orderType == OrderType.GTC
 
 
+def test_quote_does_not_require_maker_rewards(tmp_path):
+    """A market paying zero maker rewards is quotable.
+
+    Every market the ranker graduates is source=spread with daily=0.00, and the
+    income is the merge below $1.00, not the rebate. The fleet has passed
+    require_rewards=False since spread capture landed; this asserts the CLI
+    reaches the venue the same way instead of refusing its own universe.
+    """
+    cond_id = "0xebd7653a13838fa5838537370b9b09fe91169e02171b8c62f7ff4018ebee59c7"
+    dummy_market = MagicMock(
+        up_token="tok_up", down_token="tok_dn",
+        market_slug="mlb-atl-min-2026-08-18", tick_size=0.01, neg_risk=False
+    )
+    seen = {}
+
+    def _fetch(cid, require_rewards=True):
+        seen["require_rewards"] = require_rewards
+        return dummy_market
+
+    mock_client = MagicMock()
+    mock_client.post_orders.return_value = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    mock_client.get_order.side_effect = (
+        lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
+    )
+
+    with patch("engine.markets.fetch_pinned_market", side_effect=_fetch),          patch.object(le, "_client", return_value=mock_client),          patch.object(le, "_open_notional", return_value=0.0),          patch.object(le, "RUN", tmp_path):
+        le.quote(cond_id, price=0.50, size=5.0, live=True,
+                 db_path=tmp_path / "live.db")
+
+    assert seen["require_rewards"] is False
+    assert mock_client.post_orders.call_count == 1
+
+
 def test_quote_allows_explicit_no_post_only(tmp_path):
     """quote(..., post_only=False) passes post_only=False to SDK post_orders."""
     from py_clob_client_v2.clob_types import OrderType
