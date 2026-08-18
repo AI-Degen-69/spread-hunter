@@ -1,0 +1,17 @@
+{
+  "_README": "Modules copied down from the simulation into live/engine/. Divergence is expected and allowed: live tuning must not perturb a simulation sample. What is NOT allowed is divergence nobody noticed, which is what live/tests/test_fork_drift.py reports. source_sha256 is over the file with CRLF normalised to LF, so a line-ending change alone does not trip it. When the root copy has genuinely moved, read the diff, decide whether the live copy wants the same change, then re-record with: python live/scripts/refork.py",
+  "forks": {
+    "live/engine/config.py": {
+      "forked_from": "strategy/config.py",
+      "at_commit": "c50cca5e26a6655cab4649d2b9fba185ee190354",
+      "source_sha256": "56d09b7e4e5309d53c636795a98356d686076799ae0f7d723b754d8c31caa72a",
+      "why": "Leaf module -- stdlib plus requests only -- so live/ can carry its own copy instead of importing across the tree boundary."
+    },
+    "live/engine/markets.py": {
+      "forked_from": "strategy/markets.py",
+      "at_commit": "c50cca5e26a6655cab4649d2b9fba185ee190354",
+      "source_sha256": "4da7e18e168fb5122607b0f659a0afdf3baad98df84bae45f5553e26b7420be3",
+      "why": "Leaf module -- stdlib plus requests only -- so live/ can carry its own copy instead of importing across the tree boundary."
+    }
+  }
+}

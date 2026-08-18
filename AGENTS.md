@@ -6,7 +6,7 @@ A maker strategy on the same market. It rests bids on BOTH outcomes rather than 
 
 **Measured against:** spread capture versus adverse selection, fill rate against real queue depth, and inventory balance — hedged markets have measured +\0.70/market versus -\0.95 when badly unbalanced.
 
-Strategy decisions are simulated. The live path is not a stub: `strategy/live_exec.py` talks to the
+Strategy decisions are simulated. The live path is not a stub: `live/engine/live_exec.py` talks to the
 venue for real — one order was accepted on the live CLOB (`status='live'`,
 `research/RESEARCH_LOG.md:2203`) and gasless `redeem` submits through the relayer. What is forbidden
 is *opening exposure*; see Safety.
@@ -46,10 +46,43 @@ Escape hatch for typos and formatting: `git commit --no-verify`.
 
 ## Layout
 
-    strategy/   engine
+Two trees. The simulation is at the repo root; everything that can touch real money is
+under `live/`, self-contained, and imports nothing from the root.
+
+    strategy/   simulation engine
     server/     fleet_dash.py (dashboard API + page)
     research/   the five files above
     PROGRAM.md  research org code — how a bounded experiment is run (read it before an experiment)
+
+    live/                     the real-money tree. Run it from here.
+      engine/                 live_exec, live_pairs, order_registry
+      engine/config.py        forked from strategy/config.py
+      engine/markets.py       forked from strategy/markets.py
+      dash/live_dash.py       the single-cycle dashboard (:8799)
+      scripts/                audit_settlement.py, refork.py
+      run/live.db             THE live order registry — nothing writes anywhere else
+      tests/                  live suite; run `pytest -q` from inside live/
+      FORKED_FROM.json        which root commit each forked module came from
+
+**The package is named `engine`, not `strategy`, and the name is load-bearing.** Two
+directories called `strategy` merge into one implicit namespace package, which is how live
+code came to import the simulation's `markets.py` without saying so — and how a clean dry
+run came to certify a live path that then failed to import. Do not name anything under
+`live/` after a package that exists at the root; sealing the collision with `__init__.py`
+makes it worse, not better (it breaks every root import in the same process).
+
+`live/engine/config.py` and `live/engine/markets.py` are **forks, not imports**. They may
+diverge — live tuning must not perturb a simulation sample. `live/tests/test_fork_drift.py`
+fails when the root copy moves, so the divergence stays a decision. Clear it with
+`python live/scripts/refork.py` after reading the diff.
+
+Commands:
+
+    cd live && python -m engine.live_exec status      # or, from the repo root:
+    python live/engine/live_exec.py status
+    cd live && python -m dash.live_dash               # dashboard on :8799
+    cd live && pytest -q                              # live suite
+    pytest -q                                         # simulation suite (repo root)
 
 ## Safety
 

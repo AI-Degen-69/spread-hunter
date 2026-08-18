@@ -3552,3 +3552,85 @@ else does that pattern hide?
 - **OPEN**: dry-run coverage generally. A dry run that returns before the venue-side imports
   cannot certify the live path, and this is a property of the early-return design rather than
   of this one command. Worth revisiting if a second instance appears.
+
+---
+
+### 2026-08-19 — Extraction: `live/` becomes an independent tree; the shared package name was the coupling
+
+#### Question
+
+Can the real-money execution path be made structurally independent of the simulation, so
+that a live run cannot silently reach into simulation code and the operator's working
+directory cannot decide whether a live order is placeable?
+
+#### Method
+
+1. Enumerated every cross-tree import from `live/`: 45 sites, all naming the package
+   `strategy`. Resolved to exactly two root modules — `strategy.config` and
+   `strategy.markets` — plus one root script, `scripts/audit_settlement.py`.
+2. Tested the obvious fix before adopting it: added `__init__.py` to `live/strategy/` and
+   attempted a simulation import in the same process.
+3. Renamed the live package and re-ran both suites, then deliberately reintroduced the
+   removed `sys.path` entry to confirm the new guard catches it.
+
+#### Result
+
+1. **The obvious fix is wrong, and measurably so.** `live/strategy/` and
+   `<repo>/strategy/` are the same importable name. Neither had `__init__.py`, so Python
+   treated both as namespace packages and merged them — `strategy.__path__` listed both
+   directories, and `from strategy.markets import ...` in live code silently received the
+   simulation's file. Adding `__init__.py` converts live's into a *regular* package, which
+   takes precedence over namespace packages and does not extend across directories: root
+   `strategy` then becomes unreachable and every simulation import in the same process
+   fails. Reproduction, ten seconds:
+
+        touch live/strategy/__init__.py
+        python -c "import sys; sys.path.insert(0,'live'); import strategy.fleet"
+        # ModuleNotFoundError: No module named 'strategy.fleet'
+
+   34 root test files import `strategy.fleet`, `strategy.quotes`, and similar. The fix is
+   to **rename**, not to seal.
+
+2. **Renamed `live/strategy` to `live/engine`** as a regular package. `config.py` and
+   `markets.py` were forked down (both leaves — stdlib plus `requests`);
+   `scripts/audit_settlement.py` moved to `live/scripts/`, being a live tool that reads
+   `run/live_orders.json`; the dashboard moved to `live/dash/live_dash.py`. It is named
+   `dash` and not `server` because the repo root already has a `server` package — the same
+   collision, avoided rather than repeated.
+
+3. **The repo root was dropped from live's `sys.path`.** `live/pytest.ini` was
+   `pythonpath = . ..`; the `..` was the coupling. `live_exec.py` now bootstraps `live/`
+   only. `import strategy` from live code raises ImportError, and there is a test asserting
+   exactly that.
+
+4. **Divergence is now visible instead of invisible.** `live/FORKED_FROM.json` records the
+   root commit and a line-ending-normalised SHA-256 for each forked module;
+   `live/tests/test_fork_drift.py` fails when the root copy moves and prints
+   `git diff <recorded-commit> -- <path>` against the working tree, so an uncommitted root
+   edit still renders. It never compares the two files to each other — the live copy is
+   free to differ, per the AGENTS.md rule that changing strategy parameters invalidates the
+   current sample. `python live/scripts/refork.py` clears it after review.
+
+5. **Both guards were verified by breaking them, not by reading them.** Restoring
+   `ROOT.parent` to the `sys.path` bootstrap fails
+   `test_importing_live_exec_does_not_put_the_repo_root_on_sys_path`; appending one line to
+   `strategy/markets.py` fails the drift test with the diff rendered.
+
+6. The stale `<repo>/run/live.db` — 45KB, schema-only, 0 orders, 0 fills — was archived to
+   `run/archive/` with a README. It is the file the dashboard was mistakenly reading, and an
+   empty registry renders identically to a healthy idle cycle.
+
+7. The pre-commit research-log hook matched `^strategy/` only, so changes to the
+   real-money path bypassed the requirement entirely. It now matches `^live/engine/` too.
+
+8. Test accounting: root 703 passed, live 180 passed, total **883 passed, 0 failed**
+   (from 878). 22 tests moved root-to-live with the dashboard and the import guard; 5 net
+   new tests (fork drift ×3, sys.path isolation, layout).
+
+#### Decision
+
+- **LIVE** on the extraction. `live/` now runs from its own directory with its own package
+  namespace, its own test suite, its own registry, and its own dashboard.
+- **OPEN**: `live/` has no `.env` of its own — `_find_env_file` still walks up to the repo
+  root. Deliberate for now (one credential file, not two), but it is the last remaining
+  read across the boundary.

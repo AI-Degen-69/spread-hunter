@@ -13,10 +13,10 @@ and nothing that does should ever be added to it.
     POLY_FUNDER=0x...           # address actually holding the USDC
     POLY_SIG_TYPE=1             # 0 EOA | 1 email-magic proxy | 2 browser proxy
 
-    python -m strategy.live_exec status
-    python -m strategy.live_exec quote <condition_id> --price 0.22 --size 20
-    python -m strategy.live_exec quote <condition_id> --price 0.22 --size 20 --live
-    python -m strategy.live_exec cancel-all --live
+    python -m engine.live_exec status
+    python -m engine.live_exec quote <condition_id> --price 0.22 --size 20
+    python -m engine.live_exec quote <condition_id> --price 0.22 --size 20 --live
+    python -m engine.live_exec cancel-all --live
 
 SAFETY RAILS, all on by default:
   * --live is required for anything that reaches the venue. Without it every
@@ -52,20 +52,23 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "run"
 
-# The `strategy` package deliberately spans two directories as an implicit
-# namespace package: live/strategy holds the execution path, <repo>/strategy the
-# shared engine. That name only resolves when BOTH parents are on sys.path, and
-# which ones are there depends on the operator's working directory.
+# Put live/ on sys.path so `engine.*` resolves however this module was reached
+# -- `python -m engine.live_exec` from live/, `python live/engine/live_exec.py`
+# from the repo root, or an import from a test.
 #
-# A dry run does not catch a missing one. `quote` imports markets before the
-# dry-run return and order_registry after it, so a half-resolved path prints a
-# clean dry run and then dies on the `--live` call -- after the operator has
-# committed to sending. Bootstrapping both parents here makes the module
-# runnable from anywhere and removes the working directory from the question of
-# whether a live order can be placed.
-for _p in (ROOT, ROOT.parent):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+# ROOT only. The repo root is deliberately NOT added: `engine` must resolve
+# inside live/ and nowhere else. This package was called `strategy` until
+# 2026-08-18, which collided with the simulation package of the same name, and
+# adding the repo root here would let that collision come back the moment
+# someone writes `from strategy...` in live code.
+#
+# A dry run does not prove this works. `quote` imports engine.markets ABOVE the
+# dry-run return and engine.order_registry BELOW it, so a half-resolved path
+# prints a clean dry run and then dies on the `--live` call -- after the
+# operator has committed to sending. That happened on 2026-08-18; the guard is
+# tests/test_live_exec_import_paths.py.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def _find_env_file() -> Path | None:
@@ -317,8 +320,8 @@ def pairs(db_path: str | Path | None = None) -> None:
     find one is to open live.db by hand -- which is exactly the sort of step an
     operator skips at the moment it matters.
     """
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH, get_connection
-    from strategy.live_pairs import load_pair, PairExitRefused
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH, get_connection
+    from engine.live_pairs import load_pair, PairExitRefused
 
     db = Path(db_path) if db_path else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db)
@@ -372,7 +375,7 @@ def quote(condition_id: str, price: float, size: float, live: bool,
         OrderArgsV2, OrderType, PostOrdersV2Args, OrderPayload,
     )
     from py_clob_client_v2.order_builder.constants import BUY
-    from strategy.markets import fetch_pinned_market
+    from engine.markets import fetch_pinned_market
 
     # Pre-flight parse check on TIF and post_only
     if post_only and tif not in ("GTC", "GTD"):
@@ -433,10 +436,10 @@ def quote(condition_id: str, price: float, size: float, live: bool,
     # act on, and the two legs rest at the venue with real money and nothing
     # tracking them -- the exact failure the registry exists to prevent.
     import uuid as _uuid
-    from strategy.order_registry import (
+    from engine.order_registry import (
         OrderRegistry, OrderRecord, DEFAULT_DB_PATH,
     )
-    from strategy import config as strategy_config
+    from engine import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     pair_id = f"pair-{_uuid.uuid4().hex[:12]}"
@@ -579,9 +582,9 @@ def quote(condition_id: str, price: float, size: float, live: bool,
 
     print(f"\nlogged to {RUN / 'live_orders.json'}")
     print(f"pair_id  {pair_id}")
-    print(f"  poll:     python -m strategy.live_exec poll --interval 5")
-    print(f"  exit:     python -m strategy.live_exec exit {pair_id}")
-    print(f"  complete: python -m strategy.live_exec complete {pair_id}")
+    print(f"  poll:     python -m engine.live_exec poll --interval 5")
+    print(f"  exit:     python -m engine.live_exec exit {pair_id}")
+    print(f"  complete: python -m engine.live_exec complete {pair_id}")
 
 
 CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
@@ -762,7 +765,7 @@ def sign_redeem_transaction(key: str, funder: str, nonce: int, deadline: int, ca
     return signer_acc.address, sig
 
 
-# Origin: scripts/audit_settlement.py:19-24
+# Origin: live/scripts/audit_settlement.py:19-24
 POLYGON_RPC_ENDPOINTS = [
     "https://polygon.drpc.org",
     "https://1rpc.io/matic",
@@ -1155,7 +1158,7 @@ def merge(condition_id: str,
           force: bool = False,
           live: bool = False) -> None:
     """Gasless merge of full outcome sets (UP + DOWN) back into USDC.e collateral."""
-    from strategy.config import MakerConfig
+    from engine.config import MakerConfig
     if index_sets is None:
         index_sets = [1, 2]
     amount_base_units = int(round(amount * 1e6))
@@ -1420,7 +1423,7 @@ def probe(series: str | None = None,
     print("=" * 80)
 
     if not live:
-        from strategy.markets import fetch_live_market
+        from engine.markets import fetch_live_market
         gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
         resolved = fetch_live_market(gamma_host, series) if not token_id else None
         print("\n[DRY-RUN] Probe execution plan validated.")
@@ -1446,7 +1449,7 @@ def probe(series: str | None = None,
     import websocket
     from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
     from py_clob_client_v2.order_builder.constants import BUY
-    from strategy.markets import fetch_live_market
+    from engine.markets import fetch_live_market
 
     gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
     client = _client()
@@ -1769,7 +1772,7 @@ def poll(
     """
     import datetime
     import signal
-    from strategy.order_registry import (
+    from engine.order_registry import (
         OrderRegistry,
         reconcile_orders,
         compute_backoff_delay,
@@ -1944,11 +1947,11 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
     Data API is down and the operator has decided to act anyway, and it says so
     on the record.
     """
-    from strategy.live_pairs import (
+    from engine.live_pairs import (
         exit_naked_leg, fetch_positions, load_pair, PairExitRefused,
     )
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
-    from strategy import config as strategy_config
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from engine import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     client = _client()
@@ -2033,7 +2036,7 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
         print(
             f"\nThe pair completed between the cancel and the sell. It is now "
             f"worth $1.00 at merge -- run:\n"
-            f"  python -m strategy.live_exec merge {result['condition_id']} "
+            f"  python -m engine.live_exec merge {result['condition_id']} "
             f"--amount <shares> --live"
         )
 
@@ -2047,12 +2050,12 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
     cross that would push the pair to or past max_pair_cost -- that case
     belongs to `exit`, and this path must not do the stop-loss's job badly.
     """
-    from strategy.live_pairs import (
+    from engine.live_pairs import (
         complete_pair, fetch_positions, load_pair, PairCompletionRefused,
         PairExitRefused,
     )
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
-    from strategy import config as strategy_config
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from engine import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     # load_pair signals an unknown pair with the exit path's exception, which
@@ -2155,7 +2158,7 @@ def cancel_single_order(order_id: str, live: bool,
         return
 
     from py_clob_client_v2.clob_types import OrderPayload
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH
 
     c = _client()
     try:
@@ -2189,7 +2192,7 @@ def cancel_market(condition_id: str, live: bool,
         return
 
     from py_clob_client_v2.clob_types import OrderMarketCancelParams
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH
 
     c = _client()
     try:

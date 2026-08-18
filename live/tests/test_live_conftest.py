@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import importlib
 import socket
 from pathlib import Path
 import pytest
@@ -34,29 +35,43 @@ def test_live_network_block_raises_on_outbound_socket():
         s.close()
 
 
-def test_namespace_precedence_and_module_resolution():
-    """Assert strategy.live_exec & order_registry resolve under live/strategy/ while strategy.markets resolves to root strategy/."""
-    import strategy.live_exec as live_exec
-    import strategy.order_registry as order_reg
-    import strategy.markets as markets
+def test_every_engine_module_resolves_inside_live():
+    """The engine is one package in one directory -- live/engine/ and nowhere else.
 
-    live_exec_path = Path(live_exec.__file__).resolve()
-    order_reg_path = Path(order_reg.__file__).resolve()
-    markets_path = Path(markets.__file__).resolve()
+    Until 2026-08-18 this package was called `strategy`, the same name as the
+    simulation package at the repo root. Neither had an `__init__.py`, so Python
+    merged them into a namespace package spanning both trees: `markets` and
+    `config` came from the simulation while `live_exec` came from live/, and
+    which of the two directories resolved depended on the working directory the
+    operator happened to be in. The rename ended that. This test is what keeps
+    it ended.
+    """
+    import engine
+    import engine.live_exec as live_exec
+    import engine.order_registry as order_reg
+    import engine.markets as markets
+    import engine.config as config
 
-    # live_exec and order_registry must resolve under live/strategy/
-    assert (
-        "live" in live_exec_path.parts and "strategy" in live_exec_path.parts
-    ), f"Expected live_exec under live/strategy/, got {live_exec_path}"
-    assert live_exec_path.name == "live_exec.py"
+    live_dir = Path(__file__).resolve().parent.parent
 
-    assert (
-        "live" in order_reg_path.parts and "strategy" in order_reg_path.parts
-    ), f"Expected order_registry under live/strategy/, got {order_reg_path}"
-    assert order_reg_path.name == "order_registry.py"
+    # A regular package, so __path__ is exactly one directory -- not a namespace
+    # package that can silently pick up a same-named directory elsewhere.
+    assert list(engine.__path__) == [str(live_dir / "engine")], list(engine.__path__)
 
-    # strategy.markets must resolve to the root strategy package (outside live/)
-    assert (
-        "live" not in markets_path.parts and "strategy" in markets_path.parts
-    ), f"Expected markets under root strategy/ (not live/), got {markets_path}"
-    assert markets_path.name == "markets.py"
+    for mod in (live_exec, order_reg, markets, config):
+        path = Path(mod.__file__).resolve()
+        assert path.parent == live_dir / "engine", f"{mod.__name__} resolved to {path}"
+
+
+def test_live_code_cannot_reach_the_simulation_package():
+    """`import strategy` must fail from the live suite.
+
+    The repo root is deliberately absent from live's sys.path (pytest.ini
+    sets `pythonpath = .`, and live_exec bootstraps ROOT only). If the
+    simulation becomes importable again the two `strategy` trees can start
+    merging again without anyone noticing.
+    """
+    import engine.live_exec  # noqa: F401  -- runs its sys.path bootstrap
+
+    with pytest.raises(ImportError):
+        importlib.import_module("strategy.quotes")

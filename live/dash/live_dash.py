@@ -4,7 +4,7 @@ Watched during ONE supervised live cycle. Its primary job is to make an
 unhedged (NAKED) leg impossible to miss from across the room.
 
 Telemetry only: reads SQLite orders, fills, and reconcile_lock directly
-from `live/run/live.db` (or `run/live.db`) via read-only URI mode:
+from `live/run/live.db` via read-only URI mode:
 `sqlite3.connect('file:<path>?mode=ro', uri=True)`.
 
 Zero venue network calls. Zero credentials needed.
@@ -25,7 +25,8 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
-ROOT = Path(__file__).resolve().parent.parent
+# live/, one level up from live/dash/. Everything this page reads lives under it.
+LIVE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PORT = 8799
 POLL_INTERVAL_MS = 2000
 STALE_THRESHOLD_SEC = 30.0
@@ -40,10 +41,12 @@ def resolve_db_path(custom_path: str | Path | None = None) -> Path:
         return Path(env_path)
     # live/run/live.db is THE live registry -- order_registry.py anchors
     # DEFAULT_DB_PATH there off its own location, and nothing writes anywhere
-    # else. The repo root still holds a run/live.db left over from before the
-    # live path was extracted; preferring it pointed this dashboard at a dead
-    # pre-extraction file that will never receive a fill.
-    return ROOT / "live" / "run" / "live.db"
+    # else. The repo root once held a stale run/live.db from before the live
+    # path was extracted; preferring it pointed this dashboard at a dead file
+    # that would never receive a fill, and an empty registry renders exactly
+    # like a healthy idle cycle. `test_dashboard_reads_exactly_where_the_registry_writes`
+    # pins this to order_registry.DEFAULT_DB_PATH so the two cannot drift apart.
+    return LIVE_ROOT / "run" / "live.db"
 
 
 def query_db_state(db_path: Path | str) -> dict[str, Any]:
@@ -260,7 +263,7 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         # Counting orders instead made a three-order pair -- the normal shape
         # during exit and complete -- fall through to a calm RESTING with no naked
         # warning, which is the one state this page exists never to show.
-        # live/strategy/live_pairs.py:347-375 groups the same way.
+        # live/engine/live_pairs.py:347-375 groups the same way.
         tokens: dict[str, dict[str, Any]] = {}
         for o in legs:
             tok = tokens.setdefault(o["token_id"], {

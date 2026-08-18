@@ -1,4 +1,4 @@
-"""Tests for the live execution monitor (server/live_dash.py).
+"""Tests for the live execution monitor (live/dash/live_dash.py).
 
 Verifies the single-cycle dashboard behavior across all essential operational states:
 1. Empty database (graceful zero state)
@@ -21,8 +21,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from live.strategy.order_registry import SCHEMA
-from server.live_dash import (
+from engine.order_registry import SCHEMA
+from dash.live_dash import (
     PAGE_HTML,
     app,
     query_db_state,
@@ -438,7 +438,7 @@ def test_dashboard_reads_exactly_where_the_registry_writes():
     extracted. Preferring it pointed this page at a dead file that never
     receives a fill, which reads identically to a healthy idle cycle.
     """
-    from live.strategy.order_registry import DEFAULT_DB_PATH
+    from engine.order_registry import DEFAULT_DB_PATH
 
     assert resolve_db_path() == DEFAULT_DB_PATH
     assert resolve_db_path().parent.parent.name == "live"

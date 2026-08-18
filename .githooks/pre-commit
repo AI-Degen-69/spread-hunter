@@ -10,8 +10,12 @@ set -e
 
 staged=$(git diff --cached --name-only)
 
-# Match core strategy files or algorithmic ranking logic (exclude server/design/scripts/tests)
-strategy_changes=$(echo "$staged" | grep -E '^(strategy/|scripts/rank_markets\.py|scripts/rerank_loop\.py)' || true)
+# Match core strategy files or algorithmic ranking logic (exclude server/design/scripts/tests).
+# live/engine/ is included: it is the real-money execution path, so a change to its
+# architecture or ceilings matters at least as much as one to the simulator's. Its
+# dashboard (live/dash/) and helper scripts (live/scripts/) are excluded like the
+# root's, and so are its tests.
+strategy_changes=$(echo "$staged" | grep -E '^(strategy/|live/engine/|scripts/rank_markets\.py|scripts/rerank_loop\.py)' || true)
 research=$(echo "$staged" | grep -E '^research/' || true)
 
 if [ -n "$strategy_changes" ] && [ -z "$research" ]; then

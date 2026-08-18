@@ -16,8 +16,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 import pytest
 
-from strategy.order_registry import OrderRegistry, OrderRecord, FillRecord
-from strategy import live_pairs as lp
+from engine.order_registry import OrderRegistry, OrderRecord, FillRecord
+from engine import live_pairs as lp
 
 
 MAX_PAIR_COST = 0.995
@@ -721,7 +721,7 @@ def test_route_to_merge_does_not_leave_the_condition_blocked(
     marked `submitted`, `_check_idempotency_guard` would then refuse that merge
     until --force -- a guard blocking the recovery it just recommended.
     """
-    from strategy import live_exec
+    from engine import live_exec
 
     monkeypatch.setattr(live_exec, "RUN", tmp_path)
     monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
@@ -734,7 +734,7 @@ def test_route_to_merge_does_not_leave_the_condition_blocked(
                 "condition_id": COND, "cancelled": [light.order_id], "size": 0.0}
 
     monkeypatch.setattr(live_exec, "exit_naked_leg", fake_exit, raising=False)
-    monkeypatch.setattr("strategy.live_pairs.exit_naked_leg", fake_exit)
+    monkeypatch.setattr("engine.live_pairs.exit_naked_leg", fake_exit)
 
     live_exec.exit_pair(pair_id, live=True, db_path=registry.db_path,
                         skip_positions_check=True)
@@ -746,7 +746,7 @@ def test_route_to_merge_does_not_leave_the_condition_blocked(
 def test_a_real_exit_does_hold_the_condition(registry: OrderRegistry, tmp_path,
                                              monkeypatch):
     """The mirror: a sell that actually went out must block a second one."""
-    from strategy import live_exec
+    from engine import live_exec
 
     monkeypatch.setattr(live_exec, "RUN", tmp_path)
     monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
@@ -757,7 +757,7 @@ def test_a_real_exit_does_hold_the_condition(registry: OrderRegistry, tmp_path,
         return {"action": "exited", "pair_id": pair_id, "condition_id": COND,
                 "size": 10.0, "cancelled": []}
 
-    monkeypatch.setattr("strategy.live_pairs.exit_naked_leg", fake_exit)
+    monkeypatch.setattr("engine.live_pairs.exit_naked_leg", fake_exit)
 
     live_exec.exit_pair(pair_id, live=True, db_path=registry.db_path,
                         skip_positions_check=True)
@@ -771,12 +771,12 @@ def test_complete_pair_cmd_runs_end_to_end_and_holds_after_a_cross(
 ):
     """The Stage 4 command has its own config load, audit row and result handling.
 
-    It carried the same `from strategy.config import Config` failure as the exit
+    It carried the same `from engine.config import Config` failure as the exit
     and was fixed alongside it, but the round-four tests only drove `exit_pair`.
     Fixing one entry point and testing the other is how that defect survived
     thirty-seven passing tests in the first place.
     """
-    from strategy import live_exec
+    from engine import live_exec
 
     monkeypatch.setattr(live_exec, "RUN", tmp_path)
     monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
@@ -790,7 +790,7 @@ def test_complete_pair_cmd_runs_end_to_end_and_holds_after_a_cross(
         return {"action": "completed", "pair_id": pair_id, "condition_id": COND,
                 "size": 10.0, "notional": 3.0}
 
-    monkeypatch.setattr("strategy.live_pairs.complete_pair", fake_complete)
+    monkeypatch.setattr("engine.live_pairs.complete_pair", fake_complete)
 
     live_exec.complete_pair_cmd(pair_id, live=True, db_path=registry.db_path,
                                 skip_positions_check=True)
@@ -804,7 +804,7 @@ def test_complete_pair_cmd_does_not_hold_the_condition_when_nothing_crossed(
     registry: OrderRegistry, tmp_path, monkeypatch
 ):
     """`balanced` sends no BUY, so it must not block a later merge or completion."""
-    from strategy import live_exec
+    from engine import live_exec
 
     monkeypatch.setattr(live_exec, "RUN", tmp_path)
     monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
@@ -815,7 +815,7 @@ def test_complete_pair_cmd_does_not_hold_the_condition_when_nothing_crossed(
         return {"action": "balanced", "pair_id": pair_id, "condition_id": COND,
                 "size": 0.0}
 
-    monkeypatch.setattr("strategy.live_pairs.complete_pair", fake_complete)
+    monkeypatch.setattr("engine.live_pairs.complete_pair", fake_complete)
 
     live_exec.complete_pair_cmd(pair_id, live=True, db_path=registry.db_path,
                                 skip_positions_check=True)
@@ -830,7 +830,7 @@ def test_an_unknown_pair_id_refuses_cleanly_on_both_commands(tmp_path, monkeypat
     before either command's try block, and the completion path does not
     otherwise catch the exit path's exception type.
     """
-    from strategy import live_exec
+    from engine import live_exec
 
     monkeypatch.setattr(live_exec, "RUN", tmp_path)
     monkeypatch.setattr(live_exec, "_client", lambda *a, **k: None)
@@ -1058,7 +1058,7 @@ def test_quote_writes_both_legs_to_the_registry_under_one_pair_id(
     """Without this the poll loop has nothing to reconcile and exit/complete
     have no pair_id, so the two legs rest at the venue with real money and
     nothing tracking them."""
-    from strategy import live_exec
+    from engine import live_exec
 
     monkeypatch.setattr(live_exec, "RUN", tmp_path)
     db = tmp_path / "live.db"
@@ -1070,7 +1070,7 @@ def test_quote_writes_both_legs_to_the_registry_under_one_pair_id(
         tick_size = "0.01"
         neg_risk = False
 
-    monkeypatch.setattr("strategy.markets.fetch_pinned_market", lambda cid: Market())
+    monkeypatch.setattr("engine.markets.fetch_pinned_market", lambda cid: Market())
 
     posted = []
 
@@ -1121,7 +1121,7 @@ def test_quote_leaves_the_row_pending_when_the_venue_returns_no_id(
     Guessing an id would bind our row to somebody else's order; `pending` is
     what reconcile's orphan adoption is built to claim.
     """
-    from strategy import live_exec
+    from engine import live_exec
 
     monkeypatch.setattr(live_exec, "RUN", tmp_path)
     db = tmp_path / "live.db"
@@ -1133,7 +1133,7 @@ def test_quote_leaves_the_row_pending_when_the_venue_returns_no_id(
         tick_size = "0.01"
         neg_risk = False
 
-    monkeypatch.setattr("strategy.markets.fetch_pinned_market", lambda cid: Market())
+    monkeypatch.setattr("engine.markets.fetch_pinned_market", lambda cid: Market())
 
     class Client:
         creds = object()
@@ -1158,7 +1158,7 @@ def test_quote_leaves_the_row_pending_when_the_venue_returns_no_id(
 
 
 def test_venue_order_id_accepts_the_spellings_and_refuses_to_guess():
-    from strategy import live_exec
+    from engine import live_exec
 
     assert live_exec._venue_order_id({"orderID": "a"}) == "a"
     assert live_exec._venue_order_id({"orderId": "b"}) == "b"
@@ -1174,7 +1174,7 @@ def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
     a typo in a condition_id that is perfectly correct -- the same class of
     misleading diagnostic as reporting an unread balance as 0.00.
     """
-    from strategy import live_exec
+    from engine import live_exec
 
     monkeypatch.setattr(live_exec, "RUN", tmp_path)
 
@@ -1189,7 +1189,7 @@ def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
     def unfunded(cid, require_rewards=True):
         return None if require_rewards else Market()
 
-    monkeypatch.setattr("strategy.markets.fetch_pinned_market", unfunded)
+    monkeypatch.setattr("engine.markets.fetch_pinned_market", unfunded)
     with pytest.raises(SystemExit, match="pays no maker rewards") as exc_info:
         live_exec.quote(COND, price=0.48, size=5.0, live=False,
                         db_path=tmp_path / "live.db")
@@ -1201,7 +1201,7 @@ def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
     assert "resting" in msg  # resting-income explanation
 
     # Genuinely absent: None either way.
-    monkeypatch.setattr("strategy.markets.fetch_pinned_market",
+    monkeypatch.setattr("engine.markets.fetch_pinned_market",
                         lambda cid, require_rewards=True: None)
     with pytest.raises(SystemExit, match="no market at condition_id") as exc_info:
         live_exec.quote(COND, price=0.48, size=5.0, live=False,
