@@ -61,7 +61,20 @@ Escape hatch for typos and formatting: `git commit --no-verify`.
   3. **Forbidden until Stages 1–4 land and the Owner approves:** any order that opens or increases
      exposure — resting a quote, crossing to complete a pair, the automated loop. A one-sided fill
      with no live stop-loss rides unhedged to resolution at up to 100% loss of that leg.
-  4. `--live` on a newly built command needs Owner sign-off for that command, not once per session.
+  4. **`--live` is gated on DIRECTION, not on the command's name.** Owner decision, 2026-08-18,
+     replacing the earlier per-command sign-off rule.
+     - **Pre-approved — closing commands.** `exit`, `complete`, `merge`, `redeem`, `cancel`,
+       `cancel-market`, `cancel-all`. Each of these only reduces exposure, so a full cycle runs
+       without stopping for approval at every step. Friction here costs money: a naked leg that
+       waits on a copy-paste is a naked leg for longer.
+     - **Explicit approval each time — opening commands.** `quote`, and anything else that rests
+       or crosses to create a position. `quote` is the only verb in the set that can create a loss,
+       so it is the only one that stops for a human. The Owner watches the position on
+       Polymarket's own interface while it runs.
+     - **The automated loop stays forbidden** regardless of direction until Stage 5 is separately
+       approved. This rule governs one supervised cycle, not unattended operation.
+     - **Funding is requested before the cycle, never during.** Tell the Owner the amount and the
+       reason ahead of time; do not discover mid-cycle that the wallet is short.
 
   Stage list and current status: `.claude/reviews/SESSION-66-BRIEF.md` §5.
 - Hosted credentials are placeholders. Never deploy a real `PRIVATE_KEY`.
