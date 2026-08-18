@@ -2913,3 +2913,98 @@ commit, והעבירה את `order_id` מהראשונה. פקודת הזירה �
 - **LIVE** על דינמיקת סקיילינג של ה-Bankroll תחת 91.9% חפיפת שווקים.
 - **OPEN** על הרצה בהשגחה של שלב 4.5.
 
+---
+
+### 2026-08-18 — אבן דרך 2: חילוץ תת-עץ המסחר החי, ביטול צימוד בחבילת Namespace וביקורת צימוד תצורת הסימולציה
+
+#### שאלה
+
+כיצד ניתן לחלץ את מודולי ביצוע המסחר החי (`strategy/live_exec.py`, `strategy/live_pairs.py`, `strategy/order_registry.py`) ובדיקותיהם לתת-עץ מבודד `live/`, תוך שמירה מלאה על אפס שבירות בסוויטת הסימולציה הראשית וביסוס גבולות בטיחות הרמטיים?
+
+#### שיטה
+
+1. העברת `strategy/order_registry.py`, `strategy/live_pairs.py` ו-`strategy/live_exec.py` אל `live/strategy/`.
+2. העברת קובצי הבדיקות המתאימים (`test_order_registry.py`, `test_live_pairs.py`, `test_live_exec.py`, `test_live_exec_merge.py`) אל `live/tests/`.
+3. ביטול התנגשויות גבולות חבילה על ידי מחיקת `strategy/__init__.py` ו-`live/strategy/__init__.py`, והגדרת `strategy` כ-implicit namespace package הפרוסה על פני `live/` ו-`strategy/` השורשי.
+4. הגדרת `live/pytest.ini` עם `pythonpath = . ..` (`live/` ראשון) ו-`pytest.ini` השורשי עם `testpaths = tests`, `norecursedirs = live .*`.
+5. בניית רתמת בדיקה הרמטית ב-`live/tests/conftest.py` עם ניקוי אוטומטי של אישורי גישה (`scrub_credential_env`) וחסימת שקעי רשת שאינם loopback (`block_non_loopback_sockets`).
+6. קיבוע קדימות פענוח מודולים ב-`live/tests/test_live_conftest.py` המאמת לפי `__file__` כי `strategy.live_exec` ו-`strategy.order_registry` נפתרים תחת `live/strategy/` בעוד ש-`strategy.markets` נפתר תחת `strategy/` השורשי.
+7. ביקורת ובידוד נתיבי אחסון: `DEFAULT_DB_PATH` ב-`live/strategy/order_registry.py` נפתר ל-`<live_root>/run/live.db`, ו-`_find_env_file()` ב-`live/strategy/live_exec.py` תוחם חיפוש כלפי מעלה לעד 3 רמות אב ועוצר ב-`AGENTS.md`.
+8. עדכון `.gitignore` עם כללי התעלמות עבור `live/run/` וכללי wildcard עבור `**/run/*.db`, `**/run/*.log` וכו'.
+9. עדכון `.github/workflows/tests.yml` עם צעדים נפרדים בעלי שמות מוגדרים עבור סוויטת השורש וסוויטת ה-live.
+
+#### תוצאה
+
+1. **חילוץ ומאזן בדיקות:**
+   - סוויטת שורש: `703 passed, 1 warning in 28.85s` (קוד יציאה 0).
+   - סוויטת live: `129 passed in 7.57s` (קוד יציאה 0).
+   - סך בדיקות: 703 + 129 = 832 עוברות, בהתאמה לבסיס של 829 (+3 בדיקות שמירה וקדימות חדשות, 0 אובדן, [נגזר] 0 נכשלו, 0 דולגו).
+2. **ממצא א' — הנחת עבודה שהופרכה לגבי אי-תלות בייבוא:**
+   - הנחת המסירה הראשונית לפיה `strategy/live_exec.py` אינו מייבא דבר מ-`strategy/` **הופרכה**:
+     - `strategy.markets` מיובא בשורה 337 (`fetch_pinned_market`) ובשורות 1263, 1289 (`fetch_live_market`). `parse_book` ו-`full_book` קיימים ב-`markets.py` אך אינם מיובאים על ידי `live_exec.py`.
+     - `strategy.config` מיובא בשורות 391, 1009, 1787 ו-1891 (`config.load()`, `MakerConfig`).
+   - פענוח ה-namespace פותר זאת בצורה נקייה על ידי הצבת `live/` ראשון ב-`sys.path`.
+3. **ממצא ב' — צימוד תצורת סימולציה (`max_pair_cost`):**
+   - `live/strategy/live_exec.py` מייבא את `strategy.config` בשורות 391, 1787, 1891 ואת `MakerConfig` בשורה 1009; הערך `max_pair_cost` נקרא בשורות 395, 1837 ו-1956.
+   - `max_pair_cost` הוא ברירת מחדל של dataclass ב-`strategy/config.py:615` ואינו ניתן לדריסה דרך env ב-`config.load()` (הדריסות שם הן מפתחות HUNTER_* בלבד). לכן סכנת הסחיפה היא עריכת קוד מקור לצורך סריקה, ולא היפוך משתנה סביבה בזמן ריצה -- צר יותר ממה שנוסח תחילה, ועדיין קיים.
+   - צימוד תקרת סיכון המסחר החי ישירות לתצורת הסימולציה יוצר סכנת סחיפת סיכון בלתי מוגנת. ביצוע חי דורש חוזה תצורת סיכון נפרד ומפורש.
+4. **בטיחות הרמטית ואימות CLI:**
+   - חוסם שקעים אומת: חיבורים שאינם loopback זורקים `RuntimeError("Live test attempted outbound network socket connection...")`.
+   - ניקוי סביבה אומת: מפתחות `POLY_API_KEY`, `POLY_SECRET`, `POLY_PASSPHRASE`, `POLY_PRIVATE_KEY` מנוקים בפיקסצ'רים.
+   - הרצת CLI אומתה: `cd live && python -m strategy.live_exec status` רץ בצורה נקייה עם `sys.path[0] == ''` ומדווח על אישורי גישה חסרים ללא פתיחת חיבורי רשת.
+
+#### החלטה
+
+- **OPEN** על חילוץ תת-עץ המסחר החי (`live/`).
+- **OPEN** על ביטול צימוד תצורת סיכון חי (`max_pair_cost`) מסריקות סימולציה ב-`strategy.config`.
+
+---
+
+### 2026-08-18 — אבן דרך 4: יישור ממשק פקודות מול זירת המסחר, ברירת מחדל בטוחה של postOnly, פועלי ביטול עצמאיים וביקורת טלמטריית זמני השהיה
+
+#### שאלה
+
+אילו יכולות חושפת זירת ה-CLOB של פולימרקט לניהול וביצוע מחזור חיי פקודות, כיצד משתווה ממשק ה-CLI שלנו, כיצד יש להגן על ביצוע עושה-שוק (maker) מפני חציית מרווח בשוגג, וכיצד ניתן למדוד השהיית sent-to-landed ברמת ההזמנה הבודדת?
+
+#### שיטה
+
+1. מיפוי ממשק ה-API הרשמי מתוך התיעוד של פולימרקט (`docs.polymarket.com/api-reference/trade/post-a-new-order`, `POST /orders`, `DELETE /order` וכו') ומתוך ה-SDK של `py_clob_client_v2`.
+2. השוואת יכולות הזירה מול 11 תת-פקודות ה-CLI ב-`live/strategy/live_exec.py`, וחלוקתן לשלוש קבוצות זרות: מתורגלות, לא נבדקו (קבוצה ב'), וחשופות בזירה אך לא מומשות (קבוצה ג').
+3. הוספת `--post-only` (ברירת מחדל `True`, באמצעות `argparse.BooleanOptionalAction`) ובקרת תוקף הזמנה `--tif` (`GTC`, `GTD`, `FOK`, `FAK`, ברירת מחדל `GTC`) יחד עם `--expiration` לפקודת `quote()`, ואכיפת דחייה בזמן פענוח ארגומנטים של שילובים לא חוקיים (`post_only` יחד עם `FOK`/`FAK`, ו-`GTD` ללא `--expiration`).
+4. מימוש פועלי סגירה עצמאיים `cancel <order_id>` ו-`cancel-market <condition_id>` עם טיפול סירוב fail-closed וסנכרון סטטוס ב-`OrderRegistry`.
+5. סגירת קבוצה ב' על ידי כתיבת בדיקות יחידה עבור `cancel-all`, `status`, `balance`, `pairs` ודגלי הציטוט, ואימות שנתיבי taker (`exit`, `complete`) לעולם אינם מעבירים `post_only`.
+6. ביקורת טלמטריית זמני השהיה ב-`OrderRegistry` והערכת ערוץ ה-WebSocket של המשתמש (`wss://ws-subscriptions-clob.polymarket.com/ws/user`) לקבלת חותמות זמן של אישור הזמנה בשעון הזירה.
+
+#### תוצאה
+
+1. **הבטחת עושה-שוק postOnly:** מכיוון שהאסטרטגיה מציבה הצעות מחיר בשני הצדדים כדי לגרוף מרווח, מילוי אגרסיבי בעת ציטוט הוא פגם אסטרטגי. `--post-only` מוגדר כברירת מחדל כ-`True` ב-`quote()`, ומחייב ציון מפורש של `--no-post-only` לביטול. נתיבי taker חותכים (`exit`, `complete`) נותרים באופן קשיח `post_only=False`.
+2. **סמכות מקור ותיקון מגבלת GTD:** משך ה-GTD המינימלי של 125 שניות שצוטט בתיעוד צד שלישי (`docs.polycop.ai`) אינו מאושר במפרט ה-API הרשמי של פולימרקט; תועד כטענת צד שלישי בלתי מאומתת.
+3. **פועלי ביטול ותיקון כלל הבטיחות ב-AGENTS.md:** הפעלת `cancel` ו-`cancel-market` העצמאיות סוגרת חשיפה וזוכה לאישור מראש לפי הנוסח המעודכן של `AGENTS.md` (קומיט `f8e8bf1`). טיפול Fail-closed אומת ומעלה סירוב נקי `CANCEL REFUSED` / `CANCEL-MARKET REFUSED` בדחייה על ידי הזירה ללא זליגת tracebacks.
+4. **נתיב טלמטריית השהיה להזמנה:** בעוד שסכמת מסד הנתונים של ה-REST (`posted_ts`, `last_polled_ts`) אינה יכולה לשחזר את השהיית הקבלה בת 81.13 מילי-שניות בשל היעדר אישור REST ואי-סדירות הדגימה (polling jitter), ערוץ ה-WebSocket של המשתמש (`wss://ws-subscriptions-clob.polymarket.com/ws/user`) פולט אירועי הצבה עם חותמות זמן בשעון הזירה ($t_{\text{ack}}$) המאפשרות מדידה אמיתית של השהיית sent-to-landed.
+5. **מאזן בדיקות ואימות הסוויטה:** סוויטת שורש: `703 passed, 1 warning in 59.98s`. סוויטת live: `143 passed in 19.87s` (עלייה מ-129 בסיס, +14 בדיקות חדשות המכסות דגלי ציטוט, פועלי ביטול, פקודות קבוצה ב' ובידוד post_only ב-taker). סך הכול: 703 + 143 = 846 עברו (קוד יציאה 0 בשתיהן, [נגזר] 0 נכשלו, 0 דולגו).
+
+#### החלטה
+
+- **OPEN** על מימוש אבן דרך 4 (כל הקוד, פועלי ה-CLI והבדיקות נחתו ב-`live-extraction`, PR #41; מגע עם הזירה מותנה באישור Owner לשלב 4.5).
+- **OPEN** על אבן דרך 5 (שליחת פקודות באצווה ושיוך שורות לשתי הרגליים).
+
+#### נספח (סקירת Prime, אותו יום)
+
+שני ליקויי fail-open אותרו בעת אימות אבן הדרך ותוקנו באותו ענף:
+
+1. `quote()` פתר את ה-time-in-force באמצעות `getattr(OrderType, tif, OrderType.GTC)`.
+   `OrderType` ב-`py_clob_client_v2` הוא מחלקת קבועים רגילה, לא `Enum`, ולכן `tif` לא מוכר
+   הפך בשקט ל-**GTC** — פקודה שהמבקש ביקש שתהיה immediate-or-cancel הייתה במקום זאת נחה
+   בספר ומחזיקה חשיפה שהמבקש דחה במפורש. `argparse` מגביל את ה-CLI, אך `quote()` נקראת
+   ישירות מבדיקות ומכל קורא תוכנתי עתידי. הוחלף בבדיקת רשימת-היתר מפורשת שמעלה `SystemExit`.
+
+2. `probe()` שלח את פקודת המדידה שלו עם `post_only` בברירת המחדל של ה-SDK, `False`.
+   ה-probe מניח BUY 100 @ $0.01 אך ורק כדי למדוד latency של קבלה בוונְיו ולעולם אינו רוצה
+   ביצוע; ביצוע היה משבש את המדידה וגם פותח פוזיציה לא מכוונת. $0.01 רחוק מהספר, אך "רחוק"
+   הוא תנאי שוק, לא ערובה. כעת נשלח עם `post_only=True`, מה שהופך את תכונת אי-הביצוע
+   לאינווריאנטה שהוונְיו אוכף ולא להימור על המרווח.
+
+הערה על סיווג: `probe` מניח BUY נח ולכן הוא פקודה **פותחת** תחת כלל הכיוון המתוקן ב-`AGENTS.md`.
+הוא אינו בקבוצת הסגירה המאושרת מראש ואין להתייחס אליו כאל שפיר רק משום שכוונתו קריאה.
+
+חבילת הבדיקות החיה אחרי שני התיקונים: **143 עוברות** (יציאה 0).

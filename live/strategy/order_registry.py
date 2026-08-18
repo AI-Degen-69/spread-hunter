@@ -22,7 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
-DEFAULT_DB_PATH = Path("run/live.db")
+LIVE_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DB_PATH = LIVE_ROOT / "run" / "live.db"
 BUSY_TIMEOUT_SEC = 5.0
 
 # 30 seconds match window: covers HTTP roundtrip and CLOB ingestion skew

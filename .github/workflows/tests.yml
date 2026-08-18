@@ -41,7 +41,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run tests
-        # No network, no wallet, no venue. Any test that needs those is either
-        # mocked or non-hermetic, and this is where that shows up.
+      - name: Run root test suite
+        # No network, no wallet, no venue. Tests simulation and core strategy.
         run: pytest -q
+
+      - name: Run live extraction test suite
+        # Runs the isolated live execution tests with live/ hermetic conftest.
+        run: |
+          cd live
+          pytest -q

@@ -1079,7 +1079,7 @@ def test_quote_writes_both_legs_to_the_registry_under_one_pair_id(
         def create_order(self, args):
             return {"signed": True, "token": args.token_id}
 
-        def post_order(self, signed, order_type):
+        def post_order(self, signed, order_type=None, post_only=False, **kwargs):
             posted.append(signed["token"])
             return {"orderID": f"venue-{signed['token']}", "success": True}
 
@@ -1132,7 +1132,7 @@ def test_quote_leaves_the_row_pending_when_the_venue_returns_no_id(
         def create_order(self, args):
             return {"token": args.token_id}
 
-        def post_order(self, signed, order_type):
+        def post_order(self, signed, order_type=None, post_only=False, **kwargs):
             return {"success": True}          # no id of any spelling
 
         def get_open_orders(self, *a, **k):
@@ -1201,3 +1201,51 @@ def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
     msg = str(exc_info.value)
     assert COND[:12] in msg  # condition ID
     assert "CLOB" in msg  # CLOB wording
+
+
+def test_taker_paths_never_set_post_only(registry):
+    """exit_naked_leg and complete_pair are deliberate taker crosses and must NEVER pass post_only=True."""
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = FakeClient(best_ask=0.395, best_bid=0.55)
+
+    # 1. Test exit_naked_leg (taker SELL)
+    res_exit = lp.exit_naked_leg(
+        client, registry, pair_id,
+        max_pair_cost=MAX_PAIR_COST,
+        live=True,
+    )
+    assert res_exit["action"] == "exited"
+    assert len(client.orders) == 1
+    assert client.orders[0]["side"] == "SELL"
+
+    # 2. Test complete_pair (taker BUY)
+    pair_id_2 = "pair-comp-1"
+    now = 1_000_000
+    heavy = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-h2", condition_id=COND,
+        token_id=TOK_UP, side="BUY", price=0.60, original_size=10.0,
+        status="filled", posted_ts=now, last_polled_ts=now, pair_id=pair_id_2,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(heavy)
+    registry.record_fill(FillRecord(
+        trade_id="trade-h2", order_uuid=heavy.id, size=10.0,
+        price=0.60, venue_ts=now,
+    ))
+    light = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-l2", condition_id=COND,
+        token_id=TOK_DN, side="BUY", price=0.38, original_size=10.0,
+        status="open", posted_ts=now, last_polled_ts=now, pair_id=pair_id_2,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(light)
+
+    client_comp = FakeClient(best_ask=0.35, best_bid=0.55)
+    res_comp = lp.complete_pair(
+        client_comp, registry, pair_id_2,
+        max_pair_cost=MAX_PAIR_COST,
+        live=True,
+    )
+    assert res_comp["action"] == "completed"
+    assert len(client_comp.orders) == 1
+    assert client_comp.orders[0]["side"] == "BUY"

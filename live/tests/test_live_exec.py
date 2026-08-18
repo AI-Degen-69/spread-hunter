@@ -874,4 +874,284 @@ def test_parent_collection_id_off_the_curve_is_rejected():
         le.get_collection_id(off_curve_parent, _COND_A, 1)
 
 
+# ===========================================================================
+# Milestone 4 — Quote flags, Cancellation verbs, and Set B commands
+# ===========================================================================
+
+
+def test_quote_passes_post_only_default_true(tmp_path):
+    """quote() defaults post_only=True and order_type=GTC."""
+    from py_clob_client_v2.clob_types import OrderType
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up", down_token="tok_dn",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    mock_client.post_order.side_effect = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    db_path = tmp_path / "live.db"
+
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        le.quote(cond_id, price=0.50, size=10.0, live=True, db_path=db_path)
+
+    assert mock_client.post_order.call_count == 2
+    for call in mock_client.post_order.call_args_list:
+        _, kwargs = call
+        assert kwargs.get("post_only") is True
+        assert kwargs.get("order_type") == OrderType.GTC
+
+
+def test_quote_allows_explicit_no_post_only(tmp_path):
+    """quote(..., post_only=False) passes post_only=False to SDK post_order."""
+    from py_clob_client_v2.clob_types import OrderType
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up", down_token="tok_dn",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    mock_client.post_order.side_effect = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    db_path = tmp_path / "live.db"
+
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        le.quote(cond_id, price=0.50, size=10.0, live=True, post_only=False, db_path=db_path)
+
+    assert mock_client.post_order.call_count == 2
+    for call in mock_client.post_order.call_args_list:
+        _, kwargs = call
+        assert kwargs.get("post_only") is False
+
+
+def test_quote_tif_gtd_with_expiration(tmp_path):
+    """quote(..., tif='GTD', expiration=1786855000) passes OrderType.GTD and expiration."""
+    from py_clob_client_v2.clob_types import OrderType
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up", down_token="tok_dn",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    mock_client.post_order.side_effect = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    db_path = tmp_path / "live.db"
+
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        le.quote(cond_id, price=0.50, size=10.0, live=True, tif="GTD", expiration=1786855000, db_path=db_path)
+
+    assert mock_client.create_order.call_count == 2
+    for call in mock_client.create_order.call_args_list:
+        args, _ = call
+        assert args[0].expiration == 1786855000
+
+    assert mock_client.post_order.call_count == 2
+    for call in mock_client.post_order.call_args_list:
+        _, kwargs = call
+        assert kwargs.get("order_type") == OrderType.GTD
+        assert kwargs.get("post_only") is True
+
+
+def test_quote_rejects_post_only_with_fok_or_fak():
+    """quote() fails at parse-time if post_only is combined with FOK or FAK."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+    with pytest.raises(SystemExit) as exc_fok:
+        le.quote(cond_id, price=0.50, size=10.0, live=False, post_only=True, tif="FOK")
+    assert "--post-only is valid only for GTC and GTD orders" in str(exc_fok.value)
+
+    with pytest.raises(SystemExit) as exc_fak:
+        le.quote(cond_id, price=0.50, size=10.0, live=False, post_only=True, tif="FAK")
+    assert "--post-only is valid only for GTC and GTD orders" in str(exc_fak.value)
+
+
+def test_quote_rejects_gtd_without_expiration():
+    """quote() fails at parse-time if tif=GTD is passed without expiration."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+
+    with pytest.raises(SystemExit) as exc:
+        le.quote(cond_id, price=0.50, size=10.0, live=False, tif="GTD", expiration=None)
+    assert "--expiration (UTC epoch seconds) is required when --tif GTD" in str(exc.value)
+
+
+def test_cancel_single_order_dry_run_and_live(tmp_path, capsys):
+    """cancel_single_order prints dry-run message when live=False, calls SDK and updates DB when live=True."""
+    from strategy.order_registry import OrderRegistry, OrderRecord
+    db_path = tmp_path / "live.db"
+    registry = OrderRegistry(db_path=db_path)
+    now_ms = 1_000_000
+    registry.create_order(OrderRecord(
+        id="local-1", order_id="venue-order-99", condition_id="0xcond",
+        token_id="tok-1", side="BUY", price=0.50, original_size=10.0,
+        status="open", posted_ts=now_ms, last_polled_ts=now_ms,
+        pair_id="pair-1", max_pair_cost_at_post=0.995,
+    ))
+
+    # 1. Dry run
+    le.cancel_single_order("venue-order-99", live=False, db_path=db_path)
+    out_dry = capsys.readouterr().out
+    assert "DRY RUN -- would cancel order venue-order-99" in out_dry
+    assert registry.get_order("local-1").status == "open"
+
+    # 2. Live execution
+    mock_client = MagicMock()
+    mock_client.cancel_order.return_value = {"canceled": ["venue-order-99"]}
+    with patch.object(le, "_client", return_value=mock_client):
+        le.cancel_single_order("venue-order-99", live=True, db_path=db_path)
+
+    out_live = capsys.readouterr().out
+    assert "venue-order-99" in out_live
+    assert registry.get_order("local-1").status == "cancelled"
+
+
+def test_cancel_single_order_handles_venue_rejection(tmp_path):
+    """cancel_single_order raises SystemExit naming refusal when venue rejects."""
+    db_path = tmp_path / "live.db"
+    mock_client = MagicMock()
+    mock_client.cancel_order.side_effect = RuntimeError("Order not found or already closed")
+
+    with patch.object(le, "_client", return_value=mock_client):
+        with pytest.raises(SystemExit) as exc:
+            le.cancel_single_order("venue-order-missing", live=True, db_path=db_path)
+
+    msg = str(exc.value)
+    assert "CANCEL REFUSED" in msg
+    assert "Order not found or already closed" in msg
+
+
+def test_cancel_market_dry_run_and_live(tmp_path, capsys):
+    """cancel_market prints dry-run message when live=False, calls SDK and cancels active orders when live=True."""
+    from strategy.order_registry import OrderRegistry, OrderRecord
+    db_path = tmp_path / "live.db"
+    registry = OrderRegistry(db_path=db_path)
+    now_ms = 1_000_000
+    registry.create_order(OrderRecord(
+        id="local-1", order_id="venue-1", condition_id="0xmarketA",
+        token_id="tok-1", side="BUY", price=0.50, original_size=10.0,
+        status="open", posted_ts=now_ms, last_polled_ts=now_ms,
+        pair_id="pair-1", max_pair_cost_at_post=0.995,
+    ))
+    registry.create_order(OrderRecord(
+        id="local-2", order_id="venue-2", condition_id="0xmarketB",
+        token_id="tok-2", side="BUY", price=0.50, original_size=10.0,
+        status="open", posted_ts=now_ms, last_polled_ts=now_ms,
+        pair_id="pair-2", max_pair_cost_at_post=0.995,
+    ))
+
+    # 1. Dry run
+    le.cancel_market("0xmarketA", live=False, db_path=db_path)
+    out_dry = capsys.readouterr().out
+    assert "DRY RUN -- would cancel all active orders for market 0xmarketA" in out_dry
+    assert registry.get_order("local-1").status == "open"
+    assert registry.get_order("local-2").status == "open"
+
+    # 2. Live execution
+    mock_client = MagicMock()
+    mock_client.cancel_market_orders.return_value = {"canceled": ["venue-1"]}
+    with patch.object(le, "_client", return_value=mock_client):
+        le.cancel_market("0xmarketA", live=True, db_path=db_path)
+
+    assert registry.get_order("local-1").status == "cancelled"
+    assert registry.get_order("local-2").status == "open"
+
+
+def test_cancel_market_handles_venue_error(tmp_path):
+    """cancel_market raises SystemExit naming refusal when venue rejects."""
+    db_path = tmp_path / "live.db"
+    mock_client = MagicMock()
+    mock_client.cancel_market_orders.side_effect = RuntimeError("Market cancel failed")
+
+    with patch.object(le, "_client", return_value=mock_client):
+        with pytest.raises(SystemExit) as exc:
+            le.cancel_market("0xmarket-fail", live=True, db_path=db_path)
+
+    msg = str(exc.value)
+    assert "CANCEL-MARKET REFUSED" in msg
+    assert "Market cancel failed" in msg
+
+
+def test_cancel_all_cmd_dry_run_and_live(capsys):
+    """cancel_all handles dry run, live invocation, and venue failure."""
+    # 1. Dry run
+    le.cancel_all(live=False)
+    assert "DRY RUN -- would cancel ALL open orders" in capsys.readouterr().out
+
+    # 2. Live execution
+    mock_client = MagicMock()
+    mock_client.cancel_all.return_value = {"canceled": ["ord-1", "ord-2"]}
+    with patch.object(le, "_client", return_value=mock_client):
+        le.cancel_all(live=True)
+    assert "ord-1" in capsys.readouterr().out
+
+    # 3. Live failure
+    mock_client.cancel_all.side_effect = RuntimeError("Unauthorized")
+    with patch.object(le, "_client", return_value=mock_client):
+        with pytest.raises(SystemExit) as exc:
+            le.cancel_all(live=True)
+    assert "CANCEL-ALL REFUSED" in str(exc.value)
+
+
+def test_status_cmd_reports_auth_and_balances(capsys):
+    """status() prints address, funder, and open order summary."""
+    mock_client = MagicMock()
+    mock_client.get_address.return_value = "0x1111222233334444555566667777888899990000"
+    mock_client.get_open_orders.return_value = [
+        {"side": "BUY", "original_size": "100", "price": "0.50", "id": "venue-ord-1"}
+    ]
+
+    with patch.object(le, "_client", return_value=mock_client), \
+         patch.dict(os.environ, {"POLY_FUNDER": "0xfunder1234"}, clear=False):
+        le.status()
+
+    out = capsys.readouterr().out
+    assert "0x1111222233334444555566667777888899990000" in out
+    assert "0xfunder1234" in out
+    assert "open orders    1" in out
+    assert "venue-ord-1" in out
+
+
+def test_balance_cmd_queries_funder_and_collateral(capsys):
+    """balance() parses 6dp USDC balance and allowances correctly."""
+    mock_client = MagicMock()
+    mock_client.get_balance_allowance.return_value = {
+        "balance": "50000000",  # $50.00 USDC
+        "allowance": "100000000",  # $100.00 USDC
+        "allowances": {"0xexchange_contract": "100000000"}
+    }
+
+    with patch.object(le, "_client", return_value=mock_client):
+        le.balance("0xfunder_addr")
+
+    out = capsys.readouterr().out
+    assert "0xfunder_addr" in out
+    assert "$50.00 USDC" in out
+    assert "$100.00" in out
+
+
+def test_pairs_cmd_lists_registry_records(tmp_path, capsys):
+    """pairs() outputs table of all registered pairs and held sizes."""
+    from strategy.order_registry import OrderRegistry, OrderRecord
+    db_path = tmp_path / "live.db"
+    registry = OrderRegistry(db_path=db_path)
+    now_ms = 1_000_000
+
+    registry.create_order(OrderRecord(
+        id="loc-1", order_id="v-1", condition_id="0xcondition1234",
+        token_id="tok-up-1", side="BUY", price=0.60, original_size=10.0,
+        status="open", posted_ts=now_ms, last_polled_ts=now_ms,
+        pair_id="pair-abc-1", max_pair_cost_at_post=0.995,
+    ))
+
+    le.pairs(db_path=db_path)
+    out = capsys.readouterr().out
+    assert "pair-abc-1" in out
+    assert "0xcondition1" in out
+
+
 

@@ -3370,3 +3370,102 @@ Do the headline economics, adverse selection markouts, and exit parameters recor
 - **LIVE** on bankroll scaling dynamics: 10-tier suite establishes scale-driven completion efficiency under 91.9% market overlap.
 - **OPEN** on Stage 4.5 supervised execution.
 
+---
+
+### 2026-08-18 — Milestone 2: Live subtree extraction, namespace package decoupling, and simulation-config coupling audit
+
+#### Question
+
+How can live trading execution modules (`strategy/live_exec.py`, `strategy/live_pairs.py`, `strategy/order_registry.py`) and their tests be extracted into an isolated `live/` subtree while maintaining zero-breakage on the root simulation suite and establishing hermetic safety boundaries?
+
+#### Method
+
+1. Move `strategy/order_registry.py`, `strategy/live_pairs.py`, and `strategy/live_exec.py` to `live/strategy/`.
+2. Move corresponding test files (`test_order_registry.py`, `test_live_pairs.py`, `test_live_exec.py`, `test_live_exec_merge.py`) to `live/tests/`.
+3. Eliminate package boundary collisions by deleting `strategy/__init__.py` and `live/strategy/__init__.py`, configuring `strategy` as an implicit namespace package across `live/` and root `strategy/`.
+4. Configure `live/pytest.ini` with `pythonpath = . ..` (`live/` first) and root `pytest.ini` with `testpaths = tests`, `norecursedirs = live .*`.
+5. Implement hermetic test harness in `live/tests/conftest.py` with automatic credential scrubbing (`scrub_credential_env`) and socket blocking (`block_non_loopback_sockets`).
+6. Pin module resolution precedence in `live/tests/test_live_conftest.py` asserting by `__file__` that `strategy.live_exec` and `strategy.order_registry` resolve under `live/strategy/` while `strategy.markets` resolves under root `strategy/`.
+7. Audit and isolate storage paths: `DEFAULT_DB_PATH` in `live/strategy/order_registry.py` resolves to `<live_root>/run/live.db`, and `_find_env_file()` in `live/strategy/live_exec.py` bounds upward search to at most 3 ancestor levels stopping at `AGENTS.md`.
+8. Update `.gitignore` with `live/run/` and wildcard ignore rules for `**/run/*.db`, `**/run/*.log`, etc.
+9. Update `.github/workflows/tests.yml` with separate named steps for root and live suites.
+
+#### Result
+
+1. **Extraction & Test Accounting:**
+   - Root test suite: `703 passed, 1 warning in 28.85s` (exit code 0).
+   - Live test suite: `129 passed in 7.57s` (exit code 0).
+   - Total tests: 703 + 129 = 832 passed, accounting for the 829 baseline (+3 new hermetic guard and precedence tests, 0 lost, [DERIVED] 0 failed, 0 skipped).
+2. **Finding A — Falsified Premise on Import Independence:**
+   - The initial handoff premise that `strategy/live_exec.py` imports nothing from `strategy/` was **falsified**:
+     - `strategy.markets` is imported at lines 337 (`fetch_pinned_market`) and 1263, 1289 (`fetch_live_market`). `parse_book` and `full_book` exist in `markets.py` but are NOT imported by `live_exec.py`.
+     - `strategy.config` is imported at lines 391, 1009, 1787, and 1891 (`config.load()`, `MakerConfig`).
+   - Namespace resolution resolves this cleanly by placing `live/` before root on `sys.path`.
+3. **Finding B — Simulation-Config Coupling (`max_pair_cost`):**
+   - `live/strategy/live_exec.py` imports `strategy.config` at lines 391, 1787, 1891 and `MakerConfig` at line 1009; the `max_pair_cost` value is read at lines 395, 1837 and 1956.
+   - `max_pair_cost` is a dataclass default at `strategy/config.py:615` and is NOT env-overridable in `config.load()` (whose overrides are the HUNTER_* keys only). The drift hazard is therefore a source edit made for a simulation sweep, not a runtime environment flip -- narrower than first stated, and still live.
+   - Coupling live execution risk ceilings directly to simulation config creates an unhedged drift hazard. Live execution requires an explicit, decoupled risk parameter contract.
+4. **Hermetic Safety & CLI Verification:**
+   - Socket blocker verified: non-loopback connections raise `RuntimeError("Live test attempted outbound network socket connection...")`.
+   - Env scrub verified: `POLY_API_KEY`, `POLY_SECRET`, `POLY_PASSPHRASE`, `POLY_PRIVATE_KEY` scrubbed in live test fixtures.
+   - CLI execution verified: `cd live && python -m strategy.live_exec status` executes cleanly with `sys.path[0] == ''` and reports missing credentials without opening network connections.
+
+#### Decision
+
+- **OPEN** on the Live subtree extraction (`live/`).
+- **OPEN** on decoupling live risk configuration (`max_pair_cost`) from simulation sweeps in `strategy.config`.
+
+---
+
+### 2026-08-18 — Milestone 4: Venue order surface alignment, postOnly safety default, standalone cancellation verbs, and latency telemetry audit
+
+#### Question
+
+What capabilities does the Polymarket CLOB venue expose for order execution and lifecycle management, how does our CLI surface compare, how should maker execution be guarded against accidental crosses, and how can per-order sent-to-landed latency be captured?
+
+#### Method
+
+1. Enumerate official venue API surface from official Polymarket documentation (`docs.polymarket.com/api-reference/trade/post-a-new-order`, `POST /orders`, `DELETE /order`, etc.) and `py_clob_client_v2` SDK.
+2. Diff venue surface against the 11 CLI subcommands in `live/strategy/live_exec.py`, partitioning capabilities into three disjoint sets: exercised, untested (Set B), and exposed but unimplemented (Set C).
+3. Add `--post-only` (default `True`, `argparse.BooleanOptionalAction`) and time-in-force `--tif` (`GTC`, `GTD`, `FOK`, `FAK`, default `GTC`) with `--expiration` to `quote()`, enforcing parse-time rejection of invalid combinations (`post_only` with `FOK`/`FAK`, `GTD` without `--expiration`).
+4. Implement standalone closing verbs `cancel <order_id>` and `cancel-market <condition_id>` with fail-closed refusal handling and `OrderRegistry` status synchronization.
+5. Close Set B by adding unit tests for `cancel-all`, `status`, `balance`, `pairs` and quote flags, and verify taker paths (`exit`, `complete`) never set `post_only`.
+6. Audit latency telemetry in `OrderRegistry` and evaluate the user WebSocket subscription route (`wss://ws-subscriptions-clob.polymarket.com/ws/user`) for per-order venue acknowledgement timestamps.
+
+#### Result
+
+1. **postOnly Maker Guarantee:** Because this strategy rests bids on both sides to capture spread, an aggressive fill on quote entry is a strategy defect. `--post-only` defaults `True` on `quote()`, requiring explicit `--no-post-only` to bypass. Taker paths (`exit`, `complete`) remain strictly `post_only=False`.
+2. **Source Authority & GTD Constraint Correction:** The 125s minimum GTD duration cited in third-party documentation (`docs.polycop.ai`) is unconfirmed in official Polymarket API reference; documented as an unconfirmed third-party claim.
+3. **Cancellation Verbs & AGENTS.md Safety Rule Amendment:** Standalone `cancel` and `cancel-market` close exposure and inherit pre-approval under amended `AGENTS.md` (commit `f8e8bf1`). Fail-closed handling verified to raise clean `CANCEL REFUSED` / `CANCEL-MARKET REFUSED` on venue rejection without escaping tracebacks.
+4. **Per-Order Latency Telemetry Route:** While REST database schema (`posted_ts`, `last_polled_ts`) cannot reproduce the 81.13 ms accept latency per order due to REST ack omission and polling jitter, the user WebSocket channel (`wss://ws-subscriptions-clob.polymarket.com/ws/user`) emits placement events with venue-clock timestamps ($t_{\text{ack}}$) enabling true per-order sent-to-landed telemetry.
+5. **Test Accounting & Suite Verification:** Root suite: `703 passed, 1 warning in 59.98s`. Live suite: `143 passed in 19.87s` (up from 129 baseline, +14 new tests covering quote flags, cancel verbs, Set B commands, and taker post_only isolation). Total: 703 + 143 = 846 passed (exit code 0 across both, [DERIVED] 0 failed, 0 skipped).
+
+#### Decision
+
+- **OPEN** on Milestone 4 implementation (all code, CLI verbs, and tests landed in `live-extraction`, PR #41; venue contact remains gated on Stage 4.5 Owner approval).
+- **OPEN** on Milestone 5 (batch order placement and two-leg row attribution).
+
+#### Addendum (Prime review, same day)
+
+Two fail-open defects found while verifying the milestone and fixed in the same branch:
+
+1. `quote()` resolved the time-in-force with `getattr(OrderType, tif, OrderType.GTC)`.
+   `OrderType` in `py_clob_client_v2` is a plain constants class, not an `Enum`, so an
+   unrecognised `tif` silently became **GTC** — an order the caller asked to be
+   immediate-or-cancel would instead REST on the book, holding exposure the caller had
+   explicitly declined. `argparse` constrains the CLI, but `quote()` is called directly by
+   tests and by any future programmatic caller. Replaced with an explicit allow-list check
+   that raises `SystemExit` on an unknown value.
+
+2. `probe()` posted its measurement order with `post_only` left at the SDK default of
+   `False` (`live_exec.py`, probe cycle). The probe rests a BUY 100 @ $0.01 purely to
+   measure venue accept latency and never wants a fill; a fill would both corrupt the
+   measurement and open an unintended position. $0.01 is far from the book, but "far" is a
+   market condition, not a guarantee. Now posts with `post_only=True`, which makes the
+   no-fill property a venue-enforced invariant rather than a bet on the spread.
+
+Note on classification: `probe` posts a resting BUY and is therefore an **opening** command
+under the amended `AGENTS.md` direction rule. It is not in the pre-approved closing set and
+must not be treated as benign because it is read-shaped in intent.
+
+Live suite after both fixes: **143 passed** (exit 0).

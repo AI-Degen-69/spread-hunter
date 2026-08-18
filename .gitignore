@@ -106,3 +106,12 @@ run/bankroll_*/
 # a forgotten one can never reach a commit in the meantime.
 scratch/
 
+# Live extraction runtime state (live/run/*.db, *.log, *.json)
+live/run/
+**/run/*.db
+**/run/*.db-*
+**/run/*.db.bak-*
+**/run/*.db-journal
+**/run/*.db-wal
+**/run/*.db-shm
+**/run/*.log
