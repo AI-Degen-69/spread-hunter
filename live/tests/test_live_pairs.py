@@ -12,8 +12,9 @@ Stage 3 invariants:
 """
 
 import uuid
-import pytest
 from pathlib import Path
+from unittest.mock import MagicMock
+import pytest
 
 from strategy.order_registry import OrderRegistry, OrderRecord, FillRecord
 from strategy import live_pairs as lp
@@ -1077,11 +1078,19 @@ def test_quote_writes_both_legs_to_the_registry_under_one_pair_id(
         creds = object()
 
         def create_order(self, args):
-            return {"signed": True, "token": args.token_id}
+            return MagicMock(tokenId=args.token_id, token=args.token_id)
 
-        def post_order(self, signed, order_type=None, post_only=False, **kwargs):
-            posted.append(signed["token"])
-            return {"orderID": f"venue-{signed['token']}", "success": True}
+        def post_orders(self, batch_args, post_only=False, **kwargs):
+            res = []
+            for arg in batch_args:
+                tok = getattr(arg.order, "tokenId", None) or getattr(arg.order, "token", None)
+                posted.append(tok)
+                res.append({"orderID": f"venue-{tok}", "success": True})
+            return res
+
+        def get_order(self, order_id):
+            tok = order_id.replace("venue-", "")
+            return {"asset_id": tok}
 
         def get_open_orders(self, *a, **k):
             return []
@@ -1130,10 +1139,10 @@ def test_quote_leaves_the_row_pending_when_the_venue_returns_no_id(
         creds = object()
 
         def create_order(self, args):
-            return {"token": args.token_id}
+            return MagicMock(tokenId=args.token_id, token=args.token_id)
 
-        def post_order(self, signed, order_type=None, post_only=False, **kwargs):
-            return {"success": True}          # no id of any spelling
+        def post_orders(self, batch_args, post_only=False, **kwargs):
+            return [{"success": True}, {"success": True}]          # no id of any spelling
 
         def get_open_orders(self, *a, **k):
             return []
