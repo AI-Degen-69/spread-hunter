@@ -3398,12 +3398,12 @@ How can live trading execution modules (`strategy/live_exec.py`, `strategy/live_
    - Total tests: 703 + 129 = 832 passed, accounting for the 829 baseline (+3 new hermetic guard and precedence tests, 0 lost, [DERIVED] 0 failed, 0 skipped).
 2. **Finding A — Falsified Premise on Import Independence:**
    - The initial handoff premise that `strategy/live_exec.py` imports nothing from `strategy/` was **falsified**:
-     - `strategy.markets` is imported at lines 337, 1263, and 1289 (`fetch_pinned_market`, `parse_book`, `full_book`).
+     - `strategy.markets` is imported at lines 337 (`fetch_pinned_market`) and 1263, 1289 (`fetch_live_market`). `parse_book` and `full_book` exist in `markets.py` but are NOT imported by `live_exec.py`.
      - `strategy.config` is imported at lines 391, 1009, 1787, and 1891 (`config.load()`, `MakerConfig`).
    - Namespace resolution resolves this cleanly by placing `live/` before root on `sys.path`.
 3. **Finding B — Simulation-Config Coupling (`max_pair_cost`):**
-   - `live/strategy/live_exec.py` reads `cfg.max_pair_cost` from `strategy.config` (lines 391, 1009, 1787, 1891).
-   - `strategy.config` is the simulation parameter file whose defaults change with simulation parameter sweeps.
+   - `live/strategy/live_exec.py` imports `strategy.config` at lines 391, 1787, 1891 and `MakerConfig` at line 1009; the `max_pair_cost` value is read at lines 395, 1837 and 1956.
+   - `max_pair_cost` is a dataclass default at `strategy/config.py:615` and is NOT env-overridable in `config.load()` (whose overrides are the HUNTER_* keys only). The drift hazard is therefore a source edit made for a simulation sweep, not a runtime environment flip -- narrower than first stated, and still live.
    - Coupling live execution risk ceilings directly to simulation config creates an unhedged drift hazard. Live execution requires an explicit, decoupled risk parameter contract.
 4. **Hermetic Safety & CLI Verification:**
    - Socket blocker verified: non-loopback connections raise `RuntimeError("Live test attempted outbound network socket connection...")`.

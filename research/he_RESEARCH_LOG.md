@@ -2941,12 +2941,12 @@ commit, והעבירה את `order_id` מהראשונה. פקודת הזירה �
    - סך בדיקות: 703 + 129 = 832 עוברות, בהתאמה לבסיס של 829 (+3 בדיקות שמירה וקדימות חדשות, 0 אובדן, [נגזר] 0 נכשלו, 0 דולגו).
 2. **ממצא א' — הנחת עבודה שהופרכה לגבי אי-תלות בייבוא:**
    - הנחת המסירה הראשונית לפיה `strategy/live_exec.py` אינו מייבא דבר מ-`strategy/` **הופרכה**:
-     - `strategy.markets` מיובא בשורות 337, 1263 ו-1289 (`fetch_pinned_market`, `parse_book`, `full_book`).
+     - `strategy.markets` מיובא בשורה 337 (`fetch_pinned_market`) ובשורות 1263, 1289 (`fetch_live_market`). `parse_book` ו-`full_book` קיימים ב-`markets.py` אך אינם מיובאים על ידי `live_exec.py`.
      - `strategy.config` מיובא בשורות 391, 1009, 1787 ו-1891 (`config.load()`, `MakerConfig`).
    - פענוח ה-namespace פותר זאת בצורה נקייה על ידי הצבת `live/` ראשון ב-`sys.path`.
 3. **ממצא ב' — צימוד תצורת סימולציה (`max_pair_cost`):**
-   - `live/strategy/live_exec.py` קורא את `cfg.max_pair_cost` מתוך `strategy.config` (שורות 391, 1009, 1787, 1891).
-   - `strategy.config` הוא קובץ פרמטרי הסימולציה שברירות המחדל שלו משתנות בריצות סריקת פרמטרים.
+   - `live/strategy/live_exec.py` מייבא את `strategy.config` בשורות 391, 1787, 1891 ואת `MakerConfig` בשורה 1009; הערך `max_pair_cost` נקרא בשורות 395, 1837 ו-1956.
+   - `max_pair_cost` הוא ברירת מחדל של dataclass ב-`strategy/config.py:615` ואינו ניתן לדריסה דרך env ב-`config.load()` (הדריסות שם הן מפתחות HUNTER_* בלבד). לכן סכנת הסחיפה היא עריכת קוד מקור לצורך סריקה, ולא היפוך משתנה סביבה בזמן ריצה -- צר יותר ממה שנוסח תחילה, ועדיין קיים.
    - צימוד תקרת סיכון המסחר החי ישירות לתצורת הסימולציה יוצר סכנת סחיפת סיכון בלתי מוגנת. ביצוע חי דורש חוזה תצורת סיכון נפרד ומפורש.
 4. **בטיחות הרמטית ואימות CLI:**
    - חוסם שקעים אומת: חיבורים שאינם loopback זורקים `RuntimeError("Live test attempted outbound network socket connection...")`.

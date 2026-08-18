@@ -59,8 +59,9 @@ def _find_env_file() -> Path | None:
         if (curr / ".env").is_file():
             return curr / ".env"
         if (curr / "AGENTS.md").is_file():
-            if (curr / ".env").is_file():
-                return curr / ".env"
+            # Repo root reached and the .env check above already missed here, so
+            # there is nothing further up worth loading. Stop rather than walk
+            # out of the project and pick up a stranger's .env.
             break
         if curr.parent == curr:
             break
