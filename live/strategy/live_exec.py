@@ -52,12 +52,25 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "run"
 
-# This module is a __main__ entry point and deliberately imports nothing from
-# the fleet, so net_config -- the only other place that reads .env -- never
-# runs here. Without this line a correct .env is invisible and the missing-key
-# error below fires anyway, which sends you hunting for a problem in the file
-# rather than in the loader.
-load_dotenv(ROOT / ".env")
+
+def _find_env_file() -> Path | None:
+    curr = Path(__file__).resolve().parent
+    for _ in range(4):
+        if (curr / ".env").is_file():
+            return curr / ".env"
+        if (curr / "AGENTS.md").is_file():
+            if (curr / ".env").is_file():
+                return curr / ".env"
+            break
+        if curr.parent == curr:
+            break
+        curr = curr.parent
+    return None
+
+
+_env_file = _find_env_file()
+if _env_file is not None:
+    load_dotenv(_env_file)
 
 # Hard ceilings. Not configuration -- this is the difference between a POC and
 # an unbounded loss, so they live in code where a stray env var cannot raise

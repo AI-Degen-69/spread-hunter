@@ -3370,3 +3370,49 @@ Do the headline economics, adverse selection markouts, and exit parameters recor
 - **LIVE** on bankroll scaling dynamics: 10-tier suite establishes scale-driven completion efficiency under 91.9% market overlap.
 - **OPEN** on Stage 4.5 supervised execution.
 
+---
+
+### 2026-08-18 — Milestone 2: Live subtree extraction, namespace package decoupling, and simulation-config coupling audit
+
+#### Question
+
+How can live trading execution modules (`strategy/live_exec.py`, `strategy/live_pairs.py`, `strategy/order_registry.py`) and their tests be extracted into an isolated `live/` subtree while maintaining zero-breakage on the root simulation suite and establishing hermetic safety boundaries?
+
+#### Method
+
+1. Move `strategy/order_registry.py`, `strategy/live_pairs.py`, and `strategy/live_exec.py` to `live/strategy/`.
+2. Move corresponding test files (`test_order_registry.py`, `test_live_pairs.py`, `test_live_exec.py`, `test_live_exec_merge.py`) to `live/tests/`.
+3. Eliminate package boundary collisions by deleting `strategy/__init__.py` and `live/strategy/__init__.py`, configuring `strategy` as an implicit namespace package across `live/` and root `strategy/`.
+4. Configure `live/pytest.ini` with `pythonpath = . ..` (`live/` first) and root `pytest.ini` with `testpaths = tests`, `norecursedirs = live .*`.
+5. Implement hermetic test harness in `live/tests/conftest.py` with automatic credential scrubbing (`scrub_credential_env`) and socket blocking (`block_non_loopback_sockets`).
+6. Pin module resolution precedence in `live/tests/test_live_conftest.py` asserting by `__file__` that `strategy.live_exec` and `strategy.order_registry` resolve under `live/strategy/` while `strategy.markets` resolves under root `strategy/`.
+7. Audit and isolate storage paths: `DEFAULT_DB_PATH` in `live/strategy/order_registry.py` resolves to `<live_root>/run/live.db`, and `_find_env_file()` in `live/strategy/live_exec.py` bounds upward search to at most 3 ancestor levels stopping at `AGENTS.md`.
+8. Update `.gitignore` with `live/run/` and wildcard ignore rules for `**/run/*.db`, `**/run/*.log`, etc.
+9. Update `.github/workflows/tests.yml` with separate named steps for root and live suites.
+
+#### Result
+
+1. **Extraction & Test Accounting:**
+   - Root test suite: `703 passed, 1 warning in 28.85s` (exit code 0).
+   - Live test suite: `129 passed in 7.57s` (exit code 0).
+   - Total tests: 703 + 129 = 832 passed, accounting for the 829 baseline (+3 new hermetic guard and precedence tests, 0 lost, [DERIVED] 0 failed, 0 skipped).
+2. **Finding A — Falsified Premise on Import Independence:**
+   - The initial handoff premise that `strategy/live_exec.py` imports nothing from `strategy/` was **falsified**:
+     - `strategy.markets` is imported at lines 337, 1263, and 1289 (`fetch_pinned_market`, `parse_book`, `full_book`).
+     - `strategy.config` is imported at lines 391, 1009, 1787, and 1891 (`config.load()`, `MakerConfig`).
+   - Namespace resolution resolves this cleanly by placing `live/` before root on `sys.path`.
+3. **Finding B — Simulation-Config Coupling (`max_pair_cost`):**
+   - `live/strategy/live_exec.py` reads `cfg.max_pair_cost` from `strategy.config` (lines 391, 1009, 1787, 1891).
+   - `strategy.config` is the simulation parameter file whose defaults change with simulation parameter sweeps.
+   - Coupling live execution risk ceilings directly to simulation config creates an unhedged drift hazard. Live execution requires an explicit, decoupled risk parameter contract.
+4. **Hermetic Safety & CLI Verification:**
+   - Socket blocker verified: non-loopback connections raise `RuntimeError("Live test attempted outbound network socket connection...")`.
+   - Env scrub verified: `POLY_API_KEY`, `POLY_SECRET`, `POLY_PASSPHRASE`, `POLY_PRIVATE_KEY` scrubbed in live test fixtures.
+   - CLI execution verified: `cd live && python -m strategy.live_exec status` executes cleanly with `sys.path[0] == ''` and reports missing credentials without opening network connections.
+
+#### Decision
+
+- **OPEN** on the Live subtree extraction (`live/`).
+- **OPEN** on decoupling live risk configuration (`max_pair_cost`) from simulation sweeps in `strategy.config`.
+
+

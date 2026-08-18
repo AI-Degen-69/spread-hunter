@@ -2913,3 +2913,49 @@ commit, והעבירה את `order_id` מהראשונה. פקודת הזירה �
 - **LIVE** על דינמיקת סקיילינג של ה-Bankroll תחת 91.9% חפיפת שווקים.
 - **OPEN** על הרצה בהשגחה של שלב 4.5.
 
+---
+
+### 2026-08-18 — אבן דרך 2: חילוץ תת-עץ המסחר החי, ביטול צימוד בחבילת Namespace וביקורת צימוד תצורת הסימולציה
+
+#### שאלה
+
+כיצד ניתן לחלץ את מודולי ביצוע המסחר החי (`strategy/live_exec.py`, `strategy/live_pairs.py`, `strategy/order_registry.py`) ובדיקותיהם לתת-עץ מבודד `live/`, תוך שמירה מלאה על אפס שבירות בסוויטת הסימולציה הראשית וביסוס גבולות בטיחות הרמטיים?
+
+#### שיטה
+
+1. העברת `strategy/order_registry.py`, `strategy/live_pairs.py` ו-`strategy/live_exec.py` אל `live/strategy/`.
+2. העברת קובצי הבדיקות המתאימים (`test_order_registry.py`, `test_live_pairs.py`, `test_live_exec.py`, `test_live_exec_merge.py`) אל `live/tests/`.
+3. ביטול התנגשויות גבולות חבילה על ידי מחיקת `strategy/__init__.py` ו-`live/strategy/__init__.py`, והגדרת `strategy` כ-implicit namespace package הפרוסה על פני `live/` ו-`strategy/` השורשי.
+4. הגדרת `live/pytest.ini` עם `pythonpath = . ..` (`live/` ראשון) ו-`pytest.ini` השורשי עם `testpaths = tests`, `norecursedirs = live .*`.
+5. בניית רתמת בדיקה הרמטית ב-`live/tests/conftest.py` עם ניקוי אוטומטי של אישורי גישה (`scrub_credential_env`) וחסימת שקעי רשת שאינם loopback (`block_non_loopback_sockets`).
+6. קיבוע קדימות פענוח מודולים ב-`live/tests/test_live_conftest.py` המאמת לפי `__file__` כי `strategy.live_exec` ו-`strategy.order_registry` נפתרים תחת `live/strategy/` בעוד ש-`strategy.markets` נפתר תחת `strategy/` השורשי.
+7. ביקורת ובידוד נתיבי אחסון: `DEFAULT_DB_PATH` ב-`live/strategy/order_registry.py` נפתר ל-`<live_root>/run/live.db`, ו-`_find_env_file()` ב-`live/strategy/live_exec.py` תוחם חיפוש כלפי מעלה לעד 3 רמות אב ועוצר ב-`AGENTS.md`.
+8. עדכון `.gitignore` עם כללי התעלמות עבור `live/run/` וכללי wildcard עבור `**/run/*.db`, `**/run/*.log` וכו'.
+9. עדכון `.github/workflows/tests.yml` עם צעדים נפרדים בעלי שמות מוגדרים עבור סוויטת השורש וסוויטת ה-live.
+
+#### תוצאה
+
+1. **חילוץ ומאזן בדיקות:**
+   - סוויטת שורש: `703 passed, 1 warning in 28.85s` (קוד יציאה 0).
+   - סוויטת live: `129 passed in 7.57s` (קוד יציאה 0).
+   - סך בדיקות: 703 + 129 = 832 עוברות, בהתאמה לבסיס של 829 (+3 בדיקות שמירה וקדימות חדשות, 0 אובדן, [נגזר] 0 נכשלו, 0 דולגו).
+2. **ממצא א' — הנחת עבודה שהופרכה לגבי אי-תלות בייבוא:**
+   - הנחת המסירה הראשונית לפיה `strategy/live_exec.py` אינו מייבא דבר מ-`strategy/` **הופרכה**:
+     - `strategy.markets` מיובא בשורות 337, 1263 ו-1289 (`fetch_pinned_market`, `parse_book`, `full_book`).
+     - `strategy.config` מיובא בשורות 391, 1009, 1787 ו-1891 (`config.load()`, `MakerConfig`).
+   - פענוח ה-namespace פותר זאת בצורה נקייה על ידי הצבת `live/` ראשון ב-`sys.path`.
+3. **ממצא ב' — צימוד תצורת סימולציה (`max_pair_cost`):**
+   - `live/strategy/live_exec.py` קורא את `cfg.max_pair_cost` מתוך `strategy.config` (שורות 391, 1009, 1787, 1891).
+   - `strategy.config` הוא קובץ פרמטרי הסימולציה שברירות המחדל שלו משתנות בריצות סריקת פרמטרים.
+   - צימוד תקרת סיכון המסחר החי ישירות לתצורת הסימולציה יוצר סכנת סחיפת סיכון בלתי מוגנת. ביצוע חי דורש חוזה תצורת סיכון נפרד ומפורש.
+4. **בטיחות הרמטית ואימות CLI:**
+   - חוסם שקעים אומת: חיבורים שאינם loopback זורקים `RuntimeError("Live test attempted outbound network socket connection...")`.
+   - ניקוי סביבה אומת: מפתחות `POLY_API_KEY`, `POLY_SECRET`, `POLY_PASSPHRASE`, `POLY_PRIVATE_KEY` מנוקים בפיקסצ'רים.
+   - הרצת CLI אומתה: `cd live && python -m strategy.live_exec status` רץ בצורה נקייה עם `sys.path[0] == ''` ומדווח על אישורי גישה חסרים ללא פתיחת חיבורי רשת.
+
+#### החלטה
+
+- **OPEN** על חילוץ תת-עץ המסחר החי (`live/`).
+- **OPEN** על ביטול צימוד תצורת סיכון חי (`max_pair_cost`) מסריקות סימולציה ב-`strategy.config`.
+
+
