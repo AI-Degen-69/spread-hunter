@@ -3469,3 +3469,32 @@ under the amended `AGENTS.md` direction rule. It is not in the pre-approved clos
 must not be treated as benign because it is read-shaped in intent.
 
 Live suite after both fixes: **143 passed** (exit 0).
+
+---
+
+### 2026-08-18 — Milestone 6: Batch Quoting Atomicity, Two-Leg Verification & Fail-Closed Attribution, Probe Fixture Overhaul
+
+#### Question
+
+How can quote placement eliminate the single-network-round-trip naked window between the UP and DOWN legs, how should returned batch order IDs be attributed to their respective legs without relying on uncontracted SDK array order guarantees, and why must probe market slug defaults be removed?
+
+#### Method
+
+1. Replace sequential per-leg order submission in `quote()` with SDK `post_orders(batch_args, post_only=post_only)` packaging both legs via `PostOrdersV2Args(order=signed, orderType=order_type_enum)`.
+2. Implement immediate emergency unwind on partial batch success: if exactly one leg receives a venue order ID and the other fails, immediately issue `cancel_order(OrderPayload(orderID=survivor_id))`, mark both rows `cancelled`, and raise `SystemExit`.
+3. Implement fail-closed two-leg verification: provisionally map `res[i]` to `legs[i]`, query `c.get_order(v_id)` for each leg, and verify `venue_asset_id == leg['token_id']`. On any mismatch, error, or unreadable response, cancel BOTH orders on the venue, mark both rows `cancelled`, and raise `SystemExit`.
+4. Handle batch responses with no order IDs by leaving rows `pending` for reconcile orphan adoption.
+5. Remove misleading `default="btc-up-or-down-5m"` from `probe()`, require exactly one of `--series` or `--token-id`, and add documentation explaining recurring series is a latency fixture given that crypto accounts for <4% of quoted markets across the 66,317-quote fleet universe.
+6. Add unit tests covering batch quote happy path, partial failure emergency unwind, attribution verification fail-closed on mismatch, both legs failing, probe flag mutual exclusivity, and token-id probe execution.
+
+#### Result
+
+1. **Batch Quoting Atomicity:** Submitting both legs inside a single `POST /orders` batch request eliminates the inter-leg network round trip naked window.
+2. **Fail-Closed Attribution & Verification:** The SDK does not guarantee response array element order corresponds 1-to-1 with request order. Ground truth is established via `c.get_order(v_id)` confirming `asset_id` matching before committing the venue ID to the registry. Any discrepancy triggers full two-leg cancellation.
+3. **Probe Fixture Disambiguation:** Removing the crypto series default prevents operators from misinterpreting probe fixture traffic as representative strategy flow.
+4. **Test Accounting & Verification:** Root suite: `703 passed, 1 warning in 82.70s`. Live suite: `153 passed in 28.37s` (up from 143, +10 new tests). Total: 703 + 153 = 856 passed (exit code 0 across both, [DERIVED] 0 failed, 0 skipped).
+
+#### Decision
+
+- **LIVE** on Milestone 6 batch quoting, fail-closed verification, and probe fixture overhaul.
+

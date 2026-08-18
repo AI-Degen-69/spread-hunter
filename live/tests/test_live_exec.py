@@ -61,7 +61,7 @@ def test_live_exec_arg_parsing():
     ap.add_argument("--live", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("probe")
-    p.add_argument("--series", default="btc-up-or-down-5m")
+    p.add_argument("--series", default=None)
     p.add_argument("--token-id", default=None)
     p.add_argument("--cycles", type=int, default=30)
     p.add_argument("--min-time-remaining", type=float, default=90.0)
@@ -74,8 +74,9 @@ def test_live_exec_arg_parsing():
     r.add_argument("condition_id")
     r.add_argument("--skip-resolution-check", action="store_true")
 
-    args = ap.parse_args(["probe", "--cycles", "10", "--min-time-remaining", "120", "--max-complement-bid", "0.80"])
+    args = ap.parse_args(["probe", "--series", "btc-up-or-down-5m", "--cycles", "10", "--min-time-remaining", "120", "--max-complement-bid", "0.80"])
     assert args.cmd == "probe"
+    assert args.series == "btc-up-or-down-5m"
     assert args.cycles == 10
     assert args.min_time_remaining == 120.0
     assert args.max_complement_bid == 0.80
@@ -880,7 +881,7 @@ def test_parent_collection_id_off_the_curve_is_rejected():
 
 
 def test_quote_passes_post_only_default_true(tmp_path):
-    """quote() defaults post_only=True and order_type=GTC."""
+    """quote() defaults post_only=True and order_type=GTC via post_orders."""
     from py_clob_client_v2.clob_types import OrderType
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     dummy_market = MagicMock(
@@ -888,7 +889,8 @@ def test_quote_passes_post_only_default_true(tmp_path):
         market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
     )
     mock_client = MagicMock()
-    mock_client.post_order.side_effect = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    mock_client.post_orders.return_value = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
     db_path = tmp_path / "live.db"
 
     with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
@@ -897,15 +899,17 @@ def test_quote_passes_post_only_default_true(tmp_path):
          patch.object(le, "RUN", tmp_path):
         le.quote(cond_id, price=0.50, size=10.0, live=True, db_path=db_path)
 
-    assert mock_client.post_order.call_count == 2
-    for call in mock_client.post_order.call_args_list:
-        _, kwargs = call
-        assert kwargs.get("post_only") is True
-        assert kwargs.get("order_type") == OrderType.GTC
+    assert mock_client.post_orders.call_count == 1
+    args, kwargs = mock_client.post_orders.call_args
+    assert kwargs.get("post_only") is True
+    batch_args = args[0]
+    assert len(batch_args) == 2
+    assert batch_args[0].orderType == OrderType.GTC
+    assert batch_args[1].orderType == OrderType.GTC
 
 
 def test_quote_allows_explicit_no_post_only(tmp_path):
-    """quote(..., post_only=False) passes post_only=False to SDK post_order."""
+    """quote(..., post_only=False) passes post_only=False to SDK post_orders."""
     from py_clob_client_v2.clob_types import OrderType
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     dummy_market = MagicMock(
@@ -913,7 +917,8 @@ def test_quote_allows_explicit_no_post_only(tmp_path):
         market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
     )
     mock_client = MagicMock()
-    mock_client.post_order.side_effect = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    mock_client.post_orders.return_value = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
     db_path = tmp_path / "live.db"
 
     with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
@@ -922,10 +927,9 @@ def test_quote_allows_explicit_no_post_only(tmp_path):
          patch.object(le, "RUN", tmp_path):
         le.quote(cond_id, price=0.50, size=10.0, live=True, post_only=False, db_path=db_path)
 
-    assert mock_client.post_order.call_count == 2
-    for call in mock_client.post_order.call_args_list:
-        _, kwargs = call
-        assert kwargs.get("post_only") is False
+    assert mock_client.post_orders.call_count == 1
+    args, kwargs = mock_client.post_orders.call_args
+    assert kwargs.get("post_only") is False
 
 
 def test_quote_tif_gtd_with_expiration(tmp_path):
@@ -937,7 +941,8 @@ def test_quote_tif_gtd_with_expiration(tmp_path):
         market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
     )
     mock_client = MagicMock()
-    mock_client.post_order.side_effect = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    mock_client.post_orders.return_value = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
     db_path = tmp_path / "live.db"
 
     with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
@@ -951,11 +956,185 @@ def test_quote_tif_gtd_with_expiration(tmp_path):
         args, _ = call
         assert args[0].expiration == 1786855000
 
-    assert mock_client.post_order.call_count == 2
-    for call in mock_client.post_order.call_args_list:
-        _, kwargs = call
-        assert kwargs.get("order_type") == OrderType.GTD
-        assert kwargs.get("post_only") is True
+    assert mock_client.post_orders.call_count == 1
+    args, kwargs = mock_client.post_orders.call_args
+    batch_args = args[0]
+    assert batch_args[0].orderType == OrderType.GTD
+    assert batch_args[1].orderType == OrderType.GTD
+    assert kwargs.get("post_only") is True
+
+
+def test_batch_quote_happy_path_both_succeed(tmp_path):
+    """Batch quote places both legs, verifies asset_id on both, and attaches venue IDs as open."""
+    from strategy.order_registry import OrderRegistry
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up_111", down_token="tok_dn_222",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    mock_client.post_orders.return_value = [{"orderID": "v-up-1"}, {"orderID": "v-dn-2"}]
+    mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_up_111"} if vid == "v-up-1" else {"asset_id": "tok_dn_222"}
+    db_path = tmp_path / "live.db"
+
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        le.quote(cond_id, price=0.60, size=10.0, live=True, db_path=db_path)
+
+    registry = OrderRegistry(db_path=db_path)
+    up_ord = registry.get_order_by_venue_id("v-up-1")
+    dn_ord = registry.get_order_by_venue_id("v-dn-2")
+    assert up_ord is not None
+    assert dn_ord is not None
+    assert up_ord.status == "open"
+    assert dn_ord.status == "open"
+    assert up_ord.token_id == "tok_up_111"
+    assert dn_ord.token_id == "tok_dn_222"
+    assert up_ord.pair_id == dn_ord.pair_id
+
+
+def test_batch_quote_partial_failure_auto_cancels_naked_leg(tmp_path, capsys):
+    """If one leg succeeds and one fails, immediately auto-cancel the resting leg to prevent naked exposure."""
+    from strategy.order_registry import OrderRegistry
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up_111", down_token="tok_dn_222",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    # UP succeeds, DOWN fails with rejection error
+    mock_client.post_orders.return_value = [{"orderID": "v-up-survivor"}, {"errorMsg": "balance error", "success": False}]
+    mock_client.cancel_order.return_value = {"canceled": ["v-up-survivor"]}
+    db_path = tmp_path / "live.db"
+
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        with pytest.raises(SystemExit) as exc:
+            le.quote(cond_id, price=0.60, size=10.0, live=True, db_path=db_path)
+        assert "Batch quote failed partially" in str(exc.value)
+
+    assert mock_client.cancel_order.call_count == 1
+    cancel_arg = mock_client.cancel_order.call_args[0][0]
+    assert cancel_arg.orderID == "v-up-survivor"
+
+    err = capsys.readouterr().err
+    assert "CRITICAL: Batch quote partial failure!" in err
+    assert "Issuing emergency cancel for surviving leg v-up-survivor" in err
+
+    registry = OrderRegistry(db_path=db_path)
+    # Neither row should remain open
+    with registry._conn() as conn:
+        rows = conn.execute("SELECT * FROM orders").fetchall()
+        assert len(rows) == 2
+        for r in rows:
+            assert r["status"] == "cancelled"
+            assert r["order_id"] is None
+
+
+def test_batch_quote_reverse_response_attribution_and_half_price(tmp_path):
+    """At price=0.50 (identical amounts), reversed response array is caught by get_order verification and fails closed."""
+    from strategy.order_registry import OrderRegistry
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up_111", down_token="tok_dn_222",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    # Swapped responses: [DOWN, UP] instead of [UP, DOWN]
+    mock_client.post_orders.return_value = [{"orderID": "v-dn-2"}, {"orderID": "v-up-1"}]
+    mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_dn_222"} if vid == "v-dn-2" else {"asset_id": "tok_up_111"}
+    mock_client.cancel_order.return_value = {}
+    db_path = tmp_path / "live.db"
+
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        with pytest.raises(SystemExit) as exc:
+            # price = 0.50: UP cost = 5.0, DOWN cost = 5.0 (amounts identical)
+            le.quote(cond_id, price=0.50, size=10.0, live=True, db_path=db_path)
+        assert "FAIL CLOSED: Order verification mismatch" in str(exc.value)
+
+    # Fail closed: cancel both orders
+    assert mock_client.cancel_order.call_count == 2
+    cancelled_ids = {call[0][0].orderID for call in mock_client.cancel_order.call_args_list}
+    assert cancelled_ids == {"v-dn-2", "v-up-1"}
+
+    registry = OrderRegistry(db_path=db_path)
+    with registry._conn() as conn:
+        rows = conn.execute("SELECT * FROM orders").fetchall()
+        assert len(rows) == 2
+        for r in rows:
+            assert r["status"] == "cancelled"
+            assert r["order_id"] is None
+
+
+def test_batch_quote_verification_mismatch_fails_closed(tmp_path):
+    """Venue returning mismatched asset_id triggers fail-closed cancellation of all batch orders."""
+    from strategy.order_registry import OrderRegistry
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up_111", down_token="tok_dn_222",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    mock_client.post_orders.return_value = [{"orderID": "v-1"}, {"orderID": "v-2"}]
+    # get_order returns completely unrelated token
+    mock_client.get_order.return_value = {"asset_id": "tok_foreign_999"}
+    mock_client.cancel_order.return_value = {}
+    db_path = tmp_path / "live.db"
+
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        with pytest.raises(SystemExit) as exc:
+            le.quote(cond_id, price=0.60, size=10.0, live=True, db_path=db_path)
+        assert "FAIL CLOSED: Order verification mismatch" in str(exc.value)
+
+    assert mock_client.cancel_order.call_count == 2
+    registry = OrderRegistry(db_path=db_path)
+    with registry._conn() as conn:
+        rows = conn.execute("SELECT * FROM orders").fetchall()
+        assert len(rows) == 2
+        for r in rows:
+            assert r["status"] == "cancelled"
+            assert r["order_id"] is None
+
+
+def test_batch_quote_both_fail(tmp_path, capsys):
+    """If both legs return no order ID at the venue, both rows stay pending for orphan adoption with zero cancel calls."""
+    from strategy.order_registry import OrderRegistry
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up_111", down_token="tok_dn_222",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    mock_client.post_orders.return_value = [{"errorMsg": "err1"}, {"errorMsg": "err2"}]
+    db_path = tmp_path / "live.db"
+
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        le.quote(cond_id, price=0.60, size=10.0, live=True, db_path=db_path)
+
+    assert mock_client.cancel_order.call_count == 0
+    err = capsys.readouterr().err
+    assert "WARNING: no order IDs in batch quote response" in err
+
+    registry = OrderRegistry(db_path=db_path)
+    with registry._conn() as conn:
+        rows = conn.execute("SELECT * FROM orders").fetchall()
+        assert len(rows) == 2
+        for r in rows:
+            assert r["status"] == "pending"
+            assert r["order_id"] is None
 
 
 def test_quote_rejects_post_only_with_fok_or_fak():
@@ -1154,4 +1333,77 @@ def test_pairs_cmd_lists_registry_records(tmp_path, capsys):
     assert "0xcondition1" in out
 
 
+def test_quote_rejects_unknown_tif(tmp_path):
+    """quote() raises SystemExit on unknown tif rather than falling back to GTC."""
+    cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
+    dummy_market = MagicMock(
+        up_token="tok_up", down_token="tok_dn",
+        market_slug="btc-test-5m", tick_size=0.01, neg_risk=False
+    )
+    mock_client = MagicMock()
+    db_path = tmp_path / "live.db"
 
+    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch.object(le, "_open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
+        with pytest.raises(SystemExit) as exc:
+            le.quote(cond_id, price=0.50, size=10.0, live=True, post_only=False, tif="INVALID", db_path=db_path)
+        assert "unknown --tif 'INVALID'" in str(exc.value)
+        assert "expected one of GTC, GTD, FOK, FAK" in str(exc.value)
+
+    assert mock_client.create_order.call_count == 0
+    assert mock_client.post_orders.call_count == 0
+
+
+def test_probe_posts_with_post_only_true():
+    """probe() in live mode must always pass post_only=True to client.post_order."""
+    from py_clob_client_v2.clob_types import OrderType
+    mock_client = MagicMock()
+    mock_client.create_order.return_value = "signed_order_obj"
+    mock_client.post_order.return_value = {"orderID": "probe-ord-1"}
+    mock_client.get_order.return_value = {"size_matched": "0"}
+    mock_client.get_order_book.return_value = None
+
+    class FakeWSApp:
+        def __init__(self, url, on_open=None, on_message=None):
+            self.on_open = on_open
+            self.on_message = on_message
+        def run_forever(self):
+            if self.on_open:
+                self.on_open(MagicMock())
+        def close(self):
+            pass
+
+    with patch("websocket.WebSocketApp", FakeWSApp), \
+         patch.object(le, "_client", return_value=mock_client), \
+         patch("time.sleep", return_value=None):
+        le.probe(token_id="tok_fixed_123", cycles=1, live=True)
+
+    assert mock_client.post_order.call_count == 1
+    args, kwargs = mock_client.post_order.call_args
+    assert args[0] == "signed_order_obj"
+    assert (len(args) > 1 and args[1] == OrderType.GTC) or kwargs.get("order_type") == OrderType.GTC
+    assert kwargs.get("post_only") is True
+
+
+def test_probe_requires_either_series_or_token_id():
+    """probe() with neither --series nor --token-id exits non-zero naming both flags."""
+    with pytest.raises(SystemExit) as exc:
+        le.probe(series=None, token_id=None, live=False)
+    msg = str(exc.value)
+    assert "--series" in msg
+    assert "--token-id" in msg
+    assert "probe requires exactly one" in msg
+
+
+def test_probe_with_token_id_alone_works():
+    """probe() with --token-id alone passes dry-run execution validation."""
+    le.probe(token_id="tok_fixed_456", cycles=1, live=False)
+
+
+def test_probe_with_both_flags_rejected():
+    """probe() with both --series and --token-id exits non-zero naming mutual exclusivity."""
+    with pytest.raises(SystemExit) as exc:
+        le.probe(series="btc-up-or-down-5m", token_id="tok_fixed_456", live=False)
+    assert "probe accepts either --series or --token-id, not both" in str(exc.value)

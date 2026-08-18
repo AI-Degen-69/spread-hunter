@@ -352,8 +352,10 @@ def quote(condition_id: str, price: float, size: float, live: bool,
           post_only: bool = True, tif: str = "GTC",
           expiration: int | None = None,
           db_path: str | Path | None = None) -> None:
-    """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price."""
-    from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
+    """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price via batch quoting."""
+    from py_clob_client_v2.clob_types import (
+        OrderArgsV2, OrderType, PostOrdersV2Args, OrderPayload,
+    )
     from py_clob_client_v2.order_builder.constants import BUY
     from strategy.markets import fetch_pinned_market
 
@@ -435,6 +437,9 @@ def quote(condition_id: str, price: float, size: float, live: bool,
     order_type_enum = getattr(OrderType, tif)
     exp_val = int(expiration) if expiration is not None else 0
 
+    # 1. Pre-allocate local registry rows and sign orders before network call
+    local_legs = []
+    batch_args = []
     for tok, p, label in legs:
         local_id = str(_uuid.uuid4())
         # Row first, then send. A row written after a successful send would be
@@ -450,23 +455,112 @@ def quote(condition_id: str, price: float, size: float, live: bool,
 
         signed = c.create_order(
             OrderArgsV2(price=p, size=size, side=BUY, token_id=tok, expiration=exp_val))
-        resp = c.post_order(signed, order_type=order_type_enum, post_only=post_only)
-        _log_order({"ts": time.time(), "condition_id": condition_id,
-                    "pair_id": pair_id, "local_id": local_id,
-                    "side": label, "token_id": str(tok), "price": p,
-                    "size": size, "response": str(resp)[:400]})
+        batch_args.append(PostOrdersV2Args(order=signed, orderType=order_type_enum))
+        local_legs.append({
+            "local_id": local_id,
+            "token_id": str(tok),
+            "price": p,
+            "label": label,
+            "signed": signed,
+        })
 
-        venue_id = _venue_order_id(resp)
-        if venue_id:
-            registry.attach_venue_order_id(local_id, venue_id, status="open")
-        else:
-            # The order may well be live; we simply cannot name it. Leave the
-            # row `pending` for orphan adoption rather than guessing an id or
-            # marking a status we cannot support, and say so loudly.
-            print(f"  WARNING: no order id in the {label} response; row "
-                  f"{local_id} stays pending for reconcile to adopt.",
-                  file=sys.stderr)
-        print(f"  SENT {label}: {resp}")
+    # 2. Batch post both legs in a single network round-trip
+    resp = c.post_orders(batch_args, post_only=post_only)
+    resp_list = resp if isinstance(resp, list) else [resp] if isinstance(resp, dict) else []
+
+    _log_order({"ts": time.time(), "condition_id": condition_id,
+                "pair_id": pair_id,
+                "legs": [(leg["local_id"], leg["label"], leg["token_id"]) for leg in local_legs],
+                "response": str(resp)[:800]})
+
+    # 3. Extract venue IDs (provisional positional mapping)
+    extracted_venue_ids = []
+    for idx, leg in enumerate(local_legs):
+        item_resp = resp_list[idx] if idx < len(resp_list) else None
+        v_id = _venue_order_id(item_resp)
+        extracted_venue_ids.append(v_id)
+
+    # 4. Partial failure detection: if one succeeded and one failed, immediately
+    # cancel the survivor to prevent holding an unhedged naked leg.
+    succeeded_count = sum(1 for v in extracted_venue_ids if v is not None)
+    if succeeded_count == 1:
+        survivor_idx = 0 if extracted_venue_ids[0] is not None else 1
+        failed_idx = 1 if survivor_idx == 0 else 0
+        survivor_leg = local_legs[survivor_idx]
+        failed_leg = local_legs[failed_idx]
+        survivor_vid = extracted_venue_ids[survivor_idx]
+
+        print(f"  CRITICAL: Batch quote partial failure! {survivor_leg['label']} posted as {survivor_vid} but {failed_leg['label']} failed.",
+              file=sys.stderr)
+        print(f"  Issuing emergency cancel for surviving leg {survivor_vid} to prevent naked exposure...", file=sys.stderr)
+
+        registry.update_order_status(failed_leg["local_id"], status="cancelled", last_polled_ts=now_ms)
+        try:
+            c.cancel_order(OrderPayload(orderID=survivor_vid))
+            registry.update_order_status(survivor_leg["local_id"], status="cancelled", last_polled_ts=now_ms)
+        except Exception as exc:
+            print(f"  EMERGENCY CANCEL FAILED: {exc}. Row stays open/pending for reconcile to adopt.", file=sys.stderr)
+
+        raise SystemExit(
+            f"Batch quote failed partially: {failed_leg['label']} rejected, {survivor_leg['label']} cancelled."
+        )
+
+    if succeeded_count == 0:
+        # The orders may well be live; we simply cannot name them. Leave the
+        # rows `pending` for orphan adoption rather than guessing an id or
+        # marking a status we cannot support, and say so loudly.
+        print("  WARNING: no order IDs in batch quote response; rows stay pending for reconcile to adopt.", file=sys.stderr)
+        print(f"  SENT BATCH: {resp}")
+        return
+
+    # 5. Verification step: Read orders back from venue to verify asset_id before committing.
+    # On agreement, commit mapping. On ANY mismatch, fail closed: cancel BOTH orders,
+    # mark both rows cancelled, and raise SystemExit.
+    verified_mappings = []
+    mismatch_detected = False
+    mismatch_reason = ""
+
+    for idx, leg in enumerate(local_legs):
+        v_id = extracted_venue_ids[idx]
+        try:
+            order_data = c.get_order(v_id)
+            venue_asset_id = (
+                order_data.get("asset_id") or order_data.get("token_id") or order_data.get("tokenId")
+                if isinstance(order_data, dict)
+                else getattr(order_data, "asset_id", None)
+            )
+            if str(venue_asset_id) != str(leg["token_id"]):
+                mismatch_detected = True
+                mismatch_reason = (
+                    f"Asset ID mismatch on leg {leg['label']}: expected token {leg['token_id']}, "
+                    f"venue returned asset_id {venue_asset_id} for orderID {v_id}"
+                )
+                break
+            verified_mappings.append((leg["local_id"], v_id))
+        except Exception as exc:
+            mismatch_detected = True
+            mismatch_reason = f"Failed to verify order {v_id} from venue: {exc}"
+            break
+
+    if mismatch_detected:
+        print(f"  CRITICAL: Verification mismatch detected! {mismatch_reason}", file=sys.stderr)
+        print("  FAIL CLOSED: Cancelling all batch orders immediately...", file=sys.stderr)
+        for v_id in extracted_venue_ids:
+            if v_id:
+                try:
+                    c.cancel_order(OrderPayload(orderID=v_id))
+                except Exception as exc:
+                    print(f"  Cancel error for {v_id}: {exc}", file=sys.stderr)
+        for leg in local_legs:
+            registry.update_order_status(leg["local_id"], status="cancelled", last_polled_ts=now_ms)
+        raise SystemExit(f"FAIL CLOSED: Order verification mismatch ({mismatch_reason}); all orders cancelled.")
+
+    # 6. Agreement confirmed: commit venue IDs to registry
+    for local_id, v_id in verified_mappings:
+        registry.attach_venue_order_id(local_id, v_id, status="open", last_polled_ts=now_ms)
+
+    for idx, leg in enumerate(local_legs):
+        print(f"  SENT {leg['label']}: {extracted_venue_ids[idx]}")
 
     print(f"\nlogged to {RUN / 'live_orders.json'}")
     print(f"pair_id  {pair_id}")
@@ -1266,7 +1360,7 @@ def merge(condition_id: str,
 
 
 
-def probe(series: str = "btc-up-or-down-5m",
+def probe(series: str | None = None,
           token_id: str | None = None,
           cycles: int = 30,
           min_t_remaining: float = 90.0,
@@ -1280,13 +1374,24 @@ def probe(series: str = "btc-up-or-down-5m",
     using local monotonic CPU timestamps. Dynamically tracks 5-minute market rollovers,
     handles inter-window gaps, guards against complementary matching, and bounds uncertainty.
     """
+    if not series and not token_id:
+        raise SystemExit(
+            "probe requires exactly one of --series or --token-id. "
+            "Pass --series <series_slug> (e.g. btc-up-or-down-5m) or --token-id <id>."
+        )
+    if series and token_id:
+        raise SystemExit(
+            "probe accepts either --series or --token-id, not both."
+        )
+
     if series == "btc-updown-5m":
         series = "btc-up-or-down-5m"
 
     NET_ONEWAY_MS = 3.93  # Measured median one-way TCP transit (RTT/2 = 7.85ms / 2)
 
+    target_desc = f"series '{series}'" if series else f"fixed token '{token_id}'"
     print("=" * 80)
-    print(f"SPREAD-HUNTER LIVE LATENCY PROBE (N={cycles} cycles on series '{series}')")
+    print(f"SPREAD-HUNTER LIVE LATENCY PROBE (N={cycles} cycles on {target_desc})")
     print("=" * 80)
     print("Guardrails & Architecture:")
     print("  - Target: Dynamic live market discovery across 5m windows")
@@ -2157,9 +2262,20 @@ def main() -> None:
                    help="Bypass idempotency guard against prior pending/submitted/interrupted orders.")
     m.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
+    # A recurring series (such as btc-up-or-down-5m) is chosen for probe as a
+    # LATENCY FIXTURE because it is always mid-window and continually regenerates,
+    # not because it represents the traded universe.
+    # Measured against run/fleet.db (66,317 quotes across 425 distinct markets):
+    #   tennis (atp/wta)   34,294   51.71%
+    #   baseball (mlb)     14,772   22.27%
+    #   esports (cs2 etc)  12,584   18.98%
+    #   crypto              2,478    3.74%
+    #   other               2,189    3.30%
+    # Crypto is under 4% of everything quoted. One-off sports markets do not
+    # regenerate, so probe requires an explicit fixture target.
     p = sub.add_parser("probe", help="Multi-cycle live latency probe across dynamic series windows.")
-    p.add_argument("--series", default="btc-up-or-down-5m", help="Series slug (default: btc-up-or-down-5m)")
-    p.add_argument("--token-id", default=None, help="Optional fixed token ID override")
+    p.add_argument("--series", default=None, help="Series slug fixture (e.g. btc-up-or-down-5m). Exactly one of --series or --token-id required.")
+    p.add_argument("--token-id", default=None, help="Fixed token ID override fixture. Exactly one of --series or --token-id required.")
     p.add_argument("--cycles", type=int, default=30, help="Number of probe cycles (default: 30)")
     p.add_argument("--min-time-remaining", type=float, default=90.0, help="Minimum seconds remaining in window (default: 90s)")
     p.add_argument("--max-complement-bid", type=float, default=0.85, help="Max allowed complement best bid (default: 0.85)")
