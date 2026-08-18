@@ -238,7 +238,7 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         pairs_map[pid]["orders"].append(o)
 
     pairs_list = []
-    for pid, pdata in pairs_map.items():
+    for pdata in pairs_map.values():
         legs = pdata["orders"]
         # One price per token, not per order: after `exit` or `complete` a
         # pair holds three orders on two tokens, and summing all three
@@ -247,12 +247,12 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         # from `exit` prices an unwind, not the position, and the row order
         # the query happens to return must not decide which one is read.
         _open_by_token: dict[str, float] = {}
-        for _l in sorted(legs, key=lambda x: (x["side"] != "BUY", x["posted_ts"])):
-            _open_by_token.setdefault(_l["token_id"], float(_l["price"]))
+        for leg in sorted(legs, key=lambda x: (x["side"] != "BUY", x["posted_ts"])):
+            _open_by_token.setdefault(leg["token_id"], float(leg["price"]))
         combined_price = sum(_open_by_token.values())
         pdata["combined_price"] = round(combined_price, 4)
 
-        order_ids_in_pair = {l["id"] for l in legs}
+        order_ids_in_pair = {leg["id"] for leg in legs}
         pair_fills = [f for f in fills_list if f["order_uuid"] in order_ids_in_pair]
         pair_fills.sort(key=lambda x: x["venue_ts"])
 
@@ -327,7 +327,7 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
                 # covers a pair flattened by `exit` as well as a cancelled one.
                 working = {"open", "pending", "partial"}
                 hedge_state = ("RESTING"
-                               if any(l["status"] in working for l in legs)
+                               if any(leg["status"] in working for leg in legs)
                                else "CLOSED")
             elif len(tokens) == 2:
                 a, b = list(tokens.values())
@@ -401,10 +401,14 @@ def set_db_override(path: Path | str | None) -> None:
 
 
 @app.get("/api/state")
-def get_state(db: str | None = Query(default=None)):
-    """Return JSON state snapshot for the live execution dashboard."""
-    target_path = resolve_db_path(db or _ACTIVE_DB_OVERRIDE)
-    return JSONResponse(query_db_state(target_path))
+def get_state():
+    """Return JSON state snapshot for the live execution dashboard.
+
+    The database is chosen by the CLI or LIVE_DB_PATH only. It was once a
+    query parameter, which let any caller that could reach the port read an
+    arbitrary SQLite file and probe local paths through the error text.
+    """
+    return JSONResponse(query_db_state(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
 
 
 PAGE_HTML = """<!DOCTYPE html>
@@ -1087,7 +1091,7 @@ PAGE_HTML = """<!DOCTYPE html>
               <div>
                 <div class="hero-badge naked">❓ CANNOT CLASSIFY POSITION</div>
                 <div class="hero-headline">TREAT AS UNHEDGED</div>
-                <div class="hero-desc">${pair.refused_reason || 'Pair shape not recognised.'} Check the position on the venue before acting.</div>
+                <div class="hero-desc">${esc(pair.refused_reason || 'Pair shape not recognised.')} Check the position on the venue before acting.</div>
               </div>
             </div>
           </div>
@@ -1127,13 +1131,13 @@ PAGE_HTML = """<!DOCTYPE html>
         const price = parseFloat(o.price).toFixed(3);
         const age = formatDuration(o.age_sec);
         const isUnattr = o.status === 'unattributed';
-        const tagClass = isUnattr ? 'unattributed' : (o.status || 'open');
+        const tagClass = KNOWN_STATUSES.includes(o.status) ? o.status : 'open';
 
         return `
           <tr>
             <td>
-              <strong>${o.side || 'BUY'}</strong>
-              <div style="font-size:10px;color:var(--text-muted);">${(o.token_id || '').slice(0, 10)}...</div>
+              <strong>${esc(o.side || 'BUY')}</strong>
+              <div style="font-size:10px;color:var(--text-muted);">${esc((o.token_id || '').slice(0, 10))}...</div>
             </td>
             <td>$${price}</td>
             <td>${size}</td>
@@ -1141,7 +1145,7 @@ PAGE_HTML = """<!DOCTYPE html>
             <td>${pct}%</td>
             <td>
               <span class="status-tag ${tagClass}">
-                ${isUnattr ? '⚠️ UNATTRIBUTED' : o.status}
+                ${isUnattr ? '⚠️ UNATTRIBUTED' : esc(o.status)}
               </span>
             </td>
             <td>${age}</td>
@@ -1187,8 +1191,8 @@ PAGE_HTML = """<!DOCTYPE html>
               <div>${f.venue_time_str || formatTime(f.venue_ts)}</div>
               <div style="font-size:10px;color:var(--text-muted);">${formatDuration(f.age_sec)} ago</div>
             </td>
-            <td><span style="font-size:11px;color:var(--text-secondary);">${(f.trade_id || '').slice(0, 12)}</span></td>
-            <td><strong>${f.side || 'BUY'}</strong></td>
+            <td><span style="font-size:11px;color:var(--text-secondary);">${esc((f.trade_id || '').slice(0, 12))}</span></td>
+            <td><strong>${esc(f.side || 'BUY')}</strong></td>
             <td>$${parseFloat(f.price).toFixed(3)}</td>
             <td>${parseFloat(f.size).toFixed(2)}</td>
             <td><strong>$${notional}</strong></td>
@@ -1239,7 +1243,7 @@ PAGE_HTML = """<!DOCTYPE html>
 
       if (lock.held) {
         lockBox.className = 'lock-box lock-active';
-        lockStatus.innerHTML = `<span style="color:#f59e0b;font-weight:700;">HELD</span> by <code>${lock.holder}</code> (acquired ${formatDuration(lock.age_sec)} ago)`;
+        lockStatus.innerHTML = `<span style="color:#f59e0b;font-weight:700;">HELD</span> by <code>${esc(lock.holder)}</code> (acquired ${formatDuration(lock.age_sec)} ago)`;
       } else {
         lockBox.className = 'lock-box lock-idle';
         lockStatus.textContent = 'Idle (no reconcile pass in flight)';
@@ -1250,6 +1254,18 @@ PAGE_HTML = """<!DOCTYPE html>
     // made two dashboards on different ports indistinguishable.
     document.getElementById('port-pill').textContent =
       ':' + (window.location.port || (window.location.protocol === 'https:' ? '443' : '80'));
+
+    // Everything below builds innerHTML, and token ids, trade ids, statuses and
+    // the lock holder all originate outside this process -- the venue writes some
+    // of them. Markup stored in any of those would execute in the operator's
+    // browser while real money rests on the book, so they are escaped on the way in.
+    function esc(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    // Only these reach a CSS class name; anything else is styled as 'open'.
+    const KNOWN_STATUSES = ['pending', 'open', 'partial', 'filled', 'cancelled', 'unattributed'];
 
     async function pollState() {
       try {

@@ -398,3 +398,34 @@ def test_two_orders_on_one_token_is_naked_not_balanced(temp_db):
     assert pair["hedge_state"] == "NAKED"
     assert pair["naked_info"]["unhedged_shares"] == 20.0
     assert pair["naked_info"]["unhedged_dollars"] == 10.00
+
+
+def test_api_state_ignores_a_request_supplied_db_path(client, tmp_path):
+    """The database is chosen by CLI or env only, never by the caller.
+
+    A query parameter here let anything that could reach the port read an
+    arbitrary SQLite file and probe local paths through the error text.
+    """
+    other = tmp_path / "somewhere_else.db"
+    con = sqlite3.connect(str(other))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+
+    res = client.get("/api/state", params={"db": str(other)})
+    assert res.status_code == 200
+    assert str(other) not in res.json()["db_path"]
+
+
+def test_database_values_are_escaped_before_innerhtml():
+    """Token ids and statuses reach innerHTML, and the venue writes some of them."""
+    assert "function esc(v)" in PAGE_HTML
+    for interpolation in (
+        "${esc(o.side || 'BUY')}",
+        "${esc((o.token_id || '').slice(0, 10))}",
+        "${esc((f.trade_id || '').slice(0, 12))}",
+        "${esc(lock.holder)}",
+    ):
+        assert interpolation in PAGE_HTML, interpolation
+    # A status from the database must not become a CSS class unchecked.
+    assert "KNOWN_STATUSES.includes(o.status)" in PAGE_HTML
