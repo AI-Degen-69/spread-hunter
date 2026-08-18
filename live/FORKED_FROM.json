@@ -7,11 +7,29 @@
       "source_sha256": "56d09b7e4e5309d53c636795a98356d686076799ae0f7d723b754d8c31caa72a",
       "why": "Leaf module -- stdlib plus requests only -- so live/ can carry its own copy instead of importing across the tree boundary."
     },
+    "live/engine/gate.py": {
+      "forked_from": "strategy/gate.py",
+      "at_commit": "b4c4e61f07ed0a9a53c6dbdf0bf224746b7e2fc5",
+      "source_sha256": "eca6e1efd655f99dcddc7cfc0b083b04adb52116d4493e71e5b1ae42b858eeed",
+      "why": "Leaf module -- quality gate and fleet posture state machine -- so live/ decision layer carries its own copy."
+    },
     "live/engine/markets.py": {
       "forked_from": "strategy/markets.py",
       "at_commit": "c50cca5e26a6655cab4649d2b9fba185ee190354",
       "source_sha256": "4da7e18e168fb5122607b0f659a0afdf3baad98df84bae45f5553e26b7420be3",
       "why": "Leaf module -- stdlib plus requests only -- so live/ can carry its own copy instead of importing across the tree boundary."
+    },
+    "live/engine/quotes.py": {
+      "forked_from": "strategy/quotes.py",
+      "at_commit": "b4c4e61f07ed0a9a53c6dbdf0bf224746b7e2fc5",
+      "source_sha256": "0c09cb075c0e174e787d416171a8656b9094cfb6dd4002813475bd7446fc0594",
+      "why": "Decision layer -- decide_quotes() calculation of price, size and resting intents -- so live/ has the brain without importing from root."
+    },
+    "live/engine/risk.py": {
+      "forked_from": "strategy/risk.py",
+      "at_commit": "b4c4e61f07ed0a9a53c6dbdf0bf224746b7e2fc5",
+      "source_sha256": "7b52e16cebb8ac13d847f6e1135edaf1ce8e72e04c09a56a84502cb9951f89af",
+      "why": "Leaf module -- dollar risk, skew offsets, size ladder, and hard blocks -- so live/ quoting layer carries its own risk checks."
     }
   }
 }

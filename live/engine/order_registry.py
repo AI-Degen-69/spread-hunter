@@ -824,3 +824,56 @@ def _reconcile_pass(
     return summary
 
 
+def inventory_from_registry(
+    condition_id: str,
+    up_token: str,
+    down_token: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> "Inventory":
+    """Rebuild a market's share inventory from fills in the SQLite registry (live/run/live.db)."""
+    from engine.quotes import Inventory
+
+    inv = Inventory()
+    db = Path(db_path)
+    if not db.is_file():
+        return inv
+
+    with get_connection(db) as conn:
+        rows = conn.execute(
+            """
+            SELECT o.token_id, o.side, f.size, f.price, f.venue_ts
+            FROM fills f
+            JOIN orders o ON f.order_uuid = o.id
+            WHERE o.condition_id = ?
+            ORDER BY f.venue_ts ASC
+            """,
+            (condition_id,),
+        ).fetchall()
+        for r in rows:
+            tok = str(r["token_id"])
+            side = str(r["side"]).upper()
+            size = float(r["size"] or 0.0)
+            price = float(r["price"] or 0.0)
+            vts = float(r["venue_ts"] or 0.0) / 1000.0 if r["venue_ts"] else None
+
+            if tok == up_token:
+                if side == "BUY":
+                    inv.up_shares += size
+                    inv.up_cost += size * price
+                elif side == "SELL":
+                    inv.up_shares -= size
+                    inv.up_cost -= size * price
+            elif tok == down_token:
+                if side == "BUY":
+                    inv.down_shares += size
+                    inv.down_cost += size * price
+                elif side == "SELL":
+                    inv.down_shares -= size
+                    inv.down_cost -= size * price
+            inv.fills += 1
+            if vts:
+                inv.last_fill_ts = vts if inv.last_fill_ts is None else max(inv.last_fill_ts, vts)
+    return inv
+
+
+

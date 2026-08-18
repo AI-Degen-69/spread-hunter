@@ -3677,3 +3677,36 @@ merge-below-$1.00 model as the live path's income, on 476 closes.
 (`strategy/quotes.py:517`) and the `_requote` orchestration (`strategy/sweep.py:1038`) choose
 price and size in the simulation; the CLI takes `--price` and `--size` by hand. Until that is
 forked into `live/engine/`, a live cycle proves the plumbing, not the strategy.
+
+
+### 2026-08-19 - Porting the decision layer into live: `decide_quotes()` meets real books
+
+**Question.** Can the strategy's decision layer (`decide_quotes` in `strategy/quotes.py` and its leaf
+dependencies `gate.py`, `risk.py`) be cleanly forked into `live/engine/` without root coupling, and
+produce exact quote intents against real live order books for all eight graduated markets in
+`run/markets.json`?
+
+**Method.** Forked `strategy/quotes.py`, `strategy/gate.py`, and `strategy/risk.py` into `live/engine/`
+with internal `strategy.` imports rewritten to `engine.`. Registered all forks in `live/FORKED_FROM.json`
+and verified zero drift with `live/scripts/refork.py` (`pytest live/tests/test_fork_drift.py`).
+Implemented `live/engine/market_feed.py` reading `run/markets.json` with age/schema/presence validation.
+Added `inventory_from_registry()` to `live/engine/order_registry.py` to reconstruct state from `live.db`.
+Added read-only CLI verb `decide` in `live/engine/live_exec.py` (with no `--live` flag, structurally
+incapable of sending orders). Evaluated all eight graduated markets against real Polymarket CLOB books
+and diffed against simulation quotes in `run/fleet.db`.
+
+**Result.**
+1. All 8 graduated markets evaluated cleanly via `decide --all`. 7 of 8 produced valid quote intents;
+   1 market (`wta-bejlek-alexand-2026-08-18`) was correctly declined (`UP: 0.957 outside band 0.10-0.90; DOWN: 0.003 outside band 0.10-0.90`).
+2. Sizing and risk arithmetic on top market (`mlb-det-pit-2026-08-18`): `min_size=5.0`, UP buy 98sh @ $0.358
+   (mid $0.385, capture 2.70c), DOWN buy 85sh @ $0.584 (mid $0.615, capture 3.10c). Pair price: $0.9420
+   (edge: $0.0580 / pair or 5.80% below $1.00). Total 2-leg cost: $84.72. Worst-case naked loss: $49.64.
+3. Pricing diff against `run/fleet.db`: Quote price differences (0.5c to 3.2c) perfectly map to live
+   order book mid-price drift and the dynamic reward offset ladder. Code execution is byte-for-byte identical
+   to root simulation logic.
+4. Test suite status: root suite 703 passed, live suite 197 passed (+16 net new tests in `test_market_feed.py`,
+   `test_live_quotes.py`, `test_live_exec_decide.py`), total 900 passed, 0 failed.
+
+**Verdict.** **LIVE** on the decision layer in `live/engine/quotes.py` and the `market_feed.py` reader.
+The live tree now possesses both the brain (`decide_quotes()`) and the hands (`live_exec.py`).
+

@@ -2230,6 +2230,145 @@ def cancel_all(live: bool) -> None:
     print(json.dumps(resp, indent=2, default=str) if isinstance(resp, (dict, list)) else resp)
 
 
+def _evaluate_single_market_quote(
+    cid: str,
+    gm: "GraduatedMarket" | None,
+    cfg: "MakerConfig",
+    reg_db: Path,
+) -> dict:
+    """Evaluate and print strategy quote decision for one market."""
+    from engine.markets import fetch_pinned_market, full_book
+    from engine.order_registry import inventory_from_registry
+    from engine.quotes import decide_quotes
+
+    m = fetch_pinned_market(cid, require_rewards=False)
+    if m is None:
+        print(f"MARKET {cid[:16]}...: unable to load on venue (missing, closed, or not 2 tokens)")
+        return {"cid": cid, "status": "ERROR", "why": "market unavailable"}
+
+    title = gm.title if gm and gm.title else m.market_slug
+    slug = gm.slug if gm and gm.slug else m.market_slug
+
+    clob_host = getattr(cfg, "clob_host", "https://clob.polymarket.com")
+    try:
+        up_book = full_book(clob_host, m.up_token)
+        down_book = full_book(clob_host, m.down_token)
+    except Exception as e:
+        print(f"MARKET {title} ({cid[:16]}...): book fetch error: {e}")
+        return {"cid": cid, "status": "ERROR", "why": f"book fetch error: {e}"}
+
+    inv = inventory_from_registry(m.condition_id, m.up_token, m.down_token, db_path=reg_db)
+
+    intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
+
+    bb_up, ba_up = up_book.get("best_bid"), up_book.get("best_ask")
+    mid_up = (bb_up + ba_up) / 2.0 if (bb_up is not None and ba_up is not None) else None
+    bb_dn, ba_dn = down_book.get("best_bid"), down_book.get("best_ask")
+    mid_dn = (bb_dn + ba_dn) / 2.0 if (bb_dn is not None and ba_dn is not None) else None
+
+    depth_up = sum(up_book.get("bids", {}).values())
+    depth_dn = sum(down_book.get("bids", {}).values())
+
+    print("=" * 80)
+    print(f"MARKET:    {title}")
+    print(f"SLUG:      {slug}")
+    print(f"CID:       {m.condition_id}")
+    print(f"TICK:      {m.tick_size:<6} NEG_RISK: {m.neg_risk}")
+    if gm:
+        print(f"GRADUATED: min_size={gm.min_size} tick={gm.tick} max_spread={gm.max_spread} "
+              f"days_to_resolve={gm.days_to_resolve:.2f} daily_rewards=${gm.daily:.2f}")
+    print(f"BOOKS:")
+    print(f"  UP   (YES): bid={bb_up} ask={ba_up} mid={f'{mid_up:.4f}' if mid_up else 'None'} depth={depth_up:.0f}sh (token {m.up_token[:14]}...)")
+    print(f"  DOWN (NO):  bid={bb_dn} ask={ba_dn} mid={f'{mid_dn:.4f}' if mid_dn else 'None'} depth={depth_dn:.0f}sh (token {m.down_token[:14]}...)")
+    print(f"INVENTORY:")
+    print(f"  UP: {inv.up_shares:.0f}sh (avg ${inv.avg('UP'):.3f}, cost ${inv.up_cost:.2f}) | "
+          f"DOWN: {inv.down_shares:.0f}sh (avg ${inv.avg('DOWN'):.3f}, cost ${inv.down_cost:.2f}) | "
+          f"fills={inv.fills} balance={inv.balance:.1%}")
+
+    if intents:
+        print("DECISION: QUOTE INTENTS")
+        p_up = p_dn = None
+        s_up = s_dn = 0
+        for qi in intents:
+            edge_str = f"{100*qi.edge_vs_mid:.2f}c" if qi.edge_vs_mid is not None else "n/a"
+            tag = " [CROSSED]" if qi.crossed else ""
+            tok_str = str(qi.token_id or (m.up_token if qi.side == "UP" else m.down_token))[:14]
+            print(f"  BUY {qi.size:3d} {qi.side:4s} @ {qi.price:.3f} (mid {qi.mid:.3f}, capture {edge_str}){tag} "
+                  f"notional=${qi.price * qi.size:.2f} token={tok_str}... {qi.reason}")
+            if qi.side == "UP":
+                p_up, s_up = qi.price, qi.size
+            elif qi.side == "DOWN":
+                p_dn, s_dn = qi.price, qi.size
+
+        if p_up is not None and p_dn is not None:
+            pair_cost = p_up + p_dn
+            edge = 1.00 - pair_cost
+            worst_naked = max(p_up * s_up, p_dn * s_dn)
+            print(f"SIZING & RISK:")
+            print(f"  Pair price:            ${pair_cost:.4f} ({p_up:.3f} UP + {p_dn:.3f} DOWN)")
+            print(f"  Capture below $1.00:   ${edge:.4f} / pair ({100*edge:.2f}%)")
+            print(f"  Total 2-leg cost:      ${(p_up * s_up) + (p_dn * s_dn):.2f}")
+            print(f"  Worst-case naked loss: ${worst_naked:.2f}")
+    else:
+        print(f"DECISION: DECLINED -- {why or 'no side quotable'}")
+    print("=" * 80)
+
+    return {
+        "cid": cid,
+        "title": title,
+        "slug": slug,
+        "intents": intents,
+        "why": why,
+        "up_book": {"bb": bb_up, "ba": ba_up, "mid": mid_up},
+        "down_book": {"bb": bb_dn, "ba": ba_dn, "mid": mid_dn},
+    }
+
+
+def decide(
+    target: str | None = None,
+    all_graduated: bool = False,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Read-only quote decision for graduated markets using live venue books."""
+    from engine.config import load
+    from engine.market_feed import load_graduated_markets, get_market_by_cid, GraduatedMarket
+    from engine.order_registry import DEFAULT_DB_PATH
+
+    cfg = load()
+    reg_db = Path(db_path) if db_path else DEFAULT_DB_PATH
+
+    graduated_list = load_graduated_markets()
+    if not graduated_list:
+        raise SystemExit("no graduated markets found in run/markets.json")
+
+    targets: list[tuple[str, GraduatedMarket | None]] = []
+    if all_graduated or target == "all" or target == "--all":
+        targets = [(gm.cid, gm) for gm in graduated_list]
+    elif target is None or target == "":
+        targets = [(graduated_list[0].cid, graduated_list[0])]
+    else:
+        if target.isdigit() and 0 <= int(target) < len(graduated_list):
+            gm = graduated_list[int(target)]
+            targets = [(gm.cid, gm)]
+        else:
+            gm = get_market_by_cid(target)
+            if gm is None:
+                for candidate in graduated_list:
+                    if candidate.slug.lower() == target.lower() or target.lower() in candidate.slug.lower():
+                        gm = candidate
+                        break
+            if gm is not None:
+                targets = [(gm.cid, gm)]
+            else:
+                targets = [(target, None)]
+
+    results: list[dict] = []
+    for cid, gm in targets:
+        res = _evaluate_single_market_quote(cid, gm, cfg, reg_db)
+        results.append(res)
+    return results
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="LIVE Polymarket execution.")
     ap.add_argument("--live", action="store_true",
@@ -2326,6 +2465,10 @@ def main() -> None:
                     help="actually send.")
     pr = sub.add_parser("pairs", help="List pair_ids in the registry with held sizes.")
     pr.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    dec = sub.add_parser("decide", help="Read-only quote decision for graduated markets using live venue books.")
+    dec.add_argument("target", nargs="?", default=None, help="Market condition ID, slug, or index (0..7). Default: first graduated market.")
+    dec.add_argument("--all", action="store_true", help="Evaluate all graduated markets from run/markets.json")
+    dec.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -2389,8 +2532,11 @@ def main() -> None:
         complete_pair_cmd(a.pair_id, is_live, db_path=a.db,
                           skip_positions_check=a.skip_positions_check,
                           force=a.force)
+    elif a.cmd == "decide":
+        decide(a.target, all_graduated=a.all, db_path=a.db)
     else:
         cancel_all(is_live)
+
 
 
 if __name__ == "__main__":
