@@ -3498,3 +3498,57 @@ How can quote placement eliminate the single-network-round-trip naked window bet
 
 - **LIVE** on Milestone 6 batch quoting, fail-closed verification, and probe fixture overhaul.
 
+
+---
+
+### 2026-08-18 — Instrumentation: a clean dry run does not prove the live path imports
+
+#### Question
+
+The first `--live` quote of Stage 4.5 crashed with `ModuleNotFoundError: No module
+named 'strategy.order_registry'` immediately after printing a correct, complete dry-run
+description of the order. The identical command without `--live` had passed minutes
+earlier. Why did the dry run report healthy on a code path that could not run, and what
+else does that pattern hide?
+
+#### Method
+
+1. Confirmed no exposure was created: `status --live` reported `open orders 0 ($0.00 notional)`.
+   The crash preceded `post_orders`, so nothing reached the venue.
+2. Located the split. `quote()` imports `strategy.markets` at line 360, before the
+   `if not live: return` at line 407, and `strategy.order_registry` at line 421, after it.
+   A dry run therefore exercises the first import and never the second.
+3. Identified the cause as implicit namespace package resolution. `strategy` spans
+   `live/strategy` (execution) and `<repo>/strategy` (engine). The name resolves only when
+   both parents are on `sys.path`, and which are present depends on the operator's working
+   directory:
+   - from repo root: `strategy` resolves to `<repo>/strategy` only; `strategy.order_registry` missing
+   - from `live/`: resolves to `live/strategy` only; `strategy.markets` missing
+   - from `live/` with `PYTHONPATH=..`: both resolve, `strategy.__path__` lists two directories
+4. Added a `sys.path` bootstrap in `live_exec.py` inserting `ROOT` and `ROOT.parent` before
+   any deferred `strategy.*` import.
+5. Added `tests/test_live_exec_import_paths.py`, which parses `live_exec.py` for every
+   `from strategy.X import` and imports each in a subprocess from both working directories,
+   plus a guard test asserting the parser matches something so the suite cannot pass vacuously.
+6. Verified the test detects the defect by removing the bootstrap: 3 of 4 tests fail; restored, 4 pass.
+
+#### Result
+
+1. **The dry run is not a rehearsal of the live call.** It covers the imports above the
+   early return and none below it. Every `--live`-gated subcommand shares this shape, so a
+   passing dry run has never been evidence that the venue path is importable.
+2. **Working directory silently decided whether a live order could be placed.** No
+   configuration was wrong; the same file ran or failed depending on `cwd`.
+3. **The failure lands at the worst moment.** The operator reads a correct order
+   description, approves it, and the crash arrives at the point of sending. Here it was
+   benign because the missing import preceded the POST. An equivalent import deferred to
+   *after* a successful first leg would strand a naked position.
+4. Test accounting: root suite 724 passed (from 720, +4 new); live suite 153 passed.
+   Total 877 passed, 0 failed.
+
+#### Decision
+
+- **LIVE** on the `sys.path` bootstrap and the import regression tests.
+- **OPEN**: dry-run coverage generally. A dry run that returns before the venue-side imports
+  cannot certify the live path, and this is a property of the early-return design rather than
+  of this one command. Worth revisiting if a second instance appears.

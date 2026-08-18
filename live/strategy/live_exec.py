@@ -52,6 +52,21 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "run"
 
+# The `strategy` package deliberately spans two directories as an implicit
+# namespace package: live/strategy holds the execution path, <repo>/strategy the
+# shared engine. That name only resolves when BOTH parents are on sys.path, and
+# which ones are there depends on the operator's working directory.
+#
+# A dry run does not catch a missing one. `quote` imports markets before the
+# dry-run return and order_registry after it, so a half-resolved path prints a
+# clean dry run and then dies on the `--live` call -- after the operator has
+# committed to sending. Bootstrapping both parents here makes the module
+# runnable from anywhere and removes the working directory from the question of
+# whether a live order can be placed.
+for _p in (ROOT, ROOT.parent):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
 
 def _find_env_file() -> Path | None:
     curr = Path(__file__).resolve().parent
