@@ -344,11 +344,23 @@ def _venue_order_id(resp) -> str | None:
 
 
 def quote(condition_id: str, price: float, size: float, live: bool,
+          post_only: bool = True, tif: str = "GTC",
+          expiration: int | None = None,
           db_path: str | Path | None = None) -> None:
     """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price."""
     from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
     from py_clob_client_v2.order_builder.constants import BUY
     from strategy.markets import fetch_pinned_market
+
+    # Pre-flight parse check on TIF and post_only
+    if post_only and tif not in ("GTC", "GTD"):
+        raise SystemExit(
+            f"--post-only is valid only for GTC and GTD orders (got --tif {tif})."
+        )
+    if tif == "GTD" and not expiration:
+        raise SystemExit(
+            "--expiration (UTC epoch seconds) is required when --tif GTD."
+        )
 
     # fetch_pinned_market returns None for two unrelated reasons: the market
     # does not exist, or it exists and pays no rewards. Reporting both as "not
@@ -409,6 +421,9 @@ def quote(condition_id: str, price: float, size: float, live: bool,
     max_pair_cost = strategy_config.load().max_pair_cost
     now_ms = int(time.time() * 1000)
 
+    order_type_enum = getattr(OrderType, tif, OrderType.GTC)
+    exp_val = int(expiration) if expiration is not None else 0
+
     for tok, p, label in legs:
         local_id = str(_uuid.uuid4())
         # Row first, then send. A row written after a successful send would be
@@ -423,8 +438,8 @@ def quote(condition_id: str, price: float, size: float, live: bool,
         ))
 
         signed = c.create_order(
-            OrderArgsV2(price=p, size=size, side=BUY, token_id=tok))
-        resp = c.post_order(signed, OrderType.GTC)
+            OrderArgsV2(price=p, size=size, side=BUY, token_id=tok, expiration=exp_val))
+        resp = c.post_order(signed, order_type=order_type_enum, post_only=post_only)
         _log_order({"ts": time.time(), "condition_id": condition_id,
                     "pair_id": pair_id, "local_id": local_id,
                     "side": label, "token_id": str(tok), "price": p,
@@ -1997,11 +2012,83 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
     print(json.dumps(result, indent=2, default=str))
 
 
+def cancel_single_order(order_id: str, live: bool,
+                        db_path: str | Path | None = None) -> None:
+    """Cancel a single active order by venue order ID."""
+    if not live:
+        print(f"DRY RUN -- would cancel order {order_id}. Re-run with --live.")
+        return
+
+    from py_clob_client_v2.clob_types import OrderPayload
+    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+
+    c = _client()
+    try:
+        resp = c.cancel_order(OrderPayload(orderID=order_id))
+    except Exception as exc:
+        raise SystemExit(
+            f"CANCEL REFUSED: venue rejected cancellation of order {order_id}: {exc}"
+        ) from exc
+
+    if isinstance(resp, dict) and resp.get("canceled") is None and resp.get("success") is False:
+        err = resp.get("errorMsg") or resp.get("error") or str(resp)
+        raise SystemExit(
+            f"CANCEL REFUSED: venue reported failure for order {order_id}: {err}"
+        )
+
+    # Update registry if order is tracked locally
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    row = registry.get_order_by_venue_id(order_id)
+    if row:
+        now_ms = int(time.time() * 1000)
+        registry.update_order_status(row.id, "cancelled", now_ms)
+
+    print(json.dumps(resp, indent=2, default=str) if isinstance(resp, (dict, list)) else resp)
+
+
+def cancel_market(condition_id: str, live: bool,
+                  db_path: str | Path | None = None) -> None:
+    """Cancel all active orders for a given market / condition ID."""
+    if not live:
+        print(f"DRY RUN -- would cancel all active orders for market {condition_id}. Re-run with --live.")
+        return
+
+    from py_clob_client_v2.clob_types import OrderMarketCancelParams
+    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+
+    c = _client()
+    try:
+        resp = c.cancel_market_orders(OrderMarketCancelParams(market=condition_id))
+    except Exception as exc:
+        raise SystemExit(
+            f"CANCEL-MARKET REFUSED: venue rejected market cancellation for {condition_id}: {exc}"
+        ) from exc
+
+    if isinstance(resp, dict) and resp.get("canceled") is None and resp.get("success") is False:
+        err = resp.get("errorMsg") or resp.get("error") or str(resp)
+        raise SystemExit(
+            f"CANCEL-MARKET REFUSED: venue reported failure for {condition_id}: {err}"
+        )
+
+    # Update registry active orders for this condition
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
+    now_ms = int(time.time() * 1000)
+    for order in registry.get_active_orders():
+        if order.condition_id and order.condition_id.lower() == condition_id.lower():
+            registry.update_order_status(order.id, "cancelled", now_ms)
+
+    print(json.dumps(resp, indent=2, default=str) if isinstance(resp, (dict, list)) else resp)
+
+
 def cancel_all(live: bool) -> None:
     if not live:
         print("DRY RUN -- would cancel ALL open orders. Re-run with --live.")
         return
-    print(_client().cancel_all())
+    try:
+        resp = _client().cancel_all()
+    except Exception as exc:
+        raise SystemExit(f"CANCEL-ALL REFUSED: venue rejected cancel-all: {exc}") from exc
+    print(json.dumps(resp, indent=2, default=str) if isinstance(resp, (dict, list)) else resp)
 
 
 def main() -> None:
@@ -2017,9 +2104,25 @@ def main() -> None:
     q.add_argument("condition_id")
     q.add_argument("--price", type=float, required=True)
     q.add_argument("--size", type=float, required=True)
+    q.add_argument("--post-only", action=argparse.BooleanOptionalAction, default=True,
+                   help="Ensure orders rest on the book and do not match immediately (default: True).")
+    q.add_argument("--tif", choices=["GTC", "GTD", "FOK", "FAK"], default="GTC",
+                   help="Time in force: GTC (default), GTD, FOK, FAK.")
+    q.add_argument("--expiration", type=int, default=None,
+                   help="Expiration timestamp (UTC epoch seconds) required when --tif GTD.")
     q.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     q.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
+    canc = sub.add_parser("cancel", help="Cancel a single active order by venue order ID.")
+    canc.add_argument("order_id", help="Venue order ID to cancel")
+    canc.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    canc.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                      help="actually send.")
+    cm = sub.add_parser("cancel-market", help="Cancel all active orders for a condition ID.")
+    cm.add_argument("condition_id", help="Condition ID to cancel orders for")
+    cm.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    cm.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
+                    help="actually send.")
     r = sub.add_parser("redeem", help="Gasless redemption of winning positions via Relayer.")
     r.add_argument("condition_id", help="Condition ID to redeem")
     r.add_argument("--index-sets", default="1,2", help="Comma-separated index sets (default: 1,2)")
@@ -2078,14 +2181,22 @@ def main() -> None:
                   help="actually send.")
     a = ap.parse_args()
 
-    is_live = bool(a.live or getattr(a, "live", False))
+    is_live = bool(getattr(a, "live", False))
 
     if a.cmd == "status":
         status()
     elif a.cmd == "balance":
         balance(a.funder)
     elif a.cmd == "quote":
-        quote(a.condition_id, a.price, a.size, is_live, db_path=a.db)
+        quote(a.condition_id, a.price, a.size, is_live,
+              post_only=a.post_only, tif=a.tif, expiration=a.expiration,
+              db_path=a.db)
+    elif a.cmd == "cancel":
+        cancel_single_order(a.order_id, is_live, db_path=a.db)
+    elif a.cmd == "cancel-market":
+        cancel_market(a.condition_id, is_live, db_path=a.db)
+    elif a.cmd == "cancel-all":
+        cancel_all(is_live)
     elif a.cmd == "redeem":
         idx_sets = [int(x.strip()) for x in a.index_sets.split(",") if x.strip()]
         redeem(

@@ -3415,4 +3415,34 @@ How can live trading execution modules (`strategy/live_exec.py`, `strategy/live_
 - **OPEN** on the Live subtree extraction (`live/`).
 - **OPEN** on decoupling live risk configuration (`max_pair_cost`) from simulation sweeps in `strategy.config`.
 
+---
+
+### 2026-08-18 — Milestone 4: Venue order surface alignment, postOnly safety default, standalone cancellation verbs, and latency telemetry audit
+
+#### Question
+
+What capabilities does the Polymarket CLOB venue expose for order execution and lifecycle management, how does our CLI surface compare, how should maker execution be guarded against accidental crosses, and how can per-order sent-to-landed latency be captured?
+
+#### Method
+
+1. Enumerate official venue API surface from official Polymarket documentation (`docs.polymarket.com/api-reference/trade/post-a-new-order`, `POST /orders`, `DELETE /order`, etc.) and `py_clob_client_v2` SDK.
+2. Diff venue surface against the 11 CLI subcommands in `live/strategy/live_exec.py`, partitioning capabilities into three disjoint sets: exercised, untested (Set B), and exposed but unimplemented (Set C).
+3. Add `--post-only` (default `True`, `argparse.BooleanOptionalAction`) and time-in-force `--tif` (`GTC`, `GTD`, `FOK`, `FAK`, default `GTC`) with `--expiration` to `quote()`, enforcing parse-time rejection of invalid combinations (`post_only` with `FOK`/`FAK`, `GTD` without `--expiration`).
+4. Implement standalone closing verbs `cancel <order_id>` and `cancel-market <condition_id>` with fail-closed refusal handling and `OrderRegistry` status synchronization.
+5. Close Set B by adding unit tests for `cancel-all`, `status`, `balance`, `pairs` and quote flags, and verify taker paths (`exit`, `complete`) never set `post_only`.
+6. Audit latency telemetry in `OrderRegistry` and evaluate the user WebSocket subscription route (`wss://ws-subscriptions-clob.polymarket.com/ws/user`) for per-order venue acknowledgement timestamps.
+
+#### Result
+
+1. **postOnly Maker Guarantee:** Because this strategy rests bids on both sides to capture spread, an aggressive fill on quote entry is a strategy defect. `--post-only` defaults `True` on `quote()`, requiring explicit `--no-post-only` to bypass. Taker paths (`exit`, `complete`) remain strictly `post_only=False`.
+2. **Source Authority & GTD Constraint Correction:** The 125s minimum GTD duration cited in third-party documentation (`docs.polycop.ai`) is unconfirmed in official Polymarket API reference; documented as an unconfirmed third-party claim.
+3. **Cancellation Verbs & AGENTS.md Safety Rule Amendment:** Standalone `cancel` and `cancel-market` close exposure and inherit pre-approval under amended `AGENTS.md` (commit `f8e8bf1`). Fail-closed handling verified to raise clean `CANCEL REFUSED` / `CANCEL-MARKET REFUSED` on venue rejection without escaping tracebacks.
+4. **Per-Order Latency Telemetry Route:** While REST database schema (`posted_ts`, `last_polled_ts`) cannot reproduce the 81.13 ms accept latency per order due to REST ack omission and polling jitter, the user WebSocket channel (`wss://ws-subscriptions-clob.polymarket.com/ws/user`) emits placement events with venue-clock timestamps ($t_{\text{ack}}$) enabling true per-order sent-to-landed telemetry.
+5. **Test Accounting & Suite Verification:** Root suite: `703 passed, 1 warning in 59.98s`. Live suite: `143 passed in 19.87s` (up from 129 baseline, +14 new tests covering quote flags, cancel verbs, Set B commands, and taker post_only isolation). Total: 703 + 143 = 846 passed (exit code 0 across both, [DERIVED] 0 failed, 0 skipped).
+
+#### Decision
+
+- **OPEN** on Milestone 4 implementation (all code, CLI verbs, and tests landed in `live-extraction`, PR #41; venue contact remains gated on Stage 4.5 Owner approval).
+- **OPEN** on Milestone 5 (batch order placement and two-leg row attribution).
+
 
