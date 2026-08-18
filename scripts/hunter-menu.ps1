@@ -37,7 +37,7 @@ function Get-StrategyOnlineState {
 }
 
 function Show-Header {
-    Clear-Host
+    try { Clear-Host } catch {}
     $width = if (Get-Command Get-ProfileContentWidth -ErrorAction SilentlyContinue) { Get-ProfileContentWidth } else { 80 }
     $title = "SPREAD HUNTER - CONTROL CENTER"
     $subtitle = "Two-Sided Market Maker & 10-Tier Bankroll Sensitivity Matrix"
@@ -233,12 +233,12 @@ function Invoke-MenuAction {
     if ($act -ne "quit" -and -not $Action) {
         Write-Host ""
         Write-ProfileNeutral -Message "Press [Enter] to return to the menu..."
-        [void][Console]::ReadLine()
+        try { [void][Console]::ReadLine() } catch { [void](Read-Host) }
     }
 }
 
 if ($Action -ne "") {
-    $trimmed = $Action.Trim().ToLower()
+    $trimmed = if ($null -ne $Action) { $Action.Trim().ToLower() } else { "" }
     $aliasMap = @{
         "start"        = "1"
         "start-fresh"  = "2"
@@ -257,7 +257,7 @@ if ($Action -ne "") {
     }
     if ($aliasMap.ContainsKey($trimmed)) {
         Invoke-MenuAction $aliasMap[$trimmed]
-    } elseif ($MenuActions.Contains($trimmed)) {
+    } elseif ($MenuActions.Contains($trimmed) -or ($MenuActions[$trimmed] -ne $null)) {
         Invoke-MenuAction $trimmed
     } else {
         Write-ProfileError -Message "Unknown action '$Action'" -Suggestion "Valid: 1-11, start, stop, status, bstart, bstop, report, test, logs, dash, exit"
@@ -272,7 +272,12 @@ while ($true) {
 
     $promptColor = Get-ProfileColor -Name "Highlight"
     Write-Host "   Select an option [1-11, d, q]: " -NoNewline -ForegroundColor $promptColor
-    $choice = [Console]::ReadLine()
+    $choice = $null
+    try {
+        $choice = [Console]::ReadLine()
+    } catch {
+        $choice = Read-Host
+    }
     if ($null -eq $choice) { break }
     $choice = $choice.Trim()
     if ($choice -eq "") { continue }

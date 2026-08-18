@@ -100,7 +100,9 @@ function Get-HunterInstance {
     foreach ($r in @($data.procs)) {
         try { $p = Get-Process -Id $r.pid -ErrorAction Stop } catch { continue }
         $recorded = Get-HunterStartTicks -Record $r
-        if ($null -eq $recorded -or $p.StartTime.ToUniversalTime().Ticks -ne $recorded) {
+        $pStartTime = $null
+        try { $pStartTime = $p.StartTime } catch {}
+        if ($null -eq $recorded -or $null -eq $pStartTime -or $pStartTime.ToUniversalTime().Ticks -ne $recorded) {
             continue
         }
         $live += [pscustomobject]@{ name = $r.name; pid = $r.pid; proc = $p }

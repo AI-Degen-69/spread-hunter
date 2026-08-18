@@ -26,12 +26,12 @@ Run once after cloning (git does not install hooks automatically):
 
 Update all four files together:
 
-| file | content |
-|---|---|
-| `research/RESEARCH_LOG.md` | Question → Method → Result → Verdict |
-| `research/RESEARCH_SUMMARY.md` | one dated bullet per concrete thing done |
-| `research/he_RESEARCH_LOG.md` | Hebrew mirror of the log |
-| `research/he_RESEARCH_SUMMARY.md` | Hebrew mirror of the summary |
+| file                              | content                                  |
+| -----------------------------------| ------------------------------------------|
+| `research/RESEARCH_LOG.md`        | Question → Method → Result → Verdict     |
+| `research/RESEARCH_SUMMARY.md`    | one dated bullet per concrete thing done |
+| `research/he_RESEARCH_LOG.md`     | Hebrew mirror of the log                 |
+| `research/he_RESEARCH_SUMMARY.md` | Hebrew mirror of the summary             |
 
 Conventions:
 - Verdict is a decision, not a summary: `DEAD` / `PARKED` / `LIVE` / `OPEN`
@@ -51,14 +51,11 @@ Escape hatch for typos and formatting: `git commit --no-verify`.
     research/   the five files above
     PROGRAM.md  research org code — how a bounded experiment is run (read it before an experiment)
 
-The sibling repo `polymarket-taker` uses the SAME layout. Keep it that way — the only
-difference between the repos should be strategy-specific.
-
 ## Safety
 
 - **Staged exposure rule.** Venue calls are permitted only in the order that *closing*
   capabilities land, and only where they cannot open exposure.
-  1. **Allowed now:** read-only queries, and `redeem` — it closes a position, never opens one.
+  1. Allowed now: read-only queries, and redeem — it closes a position, never opens one.
   2. **Dry-run is the default.** Every subcommand that can reach the venue takes `--live` through
      `argparse.SUPPRESS`; without that flag nothing is sent.
   3. **Forbidden until Stages 1–4 land and the Owner approves:** any order that opens or increases
@@ -83,17 +80,15 @@ difference between the repos should be strategy-specific.
 
 ## Output style
 
-The reader has ADHD. Shape every response so it can be acted on:
+The reader has ADHD. Shape every response so it can be acted on in plain simple English for non advanced developers:
 1. Lead with the answer or next action: command, path, or snippet first.
 2. Number multi-step work; one bounded action per step.
-3. End with one next action doable in under two minutes.
-4. Finish the current issue before raising a new one.
-5. Restate progress each turn ("step 3 of 5 done").
-6. Give time estimates in concrete units, never "a bit".
-7. After a change, show what now works.
-8. Errors: state location, cause, and fix. No drama.
-9. Cap lists at 5 items.
-10. No preamble, no recaps, no closers.
+3. Finish the current issue before raising a new one.
+4. Restate progress each turn ("step 3 of 5 done").
+5. After a change, show what now works.
+6. Errors: state location, cause, and fix. No drama.
+7. Cap lists at 5 items.
+8. No preamble, no recaps, no closers.
 
 Exceptions: explain fully when asked to explain. Confirm before destructive actions. After three failed fixes, stop and name the doubtful assumption. If the request is ambiguous, ask one short question.
 
