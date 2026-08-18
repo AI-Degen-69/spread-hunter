@@ -197,7 +197,11 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         price = float(o["price"])
         status = o["status"]
 
-        if status not in ("cancelled",):
+        if o["side"] == "SELL":
+            # An unwind returns collateral rather than committing it.
+            # Adding it here made `exit` read as growing the position.
+            pass
+        elif status not in ("cancelled",):
             total_committed += (size * price)
             remaining = max(0.0, size - matched)
             resting_committed += (remaining * price)
@@ -236,79 +240,109 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
     pairs_list = []
     for pid, pdata in pairs_map.items():
         legs = pdata["orders"]
-        combined_price = sum(float(l["price"]) for l in legs)
+        # One price per token, not per order: after `exit` or `complete` a
+        # pair holds three orders on two tokens, and summing all three
+        # reports a pair cost that was never paid.
+        # The opening BUY on each token is what the pair cost. A later SELL
+        # from `exit` prices an unwind, not the position, and the row order
+        # the query happens to return must not decide which one is read.
+        _open_by_token: dict[str, float] = {}
+        for _l in sorted(legs, key=lambda x: (x["side"] != "BUY", x["posted_ts"])):
+            _open_by_token.setdefault(_l["token_id"], float(_l["price"]))
+        combined_price = sum(_open_by_token.values())
         pdata["combined_price"] = round(combined_price, 4)
 
         order_ids_in_pair = {l["id"] for l in legs}
         pair_fills = [f for f in fills_list if f["order_uuid"] in order_ids_in_pair]
         pair_fills.sort(key=lambda x: x["venue_ts"])
 
-        total_matched = sum(float(l["size_matched"]) for l in legs)
+        # Classify by TOKEN, not by order. A pair is two tokens; each token can
+        # carry any number of orders, because `exit` adds a SELL on a token
+        # already in the pair and `complete` adds a crossing BUY on the other.
+        # Counting orders instead made a three-order pair -- the normal shape
+        # during exit and complete -- fall through to a calm RESTING with no naked
+        # warning, which is the one state this page exists never to show.
+        # live/strategy/live_pairs.py:347-375 groups the same way.
+        tokens: dict[str, dict[str, Any]] = {}
+        for o in legs:
+            tok = tokens.setdefault(o["token_id"], {
+                "token_id": o["token_id"],
+                "net_matched": 0.0,
+                "notional": 0.0,
+                "orders": [],
+            })
+            matched = float(o["size_matched"])
+            # SELL reduces the position on its token. Summing it as an increase
+            # inverts the answer on exactly the pairs `exit` has already acted on.
+            signed = -matched if o["side"] == "SELL" else matched
+            tok["net_matched"] += signed
+            tok["notional"] += signed * float(o["price"])
+            tok["orders"].append(o)
 
-        if total_matched <= 1e-6:
-            if all(l["status"] in ("cancelled",) for l in legs):
-                hedge_state = "CLOSED"
-            else:
-                hedge_state = "RESTING"
-            naked_info = None
+        for t in tokens.values():
+            t["net_matched"] = round(t["net_matched"], 6)
+            t["avg_price"] = (
+                abs(t["notional"] / t["net_matched"]) if abs(t["net_matched"]) > 1e-9
+                else (float(t["orders"][0]["price"]) if t["orders"] else 0.0)
+            )
+
+        pdata["tokens"] = list(tokens.values())
+
+        def _naked_from(tok: dict[str, Any], shares: float,
+                        _toks: dict[str, dict[str, Any]] = tokens) -> dict[str, Any]:
+            """Build the naked payload for `shares` unhedged on `tok`."""
+            tok_order_ids = {o["id"] for o in tok["orders"]}
+            tok_fills = [f for f in pair_fills if f["order_uuid"] in tok_order_ids]
+            since = (tok_fills[0]["venue_ts"] if tok_fills
+                     else min(o["posted_ts"] for o in tok["orders"]))
+            price = tok["avg_price"]
+            nets = [t["net_matched"] for t in _toks.values()]
+            return {
+                "unhedged_shares": round(abs(shares), 4),
+                "unhedged_side": "LONG" if shares > 0 else "SHORT",
+                "unhedged_token_id": tok["token_id"],
+                "unhedged_price": round(price, 4),
+                "unhedged_dollars": round(abs(shares) * price, 2),
+                "long_leg_matched": round(max(nets), 4),
+                "short_leg_matched": round(min(nets), 4),
+                "naked_since_ts": since,
+                "seconds_naked": max(0.0, round((now_ms - since) / 1000.0, 1)),
+            }
+
+        naked_info = None
+        if len(tokens) > 2:
+            # live_pairs.load_pair refuses this outright rather than reducing to
+            # the largest two. A dashboard must not be more confident than the
+            # engine it watches, so it refuses too -- loudly, not silently.
+            hedge_state = "REFUSED"
+            pdata["refused_reason"] = (
+                f"pair spans {len(tokens)} token ids; a pair is two legs. "
+                f"Position cannot be classified from a reduced view."
+            )
         else:
-            if len(legs) == 2:
-                s0 = float(legs[0]["size_matched"])
-                s1 = float(legs[1]["size_matched"])
-                diff = round(abs(s0 - s1), 6)
-                if diff <= 1e-6:
+            nets = [t["net_matched"] for t in tokens.values()]
+            if all(abs(n) <= 1e-6 for n in nets):
+                # No net position on either token. RESTING while any order
+                # still works the book; CLOSED once nothing is live, which
+                # covers a pair flattened by `exit` as well as a cancelled one.
+                working = {"open", "pending", "partial"}
+                hedge_state = ("RESTING"
+                               if any(l["status"] in working for l in legs)
+                               else "CLOSED")
+            elif len(tokens) == 2:
+                a, b = list(tokens.values())
+                diff = round(a["net_matched"] - b["net_matched"], 6)
+                if abs(diff) <= 1e-6:
                     hedge_state = "BALANCED"
-                    naked_info = None
                 else:
                     hedge_state = "NAKED"
-                    long_leg = legs[0] if s0 > s1 else legs[1]
-                    short_leg = legs[1] if s0 > s1 else legs[0]
-                    unhedged_dollars = round(diff * float(long_leg["price"]), 2)
-
-                    long_fills = [f for f in pair_fills if f["order_uuid"] == long_leg["id"]]
-                    earliest_fill_ts = long_fills[0]["venue_ts"] if long_fills else long_leg["posted_ts"]
-                    sec_naked = max(0.0, round((now_ms - earliest_fill_ts) / 1000.0, 1))
-
-                    naked_info = {
-                        "unhedged_shares": diff,
-                        "unhedged_side": long_leg["side"],
-                        "unhedged_token_id": long_leg["token_id"],
-                        "unhedged_price": float(long_leg["price"]),
-                        "unhedged_dollars": unhedged_dollars,
-                        "long_leg_matched": round(max(s0, s1), 4),
-                        "short_leg_matched": round(min(s0, s1), 4),
-                        "naked_since_ts": earliest_fill_ts,
-                        "seconds_naked": sec_naked,
-                    }
-            elif len(legs) == 1:
-                leg = legs[0]
-                matched_val = float(leg["size_matched"])
-                if matched_val > 1e-6:
-                    hedge_state = "NAKED"
-                    unhedged_dollars = round(matched_val * float(leg["price"]), 2)
-                    leg_fills = [f for f in pair_fills if f["order_uuid"] == leg["id"]]
-                    earliest_fill_ts = leg_fills[0]["venue_ts"] if leg_fills else leg["posted_ts"]
-                    sec_naked = max(0.0, round((now_ms - earliest_fill_ts) / 1000.0, 1))
-                    naked_info = {
-                        "unhedged_shares": round(matched_val, 4),
-                        "unhedged_side": leg["side"],
-                        "unhedged_token_id": leg["token_id"],
-                        "unhedged_price": float(leg["price"]),
-                        "unhedged_dollars": unhedged_dollars,
-                        "long_leg_matched": round(matched_val, 4),
-                        "short_leg_matched": 0.0,
-                        "naked_since_ts": earliest_fill_ts,
-                        "seconds_naked": sec_naked,
-                    }
-                elif leg["status"] == "cancelled":
-                    hedge_state = "CLOSED"
-                    naked_info = None
-                else:
-                    hedge_state = "RESTING"
-                    naked_info = None
+                    heavy = a if a["net_matched"] > b["net_matched"] else b
+                    naked_info = _naked_from(heavy, abs(diff))
             else:
-                hedge_state = "RESTING"
-                naked_info = None
+                # One token holding a net position is unhedged by definition.
+                only = next(iter(tokens.values()))
+                hedge_state = "NAKED"
+                naked_info = _naked_from(only, only["net_matched"])
 
         pdata["hedge_state"] = hedge_state
         pdata["naked_info"] = naked_info
@@ -819,7 +853,7 @@ PAGE_HTML = """<!DOCTYPE html>
       </div>
       <div class="top-meta">
         <span id="poll-pill" class="pill pill-neutral">CONNECTING...</span>
-        <span id="port-pill" class="pill pill-neutral">:8799</span>
+        <span id="port-pill" class="pill pill-neutral"></span>
         <span id="clock-display">--:--:--</span>
       </div>
     </header>
@@ -1045,6 +1079,19 @@ PAGE_HTML = """<!DOCTYPE html>
             </div>
           </div>
         `;
+      } else if (hedgeState === 'REFUSED') {
+        localNakedSinceMs = null;
+        hero.innerHTML = `
+          <div class="hero-card state-naked">
+            <div class="hero-header">
+              <div>
+                <div class="hero-badge naked">❓ CANNOT CLASSIFY POSITION</div>
+                <div class="hero-headline">TREAT AS UNHEDGED</div>
+                <div class="hero-desc">${pair.refused_reason || 'Pair shape not recognised.'} Check the position on the venue before acting.</div>
+              </div>
+            </div>
+          </div>
+        `;
       } else {
         localNakedSinceMs = null;
         hero.innerHTML = `
@@ -1198,6 +1245,11 @@ PAGE_HTML = """<!DOCTYPE html>
         lockStatus.textContent = 'Idle (no reconcile pass in flight)';
       }
     }
+
+    // Show the port actually serving this page. Hardcoding the default
+    // made two dashboards on different ports indistinguishable.
+    document.getElementById('port-pill').textContent =
+      ':' + (window.location.port || (window.location.protocol === 'https:' ? '443' : '80'));
 
     async function pollState() {
       try {
