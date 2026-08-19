@@ -4146,3 +4146,79 @@ traced the number back to its source.
 
 **Verdict.** **LIVE** for 2-6. **OPEN** for 1: the account's value and P&L must come from the venue,
 not from a config constant. Root suite 703 passed; live suite 256 passed.
+
+---
+
+## 2026-08-19 - The account's value now comes from the venue, not from a constant
+
+**Question.** The headline tile read `_CFG.bankroll_usd + realized_pnl` = $100.30 while the account
+held $101.88. Can account value and account P&L be sourced from the venue without the dashboard
+making a single network call?
+
+**Method.** Probed the Data API read-only against the funded address before writing any code, rather
+than building on documented field names. Recorded the exact responses, then built a writer that
+records them into the registry and a reader that the dashboard uses like every other table.
+
+**Result.**
+1. **Three endpoints carry it, and two of them agree independently.** `GET /value` returns the total
+   value of open positions; `GET /positions?sizeThreshold=0` carries `cashPnl` and `initialValue`;
+   `GET /closed-positions` carries the venue's own `realizedPnl` per closed position. A fourth host,
+   `user-pnl-api.polymarket.com/user-pnl`, is what the Polymarket UI itself plots. For this account
+   the closed-position sum (+0.90 and -0.60) and the P&L series both return **+$0.30**. Both figures
+   are recorded, along with their difference; a disagreement between them is a finding, not noise.
+2. **`GET /value` returns a list, not an object.** Reading it as a dict yields `None`, which would
+   have valued every open book at zero. Pinned by a test.
+3. **The +$0.30 was real; the $100 was not.** The account's history is four deposits totalling
+   $101.58, two buys of -$4.70, and a merge of +$5.00, giving $101.88. The 30 cents is measured
+   realised P&L. What was fabricated was the base it sat on.
+4. **The percentage needed a denominator the API does not return.** Polymarket shows +0.30%.
+   Measuring against net deposits — derived as `account_value - pnl` = $101.58 — gives 0.2953%,
+   which displays as +0.30%. NULL when the basis is zero, never 0.00%.
+5. **No gap is reported against the registry's own book.** An earlier draft of the tile showed
+   `registry book $100.00 - gap +$1.88`. That "book" is the config bankroll, so the footnote restated
+   the fabrication it was meant to replace. The registry records no deposits and therefore has
+   nothing real to reconcile a venue balance against. The footnote now reports sweep age instead: a
+   balance is only as true as its last reading.
+6. **The dashboard still makes zero venue calls.** `engine.live_exec account-sweep` writes an
+   `account_marks` row; the page reads SQLite. Every column is nullable, so a sweep that reached one
+   endpoint and not another records what it got and NULL for the rest.
+7. **Unrealized and Capital Committed are measured for the first time.** They came from
+   `float_marks`, which nothing ever wrote, so the tile read `--`. They now come from the venue's
+   open positions, closing the OPEN item from the previous entry.
+
+**Verdict.** **LIVE.** Live suite 302 passed (46 new). Root suite 703 passed. Measured against the
+real account: ACCOUNT VALUE $101.88, P&L +$0.30 (+0.30%), matching the Polymarket portfolio card
+exactly on both figures.
+
+---
+
+## 2026-08-19 - A recycled PID reported the bot as running, and Stop Bot would have killed a browser
+
+**Question.** Two tests in `test_live_dash.py` failed on this machine and passed in CI. Both were
+refused resets: "Refusing to reset while the bot stack is running." No bot was running.
+
+**Method.** Read `live/run/live_procs.json`, which recorded supervisor and engine at PID 13052 from
+a run that had already exited, then asked the OS what PID 13052 actually was.
+
+**Result.**
+1. **PID 13052 was `msedge`.** The bot exited, Windows recycled the PID onto the browser, and
+   `_is_pid_alive` only asked whether *a* process with that PID existed. The dashboard therefore
+   reported the bot stack RUNNING indefinitely.
+2. **The worst consequence was not the false status.** `stop_bot` runs `taskkill /F /T` on the
+   recorded PIDs. Pressing **Stop Bot** would have force-killed the Owner's browser and its entire
+   process tree. The reset refusals and the permanently-blocked `start_bot` were the mild symptoms.
+3. **The fix is a field the file already stored.** `started_at` is written immediately after Popen,
+   so the process's real creation time must agree with it. Read via `GetProcessTimes` on Windows and
+   `/proc/<pid>/stat` on Linux, with a 60-second tolerance for clock granularity.
+4. **An unreadable creation time falls back to the bare PID check, deliberately.** A false "stopped"
+   would let a second bot stack launch beside a live one, which AGENTS.md forbids outright. The
+   failure mode is chosen, not accidental.
+5. **A process can be dead and still queryable.** Where a parent holds an open handle, `OpenProcess`
+   succeeds and the creation time is genuine; only the non-zero exit time distinguishes it. Caught by
+   a test that Popens a process, waits for it, and asserts it reads as dead.
+6. **The two failing tests were the bug reporting itself.** They now pass without touching the stale
+   file, which is the proof that the guard — not a manual cleanup — is what fixed it.
+
+**Verdict.** **LIVE.** 9 new tests, including the exact failure: a live PID recorded with an old
+`started_at` reads as STOPPED. This entry is kept because the instrumentation was not merely wrong,
+it was armed: a status check that could not tell two processes apart was wired to a force-kill.

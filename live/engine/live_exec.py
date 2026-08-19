@@ -2330,6 +2330,54 @@ def _fetch_live_balance(funder: str | None = None) -> float | None:
         return None
 
 
+def account_sweep(funder: str | None = None, db_path: str | None = None,
+                  quiet: bool = False) -> dict:
+    """Read the account from the venue and record the reading in the registry.
+
+    Read-only at the venue: collateral, open positions, closed positions, and
+    the venue's own P&L series. Nothing here can open or increase exposure.
+
+    The dashboard never calls the venue -- it reads the row this writes. That
+    is what lets the headline tile show the account's real value while the page
+    keeps its "zero venue network calls, zero credentials" contract.
+    """
+    from engine.account import read_account
+    from engine.order_registry import OrderRegistry
+
+    who = funder or os.environ.get("POLY_FUNDER")
+    if not who:
+        raise SystemExit("POLY_FUNDER not set. Cannot identify the account to read.")
+
+    # Collateral needs signed CLOB credentials; everything else is a public GET
+    # keyed by address. None here (no credentials, or a network failure) leaves
+    # account_value NULL rather than reporting positions-only as the total.
+    collateral = _fetch_live_balance(who)
+    mark = read_account(who, collateral_usd=collateral)
+
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else None)
+    registry.log_account_mark(mark)
+
+    if not quiet:
+        def _usd(v):
+            return "--" if v is None else f"${v:,.2f}"
+        print(f"funder            {who}")
+        print(f"collateral        {_usd(mark['collateral_usd'])}")
+        print(f"positions value   {_usd(mark['positions_value_usd'])}")
+        print(f"ACCOUNT VALUE     {_usd(mark['account_value_usd'])}")
+        pct = mark["pnl_pct"]
+        pct_s = "--" if pct is None else f"{pct:+.2f}%"
+        print(f"P&L (all time)    {_usd(mark['pnl_usd'])}  ({pct_s})")
+        print(f"  from series     {_usd(mark['pnl_series_usd'])}")
+        print(f"  from closes     {_usd(mark['pnl_closed_usd'])}")
+        gap = mark["pnl_source_gap"]
+        if gap is not None and abs(gap) >= 0.005:
+            print(f"  SOURCES DISAGREE by {gap:+.2f} -- neither is preferred silently")
+        print(f"unrealized (open) {_usd(mark['unrealized_usd'])}")
+        print(f"committed (open)  {_usd(mark['committed_usd'])}")
+        print(f"open positions    {mark['open_positions_count']}")
+    return mark
+
+
 def _evaluate_single_market_quote(
     cid: str,
     gm: "GraduatedMarket" | None,
@@ -2638,6 +2686,10 @@ def main() -> None:
     kp = sub.add_parser("kpi", help="Generate live KPI report mirroring strategy/kpi.py.")
     kp.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     kp.add_argument("--run-id", default=None, help="Filter by run_id session")
+    asw = sub.add_parser("account-sweep",
+                         help="Read-only: record venue account value and P&L into the registry.")
+    asw.add_argument("--funder", default=None, help="Funder address (default: POLY_FUNDER)")
+    asw.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -2655,6 +2707,10 @@ def main() -> None:
         print(format_audit_report(res))
         if not res.agree:
             sys.exit(1)
+    elif a.cmd == "account-sweep":
+        # No --live gate: every venue call underneath is a GET. The staged
+        # exposure rule gates direction, and this command has none.
+        account_sweep(funder=a.funder, db_path=a.db)
     elif a.cmd == "kpi":
         from engine.kpi import report as generate_kpi_report
         import pprint
