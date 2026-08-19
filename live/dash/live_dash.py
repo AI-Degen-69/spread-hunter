@@ -2556,11 +2556,11 @@ PAGE_HTML = """<!DOCTYPE html>
         },
         {
           label: 'Trade PnL Distribution',
-          val: meanRetVal,
-          color: ta.mean_return_pct === null || ta.mean_return_pct === undefined ? '#94a3b8' : (ta.mean_return_pct >= 0 ? '#10b981' : '#ef4444'),
-          sub: `mean ${expectancyVal}/trade &middot; n=${ta.n_closes || 0} <button onclick="openDistModal('pnl')" style="background:none;border:none;color:#38bdf8;cursor:pointer;text-decoration:underline;font:inherit;">chart &nearr;</button>`,
+          val: expectancyVal,
+          color: ta.expectancy_usd === null || ta.expectancy_usd === undefined ? '#94a3b8' : (ta.expectancy_usd >= 0 ? '#10b981' : '#ef4444'),
+          sub: `mean return ${meanRetVal} &middot; n=${ta.n_closes || 0} <button onclick="openDistModal('pnl')" style="background:none;border:none;color:#38bdf8;cursor:pointer;text-decoration:underline;font:inherit;">chart &nearr;</button>`,
           chart: histogramSvg(pnlVals, {w: 180, h: 42}),
-          tipBody: 'Histogram of the absolute net gain/loss on every closed position ($5 in returning $6.50 is a $1.50 bar).',
+          tipBody: 'Histogram of the absolute net gain/loss on every closed position ($5 in returning $6.50 is a $1.50 bar). The headline is the average dollar P&amp;L per trade; mean return % is the equal-weighted percentage.',
           tipFormula: 'realized_pnl = proceeds &minus; cost_basis',
         },
         {
@@ -2940,6 +2940,13 @@ PAGE_HTML = """<!DOCTYPE html>
         const winRateStr = ta.win_rate !== null && ta.win_rate !== undefined ? (ta.win_rate * 100).toFixed(1) + '%' : '--';
         const winCI = ta.win_rate_ci95
           ? `${(ta.win_rate_ci95.lower * 100).toFixed(0)}%–${(ta.win_rate_ci95.upper * 100).toFixed(0)}%` : '--';
+        const noLosses = ta.wins > 0 && ta.losses === 0;
+        const rrStr = ta.risk_reward_ratio !== null && ta.risk_reward_ratio !== undefined
+          ? ta.risk_reward_ratio.toFixed(2) + ':1' : (noLosses ? '&infin;' : '--');
+        const pfStr = ta.profit_factor !== null && ta.profit_factor !== undefined
+          ? ta.profit_factor.toFixed(2) : (noLosses ? '&infin;' : '--');
+        const sortinoStr = ta.sortino_ratio !== null && ta.sortino_ratio !== undefined
+          ? ta.sortino_ratio.toFixed(2) : '--';
         const statCell = (k, v, color) => `
           <div style="background:rgba(8,12,20,0.6);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;text-align:center;">
             <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-secondary);">${k}</div>
@@ -2969,7 +2976,11 @@ PAGE_HTML = """<!DOCTYPE html>
               ${statCell('Mean $/trade', fmtUsdSignedVal(ta.expectancy_usd), (ta.expectancy_usd || 0) >= 0 ? '#10b981' : '#ef4444')}
               ${statCell('Mean return', ta.mean_return_pct !== null && ta.mean_return_pct !== undefined ? (ta.mean_return_pct >= 0 ? '+' : '') + ta.mean_return_pct.toFixed(1) + '%' : '--', (ta.mean_return_pct || 0) >= 0 ? '#10b981' : '#ef4444')}
               ${statCell('Sharpe', ta.sharpe_ratio !== null && ta.sharpe_ratio !== undefined ? ta.sharpe_ratio.toFixed(2) : '--', (ta.sharpe_ratio || 0) >= 0 ? '#10b981' : '#ef4444')}
+              ${statCell('Sortino', sortinoStr, (ta.sortino_ratio || 0) >= 0 ? '#10b981' : '#ef4444')}
+              ${statCell('Profit factor', pfStr, (ta.profit_factor || 0) >= 1 ? '#10b981' : '#ef4444')}
+              ${statCell('Risk:reward', rrStr, (ta.risk_reward_ratio || 0) >= 1 ? '#10b981' : '#ef4444')}
               ${statCell('Max DD', ta.max_drawdown_pct !== null && ta.max_drawdown_pct !== undefined ? '-' + ta.max_drawdown_pct.toFixed(1) + '%' : '--', '#f59e0b')}
+              ${statCell('Max DD $', ta.max_drawdown_usd !== null && ta.max_drawdown_usd !== undefined ? '-$' + Math.abs(ta.max_drawdown_usd).toFixed(2) : '--', '#f59e0b')}
             </div>
             ${dist.length ? `
               <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--text-secondary);">CLOSED POSITIONS</div>
