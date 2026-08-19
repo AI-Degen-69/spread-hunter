@@ -4428,3 +4428,17 @@ twenty seconds apart separated them; hours of waiting would not have.
 5. **Drawdown and inventory risk are separate.** Max drawdown reads the equity curve (realised closes plus open float), peak naked exposure reads the largest one-sided float mark. Both NULL when nothing has been marked.
 
 **Verdict.** **LIVE**. The distribution is a real histogram of per-position outcomes, not a fitted bell curve - with n=1-2 live trades a normal curve is a drawing, not a measurement. Live suite 349 passed, 1 skipped.
+
+## 2026-08-19 - The live stack had no order loop; engine.live_fleet is the paper fleet's live twin
+
+**Question.** The screener (re-rank) and the engine (poll/reconcile/sweep) were wired, but nothing in live/ ever looped "decide a quote -> submit it -> reconcile the result". `decide` computed intents and logged them read-only; `quote` was a manual one-shot; `LiveFillEngine` was built and tested but imported by nothing. How do we run the already-proven `decide_quotes` gates hands-off on real money, without inventing a new strategy?
+
+**Method.** Mirror `strategy.fleet`'s rotation loop. The decision is `engine.quotes.decide_quotes` (same reward objective, same hard-block/skew/size-ladder gates as the paper fleet), the per-market config is copied from the ranker's spec exactly as `MarketState` does, and the placement path copies `live_exec.quote`'s row-first discipline. Everything venue-touching is injected, so the loop is tested with fakes and `--dry-run` is the default.
+
+**Result.**
+1. **plan_orders diffs resting vs wanted without churn.** An order already resting at (or within a sub-tick epsilon of) the desired price is kept; orders on tokens no longer quoted are cancelled; intents with no resting order are submitted. A venue rounding jitter below a tick no longer cancels+resubmits every cycle.
+2. **run() is the rotation loop.** reconcile -> per-market decide/submit -> sweep, each on its own error budget, so one market's fetch error never stops the others and one reconcile/sweep failure never stops the cycle. Dry-run decides and plans but never calls submit/cancel.
+3. **Submit reuses quote()'s discipline.** Row first, then send: a pending registry row is written before the venue call so a crash leaves a row reconcile can adopt, never an untracked live order. Passive legs batch-post post_only; crossed (emergency-hedge) legs post FOK. A couple that splits is rolled back by cancelling the survivor, and an unacknowledged batch is marked cancelled, never left half-open.
+4. **--dry-run is the default; --live opts in.** Without credentials the dry run still fetches public books and prints the decide/plan outcome, degrading reconcile/sweep (which need auth) instead of crashing.
+
+**Verdict.** **LIVE**. Live suite 364 passed, 1 skipped. The loop is the missing third job (pick -> quote -> settle); it adds no new decision logic and only reuses decide_quotes and the quote placement path.
