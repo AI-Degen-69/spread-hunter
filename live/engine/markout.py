@@ -150,3 +150,96 @@ class MarkoutWorker(threading.Thread):
 
     def stop(self) -> None:
         self.stop_requested.set()
+
+
+def _markout_weight(row: dict) -> float:
+    """Shares a row speaks for. Port of `strategy.markout._weight`.
+
+    A row with NO `size` key weighs 1.0 -- one row, one vote. A size that is
+    present but null, zero or negative is a defective row and weighs 0.0 so it
+    can neither move the mean nor pad the effective sample.
+    """
+    if "size" not in row:
+        return 1.0
+    size = row.get("size")
+    if not size or size <= 0:
+        return 0.0
+    return float(size)
+
+
+def _pool_stats(rows: list[dict], min_sample: int) -> dict:
+    """Size-weighted pooled verdict. Port of `strategy.markout._stats_from_rows`.
+
+    Returns `insufficient_sample` rather than a mean when the sample is thin.
+    `n` is Kish's `sum(w)^2 / sum(w^2)` -- the effective sample the size
+    weighting leaves behind -- so `min_sample` keeps the meaning it was tuned
+    with. Contaminated rows are dropped BEFORE weighting: a live run that
+    cannot subtract our own resting size must not let one large measurement of
+    our own footprint dominate the mean.
+    """
+    clean = [r for r in rows if r.get("ref_mid_source") != "contaminated"]
+    weights = [_markout_weight(r) for r in clean]
+    total = sum(weights)
+    if total <= 0:
+        return {"n": 0.0, "n_rows": len(clean),
+                "verdict": "insufficient_sample", "mean_per_share": None}
+    n_eff = total * total / sum(w * w for w in weights)
+    if n_eff < min_sample:
+        return {"n": n_eff, "n_rows": len(clean),
+                "verdict": "insufficient_sample", "mean_per_share": None}
+    mean = sum(w * r["markout"] for w, r in zip(weights, clean)) / total
+    return {"n": n_eff, "n_rows": len(clean), "mean_per_share": mean,
+            "verdict": "losing" if mean < 0 else "earning"}
+
+
+def _matured_drift(row: dict, horizons: tuple[float, ...]) -> list[float]:
+    """Drift at every horizon sampled, LONGEST FIRST.
+
+    Drift, not total markout: `mid_later - ref_mid` is the adverse-selection
+    term alone, and the gate must react to the market moving against us, never
+    to our own entry offset. Port of `strategy.markout._matured` -- the 15m
+    exit-window read sits AFTER the 6h column in the schema but is SHORTER, so
+    sorting is by duration, never by column index.
+    """
+    ref = row.get("ref_mid")
+    if ref is None:
+        return []
+    out = []
+    for i in range(len(horizons)):
+        col = f"mid_h{i}"
+        if col not in row:
+            continue
+        mid = row.get(col)
+        if mid is not None:
+            out.append((i, float(mid) - float(ref)))
+    out.sort(key=lambda p: horizons[p[0]], reverse=True)
+    return [d for _, d in out]
+
+
+def fleet_stats(
+    registry: OrderRegistry,
+    min_sample: int,
+    horizons: tuple[float, ...] = MARKOUT_HORIZONS,
+) -> dict:
+    """One verdict over EVERY market's fills, on the longest-horizon drift rule.
+
+    The live twin of `strategy.markout.fleet_stats`, reading the registry's
+    `markouts` table instead of the simulator's store. Pooled is the only
+    reading that exists when no individual market matures a sample of its own
+    -- the case `gate.fleet_posture` exists for -- so the fleet runner feeds
+    this to that gate once per cycle.
+
+    Every live markout row is written `ref_mid_source='contaminated'` until a
+    clean reference mid is measured, and `_pool_stats` excludes those rows, so
+    a run with no clean reference reads `insufficient_sample` and the posture
+    stays NORMAL -- never acting on a poisoned footprint.
+    """
+    rows = []
+    for r in registry.get_all_markouts():
+        matured = _matured_drift(r, horizons)
+        if not matured:
+            continue
+        # Longest matured horizon first -- see _matured_drift.
+        rows.append({"markout": matured[0], "size": r.get("size"),
+                     "ref_mid_source": r.get("ref_mid_source")})
+    return _pool_stats(rows, min_sample)

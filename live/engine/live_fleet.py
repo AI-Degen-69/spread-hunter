@@ -480,6 +480,27 @@ def _make_sweep_fn(funder: Optional[str], db_path: Path, registry):
     return sweep_fn
 
 
+def _fleet_state(registry, cfg) -> dict:
+    """The fleet-wide aggregates `decide_quotes` gates on, read once per cycle.
+
+    `run` recomputes these before every rotation and merges them into the base
+    config, so the fleet-level gates inside `decide_quotes` see live numbers
+    instead of their 0.0 / NORMAL defaults. A failure raises to `run`, which
+    keeps the previous cycle's values -- never resetting a live cap to open on
+    a bad read.
+    """
+    from engine.gate import fleet_posture
+    from engine.live_exec import _registry_naked_usd, _registry_committed_usd
+    from engine.markout import fleet_stats
+
+    return {
+        "fleet_naked_usd": _registry_naked_usd(registry),
+        "committed_usd": _registry_committed_usd(registry),
+        "fleet_posture": fleet_posture(
+            fleet_stats(registry, cfg.markout_fleet_min_sample), cfg),
+    }
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """The live equivalent of `python -m strategy.fleet`.
 
@@ -487,7 +508,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     rotation (the smoke-test path); without it the loop runs until interrupted.
     """
     from engine.config import load
-    from engine.live_exec import _registry_naked_usd
     from engine.markets import full_book
     from engine.order_registry import DEFAULT_DB_PATH, OrderRegistry
     from engine.order_registry import reconcile_orders
@@ -565,7 +585,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
         inventory_fn=_make_inventory_fn(registry, db_path),
         open_orders_fn=_make_open_orders_fn(registry),
-        fleet_state_fn=lambda r: {"fleet_naked_usd": _registry_naked_usd(r)},
+        fleet_state_fn=lambda r: _fleet_state(r, cfg),
     )
 
     for r in results:

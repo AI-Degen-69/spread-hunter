@@ -1990,6 +1990,52 @@ def _registry_naked_usd(registry) -> float:
     return total
 
 
+def _registry_committed_usd(registry) -> float:
+    """Dollars committed fleet-wide, from the registry.
+
+    Inventory cost (every filled share's cost basis whose pair is still open)
+    plus the notional resting in unfilled offers. Both are spoken for right
+    now: the venue holds collateral against an open bid, and a fill converts
+    that promise into inventory without asking -- the same two terms the
+    simulation's `fleet_committed_cost` sums, and the same gap that let $767
+    of naked exposure hide behind $9,588 of committed capital in 2026-07-30.
+
+    Pairs whose condition already has a close are skipped whole: merged or
+    exited inventory is no longer committed. A filled SELL reduces cost basis
+    (money came back), so it subtracts; a resting SELL commits no new capital
+    and is excluded.
+    """
+    with registry._conn() as conn:
+        closed_cids = {
+            r["condition_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT condition_id FROM closes WHERE condition_id IS NOT NULL"
+            ).fetchall()
+        }
+        inventory = conn.execute(
+            """
+            SELECT COALESCE(SUM(
+                CASE WHEN o.side = 'BUY' THEN f.size * f.price
+                     ELSE -f.size * f.price END
+            ), 0.0)
+            FROM fills f
+            JOIN orders o ON f.order_uuid = o.id
+            WHERE o.condition_id NOT IN (
+                SELECT DISTINCT condition_id FROM closes
+                WHERE condition_id IS NOT NULL
+            )
+            """
+        ).fetchone()[0]
+
+    resting = 0.0
+    for o in registry.get_active_orders():
+        if o.side != "BUY" or o.condition_id in closed_cids:
+            continue
+        resting += o.price * max(0.0, o.original_size - registry.get_size_matched(o.id))
+
+    return float(inventory) + resting
+
+
 def _log_float_mark_if_measured(registry, mark: dict) -> None:
     """Record an open-exposure float mark when the venue gave real numbers.
 
