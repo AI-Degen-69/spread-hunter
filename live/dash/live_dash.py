@@ -2532,9 +2532,9 @@ PAGE_HTML = """<!DOCTYPE html>
         {
           label: 'Adverse Selection',
           val: advVal,
-          color: kpi.adverse_selection === null || kpi.adverse_selection === undefined ? '#94a3b8' : (kpi.adverse_selection <= 0 ? '#10b981' : '#ef4444'),
+          color: kpi.adverse_selection === null || kpi.adverse_selection === undefined ? '#94a3b8' : (kpi.adverse_selection >= 0 ? '#10b981' : '#ef4444'),
           sub: `n=${kpi.markout_samples || 0} markout samples <button onclick="openDistModal('adv')" style="background:none;border:none;color:#38bdf8;cursor:pointer;text-decoration:underline;font:inherit;">chart &nearr;</button>`,
-          chart: bellCurveSvg({min: -5, max: 5, mean: (kpi.adverse_selection || 0) * 100, stdev: 1.5, zero: 0, color: (kpi.adverse_selection || 0) <= 0 ? '#10b981' : '#ef4444', w: 180, h: 42}),
+          chart: bellCurveSvg({min: -5, max: 5, mean: (kpi.adverse_selection || 0) * 100, stdev: 1.5, zero: 0, color: (kpi.adverse_selection || 0) >= 0 ? '#10b981' : '#ef4444', w: 180, h: 42}),
           tipBody: 'Size-weighted post-trade drift against us across 4 horizons (5m, 1h, 6h, 15m).',
           tipFormula: '&Sigma;(size &middot; (mid_later &minus; fill_price)) / total_filled',
         },
@@ -3003,9 +3003,9 @@ PAGE_HTML = """<!DOCTYPE html>
           <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
             Size-weighted post-trade drift &Delta; = mid_later &minus; fill_price (in cents). Negative = adverse selection against maker.
           </div>
-          ${bellCurveSvg({min: -8, max: 8, mean: adv, stdev: 2.0, zero: 0, color: adv <= 0 ? '#10b981' : '#ef4444', w: 600, h: 160})}
+          ${bellCurveSvg({min: -8, max: 8, mean: adv, stdev: 2.0, zero: 0, color: adv >= 0 ? '#10b981' : '#ef4444', w: 600, h: 160})}
           <div style="display:flex;justify-content:space-between;margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:12px;">
-            <span>Sample Mean: <strong style="color:${adv <= 0 ? '#10b981' : '#ef4444'};">${adv.toFixed(2)}¢</strong></span>
+            <span>Sample Mean: <strong style="color:${adv >= 0 ? '#10b981' : '#ef4444'};">${adv.toFixed(2)}¢</strong></span>
             <span>Horizon: 6h/1h/15m/5m</span>
             <span>Samples: ${lastKpi ? lastKpi.markout_samples || 0 : 0}</span>
           </div>
