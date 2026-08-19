@@ -2230,6 +2230,22 @@ def cancel_all(live: bool) -> None:
     print(json.dumps(resp, indent=2, default=str) if isinstance(resp, (dict, list)) else resp)
 
 
+def _fetch_live_balance(funder: str | None = None) -> float | None:
+    """Fetch live USDC collateral balance from venue. Returns None on network error / offline / no credentials."""
+    if not (os.environ.get("POLY_PRIVATE_KEY") or os.environ.get("POLY_KEY")):
+        return None
+    try:
+        from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
+        who = funder or os.environ.get("POLY_FUNDER")
+        sig_type = int(os.environ.get("POLY_SIG_TYPE", "3"))
+        r = _client(who).get_balance_allowance(
+            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL,
+                                   signature_type=sig_type))
+        return float(r.get("balance", 0) or 0) / 1e6
+    except Exception:
+        return None
+
+
 def _evaluate_single_market_quote(
     cid: str,
     gm: "GraduatedMarket" | None,
@@ -2269,10 +2285,14 @@ def _evaluate_single_market_quote(
     depth_up = sum(up_book.get("bids", {}).values())
     depth_dn = sum(down_book.get("bids", {}).values())
 
+    couple_alloc = max(cfg.bankroll_usd * getattr(cfg, "couple_risk_frac", 0.01), getattr(cfg, "min_couple_usd", 6.00))
+    leg_alloc = couple_alloc / 2.0
+
     print("=" * 80)
     print(f"MARKET:    {title}")
     print(f"SLUG:      {slug}")
     print(f"CID:       {m.condition_id}")
+    print(f"BANKROLL:  ${cfg.bankroll_usd:,.2f} USDC (Sizing: max(${cfg.bankroll_usd:.2f} * 1%, ${getattr(cfg, 'min_couple_usd', 6.0):.2f}) = ${couple_alloc:.2f} couple, ${leg_alloc:.2f}/leg)")
     print(f"TICK:      {m.tick_size:<6} NEG_RISK: {m.neg_risk}")
     if gm:
         print(f"GRADUATED: min_size={gm.min_size} tick={gm.tick} max_spread={gm.max_spread} "
@@ -2330,11 +2350,16 @@ def decide(
     db_path: str | Path | None = None,
 ) -> list[dict]:
     """Read-only quote decision for graduated markets using live venue books."""
+    from dataclasses import replace
     from engine.config import load
     from engine.market_feed import load_graduated_markets, get_market_by_cid, GraduatedMarket
     from engine.order_registry import DEFAULT_DB_PATH
 
     cfg = load()
+    live_bal = _fetch_live_balance()
+    if live_bal is not None and live_bal > 0:
+        cfg = replace(cfg, bankroll_usd=live_bal)
+
     reg_db = Path(db_path) if db_path else DEFAULT_DB_PATH
 
     graduated_list = load_graduated_markets()

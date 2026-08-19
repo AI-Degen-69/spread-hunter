@@ -14,8 +14,12 @@ def test_mid_price_calculation():
 
 
 def test_decide_quotes_basic_two_sided():
+    # Fixed-share sizing: this test is about the port's quoting behaviour, not
+    # about the pilot's dollar allocation, so it names the mode rather than
+    # inheriting whichever one is currently the default.
     cfg = MakerConfig(
         objective="rewards",
+        size_mode="shares",
         quote_shares=120,
         min_quote_shares=50,
         reward_offset=0.02,

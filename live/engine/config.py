@@ -20,7 +20,7 @@ class MakerConfig:
     # --- virtual account --------------------------------------------------
     # Fresh paper run wallet. This is the total simulated capital available,
     # not a promise that the allocator may commit every dollar at once.
-    bankroll_usd: float = 1000.0
+    bankroll_usd: float = 100.0
 
     # --- objective --------------------------------------------------------
     # "pair"    : the original bet -- rest under the ask, try to buy a hedged
@@ -98,7 +98,7 @@ class MakerConfig:
     # spring above, and U3's size ladder (`risk.size_for`), which decays resting
     # size as base*(1-utilization)^2 so the last order before the cap is 16% of
     # full size rather than 100% of it.
-    max_naked_usd: float = 120.0
+    max_naked_usd: float = 6.0
     # Switchable so the dollar gates can be measured on their own rather than
     # bundled with the rest of a release -- the same convention as
     # enforce_price_band and enable_emergency_hedge. False makes `hard_block`
@@ -507,14 +507,46 @@ class MakerConfig:
     # prices round to this so we can sit at a genuine price level.
     price_tick: float = 0.001
 
-    # Rebate qualification (research/btc_5min_market_spec.md):
-    #   rewardsMinSize = 50 shares, rewardsMaxSpread = 4.5c from mid.
-    # Quotes outside these earn no rebate, so they must not be posted casually.
-    min_quote_shares: int = 50
+    # Venue minimum size floor (5 shares on graduated markets).
+    # Replaces the stale 50-share rewards-scoring floor.
+    min_quote_shares: int = 5
     max_spread_from_mid: float = 0.045
 
-    # His fill sizes: median 120sh, p10 20, p90 160. 61% were >=50sh.
+    # HOW a funded market is sized. "shares" is the simulation's behaviour --
+    # `quote_shares` shares per leg. "dollars" sizes each leg from the Owner's
+    # allocation rule below and lets price decide the share count.
+    #
+    # This is a separate field on purpose. Sizing mode and funding are two
+    # different questions, and `quote_shares == 0` already answers the second
+    # one: it is the allocator saying THIS MARKET IS DEFUNDED, quote nothing.
+    # Overloading 0 to mean "size from dollars" would make every defunded
+    # market start quoting again -- the exact incident recorded on
+    # `risk.size_for`, where 17 defunded markets kept posting 50-share orders.
+    size_mode: str = "dollars"
+
+    # WHETHER this market is funded, and at what share scale in "shares" mode.
+    # 0 means defunded in BOTH modes. The allocator owns this number.
     quote_shares: int = 120
+
+    # The Owner's allocation rule, 2026-08-19:
+    #     couple = max(bankroll * couple_risk_frac, min_couple_usd)
+    #     leg    = couple / 2
+    # At a $31.17 wallet and at $100 both give $6.00 a couple, $3.00 a leg --
+    # the floor binds until bankroll passes $600.
+    couple_risk_frac: float = 0.01
+    min_couple_usd: float = 6.0
+
+    # A $3.00 leg buys about 6 shares against a 5-share venue floor, so ANY
+    # attenuation of that size lands under the floor and the order disappears.
+    # The soft price-risk taper therefore cannot express itself at pilot size:
+    # the real choice per market is the floor or nothing.
+    #
+    # True quotes the floor and says the taper was waived; False refuses. The
+    # hard band block (0.10-0.90) is untouched either way -- this waives a
+    # multiplier, never a gate. It stops mattering on its own once the leg
+    # allocation is large enough for the taper to survive the floor, so it
+    # needs no removal, only a bankroll.
+    waive_attenuation_below_floor: bool = True
 
     # --- powerwinner's two entry rules ------------------------------------
     # PRICE BAND. 54% of powerwinner's BTC 5-min volume enters at 0.30-0.70, and
@@ -793,3 +825,13 @@ def load() -> MakerConfig:
 
 # hook probe
 # hook probe
+
+
+def couple_allocation_usd(cfg) -> float:
+    """Dollars committed to one UP+DOWN couple, per the Owner's rule."""
+    return max(cfg.bankroll_usd * cfg.couple_risk_frac, cfg.min_couple_usd)
+
+
+def leg_allocation_usd(cfg) -> float:
+    """Dollars for one side of a couple. Half the couple, always."""
+    return couple_allocation_usd(cfg) / 2.0

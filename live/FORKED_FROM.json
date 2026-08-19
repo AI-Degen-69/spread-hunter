@@ -5,7 +5,7 @@
       "forked_from": "strategy/config.py",
       "at_commit": "c50cca5e26a6655cab4649d2b9fba185ee190354",
       "source_sha256": "56d09b7e4e5309d53c636795a98356d686076799ae0f7d723b754d8c31caa72a",
-      "why": "Leaf module -- stdlib plus requests only -- so live/ can carry its own copy instead of importing across the tree boundary."
+      "why": "Leaf config -- live tuning parameters diverge from simulation: bankroll_usd=100.0, quote_shares=0 (dollar-sized), min_quote_shares=5 (venue min_size), max_naked_usd=6.0, couple_risk_frac=0.01, min_couple_usd=6.0."
     },
     "live/engine/gate.py": {
       "forked_from": "strategy/gate.py",
@@ -23,13 +23,13 @@
       "forked_from": "strategy/quotes.py",
       "at_commit": "b4c4e61f07ed0a9a53c6dbdf0bf224746b7e2fc5",
       "source_sha256": "0c09cb075c0e174e787d416171a8656b9094cfb6dd4002813475bd7446fc0594",
-      "why": "Decision layer -- decide_quotes() calculation of price, size and resting intents -- so live/ has the brain without importing from root."
+      "why": "Decision layer -- decide_quotes() with live dynamic dollar sizing ($3/leg budget), explicit shortfall refusal reporting, and 5-share venue floor."
     },
     "live/engine/risk.py": {
       "forked_from": "strategy/risk.py",
       "at_commit": "b4c4e61f07ed0a9a53c6dbdf0bf224746b7e2fc5",
       "source_sha256": "7b52e16cebb8ac13d847f6e1135edaf1ce8e72e04c09a56a84502cb9951f89af",
-      "why": "Leaf module -- dollar risk, skew offsets, size ladder, and hard blocks -- so live/ quoting layer carries its own risk checks."
+      "why": "Leaf module -- dollar risk, skew offsets, size ladder with dynamic dollar sizing support (quote_shares == 0 derives shares from leg budget / price), and $6 naked cap."
     }
   }
 }

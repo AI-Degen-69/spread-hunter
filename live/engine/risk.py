@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from engine import config
+
 OTHER = {"UP": "DOWN", "DOWN": "UP"}
 
 
@@ -112,15 +114,28 @@ def size_for(cfg, inv, side: str, price: float) -> int:
     failure the share cap produced: it stopped the heavy side and then had no
     authority left, freezing the market at maximum exposure.
     """
-    # `quote_shares == 0` is the allocator defunding this market, and
-    # `max(quote_shares, min_quote_shares)` below would promote it back to the
-    # venue minimum -- how 17 defunded markets kept posting 50-share orders.
-    # `_decide_quotes_rewards` returns early on it; this keeps the function
-    # honest for callers that reach it directly (replay, U7).
+    # `quote_shares == 0` is the allocator defunding this market, in EVERY
+    # sizing mode. It is not a sizing instruction and must never be read as
+    # one: reading 0 as "size from dollars" is how 17 defunded markets kept
+    # posting 50-share orders. Defunded means silent.
     if cfg.quote_shares <= 0:
         return 0
 
-    base = max(cfg.quote_shares, cfg.min_quote_shares)
+    if getattr(cfg, "size_mode", "shares") == "dollars":
+        # Price decides the share count; the dollar allocation decides the
+        # exposure. A leg is one half of the couple, never more.
+        if price <= 0:
+            return 0
+        base = int(config.leg_allocation_usd(cfg) / price)
+    else:
+        base = max(cfg.quote_shares, cfg.min_quote_shares)
+
+    # The venue floor applies to the derived size exactly as it applies to the
+    # fixed one: an order below it cannot be posted, so the honest answer is
+    # no order rather than a token one.
+    if base < cfg.min_quote_shares:
+        return 0
+
     if naked_side(inv) != side:
         return base
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from engine import gate, risk
+from engine import config, gate, risk
 from engine.config import MakerConfig
 
 
@@ -465,12 +465,29 @@ def _decide_quotes_rewards(
         # The two price-driven cuts, applied to what the ladder allowed. Both
         # are fractions of a size the exposure rules already approved, so they
         # can only ever make an order smaller -- neither can license one the
-        # dollar budget refused.
+        # dollar budget refused. They stay in force under dollar sizing: a
+        # capital bound is not a risk bound, and `band.size_mult` is the cut
+        # that answers WHERE in the price range the order sits, which no
+        # allocation rule expresses.
         size = int(ladder * band.size_mult * truncated)
+        waived = ""
         if size < cfg.min_quote_shares:
-            # Below rewardsMinSize (50) an order earns no score while still
-            # buying inventory, so the honest answer is no order at all.
-            size = 0
+            # Below the venue minimum an order cannot be posted at all, so the
+            # honest answer is no order rather than a token one -- unless the
+            # only reason it fell there is a soft taper the pilot's leg size is
+            # too small to express, in which case quote the floor and SAY the
+            # taper was waived. Silence here would read as "the strategy
+            # declined", which is a different fact.
+            if (cfg.waive_attenuation_below_floor
+                    and getattr(cfg, "size_mode", "shares") == "dollars"
+                    and ladder >= cfg.min_quote_shares
+                    and truncated >= 1.0):
+                size = cfg.min_quote_shares
+                waived = (f", price-risk taper x{band.size_mult:.2f} waived: "
+                          f"{int(ladder * band.size_mult)}sh is under the "
+                          f"{cfg.min_quote_shares}sh venue floor")
+            else:
+                size = 0
         if size <= 0:
             # No intent at all, never a zero-size order. Each rule names
             # ITSELF: at 80% of the budget the dollar cap has NOT fired, and an
@@ -483,10 +500,25 @@ def _decide_quotes_rewards(
             # but not "reward minimum", so those refusals were counted OTHER
             # instead of SPREAD.
             if ladder <= 0:
-                util = risk.risk_utilization(cfg, inv, side)
-                blocked.append(
-                    f"{side}: size tapered to 0 at {100*util:.0f}% of the "
-                    f"${cfg.max_naked_usd:.0f} naked budget")
+                # Two different zeroes reach here and the operator must be able
+                # to tell them apart: an allocation too small to clear the venue
+                # floor is a funding fact, while a tapered size is a risk fact.
+                leg_alloc = (config.leg_allocation_usd(cfg)
+                             if getattr(cfg, "size_mode", "shares") == "dollars"
+                             else 0.0)
+                affordable = int(leg_alloc / price) if (leg_alloc and price > 0) else None
+                if affordable is not None and affordable < cfg.min_quote_shares:
+                    needed = cfg.min_quote_shares * price
+                    blocked.append(
+                        f"{side}: ${leg_alloc:.2f} leg allocation at price "
+                        f"{price:.3f} buys {affordable}sh, below the venue "
+                        f"minimum of {cfg.min_quote_shares}sh (needs "
+                        f"${needed:.2f}, shortfall ${needed - leg_alloc:.2f})")
+                else:
+                    util = risk.risk_utilization(cfg, inv, side)
+                    blocked.append(
+                        f"{side}: size tapered to 0 at {100*util:.0f}% of the "
+                        f"${cfg.max_naked_usd:.0f} naked budget")
             elif (truncated < 1.0
                     and int(ladder * band.size_mult) >= cfg.min_quote_shares):
                 # The ladder and the price-risk cut together still cleared the
@@ -506,7 +538,7 @@ def _decide_quotes_rewards(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
             reason=(f"reward quote {100*s:.1f}c under mid {mid:.3f}, "
-                    f"score {reward_score(cfg, s, size):.0f}"),
+                    f"score {reward_score(cfg, s, size):.0f}{waived}"),
         ))
 
     if not out:

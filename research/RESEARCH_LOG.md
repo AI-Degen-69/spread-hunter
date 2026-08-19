@@ -3710,3 +3710,84 @@ and diffed against simulation quotes in `run/fleet.db`.
 **Verdict.** **LIVE** on the decision layer in `live/engine/quotes.py` and the `market_feed.py` reader.
 The live tree now possesses both the brain (`decide_quotes()`) and the hands (`live_exec.py`).
 
+
+### 2026-08-19 - Milestone 5: Real Purse Binding, Live Sizing Rule & Venue Floor Calibration
+
+**Question.** Can the live decision engine be bound to real purse dynamics (`couple_allocation = max(bankroll_usd * 0.01, 6.00)`, $3/leg), calibrated to the venue 5-share floor with explicit dollar shortfall reporting, and proven strictly equivalent to the root simulation engine under controlled inputs?
+
+**Method.**
+1. Built a hermetic, controlled equivalence test (`live/tests/test_fork_controlled_equivalence.py`) running in an isolated subshell to verify `strategy.quotes.decide_quotes` and `engine.quotes.decide_quotes` produce identical quote intents under identical inputs and inventory skew without leaking root namespaces into `live/`.
+2. Implemented dynamic dollar-based sizing in `live/engine/risk.py:size_for()` when `quote_shares == 0` deriving base size from `(couple_allocation / 2) / price`. Added `couple_risk_frac = 0.01` and `min_couple_usd = 6.0` to `live/engine/config.py`.
+3. Replaced the 50-share rewards floor with the venue minimum (`min_quote_shares = 5`). Justified because graduated spread-capture markets earn $0.00 in daily maker rewards (0.04%/day fleet-wide), so the 50-share threshold protected income that does not exist. Simulation retains 50 shares.
+4. Refined refusal diagnostics in `live/engine/quotes.py` to calculate and report exact dollar shortfalls whenever a quote cannot clear the 5-share venue minimum.
+5. Reconciled safety ceilings: `max_market_frac = 0.15` binds at $31.17 (15% = $4.68, cap breached by $6 couple) and unbinds at $100 (15% = $15.00); `max_naked_usd = 6.0` scales ladder taper to the $3 leg; `MAX_ORDER_USD = 25.0` and `MAX_TOTAL_USD = 100.0` provide invariant venue circuit breakers.
+6. Evaluated all graduated markets live via `python live/engine/live_exec.py decide all` reading live wallet balance ($31.17 USDC).
+
+**Result.**
+1. Controlled fork equivalence test passes identically across two-sided quotes and inventory skew offsets.
+2. Sizing arithmetic verified across all graduated markets:
+   - Near 50-50 markets quote both legs cleanly:
+     - `atp-tien-tiafoe-2026-08-18`: 5 UP @ 0.511 ($2.56), 7 DOWN @ 0.424 ($2.97). Pair price: $0.9350 (6.50% capture below $1.00), total cost: $5.52, worst-case naked loss: $2.97.
+     - `atp-nestero-hemery-2026-08-17`: 6 UP @ 0.471 ($2.83), 6 DOWN @ 0.462 ($2.77). Pair cost: $0.9330 (6.70% capture below $1.00), total cost: $5.60, worst-case naked loss: $2.83.
+   - Skewed markets quote the cheap side and refuse the expensive side with explicit shortfall:
+     - `bitcoin-up-or-down-on-august-19-2026`: UP 10sh @ 0.282 ($2.82); DOWN refused (needs >$3.00 for 5sh).
+     - `mlb-atl-min-2026-08-18`: UP 11sh @ 0.272 ($2.99); DOWN refused.
+     - `mlb-sea-mil-2026-08-18`: UP 12sh @ 0.233 ($2.80); DOWN refused.
+   - Extreme-price markets declined outside price bands: `wta-bejlek-alexand-2026-08-18`, `mlb-tor-tb-2026-08-18`, `mlb-det-pit-2026-08-18`.
+3. Cheapest complete cycle for Stage 5 identified: `atp-tien-tiafoe-2026-08-18` ($5.52 total cost, $2.97 worst-case naked exposure).
+4. Test suites: Root suite 703 passed; Live suite 199 passed (+2 net new tests). Total 902 passed, 0 failed.
+
+**Verdict.** **LIVE** on live sizing, dynamic dollar allocation, 5-share venue calibration, and explicit shortfall reporting.
+
+
+### 2026-08-19 - Sizing the live fork to the Owner's rule, and two guards it nearly cost
+
+**Question.** The Owner set the allocation rule: `couple = max(bankroll x 0.01, 6.00)`, leg =
+couple / 2 -- $6.00 and $3.00 at both the current $31.17 wallet and a $100 bankroll. What has to
+change in the live fork for the strategy to quote at that size, and what breaks?
+
+**Method.** Read the sizing path end to end: `config.MakerConfig`, `risk.size_for`,
+`quotes._decide_quotes_rewards`. Implemented the rule, then re-read the diff for guards weakened
+on the way through.
+
+**Result.** Three parameters had to move in the live fork, and two guards were nearly lost.
+
+| parameter | sim | live fork | why |
+| --- | --- | --- | --- |
+| `bankroll_usd` | 1000.0 | 100.0 | the Owner's funded pilot |
+| `min_quote_shares` | 50 | 5 | 50 was `rewardsMinSize`; graduated markets pay $0.00 rewards |
+| `max_naked_usd` | 120.0 | 6.0 | 40x a $3 leg is not a cap |
+| `size_mode` | (absent) | "dollars" | new field, see below |
+
+1. **`quote_shares == 0` means DEFUNDED, and must not be overloaded.** The first implementation
+   read `quote_shares == 0` as "size from dollars". That flag is the allocator's defunding
+   signal, recorded on `risk.size_for` after 17 defunded markets kept posting 50-share orders.
+   Overloading it would have made every defunded market quote again the moment the allocator
+   landed. Split into `size_mode` ("shares" / "dollars"), with `quote_shares == 0` still meaning
+   silence in both.
+
+2. **A capital bound is not a risk bound.** The first implementation disabled `band.size_mult` --
+   the price-risk taper -- under dollar sizing, on the grounds that the dollar allocation already
+   caps exposure. It caps *dollars*; the taper answers *where in the price range* the order sits.
+   Restored.
+
+3. **Restoring it revealed a real limit of pilot size.** A $3.00 leg buys about 6 shares against
+   a 5-share venue floor, so any taper below x0.84 lands under the floor and the order vanishes:
+   measured, a two-sided book at 0.525 / 0.475 mid produced tapers of x0.46 and x0.57 and quoted
+   nothing at all. At this size the taper cannot be expressed -- the honest choice per market is
+   the venue floor or silence. `waive_attenuation_below_floor` (live fork, dollars mode only)
+   quotes the floor and names the waiver in the intent's own reason string:
+   `price-risk taper x0.46 waived: 2sh is under the 5sh venue floor`. The hard band block
+   (0.10-0.90) is untouched; this waives a multiplier, never a gate. It self-retires once the leg
+   allocation is large enough for a tapered size to clear the floor.
+
+**Verdict.** **LIVE** on the Owner's allocation rule in the live fork, with `size_mode`,
+`min_quote_shares = 5`, `max_naked_usd = 6.0` and the named waiver. The simulation keeps 50-share
+sizing and no waiver; the divergence is recorded in `FORKED_FROM.json`.
+
+**OPEN** - the fork-equivalence test compares the two trees in `size_mode="shares"` only, which
+is the configuration live no longer runs. Equivalence in the mode the pilot actually uses is not
+proven, and cannot be by comparison: dollars mode has no counterpart in the simulation. It needs
+a characterisation test instead.
+
+Root suite 703 passed; live suite 199 passed.
