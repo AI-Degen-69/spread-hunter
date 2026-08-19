@@ -25,6 +25,8 @@ $MenuActions = [ordered]@{
     "9"  = @{ Name = "pairs-ev-report";     Label = "Pairs EV Analysis";             Desc = "Empirical EV of pairs completion vs naked exit counterfactual" }
     "10" = @{ Name = "test-suite";          Label = "Run Test Suite (pytest)";       Desc = "Execute full test suite (671 unit and integration tests)" }
     "11" = @{ Name = "live-logs";           Label = "Stream Engine Logs";            Desc = "Follow live trading events and sweeps in real-time" }
+    "12" = @{ Name = "live-start";          Label = "Start Live Dashboard";          Desc = "Launch Live Execution Monitor :8799 (background, detached)" }
+    "13" = @{ Name = "live-stop";           Label = "Stop Live Dashboard";           Desc = "Terminate the background Live Execution Monitor" }
     "d"  = @{ Name = "open-dash";           Label = "Open Dashboard in Browser";     Desc = "Open http://127.0.0.1:8800 in default web browser" }
     "q"  = @{ Name = "quit";                Label = "Exit Menu";                     Desc = "Return to PowerShell command line" }
 }
@@ -143,6 +145,11 @@ function Show-MenuGrid {
     Write-MenuItem "11"
     Write-Host ""
 
+    Write-ProfileRuleWithText -Text "LIVE EXECUTION MONITOR" -Style "Border"
+    Write-MenuItem "12"
+    Write-MenuItem "13"
+    Write-Host ""
+
     Write-ProfileRuleWithText -Text "SHORTCUTS" -Style "Border"
     Write-MenuItem "d"
     Write-MenuItem "q"
@@ -153,7 +160,7 @@ function Invoke-MenuAction {
     param([string]$Key)
     $item = $MenuActions[$Key]
     if (-not $item) {
-        Write-ProfileError -Message "Invalid selection:" -Detail $Key -Suggestion "Choose 1-11, 'd' for dashboard, or 'q' to quit."
+        Write-ProfileError -Message "Invalid selection:" -Detail $Key -Suggestion "Choose 1-13, 'd' for dashboard, or 'q' to quit."
         Start-Sleep -Seconds 1
         return
     }
@@ -220,6 +227,12 @@ function Invoke-MenuAction {
             Write-ProfileInfo -Message "Streaming logs/supervisor.err.log" -Detail "(Press Ctrl+C to exit)..."
             Get-Content (Join-Path $ProjectPath "logs/supervisor.err.log") -Wait -Tail 25
         }
+        "live-start" {
+            & (Join-Path $PSScriptRoot "live-start.ps1")
+        }
+        "live-stop" {
+            & (Join-Path $PSScriptRoot "live-stop.ps1")
+        }
         "open-dash" {
             Start-Process "http://127.0.0.1:8800"
             Write-ProfileSuccess -Message "Opened http://127.0.0.1:8800 in default browser."
@@ -252,6 +265,8 @@ if ($Action -ne "") {
         "ev"           = "9"
         "test"         = "10"
         "logs"         = "11"
+        "lstart"       = "12"
+        "lstop"        = "13"
         "dash"         = "d"
         "exit"         = "q"
     }
@@ -260,7 +275,7 @@ if ($Action -ne "") {
     } elseif ($MenuActions.Contains($trimmed) -or ($MenuActions[$trimmed] -ne $null)) {
         Invoke-MenuAction $trimmed
     } else {
-        Write-ProfileError -Message "Unknown action '$Action'" -Suggestion "Valid: 1-11, start, stop, status, bstart, bstop, report, test, logs, dash, exit"
+        Write-ProfileError -Message "Unknown action '$Action'" -Suggestion "Valid: 1-13, start, stop, status, bstart, bstop, report, test, logs, lstart, lstop, dash, exit"
         exit 1
     }
     exit 0
@@ -271,7 +286,7 @@ while ($true) {
     Show-MenuGrid
 
     $promptColor = Get-ProfileColor -Name "Highlight"
-    Write-Host "   Select an option [1-11, d, q]: " -NoNewline -ForegroundColor $promptColor
+    Write-Host "   Select an option [1-13, d, q]: " -NoNewline -ForegroundColor $promptColor
     $choice = $null
     try {
         $choice = [Console]::ReadLine()
