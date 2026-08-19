@@ -401,3 +401,66 @@ def test_a_different_funder_gets_its_own_client(monkeypatch):
     assert a is not b
     assert a.funder == "0xaaa" and b.funder == "0xbbb"
     live_exec._CLIENT_CACHE.clear()
+
+
+def test_stored_credentials_skip_derivation_entirely(monkeypatch):
+    """Derivation is the venue's most rate-limit-sensitive endpoint. With the
+    three L2 values in the environment, no command may call it: `balance`
+    succeeded and `account-sweep` timed out on the same credentials twenty
+    seconds later, purely because each derived its own key."""
+    from engine import live_exec
+
+    live_exec._CLIENT_CACHE.clear()
+    monkeypatch.setenv("POLY_PRIVATE_KEY", "0x" + "11" * 32)
+    monkeypatch.setenv("POLY_FUNDER", "0xee3b")
+    monkeypatch.setenv("POLY_API_KEY", "k")
+    monkeypatch.setenv("POLY_API_SECRET", "s")
+    monkeypatch.setenv("POLY_API_PASSPHRASE", "p")
+
+    derived = {"n": 0}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.creds = None
+
+        def create_or_derive_api_key(self):
+            derived["n"] += 1
+            raise AssertionError("derivation must not be reached")
+
+        def set_api_creds(self, creds):
+            self.creds = creds
+
+    import py_clob_client_v2.client as clob_mod
+    monkeypatch.setattr(clob_mod, "ClobClient", FakeClient)
+
+    c = live_exec._client()
+    assert derived["n"] == 0
+    assert c.creds.api_key == "k"
+    live_exec._CLIENT_CACHE.clear()
+
+
+@pytest.mark.parametrize("missing", ["POLY_API_KEY", "POLY_API_SECRET",
+                                     "POLY_API_PASSPHRASE"])
+def test_a_partial_credential_set_falls_back_to_derivation(monkeypatch, missing):
+    """A half-configured .env would otherwise build a client that fails every
+    signed request with an error indistinguishable from a venue outage."""
+    from engine import live_exec
+
+    live_exec._CLIENT_CACHE.clear()
+    monkeypatch.setenv("POLY_API_KEY", "k")
+    monkeypatch.setenv("POLY_API_SECRET", "s")
+    monkeypatch.setenv("POLY_API_PASSPHRASE", "p")
+    monkeypatch.delenv(missing, raising=False)
+
+    assert live_exec._api_creds_from_env() is None
+    live_exec._CLIENT_CACHE.clear()
+
+
+def test_credentials_are_read_from_the_environment(monkeypatch):
+    from engine import live_exec
+
+    monkeypatch.setenv("POLY_API_KEY", "abc")
+    monkeypatch.setenv("POLY_API_SECRET", "def")
+    monkeypatch.setenv("POLY_API_PASSPHRASE", "ghi")
+    creds = live_exec._api_creds_from_env()
+    assert (creds.api_key, creds.api_secret, creds.api_passphrase) == ("abc", "def", "ghi")
