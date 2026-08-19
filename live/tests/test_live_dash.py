@@ -15,6 +15,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -442,3 +443,162 @@ def test_dashboard_reads_exactly_where_the_registry_writes():
 
     assert resolve_db_path() == DEFAULT_DB_PATH
     assert resolve_db_path().parent.parent.name == "live"
+
+
+def test_milestone8_html_contains_required_sections():
+    """Milestone 8 requirement: UI components for 3 levels, exposure chart, and run selector exist in HTML."""
+    assert "sec-run-kpis" in PAGE_HTML
+    assert "sec-exposure" in PAGE_HTML
+    assert "sec-funnel" in PAGE_HTML
+    assert "sec-mechanics" in PAGE_HTML
+    assert "modal-drilldown" in PAGE_HTML
+    assert "modal-dist" in PAGE_HTML
+    assert "run-selector" in PAGE_HTML
+    assert "tip-wrap" in PAGE_HTML
+    assert "bellCurveSvg" in PAGE_HTML
+
+
+def test_api_kpi_endpoint_returns_3_levels_and_run_isolation(client, temp_db):
+    """Test /api/kpi provides Level 1 (Strategy), Level 2 (Market), Level 3 (Mechanics), and run isolation."""
+    from engine.order_registry import (
+        OrderRegistry, OrderRecord, FillRecord, QuoteRecord,
+        MarketEventRecord, MarkoutRecord, CloseRecord, FloatMarkRecord,
+        VenueErrorRecord, DivergenceEventRecord
+    )
+    reg = OrderRegistry(temp_db)
+    t_now = time.time()
+
+    # Run 1: run-first-cycle
+    r1 = "run-first-cycle"
+    reg.create_order(OrderRecord(
+        id="ord-up", order_id="clob-up", condition_id="0xmarket1", token_id="tok-up",
+        side="BUY", price=0.62, original_size=5.0, status="filled",
+        posted_ts=int((t_now - 120) * 1000), last_polled_ts=int(t_now * 1000),
+        pair_id="pair-1", max_pair_cost_at_post=0.95, run_id=r1
+    ))
+    reg.create_order(OrderRecord(
+        id="ord-dn", order_id="clob-dn", condition_id="0xmarket1", token_id="tok-dn",
+        side="BUY", price=0.32, original_size=5.0, status="filled",
+        posted_ts=int((t_now - 120) * 1000), last_polled_ts=int(t_now * 1000),
+        pair_id="pair-1", max_pair_cost_at_post=0.95, run_id=r1
+    ))
+    reg.log_quote(QuoteRecord(
+        ts=t_now - 120, condition_id="0xmarket1", token_id="tok-up", side="UP",
+        price=0.62, size=5.0, queue_ahead=8.0, mid=0.63, edge_vs_mid=0.01,
+        filled=5.0, latency_ms=25.0, local_id="ord-up", run_id=r1
+    ))
+    reg.log_quote(QuoteRecord(
+        ts=t_now - 120, condition_id="0xmarket1", token_id="tok-dn", side="DOWN",
+        price=0.32, size=5.0, queue_ahead=5.0, mid=0.33, edge_vs_mid=0.01,
+        filled=5.0, latency_ms=25.0, local_id="ord-dn", run_id=r1
+    ))
+    reg.record_fill(FillRecord(
+        trade_id="tr-up", order_uuid="ord-up", size=5.0, price=0.62,
+        venue_ts=int((t_now - 100) * 1000), recorded_ts=int((t_now - 99) * 1000), run_id=r1
+    ))
+    reg.record_fill(FillRecord(
+        trade_id="tr-dn", order_uuid="ord-dn", size=5.0, price=0.32,
+        venue_ts=int((t_now - 90) * 1000), recorded_ts=int((t_now - 89) * 1000), run_id=r1
+    ))
+    reg.log_markout(MarkoutRecord(
+        ts=t_now - 100, condition_id="0xmarket1", side="UP", fill_price=0.62, size=5.0,
+        ref_mid=0.63, mid_h0=0.635, mid_h1=0.64, mid_h2=0.645, mid_h3=0.638, done=1, run_id=r1
+    ))
+    reg.log_close(CloseRecord(
+        ts=t_now - 30, condition_id="0xmarket1", method="merge", shares=5.0,
+        cost_basis=4.70, proceeds=5.00, realized_pnl=0.30, tx_hash="0xhash123", run_id=r1
+    ))
+    reg.log_market_event(MarketEventRecord(
+        ts=t_now - 130, condition_id="0xmarket1", kind="QUOTING", reason="both sides placed",
+        reason_code="INTENT_GENERATED", run_id=r1
+    ))
+    reg.log_market_event(MarketEventRecord(
+        ts=t_now - 140, condition_id="0xmarket_blocked", kind="BLOCKED", reason="outside price band",
+        reason_code="PRICE_BAND", run_id=r1
+    ))
+    reg.log_float_mark(unrealized_usd=0.0, committed_open_usd=4.70, naked_usd=0.0, ts=t_now - 90, run_id=r1)
+    reg.log_venue_error(VenueErrorRecord(
+        ts=t_now - 150, condition_id="0xmarket1", side="BUY", price=0.62, size=5.0,
+        error_code="INVALID_POST", raw_error_msg="post-only cross rejected", run_id=r1
+    ))
+    reg.log_divergence_event(DivergenceEventRecord(
+        ts=t_now - 20, condition_id="0xmarket1", pair_id="pair-1",
+        registry_diff=0.0, venue_diff=0.0, chain_diff=0.0, divergence_msg="all matched", run_id=r1
+    ))
+
+    # Test /api/kpi
+    res = client.get("/api/kpi", params={"run_id": r1})
+    assert res.status_code == 200
+    data = res.json()
+
+    # Level 1: Run level
+    assert data["fills"] == 2
+    assert data["filled_shares"] == 10.0
+    assert data["realized_pnl"] == 0.30
+    assert data["fill_rate"] == 1.0
+    assert data["spread_capture"] > 0
+    assert data["runs"][0]["run_id"] == r1
+
+    # Level 2: Market level & Drilldown
+    assert "0xmarket1" in data["by_market"]
+    mkt = data["by_market"]["0xmarket1"]
+    assert mkt["up_sh"] == 5.0
+    assert mkt["dn_sh"] == 5.0
+    assert mkt["pair_cost"] == 0.94
+    assert mkt["balance"] == 1.0
+    assert len(mkt["markouts"]) == 1
+    assert mkt["markouts"][0]["mid_h0"] == 0.635
+    assert mkt["markouts"][0]["mid_h1"] == 0.64
+    assert mkt["markouts"][0]["mid_h2"] == 0.645
+    assert mkt["markouts"][0]["mid_h3"] == 0.638
+
+    # Funnel
+    assert "funnel" in data
+    assert any(f["cause"] == "PRICE_BAND" for f in data["funnel"]["filters"])
+
+    # Level 3: Mechanics
+    assert data["order_latency_ms"]["median"] == 25.0
+    assert data["reconcile_lag_ms"]["median"] == 1000.0
+    assert data["venue_rejects"]["total"] == 1
+    assert data["venue_rejects"]["by_code"]["INVALID_POST"] == 1
+    assert data["three_way_divergences"]["total"] == 1
+
+    # Req 4: Float marks series
+    assert len(data["float_marks"]) >= 1
+
+
+
+def test_kpi_endpoint_survives_launch_by_file_path(tmp_path):
+    """`python live/dash/live_dash.py` must still serve /api/kpi.
+
+    Launching the file by path puts live/dash/ on sys.path instead of live/, so the
+    lazy `from engine.kpi import report` inside the endpoint raised
+    ModuleNotFoundError and every poll came back 500 -- invisible to this suite,
+    which runs with live/ as the working directory.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    dash_file = repo_root / "live" / "dash" / "live_dash.py"
+    db_file = tmp_path / "live.db"
+    conn = sqlite3.connect(db_file)
+    conn.executescript(SCHEMA)
+    conn.commit()
+    conn.close()
+
+    snippet = (
+        "import runpy, sys\n"
+        f"sys.path.insert(0, {str(dash_file.parent)!r})\n"
+        f"mod = runpy.run_path({str(dash_file)!r})\n"
+        "from fastapi.testclient import TestClient\n"
+        f"mod['set_db_override']({str(db_file)!r})\n"
+        "r = TestClient(mod['app']).get('/api/kpi')\n"
+        "print(r.status_code)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", snippet],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().endswith("200"), proc.stdout + proc.stderr

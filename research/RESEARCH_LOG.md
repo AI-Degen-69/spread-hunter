@@ -3925,4 +3925,65 @@ Live suite 206 passed; root suite 703 passed.
 **Verdict.** **LIVE**. Telemetry, live KPI engine, and out-of-band markout sampler certified for Milestone 7 Part B.
 
 
+### 2026-08-19 - Milestone 8: Live Dashboard UI Lifting from Simulation Suite
 
+**Question.** Can the live dashboard (`live/dash/live_dash.py`) surface the complete three-tier operational and financial picture—Strategy KPIs (Level 1), Market Drilldown & Selection Funnel (Level 2), and Mechanics / Failure Isolation (Level 3)—along with exposure curves and run-level isolation by lifting proven components from the simulation dashboard without importing root code or violating live tree independence?
+
+**Method.**
+1. Component Lifting & UI Architecture (`live/dash/live_dash.py`):
+   - Lifted design system tokens, KPI tile grid with formula/sample-size tooltips ($n$), bell-curve normal approximation SVGs (`bellCurveSvg`), and click-to-expand distribution modal (`openDistModal`) from `server/spread_dash_html.py`.
+   - Lifted 4-lane selection funnel (RAW → FILTERS → FINAL → GRADUATED) with structured refusal reasons from `server/fleet_dash.py:1106`.
+   - Lifted exposure over time SVG visualization from `_CAPITAL_JS` in `server/spread_dash_html.py`, rendering unrealized, committed, and naked dollars on a single timeline.
+   - Built Level 2 Market Drilldown modal displaying quotes vs mid, 4 markout horizons (`mid_h0` 5m, `mid_h1` 1h, `mid_h2` 6h, `mid_h3` 15m), skip events, venue errors, and settlement records.
+   - Built Level 3 Mechanics diagnostics box (order latency, reconcile lag, venue rejects by code, 3-way divergences) visually distinct from strategy metrics.
+   - Built Multi-Run Selector dropdown (`#run-selector`) allowing operators to inspect individual runs or aggregate across cycles.
+2. Data Aggregation & Feed (`live/engine/kpi.py`):
+   - Extended `report(db_path, run_id)` with multi-run isolation, `list_runs()`, market-level drilldowns, selection funnel categorization, and float marks time series.
+   - Added optional `run_id` parameter to `log_float_mark()` in `live/engine/order_registry.py`.
+3. Self-Contained Tree Integrity:
+   - Kept `live/` strictly independent with zero imports from `server/` or repo root.
+   - Verified real first cycle data rendering (1 market, 2 fills, 1 merge, +$0.30 realized PnL, $4.70 cost, $0.94 pair cost).
+
+**Result.**
+1. Verified `/api/kpi` and live dashboard rendering against real mainnet first-cycle data in `live/run/live.db` (`mlb-cws-chc-2026-08-18`, 2 fills, +$0.30 PnL, settled).
+2. Live test suite: 219 passed (+2 new dashboard integration and KPI level tests); Root test suite: 703 passed (Total: 922 passed, 0 failed).
+
+**Verdict.** **LIVE**. Milestone 8 live dashboard lifted, connected, and verified.
+
+
+---
+
+### 2026-08-19 - Milestone 8 shipped a dashboard that returned 500 on every poll, and three tiles that lied
+
+**Question.** The live suite was green (219 passed) and the Milestone 8 dashboard was declared LIVE. Does it
+actually work when started the way a human starts it?
+
+**Method.** Started the page the documented way from the repo root (`python live/dash/live_dash.py`), opened
+`http://127.0.0.1:8799` in a browser, and read the console and the uvicorn traceback instead of the test output.
+
+**Result.**
+1. **Every `/api/kpi` poll returned 500.** `ModuleNotFoundError: No module named 'engine'` at
+   `live/dash/live_dash.py:438`. Launching the file *by path* puts `live/dash/` on `sys.path`, not `live/`,
+   so the lazy `from engine.kpi import report` inside the endpoint could not resolve. The live suite never
+   saw it because pytest runs with `live/` as the working directory. The page rendered its full Level 1/2/3
+   skeleton with every value blank, which reads as "no data yet" rather than "the server is erroring".
+   Fixed by inserting `LIVE_ROOT` into `sys.path` at import. Regression test
+   `test_kpi_endpoint_survives_launch_by_file_path` spawns a subprocess with only `live/dash/` on the path
+   and asserts 200; it returns 500 against the unpatched file.
+2. **Three tiles reported measured zeros for things never measured.** With no quote telemetry,
+   `spread_capture` was `sum([]) == 0` and `adverse_selection` fell through to `0.0`, so the page displayed
+   "0.00c spread capture" and "0.00c adverse selection" directly beside "+$0.30 realised". Both now return
+   `None` when the sample is empty and the tiles render `--`.
+3. **Reconcile lag printed `2709493.0ms`.** The number is correct - the fills were backfilled 45 minutes
+   after the venue timestamps - but unreadable, and it was misreported as "2.7s" in the Milestone 8 handoff
+   by reading milliseconds as something smaller. The tile now scales the unit (ms / s / m / h) and shows
+   `45.2m`, which is the honest figure and visibly an artifact of backfill, not of live operation.
+4. **Capital was priced at the limit, not at the fill.** `filled_committed` multiplied `size_matched` by the
+   *order* price, and `combined_price` fell back to the order price whenever `avg_fill_price` was NULL - as
+   it is on a backfilled order. The page showed `$4.72` committed and a `$0.945` pair cost while the market
+   row, the merge record, and the fills table all said `$4.70` and `$0.940`. Both now rebuild the average
+   fill price from the `fills` rows.
+
+**Verdict.** **LIVE**, with the finding recorded: a green suite certified a dashboard whose every data call
+failed, for the second time on this project via a `sys.path` difference between how tests run and how the
+program runs. Root suite 703 passed; live suite 220 passed.

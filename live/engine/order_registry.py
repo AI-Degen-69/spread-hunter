@@ -927,11 +927,11 @@ class OrderRegistry:
             conn.commit()
 
     def log_float_mark(
-        self, unrealized_usd: float, committed_open_usd: float, naked_usd: float, ts: Optional[float] = None
+        self, unrealized_usd: float, committed_open_usd: float, naked_usd: float, ts: Optional[float] = None, run_id: Optional[str] = None
     ) -> None:
         """Record periodic portfolio marks."""
         now_ts = ts if ts is not None else time.time()
-        r_id = get_run_id()
+        r_id = run_id or get_run_id()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
