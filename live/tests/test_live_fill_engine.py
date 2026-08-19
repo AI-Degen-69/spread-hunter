@@ -86,8 +86,18 @@ def test_live_fill_engine_cross(mock_registry, mock_client):
     assert engine.filled_shares() == 15.0
     assert engine.filled_shares(include_crossed=False) == 0.0
     assert engine.filled_shares(side="DOWN") == 15.0
-    assert engine.cost(side="DOWN") == pytest.approx(10 * 0.52 + 5 * 0.53)
-    assert engine.avg_price(side="DOWN") == pytest.approx((10 * 0.52 + 5 * 0.53) / 15.0)
+
+    # Money-valued reporting excludes unconfirmed book depth by default. A cross
+    # is a proposal until the venue says otherwise, so it must not price the
+    # position; ask for it explicitly to see it.
+    assert engine.cost(side="DOWN") == pytest.approx(0.0)
+    assert engine.avg_price(side="DOWN") == pytest.approx(0.0)
+    assert engine.cost(side="DOWN", include_crossed=True) == pytest.approx(
+        10 * 0.52 + 5 * 0.53
+    )
+    assert engine.avg_price(side="DOWN", include_crossed=True) == pytest.approx(
+        (10 * 0.52 + 5 * 0.53) / 15.0
+    )
 
 
 def test_live_fill_engine_record_venue_fill(mock_registry, mock_client):

@@ -197,12 +197,27 @@ class LiveFillEngine:
                    if (side is None or f.side == side)
                    and (include_crossed or f.reason != "cross"))
 
-    def cost(self, side: Optional[str] = None) -> float:
-        """Total dollar cost of fills."""
-        return sum(f.size * f.price for f in self.fills
-                   if side is None or f.side == side)
+    def cost(self, side: Optional[str] = None,
+             include_crossed: bool = False) -> float:
+        """Total dollar cost of fills.
 
-    def avg_price(self, side: Optional[str] = None) -> float:
-        """Volume-weighted average price across fills."""
-        sh = self.filled_shares(side)
-        return (self.cost(side) / sh) if sh > 0 else 0.0
+        Defaults to confirmed fills only. `cross()` builds LiveFill objects from
+        book depth without a venue round-trip, and the displayed depth may be
+        gone, rejected, or fill elsewhere -- so an unconfirmed quantity must not
+        reach money-valued position reporting. This is a deliberate divergence
+        from `strategy/fills.py`, whose simulated crosses are always real.
+        """
+        return sum(f.size * f.price for f in self.fills
+                   if (side is None or f.side == side)
+                   and (include_crossed or f.reason != "cross"))
+
+    def avg_price(self, side: Optional[str] = None,
+                  include_crossed: bool = False) -> float:
+        """Volume-weighted average price across fills.
+
+        Numerator and denominator must share a basis, so the flag is passed to
+        both -- mixing confirmed cost over total shares would understate the
+        average against a crossed quantity.
+        """
+        sh = self.filled_shares(side, include_crossed=include_crossed)
+        return (self.cost(side, include_crossed=include_crossed) / sh) if sh > 0 else 0.0
