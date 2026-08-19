@@ -564,6 +564,7 @@ def reconcile_orders(
     maker_address: Optional[str] = None,
     current_ts_ms: Optional[int] = None,
     orphan_window_ms: int = DEFAULT_ORPHAN_MATCH_WINDOW_MS,
+    lookback_ms: Optional[int] = None,
 ) -> ReconcileSummary:
     """Reconcile registry state against venue open orders and trades.
 
@@ -584,6 +585,7 @@ def reconcile_orders(
             maker_address=maker_address,
             now_ms=now_ms,
             orphan_window_ms=orphan_window_ms,
+            lookback_ms=lookback_ms,
         )
 
 
@@ -593,6 +595,7 @@ def _reconcile_pass(
     maker_address: Optional[str],
     now_ms: int,
     orphan_window_ms: int,
+    lookback_ms: Optional[int] = None,
 ) -> ReconcileSummary:
     """One reconcile pass. Callers must already hold the reconcile lock."""
     summary = ReconcileSummary(polled_ts=now_ms)
@@ -711,7 +714,14 @@ def _reconcile_pass(
     current_active = registry.get_active_orders()
     if current_active:
         earliest_polled_ts = min(o.last_polled_ts for o in current_active)
-    earliest_polled_ts = max(earliest_polled_ts, now_ms - MAX_TRADE_LOOKBACK_MS)
+    else:
+        with registry._conn() as conn:
+            row = conn.execute("SELECT MIN(posted_ts) AS min_ts FROM orders").fetchone()
+            if row and row["min_ts"]:
+                earliest_polled_ts = int(row["min_ts"])
+
+    max_lookback = lookback_ms if lookback_ms is not None else MAX_TRADE_LOOKBACK_MS
+    earliest_polled_ts = max(earliest_polled_ts, now_ms - max_lookback)
 
     after_sec = max(0, int((earliest_polled_ts - TRADE_OVERLAP_MS) / 1000))
 
@@ -725,6 +735,7 @@ def _reconcile_pass(
 
 
     summary.trades_polled = len(trades_raw) if trades_raw else 0
+    affected_order_ids: set[str] = set()
     if trades_raw:
         for t in trades_raw:
             t_id = str(t.get("id") or t.get("trade_id") or "")
@@ -766,6 +777,7 @@ def _reconcile_pass(
                     m_order = registry.get_order_by_venue_id(m_oid) or registry.get_order(m_oid)
                     if m_order is not None:
                         matched_any_maker = True
+                        affected_order_ids.add(m_order.id)
                         m_size = float(m_entry.get("matched_amount") or m_entry.get("size") or t_size)
                         m_price = float(m_entry.get("price") or t_price)
                         fill_rec = FillRecord(
@@ -808,6 +820,7 @@ def _reconcile_pass(
                     f"size={t_size} @ {t_price}"
                 )
             else:
+                affected_order_ids.add(order.id)
                 fill_rec = FillRecord(
                     trade_id=t_id,
                     order_uuid=order.id,
@@ -821,9 +834,15 @@ def _reconcile_pass(
                 else:
                     summary.duplicates_ignored += 1
 
-    # 4. Update order statuses for all active orders
-    updated_active = registry.get_active_orders()
-    for order in updated_active:
+    # 4. Update order statuses for all active orders plus any order that received fills in this pass
+    orders_to_check: dict[str, OrderRecord] = {o.id: o for o in registry.get_active_orders()}
+    for o_id in affected_order_ids:
+        if o_id not in orders_to_check:
+            o = registry.get_order(o_id)
+            if o is not None:
+                orders_to_check[o.id] = o
+
+    for order in orders_to_check.values():
         size_matched = registry.get_size_matched(order.id)
         is_resting = bool(order.order_id and order.order_id in venue_order_map)
         is_full = (size_matched >= order.original_size - SIZE_EPS)
@@ -837,8 +856,11 @@ def _reconcile_pass(
                 summary.orders_partially_filled += 1
         else:
             # Absent from open orders and not full
-            # Only mark cancelled if it had an order_id on venue or was open/partial
-            if order.status != "pending":
+            if size_matched > SIZE_EPS:
+                new_status = "partial"
+                if order.status != "partial":
+                    summary.orders_partially_filled += 1
+            elif order.status != "pending":
                 new_status = "cancelled"
                 summary.orders_cancelled += 1
             else:

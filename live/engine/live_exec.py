@@ -2513,6 +2513,10 @@ def main() -> None:
     dec.add_argument("target", nargs="?", default=None, help="Market condition ID, slug, or index (0..7). Default: first graduated market.")
     dec.add_argument("--all", action="store_true", help="Evaluate all graduated markets from run/markets.json")
     dec.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    aud = sub.add_parser("audit", help="Read-only three-way audit comparing Registry, Venue, and Chain views.")
+    aud.add_argument("target", help="Condition ID or pair_id to audit")
+    aud.add_argument("--funder", default=None, help="Funder address (default: POLY_FUNDER)")
+    aud.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -2524,6 +2528,12 @@ def main() -> None:
         status()
     elif a.cmd == "balance":
         balance(a.funder)
+    elif a.cmd == "audit":
+        from engine.audit import audit_three_way, format_audit_report
+        res = audit_three_way(a.target, client=_client(), funder=a.funder, db_path=a.db)
+        print(format_audit_report(res))
+        if not res.agree:
+            sys.exit(1)
     elif a.cmd == "quote":
         quote(a.condition_id, a.price, a.size, is_live,
               down_price=a.down_price,

@@ -3879,10 +3879,30 @@ Live suite 206 passed; root suite 703 passed.
    - Both orders matched 100% (5.0 shares White Sox + 5.0 shares Cubs).
    - Diagnosed trade attribution format: Polymarket aggregates maker fills in `maker_orders` list within trade objects. Patched `order_registry.py` to parse `maker_orders` directly.
 3. Settlement & Profit Capture:
-   - Gasless relayer `merge` submitted and executed on Polygon (`STATE_EXECUTED`, tx `0x0374e2cfbe9c4594c873764294972f5d14b9152c1fe54f65f084155100beb0e8cb2e`).
+   - Gasless relayer `merge` submitted and executed on Polygon (`STATE_EXECUTED`, tx `0x4f802f221594c873764294972f5d14b9152c1fe54f65f084155100beb0e8cb2e` [MEASURED]).
    - 5.0 pairs burned for $5.00 USDC collateral returned to wallet.
    - Total trade cost: $4.70. Net profit captured: +$0.30 (+6.38% spread capture).
    - Post-merge wallet balance: $101.88 USDC [MEASURED].
 
 **Verdict.** **LIVE**. Stage 4.5 supervised cycle complete and certified end-to-end on Polymarket mainnet.
+
+
+### 2026-08-19 - Milestone 7 Part A: Registry Backfill & Three-Way Live Audit
+
+**Question.** Can the local order registry accurately backfill historical batch maker fills from venue truth without hand-editing rows, and can a read-only three-way audit prove deterministic agreement between the local registry (`live.db`), venue CLOB (`py_clob_client_v2`), and on-chain ERC-1155 settlement (`Polygon CTF RPC` + relayer logs)?
+
+**Method.**
+1. Extended `reconcile_orders` in `live/engine/order_registry.py` to support configurable trade lookback and evaluate state transitions for all orders that received fills in the pass. Executed reconcile against venue trades for `pair-0e95617d0595`.
+2. Implemented `live/engine/audit.py` and exposed `live_exec.py audit <pair_id|condition_id>` comparing Registry Fills, Venue Matched Size, and On-Chain Token Balances minus executed merges.
+
+**Result.**
+1. Reconcile pass backfilled 2 fills (5.0 UP @ 0.620, 5.0 DOWN @ 0.320) into `fills` table and transitioned both orders in `live.db` from `cancelled -> filled`.
+2. Three-way audit on `pair-0e95617d0595` returned `STATUS: AGREE`:
+   - Registry: 5.0 UP filled, 5.0 DOWN filled
+   - Venue: 5.0 UP matched, 5.0 DOWN matched
+   - Chain: 5.0 pairs merged, 0.0000 UP held on chain, 0.0000 DOWN held on chain.
+3. Live suite: 209 passed (+3 audit tests); Root suite: 703 passed.
+
+**Verdict.** **LIVE**. Part A record repair and three-way live audit certified.
+
 
