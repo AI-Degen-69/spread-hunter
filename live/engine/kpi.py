@@ -21,6 +21,10 @@ from engine.config import load as load_cfg
 _CFG = load_cfg()
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# Shown when neither the ranker feed nor its fallbacks name a category. A named
+# bucket groups honestly; a blank cell reads as missing data.
+UNCATEGORIZED = "Uncategorized"
+
 
 def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> dict[str, Any]:
     """Resolve human-readable title, slug, and Polymarket link for a condition_id from disk."""
@@ -29,12 +33,14 @@ def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> di
         "title": None,
         "slug": None,
         "url": None,
+        "category": None,
         "days_to_resolve": None,
         "min_size": None,
         "volume_24h": None,
         "source": None,
     }
     if not cid:
+        out["category"] = UNCATEGORIZED
         return out
     
     # Try reading run/markets.json from repo root (written by ranker)
@@ -47,6 +53,15 @@ def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> di
                     out.update({
                         "title": row.get("title") or row.get("event_title"),
                         "slug": row.get("slug"),
+                        # The live feed ships category="" on most rows, so the
+                        # series and the group are the labels that actually
+                        # survive. An empty cell teaches the reader nothing.
+                        "category": (
+                            (row.get("category") or "").strip()
+                            or (row.get("series_title") or "").strip()
+                            or (row.get("market_group") or "").strip()
+                            or None
+                        ),
                         "days_to_resolve": row.get("days_to_resolve"),
                         "min_size": row.get("min_size"),
                         "volume_24h": row.get("volume_24h"),
@@ -75,6 +90,8 @@ def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> di
 
     if out["slug"]:
         out["url"] = f"https://polymarket.com/market/{out['slug']}"
+    if not out["category"]:
+        out["category"] = UNCATEGORIZED
     return out
 
 
@@ -443,6 +460,98 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         "events": divergences[:20],
     }
 
+    # ------------------------------------------------------------------
+    # Portfolio overview: the whole run in one reading, not the first market.
+    # Mirrors the simulation's capitalSeries widget (server/spread_dash_html.py:175):
+    # realised closes stacked on the starting bankroll, with the open float
+    # folded in at the timestamps it was actually marked.
+    # ------------------------------------------------------------------
+    starting_capital = _CFG.bankroll_usd
+    sorted_closes = sorted(
+        [c for c in closes if c.get("ts") is not None], key=lambda c: float(c["ts"])
+    )
+    sorted_marks = sorted(
+        [fm for fm in float_marks if fm.get("ts") is not None], key=lambda fm: float(fm["ts"])
+    )
+    # NULL, not 0.0: nothing in the engine calls log_float_mark today, so an
+    # empty float_marks table means the open float was never measured. Printing
+    # a measured $0.00 next to a resting naked leg is the same instrumentation
+    # lie that spread_capture and adverse_selection above already refuse to tell.
+    latest_mark = sorted_marks[-1] if sorted_marks else None
+    # A mark recorded before the newest close describes a book that no longer
+    # exists: its float has since been realised and is already in realized_pnl.
+    # Counting both would bill the same money twice on the headline tile.
+    latest_close_ts = float(sorted_closes[-1]["ts"]) if sorted_closes else None
+    mark_is_current = (
+        latest_mark is not None
+        and (latest_close_ts is None or float(latest_mark["ts"]) >= latest_close_ts)
+    )
+    unrealized_usd = float(latest_mark.get("unrealized_usd") or 0.0) if mark_is_current else None
+    open_committed_usd = (
+        float(latest_mark.get("committed_open_usd") or 0.0) if mark_is_current else None
+    )
+
+    equity_series: list[dict[str, Any]] = []
+    running_equity = starting_capital
+    running_float = 0.0
+    mark_idx = 0
+
+    def _fold_marks_through(t: float) -> None:
+        """Push a point for every mark recorded at or before t."""
+        nonlocal mark_idx, running_float
+        while mark_idx < len(sorted_marks) and float(sorted_marks[mark_idx]["ts"]) <= t:
+            running_float = float(sorted_marks[mark_idx].get("unrealized_usd") or 0.0)
+            equity_series.append({
+                "ts": float(sorted_marks[mark_idx]["ts"]),
+                "v": running_equity + running_float,
+                "type": "mark",
+                "unrealized_usd": running_float,
+            })
+            mark_idx += 1
+
+    for c in sorted_closes:
+        c_ts = float(c["ts"])
+        _fold_marks_through(c_ts)
+        running_equity += float(c.get("realized_pnl") or 0.0)
+        # The float measured before this close described positions this close has
+        # now realised -- realized_pnl already holds that money. Carrying it past
+        # the close would count the same dollars twice on the curve, the way the
+        # portfolio tile would have before the stale-mark guard above.
+        running_float = 0.0
+        equity_series.append({
+            "ts": c_ts,
+            "v": running_equity,
+            "type": "close",
+            "pnl": float(c.get("realized_pnl") or 0.0),
+            "market": c.get("market_slug") or c.get("condition_id"),
+        })
+    # Marks recorded after the last close: the curve keeps stepping on float alone.
+    _fold_marks_through(float("inf"))
+
+    # An unmeasured float contributes nothing to the total, and the page says so
+    # rather than folding an unknown into a number labelled "Total Value".
+    total_pnl = realized_pnl + (unrealized_usd or 0.0)
+    # Markets that only ever appear in a refusal or a venue error were never
+    # traded. Counting them would report "2 markets" for a run that quoted one.
+    traded_markets = sum(
+        1 for m in by_mkt.values()
+        if m["fills_count"] > 0 or m["quotes_count"] > 0 or m["settlements"]
+    )
+    portfolio = {
+        "starting_capital": starting_capital,
+        "realized_pnl": realized_pnl,
+        "unrealized_usd": unrealized_usd,
+        "unrealized_measured": mark_is_current,
+        "total_pnl": total_pnl,
+        "total_value": starting_capital + total_pnl,
+        # NULL, not 0.0: a zero bankroll makes the percentage undefined, and a
+        # printed 0.00% would read as "flat" rather than "unmeasurable".
+        "pnl_pct": (100.0 * total_pnl / starting_capital) if starting_capital else None,
+        "markets_count": traded_markets,
+        "closes_count": len(closes),
+        "open_committed_usd": open_committed_usd,
+    }
+
     # Float marks formatted series for time chart
     float_marks_formatted = [
         {
@@ -459,6 +568,10 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # Multi-run metadata
         "runs": runs,
         "active_run_id": active_run_id,
+
+        # Portfolio overview (run-level, all markets)
+        "portfolio": portfolio,
+        "equity_series": equity_series,
 
         # Pace
         "markets_quoted": len({q["condition_id"] for q in quotes if q.get("condition_id")}),

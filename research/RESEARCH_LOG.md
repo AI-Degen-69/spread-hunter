@@ -4025,3 +4025,124 @@ wrote a failing test before each fix.
 
 **Verdict.** **LIVE** for 1 and 2. **OPEN** for 3. Root suite 703 passed; live suite 225 passed
 (+5 regression tests that fail against the unpatched code).
+
+---
+
+## 2026-08-19 — The dashboard reported one market as if it were the run
+
+**Question.** The live dashboard's top card named a single market and described that one pair's
+hedge state. A supervised cycle quotes many markets. What does the Owner actually need to read
+first, and does the telemetry already support it?
+
+**Method.** Compared the live page against the simulation's capital panel
+(`server/spread_dash_html.py:1449`) and its `capitalSeries` widget (`:175`), which have carried the
+run-level reading since the fleet dashboards shipped. Checked whether `live.db` holds the same two
+inputs that widget consumes. Wrote 13 failing tests before changing `live/engine/kpi.py`.
+
+**Result.**
+1. **The inputs were already there; only the aggregate was missing.** `closes` carries `ts` and
+   `realized_pnl`; `float_marks` carries `ts` and `unrealized_usd`. That is exactly what
+   `capitalSeries` folds together. `kpi.report()` was returning a scalar `equity` and no series, so
+   the page had nothing run-level to draw. Added `portfolio` (total value, realized, unrealized,
+   total P&L, P&L %, committed, market and close counts) and `equity_series`, built the same way:
+   closes stacked on the bankroll, marks folded in at the timestamps they were actually recorded.
+2. **`pnl_pct` is NULL on a zero bankroll, not 0.00%.** A printed `0.00%` reads as "flat"; the
+   quantity is undefined. Same rule the `spread_capture` and `adverse_selection` fixes established
+   in the Milestone 8 audit above.
+3. **Category was blank in practice, not absent.** The ranker feed carries a `category` field, but
+   it ships `""` on the sampled rows while `series_title` and `market_group` are populated. Reading
+   `category` alone would have rendered an empty column and looked like missing telemetry. The
+   resolver now falls back `category → series_title → market_group → "Uncategorized"`.
+4. **Rebates were left out on purpose.** The concept called for a rebates tile. Graduated spread
+   markets carry $0.00 maker rewards, and `rebate_est` is already an explicit NULL for that reason.
+   A tile there would have been a fabricated figure, so there is no tile.
+
+**Verdict.** **LIVE.** Live suite 242 passed, including 13 new tests that fail against the
+unpatched code. No new measurement is claimed here — this is an aggregation and a display of
+figures the registry already recorded.
+
+---
+
+## 2026-08-19 — Review round on the portfolio card: a zero that was never measured
+
+**Question.** The portfolio card shipped reading `UNREALIZED (OPEN) +$0.00`. Is that a measured
+zero, and does anything else on the new surface report a number it did not compute?
+
+**Method.** Diff review of the whole branch, treating the uncommitted dashboard work as in scope.
+Traced each new figure back to the table it claims to summarise, and grepped for the writer of every
+table read.
+
+**Result.**
+1. **`log_float_mark` has no production caller.** Only `order_registry.py` defines it and only tests
+   call it. `float_marks` is therefore empty in every real run, so `unrealized_usd` fell through to
+   `0.0` and the tile printed a measured zero next to a possibly-naked book. Now NULL, with an
+   `unrealized_measured` flag, and the page renders `--  not marked — open float unmeasured`. The
+   underlying gap — nothing sweeps the open book — is **OPEN**, and the card now says so rather than
+   hiding it behind a zero.
+2. **A stale mark double-counted realised money.** `total_pnl` added the newest mark's float to
+   `realized_pnl` without checking order. A mark at T1 followed by a close at T2 would have counted
+   the same dollars twice on the headline tile ($102.80 for a book worth $100.30). Marks older than
+   the newest close are no longer counted.
+3. **`markets_count` counted markets that were only refused.** `by_mkt` is keyed off every
+   condition_id seen anywhere, including `market_events` and `venue_errors`, so a run that quoted one
+   market and blocked another reported "2 markets". Now restricted to markets with a quote, a fill,
+   or a settlement.
+4. **`pytest` started the live bot stack.** `test_system_start_and_stop_endpoints` POSTed
+   `/api/system/start`, which Popens `scripts.rerank_loop` and `engine.live_exec poll`. A child
+   process does not inherit conftest's socket guard, and `live_exec` loads dotenv at import, so the
+   suite signed real requests to the venue and left both loops running after pytest exited — the
+   same failure this project already recorded once. The spawn is stubbed and a regression test now
+   fails if any test reaches `subprocess.Popen`.
+5. **`Fresh DB` would delete an archive.** `reset_database` resolves through `--db`, so a reset while
+   reviewing a past cycle archived-then-unlinked that cycle and nested `archive/archive/`. Resets now
+   refuse any path under `archive/`.
+6. **The dashboard restart relaunched by a relative path.** `sys.argv[0]` is whatever was typed, and
+   `.claude/launch.json` types it relative; replaying it under `cwd=live/` looks for
+   `live/live/dash/live_dash.py`, so the replacement died on startup after the old instance had
+   already `os._exit(0)`'d. Extracted as `relaunch_argv()` and pinned absolute, carrying `--port`
+   and `--db` through the restart.
+
+**Verdict.** **LIVE** for 1–6. **OPEN**: nothing marks the open book, so unrealized P&L stays
+unmeasured until a sweep writes float marks. Root suite 703 passed; live suite 250 passed.
+
+---
+
+## 2026-08-19 - "Total Value" was sourced from a simulation constant
+
+**Question.** CodeRabbit raised five findings on PR #44, and the Owner opened the page against the
+real account. Does the headline tile show what the account holds?
+
+**Method.** Compared the tile against the Polymarket portfolio page for the funded address, and
+traced the number back to its source.
+
+**Result.**
+1. **It does not.** The tile read **$100.30**; the account read **$101.88**. The figure was
+   `_CFG.bankroll_usd + realized_pnl`, and `bankroll_usd = 100.0` is a *simulation parameter*
+   (`live/engine/config.py:23`) that nobody deposited. The +$0.30 past-day change matched the merge,
+   which made a fabricated base look plausible. Relabelled to **Book Value / registry** with an
+   explicit "config bankroll + realised - not the Polymarket balance" note until the venue is the
+   source. Sourcing account value and account P&L from the venue is the next piece of work, tracked
+   **OPEN**; `_fetch_live_balance` (`live/engine/live_exec.py:2317`) already reads COLLATERAL and is
+   the starting point.
+2. **The equity curve carried a float past the close that realised it.** The portfolio tile ignores
+   marks older than the newest close, but the series did not: `running_float` survived the close, so
+   every later close point overstated equity by a float `realized_pnl` already contained. Same
+   defect, two surfaces, one fixed. `running_float` now resets on each close.
+3. **`start_bot` did not refuse a second start.** `Popen` ran unconditionally and `live_procs.json`
+   kept only the newest PIDs, so a double click or a direct POST launched a second screener and a
+   second poll loop that `stop_bot` could never reach - two stacks summing independent inventories
+   into one database, which AGENTS.md forbids outright. Now refuses while RUNNING.
+4. **`reset_database` could unlink the registry under a live writer.** The archive guard did not
+   check liveness; a reset mid-run would leave the loops writing an unlinked inode while the page
+   read a new empty file. Now refuses while the stack is RUNNING.
+5. **The control endpoints had no authentication.** `/api/system/start` spawns the loop that signs
+   real venue requests, and loopback is not a defence: a cross-origin form POST needs no preflight,
+   so any page in the operator's browser could start the bot. Each process now mints a token, hands
+   it only to the page it serves, and requires it as a header on every `/api/system/*` route, with
+   an Origin check behind it. A form POST cannot set a custom header, which is what makes this
+   complete.
+6. **The telemetry pill hardcoded `:8799`.** `--port` moves the dashboard; the status payload now
+   reports the port actually bound.
+
+**Verdict.** **LIVE** for 2-6. **OPEN** for 1: the account's value and P&L must come from the venue,
+not from a config constant. Root suite 703 passed; live suite 256 passed.

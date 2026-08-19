@@ -602,3 +602,303 @@ def test_kpi_endpoint_survives_launch_by_file_path(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip().endswith("200"), proc.stdout + proc.stderr
+
+
+def test_page_html_contains_status_bar_and_bot_buttons():
+    """Verify HTML contains Supervisor high-hierarchy indicator, 3 sub-service dots, and Start/Stop/Reset buttons."""
+    from dash.live_dash import PAGE_HTML
+
+    assert "id=\"supervisor-status\"" in PAGE_HTML or "id=\"sup-status\"" in PAGE_HTML
+    assert "SUPERVISOR" in PAGE_HTML
+    assert "id=\"sub-services\"" in PAGE_HTML or "class=\"sub-services\"" in PAGE_HTML
+    assert "btn-start-bot" in PAGE_HTML
+    assert "btn-stop-bot" in PAGE_HTML
+    assert "btn-reset-db" in PAGE_HTML
+    assert "dot-online" in PAGE_HTML or "status-dot" in PAGE_HTML
+
+
+def test_system_status_endpoint(client):
+    """GET /api/system/status returns supervisor, 3 sub-services (screener, engine, dash), and bot state."""
+    res = client.get("/api/system/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert "supervisor" in data
+    assert "running" in data["supervisor"]
+    assert "services" in data
+    assert "screener" in data["services"]
+    assert "engine" in data["services"]
+    assert "dash" in data["services"]
+    assert data["services"]["dash"]["running"] is True
+    assert "bot_state" in data
+
+
+def test_system_start_and_stop_endpoints(client, monkeypatch, tmp_path):
+    """POST /api/system/start and POST /api/system/stop control bot state safely.
+
+    start_bot() Popens the real screener and the real `live_exec poll` loop. A
+    child process does not inherit conftest's socket guard, and live_exec loads
+    dotenv at import, so an unmocked call here signs real requests to the venue
+    from a test run -- and nothing in the test would ever stop the loops. The
+    spawn is stubbed; what is under test is the endpoint contract.
+    """
+    import dash.live_dash as dash_mod
+
+    spawned = []
+    monkeypatch.setattr(
+        dash_mod, "start_bot",
+        lambda: (spawned.append("start"), {"ok": True, "message": "stubbed"})[1],
+    )
+    monkeypatch.setattr(
+        dash_mod, "stop_bot",
+        lambda: (spawned.append("stop"), {"ok": True, "message": "stubbed"})[1],
+    )
+
+    res_stop = client.post("/api/system/stop", headers=_control(client))
+    assert res_stop.status_code == 200
+    assert res_stop.json().get("ok") is True
+
+    res_start = client.post("/api/system/start", headers=_control(client))
+    assert res_start.status_code == 200
+    assert res_start.json().get("ok") is True
+
+    assert spawned == ["stop", "start"]
+
+
+def test_start_endpoint_never_spawns_a_process_under_test(client, monkeypatch):
+    """A regression guard: no test may Popen the live bot stack.
+
+    Fails against the unpatched suite, where /api/system/start reached
+    subprocess.Popen and left `scripts.rerank_loop` and `engine.live_exec poll`
+    running against the venue after pytest exited.
+    """
+    import subprocess
+
+    import dash.live_dash as dash_mod
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError(f"test spawned a live process: {args!r}")
+
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+    monkeypatch.setattr(
+        dash_mod, "start_bot", lambda: {"ok": True, "message": "stubbed"}
+    )
+
+    res = client.post("/api/system/start", headers=_control(client))
+    assert res.status_code == 200
+
+
+def test_reset_db_refuses_to_destroy_an_archived_run(tmp_path):
+    """Reset must not delete an archive opened for reading.
+
+    reset_database archives-then-unlinks whatever --db points at. Launched
+    against a past cycle for a post-mortem, the unguarded version destroyed the
+    record the operator opened the page to read, and nested a fresh archive/
+    inside the archive directory on the way out.
+    """
+    from dash.live_dash import reset_database
+
+    archive_dir = tmp_path / "run" / "archive"
+    archive_dir.mkdir(parents=True)
+    archived = archive_dir / "live_20260819_090708.db"
+    con = sqlite3.connect(str(archived))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+    size_before = archived.stat().st_size
+
+    result = reset_database(archived)
+
+    assert result["ok"] is False
+    assert "archived run" in result["message"]
+    assert archived.exists(), "the archived cycle was deleted"
+    assert archived.stat().st_size == size_before
+    assert not (archive_dir / "archive").exists(), "nested archive/ was created"
+
+
+def test_system_restart_dash_endpoint(client, monkeypatch):
+    """POST /api/system/restart-dash launches a replacement and exits this one.
+
+    Two things must be neutralised or the suite dies: the handler's background
+    thread really calls os._exit(0) after 0.8s, which would kill pytest itself,
+    and it really Popens a second dashboard. Both are patched at the module the
+    handler resolves them through. `threading.Thread.start` is deliberately NOT
+    patched -- TestClient runs each request on its own portal thread, so a no-op
+    start deadlocks the client instead of testing anything.
+    """
+    import subprocess
+
+    import dash.live_dash as dash_mod
+
+    launched = []
+    exited = []
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: launched.append(a))
+    monkeypatch.setattr(dash_mod.os, "_exit", lambda code: exited.append(code))
+
+    res = client.post("/api/system/restart-dash", headers=_control(client))
+    assert res.status_code == 200
+    assert res.json().get("ok") is True
+    assert "restart-dash" in PAGE_HTML
+
+    # The handler's daemon thread sleeps 0.8s before acting. Wait for it here:
+    # if monkeypatch tore down first, the real os._exit(0) would kill pytest.
+    deadline = time.time() + 5.0
+    while not exited and time.time() < deadline:
+        time.sleep(0.05)
+
+    assert launched, "no replacement dashboard was launched"
+    assert exited == [0], "the old instance did not exit to release the port"
+
+
+def test_restart_relaunches_by_absolute_path(monkeypatch):
+    """The replacement dashboard must be launched by absolute path.
+
+    sys.argv[0] is whatever the operator typed, and .claude/launch.json types it
+    relative ("live/dash/live_dash.py"). Replaying that under cwd=live/ looks for
+    live/live/dash/live_dash.py, so the replacement dies on startup and the page
+    never comes back -- while the current instance has already os._exit(0)'d.
+    """
+    from dash.live_dash import LIVE_ROOT, relaunch_argv
+
+    # Exactly how launch.json invokes it, from the repo root.
+    monkeypatch.setattr(sys, "argv", ["live/dash/live_dash.py", "--port", "8799"])
+
+    argv = relaunch_argv()
+    script = Path(argv[1])
+
+    assert script.is_absolute(), f"relaunched by relative path: {script}"
+    assert script.exists(), f"relaunch target does not exist: {script}"
+    assert script.name == "live_dash.py"
+    # The restart runs with cwd=LIVE_ROOT; the command must still resolve there.
+    assert (LIVE_ROOT / script).exists()
+    # Port and database flags survive the restart.
+    assert argv[2:] == ["--port", "8799"]
+
+
+def test_restart_preserves_the_database_flag(monkeypatch):
+    """A restart must come back on the same database it was reading."""
+    from dash.live_dash import relaunch_argv
+
+    monkeypatch.setattr(sys, "argv", ["live_dash.py", "--db", "run/archive/live_x.db"])
+    assert relaunch_argv()[2:] == ["--db", "run/archive/live_x.db"]
+
+
+def test_system_reset_db_endpoint(client, temp_db):
+    """POST /api/system/reset-db archives the existing DB and initializes a clean fresh DB."""
+    import sqlite3
+    # Put a dummy row in temp_db first
+    conn = sqlite3.connect(temp_db)
+    conn.execute("INSERT INTO orders (id, condition_id, token_id, side, price, original_size, status, posted_ts, last_polled_ts) VALUES ('dummy-1', '0x1', '0x2', 'BUY', 0.5, 10, 'open', 1000, 1000)")
+    conn.commit()
+    conn.close()
+
+    res = client.post("/api/system/reset-db", headers=_control(client))
+    assert res.status_code == 200
+    data = res.json()
+    assert data.get("ok") is True
+
+    # Verify orders table in freshly created DB is empty
+    conn2 = sqlite3.connect(temp_db)
+    cursor = conn2.cursor()
+    cursor.execute("SELECT COUNT(*) FROM orders")
+    count = cursor.fetchone()[0]
+    conn2.close()
+    assert count == 0
+
+
+
+
+# --------------------------------------------------------------------------
+# CodeRabbit review round on PR #44
+# --------------------------------------------------------------------------
+
+def _control(client):
+    """Headers that authorize a machine-state change from this process's page."""
+    from dash.live_dash import CONTROL_TOKEN
+    return {"X-Control-Token": CONTROL_TOKEN}
+
+
+def test_control_endpoints_reject_untokened_posts(client):
+    """A POST without the page's token must not change machine state.
+
+    Loopback binding is not a defence: a page in the operator's browser can
+    submit a cross-origin form POST to 127.0.0.1:8799 with no CORS preflight,
+    and /api/system/start spawns the loop that signs real venue requests.
+    """
+    for path in (
+        "/api/system/start",
+        "/api/system/stop",
+        "/api/system/reset-db",
+        "/api/system/restart-dash",
+    ):
+        assert client.post(path).status_code == 403, f"{path} accepted an untokened POST"
+
+
+def test_control_endpoints_reject_foreign_origin(client, monkeypatch):
+    """Even with a token, a request claiming a foreign Origin is refused."""
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(dash_mod, "start_bot", lambda: {"ok": True})
+    res = client.post(
+        "/api/system/start",
+        headers={**_control(client), "Origin": "https://evil.example"},
+    )
+    assert res.status_code == 403
+
+
+def test_page_carries_a_live_token_but_the_constant_does_not(client):
+    """The served page gets a real token; PAGE_HTML keeps only the placeholder."""
+    from dash.live_dash import CONTROL_TOKEN, CONTROL_TOKEN_PLACEHOLDER
+
+    assert CONTROL_TOKEN_PLACEHOLDER in PAGE_HTML
+    assert CONTROL_TOKEN not in PAGE_HTML
+
+    body = client.get("/").text
+    assert CONTROL_TOKEN in body
+    assert CONTROL_TOKEN_PLACEHOLDER not in body
+
+
+def test_start_refuses_a_second_bot_stack(client, monkeypatch):
+    """Two stacks on one database sum independent inventories into invalid data.
+
+    live_procs.json only remembers the newest PIDs, so a second start would also
+    strand the first pair beyond the reach of stop_bot.
+    """
+    import subprocess
+
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(
+        dash_mod, "get_system_status", lambda: {"bot_state": "RUNNING"}
+    )
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda *a, **kw: pytest.fail("a second bot stack was spawned"),
+    )
+
+    res = client.post("/api/system/start", headers=_control(client))
+    assert res.status_code == 200
+    assert res.json()["ok"] is False
+    assert "already running" in res.json()["message"]
+
+
+def test_reset_db_refuses_while_the_bot_is_running(monkeypatch, temp_db):
+    """Unlinking the registry under a live writer loses every later write."""
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "RUNNING"})
+    result = dash_mod.reset_database(temp_db)
+
+    assert result["ok"] is False
+    assert "running" in result["message"].lower()
+    assert temp_db.exists(), "the live registry was deleted under the bot"
+
+
+def test_status_reports_the_port_actually_bound(monkeypatch):
+    """--port moves the dashboard, and the status payload must follow it."""
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(dash_mod, "_ACTIVE_PORT", 9123)
+    assert dash_mod.get_system_status()["services"]["dash"]["port"] == 9123
+    # The page reads the reported port instead of a literal.
+    assert "':8799'" not in PAGE_HTML
