@@ -27,6 +27,9 @@ from starlette.middleware.gzip import GZipMiddleware
 
 # live/, one level up from live/dash/. Everything this page reads lives under it.
 LIVE_ROOT = Path(__file__).resolve().parent.parent
+# The ranker writes run/markets.json at the repo root; live/ reads it as data,
+# never as code -- the tree boundary is about imports, not about files on disk.
+REPO_ROOT = LIVE_ROOT.parent
 DEFAULT_PORT = 8799
 POLL_INTERVAL_MS = 2000
 STALE_THRESHOLD_SEC = 30.0
@@ -47,6 +50,45 @@ def resolve_db_path(custom_path: str | Path | None = None) -> Path:
     # like a healthy idle cycle. `test_dashboard_reads_exactly_where_the_registry_writes`
     # pins this to order_registry.DEFAULT_DB_PATH so the two cannot drift apart.
     return LIVE_ROOT / "run" / "live.db"
+
+
+def _market_identity(condition_id: str, closes_by_cid: dict) -> dict:
+    """Who is this market, in words a human recognises.
+
+    The registry stores a condition id and nothing else, so a screen built from
+    it alone shows a 66-character hex string where the market name belongs. The
+    ranker's own feed carries title, slug and horizon for everything it
+    graduated, and a close row carries the slug for anything already settled --
+    both are on disk, so neither costs a venue call.
+    """
+    out = {"condition_id": condition_id, "title": None, "slug": None,
+           "url": None, "days_to_resolve": None, "min_size": None,
+           "volume_24h": None, "source": None}
+    if not condition_id:
+        return out
+    try:
+        feed = json.loads((REPO_ROOT / "run" / "markets.json").read_text(encoding="utf-8"))
+    except Exception:
+        feed = []
+    for row in feed if isinstance(feed, list) else []:
+        if (row.get("cid") or "").lower() == condition_id.lower():
+            out.update({
+                "title": row.get("title") or row.get("event_title"),
+                "slug": row.get("slug"),
+                "days_to_resolve": row.get("days_to_resolve"),
+                "min_size": row.get("min_size"),
+                "volume_24h": row.get("volume_24h"),
+                "source": row.get("source"),
+            })
+            break
+    if not out["slug"]:
+        closed = closes_by_cid.get(condition_id) or {}
+        out["slug"] = closed.get("market_slug")
+    if not out["title"] and out["slug"]:
+        out["title"] = out["slug"].replace("-", " ").title()
+    if out["slug"]:
+        out["url"] = f"https://polymarket.com/market/{out['slug']}"
+    return out
 
 
 def query_db_state(db_path: Path | str) -> dict[str, Any]:
@@ -132,7 +174,7 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         closes_by_cid: dict[str, dict[str, float]] = {}
         if "closes" in tables:
             for c_row in cur.execute("""
-                SELECT condition_id, method, SUM(shares) AS shares,
+                SELECT condition_id, method, market_slug, SUM(shares) AS shares,
                        SUM(COALESCE(realized_pnl, 0.0)) AS pnl,
                        MAX(ts) AS last_ts
                 FROM closes
@@ -141,7 +183,8 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
             """).fetchall():
                 slot = closes_by_cid.setdefault(
                     c_row["condition_id"],
-                    {"shares": 0.0, "pnl": 0.0, "last_ts": 0.0, "methods": []},
+                    {"shares": 0.0, "pnl": 0.0, "last_ts": 0.0, "methods": [],
+                     "market_slug": c_row["market_slug"]},
                 )
                 slot["shares"] += float(c_row["shares"] or 0.0)
                 slot["pnl"] += float(c_row["pnl"] or 0.0)
@@ -196,6 +239,17 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         empty_payload["message"] = "No live orders recorded yet in registry."
         return empty_payload
 
+    # What each order actually paid, from the fills themselves. An order resting
+    # at 0.625 that filled at 0.620 committed the filled price, and reading the
+    # intended one reports a pair cost nobody was charged -- $4.72 against the
+    # $4.70 the wallet moved on the first live cycle.
+    paid_by_order: dict[str, dict[str, float]] = {}
+    for f_row in fills_rows:
+        f_d = dict(f_row)
+        slot = paid_by_order.setdefault(f_d["order_uuid"], {"size": 0.0, "notional": 0.0})
+        slot["size"] += float(f_d["size"] or 0.0)
+        slot["notional"] += float(f_d["size"] or 0.0) * float(f_d["price"] or 0.0)
+
     # Process orders
     orders_list = []
     max_poll_ms = 0
@@ -220,18 +274,24 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         price = float(o["price"])
         status = o["status"]
 
+        paid = paid_by_order.get(o["id"])
+        # Filled shares are valued at what they cost; only the unfilled
+        # remainder is still an intention priced at the resting quote.
+        matched_notional = paid["notional"] if paid else (matched * price)
+        o["avg_fill_price"] = (paid["notional"] / paid["size"]) if paid and paid["size"] else None
+
         if o["side"] == "SELL":
             # An unwind returns collateral rather than committing it.
             # Adding it here made `exit` read as growing the position.
             pass
         elif status not in ("cancelled",):
-            total_committed += (size * price)
             remaining = max(0.0, size - matched)
+            total_committed += matched_notional + (remaining * price)
             resting_committed += (remaining * price)
-            filled_committed += (matched * price)
+            filled_committed += matched_notional
         else:
-            total_committed += (matched * price)
-            filled_committed += (matched * price)
+            total_committed += matched_notional
+            filled_committed += matched_notional
 
         orders_list.append(o)
 
@@ -271,9 +331,17 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         # the query happens to return must not decide which one is read.
         _open_by_token: dict[str, float] = {}
         for leg in sorted(legs, key=lambda x: (x["side"] != "BUY", x["posted_ts"])):
-            _open_by_token.setdefault(leg["token_id"], float(leg["price"]))
+            # The filled price where there is one: the pair cost is what the
+            # wallet paid, not what the quote asked for.
+            _open_by_token.setdefault(
+                leg["token_id"],
+                float(leg.get("avg_fill_price") or leg["price"]),
+            )
         combined_price = sum(_open_by_token.values())
         pdata["combined_price"] = round(combined_price, 4)
+        pdata["combined_price_is_paid"] = any(
+            leg.get("avg_fill_price") for leg in legs
+        )
 
         order_ids_in_pair = {leg["id"] for leg in legs}
         pair_fills = [f for f in fills_list if f["order_uuid"] in order_ids_in_pair]
@@ -382,6 +450,8 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
                 hedge_state = "NAKED"
                 naked_info = _naked_from(only, only["net_matched"])
 
+        pdata["market"] = _market_identity(pdata.get("condition_id") or "",
+                                           closes_by_cid)
         pdata["hedge_state"] = hedge_state
         pdata["naked_info"] = naked_info
         pairs_list.append(pdata)
@@ -609,6 +679,23 @@ PAGE_HTML = """<!DOCTYPE html>
     }
 
     /* Stale Warning Banner */
+    .market-strip {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px;
+      padding: 14px 18px; margin-bottom: 14px; border-radius: 10px;
+      border: 1px solid var(--border, #1e293b);
+      background: var(--panel, #0f172a);
+    }
+    .market-strip .mk-title {
+      font-size: 17px; font-weight: 700; letter-spacing: 0.2px;
+    }
+    .market-strip a.mk-link { color: #38bdf8; text-decoration: none; }
+    .market-strip a.mk-link:hover { text-decoration: underline; }
+    .market-strip .mk-facts {
+      display: flex; flex-wrap: wrap; gap: 6px 16px;
+      font-size: 12px; color: var(--text-muted, #64748b);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .market-strip .mk-facts b { color: var(--text-secondary, #94a3b8); font-weight: 600; }
     .stale-banner {
       display: none;
       background: linear-gradient(90deg, #991b1b, #7f1d1d);
@@ -924,6 +1011,9 @@ PAGE_HTML = """<!DOCTYPE html>
       </div>
     </header>
 
+    <!-- Which market this cycle is on -->
+    <div id="market-strip"></div>
+
     <!-- Stale Warning Banner -->
     <div id="stale-alert-banner" class="stale-banner">
       <span>⚠️</span>
@@ -1069,6 +1159,30 @@ PAGE_HTML = """<!DOCTYPE html>
         return `${m}m ${remS}s`;
       }
       return `${s}s`;
+    }
+
+    function renderMarketStrip(state) {
+      const el = document.getElementById('market-strip');
+      const pair = (state.pairs || [])[0];
+      const m = pair && pair.market;
+      if (!m || !m.condition_id) { el.innerHTML = ''; return; }
+      const facts = [];
+      if (m.volume_24h) facts.push(`<span><b>24h volume</b> $${Number(m.volume_24h).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`);
+      if (m.days_to_resolve != null) facts.push(`<span><b>resolves in</b> ${Number(m.days_to_resolve).toFixed(1)}d</span>`);
+      if (m.min_size != null) facts.push(`<span><b>venue min</b> ${Number(m.min_size).toFixed(0)}sh</span>`);
+      if (m.source) facts.push(`<span><b>ranked as</b> ${esc(m.source)}</span>`);
+      facts.push(`<span><b>pair</b> ${esc(pair.pair_id || '')}</span>`);
+      facts.push(`<span><b>condition</b> ${esc(m.condition_id.slice(0, 10))}...${esc(m.condition_id.slice(-6))}</span>`);
+      const title = m.title || m.slug || 'Unnamed market';
+      const titleHtml = m.url
+        ? `<a class="mk-link" href="${esc(m.url)}" target="_blank" rel="noopener">${esc(title)} ↗</a>`
+        : esc(title);
+      el.innerHTML = `
+        <div class="market-strip">
+          <div class="mk-title">${titleHtml}</div>
+          <div class="mk-facts">${facts.join('')}</div>
+        </div>
+      `;
     }
 
     function renderHero(state) {
@@ -1361,6 +1475,7 @@ PAGE_HTML = """<!DOCTYPE html>
         lastState = state;
 
         document.getElementById('db-path-display').textContent = `DB: ${state.db_path || 'run/live.db'}`;
+        renderMarketStrip(state);
         renderHero(state);
         renderOrders(state);
         renderCapital(state);
