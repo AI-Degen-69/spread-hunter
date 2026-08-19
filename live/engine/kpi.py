@@ -309,6 +309,81 @@ def list_runs(reg: OrderRegistry) -> list[dict[str, Any]]:
         return runs_list
 
 
+def _funnel_from_pipeline(
+    by_mkt: dict[str, dict[str, Any]],
+    pipeline_path: Path | str | None = None,
+    markets_path: Path | str | None = None,
+) -> Optional[dict[str, Any]]:
+    """Build the Level 2 funnel from the screener's own snapshot.
+
+    `run/pipeline.json` is the same file the sim scan (server/fleet_dash.py)
+    renders, so sourcing the funnel from it makes the live Level 2 lanes
+    compare 1:1 with the sim scan: identical gate names ("volume", "YES:
+    top-3 bid depth", "horizon", ...) and identical counts. GRADUATED is the
+    ranker's run/markets.json picks annotated with this run's live fills and
+    realized PnL, so the lane reads live before any quote exists.
+
+    Returns None when the ranker hasn't written a snapshot yet, so the caller
+    falls back to runtime market-event telemetry.
+    """
+    pp = Path(pipeline_path) if pipeline_path is not None else (REPO_ROOT / "run" / "pipeline.json")
+    if not pp.is_file():
+        return None
+    try:
+        snap = json.loads(pp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(snap, dict):
+        return None
+
+    counts = snap.get("counts") or {}
+    raw_count = int(counts.get("funded") or 0) + int(counts.get("spread_universe") or 0)
+
+    filters = [
+        {
+            "cause": r.get("cause") or "other",
+            "n": int(r.get("n") or 0),
+            "examples": [
+                {"title": e.get("title") or "", "reason": e.get("reason") or ""}
+                for e in (r.get("examples") or [])
+            ],
+        }
+        for r in (snap.get("rejections") or [])
+        if isinstance(r, dict)
+    ]
+
+    graduated: list[dict[str, Any]] = []
+    mp = Path(markets_path) if markets_path is not None else (REPO_ROOT / "run" / "markets.json")
+    specs: list = []
+    if mp.is_file():
+        try:
+            specs = json.loads(mp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            specs = []
+    if not isinstance(specs, list):
+        specs = []
+    for s in specs:
+        if not isinstance(s, dict):
+            continue
+        cid = s.get("cid") or s.get("condition_id") or ""
+        m = by_mkt.get(cid, {})
+        graduated.append({
+            "condition_id": cid,
+            "slug": s.get("slug") or "",
+            "title": s.get("title") or s.get("question") or "",
+            "fills": m.get("fills_count", 0),
+            "pnl": m.get("realized_pnl", 0.0),
+        })
+
+    return {
+        "raw_count": raw_count,
+        "filters": filters,
+        "final_count": int(counts.get("eligible") or 0),
+        "graduated": graduated,
+        "source": "screener",
+    }
+
+
 def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> dict[str, Any]:
     """Generate live KPI dictionary mirroring strategy/kpi.py report() structure with live enhancements."""
     reg = OrderRegistry(db_path if db_path is not None else DEFAULT_DB_PATH)
@@ -534,20 +609,32 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     
     top_skips = sorted([(code, len(items)) for code, items in skip_reasons.items()], key=lambda kv: -kv[1])[:6]
 
-    # Funnel view (RAW -> FILTERS -> FINAL -> GRADUATED)
-    funnel_filters = [
-        {"cause": code, "n": len(items), "examples": items[:5]}
-        for code, items in sorted(skip_reasons.items(), key=lambda kv: -len(kv[1]))
-    ]
-    funnel = {
-        "raw_count": max(len(census_rows), len(all_cids)),
-        "filters": funnel_filters,
-        "final_count": len({q["condition_id"] for q in quotes if q.get("condition_id")}),
-        "graduated": [
-            {"condition_id": cid, "slug": m["slug"], "title": m["title"], "fills": m["fills_count"], "pnl": m["realized_pnl"]}
-            for cid, m in by_mkt.items() if m["fills_count"] > 0 or m["quotes_count"] > 0
-        ],
-    }
+    # Funnel view (RAW -> FILTERS -> FINAL -> GRADUATED). Prefer the screener's
+    # own snapshot so the gate names and counts compare 1:1 with the sim scan;
+    # fall back to runtime market-event telemetry when the ranker hasn't written
+    # a snapshot, or when serving a non-production db (a test/smoke db), where
+    # the repo's snapshot would misrepresent that db's own telemetry.
+    if db_path is None or Path(db_path).resolve() == DEFAULT_DB_PATH.resolve():
+        pipeline_funnel = _funnel_from_pipeline(by_mkt)
+    else:
+        pipeline_funnel = None
+    if pipeline_funnel is not None:
+        funnel = pipeline_funnel
+    else:
+        funnel_filters = [
+            {"cause": code, "n": len(items), "examples": items[:5]}
+            for code, items in sorted(skip_reasons.items(), key=lambda kv: -len(kv[1]))
+        ]
+        funnel = {
+            "raw_count": max(len(census_rows), len(all_cids)),
+            "filters": funnel_filters,
+            "final_count": len({q["condition_id"] for q in quotes if q.get("condition_id")}),
+            "graduated": [
+                {"condition_id": cid, "slug": m["slug"], "title": m["title"], "fills": m["fills_count"], "pnl": m["realized_pnl"]}
+                for cid, m in by_mkt.items() if m["fills_count"] > 0 or m["quotes_count"] > 0
+            ],
+            "source": "runtime",
+        }
 
     # Adverse selection from size-weighted markouts
     markout_drifts = []

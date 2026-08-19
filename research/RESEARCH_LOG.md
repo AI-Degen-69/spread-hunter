@@ -4463,3 +4463,9 @@ twenty seconds apart separated them; hours of waiting would not have.
 2. **The e2e lifecycle is hermetic except the venue.** `test_live_e2e_lifecycle.py` runs the real decide/submit/reconcile code paths over a real SQLite OrderRegistry with a FakeVenue stand-in, asserting row-first placement (a `pending` row exists with no venue id before `post_orders` runs) and the pending -> open -> filled transitions.
 
 **Verdict.** **LIVE**. Live suite 378 passed, 1 skipped. The dashboard's one-button start now brings up the whole hands-off stack, and the loop's lifecycle is covered end-to-end.
+
+1. **The two funnels now read the same file, so they compare 1:1.** `_funnel_from_pipeline` reads `run/pipeline.json` (what `server/fleet_dash.py` renders) and preserves the ranker's `rejections[].cause` labels verbatim -- nothing is renamed or re-bucketed, so a "volume" refusal means the same gate on both dashboards.
+2. **RAW is funded + spread_universe, not a live count.** The sim scan's 1015 is the reward pool plus the gamma liquid pool; the live funnel uses the same sum so the two headers agree.
+3. **The snapshot is scoped to the production db only.** `report()` uses the screener funnel only when serving the default live.db; a temp/smoke db falls back to runtime market-event telemetry, so a repo-level snapshot can't mislabel another db's refusals.
+
+**Verdict.** **LIVE**. Live suite 382 passed, 1 skipped. The live Level 2 now shows the same gate buckets and counts as the sim scan, sourced from the same snapshot.
