@@ -473,9 +473,23 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     sorted_marks = sorted(
         [fm for fm in float_marks if fm.get("ts") is not None], key=lambda fm: float(fm["ts"])
     )
-    # The float is whatever the most recent sweep recorded. No marks means no
-    # open float was ever measured -- report 0.0 open, not an invented number.
-    unrealized_usd = float(sorted_marks[-1].get("unrealized_usd") or 0.0) if sorted_marks else 0.0
+    # NULL, not 0.0: nothing in the engine calls log_float_mark today, so an
+    # empty float_marks table means the open float was never measured. Printing
+    # a measured $0.00 next to a resting naked leg is the same instrumentation
+    # lie that spread_capture and adverse_selection above already refuse to tell.
+    latest_mark = sorted_marks[-1] if sorted_marks else None
+    # A mark recorded before the newest close describes a book that no longer
+    # exists: its float has since been realised and is already in realized_pnl.
+    # Counting both would bill the same money twice on the headline tile.
+    latest_close_ts = float(sorted_closes[-1]["ts"]) if sorted_closes else None
+    mark_is_current = (
+        latest_mark is not None
+        and (latest_close_ts is None or float(latest_mark["ts"]) >= latest_close_ts)
+    )
+    unrealized_usd = float(latest_mark.get("unrealized_usd") or 0.0) if mark_is_current else None
+    open_committed_usd = (
+        float(latest_mark.get("committed_open_usd") or 0.0) if mark_is_current else None
+    )
 
     equity_series: list[dict[str, Any]] = []
     running_equity = starting_capital
@@ -509,21 +523,28 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # Marks recorded after the last close: the curve keeps stepping on float alone.
     _fold_marks_through(float("inf"))
 
-    total_pnl = realized_pnl + unrealized_usd
+    # An unmeasured float contributes nothing to the total, and the page says so
+    # rather than folding an unknown into a number labelled "Total Value".
+    total_pnl = realized_pnl + (unrealized_usd or 0.0)
+    # Markets that only ever appear in a refusal or a venue error were never
+    # traded. Counting them would report "2 markets" for a run that quoted one.
+    traded_markets = sum(
+        1 for m in by_mkt.values()
+        if m["fills_count"] > 0 or m["quotes_count"] > 0 or m["settlements"]
+    )
     portfolio = {
         "starting_capital": starting_capital,
         "realized_pnl": realized_pnl,
         "unrealized_usd": unrealized_usd,
+        "unrealized_measured": mark_is_current,
         "total_pnl": total_pnl,
         "total_value": starting_capital + total_pnl,
         # NULL, not 0.0: a zero bankroll makes the percentage undefined, and a
         # printed 0.00% would read as "flat" rather than "unmeasurable".
         "pnl_pct": (100.0 * total_pnl / starting_capital) if starting_capital else None,
-        "markets_count": len(by_mkt),
+        "markets_count": traded_markets,
         "closes_count": len(closes),
-        "open_committed_usd": (
-            float(sorted_marks[-1].get("committed_open_usd") or 0.0) if sorted_marks else 0.0
-        ),
+        "open_committed_usd": open_committed_usd,
     }
 
     # Float marks formatted series for time chart

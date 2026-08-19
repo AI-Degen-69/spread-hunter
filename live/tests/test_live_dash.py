@@ -633,18 +633,154 @@ def test_system_status_endpoint(client):
 
 
 def test_system_start_and_stop_endpoints(client, monkeypatch, tmp_path):
-    """POST /api/system/start and POST /api/system/stop control bot state safely."""
-    # Test stop when already stopped
+    """POST /api/system/start and POST /api/system/stop control bot state safely.
+
+    start_bot() Popens the real screener and the real `live_exec poll` loop. A
+    child process does not inherit conftest's socket guard, and live_exec loads
+    dotenv at import, so an unmocked call here signs real requests to the venue
+    from a test run -- and nothing in the test would ever stop the loops. The
+    spawn is stubbed; what is under test is the endpoint contract.
+    """
+    import dash.live_dash as dash_mod
+
+    spawned = []
+    monkeypatch.setattr(
+        dash_mod, "start_bot",
+        lambda: (spawned.append("start"), {"ok": True, "message": "stubbed"})[1],
+    )
+    monkeypatch.setattr(
+        dash_mod, "stop_bot",
+        lambda: (spawned.append("stop"), {"ok": True, "message": "stubbed"})[1],
+    )
+
     res_stop = client.post("/api/system/stop")
     assert res_stop.status_code == 200
-    stop_data = res_stop.json()
-    assert stop_data.get("ok") is True
+    assert res_stop.json().get("ok") is True
 
-    # Test start
     res_start = client.post("/api/system/start")
     assert res_start.status_code == 200
-    start_data = res_start.json()
-    assert start_data.get("ok") is True
+    assert res_start.json().get("ok") is True
+
+    assert spawned == ["stop", "start"]
+
+
+def test_start_endpoint_never_spawns_a_process_under_test(client, monkeypatch):
+    """A regression guard: no test may Popen the live bot stack.
+
+    Fails against the unpatched suite, where /api/system/start reached
+    subprocess.Popen and left `scripts.rerank_loop` and `engine.live_exec poll`
+    running against the venue after pytest exited.
+    """
+    import subprocess
+
+    import dash.live_dash as dash_mod
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError(f"test spawned a live process: {args!r}")
+
+    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+    monkeypatch.setattr(
+        dash_mod, "start_bot", lambda: {"ok": True, "message": "stubbed"}
+    )
+
+    res = client.post("/api/system/start")
+    assert res.status_code == 200
+
+
+def test_reset_db_refuses_to_destroy_an_archived_run(tmp_path):
+    """Reset must not delete an archive opened for reading.
+
+    reset_database archives-then-unlinks whatever --db points at. Launched
+    against a past cycle for a post-mortem, the unguarded version destroyed the
+    record the operator opened the page to read, and nested a fresh archive/
+    inside the archive directory on the way out.
+    """
+    from dash.live_dash import reset_database
+
+    archive_dir = tmp_path / "run" / "archive"
+    archive_dir.mkdir(parents=True)
+    archived = archive_dir / "live_20260819_090708.db"
+    con = sqlite3.connect(str(archived))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+    size_before = archived.stat().st_size
+
+    result = reset_database(archived)
+
+    assert result["ok"] is False
+    assert "archived run" in result["message"]
+    assert archived.exists(), "the archived cycle was deleted"
+    assert archived.stat().st_size == size_before
+    assert not (archive_dir / "archive").exists(), "nested archive/ was created"
+
+
+def test_system_restart_dash_endpoint(client, monkeypatch):
+    """POST /api/system/restart-dash launches a replacement and exits this one.
+
+    Two things must be neutralised or the suite dies: the handler's background
+    thread really calls os._exit(0) after 0.8s, which would kill pytest itself,
+    and it really Popens a second dashboard. Both are patched at the module the
+    handler resolves them through. `threading.Thread.start` is deliberately NOT
+    patched -- TestClient runs each request on its own portal thread, so a no-op
+    start deadlocks the client instead of testing anything.
+    """
+    import subprocess
+
+    import dash.live_dash as dash_mod
+
+    launched = []
+    exited = []
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: launched.append(a))
+    monkeypatch.setattr(dash_mod.os, "_exit", lambda code: exited.append(code))
+
+    res = client.post("/api/system/restart-dash")
+    assert res.status_code == 200
+    assert res.json().get("ok") is True
+    assert "restart-dash" in PAGE_HTML
+
+    # The handler's daemon thread sleeps 0.8s before acting. Wait for it here:
+    # if monkeypatch tore down first, the real os._exit(0) would kill pytest.
+    deadline = time.time() + 5.0
+    while not exited and time.time() < deadline:
+        time.sleep(0.05)
+
+    assert launched, "no replacement dashboard was launched"
+    assert exited == [0], "the old instance did not exit to release the port"
+
+
+def test_restart_relaunches_by_absolute_path(monkeypatch):
+    """The replacement dashboard must be launched by absolute path.
+
+    sys.argv[0] is whatever the operator typed, and .claude/launch.json types it
+    relative ("live/dash/live_dash.py"). Replaying that under cwd=live/ looks for
+    live/live/dash/live_dash.py, so the replacement dies on startup and the page
+    never comes back -- while the current instance has already os._exit(0)'d.
+    """
+    from dash.live_dash import LIVE_ROOT, relaunch_argv
+
+    # Exactly how launch.json invokes it, from the repo root.
+    monkeypatch.setattr(sys, "argv", ["live/dash/live_dash.py", "--port", "8799"])
+
+    argv = relaunch_argv()
+    script = Path(argv[1])
+
+    assert script.is_absolute(), f"relaunched by relative path: {script}"
+    assert script.exists(), f"relaunch target does not exist: {script}"
+    assert script.name == "live_dash.py"
+    # The restart runs with cwd=LIVE_ROOT; the command must still resolve there.
+    assert (LIVE_ROOT / script).exists()
+    # Port and database flags survive the restart.
+    assert argv[2:] == ["--port", "8799"]
+
+
+def test_restart_preserves_the_database_flag(monkeypatch):
+    """A restart must come back on the same database it was reading."""
+    from dash.live_dash import relaunch_argv
+
+    monkeypatch.setattr(sys, "argv", ["live_dash.py", "--db", "run/archive/live_x.db"])
+    assert relaunch_argv()[2:] == ["--db", "run/archive/live_x.db"]
 
 
 def test_system_reset_db_endpoint(client, temp_db):

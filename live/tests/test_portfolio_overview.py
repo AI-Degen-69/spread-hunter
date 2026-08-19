@@ -49,8 +49,13 @@ def temp_db(tmp_path):
 
 
 @pytest.fixture
-def seeded_db(temp_db):
-    """Two markets, two closes, two float marks -- a run, not a single pair."""
+def seeded_db(temp_db, tmp_path, monkeypatch):
+    """Two markets, two closes, two float marks -- a run, not a single pair.
+
+    REPO_ROOT is redirected even when no feed is written, so metadata never
+    resolves against the developer's live run/markets.json.
+    """
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
     reg = OrderRegistry(temp_db)
     t0 = time.time() - 600
 
@@ -137,8 +142,72 @@ def test_portfolio_zero_state_on_empty_database(temp_db):
 
     assert p["total_value"] == pytest.approx(kpi_mod._CFG.bankroll_usd)
     assert p["realized_pnl"] == 0.0
-    assert p["unrealized_usd"] == 0.0
+    # NULL, not 0.0: no sweep has ever marked the open book.
+    assert p["unrealized_usd"] is None
+    assert p["unrealized_measured"] is False
+    assert p["open_committed_usd"] is None
     assert p["markets_count"] == 0
+
+
+def test_unmarked_open_float_is_null_not_zero(temp_db):
+    """A run with closes but no float mark must not claim the float is $0.00.
+
+    Nothing in the engine calls log_float_mark today, so this is the shape of
+    every real run: reporting a measured zero next to a resting naked leg is the
+    instrumentation lie spread_capture and adverse_selection already refuse.
+    """
+    reg = OrderRegistry(temp_db)
+    reg.log_close(CloseRecord(
+        ts=time.time() - 60, condition_id="0xmarket_a", market_slug="market-a",
+        method="merge", shares=5.0, cost_basis=4.70, proceeds=5.00,
+        realized_pnl=0.30, run_id=RUN,
+    ))
+    p = report(db_path=temp_db, run_id=RUN)["portfolio"]
+
+    assert p["unrealized_usd"] is None
+    assert p["unrealized_measured"] is False
+    # The total still stands on what WAS measured: the realised close.
+    assert p["total_value"] == pytest.approx(kpi_mod._CFG.bankroll_usd + 0.30)
+
+
+def test_float_mark_older_than_the_last_close_is_not_counted(temp_db):
+    """A mark taken before a close describes money that has since been realised.
+
+    Counting both bills the same dollars twice on the headline tile.
+    """
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    reg.log_float_mark(unrealized_usd=2.50, committed_open_usd=9.60,
+                       naked_usd=0.0, ts=t0, run_id=RUN)
+    reg.log_close(CloseRecord(
+        ts=t0 + 120, condition_id="0xmarket_a", market_slug="market-a",
+        method="merge", shares=5.0, cost_basis=4.70, proceeds=5.00,
+        realized_pnl=0.30, run_id=RUN,
+    ))
+    p = report(db_path=temp_db, run_id=RUN)["portfolio"]
+
+    assert p["unrealized_measured"] is False
+    assert p["unrealized_usd"] is None
+    # Not 100.30 + 2.50: the 2.50 became the 0.30 that is already banked.
+    assert p["total_value"] == pytest.approx(kpi_mod._CFG.bankroll_usd + 0.30)
+
+
+def test_markets_only_refused_are_not_counted_as_traded(seeded_db):
+    """A market blocked at the gate was never traded and must not inflate the count."""
+    from engine.order_registry import MarketEventRecord
+
+    reg = OrderRegistry(seeded_db)
+    reg.log_market_event(MarketEventRecord(
+        ts=time.time() - 300, condition_id="0xmarket_blocked",
+        kind="BLOCKED", reason="outside price band",
+        reason_code="PRICE_BAND", run_id=RUN,
+    ))
+    data = report(db_path=seeded_db, run_id=RUN)
+
+    # The refused market is still visible in the funnel and the drill-down...
+    assert "0xmarket_blocked" in data["by_market"]
+    # ...but the portfolio counts the two markets that actually traded.
+    assert data["portfolio"]["markets_count"] == 2
 
 
 # --------------------------------------------------------------------------

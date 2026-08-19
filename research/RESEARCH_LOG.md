@@ -4060,3 +4060,47 @@ inputs that widget consumes. Wrote 13 failing tests before changing `live/engine
 **Verdict.** **LIVE.** Live suite 242 passed, including 13 new tests that fail against the
 unpatched code. No new measurement is claimed here — this is an aggregation and a display of
 figures the registry already recorded.
+
+---
+
+## 2026-08-19 — Review round on the portfolio card: a zero that was never measured
+
+**Question.** The portfolio card shipped reading `UNREALIZED (OPEN) +$0.00`. Is that a measured
+zero, and does anything else on the new surface report a number it did not compute?
+
+**Method.** Diff review of the whole branch, treating the uncommitted dashboard work as in scope.
+Traced each new figure back to the table it claims to summarise, and grepped for the writer of every
+table read.
+
+**Result.**
+1. **`log_float_mark` has no production caller.** Only `order_registry.py` defines it and only tests
+   call it. `float_marks` is therefore empty in every real run, so `unrealized_usd` fell through to
+   `0.0` and the tile printed a measured zero next to a possibly-naked book. Now NULL, with an
+   `unrealized_measured` flag, and the page renders `--  not marked — open float unmeasured`. The
+   underlying gap — nothing sweeps the open book — is **OPEN**, and the card now says so rather than
+   hiding it behind a zero.
+2. **A stale mark double-counted realised money.** `total_pnl` added the newest mark's float to
+   `realized_pnl` without checking order. A mark at T1 followed by a close at T2 would have counted
+   the same dollars twice on the headline tile ($102.80 for a book worth $100.30). Marks older than
+   the newest close are no longer counted.
+3. **`markets_count` counted markets that were only refused.** `by_mkt` is keyed off every
+   condition_id seen anywhere, including `market_events` and `venue_errors`, so a run that quoted one
+   market and blocked another reported "2 markets". Now restricted to markets with a quote, a fill,
+   or a settlement.
+4. **`pytest` started the live bot stack.** `test_system_start_and_stop_endpoints` POSTed
+   `/api/system/start`, which Popens `scripts.rerank_loop` and `engine.live_exec poll`. A child
+   process does not inherit conftest's socket guard, and `live_exec` loads dotenv at import, so the
+   suite signed real requests to the venue and left both loops running after pytest exited — the
+   same failure this project already recorded once. The spawn is stubbed and a regression test now
+   fails if any test reaches `subprocess.Popen`.
+5. **`Fresh DB` would delete an archive.** `reset_database` resolves through `--db`, so a reset while
+   reviewing a past cycle archived-then-unlinked that cycle and nested `archive/archive/`. Resets now
+   refuse any path under `archive/`.
+6. **The dashboard restart relaunched by a relative path.** `sys.argv[0]` is whatever was typed, and
+   `.claude/launch.json` types it relative; replaying it under `cwd=live/` looks for
+   `live/live/dash/live_dash.py`, so the replacement died on startup after the old instance had
+   already `os._exit(0)`'d. Extracted as `relaunch_argv()` and pinned absolute, carrying `--port`
+   and `--db` through the restart.
+
+**Verdict.** **LIVE** for 1–6. **OPEN**: nothing marks the open book, so unrealized P&L stays
+unmeasured until a sweep writes float marks. Root suite 703 passed; live suite 250 passed.

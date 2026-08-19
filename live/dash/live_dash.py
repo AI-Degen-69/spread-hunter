@@ -605,6 +605,21 @@ def reset_database(custom_path: str | Path | None = None) -> dict:
     target_db = resolve_db_path(custom_path or _ACTIVE_DB_OVERRIDE)
     archived_name = None
 
+    # This function archives-then-deletes whatever it is pointed at. Launched
+    # with --db against an archived cycle for a post-mortem, an unguarded reset
+    # would destroy the very record the operator opened the page to read -- and
+    # nest a new archive/ inside the archive directory on the way out.
+    if any(part.lower() == "archive" for part in target_db.resolve().parts):
+        return {
+            "ok": False,
+            "message": (
+                f"Refusing to reset {target_db.name}: it is an archived run, "
+                "opened for reading. Archives are history and are never reset."
+            ),
+            "archived_to": None,
+            "db_path": str(target_db),
+        }
+
     if target_db.exists() and target_db.stat().st_size > 0:
         archive_dir = target_db.parent / "archive"
         archive_dir.mkdir(parents=True, exist_ok=True)
@@ -655,6 +670,40 @@ def api_system_stop():
 def api_system_reset_db():
     """Archive current database and initialize a fresh clean live.db."""
     return JSONResponse(reset_database())
+
+
+def relaunch_argv() -> list[str]:
+    """Build the command that starts a replacement dashboard process.
+
+    The script path must be absolute. `sys.argv[0]` is whatever the operator
+    typed, and .claude/launch.json types it relative ("live/dash/live_dash.py");
+    replaying that under cwd=LIVE_ROOT would look for live/live/dash/live_dash.py,
+    so the replacement would die on startup -- after the current instance has
+    already called os._exit(0), leaving no dashboard at all.
+
+    Everything after argv[0] is carried through, so --port and --db survive a
+    restart and the page comes back on the same port against the same database.
+    """
+    return [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
+
+
+@app.post("/api/system/restart-dash")
+def api_system_restart_dash():
+    """Restart only the dashboard web server process without touching engine/screener workers."""
+    import threading
+    import subprocess
+
+    def _do_restart():
+        time.sleep(0.8)
+        # Launch detached replacement dashboard process.
+        subprocess.Popen(relaunch_argv(), cwd=str(LIVE_ROOT))
+        # Exit current instance to immediately release port 8799. Engine and
+        # screener are separate processes and keep running; they are only
+        # orphaned, never signalled.
+        os._exit(0)
+
+    threading.Thread(target=_do_restart, daemon=True).start()
+    return JSONResponse({"ok": True, "message": "Dashboard server restarting..."})
 
 
 @app.get("/api/kpi")
@@ -1237,6 +1286,20 @@ PAGE_HTML = """<!DOCTYPE html>
       opacity: 0.4;
       cursor: not-allowed;
     }
+    .btn-restart {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+    }
+    .btn-restart:hover:not(:disabled) {
+      background: rgba(56, 189, 248, 0.25);
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+    }
+    .btn-restart:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -1300,6 +1363,7 @@ PAGE_HTML = """<!DOCTYPE html>
         <button id="btn-start-bot" class="btn-bot btn-start" onclick="startBot()">▶ Start Bot</button>
         <button id="btn-stop-bot" class="btn-bot btn-stop" onclick="stopBot()">⏹ Stop Bot</button>
         <button id="btn-reset-db" class="btn-bot btn-reset" onclick="confirmResetDb()">🔄 Fresh DB</button>
+        <button id="btn-restart-dash" class="btn-bot btn-restart" onclick="restartDash()">⚡ Restart Dash</button>
       </div>
     </div>
 
@@ -1733,12 +1797,17 @@ PAGE_HTML = """<!DOCTYPE html>
       document.getElementById('portfolio-realized-sub').textContent =
         p ? `${p.closes_count} closes · ${p.markets_count} markets` : '-- closes · -- markets';
 
+      // NULL unrealized means no sweep has marked the open book -- show "--",
+      // never a $0.00 that would read as "measured, and it is flat".
+      const measured = !!(p && p.unrealized_measured);
       const unrealEl = document.getElementById('portfolio-unrealized');
-      unrealEl.textContent = p ? fmtUsdSigned(p.unrealized_usd) : '--';
-      unrealEl.style.color = (p && Number(p.unrealized_usd) < 0) ? 'var(--loss)' : 'var(--text-primary)';
+      unrealEl.textContent = measured ? fmtUsdSigned(p.unrealized_usd) : '--';
+      unrealEl.style.color = (measured && Number(p.unrealized_usd) < 0) ? 'var(--loss)' : 'var(--text-primary)';
+      document.getElementById('portfolio-unrealized-sub').textContent =
+        measured ? 'marked at last sweep' : 'not marked — open float unmeasured';
 
       document.getElementById('portfolio-committed').textContent =
-        p ? `$${Number(p.open_committed_usd || 0).toFixed(2)}` : '--';
+        measured ? `$${Number(p.open_committed_usd || 0).toFixed(2)}` : '--';
 
       document.getElementById('portfolio-equity-curve').innerHTML =
         equityCurveSvg((kpi && kpi.equity_series) || [], start);
@@ -2581,6 +2650,24 @@ PAGE_HTML = """<!DOCTYPE html>
       } finally {
         if (btn) btn.disabled = false;
       }
+    }
+
+    async function restartDash() {
+      const btn = document.getElementById('btn-restart-dash');
+      if (btn) btn.disabled = true;
+      const pollPill = document.getElementById('poll-pill');
+      if (pollPill) {
+        pollPill.textContent = 'RESTARTING...';
+        pollPill.className = 'pill pill-stale';
+      }
+      try {
+        await fetch('/api/system/restart-dash', { method: 'POST' });
+      } catch (err) {
+        // Ignored: server dropping connections on restart is expected
+      }
+      setTimeout(() => {
+        window.location.reload();
+      }, 1800);
     }
 
     async function pollState() {
