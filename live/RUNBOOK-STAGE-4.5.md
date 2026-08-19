@@ -112,10 +112,10 @@ When both legs fill on the CLOB, the position is balanced:
 ```bash
 # 1. Merge complete outcome share sets back to USDC collateral (Gasless via Relayer)
 python -m engine.live_exec merge <condition_id> --amount <shares> --live
-
-# 2. (Alternative if held to resolution) Redeem winning outcome tokens (Gasless via Relayer)
-python -m engine.live_exec redeem <condition_id> --live
 ```
+
+> [!NOTE]
+> **Polymarket Auto-Redeem is enabled:** If any resolved positions remain unmerged at market resolution, Polymarket's built-in auto-redeem automatically settles them into USDC collateral on the venue side. The manual `redeem` command is kept as a dormant fallback.
 
 ---
 

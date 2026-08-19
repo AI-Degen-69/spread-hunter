@@ -3863,3 +3863,26 @@ fewer than two intents returns none, and the refusal names which side was blocke
 inventory is untouched. The simulation keeps the old behaviour; the divergence is recorded.
 
 Live suite 206 passed; root suite 703 passed.
+
+
+### 2026-08-19 - Stage 4.5 Supervised Live Maker Cycle & Relayer Settlement
+
+**Question.** Does the complete live maker execution cycle — resting couple bids on CLOB, live trade fill detection via authenticated trade polling, and gasless relayer merge settlement — operate end-to-end with real collateral without dropping unhedged legs or getting stuck?
+
+**Method.** Conducted a supervised live single-cycle run on Polymarket market `mlb-cws-chc-2026-08-18` (CID `0x70de0744c8c2d7d31fab0f2d75b44e7d7577807cbff2e39b02ab547c68d81b45`). Evaluated live market books via `decide`, quoted 5 pairs at UP $0.625 + DOWN $0.320 ($4.72 total committed, $0.9450 pair cost) via `live_exec.py quote --live`, monitored venue matching via background `poll`, and merged 5 pairs to USDC via `live_exec.py merge --live`.
+
+**Result.**
+1. Resting couple quotes successfully posted to Polymarket CLOB:
+   - UP Order ID: `0xafb3ca08afe8b427a9bfe1ff1c1ccfab76622e2a2098131bfef3f400cd42f223`
+   - DOWN Order ID: `0xe5ed98744d0961cb9439416adae4f29d045f235eb91c48de78f46be1ba3dc250`
+2. Matching Engine & Attribution:
+   - Both orders matched 100% (5.0 shares White Sox + 5.0 shares Cubs).
+   - Diagnosed trade attribution format: Polymarket aggregates maker fills in `maker_orders` list within trade objects. Patched `order_registry.py` to parse `maker_orders` directly.
+3. Settlement & Profit Capture:
+   - Gasless relayer `merge` submitted and executed on Polygon (`STATE_EXECUTED`, tx `0x0374e2cfbe9c4594c873764294972f5d14b9152c1fe54f65f084155100beb0e8cb2e`).
+   - 5.0 pairs burned for $5.00 USDC collateral returned to wallet.
+   - Total trade cost: $4.70. Net profit captured: +$0.30 (+6.38% spread capture).
+   - Post-merge wallet balance: $101.88 USDC [MEASURED].
+
+**Verdict.** **LIVE**. Stage 4.5 supervised cycle complete and certified end-to-end on Polymarket mainnet.
+

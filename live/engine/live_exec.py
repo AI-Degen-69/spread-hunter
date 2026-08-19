@@ -367,10 +367,11 @@ def _venue_order_id(resp) -> str | None:
 
 
 def quote(condition_id: str, price: float, size: float, live: bool,
+          down_price: float | None = None,
           post_only: bool = True, tif: str = "GTC",
           expiration: int | None = None,
           db_path: str | Path | None = None) -> None:
-    """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price via batch quoting."""
+    """Rest a two-sided pair: buy UP at `price`, buy DOWN at `down_price` (default: 1-price) via batch quoting."""
     from py_clob_client_v2.clob_types import (
         OrderArgsV2, OrderType, PostOrdersV2Args, OrderPayload,
     )
@@ -408,7 +409,7 @@ def quote(condition_id: str, price: float, size: float, live: bool,
             f"exactly two tokens. Check the id."
         )
 
-    dn_price = round(1.0 - price, 4)
+    dn_price = round(down_price, 4) if down_price is not None else round(1.0 - price, 4)
     cost = price * size + dn_price * size
     if cost > MAX_ORDER_USD:
         raise SystemExit(
@@ -963,8 +964,25 @@ def _submit_and_log(
     if isinstance(res, dict):
         tx_hash = res.get("transactionHash") or res.get("transactionID") or res.get("id")
 
+    # The relayer answers with its own terminal state. Recording every reply as
+    # "submitted" leaves an executed transaction looking in-flight forever, and
+    # the idempotency guard then refuses the next merge on that market -- which
+    # is exactly what happened on the first live cycle: STATE_EXECUTED in the
+    # response, status "submitted" in the log, and `merge` blocked behind
+    # --force afterwards. Trust the state the relayer reports.
+    state = res.get("state") if isinstance(res, dict) else None
+    if state == "STATE_EXECUTED":
+        status = "executed"
+    elif state in ("STATE_FAILED", "STATE_REVERTED", "STATE_CANCELLED"):
+        status = "failed"
+    else:
+        # Anything else is genuinely in flight or unrecognised, and an unknown
+        # state must keep the guard armed rather than clear it.
+        status = "submitted"
+
     update_fields = {
-        "status": "submitted",
+        "status": status,
+        "relayer_state": state or "",
         "response": json.dumps(res)[:400],
     }
     if tx_hash:
@@ -2405,7 +2423,8 @@ def main() -> None:
                    help="test a candidate funder without editing .env")
     q = sub.add_parser("quote")
     q.add_argument("condition_id")
-    q.add_argument("--price", type=float, required=True)
+    q.add_argument("--price", type=float, required=True, help="UP token bid price")
+    q.add_argument("--down-price", type=float, default=None, help="DOWN token bid price (default: 1.0 - price)")
     q.add_argument("--size", type=float, required=True)
     q.add_argument("--post-only", action=argparse.BooleanOptionalAction, default=True,
                    help="Ensure orders rest on the book and do not match immediately (default: True).")
@@ -2507,6 +2526,7 @@ def main() -> None:
         balance(a.funder)
     elif a.cmd == "quote":
         quote(a.condition_id, a.price, a.size, is_live,
+              down_price=a.down_price,
               post_only=a.post_only, tif=a.tif, expiration=a.expiration,
               db_path=a.db)
     elif a.cmd == "cancel":

@@ -755,6 +755,35 @@ def _reconcile_pass(
             if t_ts < 10_000_000_000:
                 t_ts *= 1000
 
+            # Check if this trade contains aggregate maker_orders
+            maker_entries = t.get("maker_orders")
+            matched_any_maker = False
+            if isinstance(maker_entries, list) and maker_entries:
+                for m_entry in maker_entries:
+                    m_oid = str(m_entry.get("order_id") or "")
+                    if not m_oid:
+                        continue
+                    m_order = registry.get_order_by_venue_id(m_oid) or registry.get_order(m_oid)
+                    if m_order is not None:
+                        matched_any_maker = True
+                        m_size = float(m_entry.get("matched_amount") or m_entry.get("size") or t_size)
+                        m_price = float(m_entry.get("price") or t_price)
+                        fill_rec = FillRecord(
+                            trade_id=f"{t_id}_{m_oid[:10]}",
+                            order_uuid=m_order.id,
+                            size=m_size,
+                            price=m_price,
+                            venue_ts=t_ts,
+                        )
+                        if registry.record_fill(fill_rec):
+                            summary.fills_recorded += 1
+                            summary.transitions.append(f"FILL {m_order.id[:8]} ({m_order.order_id}): +{m_size} @ {m_price}")
+                        else:
+                            summary.duplicates_ignored += 1
+
+            if matched_any_maker:
+                continue
+
             order = None
             for candidate in (
                 t_order_id,
