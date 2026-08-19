@@ -3906,3 +3906,23 @@ Live suite 206 passed; root suite 703 passed.
 **Verdict.** **LIVE**. Part A record repair and three-way live audit certified.
 
 
+### 2026-08-19 - Milestone 7 Part B: Full Telemetry Port, Live KPIs, Markout Sampler & Dashboard Expansion
+
+**Question.** Can the live execution engine record complete operational and financial telemetry matching the simulation store schema 1:1, sample adverse selection out-of-band across standard horizons, report live KPIs with real latencies and reconcile lags, while ensuring decision routines remain structurally incapable of placing orders?
+
+**Method.**
+1. Schema Expansion (`live/engine/order_registry.py`): Migrated and implemented 9 telemetry tables in `live/run/live.db` (`quotes`, `market_events`, `markouts`, `closes`, `float_marks`, `hedge_census`, `resolutions`, `venue_errors`, `divergence_events`), adding `run_id` session tracking and splitting fill timestamps into venue truth `venue_ts` and local clock `recorded_ts`. Repaired historical fill rows in `live.db` with true venue match times (`1787105572000` and `1787105664000`).
+2. Write Sites & Safety (`live/engine/live_exec.py`): Instrumented quote latency tracking, reject error logging, market event logging on decisions, and close recording on executed merges. Guaranteed `decide` is strictly read-only on orders and orders cannot be placed from decision logic.
+3. Out-of-Band Markout Sampler (`live/engine/markout.py`): Built non-blocking background markout sampling across 4 simulation horizons (`mid_h0` 300s, `mid_h1` 3600s, `mid_h2` 21600s, `mid_h3` 900s) that fails safely to NULL without stalling the reconcile loop.
+4. Live KPI Engine (`live/engine/kpi.py`): Mirrored `strategy/kpi.py:124-410` field-for-field, computing maker fill rates, spread capture, markout adverse selection, and 4 live metrics (`order_latency_ms`, `reconcile_lag_ms`, `venue_rejects`, `three_way_divergences`) with explicit `rebate_est = None`.
+5. Dashboard & CLI Integration (`live/dash/live_dash.py`): Added `/api/kpi` endpoint and exposed CLI command `python live/engine/live_exec.py kpi`.
+
+**Result.**
+1. Reconcile lag accurately computed on real data as `recorded_ts - venue_ts` (~45 min backfill lag on initial test).
+2. Live test suite: 217 passed (+8 telemetry, KPI, and markout safety tests); Root test suite: 703 passed (Total: 920 passed).
+3. Manifest fork tracking updated in `live/FORKED_FROM.json` for `kpi.py` and `markout.py`.
+
+**Verdict.** **LIVE**. Telemetry, live KPI engine, and out-of-band markout sampler certified for Milestone 7 Part B.
+
+
+

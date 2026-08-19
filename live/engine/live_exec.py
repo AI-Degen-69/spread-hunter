@@ -485,7 +485,9 @@ def quote(condition_id: str, price: float, size: float, live: bool,
         })
 
     # 2. Batch post both legs in a single network round-trip
+    t_start = time.perf_counter()
     resp = c.post_orders(batch_args, post_only=post_only)
+    post_latency_ms = (time.perf_counter() - t_start) * 1000.0
     resp_list = resp if isinstance(resp, list) else [resp] if isinstance(resp, dict) else []
 
     _log_order({"ts": time.time(), "condition_id": condition_id,
@@ -526,16 +528,26 @@ def quote(condition_id: str, price: float, size: float, live: bool,
         )
 
     if succeeded_count == 0:
-        # The orders may well be live; we simply cannot name them. Leave the
-        # rows `pending` for orphan adoption rather than guessing an id or
-        # marking a status we cannot support, and say so loudly.
+        # Log venue errors if present
+        from engine.order_registry import VenueErrorRecord, get_run_id
+        for idx, leg in enumerate(local_legs):
+            item_resp = resp_list[idx] if idx < len(resp_list) else None
+            if isinstance(item_resp, dict) and (item_resp.get("errorMsg") or item_resp.get("success") is False):
+                registry.log_venue_error(VenueErrorRecord(
+                    ts=time.time(),
+                    condition_id=condition_id,
+                    side=leg["label"],
+                    price=leg["price"],
+                    size=size,
+                    error_code=item_resp.get("status") or "REJECTED",
+                    raw_error_msg=str(item_resp.get("errorMsg") or "order rejected"),
+                    run_id=get_run_id(),
+                ))
         print("  WARNING: no order IDs in batch quote response; rows stay pending for reconcile to adopt.", file=sys.stderr)
         print(f"  SENT BATCH: {resp}")
         return
 
     # 5. Verification step: Read orders back from venue to verify asset_id before committing.
-    # On agreement, commit mapping. On ANY mismatch, fail closed: cancel BOTH orders,
-    # mark both rows cancelled, and raise SystemExit.
     verified_mappings = []
     mismatch_detected = False
     mismatch_reason = ""
@@ -575,12 +587,30 @@ def quote(condition_id: str, price: float, size: float, live: bool,
             registry.update_order_status(leg["local_id"], status="cancelled", last_polled_ts=now_ms)
         raise SystemExit(f"FAIL CLOSED: Order verification mismatch ({mismatch_reason}); all orders cancelled.")
 
-    # 6. Agreement confirmed: commit venue IDs to registry
+    # 6. Agreement confirmed: commit venue IDs to registry and log QuoteRecord
+    from engine.order_registry import QuoteRecord, get_run_id
+    mid_quote = round((price + dn_price) / 2.0, 4)
     for local_id, v_id in verified_mappings:
         registry.attach_venue_order_id(local_id, v_id, status="open", last_polled_ts=now_ms)
 
     for idx, leg in enumerate(local_legs):
-        print(f"  SENT {leg['label']}: {extracted_venue_ids[idx]}")
+        v_id = extracted_venue_ids[idx] if idx < len(extracted_venue_ids) else None
+        registry.log_quote(QuoteRecord(
+            ts=time.time(),
+            market_slug=m.market_slug,
+            condition_id=condition_id,
+            token_id=leg["token_id"],
+            side=leg["label"],
+            price=leg["price"],
+            size=size,
+            mid=mid_quote,
+            edge_vs_mid=round(mid_quote - leg["price"], 4),
+            order_id=v_id,
+            local_id=leg["local_id"],
+            latency_ms=post_latency_ms,
+            run_id=get_run_id(),
+        ))
+        print(f"  SENT {leg['label']}: {v_id}")
 
     print(f"\nlogged to {RUN / 'live_orders.json'}")
     print(f"pair_id  {pair_id}")
@@ -1027,6 +1057,42 @@ def _submit_and_log(
 
     print(f"  RELAYER RESPONSE: {json.dumps(res)[:400]}")
     print(f"\nlogged to {RUN / 'live_orders.json'}")
+
+    if action == "MERGE" and (status == "executed" or state == "STATE_EXECUTED"):
+        try:
+            from engine.order_registry import OrderRegistry, CloseRecord, get_run_id
+            registry = OrderRegistry()
+            cost_basis = 0.0
+            with registry._conn() as conn:
+                r = conn.execute(
+                    "SELECT COALESCE(SUM(f.size * f.price), 0.0) AS c FROM fills f JOIN orders o ON f.order_uuid = o.id WHERE o.condition_id = ?",
+                    (condition_id,),
+                ).fetchone()
+                cost_basis = float(r["c"]) if r else 0.0
+            amt = 0.0
+            if call_data and len(call_data) >= 10 + 64 * 5:
+                amount_hex = call_data[10 + 64 * 4 : 10 + 64 * 5]
+                amt = int(amount_hex, 16) / 10**6
+            proceeds = float(amt) * 1.00
+            realized_pnl = proceeds - cost_basis
+            registry.log_close(CloseRecord(
+                ts=time.time(),
+                condition_id=condition_id,
+                method="merge",
+                gas=0.0,
+                shares=float(amt),
+                cost_basis=cost_basis,
+                proceeds=proceeds,
+                fee=0.0,
+                realized_pnl=realized_pnl,
+                forgone_vs_settlement=0.0,
+                up_cost_removed=cost_basis / 2.0 if cost_basis else 0.0,
+                dn_cost_removed=cost_basis / 2.0 if cost_basis else 0.0,
+                tx_hash=tx_hash,
+                run_id=get_run_id(),
+            ))
+        except Exception as close_exc:
+            print(f"  WARNING: Failed to log close record: {close_exc}", file=sys.stderr)
 
 
 def redeem(condition_id: str, index_sets: list[int] | None = None,
@@ -2272,8 +2338,10 @@ def _evaluate_single_market_quote(
 ) -> dict:
     """Evaluate and print strategy quote decision for one market."""
     from engine.markets import fetch_pinned_market, full_book
-    from engine.order_registry import inventory_from_registry
+    from engine.order_registry import inventory_from_registry, OrderRegistry
     from engine.quotes import decide_quotes
+
+    registry = OrderRegistry(db_path=reg_db)
 
     m = fetch_pinned_market(cid, require_rewards=False)
     if m is None:
@@ -2350,6 +2418,56 @@ def _evaluate_single_market_quote(
     else:
         print(f"DECISION: DECLINED -- {why or 'no side quotable'}")
     print("=" * 80)
+
+    # Telemetry logging to live.db (Amendment 4: decide stays strictly read-only on orders, logs telemetry only)
+    from engine.order_registry import HedgeCensusRecord, MarketEventRecord, get_run_id
+    pair_touch = round(ba_up + ba_dn - 0.02, 4) if (ba_up is not None and ba_dn is not None) else None
+    fillable_sub = 1.0 if (pair_touch is not None and pair_touch < cfg.max_pair_cost) else 0.0
+    registry.log_hedge_census(HedgeCensusRecord(
+        condition_id=m.condition_id,
+        market_slug=slug,
+        up_ask=ba_up,
+        down_ask=ba_dn,
+        pair_cost_at_touch=pair_touch,
+        fillable_sub_one=fillable_sub,
+        observed_ts=time.time(),
+        run_id=get_run_id(),
+    ))
+
+    if intents:
+        for qi in intents:
+            registry.log_market_event(MarketEventRecord(
+                ts=time.time(),
+                condition_id=m.condition_id,
+                market_slug=slug,
+                kind="QUOTING",
+                reason=qi.reason,
+                reason_code="INTENT_GENERATED",
+                side=qi.side,
+                price=qi.price,
+                size=float(qi.size),
+                run_id=get_run_id(),
+            ))
+    else:
+        code = "OTHER"
+        if why:
+            if "band" in why.lower():
+                code = "PRICE_BAND"
+            elif "shortfall" in why.lower() or "cost" in why.lower():
+                code = "COST_LIMIT"
+            elif "inventory" in why.lower():
+                code = "INVENTORY_MAX"
+            elif "one_sided" in why.lower() or "two_sided" in why.lower():
+                code = "TWO_SIDED_REQUIRED"
+        registry.log_market_event(MarketEventRecord(
+            ts=time.time(),
+            condition_id=m.condition_id,
+            market_slug=slug,
+            kind="BLOCKED",
+            reason=why or "no side quotable",
+            reason_code=code,
+            run_id=get_run_id(),
+        ))
 
     return {
         "cid": cid,
@@ -2517,6 +2635,9 @@ def main() -> None:
     aud.add_argument("target", help="Condition ID or pair_id to audit")
     aud.add_argument("--funder", default=None, help="Funder address (default: POLY_FUNDER)")
     aud.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    kp = sub.add_parser("kpi", help="Generate live KPI report mirroring strategy/kpi.py.")
+    kp.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    kp.add_argument("--run-id", default=None, help="Filter by run_id session")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -2534,6 +2655,11 @@ def main() -> None:
         print(format_audit_report(res))
         if not res.agree:
             sys.exit(1)
+    elif a.cmd == "kpi":
+        from engine.kpi import report as generate_kpi_report
+        import pprint
+        rep = generate_kpi_report(db_path=a.db, run_id=a.run_id)
+        pprint.pprint(rep, sort_dicts=False)
     elif a.cmd == "quote":
         quote(a.condition_id, a.price, a.size, is_live,
               down_price=a.down_price,

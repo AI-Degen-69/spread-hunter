@@ -7,8 +7,9 @@ Stage 2 Architecture Constraints:
 - size_matched is strictly derived from SUM(fills.size), never stored as a mutable column in orders.
 - PRAGMA foreign_keys=ON on every connection to enforce fills.order_uuid -> orders.id.
 - PRAGMA journal_mode=WAL for non-blocking concurrent reads during poll writes.
-- Timestamps are integer epoch milliseconds (UTC).
+- Timestamps are integer epoch milliseconds (UTC) for order/fill events; real seconds for store parity.
 - Atomic fail-closed transaction boundaries.
+- Every table carries a run_id for session tracing.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -27,56 +29,43 @@ DEFAULT_DB_PATH = LIVE_ROOT / "run" / "live.db"
 BUSY_TIMEOUT_SEC = 5.0
 
 # 30 seconds match window: covers HTTP roundtrip and CLOB ingestion skew
-# while preventing false-positive matches against sequential order updates.
 DEFAULT_ORPHAN_MATCH_WINDOW_MS: int = 30_000
 
-# The deliberate re-read window on every trade query. Our clock and the venue's
-# differ, and `after`'s inclusivity is unverified, so we overlap rather than
-# chase an exact boundary and let the trade_id dedupe absorb the repeats.
+# The deliberate re-read window on every trade query.
 TRADE_OVERLAP_MS: int = 60_000
 
-# Floor on how far back a trade query may reach. Without it a single order left
-# pending for an hour drags `after` back an hour on every 5-second cycle.
+# Floor on how far back a trade query may reach.
 MAX_TRADE_LOOKBACK_MS: int = 15 * 60 * 1000
 
-# Sentinel for "this client does not expose a creds attribute at all", which is
-# the normal case for the test doubles. Only an explicit `creds is None` -- a
-# real client that failed to authenticate -- is treated as a refusal.
+# Sentinel for test doubles
 _CREDS_UNCHECKED = object()
 
-# Sizes are REAL, so size_matched accumulates float error across partial fills.
-# Never compare it to original_size with == or >=: forty fills summing to 100.0
-# in decimal can land at 99.99999999999999 in binary, and an order that is full
-# would never be marked filled. Compare with this epsilon instead. Polymarket
-# sizes carry at most six decimal places, so 1e-9 sits far below the smallest
-# real difference and far above the accumulated representation error.
+# Float epsilon for size comparisons
 SIZE_EPS: float = 1e-9
 
 # Every status a row may hold, enforced by a CHECK constraint in the schema.
-# Without the constraint a typo inserts cleanly and the row becomes invisible to
-# get_active_orders: a resting order, real money, and nothing tracking it.
 ORDER_STATUSES = ("pending", "open", "partial", "filled", "cancelled", "unattributed")
 
-# How long a held reconcile lock stays credible before a later pass reclaims it.
-#
-# A legitimate pass makes two venue round trips and a handful of local writes;
-# with the SDK's own timeouts and retries that is seconds, not minutes. Five
-# minutes is two orders of magnitude beyond the honest case, so reclaiming can
-# only follow a genuine crash -- never a slow venue. The cost of setting it too
-# low is two passes racing, which is the defect this lock exists to prevent; the
-# cost of setting it too high is a longer outage after a kill -9. Prefer the
-# outage.
 RECONCILE_LOCK_STALE_MS: int = 300_000
+
+_CURRENT_RUN_ID = os.environ.get("SH_RUN_ID") or f"run-{uuid.uuid4().hex[:12]}"
+
+
+def get_run_id() -> str:
+    """Return the current process/session run_id."""
+    global _CURRENT_RUN_ID
+    return _CURRENT_RUN_ID
+
+
+def set_run_id(run_id: str) -> None:
+    """Set the session run_id."""
+    global _CURRENT_RUN_ID
+    _CURRENT_RUN_ID = run_id
 
 
 class ReconcileInProgress(RuntimeError):
-    """Raised when a reconcile pass is already in flight against this database.
+    """Raised when a reconcile pass is already in flight against this database."""
 
-    Refusal, not queueing. A pass that waited its turn would begin with venue
-    reads taken before the pass ahead of it wrote its decisions, which is the
-    same stale-read race the lock exists to prevent. The poll loop's own
-    interval is the correct retry mechanism.
-    """
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS orders (
@@ -93,7 +82,8 @@ CREATE TABLE IF NOT EXISTS orders (
     posted_ts INTEGER NOT NULL,
     last_polled_ts INTEGER NOT NULL,
     pair_id TEXT,
-    max_pair_cost_at_post REAL
+    max_pair_cost_at_post REAL,
+    run_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS fills (
@@ -101,15 +91,138 @@ CREATE TABLE IF NOT EXISTS fills (
     order_uuid TEXT NOT NULL,
     size REAL NOT NULL,
     price REAL NOT NULL,
-    venue_ts INTEGER NOT NULL,
+    venue_ts INTEGER,
+    recorded_ts INTEGER,
+    run_id TEXT,
     FOREIGN KEY (order_uuid) REFERENCES orders(id)
 );
 
--- At most one reconcile pass may be in flight against this database. The row
--- is the lock; `id = 1` makes that a schema guarantee rather than a convention.
--- It lives here, and not in a threading.Lock, because the contention that
--- actually bites is an operator running `poll` in one shell while firing a
--- one-shot reconcile from another -- two processes, one file.
+CREATE TABLE IF NOT EXISTS quotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    market_slug TEXT,
+    condition_id TEXT,
+    token_id TEXT,
+    side TEXT,
+    price REAL,
+    size REAL,
+    queue_ahead REAL,
+    mid REAL,
+    edge_vs_mid REAL,
+    t_remaining REAL,
+    filled REAL DEFAULT 0,
+    fill_ts REAL,
+    cancelled INTEGER DEFAULT 0,
+    order_id TEXT,
+    local_id TEXT,
+    latency_ms REAL,
+    run_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS market_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    market_slug TEXT,
+    condition_id TEXT,
+    kind TEXT NOT NULL,
+    reason TEXT,
+    reason_code TEXT DEFAULT 'OTHER',
+    side TEXT,
+    price REAL,
+    size REAL,
+    run_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS markouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    condition_id TEXT,
+    market_slug TEXT,
+    side TEXT,
+    fill_price REAL,
+    size REAL,
+    ref_mid REAL,
+    ref_mid_source TEXT DEFAULT 'contaminated',
+    mid_h0 REAL,
+    mid_h1 REAL,
+    mid_h2 REAL,
+    mid_h3 REAL,
+    done INTEGER DEFAULT 0,
+    run_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS closes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    condition_id TEXT,
+    market_slug TEXT,
+    method TEXT DEFAULT 'sell',
+    gas REAL,
+    shares REAL,
+    up_price REAL,
+    dn_price REAL,
+    cost_basis REAL,
+    proceeds REAL,
+    fee REAL,
+    realized_pnl REAL,
+    forgone_vs_settlement REAL,
+    up_cost_removed REAL,
+    dn_cost_removed REAL,
+    tx_hash TEXT,
+    run_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS float_marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    unrealized_usd REAL NOT NULL,
+    committed_open_usd REAL NOT NULL,
+    naked_usd REAL NOT NULL,
+    run_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS hedge_census (
+    condition_id TEXT PRIMARY KEY,
+    market_slug TEXT,
+    up_ask REAL,
+    down_ask REAL,
+    pair_cost_at_touch REAL,
+    fillable_sub_one REAL,
+    observed_ts REAL,
+    run_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS resolutions (
+    condition_id TEXT PRIMARY KEY,
+    winning_token TEXT,
+    resolved_ts REAL,
+    run_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS venue_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    condition_id TEXT,
+    side TEXT,
+    price REAL,
+    size REAL,
+    error_code TEXT,
+    raw_error_msg TEXT,
+    run_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS divergence_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    condition_id TEXT,
+    pair_id TEXT,
+    registry_diff REAL,
+    venue_diff REAL,
+    chain_diff REAL,
+    divergence_msg TEXT,
+    run_id TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS reconcile_lock (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     holder TEXT NOT NULL,
@@ -120,6 +233,11 @@ CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_pair_id ON orders(pair_id);
 CREATE INDEX IF NOT EXISTS idx_fills_order_uuid ON fills(order_uuid);
+CREATE INDEX IF NOT EXISTS idx_quotes_ts ON quotes(ts);
+CREATE INDEX IF NOT EXISTS idx_market_events_cond_ts ON market_events(condition_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_markouts_done ON markouts(done, ts);
+CREATE INDEX IF NOT EXISTS idx_closes_ts ON closes(ts);
+CREATE INDEX IF NOT EXISTS idx_float_marks_ts ON float_marks(ts);
 
 CREATE VIEW IF NOT EXISTS order_summary AS
 SELECT
@@ -135,6 +253,7 @@ SELECT
     o.last_polled_ts,
     o.pair_id,
     o.max_pair_cost_at_post,
+    o.run_id,
     COALESCE(SUM(f.size), 0.0) AS size_matched
 FROM orders o
 LEFT JOIN fills f ON f.order_uuid = o.id
@@ -143,6 +262,43 @@ GROUP BY o.id;
 
 _schema_ready: dict[str, tuple[int, int, int]] = {}
 _lock = threading.RLock()
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    """Safely apply schema migrations to existing database tables."""
+    # Check columns in orders
+    cur = conn.execute("PRAGMA table_info(orders)")
+    cols = {row["name"] for row in cur.fetchall()}
+    if "run_id" not in cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN run_id TEXT")
+
+    # Check columns in fills
+    cur = conn.execute("PRAGMA table_info(fills)")
+    cols = {row["name"] for row in cur.fetchall()}
+    if "recorded_ts" not in cols:
+        conn.execute("ALTER TABLE fills ADD COLUMN recorded_ts INTEGER")
+    if "run_id" not in cols:
+        conn.execute("ALTER TABLE fills ADD COLUMN run_id TEXT")
+
+    # Check columns in markouts
+    cur = conn.execute("PRAGMA table_info(markouts)")
+    cols = {row["name"] for row in cur.fetchall()}
+    if cols:
+        if "mid_h3" not in cols:
+            conn.execute("ALTER TABLE markouts ADD COLUMN mid_h3 REAL")
+        if "run_id" not in cols:
+            conn.execute("ALTER TABLE markouts ADD COLUMN run_id TEXT")
+
+    # Check columns in closes
+    cur = conn.execute("PRAGMA table_info(closes)")
+    cols = {row["name"] for row in cur.fetchall()}
+    if cols:
+        if "tx_hash" not in cols:
+            conn.execute("ALTER TABLE closes ADD COLUMN tx_hash TEXT")
+        if "run_id" not in cols:
+            conn.execute("ALTER TABLE closes ADD COLUMN run_id TEXT")
+
+    conn.commit()
 
 
 def get_connection(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -154,7 +310,6 @@ def get_connection(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
     conn = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SEC)
     conn.row_factory = sqlite3.Row
-    # Foreign keys must be enabled per-connection on every connection
     conn.execute("PRAGMA foreign_keys=ON")
 
     try:
@@ -169,7 +324,7 @@ def get_connection(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
         except sqlite3.Error:
             pass
         conn.executescript(SCHEMA)
-        conn.commit()
+        _apply_migrations(conn)
         _schema_ready[path] = file_id
 
     return conn
@@ -196,6 +351,7 @@ class OrderRecord:
     order_id: Optional[str] = None
     pair_id: Optional[str] = None
     max_pair_cost_at_post: Optional[float] = None
+    run_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -204,14 +360,144 @@ class FillRecord:
     order_uuid: str
     size: float
     price: float
-    venue_ts: int
+    venue_ts: Optional[int] = None
+    recorded_ts: Optional[int] = None
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class QuoteRecord:
+    ts: float
+    condition_id: str
+    token_id: str
+    side: str
+    price: float
+    size: float
+    market_slug: Optional[str] = None
+    queue_ahead: Optional[float] = None
+    mid: Optional[float] = None
+    edge_vs_mid: Optional[float] = None
+    t_remaining: Optional[float] = None
+    filled: float = 0.0
+    fill_ts: Optional[float] = None
+    cancelled: int = 0
+    order_id: Optional[str] = None
+    local_id: Optional[str] = None
+    latency_ms: Optional[float] = None
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class MarketEventRecord:
+    ts: float
+    condition_id: str
+    kind: str
+    market_slug: Optional[str] = None
+    reason: Optional[str] = None
+    reason_code: str = "OTHER"
+    side: Optional[str] = None
+    price: Optional[float] = None
+    size: Optional[float] = None
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class MarkoutRecord:
+    ts: float
+    condition_id: str
+    side: str
+    fill_price: float
+    size: float
+    market_slug: Optional[str] = None
+    ref_mid: Optional[float] = None
+    ref_mid_source: str = "contaminated"
+    mid_h0: Optional[float] = None
+    mid_h1: Optional[float] = None
+    mid_h2: Optional[float] = None
+    mid_h3: Optional[float] = None
+    done: int = 0
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CloseRecord:
+    ts: float
+    condition_id: str
+    method: str = "sell"
+    market_slug: Optional[str] = None
+    gas: Optional[float] = None
+    shares: Optional[float] = None
+    up_price: Optional[float] = None
+    dn_price: Optional[float] = None
+    cost_basis: Optional[float] = None
+    proceeds: Optional[float] = None
+    fee: Optional[float] = None
+    realized_pnl: Optional[float] = None
+    forgone_vs_settlement: Optional[float] = None
+    up_cost_removed: Optional[float] = None
+    dn_cost_removed: Optional[float] = None
+    tx_hash: Optional[str] = None
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class FloatMarkRecord:
+    ts: float
+    unrealized_usd: float
+    committed_open_usd: float
+    naked_usd: float
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class HedgeCensusRecord:
+    condition_id: str
+    up_ask: Optional[float]
+    down_ask: Optional[float]
+    pair_cost_at_touch: Optional[float]
+    fillable_sub_one: Optional[float]
+    observed_ts: float
+    market_slug: Optional[str] = None
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ResolutionRecord:
+    condition_id: str
+    winning_token: str
+    resolved_ts: float
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class VenueErrorRecord:
+    ts: float
+    condition_id: str
+    side: Optional[str]
+    price: Optional[float]
+    size: Optional[float]
+    error_code: Optional[str]
+    raw_error_msg: str
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DivergenceEventRecord:
+    ts: float
+    condition_id: str
+    pair_id: Optional[str]
+    registry_diff: float
+    venue_diff: float
+    chain_diff: float
+    divergence_msg: str
+    run_id: Optional[str] = None
 
 
 class OrderRegistry:
-    """Thread-safe SQLite-backed registry for live orders and fills."""
+    """Thread-safe SQLite-backed registry for live orders, fills, and operational telemetry."""
 
-    def __init__(self, db_path: Path | str = DEFAULT_DB_PATH) -> None:
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: Path | str | None = None) -> None:
+        self.db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
         init_db(self.db_path)
 
     @contextmanager
@@ -221,10 +507,6 @@ class OrderRegistry:
             try:
                 yield conn
             except BaseException:
-                # Roll back explicitly rather than relying on close() to discard
-                # the open transaction. A write path that fails must leave no
-                # partial state, and that must be true by construction, not by
-                # a side effect of the driver's teardown.
                 try:
                     conn.rollback()
                 except sqlite3.Error:
@@ -234,7 +516,7 @@ class OrderRegistry:
                 conn.close()
 
     def _write_reconcile_lock(self, holder: str, acquired_ts: int) -> None:
-        """Force the lock row. Test and recovery seam -- not a public acquire."""
+        """Force the lock row. Test and recovery seam."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -246,14 +528,7 @@ class OrderRegistry:
 
     @contextmanager
     def reconcile_lock(self, now_ms: int) -> Iterator[str]:
-        """Hold the single reconcile slot for this database, or refuse.
-
-        The lock is taken and released in their own short transactions. Holding
-        one transaction open across the whole pass would be the obvious
-        alternative and is the wrong fix: it keeps SQLite's write lock for the
-        duration of the venue calls, so every reader blocks for as long as the
-        venue takes to answer.
-        """
+        """Hold the single reconcile slot for this database, or refuse."""
         holder = f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -271,9 +546,6 @@ class OrderRegistry:
                         f"transitions from reads the other pass is about to "
                         f"invalidate."
                     )
-                # Past the threshold the holder is presumed dead. Reclaiming is
-                # the difference between a restart recovering and a killed
-                # process bricking every future pass.
             conn.execute(
                 "INSERT OR REPLACE INTO reconcile_lock (id, holder, acquired_ts) "
                 "VALUES (1, ?, ?)",
@@ -284,13 +556,6 @@ class OrderRegistry:
         try:
             yield holder
         finally:
-            # Release on every path, exceptions included. A venue error that
-            # left the row behind would turn one transient 429 into a stuck
-            # poller for the whole staleness window.
-            #
-            # Scoped to our own holder: if we were already reclaimed as stale,
-            # the row belongs to a live pass and deleting it would hand out a
-            # second slot.
             try:
                 with self._conn() as conn:
                     conn.execute("BEGIN IMMEDIATE")
@@ -300,12 +565,11 @@ class OrderRegistry:
                     )
                     conn.commit()
             except sqlite3.Error:
-                # An unreleasable lock self-heals at RECONCILE_LOCK_STALE_MS.
-                # Masking the original exception with this one would be worse.
                 pass
 
     def create_order(self, order: OrderRecord) -> None:
         """Insert a new order row before sending to venue."""
+        r_id = order.run_id or get_run_id()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -313,8 +577,8 @@ class OrderRegistry:
                 INSERT INTO orders (
                     id, order_id, condition_id, token_id, side, price,
                     original_size, status, posted_ts, last_polled_ts,
-                    pair_id, max_pair_cost_at_post
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    pair_id, max_pair_cost_at_post, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order.id,
@@ -329,6 +593,7 @@ class OrderRegistry:
                     order.last_polled_ts,
                     order.pair_id,
                     order.max_pair_cost_at_post,
+                    r_id,
                 ),
             )
             conn.commit()
@@ -340,14 +605,7 @@ class OrderRegistry:
         status: str = "open",
         last_polled_ts: Optional[int] = None,
     ) -> None:
-        """Attach venue order ID to a pending order upon receiving response.
-
-        Raises `KeyError` when no row matches `local_id`. A silent zero-row
-        UPDATE is the worst available outcome here: the venue has accepted an
-        order, we hold its id, and nothing in the registry references it. That
-        order rests until it fills, invisible to every reconcile pass. Fail
-        closed so the caller can record it as unattributed instead.
-        """
+        """Attach venue order ID to a pending order upon receiving response."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if last_polled_ts is not None:
@@ -408,19 +666,9 @@ class OrderRegistry:
             return float(row["total"]) if row else 0.0
 
     def record_fill(self, fill: FillRecord) -> bool:
-        """Record a fill idempotently. True if inserted, False if already present.
-
-        A duplicate `trade_id` is the normal case, not an error. The reconcile
-        loop re-reads trades with a deliberate 60-second overlap because our
-        clock and the venue's differ, so every poll after the first re-presents
-        trades already recorded. Raising here would kill the poll loop on its
-        second cycle. Deduping on the venue's own `trade_id` is what makes the
-        overlap safe, and that is the whole design.
-
-        A fill referencing an unknown order still raises: that is a foreign key
-        violation, it means an orphan the reconciler failed to adopt, and it
-        must fail closed rather than sum into `size_matched` for no order.
-        """
+        """Record a fill idempotently. True if inserted, False if already present."""
+        rec_ts = fill.recorded_ts if fill.recorded_ts is not None else int(time.time() * 1000)
+        r_id = fill.run_id or get_run_id()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             already = conn.execute(
@@ -432,10 +680,10 @@ class OrderRegistry:
                 return False
             conn.execute(
                 """
-                INSERT INTO fills (trade_id, order_uuid, size, price, venue_ts)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO fills (trade_id, order_uuid, size, price, venue_ts, recorded_ts, run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (fill.trade_id, fill.order_uuid, fill.size, fill.price, fill.venue_ts),
+                (fill.trade_id, fill.order_uuid, fill.size, fill.price, fill.venue_ts, rec_ts, r_id),
             )
             conn.commit()
             return True
@@ -443,13 +691,7 @@ class OrderRegistry:
     def update_order_status(
         self, local_id: str, status: str, last_polled_ts: int
     ) -> None:
-        """Update order status and last_polled_ts.
-
-        Raises `KeyError` when no row matches. Same rule as
-        `attach_venue_order_id`: an UPDATE that must affect exactly one row
-        asserts its `rowcount`, or a vanished row is reported as a successful
-        transition and the reconcile pass believes it moved state it did not.
-        """
+        """Update order status and last_polled_ts."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute(
@@ -469,13 +711,7 @@ class OrderRegistry:
             conn.commit()
 
     def get_matched_notional(self, order_uuid: str) -> float:
-        """SUM(size * price) over this order's fills.
-
-        Paired with get_size_matched this gives the volume-weighted fill price,
-        which is the only honest cost basis for a leg filled across several
-        trades at different prices. Derived from the fills rows for the same
-        reason size_matched is: a stored average drifts from its evidence.
-        """
+        """SUM(size * price) over this order's fills."""
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT COALESCE(SUM(size * price), 0.0) AS notional "
@@ -485,12 +721,7 @@ class OrderRegistry:
         return float(row["notional"]) if row else 0.0
 
     def get_orders_by_pair(self, pair_id: str) -> list[OrderRecord]:
-        """Every order carrying this pair_id, whatever its status.
-
-        Unlike get_active_orders this includes filled and cancelled rows: a
-        pair's exit decision depends on what filled, not only on what is still
-        working.
-        """
+        """Every order carrying this pair_id, whatever its status."""
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM orders WHERE pair_id = ? ORDER BY posted_ts",
@@ -505,6 +736,360 @@ class OrderRegistry:
                 "SELECT * FROM orders WHERE status IN ('pending', 'open', 'partial') ORDER BY posted_ts ASC"
             ).fetchall()
             return [self._row_to_order(r) for r in rows]
+
+    # --- Telemetry Logging Methods -----------------------------------------
+
+    def log_quote(self, quote: QuoteRecord) -> int:
+        """Record a quote intent to quotes table."""
+        r_id = quote.run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                """
+                INSERT INTO quotes (
+                    ts, market_slug, condition_id, token_id, side, price, size,
+                    queue_ahead, mid, edge_vs_mid, t_remaining, filled, fill_ts,
+                    cancelled, order_id, local_id, latency_ms, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    quote.ts,
+                    quote.market_slug,
+                    quote.condition_id,
+                    quote.token_id,
+                    quote.side,
+                    quote.price,
+                    quote.size,
+                    quote.queue_ahead,
+                    quote.mid,
+                    quote.edge_vs_mid,
+                    quote.t_remaining,
+                    quote.filled,
+                    quote.fill_ts,
+                    quote.cancelled,
+                    quote.order_id,
+                    quote.local_id,
+                    quote.latency_ms,
+                    r_id,
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def update_quote_fill(
+        self, local_id: str, filled_shares: float, fill_ts: float, cancelled: bool = False
+    ) -> None:
+        """Update quote record fill status."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE quotes
+                SET filled = ?, fill_ts = ?, cancelled = ?
+                WHERE local_id = ?
+                """,
+                (filled_shares, fill_ts, 1 if cancelled else 0, local_id),
+            )
+            conn.commit()
+
+    def log_market_event(self, event: MarketEventRecord) -> None:
+        """Record a market event (decision, skip reason, fill, state transition)."""
+        r_id = event.run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO market_events (
+                    ts, market_slug, condition_id, kind, reason, reason_code,
+                    side, price, size, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.ts,
+                    event.market_slug,
+                    event.condition_id,
+                    event.kind,
+                    event.reason,
+                    event.reason_code,
+                    event.side,
+                    event.price,
+                    event.size,
+                    r_id,
+                ),
+            )
+            conn.commit()
+
+    def log_markout(self, markout: MarkoutRecord) -> int:
+        """Record initial markout row on fill."""
+        r_id = markout.run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                """
+                INSERT INTO markouts (
+                    ts, condition_id, market_slug, side, fill_price, size,
+                    ref_mid, ref_mid_source, mid_h0, mid_h1, mid_h2, mid_h3,
+                    done, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    markout.ts,
+                    markout.condition_id,
+                    markout.market_slug,
+                    markout.side,
+                    markout.fill_price,
+                    markout.size,
+                    markout.ref_mid,
+                    markout.ref_mid_source,
+                    markout.mid_h0,
+                    markout.mid_h1,
+                    markout.mid_h2,
+                    markout.mid_h3,
+                    markout.done,
+                    r_id,
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def update_markout_horizon(
+        self, markout_id: int, horizon_idx: int, mid: float, last: bool = False
+    ) -> None:
+        """Record mid at horizon_idx and set done flag if last horizon."""
+        col = f"mid_h{horizon_idx}"
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if last:
+                conn.execute(
+                    f"UPDATE markouts SET {col} = ?, done = 1 WHERE id = ?",
+                    (mid, markout_id),
+                )
+            else:
+                conn.execute(
+                    f"UPDATE markouts SET {col} = ? WHERE id = ?",
+                    (mid, markout_id),
+                )
+            conn.commit()
+
+    def get_pending_markouts(self, now_sec: float, horizons: tuple[float, ...]) -> list[dict]:
+        """Fetch pending markouts due for sampling."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM markouts WHERE done = 0 ORDER BY ts ASC"
+            ).fetchall()
+            out = []
+            for r in rows:
+                row_dict = dict(r)
+                age = now_sec - float(row_dict["ts"])
+                for i, h in enumerate(horizons):
+                    col = f"mid_h{i}"
+                    if row_dict.get(col) is None and age >= h:
+                        item = dict(row_dict)
+                        item["_due"] = i
+                        out.append(item)
+                        break
+            return out
+
+    def log_close(self, close: CloseRecord) -> None:
+        """Record an early exit or merge close."""
+        r_id = close.run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO closes (
+                    ts, condition_id, market_slug, method, gas, shares,
+                    up_price, dn_price, cost_basis, proceeds, fee, realized_pnl,
+                    forgone_vs_settlement, up_cost_removed, dn_cost_removed,
+                    tx_hash, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    close.ts,
+                    close.condition_id,
+                    close.market_slug,
+                    close.method,
+                    close.gas,
+                    close.shares,
+                    close.up_price,
+                    close.dn_price,
+                    close.cost_basis,
+                    close.proceeds,
+                    close.fee,
+                    close.realized_pnl,
+                    close.forgone_vs_settlement,
+                    close.up_cost_removed,
+                    close.dn_cost_removed,
+                    close.tx_hash,
+                    r_id,
+                ),
+            )
+            conn.commit()
+
+    def log_float_mark(
+        self, unrealized_usd: float, committed_open_usd: float, naked_usd: float, ts: Optional[float] = None
+    ) -> None:
+        """Record periodic portfolio marks."""
+        now_ts = ts if ts is not None else time.time()
+        r_id = get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO float_marks (ts, unrealized_usd, committed_open_usd, naked_usd, run_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (now_ts, unrealized_usd, committed_open_usd, naked_usd, r_id),
+            )
+            conn.commit()
+
+    def log_hedge_census(self, census: HedgeCensusRecord) -> None:
+        """Record market hedge census evaluation."""
+        r_id = census.run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO hedge_census (
+                    condition_id, market_slug, up_ask, down_ask,
+                    pair_cost_at_touch, fillable_sub_one, observed_ts, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    census.condition_id,
+                    census.market_slug,
+                    census.up_ask,
+                    census.down_ask,
+                    census.pair_cost_at_touch,
+                    census.fillable_sub_one,
+                    census.observed_ts,
+                    r_id,
+                ),
+            )
+            conn.commit()
+
+    def log_resolution(self, res: ResolutionRecord) -> None:
+        """Record market resolution."""
+        r_id = res.run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO resolutions (condition_id, winning_token, resolved_ts, run_id)
+                VALUES (?, ?, ?, ?)
+                """,
+                (res.condition_id, res.winning_token, res.resolved_ts, r_id),
+            )
+            conn.commit()
+
+    def log_venue_error(self, err: VenueErrorRecord) -> None:
+        """Record venue error or rejection."""
+        r_id = err.run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO venue_errors (
+                    ts, condition_id, side, price, size, error_code, raw_error_msg, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    err.ts,
+                    err.condition_id,
+                    err.side,
+                    err.price,
+                    err.size,
+                    err.error_code,
+                    err.raw_error_msg,
+                    r_id,
+                ),
+            )
+            conn.commit()
+
+    def log_divergence_event(self, div: DivergenceEventRecord) -> None:
+        """Record 3-way divergence incident."""
+        r_id = div.run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO divergence_events (
+                    ts, condition_id, pair_id, registry_diff, venue_diff, chain_diff,
+                    divergence_msg, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    div.ts,
+                    div.condition_id,
+                    div.pair_id,
+                    div.registry_diff,
+                    div.venue_diff,
+                    div.chain_diff,
+                    div.divergence_msg,
+                    r_id,
+                ),
+            )
+            conn.commit()
+
+    # --- Query helpers for reporting ---------------------------------------
+
+    def get_all_quotes(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM quotes ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_fills(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts, f.recorded_ts, f.run_id,
+                       o.condition_id, o.token_id, o.side, o.pair_id, o.posted_ts
+                FROM fills f
+                JOIN orders o ON f.order_uuid = o.id
+                ORDER BY f.recorded_ts ASC
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_market_events(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM market_events ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_markouts(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM markouts ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_closes(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM closes ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_float_marks(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM float_marks ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_hedge_census(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM hedge_census ORDER BY observed_ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_resolutions(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM resolutions").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_venue_errors(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM venue_errors ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_divergence_events(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM divergence_events ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
 
     @staticmethod
     def _row_to_order(row: sqlite3.Row) -> OrderRecord:
@@ -525,6 +1110,7 @@ class OrderRegistry:
                 if row["max_pair_cost_at_post"] is not None
                 else None
             ),
+            run_id=row["run_id"] if "run_id" in row.keys() else None,
         )
 
 
@@ -541,11 +1127,7 @@ class ReconcileSummary:
     orphans_adopted: int = 0
     unattributed_recorded: int = 0
     unmatched_trades: int = 0
-    transitions: list[str] = None
-
-    def __post_init__(self):
-        if self.transitions is None:
-            self.transitions = []
+    transitions: list[str] = field(default_factory=list)
 
 
 def compute_backoff_delay(
@@ -566,17 +1148,7 @@ def reconcile_orders(
     orphan_window_ms: int = DEFAULT_ORPHAN_MATCH_WINDOW_MS,
     lookback_ms: Optional[int] = None,
 ) -> ReconcileSummary:
-    """Reconcile registry state against venue open orders and trades.
-
-    Serialised behind the database-level reconcile lock. The lock is taken here,
-    at the only public entry point, rather than at each call site: the poll
-    loop, a one-shot CLI call, and whatever Stage 3 adds are all covered by
-    construction, and a future caller cannot forget to take it.
-
-    Raises ReconcileInProgress when another pass already holds the slot.
-    """
-    import time
-
+    """Reconcile registry state against venue open orders and trades."""
     now_ms = current_ts_ms if current_ts_ms is not None else int(time.time() * 1000)
     with registry.reconcile_lock(now_ms):
         return _reconcile_pass(
@@ -600,12 +1172,6 @@ def _reconcile_pass(
     """One reconcile pass. Callers must already hold the reconcile lock."""
     summary = ReconcileSummary(polled_ts=now_ms)
 
-    # Absence of open orders is evidence only if we know we asked and were
-    # answered. The SDK already raises from assert_level_2_auth when creds are
-    # missing, so this is belt-and-braces -- but it fails fast with a legible
-    # message instead of deep inside header construction, and it stops a
-    # degraded or stubbed client from cancelling the whole registry by
-    # answering "no open orders" to a question it never sent.
     creds = getattr(client, "creds", _CREDS_UNCHECKED)
     if creds is None:
         raise PermissionError(
@@ -615,12 +1181,7 @@ def _reconcile_pass(
         )
 
     # 1. Fetch open orders from venue.
-    #
-    # No try/except here on purpose. A failed fetch must reach the poll loop so
-    # it can back off; swallowing it and continuing with an empty list would
-    # make every resting order look absent, and section 4 would cancel them all.
     venue_open_orders_raw = client.get_open_orders()
-
     summary.open_orders_count = len(venue_open_orders_raw) if venue_open_orders_raw else 0
     venue_order_map: dict[str, dict] = {}
     if venue_open_orders_raw:
@@ -629,15 +1190,7 @@ def _reconcile_pass(
             if v_id:
                 venue_order_map[v_id] = item
 
-    # 2. Orphan adoption: check venue open orders not currently in registry.
-    #
-    # The candidate pool is consumed as it is matched. The match predicate is
-    # (token, price, size, posted_ts +/- window) -- nothing in it is unique, and
-    # two legs quoted at the same price and size inside the window is a normal
-    # pattern, not an edge case. Without removal both venue orders select the
-    # same pending row, the second adoption moves order_id off the first, and
-    # that first venue order is left resting with real money and nothing in the
-    # registry referencing it.
+    # 2. Orphan adoption
     active_orders = registry.get_active_orders()
     pending_pool = [o for o in active_orders if o.status == "pending"]
     for v_id, item in venue_order_map.items():
@@ -646,7 +1199,7 @@ def _reconcile_pass(
             v_token = str(item.get("asset_id") or item.get("token_id") or "")
             v_price = float(item.get("price", 0.0))
             v_size = float(item.get("size") or item.get("original_size") or 0.0)
-            v_ts_raw = item.get("timestamp") or item.get("created_at") or item.get("posted_ts")
+            v_ts_raw = item.get("match_time") or item.get("timestamp") or item.get("created_at") or item.get("posted_ts")
             v_ts = int(v_ts_raw) if v_ts_raw is not None else None
             if v_ts is not None and v_ts < 10_000_000_000:
                 v_ts *= 1000
@@ -683,6 +1236,7 @@ def _reconcile_pass(
                         status="unattributed",
                         posted_ts=now_ms,
                         last_polled_ts=now_ms,
+                        run_id=get_run_id(),
                     )
                     registry.create_order(unattr_order)
                     summary.unattributed_recorded += 1
@@ -699,17 +1253,13 @@ def _reconcile_pass(
                     status="unattributed",
                     posted_ts=now_ms,
                     last_polled_ts=now_ms,
+                    run_id=get_run_id(),
                 )
                 registry.create_order(unattr_order)
                 summary.unattributed_recorded += 1
                 summary.transitions.append(f"UNATTRIBUTED {v_id}")
 
     # 3. Poll trades with the 60s overlap.
-    #
-    # The overlap is exactly 60s from the oldest cursor we care about, not 60s
-    # subtracted twice. It is also floored at MAX_TRADE_LOOKBACK_MS: a single
-    # order left pending for an hour would otherwise drag `after` back an hour
-    # on every 5s cycle, and the query grows without bound for no benefit.
     earliest_polled_ts = now_ms
     current_active = registry.get_active_orders()
     if current_active:
@@ -722,17 +1272,12 @@ def _reconcile_pass(
 
     max_lookback = lookback_ms if lookback_ms is not None else MAX_TRADE_LOOKBACK_MS
     earliest_polled_ts = max(earliest_polled_ts, now_ms - max_lookback)
-
     after_sec = max(0, int((earliest_polled_ts - TRADE_OVERLAP_MS) / 1000))
 
-    # Any query error (429, 5xx, socket error, or response parsing TypeError)
-    # must propagate to the poll loop's backoff: returning an empty trade list
-    # or falling back to an unbounded query here would corrupt attribution.
     from py_clob_client_v2.clob_types import TradeParams
 
     p = TradeParams(maker_address=maker_address, after=after_sec)
     trades_raw = client.get_trades(params=p)
-
 
     summary.trades_polled = len(trades_raw) if trades_raw else 0
     affected_order_ids: set[str] = set()
@@ -740,19 +1285,12 @@ def _reconcile_pass(
         for t in trades_raw:
             t_id = str(t.get("id") or t.get("trade_id") or "")
             if not t_id:
-                # No venue trade id means no dedupe key. Keying on "" would let
-                # the first id-less trade insert and every later one collide
-                # with it, so each would be counted as a duplicate and dropped:
-                # real executed volume vanishing into duplicates_ignored, with
-                # size_matched understated for the orders it belonged to.
                 summary.unmatched_trades += 1
                 summary.transitions.append(
                     f"UNMATCHED_TRADE <no id> size={t.get('size')} @ {t.get('price')}"
                 )
                 continue
-            # taker_order_id first: when we cross the spread our order is the
-            # taker, and matching only on maker ids silently drops every
-            # aggressive fill we ever make.
+
             t_order_id = str(
                 t.get("taker_order_id")
                 or t.get("order_id")
@@ -761,10 +1299,17 @@ def _reconcile_pass(
             )
             t_size = float(t.get("size", 0.0))
             t_price = float(t.get("price", 0.0))
-            t_ts_raw = t.get("timestamp") or t.get("venue_ts") or t.get("created_at")
-            t_ts = int(t_ts_raw) if t_ts_raw is not None else now_ms
-            if t_ts < 10_000_000_000:
-                t_ts *= 1000
+
+            # Venue match time: match_time, timestamp, or created_at
+            t_ts_raw = t.get("match_time") or t.get("timestamp") or t.get("venue_ts") or t.get("created_at")
+            t_ts = None
+            if t_ts_raw is not None:
+                try:
+                    t_ts = int(t_ts_raw)
+                    if t_ts < 10_000_000_000:
+                        t_ts *= 1000
+                except (ValueError, TypeError):
+                    t_ts = None
 
             # Check if this trade contains aggregate maker_orders
             maker_entries = t.get("maker_orders")
@@ -786,10 +1331,26 @@ def _reconcile_pass(
                             size=m_size,
                             price=m_price,
                             venue_ts=t_ts,
+                            recorded_ts=now_ms,
+                            run_id=get_run_id(),
                         )
                         if registry.record_fill(fill_rec):
                             summary.fills_recorded += 1
                             summary.transitions.append(f"FILL {m_order.id[:8]} ({m_order.order_id}): +{m_size} @ {m_price}")
+                            # Record markout entry
+                            fill_sec = (t_ts / 1000.0) if t_ts else (now_ms / 1000.0)
+                            registry.log_markout(
+                                MarkoutRecord(
+                                    ts=fill_sec,
+                                    condition_id=m_order.condition_id,
+                                    side=m_order.side,
+                                    fill_price=m_price,
+                                    size=m_size,
+                                    ref_mid=m_price,  # initial ref mid fallback
+                                    ref_mid_source="contaminated",
+                                    run_id=get_run_id(),
+                                )
+                            )
                         else:
                             summary.duplicates_ignored += 1
 
@@ -811,9 +1372,6 @@ def _reconcile_pass(
                     break
 
             if order is None:
-                # A trade we cannot attribute is not nothing. Dropping it
-                # silently loses real executed volume and leaves size_matched
-                # understated, which Stage 4 would then size money from.
                 summary.unmatched_trades += 1
                 summary.transitions.append(
                     f"UNMATCHED_TRADE {t_id} order_id={t_order_id or 'none'} "
@@ -827,10 +1385,25 @@ def _reconcile_pass(
                     size=t_size,
                     price=t_price,
                     venue_ts=t_ts,
+                    recorded_ts=now_ms,
+                    run_id=get_run_id(),
                 )
                 if registry.record_fill(fill_rec):
                     summary.fills_recorded += 1
                     summary.transitions.append(f"FILL {order.id[:8]} ({order.order_id}): +{t_size} @ {t_price}")
+                    fill_sec = (t_ts / 1000.0) if t_ts else (now_ms / 1000.0)
+                    registry.log_markout(
+                        MarkoutRecord(
+                            ts=fill_sec,
+                            condition_id=order.condition_id,
+                            side=order.side,
+                            fill_price=t_price,
+                            size=t_size,
+                            ref_mid=t_price,
+                            ref_mid_source="contaminated",
+                            run_id=get_run_id(),
+                        )
+                    )
                 else:
                     summary.duplicates_ignored += 1
 
@@ -855,7 +1428,6 @@ def _reconcile_pass(
             if new_status == "partial" and order.status != "partial":
                 summary.orders_partially_filled += 1
         else:
-            # Absent from open orders and not full
             if size_matched > SIZE_EPS:
                 new_status = "partial"
                 if order.status != "partial":
@@ -881,7 +1453,7 @@ def inventory_from_registry(
     down_token: str,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> "Inventory":
-    """Rebuild a market's share inventory from fills in the SQLite registry (live/run/live.db)."""
+    """Rebuild a market's share inventory from fills and closes in the SQLite registry."""
     from engine.quotes import Inventory
 
     inv = Inventory()
@@ -924,7 +1496,25 @@ def inventory_from_registry(
             inv.fills += 1
             if vts:
                 inv.last_fill_ts = vts if inv.last_fill_ts is None else max(inv.last_fill_ts, vts)
+
+        # Subtract executed closes
+        close_rows = conn.execute(
+            """
+            SELECT method, shares, up_cost_removed, dn_cost_removed, cost_basis
+            FROM closes
+            WHERE condition_id = ?
+            """,
+            (condition_id,),
+        ).fetchall()
+        for cr in close_rows:
+            method = cr["method"]
+            sh = float(cr["shares"] or 0.0)
+            up_c = cr["up_cost_removed"]
+            dn_c = cr["dn_cost_removed"]
+            if method == "merge":
+                inv.up_shares = max(0.0, inv.up_shares - sh)
+                inv.down_shares = max(0.0, inv.down_shares - sh)
+                if up_c is not None and dn_c is not None:
+                    inv.up_cost = max(0.0, inv.up_cost - float(up_c))
+                    inv.down_cost = max(0.0, inv.down_cost - float(dn_c))
     return inv
-
-
-

@@ -412,6 +412,18 @@ def get_state():
     return JSONResponse(query_db_state(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
 
 
+@app.get("/api/kpi")
+def get_kpi(run_id: str | None = None):
+    """Return live KPI report mirroring strategy/kpi.py."""
+    from engine.kpi import report as generate_kpi_report
+    db_path = resolve_db_path(_ACTIVE_DB_OVERRIDE)
+    try:
+        data = generate_kpi_report(db_path=db_path, run_id=run_id)
+        return JSONResponse(data)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 PAGE_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>

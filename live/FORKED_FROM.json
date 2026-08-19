@@ -13,11 +13,23 @@
       "source_sha256": "eca6e1efd655f99dcddc7cfc0b083b04adb52116d4493e71e5b1ae42b858eeed",
       "why": "Leaf module -- quality gate and fleet posture state machine -- so live/ decision layer carries its own copy."
     },
+    "live/engine/kpi.py": {
+      "forked_from": "strategy/kpi.py",
+      "at_commit": "c2b91152a55850937a0166d2a45a33a57eeb789c",
+      "source_sha256": "84f9e37694d04a28ebf1b87f7b0634ac0a1b180134ab5dc61c2a9f01e42b8f51",
+      "why": "Telemetry layer -- live KPI report mirroring strategy/kpi.py from live/run/live.db plus latency, reconcile lag, venue errors, and divergences."
+    },
     "live/engine/markets.py": {
       "forked_from": "strategy/markets.py",
       "at_commit": "c50cca5e26a6655cab4649d2b9fba185ee190354",
       "source_sha256": "4da7e18e168fb5122607b0f659a0afdf3baad98df84bae45f5553e26b7420be3",
       "why": "Leaf module -- stdlib plus requests only -- so live/ can carry its own copy instead of importing across the tree boundary."
+    },
+    "live/engine/markout.py": {
+      "forked_from": "strategy/markout.py",
+      "at_commit": "c2b91152a55850937a0166d2a45a33a57eeb789c",
+      "source_sha256": "5341abf733b85e9b9b83b0bd0a44c57346e9a54a10522312423516faef710e26",
+      "why": "Markout sampler -- out-of-band adverse selection sampler at standard horizons (300s, 3600s, 21600s, 900s) writing to live.db."
     },
     "live/engine/quotes.py": {
       "forked_from": "strategy/quotes.py",
