@@ -443,16 +443,42 @@ def test_stored_credentials_skip_derivation_entirely(monkeypatch):
                                      "POLY_API_PASSPHRASE"])
 def test_a_partial_credential_set_falls_back_to_derivation(monkeypatch, missing):
     """A half-configured .env would otherwise build a client that fails every
-    signed request with an error indistinguishable from a venue outage."""
+    signed request with an error indistinguishable from a venue outage.
+
+    Asserted through `_client()`, not just `_api_creds_from_env()`: the point is
+    that derivation still happens, and a test that only checks the helper
+    returns None would pass even if `_client()` stopped deriving on None.
+    """
     from engine import live_exec
 
     live_exec._CLIENT_CACHE.clear()
+    monkeypatch.setenv("POLY_PRIVATE_KEY", "0x" + "11" * 32)
+    monkeypatch.setenv("POLY_FUNDER", "0xee3b")
     monkeypatch.setenv("POLY_API_KEY", "k")
     monkeypatch.setenv("POLY_API_SECRET", "s")
     monkeypatch.setenv("POLY_API_PASSPHRASE", "p")
     monkeypatch.delenv(missing, raising=False)
 
+    derived = {"n": 0}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.creds = None
+
+        def create_or_derive_api_key(self):
+            derived["n"] += 1
+            return "derived-creds"
+
+        def set_api_creds(self, creds):
+            self.creds = creds
+
+    import py_clob_client_v2.client as clob_mod
+    monkeypatch.setattr(clob_mod, "ClobClient", FakeClient)
+
     assert live_exec._api_creds_from_env() is None
+    c = live_exec._client()
+    assert derived["n"] == 1
+    assert c.creds == "derived-creds"
     live_exec._CLIENT_CACHE.clear()
 
 
@@ -464,3 +490,33 @@ def test_credentials_are_read_from_the_environment(monkeypatch):
     monkeypatch.setenv("POLY_API_PASSPHRASE", "ghi")
     creds = live_exec._api_creds_from_env()
     assert (creds.api_key, creds.api_secret, creds.api_passphrase) == ("abc", "def", "ghi")
+
+
+def test_env_write_is_atomic_and_never_truncates_on_failure(tmp_path, monkeypatch):
+    """.env holds POLY_PRIVATE_KEY. A plain write truncates first, so a crash
+    between truncate and flush would destroy the wallet's signing key -- and it
+    is not recoverable from anywhere in this repo."""
+    from engine import live_exec
+
+    env = tmp_path / ".env"
+    original = "POLY_PRIVATE_KEY=0xdeadbeef\n"
+    env.write_text(original, encoding="utf-8")
+
+    # A write that fails mid-flight must leave the original byte-for-byte.
+    real_open = open
+
+    def exploding_open(path, *args, **kwargs):
+        if ".tmp." in str(path):
+            raise OSError("disk full")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", exploding_open)
+    assert live_exec._atomic_write_text(env, "REPLACED\n") is False
+    monkeypatch.undo()
+    assert env.read_text(encoding="utf-8") == original
+    assert list(tmp_path.glob("*.tmp.*")) == []
+
+    # A successful write replaces the content and leaves no temp file behind.
+    assert live_exec._atomic_write_text(env, "REPLACED\n") is True
+    assert env.read_text(encoding="utf-8") == "REPLACED\n"
+    assert list(tmp_path.glob("*.tmp.*")) == []

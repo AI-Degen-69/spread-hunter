@@ -4365,7 +4365,10 @@ same wallet, the same private key, and the same `_client()` path.
    path, opposite outcomes seconds apart. Nothing about the *account* can explain that.
 2. **The rate limit is on derivation, not on the account.** `POST /auth/api-key` returns
    `400 Could not create api key` every time - the key already exists - and the client then falls
-   through to `GET /auth/derive-api-key`, which is throttled to roughly one call per few minutes.
+   through to `GET /auth/derive-api-key`, which is rate-limited. The window itself was **not
+   measured**: what was measured is that a second derivation **twenty seconds** after a
+   successful one was refused, which bounds it below at >20s and says nothing about the
+   upper end.
    Every command derived its own key, so the second command in any pair was throttled by the first.
    The previous entry's "account-specific server-side stall" was **wrong**: it was self-inflicted,
    and the per-process client cache only reduced the rate rather than removing the call.
@@ -4379,6 +4382,12 @@ same wallet, the same private key, and the same `_client()` path.
 5. **A partial set falls back to deriving.** Two of three would build a client that fails every
    signed request with an error indistinguishable from a venue outage - which is exactly the
    misdiagnosis this entry corrects. Parametrised over each missing value.
+
+6. **Measured after the fix, since the claim is that throttling is gone.** Six `GET /value` calls
+   back to back returned HTTP 200 in 0.05-0.19s each. Three credentialed balance reads, in three
+   *separate processes* so no cache could help, returned $101.88 in 2.60s, 2.71s, and 2.39s.
+   That is a handful of calls, not sustained load: it supports a sweep every 30-60s and says
+   nothing about once per second.
 
 **Verdict.** **LIVE**, and it closes the **OPEN** item from the previous entry, which was
 misdiagnosed. Measured after storing the credentials: `account-sweep` returned ACCOUNT VALUE

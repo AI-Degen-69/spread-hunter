@@ -214,6 +214,37 @@ def _atomic_write_json(file_path: Path, data: list) -> bool:
         return False
 
 
+def _atomic_write_text(file_path: Path, text: str) -> bool:
+    """Atomically replace a text file, preserving its permission bits.
+
+    The mode is carried over because the target may be `.env`: a file created
+    with restrictive permissions must not silently widen to the default umask
+    just because it was rewritten.
+    """
+    tmp_path = file_path.with_name(f"{file_path.name}.tmp.{uuid.uuid4()}")
+    try:
+        try:
+            mode = os.stat(file_path).st_mode
+        except OSError:
+            mode = None
+        with open(tmp_path, "w", encoding="utf-8") as tf:
+            tf.write(text)
+            tf.flush()
+            os.fsync(tf.fileno())
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        os.replace(tmp_path, file_path)
+        return True
+    except Exception as exc:
+        print(f"WARNING: _atomic_write_text failed for {file_path}: {exc}", file=sys.stderr)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        return False
+
+
 def _log_order(rec: dict) -> str:
     RUN.mkdir(exist_ok=True)
     f = RUN / "live_orders.json"
@@ -2436,7 +2467,7 @@ def api_creds(force: bool = False) -> None:
 
     text = env_file.read_text(encoding="utf-8")
     lines = [ln for ln in text.splitlines()
-             if not ln.split("=", 1)[0].strip() in
+             if ln.split("=", 1)[0].strip() not in
              ("POLY_API_KEY", "POLY_API_SECRET", "POLY_API_PASSPHRASE")]
     lines += [
         "",
@@ -2446,7 +2477,13 @@ def api_creds(force: bool = False) -> None:
         f"POLY_API_SECRET={creds.api_secret}",
         f"POLY_API_PASSPHRASE={creds.api_passphrase}",
     ]
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Atomic, because this file holds POLY_PRIVATE_KEY. A plain write truncates
+    # first: a crash or a full disk between truncate and flush would leave the
+    # wallet's signing key destroyed, and it is not recoverable from anywhere in
+    # this repo. Same temp-file/fsync/os.replace shape as _atomic_write_json.
+    if not _atomic_write_text(env_file, "\n".join(lines) + "\n"):
+        raise SystemExit(
+            f"Could not write {env_file}. It is unchanged -- nothing was lost.")
     print(f"Wrote POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE to {env_file}.")
     print("Values are not printed here on purpose. Confirm .env is in .gitignore.")
     print("Every later command now skips derivation entirely.")
