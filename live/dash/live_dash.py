@@ -489,24 +489,134 @@ def get_state():
     return JSONResponse(query_db_state(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
 
 
-def _is_pid_alive(pid: int | None) -> bool:
-    """Check if process with given PID is currently alive."""
-    if not pid or pid <= 0:
-        return False
+# How far a process's real creation time may sit from the time we recorded for
+# it. The parent writes started_at immediately after Popen, so a genuine match
+# is sub-second; this is slack for clock granularity, not for a different
+# process. A recycled PID landing inside this window is not a case worth
+# engineering around -- a PID that came back within a minute is still the same
+# generation of work.
+PID_START_TOLERANCE_S: float = 60.0
+
+
+def _win_process_times(pid: int) -> tuple[float | None, float | None] | None:
+    """(created, exited) as Unix timestamps for a Windows PID.
+
+    `exited` is None while the process is still running. It is not always zero
+    for a dead one: a process whose parent still holds an open handle stays
+    queryable after exit, and only this field distinguishes it from a live one.
+
+    Returns None when the process cannot be opened at all.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    # argtypes and restype are declared, not left to ctypes' defaults. A HANDLE
+    # is pointer-sized, and the default `c_int` restype truncates it on 64-bit
+    # Windows -- so a handle above 2**31 would come back as a different value,
+    # be passed to GetProcessTimes as garbage, and then be closed as garbage.
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.GetProcessTimes.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+    ]
+    k32.GetProcessTimes.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+
+    handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return None
+    try:
+        creation = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        if not k32.GetProcessTimes(
+                handle, ctypes.byref(creation), ctypes.byref(exited),
+                ctypes.byref(kernel), ctypes.byref(user)):
+            return None
+
+        def _unix(ft) -> float | None:
+            # FILETIME counts 100ns intervals since 1601-01-01; the Unix epoch
+            # is 11644473600 seconds later. Zero means "not set".
+            ticks = (ft.dwHighDateTime << 32) | ft.dwLowDateTime
+            return None if ticks == 0 else ticks / 1e7 - 11644473600.0
+
+        return _unix(creation), _unix(exited)
+    finally:
+        k32.CloseHandle(handle)
+
+
+def _process_start_time(pid: int) -> float | None:
+    """Unix timestamp the process was created, or None if it cannot be read."""
     try:
         if sys.platform == "win32":
-            import ctypes
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return True
-            return False
+            times = _win_process_times(int(pid))
+            return None if times is None else times[0]
+        # Linux: field 22 of /proc/<pid>/stat is starttime in clock ticks since
+        # boot. The comm field can contain spaces and parentheses, so the split
+        # starts after the last ')'.
+        stat = Path(f"/proc/{int(pid)}/stat").read_text()
+        fields = stat[stat.rindex(")") + 2:].split()
+        starttime_ticks = float(fields[19])
+        hz = os.sysconf("SC_CLK_TCK")
+        with open("/proc/stat", encoding="utf-8") as fh:
+            btime = next(float(line.split()[1])
+                         for line in fh if line.startswith("btime "))
+        return btime + starttime_ticks / hz
+    except Exception:
+        return None
+
+
+def _is_pid_alive(pid: int | None, started_at: float | None = None) -> bool:
+    """Is the process we recorded still running?
+
+    A bare PID check is not enough. The OS recycles PIDs, and on this project it
+    did: the bot exited, Windows handed 13052 to msedge, and the dashboard then
+    reported the bot stack RUNNING forever -- which permanently refused every
+    `Fresh DB` reset and would have refused a legitimate start. When we know
+    when the process was supposed to have started, the creation time must agree.
+
+    If the creation time cannot be read (unsupported platform, denied access),
+    this falls back to the bare PID check rather than declaring the process
+    dead: a false "stopped" would let a second bot stack launch alongside a
+    live one, which AGENTS.md forbids outright.
+    """
+    if not pid or pid <= 0:
+        return False
+    created: float | None = None
+    try:
+        if sys.platform == "win32":
+            times = _win_process_times(int(pid))
+            if times is None:
+                return False
+            created, exited = times
+            if exited is not None:
+                # Queryable but finished -- a handle is still open somewhere.
+                return False
         else:
-            os.kill(int(pid), 0)
-            return True
+            try:
+                os.kill(int(pid), 0)
+            except PermissionError:
+                # EPERM means the process exists but belongs to another user.
+                # Letting the bare `except` below turn that into False is the
+                # false "stopped" this function exists to avoid -- it would let
+                # a second bot stack launch beside a live one.
+                pass
     except Exception:
         return False
+
+    if started_at is None:
+        return True
+    if created is None:
+        created = _process_start_time(int(pid))
+    if created is None:
+        return True
+    return abs(created - float(started_at)) <= PID_START_TOLERANCE_S
 
 
 def get_system_status() -> dict:
@@ -521,15 +631,15 @@ def get_system_status() -> dict:
 
     sup_info = saved_procs.get("supervisor", {})
     sup_pid = sup_info.get("pid")
-    sup_running = _is_pid_alive(sup_pid)
+    sup_running = _is_pid_alive(sup_pid, sup_info.get("started_at"))
 
     scr_info = saved_procs.get("screener", {})
     scr_pid = scr_info.get("pid")
-    scr_running = _is_pid_alive(scr_pid)
+    scr_running = _is_pid_alive(scr_pid, scr_info.get("started_at"))
 
     eng_info = saved_procs.get("engine", {})
     eng_pid = eng_info.get("pid")
-    eng_running = _is_pid_alive(eng_pid)
+    eng_running = _is_pid_alive(eng_pid, eng_info.get("started_at"))
 
     dash_running = True
     dash_pid = os.getpid()
@@ -624,7 +734,7 @@ def stop_bot() -> dict:
 
         for name, info in saved_procs.items():
             pid = info.get("pid")
-            if pid and _is_pid_alive(pid):
+            if pid and _is_pid_alive(pid, info.get("started_at")):
                 try:
                     if sys.platform == "win32":
                         subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
@@ -1437,30 +1547,28 @@ PAGE_HTML = """<!DOCTYPE html>
     <section class="portfolio-card">
       <div class="portfolio-tiles">
         <div class="pf-tile pf-tile-primary">
-          <div class="pf-label">Book Value <span class="pf-src">registry</span></div>
+          <div class="pf-label">Account Value <span class="pf-src" id="portfolio-src">venue</span></div>
           <div class="pf-value-huge mono" id="portfolio-total-value">--</div>
           <div class="pf-foot">
             <span class="pf-chip" id="portfolio-pnl">--</span>
-            <span class="pf-foot-note mono" id="portfolio-basis">on -- bank</span>
+            <span class="pf-foot-note mono" id="portfolio-basis">collateral + positions</span>
           </div>
-          <div class="pf-foot-note mono" style="color:var(--warn);">
-            config bankroll + realised &mdash; not the Polymarket balance
-          </div>
+          <div class="pf-foot-note mono" id="portfolio-src-note">&nbsp;</div>
         </div>
         <div class="pf-tile">
-          <div class="pf-label">Realized P&amp;L</div>
+          <div class="pf-label">Realized P&amp;L <span class="pf-src" id="portfolio-realized-src">venue</span></div>
           <div class="pf-value mono" id="portfolio-realized">--</div>
           <div class="pf-foot-note mono" id="portfolio-realized-sub">-- closes &middot; -- markets</div>
         </div>
         <div class="pf-tile">
-          <div class="pf-label">Unrealized (Open)</div>
+          <div class="pf-label">Unrealized (Open) <span class="pf-src">venue</span></div>
           <div class="pf-value mono" id="portfolio-unrealized">--</div>
           <div class="pf-foot-note mono" id="portfolio-unrealized-sub">marked at last sweep</div>
         </div>
         <div class="pf-tile">
-          <div class="pf-label">Capital Committed</div>
+          <div class="pf-label">Capital Committed <span class="pf-src">venue</span></div>
           <div class="pf-value mono" id="portfolio-committed">--</div>
-          <div class="pf-foot-note mono">open cost basis at risk</div>
+          <div class="pf-foot-note mono" id="portfolio-committed-sub">open cost basis at risk</div>
         </div>
       </div>
       <div class="pf-chart" id="portfolio-equity-curve"></div>
@@ -1846,48 +1954,105 @@ PAGE_HTML = """<!DOCTYPE html>
 
     function renderPortfolio(kpi) {
       const p = (kpi && kpi.portfolio) || null;
-      const start = p ? Number(p.starting_capital || 0) : 0;
-      const totalValue = p ? Number(p.total_value || 0) : 0;
-      const totalPnl = p ? Number(p.total_pnl || 0) : 0;
-      const up = totalPnl >= 0;
+      const a = (p && p.account) || null;
+      // The account, as the venue reports it. Anything the sweep did not obtain
+      // arrives as null and renders "--". A zero here would be a number the
+      // venue never gave us, which is the defect this card was built to end.
+      const swept = !!(a && a.measured);
+      const hasValue = swept && a.account_value_usd !== null && a.account_value_usd !== undefined;
+      const accPnl = (swept && a.pnl_usd !== null && a.pnl_usd !== undefined)
+        ? Number(a.pnl_usd) : null;
+      const up = accPnl === null ? true : accPnl >= 0;
       const color = up ? 'var(--signal)' : 'var(--loss)';
 
-      document.getElementById('portfolio-total-value').textContent =
-        p ? `$${totalValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '--';
+      document.getElementById('portfolio-total-value').textContent = hasValue
+        ? `$${Number(a.account_value_usd).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
+        : '--';
 
       const pnlEl = document.getElementById('portfolio-pnl');
-      // pnl_pct is NULL when the bankroll is zero: the percentage is undefined,
+      // pnl_pct is NULL when net deposits are zero: the percentage is undefined,
       // and printing 0.00% would read as "flat" instead of "unmeasurable".
-      const pctStr = (p && p.pnl_pct !== null && p.pnl_pct !== undefined)
-        ? `${p.pnl_pct >= 0 ? '+' : ''}${Number(p.pnl_pct).toFixed(2)}%` : 'n/a';
-      pnlEl.textContent = p ? `${fmtUsdSigned(totalPnl)} (${pctStr})` : '--';
+      const pctStr = (a && a.pnl_pct !== null && a.pnl_pct !== undefined)
+        ? `${a.pnl_pct >= 0 ? '+' : ''}${Number(a.pnl_pct).toFixed(2)}%` : 'n/a';
+      pnlEl.textContent = accPnl === null ? '--' : `${fmtUsdSigned(accPnl)} (${pctStr})`;
       pnlEl.style.color = color;
       pnlEl.style.background = up ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)';
       pnlEl.style.borderColor = up ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)';
 
-      document.getElementById('portfolio-basis').textContent =
-        p ? `on $${start.toFixed(2)} bank` : 'on -- bank';
+      // `?? 0` here would print "$0.00 cash" for a collateral read that failed,
+      // stating a figure the venue never returned -- the same NULL-versus-zero
+      // rule the rest of this card enforces.
+      const usdOrDash = (v) =>
+        (v === null || v === undefined) ? '--' : `$${Number(v).toFixed(2)}`;
+      const basisEl = document.getElementById('portfolio-basis');
+      basisEl.textContent = swept
+        ? `${usdOrDash(a.collateral_usd)} cash + ${usdOrDash(a.positions_value_usd)} positions`
+        : 'collateral + positions';
 
+      // How old the reading is. A balance is only as true as its last sweep,
+      // and a stale one is the failure mode worth naming on the tile itself.
+      const srcNote = document.getElementById('portfolio-src-note');
+      if (!swept) {
+        srcNote.textContent = 'no sweep yet — run: python -m engine.live_exec account-sweep';
+        srcNote.style.color = 'var(--warn)';
+      } else {
+        const ageS = Math.max(0, (Date.now() / 1000) - Number(a.ts || 0));
+        const ageStr = ageS < 90 ? `${Math.round(ageS)}s`
+          : ageS < 5400 ? `${Math.round(ageS / 60)}m`
+          : `${Math.round(ageS / 3600)}h`;
+        srcNote.textContent = `swept ${ageStr} ago`;
+        srcNote.style.color = ageS > 900 ? 'var(--warn)' : 'var(--text-muted)';
+      }
+      const srcEl = document.getElementById('portfolio-src');
+      srcEl.textContent = swept ? (a.source || 'venue') : 'unswept';
+
+      // Realised P&L is the sum of what the venue's own closed positions
+      // returned. The registry only knows the closes this bot performed, so it
+      // reports $0.00 for a position closed by a merge on Polymarket itself --
+      // which is exactly how the White Sox / Cubs pair (-3.10, -1.60, +5.00)
+      // vanished from the tile. Registry closes stay as the sub-line, labelled.
+      const hasVenueRealized = swept && a.pnl_closed_usd !== null && a.pnl_closed_usd !== undefined;
+      const realizedVal = hasVenueRealized ? Number(a.pnl_closed_usd)
+                        : (p ? Number(p.realized_pnl) : null);
       const realizedEl = document.getElementById('portfolio-realized');
-      realizedEl.textContent = p ? fmtUsdSigned(p.realized_pnl) : '--';
-      realizedEl.style.color = (p && Number(p.realized_pnl) < 0) ? 'var(--loss)' : 'var(--signal)';
-      document.getElementById('portfolio-realized-sub').textContent =
-        p ? `${p.closes_count} closes · ${p.markets_count} markets` : '-- closes · -- markets';
+      realizedEl.textContent = realizedVal === null ? '--' : fmtUsdSigned(realizedVal);
+      realizedEl.style.color = (realizedVal !== null && realizedVal < 0) ? 'var(--loss)' : 'var(--signal)';
+      document.getElementById('portfolio-realized-src').textContent =
+        hasVenueRealized ? 'venue' : 'registry';
+      // A null count is "this sweep did not report one", not zero.
+      const closedN = (a && a.closed_positions_count !== null && a.closed_positions_count !== undefined)
+        ? `${a.closed_positions_count} closed position(s)` : 'closed positions';
+      document.getElementById('portfolio-realized-sub').textContent = hasVenueRealized
+        ? `${closedN} · ${p ? p.closes_count : 0} registry closes`
+        : (p ? `${p.closes_count} closes · ${p.markets_count} markets` : '-- closes · -- markets');
 
-      // NULL unrealized means no sweep has marked the open book -- show "--",
-      // never a $0.00 that would read as "measured, and it is flat".
-      const measured = !!(p && p.unrealized_measured);
+      // Unrealized and committed now come from the venue's open positions, so
+      // they no longer depend on a float_marks sweep that nothing ever ran.
+      const hasUnreal = swept && a.unrealized_usd !== null && a.unrealized_usd !== undefined;
       const unrealEl = document.getElementById('portfolio-unrealized');
-      unrealEl.textContent = measured ? fmtUsdSigned(p.unrealized_usd) : '--';
-      unrealEl.style.color = (measured && Number(p.unrealized_usd) < 0) ? 'var(--loss)' : 'var(--text-primary)';
-      document.getElementById('portfolio-unrealized-sub').textContent =
-        measured ? 'marked at last sweep' : 'not marked — open float unmeasured';
+      unrealEl.textContent = hasUnreal ? fmtUsdSigned(a.unrealized_usd) : '--';
+      unrealEl.style.color = (hasUnreal && Number(a.unrealized_usd) < 0) ? 'var(--loss)' : 'var(--text-primary)';
+      document.getElementById('portfolio-unrealized-sub').textContent = hasUnreal
+        ? `${a.open_positions_count ?? 0} open position(s)`
+        : 'not marked — no venue sweep';
 
+      const hasCommitted = swept && a.committed_usd !== null && a.committed_usd !== undefined;
       document.getElementById('portfolio-committed').textContent =
-        measured ? `$${Number(p.open_committed_usd || 0).toFixed(2)}` : '--';
+        hasCommitted ? `$${Number(a.committed_usd).toFixed(2)}` : '--';
+      document.getElementById('portfolio-committed-sub').textContent =
+        hasCommitted ? 'open cost basis at risk' : 'not marked — no venue sweep';
 
-      document.getElementById('portfolio-equity-curve').innerHTML =
-        equityCurveSvg((kpi && kpi.equity_series) || [], start);
+      // Plot the venue's account-value curve once sweeps exist; fall back to
+      // the registry equity curve until the first one lands.
+      const accSeries = (kpi && kpi.account_series) || [];
+      if (accSeries.length >= 2) {
+        document.getElementById('portfolio-equity-curve').innerHTML =
+          equityCurveSvg(accSeries, Number(accSeries[0].v));
+      } else {
+        document.getElementById('portfolio-equity-curve').innerHTML =
+          equityCurveSvg((kpi && kpi.equity_series) || [],
+                         p ? Number(p.starting_capital || 0) : 0);
+      }
     }
 
     function renderHero(state) {

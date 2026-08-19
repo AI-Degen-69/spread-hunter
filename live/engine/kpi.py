@@ -165,6 +165,10 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     all_venue_errs = reg.get_all_venue_errors()
     all_divergences = reg.get_all_divergence_events()
     all_float_marks = reg.get_all_float_marks()
+    # Deliberately NOT filtered by run_id below. An account balance belongs to
+    # the wallet, not to a run: slicing it per run would report the account as
+    # empty for any run that happened not to sweep.
+    all_account_marks = reg.get_all_account_marks()
     resolutions = reg.get_all_resolutions()
 
     runs = list_runs(reg)
@@ -537,6 +541,67 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         1 for m in by_mkt.values()
         if m["fills_count"] > 0 or m["quotes_count"] > 0 or m["settlements"]
     )
+    # ------------------------------------------------------------------
+    # The account, as the venue reports it. `starting_capital` above is a
+    # simulation constant that nobody deposited; these fields are the balance
+    # and P&L the account holder sees on Polymarket, written by
+    # `engine.live_exec account-sweep` and read here from SQLite.
+    # ------------------------------------------------------------------
+    sorted_account_marks = sorted(
+        [am for am in all_account_marks if am.get("ts") is not None],
+        key=lambda am: float(am["ts"]),
+    )
+    # Prefer the newest sweep that actually obtained an account value. A sweep
+    # whose collateral read failed records NULL, and letting that NULL win would
+    # blank the headline while a good reading from minutes earlier sits in the
+    # table. The whole mark is taken from one row -- never assembled field by
+    # field across rows -- and `ts` reports how old that row is, so the page can
+    # say the reading is stale rather than pretend it is current.
+    latest_account = next(
+        (am for am in reversed(sorted_account_marks)
+         if am.get("account_value_usd") is not None),
+        sorted_account_marks[-1] if sorted_account_marks else None,
+    )
+
+    def _am(field: str) -> Optional[float]:
+        """A field of the newest account mark, preserving NULL.
+
+        `float(x or 0.0)` would turn an unmeasured field into a measured zero,
+        which is the exact defect this whole change exists to remove.
+        """
+        if latest_account is None:
+            return None
+        v = latest_account.get(field)
+        return None if v is None else float(v)
+
+    account = {
+        "measured": latest_account is not None,
+        "ts": float(latest_account["ts"]) if latest_account else None,
+        "source": (latest_account.get("source") if latest_account else None),
+        "collateral_usd": _am("collateral_usd"),
+        "positions_value_usd": _am("positions_value_usd"),
+        "account_value_usd": _am("account_value_usd"),
+        "pnl_usd": _am("pnl_usd"),
+        "pnl_pct": _am("pnl_pct"),
+        "pnl_closed_usd": _am("pnl_closed_usd"),
+        "pnl_series_usd": _am("pnl_series_usd"),
+        "unrealized_usd": _am("unrealized_usd"),
+        "committed_usd": _am("committed_usd"),
+        "open_positions_count": (
+            None if latest_account is None or latest_account.get("open_positions_count") is None
+            else int(latest_account["open_positions_count"])
+        ),
+        "closed_positions_count": (
+            None if latest_account is None or latest_account.get("closed_positions_count") is None
+            else int(latest_account["closed_positions_count"])
+        ),
+    }
+    # No reconciliation against `starting_capital + total_pnl` is offered here.
+    # That figure is the config bankroll -- a number nobody deposited -- so a
+    # "gap" against it would restate the fabrication this change removed, in a
+    # footnote. The registry records no deposits, so it has nothing real to
+    # reconcile the venue's balance against.
+
     portfolio = {
         "starting_capital": starting_capital,
         "realized_pnl": realized_pnl,
@@ -550,6 +615,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         "markets_count": traded_markets,
         "closes_count": len(closes),
         "open_committed_usd": open_committed_usd,
+        "account": account,
     }
 
     # Float marks formatted series for time chart
@@ -572,6 +638,15 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # Portfolio overview (run-level, all markets)
         "portfolio": portfolio,
         "equity_series": equity_series,
+        # The true account-value curve: one point per sweep, venue-sourced.
+        # Marks that failed to reach the venue carry a NULL value and are
+        # dropped here rather than plotted as a crash to zero.
+        "account_series": [
+            {"ts": float(am["ts"]), "v": float(am["account_value_usd"]),
+             "pnl": (None if am.get("pnl_usd") is None else float(am["pnl_usd"]))}
+            for am in sorted_account_marks
+            if am.get("account_value_usd") is not None
+        ],
 
         # Pace
         "markets_quoted": len({q["condition_id"] for q in quotes if q.get("condition_id")}),

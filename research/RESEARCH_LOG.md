@@ -4146,3 +4146,203 @@ traced the number back to its source.
 
 **Verdict.** **LIVE** for 2-6. **OPEN** for 1: the account's value and P&L must come from the venue,
 not from a config constant. Root suite 703 passed; live suite 256 passed.
+
+---
+
+## 2026-08-19 - The account's value now comes from the venue, not from a constant
+
+**Question.** The headline tile read `_CFG.bankroll_usd + realized_pnl` = $100.30 while the account
+held $101.88. Can account value and account P&L be sourced from the venue without the dashboard
+making a single network call?
+
+**Method.** Probed the Data API read-only against the funded address before writing any code, rather
+than building on documented field names. Recorded the exact responses, then built a writer that
+records them into the registry and a reader that the dashboard uses like every other table.
+
+**Result.**
+1. **Three endpoints carry it, and two of them agree independently.** `GET /value` returns the total
+   value of open positions; `GET /positions?sizeThreshold=0` carries `cashPnl` and `initialValue`;
+   `GET /closed-positions` carries the venue's own `realizedPnl` per closed position. A fourth host,
+   `user-pnl-api.polymarket.com/user-pnl`, is what the Polymarket UI itself plots. For this account
+   the closed-position sum (+0.90 and -0.60) and the P&L series both return **+$0.30**. Both figures
+   are recorded, along with their difference; a disagreement between them is a finding, not noise.
+2. **`GET /value` returns a list, not an object.** Reading it as a dict yields `None`, which would
+   have valued every open book at zero. Pinned by a test.
+3. **The +$0.30 was real; the $100 was not.** The account's history is four deposits totalling
+   $101.58, two buys of -$4.70, and a merge of +$5.00, giving $101.88. The 30 cents is measured
+   realised P&L. What was fabricated was the base it sat on.
+4. **The percentage needed a denominator the API does not return.** Polymarket shows +0.30%.
+   Measuring against net deposits — derived as `account_value - pnl` = $101.58 — gives 0.2953%,
+   which displays as +0.30%. NULL when the basis is zero, never 0.00%.
+5. **No gap is reported against the registry's own book.** An earlier draft of the tile showed
+   `registry book $100.00 - gap +$1.88`. That "book" is the config bankroll, so the footnote restated
+   the fabrication it was meant to replace. The registry records no deposits and therefore has
+   nothing real to reconcile a venue balance against. The footnote now reports sweep age instead: a
+   balance is only as true as its last reading.
+6. **The dashboard still makes zero venue calls.** `engine.live_exec account-sweep` writes an
+   `account_marks` row; the page reads SQLite. Every column is nullable, so a sweep that reached one
+   endpoint and not another records what it got and NULL for the rest.
+7. **Unrealized and Capital Committed are measured for the first time.** They came from
+   `float_marks`, which nothing ever wrote, so the tile read `--`. They now come from the venue's
+   open positions, closing the OPEN item from the previous entry.
+
+**Verdict.** **LIVE.** Live suite 302 passed (46 new). Root suite 703 passed. Measured against the
+real account: ACCOUNT VALUE $101.88, P&L +$0.30 (+0.30%), matching the Polymarket portfolio card
+exactly on both figures.
+
+---
+
+## 2026-08-19 - A recycled PID reported the bot as running, and Stop Bot would have killed a browser
+
+**Question.** Two tests in `test_live_dash.py` failed on this machine and passed in CI. Both were
+refused resets: "Refusing to reset while the bot stack is running." No bot was running.
+
+**Method.** Read `live/run/live_procs.json`, which recorded supervisor and engine at PID 13052 from
+a run that had already exited, then asked the OS what PID 13052 actually was.
+
+**Result.**
+1. **PID 13052 was `msedge`.** The bot exited, Windows recycled the PID onto the browser, and
+   `_is_pid_alive` only asked whether *a* process with that PID existed. The dashboard therefore
+   reported the bot stack RUNNING indefinitely.
+2. **The worst consequence was not the false status.** `stop_bot` runs `taskkill /F /T` on the
+   recorded PIDs. Pressing **Stop Bot** would have force-killed the Owner's browser and its entire
+   process tree. The reset refusals and the permanently-blocked `start_bot` were the mild symptoms.
+3. **The fix is a field the file already stored.** `started_at` is written immediately after Popen,
+   so the process's real creation time must agree with it. Read via `GetProcessTimes` on Windows and
+   `/proc/<pid>/stat` on Linux, with a 60-second tolerance for clock granularity.
+4. **An unreadable creation time falls back to the bare PID check, deliberately.** A false "stopped"
+   would let a second bot stack launch beside a live one, which AGENTS.md forbids outright. The
+   failure mode is chosen, not accidental.
+5. **A process can be dead and still queryable.** Where a parent holds an open handle, `OpenProcess`
+   succeeds and the creation time is genuine; only the non-zero exit time distinguishes it. Caught by
+   a test that Popens a process, waits for it, and asserts it reads as dead.
+6. **The two failing tests were the bug reporting itself.** They now pass without touching the stale
+   file, which is the proof that the guard — not a manual cleanup — is what fixed it.
+
+**Verdict.** **LIVE.** 9 new tests, including the exact failure: a live PID recorded with an old
+`started_at` reads as STOPPED. This entry is kept because the instrumentation was not merely wrong,
+it was armed: a status check that could not tell two processes apart was wired to a force-kill.
+
+---
+
+## 2026-08-19 - Realized P&L was still the registry's, and the registry did not see the merge
+
+**Question.** The account tile was switched to the venue, but Realized P&L kept a `registry` chip
+and read **+$0.00**. The Owner pointed at the venue's own history: -$3.10, -$1.60, +$5.00 on the
+White Sox / Cubs pair. Why does a figure the venue computes come from a table that does not have it?
+
+**Method.** Compared the two derivations of the same number, then traced what the registry actually
+records for that pair.
+
+**Result.**
+1. **The two derivations agree, and only one was on screen.** Cash flows give
+   `-3.10 - 1.60 + 5.00 = +0.30`. Summing the venue's `realizedPnl` per closed position gives
+   `+0.90 - 0.60 = +0.30`. The tile showed neither: it read `closes`, a table that records closes
+   *this bot performed*.
+2. **The position was closed by a merge on Polymarket, not by the bot.** Nothing wrote a `closes`
+   row, so the registry's honest answer was $0.00 - and $0.00 next to a pair that returned real money
+   is the same class of untrue number as the $100 bankroll. The tile now sources
+   `Sum(closed_positions.realizedPnl)` from the venue, keeps registry closes as a labelled sub-line,
+   and falls back to the registry only when no sweep exists, flipping the chip to say so.
+3. **`closed_positions_count` was added** so the sub-line reports what it counted. Existing
+   `account_marks` rows predate the column, so `_apply_migrations` gained an `ALTER TABLE`; a NULL
+   count renders as "closed positions", never as "0 closed position(s)".
+
+**Verdict.** **LIVE.** Realized P&L reads **+$0.30 / venue**. Live suite 309 passed, root 703 passed.
+
+---
+
+## 2026-08-19 - A failed collateral read blanked a headline that was already known
+
+**Question.** Mid-session the CLOB began answering `Could not derive api key` and collateral came
+back None, so `account_value_usd` was NULL and the tile went to `--`. A correct reading from
+seventeen minutes earlier was sitting in the same table. Which should the page show?
+
+**Method.** Confirmed the failure was not introduced here - the pre-existing `balance` subcommand
+fails identically - then changed which row the KPI layer selects.
+
+**Result.**
+1. **The newest mark is no longer automatically the one shown.** `kpi.report` now takes the newest
+   mark that actually obtained an `account_value_usd`, and reports that row's `ts`. The page already
+   renders sweep age, so a stale-but-true reading announces itself as stale instead of vanishing.
+2. **The whole mark comes from one row.** Assembling a collateral from one sweep and a P&L from
+   another would produce a total that was never true at any single moment. Pinned by a test that
+   seeds two marks with different values and asserts no field crosses between them.
+3. **An on-chain fallback for collateral was built and then reverted.** `balanceOf` on both USDC.e
+   (`0x2791...4174`) and native USDC (`0x3c49...3359`) returns **0.0** for this wallet while the
+   account holds $101.88 - Polymarket keeps the balance in its own ledger, not as a token balance on
+   the funder address. Shipping it would have reported $0.00 collateral with full confidence, which
+   is precisely the failure mode this work exists to remove. Recorded so it is not attempted again.
+
+**Verdict.** **LIVE** for 1-2. **DEAD** for 3: there is no credential-free route to collateral, so
+the CLOB auth path is a hard dependency for account value. The CLOB `derive-api-key` failure itself
+is **OPEN** and pre-existing - `python -m engine.live_exec balance` reproduces it without any of this
+change.
+
+---
+
+## 2026-08-19 - The CLOB stopped answering signed auth, and we were part of the cause
+
+**Question.** `account-sweep` reported `collateral --` with `The read operation timed out`, having
+earlier reported `Could not derive api key`. Is the venue down, is the network bad, or is this ours?
+
+**Method.** Timed each layer separately rather than assuming: host reachability, the auth endpoints
+unsigned, the same endpoints signed, and the client's own construction and key derivation.
+
+**Result.**
+1. **Nothing is down.** `clob.polymarket.com` answered in **0.17s**. `/auth/api-key` returned 405,
+   `/auth/derive-api-key` returned 401, and `/auth/ban-status/cert-required` returned 400 - all
+   unsigned, all in ~0.1s. The endpoints are alive and fast to everyone.
+2. **The stall is specific to this account's signature.** A hand-built signed GET to
+   `/auth/derive-api-key` hung past a 5-second timeout and again past a 30-second one. Unsigned
+   returns in 0.1s; signed never returns. That is server-side and account-specific, not transport.
+3. **The client's timeout is 5 seconds and not configurable.** `py_clob_client_v2` holds a
+   module-level `httpx.Client(http2=True)` with httpx's default timeout. HTTP/2 was ruled out: an
+   unsigned request over HTTP/2 and over HTTP/1.1 both returned 401 in 0.1s.
+4. **We were deriving a fresh API key on every command.** `_client()` called
+   `create_or_derive_api_key()` unconditionally, so each CLI run derived once and any command
+   touching the venue twice derived twice. Roughly eight runs preceded the stall. Derivation is the
+   most rate-limit-sensitive call in the API, so this is the plausible trigger and it was ours.
+5. **The client is now cached per process**, keyed on `(sha256(key), funder, sig_type, host)`. The
+   key is hashed into the cache key so it stays out of any structure that could be printed. Nothing
+   is written to disk, preserving the "creds are never stored" rule. The poll loop already built its
+   client once, so no loop was hammering the endpoint; this bounds the CLI path.
+
+**Verdict.** **OPEN.** The stall is venue-side and no code change clears it - only backing off can.
+The derivation storm that likely triggered it is **LIVE**-fixed. Recorded because the diagnosis
+order mattered: the fast unsigned response is what proved the venue was healthy and turned this from
+"Polymarket is down" into "we are being throttled".
+
+---
+
+## 2026-08-19 - Review round on PR #45: a truncated handle and a zero the venue never said
+
+**Question.** CodeRabbit raised five findings against the venue-sourcing branch. Which are real?
+
+**Method.** Verified each against the source and the platform's documented behaviour before changing
+anything. All five held.
+
+**Result.**
+1. **`OpenProcess` returned a truncated handle.** ctypes defaults `restype` to `c_int` and a Windows
+   `HANDLE` is pointer-sized, so on 64-bit a handle above 2**31 came back as a different value, was
+   passed to `GetProcessTimes` as garbage, and was then closed as garbage. `argtypes` and `restype`
+   are now declared for all three calls through `WinDLL(use_last_error=True)`. The PID-recycling
+   guard shipped one commit earlier depends on these calls, so this was a defect inside a fix.
+2. **`os.kill(pid, 0)` reported a live foreign process as stopped.** On POSIX it raises
+   `PermissionError` when the process exists but belongs to another user, and the bare
+   `except Exception` turned that into `False`. That is the exact false "stopped" the guard's own
+   docstring names as the failure mode to avoid, because it lets a second bot stack launch beside a
+   live one. `PermissionError` is now proof of existence.
+3. **`?? 0` printed an unmeasured leg as a measured `$0.00`.** With `/value` reached but the
+   collateral read failed, the footnote rendered "$0.00 cash" - a figure the venue never returned.
+   The same NULL-versus-zero rule the rest of this card was built to enforce, broken inside the card
+   itself. Renders `--` now.
+4. **`var(--text-dim)` is not defined.** Only `--text-primary`, `--text-secondary`, and
+   `--text-muted` exist, so the sweep-age note silently kept its inherited colour. A CSS variable
+   that does not exist fails quietly, which is why a test now parses every `var()` in the page
+   against the `:root` definitions and fails the suite on an undefined one.
+5. **One transport test replaced `_get_json` by hand** instead of using `monkeypatch`; corrected.
+
+**Verdict.** **LIVE** for all five. Live suite 314 passed with 1 skipped (a Windows-only handle
+test), root suite 703 passed. Findings 1 and 3 are the notable ones: both were defects introduced
+*inside* the fixes for the same class of bug they belong to.

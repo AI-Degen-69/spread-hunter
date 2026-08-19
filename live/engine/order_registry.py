@@ -182,6 +182,28 @@ CREATE TABLE IF NOT EXISTS float_marks (
     run_id TEXT NOT NULL
 );
 
+-- What the venue says the account is worth, recorded by the account sweep.
+-- Every column is nullable on purpose: a sweep that reached one endpoint and
+-- not another records what it got and NULL for the rest. A 0.0 here would be a
+-- claim the venue never made.
+CREATE TABLE IF NOT EXISTS account_marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    collateral_usd REAL,
+    positions_value_usd REAL,
+    account_value_usd REAL,
+    pnl_usd REAL,
+    pnl_pct REAL,
+    pnl_closed_usd REAL,
+    pnl_series_usd REAL,
+    unrealized_usd REAL,
+    committed_usd REAL,
+    open_positions_count INTEGER,
+    closed_positions_count INTEGER,
+    source TEXT NOT NULL,
+    run_id TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS hedge_census (
     condition_id TEXT PRIMARY KEY,
     market_slug TEXT,
@@ -239,6 +261,7 @@ CREATE INDEX IF NOT EXISTS idx_market_events_cond_ts ON market_events(condition_
 CREATE INDEX IF NOT EXISTS idx_markouts_done ON markouts(done, ts);
 CREATE INDEX IF NOT EXISTS idx_closes_ts ON closes(ts);
 CREATE INDEX IF NOT EXISTS idx_float_marks_ts ON float_marks(ts);
+CREATE INDEX IF NOT EXISTS idx_account_marks_ts ON account_marks(ts);
 
 CREATE VIEW IF NOT EXISTS order_summary AS
 SELECT
@@ -300,6 +323,12 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE closes ADD COLUMN tx_hash TEXT")
         if "run_id" not in cols:
             conn.execute("ALTER TABLE closes ADD COLUMN run_id TEXT")
+
+    # Check columns in account_marks
+    cur = conn.execute("PRAGMA table_info(account_marks)")
+    cols = {row["name"] for row in cur.fetchall()}
+    if cols and "closed_positions_count" not in cols:
+        conn.execute("ALTER TABLE account_marks ADD COLUMN closed_positions_count INTEGER")
 
     conn.commit()
 
@@ -951,6 +980,47 @@ class OrderRegistry:
             )
             conn.commit()
 
+    def log_account_mark(
+        self, mark: dict, ts: Optional[float] = None, run_id: Optional[str] = None
+    ) -> None:
+        """Record what the venue said the account was worth.
+
+        `mark` is the dict returned by engine.account.compose_account_mark.
+        Absent keys are stored as NULL rather than 0.0: the dashboard reads
+        these rows and must be able to tell "not measured" from "measured flat".
+        """
+        now_ts = ts if ts is not None else time.time()
+        r_id = run_id or get_run_id()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO account_marks (
+                    ts, collateral_usd, positions_value_usd, account_value_usd,
+                    pnl_usd, pnl_pct, pnl_closed_usd, pnl_series_usd,
+                    unrealized_usd, committed_usd, open_positions_count,
+                    closed_positions_count, source, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    now_ts,
+                    mark.get("collateral_usd"),
+                    mark.get("positions_value_usd"),
+                    mark.get("account_value_usd"),
+                    mark.get("pnl_usd"),
+                    mark.get("pnl_pct"),
+                    mark.get("pnl_closed_usd"),
+                    mark.get("pnl_series_usd"),
+                    mark.get("unrealized_usd"),
+                    mark.get("committed_usd"),
+                    mark.get("open_positions_count"),
+                    mark.get("closed_positions_count"),
+                    mark.get("source") or "venue",
+                    r_id,
+                ),
+            )
+            conn.commit()
+
     def log_hedge_census(self, census: HedgeCensusRecord) -> None:
         """Record market hedge census evaluation."""
         r_id = census.run_id or get_run_id()
@@ -1077,6 +1147,11 @@ class OrderRegistry:
     def get_all_float_marks(self) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM float_marks ORDER BY ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_account_marks(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM account_marks ORDER BY ts ASC").fetchall()
             return [dict(r) for r in rows]
 
     def get_all_hedge_census(self) -> list[dict]:
