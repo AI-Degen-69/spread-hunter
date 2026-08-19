@@ -126,6 +126,28 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
                 ORDER BY o.posted_ts DESC
             """).fetchall()
 
+        # Settlement. A merged pair still has its fills on record -- the shares
+        # left the wallet on chain, not from the registry -- so a position that
+        # has been closed reads BALANCED forever unless the closes are consulted.
+        closes_by_cid: dict[str, dict[str, float]] = {}
+        if "closes" in tables:
+            for c_row in cur.execute("""
+                SELECT condition_id, method, SUM(shares) AS shares,
+                       SUM(COALESCE(realized_pnl, 0.0)) AS pnl,
+                       MAX(ts) AS last_ts
+                FROM closes
+                WHERE condition_id IS NOT NULL
+                GROUP BY condition_id, method
+            """).fetchall():
+                slot = closes_by_cid.setdefault(
+                    c_row["condition_id"],
+                    {"shares": 0.0, "pnl": 0.0, "last_ts": 0.0, "methods": []},
+                )
+                slot["shares"] += float(c_row["shares"] or 0.0)
+                slot["pnl"] += float(c_row["pnl"] or 0.0)
+                slot["last_ts"] = max(slot["last_ts"], float(c_row["last_ts"] or 0.0))
+                slot["methods"].append(c_row["method"] or "?")
+
         # Query fills
         fills_rows = []
         if "fills" in tables:
@@ -334,7 +356,22 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
                 a, b = list(tokens.values())
                 diff = round(a["net_matched"] - b["net_matched"], 6)
                 if abs(diff) <= 1e-6:
-                    hedge_state = "BALANCED"
+                    held = min(a["net_matched"], b["net_matched"])
+                    closed = closes_by_cid.get(pdata.get("condition_id") or "")
+                    if closed and closed["shares"] + 1e-6 >= held > 0:
+                        # The pair was merged or redeemed: the shares are gone
+                        # and the money is back. Showing BALANCED here reads as
+                        # "you are holding a hedged position", which is exactly
+                        # the wrong thing to believe about a closed trade.
+                        hedge_state = "SETTLED"
+                        pdata["settlement"] = {
+                            "shares": closed["shares"],
+                            "pnl": closed["pnl"],
+                            "methods": sorted(set(closed["methods"])),
+                            "ts": closed["last_ts"],
+                        }
+                    else:
+                        hedge_state = "BALANCED"
                 else:
                     hedge_state = "NAKED"
                     heavy = a if a["net_matched"] > b["net_matched"] else b
@@ -355,6 +392,16 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         else None
     )
     stale = (seconds_since_poll is None) or (seconds_since_poll > STALE_THRESHOLD_SEC)
+
+    # Stale telemetry means "the poll loop stopped updating while something was
+    # at stake". With nothing resting and nothing unhedged there is nothing at
+    # stake, and the same red banner then fires every time the operator opens
+    # the page between cycles -- which is how a real alarm gets ignored.
+    at_stake = any(
+        p_.get("hedge_state") in ("NAKED", "BALANCED", "RESTING")
+        for p_ in pairs_list
+    )
+    idle = not at_stake
 
     rec_lock_info = {
         "held": False,
@@ -386,6 +433,8 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         "last_polled_ts": max_poll_ms if max_poll_ms > 0 else None,
         "seconds_since_poll": seconds_since_poll,
         "stale": stale,
+        "idle": idle,
+        "at_stake": at_stake,
         "reconcile_lock": rec_lock_info,
     }
 
@@ -1069,6 +1118,22 @@ PAGE_HTML = """<!DOCTYPE html>
             </div>
           </div>
         `;
+      } else if (hedgeState === 'SETTLED') {
+        localNakedSinceMs = null;
+        const st = pair.settlement || {};
+        const pnl = Number(st.pnl || 0);
+        const sign = pnl >= 0 ? '+' : '-';
+        hero.innerHTML = `
+          <div class="hero-card state-balanced">
+            <div class="hero-header">
+              <div>
+                <div class="hero-badge balanced">✅ POSITION CLOSED</div>
+                <div class="hero-headline">${sign}$${Math.abs(pnl).toFixed(2)} REALISED</div>
+                <div class="hero-desc">${esc((st.methods || ['closed']).join(', '))} — ${Number(st.shares || 0).toFixed(2)} pairs settled. The shares are gone and the money is back; nothing is at risk on this market.</div>
+              </div>
+            </div>
+          </div>
+        `;
       } else if (hedgeState === 'BALANCED') {
         localNakedSinceMs = null;
         const totalFills = pair.orders.reduce((acc, o) => acc + (o.size_matched || 0), 0);
@@ -1233,11 +1298,19 @@ PAGE_HTML = """<!DOCTYPE html>
         const secSince = state.seconds_since_poll || 0;
         lastPollEl.textContent = `${formatTime(state.last_polled_ts)} (${formatDuration(secSince)} ago)`;
 
-        if (state.stale) {
+        if (state.stale && state.idle) {
+          // Nothing resting, nothing unhedged: the poll loop is not running
+          // because there is no cycle to poll. Saying STALE here trains the
+          // operator to ignore the word before the one time it means money.
+          pollPill.className = 'pill pill-neutral';
+          pollPill.textContent = 'IDLE — NO CYCLE RUNNING';
+          staleBanner.style.display = 'none';
+          pollStatusEl.textContent = `Idle (last poll ${formatDuration(secSince)} ago)`;
+        } else if (state.stale) {
           pollPill.className = 'pill pill-stale';
           pollPill.textContent = `STALE (${Math.round(secSince)}s)`;
           staleBanner.style.display = 'flex';
-          staleText.textContent = `⚠️ STALE TELEMETRY: Poll loop has not run in ${Math.round(secSince)}s (>30s limit)! Check supervisor or poll script.`;
+          staleText.textContent = `⚠️ STALE TELEMETRY: money is at stake and the poll loop has not run in ${Math.round(secSince)}s (>30s limit). Check the supervisor or the poll script.`;
           pollStatusEl.textContent = 'STALE (>30s)';
           pollStatusEl.style.color = 'var(--red-alert)';
         } else {
