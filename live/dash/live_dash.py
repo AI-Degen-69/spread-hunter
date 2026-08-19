@@ -1534,7 +1534,7 @@ PAGE_HTML = """<!DOCTYPE html>
           <div class="pf-foot-note mono" id="portfolio-src-note">&nbsp;</div>
         </div>
         <div class="pf-tile">
-          <div class="pf-label">Realized P&amp;L <span class="pf-src">registry</span></div>
+          <div class="pf-label">Realized P&amp;L <span class="pf-src" id="portfolio-realized-src">venue</span></div>
           <div class="pf-value mono" id="portfolio-realized">--</div>
           <div class="pf-foot-note mono" id="portfolio-realized-sub">-- closes &middot; -- markets</div>
         </div>
@@ -1979,11 +1979,25 @@ PAGE_HTML = """<!DOCTYPE html>
       const srcEl = document.getElementById('portfolio-src');
       srcEl.textContent = swept ? (a.source || 'venue') : 'unswept';
 
+      // Realised P&L is the sum of what the venue's own closed positions
+      // returned. The registry only knows the closes this bot performed, so it
+      // reports $0.00 for a position closed by a merge on Polymarket itself --
+      // which is exactly how the White Sox / Cubs pair (-3.10, -1.60, +5.00)
+      // vanished from the tile. Registry closes stay as the sub-line, labelled.
+      const hasVenueRealized = swept && a.pnl_closed_usd !== null && a.pnl_closed_usd !== undefined;
+      const realizedVal = hasVenueRealized ? Number(a.pnl_closed_usd)
+                        : (p ? Number(p.realized_pnl) : null);
       const realizedEl = document.getElementById('portfolio-realized');
-      realizedEl.textContent = p ? fmtUsdSigned(p.realized_pnl) : '--';
-      realizedEl.style.color = (p && Number(p.realized_pnl) < 0) ? 'var(--loss)' : 'var(--signal)';
-      document.getElementById('portfolio-realized-sub').textContent =
-        p ? `${p.closes_count} closes · ${p.markets_count} markets` : '-- closes · -- markets';
+      realizedEl.textContent = realizedVal === null ? '--' : fmtUsdSigned(realizedVal);
+      realizedEl.style.color = (realizedVal !== null && realizedVal < 0) ? 'var(--loss)' : 'var(--signal)';
+      document.getElementById('portfolio-realized-src').textContent =
+        hasVenueRealized ? 'venue' : 'registry';
+      // A null count is "this sweep did not report one", not zero.
+      const closedN = (a && a.closed_positions_count !== null && a.closed_positions_count !== undefined)
+        ? `${a.closed_positions_count} closed position(s)` : 'closed positions';
+      document.getElementById('portfolio-realized-sub').textContent = hasVenueRealized
+        ? `${closedN} · ${p ? p.closes_count : 0} registry closes`
+        : (p ? `${p.closes_count} closes · ${p.markets_count} markets` : '-- closes · -- markets');
 
       // Unrealized and committed now come from the venue's open positions, so
       // they no longer depend on a float_marks sweep that nothing ever ran.

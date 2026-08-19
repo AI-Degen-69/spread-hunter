@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS account_marks (
     unrealized_usd REAL,
     committed_usd REAL,
     open_positions_count INTEGER,
+    closed_positions_count INTEGER,
     source TEXT NOT NULL,
     run_id TEXT NOT NULL
 );
@@ -322,6 +323,12 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE closes ADD COLUMN tx_hash TEXT")
         if "run_id" not in cols:
             conn.execute("ALTER TABLE closes ADD COLUMN run_id TEXT")
+
+    # Check columns in account_marks
+    cur = conn.execute("PRAGMA table_info(account_marks)")
+    cols = {row["name"] for row in cur.fetchall()}
+    if cols and "closed_positions_count" not in cols:
+        conn.execute("ALTER TABLE account_marks ADD COLUMN closed_positions_count INTEGER")
 
     conn.commit()
 
@@ -992,8 +999,8 @@ class OrderRegistry:
                     ts, collateral_usd, positions_value_usd, account_value_usd,
                     pnl_usd, pnl_pct, pnl_closed_usd, pnl_series_usd,
                     unrealized_usd, committed_usd, open_positions_count,
-                    source, run_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    closed_positions_count, source, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     now_ts,
@@ -1007,6 +1014,7 @@ class OrderRegistry:
                     mark.get("unrealized_usd"),
                     mark.get("committed_usd"),
                     mark.get("open_positions_count"),
+                    mark.get("closed_positions_count"),
                     mark.get("source") or "venue",
                     r_id,
                 ),

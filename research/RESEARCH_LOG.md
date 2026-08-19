@@ -4222,3 +4222,59 @@ a run that had already exited, then asked the OS what PID 13052 actually was.
 **Verdict.** **LIVE.** 9 new tests, including the exact failure: a live PID recorded with an old
 `started_at` reads as STOPPED. This entry is kept because the instrumentation was not merely wrong,
 it was armed: a status check that could not tell two processes apart was wired to a force-kill.
+
+---
+
+## 2026-08-19 - Realized P&L was still the registry's, and the registry did not see the merge
+
+**Question.** The account tile was switched to the venue, but Realized P&L kept a `registry` chip
+and read **+$0.00**. The Owner pointed at the venue's own history: -$3.10, -$1.60, +$5.00 on the
+White Sox / Cubs pair. Why does a figure the venue computes come from a table that does not have it?
+
+**Method.** Compared the two derivations of the same number, then traced what the registry actually
+records for that pair.
+
+**Result.**
+1. **The two derivations agree, and only one was on screen.** Cash flows give
+   `-3.10 - 1.60 + 5.00 = +0.30`. Summing the venue's `realizedPnl` per closed position gives
+   `+0.90 - 0.60 = +0.30`. The tile showed neither: it read `closes`, a table that records closes
+   *this bot performed*.
+2. **The position was closed by a merge on Polymarket, not by the bot.** Nothing wrote a `closes`
+   row, so the registry's honest answer was $0.00 - and $0.00 next to a pair that returned real money
+   is the same class of untrue number as the $100 bankroll. The tile now sources
+   `Sum(closed_positions.realizedPnl)` from the venue, keeps registry closes as a labelled sub-line,
+   and falls back to the registry only when no sweep exists, flipping the chip to say so.
+3. **`closed_positions_count` was added** so the sub-line reports what it counted. Existing
+   `account_marks` rows predate the column, so `_apply_migrations` gained an `ALTER TABLE`; a NULL
+   count renders as "closed positions", never as "0 closed position(s)".
+
+**Verdict.** **LIVE.** Realized P&L reads **+$0.30 / venue**. Live suite 309 passed, root 703 passed.
+
+---
+
+## 2026-08-19 - A failed collateral read blanked a headline that was already known
+
+**Question.** Mid-session the CLOB began answering `Could not derive api key` and collateral came
+back None, so `account_value_usd` was NULL and the tile went to `--`. A correct reading from
+seventeen minutes earlier was sitting in the same table. Which should the page show?
+
+**Method.** Confirmed the failure was not introduced here - the pre-existing `balance` subcommand
+fails identically - then changed which row the KPI layer selects.
+
+**Result.**
+1. **The newest mark is no longer automatically the one shown.** `kpi.report` now takes the newest
+   mark that actually obtained an `account_value_usd`, and reports that row's `ts`. The page already
+   renders sweep age, so a stale-but-true reading announces itself as stale instead of vanishing.
+2. **The whole mark comes from one row.** Assembling a collateral from one sweep and a P&L from
+   another would produce a total that was never true at any single moment. Pinned by a test that
+   seeds two marks with different values and asserts no field crosses between them.
+3. **An on-chain fallback for collateral was built and then reverted.** `balanceOf` on both USDC.e
+   (`0x2791...4174`) and native USDC (`0x3c49...3359`) returns **0.0** for this wallet while the
+   account holds $101.88 - Polymarket keeps the balance in its own ledger, not as a token balance on
+   the funder address. Shipping it would have reported $0.00 collateral with full confidence, which
+   is precisely the failure mode this work exists to remove. Recorded so it is not attempted again.
+
+**Verdict.** **LIVE** for 1-2. **DEAD** for 3: there is no credential-free route to collateral, so
+the CLOB auth path is a hard dependency for account value. The CLOB `derive-api-key` failure itself
+is **OPEN** and pre-existing - `python -m engine.live_exec balance` reproduces it without any of this
+change.

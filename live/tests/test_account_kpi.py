@@ -190,3 +190,57 @@ def test_page_shows_how_stale_the_reading_is():
     assert "swept ${ageStr} ago" in PAGE_HTML
     # The old footnote compared the venue against the config bankroll.
     assert "registry book" not in PAGE_HTML
+
+
+def test_realized_pnl_comes_from_the_venues_closed_positions(temp_db):
+    """The registry only knows closes this bot performed. A position closed by a
+    merge on Polymarket itself leaves the registry at $0.00 while the venue
+    reports the real result -- which is how -3.10, -1.60, +5.00 disappeared."""
+    reg = OrderRegistry(temp_db)
+    reg.log_account_mark(_mark(), ts=time.time(), run_id=RUN)
+
+    p = report(db_path=str(temp_db), run_id="all")["portfolio"]
+    assert p["realized_pnl"] == pytest.approx(0.0)          # registry knows nothing
+    assert p["account"]["pnl_closed_usd"] == pytest.approx(0.30)
+    assert p["account"]["closed_positions_count"] == 2
+
+
+def test_page_sources_realized_from_the_venue():
+    assert "a.pnl_closed_usd" in PAGE_HTML
+    assert "closed position(s)" in PAGE_HTML
+
+
+def test_a_failed_sweep_does_not_blank_a_good_reading(temp_db):
+    """A sweep whose collateral read failed records NULL. Letting that NULL win
+    would blank the headline while a complete reading sits in the table."""
+    reg = OrderRegistry(temp_db)
+    reg.log_account_mark(_mark(), ts=1000.0, run_id=RUN)
+    reg.log_account_mark(_mark(collateral_usd=None), ts=2000.0, run_id=RUN)
+
+    a = report(db_path=str(temp_db), run_id="all")["portfolio"]["account"]
+    assert a["account_value_usd"] == pytest.approx(101.88)
+    # And it reports the age of the reading it actually used, not of the
+    # failed sweep -- so the page can call it stale.
+    assert a["ts"] == 1000.0
+
+
+def test_every_field_comes_from_one_mark_not_assembled_across_marks(temp_db):
+    """Mixing a collateral from one sweep with a P&L from another would produce
+    a total that was never true at any single moment."""
+    reg = OrderRegistry(temp_db)
+    reg.log_account_mark(_mark(collateral_usd=50.0, user_pnl_usd=1.0), ts=1000.0, run_id=RUN)
+    reg.log_account_mark(_mark(collateral_usd=None, user_pnl_usd=9.0), ts=2000.0, run_id=RUN)
+
+    a = report(db_path=str(temp_db), run_id="all")["portfolio"]["account"]
+    assert a["account_value_usd"] == pytest.approx(50.0)
+    assert a["pnl_usd"] == pytest.approx(1.0)   # not 9.0 from the failed sweep
+
+
+def test_all_sweeps_failed_still_reports_measured_with_nulls(temp_db):
+    reg = OrderRegistry(temp_db)
+    reg.log_account_mark(acct.compose_account_mark(None, None, None, None, None),
+                         ts=1000.0, run_id=RUN)
+
+    a = report(db_path=str(temp_db), run_id="all")["portfolio"]["account"]
+    assert a["measured"] is True
+    assert a["account_value_usd"] is None

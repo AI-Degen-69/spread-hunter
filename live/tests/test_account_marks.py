@@ -98,6 +98,8 @@ def test_unreached_endpoint_is_null_not_zero():
     assert reached["committed_usd"] == 0.0
     assert reached["pnl_closed_usd"] == 0.0
     assert reached["open_positions_count"] == 0
+    assert unreached["closed_positions_count"] is None
+    assert reached["closed_positions_count"] == 0
 
 
 def test_open_positions_drive_unrealized_and_committed():
@@ -331,3 +333,14 @@ def test_marks_come_back_in_timestamp_order(tmp_path):
         reg.log_account_mark(
             acct.compose_account_mark(val, 0.0, [], [], 0.0), ts=ts, run_id="r")
     assert [r["ts"] for r in reg.get_all_account_marks()] == [1000.0, 2000.0, 3000.0]
+
+
+def test_closed_positions_count_round_trips(tmp_path):
+    reg = OrderRegistry(db_path=tmp_path / "live.db")
+    reg.log_account_mark(
+        acct.compose_account_mark(
+            101.88, 0.0, [], [{"realizedPnl": 0.9}, {"realizedPnl": -0.6}], 0.3),
+        ts=1000.0, run_id="r")
+    row = reg.get_all_account_marks()[0]
+    assert row["closed_positions_count"] == 2
+    assert row["pnl_closed_usd"] == pytest.approx(0.30)

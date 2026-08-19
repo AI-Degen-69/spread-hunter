@@ -239,6 +239,7 @@ def compose_account_mark(
         "unrealized_usd": unrealized_usd,
         "committed_usd": committed_usd,
         "open_positions_count": None if open_positions is None else len(open_positions),
+        "closed_positions_count": None if closed_positions is None else len(closed_positions),
         "source": "venue",
     }
 
