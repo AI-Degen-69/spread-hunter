@@ -1638,7 +1638,7 @@ PAGE_HTML = """<!DOCTYPE html>
         <div class="mech-card">
           <div style="font-size:11px;color:var(--text-secondary);font-weight:700;">VENUE REJECTS / ERRORS</div>
           <div style="font-size:20px;font-weight:800;color:${rej.total > 0 ? '#ef4444' : '#10b981'};">${rej.total}</div>
-          <div style="font-size:11px;color:var(--text-muted);">${Object.keys(rej.by_code || {}).map(c => `${c}: ${rej.by_code[c]}`).join(', ') || '0 errors'}</div>
+          <div style="font-size:11px;color:var(--text-muted);">${Object.keys(rej.by_code || {}).map(c => `${esc(c)}: ${esc(rej.by_code[c])}`).join(', ') || '0 errors'}</div>
         </div>
 
         <div class="mech-card">

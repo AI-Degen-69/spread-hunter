@@ -35,6 +35,14 @@ SAMPLE_ROW = {
 }
 
 
+def _real_feed_or_skip():
+    """Return the ranker's live feed, or skip when this checkout has none."""
+    try:
+        return load_graduated_markets()
+    except MarketFeedAbsentError as exc:
+        pytest.skip(f"no ranker feed in this checkout: {exc}")
+
+
 def test_load_graduated_markets_real_file():
     """The real feed must load cleanly, whatever the ranker currently holds.
 
@@ -43,8 +51,12 @@ def test_load_graduated_markets_real_file():
     the moment it was written and fail minutes later, which is the mutating-data
     trap: snapshot it, or assert only what is invariant. Shape is invariant;
     contents are not.
+
+    The feed is generated, not committed, so a clean checkout (CI) has no file
+    to read. Skip there rather than fail: the assertion is about the ranker's
+    output shape, and there is no output to check.
     """
-    markets = load_graduated_markets()
+    markets = _real_feed_or_skip()
     assert markets, "ranker feed is present but empty"
     for m in markets:
         assert isinstance(m, GraduatedMarket)
@@ -97,7 +109,7 @@ def test_load_graduated_markets_not_a_list(tmp_path):
 
 def test_get_market_by_cid():
     """Look up market by full CID and prefix."""
-    markets = load_graduated_markets()
+    markets = _real_feed_or_skip()
     first = markets[0]
     found_full = get_market_by_cid(first.cid)
     assert found_full is not None
