@@ -412,7 +412,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     resolutions = reg.get_all_resolutions()
 
     runs = list_runs(reg)
-    
+
     # Active run resolution
     active_run_id: Optional[str] = None
     if run_id == "all":
@@ -420,8 +420,22 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     elif run_id:
         active_run_id = run_id
     elif runs:
-        # Default to the most recent run
-        active_run_id = runs[0]["run_id"]
+        # Default to the most recent run.
+        # BUT: a process restart orphans fills under a defunct run_id while the
+        # new process's run_id has orders + quotes and zero fills. Picking the
+        # most-recent run there would render the dashboard empty even though the
+        # venue saw real fills minutes ago. Fall through to "all" when the
+        # chosen run has no fills but any earlier run does -- the operator
+        # would rather see 30s of stale fills than a clean zeros grid.
+        chosen = runs[0]
+        chosen_has_fills = chosen.get("fills_count", 0) > 0
+        any_earlier_has_fills = any(
+            r.get("fills_count", 0) > 0 for r in runs[1:]
+        )
+        if chosen_has_fills or not any_earlier_has_fills:
+            active_run_id = chosen["run_id"]
+        else:
+            active_run_id = "all"
     else:
         active_run_id = None
 

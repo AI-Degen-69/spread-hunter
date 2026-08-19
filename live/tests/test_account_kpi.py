@@ -260,3 +260,84 @@ def test_page_uses_only_defined_css_variables():
     defined = set(re.findall(r"(--[a-z0-9-]+):", PAGE_HTML))
     used = set(re.findall(r"var\((--[a-z0-9-]+)\)", PAGE_HTML))
     assert used - defined == set()
+
+
+def test_active_run_falls_back_to_all_when_most_recent_run_has_no_fills(temp_db):
+    """When the most-recent run has zero fills but an earlier run does, default
+    the active run to "all" so the dashboard doesn't render a misleading zeros
+    grid over real, recent fills.
+
+    Regression for: live_exec process restart orphans fills under a defunct
+    run_id; the dashboard's default most-recent run had no fills, so all 29
+    fills became invisible.
+    """
+    from engine.order_registry import FillRecord, OrderRecord
+    reg = OrderRegistry(temp_db)
+    # Earlier run: orders + fills. Lower max_ts so it's NOT the most-recent.
+    earlier = "run-orphan"
+    reg.log_account_mark(_mark(collateral_usd=101.0), ts=1000.0, run_id=earlier)
+    reg.create_order(OrderRecord(
+        id="ord-orphan-1", condition_id="cond-orphan", token_id="tok-orphan",
+        side="BUY", price=0.21, original_size=10.0, status="open",
+        posted_ts=1000, last_polled_ts=1000, pair_id="pair-orphan",
+    ))
+    reg.record_fill(FillRecord(
+        trade_id="t-orphan-1", order_uuid="ord-orphan-1", size=8.0, price=0.21,
+        venue_ts=1100.0, recorded_ts=1100.5, run_id=earlier,
+    ))
+    # Current run: orders only, no fills. Higher max_ts so it IS most-recent.
+    current = "run-current"
+    reg.log_account_mark(_mark(collateral_usd=101.5), ts=5000.0, run_id=current)
+    reg.log_quote(_make_quote(run_id=current, ts=5000.0))
+
+    # No run_id argument: must fall back to "all".
+    rep = report(db_path=str(temp_db))
+    assert rep["active_run_id"] == "all"
+    # And the fills must be visible (n=1, not n=0).
+    by_mkt = rep["by_market"]
+    fills_visible = sum(m.get("fills_count", 0) for m in by_mkt.values())
+    assert fills_visible == 1
+
+
+def test_active_run_sticks_to_most_recent_when_it_has_fills(temp_db):
+    """When the most-recent run DOES have fills, do NOT fall back to "all" --
+    the operator wants to see the current run in isolation, not pooled."""
+    from engine.order_registry import FillRecord, OrderRecord
+    reg = OrderRegistry(temp_db)
+    reg.log_account_mark(_mark(collateral_usd=101.0), ts=1000.0, run_id="run-old")
+    reg.create_order(OrderRecord(
+        id="ord-old", condition_id="cond-old", token_id="tok-old",
+        side="BUY", price=0.21, original_size=10.0, status="open",
+        posted_ts=1000, last_polled_ts=1000, pair_id="pair-old",
+    ))
+    reg.record_fill(FillRecord(
+        trade_id="t-old", order_uuid="ord-old", size=8.0, price=0.21,
+        venue_ts=1100.0, recorded_ts=1100.5, run_id="run-old",
+    ))
+    reg.log_account_mark(_mark(collateral_usd=102.0), ts=9000.0, run_id="run-new")
+    reg.create_order(OrderRecord(
+        id="ord-new", condition_id="cond-new", token_id="tok-new",
+        side="BUY", price=0.79, original_size=10.0, status="open",
+        posted_ts=9000, last_polled_ts=9000, pair_id="pair-new",
+    ))
+    reg.record_fill(FillRecord(
+        trade_id="t-new", order_uuid="ord-new", size=4.0, price=0.79,
+        venue_ts=9100.0, recorded_ts=9100.5, run_id="run-new",
+    ))
+
+    rep = report(db_path=str(temp_db))
+    assert rep["active_run_id"] == "run-new"
+    by_mkt = rep["by_market"]
+    fills_visible = sum(m.get("fills_count", 0) for m in by_mkt.values())
+    assert fills_visible == 1  # only the run-new fill, not pooled.
+
+
+def _make_quote(*, run_id, ts, **over):
+    from engine.order_registry import QuoteRecord
+    base = dict(
+        ts=ts, market_slug="slug", condition_id="cond-1",
+        token_id="tok-1", side="BUY", price=0.5, size=5.0,
+        order_id="0xvenue", local_id="local-1", run_id=run_id,
+    )
+    base.update(over)
+    return QuoteRecord(**base)

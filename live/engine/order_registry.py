@@ -48,7 +48,40 @@ ORDER_STATUSES = ("pending", "open", "partial", "filled", "cancelled", "unattrib
 
 RECONCILE_LOCK_STALE_MS: int = 300_000
 
-_CURRENT_RUN_ID = os.environ.get("SH_RUN_ID") or f"run-{uuid.uuid4().hex[:12]}"
+_CURRENT_RUN_ID: Optional[str] = None
+
+
+def _resolve_run_id() -> str:
+    """Derive the session run_id so fleet/dash/exec processes share one ID.
+
+    Priority:
+    1. SH_RUN_ID env var (explicit override, set by start_bot)
+    2. live/run/.current_run_id lock file, if it was written in the last 12h
+    3. New UUID — generates and writes the lock file so other processes pick it up
+    """
+    env_id = os.environ.get("SH_RUN_ID")
+    if env_id:
+        return env_id
+
+    lock_file = LIVE_ROOT / "run" / ".current_run_id"
+    try:
+        if lock_file.exists():
+            mtime = lock_file.stat().st_mtime
+            if time.time() - mtime < 43200:  # 12h
+                return lock_file.read_text().strip()
+    except Exception:
+        pass
+
+    new_id = f"run-{uuid.uuid4().hex[:12]}"
+    try:
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        lock_file.write_text(new_id)
+    except Exception:
+        pass
+    return new_id
+
+
+_CURRENT_RUN_ID = _resolve_run_id()
 
 
 def get_run_id() -> str:

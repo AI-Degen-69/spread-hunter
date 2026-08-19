@@ -389,3 +389,48 @@ def test_markout_leg_resolution_rejects_a_foreign_token(tmp_path):
     # Rows written before token_id existed fall back to the side string.
     assert _resolve_leg(None, mids, "UP") == "UP"
     assert _resolve_leg(None, mids, "BUY") is None
+
+
+# ---------------------------------------------------------------------------
+# Regression: latency_ms in fleet path + run_id lock file
+# ---------------------------------------------------------------------------
+
+def test_latency_ms_persisted_by_log_quote(tmp_path):
+    """Fleet log_quote with latency_ms stores the value, not NULL."""
+    db_file = tmp_path / "test_latency.db"
+    from engine.order_registry import QuoteRecord
+    reg = OrderRegistry(db_file)
+    reg.log_quote(QuoteRecord(
+        ts=1000.0, market_slug="test-slug", condition_id="test-cid",
+        token_id="test-tok", side="BUY", price=0.55, size=5.0,
+        order_id="0xvenue", local_id="loc-1", run_id="run-latency",
+        latency_ms=47.3,
+    ))
+    with reg._conn() as conn:
+        row = dict(conn.execute("SELECT * FROM quotes WHERE local_id = 'loc-1'").fetchone())
+    assert row["latency_ms"] == pytest.approx(47.3)
+
+
+def test_run_id_lock_file_shared_across_processes(tmp_path, monkeypatch):
+    """First import writes .current_run_id; second import reuses it."""
+    from engine import order_registry as reg_mod
+    lock_dir = tmp_path / "run"
+    monkeypatch.setattr(reg_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.delenv("SH_RUN_ID", raising=False)
+    monkeypatch.setattr(reg_mod, "_CURRENT_RUN_ID", None)
+    id1 = reg_mod._resolve_run_id()
+    assert (lock_dir / ".current_run_id").exists()
+    stored = (lock_dir / ".current_run_id").read_text().strip()
+    assert id1 == stored
+    monkeypatch.setattr(reg_mod, "_CURRENT_RUN_ID", None)
+    id2 = reg_mod._resolve_run_id()
+    assert id2 == id1
+
+
+def test_sh_run_id_env_overrides_lock_file(tmp_path, monkeypatch):
+    """SH_RUN_ID wins when set, no lock file read needed."""
+    from engine import order_registry as reg_mod
+    monkeypatch.setenv("SH_RUN_ID", "env-override-123")
+    monkeypatch.setattr(reg_mod, "_CURRENT_RUN_ID", None)
+    rid = reg_mod._resolve_run_id()
+    assert rid == "env-override-123"

@@ -395,7 +395,9 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
                 "mid": i.mid, "edge_vs_mid": i.edge_vs_mid, "crossed": i.crossed,
             })
 
+        t_start = time.perf_counter()
         resp = client.post_orders(batch_args, post_only=post_only)
+        post_latency_ms = (time.perf_counter() - t_start) * 1000.0
         resp_list = (resp if isinstance(resp, list)
                      else [resp] if isinstance(resp, dict) else [])
 
@@ -440,6 +442,7 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
                 side=leg["side"], price=leg["price"], size=leg["size"],
                 mid=leg["mid"], edge_vs_mid=leg["edge_vs_mid"],
                 order_id=v_id, local_id=leg["local_id"], run_id=get_run_id(),
+                latency_ms=post_latency_ms,
             ))
             placed += 1
 

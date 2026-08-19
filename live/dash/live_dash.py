@@ -334,12 +334,12 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
         fills_rows = []
         if "fills" in tables:
             fills_rows = cur.execute("""
-                SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts,
-                       o.side, o.pair_id, o.token_id
-                FROM fills f
-                LEFT JOIN orders o ON o.id = f.order_uuid
-                ORDER BY f.venue_ts DESC
-            """).fetchall()
+                            SELECT f.trade_id, f.order_uuid, f.size, f.price, f.venue_ts,
+                                   o.side, o.pair_id, o.token_id, o.condition_id
+                            FROM fills f
+                            LEFT JOIN orders o ON o.id = f.order_uuid
+                            ORDER BY f.venue_ts DESC
+                        """).fetchall()
 
         # Check reconcile lock
         rec_lock_info = {
@@ -846,12 +846,20 @@ def start_bot() -> dict:
     procs_file = LIVE_ROOT / "run" / "live_procs.json"
     procs_file.parent.mkdir(parents=True, exist_ok=True)
 
+    # Derive a stable run_id so fleet/exec/dash share one session id.
+    # Without this, each process generates its own UUID at import time
+    # and fills/orders are tagged to inconsistent run_ids, which makes
+    # the dashboard default run selector show a misleading zeros grid.
+    from engine.order_registry import get_run_id
+    child_env = {**os.environ, "SH_RUN_ID": get_run_id()}
+
     # Launch Screener (rerank_loop)
     p_scr = subprocess.Popen(
         [sys.executable, "-m", "scripts.rerank_loop"],
         cwd=str(REPO_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=child_env,
     )
 
     # Launch Engine Poll loop (live_exec poll --interval 5). The account sweep
@@ -867,6 +875,7 @@ def start_bot() -> dict:
         cwd=str(LIVE_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=child_env,
     )
 
     # Launch the Fleet loop (decide -> submit). It reads open orders from the
@@ -879,6 +888,7 @@ def start_bot() -> dict:
         cwd=str(LIVE_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=child_env,
     )
 
     saved_procs = {
@@ -1988,21 +1998,22 @@ PAGE_HTML = """<!DOCTYPE html>
         <div class="table-container">
           <table>
             <thead>
-              <tr>
-                <th>Side / Leg</th>
-                <th>Price</th>
-                <th>Size</th>
-                <th>Matched</th>
-                <th>Fill %</th>
-                <th>Status</th>
-                <th>Age</th>
-              </tr>
-            </thead>
-            <tbody id="orders-tbody">
-              <tr>
-                <td colspan="7" class="empty-state-text">No orders loaded</td>
-              </tr>
-            </tbody>
+                          <tr>
+                            <th>Side / Leg</th>
+                            <th>Price</th>
+                            <th>Size</th>
+                            <th>Matched</th>
+                            <th>Fill %</th>
+                            <th>Status</th>
+                            <th>Age</th>
+                            <th style="width:80px;"></th>
+                          </tr>
+                        </thead>
+                        <tbody id="orders-tbody">
+                          <tr>
+                            <td colspan="8" class="empty-state-text">No orders loaded</td>
+                          </tr>
+                        </tbody>
           </table>
         </div>
       </div>
@@ -2046,20 +2057,21 @@ PAGE_HTML = """<!DOCTYPE html>
       <div class="table-container">
         <table>
           <thead>
-            <tr>
-              <th>Time (Local)</th>
-              <th>Trade ID</th>
-              <th>Side</th>
-              <th>Price</th>
-              <th>Size</th>
-              <th>Notional</th>
-            </tr>
-          </thead>
-          <tbody id="fills-tbody">
-            <tr>
-              <td colspan="6" class="empty-state-text">No fills recorded yet</td>
-            </tr>
-          </tbody>
+                      <tr>
+                        <th>Time (Local)</th>
+                        <th>Trade ID</th>
+                        <th>Side</th>
+                        <th>Price</th>
+                        <th>Size</th>
+                        <th>Notional</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="fills-tbody">
+                      <tr>
+                        <td colspan="7" class="empty-state-text">No fills recorded yet</td>
+                      </tr>
+                    </tbody>
         </table>
       </div>
     </div>
@@ -3137,46 +3149,71 @@ PAGE_HTML = """<!DOCTYPE html>
       document.getElementById('modal-dist').style.display = 'none';
     }
 
+    // Collapsible market aggregation state
+    const LIVE_EXPANDED_MARKETS = new Set();
+    function toggleLiveMarketExpand(key) {
+      if (LIVE_EXPANDED_MARKETS.has(key)) LIVE_EXPANDED_MARKETS.delete(key);
+      else LIVE_EXPANDED_MARKETS.add(key);
+    }
+
     function renderOrders(state) {
       const tbody = document.getElementById('orders-tbody');
       const badge = document.getElementById('order-count-badge');
-      const orders = state.orders || [];
-
-      badge.textContent = `${orders.length} order${orders.length === 1 ? '' : 's'}`;
-
+      const ACTIVE_STATUSES = new Set(['open', 'pending', 'partial']);
+      const all = state.orders || [];
+      const orders = all.filter(o => ACTIVE_STATUSES.has(o.status));
+      badge.textContent = `${orders.length} of ${all.length} orders`;
       if (orders.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state-text">No orders recorded in database</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state-text">No active orders</td></tr>';
         return;
       }
-
-      tbody.innerHTML = orders.map(o => {
-        const size = parseFloat(o.original_size).toFixed(2);
-        const matched = parseFloat(o.size_matched).toFixed(2);
-        const pct = o.original_size > 0 ? Math.min(100, Math.round((o.size_matched / o.original_size) * 100)) : 0;
-        const price = parseFloat(o.price).toFixed(3);
-        const age = formatDuration(o.age_sec);
-        const isUnattr = o.status === 'unattributed';
-        const tagClass = KNOWN_STATUSES.includes(o.status) ? o.status : 'open';
-
-        return `
-          <tr>
-            <td>
-              <strong>${esc(o.side || 'BUY')}</strong>
-              <div style="font-size:10px;color:var(--text-muted);">${esc((o.token_id || '').slice(0, 10))}...</div>
-            </td>
-            <td>$${price}</td>
-            <td>${size}</td>
-            <td><strong>${matched}</strong></td>
-            <td>${pct}%</td>
-            <td>
-              <span class="status-tag ${tagClass}">
-                ${isUnattr ? '⚠️ UNATTRIBUTED' : esc(o.status)}
-              </span>
-            </td>
-            <td>${age}</td>
-          </tr>
-        `;
-      }).join('');
+      const groups = new Map();
+      for (const o of orders) {
+        const cid = o.condition_id || 'unknown';
+        if (!groups.has(cid)) groups.set(cid, []);
+        groups.get(cid).push(o);
+      }
+      const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+      let html = '';
+      for (const [cid, groupOrders] of sorted) {
+        groupOrders.sort((a, b) => b.posted_ts - a.posted_ts);
+        const isExpanded = LIVE_EXPANDED_MARKETS.has(cid);
+        const totalSize = groupOrders.reduce((s, o) => s + parseFloat(o.original_size || 0), 0);
+        const totalMatched = groupOrders.reduce((s, o) => s + parseFloat(o.size_matched || 0), 0);
+        const statuses = [...new Set(groupOrders.map(o => o.status))].join(', ');
+        const cidShort = (cid || '').slice(0, 14) + '..';
+        html += `<tr class="market-agg-row" style="cursor:pointer;background:rgba(30,41,59,0.3);" onclick="toggleLiveMarketExpand('${esc(cid)}')">
+          <td><strong>${esc(cidShort)}</strong><div style="font-size:10px;color:var(--text-muted);">${groupOrders.length} orders &middot; ${esc(statuses)}</div></td>
+          <td>&mdash;</td>
+          <td>${totalSize.toFixed(1)}</td>
+          <td><strong>${totalMatched.toFixed(1)}</strong></td>
+          <td>${totalSize > 0 ? Math.round(totalMatched / totalSize * 100) : 0}%</td>
+          <td><span class="status-tag open">${groupOrders.length} open</span></td>
+          <td>&mdash;</td>
+          <td><button type="button" onclick="event.stopPropagation();toggleLiveMarketExpand('${esc(cid)}')" class="expand-btn mono text-[11px] px-2 py-0.5 bg-[#1F2937] border border-[#374151] text-[#F9FAFB] cursor-pointer">${isExpanded ? '▲' : '▼'}</button></td>
+        </tr>`;
+        if (isExpanded) {
+          for (const o of groupOrders) {
+            const size = parseFloat(o.original_size).toFixed(2);
+            const matched = parseFloat(o.size_matched).toFixed(2);
+            const pct = o.original_size > 0 ? Math.min(100, Math.round((o.size_matched / o.original_size) * 100)) : 0;
+            const price = parseFloat(o.price).toFixed(3);
+            const age = formatDuration(o.age_sec);
+            const tagClass = KNOWN_STATUSES.includes(o.status) ? o.status : 'open';
+            html += `<tr class="market-detail-row" style="background:rgba(8,12,20,0.4);">
+              <td style="padding-left:24px;"><strong>${esc(o.side || 'BUY')}</strong> <span style="font-size:10px;color:var(--text-muted);">${esc((o.token_id || '').slice(0, 10))}..</span></td>
+              <td>$${price}</td>
+              <td>${size}</td>
+              <td><strong>${matched}</strong></td>
+              <td>${pct}%</td>
+              <td><span class="status-tag ${tagClass}">${esc(o.status)}</span></td>
+              <td>${age}</td>
+              <td></td>
+            </tr>`;
+          }
+        }
+      }
+      tbody.innerHTML = html;
     }
 
     function renderCapital(state) {
@@ -3200,30 +3237,51 @@ PAGE_HTML = """<!DOCTYPE html>
       const tbody = document.getElementById('fills-tbody');
       const badge = document.getElementById('fill-count-badge');
       const fills = state.fills || [];
-
       badge.textContent = `${fills.length} fill${fills.length === 1 ? '' : 's'}`;
-
       if (fills.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-state-text">No fills recorded yet</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state-text">No fills recorded yet</td></tr>';
         return;
       }
-
-      tbody.innerHTML = fills.map(f => {
-        const notional = (f.size * f.price).toFixed(2);
-        return `
-          <tr>
-            <td>
-              <div>${esc(f.venue_time_str || formatTime(f.venue_ts))}</div>
-              <div style="font-size:10px;color:var(--text-muted);">${formatDuration(f.age_sec)} ago</div>
-            </td>
-            <td><span style="font-size:11px;color:var(--text-secondary);">${esc((f.trade_id || '').slice(0, 12))}</span></td>
-            <td><strong>${esc(f.side || 'BUY')}</strong></td>
-            <td>$${parseFloat(f.price).toFixed(3)}</td>
-            <td>${parseFloat(f.size).toFixed(2)}</td>
-            <td><strong>$${notional}</strong></td>
-          </tr>
-        `;
-      }).join('');
+      const groups = new Map();
+      for (const f of fills) {
+        const cid = f.condition_id || 'unknown';
+        if (!groups.has(cid)) groups.set(cid, []);
+        groups.get(cid).push(f);
+      }
+      const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+      let html = '';
+      for (const [cid, groupFills] of sorted) {
+        groupFills.sort((a, b) => b.venue_ts - a.venue_ts);
+        const isExpanded = LIVE_EXPANDED_MARKETS.has(cid);
+        const totalSize = groupFills.reduce((s, f) => s + parseFloat(f.size || 0), 0);
+        const totalNotional = groupFills.reduce((s, f) => s + parseFloat(f.size || 0) * parseFloat(f.price || 0), 0);
+        const avgPrice = totalSize > 0 ? totalNotional / totalSize : 0;
+        const cidShort = (cid || '').slice(0, 14) + '..';
+        html += `<tr class="market-agg-row" style="cursor:pointer;background:rgba(30,41,59,0.3);" onclick="toggleLiveMarketExpand('${esc(cid)}')">
+          <td><strong>${esc(cidShort)}</strong><div style="font-size:10px;color:var(--text-muted);">${groupFills.length} fills</div></td>
+          <td>&mdash;</td>
+          <td><strong>${esc(groupFills[0]?.side || 'BUY')}</strong></td>
+          <td>$${avgPrice.toFixed(3)}</td>
+          <td>${totalSize.toFixed(1)} sh</td>
+          <td><strong>$${totalNotional.toFixed(2)}</strong></td>
+          <td><button type="button" onclick="event.stopPropagation();toggleLiveMarketExpand('${esc(cid)}')" class="expand-btn mono text-[11px] px-2 py-0.5 bg-[#1F2937] border border-[#374151] text-[#F9FAFB] cursor-pointer">${isExpanded ? '▲' : '▼'}</button></td>
+        </tr>`;
+        if (isExpanded) {
+          for (const f of groupFills) {
+            const notional = (f.size * f.price).toFixed(2);
+            html += `<tr class="market-detail-row" style="background:rgba(8,12,20,0.4);">
+              <td style="padding-left:24px;"><div>${esc(f.venue_time_str || formatTime(f.venue_ts))}</div><div style="font-size:10px;color:var(--text-muted);">${formatDuration(f.age_sec)} ago</div></td>
+              <td><span style="font-size:11px;color:var(--text-secondary);">${esc((f.trade_id || '').slice(0, 12))}</span></td>
+              <td><strong>${esc(f.side || 'BUY')}</strong></td>
+              <td>$${parseFloat(f.price).toFixed(3)}</td>
+              <td>${parseFloat(f.size).toFixed(2)}</td>
+              <td><strong>$${notional}</strong></td>
+              <td></td>
+            </tr>`;
+          }
+        }
+      }
+      tbody.innerHTML = html;
     }
 
     function renderFreshnessAndLock(state) {

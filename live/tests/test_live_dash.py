@@ -828,6 +828,51 @@ def test_system_reset_db_endpoint(client, temp_db):
 # CodeRabbit review round on PR #44
 # --------------------------------------------------------------------------
 
+def test_active_orders_panel_filters_out_filled_and_cancelled():
+    """The 'Active Pair Orders' panel must hide filled/cancelled rows.
+    Regression for: live/run/live.db had 720 orders (668 cancelled, 29
+    filled, 27 pending, 1 partial); all showed up in one table and buried
+    the live view.
+    """
+    assert "Active Pair Orders" in PAGE_HTML
+    # Filter must be in the rendered JS, not just a comment.
+    assert "ACTIVE_STATUSES" in PAGE_HTML
+    assert "open" in PAGE_HTML and "pending" in PAGE_HTML and "partial" in PAGE_HTML
+    # The empty-state copy must point the operator at the Fills Timeline so
+    # they don't think the cancelled rows were deleted from the DB.
+    assert "Fills Timeline" in PAGE_HTML or "Fills timeline" in PAGE_HTML
+
+
+def test_api_state_does_not_pre_filter_orders(client, temp_db):
+    """The server emits ALL orders; the JS filter is what renders only
+    active ones. A server-side filter would be brittle (anyone calling
+    /api/state from a tool would see a partial picture).
+    """
+    now_ms = int(time.time() * 1000)
+    con = sqlite3.connect(str(temp_db))
+    con.executemany(
+        """INSERT INTO orders (id, condition_id, token_id, side, price, original_size, status, posted_ts, last_polled_ts)
+           VALUES (?, 'cond-1', 'tok-1', 'BUY', 0.5, 10.0, ?, ?, ?)""",
+        [
+            ("ord-active-1", "open", now_ms, now_ms),
+            ("ord-active-2", "pending", now_ms, now_ms),
+            ("ord-active-3", "partial", now_ms, now_ms),
+            ("ord-cancelled", "cancelled", now_ms, now_ms),
+            ("ord-filled", "filled", now_ms, now_ms),
+        ],
+    )
+    con.commit()
+    con.close()
+
+    res = client.get("/api/state")
+    assert res.status_code == 200
+    data = res.json()
+    ids = {o["id"] for o in data["orders"]}
+    # All five rows on the wire; the JS hides three of them in the table.
+    assert ids == {"ord-active-1", "ord-active-2", "ord-active-3",
+                   "ord-cancelled", "ord-filled"}
+
+
 def _control(client):
     """Headers that authorize a machine-state change from this process's page."""
     from dash.live_dash import CONTROL_TOKEN
