@@ -3987,3 +3987,41 @@ actually work when started the way a human starts it?
 **Verdict.** **LIVE**, with the finding recorded: a green suite certified a dashboard whose every data call
 failed, for the second time on this project via a `sys.path` difference between how tests run and how the
 program runs. Root suite 703 passed; live suite 220 passed.
+
+
+---
+
+### 2026-08-19 - The adverse-selection sampler never sampled, and one fill counted twice
+
+**Question.** A code review on PR #43 raised three findings against `live/engine/`. Do they hold
+against the current code?
+
+**Method.** Read each cited path, checked the claim against the schema and the live database, and
+wrote a failing test before each fix.
+
+**Result.**
+1. **Markout never sampled anything.** `live/engine/markout.py` looked its reference mid up with
+   `mids.get(side)`, where `mids_cache` is keyed `"UP"` / `"DOWN"` and `side` comes from the
+   `markouts` table. That column is written from `OrderRecord.side`, and the `orders` schema
+   constrains it to `'BUY'` / `'SELL'` (`CHECK (side IN ('BUY','SELL'))`). The lookup therefore
+   returned `None` for every reconciled row: `update_markout_horizon` was never called, `done` was
+   never set, and `get_pending_markouts` re-selected the whole backlog every 10 seconds forever.
+   The Milestone 8 dashboard reported `markout_samples: 0` and adverse selection `--`; that was not
+   a thin sample, it was a sampler that could not fire. Fixed by carrying the fill's `token_id` on
+   the markout row and resolving the UP/DOWN leg from it, with the side string kept only as a
+   fallback for rows written before the column existed. A foreign token now leaves the row
+   unsampled rather than guessing a leg.
+2. **One venue fill was attributed to every matching order.** `LiveFillEngine.record_venue_fill`
+   recomputed `take = min(o.remaining, size)` per matching order against the *full* fill size and
+   broke only once an order was fully consumed. Two open orders on one token and side turned a
+   6-share fill into 6 + 6. `remaining`, `is_open`, and `open_orders()` all derive from `filled`,
+   so the engine would have reported orders closed while they still rested on the venue. The
+   existing test covered only the single-order case, which is correct under the old loop. The
+   attribution now decrements what is left to assign and prefers an exact `order_id` match.
+3. **`cross()` fabricates fills.** It builds `LiveFill` objects from book depth and appends them to
+   `self.fills` with no venue confirmation, against the module's own stated invariant. Left open as
+   a decision for the Owner: the method has no production caller, and both candidate fixes
+   (build the unverified/promote lifecycle, or delete the method) change a live-money interface.
+
+**Verdict.** **LIVE** for 1 and 2. **OPEN** for 3. Root suite 703 passed; live suite 225 passed
+(+5 regression tests that fail against the unpatched code).

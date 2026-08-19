@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS markouts (
     condition_id TEXT,
     market_slug TEXT,
     side TEXT,
+    token_id TEXT,
     fill_price REAL,
     size REAL,
     ref_mid REAL,
@@ -288,6 +289,8 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE markouts ADD COLUMN mid_h3 REAL")
         if "run_id" not in cols:
             conn.execute("ALTER TABLE markouts ADD COLUMN run_id TEXT")
+        if "token_id" not in cols:
+            conn.execute("ALTER TABLE markouts ADD COLUMN token_id TEXT")
 
     # Check columns in closes
     cur = conn.execute("PRAGMA table_info(closes)")
@@ -408,6 +411,10 @@ class MarkoutRecord:
     side: str
     fill_price: float
     size: float
+    # The venue token this fill was on. `side` is the order book's BUY/SELL, which
+    # cannot say whether the fill was on the UP or the DOWN leg -- and the markout
+    # sampler needs exactly that to pick a reference mid.
+    token_id: Optional[str] = None
     market_slug: Optional[str] = None
     ref_mid: Optional[float] = None
     ref_mid_source: str = "contaminated"
@@ -827,16 +834,17 @@ class OrderRegistry:
             cur = conn.execute(
                 """
                 INSERT INTO markouts (
-                    ts, condition_id, market_slug, side, fill_price, size,
+                    ts, condition_id, market_slug, side, token_id, fill_price, size,
                     ref_mid, ref_mid_source, mid_h0, mid_h1, mid_h2, mid_h3,
                     done, run_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     markout.ts,
                     markout.condition_id,
                     markout.market_slug,
                     markout.side,
+                    markout.token_id,
                     markout.fill_price,
                     markout.size,
                     markout.ref_mid,
@@ -1344,6 +1352,7 @@ def _reconcile_pass(
                                     ts=fill_sec,
                                     condition_id=m_order.condition_id,
                                     side=m_order.side,
+                                    token_id=m_order.token_id,
                                     fill_price=m_price,
                                     size=m_size,
                                     ref_mid=m_price,  # initial ref mid fallback
@@ -1397,6 +1406,7 @@ def _reconcile_pass(
                             ts=fill_sec,
                             condition_id=order.condition_id,
                             side=order.side,
+                            token_id=order.token_id,
                             fill_price=t_price,
                             size=t_size,
                             ref_mid=t_price,

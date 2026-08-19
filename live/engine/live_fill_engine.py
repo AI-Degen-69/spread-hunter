@@ -168,12 +168,26 @@ class LiveFillEngine:
             ts=ts, order_id=order_id, trade_id=trade_id, reason="venue"
         )
         self.fills.append(f)
-        for o in self.orders:
-            if o.is_open and o.token_id == token_id and o.side == side:
-                take = min(o.remaining, size)
-                o.filled += take
-                if o.remaining <= 1e-9:
-                    break
+        # Attribute the fill across resting orders, decrementing what is left to
+        # assign. The previous loop recomputed `min(o.remaining, size)` per order
+        # against the *full* fill size and stopped only once an order was fully
+        # consumed -- so two open orders on one token/side split a 6-share fill
+        # into 6 + 6. `remaining`, `is_open`, and `open_orders()` all derive from
+        # `filled`, so the engine then reported orders closed while they still
+        # rested on the venue.
+        unattributed = size
+        exact = [o for o in self.orders if order_id and o.order_id == order_id]
+        candidates = exact or [
+            o for o in self.orders if o.token_id == token_id and o.side == side
+        ]
+        for o in candidates:
+            if unattributed <= 1e-9:
+                break
+            if not o.is_open:
+                continue
+            take = min(o.remaining, unattributed)
+            o.filled += take
+            unattributed -= take
         return f
 
     def filled_shares(self, side: Optional[str] = None,

@@ -26,6 +26,23 @@ MARKOUT_HORIZONS: tuple[float, ...] = getattr(
 )
 
 
+def _resolve_leg(
+    token_id: Optional[str], mids: dict, side_fallback: str
+) -> Optional[str]:
+    """Map a fill's token to the UP or DOWN leg of its market.
+
+    Returns None when the token belongs to neither leg -- better to leave the
+    markout unsampled than to attribute it to the wrong side of the book.
+    """
+    if token_id:
+        if token_id == mids.get("_up_token"):
+            return "UP"
+        if token_id == mids.get("_down_token"):
+            return "DOWN"
+        return None
+    return side_fallback if side_fallback in ("UP", "DOWN") else None
+
+
 def sample_pending_markouts(
     registry: OrderRegistry,
     clob_host: str = "https://clob.polymarket.com",
@@ -49,7 +66,12 @@ def sample_pending_markouts(
 
     for row in pending:
         cid = row.get("condition_id")
-        side = row.get("side", "UP").upper()
+        # `side` on a markout row is the order book's BUY/SELL, never UP/DOWN, so
+        # it cannot pick a reference mid on its own. Resolve the leg from the
+        # token the fill was on; fall back to the side string only for rows
+        # written before token_id existed.
+        row_token = row.get("token_id")
+        side = str(row.get("side") or "UP").upper()
         h_idx = row.get("_due")
         m_id = row.get("id")
         if cid is None or h_idx is None or m_id is None:
@@ -64,14 +86,29 @@ def sample_pending_markouts(
                     dn_book = full_book(clob_host, m.down_token)
                     bb_up, ba_up = up_book.get("best_bid"), up_book.get("best_ask")
                     bb_dn, ba_dn = dn_book.get("best_bid"), dn_book.get("best_ask")
-                    mid_up = (bb_up + ba_up) / 2.0 if (bb_up and ba_up) else None
-                    mid_dn = (bb_dn + ba_dn) / 2.0 if (bb_dn and ba_dn) else None
-                    mids_cache[cid] = {"UP": mid_up, "DOWN": mid_dn}
+                    # A legitimate price of 0.0 is falsy; test for absence.
+                    mid_up = (
+                        (bb_up + ba_up) / 2.0
+                        if (bb_up is not None and ba_up is not None)
+                        else None
+                    )
+                    mid_dn = (
+                        (bb_dn + ba_dn) / 2.0
+                        if (bb_dn is not None and ba_dn is not None)
+                        else None
+                    )
+                    mids_cache[cid] = {
+                        "UP": mid_up,
+                        "DOWN": mid_dn,
+                        "_up_token": m.up_token,
+                        "_down_token": m.down_token,
+                    }
             except Exception:
                 mids_cache[cid] = {}
 
         mids = mids_cache.get(cid, {})
-        mid = mids.get(side)
+        leg = _resolve_leg(row_token, mids, side)
+        mid = mids.get(leg) if leg else None
         if mid is not None:
             # Check if all other horizons are filled
             still_open = any(

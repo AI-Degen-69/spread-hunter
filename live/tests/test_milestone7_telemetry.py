@@ -327,3 +327,65 @@ def test_decide_is_structurally_read_only(tmp_path):
 
     orders_after = reg.get_active_orders()
     assert len(orders_after) == len(orders_before) == 0
+
+
+def test_markout_samples_a_buy_side_row_by_token(tmp_path, monkeypatch):
+    """A reconciled fill records side='BUY'; the sampler must still find its mid.
+
+    `mids_cache` is keyed UP/DOWN, but the markouts row's `side` column is copied
+    from the order, whose schema constrains it to BUY/SELL. Looking the mid up by
+    `side` therefore returned None for every reconciled row: no horizon was ever
+    sampled, `done` was never set, and the pending backlog grew without bound.
+    The row now carries the token it filled on, and the leg is resolved from that.
+    """
+    import types
+    import engine.markets as markets_mod
+
+    reg = OrderRegistry(tmp_path / "test_markout_leg.db")
+    t_now = time.time()
+
+    reg.log_markout(MarkoutRecord(
+        ts=t_now - 350.0,
+        condition_id="0xcond_leg",
+        side="BUY",
+        token_id="tok_down",
+        fill_price=0.32,
+        size=5.0,
+    ))
+
+    monkeypatch.setattr(
+        markets_mod,
+        "fetch_pinned_market",
+        lambda cid, require_rewards=False: types.SimpleNamespace(
+            up_token="tok_up", down_token="tok_down"
+        ),
+    )
+    monkeypatch.setattr(
+        markets_mod,
+        "full_book",
+        lambda host, token: (
+            {"best_bid": 0.60, "best_ask": 0.64}
+            if token == "tok_up"
+            else {"best_bid": 0.34, "best_ask": 0.38}
+        ),
+    )
+
+    assert sample_pending_markouts(reg, now_sec=t_now) == 1
+
+    with reg._conn() as conn:
+        row = dict(conn.execute("SELECT * FROM markouts").fetchone())
+    assert row["token_id"] == "tok_down"
+    assert row["mid_h0"] == pytest.approx(0.36)
+
+
+def test_markout_leg_resolution_rejects_a_foreign_token(tmp_path):
+    """A token belonging to neither leg leaves the markout unsampled, not mis-sided."""
+    from engine.markout import _resolve_leg
+
+    mids = {"UP": 0.62, "DOWN": 0.36, "_up_token": "tok_up", "_down_token": "tok_down"}
+    assert _resolve_leg("tok_up", mids, "BUY") == "UP"
+    assert _resolve_leg("tok_down", mids, "BUY") == "DOWN"
+    assert _resolve_leg("tok_someone_elses", mids, "BUY") is None
+    # Rows written before token_id existed fall back to the side string.
+    assert _resolve_leg(None, mids, "UP") == "UP"
+    assert _resolve_leg(None, mids, "BUY") is None
