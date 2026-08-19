@@ -1985,7 +1985,7 @@ PAGE_HTML = """<!DOCTYPE html>
       <span class="status-dot dot-offline" id="sup-dot"></span>
       <div>
         <div class="footer-sup-title">SUPERVISOR: <span id="sup-text" style="color:#f87171;">OFFLINE</span></div>
-        <div id="sup-sub" class="footer-sup-sub">Not Running</div>
+        <div id="sup-sub" class="footer-sup-sub"></div>
       </div>
     </div>
 
@@ -3189,11 +3189,11 @@ PAGE_HTML = """<!DOCTYPE html>
       if (sup.running) {
         if (supDot) { supDot.className = 'status-dot dot-online'; }
         if (supText) { supText.textContent = 'ONLINE'; supText.style.color = '#34d399'; }
-        if (supSub) { supSub.textContent = `PID ${sup.pid || '--'}`; }
+        if (supSub) { supSub.style.display = ''; supSub.textContent = `PID ${sup.pid || '--'}`; }
       } else {
         if (supDot) { supDot.className = 'status-dot dot-offline'; }
         if (supText) { supText.textContent = 'OFFLINE'; supText.style.color = '#f87171'; }
-        if (supSub) { supSub.textContent = 'Not Running'; }
+        if (supSub) { supSub.textContent = ''; supSub.style.display = 'none'; }
       }
 
       const s = data.services || {};
