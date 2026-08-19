@@ -459,6 +459,204 @@ def get_state():
     return JSONResponse(query_db_state(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
 
 
+def _is_pid_alive(pid: int | None) -> bool:
+    """Check if process with given PID is currently alive."""
+    if not pid or pid <= 0:
+        return False
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return False
+        else:
+            os.kill(int(pid), 0)
+            return True
+    except Exception:
+        return False
+
+
+def get_system_status() -> dict:
+    """Return live running status for Supervisor and 3 sub-services (Screener, Engine, Telemetry)."""
+    procs_file = LIVE_ROOT / "run" / "live_procs.json"
+    saved_procs: dict[str, Any] = {}
+    if procs_file.exists():
+        try:
+            saved_procs = json.loads(procs_file.read_text(encoding="utf-8"))
+        except Exception:
+            saved_procs = {}
+
+    sup_info = saved_procs.get("supervisor", {})
+    sup_pid = sup_info.get("pid")
+    sup_running = _is_pid_alive(sup_pid)
+
+    scr_info = saved_procs.get("screener", {})
+    scr_pid = scr_info.get("pid")
+    scr_running = _is_pid_alive(scr_pid)
+
+    eng_info = saved_procs.get("engine", {})
+    eng_pid = eng_info.get("pid")
+    eng_running = _is_pid_alive(eng_pid)
+
+    dash_running = True
+    dash_pid = os.getpid()
+
+    bot_running = bool(sup_running or scr_running or eng_running)
+
+    return {
+        "supervisor": {
+            "name": "Supervisor",
+            "running": sup_running,
+            "pid": sup_pid if sup_running else None,
+            "started_at": sup_info.get("started_at") if sup_running else None,
+        },
+        "services": {
+            "screener": {
+                "name": "Screener (rerank)",
+                "running": scr_running,
+                "pid": scr_pid if scr_running else None,
+            },
+            "engine": {
+                "name": "Engine (sweep/poll)",
+                "running": eng_running,
+                "pid": eng_pid if eng_running else None,
+            },
+            "dash": {
+                "name": "Telemetry (dash)",
+                "running": dash_running,
+                "pid": dash_pid,
+                "port": DEFAULT_PORT,
+            },
+        },
+        "bot_state": "RUNNING" if bot_running else "STOPPED",
+        "timestamp": time.time(),
+    }
+
+
+def start_bot() -> dict:
+    """Launch background Screener and Reconcile loop."""
+    import subprocess
+    procs_file = LIVE_ROOT / "run" / "live_procs.json"
+    procs_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Launch Screener (rerank_loop)
+    p_scr = subprocess.Popen(
+        [sys.executable, "-m", "scripts.rerank_loop"],
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Launch Engine Poll loop (live_exec poll --interval 5)
+    p_eng = subprocess.Popen(
+        [sys.executable, "-m", "engine.live_exec", "poll", "--interval", "5"],
+        cwd=str(LIVE_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    saved_procs = {
+        "supervisor": {"pid": p_eng.pid, "started_at": time.time()},
+        "screener": {"pid": p_scr.pid, "started_at": time.time()},
+        "engine": {"pid": p_eng.pid, "started_at": time.time()},
+    }
+    procs_file.write_text(json.dumps(saved_procs, indent=2), encoding="utf-8")
+
+    return {"ok": True, "message": "Bot stack started", "status": get_system_status()}
+
+
+def stop_bot() -> dict:
+    """Terminate background Screener and Reconcile loop."""
+    import subprocess
+    procs_file = LIVE_ROOT / "run" / "live_procs.json"
+    if procs_file.exists():
+        try:
+            saved_procs = json.loads(procs_file.read_text(encoding="utf-8"))
+        except Exception:
+            saved_procs = {}
+
+        for name, info in saved_procs.items():
+            pid = info.get("pid")
+            if pid and _is_pid_alive(pid):
+                try:
+                    if sys.platform == "win32":
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+                    else:
+                        os.kill(int(pid), 15)
+                except Exception:
+                    pass
+        try:
+            procs_file.unlink()
+        except Exception:
+            pass
+
+    return {"ok": True, "message": "Bot stack stopped", "status": get_system_status()}
+
+
+def reset_database(custom_path: str | Path | None = None) -> dict:
+    """Safely archive the existing live.db and initialize a fresh, clean database."""
+    from engine.order_registry import OrderRegistry
+    import shutil
+    import datetime
+
+    target_db = resolve_db_path(custom_path or _ACTIVE_DB_OVERRIDE)
+    archived_name = None
+
+    if target_db.exists() and target_db.stat().st_size > 0:
+        archive_dir = target_db.parent / "archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        ts_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        archive_path = archive_dir / f"live_{ts_str}.db"
+        shutil.copy2(target_db, archive_path)
+        archived_name = archive_path.name
+        try:
+            target_db.unlink()
+        except Exception:
+            pass
+        for extra in (f"{target_db}-wal", f"{target_db}-shm"):
+            try:
+                Path(extra).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    # Initialize fresh database with all tables and schema
+    reg = OrderRegistry(target_db)
+
+    return {
+        "ok": True,
+        "message": f"Created fresh database at {target_db.name}" + (f" (archived previous to {archived_name})" if archived_name else ""),
+        "archived_to": archived_name,
+        "db_path": str(target_db),
+    }
+
+
+@app.get("/api/system/status")
+def api_system_status():
+    """Return process states for supervisor and 3 sub-services."""
+    return JSONResponse(get_system_status())
+
+
+@app.post("/api/system/start")
+def api_system_start():
+    """Start background bot stack."""
+    return JSONResponse(start_bot())
+
+
+@app.post("/api/system/stop")
+def api_system_stop():
+    """Stop background bot stack."""
+    return JSONResponse(stop_bot())
+
+
+@app.post("/api/system/reset-db")
+def api_system_reset_db():
+    """Archive current database and initialize a fresh clean live.db."""
+    return JSONResponse(reset_database())
+
+
 @app.get("/api/kpi")
 def get_kpi(run_id: str | None = None):
     """Return live KPI report mirroring strategy/kpi.py with Level 1/2/3 diagnostics."""
@@ -469,6 +667,7 @@ def get_kpi(run_id: str | None = None):
         return JSONResponse(data)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
 
 
 PAGE_HTML = """<!DOCTYPE html>
@@ -596,22 +795,66 @@ PAGE_HTML = """<!DOCTYPE html>
     .pill-stale { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); animation: pulse 1.5s infinite; }
     .pill-neutral { background: var(--bg-surface-raised); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
 
-    /* Market Strip */
-    .market-strip {
-      display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px;
-      padding: 12px 18px; border-radius: 10px;
-      border: 1px solid var(--border-subtle);
+    /* Portfolio Overview (run-level, all markets) */
+    .portfolio-card {
       background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
     }
-    .market-strip .mk-title { font-size: 16px; font-weight: 700; }
-    .market-strip a.mk-link { color: #38bdf8; text-decoration: none; }
-    .market-strip a.mk-link:hover { text-decoration: underline; }
-    .market-strip .mk-facts {
-      display: flex; flex-wrap: wrap; gap: 6px 16px;
-      font-size: 12px; color: var(--text-muted);
+    .portfolio-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: var(--signal);
+    }
+    .portfolio-tiles {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+    }
+    .pf-tile {
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex; flex-direction: column; justify-content: space-between; gap: 8px;
+    }
+    .pf-tile-primary { border-color: rgba(16, 185, 129, 0.35); }
+    .pf-label {
       font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--text-secondary); font-weight: 600;
     }
-    .market-strip .mk-facts b { color: var(--text-secondary); font-weight: 600; }
+    .pf-tile-primary .pf-label { color: var(--signal); }
+    .pf-value-huge { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+    .pf-value { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; }
+    .pf-foot {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      border-top: 1px solid var(--border-subtle); padding-top: 8px;
+    }
+    .pf-chip {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; font-weight: 700;
+      padding: 2px 7px; border-radius: 5px; border: 1px solid transparent;
+    }
+    .pf-foot-note { font-size: 11px; color: var(--text-muted); }
+    .pf-chart { margin-top: 14px; }
+    .pf-chart svg { width: 100%; height: auto; display: block; }
+    .pf-empty {
+      padding: 26px; text-align: center;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted);
+      border: 1px dashed var(--border-subtle); border-radius: 10px;
+    }
+    a.mkt-name-link { color: #38bdf8; text-decoration: none; font-weight: 700; }
+    a.mkt-name-link:hover { text-decoration: underline; }
+    .cat-tag {
+      display: inline-block; font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
+      padding: 2px 6px; border-radius: 4px;
+      background: var(--bg-surface-raised); border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+    }
 
     /* Stale Warning Banner */
     .stale-banner {
@@ -873,6 +1116,127 @@ PAGE_HTML = """<!DOCTYPE html>
     .lock-idle { border-left: 4px solid var(--green-ok); }
     .lock-active { border-left: 4px solid var(--amber-warn); }
     .empty-state-text { color: var(--text-muted); font-style: italic; padding: 18px 0; text-align: center; }
+
+    /* SYSTEM STATUS BAR & BOT CONTROLS */
+    .status-bar-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 18px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      flex-wrap: wrap;
+    }
+    .sup-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 14px;
+      background: var(--bg-surface-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .status-dot-sm {
+      width: 7px;
+      height: 7px;
+    }
+    .dot-online {
+      background-color: #10b981;
+      box-shadow: 0 0 8px #10b981;
+    }
+    .dot-offline {
+      background-color: #ef4444;
+      box-shadow: 0 0 8px #ef4444;
+    }
+    .sub-services-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .sub-service-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--bg-surface-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .sub-service-name {
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+    .sub-service-status {
+      font-weight: 700;
+    }
+    .bot-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-bot {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 7px 16px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+    }
+    .btn-start {
+      background: #059669;
+      color: #ffffff;
+    }
+    .btn-start:hover:not(:disabled) {
+      background: #10b981;
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+    }
+    .btn-start:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .btn-stop {
+      background: #dc2626;
+      color: #ffffff;
+    }
+    .btn-stop:hover:not(:disabled) {
+      background: #ef4444;
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+    }
+    .btn-stop:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .btn-reset {
+      background: #334155;
+      color: #cbd5e1;
+      border: 1px solid var(--border-strong);
+    }
+    .btn-reset:hover:not(:disabled) {
+      background: #475569;
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(148, 163, 184, 0.3);
+    }
+    .btn-reset:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -899,8 +1263,76 @@ PAGE_HTML = """<!DOCTYPE html>
       </div>
     </header>
 
-    <!-- Market Strip -->
-    <div id="market-strip"></div>
+    <!-- SYSTEM & SUPERVISOR STATUS BAR -->
+    <div class="status-bar-wrap">
+      <!-- High Hierarchy: Supervisor Status -->
+      <div id="supervisor-status" class="sup-card">
+        <span class="status-dot dot-offline" id="sup-dot"></span>
+        <div>
+          <div style="font-size:12px;font-weight:800;letter-spacing:0.02em;color:var(--text-primary);">
+            SUPERVISOR: <span id="sup-text" style="color:#f87171;">OFFLINE</span>
+          </div>
+          <div id="sup-sub" style="font-size:10px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;">Not Running</div>
+        </div>
+      </div>
+
+      <!-- 3 Sub-Services in Small Format -->
+      <div id="sub-services" class="sub-services-group">
+        <div class="sub-service-pill" id="pill-screener">
+          <span class="status-dot status-dot-sm dot-offline" id="dot-screener"></span>
+          <span class="sub-service-name">Screener</span>
+          <span class="sub-service-status" id="txt-screener" style="color:#f87171;">offline</span>
+        </div>
+        <div class="sub-service-pill" id="pill-engine">
+          <span class="status-dot status-dot-sm dot-offline" id="dot-engine"></span>
+          <span class="sub-service-name">Engine</span>
+          <span class="sub-service-status" id="txt-engine" style="color:#f87171;">offline</span>
+        </div>
+        <div class="sub-service-pill" id="pill-dash">
+          <span class="status-dot status-dot-sm dot-online" id="dot-dash"></span>
+          <span class="sub-service-name">Telemetry</span>
+          <span class="sub-service-status" id="txt-dash" style="color:#34d399;">:8799</span>
+        </div>
+      </div>
+
+      <!-- Bot Control Buttons -->
+      <div class="bot-controls">
+        <button id="btn-start-bot" class="btn-bot btn-start" onclick="startBot()">▶ Start Bot</button>
+        <button id="btn-stop-bot" class="btn-bot btn-stop" onclick="stopBot()">⏹ Stop Bot</button>
+        <button id="btn-reset-db" class="btn-bot btn-reset" onclick="confirmResetDb()">🔄 Fresh DB</button>
+      </div>
+    </div>
+
+    <!-- PORTFOLIO OVERVIEW: the whole run, every market, one reading.
+         Mirrors the simulation's capital panel (server/spread_dash_html.py:1449). -->
+    <section class="portfolio-card">
+      <div class="portfolio-tiles">
+        <div class="pf-tile pf-tile-primary">
+          <div class="pf-label">Total Value</div>
+          <div class="pf-value-huge mono" id="portfolio-total-value">--</div>
+          <div class="pf-foot">
+            <span class="pf-chip" id="portfolio-pnl">--</span>
+            <span class="pf-foot-note mono" id="portfolio-basis">on -- bank</span>
+          </div>
+        </div>
+        <div class="pf-tile">
+          <div class="pf-label">Realized P&amp;L</div>
+          <div class="pf-value mono" id="portfolio-realized">--</div>
+          <div class="pf-foot-note mono" id="portfolio-realized-sub">-- closes &middot; -- markets</div>
+        </div>
+        <div class="pf-tile">
+          <div class="pf-label">Unrealized (Open)</div>
+          <div class="pf-value mono" id="portfolio-unrealized">--</div>
+          <div class="pf-foot-note mono" id="portfolio-unrealized-sub">marked at last sweep</div>
+        </div>
+        <div class="pf-tile">
+          <div class="pf-label">Capital Committed</div>
+          <div class="pf-value mono" id="portfolio-committed">--</div>
+          <div class="pf-foot-note mono">open cost basis at risk</div>
+        </div>
+      </div>
+      <div class="pf-chart" id="portfolio-equity-curve"></div>
+    </section>
 
     <!-- Stale Warning Banner -->
     <div id="stale-alert-banner" class="stale-banner">
@@ -957,6 +1389,7 @@ PAGE_HTML = """<!DOCTYPE html>
             <thead>
               <tr>
                 <th>Market</th>
+                <th>Category</th>
                 <th>Volume (24h)</th>
                 <th>Horizon</th>
                 <th>Fills / Quotes</th>
@@ -968,7 +1401,7 @@ PAGE_HTML = """<!DOCTYPE html>
               </tr>
             </thead>
             <tbody id="markets-tbody">
-              <tr><td colspan="9" class="empty-state-text">No market telemetry available</td></tr>
+              <tr><td colspan="10" class="empty-state-text">No market telemetry available</td></tr>
             </tbody>
           </table>
         </div>
@@ -1205,28 +1638,110 @@ PAGE_HTML = """<!DOCTYPE html>
       </svg>`;
     }
 
-    function renderMarketStrip(state) {
-      const el = document.getElementById('market-strip');
-      const pair = (state.pairs || [])[0];
-      const m = pair && pair.market;
-      if (!m || !m.condition_id) { el.innerHTML = ''; return; }
-      const facts = [];
-      if (m.volume_24h) facts.push(`<span><b>24h volume</b> $${Number(m.volume_24h).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`);
-      if (m.days_to_resolve != null) facts.push(`<span><b>resolves in</b> ${Number(m.days_to_resolve).toFixed(1)}d</span>`);
-      if (m.min_size != null) facts.push(`<span><b>venue min</b> ${Number(m.min_size).toFixed(0)}sh</span>`);
-      if (m.source) facts.push(`<span><b>ranked as</b> ${esc(m.source)}</span>`);
-      facts.push(`<span><b>pair</b> ${esc(pair.pair_id || '')}</span>`);
-      facts.push(`<span><b>condition</b> ${esc(m.condition_id.slice(0, 10))}...${esc(m.condition_id.slice(-6))}</span>`);
-      const title = m.title || m.slug || 'Unnamed market';
-      const titleHtml = m.url
-        ? `<a class="mk-link" href="${esc(m.url)}" target="_blank" rel="noopener">${esc(title)} ↗</a>`
-        : esc(title);
-      el.innerHTML = `
-        <div class="market-strip">
-          <div class="mk-title">${titleHtml}</div>
-          <div class="mk-facts">${facts.join('')}</div>
-        </div>
+    // ---------- PORTFOLIO OVERVIEW (run level, every market) ----------
+    // The run's whole book in one reading. The curve is the same construction
+    // the simulation uses (server/spread_dash_html.py:175): realised closes
+    // stacked on the starting bankroll, open float folded in at the marks.
+    function fmtUsdSigned(v) {
+      const n = Number(v || 0);
+      return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}`;
+    }
+
+    function equityCurveSvg(series, startingCapital) {
+      if (!series || series.length === 0) {
+        return `<div class="pf-empty">No closes or marks yet &mdash; the curve starts on the first settled position.</div>`;
+      }
+      const W = 900, H = 220, padL = 62, padR = 20, padT = 18, padB = 26;
+      const pts = series.slice().sort((a, b) => a.ts - b.ts);
+      const t0 = pts[0].ts;
+      const t1 = pts[pts.length - 1].ts === t0 ? t0 + 3600 : pts[pts.length - 1].ts;
+      const span = Math.max(1, t1 - t0);
+      const vals = pts.map(p => p.v);
+      const lo = Math.min(startingCapital, ...vals);
+      const hi = Math.max(startingCapital, ...vals);
+      const pad = Math.max((hi - lo) * 0.16, 0.5);
+      const minY = lo - pad, maxY = hi + pad;
+      const X = t => padL + ((t - t0) / span) * (W - padL - padR);
+      const Y = v => padT + (1 - (v - minY) / (maxY - minY)) * (H - padT - padB);
+
+      const last = pts[pts.length - 1].v;
+      const up = last >= startingCapital;
+      const stroke = up ? '#10b981' : '#ef4444';
+      // A single point has no line to draw; anchor it on the bankroll so the
+      // reader sees the step, not an empty box.
+      const path = [`M ${X(t0)} ${Y(startingCapital)}`]
+        .concat(pts.map(p => `L ${X(p.ts)} ${Y(p.v)}`)).join(' ');
+      const area = `${path} L ${X(pts[pts.length - 1].ts)} ${Y(minY)} L ${X(t0)} ${Y(minY)} Z`;
+      const baseY = Y(startingCapital);
+
+      const dots = pts.filter(p => p.type === 'close').map(p =>
+        `<circle cx="${X(p.ts)}" cy="${Y(p.v)}" r="3.5" fill="${stroke}" stroke="#080c14" stroke-width="1.5">`
+        + `<title>${esc(String(p.market || 'close'))} — ${fmtUsdSigned(p.pnl)} → $${p.v.toFixed(2)}</title></circle>`
+      ).join('');
+
+      return `
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Total equity since inception">
+          <defs>
+            <linearGradient id="pf-grad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${stroke}" stop-opacity="0.28"/>
+              <stop offset="100%" stop-color="${stroke}" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <line x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}"
+                stroke="#64748b" stroke-width="1" stroke-dasharray="4 4"/>
+          <text x="${padL - 6}" y="${baseY + 3}" text-anchor="end"
+                font-family="JetBrains Mono, monospace" font-size="10" fill="#64748b">$${startingCapital.toFixed(0)}</text>
+          <text x="${padL - 6}" y="${Y(maxY) + 10}" text-anchor="end"
+                font-family="JetBrains Mono, monospace" font-size="10" fill="#64748b">$${maxY.toFixed(2)}</text>
+          <text x="${padL - 6}" y="${Y(minY) - 2}" text-anchor="end"
+                font-family="JetBrains Mono, monospace" font-size="10" fill="#64748b">$${minY.toFixed(2)}</text>
+          <path d="${area}" fill="url(#pf-grad)"/>
+          <path d="${path}" fill="none" stroke="${stroke}" stroke-width="2"
+                stroke-linejoin="round" stroke-linecap="round"/>
+          ${dots}
+        </svg>
       `;
+    }
+
+    function renderPortfolio(kpi) {
+      const p = (kpi && kpi.portfolio) || null;
+      const start = p ? Number(p.starting_capital || 0) : 0;
+      const totalValue = p ? Number(p.total_value || 0) : 0;
+      const totalPnl = p ? Number(p.total_pnl || 0) : 0;
+      const up = totalPnl >= 0;
+      const color = up ? 'var(--signal)' : 'var(--loss)';
+
+      document.getElementById('portfolio-total-value').textContent =
+        p ? `$${totalValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '--';
+
+      const pnlEl = document.getElementById('portfolio-pnl');
+      // pnl_pct is NULL when the bankroll is zero: the percentage is undefined,
+      // and printing 0.00% would read as "flat" instead of "unmeasurable".
+      const pctStr = (p && p.pnl_pct !== null && p.pnl_pct !== undefined)
+        ? `${p.pnl_pct >= 0 ? '+' : ''}${Number(p.pnl_pct).toFixed(2)}%` : 'n/a';
+      pnlEl.textContent = p ? `${fmtUsdSigned(totalPnl)} (${pctStr})` : '--';
+      pnlEl.style.color = color;
+      pnlEl.style.background = up ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)';
+      pnlEl.style.borderColor = up ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)';
+
+      document.getElementById('portfolio-basis').textContent =
+        p ? `on $${start.toFixed(2)} bank` : 'on -- bank';
+
+      const realizedEl = document.getElementById('portfolio-realized');
+      realizedEl.textContent = p ? fmtUsdSigned(p.realized_pnl) : '--';
+      realizedEl.style.color = (p && Number(p.realized_pnl) < 0) ? 'var(--loss)' : 'var(--signal)';
+      document.getElementById('portfolio-realized-sub').textContent =
+        p ? `${p.closes_count} closes · ${p.markets_count} markets` : '-- closes · -- markets';
+
+      const unrealEl = document.getElementById('portfolio-unrealized');
+      unrealEl.textContent = p ? fmtUsdSigned(p.unrealized_usd) : '--';
+      unrealEl.style.color = (p && Number(p.unrealized_usd) < 0) ? 'var(--loss)' : 'var(--text-primary)';
+
+      document.getElementById('portfolio-committed').textContent =
+        p ? `$${Number(p.open_committed_usd || 0).toFixed(2)}` : '--';
+
+      document.getElementById('portfolio-equity-curve').innerHTML =
+        equityCurveSvg((kpi && kpi.equity_series) || [], start);
     }
 
     function renderHero(state) {
@@ -1566,7 +2081,7 @@ PAGE_HTML = """<!DOCTYPE html>
       const cids = Object.keys(byMkt);
 
       if (cids.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" class="empty-state-text">No market telemetry in selected run</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-state-text">No market telemetry in selected run</td></tr>';
         return;
       }
 
@@ -1580,12 +2095,19 @@ PAGE_HTML = """<!DOCTYPE html>
         const volStr = m.volume_24h ? `$${(m.volume_24h / 1000).toFixed(0)}K` : '--';
         const daysStr = m.days_to_resolve !== null ? `${m.days_to_resolve.toFixed(1)}d` : '--';
 
+        // The name is the market's identity and its way out to the venue. The
+        // link must not swallow the row click that opens the drill-down.
+        const nameHtml = m.url
+          ? `<a class="mkt-name-link" href="${esc(m.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation();">${esc(title)} &#8599;</a>`
+          : `<strong>${esc(title)}</strong>`;
+
         return `
           <tr class="clickable-row" onclick="openDrilldownModal('${esc(cid)}')">
             <td>
-              <strong>${esc(title)}</strong>
+              ${nameHtml}
               <div style="font-size:10px;color:var(--text-muted);">${esc(cid.slice(0, 10))}...${esc(cid.slice(-6))}</div>
             </td>
+            <td><span class="cat-tag">${esc(m.category || 'Uncategorized')}</span></td>
             <td>${volStr}</td>
             <td>${daysStr}</td>
             <td>${m.fills_count} / ${m.quotes_count}</td>
@@ -1951,12 +2473,124 @@ PAGE_HTML = """<!DOCTYPE html>
     document.getElementById('port-pill').textContent =
       ':' + (window.location.port || (window.location.protocol === 'https:' ? '443' : '80'));
 
+    async function fetchSystemStatus() {
+      try {
+        const res = await fetch('/api/system/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderSystemStatus(data);
+      } catch (err) {
+        console.error('Failed to fetch system status', err);
+      }
+    }
+
+    function renderSystemStatus(data) {
+      if (!data) return;
+      const sup = data.supervisor || {};
+      const supDot = document.getElementById('sup-dot');
+      const supText = document.getElementById('sup-text');
+      const supSub = document.getElementById('sup-sub');
+
+      if (sup.running) {
+        if (supDot) { supDot.className = 'status-dot dot-online'; }
+        if (supText) { supText.textContent = 'ONLINE'; supText.style.color = '#34d399'; }
+        if (supSub) { supSub.textContent = `PID ${sup.pid || '--'}`; }
+      } else {
+        if (supDot) { supDot.className = 'status-dot dot-offline'; }
+        if (supText) { supText.textContent = 'OFFLINE'; supText.style.color = '#f87171'; }
+        if (supSub) { supSub.textContent = 'Not Running'; }
+      }
+
+      const s = data.services || {};
+      const scr = s.screener || {};
+      const eng = s.engine || {};
+      const dsh = s.dash || {};
+
+      const dotScr = document.getElementById('dot-screener');
+      const txtScr = document.getElementById('txt-screener');
+      if (dotScr) dotScr.className = scr.running ? 'status-dot status-dot-sm dot-online' : 'status-dot status-dot-sm dot-offline';
+      if (txtScr) {
+        txtScr.textContent = scr.running ? 'online' : 'offline';
+        txtScr.style.color = scr.running ? '#34d399' : '#f87171';
+      }
+
+      const dotEng = document.getElementById('dot-engine');
+      const txtEng = document.getElementById('txt-engine');
+      if (dotEng) dotEng.className = eng.running ? 'status-dot status-dot-sm dot-online' : 'status-dot status-dot-sm dot-offline';
+      if (txtEng) {
+        txtEng.textContent = eng.running ? 'online' : 'offline';
+        txtEng.style.color = eng.running ? '#34d399' : '#f87171';
+      }
+
+      const dotDsh = document.getElementById('dot-dash');
+      const txtDsh = document.getElementById('txt-dash');
+      if (dotDsh) dotDsh.className = dsh.running ? 'status-dot status-dot-sm dot-online' : 'status-dot status-dot-sm dot-offline';
+      if (txtDsh) {
+        txtDsh.textContent = dsh.running ? ':8799' : 'offline';
+        txtDsh.style.color = dsh.running ? '#34d399' : '#f87171';
+      }
+
+      const btnStart = document.getElementById('btn-start-bot');
+      const btnStop = document.getElementById('btn-stop-bot');
+      const isRunning = data.bot_state === 'RUNNING';
+      if (btnStart) btnStart.disabled = isRunning;
+      if (btnStop) btnStop.disabled = !isRunning;
+    }
+
+    async function startBot() {
+      const btnStart = document.getElementById('btn-start-bot');
+      if (btnStart) btnStart.disabled = true;
+      try {
+        const res = await fetch('/api/system/start', { method: 'POST' });
+        const data = await res.json();
+        if (data.status) renderSystemStatus(data.status);
+      } catch (err) {
+        alert('Failed to start bot: ' + err);
+      } finally {
+        fetchSystemStatus();
+      }
+    }
+
+    async function stopBot() {
+      const btnStop = document.getElementById('btn-stop-bot');
+      if (btnStop) btnStop.disabled = true;
+      try {
+        const res = await fetch('/api/system/stop', { method: 'POST' });
+        const data = await res.json();
+        if (data.status) renderSystemStatus(data.status);
+      } catch (err) {
+        alert('Failed to stop bot: ' + err);
+      } finally {
+        fetchSystemStatus();
+      }
+    }
+
+    async function confirmResetDb() {
+      if (!confirm("Are you sure you want to archive current live.db and create a FRESH database? All metrics and orders will start clean from 0.")) {
+        return;
+      }
+      const btn = document.getElementById('btn-reset-db');
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch('/api/system/reset-db', { method: 'POST' });
+        const data = await res.json();
+        alert(data.message || "Fresh database created successfully.");
+        pollState();
+      } catch (err) {
+        alert("Failed to reset DB: " + err);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
     async function pollState() {
       try {
         const [stateRes, kpiRes] = await Promise.all([
           fetch('/api/state'),
           fetch(`/api/kpi${selectedRunId ? '?run_id=' + encodeURIComponent(selectedRunId) : ''}`)
         ]);
+
+        fetchSystemStatus();
 
         if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
         const state = await stateRes.json();
@@ -1970,7 +2604,7 @@ PAGE_HTML = """<!DOCTYPE html>
 
         document.getElementById('db-path-display').textContent = `DB: ${state.db_path || 'run/live.db'}`;
         renderRunsSelector(kpi);
-        renderMarketStrip(state);
+        renderPortfolio(kpi);
         renderHero(state);
         renderRunKpis(kpi);
         renderExposureChart(kpi);
@@ -2021,7 +2655,14 @@ PAGE_HTML = """<!DOCTYPE html>
 @app.get("/", response_class=HTMLResponse)
 def index():
     """Serve the live execution monitor."""
-    return HTMLResponse(PAGE_HTML)
+    return HTMLResponse(
+        PAGE_HTML,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 def main():

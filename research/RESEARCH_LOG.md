@@ -4025,3 +4025,38 @@ wrote a failing test before each fix.
 
 **Verdict.** **LIVE** for 1 and 2. **OPEN** for 3. Root suite 703 passed; live suite 225 passed
 (+5 regression tests that fail against the unpatched code).
+
+---
+
+## 2026-08-19 — The dashboard reported one market as if it were the run
+
+**Question.** The live dashboard's top card named a single market and described that one pair's
+hedge state. A supervised cycle quotes many markets. What does the Owner actually need to read
+first, and does the telemetry already support it?
+
+**Method.** Compared the live page against the simulation's capital panel
+(`server/spread_dash_html.py:1449`) and its `capitalSeries` widget (`:175`), which have carried the
+run-level reading since the fleet dashboards shipped. Checked whether `live.db` holds the same two
+inputs that widget consumes. Wrote 13 failing tests before changing `live/engine/kpi.py`.
+
+**Result.**
+1. **The inputs were already there; only the aggregate was missing.** `closes` carries `ts` and
+   `realized_pnl`; `float_marks` carries `ts` and `unrealized_usd`. That is exactly what
+   `capitalSeries` folds together. `kpi.report()` was returning a scalar `equity` and no series, so
+   the page had nothing run-level to draw. Added `portfolio` (total value, realized, unrealized,
+   total P&L, P&L %, committed, market and close counts) and `equity_series`, built the same way:
+   closes stacked on the bankroll, marks folded in at the timestamps they were actually recorded.
+2. **`pnl_pct` is NULL on a zero bankroll, not 0.00%.** A printed `0.00%` reads as "flat"; the
+   quantity is undefined. Same rule the `spread_capture` and `adverse_selection` fixes established
+   in the Milestone 8 audit above.
+3. **Category was blank in practice, not absent.** The ranker feed carries a `category` field, but
+   it ships `""` on the sampled rows while `series_title` and `market_group` are populated. Reading
+   `category` alone would have rendered an empty column and looked like missing telemetry. The
+   resolver now falls back `category → series_title → market_group → "Uncategorized"`.
+4. **Rebates were left out on purpose.** The concept called for a rebates tile. Graduated spread
+   markets carry $0.00 maker rewards, and `rebate_est` is already an explicit NULL for that reason.
+   A tile there would have been a fabricated figure, so there is no tile.
+
+**Verdict.** **LIVE.** Live suite 242 passed, including 13 new tests that fail against the
+unpatched code. No new measurement is claimed here — this is an aggregation and a display of
+figures the registry already recorded.

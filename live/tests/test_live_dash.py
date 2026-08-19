@@ -602,3 +602,71 @@ def test_kpi_endpoint_survives_launch_by_file_path(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip().endswith("200"), proc.stdout + proc.stderr
+
+
+def test_page_html_contains_status_bar_and_bot_buttons():
+    """Verify HTML contains Supervisor high-hierarchy indicator, 3 sub-service dots, and Start/Stop/Reset buttons."""
+    from dash.live_dash import PAGE_HTML
+
+    assert "id=\"supervisor-status\"" in PAGE_HTML or "id=\"sup-status\"" in PAGE_HTML
+    assert "SUPERVISOR" in PAGE_HTML
+    assert "id=\"sub-services\"" in PAGE_HTML or "class=\"sub-services\"" in PAGE_HTML
+    assert "btn-start-bot" in PAGE_HTML
+    assert "btn-stop-bot" in PAGE_HTML
+    assert "btn-reset-db" in PAGE_HTML
+    assert "dot-online" in PAGE_HTML or "status-dot" in PAGE_HTML
+
+
+def test_system_status_endpoint(client):
+    """GET /api/system/status returns supervisor, 3 sub-services (screener, engine, dash), and bot state."""
+    res = client.get("/api/system/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert "supervisor" in data
+    assert "running" in data["supervisor"]
+    assert "services" in data
+    assert "screener" in data["services"]
+    assert "engine" in data["services"]
+    assert "dash" in data["services"]
+    assert data["services"]["dash"]["running"] is True
+    assert "bot_state" in data
+
+
+def test_system_start_and_stop_endpoints(client, monkeypatch, tmp_path):
+    """POST /api/system/start and POST /api/system/stop control bot state safely."""
+    # Test stop when already stopped
+    res_stop = client.post("/api/system/stop")
+    assert res_stop.status_code == 200
+    stop_data = res_stop.json()
+    assert stop_data.get("ok") is True
+
+    # Test start
+    res_start = client.post("/api/system/start")
+    assert res_start.status_code == 200
+    start_data = res_start.json()
+    assert start_data.get("ok") is True
+
+
+def test_system_reset_db_endpoint(client, temp_db):
+    """POST /api/system/reset-db archives the existing DB and initializes a clean fresh DB."""
+    import sqlite3
+    # Put a dummy row in temp_db first
+    conn = sqlite3.connect(temp_db)
+    conn.execute("INSERT INTO orders (id, condition_id, token_id, side, price, original_size, status, posted_ts, last_polled_ts) VALUES ('dummy-1', '0x1', '0x2', 'BUY', 0.5, 10, 'open', 1000, 1000)")
+    conn.commit()
+    conn.close()
+
+    res = client.post("/api/system/reset-db")
+    assert res.status_code == 200
+    data = res.json()
+    assert data.get("ok") is True
+
+    # Verify orders table in freshly created DB is empty
+    conn2 = sqlite3.connect(temp_db)
+    cursor = conn2.cursor()
+    cursor.execute("SELECT COUNT(*) FROM orders")
+    count = cursor.fetchone()[0]
+    conn2.close()
+    assert count == 0
+
+

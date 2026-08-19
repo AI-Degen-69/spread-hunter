@@ -21,6 +21,10 @@ from engine.config import load as load_cfg
 _CFG = load_cfg()
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# Shown when neither the ranker feed nor its fallbacks name a category. A named
+# bucket groups honestly; a blank cell reads as missing data.
+UNCATEGORIZED = "Uncategorized"
+
 
 def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> dict[str, Any]:
     """Resolve human-readable title, slug, and Polymarket link for a condition_id from disk."""
@@ -29,12 +33,14 @@ def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> di
         "title": None,
         "slug": None,
         "url": None,
+        "category": None,
         "days_to_resolve": None,
         "min_size": None,
         "volume_24h": None,
         "source": None,
     }
     if not cid:
+        out["category"] = UNCATEGORIZED
         return out
     
     # Try reading run/markets.json from repo root (written by ranker)
@@ -47,6 +53,15 @@ def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> di
                     out.update({
                         "title": row.get("title") or row.get("event_title"),
                         "slug": row.get("slug"),
+                        # The live feed ships category="" on most rows, so the
+                        # series and the group are the labels that actually
+                        # survive. An empty cell teaches the reader nothing.
+                        "category": (
+                            (row.get("category") or "").strip()
+                            or (row.get("series_title") or "").strip()
+                            or (row.get("market_group") or "").strip()
+                            or None
+                        ),
                         "days_to_resolve": row.get("days_to_resolve"),
                         "min_size": row.get("min_size"),
                         "volume_24h": row.get("volume_24h"),
@@ -75,6 +90,8 @@ def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> di
 
     if out["slug"]:
         out["url"] = f"https://polymarket.com/market/{out['slug']}"
+    if not out["category"]:
+        out["category"] = UNCATEGORIZED
     return out
 
 
@@ -443,6 +460,72 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         "events": divergences[:20],
     }
 
+    # ------------------------------------------------------------------
+    # Portfolio overview: the whole run in one reading, not the first market.
+    # Mirrors the simulation's capitalSeries widget (server/spread_dash_html.py:175):
+    # realised closes stacked on the starting bankroll, with the open float
+    # folded in at the timestamps it was actually marked.
+    # ------------------------------------------------------------------
+    starting_capital = _CFG.bankroll_usd
+    sorted_closes = sorted(
+        [c for c in closes if c.get("ts") is not None], key=lambda c: float(c["ts"])
+    )
+    sorted_marks = sorted(
+        [fm for fm in float_marks if fm.get("ts") is not None], key=lambda fm: float(fm["ts"])
+    )
+    # The float is whatever the most recent sweep recorded. No marks means no
+    # open float was ever measured -- report 0.0 open, not an invented number.
+    unrealized_usd = float(sorted_marks[-1].get("unrealized_usd") or 0.0) if sorted_marks else 0.0
+
+    equity_series: list[dict[str, Any]] = []
+    running_equity = starting_capital
+    running_float = 0.0
+    mark_idx = 0
+
+    def _fold_marks_through(t: float) -> None:
+        """Push a point for every mark recorded at or before t."""
+        nonlocal mark_idx, running_float
+        while mark_idx < len(sorted_marks) and float(sorted_marks[mark_idx]["ts"]) <= t:
+            running_float = float(sorted_marks[mark_idx].get("unrealized_usd") or 0.0)
+            equity_series.append({
+                "ts": float(sorted_marks[mark_idx]["ts"]),
+                "v": running_equity + running_float,
+                "type": "mark",
+                "unrealized_usd": running_float,
+            })
+            mark_idx += 1
+
+    for c in sorted_closes:
+        c_ts = float(c["ts"])
+        _fold_marks_through(c_ts)
+        running_equity += float(c.get("realized_pnl") or 0.0)
+        equity_series.append({
+            "ts": c_ts,
+            "v": running_equity + running_float,
+            "type": "close",
+            "pnl": float(c.get("realized_pnl") or 0.0),
+            "market": c.get("market_slug") or c.get("condition_id"),
+        })
+    # Marks recorded after the last close: the curve keeps stepping on float alone.
+    _fold_marks_through(float("inf"))
+
+    total_pnl = realized_pnl + unrealized_usd
+    portfolio = {
+        "starting_capital": starting_capital,
+        "realized_pnl": realized_pnl,
+        "unrealized_usd": unrealized_usd,
+        "total_pnl": total_pnl,
+        "total_value": starting_capital + total_pnl,
+        # NULL, not 0.0: a zero bankroll makes the percentage undefined, and a
+        # printed 0.00% would read as "flat" rather than "unmeasurable".
+        "pnl_pct": (100.0 * total_pnl / starting_capital) if starting_capital else None,
+        "markets_count": len(by_mkt),
+        "closes_count": len(closes),
+        "open_committed_usd": (
+            float(sorted_marks[-1].get("committed_open_usd") or 0.0) if sorted_marks else 0.0
+        ),
+    }
+
     # Float marks formatted series for time chart
     float_marks_formatted = [
         {
@@ -459,6 +542,10 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # Multi-run metadata
         "runs": runs,
         "active_run_id": active_run_id,
+
+        # Portfolio overview (run-level, all markets)
+        "portfolio": portfolio,
+        "equity_series": equity_series,
 
         # Pace
         "markets_quoted": len({q["condition_id"] for q in quotes if q.get("condition_id")}),
