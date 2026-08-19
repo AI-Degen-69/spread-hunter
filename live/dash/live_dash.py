@@ -60,6 +60,142 @@ def resolve_db_path(custom_path: str | Path | None = None) -> Path:
     return LIVE_ROOT / "run" / "live.db"
 
 
+def resolve_sweep_interval() -> float | None:
+    """Configured account-sweep cadence in seconds, or None for every tick.
+
+    Read from LIVE_SWEEP_INTERVAL so the operator can throttle the venue
+    reads the account card depends on without editing code. An absent,
+    invalid, or non-positive value falls back to the every-tick default.
+    """
+    raw = (os.environ.get("LIVE_SWEEP_INTERVAL") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _env_file() -> Path | None:
+    """The .env file engine.live_exec loads, found without importing it.
+
+    Mirrors engine.live_exec._find_env_file: the nearest .env walking up from
+    live/engine/, stopping at the AGENTS.md boundary. The dashboard never
+    loads the whole file -- only LIVE_SWEEP_INTERVAL is read or written -- so
+    the signing key and L2 credentials never enter this process.
+    """
+    curr = LIVE_ROOT / "engine"
+    for _ in range(4):
+        if (curr / ".env").is_file():
+            return curr / ".env"
+        if (curr / "AGENTS.md").is_file():
+            break
+        if curr.parent == curr:
+            break
+        curr = curr.parent
+    return None
+
+
+def read_sweep_interval_from_env_file(env_path: Path) -> float | None:
+    """Parse LIVE_SWEEP_INTERVAL from a .env file, or None.
+
+    Reads the file as text and looks only at that key, so no credential line
+    is ever materialised anywhere it could be logged.
+    """
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() != "LIVE_SWEEP_INTERVAL":
+            continue
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            parsed = float(raw)
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def write_sweep_interval_to_env_file(env_path: Path, value: float | None) -> bool:
+    """Set or remove LIVE_SWEEP_INTERVAL in .env without disturbing the rest.
+
+    Atomic temp-file + fsync + os.replace, carrying over the file's permission
+    bits, because the file may hold POLY_PRIVATE_KEY and must never be
+    truncated in place.
+    """
+    try:
+        text = env_path.read_text(encoding="utf-8")
+        try:
+            mode = os.stat(env_path).st_mode
+        except OSError:
+            mode = None
+    except OSError:
+        return False
+
+    lines = [
+        ln for ln in text.splitlines()
+        if ln.split("=", 1)[0].strip() != "LIVE_SWEEP_INTERVAL"
+    ]
+    if value is not None:
+        lines += [
+            "",
+            "# Account-sweep cadence for the live dashboard (seconds).",
+            f"LIVE_SWEEP_INTERVAL={value:g}",
+        ]
+    new_text = "\n".join(lines)
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+
+    tmp = env_path.with_name(f".env.tmp.{secrets.token_hex(4)}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(new_text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, env_path)
+        return True
+    except OSError:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def _bootstrap_sweep_interval() -> None:
+    """Seed LIVE_SWEEP_INTERVAL from .env once, without loading credentials.
+
+    An explicit environment variable wins; only when it is absent do we read
+    the single key back from the file the engine loads. Everything else in
+    .env -- the signing key, L2 credentials -- stays on disk.
+    """
+    if "LIVE_SWEEP_INTERVAL" in os.environ:
+        return
+    env_file = _env_file()
+    if env_file is None:
+        return
+    saved = read_sweep_interval_from_env_file(env_file)
+    if saved is not None:
+        os.environ["LIVE_SWEEP_INTERVAL"] = str(saved)
+
+
+_bootstrap_sweep_interval()
+
+
 def _market_identity(condition_id: str, closes_by_cid: dict) -> dict:
     """Who is this market, in words a human recognises."""
     out = {"condition_id": condition_id, "title": None, "slug": None,
@@ -641,6 +777,9 @@ def get_system_status() -> dict:
     eng_pid = eng_info.get("pid")
     eng_running = _is_pid_alive(eng_pid, eng_info.get("started_at"))
 
+    configured_sweep_interval = resolve_sweep_interval()
+    running_sweep_interval = eng_info.get("sweep_interval_sec") if eng_running else None
+
     dash_running = True
     dash_pid = os.getpid()
 
@@ -663,6 +802,8 @@ def get_system_status() -> dict:
                 "name": "Engine (sweep/poll)",
                 "running": eng_running,
                 "pid": eng_pid if eng_running else None,
+                "sweep_interval_sec": configured_sweep_interval,
+                "running_sweep_interval_sec": running_sweep_interval,
             },
             "dash": {
                 "name": "Telemetry (dash)",
@@ -704,9 +845,14 @@ def start_bot() -> dict:
         stderr=subprocess.DEVNULL,
     )
 
-    # Launch Engine Poll loop (live_exec poll --interval 5)
+    # Launch Engine Poll loop (live_exec poll --interval 5). The account sweep
+    # follows LIVE_SWEEP_INTERVAL when set; otherwise it runs every tick.
+    sweep_interval = resolve_sweep_interval()
+    poll_cmd = [sys.executable, "-m", "engine.live_exec", "poll", "--interval", "5"]
+    if sweep_interval is not None:
+        poll_cmd += ["--sweep-interval", str(sweep_interval)]
     p_eng = subprocess.Popen(
-        [sys.executable, "-m", "engine.live_exec", "poll", "--interval", "5"],
+        poll_cmd,
         cwd=str(LIVE_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -715,7 +861,8 @@ def start_bot() -> dict:
     saved_procs = {
         "supervisor": {"pid": p_eng.pid, "started_at": time.time()},
         "screener": {"pid": p_scr.pid, "started_at": time.time()},
-        "engine": {"pid": p_eng.pid, "started_at": time.time()},
+        "engine": {"pid": p_eng.pid, "started_at": time.time(),
+                   "sweep_interval_sec": sweep_interval},
     }
     procs_file.write_text(json.dumps(saved_procs, indent=2), encoding="utf-8")
 
@@ -748,6 +895,44 @@ def stop_bot() -> dict:
             pass
 
     return {"ok": True, "message": "Bot stack stopped", "status": get_system_status()}
+
+
+def set_sweep_interval(raw: str | None) -> dict:
+    """Apply and persist the account-sweep cadence.
+
+    `raw` is None or empty to clear (revert to every tick), otherwise a
+    positive number of seconds. Persists to the .env live_exec loads and
+    updates this process's environment so the status payload reflects it
+    immediately. A running engine keeps its launch-time cadence until the
+    bot stack is restarted.
+    """
+    value: float | None = None
+    if raw is not None and str(raw).strip() != "":
+        try:
+            value = float(str(raw).strip())
+        except ValueError:
+            return {"ok": False, "message": "sweep interval must be a number of seconds"}
+        if value <= 0:
+            return {"ok": False, "message": "sweep interval must be positive seconds"}
+
+    env_file = _env_file()
+    if env_file is None:
+        return {"ok": False, "message": "no .env found; sweep interval was not persisted"}
+
+    if not write_sweep_interval_to_env_file(env_file, value):
+        return {"ok": False, "message": f"failed to write {env_file}"}
+
+    if value is None:
+        os.environ.pop("LIVE_SWEEP_INTERVAL", None)
+    else:
+        os.environ["LIVE_SWEEP_INTERVAL"] = str(value)
+
+    return {
+        "ok": True,
+        "message": "sweep: every tick" if value is None else f"sweep interval set to {value:g}s",
+        "sweep_interval_sec": value,
+        "status": get_system_status(),
+    }
 
 
 def reset_database(custom_path: str | Path | None = None) -> dict:
@@ -832,6 +1017,13 @@ def api_system_stop(request: Request):
     """Stop background bot stack."""
     _authorize_control(request)
     return JSONResponse(stop_bot())
+
+
+@app.post("/api/system/sweep-interval")
+def api_system_set_sweep_interval(request: Request, seconds: str | None = None):
+    """Set or clear the account-sweep cadence and persist it to .env."""
+    _authorize_control(request)
+    return JSONResponse(set_sweep_interval(seconds))
 
 
 @app.post("/api/system/reset-db")
@@ -1475,6 +1667,44 @@ PAGE_HTML = """<!DOCTYPE html>
       opacity: 0.4;
       cursor: not-allowed;
     }
+    .sweep-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding-left: 8px;
+      border-left: 1px solid var(--border-subtle);
+    }
+    .sweep-label {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .sweep-input {
+      width: 64px;
+      padding: 5px 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      background: var(--bg-surface-raised);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+    }
+    .sweep-unit {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+    }
+    .btn-sweep {
+      background: #334155;
+      color: #cbd5e1;
+      border: 1px solid var(--border-strong);
+    }
+    .btn-sweep:hover:not(:disabled) {
+      background: #475569;
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(148, 163, 184, 0.3);
+    }
   </style>
 </head>
 <body>
@@ -1525,6 +1755,7 @@ PAGE_HTML = """<!DOCTYPE html>
           <span class="status-dot status-dot-sm dot-offline" id="dot-engine"></span>
           <span class="sub-service-name">Engine</span>
           <span class="sub-service-status" id="txt-engine" style="color:#f87171;">offline</span>
+          <span class="sub-service-status" id="txt-engine-sweep" style="color:var(--text-muted);font-weight:400;">sweep: every tick</span>
         </div>
         <div class="sub-service-pill" id="pill-dash">
           <span class="status-dot status-dot-sm dot-online" id="dot-dash"></span>
@@ -1539,6 +1770,13 @@ PAGE_HTML = """<!DOCTYPE html>
         <button id="btn-stop-bot" class="btn-bot btn-stop" onclick="stopBot()">⏹ Stop Bot</button>
         <button id="btn-reset-db" class="btn-bot btn-reset" onclick="confirmResetDb()">🔄 Fresh DB</button>
         <button id="btn-restart-dash" class="btn-bot btn-restart" onclick="restartDash()">⚡ Restart Dash</button>
+        <div class="sweep-control">
+          <label class="sweep-label" for="sweep-interval-input">sweep</label>
+          <input id="sweep-interval-input" class="sweep-input" type="number" min="1" step="1" placeholder="every tick" />
+          <span class="sweep-unit">s</span>
+          <button class="btn-bot btn-sweep" onclick="setSweepInterval()">Set</button>
+          <button class="btn-bot btn-sweep" onclick="clearSweepInterval()">Reset</button>
+        </div>
       </div>
     </div>
 
@@ -1887,6 +2125,51 @@ PAGE_HTML = """<!DOCTYPE html>
       </svg>`;
     }
 
+    // Histogram of actual per-trade outcomes (dollars). Green bars = profitable
+    // closes, red = losing closes, with a dashed zero line. A real histogram,
+    // not a fitted bell: with n=1-2 live trades a normal curve is a drawing,
+    // not a measurement.
+    function histogramSvg(values, opts) {
+      opts = opts || {};
+      const W = opts.w || 180, H = opts.h || 46;
+      const pad = 4, base = H - 5;
+      if (!values || !values.length) return '';
+      const minV = Math.min(...values), maxV = Math.max(...values);
+      const lo = Math.min(0, minV), hi = Math.max(0, maxV);
+      const span = (hi - lo) || 1;
+      const nb = Math.max(2, Math.min((opts.bins || 7), Math.max(2, Math.ceil(Math.sqrt(values.length) * 2))));
+      const counts = new Array(nb).fill(0);
+      for (const v of values) {
+        let idx = Math.floor(((v - lo) / span) * nb);
+        if (idx >= nb) idx = nb - 1;
+        if (idx < 0) idx = 0;
+        counts[idx]++;
+      }
+      const maxC = Math.max(...counts) || 1;
+      const barW = (W - pad * 2) / nb;
+      const binW = span / nb;
+      const zeroX = pad + ((0 - lo) / span) * (W - pad * 2);
+      const bars = counts.map((c, i) => {
+        const bh = Math.max(0, (c / maxC) * (base - 4));
+        const bx = pad + i * barW;
+        const center = lo + (i + 0.5) * binW;
+        const bcolor = center >= 0 ? (opts.color || '#10b981') : '#ef4444';
+        return `<rect x="${bx.toFixed(1)}" y="${(base - bh).toFixed(1)}" width="${Math.max(1, barW - 1).toFixed(1)}" height="${bh.toFixed(1)}" fill="${bcolor}" fill-opacity="0.85"/>`;
+      }).join('');
+      const zeroLine = (zeroX >= pad && zeroX <= W - pad)
+        ? `<line x1="${zeroX.toFixed(1)}" x2="${zeroX.toFixed(1)}" y1="2" y2="${base}" stroke="#94a3b8" stroke-width="1" stroke-dasharray="2 2"/>` : '';
+      return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block;" role="img" aria-label="Per-trade P&L histogram">
+        ${bars}
+        ${zeroLine}
+      </svg>`;
+    }
+
+    function fmtUsdSignedVal(v) {
+      const n = Number(v);
+      if (v === null || v === undefined || isNaN(n)) return '--';
+      return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}`;
+    }
+
     // ---------- PORTFOLIO OVERVIEW (run level, every market) ----------
     // The run's whole book in one reading. The curve is the same construction
     // the simulation uses (server/spread_dash_html.py:175): realised closes
@@ -2191,6 +2474,28 @@ PAGE_HTML = """<!DOCTYPE html>
       const roiVal = kpi.roi_on_cost !== null ? (kpi.roi_on_cost * 100).toFixed(1) + '%' : '--';
       const topSkip = (kpi.top_skip_reasons && kpi.top_skip_reasons[0]) ? `${kpi.top_skip_reasons[0].reason} (${kpi.top_skip_reasons[0].cycles})` : 'None';
 
+      const ta = kpi.trade_analytics || {};
+      const winRateVal = ta.win_rate !== null && ta.win_rate !== undefined ? (ta.win_rate * 100).toFixed(1) + '%' : '--';
+      const winRateCI = ta.win_rate_ci95
+        ? `CI [${(ta.win_rate_ci95.lower * 100).toFixed(0)}%, ${(ta.win_rate_ci95.upper * 100).toFixed(0)}%]`
+        : 'CI --';
+      const expectancyVal = fmtUsdSignedVal(ta.expectancy_usd);
+      const meanRetVal = ta.mean_return_pct !== null && ta.mean_return_pct !== undefined
+        ? (ta.mean_return_pct >= 0 ? '+' : '') + ta.mean_return_pct.toFixed(1) + '%' : '--';
+      const sharpeVal = ta.sharpe_ratio !== null && ta.sharpe_ratio !== undefined ? ta.sharpe_ratio.toFixed(2) : '--';
+      const rrVal = ta.risk_reward_ratio !== null && ta.risk_reward_ratio !== undefined
+        ? ta.risk_reward_ratio.toFixed(2) + ':1'
+        : ((ta.wins > 0 && ta.losses === 0) ? '&infin;' : '--');
+      const pfVal = ta.profit_factor !== null && ta.profit_factor !== undefined
+        ? ta.profit_factor.toFixed(2)
+        : ((ta.wins > 0 && ta.losses === 0) ? '&infin;' : '--');
+      const sortinoVal = ta.sortino_ratio !== null && ta.sortino_ratio !== undefined ? ta.sortino_ratio.toFixed(2) : '--';
+      const ddPctVal = ta.max_drawdown_pct !== null && ta.max_drawdown_pct !== undefined
+        ? '-' + ta.max_drawdown_pct.toFixed(1) + '%' : '--';
+      const ddUsdVal = ta.max_drawdown_usd !== null && ta.max_drawdown_usd !== undefined
+        ? '-$' + Math.abs(ta.max_drawdown_usd).toFixed(2) : '--';
+      const pnlVals = (ta.pnl_distribution || []).map(d => d.realized_pnl).filter(v => v !== null && v !== undefined);
+
       const tiles = [
         {
           label: 'Maker Fill Rate',
@@ -2240,6 +2545,39 @@ PAGE_HTML = """<!DOCTYPE html>
           sub: `ROI: ${roiVal} &middot; ${kpi.wins || 0}W / ${kpi.losses || 0}L closes`,
           tipBody: 'Realized trading profit from settled merges and early exits on cost basis.',
           tipFormula: 'realized_pnl / capital_cost',
+        },
+        {
+          label: 'Win Rate & Expectancy',
+          val: winRateVal,
+          color: ta.win_rate === null || ta.win_rate === undefined ? '#94a3b8' : (ta.win_rate >= 0.5 ? '#10b981' : '#ef4444'),
+          sub: `n=${ta.n_closes || 0} closes &middot; exp ${expectancyVal} &middot; ${winRateCI}`,
+          tipBody: 'Win rate is profitable closes over all closes, with a Wilson 95% interval. Expectancy is the average realized P&amp;L per closed position &mdash; positive means the strategy earns on average.',
+          tipFormula: 'wins / closes; mean(realized_pnl)',
+        },
+        {
+          label: 'Trade PnL Distribution',
+          val: meanRetVal,
+          color: ta.mean_return_pct === null || ta.mean_return_pct === undefined ? '#94a3b8' : (ta.mean_return_pct >= 0 ? '#10b981' : '#ef4444'),
+          sub: `mean ${expectancyVal}/trade &middot; n=${ta.n_closes || 0} <button onclick="openDistModal('pnl')" style="background:none;border:none;color:#38bdf8;cursor:pointer;text-decoration:underline;font:inherit;">chart &nearr;</button>`,
+          chart: histogramSvg(pnlVals, {w: 180, h: 42}),
+          tipBody: 'Histogram of the absolute net gain/loss on every closed position ($5 in returning $6.50 is a $1.50 bar).',
+          tipFormula: 'realized_pnl = proceeds &minus; cost_basis',
+        },
+        {
+          label: 'Sharpe & Risk/Reward',
+          val: sharpeVal,
+          color: ta.sharpe_ratio === null || ta.sharpe_ratio === undefined ? '#94a3b8' : (ta.sharpe_ratio >= 0 ? '#10b981' : '#ef4444'),
+          sub: `R:R ${rrVal} &middot; PF ${pfVal} &middot; Sortino ${sortinoVal}`,
+          tipBody: 'Per-trade Sharpe = mean return / &sigma;(returns). Risk:reward = avg win / avg loss. Profit factor = gross wins / gross losses. Sortino penalises only downside deviation.',
+          tipFormula: 'mean/&sigma;; &Sigma;wins/|&Sigma;losses|',
+        },
+        {
+          label: 'Drawdown & Inventory',
+          val: ddPctVal,
+          color: ta.max_drawdown_pct === null || ta.max_drawdown_pct === undefined ? '#94a3b8' : (ta.max_drawdown_pct === 0 ? '#10b981' : '#f59e0b'),
+          sub: `Max DD ${ddUsdVal} &middot; peak naked $${ta.max_naked_exposure_usd !== null && ta.max_naked_exposure_usd !== undefined ? ta.max_naked_exposure_usd.toFixed(2) : '--'}`,
+          tipBody: 'Max drawdown is the largest peak-to-trough fall of run equity (realised closes plus open float). Inventory risk is the largest naked one-sided exposure ever marked.',
+          tipFormula: 'max(peak &minus; trough); max(naked_usd)',
         },
       ];
 
@@ -2595,6 +2933,58 @@ PAGE_HTML = """<!DOCTYPE html>
       const body = document.getElementById('modal-dist-body');
       const title = document.getElementById('modal-dist-title');
 
+      if (type === 'pnl') {
+        const ta = (lastKpi && lastKpi.trade_analytics) || {};
+        const dist = ta.pnl_distribution || [];
+        const pnlVals = dist.map(d => d.realized_pnl);
+        const winRateStr = ta.win_rate !== null && ta.win_rate !== undefined ? (ta.win_rate * 100).toFixed(1) + '%' : '--';
+        const winCI = ta.win_rate_ci95
+          ? `${(ta.win_rate_ci95.lower * 100).toFixed(0)}%–${(ta.win_rate_ci95.upper * 100).toFixed(0)}%` : '--';
+        const statCell = (k, v, color) => `
+          <div style="background:rgba(8,12,20,0.6);border:1px solid var(--border-subtle);border-radius:8px;padding:10px 12px;text-align:center;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-secondary);">${k}</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:800;margin-top:4px;color:${color || '#f8fafc'};">${v}</div>
+          </div>`;
+        const tradesRows = dist.slice().reverse().map(d => `
+          <tr>
+            <td>${formatTime(d.ts * 1000)}</td>
+            <td>${esc(d.market_slug || d.condition_id || '—')}</td>
+            <td><strong>${esc(d.method || '—')}</strong></td>
+            <td>${d.cost_basis !== null && d.cost_basis !== undefined ? '$' + d.cost_basis.toFixed(2) : '--'}</td>
+            <td style="color:${d.realized_pnl >= 0 ? '#10b981' : '#ef4444'};font-weight:700;">${fmtUsdSignedVal(d.realized_pnl)}</td>
+            <td style="color:${d.return_pct >= 0 ? '#10b981' : '#ef4444'};font-weight:700;">${d.return_pct !== null && d.return_pct !== undefined ? (d.return_pct >= 0 ? '+' : '') + d.return_pct.toFixed(1) + '%' : '--'}</td>
+          </tr>`).join('');
+
+        title.textContent = "Trade P&L Distribution";
+        body.innerHTML = `
+          <div style="padding:10px;display:flex;flex-direction:column;gap:14px;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text-secondary);">
+              Net gain/loss per closed position: realized_pnl = proceeds &minus; cost_basis. A $5 commit returning $6.50 is a +$1.50 bar (+30%).
+            </div>
+            ${histogramSvg(pnlVals, {w: 640, h: 180, bins: 9})}
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px;">
+              ${statCell('n trades', ta.n_closes || 0)}
+              ${statCell('Win rate', winRateStr, (ta.win_rate || 0) >= 0.5 ? '#10b981' : '#ef4444')}
+              ${statCell('Win rate CI', winCI)}
+              ${statCell('Mean $/trade', fmtUsdSignedVal(ta.expectancy_usd), (ta.expectancy_usd || 0) >= 0 ? '#10b981' : '#ef4444')}
+              ${statCell('Mean return', ta.mean_return_pct !== null && ta.mean_return_pct !== undefined ? (ta.mean_return_pct >= 0 ? '+' : '') + ta.mean_return_pct.toFixed(1) + '%' : '--', (ta.mean_return_pct || 0) >= 0 ? '#10b981' : '#ef4444')}
+              ${statCell('Sharpe', ta.sharpe_ratio !== null && ta.sharpe_ratio !== undefined ? ta.sharpe_ratio.toFixed(2) : '--', (ta.sharpe_ratio || 0) >= 0 ? '#10b981' : '#ef4444')}
+              ${statCell('Max DD', ta.max_drawdown_pct !== null && ta.max_drawdown_pct !== undefined ? '-' + ta.max_drawdown_pct.toFixed(1) + '%' : '--', '#f59e0b')}
+            </div>
+            ${dist.length ? `
+              <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--text-secondary);">CLOSED POSITIONS</div>
+              <div class="table-container">
+                <table style="font-size:11px;">
+                  <thead><tr><th>Time</th><th>Market</th><th>Method</th><th>Cost</th><th>Net P&L</th><th>Return</th></tr></thead>
+                  <tbody>${tradesRows}</tbody>
+                </table>
+              </div>` : '<div class="empty-state-text">No closed positions yet — the distribution starts on the first settled trade.</div>'}
+          </div>
+        `;
+        modal.style.display = 'flex';
+        return;
+      }
+
       const adv = lastKpi ? (lastKpi.adverse_selection || 0) * 100 : 0;
       title.textContent = "Adverse Selection Markout Distribution";
       body.innerHTML = `
@@ -2833,6 +3223,24 @@ PAGE_HTML = """<!DOCTYPE html>
         txtEng.style.color = eng.running ? '#34d399' : '#f87171';
       }
 
+      const txtEngSweep = document.getElementById('txt-engine-sweep');
+      if (txtEngSweep) {
+        const cfg = (eng.sweep_interval_sec == null) ? 'every tick' : `${eng.sweep_interval_sec}s`;
+        let sweepLabel = `sweep: ${cfg}`;
+        if (eng.running && eng.running_sweep_interval_sec !== undefined &&
+            eng.running_sweep_interval_sec !== eng.sweep_interval_sec) {
+          const running = (eng.running_sweep_interval_sec == null)
+            ? 'every tick' : `${eng.running_sweep_interval_sec}s`;
+          sweepLabel += ` · running ${running} (restart)`;
+        }
+        txtEngSweep.textContent = sweepLabel;
+      }
+
+      const sweepInput = document.getElementById('sweep-interval-input');
+      if (sweepInput && document.activeElement !== sweepInput) {
+        sweepInput.value = (eng.sweep_interval_sec == null) ? '' : eng.sweep_interval_sec;
+      }
+
       const dotDsh = document.getElementById('dot-dash');
       const txtDsh = document.getElementById('txt-dash');
       if (dotDsh) dotDsh.className = dsh.running ? 'status-dot status-dot-sm dot-online' : 'status-dot status-dot-sm dot-offline';
@@ -2847,6 +3255,28 @@ PAGE_HTML = """<!DOCTYPE html>
       const isRunning = data.bot_state === 'RUNNING';
       if (btnStart) btnStart.disabled = isRunning;
       if (btnStop) btnStop.disabled = !isRunning;
+    }
+
+    async function setSweepInterval() {
+      const input = document.getElementById('sweep-interval-input');
+      const raw = input ? input.value.trim() : '';
+      const path = raw
+        ? '/api/system/sweep-interval?seconds=' + encodeURIComponent(raw)
+        : '/api/system/sweep-interval';
+      try {
+        const res = await controlFetch(path);
+        const data = await res.json();
+        if (data.status) renderSystemStatus(data.status);
+        if (!data.ok) alert(data.message || 'Failed to set sweep interval');
+      } catch (err) {
+        alert('Failed to set sweep interval: ' + err);
+      }
+    }
+
+    function clearSweepInterval() {
+      const input = document.getElementById('sweep-interval-input');
+      if (input) input.value = '';
+      setSweepInterval();
     }
 
     async function startBot() {

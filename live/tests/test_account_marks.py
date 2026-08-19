@@ -520,3 +520,67 @@ def test_env_write_is_atomic_and_never_truncates_on_failure(tmp_path, monkeypatc
     assert live_exec._atomic_write_text(env, "REPLACED\n") is True
     assert env.read_text(encoding="utf-8") == "REPLACED\n"
     assert list(tmp_path.glob("*.tmp.*")) == []
+
+
+def test_registry_naked_usd_counts_open_pairs_only(tmp_path):
+    """Naked dollars come from open pairs; a merged pair contributes nothing."""
+    import time
+
+    from engine import live_exec
+    from engine.order_registry import (
+        OrderRegistry, OrderRecord, FillRecord, CloseRecord,
+    )
+
+    reg = OrderRegistry(db_path=tmp_path / "live.db")
+    now = int(time.time() * 1000)
+
+    # Open pair: 5 filled on one leg, 2 on the other -> 3 naked shares at $0.62.
+    for oid, tok, price in (("o1", "tok-a", 0.62), ("o2", "tok-b", 0.32)):
+        reg.create_order(OrderRecord(
+            id=oid, condition_id="cond-open", token_id=tok, side="BUY",
+            price=price, original_size=5.0, status="partial",
+            posted_ts=now, last_polled_ts=now, pair_id="pair-open",
+        ))
+    reg.record_fill(FillRecord(trade_id="t1", order_uuid="o1", size=5.0,
+                               price=0.62, venue_ts=now, recorded_ts=now, run_id="run-a"))
+    reg.record_fill(FillRecord(trade_id="t2", order_uuid="o2", size=2.0,
+                               price=0.32, venue_ts=now, recorded_ts=now, run_id="run-a"))
+
+    # Closed pair: fully filled then merged -> no open exposure remains.
+    for oid, tok, price in (("o3", "tok-c", 0.60), ("o4", "tok-d", 0.40)):
+        reg.create_order(OrderRecord(
+            id=oid, condition_id="cond-closed", token_id=tok, side="BUY",
+            price=price, original_size=5.0, status="filled",
+            posted_ts=now, last_polled_ts=now, pair_id="pair-closed",
+        ))
+    reg.record_fill(FillRecord(trade_id="t3", order_uuid="o3", size=5.0,
+                               price=0.60, venue_ts=now, recorded_ts=now, run_id="run-a"))
+    reg.record_fill(FillRecord(trade_id="t4", order_uuid="o4", size=5.0,
+                               price=0.40, venue_ts=now, recorded_ts=now, run_id="run-a"))
+    reg.log_close(CloseRecord(ts=time.time(), condition_id="cond-closed",
+                              method="merge", shares=5.0, cost_basis=5.0,
+                              proceeds=5.0, realized_pnl=0.0, run_id="run-a"))
+
+    assert live_exec._registry_naked_usd(reg) == pytest.approx(3.0 * 0.62)
+
+
+def test_float_mark_logs_only_when_the_venue_measured(tmp_path):
+    """A partial venue read must not fabricate a 0.0 float mark."""
+    from engine import live_exec
+    from engine.order_registry import OrderRegistry
+
+    reg = OrderRegistry(db_path=tmp_path / "live.db")
+
+    live_exec._log_float_mark_if_measured(
+        reg, {"unrealized_usd": None, "committed_usd": 4.7}
+    )
+    assert reg.get_all_float_marks() == []
+
+    live_exec._log_float_mark_if_measured(
+        reg, {"unrealized_usd": 0.30, "committed_usd": 4.7}
+    )
+    rows = reg.get_all_float_marks()
+    assert len(rows) == 1
+    assert rows[0]["unrealized_usd"] == pytest.approx(0.30)
+    assert rows[0]["committed_open_usd"] == pytest.approx(4.7)
+    assert rows[0]["naked_usd"] == 0.0

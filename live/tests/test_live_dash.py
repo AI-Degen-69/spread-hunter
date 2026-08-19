@@ -458,6 +458,20 @@ def test_milestone8_html_contains_required_sections():
     assert "bellCurveSvg" in PAGE_HTML
 
 
+def test_level1_trade_analytics_tiles_are_present():
+    """The new win-rate/expectancy, distribution, Sharpe, and drawdown tiles exist."""
+    for marker in (
+        "Win Rate & Expectancy",
+        "Trade PnL Distribution",
+        "Sharpe & Risk/Reward",
+        "Drawdown & Inventory",
+        "histogramSvg",
+        "trade_analytics",
+        "openDistModal('pnl')",
+    ):
+        assert marker in PAGE_HTML, marker
+
+
 def test_api_kpi_endpoint_returns_3_levels_and_run_isolation(client, temp_db):
     """Test /api/kpi provides Level 1 (Strategy), Level 2 (Market), Level 3 (Mechanics), and run isolation."""
     from engine.order_registry import (
@@ -830,6 +844,7 @@ def test_control_endpoints_reject_untokened_posts(client):
         "/api/system/stop",
         "/api/system/reset-db",
         "/api/system/restart-dash",
+        "/api/system/sweep-interval",
     ):
         assert client.post(path).status_code == 403, f"{path} accepted an untokened POST"
 
@@ -902,3 +917,139 @@ def test_status_reports_the_port_actually_bound(monkeypatch):
     assert dash_mod.get_system_status()["services"]["dash"]["port"] == 9123
     # The page reads the reported port instead of a literal.
     assert "':8799'" not in PAGE_HTML
+
+
+def test_sweep_interval_is_configurable_from_env(monkeypatch):
+    """LIVE_SWEEP_INTERVAL sets the card's cadence; absent/bad values don't."""
+    from dash.live_dash import resolve_sweep_interval
+
+    monkeypatch.setenv("LIVE_SWEEP_INTERVAL", "30")
+    assert resolve_sweep_interval() == 30.0
+
+    monkeypatch.delenv("LIVE_SWEEP_INTERVAL")
+    assert resolve_sweep_interval() is None
+
+    monkeypatch.setenv("LIVE_SWEEP_INTERVAL", "garbage")
+    assert resolve_sweep_interval() is None
+
+    monkeypatch.setenv("LIVE_SWEEP_INTERVAL", "-5")
+    assert resolve_sweep_interval() is None
+
+
+def test_status_surfaces_engine_sweep_cadence(monkeypatch, tmp_path):
+    """The system-status payload reports how often the engine sweeps."""
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setenv("LIVE_SWEEP_INTERVAL", "30")
+    assert dash_mod.get_system_status()["services"]["engine"]["sweep_interval_sec"] == 30.0
+
+    monkeypatch.delenv("LIVE_SWEEP_INTERVAL")
+    assert dash_mod.get_system_status()["services"]["engine"]["sweep_interval_sec"] is None
+
+
+def test_start_bot_passes_sweep_interval_to_poll(monkeypatch, tmp_path):
+    """start_bot launches poll with --sweep-interval when one is configured."""
+    import subprocess
+
+    import dash.live_dash as dash_mod
+
+    spawned = []
+
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append(args)
+            self.pid = 12345
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "STOPPED"})
+    monkeypatch.setattr(dash_mod, "resolve_sweep_interval", lambda: 30.0)
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+
+    result = dash_mod.start_bot()
+    assert result["ok"] is True
+
+    engine_cmd = next(a for a in spawned if "poll" in a)
+    assert "--sweep-interval" in engine_cmd
+    assert engine_cmd[engine_cmd.index("--sweep-interval") + 1] == "30.0"
+
+
+def test_set_sweep_interval_persists_and_applies(monkeypatch, tmp_path):
+    """The control writes LIVE_SWEEP_INTERVAL into .env and the status payload."""
+    import os
+
+    import dash.live_dash as dash_mod
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("POLY_PRIVATE_KEY=do-not-load\nOTHER=1\n", encoding="utf-8")
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.delenv("LIVE_SWEEP_INTERVAL", raising=False)
+
+    result = dash_mod.set_sweep_interval("45")
+    assert result["ok"] is True
+    assert result["sweep_interval_sec"] == 45.0
+    assert os.environ["LIVE_SWEEP_INTERVAL"] == "45.0"
+
+    saved = env_file.read_text(encoding="utf-8")
+    assert "LIVE_SWEEP_INTERVAL=45" in saved
+    # Everything else in the file survives, credentials included.
+    assert "POLY_PRIVATE_KEY=do-not-load" in saved
+    assert "OTHER=1" in saved
+    assert result["status"]["services"]["engine"]["sweep_interval_sec"] == 45.0
+
+
+def test_set_sweep_interval_rejects_bad_values(monkeypatch, tmp_path):
+    """A non-numeric or non-positive cadence is refused before touching .env."""
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+
+    assert dash_mod.set_sweep_interval("abc")["ok"] is False
+    assert dash_mod.set_sweep_interval("0")["ok"] is False
+    assert dash_mod.set_sweep_interval("-3")["ok"] is False
+
+
+def test_sweep_interval_endpoint_sets_and_clears(client, monkeypatch, tmp_path):
+    """POST /api/system/sweep-interval persists and clears the cadence."""
+    import dash.live_dash as dash_mod
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.delenv("LIVE_SWEEP_INTERVAL", raising=False)
+
+    res = client.post("/api/system/sweep-interval?seconds=60", headers=_control(client))
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert data["sweep_interval_sec"] == 60.0
+    assert "LIVE_SWEEP_INTERVAL=60" in env_file.read_text(encoding="utf-8")
+
+    res = client.post("/api/system/sweep-interval", headers=_control(client))
+    data = res.json()
+    assert data["ok"] is True
+    assert data["sweep_interval_sec"] is None
+    assert "LIVE_SWEEP_INTERVAL" not in env_file.read_text(encoding="utf-8")
+
+
+def test_status_distinguishes_configured_from_running_sweep_cadence(monkeypatch, tmp_path):
+    """Configured cadence is what the control set; running is what poll launched with."""
+    import json
+    import os
+    import time
+
+    import dash.live_dash as dash_mod
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "live_procs.json").write_text(json.dumps({
+        "engine": {"pid": os.getpid(), "started_at": time.time(), "sweep_interval_sec": 30.0},
+    }), encoding="utf-8")
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "_is_pid_alive", lambda pid, started_at=None: pid is not None)
+    monkeypatch.setenv("LIVE_SWEEP_INTERVAL", "60")
+
+    engine = dash_mod.get_system_status()["services"]["engine"]
+    assert engine["sweep_interval_sec"] == 60.0           # configured
+    assert engine["running_sweep_interval_sec"] == 30.0   # running process's launch value

@@ -4398,3 +4398,33 @@ The lesson is the one this project keeps relearning: the instrumentation was lyi
 A failure that looks like the venue punishing an account, and a failure caused by the client asking
 the same question too often, are indistinguishable from the error message alone. Two commands run
 twenty seconds apart separated them; hours of waiting would not have.
+
+## 2026-08-19 - The account card froze after bot trades; the poll loop now sweeps, and two Level 1 widgets finally sample
+
+**Question.** The account card only refreshed when an operator ran `account-sweep` by hand. Reconcile updates orders and fills every poll tick, but nothing re-read the venue's account value, so a trade through the bot froze the headline at its last reading. Two more Level 1 widgets - the adverse-selection bell curve and the Portfolio Exposure chart - were defined but never started, so they reported n=0 and "no marks" forever. Why were all three empty, and what is the smallest correct fix?
+
+**Method.** Fold the sweep into `poll()` rather than enumerating "sweep after every action" hooks - fills are only discovered by reconcile, so the fill hook is already inside the poll loop, and venue-side events (manual UI trades, deposits, resolution) have no hook at all. Start `MarkoutWorker` on the production poll path and write a float mark from each successful sweep.
+
+**Result.**
+1. **The sweep runs every tick, on its own error budget.** A Data API failure logs to `live_events.log` and keeps the last good reading; it never increments `consecutive_errors` or drives the money loop into 60s backoff. Cadence is decoupled from reconcile via `--sweep-interval` (seconds) or `--sweep-every` (ticks).
+2. **A missing POLY_FUNDER cannot kill the poller.** `account_sweep` raises `SystemExit` when the funder is absent, and `SystemExit` is a `BaseException` the loop's `except Exception` never catches; the poller now pre-guards the funder and skips.
+3. **The markout sampler now starts.** `MarkoutWorker` runs as a daemon thread on the production path only (never beside a test/dry-run client) and matures the 5m/15m/1h/6h horizons, so the bell curve accumulates real samples instead of reporting n=0 forever.
+4. **Each successful sweep writes a float mark.** Unrealised and committed come from the venue; naked comes from a new registry walk that skips pairs whose condition already has a close, so a merged pair's one-sided risk is not double-billed. A partial venue read skips the mark instead of writing a fabricated 0.0.
+5. **The dashboard controls the cadence.** `LIVE_SWEEP_INTERVAL` reads from `.env`, a Set/Reset input persists it, and `/api/system/status` reports both the configured and the running cadence so a change that awaits restart is visible.
+
+**Verdict.** **LIVE**. The Engine pill no longer promises a sweep the launcher does not start. Live suite 349 passed, 1 skipped.
+
+## 2026-08-19 - Level 1 now answers the maker's real question: is expectancy positive, and with what risk?
+
+**Question.** The strategy dashboard answered "win rate with a confidence interval" and "gain/loss per trade"; the live dashboard answered only "did we make money in aggregate". A maker needs the distribution of per-position outcomes and the sign of expectancy with confidence, plus risk-adjusted factors. How do these map onto the live `closes` table, which records only voluntary exits?
+
+**Method.** Treat each `closes` row as one trade: `realized_pnl` is the net dollars, and `return_pct = realized_pnl / cost_basis` (a $5 commit returning $6.50 is +$1.50 / +30%). Compute win rate with a Wilson 95% interval, expectancy (mean dollars and mean return, with a one-sided 90% lower bound), per-trade Sharpe and Sortino, reward:risk, profit factor, max drawdown from the run equity curve, and peak naked exposure from float marks. Render four new Level 1 tiles and a histogram modal.
+
+**Result.**
+1. **Win rate gets a Wilson interval, not a normal one.** At n=1 or all-wins the normal approximation breaks; Wilson stays inside [0, 1]. A 2-win-in-3 sample reads 66.7% with a wide interval, which is the honest reading of three trades.
+2. **Expectancy is the average realized P&L per closed position**, and its 90% one-sided lower bound is `mean - 1.645*se` - the same positivity gate the simulation uses.
+3. **Sharpe and Sortino are per-trade, not annualised.** Trades are not daily observations; annualising a three-trade sample would manufacture a number the sample never earned. Both are NULL until there are two trades with dispersion.
+4. **Reward:risk and profit factor split the question.** R:R = avg win / |avg loss|, profit factor = gross wins / |gross losses|; both NULL on an all-win run (no loss denominator) rather than a fake infinity.
+5. **Drawdown and inventory risk are separate.** Max drawdown reads the equity curve (realised closes plus open float), peak naked exposure reads the largest one-sided float mark. Both NULL when nothing has been marked.
+
+**Verdict.** **LIVE**. The distribution is a real histogram of per-position outcomes, not a fitted bell curve - with n=1-2 live trades a normal curve is a drawing, not a measurement. Live suite 349 passed, 1 skipped.

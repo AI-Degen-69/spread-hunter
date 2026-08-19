@@ -10,6 +10,7 @@ Plus multi-run isolation (run selector) and float_marks time series.
 from __future__ import annotations
 
 import json
+import math
 import statistics
 import time
 from pathlib import Path
@@ -24,6 +25,162 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 # Shown when neither the ranker feed nor its fallbacks name a category. A named
 # bucket groups honestly; a blank cell reads as missing data.
 UNCATEGORIZED = "Uncategorized"
+
+
+def _wilson_ci(successes: int, n: int, z: float = 1.96) -> Optional[dict[str, float]]:
+    """Wilson score interval for a binomial proportion (the win rate).
+
+    The normal-approximation interval misbehaves at n=1 or all-wins/losses;
+    Wilson stays inside [0, 1] there. z=1.96 is the 95% two-sided bound.
+    """
+    if n <= 0:
+        return None
+    p = successes / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (p + z2 / (2.0 * n)) / denom
+    half = (z * math.sqrt((p * (1.0 - p) + z2 / (4.0 * n)) / n)) / denom
+    return {
+        "lower": max(0.0, center - half),
+        "upper": min(1.0, center + half),
+    }
+
+
+def compute_trade_analytics(
+    closes: list[dict],
+    starting_capital: float,
+    equity_series: list[dict],
+    float_marks: list[dict],
+) -> dict[str, Any]:
+    """Per-trade outcome statistics and risk factors for the Level 1 tiles.
+
+    A "trade" is one closed position (a `closes` row). `realized_pnl` is the
+    absolute net gain/loss on it -- the $1.50 in "committed $5, returned
+    $6.50" -- and `cost_basis` is the $5. Return % is pnl / cost_basis, so the
+    same position also reads +30%.
+
+    Every field is NULL when it cannot be measured, never a fabricated zero:
+    a one-close run has no stdev, Sharpe, or CI; a no-close run has no drawdown.
+    """
+    n = len(closes)
+    pnl_distribution: list[dict[str, Any]] = []
+    wins: list[float] = []
+    losses: list[float] = []
+    return_pcts: list[float] = []
+
+    for c in closes:
+        pnl = float(c.get("realized_pnl") or 0.0)
+        cost = c.get("cost_basis")
+        cost_f = float(cost) if cost is not None else None
+        return_pct = (100.0 * pnl / cost_f) if (cost_f is not None and cost_f > 0) else None
+        if return_pct is not None:
+            return_pcts.append(return_pct)
+        if pnl > 0:
+            wins.append(pnl)
+        else:
+            losses.append(pnl)
+        pnl_distribution.append({
+            "ts": c.get("ts"),
+            "condition_id": c.get("condition_id"),
+            "market_slug": c.get("market_slug"),
+            "method": c.get("method"),
+            "realized_pnl": pnl,
+            "cost_basis": cost_f,
+            "return_pct": return_pct,
+        })
+    pnl_distribution.sort(key=lambda r: (r["ts"] if r["ts"] is not None else 0.0))
+
+    n_wins = len(wins)
+    n_losses = len(losses)
+    win_rate = (n_wins / n) if n else None
+    win_rate_ci95 = _wilson_ci(n_wins, n) if n else None
+
+    expectancy_usd = statistics.mean(wins + losses) if n else None
+    mean_return_pct = statistics.mean(return_pcts) if return_pcts else None
+    stdev_return_pct = statistics.stdev(return_pcts) if len(return_pcts) > 1 else None
+
+    ci90_lower_pct: Optional[float] = None
+    ci95_return_pct: Optional[dict[str, float]] = None
+    if mean_return_pct is not None and stdev_return_pct is not None and len(return_pcts) > 1:
+        se = stdev_return_pct / math.sqrt(len(return_pcts))
+        # One-sided 90% lower bound (the "is expectancy positive?" gate the
+        # simulation uses), plus a 95% two-sided band for context.
+        ci90_lower_pct = mean_return_pct - 1.645 * se
+        ci95_return_pct = {
+            "lower": mean_return_pct - 1.96 * se,
+            "upper": mean_return_pct + 1.96 * se,
+        }
+
+    avg_win_usd = statistics.mean(wins) if wins else None
+    avg_loss_usd = statistics.mean(losses) if losses else None
+    # Classic reward:risk = average win / average loss (magnitude). NULL when
+    # there is no loss to measure against (an all-win run has no downside yet).
+    risk_reward_ratio = (
+        avg_win_usd / abs(avg_loss_usd)
+        if avg_win_usd is not None and avg_loss_usd is not None and avg_loss_usd != 0.0
+        else None
+    )
+    gross_wins = sum(wins)
+    gross_losses = abs(sum(losses))
+    profit_factor = (gross_wins / gross_losses) if gross_losses > 0 else None
+
+    # Per-trade Sharpe/Sortino on the return distribution (no annualisation:
+    # trades are not daily observations, and annualising a 3-trade sample would
+    # manufacture a number the sample never earned).
+    sharpe_ratio: Optional[float] = None
+    sortino_ratio: Optional[float] = None
+    if len(return_pcts) > 1 and stdev_return_pct and stdev_return_pct > 0:
+        sharpe_ratio = mean_return_pct / stdev_return_pct
+        downside = [r for r in return_pcts if r < 0]
+        downside_dev = math.sqrt(sum(r * r for r in downside) / len(downside)) if downside else 0.0
+        if downside_dev > 0:
+            sortino_ratio = mean_return_pct / downside_dev
+
+    # Max drawdown from the run-level equity curve (realised closes stacked on
+    # the bankroll, open float folded in at its marks).
+    max_drawdown_usd: Optional[float] = None
+    max_drawdown_pct: Optional[float] = None
+    if equity_series:
+        peak = starting_capital
+        max_dd_usd = 0.0
+        max_dd_pct = 0.0
+        for pt in equity_series:
+            v = float(pt.get("v") or 0.0)
+            if v > peak:
+                peak = v
+            dd = peak - v
+            if dd > max_dd_usd:
+                max_dd_usd = dd
+                max_dd_pct = (100.0 * dd / peak) if peak > 0 else 0.0
+        max_drawdown_usd = max_dd_usd
+        max_drawdown_pct = max_dd_pct
+
+    # Inventory risk: the largest naked (one-sided) dollar exposure ever marked.
+    naked_vals = [float(fm.get("naked_usd") or 0.0) for fm in float_marks]
+    max_naked_exposure_usd = max(naked_vals) if naked_vals else None
+
+    return {
+        "n_closes": n,
+        "wins": n_wins,
+        "losses": n_losses,
+        "win_rate": win_rate,
+        "win_rate_ci95": win_rate_ci95,
+        "expectancy_usd": expectancy_usd,
+        "mean_return_pct": mean_return_pct,
+        "stdev_return_pct": stdev_return_pct,
+        "ci90_lower_pct": ci90_lower_pct,
+        "ci95_return_pct": ci95_return_pct,
+        "avg_win_usd": avg_win_usd,
+        "avg_loss_usd": avg_loss_usd,
+        "risk_reward_ratio": risk_reward_ratio,
+        "profit_factor": profit_factor,
+        "sharpe_ratio": sharpe_ratio,
+        "sortino_ratio": sortino_ratio,
+        "max_drawdown_usd": max_drawdown_usd,
+        "max_drawdown_pct": max_drawdown_pct,
+        "max_naked_exposure_usd": max_naked_exposure_usd,
+        "pnl_distribution": pnl_distribution,
+    }
 
 
 def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> dict[str, Any]:
@@ -630,6 +787,16 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         for fm in float_marks
     ]
 
+    # Per-trade win rate/expectancy/risk factors (Level 1 tiles). Computed from
+    # the same closes the outcome block sums, plus the equity curve and marks
+    # already assembled above.
+    trade_analytics = compute_trade_analytics(
+        closes=closes,
+        starting_capital=starting_capital,
+        equity_series=equity_series,
+        float_marks=float_marks,
+    )
+
     return {
         # Multi-run metadata
         "runs": runs,
@@ -695,6 +862,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         "avg_win": statistics.mean(wins) if wins else 0.0,
         "avg_loss": statistics.mean(losses) if losses else 0.0,
         "roi_on_cost": (realized_pnl / cost) if cost else None,
+
+        # Win rate + expectancy + risk-adjusted factors (Level 1)
+        "trade_analytics": trade_analytics,
 
         # Adverse selection & rebate
         "adverse_selection": adverse_selection,

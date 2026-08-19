@@ -1022,3 +1022,94 @@ def test_poll_skips_a_contended_cycle_without_arming_the_backoff(temp_db: Path, 
     assert "backoff" not in err
     # And it refused before spending a venue round trip.
     assert client.get_open_orders_calls == []
+
+
+class StopAfterClient(MockClobClient):
+    """A CLOB client that raises KeyboardInterrupt once N opens have succeeded."""
+
+    def __init__(self, raise_after_calls: int):
+        super().__init__()
+        self.raise_after_calls = raise_after_calls
+        self.open_orders_attempts = 0
+
+    def get_open_orders(self, params=None, only_first_page=False, next_cursor=None):
+        self.open_orders_attempts += 1
+        if self.open_orders_attempts > self.raise_after_calls:
+            raise KeyboardInterrupt
+        return super().get_open_orders(params, only_first_page, next_cursor)
+
+
+def test_poll_sweep_error_is_isolated_from_reconcile(temp_db: Path, capsys, monkeypatch):
+    """A failed account sweep must not look like a reconcile failure.
+
+    The sweep is dashboard telemetry. If its error were counted on the same
+    budget as reconcile, a Data API hiccup would drive the poller's backoff
+    and a --once run would exit non-zero despite having reconciled fine.
+    """
+    from engine import live_exec
+
+    monkeypatch.setenv("POLY_FUNDER", "0xdeadbeef")
+    sweep = MagicMock(side_effect=RuntimeError("data-api down"))
+    monkeypatch.setattr(live_exec, "account_sweep", sweep)
+
+    client = MockClobClient()
+    # Returns normally: reconcile succeeded, so --once reports success even
+    # though the sweep failed on the cycle's first line.
+    live_exec.poll(interval=0.01, once=True, db_path=temp_db, client=client)
+
+    assert sweep.call_count == 1
+    assert client.get_open_orders_calls != []  # reconcile still ran
+    err = capsys.readouterr().err
+    assert "backoff" not in err
+
+
+def test_poll_skips_sweep_without_a_funder(temp_db: Path, monkeypatch):
+    """account_sweep raises SystemExit without POLY_FUNDER; poll must not die."""
+    from engine import live_exec
+
+    monkeypatch.delenv("POLY_FUNDER", raising=False)
+    sweep = MagicMock()
+    monkeypatch.setattr(live_exec, "account_sweep", sweep)
+
+    client = MockClobClient()
+    live_exec.poll(interval=0.01, once=True, db_path=temp_db, client=client)
+
+    assert sweep.call_count == 0
+    assert client.get_open_orders_calls != []
+
+
+def test_poll_sweeps_on_its_own_cadence(temp_db: Path, monkeypatch):
+    """sweep_every=2 sweeps on cycles 1 and 3, not on the skipped cycle 2."""
+    from engine import live_exec
+
+    monkeypatch.setenv("POLY_FUNDER", "0xdeadbeef")
+    sweep = MagicMock()
+    monkeypatch.setattr(live_exec, "account_sweep", sweep)
+
+    # Two successful reconciles, then a KeyboardInterrupt on the third: three
+    # cycles run, and poll stops cleanly on the interrupt.
+    client = StopAfterClient(raise_after_calls=2)
+    live_exec.poll(interval=0.01, sweep_every=2, db_path=temp_db, client=client)
+
+    assert sweep.call_count == 2  # cycles 1 and 3, cycle 2 skipped
+    assert client.open_orders_attempts == 3
+
+
+def test_sweep_due_interval_decouples_from_ticks():
+    """sweep_interval (seconds) governs; the first cycle always sweeps."""
+    from engine.live_exec import _sweep_due
+
+    assert _sweep_due(1, now=0.0, last_sweep_ts=None, sweep_interval=30.0, sweep_every=1)
+    assert not _sweep_due(2, now=5.0, last_sweep_ts=0.0, sweep_interval=30.0, sweep_every=1)
+    assert _sweep_due(7, now=30.0, last_sweep_ts=0.0, sweep_interval=30.0, sweep_every=1)
+    # No last stamp (e.g. a fresh start) is due immediately.
+    assert _sweep_due(2, now=5.0, last_sweep_ts=None, sweep_interval=30.0, sweep_every=1)
+
+
+def test_sweep_due_tick_cadence_is_the_fallback():
+    """Without sweep_interval, the sweep follows sweep_every cycles."""
+    from engine.live_exec import _sweep_due
+
+    assert _sweep_due(2, now=999.0, last_sweep_ts=0.0, sweep_interval=None, sweep_every=2)
+    assert not _sweep_due(3, now=999.0, last_sweep_ts=0.0, sweep_interval=None, sweep_every=2)
+    assert _sweep_due(4, now=999.0, last_sweep_ts=0.0, sweep_interval=None, sweep_every=2)

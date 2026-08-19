@@ -1934,11 +1934,88 @@ def probe(series: str | None = None,
             print(f"  - Cycle {g['cycle']}: {g['gap_duration_s']:.2f}s gap before window '{g['market_slug']}'")
 
 
+def _sweep_due(
+    cycle: int,
+    now: float,
+    last_sweep_ts: float | None,
+    sweep_interval: float | None,
+    sweep_every: int,
+) -> bool:
+    """Whether this cycle should refresh the account card.
+
+    `sweep_interval` (seconds) takes precedence and decouples the sweep from
+    the poll tick rate; when it is None the legacy tick cadence applies. The
+    first cycle always sweeps so the card is fresh on startup.
+    """
+    if cycle == 1:
+        return True
+    if sweep_interval is not None:
+        return last_sweep_ts is None or (now - last_sweep_ts) >= sweep_interval
+    return cycle % sweep_every == 0
+
+
+def _registry_naked_usd(registry) -> float:
+    """Dollars at risk on open, one-sided live exposure, from the registry.
+
+    Pairs whose condition already has a close are skipped: a merged pair has
+    no open exposure, and counting its fills would bill risk the venue no
+    longer carries. A partially-exited pair is skipped whole rather than
+    over-stated, which is the safe direction for a risk figure.
+    """
+    from engine.live_pairs import load_pair, PairExitRefused
+
+    with registry._conn() as conn:
+        closed_cids = {
+            r["condition_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT condition_id FROM closes WHERE condition_id IS NOT NULL"
+            ).fetchall()
+        }
+        rows = conn.execute(
+            "SELECT DISTINCT condition_id, pair_id FROM orders "
+            "WHERE pair_id IS NOT NULL"
+        ).fetchall()
+
+    total = 0.0
+    for r in rows:
+        if r["condition_id"] in closed_cids:
+            continue
+        try:
+            pair = load_pair(registry, r["pair_id"])
+        except PairExitRefused:
+            continue
+        naked_sh = pair.get("naked") or 0.0
+        if naked_sh > 0:
+            total += naked_sh * (pair.get("fill_cost") or 0.0)
+    return total
+
+
+def _log_float_mark_if_measured(registry, mark: dict) -> None:
+    """Record an open-exposure float mark when the venue gave real numbers.
+
+    Unrealised and committed come from the venue sweep; naked is registry-
+    derived because the venue has no notion of a one-sided live leg. A
+    partial sweep skips rather than writing 0.0 for a number the venue never
+    reported.
+    """
+    unrealized = mark.get("unrealized_usd")
+    committed = mark.get("committed_usd")
+    if unrealized is None or committed is None:
+        return
+    registry.log_float_mark(
+        unrealized_usd=float(unrealized),
+        committed_open_usd=float(committed),
+        naked_usd=_registry_naked_usd(registry),
+    )
+
+
 def poll(
     interval: float = 5.0,
     once: bool = False,
     db_path: str | Path | None = None,
     client=None,
+    sweep_every: int = 1,
+    sweep_interval: float | None = None,
 ) -> None:
     """Poll CLOB for open orders and fills, reconciling into order registry.
 
@@ -1947,7 +2024,13 @@ def poll(
     - Append-only event log (run/live_events.log).
     - Atomic heartbeat (run/live_poll_heartbeat.json).
     - Exponential backoff on 429 / 5xx capped at 60s.
+    - Account sweep folded into the loop, on its own error budget.
     - Clean SIGTERM / KeyboardInterrupt exit.
+
+    The account sweep runs on the first cycle and then either every
+    `sweep_interval` seconds (when set) or every `sweep_every` cycles. The
+    seconds form decouples the card's freshness from the poll tick rate, so
+    changing `--interval` does not change how often the venue is swept.
     """
     import datetime
     import signal
@@ -1962,10 +2045,17 @@ def poll(
     db_p = Path(db_path) if db_path else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db_p)
 
+    # Remember whether a client was injected before building one: the markout
+    # sampler must only start on the production path, never beside a test or
+    # dry-run client whose presence means "do not reach the venue yourself".
+    injected_client = client is not None
     if client is None:
         client = _client()
 
     funder = os.environ.get("POLY_FUNDER")
+    sweep_every = max(1, int(sweep_every))
+    if sweep_interval is not None:
+        sweep_interval = max(0.0, float(sweep_interval))
 
     stop_requested = False
 
@@ -1990,6 +2080,38 @@ def poll(
         except OSError as exc:
             print(f"WARNING: event log write failed: {exc}", file=sys.stderr)
 
+    sweep_funder_warned = False
+    last_sweep_ts: float | None = None
+
+    def _sweep_account(now_iso: str) -> None:
+        """Read the account from the venue without failing the poll cycle.
+
+        The sweep is dashboard telemetry: a failure here must leave the last
+        good reading intact and must never count toward the reconcile
+        backoff. The missing-funder SystemExit is guarded before the call
+        rather than caught, so it cannot kill the poller.
+
+        `last_sweep_ts` is stamped on every attempt, success or failure, so
+        the interval cadence throttles retries instead of hammering the Data
+        API during an outage.
+        """
+        nonlocal sweep_funder_warned, last_sweep_ts
+        last_sweep_ts = time.time()
+        if not funder:
+            if not sweep_funder_warned:
+                sweep_funder_warned = True
+                _log_event(f"[{now_iso}] SWEEP SKIPPED: POLY_FUNDER not set")
+            return
+        try:
+            mark = account_sweep(funder=funder, db_path=db_p, quiet=True)
+        except Exception as exc:
+            _log_event(f"[{now_iso}] SWEEP ERROR: {exc}")
+            return
+        try:
+            _log_float_mark_if_measured(registry, mark)
+        except Exception as exc:
+            _log_event(f"[{now_iso}] FLOAT MARK ERROR: {exc}")
+
     # START and STOP are written unconditionally, so the log exists from the
     # first second of a run. Without them a quiet session leaves no file at all,
     # and "it never started" is indistinguishable from "it ran and saw nothing"
@@ -2003,10 +2125,25 @@ def poll(
     cycle = 0
     last_cycle_failed = False
 
+    # The markout sampler fills the adverse-selection horizons out-of-band, so
+    # it never blocks reconcile. It is a daemon thread, started only on the
+    # production path (no injected client), and stopped when the loop exits.
+    markout_worker = None
+    if not once and not injected_client:
+        from engine.markout import MarkoutWorker
+        markout_worker = MarkoutWorker(
+            registry=registry,
+            clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
+        )
+        markout_worker.start()
+
     while not stop_requested:
         cycle += 1
         cycle_start = time.time()
         now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        if _sweep_due(cycle, time.time(), last_sweep_ts, sweep_interval, sweep_every):
+            _sweep_account(now_iso)
 
         try:
             summary = reconcile_orders(client, registry, maker_address=funder)
@@ -2103,6 +2240,9 @@ def poll(
             _log_event(f"[{stop_iso}] STOP KeyboardInterrupt while idle after cycle {cycle}")
             print(f"[POLL {stop_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
             break
+
+    if markout_worker is not None:
+        markout_worker.stop()
 
     exit_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _log_event(f"[{exit_iso}] EXIT cycles={cycle} errors={consecutive_errors}")
@@ -2814,6 +2954,10 @@ def main() -> None:
     pl.add_argument("--interval", type=float, default=5.0, help="Cadence in seconds (default: 5.0)")
     pl.add_argument("--once", action="store_true", help="Reconcile once and exit")
     pl.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    pl.add_argument("--sweep-every", type=int, default=1,
+                    help="Account sweep every N poll cycles when --sweep-interval is not set (default 1 = every tick)")
+    pl.add_argument("--sweep-interval", type=float, default=None,
+                    help="Account sweep cadence in seconds, independent of the poll interval (overrides --sweep-every)")
     ex = sub.add_parser("exit", help="Stage 3: close a one-sided pair (cancel resting leg, sell filled leg).")
     ex.add_argument("pair_id", help="pair_id as recorded in the order registry")
     ex.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
@@ -2925,7 +3069,8 @@ def main() -> None:
             live=is_live,
         )
     elif a.cmd == "poll":
-        poll(interval=a.interval, once=a.once, db_path=a.db)
+        poll(interval=a.interval, once=a.once, db_path=a.db,
+             sweep_every=a.sweep_every, sweep_interval=a.sweep_interval)
     elif a.cmd == "pairs":
         pairs(db_path=a.db)
     elif a.cmd == "exit":
