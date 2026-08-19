@@ -1133,7 +1133,7 @@ PAGE_HTML = """<!DOCTYPE html>
       color: var(--text-primary);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       min-height: 100vh;
-      padding: 20px;
+      padding: 20px 20px 76px;
       line-height: 1.5;
     }
 
@@ -1272,20 +1272,47 @@ PAGE_HTML = """<!DOCTYPE html>
       color: var(--text-secondary);
     }
 
-    /* Stale Warning Banner */
-    .stale-banner {
-      display: none;
-      background: linear-gradient(90deg, #991b1b, #7f1d1d);
-      border: 2px solid var(--red-alert);
-      color: #fee2e2;
-      padding: 12px 18px;
-      border-radius: 10px;
-      font-weight: 700;
-      font-size: 14px;
-      box-shadow: var(--red-glow);
-      animation: pulse 1.5s infinite;
+    /* Fixed status footer: backend indicators always on screen */
+    .footer-bar {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      z-index: 1000;
+      display: flex;
       align-items: center;
-      gap: 12px;
+      justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
+      padding: 8px 18px;
+      background: rgba(8, 12, 20, 0.92);
+      border-top: 1px solid var(--border-subtle);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+    }
+    .footer-bar .sup-card { padding: 4px 12px; }
+    .footer-sup-title {
+      font-size: 11px; font-weight: 800; letter-spacing: 0.02em; color: var(--text-primary);
+      white-space: nowrap;
+    }
+    .footer-sup-sub { font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
+    .footer-meta {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .footer-lock {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 9999px;
+      background: var(--bg-surface-raised); border: 1px solid var(--border-subtle);
+      font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700;
+      cursor: help;
+    }
+    .footer-lock.lock-idle { color: var(--green-ok); }
+    .footer-lock.lock-active { color: var(--amber-warn); border-color: rgba(245, 158, 11, 0.5); }
+    .dot-amber { background-color: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
+    .footer-clock {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; font-weight: 700; color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      min-width: 64px; text-align: right;
     }
 
     @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.9; transform: scale(0.995); } }
@@ -1523,14 +1550,11 @@ PAGE_HTML = """<!DOCTYPE html>
 
     .grid-2col { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
     @media (max-width: 900px) { .grid-2col { grid-template-columns: 1fr; } }
-    .grid-bottom { display: grid; grid-template-columns: 3fr 2fr; gap: 18px; }
-    @media (max-width: 900px) { .grid-bottom { grid-template-columns: 1fr; } }
 
     .stat-list { display: flex; flex-direction: column; gap: 10px; }
     .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg-surface-raised); border-radius: 6px; border: 1px solid var(--border-subtle); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
-    .lock-box { padding: 12px; border-radius: 6px; background: var(--bg-surface-raised); border: 1px solid var(--border-subtle); font-size: 12px; font-family: 'JetBrains Mono', monospace; }
-    .lock-idle { border-left: 4px solid var(--green-ok); }
-    .lock-active { border-left: 4px solid var(--amber-warn); }
+    .lock-idle { color: var(--green-ok); }
+    .lock-active { color: var(--amber-warn); }
     .empty-state-text { color: var(--text-muted); font-style: italic; padding: 18px 0; text-align: center; }
 
     /* SYSTEM STATUS BAR & BOT CONTROLS */
@@ -1725,46 +1749,11 @@ PAGE_HTML = """<!DOCTYPE html>
             <option value="">Latest Run</option>
           </select>
         </div>
-        <span id="poll-pill" class="pill pill-neutral">CONNECTING...</span>
-        <span id="port-pill" class="pill pill-neutral"></span>
-        <span id="clock-display">--:--:--</span>
       </div>
     </header>
 
-    <!-- SYSTEM & SUPERVISOR STATUS BAR -->
+    <!-- BOT CONTROL BAR -->
     <div class="status-bar-wrap">
-      <!-- High Hierarchy: Supervisor Status -->
-      <div id="supervisor-status" class="sup-card">
-        <span class="status-dot dot-offline" id="sup-dot"></span>
-        <div>
-          <div style="font-size:12px;font-weight:800;letter-spacing:0.02em;color:var(--text-primary);">
-            SUPERVISOR: <span id="sup-text" style="color:#f87171;">OFFLINE</span>
-          </div>
-          <div id="sup-sub" style="font-size:10px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;">Not Running</div>
-        </div>
-      </div>
-
-      <!-- 3 Sub-Services in Small Format -->
-      <div id="sub-services" class="sub-services-group">
-        <div class="sub-service-pill" id="pill-screener">
-          <span class="status-dot status-dot-sm dot-offline" id="dot-screener"></span>
-          <span class="sub-service-name">Screener</span>
-          <span class="sub-service-status" id="txt-screener" style="color:#f87171;">offline</span>
-        </div>
-        <div class="sub-service-pill" id="pill-engine">
-          <span class="status-dot status-dot-sm dot-offline" id="dot-engine"></span>
-          <span class="sub-service-name">Engine</span>
-          <span class="sub-service-status" id="txt-engine" style="color:#f87171;">offline</span>
-          <span class="sub-service-status" id="txt-engine-sweep" style="color:var(--text-muted);font-weight:400;">sweep: every tick</span>
-        </div>
-        <div class="sub-service-pill" id="pill-dash">
-          <span class="status-dot status-dot-sm dot-online" id="dot-dash"></span>
-          <span class="sub-service-name">Telemetry</span>
-          <span class="sub-service-status" id="txt-dash" style="color:#34d399;">:8799</span>
-        </div>
-      </div>
-
-      <!-- Bot Control Buttons -->
       <div class="bot-controls">
         <button id="btn-start-bot" class="btn-bot btn-start" onclick="startBot()">▶ Start Bot</button>
         <button id="btn-stop-bot" class="btn-bot btn-stop" onclick="stopBot()">⏹ Stop Bot</button>
@@ -1811,12 +1800,6 @@ PAGE_HTML = """<!DOCTYPE html>
       </div>
       <div class="pf-chart" id="portfolio-equity-curve"></div>
     </section>
-
-    <!-- Stale Warning Banner -->
-    <div id="stale-alert-banner" class="stale-banner">
-      <span>⚠️</span>
-      <span id="stale-alert-text">STALE TELEMETRY: Poll loop has not updated the database in >30 seconds.</span>
-    </div>
 
     <!-- HERO SECTION: HEDGE STATE -->
     <div id="hero-container">
@@ -1968,54 +1951,66 @@ PAGE_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- BOTTOM GRID: FILLS TIMELINE + FRESHNESS & LOCK -->
-    <div class="grid-bottom">
-      <!-- Fills Timeline -->
-      <div class="panel">
-        <div class="section-title" style="color:var(--text-secondary);">
-          <span>Fills Timeline (Newest First)</span>
-          <span id="fill-count-badge" class="pill pill-neutral">0 fills</span>
-        </div>
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Time (Local)</th>
-                <th>Trade ID</th>
-                <th>Side</th>
-                <th>Price</th>
-                <th>Size</th>
-                <th>Notional</th>
-              </tr>
-            </thead>
-            <tbody id="fills-tbody">
-              <tr>
-                <td colspan="6" class="empty-state-text">No fills recorded yet</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+    <!-- FILLS TIMELINE -->
+    <div class="panel">
+      <div class="section-title" style="color:var(--text-secondary);">
+        <span>Fills Timeline (Newest First)</span>
+        <span id="fill-count-badge" class="pill pill-neutral">0 fills</span>
       </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Time (Local)</th>
+              <th>Trade ID</th>
+              <th>Side</th>
+              <th>Price</th>
+              <th>Size</th>
+              <th>Notional</th>
+            </tr>
+          </thead>
+          <tbody id="fills-tbody">
+            <tr>
+              <td colspan="6" class="empty-state-text">No fills recorded yet</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
-      <!-- Telemetry & Reconcile Lock -->
-      <div class="panel">
-        <div class="section-title" style="color:var(--text-secondary);">
-          <span>Telemetry & Lock State</span>
-        </div>
-        <div class="stat-list">
-          <div class="stat-row">
-            <span style="color:var(--text-secondary);">Last Venue Poll</span>
-            <span id="telemetry-last-poll" style="font-weight:700;">--</span>
-          </div>
-          <div class="stat-row">
-            <span style="color:var(--text-secondary);">Poll Status</span>
-            <span id="telemetry-poll-status" style="font-weight:700;">Waiting</span>
-          </div>
-          <div id="lock-container" class="lock-box lock-idle">
-            <strong>Reconcile Lock:</strong> <span id="lock-status-text">Idle (no pass in flight)</span>
-          </div>
-        </div>
+  <!-- FIXED STATUS FOOTER: always-visible backend indicators -->
+  <div class="footer-bar">
+    <div id="supervisor-status" class="sup-card">
+      <span class="status-dot dot-offline" id="sup-dot"></span>
+      <div>
+        <div class="footer-sup-title">SUPERVISOR: <span id="sup-text" style="color:#f87171;">OFFLINE</span></div>
+        <div id="sup-sub" class="footer-sup-sub">Not Running</div>
       </div>
+    </div>
+
+    <div id="sub-services" class="sub-services-group">
+      <div class="sub-service-pill" id="pill-screener">
+        <span class="status-dot status-dot-sm dot-offline" id="dot-screener"></span>
+        <span class="sub-service-name">Screener</span>
+        <span class="sub-service-status" id="txt-screener" style="color:#f87171;">offline</span>
+      </div>
+      <div class="sub-service-pill" id="pill-engine">
+        <span class="status-dot status-dot-sm dot-offline" id="dot-engine"></span>
+        <span class="sub-service-name">Engine</span>
+        <span class="sub-service-status" id="txt-engine" style="color:#f87171;">offline</span>
+        <span class="sub-service-status" id="txt-engine-sweep" style="color:var(--text-muted);font-weight:400;">sweep: every tick</span>
+      </div>
+    </div>
+
+    <div class="footer-meta">
+      <span id="poll-pill" class="pill pill-neutral">CONNECTING...</span>
+      <span id="lock-container" class="footer-lock lock-idle">
+        <span class="status-dot status-dot-sm dot-online" id="lock-dot"></span>
+        <span id="lock-status-text">Idle</span>
+      </span>
+      <span id="port-pill" class="pill pill-neutral"></span>
+      <span id="clock-display" class="footer-clock">--:--:--</span>
     </div>
   </div>
 
@@ -3109,41 +3104,24 @@ PAGE_HTML = """<!DOCTYPE html>
 
     function renderFreshnessAndLock(state) {
       const pollPill = document.getElementById('poll-pill');
-      const staleBanner = document.getElementById('stale-alert-banner');
-      const staleText = document.getElementById('stale-alert-text');
-      const lastPollEl = document.getElementById('telemetry-last-poll');
-      const pollStatusEl = document.getElementById('telemetry-poll-status');
 
       localLastPollMs = state.last_polled_ts;
 
       if (state.empty || !state.last_polled_ts) {
         pollPill.className = 'pill pill-neutral';
         pollPill.textContent = 'NO POLL DATA';
-        staleBanner.style.display = 'none';
-        lastPollEl.textContent = 'Never';
-        pollStatusEl.textContent = 'Idle';
       } else {
         const secSince = state.seconds_since_poll || 0;
-        lastPollEl.textContent = `${formatTime(state.last_polled_ts)} (${formatDuration(secSince)} ago)`;
 
         if (state.stale && state.idle) {
           pollPill.className = 'pill pill-neutral';
           pollPill.textContent = 'IDLE — NO CYCLE RUNNING';
-          staleBanner.style.display = 'none';
-          pollStatusEl.textContent = `Idle (last poll ${formatDuration(secSince)} ago)`;
         } else if (state.stale) {
           pollPill.className = 'pill pill-stale';
           pollPill.textContent = `STALE (${Math.round(secSince)}s)`;
-          staleBanner.style.display = 'flex';
-          staleText.textContent = `⚠️ STALE TELEMETRY: money is at stake and the poll loop has not run in ${Math.round(secSince)}s (>30s limit). Check the supervisor or the poll script.`;
-          pollStatusEl.textContent = 'STALE (>30s)';
-          pollStatusEl.style.color = 'var(--red-alert)';
         } else {
           pollPill.className = 'pill pill-fresh';
           pollPill.textContent = `POLL OK (${Math.round(secSince)}s)`;
-          staleBanner.style.display = 'none';
-          pollStatusEl.textContent = 'Healthy';
-          pollStatusEl.style.color = 'var(--green-ok)';
         }
       }
 
@@ -3151,13 +3129,18 @@ PAGE_HTML = """<!DOCTYPE html>
       const lock = state.reconcile_lock || {};
       const lockBox = document.getElementById('lock-container');
       const lockStatus = document.getElementById('lock-status-text');
+      const lockDot = document.getElementById('lock-dot');
 
       if (lock.held) {
-        lockBox.className = 'lock-box lock-active';
-        lockStatus.innerHTML = `<span style="color:#f59e0b;font-weight:700;">HELD</span> by <code>${esc(lock.holder)}</code> (acquired ${formatDuration(lock.age_sec)} ago)`;
+        lockBox.className = 'footer-lock lock-active';
+        if (lockDot) lockDot.className = 'status-dot status-dot-sm dot-amber';
+        lockStatus.textContent = 'HELD';
+        lockBox.title = `Reconcile lock held by ${esc(lock.holder)} (acquired ${formatDuration(lock.age_sec)} ago)`;
       } else {
-        lockBox.className = 'lock-box lock-idle';
-        lockStatus.textContent = 'Idle (no reconcile pass in flight)';
+        lockBox.className = 'footer-lock lock-idle';
+        if (lockDot) lockDot.className = 'status-dot status-dot-sm dot-online';
+        lockStatus.textContent = 'Idle';
+        lockBox.title = 'No reconcile pass in flight';
       }
     }
 
@@ -3216,7 +3199,6 @@ PAGE_HTML = """<!DOCTYPE html>
       const s = data.services || {};
       const scr = s.screener || {};
       const eng = s.engine || {};
-      const dsh = s.dash || {};
 
       const dotScr = document.getElementById('dot-screener');
       const txtScr = document.getElementById('txt-screener');
@@ -3250,15 +3232,6 @@ PAGE_HTML = """<!DOCTYPE html>
       const sweepInput = document.getElementById('sweep-interval-input');
       if (sweepInput && document.activeElement !== sweepInput) {
         sweepInput.value = (eng.sweep_interval_sec == null) ? '' : eng.sweep_interval_sec;
-      }
-
-      const dotDsh = document.getElementById('dot-dash');
-      const txtDsh = document.getElementById('txt-dash');
-      if (dotDsh) dotDsh.className = dsh.running ? 'status-dot status-dot-sm dot-online' : 'status-dot status-dot-sm dot-offline';
-      if (txtDsh) {
-        const dashPort = dsh.port || window.location.port || '';
-        txtDsh.textContent = dsh.running ? (dashPort ? ':' + dashPort : 'online') : 'offline';
-        txtDsh.style.color = dsh.running ? '#34d399' : '#f87171';
       }
 
       const btnStart = document.getElementById('btn-start-bot');
