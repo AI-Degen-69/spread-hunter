@@ -104,6 +104,26 @@ _TIF_CHOICES = ("GTC", "GTD", "FOK", "FAK")
 MAX_TOTAL_USD = 100.0
 
 
+# ── UA patch ──────────────────────────────────────────────────────────────────
+# Polymarket's WAF now returns HTTP 403 for the SDK's default User-Agent
+# ("py_clob_client_v2"). Monkey-patch _overload_headers at import time so
+# every request carries a browser-like UA. Done here rather than in
+# site-packages so pip upgrades don't silently revert it.
+def _patch_sdk_user_agent():
+    import py_clob_client_v2.http_helpers.helpers as _h
+    _orig = _h._overload_headers
+    def _patched(method, headers):
+        headers = _orig(method, headers)
+        headers["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        )
+        return headers
+    _h._overload_headers = _patched
+
+_patch_sdk_user_agent()
+
 # One built client per (funder, sig_type, host) for the life of the process.
 # Every _client() call used to POST /auth/api-key and then GET
 # /auth/derive-api-key, so a single command that touched the venue twice
@@ -144,10 +164,34 @@ def _client(funder: str | None = None):
 
     c = ClobClient(host, key=key, chain_id=137,
                    signature_type=sig_type, funder=funder)
-    # L2 API creds are derived from the key by the client; we never store them.
-    c.set_api_creds(c.create_or_derive_api_key())
+    creds = _api_creds_from_env()
+    if creds is not None:
+        # Already-issued L2 credentials. This is the path that makes no network
+        # call at all: derivation is the most rate-limit-sensitive endpoint in
+        # the API, and deriving once per command is what got this account
+        # throttled -- `balance` succeeded and `account-sweep` timed out on the
+        # same credentials twenty seconds later.
+        c.set_api_creds(creds)
+    else:
+        c.set_api_creds(c.create_or_derive_api_key())
     _CLIENT_CACHE[cache_key] = c
     return c
+
+
+def _api_creds_from_env():
+    """L2 API credentials from the environment, or None if incomplete.
+
+    All three must be present. A partial set would build a client that fails
+    every signed request with an error that looks like a venue outage.
+    """
+    from py_clob_client_v2.clob_types import ApiCreds
+
+    api_key = os.environ.get("POLY_API_KEY")
+    secret = os.environ.get("POLY_API_SECRET")
+    passphrase = os.environ.get("POLY_API_PASSPHRASE")
+    if not (api_key and secret and passphrase):
+        return None
+    return ApiCreds(api_key=api_key, api_secret=secret, api_passphrase=passphrase)
 
 
 def _atomic_write_json(file_path: Path, data: list) -> bool:
@@ -162,6 +206,37 @@ def _atomic_write_json(file_path: Path, data: list) -> bool:
         return True
     except Exception as exc:
         print(f"WARNING: _atomic_write_json failed for {file_path}: {exc}", file=sys.stderr)
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def _atomic_write_text(file_path: Path, text: str) -> bool:
+    """Atomically replace a text file, preserving its permission bits.
+
+    The mode is carried over because the target may be `.env`: a file created
+    with restrictive permissions must not silently widen to the default umask
+    just because it was rewritten.
+    """
+    tmp_path = file_path.with_name(f"{file_path.name}.tmp.{uuid.uuid4()}")
+    try:
+        try:
+            mode = os.stat(file_path).st_mode
+        except OSError:
+            mode = None
+        with open(tmp_path, "w", encoding="utf-8") as tf:
+            tf.write(text)
+            tf.flush()
+            os.fsync(tf.fileno())
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        os.replace(tmp_path, file_path)
+        return True
+    except Exception as exc:
+        print(f"WARNING: _atomic_write_text failed for {file_path}: {exc}", file=sys.stderr)
         try:
             if tmp_path.exists():
                 tmp_path.unlink()
@@ -2349,6 +2424,71 @@ def _fetch_live_balance(funder: str | None = None) -> float | None:
         return None
 
 
+def api_creds(force: bool = False) -> None:
+    """Derive the L2 API credentials once and write them into .env.
+
+    Every command used to derive a fresh key, and derivation is the most
+    rate-limit-sensitive endpoint the venue exposes. Once these three values are
+    in .env, `_client()` uses them directly and no command ever calls
+    /auth/derive-api-key again.
+
+    The values are written straight to the file and never printed. .env already
+    holds the private key these are derived from, so this adds nothing to that
+    file's blast radius -- but it does not belong in a terminal scrollback.
+    """
+    env_file = _find_env_file()
+    if env_file is None:
+        raise SystemExit(
+            "No .env found. Create one at the repo root before running this.")
+
+    existing = _api_creds_from_env()
+    if existing is not None and not force:
+        print(f"{env_file} already has POLY_API_KEY, POLY_API_SECRET, and "
+              f"POLY_API_PASSPHRASE.\nNothing to do. Re-derive with --force.")
+        return
+
+    from py_clob_client_v2.client import ClobClient
+
+    key = os.environ.get("POLY_PRIVATE_KEY") or os.environ.get("POLY_KEY")
+    if not key:
+        raise SystemExit("POLY_PRIVATE_KEY not set.")
+
+    c = ClobClient(os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
+                   key=key, chain_id=137,
+                   signature_type=int(os.environ.get("POLY_SIG_TYPE", "3")),
+                   funder=os.environ.get("POLY_FUNDER"))
+    try:
+        creds = c.create_or_derive_api_key()
+    except Exception as exc:
+        raise SystemExit(
+            f"Derivation failed: {type(exc).__name__}. The venue throttles this "
+            f"endpoint -- wait a few minutes and run this once more. Everything "
+            f"else keeps working; only account value needs credentials.") from exc
+
+    text = env_file.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines()
+             if ln.split("=", 1)[0].strip() not in
+             ("POLY_API_KEY", "POLY_API_SECRET", "POLY_API_PASSPHRASE")]
+    lines += [
+        "",
+        "# L2 API credentials, derived from POLY_PRIVATE_KEY. Present so that no",
+        "# command has to call /auth/derive-api-key, which the venue rate-limits.",
+        f"POLY_API_KEY={creds.api_key}",
+        f"POLY_API_SECRET={creds.api_secret}",
+        f"POLY_API_PASSPHRASE={creds.api_passphrase}",
+    ]
+    # Atomic, because this file holds POLY_PRIVATE_KEY. A plain write truncates
+    # first: a crash or a full disk between truncate and flush would leave the
+    # wallet's signing key destroyed, and it is not recoverable from anywhere in
+    # this repo. Same temp-file/fsync/os.replace shape as _atomic_write_json.
+    if not _atomic_write_text(env_file, "\n".join(lines) + "\n"):
+        raise SystemExit(
+            f"Could not write {env_file}. It is unchanged -- nothing was lost.")
+    print(f"Wrote POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE to {env_file}.")
+    print("Values are not printed here on purpose. Confirm .env is in .gitignore.")
+    print("Every later command now skips derivation entirely.")
+
+
 def account_sweep(funder: str | None = None, db_path: str | None = None,
                   quiet: bool = False) -> dict:
     """Read the account from the venue and record the reading in the registry.
@@ -2705,6 +2845,10 @@ def main() -> None:
     kp = sub.add_parser("kpi", help="Generate live KPI report mirroring strategy/kpi.py.")
     kp.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
     kp.add_argument("--run-id", default=None, help="Filter by run_id session")
+    ac = sub.add_parser("api-creds",
+                        help="Derive L2 API credentials once and store them in .env.")
+    ac.add_argument("--force", action="store_true",
+                    help="re-derive even if .env already has them")
     asw = sub.add_parser("account-sweep",
                          help="Read-only: record venue account value and P&L into the registry.")
     asw.add_argument("--funder", default=None, help="Funder address (default: POLY_FUNDER)")
@@ -2726,6 +2870,9 @@ def main() -> None:
         print(format_audit_report(res))
         if not res.agree:
             sys.exit(1)
+    elif a.cmd == "api-creds":
+        # No --live gate: derivation issues read credentials, it opens nothing.
+        api_creds(force=a.force)
     elif a.cmd == "account-sweep":
         # No --live gate: every venue call underneath is a GET. The staged
         # exposure rule gates direction, and this command has none.

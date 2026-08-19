@@ -4346,3 +4346,55 @@ anything. All five held.
 **Verdict.** **LIVE** for all five. Live suite 314 passed with 1 skipped (a Windows-only handle
 test), root suite 703 passed. Findings 1 and 3 are the notable ones: both were defects introduced
 *inside* the fixes for the same class of bug they belong to.
+
+---
+
+## 2026-08-19 - The venue was never throttling the account, it was throttling key derivation
+
+**Question.** The previous entry left the signed-auth stall **OPEN**, reading it as an
+account-specific server-side problem that only time would clear. Two commands run back to back
+disproved that. Which is it?
+
+**Method.** Ran `balance` and then `account-sweep` twenty seconds apart and compared. Both use the
+same wallet, the same private key, and the same `_client()` path.
+
+**Result.**
+1. **`balance` succeeded and `account-sweep` failed.** `balance` printed `$101.88 USDC` with the
+   venue's raw payload; `account-sweep`, twenty seconds later, printed `collateral --` after
+   `The read operation timed out` on `/auth/derive-api-key`. Identical credentials, identical code
+   path, opposite outcomes seconds apart. Nothing about the *account* can explain that.
+2. **The rate limit is on derivation, not on the account.** `POST /auth/api-key` returns
+   `400 Could not create api key` every time - the key already exists - and the client then falls
+   through to `GET /auth/derive-api-key`, which is rate-limited. The window itself was **not
+   measured**: what was measured is that a second derivation **twenty seconds** after a
+   successful one was refused, which bounds it below at >20s and says nothing about the
+   upper end.
+   Every command derived its own key, so the second command in any pair was throttled by the first.
+   The previous entry's "account-specific server-side stall" was **wrong**: it was self-inflicted,
+   and the per-process client cache only reduced the rate rather than removing the call.
+3. **The client accepts already-issued credentials.** `ClobClient` takes an `ApiCreds(api_key,
+   api_secret, api_passphrase)`, so derivation is avoidable entirely rather than merely rationed.
+   `_client()` now reads `POLY_API_KEY`, `POLY_API_SECRET`, and `POLY_API_PASSPHRASE` from the
+   environment and makes **no network call at all** when all three are present.
+4. **A new `api-creds` subcommand derives once and writes them to `.env`.** The values are never
+   printed: `.env` already holds the private key they derive from and is gitignored, so this adds
+   nothing to that file's blast radius, but a terminal scrollback is a worse place for them.
+5. **A partial set falls back to deriving.** Two of three would build a client that fails every
+   signed request with an error indistinguishable from a venue outage - which is exactly the
+   misdiagnosis this entry corrects. Parametrised over each missing value.
+
+6. **Measured after the fix, since the claim is that throttling is gone.** Six `GET /value` calls
+   back to back returned HTTP 200 in 0.05-0.19s each. Three credentialed balance reads, in three
+   *separate processes* so no cache could help, returned $101.88 in 2.60s, 2.71s, and 2.39s.
+   That is a handful of calls, not sustained load: it supports a sweep every 30-60s and says
+   nothing about once per second.
+
+**Verdict.** **LIVE**, and it closes the **OPEN** item from the previous entry, which was
+misdiagnosed. Measured after storing the credentials: `account-sweep` returned ACCOUNT VALUE
+**$101.88**, P&L **+$0.30 (+0.30%)**, 2 closed positions, with no auth error line emitted at all.
+Live suite 319 passed with 1 skipped, root suite 703 passed.
+
+The lesson is the one this project keeps relearning: the instrumentation was lying about the cause.
+A failure that looks like the venue punishing an account, and a failure caused by the client asking
+the same question too often, are indistinguishable from the error message alone. Two commands run
+twenty seconds apart separated them; hours of waiting would not have.
