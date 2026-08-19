@@ -375,12 +375,20 @@ def _funnel_from_pipeline(
             "pnl": m.get("realized_pnl", 0.0),
         })
 
+    # Snapshot metadata so the dashboard can show where the lanes came
+    # from and how fresh they are.
+    snap_ts = snap.get("ts")
+    snapshot_age = (time.time() - snap_ts) if snap_ts else None
+
     return {
         "raw_count": raw_count,
         "filters": filters,
         "final_count": int(counts.get("eligible") or 0),
         "graduated": graduated,
         "source": "screener",
+        "snapshot_age": snapshot_age,
+        "census": snap.get("census") or "",
+        "gates": snap.get("gates") or "",
     }
 
 
@@ -634,6 +642,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
                 for cid, m in by_mkt.items() if m["fills_count"] > 0 or m["quotes_count"] > 0
             ],
             "source": "runtime",
+            "snapshot_age": None,
+            "census": "",
+            "gates": "",
         }
 
     # Adverse selection from size-weighted markouts

@@ -1519,6 +1519,68 @@ PAGE_HTML = """<!DOCTYPE html>
     .gate-card .gate-code { font-weight: 700; color: #f59e0b; }
     .gate-card .gate-ex { color: var(--text-muted); font-size: 10px; line-height: 1.4; }
 
+    /* FUNNEL CENSUS STRIP */
+    .funnel-census-strip {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px 14px;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      margin-bottom: 12px;
+    }
+    .funnel-census-chain {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .funnel-census-chain .arrow { color: var(--text-muted); margin: 0 2px; }
+    .funnel-census-chain .val { font-weight: 700; }
+    .funnel-census-chain .val-up { color: #10b981; }
+    .funnel-census-chain .val-down { color: #ef4444; }
+    .funnel-census-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .funnel-census-meta .source-badge {
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .funnel-census-details {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .funnel-census-details summary {
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 10.5px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      user-select: none;
+    }
+    .funnel-census-details[open] summary { margin-bottom: 5px; }
+    .funnel-census-gates {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 5px;
+      border-top: 1px dashed var(--border-subtle);
+      padding-top: 4px;
+    }
+
     /* TABLES */
     .table-container { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: 'JetBrains Mono', monospace; }
@@ -2683,7 +2745,40 @@ PAGE_HTML = """<!DOCTYPE html>
       const finalCount = funnel.final_count || graduated.length;
       const gradCount = graduated.length;
 
+      // Census strip: source, snapshot age, gates line -- operator sees
+      // which snapshot the lanes came from at a glance.
+      const source = funnel.source || 'unknown';
+      const age = Math.max(0, funnel.snapshot_age || 0);
+      const stale = age > 900;
+      const census = (funnel.census || '').trim();
+      const gates = (funnel.gates || '').trim();
+      const hms = s => { s = Math.max(0, Math.floor(s));
+        const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60;
+        const p = n => String(n).padStart(2,'0');
+        return h ? `${h}h ${p(m)}m ${p(x)}s` : `${m}m ${p(x)}s`;
+      };
+      const sourceBadge = source === 'screener'
+        ? '<span class="source-badge" style="background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.4);color:#10b981;">SNAPSHOT</span>'
+        : '<span class="source-badge" style="background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);color:#f59e0b;">RUNTIME</span>';
+      const ageColor = stale ? '#ef4444' : 'var(--text-muted)';
+      const censusStrip = `
+        <div class="funnel-census-strip">
+          <div class="funnel-census-meta">
+            ${sourceBadge}
+            <span style="color:${ageColor};">snapshot ${hms(age)} old</span>
+          </div>
+          ${census ? `<div class="funnel-census-chain">${esc(census)}</div>` : ''}
+          ${gates ? `
+            <details class="funnel-census-details">
+              <summary>what the last rank did · the gates it used</summary>
+              <div class="funnel-census-gates">${esc(gates)}</div>
+            </details>
+          ` : ''}
+        </div>
+      `;
+
       el.innerHTML = `
+        ${censusStrip}
         <!-- Lane 1: RAW -->
         <div class="funnel-lane">
           <div class="funnel-hdr">
