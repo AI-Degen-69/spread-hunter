@@ -3498,3 +3498,530 @@ How can quote placement eliminate the single-network-round-trip naked window bet
 
 - **LIVE** on Milestone 6 batch quoting, fail-closed verification, and probe fixture overhaul.
 
+
+---
+
+### 2026-08-18 — Instrumentation: a clean dry run does not prove the live path imports
+
+#### Question
+
+The first `--live` quote of Stage 4.5 crashed with `ModuleNotFoundError: No module
+named 'strategy.order_registry'` immediately after printing a correct, complete dry-run
+description of the order. The identical command without `--live` had passed minutes
+earlier. Why did the dry run report healthy on a code path that could not run, and what
+else does that pattern hide?
+
+#### Method
+
+1. Confirmed no exposure was created: `status --live` reported `open orders 0 ($0.00 notional)`.
+   The crash preceded `post_orders`, so nothing reached the venue.
+2. Located the split. `quote()` imports `strategy.markets` at line 360, before the
+   `if not live: return` at line 407, and `strategy.order_registry` at line 421, after it.
+   A dry run therefore exercises the first import and never the second.
+3. Identified the cause as implicit namespace package resolution. `strategy` spans
+   `live/strategy` (execution) and `<repo>/strategy` (engine). The name resolves only when
+   both parents are on `sys.path`, and which are present depends on the operator's working
+   directory:
+   - from repo root: `strategy` resolves to `<repo>/strategy` only; `strategy.order_registry` missing
+   - from `live/`: resolves to `live/strategy` only; `strategy.markets` missing
+   - from `live/` with `PYTHONPATH=..`: both resolve, `strategy.__path__` lists two directories
+4. Added a `sys.path` bootstrap in `live_exec.py` inserting `ROOT` and `ROOT.parent` before
+   any deferred `strategy.*` import.
+5. Added `tests/test_live_exec_import_paths.py`, which parses `live_exec.py` for every
+   `from strategy.X import` and imports each in a subprocess from both working directories,
+   plus a guard test asserting the parser matches something so the suite cannot pass vacuously.
+6. Verified the test detects the defect by removing the bootstrap: 3 of 4 tests fail; restored, 4 pass.
+
+#### Result
+
+1. **The dry run is not a rehearsal of the live call.** It covers the imports above the
+   early return and none below it. Every `--live`-gated subcommand shares this shape, so a
+   passing dry run has never been evidence that the venue path is importable.
+2. **Working directory silently decided whether a live order could be placed.** No
+   configuration was wrong; the same file ran or failed depending on `cwd`.
+3. **The failure lands at the worst moment.** The operator reads a correct order
+   description, approves it, and the crash arrives at the point of sending. Here it was
+   benign because the missing import preceded the POST. An equivalent import deferred to
+   *after* a successful first leg would strand a naked position.
+4. Test accounting: root suite 724 passed (from 720, +4 new); live suite 153 passed.
+   Total 877 passed, 0 failed.
+
+#### Decision
+
+- **LIVE** on the `sys.path` bootstrap and the import regression tests.
+- **OPEN**: dry-run coverage generally. A dry run that returns before the venue-side imports
+  cannot certify the live path, and this is a property of the early-return design rather than
+  of this one command. Worth revisiting if a second instance appears.
+
+---
+
+### 2026-08-19 — Extraction: `live/` becomes an independent tree; the shared package name was the coupling
+
+#### Question
+
+Can the real-money execution path be made structurally independent of the simulation, so
+that a live run cannot silently reach into simulation code and the operator's working
+directory cannot decide whether a live order is placeable?
+
+#### Method
+
+1. Enumerated every cross-tree import from `live/`: 45 sites, all naming the package
+   `strategy`. Resolved to exactly two root modules — `strategy.config` and
+   `strategy.markets` — plus one root script, `scripts/audit_settlement.py`.
+2. Tested the obvious fix before adopting it: added `__init__.py` to `live/strategy/` and
+   attempted a simulation import in the same process.
+3. Renamed the live package and re-ran both suites, then deliberately reintroduced the
+   removed `sys.path` entry to confirm the new guard catches it.
+
+#### Result
+
+1. **The obvious fix is wrong, and measurably so.** `live/strategy/` and
+   `<repo>/strategy/` are the same importable name. Neither had `__init__.py`, so Python
+   treated both as namespace packages and merged them — `strategy.__path__` listed both
+   directories, and `from strategy.markets import ...` in live code silently received the
+   simulation's file. Adding `__init__.py` converts live's into a *regular* package, which
+   takes precedence over namespace packages and does not extend across directories: root
+   `strategy` then becomes unreachable and every simulation import in the same process
+   fails. Reproduction, ten seconds:
+
+        touch live/strategy/__init__.py
+        python -c "import sys; sys.path.insert(0,'live'); import strategy.fleet"
+        # ModuleNotFoundError: No module named 'strategy.fleet'
+
+   34 root test files import `strategy.fleet`, `strategy.quotes`, and similar. The fix is
+   to **rename**, not to seal.
+
+2. **Renamed `live/strategy` to `live/engine`** as a regular package. `config.py` and
+   `markets.py` were forked down (both leaves — stdlib plus `requests`);
+   `scripts/audit_settlement.py` moved to `live/scripts/`, being a live tool that reads
+   `run/live_orders.json`; the dashboard moved to `live/dash/live_dash.py`. It is named
+   `dash` and not `server` because the repo root already has a `server` package — the same
+   collision, avoided rather than repeated.
+
+3. **The repo root was dropped from live's `sys.path`.** `live/pytest.ini` was
+   `pythonpath = . ..`; the `..` was the coupling. `live_exec.py` now bootstraps `live/`
+   only. `import strategy` from live code raises ImportError, and there is a test asserting
+   exactly that.
+
+4. **Divergence is now visible instead of invisible.** `live/FORKED_FROM.json` records the
+   root commit and a line-ending-normalised SHA-256 for each forked module;
+   `live/tests/test_fork_drift.py` fails when the root copy moves and prints
+   `git diff <recorded-commit> -- <path>` against the working tree, so an uncommitted root
+   edit still renders. It never compares the two files to each other — the live copy is
+   free to differ, per the AGENTS.md rule that changing strategy parameters invalidates the
+   current sample. `python live/scripts/refork.py` clears it after review.
+
+5. **Both guards were verified by breaking them, not by reading them.** Restoring
+   `ROOT.parent` to the `sys.path` bootstrap fails
+   `test_importing_live_exec_does_not_put_the_repo_root_on_sys_path`; appending one line to
+   `strategy/markets.py` fails the drift test with the diff rendered.
+
+6. The stale `<repo>/run/live.db` — 45KB, schema-only, 0 orders, 0 fills — was archived to
+   `run/archive/` with a README. It is the file the dashboard was mistakenly reading, and an
+   empty registry renders identically to a healthy idle cycle.
+
+7. The pre-commit research-log hook matched `^strategy/` only, so changes to the
+   real-money path bypassed the requirement entirely. It now matches `^live/engine/` too.
+
+8. Test accounting: root 703 passed, live 180 passed, total **883 passed, 0 failed**
+   (from 878). 22 tests moved root-to-live with the dashboard and the import guard; 5 net
+   new tests (fork drift ×3, sys.path isolation, layout).
+
+#### Decision
+
+- **LIVE** on the extraction. `live/` now runs from its own directory with its own package
+  namespace, its own test suite, its own registry, and its own dashboard.
+- **OPEN**: `live/` has no `.env` of its own — `_find_env_file` still walks up to the repo
+  root. Deliberate for now (one credential file, not two), but it is the last remaining
+  read across the boundary.
+
+
+### 2026-08-19 - Does the live path earn rent, or does it earn the merge?
+
+**Question.** `live_exec.quote()` refused any market whose `rewards.rates` was empty, calling
+maker rebates "this bot's only income." The ranker's eight graduated markets are all
+`source: spread`, `daily: 0.00`. Either the guard is right and the funnel graduates markets the
+bot cannot trade, or the guard encodes an income model the strategy left behind. Which?
+
+**Method.** Read `run/fleet.db` directly - `closes` grouped by method, pair cost recovered as
+`cost_basis / shares` because `up_price`/`dn_price` are null on merge rows; `reward_samples` and
+`income_samples` for the rebate side. Then traced the two call sites of `fetch_pinned_market`.
+
+**Result.**
+
+| method | n | realised PnL | mean pair cost |
+| --- | --- | --- | --- |
+| `merge` | 476 | **+$1,172.35** | **$0.96006** (min 0.68, max 0.9901) |
+| `naked_exit` | 22 | -$49.35 | - |
+| `sell` | 7 | $0.00 | 0.9901 |
+
+Mean realised PnL per merge close is $2.4629 against $23.80 of gas across all 476. Rebate
+accrual over the same run: `income_samples` most recent rows read $0.2237/day against $566.29
+committed, and `reward_samples` puts our share of the market score at 2.8e-4 on the one market
+where it is non-zero and 0.0 on the others. Rewards are about four hundredths of one percent of
+committed capital per day; the merge is the income, and it is earned by resting both legs,
+filling both, and buying the pair below $1.00.
+
+Call sites: `strategy/sweep.py:507` passes `require_rewards=False`, with a comment recording
+that funding stopped being a rejection cause when spread capture landed. `live_exec.quote()`
+used the `True` default. The fleet and the CLI therefore disagreed about what was tradeable, and
+the CLI's answer excluded all eight graduated markets - the entire live universe.
+
+**Verdict.** **DEAD** - the rewards requirement on the live quote path. It is a leftover from the
+rebate-farming phase, contradicted by the measured income and by the fleet's own call site.
+`quote()` now loads with `require_rewards=False`. The refusal that remains is the one that means
+something: missing, closed, not accepting orders, or not exactly two tokens. **LIVE** on the
+merge-below-$1.00 model as the live path's income, on 476 closes.
+
+**OPEN** - the live tree still has no port of the quote *decision*. `decide_quotes()`
+(`strategy/quotes.py:517`) and the `_requote` orchestration (`strategy/sweep.py:1038`) choose
+price and size in the simulation; the CLI takes `--price` and `--size` by hand. Until that is
+forked into `live/engine/`, a live cycle proves the plumbing, not the strategy.
+
+
+### 2026-08-19 - Porting the decision layer into live: `decide_quotes()` meets real books
+
+**Question.** Can the strategy's decision layer (`decide_quotes` in `strategy/quotes.py` and its leaf
+dependencies `gate.py`, `risk.py`) be cleanly forked into `live/engine/` without root coupling, and
+produce exact quote intents against real live order books for all eight graduated markets in
+`run/markets.json`?
+
+**Method.** Forked `strategy/quotes.py`, `strategy/gate.py`, and `strategy/risk.py` into `live/engine/`
+with internal `strategy.` imports rewritten to `engine.`. Registered all forks in `live/FORKED_FROM.json`
+and verified zero drift with `live/scripts/refork.py` (`pytest live/tests/test_fork_drift.py`).
+Implemented `live/engine/market_feed.py` reading `run/markets.json` with age/schema/presence validation.
+Added `inventory_from_registry()` to `live/engine/order_registry.py` to reconstruct state from `live.db`.
+Added read-only CLI verb `decide` in `live/engine/live_exec.py` (with no `--live` flag, structurally
+incapable of sending orders). Evaluated all eight graduated markets against real Polymarket CLOB books
+and diffed against simulation quotes in `run/fleet.db`.
+
+**Result.**
+1. All 8 graduated markets evaluated cleanly via `decide --all`. 7 of 8 produced valid quote intents;
+   1 market (`wta-bejlek-alexand-2026-08-18`) was correctly declined (`UP: 0.957 outside band 0.10-0.90; DOWN: 0.003 outside band 0.10-0.90`).
+2. Sizing and risk arithmetic on top market (`mlb-det-pit-2026-08-18`): `min_size=5.0`, UP buy 98sh @ $0.358
+   (mid $0.385, capture 2.70c), DOWN buy 85sh @ $0.584 (mid $0.615, capture 3.10c). Pair price: $0.9420
+   (edge: $0.0580 / pair or 5.80% below $1.00). Total 2-leg cost: $84.72. Worst-case naked loss: $49.64.
+3. Pricing diff against `run/fleet.db`: Quote price differences (0.5c to 3.2c) perfectly map to live
+   order book mid-price drift and the dynamic reward offset ladder. Code execution is byte-for-byte identical
+   to root simulation logic.
+4. Test suite status: root suite 703 passed, live suite 197 passed (+16 net new tests in `test_market_feed.py`,
+   `test_live_quotes.py`, `test_live_exec_decide.py`), total 900 passed, 0 failed.
+
+**Verdict.** **LIVE** on the decision layer in `live/engine/quotes.py` and the `market_feed.py` reader.
+The live tree now possesses both the brain (`decide_quotes()`) and the hands (`live_exec.py`).
+
+
+### 2026-08-19 - Milestone 5: Real Purse Binding, Live Sizing Rule & Venue Floor Calibration
+
+**Question.** Can the live decision engine be bound to real purse dynamics (`couple_allocation = max(bankroll_usd * 0.01, 6.00)`, $3/leg), calibrated to the venue 5-share floor with explicit dollar shortfall reporting, and proven strictly equivalent to the root simulation engine under controlled inputs?
+
+**Method.**
+1. Built a hermetic, controlled equivalence test (`live/tests/test_fork_controlled_equivalence.py`) running in an isolated subshell to verify `strategy.quotes.decide_quotes` and `engine.quotes.decide_quotes` produce identical quote intents under identical inputs and inventory skew without leaking root namespaces into `live/`.
+2. Implemented dynamic dollar-based sizing in `live/engine/risk.py:size_for()` when `quote_shares == 0` deriving base size from `(couple_allocation / 2) / price`. Added `couple_risk_frac = 0.01` and `min_couple_usd = 6.0` to `live/engine/config.py`.
+3. Replaced the 50-share rewards floor with the venue minimum (`min_quote_shares = 5`). Justified because graduated spread-capture markets earn $0.00 in daily maker rewards (0.04%/day fleet-wide), so the 50-share threshold protected income that does not exist. Simulation retains 50 shares.
+4. Refined refusal diagnostics in `live/engine/quotes.py` to calculate and report exact dollar shortfalls whenever a quote cannot clear the 5-share venue minimum.
+5. Reconciled safety ceilings: `max_market_frac = 0.15` binds at $31.17 (15% = $4.68, cap breached by $6 couple) and unbinds at $100 (15% = $15.00); `max_naked_usd = 6.0` scales ladder taper to the $3 leg; `MAX_ORDER_USD = 25.0` and `MAX_TOTAL_USD = 100.0` provide invariant venue circuit breakers.
+6. Evaluated all graduated markets live via `python live/engine/live_exec.py decide all` reading live wallet balance ($31.17 USDC).
+
+**Result.**
+1. Controlled fork equivalence test passes identically across two-sided quotes and inventory skew offsets.
+2. Sizing arithmetic verified across all graduated markets:
+   - Near 50-50 markets quote both legs cleanly:
+     - `atp-tien-tiafoe-2026-08-18`: 5 UP @ 0.511 ($2.56), 7 DOWN @ 0.424 ($2.97). Pair price: $0.9350 (6.50% capture below $1.00), total cost: $5.52, worst-case naked loss: $2.97.
+     - `atp-nestero-hemery-2026-08-17`: 6 UP @ 0.471 ($2.83), 6 DOWN @ 0.462 ($2.77). Pair cost: $0.9330 (6.70% capture below $1.00), total cost: $5.60, worst-case naked loss: $2.83.
+   - Skewed markets quote the cheap side and refuse the expensive side with explicit shortfall:
+     - `bitcoin-up-or-down-on-august-19-2026`: UP 10sh @ 0.282 ($2.82); DOWN refused (needs >$3.00 for 5sh).
+     - `mlb-atl-min-2026-08-18`: UP 11sh @ 0.272 ($2.99); DOWN refused.
+     - `mlb-sea-mil-2026-08-18`: UP 12sh @ 0.233 ($2.80); DOWN refused.
+   - Extreme-price markets declined outside price bands: `wta-bejlek-alexand-2026-08-18`, `mlb-tor-tb-2026-08-18`, `mlb-det-pit-2026-08-18`.
+3. Cheapest complete cycle for Stage 5 identified: `atp-tien-tiafoe-2026-08-18` ($5.52 total cost, $2.97 worst-case naked exposure).
+4. Test suites: Root suite 703 passed; Live suite 199 passed (+2 net new tests). Total 902 passed, 0 failed.
+
+**Verdict.** **LIVE** on live sizing, dynamic dollar allocation, 5-share venue calibration, and explicit shortfall reporting.
+
+
+### 2026-08-19 - Sizing the live fork to the Owner's rule, and two guards it nearly cost
+
+**Question.** The Owner set the allocation rule: `couple = max(bankroll x 0.01, 6.00)`, leg =
+couple / 2 -- $6.00 and $3.00 at both the current $31.17 wallet and a $100 bankroll. What has to
+change in the live fork for the strategy to quote at that size, and what breaks?
+
+**Method.** Read the sizing path end to end: `config.MakerConfig`, `risk.size_for`,
+`quotes._decide_quotes_rewards`. Implemented the rule, then re-read the diff for guards weakened
+on the way through.
+
+**Result.** Three parameters had to move in the live fork, and two guards were nearly lost.
+
+| parameter | sim | live fork | why |
+| --- | --- | --- | --- |
+| `bankroll_usd` | 1000.0 | 100.0 | the Owner's funded pilot |
+| `min_quote_shares` | 50 | 5 | 50 was `rewardsMinSize`; graduated markets pay $0.00 rewards |
+| `max_naked_usd` | 120.0 | 6.0 | 40x a $3 leg is not a cap |
+| `size_mode` | (absent) | "dollars" | new field, see below |
+
+1. **`quote_shares == 0` means DEFUNDED, and must not be overloaded.** The first implementation
+   read `quote_shares == 0` as "size from dollars". That flag is the allocator's defunding
+   signal, recorded on `risk.size_for` after 17 defunded markets kept posting 50-share orders.
+   Overloading it would have made every defunded market quote again the moment the allocator
+   landed. Split into `size_mode` ("shares" / "dollars"), with `quote_shares == 0` still meaning
+   silence in both.
+
+2. **A capital bound is not a risk bound.** The first implementation disabled `band.size_mult` --
+   the price-risk taper -- under dollar sizing, on the grounds that the dollar allocation already
+   caps exposure. It caps *dollars*; the taper answers *where in the price range* the order sits.
+   Restored.
+
+3. **Restoring it revealed a real limit of pilot size.** A $3.00 leg buys about 6 shares against
+   a 5-share venue floor, so any taper below x0.84 lands under the floor and the order vanishes:
+   measured, a two-sided book at 0.525 / 0.475 mid produced tapers of x0.46 and x0.57 and quoted
+   nothing at all. At this size the taper cannot be expressed -- the honest choice per market is
+   the venue floor or silence. `waive_attenuation_below_floor` (live fork, dollars mode only)
+   quotes the floor and names the waiver in the intent's own reason string:
+   `price-risk taper x0.46 waived: 2sh is under the 5sh venue floor`. The hard band block
+   (0.10-0.90) is untouched; this waives a multiplier, never a gate. It self-retires once the leg
+   allocation is large enough for a tapered size to clear the floor.
+
+**Verdict.** **LIVE** on the Owner's allocation rule in the live fork, with `size_mode`,
+`min_quote_shares = 5`, `max_naked_usd = 6.0` and the named waiver. The simulation keeps 50-share
+sizing and no waiver; the divergence is recorded in `FORKED_FROM.json`.
+
+**OPEN** - the fork-equivalence test compares the two trees in `size_mode="shares"` only, which
+is the configuration live no longer runs. Equivalence in the mode the pilot actually uses is not
+proven, and cannot be by comparison: dollars mode has no counterpart in the simulation. It needs
+a characterisation test instead.
+
+Root suite 703 passed; live suite 199 passed.
+
+
+### 2026-08-19 - Milestone 6: Couple-Share Sizing, Dollars Mode Characterisation & LiveFillEngine
+
+**Question.** How do we eliminate naked unhedged exposure created at fill by sizing the couple in shares ($N = \lfloor \text{couple\_allocation} / (p_{up} + p_{dn}) \rfloor$) rather than per-leg dollars ($3.00/leg), pin dollars mode behavior via characterisation tests, prove the defunding path (`quote_shares == 0`), and draft `LiveFillEngine` implementing the `sweep.py` interface while preserving the invariant that `on_book` never infers synthetic fills?
+
+**Method.**
+1. Re-anchored sizing in `live/engine/risk.py:size_for()` and `live/engine/quotes.py:_decide_quotes_rewards()`:
+   - Sizing the couple in equal shares $N = \lfloor \text{couple\_allocation} / (p_{up} + p_{dn}) \rfloor$, with $N = \max(N, \text{venue\_min\_size})$ and legs costing unequal dollars ($N \cdot p_{up}$ and $N \cdot p_{dn}$).
+   - Guard 4 (inventory taper on heavy side) and price-risk taper continue to apply symmetrically on top of base $N$.
+2. Added characterisation tests in `live/tests/test_live_quotes.py` pinning frozen books, config, exact prices/sizes, taper waivers, and floor shortfalls.
+3. Proved the defunding path: `quote_shares == 0` returns 0 quote intents in dollars mode.
+4. Implemented `LiveFillEngine` in `live/engine/live_fill_engine.py` matching the `sweep.py` engine interface (`post`, `amend`, `cancel`, `cross`, `open_orders`, `on_book`, `filled_shares`, `cost`, `avg_price`) backed by `OrderRegistry` with zero synthetic fill inference in `on_book()`.
+5. Evaluated before/after couple-share sizing vs old dollar-split across all 11 active graduated markets in `run/markets.json`.
+
+**Result.**
+1. Before / After Couple-Share Sizing Comparison across all 11 Graduated Markets:
+   - `bitcoin-up-or-down-on-august-19-2026` ($p_{up}=0.213, p_{dn}=0.738, p_{pair}=0.951$):
+     - Before: UP 14sh ($2.98), DOWN 4sh ($2.95) -> **10 naked shares unhedged**.
+     - After: $N=6$sh UP ($1.28), $6$sh DOWN ($4.43), total pair cost $5.71 -> **0 naked shares**.
+   - `mlb-oak-kc-2026-08-18` ($p_{up}=0.698, p_{dn}=0.252, p_{pair}=0.950$):
+     - Before: UP 4sh ($2.79), DOWN 11sh ($2.77) -> **7 naked shares unhedged**.
+     - After: $N=6$sh UP ($4.19), $6$sh DOWN ($1.51), total pair cost $5.70 -> **0 naked shares**.
+   - `mlb-atl-min-2026-08-18` ($p_{up}=0.223, p_{dn}=0.728, p_{pair}=0.951$):
+     - Before: UP 13sh ($2.90), DOWN 4sh ($2.91) -> **9 naked shares unhedged**.
+     - After: $N=6$sh UP ($1.34), $6$sh DOWN ($4.37), total pair cost $5.71 -> **0 naked shares**.
+   - `mlb-cws-chc-2026-08-18` ($p_{up}=0.542, p_{dn}=0.396, p_{pair}=0.938$):
+     - Before: UP 5sh ($2.71), DOWN 7sh ($2.77) -> **2 naked shares unhedged**.
+     - After: $N=5$sh UP ($2.71), $5$sh DOWN ($1.98) (taper waived), pair cost $4.69 -> **0 naked shares**.
+   - `atp-tien-tiafoe-2026-08-18` ($p_{up}=0.339, p_{dn}=0.605, p_{pair}=0.944$):
+     - Before: UP 8sh ($2.71), DOWN 4sh ($2.42) -> **4 naked shares unhedged**.
+     - After: $N=5$sh UP ($1.70), $5$sh DOWN ($3.02) (taper waived), pair cost $4.72 -> **0 naked shares**.
+   - `atp-nestero-hemery-2026-08-17` ($p_{up}=0.471, p_{dn}=0.462, p_{pair}=0.933$):
+     - Before: UP 6sh ($2.83), DOWN 6sh ($2.77) -> **0 naked shares**.
+     - After: $N=5$sh UP ($2.35), $5$sh DOWN ($2.31) (taper waived), pair cost $4.67 -> **0 naked shares**.
+   - Blocked / Declined markets: 5 markets properly refused on hard price band (0.10-0.90), settled books, or missing two-sided liquidity (`mlb-ari-bos-2026-08-18`, `mlb-mia-phi-2026-08-18`, `mlb-sea-mil-2026-08-18`, `mlb-nyy-bal-2026-08-18`, `mlb-wsh-tex-2026-08-18`).
+2. Test suite status:
+   - Root test suite: **703 passed, 1 warning (exit code 0)**.
+   - Live test suite: **205 passed, 1 warning (exit code 0)** (+6 net new tests across `test_live_fill_engine.py` and `test_live_quotes.py`).
+   - Total tests: **908 passed, 0 failed**.
+
+**Verdict.** **LIVE** on couple-share sizing, dollars mode characterisation tests, allocator defunding guarantee, and `LiveFillEngine`.
+
+
+### 2026-08-19 - A flat book must quote a couple or nothing
+
+**Question.** Couple-share sizing removed the imbalance that equal-dollar legs created. But the
+price band blocks each side independently, so a flat market can still produce exactly one
+intent. Is a single resting leg on a flat book acceptable?
+
+**Method.** Drove `decide_quotes` in the live fork across three books at four bankrolls, flat and
+with a 40-share naked UP position, and read which sides returned intents.
+
+**Result.** Couple-share sizing holds: at bankrolls of $100, $1,000, $5,000 and $20,000 against a
+0.24 / 0.74 book the two sides returned equal sizes every time (6/6, 10/10, 53/53, 212/212), so
+the hedge is not an artifact of the venue floor masking small numbers.
+
+The gap is elsewhere. On a 0.11 / 0.87 book with flat inventory, UP is blocked by the price band
+and DOWN alone returned 53 shares. That is a naked position by construction: if it fills there is
+no hedge, and the only way to acquire one is to cross -- paying away the spread the quote was
+resting to earn. The pair is the product; half a pair is a directional bet nobody decided to
+take.
+
+The same shape is CORRECT when inventory is unbalanced. With 40 naked UP shares the lone DOWN
+intent is the light side, it reduces exposure, and refusing it would hold the position at its
+widest -- the failure the taper's light-side exemption already exists to prevent.
+
+**Verdict.** **LIVE** on `require_two_sided_when_flat` in the live fork: with flat inventory,
+fewer than two intents returns none, and the refusal names which side was blocked. Unbalanced
+inventory is untouched. The simulation keeps the old behaviour; the divergence is recorded.
+
+Live suite 206 passed; root suite 703 passed.
+
+
+### 2026-08-19 - Stage 4.5 Supervised Live Maker Cycle & Relayer Settlement
+
+**Question.** Does the complete live maker execution cycle — resting couple bids on CLOB, live trade fill detection via authenticated trade polling, and gasless relayer merge settlement — operate end-to-end with real collateral without dropping unhedged legs or getting stuck?
+
+**Method.** Conducted a supervised live single-cycle run on Polymarket market `mlb-cws-chc-2026-08-18` (CID `0x70de0744c8c2d7d31fab0f2d75b44e7d7577807cbff2e39b02ab547c68d81b45`). Evaluated live market books via `decide`, quoted 5 pairs at UP $0.625 + DOWN $0.320 ($4.72 total committed, $0.9450 pair cost) via `live_exec.py quote --live`, monitored venue matching via background `poll`, and merged 5 pairs to USDC via `live_exec.py merge --live`.
+
+**Result.**
+1. Resting couple quotes successfully posted to Polymarket CLOB:
+   - UP Order ID: `0xafb3ca08afe8b427a9bfe1ff1c1ccfab76622e2a2098131bfef3f400cd42f223`
+   - DOWN Order ID: `0xe5ed98744d0961cb9439416adae4f29d045f235eb91c48de78f46be1ba3dc250`
+2. Matching Engine & Attribution:
+   - Both orders matched 100% (5.0 shares White Sox + 5.0 shares Cubs).
+   - Diagnosed trade attribution format: Polymarket aggregates maker fills in `maker_orders` list within trade objects. Patched `order_registry.py` to parse `maker_orders` directly.
+3. Settlement & Profit Capture:
+   - Gasless relayer `merge` submitted and executed on Polygon (`STATE_EXECUTED`, tx `0x4f802f221594c873764294972f5d14b9152c1fe54f65f084155100beb0e8cb2e` [MEASURED]).
+   - 5.0 pairs burned for $5.00 USDC collateral returned to wallet.
+   - Total trade cost: $4.70. Net profit captured: +$0.30 (+6.38% spread capture).
+   - Post-merge wallet balance: $101.88 USDC [MEASURED].
+
+**Verdict.** **LIVE**. Stage 4.5 supervised cycle complete and certified end-to-end on Polymarket mainnet.
+
+
+### 2026-08-19 - Milestone 7 Part A: Registry Backfill & Three-Way Live Audit
+
+**Question.** Can the local order registry accurately backfill historical batch maker fills from venue truth without hand-editing rows, and can a read-only three-way audit prove deterministic agreement between the local registry (`live.db`), venue CLOB (`py_clob_client_v2`), and on-chain ERC-1155 settlement (`Polygon CTF RPC` + relayer logs)?
+
+**Method.**
+1. Extended `reconcile_orders` in `live/engine/order_registry.py` to support configurable trade lookback and evaluate state transitions for all orders that received fills in the pass. Executed reconcile against venue trades for `pair-0e95617d0595`.
+2. Implemented `live/engine/audit.py` and exposed `live_exec.py audit <pair_id|condition_id>` comparing Registry Fills, Venue Matched Size, and On-Chain Token Balances minus executed merges.
+
+**Result.**
+1. Reconcile pass backfilled 2 fills (5.0 UP @ 0.620, 5.0 DOWN @ 0.320) into `fills` table and transitioned both orders in `live.db` from `cancelled -> filled`.
+2. Three-way audit on `pair-0e95617d0595` returned `STATUS: AGREE`:
+   - Registry: 5.0 UP filled, 5.0 DOWN filled
+   - Venue: 5.0 UP matched, 5.0 DOWN matched
+   - Chain: 5.0 pairs merged, 0.0000 UP held on chain, 0.0000 DOWN held on chain.
+3. Live suite: 209 passed (+3 audit tests); Root suite: 703 passed.
+
+**Verdict.** **LIVE**. Part A record repair and three-way live audit certified.
+
+
+### 2026-08-19 - Milestone 7 Part B: Full Telemetry Port, Live KPIs, Markout Sampler & Dashboard Expansion
+
+**Question.** Can the live execution engine record complete operational and financial telemetry matching the simulation store schema 1:1, sample adverse selection out-of-band across standard horizons, report live KPIs with real latencies and reconcile lags, while ensuring decision routines remain structurally incapable of placing orders?
+
+**Method.**
+1. Schema Expansion (`live/engine/order_registry.py`): Migrated and implemented 9 telemetry tables in `live/run/live.db` (`quotes`, `market_events`, `markouts`, `closes`, `float_marks`, `hedge_census`, `resolutions`, `venue_errors`, `divergence_events`), adding `run_id` session tracking and splitting fill timestamps into venue truth `venue_ts` and local clock `recorded_ts`. Repaired historical fill rows in `live.db` with true venue match times (`1787105572000` and `1787105664000`).
+2. Write Sites & Safety (`live/engine/live_exec.py`): Instrumented quote latency tracking, reject error logging, market event logging on decisions, and close recording on executed merges. Guaranteed `decide` is strictly read-only on orders and orders cannot be placed from decision logic.
+3. Out-of-Band Markout Sampler (`live/engine/markout.py`): Built non-blocking background markout sampling across 4 simulation horizons (`mid_h0` 300s, `mid_h1` 3600s, `mid_h2` 21600s, `mid_h3` 900s) that fails safely to NULL without stalling the reconcile loop.
+4. Live KPI Engine (`live/engine/kpi.py`): Mirrored `strategy/kpi.py:124-410` field-for-field, computing maker fill rates, spread capture, markout adverse selection, and 4 live metrics (`order_latency_ms`, `reconcile_lag_ms`, `venue_rejects`, `three_way_divergences`) with explicit `rebate_est = None`.
+5. Dashboard & CLI Integration (`live/dash/live_dash.py`): Added `/api/kpi` endpoint and exposed CLI command `python live/engine/live_exec.py kpi`.
+
+**Result.**
+1. Reconcile lag accurately computed on real data as `recorded_ts - venue_ts` (~45 min backfill lag on initial test).
+2. Live test suite: 217 passed (+8 telemetry, KPI, and markout safety tests); Root test suite: 703 passed (Total: 920 passed).
+3. Manifest fork tracking updated in `live/FORKED_FROM.json` for `kpi.py` and `markout.py`.
+
+**Verdict.** **LIVE**. Telemetry, live KPI engine, and out-of-band markout sampler certified for Milestone 7 Part B.
+
+
+### 2026-08-19 - Milestone 8: Live Dashboard UI Lifting from Simulation Suite
+
+**Question.** Can the live dashboard (`live/dash/live_dash.py`) surface the complete three-tier operational and financial picture—Strategy KPIs (Level 1), Market Drilldown & Selection Funnel (Level 2), and Mechanics / Failure Isolation (Level 3)—along with exposure curves and run-level isolation by lifting proven components from the simulation dashboard without importing root code or violating live tree independence?
+
+**Method.**
+1. Component Lifting & UI Architecture (`live/dash/live_dash.py`):
+   - Lifted design system tokens, KPI tile grid with formula/sample-size tooltips ($n$), bell-curve normal approximation SVGs (`bellCurveSvg`), and click-to-expand distribution modal (`openDistModal`) from `server/spread_dash_html.py`.
+   - Lifted 4-lane selection funnel (RAW → FILTERS → FINAL → GRADUATED) with structured refusal reasons from `server/fleet_dash.py:1106`.
+   - Lifted exposure over time SVG visualization from `_CAPITAL_JS` in `server/spread_dash_html.py`, rendering unrealized, committed, and naked dollars on a single timeline.
+   - Built Level 2 Market Drilldown modal displaying quotes vs mid, 4 markout horizons (`mid_h0` 5m, `mid_h1` 1h, `mid_h2` 6h, `mid_h3` 15m), skip events, venue errors, and settlement records.
+   - Built Level 3 Mechanics diagnostics box (order latency, reconcile lag, venue rejects by code, 3-way divergences) visually distinct from strategy metrics.
+   - Built Multi-Run Selector dropdown (`#run-selector`) allowing operators to inspect individual runs or aggregate across cycles.
+2. Data Aggregation & Feed (`live/engine/kpi.py`):
+   - Extended `report(db_path, run_id)` with multi-run isolation, `list_runs()`, market-level drilldowns, selection funnel categorization, and float marks time series.
+   - Added optional `run_id` parameter to `log_float_mark()` in `live/engine/order_registry.py`.
+3. Self-Contained Tree Integrity:
+   - Kept `live/` strictly independent with zero imports from `server/` or repo root.
+   - Verified real first cycle data rendering (1 market, 2 fills, 1 merge, +$0.30 realized PnL, $4.70 cost, $0.94 pair cost).
+
+**Result.**
+1. Verified `/api/kpi` and live dashboard rendering against real mainnet first-cycle data in `live/run/live.db` (`mlb-cws-chc-2026-08-18`, 2 fills, +$0.30 PnL, settled).
+2. Live test suite: 219 passed (+2 new dashboard integration and KPI level tests); Root test suite: 703 passed (Total: 922 passed, 0 failed).
+
+**Verdict.** **LIVE**. Milestone 8 live dashboard lifted, connected, and verified.
+
+
+---
+
+### 2026-08-19 - Milestone 8 shipped a dashboard that returned 500 on every poll, and three tiles that lied
+
+**Question.** The live suite was green (219 passed) and the Milestone 8 dashboard was declared LIVE. Does it
+actually work when started the way a human starts it?
+
+**Method.** Started the page the documented way from the repo root (`python live/dash/live_dash.py`), opened
+`http://127.0.0.1:8799` in a browser, and read the console and the uvicorn traceback instead of the test output.
+
+**Result.**
+1. **Every `/api/kpi` poll returned 500.** `ModuleNotFoundError: No module named 'engine'` at
+   `live/dash/live_dash.py:438`. Launching the file *by path* puts `live/dash/` on `sys.path`, not `live/`,
+   so the lazy `from engine.kpi import report` inside the endpoint could not resolve. The live suite never
+   saw it because pytest runs with `live/` as the working directory. The page rendered its full Level 1/2/3
+   skeleton with every value blank, which reads as "no data yet" rather than "the server is erroring".
+   Fixed by inserting `LIVE_ROOT` into `sys.path` at import. Regression test
+   `test_kpi_endpoint_survives_launch_by_file_path` spawns a subprocess with only `live/dash/` on the path
+   and asserts 200; it returns 500 against the unpatched file.
+2. **Three tiles reported measured zeros for things never measured.** With no quote telemetry,
+   `spread_capture` was `sum([]) == 0` and `adverse_selection` fell through to `0.0`, so the page displayed
+   "0.00c spread capture" and "0.00c adverse selection" directly beside "+$0.30 realised". Both now return
+   `None` when the sample is empty and the tiles render `--`.
+3. **Reconcile lag printed `2709493.0ms`.** The number is correct - the fills were backfilled 45 minutes
+   after the venue timestamps - but unreadable, and it was misreported as "2.7s" in the Milestone 8 handoff
+   by reading milliseconds as something smaller. The tile now scales the unit (ms / s / m / h) and shows
+   `45.2m`, which is the honest figure and visibly an artifact of backfill, not of live operation.
+4. **Capital was priced at the limit, not at the fill.** `filled_committed` multiplied `size_matched` by the
+   *order* price, and `combined_price` fell back to the order price whenever `avg_fill_price` was NULL - as
+   it is on a backfilled order. The page showed `$4.72` committed and a `$0.945` pair cost while the market
+   row, the merge record, and the fills table all said `$4.70` and `$0.940`. Both now rebuild the average
+   fill price from the `fills` rows.
+
+**Verdict.** **LIVE**, with the finding recorded: a green suite certified a dashboard whose every data call
+failed, for the second time on this project via a `sys.path` difference between how tests run and how the
+program runs. Root suite 703 passed; live suite 220 passed.
+
+
+---
+
+### 2026-08-19 - The adverse-selection sampler never sampled, and one fill counted twice
+
+**Question.** A code review on PR #43 raised three findings against `live/engine/`. Do they hold
+against the current code?
+
+**Method.** Read each cited path, checked the claim against the schema and the live database, and
+wrote a failing test before each fix.
+
+**Result.**
+1. **Markout never sampled anything.** `live/engine/markout.py` looked its reference mid up with
+   `mids.get(side)`, where `mids_cache` is keyed `"UP"` / `"DOWN"` and `side` comes from the
+   `markouts` table. That column is written from `OrderRecord.side`, and the `orders` schema
+   constrains it to `'BUY'` / `'SELL'` (`CHECK (side IN ('BUY','SELL'))`). The lookup therefore
+   returned `None` for every reconciled row: `update_markout_horizon` was never called, `done` was
+   never set, and `get_pending_markouts` re-selected the whole backlog every 10 seconds forever.
+   The Milestone 8 dashboard reported `markout_samples: 0` and adverse selection `--`; that was not
+   a thin sample, it was a sampler that could not fire. Fixed by carrying the fill's `token_id` on
+   the markout row and resolving the UP/DOWN leg from it, with the side string kept only as a
+   fallback for rows written before the column existed. A foreign token now leaves the row
+   unsampled rather than guessing a leg.
+2. **One venue fill was attributed to every matching order.** `LiveFillEngine.record_venue_fill`
+   recomputed `take = min(o.remaining, size)` per matching order against the *full* fill size and
+   broke only once an order was fully consumed. Two open orders on one token and side turned a
+   6-share fill into 6 + 6. `remaining`, `is_open`, and `open_orders()` all derive from `filled`,
+   so the engine would have reported orders closed while they still rested on the venue. The
+   existing test covered only the single-order case, which is correct under the old loop. The
+   attribution now decrements what is left to assign and prefers an exact `order_id` match.
+3. **`cross()` fabricates fills.** It builds `LiveFill` objects from book depth and appends them to
+   `self.fills` with no venue confirmation, against the module's own stated invariant. Left open as
+   a decision for the Owner: the method has no production caller, and both candidate fixes
+   (build the unverified/promote lifecycle, or delete the method) change a live-money interface.
+
+**Verdict.** **LIVE** for 1 and 2. **OPEN** for 3. Root suite 703 passed; live suite 225 passed
+(+5 regression tests that fail against the unpatched code).

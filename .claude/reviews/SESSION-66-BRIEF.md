@@ -214,9 +214,9 @@ Self-evaluation scored 3.8/5. The three that cost real cycles:
 - Pre-commit hook blocks any `strategy/` change unless all four research files are updated
   (`RESEARCH_LOG.md`, `RESEARCH_SUMMARY.md`, and both `he_` Hebrew mirrors), Question → Method →
   Result → Verdict, vocabulary DEAD / PARKED / LIVE / OPEN. Budget for this on every stage.
-- `.env` invariants: signer `0x3e69e2f2…Cbc1`, funder `0xed0b7d6a…b090`, **`POLY_SIG_TYPE=3`**.
+- `.env` invariants: signer `0x832cBcdece2724eA0174c9fbE8D584b75C872163`, funder `0xeE3B778A783510BC833384919F709e3d2fee1624`, **`POLY_SIG_TYPE=3`**, balance `$31.17 USDC` as of 2026-08-19.
   Types 0/1/2 report a truthful `$0.00` about a wallet that never existed — this has cost two
-  sessions hours. Sweep `for s in 0 1 2 3; do POLY_SIG_TYPE=$s python -m strategy.live_exec balance;
+  sessions hours. Sweep `for s in 0 1 2 3; do POLY_SIG_TYPE=$s python -m engine.live_exec balance;
   done` if a balance ever reads zero.
 - Calendar gate retired from `go_live_readiness()` by Owner decision; status now
   `READY_FOR_SMALL_LIVE_PILOT`, which is **display-only** — every consumer is a dashboard renderer,

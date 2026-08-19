@@ -4,20 +4,54 @@
     {
       "name": "spread-dash",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "server.spread_dash:app", "--host", "127.0.0.1", "--port", "8800"],
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "server.spread_dash:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8800"
+      ],
       "port": 8800
     },
     {
       "name": "fleet-dash",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "server.fleet_dash:app", "--host", "127.0.0.1", "--port", "8801"],
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "server.fleet_dash:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8801"
+      ],
       "port": 8801
     },
     {
       "name": "dashboard",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "server.dashboard:app", "--host", "127.0.0.1", "--port", "8788"],
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "server.dashboard:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8788"
+      ],
       "port": 8788
+    },
+    {
+      "name": "live-dash",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "live/dash/live_dash.py",
+        "--port",
+        "8799"
+      ],
+      "port": 8799
     }
   ]
 }

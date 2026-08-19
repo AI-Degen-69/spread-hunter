@@ -13,10 +13,10 @@ and nothing that does should ever be added to it.
     POLY_FUNDER=0x...           # address actually holding the USDC
     POLY_SIG_TYPE=1             # 0 EOA | 1 email-magic proxy | 2 browser proxy
 
-    python -m strategy.live_exec status
-    python -m strategy.live_exec quote <condition_id> --price 0.22 --size 20
-    python -m strategy.live_exec quote <condition_id> --price 0.22 --size 20 --live
-    python -m strategy.live_exec cancel-all --live
+    python -m engine.live_exec status
+    python -m engine.live_exec quote <condition_id> --price 0.22 --size 20
+    python -m engine.live_exec quote <condition_id> --price 0.22 --size 20 --live
+    python -m engine.live_exec cancel-all --live
 
 SAFETY RAILS, all on by default:
   * --live is required for anything that reaches the venue. Without it every
@@ -51,6 +51,24 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "run"
+
+# Put live/ on sys.path so `engine.*` resolves however this module was reached
+# -- `python -m engine.live_exec` from live/, `python live/engine/live_exec.py`
+# from the repo root, or an import from a test.
+#
+# ROOT only. The repo root is deliberately NOT added: `engine` must resolve
+# inside live/ and nowhere else. This package was called `strategy` until
+# 2026-08-18, which collided with the simulation package of the same name, and
+# adding the repo root here would let that collision come back the moment
+# someone writes `from strategy...` in live code.
+#
+# A dry run does not prove this works. `quote` imports engine.markets ABOVE the
+# dry-run return and engine.order_registry BELOW it, so a half-resolved path
+# prints a clean dry run and then dies on the `--live` call -- after the
+# operator has committed to sending. That happened on 2026-08-18; the guard is
+# tests/test_live_exec_import_paths.py.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def _find_env_file() -> Path | None:
@@ -302,8 +320,8 @@ def pairs(db_path: str | Path | None = None) -> None:
     find one is to open live.db by hand -- which is exactly the sort of step an
     operator skips at the moment it matters.
     """
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH, get_connection
-    from strategy.live_pairs import load_pair, PairExitRefused
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH, get_connection
+    from engine.live_pairs import load_pair, PairExitRefused
 
     db = Path(db_path) if db_path else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db)
@@ -349,15 +367,16 @@ def _venue_order_id(resp) -> str | None:
 
 
 def quote(condition_id: str, price: float, size: float, live: bool,
+          down_price: float | None = None,
           post_only: bool = True, tif: str = "GTC",
           expiration: int | None = None,
           db_path: str | Path | None = None) -> None:
-    """Rest a two-sided pair: buy UP at `price`, buy DOWN at 1-price via batch quoting."""
+    """Rest a two-sided pair: buy UP at `price`, buy DOWN at `down_price` (default: 1-price) via batch quoting."""
     from py_clob_client_v2.clob_types import (
         OrderArgsV2, OrderType, PostOrdersV2Args, OrderPayload,
     )
     from py_clob_client_v2.order_builder.constants import BUY
-    from strategy.markets import fetch_pinned_market
+    from engine.markets import fetch_pinned_market
 
     # Pre-flight parse check on TIF and post_only
     if post_only and tif not in ("GTC", "GTD"):
@@ -369,27 +388,28 @@ def quote(condition_id: str, price: float, size: float, live: bool,
             "--expiration (UTC epoch seconds) is required when --tif GTD."
         )
 
-    # fetch_pinned_market returns None for two unrelated reasons: the market
-    # does not exist, or it exists and pays no rewards. Reporting both as "not
-    # found" sends the operator hunting for a typo in a condition_id that is
-    # perfectly correct.
-    m = fetch_pinned_market(condition_id)
+    # Rewards are not the income. Measured on run/fleet.db: 476 merge closes
+    # earned +$1,172.35 at an average pair cost of $0.96006, while maker rebate
+    # accrual over the same run ran about $0.22/day against $566 committed --
+    # four hundredths of a percent. The income is buying UP+DOWN below $1.00 and
+    # merging, which is what "spread hunter" names.
+    #
+    # This path used to demand rewards, a default left over from the rebate-
+    # farming phase. `sweep.py:507` -- the fleet, the thing that actually trades
+    # -- passes require_rewards=False and has since spread capture landed, so the
+    # CLI was refusing every market the fleet quotes: all eight currently in
+    # run/markets.json are source=spread with daily=0.00. The guard is gone here
+    # for the same reason it is off there. Whether a market is worth funding is
+    # the allocator's call, made from run/markets.json, not this function's.
+    m = fetch_pinned_market(condition_id, require_rewards=False)
     if m is None:
-        unfunded = fetch_pinned_market(condition_id, require_rewards=False)
-        if unfunded is not None:
-            raise SystemExit(
-                f"market {unfunded.market_slug} exists but pays no maker "
-                f"rewards (rewards.rates is empty). Quoting it earns nothing "
-                f"for resting, which is this bot's only income. Pick a "
-                f"reward-funded market, or quote it deliberately through the "
-                f"fleet path that passes require_rewards=False."
-            )
         raise SystemExit(
-            f"no market at condition_id {condition_id[:12]}... on the CLOB. "
-            f"Check the id."
+            f"no tradeable market at condition_id {condition_id[:12]}... -- it "
+            f"is missing, closed, not accepting orders, or does not carry "
+            f"exactly two tokens. Check the id."
         )
 
-    dn_price = round(1.0 - price, 4)
+    dn_price = round(down_price, 4) if down_price is not None else round(1.0 - price, 4)
     cost = price * size + dn_price * size
     if cost > MAX_ORDER_USD:
         raise SystemExit(
@@ -418,10 +438,10 @@ def quote(condition_id: str, price: float, size: float, live: bool,
     # act on, and the two legs rest at the venue with real money and nothing
     # tracking them -- the exact failure the registry exists to prevent.
     import uuid as _uuid
-    from strategy.order_registry import (
+    from engine.order_registry import (
         OrderRegistry, OrderRecord, DEFAULT_DB_PATH,
     )
-    from strategy import config as strategy_config
+    from engine import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     pair_id = f"pair-{_uuid.uuid4().hex[:12]}"
@@ -465,7 +485,9 @@ def quote(condition_id: str, price: float, size: float, live: bool,
         })
 
     # 2. Batch post both legs in a single network round-trip
+    t_start = time.perf_counter()
     resp = c.post_orders(batch_args, post_only=post_only)
+    post_latency_ms = (time.perf_counter() - t_start) * 1000.0
     resp_list = resp if isinstance(resp, list) else [resp] if isinstance(resp, dict) else []
 
     _log_order({"ts": time.time(), "condition_id": condition_id,
@@ -506,16 +528,26 @@ def quote(condition_id: str, price: float, size: float, live: bool,
         )
 
     if succeeded_count == 0:
-        # The orders may well be live; we simply cannot name them. Leave the
-        # rows `pending` for orphan adoption rather than guessing an id or
-        # marking a status we cannot support, and say so loudly.
+        # Log venue errors if present
+        from engine.order_registry import VenueErrorRecord, get_run_id
+        for idx, leg in enumerate(local_legs):
+            item_resp = resp_list[idx] if idx < len(resp_list) else None
+            if isinstance(item_resp, dict) and (item_resp.get("errorMsg") or item_resp.get("success") is False):
+                registry.log_venue_error(VenueErrorRecord(
+                    ts=time.time(),
+                    condition_id=condition_id,
+                    side=leg["label"],
+                    price=leg["price"],
+                    size=size,
+                    error_code=item_resp.get("status") or "REJECTED",
+                    raw_error_msg=str(item_resp.get("errorMsg") or "order rejected"),
+                    run_id=get_run_id(),
+                ))
         print("  WARNING: no order IDs in batch quote response; rows stay pending for reconcile to adopt.", file=sys.stderr)
         print(f"  SENT BATCH: {resp}")
         return
 
     # 5. Verification step: Read orders back from venue to verify asset_id before committing.
-    # On agreement, commit mapping. On ANY mismatch, fail closed: cancel BOTH orders,
-    # mark both rows cancelled, and raise SystemExit.
     verified_mappings = []
     mismatch_detected = False
     mismatch_reason = ""
@@ -555,18 +587,36 @@ def quote(condition_id: str, price: float, size: float, live: bool,
             registry.update_order_status(leg["local_id"], status="cancelled", last_polled_ts=now_ms)
         raise SystemExit(f"FAIL CLOSED: Order verification mismatch ({mismatch_reason}); all orders cancelled.")
 
-    # 6. Agreement confirmed: commit venue IDs to registry
+    # 6. Agreement confirmed: commit venue IDs to registry and log QuoteRecord
+    from engine.order_registry import QuoteRecord, get_run_id
+    mid_quote = round((price + dn_price) / 2.0, 4)
     for local_id, v_id in verified_mappings:
         registry.attach_venue_order_id(local_id, v_id, status="open", last_polled_ts=now_ms)
 
     for idx, leg in enumerate(local_legs):
-        print(f"  SENT {leg['label']}: {extracted_venue_ids[idx]}")
+        v_id = extracted_venue_ids[idx] if idx < len(extracted_venue_ids) else None
+        registry.log_quote(QuoteRecord(
+            ts=time.time(),
+            market_slug=m.market_slug,
+            condition_id=condition_id,
+            token_id=leg["token_id"],
+            side=leg["label"],
+            price=leg["price"],
+            size=size,
+            mid=mid_quote,
+            edge_vs_mid=round(mid_quote - leg["price"], 4),
+            order_id=v_id,
+            local_id=leg["local_id"],
+            latency_ms=post_latency_ms,
+            run_id=get_run_id(),
+        ))
+        print(f"  SENT {leg['label']}: {v_id}")
 
     print(f"\nlogged to {RUN / 'live_orders.json'}")
     print(f"pair_id  {pair_id}")
-    print(f"  poll:     python -m strategy.live_exec poll --interval 5")
-    print(f"  exit:     python -m strategy.live_exec exit {pair_id}")
-    print(f"  complete: python -m strategy.live_exec complete {pair_id}")
+    print(f"  poll:     python -m engine.live_exec poll --interval 5")
+    print(f"  exit:     python -m engine.live_exec exit {pair_id}")
+    print(f"  complete: python -m engine.live_exec complete {pair_id}")
 
 
 CTF_CONTRACT = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
@@ -747,7 +797,7 @@ def sign_redeem_transaction(key: str, funder: str, nonce: int, deadline: int, ca
     return signer_acc.address, sig
 
 
-# Origin: scripts/audit_settlement.py:19-24
+# Origin: live/scripts/audit_settlement.py:19-24
 POLYGON_RPC_ENDPOINTS = [
     "https://polygon.drpc.org",
     "https://1rpc.io/matic",
@@ -944,8 +994,25 @@ def _submit_and_log(
     if isinstance(res, dict):
         tx_hash = res.get("transactionHash") or res.get("transactionID") or res.get("id")
 
+    # The relayer answers with its own terminal state. Recording every reply as
+    # "submitted" leaves an executed transaction looking in-flight forever, and
+    # the idempotency guard then refuses the next merge on that market -- which
+    # is exactly what happened on the first live cycle: STATE_EXECUTED in the
+    # response, status "submitted" in the log, and `merge` blocked behind
+    # --force afterwards. Trust the state the relayer reports.
+    state = res.get("state") if isinstance(res, dict) else None
+    if state == "STATE_EXECUTED":
+        status = "executed"
+    elif state in ("STATE_FAILED", "STATE_REVERTED", "STATE_CANCELLED"):
+        status = "failed"
+    else:
+        # Anything else is genuinely in flight or unrecognised, and an unknown
+        # state must keep the guard armed rather than clear it.
+        status = "submitted"
+
     update_fields = {
-        "status": "submitted",
+        "status": status,
+        "relayer_state": state or "",
         "response": json.dumps(res)[:400],
     }
     if tx_hash:
@@ -990,6 +1057,42 @@ def _submit_and_log(
 
     print(f"  RELAYER RESPONSE: {json.dumps(res)[:400]}")
     print(f"\nlogged to {RUN / 'live_orders.json'}")
+
+    if action == "MERGE" and (status == "executed" or state == "STATE_EXECUTED"):
+        try:
+            from engine.order_registry import OrderRegistry, CloseRecord, get_run_id
+            registry = OrderRegistry()
+            cost_basis = 0.0
+            with registry._conn() as conn:
+                r = conn.execute(
+                    "SELECT COALESCE(SUM(f.size * f.price), 0.0) AS c FROM fills f JOIN orders o ON f.order_uuid = o.id WHERE o.condition_id = ?",
+                    (condition_id,),
+                ).fetchone()
+                cost_basis = float(r["c"]) if r else 0.0
+            amt = 0.0
+            if call_data and len(call_data) >= 10 + 64 * 5:
+                amount_hex = call_data[10 + 64 * 4 : 10 + 64 * 5]
+                amt = int(amount_hex, 16) / 10**6
+            proceeds = float(amt) * 1.00
+            realized_pnl = proceeds - cost_basis
+            registry.log_close(CloseRecord(
+                ts=time.time(),
+                condition_id=condition_id,
+                method="merge",
+                gas=0.0,
+                shares=float(amt),
+                cost_basis=cost_basis,
+                proceeds=proceeds,
+                fee=0.0,
+                realized_pnl=realized_pnl,
+                forgone_vs_settlement=0.0,
+                up_cost_removed=cost_basis / 2.0 if cost_basis else 0.0,
+                dn_cost_removed=cost_basis / 2.0 if cost_basis else 0.0,
+                tx_hash=tx_hash,
+                run_id=get_run_id(),
+            ))
+        except Exception as close_exc:
+            print(f"  WARNING: Failed to log close record: {close_exc}", file=sys.stderr)
 
 
 def redeem(condition_id: str, index_sets: list[int] | None = None,
@@ -1140,7 +1243,7 @@ def merge(condition_id: str,
           force: bool = False,
           live: bool = False) -> None:
     """Gasless merge of full outcome sets (UP + DOWN) back into USDC.e collateral."""
-    from strategy.config import MakerConfig
+    from engine.config import MakerConfig
     if index_sets is None:
         index_sets = [1, 2]
     amount_base_units = int(round(amount * 1e6))
@@ -1405,7 +1508,7 @@ def probe(series: str | None = None,
     print("=" * 80)
 
     if not live:
-        from strategy.markets import fetch_live_market
+        from engine.markets import fetch_live_market
         gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
         resolved = fetch_live_market(gamma_host, series) if not token_id else None
         print("\n[DRY-RUN] Probe execution plan validated.")
@@ -1431,7 +1534,7 @@ def probe(series: str | None = None,
     import websocket
     from py_clob_client_v2.clob_types import OrderArgsV2, OrderType
     from py_clob_client_v2.order_builder.constants import BUY
-    from strategy.markets import fetch_live_market
+    from engine.markets import fetch_live_market
 
     gamma_host = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
     client = _client()
@@ -1754,7 +1857,7 @@ def poll(
     """
     import datetime
     import signal
-    from strategy.order_registry import (
+    from engine.order_registry import (
         OrderRegistry,
         reconcile_orders,
         compute_backoff_delay,
@@ -1929,11 +2032,11 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
     Data API is down and the operator has decided to act anyway, and it says so
     on the record.
     """
-    from strategy.live_pairs import (
+    from engine.live_pairs import (
         exit_naked_leg, fetch_positions, load_pair, PairExitRefused,
     )
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
-    from strategy import config as strategy_config
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from engine import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     client = _client()
@@ -2018,7 +2121,7 @@ def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,
         print(
             f"\nThe pair completed between the cancel and the sell. It is now "
             f"worth $1.00 at merge -- run:\n"
-            f"  python -m strategy.live_exec merge {result['condition_id']} "
+            f"  python -m engine.live_exec merge {result['condition_id']} "
             f"--amount <shares> --live"
         )
 
@@ -2032,12 +2135,12 @@ def complete_pair_cmd(pair_id: str, live: bool, db_path: str | Path | None = Non
     cross that would push the pair to or past max_pair_cost -- that case
     belongs to `exit`, and this path must not do the stop-loss's job badly.
     """
-    from strategy.live_pairs import (
+    from engine.live_pairs import (
         complete_pair, fetch_positions, load_pair, PairCompletionRefused,
         PairExitRefused,
     )
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
-    from strategy import config as strategy_config
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from engine import config as strategy_config
 
     registry = OrderRegistry(db_path=Path(db_path) if db_path else DEFAULT_DB_PATH)
     # load_pair signals an unknown pair with the exit path's exception, which
@@ -2140,7 +2243,7 @@ def cancel_single_order(order_id: str, live: bool,
         return
 
     from py_clob_client_v2.clob_types import OrderPayload
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH
 
     c = _client()
     try:
@@ -2174,7 +2277,7 @@ def cancel_market(condition_id: str, live: bool,
         return
 
     from py_clob_client_v2.clob_types import OrderMarketCancelParams
-    from strategy.order_registry import OrderRegistry, DEFAULT_DB_PATH
+    from engine.order_registry import OrderRegistry, DEFAULT_DB_PATH
 
     c = _client()
     try:
@@ -2211,6 +2314,222 @@ def cancel_all(live: bool) -> None:
     print(json.dumps(resp, indent=2, default=str) if isinstance(resp, (dict, list)) else resp)
 
 
+def _fetch_live_balance(funder: str | None = None) -> float | None:
+    """Fetch live USDC collateral balance from venue. Returns None on network error / offline / no credentials."""
+    if not (os.environ.get("POLY_PRIVATE_KEY") or os.environ.get("POLY_KEY")):
+        return None
+    try:
+        from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
+        who = funder or os.environ.get("POLY_FUNDER")
+        sig_type = int(os.environ.get("POLY_SIG_TYPE", "3"))
+        r = _client(who).get_balance_allowance(
+            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL,
+                                   signature_type=sig_type))
+        return float(r.get("balance", 0) or 0) / 1e6
+    except Exception:
+        return None
+
+
+def _evaluate_single_market_quote(
+    cid: str,
+    gm: "GraduatedMarket" | None,
+    cfg: "MakerConfig",
+    reg_db: Path,
+) -> dict:
+    """Evaluate and print strategy quote decision for one market."""
+    from engine.markets import fetch_pinned_market, full_book
+    from engine.order_registry import inventory_from_registry, OrderRegistry
+    from engine.quotes import decide_quotes
+
+    registry = OrderRegistry(db_path=reg_db)
+
+    m = fetch_pinned_market(cid, require_rewards=False)
+    if m is None:
+        print(f"MARKET {cid[:16]}...: unable to load on venue (missing, closed, or not 2 tokens)")
+        return {"cid": cid, "status": "ERROR", "why": "market unavailable"}
+
+    title = gm.title if gm and gm.title else m.market_slug
+    slug = gm.slug if gm and gm.slug else m.market_slug
+
+    clob_host = getattr(cfg, "clob_host", "https://clob.polymarket.com")
+    try:
+        up_book = full_book(clob_host, m.up_token)
+        down_book = full_book(clob_host, m.down_token)
+    except Exception as e:
+        print(f"MARKET {title} ({cid[:16]}...): book fetch error: {e}")
+        return {"cid": cid, "status": "ERROR", "why": f"book fetch error: {e}"}
+
+    inv = inventory_from_registry(m.condition_id, m.up_token, m.down_token, db_path=reg_db)
+
+    intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
+
+    bb_up, ba_up = up_book.get("best_bid"), up_book.get("best_ask")
+    mid_up = (bb_up + ba_up) / 2.0 if (bb_up is not None and ba_up is not None) else None
+    bb_dn, ba_dn = down_book.get("best_bid"), down_book.get("best_ask")
+    mid_dn = (bb_dn + ba_dn) / 2.0 if (bb_dn is not None and ba_dn is not None) else None
+
+    depth_up = sum(up_book.get("bids", {}).values())
+    depth_dn = sum(down_book.get("bids", {}).values())
+
+    couple_alloc = max(cfg.bankroll_usd * getattr(cfg, "couple_risk_frac", 0.01), getattr(cfg, "min_couple_usd", 6.00))
+    leg_alloc = couple_alloc / 2.0
+
+    print("=" * 80)
+    print(f"MARKET:    {title}")
+    print(f"SLUG:      {slug}")
+    print(f"CID:       {m.condition_id}")
+    print(f"BANKROLL:  ${cfg.bankroll_usd:,.2f} USDC (Sizing: max(${cfg.bankroll_usd:.2f} * 1%, ${getattr(cfg, 'min_couple_usd', 6.0):.2f}) = ${couple_alloc:.2f} couple, ${leg_alloc:.2f}/leg)")
+    print(f"TICK:      {m.tick_size:<6} NEG_RISK: {m.neg_risk}")
+    if gm:
+        print(f"GRADUATED: min_size={gm.min_size} tick={gm.tick} max_spread={gm.max_spread} "
+              f"days_to_resolve={gm.days_to_resolve:.2f} daily_rewards=${gm.daily:.2f}")
+    print(f"BOOKS:")
+    print(f"  UP   (YES): bid={bb_up} ask={ba_up} mid={f'{mid_up:.4f}' if mid_up else 'None'} depth={depth_up:.0f}sh (token {m.up_token[:14]}...)")
+    print(f"  DOWN (NO):  bid={bb_dn} ask={ba_dn} mid={f'{mid_dn:.4f}' if mid_dn else 'None'} depth={depth_dn:.0f}sh (token {m.down_token[:14]}...)")
+    print(f"INVENTORY:")
+    print(f"  UP: {inv.up_shares:.0f}sh (avg ${inv.avg('UP'):.3f}, cost ${inv.up_cost:.2f}) | "
+          f"DOWN: {inv.down_shares:.0f}sh (avg ${inv.avg('DOWN'):.3f}, cost ${inv.down_cost:.2f}) | "
+          f"fills={inv.fills} balance={inv.balance:.1%}")
+
+    if intents:
+        print("DECISION: QUOTE INTENTS")
+        p_up = p_dn = None
+        s_up = s_dn = 0
+        for qi in intents:
+            edge_str = f"{100*qi.edge_vs_mid:.2f}c" if qi.edge_vs_mid is not None else "n/a"
+            tag = " [CROSSED]" if qi.crossed else ""
+            tok_str = str(qi.token_id or (m.up_token if qi.side == "UP" else m.down_token))[:14]
+            print(f"  BUY {qi.size:3d} {qi.side:4s} @ {qi.price:.3f} (mid {qi.mid:.3f}, capture {edge_str}){tag} "
+                  f"notional=${qi.price * qi.size:.2f} token={tok_str}... {qi.reason}")
+            if qi.side == "UP":
+                p_up, s_up = qi.price, qi.size
+            elif qi.side == "DOWN":
+                p_dn, s_dn = qi.price, qi.size
+
+        if p_up is not None and p_dn is not None:
+            pair_cost = p_up + p_dn
+            edge = 1.00 - pair_cost
+            worst_naked = max(p_up * s_up, p_dn * s_dn)
+            print(f"SIZING & RISK:")
+            print(f"  Pair price:            ${pair_cost:.4f} ({p_up:.3f} UP + {p_dn:.3f} DOWN)")
+            print(f"  Capture below $1.00:   ${edge:.4f} / pair ({100*edge:.2f}%)")
+            print(f"  Total 2-leg cost:      ${(p_up * s_up) + (p_dn * s_dn):.2f}")
+            print(f"  Worst-case naked loss: ${worst_naked:.2f}")
+    else:
+        print(f"DECISION: DECLINED -- {why or 'no side quotable'}")
+    print("=" * 80)
+
+    # Telemetry logging to live.db (Amendment 4: decide stays strictly read-only on orders, logs telemetry only)
+    from engine.order_registry import HedgeCensusRecord, MarketEventRecord, get_run_id
+    pair_touch = round(ba_up + ba_dn - 0.02, 4) if (ba_up is not None and ba_dn is not None) else None
+    fillable_sub = 1.0 if (pair_touch is not None and pair_touch < cfg.max_pair_cost) else 0.0
+    registry.log_hedge_census(HedgeCensusRecord(
+        condition_id=m.condition_id,
+        market_slug=slug,
+        up_ask=ba_up,
+        down_ask=ba_dn,
+        pair_cost_at_touch=pair_touch,
+        fillable_sub_one=fillable_sub,
+        observed_ts=time.time(),
+        run_id=get_run_id(),
+    ))
+
+    if intents:
+        for qi in intents:
+            registry.log_market_event(MarketEventRecord(
+                ts=time.time(),
+                condition_id=m.condition_id,
+                market_slug=slug,
+                kind="QUOTING",
+                reason=qi.reason,
+                reason_code="INTENT_GENERATED",
+                side=qi.side,
+                price=qi.price,
+                size=float(qi.size),
+                run_id=get_run_id(),
+            ))
+    else:
+        code = "OTHER"
+        if why:
+            if "band" in why.lower():
+                code = "PRICE_BAND"
+            elif "shortfall" in why.lower() or "cost" in why.lower():
+                code = "COST_LIMIT"
+            elif "inventory" in why.lower():
+                code = "INVENTORY_MAX"
+            elif "one_sided" in why.lower() or "two_sided" in why.lower():
+                code = "TWO_SIDED_REQUIRED"
+        registry.log_market_event(MarketEventRecord(
+            ts=time.time(),
+            condition_id=m.condition_id,
+            market_slug=slug,
+            kind="BLOCKED",
+            reason=why or "no side quotable",
+            reason_code=code,
+            run_id=get_run_id(),
+        ))
+
+    return {
+        "cid": cid,
+        "title": title,
+        "slug": slug,
+        "intents": intents,
+        "why": why,
+        "up_book": {"bb": bb_up, "ba": ba_up, "mid": mid_up},
+        "down_book": {"bb": bb_dn, "ba": ba_dn, "mid": mid_dn},
+    }
+
+
+def decide(
+    target: str | None = None,
+    all_graduated: bool = False,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Read-only quote decision for graduated markets using live venue books."""
+    from dataclasses import replace
+    from engine.config import load
+    from engine.market_feed import load_graduated_markets, get_market_by_cid, GraduatedMarket
+    from engine.order_registry import DEFAULT_DB_PATH
+
+    cfg = load()
+    live_bal = _fetch_live_balance()
+    if live_bal is not None and live_bal > 0:
+        cfg = replace(cfg, bankroll_usd=live_bal)
+
+    reg_db = Path(db_path) if db_path else DEFAULT_DB_PATH
+
+    graduated_list = load_graduated_markets()
+    if not graduated_list:
+        raise SystemExit("no graduated markets found in run/markets.json")
+
+    targets: list[tuple[str, GraduatedMarket | None]] = []
+    if all_graduated or target == "all" or target == "--all":
+        targets = [(gm.cid, gm) for gm in graduated_list]
+    elif target is None or target == "":
+        targets = [(graduated_list[0].cid, graduated_list[0])]
+    else:
+        if target.isdigit() and 0 <= int(target) < len(graduated_list):
+            gm = graduated_list[int(target)]
+            targets = [(gm.cid, gm)]
+        else:
+            gm = get_market_by_cid(target)
+            if gm is None:
+                for candidate in graduated_list:
+                    if candidate.slug.lower() == target.lower() or target.lower() in candidate.slug.lower():
+                        gm = candidate
+                        break
+            if gm is not None:
+                targets = [(gm.cid, gm)]
+            else:
+                targets = [(target, None)]
+
+    results: list[dict] = []
+    for cid, gm in targets:
+        res = _evaluate_single_market_quote(cid, gm, cfg, reg_db)
+        results.append(res)
+    return results
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="LIVE Polymarket execution.")
     ap.add_argument("--live", action="store_true",
@@ -2222,7 +2541,8 @@ def main() -> None:
                    help="test a candidate funder without editing .env")
     q = sub.add_parser("quote")
     q.add_argument("condition_id")
-    q.add_argument("--price", type=float, required=True)
+    q.add_argument("--price", type=float, required=True, help="UP token bid price")
+    q.add_argument("--down-price", type=float, default=None, help="DOWN token bid price (default: 1.0 - price)")
     q.add_argument("--size", type=float, required=True)
     q.add_argument("--post-only", action=argparse.BooleanOptionalAction, default=True,
                    help="Ensure orders rest on the book and do not match immediately (default: True).")
@@ -2307,6 +2627,17 @@ def main() -> None:
                     help="actually send.")
     pr = sub.add_parser("pairs", help="List pair_ids in the registry with held sizes.")
     pr.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    dec = sub.add_parser("decide", help="Read-only quote decision for graduated markets using live venue books.")
+    dec.add_argument("target", nargs="?", default=None, help="Market condition ID, slug, or index (0..7). Default: first graduated market.")
+    dec.add_argument("--all", action="store_true", help="Evaluate all graduated markets from run/markets.json")
+    dec.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    aud = sub.add_parser("audit", help="Read-only three-way audit comparing Registry, Venue, and Chain views.")
+    aud.add_argument("target", help="Condition ID or pair_id to audit")
+    aud.add_argument("--funder", default=None, help="Funder address (default: POLY_FUNDER)")
+    aud.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    kp = sub.add_parser("kpi", help="Generate live KPI report mirroring strategy/kpi.py.")
+    kp.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
+    kp.add_argument("--run-id", default=None, help="Filter by run_id session")
     c = sub.add_parser("cancel-all")
     c.add_argument("--live", action="store_true", default=argparse.SUPPRESS,
                   help="actually send.")
@@ -2318,8 +2649,20 @@ def main() -> None:
         status()
     elif a.cmd == "balance":
         balance(a.funder)
+    elif a.cmd == "audit":
+        from engine.audit import audit_three_way, format_audit_report
+        res = audit_three_way(a.target, client=_client(), funder=a.funder, db_path=a.db)
+        print(format_audit_report(res))
+        if not res.agree:
+            sys.exit(1)
+    elif a.cmd == "kpi":
+        from engine.kpi import report as generate_kpi_report
+        import pprint
+        rep = generate_kpi_report(db_path=a.db, run_id=a.run_id)
+        pprint.pprint(rep, sort_dicts=False)
     elif a.cmd == "quote":
         quote(a.condition_id, a.price, a.size, is_live,
+              down_price=a.down_price,
               post_only=a.post_only, tif=a.tif, expiration=a.expiration,
               db_path=a.db)
     elif a.cmd == "cancel":
@@ -2370,8 +2713,11 @@ def main() -> None:
         complete_pair_cmd(a.pair_id, is_live, db_path=a.db,
                           skip_positions_check=a.skip_positions_check,
                           force=a.force)
+    elif a.cmd == "decide":
+        decide(a.target, all_graduated=a.all, db_path=a.db)
     else:
         cancel_all(is_live)
+
 
 
 if __name__ == "__main__":

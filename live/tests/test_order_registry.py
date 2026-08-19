@@ -21,7 +21,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from strategy.order_registry import (
+from engine.order_registry import (
     OrderRegistry,
     OrderRecord,
     FillRecord,
@@ -1004,7 +1004,7 @@ def test_poll_skips_a_contended_cycle_without_arming_the_backoff(temp_db: Path, 
     for something that clears in milliseconds, degrading the poller because a
     second shell ran a one-shot reconcile.
     """
-    from strategy import live_exec
+    from engine import live_exec
 
     registry = OrderRegistry(temp_db)
     blocker = OrderRegistry(temp_db)

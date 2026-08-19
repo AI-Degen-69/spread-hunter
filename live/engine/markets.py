@@ -1,0 +1,336 @@
+"""Discover the currently-live BTC 5-min market via gamma-api events endpoint."""
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+import requests
+
+log = logging.getLogger("markets")
+
+# (connect, read). `fetch_pinned_market` is called from inside the fleet's
+# trading loop for any market not yet loaded, and its old scalar 15s applied to
+# the connect phase as well -- one unreachable market could hold the whole
+# rotation for half a minute and push the sweep past the dashboard's 120s
+# staleness threshold.
+MARKET_TIMEOUT = (3.05, 5.0)
+EVENTS_TIMEOUT = (3.05, 5.0)
+
+# Pooled keep-alive instead of a fresh TLS handshake per call. No retries -- a
+# failed load is handled by the caller (the market is skipped for this visit)
+# and retrying here would spend the loop's time budget silently.
+_SESSION = requests.Session()
+_SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
+for _scheme in ("https://", "http://"):
+    _SESSION.mount(_scheme, requests.adapters.HTTPAdapter(
+        pool_connections=8, pool_maxsize=8, max_retries=0))
+
+
+@dataclass(frozen=True)
+class LiveMarket:
+    condition_id: str
+    market_slug: str
+    up_token: str
+    down_token: str
+    start_ts: float  # unix seconds, market opens
+    end_ts: float    # unix seconds, market closes
+    tick_size: float
+    neg_risk: bool
+
+    def t_remaining(self, now: Optional[float] = None) -> float:
+        return self.end_ts - (now if now is not None else time.time())
+
+
+# Slugs come from the venue API and are later embedded in dashboard HTML
+# attributes/links and persisted to the fleet DB. Restrict them to the
+# unreserved URL character set at the venue-data boundary so a hostile value
+# never reaches either place.
+_SAFE_SLUG_RE = re.compile(r"[^A-Za-z0-9._~-]")
+
+
+def _sanitize_slug(slug: str) -> str:
+    return _SAFE_SLUG_RE.sub("", slug or "")
+
+
+def _parse_market(market: dict) -> Optional[LiveMarket]:
+    token_ids_raw = market.get("clobTokenIds")
+    if not token_ids_raw:
+        return None
+    token_ids = json.loads(token_ids_raw) if isinstance(token_ids_raw, str) else token_ids_raw
+    if len(token_ids) != 2:
+        return None
+
+    # eventStartTime is the actual trading-window open (UTC :00/:05/:10 boundary).
+    # startDate is when the market was *listed*, often hours earlier.
+    start_iso = market.get("eventStartTime")
+    end_iso = market.get("endDate") or market.get("endDateIso")
+    if not start_iso or not end_iso:
+        return None
+
+    start_ts = _iso_to_unix(start_iso)
+    end_ts = _iso_to_unix(end_iso)
+    return LiveMarket(
+        condition_id=market["conditionId"],
+        market_slug=_sanitize_slug(market.get("slug", "")),
+        up_token=str(token_ids[0]),
+        down_token=str(token_ids[1]),
+        start_ts=start_ts,
+        end_ts=end_ts,
+        tick_size=float(market.get("orderPriceMinTickSize") or 0.01),
+        neg_risk=bool(market.get("negRisk", False)),
+    )
+
+
+def _iso_to_unix(s: str) -> float:
+    # tolerate "Z" suffix
+    from datetime import datetime
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    return datetime.fromisoformat(s).timestamp()
+
+
+def fetch_live_market(gamma_host: str, series_slug: str) -> Optional[LiveMarket]:
+    """Return the single 5-min BTC market that's currently live, or None."""
+    url = f"{gamma_host}/events"
+    params = {"series_slug": series_slug, "closed": "false", "limit": 500}
+    r = _SESSION.get(url, params=params, timeout=EVENTS_TIMEOUT)
+    r.raise_for_status()
+    events = r.json()
+
+    now = time.time()
+    candidates: list[LiveMarket] = []
+    for ev in events:
+        markets = ev.get("markets") or []
+        for m in markets:
+            lm = _parse_market(m)
+            if lm and lm.start_ts <= now < lm.end_ts:
+                candidates.append(lm)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda m: m.start_ts, reverse=True)
+    return candidates[0]
+
+
+def fetch_pinned_market(condition_id: str,
+                        require_rewards: bool = True) -> Optional[LiveMarket]:
+    """One specific long-dated market, pinned by condition_id.
+
+    The 5-min BTC series pays nothing for resting (rewards.rates = null); these
+    markets do. They also do not roll every five minutes, so there is no window
+    to discover -- we quote the same book all day. `end_ts` is the real
+    resolution date (months out), which makes t_remaining effectively infinite
+    and disables every 5-min-specific timing rule by construction.
+
+    `require_rewards` refuses a market that is not actually funded. A market
+    can carry min_size and max_spread while `rates` is null, which looks
+    configured and pays zero -- that exact trap cost us a whole run, and it is
+    still the right default for a bot whose only income is rent.
+
+    The fleet passes False, because "pays no rewards" stopped being
+    disqualifying when spread capture landed: those are the markets that
+    actually trade, and refusing them here made them unloadable, unsampled and
+    therefore unfundable however well the allocator sized them. Whether a
+    market is worth funding is the allocator's decision and it is made from
+    `run/markets.json`; this function's job is only to say whether the market
+    can be quoted at all.
+    """
+    r = _SESSION.get(f"https://clob.polymarket.com/markets/{condition_id}",
+                     timeout=MARKET_TIMEOUT)
+    r.raise_for_status()
+    m = r.json()
+
+    rewards = m.get("rewards") or {}
+    rates = rewards.get("rates") or []
+    daily = sum(x.get("rewards_daily_rate", 0) or 0 for x in rates)
+    if require_rewards and daily <= 0:
+        return None
+    if m.get("closed") or not m.get("accepting_orders"):
+        return None
+
+    toks = [t.get("token_id") for t in (m.get("tokens") or [])]
+    if len(toks) != 2:
+        return None
+
+    end_iso = m.get("end_date_iso")
+    end_ts = _iso_to_unix(end_iso) if end_iso else (time.time() + 365 * 86400)
+    return LiveMarket(
+        condition_id=condition_id,
+        market_slug=_sanitize_slug(m.get("market_slug") or condition_id[:10]),
+        up_token=str(toks[0]),
+        down_token=str(toks[1]),
+        start_ts=time.time() - 1.0,
+        end_ts=end_ts,
+        tick_size=float(m.get("minimum_tick_size") or 0.01),
+        neg_risk=bool(m.get("neg_risk", False)),
+    )
+
+
+def market_meta(condition_id: str) -> dict:
+    """Question text, link and funded daily rate, for the dashboard header."""
+    try:
+        m = _SESSION.get(f"https://clob.polymarket.com/markets/{condition_id}",
+                         timeout=MARKET_TIMEOUT).json()
+    except Exception:
+        return {}
+    rw = m.get("rewards") or {}
+    slug = m.get("market_slug") or ""
+    return {
+        "question": m.get("question") or condition_id[:12],
+        "slug": slug,
+        "url": f"https://polymarket.com/market/{slug}" if slug else "",
+        "daily_rate": sum(x.get("rewards_daily_rate", 0) or 0
+                          for x in (rw.get("rates") or [])),
+        "max_spread": rw.get("max_spread"),
+        "min_size": rw.get("min_size"),
+        "tick": m.get("minimum_tick_size"),
+    }
+
+
+# --- book / tape fetchers (moved here from the deleted strategy/main.py, #14) --
+
+TRADES_API = "https://data-api.polymarket.com/trades"
+
+# (connect, read) rather than one scalar. Split deliberately: a host that is not
+# answering its SYN at all is abandoned in ~3s, while a host that did answer
+# gets 5s to finish the body. The old scalar 10s applied to BOTH phases, so a
+# single unreachable endpoint could add 20s to one market visit -- three such
+# markets in a sweep is the difference between a 60s cycle and the >120s the
+# dashboard calls dead.
+BOOK_TIMEOUT = (3.05, 5.0)
+TAPE_TIMEOUT = (3.05, 5.0)
+
+
+def parse_book(raw: dict, token_id: str) -> dict:
+    """Venue /book payload -> the canonical book dict, skipping bad levels.
+
+    The parse half of the fetch seam. The contract distinguishes ROW garbage
+    from a STRUCTURAL failure:
+
+      * a row whose price or size will not parse is skipped and counted in
+        `malformed` -- the same tolerance `selector.top_depth_usd` applies
+        to gate inputs. One bad level must not take down a caller: it used
+        to crash the ranker's whole run and get the fleet to cancel quotes
+        on a healthy venue.
+      * a payload that is not a dict, or a side that is not a list, raises
+        ValueError -- that is a fetch-shaped failure, and callers already
+        treat fetch failures (retry, hold, fail closed).
+
+    `malformed` lets a caller fail closed when a skipped level would overstate
+    its own reading (the ranker drops the market: an under-counted competitor
+    inflates projected income) or ignore the count when the gate judges what
+    is readable (the fleet).
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("book payload is not a dict")
+    bids: dict[float, float] = {}
+    asks: dict[float, float] = {}
+    malformed = 0
+    for side, target in (("bids", bids), ("asks", asks)):
+        rows = raw.get(side) or []
+        if not isinstance(rows, list):
+            raise ValueError(f"book {side} is not a list")
+        for x in rows:
+            if not isinstance(x, dict):
+                malformed += 1
+                continue
+            try:
+                price = round(float(x["price"]), 4)
+                size = float(x["size"])
+            except (TypeError, ValueError, KeyError):
+                malformed += 1
+                continue
+            target[price] = size
+    return {
+        "token_id": token_id,
+        "bids": bids,
+        "asks": asks,
+        "best_bid": max(bids) if bids else None,
+        "best_ask": min(asks) if asks else None,
+        "malformed": malformed,
+    }
+
+
+def full_book(clob_host: str, token_id: str) -> dict:
+    """Full depth, not just top-of-book -- queue position needs the level sizes.
+
+    Row-level garbage is skipped by `parse_book`, never raised: a malformed
+    level must not look like a network failure to the sweep's book gate, or
+    a healthy venue gets its quotes cancelled. Structural failures still
+    raise and ride the fetch-failure path.
+    """
+    r = _SESSION.get(f"{clob_host}/book", params={"token_id": token_id},
+                     timeout=BOOK_TIMEOUT)
+    r.raise_for_status()
+    return parse_book(r.json(), token_id)
+
+
+def recent_trades(condition_id: str, seen: set, limit: int = 500) -> dict:
+    """Volume by (token_id, price) that has actually TRADED since we last looked.
+
+    The fill model needs this to tell a level that was TRADED from one that was
+    CANCELLED -- from the book they are identical, and guessing costs an order
+    of magnitude: on recorded books the book-only model reported a 50% fill
+    rate where the tape-confirmed rate was 3%, because every fill it produced
+    came from the "level emptied, credit the whole remainder" branch.
+
+    De-duplicated by trade identity rather than by timestamp window: the API
+    stamps trades to the second while we poll faster than that, so a time-based
+    cursor would double-count or skip. `seen` is per-market and is dropped when
+    the window rolls.
+
+    Row-level garbage is skipped, never raised: the parse sits OUTSIDE the
+    fetch try, and before this a single unparseable price crashed out of the
+    loop -- which the sweep's "exceptions propagate" contract turned into a
+    market that silently vanished from every sweep with no status, no err and
+    no event. A skipped trade only under-counts volume at a level, which is
+    the conservative direction for a fill model.
+    """
+    out: dict[str, dict[float, float]] = {}
+    try:
+        r = _SESSION.get(TRADES_API,
+                         params={"market": condition_id, "limit": limit},
+                         timeout=TAPE_TIMEOUT)
+        r.raise_for_status()
+        rows = r.json() or []
+    except Exception as e:
+        log.debug("tape fetch failed: %s", e)
+        return out                      # no tape -> caller falls back to books
+    if not isinstance(rows, list):
+        log.debug("tape response is not a list (got %s)", type(rows).__name__)
+        return out
+    for t in rows:
+        if not isinstance(t, dict):
+            continue
+        key = (str(t.get("transactionHash") or ""), str(t.get("asset")),
+               t.get("timestamp"), t.get("price"), t.get("size"))
+        if key in seen:
+            continue
+        seen.add(key)
+        tok = str(t.get("asset"))
+        try:
+            p = round(float(t.get("price") or 0), 4)
+            size = float(t.get("size") or 0)
+        except (TypeError, ValueError):
+            continue
+        out.setdefault(tok, {})[p] = out.setdefault(tok, {}).get(p, 0.0) + size
+    return out
+
+
+if __name__ == "__main__":
+    from engine.config import load
+
+    cfg = load()
+    m = fetch_live_market(cfg.gamma_host, cfg.series_slug)
+    if not m:
+        print("no live market right now")
+    else:
+        rem = m.t_remaining()
+        print(f"live: {m.market_slug}  t_remaining={rem:.1f}s")
+        print(f"  cond={m.condition_id}")
+        print(f"  up_token={m.up_token[:18]}...")
+        print(f"  down_token={m.down_token[:18]}...")
+        print(f"  tick={m.tick_size}  neg_risk={m.neg_risk}")

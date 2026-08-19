@@ -43,7 +43,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from strategy.order_registry import OrderRegistry, SIZE_EPS
+from engine.order_registry import OrderRegistry, SIZE_EPS
 
 DATA_API_BASE = "https://data-api.polymarket.com"
 

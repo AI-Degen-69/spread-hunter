@@ -11,7 +11,7 @@ from eth_account import Account
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import strategy.live_exec as le
+import engine.live_exec as le
 
 
 # Response shape MEASURED against live relayer 2026-08-16:
@@ -422,7 +422,7 @@ def test_get_payout_denominator_empty_result_raises():
 
 
 def test_dry_run_probe():
-    with patch("strategy.markets.fetch_live_market") as mock_fetch:
+    with patch("engine.markets.fetch_live_market") as mock_fetch:
         mock_fetch.return_value = MagicMock(
             market_slug="btc-updown-5m-12345",
             t_remaining=lambda: 180.0,
@@ -559,7 +559,7 @@ def test_redeem_dry_run_writes_no_row(tmp_path):
 
 def test_audit_settlement_relayer_log_reader_finds_redeem_fixture(tmp_path):
     """5. audit_settlement.py's relayer-log reader finds a REDEEM record in a fixture written by _log_order itself."""
-    import scripts.audit_settlement as audit
+    import scripts.audit_settlement as audit  # live/scripts/, forked out of the repo root with the rest of live
 
     # Build the fixture using _log_order itself
     log_file = tmp_path / "live_orders.json"
@@ -893,7 +893,7 @@ def test_quote_passes_post_only_default_true(tmp_path):
     mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
@@ -906,6 +906,39 @@ def test_quote_passes_post_only_default_true(tmp_path):
     assert len(batch_args) == 2
     assert batch_args[0].orderType == OrderType.GTC
     assert batch_args[1].orderType == OrderType.GTC
+
+
+def test_quote_does_not_require_maker_rewards(tmp_path):
+    """A market paying zero maker rewards is quotable.
+
+    Every market the ranker graduates is source=spread with daily=0.00, and the
+    income is the merge below $1.00, not the rebate. The fleet has passed
+    require_rewards=False since spread capture landed; this asserts the CLI
+    reaches the venue the same way instead of refusing its own universe.
+    """
+    cond_id = "0xebd7653a13838fa5838537370b9b09fe91169e02171b8c62f7ff4018ebee59c7"
+    dummy_market = MagicMock(
+        up_token="tok_up", down_token="tok_dn",
+        market_slug="mlb-atl-min-2026-08-18", tick_size=0.01, neg_risk=False
+    )
+    seen = {}
+
+    def _fetch(cid, require_rewards=True):
+        seen["require_rewards"] = require_rewards
+        return dummy_market
+
+    mock_client = MagicMock()
+    mock_client.post_orders.return_value = [{"orderID": "venue-up"}, {"orderID": "venue-dn"}]
+    mock_client.get_order.side_effect = (
+        lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
+    )
+
+    with patch("engine.markets.fetch_pinned_market", side_effect=_fetch),          patch.object(le, "_client", return_value=mock_client),          patch.object(le, "_open_notional", return_value=0.0),          patch.object(le, "RUN", tmp_path):
+        le.quote(cond_id, price=0.50, size=5.0, live=True,
+                 db_path=tmp_path / "live.db")
+
+    assert seen["require_rewards"] is False
+    assert mock_client.post_orders.call_count == 1
 
 
 def test_quote_allows_explicit_no_post_only(tmp_path):
@@ -921,7 +954,7 @@ def test_quote_allows_explicit_no_post_only(tmp_path):
     mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
@@ -945,7 +978,7 @@ def test_quote_tif_gtd_with_expiration(tmp_path):
     mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
@@ -966,7 +999,7 @@ def test_quote_tif_gtd_with_expiration(tmp_path):
 
 def test_batch_quote_happy_path_both_succeed(tmp_path):
     """Batch quote places both legs, verifies asset_id on both, and attaches venue IDs as open."""
-    from strategy.order_registry import OrderRegistry
+    from engine.order_registry import OrderRegistry
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     dummy_market = MagicMock(
         up_token="tok_up_111", down_token="tok_dn_222",
@@ -977,7 +1010,7 @@ def test_batch_quote_happy_path_both_succeed(tmp_path):
     mock_client.get_order.side_effect = lambda vid: {"asset_id": "tok_up_111"} if vid == "v-up-1" else {"asset_id": "tok_dn_222"}
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
@@ -997,7 +1030,7 @@ def test_batch_quote_happy_path_both_succeed(tmp_path):
 
 def test_batch_quote_partial_failure_auto_cancels_naked_leg(tmp_path, capsys):
     """If one leg succeeds and one fails, immediately auto-cancel the resting leg to prevent naked exposure."""
-    from strategy.order_registry import OrderRegistry
+    from engine.order_registry import OrderRegistry
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     dummy_market = MagicMock(
         up_token="tok_up_111", down_token="tok_dn_222",
@@ -1009,7 +1042,7 @@ def test_batch_quote_partial_failure_auto_cancels_naked_leg(tmp_path, capsys):
     mock_client.cancel_order.return_value = {"canceled": ["v-up-survivor"]}
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
@@ -1037,7 +1070,7 @@ def test_batch_quote_partial_failure_auto_cancels_naked_leg(tmp_path, capsys):
 
 def test_batch_quote_reverse_response_attribution_and_half_price(tmp_path):
     """At price=0.50 (identical amounts), reversed response array is caught by get_order verification and fails closed."""
-    from strategy.order_registry import OrderRegistry
+    from engine.order_registry import OrderRegistry
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     dummy_market = MagicMock(
         up_token="tok_up_111", down_token="tok_dn_222",
@@ -1050,7 +1083,7 @@ def test_batch_quote_reverse_response_attribution_and_half_price(tmp_path):
     mock_client.cancel_order.return_value = {}
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
@@ -1075,7 +1108,7 @@ def test_batch_quote_reverse_response_attribution_and_half_price(tmp_path):
 
 def test_batch_quote_verification_mismatch_fails_closed(tmp_path):
     """Venue returning mismatched asset_id triggers fail-closed cancellation of all batch orders."""
-    from strategy.order_registry import OrderRegistry
+    from engine.order_registry import OrderRegistry
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     dummy_market = MagicMock(
         up_token="tok_up_111", down_token="tok_dn_222",
@@ -1088,7 +1121,7 @@ def test_batch_quote_verification_mismatch_fails_closed(tmp_path):
     mock_client.cancel_order.return_value = {}
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
@@ -1108,7 +1141,7 @@ def test_batch_quote_verification_mismatch_fails_closed(tmp_path):
 
 def test_batch_quote_both_fail(tmp_path, capsys):
     """If both legs return no order ID at the venue, both rows stay pending for orphan adoption with zero cancel calls."""
-    from strategy.order_registry import OrderRegistry
+    from engine.order_registry import OrderRegistry
     cond_id = "0x26b64228a9fb13e5c2221cd5879fa0f235cee8ab254c0f094977cc86beeb6a2f"
     dummy_market = MagicMock(
         up_token="tok_up_111", down_token="tok_dn_222",
@@ -1118,7 +1151,7 @@ def test_batch_quote_both_fail(tmp_path, capsys):
     mock_client.post_orders.return_value = [{"errorMsg": "err1"}, {"errorMsg": "err2"}]
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
@@ -1161,7 +1194,7 @@ def test_quote_rejects_gtd_without_expiration():
 
 def test_cancel_single_order_dry_run_and_live(tmp_path, capsys):
     """cancel_single_order prints dry-run message when live=False, calls SDK and updates DB when live=True."""
-    from strategy.order_registry import OrderRegistry, OrderRecord
+    from engine.order_registry import OrderRegistry, OrderRecord
     db_path = tmp_path / "live.db"
     registry = OrderRegistry(db_path=db_path)
     now_ms = 1_000_000
@@ -1206,7 +1239,7 @@ def test_cancel_single_order_handles_venue_rejection(tmp_path):
 
 def test_cancel_market_dry_run_and_live(tmp_path, capsys):
     """cancel_market prints dry-run message when live=False, calls SDK and cancels active orders when live=True."""
-    from strategy.order_registry import OrderRegistry, OrderRecord
+    from engine.order_registry import OrderRegistry, OrderRecord
     db_path = tmp_path / "live.db"
     registry = OrderRegistry(db_path=db_path)
     now_ms = 1_000_000
@@ -1315,7 +1348,7 @@ def test_balance_cmd_queries_funder_and_collateral(capsys):
 
 def test_pairs_cmd_lists_registry_records(tmp_path, capsys):
     """pairs() outputs table of all registered pairs and held sizes."""
-    from strategy.order_registry import OrderRegistry, OrderRecord
+    from engine.order_registry import OrderRegistry, OrderRecord
     db_path = tmp_path / "live.db"
     registry = OrderRegistry(db_path=db_path)
     now_ms = 1_000_000
@@ -1343,7 +1376,7 @@ def test_quote_rejects_unknown_tif(tmp_path):
     mock_client = MagicMock()
     db_path = tmp_path / "live.db"
 
-    with patch("strategy.markets.fetch_pinned_market", return_value=dummy_market), \
+    with patch("engine.markets.fetch_pinned_market", return_value=dummy_market), \
          patch.object(le, "_client", return_value=mock_client), \
          patch.object(le, "_open_notional", return_value=0.0), \
          patch.object(le, "RUN", tmp_path):
