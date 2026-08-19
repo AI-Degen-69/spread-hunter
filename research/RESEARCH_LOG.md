@@ -4278,3 +4278,71 @@ fails identically - then changed which row the KPI layer selects.
 the CLOB auth path is a hard dependency for account value. The CLOB `derive-api-key` failure itself
 is **OPEN** and pre-existing - `python -m engine.live_exec balance` reproduces it without any of this
 change.
+
+---
+
+## 2026-08-19 - The CLOB stopped answering signed auth, and we were part of the cause
+
+**Question.** `account-sweep` reported `collateral --` with `The read operation timed out`, having
+earlier reported `Could not derive api key`. Is the venue down, is the network bad, or is this ours?
+
+**Method.** Timed each layer separately rather than assuming: host reachability, the auth endpoints
+unsigned, the same endpoints signed, and the client's own construction and key derivation.
+
+**Result.**
+1. **Nothing is down.** `clob.polymarket.com` answered in **0.17s**. `/auth/api-key` returned 405,
+   `/auth/derive-api-key` returned 401, and `/auth/ban-status/cert-required` returned 400 - all
+   unsigned, all in ~0.1s. The endpoints are alive and fast to everyone.
+2. **The stall is specific to this account's signature.** A hand-built signed GET to
+   `/auth/derive-api-key` hung past a 5-second timeout and again past a 30-second one. Unsigned
+   returns in 0.1s; signed never returns. That is server-side and account-specific, not transport.
+3. **The client's timeout is 5 seconds and not configurable.** `py_clob_client_v2` holds a
+   module-level `httpx.Client(http2=True)` with httpx's default timeout. HTTP/2 was ruled out: an
+   unsigned request over HTTP/2 and over HTTP/1.1 both returned 401 in 0.1s.
+4. **We were deriving a fresh API key on every command.** `_client()` called
+   `create_or_derive_api_key()` unconditionally, so each CLI run derived once and any command
+   touching the venue twice derived twice. Roughly eight runs preceded the stall. Derivation is the
+   most rate-limit-sensitive call in the API, so this is the plausible trigger and it was ours.
+5. **The client is now cached per process**, keyed on `(sha256(key), funder, sig_type, host)`. The
+   key is hashed into the cache key so it stays out of any structure that could be printed. Nothing
+   is written to disk, preserving the "creds are never stored" rule. The poll loop already built its
+   client once, so no loop was hammering the endpoint; this bounds the CLI path.
+
+**Verdict.** **OPEN.** The stall is venue-side and no code change clears it - only backing off can.
+The derivation storm that likely triggered it is **LIVE**-fixed. Recorded because the diagnosis
+order mattered: the fast unsigned response is what proved the venue was healthy and turned this from
+"Polymarket is down" into "we are being throttled".
+
+---
+
+## 2026-08-19 - Review round on PR #45: a truncated handle and a zero the venue never said
+
+**Question.** CodeRabbit raised five findings against the venue-sourcing branch. Which are real?
+
+**Method.** Verified each against the source and the platform's documented behaviour before changing
+anything. All five held.
+
+**Result.**
+1. **`OpenProcess` returned a truncated handle.** ctypes defaults `restype` to `c_int` and a Windows
+   `HANDLE` is pointer-sized, so on 64-bit a handle above 2**31 came back as a different value, was
+   passed to `GetProcessTimes` as garbage, and was then closed as garbage. `argtypes` and `restype`
+   are now declared for all three calls through `WinDLL(use_last_error=True)`. The PID-recycling
+   guard shipped one commit earlier depends on these calls, so this was a defect inside a fix.
+2. **`os.kill(pid, 0)` reported a live foreign process as stopped.** On POSIX it raises
+   `PermissionError` when the process exists but belongs to another user, and the bare
+   `except Exception` turned that into `False`. That is the exact false "stopped" the guard's own
+   docstring names as the failure mode to avoid, because it lets a second bot stack launch beside a
+   live one. `PermissionError` is now proof of existence.
+3. **`?? 0` printed an unmeasured leg as a measured `$0.00`.** With `/value` reached but the
+   collateral read failed, the footnote rendered "$0.00 cash" - a figure the venue never returned.
+   The same NULL-versus-zero rule the rest of this card was built to enforce, broken inside the card
+   itself. Renders `--` now.
+4. **`var(--text-dim)` is not defined.** Only `--text-primary`, `--text-secondary`, and
+   `--text-muted` exist, so the sweep-age note silently kept its inherited colour. A CSS variable
+   that does not exist fails quietly, which is why a test now parses every `var()` in the page
+   against the `:root` definitions and fails the suite on an undefined one.
+5. **One transport test replaced `_get_json` by hand** instead of using `monkeypatch`; corrected.
+
+**Verdict.** **LIVE** for all five. Live suite 314 passed with 1 skipped (a Windows-only handle
+test), root suite 703 passed. Findings 1 and 3 are the notable ones: both were defects introduced
+*inside* the fixes for the same class of bug they belong to.

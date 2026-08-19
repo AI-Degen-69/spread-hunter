@@ -511,7 +511,22 @@ def _win_process_times(pid: int) -> tuple[float | None, float | None] | None:
     from ctypes import wintypes
 
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    k32 = ctypes.windll.kernel32
+    # argtypes and restype are declared, not left to ctypes' defaults. A HANDLE
+    # is pointer-sized, and the default `c_int` restype truncates it on 64-bit
+    # Windows -- so a handle above 2**31 would come back as a different value,
+    # be passed to GetProcessTimes as garbage, and then be closed as garbage.
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.GetProcessTimes.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME),
+    ]
+    k32.GetProcessTimes.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+
     handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     if not handle:
         return None
@@ -584,7 +599,14 @@ def _is_pid_alive(pid: int | None, started_at: float | None = None) -> bool:
                 # Queryable but finished -- a handle is still open somewhere.
                 return False
         else:
-            os.kill(int(pid), 0)
+            try:
+                os.kill(int(pid), 0)
+            except PermissionError:
+                # EPERM means the process exists but belongs to another user.
+                # Letting the bare `except` below turn that into False is the
+                # false "stopped" this function exists to avoid -- it would let
+                # a second bot stack launch beside a live one.
+                pass
     except Exception:
         return False
 
@@ -1957,9 +1979,14 @@ PAGE_HTML = """<!DOCTYPE html>
       pnlEl.style.background = up ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)';
       pnlEl.style.borderColor = up ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)';
 
+      // `?? 0` here would print "$0.00 cash" for a collateral read that failed,
+      // stating a figure the venue never returned -- the same NULL-versus-zero
+      // rule the rest of this card enforces.
+      const usdOrDash = (v) =>
+        (v === null || v === undefined) ? '--' : `$${Number(v).toFixed(2)}`;
       const basisEl = document.getElementById('portfolio-basis');
       basisEl.textContent = swept
-        ? `$${Number(a.collateral_usd ?? 0).toFixed(2)} cash + $${Number(a.positions_value_usd ?? 0).toFixed(2)} positions`
+        ? `${usdOrDash(a.collateral_usd)} cash + ${usdOrDash(a.positions_value_usd)} positions`
         : 'collateral + positions';
 
       // How old the reading is. A balance is only as true as its last sweep,
@@ -1974,7 +2001,7 @@ PAGE_HTML = """<!DOCTYPE html>
           : ageS < 5400 ? `${Math.round(ageS / 60)}m`
           : `${Math.round(ageS / 3600)}h`;
         srcNote.textContent = `swept ${ageStr} ago`;
-        srcNote.style.color = ageS > 900 ? 'var(--warn)' : 'var(--text-dim)';
+        srcNote.style.color = ageS > 900 ? 'var(--warn)' : 'var(--text-muted)';
       }
       const srcEl = document.getElementById('portfolio-src');
       srcEl.textContent = swept ? (a.source || 'venue') : 'unswept';

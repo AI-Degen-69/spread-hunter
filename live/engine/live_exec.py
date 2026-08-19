@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import contextlib
+import hashlib
 import os
 import sys
 import threading
@@ -103,6 +104,15 @@ _TIF_CHOICES = ("GTC", "GTD", "FOK", "FAK")
 MAX_TOTAL_USD = 100.0
 
 
+# One built client per (funder, sig_type, host) for the life of the process.
+# Every _client() call used to POST /auth/api-key and then GET
+# /auth/derive-api-key, so a single command that touched the venue twice
+# derived twice, and a session of CLI runs derived once per run. Derivation is
+# the most rate-limit-sensitive call in the API. Process-local only: the creds
+# are never written to disk, matching the "never stored" rule below.
+_CLIENT_CACHE: dict = {}
+
+
 def _client(funder: str | None = None):
     """Build a CLOB client from the environment. Raises if anything is absent.
 
@@ -124,10 +134,19 @@ def _client(funder: str | None = None):
     sig_type = int(os.environ.get("POLY_SIG_TYPE", "3"))
     host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
 
+    # Keyed on the signing key too, so a changed key never reuses a client
+    # authenticated as someone else. Hashed: the key itself stays out of any
+    # structure that could be printed or logged.
+    cache_key = (hashlib.sha256(key.encode()).hexdigest(), funder, sig_type, host)
+    cached = _CLIENT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     c = ClobClient(host, key=key, chain_id=137,
                    signature_type=sig_type, funder=funder)
     # L2 API creds are derived from the key by the client; we never store them.
     c.set_api_creds(c.create_or_derive_api_key())
+    _CLIENT_CACHE[cache_key] = c
     return c
 
 

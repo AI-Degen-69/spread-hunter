@@ -115,3 +115,40 @@ def test_system_status_reports_a_genuinely_running_process(tmp_path, monkeypatch
     status = dash_mod.get_system_status()
     assert status["supervisor"]["running"] is True
     assert status["bot_state"] == "RUNNING"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows handle types")
+def test_open_process_handle_is_not_truncated():
+    """ctypes defaults restype to c_int, which truncates a pointer-sized HANDLE
+    on 64-bit Windows: a handle above 2**31 would be passed on as a different
+    value and then closed as garbage. argtypes/restype must be declared."""
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    handle = k32.OpenProcess(0x1000, False, os.getpid())
+    try:
+        assert handle is not None
+        assert int(handle) > 0        # never negative from truncation
+    finally:
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        k32.CloseHandle(handle)
+
+    # And the real helper reads a sane creation time through the same path.
+    assert _process_start_time(os.getpid()) is not None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal semantics")
+def test_permission_error_means_the_process_exists(monkeypatch):
+    """EPERM from os.kill means the process is alive and owned by someone else.
+    Reading it as 'stopped' would let a second bot stack start beside a live
+    one, which AGENTS.md forbids."""
+    import dash.live_dash as dash_mod
+
+    def denied(pid, sig):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(dash_mod.os, "kill", denied)
+    assert dash_mod._is_pid_alive(4321) is True

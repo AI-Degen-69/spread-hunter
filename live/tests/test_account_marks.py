@@ -175,15 +175,10 @@ def test_value_endpoint_is_read_as_a_list(monkeypatch):
     assert acct.fetch_positions_value("0xee") == pytest.approx(61.5)
 
 
-def test_value_endpoint_empty_list_is_none():
+def test_value_endpoint_empty_list_is_none(monkeypatch):
     """No row is 'the venue said nothing', not 'the positions are worth zero'."""
-    import engine.account as m
-    orig = m._get_json
-    m._get_json = lambda base, path, params, timeout: []
-    try:
-        assert m.fetch_positions_value("0xee") is None
-    finally:
-        m._get_json = orig
+    monkeypatch.setattr(acct, "_get_json", lambda base, path, params, timeout: [])
+    assert acct.fetch_positions_value("0xee") is None
 
 
 def test_positions_request_sets_size_threshold_zero(monkeypatch):
@@ -344,3 +339,65 @@ def test_closed_positions_count_round_trips(tmp_path):
     row = reg.get_all_account_marks()[0]
     assert row["closed_positions_count"] == 2
     assert row["pnl_closed_usd"] == pytest.approx(0.30)
+
+
+def test_client_is_built_once_per_process(monkeypatch):
+    """Every _client() call used to POST /auth/api-key then GET
+    /auth/derive-api-key. Derivation is the most rate-limit-sensitive call in
+    the API, and repeated derivations preceded a venue-side stall on this
+    account: signed requests hung past 30s while unsigned ones returned in 0.1s.
+    """
+    from engine import live_exec
+
+    live_exec._CLIENT_CACHE.clear()
+    monkeypatch.setenv("POLY_PRIVATE_KEY", "0x" + "11" * 32)
+    monkeypatch.setenv("POLY_FUNDER", "0xee3b")
+
+    built = {"n": 0}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            built["n"] += 1
+
+        def create_or_derive_api_key(self):
+            return {"key": "k"}
+
+        def set_api_creds(self, creds):
+            pass
+
+    import py_clob_client_v2.client as clob_mod
+    monkeypatch.setattr(clob_mod, "ClobClient", FakeClient)
+
+    first = live_exec._client()
+    second = live_exec._client()
+    assert first is second
+    assert built["n"] == 1
+    live_exec._CLIENT_CACHE.clear()
+
+
+def test_a_different_funder_gets_its_own_client(monkeypatch):
+    """`balance --funder` checks a candidate address; it must not reuse a
+    client authenticated for a different one."""
+    from engine import live_exec
+
+    live_exec._CLIENT_CACHE.clear()
+    monkeypatch.setenv("POLY_PRIVATE_KEY", "0x" + "11" * 32)
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            self.funder = kw.get("funder")
+
+        def create_or_derive_api_key(self):
+            return {"key": "k"}
+
+        def set_api_creds(self, creds):
+            pass
+
+    import py_clob_client_v2.client as clob_mod
+    monkeypatch.setattr(clob_mod, "ClobClient", FakeClient)
+
+    a = live_exec._client(funder="0xaaa")
+    b = live_exec._client(funder="0xbbb")
+    assert a is not b
+    assert a.funder == "0xaaa" and b.funder == "0xbbb"
+    live_exec._CLIENT_CACHE.clear()

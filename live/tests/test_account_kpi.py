@@ -244,3 +244,19 @@ def test_all_sweeps_failed_still_reports_measured_with_nulls(temp_db):
     a = report(db_path=str(temp_db), run_id="all")["portfolio"]["account"]
     assert a["measured"] is True
     assert a["account_value_usd"] is None
+
+
+def test_page_never_prints_an_unmeasured_leg_as_zero():
+    """A failed collateral read must render "--", not "$0.00 cash"."""
+    assert "a.collateral_usd ?? 0" not in PAGE_HTML
+    assert "usdOrDash" in PAGE_HTML
+
+
+def test_page_uses_only_defined_css_variables():
+    """var(--text-dim) resolves to nothing and silently keeps the inherited
+    colour, so the note never looks muted."""
+    import re
+
+    defined = set(re.findall(r"(--[a-z0-9-]+):", PAGE_HTML))
+    used = set(re.findall(r"var\((--[a-z0-9-]+)\)", PAGE_HTML))
+    assert used - defined == set()
