@@ -134,6 +134,7 @@ def run(
     clob_host: Optional[str] = None,
     inventory_fn: Optional[Callable] = None,
     open_orders_fn: Optional[Callable] = None,
+    fleet_state_fn: Optional[Callable] = None,
 ) -> list[LiveFleetResult]:
     """Rotate over `markets`: reconcile, then decide+submit per market, then sweep.
 
@@ -165,6 +166,16 @@ def run(
     once_results: list[LiveFleetResult] = []
     last_cycle: list[LiveFleetResult] = []
     while True:
+        # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
+        # are recomputed once per cycle and merged into the base config, so the
+        # fleet-level gates inside decide_quotes see live numbers rather than
+        # their 0.0 defaults. A failure here degrades to the defaults.
+        if fleet_state_fn is not None:
+            try:
+                base_cfg = replace(base_cfg, **fleet_state_fn(registry))
+            except Exception as e:
+                log.warning("fleet state failed: %s: %s", type(e).__name__, e)
+
         try:
             reconcile_fn(client, registry, maker_address)
         except KeyboardInterrupt:
@@ -234,10 +245,18 @@ def _visit_one(
             condition_id=cid, title=title, why=why, intents=list(intents))
 
     submitted = cancelled = 0
-    if to_submit:
-        submitted = submit_fn(client, registry, market, to_submit, cfg)
-    if to_cancel:
-        cancelled = cancel_fn(client, registry, to_cancel)
+    try:
+        if to_submit:
+            submitted = submit_fn(client, registry, market, to_submit, cfg)
+        if to_cancel:
+            cancelled = cancel_fn(client, registry, to_cancel)
+    except Exception as e:
+        # A submit/cancel failure (venue rejection, a split couple rolled back)
+        # must degrade this market to ERROR, never stop the rotation.
+        return LiveFleetResult(
+            status="ERROR", condition_id=cid, title=title, why=why,
+            intents=list(intents), submitted=submitted, cancelled=cancelled,
+            error=f"submit/cancel: {type(e).__name__}: {e}")
     return LiveFleetResult(
         status="QUOTED" if intents else "DECLINED",
         condition_id=cid, title=title, why=why, intents=list(intents),
@@ -468,6 +487,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     rotation (the smoke-test path); without it the loop runs until interrupted.
     """
     from engine.config import load
+    from engine.live_exec import _registry_naked_usd
     from engine.markets import full_book
     from engine.order_registry import DEFAULT_DB_PATH, OrderRegistry
     from engine.order_registry import reconcile_orders
@@ -545,6 +565,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
         inventory_fn=_make_inventory_fn(registry, db_path),
         open_orders_fn=_make_open_orders_fn(registry),
+        fleet_state_fn=lambda r: {"fleet_naked_usd": _registry_naked_usd(r)},
     )
 
     for r in results:

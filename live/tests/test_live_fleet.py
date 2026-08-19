@@ -156,3 +156,63 @@ class TestRunLoop:
     def test_sweep_runs_on_first_cycle(self):
         results, calls = self._run(live=False, intents=[])
         assert calls["swept"] == 1
+
+    def test_submit_error_does_not_stop_the_rotation(self):
+        # A submit failure must degrade the market to ERROR, not kill the loop:
+        # the second market is still visited and reconcile still runs.
+        calls = {"reconciled": 0}
+
+        def fetch_market(cid):
+            return FakeMarket(cid)
+
+        def fetch_books(clob_host, token):
+            return {"token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                    "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            return [_intent()], ""
+
+        def submit_fn(client, registry, market, intents, cfg):
+            raise RuntimeError("venue rejected")
+
+        def cancel_fn(client, registry, orders):
+            return 0
+
+        def reconcile_fn(client, registry, maker):
+            calls["reconciled"] += 1
+
+        results = run(
+            interval=0.0, once=True, live=True,
+            markets=[FakeMarket("0xa"), FakeMarket("0xb")],
+            client=object(), fetch_market=fetch_market, fetch_books=fetch_books,
+            decide=decide, submit_fn=submit_fn, cancel_fn=cancel_fn,
+            reconcile_fn=reconcile_fn, sweep_fn=lambda: None,
+            sleep_fn=lambda s: None,
+        )
+        assert [r.status for r in results] == ["ERROR", "ERROR"]
+        assert calls["reconciled"] == 1
+
+    def test_fleet_state_is_injected_into_decide_cfg(self):
+        seen = {}
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            seen["fleet_naked_usd"] = cfg.fleet_naked_usd
+            return [], "declined"
+
+        def fetch_market(cid):
+            return FakeMarket(cid)
+
+        def fetch_books(clob_host, token):
+            return {"token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                    "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+        run(
+            interval=0.0, once=True, live=False,
+            markets=[FakeMarket("0xabc")], client=object(),
+            fetch_market=fetch_market, fetch_books=fetch_books, decide=decide,
+            submit_fn=lambda *a, **k: 0, cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None, sweep_fn=lambda: None,
+            sleep_fn=lambda s: None,
+            fleet_state_fn=lambda r: {"fleet_naked_usd": 12.5},
+        )
+        assert seen["fleet_naked_usd"] == 12.5
