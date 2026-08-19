@@ -527,6 +527,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="cap the number of markets rotated (default: all)")
     ap.add_argument("--funder", default=None,
                     help="funder address (default: POLY_FUNDER)")
+    ap.add_argument("--no-reconcile", action="store_true",
+                    help="skip the reconcile pass (the poll loop owns it when "
+                         "running alongside this fleet)")
+    ap.add_argument("--no-sweep", action="store_true",
+                    help="skip the account sweep (the poll loop owns it when "
+                         "running alongside this fleet)")
     a = ap.parse_args(argv)
 
     logging.basicConfig(
@@ -577,8 +583,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         decide=decide_quotes,
         submit_fn=_submit_intents,
         cancel_fn=_cancel_orders,
-        reconcile_fn=lambda c, r, m: reconcile_orders(c, r, maker_address=m),
-        sweep_fn=_make_sweep_fn(maker, db_path, registry),
+        reconcile_fn=(
+            (lambda c, r, m: None) if a.no_reconcile
+            else (lambda c, r, m: reconcile_orders(c, r, maker_address=m))
+        ),
+        sweep_fn=(
+            (lambda: None) if a.no_sweep
+            else _make_sweep_fn(maker, db_path, registry)
+        ),
         base_cfg=cfg,
         registry=registry,
         maker_address=maker,

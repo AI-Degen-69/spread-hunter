@@ -619,12 +619,13 @@ def test_kpi_endpoint_survives_launch_by_file_path(tmp_path):
 
 
 def test_page_html_contains_status_bar_and_bot_buttons():
-    """Verify HTML contains Supervisor high-hierarchy indicator, 3 sub-service dots, and Start/Stop/Reset buttons."""
+    """Verify HTML contains Supervisor, 4 sub-service pills, and Start/Stop/Reset buttons."""
     from dash.live_dash import PAGE_HTML
 
     assert "id=\"supervisor-status\"" in PAGE_HTML or "id=\"sup-status\"" in PAGE_HTML
     assert "SUPERVISOR" in PAGE_HTML
     assert "id=\"sub-services\"" in PAGE_HTML or "class=\"sub-services\"" in PAGE_HTML
+    assert "id=\"pill-fleet\"" in PAGE_HTML
     assert "btn-start-bot" in PAGE_HTML
     assert "btn-stop-bot" in PAGE_HTML
     assert "btn-reset-db" in PAGE_HTML
@@ -632,7 +633,7 @@ def test_page_html_contains_status_bar_and_bot_buttons():
 
 
 def test_system_status_endpoint(client):
-    """GET /api/system/status returns supervisor, 3 sub-services (screener, engine, dash), and bot state."""
+    """GET /api/system/status returns supervisor, 4 sub-services (screener, engine, fleet, dash), and bot state."""
     res = client.get("/api/system/status")
     assert res.status_code == 200
     data = res.json()
@@ -641,6 +642,7 @@ def test_system_status_endpoint(client):
     assert "services" in data
     assert "screener" in data["services"]
     assert "engine" in data["services"]
+    assert "fleet" in data["services"]
     assert "dash" in data["services"]
     assert data["services"]["dash"]["running"] is True
     assert "bot_state" in data
@@ -972,6 +974,41 @@ def test_start_bot_passes_sweep_interval_to_poll(monkeypatch, tmp_path):
     engine_cmd = next(a for a in spawned if "poll" in a)
     assert "--sweep-interval" in engine_cmd
     assert engine_cmd[engine_cmd.index("--sweep-interval") + 1] == "30.0"
+
+
+def test_start_bot_spawns_screener_engine_and_fleet(monkeypatch, tmp_path):
+    """Start Bot launches the full hands-off stack: rerank, poll, and fleet.
+
+    The fleet loop must not reconcile or sweep -- poll owns both -- so its
+    command line carries --no-reconcile and --no-sweep alongside --live.
+    """
+    import subprocess
+
+    import dash.live_dash as dash_mod
+
+    spawned = []
+
+    class _FakePopen:
+        def __init__(self, args, **kwargs):
+            spawned.append(args)
+            self.pid = 12345
+
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "STOPPED"})
+    monkeypatch.setattr(dash_mod, "resolve_sweep_interval", lambda: None)
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+
+    result = dash_mod.start_bot()
+    assert result["ok"] is True
+
+    cmds = [" ".join(a) for a in spawned]
+    assert any("scripts.rerank_loop" in c for c in cmds), cmds
+    assert any("engine.live_exec" in c and "poll" in c for c in cmds), cmds
+
+    fleet_cmd = next(c for c in cmds if "engine.live_fleet" in c)
+    assert "--live" in fleet_cmd
+    assert "--no-reconcile" in fleet_cmd
+    assert "--no-sweep" in fleet_cmd
 
 
 def test_set_sweep_interval_persists_and_applies(monkeypatch, tmp_path):

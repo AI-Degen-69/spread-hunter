@@ -4458,3 +4458,8 @@ twenty seconds apart separated them; hours of waiting would not have.
 4. **One honest caveat: the breaker is wired but not yet armed.** Every live markout row is written `ref_mid_source='contaminated'`, and `_pool_stats` drops those rows by design, so the posture reads NORMAL until a clean reference mid (our own resting size subtracted) is measured. That is the correct safe direction -- never acting on a poisoned footprint -- but producing clean live ref_mids is the next step before HALT can trip on real money.
 
 **Verdict.** **LIVE**. Live suite 375 passed, 1 skipped. All three fleet-wide gates now have live inputs; the pooled breaker additionally needs clean reference mids before its halt can actually trip.
+
+1. **One reconcile loop, one sweep loop.** Poll owns reconcile/sweep and their shared lock + venue reads; fleet co-resides read-only against the registry (`--no-reconcile --no-sweep`), so nothing double-reconciles or contends.
+2. **The e2e lifecycle is hermetic except the venue.** `test_live_e2e_lifecycle.py` runs the real decide/submit/reconcile code paths over a real SQLite OrderRegistry with a FakeVenue stand-in, asserting row-first placement (a `pending` row exists with no venue id before `post_orders` runs) and the pending -> open -> filled transitions.
+
+**Verdict.** **LIVE**. Live suite 378 passed, 1 skipped. The dashboard's one-button start now brings up the whole hands-off stack, and the loop's lifecycle is covered end-to-end.

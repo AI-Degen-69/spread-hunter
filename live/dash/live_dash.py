@@ -756,7 +756,7 @@ def _is_pid_alive(pid: int | None, started_at: float | None = None) -> bool:
 
 
 def get_system_status() -> dict:
-    """Return live running status for Supervisor and 3 sub-services (Screener, Engine, Telemetry)."""
+    """Return live running status for Supervisor and 4 sub-services (Screener, Engine, Fleet, Telemetry)."""
     procs_file = LIVE_ROOT / "run" / "live_procs.json"
     saved_procs: dict[str, Any] = {}
     if procs_file.exists():
@@ -777,13 +777,17 @@ def get_system_status() -> dict:
     eng_pid = eng_info.get("pid")
     eng_running = _is_pid_alive(eng_pid, eng_info.get("started_at"))
 
+    fleet_info = saved_procs.get("fleet", {})
+    fleet_pid = fleet_info.get("pid")
+    fleet_running = _is_pid_alive(fleet_pid, fleet_info.get("started_at"))
+
     configured_sweep_interval = resolve_sweep_interval()
     running_sweep_interval = eng_info.get("sweep_interval_sec") if eng_running else None
 
     dash_running = True
     dash_pid = os.getpid()
 
-    bot_running = bool(sup_running or scr_running or eng_running)
+    bot_running = bool(sup_running or scr_running or eng_running or fleet_running)
 
     return {
         "supervisor": {
@@ -804,6 +808,11 @@ def get_system_status() -> dict:
                 "pid": eng_pid if eng_running else None,
                 "sweep_interval_sec": configured_sweep_interval,
                 "running_sweep_interval_sec": running_sweep_interval,
+            },
+            "fleet": {
+                "name": "Fleet (decide/submit)",
+                "running": fleet_running,
+                "pid": fleet_pid if fleet_running else None,
             },
             "dash": {
                 "name": "Telemetry (dash)",
@@ -846,7 +855,9 @@ def start_bot() -> dict:
     )
 
     # Launch Engine Poll loop (live_exec poll --interval 5). The account sweep
-    # follows LIVE_SWEEP_INTERVAL when set; otherwise it runs every tick.
+    # follows LIVE_SWEEP_INTERVAL when set; otherwise it runs every tick. Poll
+    # owns reconcile, the account sweep, and the markout sampler, and it keeps
+    # the registry's open orders fresh for the fleet loop below.
     sweep_interval = resolve_sweep_interval()
     poll_cmd = [sys.executable, "-m", "engine.live_exec", "poll", "--interval", "5"]
     if sweep_interval is not None:
@@ -858,11 +869,24 @@ def start_bot() -> dict:
         stderr=subprocess.DEVNULL,
     )
 
+    # Launch the Fleet loop (decide -> submit). It reads open orders from the
+    # registry rather than re-reconciling, so it runs with --no-reconcile and
+    # --no-sweep: a second reconcile loop would contend on the reconcile lock
+    # and double the venue reads poll already makes.
+    p_fleet = subprocess.Popen(
+        [sys.executable, "-m", "engine.live_fleet", "--live",
+         "--no-reconcile", "--no-sweep", "--interval", "5"],
+        cwd=str(LIVE_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
     saved_procs = {
         "supervisor": {"pid": p_eng.pid, "started_at": time.time()},
         "screener": {"pid": p_scr.pid, "started_at": time.time()},
         "engine": {"pid": p_eng.pid, "started_at": time.time(),
                    "sweep_interval_sec": sweep_interval},
+        "fleet": {"pid": p_fleet.pid, "started_at": time.time()},
     }
     procs_file.write_text(json.dumps(saved_procs, indent=2), encoding="utf-8")
 
@@ -2000,6 +2024,11 @@ PAGE_HTML = """<!DOCTYPE html>
         <span class="sub-service-name">Engine</span>
         <span class="sub-service-status" id="txt-engine" style="color:#f87171;">offline</span>
         <span class="sub-service-status" id="txt-engine-sweep" style="color:var(--text-muted);font-weight:400;">sweep: every tick</span>
+      </div>
+      <div class="sub-service-pill" id="pill-fleet">
+        <span class="status-dot status-dot-sm dot-offline" id="dot-fleet"></span>
+        <span class="sub-service-name">Fleet</span>
+        <span class="sub-service-status" id="txt-fleet" style="color:#f87171;">offline</span>
       </div>
     </div>
 
@@ -3214,6 +3243,15 @@ PAGE_HTML = """<!DOCTYPE html>
       if (txtEng) {
         txtEng.textContent = eng.running ? 'online' : 'offline';
         txtEng.style.color = eng.running ? '#34d399' : '#f87171';
+      }
+
+      const fleet = s.fleet || {};
+      const dotFleet = document.getElementById('dot-fleet');
+      const txtFleet = document.getElementById('txt-fleet');
+      if (dotFleet) dotFleet.className = fleet.running ? 'status-dot status-dot-sm dot-online' : 'status-dot status-dot-sm dot-offline';
+      if (txtFleet) {
+        txtFleet.textContent = fleet.running ? 'online' : 'offline';
+        txtFleet.style.color = fleet.running ? '#34d399' : '#f87171';
       }
 
       const txtEngSweep = document.getElementById('txt-engine-sweep');
