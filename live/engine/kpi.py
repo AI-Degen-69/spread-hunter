@@ -513,9 +513,14 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         c_ts = float(c["ts"])
         _fold_marks_through(c_ts)
         running_equity += float(c.get("realized_pnl") or 0.0)
+        # The float measured before this close described positions this close has
+        # now realised -- realized_pnl already holds that money. Carrying it past
+        # the close would count the same dollars twice on the curve, the way the
+        # portfolio tile would have before the stale-mark guard above.
+        running_float = 0.0
         equity_series.append({
             "ts": c_ts,
-            "v": running_equity + running_float,
+            "v": running_equity,
             "type": "close",
             "pnl": float(c.get("realized_pnl") or 0.0),
             "market": c.get("market_slug") or c.get("condition_id"),

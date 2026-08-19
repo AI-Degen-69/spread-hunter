@@ -653,11 +653,11 @@ def test_system_start_and_stop_endpoints(client, monkeypatch, tmp_path):
         lambda: (spawned.append("stop"), {"ok": True, "message": "stubbed"})[1],
     )
 
-    res_stop = client.post("/api/system/stop")
+    res_stop = client.post("/api/system/stop", headers=_control(client))
     assert res_stop.status_code == 200
     assert res_stop.json().get("ok") is True
 
-    res_start = client.post("/api/system/start")
+    res_start = client.post("/api/system/start", headers=_control(client))
     assert res_start.status_code == 200
     assert res_start.json().get("ok") is True
 
@@ -683,7 +683,7 @@ def test_start_endpoint_never_spawns_a_process_under_test(client, monkeypatch):
         dash_mod, "start_bot", lambda: {"ok": True, "message": "stubbed"}
     )
 
-    res = client.post("/api/system/start")
+    res = client.post("/api/system/start", headers=_control(client))
     assert res.status_code == 200
 
 
@@ -735,7 +735,7 @@ def test_system_restart_dash_endpoint(client, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: launched.append(a))
     monkeypatch.setattr(dash_mod.os, "_exit", lambda code: exited.append(code))
 
-    res = client.post("/api/system/restart-dash")
+    res = client.post("/api/system/restart-dash", headers=_control(client))
     assert res.status_code == 200
     assert res.json().get("ok") is True
     assert "restart-dash" in PAGE_HTML
@@ -792,7 +792,7 @@ def test_system_reset_db_endpoint(client, temp_db):
     conn.commit()
     conn.close()
 
-    res = client.post("/api/system/reset-db")
+    res = client.post("/api/system/reset-db", headers=_control(client))
     assert res.status_code == 200
     data = res.json()
     assert data.get("ok") is True
@@ -806,3 +806,99 @@ def test_system_reset_db_endpoint(client, temp_db):
     assert count == 0
 
 
+
+
+# --------------------------------------------------------------------------
+# CodeRabbit review round on PR #44
+# --------------------------------------------------------------------------
+
+def _control(client):
+    """Headers that authorize a machine-state change from this process's page."""
+    from dash.live_dash import CONTROL_TOKEN
+    return {"X-Control-Token": CONTROL_TOKEN}
+
+
+def test_control_endpoints_reject_untokened_posts(client):
+    """A POST without the page's token must not change machine state.
+
+    Loopback binding is not a defence: a page in the operator's browser can
+    submit a cross-origin form POST to 127.0.0.1:8799 with no CORS preflight,
+    and /api/system/start spawns the loop that signs real venue requests.
+    """
+    for path in (
+        "/api/system/start",
+        "/api/system/stop",
+        "/api/system/reset-db",
+        "/api/system/restart-dash",
+    ):
+        assert client.post(path).status_code == 403, f"{path} accepted an untokened POST"
+
+
+def test_control_endpoints_reject_foreign_origin(client, monkeypatch):
+    """Even with a token, a request claiming a foreign Origin is refused."""
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(dash_mod, "start_bot", lambda: {"ok": True})
+    res = client.post(
+        "/api/system/start",
+        headers={**_control(client), "Origin": "https://evil.example"},
+    )
+    assert res.status_code == 403
+
+
+def test_page_carries_a_live_token_but_the_constant_does_not(client):
+    """The served page gets a real token; PAGE_HTML keeps only the placeholder."""
+    from dash.live_dash import CONTROL_TOKEN, CONTROL_TOKEN_PLACEHOLDER
+
+    assert CONTROL_TOKEN_PLACEHOLDER in PAGE_HTML
+    assert CONTROL_TOKEN not in PAGE_HTML
+
+    body = client.get("/").text
+    assert CONTROL_TOKEN in body
+    assert CONTROL_TOKEN_PLACEHOLDER not in body
+
+
+def test_start_refuses_a_second_bot_stack(client, monkeypatch):
+    """Two stacks on one database sum independent inventories into invalid data.
+
+    live_procs.json only remembers the newest PIDs, so a second start would also
+    strand the first pair beyond the reach of stop_bot.
+    """
+    import subprocess
+
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(
+        dash_mod, "get_system_status", lambda: {"bot_state": "RUNNING"}
+    )
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda *a, **kw: pytest.fail("a second bot stack was spawned"),
+    )
+
+    res = client.post("/api/system/start", headers=_control(client))
+    assert res.status_code == 200
+    assert res.json()["ok"] is False
+    assert "already running" in res.json()["message"]
+
+
+def test_reset_db_refuses_while_the_bot_is_running(monkeypatch, temp_db):
+    """Unlinking the registry under a live writer loses every later write."""
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(dash_mod, "get_system_status", lambda: {"bot_state": "RUNNING"})
+    result = dash_mod.reset_database(temp_db)
+
+    assert result["ok"] is False
+    assert "running" in result["message"].lower()
+    assert temp_db.exists(), "the live registry was deleted under the bot"
+
+
+def test_status_reports_the_port_actually_bound(monkeypatch):
+    """--port moves the dashboard, and the status payload must follow it."""
+    import dash.live_dash as dash_mod
+
+    monkeypatch.setattr(dash_mod, "_ACTIVE_PORT", 9123)
+    assert dash_mod.get_system_status()["services"]["dash"]["port"] == 9123
+    # The page reads the reported port instead of a literal.
+    assert "':8799'" not in PAGE_HTML

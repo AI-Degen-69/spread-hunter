@@ -4104,3 +4104,45 @@ table read.
 
 **Verdict.** **LIVE** for 1–6. **OPEN**: nothing marks the open book, so unrealized P&L stays
 unmeasured until a sweep writes float marks. Root suite 703 passed; live suite 250 passed.
+
+---
+
+## 2026-08-19 - "Total Value" was sourced from a simulation constant
+
+**Question.** CodeRabbit raised five findings on PR #44, and the Owner opened the page against the
+real account. Does the headline tile show what the account holds?
+
+**Method.** Compared the tile against the Polymarket portfolio page for the funded address, and
+traced the number back to its source.
+
+**Result.**
+1. **It does not.** The tile read **$100.30**; the account read **$101.88**. The figure was
+   `_CFG.bankroll_usd + realized_pnl`, and `bankroll_usd = 100.0` is a *simulation parameter*
+   (`live/engine/config.py:23`) that nobody deposited. The +$0.30 past-day change matched the merge,
+   which made a fabricated base look plausible. Relabelled to **Book Value / registry** with an
+   explicit "config bankroll + realised - not the Polymarket balance" note until the venue is the
+   source. Sourcing account value and account P&L from the venue is the next piece of work, tracked
+   **OPEN**; `_fetch_live_balance` (`live/engine/live_exec.py:2317`) already reads COLLATERAL and is
+   the starting point.
+2. **The equity curve carried a float past the close that realised it.** The portfolio tile ignores
+   marks older than the newest close, but the series did not: `running_float` survived the close, so
+   every later close point overstated equity by a float `realized_pnl` already contained. Same
+   defect, two surfaces, one fixed. `running_float` now resets on each close.
+3. **`start_bot` did not refuse a second start.** `Popen` ran unconditionally and `live_procs.json`
+   kept only the newest PIDs, so a double click or a direct POST launched a second screener and a
+   second poll loop that `stop_bot` could never reach - two stacks summing independent inventories
+   into one database, which AGENTS.md forbids outright. Now refuses while RUNNING.
+4. **`reset_database` could unlink the registry under a live writer.** The archive guard did not
+   check liveness; a reset mid-run would leave the loops writing an unlinked inode while the page
+   read a new empty file. Now refuses while the stack is RUNNING.
+5. **The control endpoints had no authentication.** `/api/system/start` spawns the loop that signs
+   real venue requests, and loopback is not a defence: a cross-origin form POST needs no preflight,
+   so any page in the operator's browser could start the bot. Each process now mints a token, hands
+   it only to the page it serves, and requires it as a header on every `/api/system/*` route, with
+   an Origin check behind it. A form POST cannot set a custom header, which is what makes this
+   complete.
+6. **The telemetry pill hardcoded `:8799`.** `--port` moves the dashboard; the status payload now
+   reports the port actually bound.
+
+**Verdict.** **LIVE** for 2-6. **OPEN** for 1: the account's value and P&L must come from the venue,
+not from a config constant. Root suite 703 passed; live suite 256 passed.

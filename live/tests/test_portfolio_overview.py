@@ -228,6 +228,13 @@ def test_equity_series_steps_on_each_close_and_mark(seeded_db):
     # First close: bankroll + 0.30, no float recorded yet.
     assert series[0]["type"] == "close"
     assert series[0]["v"] == pytest.approx(start + 0.30)
+    # The mark at t+120 floats on top of the first close.
+    assert series[1]["type"] == "mark"
+    assert series[1]["v"] == pytest.approx(start + 0.30 + 1.25)
+    # The second close realises that float. Not start + 0.40 + 1.25: the 1.25
+    # described positions this close just settled, and realized_pnl holds them.
+    assert series[2]["type"] == "close"
+    assert series[2]["v"] == pytest.approx(start + 0.40)
     # Last point: both closes banked, latest mark floated on top.
     assert series[-1]["v"] == pytest.approx(start + 0.40 + 2.50)
 

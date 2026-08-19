@@ -21,13 +21,14 @@ import argparse
 import datetime
 import json
 import os
+import secrets
 import sqlite3
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -42,6 +43,9 @@ if str(LIVE_ROOT) not in sys.path:
 # never as code -- the tree boundary is about imports, not about files on disk.
 REPO_ROOT = LIVE_ROOT.parent
 DEFAULT_PORT = 8799
+# The port actually bound. main() overwrites it when --port is given; the status
+# payload must report where the page really is, not where it usually is.
+_ACTIVE_PORT = DEFAULT_PORT
 POLL_INTERVAL_MS = 2000
 STALE_THRESHOLD_SEC = 30.0
 
@@ -445,6 +449,32 @@ def query_db_state(db_path: Path | str) -> dict[str, Any]:
 app = FastAPI(title="Spread Hunter Live Monitor")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# Every /api/system/* route changes machine state: start spawns the live
+# execution loop that signs real venue requests, reset-db deletes the registry,
+# restart-dash ends this process. Loopback binding is not a defence -- a page
+# open in the operator's browser can submit a cross-origin form POST to
+# 127.0.0.1:8799 with no CORS preflight, and the side effect lands even though
+# the attacker cannot read the reply.
+#
+# The token is generated per process and handed to the page that this process
+# serves, so there is nothing for the operator to configure and no state to
+# leak between runs. A simple form POST cannot set a custom header, which is
+# what makes the header requirement a complete CSRF defence on its own; the
+# Origin check is the second lock.
+CONTROL_TOKEN = secrets.token_urlsafe(32)
+CONTROL_TOKEN_PLACEHOLDER = "__LIVE_DASH_CONTROL_TOKEN__"
+
+
+def _authorize_control(request: Request) -> None:
+    """Reject cross-origin or untokened attempts to change machine state."""
+    origin = request.headers.get("origin")
+    if origin is not None:
+        allowed = {f"http://{request.url.netloc}", f"https://{request.url.netloc}"}
+        if origin not in allowed:
+            raise HTTPException(status_code=403, detail="cross-origin control request refused")
+    if request.headers.get("x-control-token") != CONTROL_TOKEN:
+        raise HTTPException(status_code=403, detail="missing or stale control token")
+
 _ACTIVE_DB_OVERRIDE: Path | None = None
 
 
@@ -528,7 +558,7 @@ def get_system_status() -> dict:
                 "name": "Telemetry (dash)",
                 "running": dash_running,
                 "pid": dash_pid,
-                "port": DEFAULT_PORT,
+                "port": _ACTIVE_PORT,
             },
         },
         "bot_state": "RUNNING" if bot_running else "STOPPED",
@@ -539,6 +569,20 @@ def get_system_status() -> dict:
 def start_bot() -> dict:
     """Launch background Screener and Reconcile loop."""
     import subprocess
+
+    # One instance at a time (AGENTS.md): two stacks on one database sum their
+    # independent inventories into silently invalid data. The page disables the
+    # button while RUNNING, but a double click in the poll gap, a reload, or a
+    # direct POST all bypass button state -- and live_procs.json only remembers
+    # the newest PIDs, so stop_bot could never reach the first pair.
+    current = get_system_status()
+    if current["bot_state"] == "RUNNING":
+        return {
+            "ok": False,
+            "message": "Bot stack is already running; refusing to start a second instance.",
+            "status": current,
+        }
+
     procs_file = LIVE_ROOT / "run" / "live_procs.json"
     procs_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -605,6 +649,18 @@ def reset_database(custom_path: str | Path | None = None) -> dict:
     target_db = resolve_db_path(custom_path or _ACTIVE_DB_OVERRIDE)
     archived_name = None
 
+    # Unlinking the registry under a live writer loses every subsequent write:
+    # the engine and screener keep their handles on the old inode while the page
+    # reads a new empty file, so the run's telemetry splits across two files and
+    # the dashboard reads empty for a bot that is still trading.
+    if get_system_status()["bot_state"] == "RUNNING":
+        return {
+            "ok": False,
+            "message": "Refusing to reset while the bot stack is running. Stop the bot first.",
+            "archived_to": None,
+            "db_path": str(target_db),
+        }
+
     # This function archives-then-deletes whatever it is pointed at. Launched
     # with --db against an archived cycle for a post-mortem, an unguarded reset
     # would destroy the very record the operator opened the page to read -- and
@@ -655,20 +711,23 @@ def api_system_status():
 
 
 @app.post("/api/system/start")
-def api_system_start():
+def api_system_start(request: Request):
     """Start background bot stack."""
+    _authorize_control(request)
     return JSONResponse(start_bot())
 
 
 @app.post("/api/system/stop")
-def api_system_stop():
+def api_system_stop(request: Request):
     """Stop background bot stack."""
+    _authorize_control(request)
     return JSONResponse(stop_bot())
 
 
 @app.post("/api/system/reset-db")
-def api_system_reset_db():
+def api_system_reset_db(request: Request):
     """Archive current database and initialize a fresh clean live.db."""
+    _authorize_control(request)
     return JSONResponse(reset_database())
 
 
@@ -688,8 +747,9 @@ def relaunch_argv() -> list[str]:
 
 
 @app.post("/api/system/restart-dash")
-def api_system_restart_dash():
+def api_system_restart_dash(request: Request):
     """Restart only the dashboard web server process without touching engine/screener workers."""
+    _authorize_control(request)
     import threading
     import subprocess
 
@@ -888,6 +948,11 @@ PAGE_HTML = """<!DOCTYPE html>
       padding: 2px 7px; border-radius: 5px; border: 1px solid transparent;
     }
     .pf-foot-note { font-size: 11px; color: var(--text-muted); }
+    .pf-src {
+      font-size: 9px; letter-spacing: 0.08em; padding: 1px 5px; border-radius: 3px;
+      background: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.35);
+      color: var(--warn); font-weight: 700; margin-left: 4px;
+    }
     .pf-chart { margin-top: 14px; }
     .pf-chart svg { width: 100%; height: auto; display: block; }
     .pf-empty {
@@ -1372,11 +1437,14 @@ PAGE_HTML = """<!DOCTYPE html>
     <section class="portfolio-card">
       <div class="portfolio-tiles">
         <div class="pf-tile pf-tile-primary">
-          <div class="pf-label">Total Value</div>
+          <div class="pf-label">Book Value <span class="pf-src">registry</span></div>
           <div class="pf-value-huge mono" id="portfolio-total-value">--</div>
           <div class="pf-foot">
             <span class="pf-chip" id="portfolio-pnl">--</span>
             <span class="pf-foot-note mono" id="portfolio-basis">on -- bank</span>
+          </div>
+          <div class="pf-foot-note mono" style="color:var(--warn);">
+            config bankroll + realised &mdash; not the Polymarket balance
           </div>
         </div>
         <div class="pf-tile">
@@ -1635,6 +1703,15 @@ PAGE_HTML = """<!DOCTYPE html>
   <script>
     let lastState = null;
     let lastKpi = null;
+    // Handed to this page by the process that served it. Required on every
+    // /api/system/* call: a cross-origin form POST cannot set a custom header,
+    // which is what stops another tab from starting the bot on your behalf.
+    const CONTROL_TOKEN = "__LIVE_DASH_CONTROL_TOKEN__";
+
+    function controlFetch(path) {
+      return fetch(path, { method: 'POST', headers: { 'X-Control-Token': CONTROL_TOKEN } });
+    }
+
     let localNakedSinceMs = null;
     let localLastPollMs = null;
     let selectedRunId = "";
@@ -2595,7 +2672,8 @@ PAGE_HTML = """<!DOCTYPE html>
       const txtDsh = document.getElementById('txt-dash');
       if (dotDsh) dotDsh.className = dsh.running ? 'status-dot status-dot-sm dot-online' : 'status-dot status-dot-sm dot-offline';
       if (txtDsh) {
-        txtDsh.textContent = dsh.running ? ':8799' : 'offline';
+        const dashPort = dsh.port || window.location.port || '';
+        txtDsh.textContent = dsh.running ? (dashPort ? ':' + dashPort : 'online') : 'offline';
         txtDsh.style.color = dsh.running ? '#34d399' : '#f87171';
       }
 
@@ -2610,7 +2688,7 @@ PAGE_HTML = """<!DOCTYPE html>
       const btnStart = document.getElementById('btn-start-bot');
       if (btnStart) btnStart.disabled = true;
       try {
-        const res = await fetch('/api/system/start', { method: 'POST' });
+        const res = await controlFetch('/api/system/start');
         const data = await res.json();
         if (data.status) renderSystemStatus(data.status);
       } catch (err) {
@@ -2624,7 +2702,7 @@ PAGE_HTML = """<!DOCTYPE html>
       const btnStop = document.getElementById('btn-stop-bot');
       if (btnStop) btnStop.disabled = true;
       try {
-        const res = await fetch('/api/system/stop', { method: 'POST' });
+        const res = await controlFetch('/api/system/stop');
         const data = await res.json();
         if (data.status) renderSystemStatus(data.status);
       } catch (err) {
@@ -2641,7 +2719,7 @@ PAGE_HTML = """<!DOCTYPE html>
       const btn = document.getElementById('btn-reset-db');
       if (btn) btn.disabled = true;
       try {
-        const res = await fetch('/api/system/reset-db', { method: 'POST' });
+        const res = await controlFetch('/api/system/reset-db');
         const data = await res.json();
         alert(data.message || "Fresh database created successfully.");
         pollState();
@@ -2661,7 +2739,7 @@ PAGE_HTML = """<!DOCTYPE html>
         pollPill.className = 'pill pill-stale';
       }
       try {
-        await fetch('/api/system/restart-dash', { method: 'POST' });
+        await controlFetch('/api/system/restart-dash');
       } catch (err) {
         // Ignored: server dropping connections on restart is expected
       }
@@ -2742,8 +2820,11 @@ PAGE_HTML = """<!DOCTYPE html>
 @app.get("/", response_class=HTMLResponse)
 def index():
     """Serve the live execution monitor."""
+    # The token is minted per process and only ever reaches the page this
+    # process serves. PAGE_HTML keeps the placeholder so the constant itself
+    # never carries a live credential.
     return HTMLResponse(
-        PAGE_HTML,
+        PAGE_HTML.replace(CONTROL_TOKEN_PLACEHOLDER, CONTROL_TOKEN),
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
@@ -2763,6 +2844,9 @@ def main():
 
     if args.db:
         set_db_override(args.db)
+
+    global _ACTIVE_PORT
+    _ACTIVE_PORT = args.port
 
     print(f"Starting Live Execution Dashboard on http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port)
