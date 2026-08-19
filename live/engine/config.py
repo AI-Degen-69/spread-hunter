@@ -548,6 +548,17 @@ class MakerConfig:
     # needs no removal, only a bankroll.
     waive_attenuation_below_floor: bool = True
 
+    # A couple is two legs. When inventory is FLAT, resting one leg alone is
+    # not a smaller couple -- it is a naked position taken on purpose, and the
+    # only thing that can close it is the taker path paying the spread it was
+    # resting to earn. So on a flat book both sides quote or neither does.
+    #
+    # This does NOT apply when inventory is unbalanced: there the single
+    # remaining quote is the light side, and it FLATTENS the position. Blocking
+    # it would freeze the market at maximum exposure, which is the failure the
+    # taper's light-side exemption exists to avoid.
+    require_two_sided_when_flat: bool = True
+
     # --- powerwinner's two entry rules ------------------------------------
     # PRICE BAND. 54% of powerwinner's BTC 5-min volume enters at 0.30-0.70, and
     # he has ZERO trades at 0.98+. That is where the spread -- and the taker fee

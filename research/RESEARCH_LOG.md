@@ -3791,3 +3791,75 @@ proven, and cannot be by comparison: dollars mode has no counterpart in the simu
 a characterisation test instead.
 
 Root suite 703 passed; live suite 199 passed.
+
+
+### 2026-08-19 - Milestone 6: Couple-Share Sizing, Dollars Mode Characterisation & LiveFillEngine
+
+**Question.** How do we eliminate naked unhedged exposure created at fill by sizing the couple in shares ($N = \lfloor \text{couple\_allocation} / (p_{up} + p_{dn}) \rfloor$) rather than per-leg dollars ($3.00/leg), pin dollars mode behavior via characterisation tests, prove the defunding path (`quote_shares == 0`), and draft `LiveFillEngine` implementing the `sweep.py` interface while preserving the invariant that `on_book` never infers synthetic fills?
+
+**Method.**
+1. Re-anchored sizing in `live/engine/risk.py:size_for()` and `live/engine/quotes.py:_decide_quotes_rewards()`:
+   - Sizing the couple in equal shares $N = \lfloor \text{couple\_allocation} / (p_{up} + p_{dn}) \rfloor$, with $N = \max(N, \text{venue\_min\_size})$ and legs costing unequal dollars ($N \cdot p_{up}$ and $N \cdot p_{dn}$).
+   - Guard 4 (inventory taper on heavy side) and price-risk taper continue to apply symmetrically on top of base $N$.
+2. Added characterisation tests in `live/tests/test_live_quotes.py` pinning frozen books, config, exact prices/sizes, taper waivers, and floor shortfalls.
+3. Proved the defunding path: `quote_shares == 0` returns 0 quote intents in dollars mode.
+4. Implemented `LiveFillEngine` in `live/engine/live_fill_engine.py` matching the `sweep.py` engine interface (`post`, `amend`, `cancel`, `cross`, `open_orders`, `on_book`, `filled_shares`, `cost`, `avg_price`) backed by `OrderRegistry` with zero synthetic fill inference in `on_book()`.
+5. Evaluated before/after couple-share sizing vs old dollar-split across all 11 active graduated markets in `run/markets.json`.
+
+**Result.**
+1. Before / After Couple-Share Sizing Comparison across all 11 Graduated Markets:
+   - `bitcoin-up-or-down-on-august-19-2026` ($p_{up}=0.213, p_{dn}=0.738, p_{pair}=0.951$):
+     - Before: UP 14sh ($2.98), DOWN 4sh ($2.95) -> **10 naked shares unhedged**.
+     - After: $N=6$sh UP ($1.28), $6$sh DOWN ($4.43), total pair cost $5.71 -> **0 naked shares**.
+   - `mlb-oak-kc-2026-08-18` ($p_{up}=0.698, p_{dn}=0.252, p_{pair}=0.950$):
+     - Before: UP 4sh ($2.79), DOWN 11sh ($2.77) -> **7 naked shares unhedged**.
+     - After: $N=6$sh UP ($4.19), $6$sh DOWN ($1.51), total pair cost $5.70 -> **0 naked shares**.
+   - `mlb-atl-min-2026-08-18` ($p_{up}=0.223, p_{dn}=0.728, p_{pair}=0.951$):
+     - Before: UP 13sh ($2.90), DOWN 4sh ($2.91) -> **9 naked shares unhedged**.
+     - After: $N=6$sh UP ($1.34), $6$sh DOWN ($4.37), total pair cost $5.71 -> **0 naked shares**.
+   - `mlb-cws-chc-2026-08-18` ($p_{up}=0.542, p_{dn}=0.396, p_{pair}=0.938$):
+     - Before: UP 5sh ($2.71), DOWN 7sh ($2.77) -> **2 naked shares unhedged**.
+     - After: $N=5$sh UP ($2.71), $5$sh DOWN ($1.98) (taper waived), pair cost $4.69 -> **0 naked shares**.
+   - `atp-tien-tiafoe-2026-08-18` ($p_{up}=0.339, p_{dn}=0.605, p_{pair}=0.944$):
+     - Before: UP 8sh ($2.71), DOWN 4sh ($2.42) -> **4 naked shares unhedged**.
+     - After: $N=5$sh UP ($1.70), $5$sh DOWN ($3.02) (taper waived), pair cost $4.72 -> **0 naked shares**.
+   - `atp-nestero-hemery-2026-08-17` ($p_{up}=0.471, p_{dn}=0.462, p_{pair}=0.933$):
+     - Before: UP 6sh ($2.83), DOWN 6sh ($2.77) -> **0 naked shares**.
+     - After: $N=5$sh UP ($2.35), $5$sh DOWN ($2.31) (taper waived), pair cost $4.67 -> **0 naked shares**.
+   - Blocked / Declined markets: 5 markets properly refused on hard price band (0.10-0.90), settled books, or missing two-sided liquidity (`mlb-ari-bos-2026-08-18`, `mlb-mia-phi-2026-08-18`, `mlb-sea-mil-2026-08-18`, `mlb-nyy-bal-2026-08-18`, `mlb-wsh-tex-2026-08-18`).
+2. Test suite status:
+   - Root test suite: **703 passed, 1 warning (exit code 0)**.
+   - Live test suite: **205 passed, 1 warning (exit code 0)** (+6 net new tests across `test_live_fill_engine.py` and `test_live_quotes.py`).
+   - Total tests: **908 passed, 0 failed**.
+
+**Verdict.** **LIVE** on couple-share sizing, dollars mode characterisation tests, allocator defunding guarantee, and `LiveFillEngine`.
+
+
+### 2026-08-19 - A flat book must quote a couple or nothing
+
+**Question.** Couple-share sizing removed the imbalance that equal-dollar legs created. But the
+price band blocks each side independently, so a flat market can still produce exactly one
+intent. Is a single resting leg on a flat book acceptable?
+
+**Method.** Drove `decide_quotes` in the live fork across three books at four bankrolls, flat and
+with a 40-share naked UP position, and read which sides returned intents.
+
+**Result.** Couple-share sizing holds: at bankrolls of $100, $1,000, $5,000 and $20,000 against a
+0.24 / 0.74 book the two sides returned equal sizes every time (6/6, 10/10, 53/53, 212/212), so
+the hedge is not an artifact of the venue floor masking small numbers.
+
+The gap is elsewhere. On a 0.11 / 0.87 book with flat inventory, UP is blocked by the price band
+and DOWN alone returned 53 shares. That is a naked position by construction: if it fills there is
+no hedge, and the only way to acquire one is to cross -- paying away the spread the quote was
+resting to earn. The pair is the product; half a pair is a directional bet nobody decided to
+take.
+
+The same shape is CORRECT when inventory is unbalanced. With 40 naked UP shares the lone DOWN
+intent is the light side, it reduces exposure, and refusing it would hold the position at its
+widest -- the failure the taper's light-side exemption already exists to prevent.
+
+**Verdict.** **LIVE** on `require_two_sided_when_flat` in the live fork: with flat inventory,
+fewer than two intents returns none, and the refusal names which side was blocked. Unbalanced
+inventory is untouched. The simulation keeps the old behaviour; the divergence is recorded.
+
+Live suite 206 passed; root suite 703 passed.

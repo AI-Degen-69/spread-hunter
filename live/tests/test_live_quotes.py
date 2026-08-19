@@ -105,3 +105,111 @@ def test_inventory_from_registry(tmp_path):
     assert inv.fills == 2
     assert inv.last_fill_ts == pytest.approx(1060.0)
     assert inv.balance == pytest.approx(40.0 / 60.0)
+
+
+def test_decide_quotes_dollars_mode_characterisation():
+    """Pin the behaviour of dollars mode under frozen book and config."""
+    # 1. Normal couple sizing with taper waived at coin-flip
+    cfg_waived = MakerConfig(
+        objective="rewards",
+        size_mode="dollars",
+        bankroll_usd=100.0,
+        couple_risk_frac=0.01,
+        min_couple_usd=6.0,
+        min_quote_shares=5,
+        quote_shares=120,
+        reward_offset=0.02,
+        waive_attenuation_below_floor=True,
+    )
+    up_book = {
+        "best_bid": 0.51, "best_ask": 0.52,
+        "bids": {0.51: 1000.0}, "asks": {0.52: 1000.0}
+    }
+    down_book = {
+        "best_bid": 0.48, "best_ask": 0.49,
+        "bids": {0.48: 1000.0}, "asks": {0.49: 1000.0}
+    }
+    inv = Inventory()
+    intents, why = decide_quotes(cfg_waived, up_book, down_book, inv, 1e9, None)
+
+    assert len(intents) == 2
+    assert not why
+    up_qi = [i for i in intents if i.side == "UP"][0]
+    dn_qi = [i for i in intents if i.side == "DOWN"][0]
+
+    assert up_qi.price == 0.480
+    assert dn_qi.price == 0.452
+    assert up_qi.size == 5
+    assert dn_qi.size == 5
+    assert "price-risk taper x0.46 waived: 2sh is under the 5sh venue floor" in up_qi.reason
+    assert "price-risk taper x0.55 waived: 3sh is under the 5sh venue floor" in dn_qi.reason
+
+    # 2. Allocation cannot clear the venue floor
+    cfg_shortfall = MakerConfig(
+        objective="rewards",
+        size_mode="dollars",
+        bankroll_usd=10.0,
+        couple_risk_frac=0.01,
+        min_couple_usd=2.0,
+        min_quote_shares=5,
+        quote_shares=120,
+        reward_offset=0.02,
+    )
+    intents_short, why_short = decide_quotes(cfg_shortfall, up_book, down_book, inv, 1e9, None)
+    assert len(intents_short) == 0
+    assert "$2.00 couple allocation at pair price 0.932 buys 2sh, below the venue minimum of 5sh" in why_short
+    assert "needs $4.66, shortfall $2.66" in why_short
+
+
+def test_decide_quotes_dollars_mode_defunded():
+    """quote_shares == 0 in dollars mode means defunded: quote nothing."""
+    cfg_defunded = MakerConfig(
+        objective="rewards",
+        size_mode="dollars",
+        quote_shares=0,
+        bankroll_usd=100.0,
+        min_couple_usd=6.0,
+        min_quote_shares=5,
+    )
+    up_book = {
+        "best_bid": 0.50, "best_ask": 0.52,
+        "bids": {0.50: 1000.0}, "asks": {0.52: 1000.0}
+    }
+    down_book = {
+        "best_bid": 0.48, "best_ask": 0.50,
+        "bids": {0.48: 1000.0}, "asks": {0.50: 1000.0}
+    }
+    inv = Inventory()
+    intents, why = decide_quotes(cfg_defunded, up_book, down_book, inv, 1e9, None)
+    assert len(intents) == 0
+    assert why == "unfunded by the allocator -- quoting nothing"
+
+
+def test_flat_inventory_refuses_a_lone_leg():
+    """One resting leg against no inventory is a naked position by construction.
+
+    If it fills, the hedge does not exist and the only way to get it is to
+    cross, paying away the spread the quote was resting to earn. The couple is
+    the product; half a couple is a directional bet nobody chose.
+    """
+    from dataclasses import replace
+    from engine.config import load
+
+    cfg = replace(load(), bankroll_usd=5000.0)
+    flat = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
+    # UP sits at the band edge and is blocked; DOWN alone would otherwise rest.
+    up = {"best_bid": 0.11, "best_ask": 0.12,
+          "bids": {0.11: 9999.0}, "asks": {0.12: 9999.0}}
+    down = {"best_bid": 0.87, "best_ask": 0.88,
+            "bids": {0.87: 9999.0}, "asks": {0.88: 9999.0}}
+
+    intents, why = decide_quotes(cfg, up, down, flat, 1e9, None)
+    assert intents == []
+    assert "lone resting leg is a naked position" in why
+
+    # Unbalanced is the opposite case: the single intent is the LIGHT side and
+    # it flattens the position, so it must still be allowed through.
+    naked = Inventory(up_shares=40, down_shares=0, up_cost=6.0, down_cost=0.0)
+    intents, why = decide_quotes(cfg, up, down, naked, 1e9, None)
+    assert [i.side for i in intents] == ["DOWN"]
+    assert why == ""

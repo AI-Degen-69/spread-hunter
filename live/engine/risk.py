@@ -82,7 +82,7 @@ def risk_utilization(cfg, inv, side: str) -> float:
     return max(0.0, min(1.0, naked_usd(inv, side) / budget))
 
 
-def size_for(cfg, inv, side: str, price: float) -> int:
+def size_for(cfg, inv, side: str, price: float, pair_price: float | None = None) -> int:
     """How many shares to rest on `side`, given what is already at risk.
 
     R5. `hard_block` is a step, and a step is the wrong shape for a limit: at
@@ -122,11 +122,19 @@ def size_for(cfg, inv, side: str, price: float) -> int:
         return 0
 
     if getattr(cfg, "size_mode", "shares") == "dollars":
-        # Price decides the share count; the dollar allocation decides the
-        # exposure. A leg is one half of the couple, never more.
+        # Sized in couple shares from the Owner's allocation rule:
+        # N = floor(couple_allocation / (up_price + down_price))
+        # N = max(N, venue_min_size)
         if price <= 0:
             return 0
-        base = int(config.leg_allocation_usd(cfg) / price)
+        eff_pair = pair_price if (pair_price is not None and pair_price > 0) else (2.0 * price)
+        if eff_pair <= 0:
+            return 0
+        couple_alloc = config.couple_allocation_usd(cfg)
+        raw_n = int(couple_alloc / eff_pair)
+        if raw_n < cfg.min_quote_shares:
+            return 0
+        base = max(raw_n, cfg.min_quote_shares)
     else:
         base = max(cfg.quote_shares, cfg.min_quote_shares)
 
