@@ -2080,6 +2080,7 @@ def poll(
     """
     import datetime
     import signal
+    from engine.cycle_stream import emit as _emit_cycle_event
     from engine.order_registry import (
         OrderRegistry,
         reconcile_orders,
@@ -2190,6 +2191,10 @@ def poll(
 
         if _sweep_due(cycle, time.time(), last_sweep_ts, sweep_interval, sweep_every):
             _sweep_account(now_iso)
+            _emit_cycle_event(
+                service="engine", cycle=cycle, phase="settling",
+                action="sweep_done",
+            )
 
         try:
             summary = reconcile_orders(client, registry, maker_address=funder)
@@ -2211,6 +2216,18 @@ def poll(
                 f"fills=+{summary.fills_recorded} (dup={summary.duplicates_ignored}) | "
                 f"open_orders={summary.open_orders_count} trades={summary.trades_polled} | "
                 f"cycle={elapsed:.2f}s | errors=0"
+            )
+            _emit_cycle_event(
+                service="engine", cycle=cycle, phase="reconciling",
+                action="reconcile_ok", latency_ms=elapsed * 1000.0,
+                extra={
+                    "fills": summary.fills_recorded,
+                    "duplicates_ignored": summary.duplicates_ignored,
+                    "transitions": len(summary.transitions),
+                    "open": open_count,
+                    "partial": partial_count,
+                    "pending": pending_count,
+                },
             )
 
         except KeyboardInterrupt:
@@ -2235,6 +2252,10 @@ def poll(
             skip_msg = f"[POLL {now_iso}] SKIPPED cycle {cycle}: {exc}"
             print(skip_msg, file=sys.stderr)
             _log_event(skip_msg)
+            _emit_cycle_event(
+                service="engine", cycle=cycle, phase="waiting",
+                action="reconcile_contended",
+            )
             if once:
                 last_cycle_failed = True
                 break
@@ -2253,6 +2274,10 @@ def poll(
             err_msg = f"[POLL {now_iso}] ERROR (count={consecutive_errors}, backoff={backoff_s:.1f}s): {exc}"
             print(err_msg, file=sys.stderr)
             _log_event(err_msg)
+            _emit_cycle_event(
+                service="engine", cycle=cycle, phase="reconciling",
+                action="reconcile_error", reason=str(exc),
+            )
             if not once and not stop_requested:
                 try:
                     time.sleep(backoff_s)

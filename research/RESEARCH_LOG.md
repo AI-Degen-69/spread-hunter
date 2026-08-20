@@ -4511,3 +4511,28 @@ Fix: a market is treated as resolved (and dropped from the panel) when the accou
 Live proof: `run='all'` drops from 12 stale cids to 5 (the 7 venue_sync-resolved markets are gone). Added 2 regression tests; full `live/tests` suite passes (394 passed, 1 pre-existing unrelated failure).
 
 **Verdict.** **LIVE**. The panel no longer lists resolved markets; blocked/quoted/cancelled markets still appear for drill-down.
+
+---
+
+## Session — 2026-08-20 (the per-cycle telemetry ring, issue #51)
+
+### Why can't the operator tell whether the bot is working?
+
+#### Question
+
+The dashboard could say a process was alive, never what it found: the poll heartbeat carried `{ts, pid, cycle, errors}`; the fleet's decide rationale (`why`, `intents`) was returned and discarded; the screener's output was a log file and a `markets.json` overwrite.
+
+#### Method
+
+New `live/engine/cycle_stream.py`: an append-only NDJSON ring (`live/run/cycle_events.jsonl`, max 500 lines, atomic rotation keeping the last 400) plus a `cycle_intent` SQL table (one row per fleet market visit, pruned to the last 200). Every emit is fire-and-forget (`try/except: pass`), so telemetry can never add latency or kill the caller.
+
+#### Result
+
+- Engine `poll()` emits `reconcile_ok` (fills, transitions, open/partial/pending counts, latency), `reconcile_error`, `reconcile_contended`, and `sweep_done`.
+- Fleet `_visit_one()` emits `decide` (intent_count + the `why` rationale), `submit` (submitted/cancelled counts), and `market_error` on all three error paths. The decide event INSERTs the `cycle_intent` row; the submit event UPDATEs the same row's counts — one row per market visit.
+- Screener appends its own 3-line inline NDJSON (`rerank_done` / `rerank_error`, `service="screener"`) instead of importing `engine.cycle_stream` across the root/live boundary (AGENTS.md isolation).
+- Rotation is owned by the engine process only (Q3): fleet and screener appends never rotate, so there is no concurrent-rotator race.
+- Each record carries `service` (`engine`/`fleet`/`screener`) because each loop has its own cycle counter (Q1).
+- **Instrumentation find:** the concurrent-append test lost a line (149/150) with plain `open("a")` — seek-then-write collides on Windows. Appends now go through one `os.write` on an `O_APPEND` fd, which lands at EOF as a single syscall.
+
+**Verdict.** **LIVE**. Telemetry only — no strategy parameters, decision logic, or quote logic changed. This is the per-cycle data layer #53 (SSE panel) and #54 (scan/idle signal) consume. One plan correction: the draft test's rotation numbers (410 lines, first kept cycle 111) do not follow from its own "keep last 400 of > 500" rule; actual is 409 lines / first kept cycle 102, asserted in `test_cycle_stream.py`. Live suite 407 passed, 1 skipped; root suite 703 passed.

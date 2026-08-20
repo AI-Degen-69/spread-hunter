@@ -17,6 +17,8 @@ refresh for the rest of the night.
 """
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 import time
@@ -24,6 +26,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LOG = ROOT / "logs" / "rerank.log"
+
+# The live cycle-telemetry ring (live/engine/cycle_stream.py). This script
+# APPENDS only, deliberately without importing engine.cycle_stream: it runs
+# from the repo root and must stay decoupled from live/'s package (AGENTS.md
+# isolation). Rotation of the ring is owned by the engine process (Q3).
+RING_PATH = ROOT / "live" / "run" / "cycle_events.jsonl"
 
 # How often to regenerate run/markets.json. The fleet adopts the file within
 # a second of its mtime changing, so this is the whole "how fast do new
@@ -34,6 +42,21 @@ LOG = ROOT / "logs" / "rerank.log"
 # hour to ten minutes.
 INTERVAL_SEC = 600.0
 TOP = 20
+
+
+def _emit_scan_event(record: dict) -> None:
+    """Inline NDJSON append to the live cycle ring. Never raises.
+
+    Three lines, same schema as engine.cycle_stream.emit, `service="screener"`.
+    Append-only: the engine owns rotation, so a screener append can never race
+    a rewrite of the file (Q3).
+    """
+    try:
+        RING_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with RING_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, default=str) + "\n")
+    except Exception:
+        pass
 
 
 def _rank_cmd(top: int = TOP) -> list[str]:
@@ -70,12 +93,15 @@ def _rank_cmd(top: int = TOP) -> list[str]:
 
 def main() -> None:
     LOG.parent.mkdir(exist_ok=True)
+    cycle = 0
     while True:
         # Rank FIRST, then sleep. Sleeping first left a newly started fleet
         # quoting whatever markets.json happened to be on disk for a full
         # hour -- and fleet-start.ps1 starts the supervisor before this process,
         # so that stale universe is exactly what it picks up.
+        cycle += 1
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        t0 = time.time()
         try:
             r = subprocess.run(
                 _rank_cmd(TOP),
@@ -86,6 +112,23 @@ def main() -> None:
             out, err = "", f"\nFAILED: {type(e).__name__}: {e}"
         with LOG.open("a", encoding="utf-8", errors="replace") as f:
             f.write(f"\n===== {stamp} =====\n{out}{err}")
+        if err:
+            _emit_scan_event({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "service": "screener", "cycle": cycle, "phase": "scanning",
+                "action": "rerank_error", "market_slug": "", "reason": err,
+                "latency_ms": round((time.time() - t0) * 1000.0, 2),
+                "pid": os.getpid(), "extra": {},
+            })
+        else:
+            _emit_scan_event({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "service": "screener", "cycle": cycle, "phase": "scanning",
+                "action": "rerank_done", "market_slug": "", "reason": "",
+                "latency_ms": round((time.time() - t0) * 1000.0, 2),
+                "pid": os.getpid(),
+                "extra": {"exit_code": r.returncode},
+            })
         time.sleep(INTERVAL_SEC)
 
 
