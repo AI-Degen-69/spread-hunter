@@ -312,6 +312,25 @@ CREATE TABLE IF NOT EXISTS reconcile_lock (
     acquired_ts INTEGER NOT NULL
 );
 
+-- Per-cycle fleet decisions, one row per market visit, pruned to the last 200.
+-- Written by engine.cycle_stream (decide event inserts, submit event updates
+-- the submitted/cancelled counts). Telemetry only; the ring file is for
+-- streaming, this table is for SQL queries.
+CREATE TABLE IF NOT EXISTS cycle_intent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    cycle INTEGER NOT NULL,
+    market_slug TEXT NOT NULL,
+    condition_id TEXT,
+    intent_count INTEGER NOT NULL DEFAULT 0,
+    submitted INTEGER NOT NULL DEFAULT 0,
+    cancelled INTEGER NOT NULL DEFAULT 0,
+    top_skip_reason TEXT,
+    top_pass_reason TEXT,
+    latency_ms REAL,
+    run_id TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_pair_id ON orders(pair_id);

@@ -17,6 +17,8 @@ refresh for the rest of the night.
 """
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 import time
@@ -24,6 +26,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LOG = ROOT / "logs" / "rerank.log"
+
+# The live cycle-telemetry ring (live/engine/cycle_stream.py). This script
+# APPENDS only, deliberately without importing engine.cycle_stream: it runs
+# from the repo root and must stay decoupled from live/'s package (AGENTS.md
+# isolation). Rotation of the ring is owned by the engine process (Q3).
+RING_PATH = ROOT / "live" / "run" / "cycle_events.jsonl"
 
 # How often to regenerate run/markets.json. The fleet adopts the file within
 # a second of its mtime changing, so this is the whole "how fast do new
@@ -34,6 +42,26 @@ LOG = ROOT / "logs" / "rerank.log"
 # hour to ten minutes.
 INTERVAL_SEC = 600.0
 TOP = 20
+
+
+def _emit_scan_event(record: dict) -> None:
+    """Inline NDJSON append to the live cycle ring. Never raises.
+
+    Same schema as engine.cycle_stream.emit, `service="screener"`. Appends go
+    through one os.write on an O_APPEND fd, which lands at EOF as a single
+    syscall -- a plain open("a") seek-then-write loses a line on Windows when
+    two writers hit the same end offset. The engine owns rotation.
+    """
+    try:
+        RING_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = (json.dumps(record, default=str) + "\n").encode("utf-8")
+        fd = os.open(RING_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+    except Exception:
+        pass
 
 
 def _rank_cmd(top: int = TOP) -> list[str]:
@@ -70,12 +98,15 @@ def _rank_cmd(top: int = TOP) -> list[str]:
 
 def main() -> None:
     LOG.parent.mkdir(exist_ok=True)
+    cycle = 0
     while True:
         # Rank FIRST, then sleep. Sleeping first left a newly started fleet
         # quoting whatever markets.json happened to be on disk for a full
         # hour -- and fleet-start.ps1 starts the supervisor before this process,
         # so that stale universe is exactly what it picks up.
+        cycle += 1
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        t0 = time.time()
         try:
             r = subprocess.run(
                 _rank_cmd(TOP),
@@ -86,6 +117,23 @@ def main() -> None:
             out, err = "", f"\nFAILED: {type(e).__name__}: {e}"
         with LOG.open("a", encoding="utf-8", errors="replace") as f:
             f.write(f"\n===== {stamp} =====\n{out}{err}")
+        if err:
+            _emit_scan_event({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "service": "screener", "cycle": cycle, "phase": "scanning",
+                "action": "rerank_error", "market_slug": "", "reason": err,
+                "latency_ms": round((time.time() - t0) * 1000.0, 2),
+                "pid": os.getpid(), "extra": {},
+            })
+        else:
+            _emit_scan_event({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "service": "screener", "cycle": cycle, "phase": "scanning",
+                "action": "rerank_done", "market_slug": "", "reason": "",
+                "latency_ms": round((time.time() - t0) * 1000.0, 2),
+                "pid": os.getpid(),
+                "extra": {"exit_code": r.returncode},
+            })
         time.sleep(INTERVAL_SEC)
 
 

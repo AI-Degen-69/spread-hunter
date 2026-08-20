@@ -22,10 +22,12 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from engine.quotes import Inventory, QuoteIntent
+from engine.cycle_stream import emit as _emit_cycle_event
 
 log = logging.getLogger("live_fleet")
 
@@ -135,6 +137,7 @@ def run(
     inventory_fn: Optional[Callable] = None,
     open_orders_fn: Optional[Callable] = None,
     fleet_state_fn: Optional[Callable] = None,
+    emit_fn: Optional[Callable] = None,
 ) -> list[LiveFleetResult]:
     """Rotate over `markets`: reconcile, then decide+submit per market, then sweep.
 
@@ -163,9 +166,16 @@ def run(
     if missing:
         raise TypeError(f"live_fleet.run missing required callables: {', '.join(missing)}")
 
+    # Telemetry is opt-in: main() wires engine.cycle_stream.emit; tests drive
+    # the loop without it so no test ever writes into live/run/.
+    if emit_fn is None:
+        emit_fn = lambda *a, **k: None
+
     once_results: list[LiveFleetResult] = []
     last_cycle: list[LiveFleetResult] = []
+    cycle = 0
     while True:
+        cycle += 1
         # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
         # are recomputed once per cycle and merged into the base config, so the
         # fleet-level gates inside decide_quotes see live numbers rather than
@@ -191,6 +201,7 @@ def run(
                 fetch_books=fetch_books, decide=decide, submit_fn=submit_fn,
                 cancel_fn=cancel_fn, clob_host=clob_host,
                 inventory_fn=inventory_fn, open_orders_fn=open_orders_fn,
+                cycle=cycle, emit_fn=emit_fn,
             ))
         last_cycle = cycle_results
         if once:
@@ -217,12 +228,19 @@ def _visit_one(
     spec, base_cfg, live, client, registry,
     fetch_market, fetch_books, decide, submit_fn, cancel_fn,
     clob_host, inventory_fn, open_orders_fn,
+    cycle: int = 0,
+    emit_fn: Optional[Callable] = None,
 ) -> LiveFleetResult:
     """One poll of one market: fetch -> decide -> plan -> submit/cancel."""
     cid = _cid(spec)
+    if emit_fn is None:
+        emit_fn = lambda *a, **k: None
     try:
         market = fetch_market(cid)
     except Exception as e:
+        emit_fn(service="fleet", cycle=cycle, phase="quoting",
+                action="market_error", market_slug="",
+                reason=f"{type(e).__name__}: {e}")
         return LiveFleetResult(status="ERROR", condition_id=cid,
                                error=f"{type(e).__name__}: {e}")
 
@@ -236,8 +254,15 @@ def _visit_one(
         open_orders = open_orders_fn(market) if open_orders_fn else []
         to_cancel, to_submit = plan_orders(open_orders, intents)
     except Exception as e:
+        emit_fn(service="fleet", cycle=cycle, phase="quoting",
+                action="market_error", market_slug=title,
+                reason=f"{type(e).__name__}: {e}")
         return LiveFleetResult(status="ERROR", condition_id=cid, title=title,
                                error=f"{type(e).__name__}: {e}")
+
+    emit_fn(service="fleet", cycle=cycle, phase="quoting", action="decide",
+            market_slug=title, reason=why,
+            extra={"intent_count": len(intents), "condition_id": cid})
 
     if not live:
         return LiveFleetResult(
@@ -253,10 +278,18 @@ def _visit_one(
     except Exception as e:
         # A submit/cancel failure (venue rejection, a split couple rolled back)
         # must degrade this market to ERROR, never stop the rotation.
+        emit_fn(service="fleet", cycle=cycle, phase="quoting",
+                action="market_error", market_slug=title,
+                reason=f"submit/cancel: {type(e).__name__}: {e}",
+                extra={"submitted": submitted, "cancelled": cancelled})
         return LiveFleetResult(
             status="ERROR", condition_id=cid, title=title, why=why,
             intents=list(intents), submitted=submitted, cancelled=cancelled,
             error=f"submit/cancel: {type(e).__name__}: {e}")
+
+    emit_fn(service="fleet", cycle=cycle, phase="quoting", action="submit",
+            market_slug=title,
+            extra={"submitted": submitted, "cancelled": cancelled})
     return LiveFleetResult(
         status="QUOTED" if intents else "DECLINED",
         condition_id=cid, title=title, why=why, intents=list(intents),
@@ -601,6 +634,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         inventory_fn=_make_inventory_fn(registry, db_path),
         open_orders_fn=_make_open_orders_fn(registry),
         fleet_state_fn=lambda r: _fleet_state(r, cfg),
+        emit_fn=partial(_emit_cycle_event, db_path=db_path),
     )
 
     for r in results:

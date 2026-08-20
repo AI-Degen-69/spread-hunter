@@ -11,6 +11,9 @@ Verifies the single-cycle dashboard behavior across all essential operational st
 8. Read-only SQLite URI enforcement (no writes possible)
 9. FastAPI HTML and JSON endpoint integration
 """
+import datetime
+import json
+import os
 import re
 import shutil
 import sqlite3
@@ -26,9 +29,13 @@ from engine.order_registry import SCHEMA
 from dash.live_dash import (
     PAGE_HTML,
     app,
+    compute_scan_state,
     query_db_state,
     resolve_db_path,
     set_db_override,
+    set_heartbeat_override,
+    set_ring_override,
+    _cycle_stream_sse,
 )
 
 NODE = shutil.which("node")
@@ -1192,3 +1199,149 @@ def test_status_distinguishes_configured_from_running_sweep_cadence(monkeypatch,
     engine = dash_mod.get_system_status()["services"]["engine"]
     assert engine["sweep_interval_sec"] == 60.0           # configured
     assert engine["running_sweep_interval_sec"] == 30.0   # running process's launch value
+
+
+def test_cycle_stream_route_registered():
+    """GET /api/cycle-stream is served as an SSE endpoint."""
+    paths = {getattr(r, "path", None) for r in app.routes}
+    assert "/api/cycle-stream" in paths
+
+
+def test_cycle_stream_sse_replays_tail_and_follows_appends(tmp_path):
+    """The SSE generator replays the ring tail, then follows new appends."""
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(
+        json.dumps({"service": "engine", "phase": "scanning", "action": "tick"}) + "\n",
+        encoding="utf-8",
+    )
+    gen = _cycle_stream_sse(ring, tail=50, poll_sec=0.01)
+    first = next(gen)
+    assert "data:" in first
+    assert '"action": "tick"' in first
+
+    with ring.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps({"service": "fleet", "phase": "quoting", "action": "decide"}) + "\n"
+        )
+
+    deadline = time.time() + 3.0
+    saw_follow = False
+    while time.time() < deadline:
+        if '"action": "decide"' in next(gen):
+            saw_follow = True
+            break
+    gen.close()
+    assert saw_follow
+
+
+def test_cycle_stream_sse_detects_rotation_by_file_identity(tmp_path):
+    """A rotation that replaces the ring with a LARGER file is still detected."""
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(
+        json.dumps({"service": "engine", "phase": "scanning", "action": "a"}) + "\n",
+        encoding="utf-8",
+    )
+    gen = _cycle_stream_sse(ring, tail=50, poll_sec=0.01)
+    next(gen)  # consume the initial replay
+
+    # Simulate the engine's os.replace rotation with a larger-byte file.
+    tmp = tmp_path / "new.jsonl"
+    tmp.write_text(
+        json.dumps({"service": "fleet", "phase": "quoting", "action": "b",
+                    "reason": "x" * 200}) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, ring)
+
+    deadline = time.time() + 3.0
+    saw_rotate = False
+    saw_new = False
+    while time.time() < deadline:
+        frame = next(gen)
+        if frame.startswith("event: rotate"):
+            saw_rotate = True
+        if '"action": "b"' in frame:
+            saw_new = True
+        if saw_rotate and saw_new:
+            break
+    gen.close()
+    assert saw_rotate
+    assert saw_new
+
+
+def test_page_html_contains_bot_brains_panel():
+    """The page ships the Bot Brains panel shell and its SSE hookup."""
+    assert "Bot Brains" in PAGE_HTML
+    assert 'id="bb-active-pills"' in PAGE_HTML
+    assert 'id="bb-decision-log"' in PAGE_HTML
+    assert 'id="bb-sparkline"' in PAGE_HTML
+    assert "/api/cycle-stream" in PAGE_HTML
+
+
+def test_compute_scan_state_stalled_when_heartbeat_missing():
+    state, age = compute_scan_state(None, None, 1_000_000.0, {"scanning"})
+    assert state == "STALLED"
+    assert age is None
+
+
+def test_compute_scan_state_stalled_when_heartbeat_stale():
+    now = 1_000_000.0
+    state, age = compute_scan_state(now - 5, now - 120, now, {"quoting"})
+    assert state == "STALLED"
+    assert age == 120.0
+
+
+def test_compute_scan_state_scanning_vs_idle():
+    now = 1_000_000.0
+    state, _ = compute_scan_state(now - 5, now - 5, now, {"quoting"})
+    assert state == "SCANNING"
+    state, _ = compute_scan_state(now - 5, now - 5, now, {"idle", "waiting"})
+    assert state == "IDLE"
+
+
+def test_scan_state_endpoint_reports_rationale_and_stall(client, temp_db, tmp_path):
+    """/api/scan-state derives state from ring+heartbeat and skip/pass from cycle_intent."""
+    con = sqlite3.connect(str(temp_db))
+    con.execute(
+        "INSERT INTO cycle_intent (ts, cycle, market_slug, intent_count, "
+        "top_skip_reason, top_pass_reason, run_id) VALUES (?,?,?,?,?,?,?)",
+        (time.time(), 1, "mkt-a", 0, "price_band", None, "live"),
+    )
+    con.execute(
+        "INSERT INTO cycle_intent (ts, cycle, market_slug, intent_count, "
+        "top_skip_reason, top_pass_reason, run_id) VALUES (?,?,?,?,?,?,?)",
+        (time.time(), 2, "mkt-b", 2, None, "edge_ok", "live"),
+    )
+    con.commit()
+    con.close()
+
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(
+        json.dumps({
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "service": "screener", "cycle": 1, "phase": "scanning",
+            "action": "rerank_done", "market_slug": "", "reason": "",
+            "latency_ms": 1.0,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    hb = tmp_path / "heartbeat.json"
+    hb.write_text(
+        json.dumps([{"ts": int(time.time() * 1000), "cycle": 1, "errors": 0}]),
+        encoding="utf-8",
+    )
+
+    set_ring_override(ring)
+    set_heartbeat_override(hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["scan_state"] in {"SCANNING", "IDLE", "STALLED"}
+    assert data["seconds_since_heartbeat"] is not None
+    assert {"reason": "price_band", "count": 1} in data["skip_reasons"]
+    assert {"reason": "edge_ok", "count": 1} in data["pass_reasons"]

@@ -2080,6 +2080,7 @@ def poll(
     """
     import datetime
     import signal
+    from engine.cycle_stream import emit as _emit_cycle_event
     from engine.order_registry import (
         OrderRegistry,
         reconcile_orders,
@@ -2129,13 +2130,14 @@ def poll(
     sweep_funder_warned = False
     last_sweep_ts: float | None = None
 
-    def _sweep_account(now_iso: str) -> None:
+    def _sweep_account(now_iso: str) -> str:
         """Read the account from the venue without failing the poll cycle.
 
-        The sweep is dashboard telemetry: a failure here must leave the last
-        good reading intact and must never count toward the reconcile
-        backoff. The missing-funder SystemExit is guarded before the call
-        rather than caught, so it cannot kill the poller.
+        Returns "success", "skipped" (no funder), or "error" so the telemetry
+        event never claims a completed sweep that did not complete. A failure
+        here must leave the last good reading intact and must never count
+        toward the reconcile backoff. The missing-funder SystemExit is guarded
+        before the call rather than caught, so it cannot kill the poller.
 
         `last_sweep_ts` is stamped on every attempt, success or failure, so
         the interval cadence throttles retries instead of hammering the Data
@@ -2147,16 +2149,18 @@ def poll(
             if not sweep_funder_warned:
                 sweep_funder_warned = True
                 _log_event(f"[{now_iso}] SWEEP SKIPPED: POLY_FUNDER not set")
-            return
+            return "skipped"
         try:
             mark = account_sweep(funder=funder, db_path=db_p, quiet=True)
         except Exception as exc:
             _log_event(f"[{now_iso}] SWEEP ERROR: {exc}")
-            return
+            return "error"
         try:
             _log_float_mark_if_measured(registry, mark)
         except Exception as exc:
             _log_event(f"[{now_iso}] FLOAT MARK ERROR: {exc}")
+            return "error"
+        return "success"
 
     # START and STOP are written unconditionally, so the log exists from the
     # first second of a run. Without them a quiet session leaves no file at all,
@@ -2189,7 +2193,16 @@ def poll(
         now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         if _sweep_due(cycle, time.time(), last_sweep_ts, sweep_interval, sweep_every):
-            _sweep_account(now_iso)
+            sweep_outcome = _sweep_account(now_iso)
+            sweep_action = (
+                "sweep_done" if sweep_outcome == "success"
+                else "sweep_skipped" if sweep_outcome == "skipped"
+                else "sweep_error"
+            )
+            _emit_cycle_event(
+                service="engine", cycle=cycle, phase="settling",
+                action=sweep_action,
+            )
 
         try:
             summary = reconcile_orders(client, registry, maker_address=funder)
@@ -2211,6 +2224,18 @@ def poll(
                 f"fills=+{summary.fills_recorded} (dup={summary.duplicates_ignored}) | "
                 f"open_orders={summary.open_orders_count} trades={summary.trades_polled} | "
                 f"cycle={elapsed:.2f}s | errors=0"
+            )
+            _emit_cycle_event(
+                service="engine", cycle=cycle, phase="reconciling",
+                action="reconcile_ok", latency_ms=elapsed * 1000.0,
+                extra={
+                    "fills": summary.fills_recorded,
+                    "duplicates_ignored": summary.duplicates_ignored,
+                    "transitions": len(summary.transitions),
+                    "open": open_count,
+                    "partial": partial_count,
+                    "pending": pending_count,
+                },
             )
 
         except KeyboardInterrupt:
@@ -2235,6 +2260,10 @@ def poll(
             skip_msg = f"[POLL {now_iso}] SKIPPED cycle {cycle}: {exc}"
             print(skip_msg, file=sys.stderr)
             _log_event(skip_msg)
+            _emit_cycle_event(
+                service="engine", cycle=cycle, phase="waiting",
+                action="reconcile_contended",
+            )
             if once:
                 last_cycle_failed = True
                 break
@@ -2253,6 +2282,10 @@ def poll(
             err_msg = f"[POLL {now_iso}] ERROR (count={consecutive_errors}, backoff={backoff_s:.1f}s): {exc}"
             print(err_msg, file=sys.stderr)
             _log_event(err_msg)
+            _emit_cycle_event(
+                service="engine", cycle=cycle, phase="reconciling",
+                action="reconcile_error", reason=str(exc),
+            )
             if not once and not stop_requested:
                 try:
                     time.sleep(backoff_s)
