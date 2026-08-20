@@ -834,8 +834,11 @@ def test_system_reset_db_endpoint(client, temp_db, tmp_path, monkeypatch):
     conn2.close()
     assert count == 0
 
-    # Verify the archive file is a valid sqlite3 db containing the original pre-reset data
-    arch_conn = sqlite3.connect(archived_path)
+    # Verify the archive file is a valid sqlite3 db containing the original pre-reset data.
+    # reset_database() returns only the archive *filename*; the file lives under
+    # <target_db.parent>/archive/, and target_db resolves to temp_db (tmp_path/live.db).
+    archive_dir = tmp_path / "archive"
+    arch_conn = sqlite3.connect(archive_dir / archived_path)
     arch_cursor = arch_conn.cursor()
     arch_cursor.execute("SELECT id FROM orders WHERE id = 'dummy-1'")
     archived_row = arch_cursor.fetchone()
