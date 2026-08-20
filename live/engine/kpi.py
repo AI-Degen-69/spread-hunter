@@ -314,17 +314,16 @@ def _funnel_from_pipeline(
     pipeline_path: Path | str | None = None,
     markets_path: Path | str | None = None,
 ) -> Optional[dict[str, Any]]:
-    """Build the Level 2 funnel from the screener's own snapshot.
-
-    `run/pipeline.json` is the same file the sim scan (server/fleet_dash.py)
-    renders, so sourcing the funnel from it makes the live Level 2 lanes
-    compare 1:1 with the sim scan: identical gate names ("volume", "YES:
-    top-3 bid depth", "horizon", ...) and identical counts. GRADUATED is the
-    ranker's run/markets.json picks annotated with this run's live fills and
-    realized PnL, so the lane reads live before any quote exists.
-
-    Returns None when the ranker hasn't written a snapshot yet, so the caller
-    falls back to runtime market-event telemetry.
+    """
+    Build a market funnel from a screener snapshot and annotate graduated markets with live results.
+    
+    Parameters:
+        by_mkt (dict): Market metrics used to annotate graduated markets.
+        pipeline_path (Path | str | None): Optional path to the screener snapshot.
+        markets_path (Path | str | None): Optional path to graduated market metadata.
+    
+    Returns:
+        Optional[dict]: Funnel data containing counts, rejection filters, graduated markets, and snapshot metadata; `None` when the snapshot is missing, invalid, or unreadable.
     """
     pp = Path(pipeline_path) if pipeline_path is not None else (REPO_ROOT / "run" / "pipeline.json")
     if not pp.is_file():
@@ -399,7 +398,16 @@ def _funnel_from_pipeline(
 
 
 def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> dict[str, Any]:
-    """Generate live KPI dictionary mirroring strategy/kpi.py report() structure with live enhancements."""
+    """
+    Generate a live KPI report containing run-level, portfolio, market-level, funnel, and mechanics metrics.
+    
+    Parameters:
+    	db_path (Path | str | None): Path to the registry database. Uses the default database when omitted.
+    	run_id (Optional[str]): Run identifier to report, or `"all"` to aggregate all runs. When omitted, selects the most recent applicable run.
+    
+    Returns:
+    	dict[str, Any]: A dictionary containing KPI metrics, portfolio and account series, market drilldowns, funnel data, settlements, and diagnostics.
+    """
     reg = OrderRegistry(db_path if db_path is not None else DEFAULT_DB_PATH)
     
     all_quotes = reg.get_all_quotes()

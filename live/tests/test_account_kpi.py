@@ -333,6 +333,17 @@ def test_active_run_sticks_to_most_recent_when_it_has_fills(temp_db):
 
 
 def _make_quote(*, run_id, ts, **over):
+    """
+    Create a quote record with standard test values and optional field overrides.
+    
+    Parameters:
+        run_id: Identifier for the run associated with the quote.
+        ts: Timestamp of the quote.
+        **over: Quote fields that override the standard test values.
+    
+    Returns:
+        A configured QuoteRecord.
+    """
     from engine.order_registry import QuoteRecord
     base = dict(
         ts=ts, market_slug="slug", condition_id="cond-1",

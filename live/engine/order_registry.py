@@ -1220,16 +1220,33 @@ class OrderRegistry:
             return [dict(r) for r in rows]
 
     def get_all_account_marks(self) -> list[dict]:
+        """
+        Retrieve all recorded account marks in ascending timestamp order.
+        
+        Returns:
+            list[dict]: Account mark records ordered by timestamp.
+        """
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM account_marks ORDER BY ts ASC").fetchall()
             return [dict(r) for r in rows]
 
     def get_all_orders(self) -> list[dict]:
+        """Return all orders ordered by their posting timestamp.
+        
+        Returns:
+        	list[dict]: Order records represented as dictionaries.
+        """
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM orders ORDER BY posted_ts ASC").fetchall()
             return [dict(r) for r in rows]
 
     def get_all_hedge_census(self) -> list[dict]:
+        """
+        Return all recorded hedge census entries ordered by observation time.
+        
+        Returns:
+        	list[dict]: Hedge census records in ascending order of observed timestamp.
+        """
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM hedge_census ORDER BY observed_ts ASC").fetchall()
             return [dict(r) for r in rows]
