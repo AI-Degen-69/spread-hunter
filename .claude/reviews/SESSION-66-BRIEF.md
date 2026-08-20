@@ -83,7 +83,7 @@ times against live books and produced the numbers in section 3.
 
 | step | live path | evidence |
 | --- | --- | --- |
-| a. quote both legs | manual CLI only | `live_exec.py:171-214`; the automated loop is sim-only |
+| a. quote both legs | **live fleet** (`live_fleet --live`), supervised | approved for supervised live quoting on the $100 account (Owner 2026-08-21); unattended still gated on stages 1–4 |
 | b. detect one-leg fill | **ABSENT** | no fill listener, no user-channel stream, no order polling |
 | c. complete second leg | **ABSENT** | no taker crossing |
 | d. **merge at parity** | **ABSENT** | no `mergePositions` encoder or contract call anywhere |
@@ -110,14 +110,16 @@ $1.00 before resolution (`mergePositions`, not implemented).
 | **2** | Fill detection | read-only | not specced |
 | **3** | Stop-loss / naked exit on live path | **closes** | not specced |
 | **4** | Second-leg completion (taker cross) | **closes** | not specced |
-| **5** | Automated quoting loop | **OPENS** | out of scope this phase |
+| **5** | Automated quoting loop | **OPENS** | **approved for supervised live operation on the $100 account (Owner 2026-08-21)**; unattended waits on 1–4 |
 
 Stage 1 is first among the new capabilities because merging can only ever *reduce* exposure — it
 converts a hedged position into cash. There is no state where merging leaves you worse off, gas
-aside. Stage 5 does not get built until 1–4 are proven.
+aside. Supervised live quoting was approved by the Owner on 2026-08-21 (real-money $100 account,
+minimal risk per trade); stages 1–4 remain the gate for unattended operation and for scaling beyond
+the supervised budget.
 
-**Funding note:** the Owner can transfer funds on demand. Do not treat $0.99 as a constraint on
-planning — but also do not request funding before stages 1–4 land. Money before the stop-loss
+**Funding note:** the Owner can transfer funds on demand. The $100 live balance is funded for the
+supervised phase; larger funding still waits on stages 1–4. Money before the stop-loss
 exists means a one-sided fill rides unhedged to resolution at up to 100% loss of that leg.
 
 ## 6. WORKFLOW — PRIME / SUB
