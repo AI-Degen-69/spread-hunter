@@ -1224,6 +1224,11 @@ class OrderRegistry:
             rows = conn.execute("SELECT * FROM account_marks ORDER BY ts ASC").fetchall()
             return [dict(r) for r in rows]
 
+    def get_all_orders(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM orders ORDER BY posted_ts ASC").fetchall()
+            return [dict(r) for r in rows]
+
     def get_all_hedge_census(self) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute("SELECT * FROM hedge_census ORDER BY observed_ts ASC").fetchall()

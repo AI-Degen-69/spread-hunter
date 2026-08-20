@@ -4495,5 +4495,19 @@ Ran `test_dashboard_script_parses` (extracts the inline `<script>` and runs `nod
 
 **Verdict.** **LIVE**. The dashboard now loads telemetry and all control buttons respond; the sync backfills per-trade closes so the Level-1 Win Rate / Sharpe / Realized PnL / Drawdown tiles populate from `closes` (Polymarket is source of truth). The `node --check` parse test is the regression guard.
 
-#### Hebrew mirror
-שורש הבעיה: `PAGE_HTML` הוא מחרוזת Python במרכאות משולשות, וסימן השורה החדשה `\n` בתוך מחרוזת JS הפך לירידת שורה אמיתית — השלם ה-`<script>` נשבר ולכן שום כפתור לא ענה והדף תקע על "טוען". התיקון: הודעת ה-alert כתובה כ-backtick template literal. נוסף `venue_sync()` שמסנכרן סגירות מ-Polymarket לטבלת `closes` (ללא כפילויות) וכותב `float_marks`; הכפתור Sync וקצה ה-API עובדים. סוויטת הבדיקות: 393 עוברות.
+#### 2026-08-20 — BUG: "MARKETS IN RUN" listed already-resolved markets
+
+##### Question
+Why does the "MARKETS IN RUN" panel show markets that have already resolved on the venue, with no orders or fills since 2026-08-20 00:07?
+
+##### Method
+Traced the data flow: `live_dash.py` → `kpi.report()` → the `by_market` table. Inspected the SQLite tables (`quotes`, `closes`, `orders`, `market_events`) and `run/markets.json`.
+
+##### Result
+Root cause: resolved markets linger in the registry forever (rows in `quotes`/`closes`/`market_events` are never pruned), and `run/markets.json` only carries the current top-N — so `days_to_resolve` is `None` for historical cids and the naive filter did nothing. The panel also pulled 12 cids from defunct runs (e.g. `run-4cfec0b26ffb`) that fell under the default `all` selection.
+
+Fix: a market is treated as resolved (and dropped from the panel) when the account sweep recorded it settled via a `closes` row with `method='venue_sync'` (distinct from local merge/sell closes, which are still-open trades the operator wants to see), or when the ranker recorded `days_to_resolve < 0`. Both signals are durable and venue-free.
+
+Live proof: `run='all'` drops from 12 stale cids to 5 (the 7 venue_sync-resolved markets are gone). Added 2 regression tests; full `live/tests` suite passes (394 passed, 1 pre-existing unrelated failure).
+
+**Verdict.** **LIVE**. The panel no longer lists resolved markets; blocked/quoted/cancelled markets still appear for drill-down.

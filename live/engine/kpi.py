@@ -365,6 +365,12 @@ def _funnel_from_pipeline(
     for s in specs:
         if not isinstance(s, dict):
             continue
+        # Skip markets the ranker recorded as already resolved. The gamma query
+        # already excludes closed markets, but a market can resolve between the
+        # rank pass and the dashboard read; days_to_resolve < 0 means expired.
+        dtr = s.get("days_to_resolve")
+        if isinstance(dtr, (int, float)) and dtr < 0:
+            continue
         cid = s.get("cid") or s.get("condition_id") or ""
         m = by_mkt.get(cid, {})
         graduated.append({
@@ -405,6 +411,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     all_venue_errs = reg.get_all_venue_errors()
     all_divergences = reg.get_all_divergence_events()
     all_float_marks = reg.get_all_float_marks()
+    all_orders = reg.get_all_orders()
     # Deliberately NOT filtered by run_id below. An account balance belongs to
     # the wallet, not to a run: slicing it per run would report the account as
     # empty for any run that happened not to sweep.
@@ -449,6 +456,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         venue_errs = [v for v in all_venue_errs if v.get("run_id") == active_run_id]
         divergences = [d for d in all_divergences if d.get("run_id") == active_run_id]
         float_marks = [fm for fm in all_float_marks if fm.get("run_id") == active_run_id]
+        orders = [o for o in all_orders if o.get("run_id") == active_run_id]
     else:
         quotes = all_quotes
         fills = all_fills
@@ -458,6 +466,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         venue_errs = all_venue_errs
         divergences = all_divergences
         float_marks = all_float_marks
+        orders = all_orders
 
     posted_sh = sum(float(q.get("size") or 0.0) for q in quotes)
     filled_sh = sum(float(f.get("size") or 0.0) for f in fills)
@@ -579,6 +588,29 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             "venue_errors": m_errs,
             "settlements": m_closes,
         }
+
+    # Drop markets that have already resolved.
+    #
+    # A market leaves "MARKETS IN RUN" once the venue reports it settled. The
+    # account sweep writes those as `closes` rows with method='venue_sync'
+    # (distinct from local merge/sell closes, which are still-open trades the
+    # operator wants to see). A negative `days_to_resolve` from run/markets.json
+    # is the same fact from the ranker's side. Both are durable, venue-free
+    # signals already in the registry.
+    #
+    # Markets that were merely blocked, quoted-then-cancelled, or never opened
+    # here are KEPT: they were touched by the bot this run and belong in the
+    # drill-down. `days_to_resolve` of None is kept (unknown rank freshness
+    # must never silently drop a market).
+    resolved_cids = {
+        c.get("condition_id") for c in closes
+        if c.get("condition_id") and c.get("method") == "venue_sync"
+    }
+    by_mkt = {
+        cid: m for cid, m in by_mkt.items()
+        if cid not in resolved_cids
+        and not (m.get("days_to_resolve") is not None and m.get("days_to_resolve") < 0)
+    }
 
     balances = [m["balance"] for m in by_mkt.values() if m["balance"] is not None]
     pairs = [m["pair_cost"] for m in by_mkt.values() if m["pair_cost"] is not None]
