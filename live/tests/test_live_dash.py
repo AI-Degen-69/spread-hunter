@@ -11,6 +11,8 @@ Verifies the single-cycle dashboard behavior across all essential operational st
 8. Read-only SQLite URI enforcement (no writes possible)
 9. FastAPI HTML and JSON endpoint integration
 """
+import datetime
+import json
 import re
 import shutil
 import sqlite3
@@ -26,9 +28,13 @@ from engine.order_registry import SCHEMA
 from dash.live_dash import (
     PAGE_HTML,
     app,
+    compute_scan_state,
     query_db_state,
     resolve_db_path,
     set_db_override,
+    set_heartbeat_override,
+    set_ring_override,
+    _cycle_stream_sse,
 )
 
 NODE = shutil.which("node")
@@ -1192,3 +1198,45 @@ def test_status_distinguishes_configured_from_running_sweep_cadence(monkeypatch,
     engine = dash_mod.get_system_status()["services"]["engine"]
     assert engine["sweep_interval_sec"] == 60.0           # configured
     assert engine["running_sweep_interval_sec"] == 30.0   # running process's launch value
+
+
+def test_cycle_stream_route_registered():
+    """GET /api/cycle-stream is served as an SSE endpoint."""
+    paths = {getattr(r, "path", None) for r in app.routes}
+    assert "/api/cycle-stream" in paths
+
+
+def test_cycle_stream_sse_replays_tail_and_follows_appends(tmp_path):
+    """The SSE generator replays the ring tail, then follows new appends."""
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(
+        json.dumps({"service": "engine", "phase": "scanning", "action": "tick"}) + "\n",
+        encoding="utf-8",
+    )
+    gen = _cycle_stream_sse(ring, tail=50, poll_sec=0.01)
+    first = next(gen)
+    assert "data:" in first
+    assert '"action": "tick"' in first
+
+    with ring.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps({"service": "fleet", "phase": "quoting", "action": "decide"}) + "\n"
+        )
+
+    deadline = time.time() + 3.0
+    saw_follow = False
+    while time.time() < deadline:
+        if '"action": "decide"' in next(gen):
+            saw_follow = True
+            break
+    gen.close()
+    assert saw_follow
+
+
+def test_page_html_contains_bot_brains_panel():
+    """The page ships the Bot Brains panel shell and its SSE hookup."""
+    assert "Bot Brains" in PAGE_HTML
+    assert 'id="bb-active-pills"' in PAGE_HTML
+    assert 'id="bb-decision-log"' in PAGE_HTML
+    assert 'id="bb-sparkline"' in PAGE_HTML
+    assert "/api/cycle-stream" in PAGE_HTML
