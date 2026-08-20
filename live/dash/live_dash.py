@@ -1236,8 +1236,145 @@ def compute_scan_state(
     active_phases: set[str],
     stall_threshold: float = SCAN_STALL_THRESHOLD_SEC,
 ) -> tuple[str, Optional[float]]:
-    """Task B fills this in; stub returns IDLE so Task A imports resolve."""
-    return "IDLE", None
+    """Classify the fleet as SCANNING, IDLE, or STALLED.
+
+    STALLED  -- the engine heartbeat has not advanced within `stall_threshold`
+                (or is absent entirely): a real alarm, not an empty table.
+    SCANNING -- heartbeat fresh AND some service did active-phase work
+                (scanning/filtering/quoting/settling) in the recent window.
+    IDLE     -- heartbeat fresh but no active-phase work in the window.
+    """
+    age = None
+    if hb_ts is not None:
+        age = max(0.0, now - hb_ts)
+    if hb_ts is None or (age is not None and age > stall_threshold):
+        return "STALLED", age
+    if active_phases & {"scanning", "filtering", "quoting", "settling"}:
+        return "SCANNING", age
+    return "IDLE", age
+
+
+def _parse_event_ts(ts: Any) -> Optional[float]:
+    """Parse an ISO-8601 ring timestamp to a Unix timestamp, or None."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.datetime.strptime(str(ts), "%Y-%m-%dT%H:%M:%SZ")
+        return dt.replace(tzinfo=datetime.timezone.utc).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _last_per_service(events: list[dict]) -> dict[str, tuple[str, Optional[float]]]:
+    """Latest (phase, unix ts) per service from ring events."""
+    out: dict[str, tuple[str, Optional[float]]] = {}
+    for ev in events:
+        svc = str(ev.get("service") or "engine")
+        ts = _parse_event_ts(ev.get("ts"))
+        if svc not in out or (
+            ts is not None and (out[svc][1] is None or ts > out[svc][1])
+        ):
+            out[svc] = (str(ev.get("phase") or ""), ts)
+    return out
+
+
+def _read_engine_heartbeat() -> dict[str, Any]:
+    """Read live/run/live_poll_heartbeat.json, returning {} when absent/invalid."""
+    try:
+        data = json.loads(resolve_heartbeat_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if isinstance(data, list) and data and isinstance(data[-1], dict):
+        return data[-1]
+    return {}
+
+
+def _read_cycle_intent_rows(db_path: Path | str, limit: int = 200) -> list[dict]:
+    """Last `limit` cycle_intent rows in read-only mode; [] when unavailable."""
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    uri = f"file:{path.resolve().as_posix()}?mode=ro"
+    try:
+        con = sqlite3.connect(uri, uri=True, timeout=2.0)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT ts, cycle, market_slug, top_skip_reason, top_pass_reason, "
+            "intent_count, submitted, cancelled FROM cycle_intent "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        con.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+@app.get("/api/scan-state")
+def get_scan_state():
+    """SCANNING / IDLE / STALLED plus per-cycle skip/pass rationale (read-only)."""
+    now = time.time()
+    events = []
+    try:
+        from engine.cycle_stream import read_ring
+        events = read_ring(resolve_ring_path(), tail=400)
+    except Exception:
+        events = []
+
+    hb = _read_engine_heartbeat()
+    hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
+
+    window = now - 60.0
+    active_phases: set[str] = set()
+    last_event_ts: Optional[float] = None
+    last_scan_ts: Optional[float] = None
+    for ev in events:
+        ts = _parse_event_ts(ev.get("ts"))
+        if ts is None:
+            continue
+        if last_event_ts is None or ts > last_event_ts:
+            last_event_ts = ts
+        if ts >= window:
+            active_phases.add(str(ev.get("phase") or ""))
+        if str(ev.get("service") or "") == "screener" and (
+            last_scan_ts is None or ts > last_scan_ts
+        ):
+            last_scan_ts = ts
+
+    state, hb_age = compute_scan_state(last_event_ts, hb_ts, now, active_phases)
+
+    rows = _read_cycle_intent_rows(resolve_db_path(_ACTIVE_DB_OVERRIDE))
+    skip_counts: dict[str, int] = {}
+    pass_counts: dict[str, int] = {}
+    for r in rows:
+        sk = r.get("top_skip_reason")
+        pk = r.get("top_pass_reason")
+        if sk:
+            skip_counts[sk] = skip_counts.get(sk, 0) + 1
+        if pk:
+            pass_counts[pk] = pass_counts.get(pk, 0) + 1
+
+    return JSONResponse({
+        "scan_state": state,
+        "seconds_since_heartbeat": round(hb_age, 1) if hb_age is not None else None,
+        "seconds_since_scan": (
+            round(max(0.0, now - last_scan_ts), 1) if last_scan_ts is not None else None
+        ),
+        "last_scan_ts": last_scan_ts,
+        "services": {
+            svc: {"phase": phase, "last_ts": ts}
+            for svc, (phase, ts) in _last_per_service(events).items()
+        },
+        "decisions_logged": len(rows),
+        "skip_reasons": sorted(
+            [{"reason": k, "count": v} for k, v in skip_counts.items()],
+            key=lambda x: -x["count"],
+        ),
+        "pass_reasons": sorted(
+            [{"reason": k, "count": v} for k, v in pass_counts.items()],
+            key=lambda x: -x["count"],
+        ),
+    })
 
 
 def _cycle_stream_sse(
@@ -3916,6 +4053,30 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
       bbSkipsEl.textContent = skips || 'no skips recorded';
     }
 
+    function renderScanState(scanRes) {
+      if (!scanRes || !scanRes.ok) {
+        bbSetScanState('stalled', 'STALLED', 'scan-state unavailable');
+        return;
+      }
+      scanRes.json().then(scan => {
+        const kind = scan.scan_state === 'SCANNING' ? 'scanning'
+          : scan.scan_state === 'STALLED' ? 'stalled' : 'idle';
+        let sub = '';
+        if (scan.seconds_since_scan !== null && scan.seconds_since_scan !== undefined) {
+          sub = 'last scan ' + Math.round(scan.seconds_since_scan) + 's ago';
+        }
+        if (scan.scan_state === 'STALLED') {
+          const hb = scan.seconds_since_heartbeat;
+          sub = 'STALLED — no heartbeat for ' + (hb !== null && hb !== undefined ? Math.round(hb) + 's' : '?');
+        }
+        bbSetScanState(kind, scan.scan_state, sub);
+        if (bbSkipsEl && scan.skip_reasons && scan.skip_reasons.length) {
+          bbSkipsEl.textContent = scan.skip_reasons
+            .map(s => s.reason + ' (' + s.count + ')').slice(0, 3).join(' · ');
+        }
+      }).catch(() => {});
+    }
+
     function bbOpenStream() {
       bbLogEl = document.getElementById('bb-decision-log');
       bbDotEl = document.getElementById('bb-status-dot');
@@ -3942,9 +4103,10 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
 
     async function pollState() {
       try {
-        const [stateRes, kpiRes] = await Promise.all([
+        const [stateRes, kpiRes, scanRes] = await Promise.all([
           fetch('/api/state'),
-          fetch(`/api/kpi${selectedRunId ? '?run_id=' + encodeURIComponent(selectedRunId) : ''}`)
+          fetch(`/api/kpi${selectedRunId ? '?run_id=' + encodeURIComponent(selectedRunId) : ''}`),
+          fetch('/api/scan-state')
         ]);
 
         fetchSystemStatus();
@@ -3967,6 +4129,7 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
         renderExposureChart(kpi);
         renderFunnel(kpi);
         renderBotBrainsFunnel(kpi);
+        renderScanState(scanRes);
         renderMarketsTable(kpi);
         renderMechanics(kpi, state);
         renderOrders(state);

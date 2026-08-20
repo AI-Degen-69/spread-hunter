@@ -1240,3 +1240,72 @@ def test_page_html_contains_bot_brains_panel():
     assert 'id="bb-decision-log"' in PAGE_HTML
     assert 'id="bb-sparkline"' in PAGE_HTML
     assert "/api/cycle-stream" in PAGE_HTML
+
+
+def test_compute_scan_state_stalled_when_heartbeat_missing():
+    state, age = compute_scan_state(None, None, 1_000_000.0, {"scanning"})
+    assert state == "STALLED"
+    assert age is None
+
+
+def test_compute_scan_state_stalled_when_heartbeat_stale():
+    now = 1_000_000.0
+    state, age = compute_scan_state(now - 5, now - 120, now, {"quoting"})
+    assert state == "STALLED"
+    assert age == 120.0
+
+
+def test_compute_scan_state_scanning_vs_idle():
+    now = 1_000_000.0
+    state, _ = compute_scan_state(now - 5, now - 5, now, {"quoting"})
+    assert state == "SCANNING"
+    state, _ = compute_scan_state(now - 5, now - 5, now, {"idle", "waiting"})
+    assert state == "IDLE"
+
+
+def test_scan_state_endpoint_reports_rationale_and_stall(client, temp_db, tmp_path):
+    """/api/scan-state derives state from ring+heartbeat and skip/pass from cycle_intent."""
+    con = sqlite3.connect(str(temp_db))
+    con.execute(
+        "INSERT INTO cycle_intent (ts, cycle, market_slug, intent_count, "
+        "top_skip_reason, top_pass_reason, run_id) VALUES (?,?,?,?,?,?,?)",
+        (time.time(), 1, "mkt-a", 0, "price_band", None, "live"),
+    )
+    con.execute(
+        "INSERT INTO cycle_intent (ts, cycle, market_slug, intent_count, "
+        "top_skip_reason, top_pass_reason, run_id) VALUES (?,?,?,?,?,?,?)",
+        (time.time(), 2, "mkt-b", 2, None, "edge_ok", "live"),
+    )
+    con.commit()
+    con.close()
+
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(
+        json.dumps({
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "service": "screener", "cycle": 1, "phase": "scanning",
+            "action": "rerank_done", "market_slug": "", "reason": "",
+            "latency_ms": 1.0,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    hb = tmp_path / "heartbeat.json"
+    hb.write_text(
+        json.dumps([{"ts": int(time.time() * 1000), "cycle": 1, "errors": 0}]),
+        encoding="utf-8",
+    )
+
+    set_ring_override(ring)
+    set_heartbeat_override(hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["scan_state"] in {"SCANNING", "IDLE", "STALLED"}
+    assert data["seconds_since_heartbeat"] is not None
+    assert {"reason": "price_band", "count": 1} in data["skip_reasons"]
+    assert {"reason": "edge_ok", "count": 1} in data["pass_reasons"]
