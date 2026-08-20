@@ -39,6 +39,7 @@ the same fail-closed shape `merge` uses.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Optional
@@ -827,3 +828,115 @@ def complete_pair(
         "venue_light_matched": venue_light_matched,
         "response": resp,
     }
+
+
+# --- U35 in the live loop ----------------------------------------------------
+
+
+def auto_manage_pairs(
+    client,
+    registry: OrderRegistry,
+    cfg,
+    *,
+    live: bool = True,
+    now: Optional[float] = None,
+    venue_positions: Optional[dict[str, float]] = None,
+    funder: Optional[str] = None,
+) -> list[dict]:
+    """U35 in the live loop: convert each in-window one-sided fill.
+
+    One pass per poll cycle, run after reconcile so the registry is fresh.
+    Discovery is from the fills ledger: every pair that has a fill, whose
+    condition has no close, whose last fill is inside `pairs_exit_window_sec`,
+    and whose legs are unbalanced. Each such pair is routed exactly like the
+    sim's sweep -- complete the missing leg at ask when the pair stays under
+    `max_pair_cost`, else same-window exit of the naked leg at the best bid.
+
+    Closing actions only, so the direction gate pre-approves them. Per-pair
+    failures are isolated and reported: one pair's refusal never stops the
+    cycle. An unreadable Data API positions endpoint fails the pass closed --
+    the leg stays naked one more tick and the read is retried next cycle.
+    """
+    if not getattr(cfg, "enable_pairs_rule", True):
+        return []
+
+    now_s = now if now is not None else time.time()
+    window_ms = int(getattr(cfg, "pairs_exit_window_sec", 900.0) * 1000)
+    max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
+
+    # Same pre-flight the manual exit uses: selling a size the venue does not
+    # agree we hold is an oversell. `None` means the caller supplied no view;
+    # when we are live we fetch one, and an unreadable endpoint fails the pass
+    # closed rather than acting blind.
+    if venue_positions is None and live and funder:
+        try:
+            venue_positions = fetch_positions(funder)
+        except Exception as e:
+            return [{
+                "pair_id": None, "action": "error",
+                "error": f"positions read failed: {type(e).__name__}: {e}",
+            }]
+
+    closed_cids = {
+        r["condition_id"] for r in registry.get_all_closes()
+        if r.get("condition_id")
+    }
+
+    last_fill_ms: dict[str, int] = {}
+    pair_cids: dict[str, str] = {}
+    for f in registry.get_all_fills():
+        pid = f.get("pair_id")
+        if not pid:
+            continue
+        pair_cids.setdefault(pid, f.get("condition_id") or "")
+        vts = f.get("venue_ts")
+        if vts:
+            last_fill_ms[pid] = max(last_fill_ms.get(pid, 0), int(vts))
+
+    out: list[dict] = []
+    for pid, last_ms in last_fill_ms.items():
+        if pair_cids.get(pid) in closed_cids:
+            continue
+        # U35 window: act only while the fill is fresh enough that the measured
+        # drift is still ~0. An undated fill (no venue_ts) is left alone --
+        # "older than the window is left alone" reads both directions.
+        if last_ms <= 0 or (now_s * 1000.0 - last_ms) > window_ms:
+            continue
+        try:
+            pair = load_pair(registry, pid)
+            if pair["naked"] <= SIZE_EPS:
+                continue
+            out.append(_route_pair(
+                client, registry, pair, max_pair_cost, live, venue_positions))
+        except (PairExitRefused, PairCompletionRefused) as e:
+            out.append({"pair_id": pid, "action": "error", "error": str(e)})
+        except Exception as e:
+            out.append({"pair_id": pid, "action": "error",
+                        "error": f"{type(e).__name__}: {e}"})
+    return out
+
+
+def _route_pair(client, registry, pair, max_pair_cost, live,
+                venue_positions) -> dict:
+    """Complete when the pair stays under the cap, else exit the naked leg.
+
+    The sim's sweep decides the same way: cross the missing leg at ask when
+    `fill_cost + ask < max_pair_cost`, otherwise sell the naked leg at the
+    best bid. `should_exit` is the ported trigger; the light ask is read once
+    to route, and the action functions re-read what they need. If the ask
+    moves above the cap between our read and the completion's re-check, the
+    completion refuses and the exit owns the case.
+    """
+    light_token = pair["light"]["token_id"]
+    ask = best_ask(client.get_order_book(light_token)) if light_token else None
+
+    if should_exit(pair["fill_cost"], ask, max_pair_cost):
+        return exit_naked_leg(client, registry, pair["pair_id"], max_pair_cost,
+                              live=live, venue_positions=venue_positions)
+
+    try:
+        return complete_pair(client, registry, pair["pair_id"], max_pair_cost,
+                             live=live)
+    except PairCompletionRefused:
+        return exit_naked_leg(client, registry, pair["pair_id"], max_pair_cost,
+                              live=live, venue_positions=venue_positions)

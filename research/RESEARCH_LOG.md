@@ -4559,3 +4559,23 @@ Additive to the telemetry path only; no decision or quote logic changed:
 Regression tests added: a later decide no longer captures an earlier submit's outcome; a market_error persists the partial submitted/cancelled counts. Live suite and root suite pass.
 
 **Verdict.** **LIVE**. Instrumentation-only; measured behaviour is unchanged.
+
+## Session — 2026-08-21 (U35 in the live loop: auto naked-leg management)
+
+### Question
+
+The sim's guardrail converts every one-sided fill into either a COMPLETED pair (cross the missing leg at ask when the pair stays under `max_pair_cost`) or a SAME-WINDOW EXIT of the naked leg at the best bid. The live tree had all the pieces — `should_exit` (ported trigger), `exit_naked_leg` (Stage 3), `complete_pair` (Stage 4), and the U35 window (`enable_pairs_rule`, `pairs_exit_window_sec=900`) — but nothing orchestrated them: a one-sided fill rode to resolution, watched only by a human with the manual `exit`/`complete` verbs. Can U35 run automatically in the live poll loop with the same routing?
+
+### Method
+
+New `live/engine/live_pairs.auto_manage_pairs(client, registry, cfg, *, live, now, venue_positions, funder)` — one pass per poll cycle, run after reconcile:
+- Discovery from the fills ledger: every pair with a fill, whose condition has no close, whose last fill is inside the U35 window, whose legs are unbalanced.
+- Routing mirrors the sim: `should_exit(fill_cost, light_ask, max_pair_cost)` → under the cap, `complete_pair`; at/over the cap or no ask, `exit_naked_leg`. If the ask moves above the cap between the route read and the completion's re-check, the completion refuses and the exit owns the case.
+- Safety: one `fetch_positions` per cycle (the same oversell pre-flight the manual exit uses) — an unreadable Data API fails the pass closed and retries next tick; per-pair failures are isolated and reported; closing actions only, so the direction gate pre-approves them.
+- Poll integration: the pass runs after reconcile, emits `pairs_<action>` cycle events, and a pass-level failure logs and continues — it never stops the loop.
+
+### Result
+
+Live suite 429 passed (11 new tests in `test_auto_pairs.py`: window gating, complete-under-cap, exit-at-cap, no-ask → exit, dry-run `would_*` with zero sends, positions-read failure fails closed, one bad pair never stops the others, closed/balanced pairs skipped; +1 in `test_live_dash.py` for the new `/api/pairs-activity` aggregation). All `pairs_*` actions now reach the cycle ring — including the quiet `hold`/`balanced`/`would_*` decisions, which stay out of the console but are no longer dropped — and the dashboard's Bot Brains section gained a live panel showing per-cycle counts of completed/exited/would_complete/would_exit/error plus each pair's last action with timestamp. The measured economics of the rule are unchanged from U35's own record (completion +3.68c/share, exit −3.67c, both re-measured 2026-08-12).
+
+**Verdict.** **LIVE**. The sim's proven guardrail now runs unattended on the live loop within the same window and caps.
