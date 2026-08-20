@@ -369,6 +369,9 @@ class MakerConfig:
     # made permanent. Overridable from HUNTER_DEPTH_TRIAL_USD; the ranker's own
     # `--trial-depth` flag wins over both.
     select_min_top3_depth_usd_trial: float | None = None
+    # NOTE (ADR-0001): the two depth fields above are RANKER-ONLY knobs --
+    # the live fleet deliberately skips a depth-in-USD gate and no live code
+    # reads them. See docs/adr/0001-live-fleet-skips-usd-depth-gate.md
     # VOLUME-GATE TRIAL (U36). Same staging contract as the depth trial above:
     # when set, the RANKER gates 24h volume on this bar instead of
     # `select_min_volume_24h_usd`; adopted markets are tagged `trial_volume_usd`
