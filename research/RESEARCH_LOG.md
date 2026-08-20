@@ -4536,3 +4536,26 @@ New `live/engine/cycle_stream.py`: an append-only NDJSON ring (`live/run/cycle_e
 - **Instrumentation find:** the concurrent-append test lost a line (149/150) with plain `open("a")` — seek-then-write collides on Windows. Appends now go through one `os.write` on an `O_APPEND` fd, which lands at EOF as a single syscall.
 
 **Verdict.** **LIVE**. Telemetry only — no strategy parameters, decision logic, or quote logic changed. This is the per-cycle data layer #53 (SSE panel) and #54 (scan/idle signal) consume. One plan correction: the draft test's rotation numbers (410 lines, first kept cycle 111) do not follow from its own "keep last 400 of > 500" rule; actual is 409 lines / first kept cycle 102, asserted in `test_cycle_stream.py`. Live suite 407 passed, 1 skipped; root suite 703 passed.
+
+---
+
+## Session — 2026-08-20 (telemetry ring instrumentation fixes, post #51 review)
+
+### Question
+
+Review of the #51 ring found correctness gaps that could make an operator trust a misleading status: a submit outcome could update the wrong market visit, rotation could drop a concurrent append, `sweep_done` fired even when the sweep skipped or failed, a partial submit/cancel left `cycle_intent` counts at zero, the fleet's telemetry could write to a different database than its orders under `--db`, and the screener's plain `open("a")` append could lose a line on Windows.
+
+### Method
+
+Additive to the telemetry path only; no decision or quote logic changed:
+- `cycle_stream._update_cycle_intent` now matches on (market_slug, cycle, run_id) so a submit updates the exact visit its decide inserted, and `market_error` on the submit/cancel path persists the partial counts instead of zeros.
+- `cycle_stream._rotate_ring_file` re-stats after reading and skips rotation when a concurrent append landed, narrowing the lost-line window to the residual read-replace gap (documented; a full fix needs a cross-process lock shared with the decoupled screener).
+- `live_exec._sweep_account` returns success/skipped/error and the poll loop emits `sweep_done` / `sweep_skipped` / `sweep_error` accordingly.
+- `live_fleet.run` binds `db_path` into the emitter via `functools.partial` so `--db custom.db` keeps orders and intents in one database.
+- `rerank_loop._emit_scan_event` appends via one `os.write` on an `O_APPEND` fd (the same Windows append-loss fix the engine already used).
+
+### Result
+
+Regression tests added: a later decide no longer captures an earlier submit's outcome; a market_error persists the partial submitted/cancelled counts. Live suite and root suite pass.
+
+**Verdict.** **LIVE**. Instrumentation-only; measured behaviour is unchanged.

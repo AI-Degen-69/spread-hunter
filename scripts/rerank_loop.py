@@ -47,14 +47,19 @@ TOP = 20
 def _emit_scan_event(record: dict) -> None:
     """Inline NDJSON append to the live cycle ring. Never raises.
 
-    Three lines, same schema as engine.cycle_stream.emit, `service="screener"`.
-    Append-only: the engine owns rotation, so a screener append can never race
-    a rewrite of the file (Q3).
+    Same schema as engine.cycle_stream.emit, `service="screener"`. Appends go
+    through one os.write on an O_APPEND fd, which lands at EOF as a single
+    syscall -- a plain open("a") seek-then-write loses a line on Windows when
+    two writers hit the same end offset. The engine owns rotation.
     """
     try:
         RING_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with RING_PATH.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, default=str) + "\n")
+        payload = (json.dumps(record, default=str) + "\n").encode("utf-8")
+        fd = os.open(RING_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
     except Exception:
         pass
 

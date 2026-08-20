@@ -2130,13 +2130,14 @@ def poll(
     sweep_funder_warned = False
     last_sweep_ts: float | None = None
 
-    def _sweep_account(now_iso: str) -> None:
+    def _sweep_account(now_iso: str) -> str:
         """Read the account from the venue without failing the poll cycle.
 
-        The sweep is dashboard telemetry: a failure here must leave the last
-        good reading intact and must never count toward the reconcile
-        backoff. The missing-funder SystemExit is guarded before the call
-        rather than caught, so it cannot kill the poller.
+        Returns "success", "skipped" (no funder), or "error" so the telemetry
+        event never claims a completed sweep that did not complete. A failure
+        here must leave the last good reading intact and must never count
+        toward the reconcile backoff. The missing-funder SystemExit is guarded
+        before the call rather than caught, so it cannot kill the poller.
 
         `last_sweep_ts` is stamped on every attempt, success or failure, so
         the interval cadence throttles retries instead of hammering the Data
@@ -2148,16 +2149,18 @@ def poll(
             if not sweep_funder_warned:
                 sweep_funder_warned = True
                 _log_event(f"[{now_iso}] SWEEP SKIPPED: POLY_FUNDER not set")
-            return
+            return "skipped"
         try:
             mark = account_sweep(funder=funder, db_path=db_p, quiet=True)
         except Exception as exc:
             _log_event(f"[{now_iso}] SWEEP ERROR: {exc}")
-            return
+            return "error"
         try:
             _log_float_mark_if_measured(registry, mark)
         except Exception as exc:
             _log_event(f"[{now_iso}] FLOAT MARK ERROR: {exc}")
+            return "error"
+        return "success"
 
     # START and STOP are written unconditionally, so the log exists from the
     # first second of a run. Without them a quiet session leaves no file at all,
@@ -2190,10 +2193,15 @@ def poll(
         now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         if _sweep_due(cycle, time.time(), last_sweep_ts, sweep_interval, sweep_every):
-            _sweep_account(now_iso)
+            sweep_outcome = _sweep_account(now_iso)
+            sweep_action = (
+                "sweep_done" if sweep_outcome == "success"
+                else "sweep_skipped" if sweep_outcome == "skipped"
+                else "sweep_error"
+            )
             _emit_cycle_event(
                 service="engine", cycle=cycle, phase="settling",
-                action="sweep_done",
+                action=sweep_action,
             )
 
         try:

@@ -1377,6 +1377,17 @@ def get_scan_state():
     })
 
 
+def _ring_file_key(st: Any) -> tuple:
+    """Identity that changes when the engine rotates the ring via os.replace.
+
+    st_ino distinguishes the replaced inode on POSIX; on Windows st_ino is 0,
+    so fall back to creation time (st_ctime_ns), which os.replace changes.
+    """
+    if getattr(st, "st_ino", 0):
+        return (st.st_dev, st.st_ino)
+    return (st.st_dev, st.st_ctime_ns)
+
+
 def _cycle_stream_sse(
     ring_path: Path,
     tail: int = SSE_REPLAY_LINES,
@@ -1385,8 +1396,10 @@ def _cycle_stream_sse(
     """Yield SSE frames for the cycle-telemetry ring: replay tail, then follow appends.
 
     The engine rotates the ring past 500 lines by atomically replacing the file.
-    When the file shrinks we emit an ``event: rotate`` frame and re-sync from the
-    new tail so the client can clear its log before the replay.
+    Replacement is detected by file identity (inode on POSIX, creation time on
+    Windows) rather than size alone, so a replacement larger than the current
+    read offset is still seen. On rotation we emit an ``event: rotate`` frame
+    and re-sync from the new file's start.
     """
     last_keepalive = time.time()
 
@@ -1394,11 +1407,15 @@ def _cycle_stream_sse(
         return f"data: {line.strip()}\n\n"
 
     offset = 0
+    file_key = None
     if ring_path.exists():
         try:
             with open(ring_path, "r", encoding="utf-8", errors="replace") as fh:
                 tail_lines = fh.readlines()[-tail:]
-            offset = ring_path.stat().st_size
+                # Position actually consumed, not a later stat: an append in the
+                # read-to-stat gap must not be silently skipped.
+                offset = fh.tell()
+                file_key = _ring_file_key(os.fstat(fh.fileno()))
             for line in tail_lines:
                 if line.strip():
                     yield _frame(line)
@@ -1410,17 +1427,20 @@ def _cycle_stream_sse(
             if not ring_path.exists():
                 time.sleep(poll_sec)
                 continue
-            size = ring_path.stat().st_size
-            if size < offset:
+            st = ring_path.stat()
+            key = _ring_file_key(st)
+            size = st.st_size
+            if file_key is not None and (key != file_key or size < offset):
                 offset = 0
                 yield "event: rotate\ndata: {}\n\n"
+            file_key = key
             if size > offset:
                 with open(ring_path, "r", encoding="utf-8", errors="replace") as fh:
                     fh.seek(offset)
                     for line in fh:
                         if line.strip():
                             yield _frame(line)
-                offset = size
+                    offset = fh.tell()
             if time.time() - last_keepalive >= SSE_KEEPALIVE_SEC:
                 yield ": keepalive\n\n"
                 last_keepalive = time.time()

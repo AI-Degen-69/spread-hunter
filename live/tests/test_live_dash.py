@@ -13,6 +13,7 @@ Verifies the single-cycle dashboard behavior across all essential operational st
 """
 import datetime
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -1231,6 +1232,41 @@ def test_cycle_stream_sse_replays_tail_and_follows_appends(tmp_path):
             break
     gen.close()
     assert saw_follow
+
+
+def test_cycle_stream_sse_detects_rotation_by_file_identity(tmp_path):
+    """A rotation that replaces the ring with a LARGER file is still detected."""
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(
+        json.dumps({"service": "engine", "phase": "scanning", "action": "a"}) + "\n",
+        encoding="utf-8",
+    )
+    gen = _cycle_stream_sse(ring, tail=50, poll_sec=0.01)
+    next(gen)  # consume the initial replay
+
+    # Simulate the engine's os.replace rotation with a larger-byte file.
+    tmp = tmp_path / "new.jsonl"
+    tmp.write_text(
+        json.dumps({"service": "fleet", "phase": "quoting", "action": "b",
+                    "reason": "x" * 200}) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, ring)
+
+    deadline = time.time() + 3.0
+    saw_rotate = False
+    saw_new = False
+    while time.time() < deadline:
+        frame = next(gen)
+        if frame.startswith("event: rotate"):
+            saw_rotate = True
+        if '"action": "b"' in frame:
+            saw_new = True
+        if saw_rotate and saw_new:
+            break
+    gen.close()
+    assert saw_rotate
+    assert saw_new
 
 
 def test_page_html_contains_bot_brains_panel():

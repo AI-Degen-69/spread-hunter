@@ -22,6 +22,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -279,7 +280,8 @@ def _visit_one(
         # must degrade this market to ERROR, never stop the rotation.
         emit_fn(service="fleet", cycle=cycle, phase="quoting",
                 action="market_error", market_slug=title,
-                reason=f"submit/cancel: {type(e).__name__}: {e}")
+                reason=f"submit/cancel: {type(e).__name__}: {e}",
+                extra={"submitted": submitted, "cancelled": cancelled})
         return LiveFleetResult(
             status="ERROR", condition_id=cid, title=title, why=why,
             intents=list(intents), submitted=submitted, cancelled=cancelled,
@@ -632,7 +634,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         inventory_fn=_make_inventory_fn(registry, db_path),
         open_orders_fn=_make_open_orders_fn(registry),
         fleet_state_fn=lambda r: _fleet_state(r, cfg),
-        emit_fn=_emit_cycle_event,
+        emit_fn=partial(_emit_cycle_event, db_path=db_path),
     )
 
     for r in results:

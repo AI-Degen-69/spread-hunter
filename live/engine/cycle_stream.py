@@ -33,6 +33,15 @@ MAX_LINES = 500
 KEEP_LINES = 400
 
 
+def _resolve_run_id() -> str:
+    """The current run id, resolved the same way for decide and submit events."""
+    try:
+        from engine.order_registry import get_run_id
+        return get_run_id()
+    except Exception:
+        return "live"
+
+
 def _write_cycle_intent(
     cycle: int,
     market_slug: str,
@@ -49,13 +58,7 @@ def _write_cycle_intent(
     if not p.parent.exists():
         p.parent.mkdir(parents=True, exist_ok=True)
 
-    r_id = run_id
-    if r_id is None:
-        try:
-            from engine.order_registry import get_run_id
-            r_id = get_run_id()
-        except Exception:
-            r_id = "live"
+    r_id = run_id or _resolve_run_id()
 
     now_ts = time.time()
     try:
@@ -116,15 +119,17 @@ def _write_cycle_intent(
 
 def _update_cycle_intent(
     market_slug: str,
+    cycle: int,
+    run_id: str,
     submitted: int = 0,
     cancelled: int = 0,
     db_path: Path | None = None,
 ) -> None:
-    """Fire-and-forget UPDATE of the newest cycle_intent row for a market.
+    """Fire-and-forget UPDATE of the cycle_intent row for one market visit.
 
-    The submit event of the same market visit carries the counts; writing them
-    onto the decide row keeps one row per market visit (the schema's
-    submitted/cancelled columns are the outcome, not a second decision).
+    Matching on market_slug alone would let a later decide event for the same
+    market (before this submit arrives) capture this submit's outcome. cycle +
+    run_id + market_slug identify the exact visit the decide event inserted.
     """
     p = Path(db_path) if db_path else DEFAULT_DB_PATH
     if not p.exists():
@@ -136,10 +141,11 @@ def _update_cycle_intent(
                 UPDATE cycle_intent SET submitted = ?, cancelled = ?
                 WHERE id = (
                     SELECT id FROM cycle_intent
-                    WHERE market_slug = ? ORDER BY id DESC LIMIT 1
+                    WHERE market_slug = ? AND cycle = ? AND run_id = ?
+                    ORDER BY id DESC LIMIT 1
                 )
                 """,
-                (submitted, cancelled, market_slug),
+                (submitted, cancelled, market_slug, cycle, run_id),
             )
             conn.commit()
     except Exception as exc:
@@ -165,13 +171,25 @@ def _append_line(path: Path, line: str) -> None:
 
 
 def _rotate_ring_file(ring_path: Path) -> None:
-    """Atomic rotation of the ring file keeping the last KEEP_LINES."""
+    """Atomic rotation of the ring file keeping the last KEEP_LINES.
+
+    A concurrent writer (fleet/screener) can append between our read and the
+    replace. A fully atomic rotation would need a cross-process lock shared
+    with those decoupled writers (they must not import engine.*), so instead
+    we re-stat after reading and skip this rotation when the file grew. The
+    residual window (append after the re-stat, before os.replace) can drop at
+    most one telemetry line in a rare race; the next emit re-checks.
+    """
     try:
         if not ring_path.exists():
             return
+        size_before = ring_path.stat().st_size
         with open(ring_path, "r", encoding="utf-8", errors="replace") as rf:
             lines = rf.readlines()
         if len(lines) > MAX_LINES:
+            if ring_path.stat().st_size != size_before:
+                # A concurrent append landed during our read; don't drop it.
+                return
             kept = lines[-KEEP_LINES:]
             tmp_path = ring_path.with_name(f"{ring_path.name}.tmp.{uuid.uuid4()}")
             with open(tmp_path, "w", encoding="utf-8") as tf:
@@ -242,9 +260,14 @@ def emit(
                 latency_ms=latency_ms,
                 db_path=db_path,
             )
-        elif phase == "quoting" and action == "submit":
+        elif phase == "quoting" and action in ("submit", "market_error"):
+            # submit carries the outcome of a successful decide; market_error on
+            # the submit/cancel path carries the partial counts that must not be
+            # left at zero. Either way update the same row the decide inserted.
             _update_cycle_intent(
                 market_slug=market_slug,
+                cycle=cycle,
+                run_id=_resolve_run_id(),
                 submitted=int((extra or {}).get("submitted", 0)),
                 cancelled=int((extra or {}).get("cancelled", 0)),
                 db_path=db_path,

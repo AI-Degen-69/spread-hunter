@@ -145,6 +145,33 @@ class TestCycleIntent:
         assert len(rows) == 1
         assert rows[0] == (2, 1, 1, "0xcid")
 
+    def test_cycle_intent_submit_targets_exact_visit(self, tmp_path):
+        """A later decide for the same market must not capture an earlier submit."""
+        ring = tmp_path / "events.jsonl"
+        db = tmp_path / "live.db"
+        emit(7, "quoting", "decide", market_slug="mkt",
+             extra={"intent_count": 1}, ring_path=ring, db_path=db)
+        emit(8, "quoting", "decide", market_slug="mkt",
+             extra={"intent_count": 2}, ring_path=ring, db_path=db)
+        emit(7, "quoting", "submit", market_slug="mkt",
+             extra={"submitted": 1, "cancelled": 0}, ring_path=ring, db_path=db)
+        rows = _query_intent(db, "SELECT cycle, intent_count, submitted, "
+                                  "cancelled FROM cycle_intent ORDER BY id")
+        assert rows[0] == (7, 1, 1, 0)
+        assert rows[1] == (8, 2, 0, 0)
+
+    def test_cycle_intent_market_error_persists_partial_counts(self, tmp_path):
+        """A submit/cancel failure records the partial counts, not zeros."""
+        ring = tmp_path / "events.jsonl"
+        db = tmp_path / "live.db"
+        emit(7, "quoting", "decide", market_slug="mkt",
+             extra={"intent_count": 2}, ring_path=ring, db_path=db)
+        emit(7, "quoting", "market_error", market_slug="mkt",
+             reason="submit/cancel: boom",
+             extra={"submitted": 1, "cancelled": 0}, ring_path=ring, db_path=db)
+        rows = _query_intent(db, "SELECT submitted, cancelled FROM cycle_intent")
+        assert rows[0] == (1, 0)
+
     def test_cycle_intent_retention_200(self, tmp_path):
         ring = tmp_path / "events.jsonl"
         db = tmp_path / "live.db"
