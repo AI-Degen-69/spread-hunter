@@ -314,17 +314,18 @@ def _funnel_from_pipeline(
     pipeline_path: Path | str | None = None,
     markets_path: Path | str | None = None,
 ) -> Optional[dict[str, Any]]:
-    """
-    Build a market funnel from a screener snapshot and annotate graduated markets with live results.
-    
-    Parameters:
-        by_mkt (dict): Market metrics used to annotate graduated markets.
-        pipeline_path (Path | str | None): Optional path to the screener snapshot.
-        markets_path (Path | str | None): Optional path to graduated market metadata.
-    
-    Returns:
-        Optional[dict]: Funnel data containing counts, rejection filters, graduated markets, and snapshot metadata; `None` when the snapshot is missing, invalid, or unreadable.
-    """
+"""Build the Level 2 market funnel from the screener's own snapshot and annotate graduated markets with live results.
+
+`run/pipeline.json` is the same file the sim scan (server/fleet_dash.py) renders, so sourcing the funnel from it makes the live Level 2 lanes compare 1:1 with the sim scan: identical gate names ("volume", "YES: top-3 bid depth", "horizon", ...) and identical counts. GRADUATED is the ranker's run/markets.json picks annotated with this run's live fills and realized PnL, so the lane reads live before any quote exists.
+
+Parameters:
+    by_mkt (dict[str, Any]): Market metrics used to annotate graduated markets.
+    pipeline_path (Path | str | None): Optional path to the screener snapshot. Defaults to run/pipeline.json.
+    markets_path (Path | str | None): Optional path to graduated market metadata.
+
+Returns:
+    Optional[dict[str, Any]]: Funnel data containing counts, rejection filters, graduated markets, and snapshot metadata; None when the ranker hasn't written a snapshot yet (caller falls back to runtime market-event telemetry).
+"""
     pp = Path(pipeline_path) if pipeline_path is not None else (REPO_ROOT / "run" / "pipeline.json")
     if not pp.is_file():
         return None
