@@ -23,6 +23,7 @@ import json
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -432,7 +433,7 @@ def _trial_market():
         "tokens": [{"token_id": "0xaa"}, {"token_id": "0xbb"}],
         "rewards": {"max_spread": 3.5, "min_size": 50},
         "minimum_tick_size": 0.001,
-        "end_date_iso": "2026-08-20T00:00:00Z",
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=12)).isoformat(),
         "_volume_24h": 1_000_000.0,
         "_spread": 0.02,
     }
@@ -529,7 +530,7 @@ def _volume_trial_market():
         "tokens": [{"token_id": "0xcc"}, {"token_id": "0xdd"}],
         "rewards": {"max_spread": 3.5, "min_size": 50},
         "minimum_tick_size": 0.001,
-        "end_date_iso": "2026-08-25T00:00:00Z",
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=15)).isoformat(),
         "_volume_24h": 210_000.0,
         "_spread": 0.02,
     }

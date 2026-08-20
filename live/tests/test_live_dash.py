@@ -703,7 +703,7 @@ def test_start_endpoint_never_spawns_a_process_under_test(client, monkeypatch):
     assert res.status_code == 200
 
 
-def test_reset_db_refuses_to_destroy_an_archived_run(tmp_path):
+def test_reset_db_refuses_to_destroy_an_archived_run(tmp_path, monkeypatch):
     """Reset must not delete an archive opened for reading.
 
     reset_database archives-then-unlinks whatever --db points at. Launched
@@ -711,6 +711,10 @@ def test_reset_db_refuses_to_destroy_an_archived_run(tmp_path):
     record the operator opened the page to read, and nested a fresh archive/
     inside the archive directory on the way out.
     """
+    import dash.live_dash as dash_mod
+    # Isolate the bot-running gate (see test_system_reset_db_endpoint): point
+    # LIVE_ROOT at tmp_path so the global live_procs.json is not consulted.
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
     from dash.live_dash import reset_database
 
     archive_dir = tmp_path / "run" / "archive"
@@ -799,9 +803,16 @@ def test_restart_preserves_the_database_flag(monkeypatch):
     assert relaunch_argv()[2:] == ["--db", "run/archive/live_x.db"]
 
 
-def test_system_reset_db_endpoint(client, temp_db):
+def test_system_reset_db_endpoint(client, temp_db, tmp_path, monkeypatch):
     """POST /api/system/reset-db archives the existing DB and initializes a clean fresh DB."""
     import sqlite3
+    import dash.live_dash as dash_mod
+    # Isolate the bot-running gate: reset_database() consults the global
+    # LIVE_ROOT/run/live_procs.json to decide if the bot is RUNNING. Point
+    # LIVE_ROOT at the test tmp so the gate sees no procs file and treats the
+    # bot as STOPPED, otherwise a live bot on the operator's machine short-
+    # circuits the reset before it ever touches temp_db.
+    monkeypatch.setattr(dash_mod, "LIVE_ROOT", tmp_path)
     # Put a dummy row in temp_db first
     conn = sqlite3.connect(temp_db)
     conn.execute("INSERT INTO orders (id, condition_id, token_id, side, price, original_size, status, posted_ts, last_polled_ts) VALUES ('dummy-1', '0x1', '0x2', 'BUY', 0.5, 10, 'open', 1000, 1000)")

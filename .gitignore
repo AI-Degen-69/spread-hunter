@@ -79,6 +79,16 @@ run/*.db
 run/*.db-journal
 run/*.db-wal
 run/*.db-shm
+# Generated SQLite at ANY depth under run/ (e.g. bankroll_100/fleet.db from the
+# experiment harness). A bare `run/*.db` only matches the root level; `**`
+# crosses subdirs. Intentional sources of truth (run/markets.json,
+# run/live_test_*.json) are JSON and stay tracked — do not add run/**/*.json.
+run/**/*.db
+run/**/*.db-*
+run/**/*.db.bak-*
+run/**/*.db-journal
+run/**/*.db-wal
+run/**/*.db-shm
 # Supervisor and dashboard stdout/stderr. Four of these were tracked until
 # 2026-08-16 (1,033 KB, mostly supervisor.log), which AGENTS.md's hygiene rule
 # already forbade: "Never commit generated output or debug logs." Untracked with
