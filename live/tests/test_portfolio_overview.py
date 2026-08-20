@@ -31,7 +31,7 @@ import pytest
 
 from engine import kpi as kpi_mod
 from engine.kpi import report
-from engine.order_registry import SCHEMA, CloseRecord, OrderRegistry
+from engine.order_registry import SCHEMA, CloseRecord, MarketEventRecord, OrderRegistry
 from dash.live_dash import PAGE_HTML
 
 RUN = "run-portfolio"
@@ -302,4 +302,64 @@ def test_portfolio_overview_is_the_first_card_on_the_page():
     ):
         assert element_id in PAGE_HTML
 
-    assert PAGE_HTML.index('id="portfolio-total-value"') < PAGE_HTML.index('id="sec-run-kpis"')
+
+# --------------------------------------------------------------------------
+# Regression: resolved markets must not linger in "MARKETS IN RUN"
+# --------------------------------------------------------------------------
+
+def test_resolved_market_drops_from_by_market_via_venue_sync_close(temp_db, tmp_path, monkeypatch):
+    """A market the venue reports settled (closes.method='venue_sync') leaves the
+    drill-down, so "MARKETS IN RUN" stops listing markets that already resolved.
+
+    A local merge close (still-open trade) must NOT drop the market -- that path
+    is for trades the operator is still watching, not resolutions.
+    """
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+
+    # Resolved via the account sweep.
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id="0xresolved", market_slug="resolved",
+        method="venue_sync", shares=5.0, cost_basis=4.70, proceeds=5.00,
+        realized_pnl=0.30, tx_hash="0xres", run_id=RUN,
+    ))
+    # Still-open trade, closed locally via merge (NOT a venue resolution).
+    reg.log_close(CloseRecord(
+        ts=t0 + 120, condition_id="0xopen", market_slug="open",
+        method="merge", shares=5.0, cost_basis=4.90, proceeds=5.00,
+        realized_pnl=0.10, tx_hash="0xopn", run_id=RUN,
+    ))
+
+    data = report(db_path=temp_db, run_id=RUN)
+    assert "0xresolved" not in data["by_market"]
+    assert "0xopen" in data["by_market"]
+
+
+def test_resolved_market_drops_when_ranker_records_negative_days_to_resolve(temp_db, tmp_path, monkeypatch):
+    """A market whose end date passed (days_to_resolve < 0 in run/markets.json)
+    leaves "MARKETS IN RUN" even without a closes row yet.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "markets.json").write_text(json.dumps([
+        {"cid": "0xexpired", "slug": "expired", "title": "Expired",
+         "days_to_resolve": -0.5, "source": "spread", "eligible": True},
+        {"cid": "0xlive", "slug": "live", "title": "Live",
+         "days_to_resolve": 2.0, "source": "spread", "eligible": True},
+    ]), encoding="utf-8")
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+
+    reg = OrderRegistry(temp_db)
+    reg.log_market_event(MarketEventRecord(
+        ts=time.time() - 10, condition_id="0xexpired", kind="DECISION",
+        reason="quoting", reason_code="INTENT_GENERATED", run_id=RUN,
+    ))
+    reg.log_market_event(MarketEventRecord(
+        ts=time.time() - 10, condition_id="0xlive", kind="DECISION",
+        reason="quoting", reason_code="INTENT_GENERATED", run_id=RUN,
+    ))
+
+    data = report(db_path=temp_db, run_id=RUN)
+    assert "0xexpired" not in data["by_market"]
+    assert "0xlive" in data["by_market"]

@@ -314,17 +314,14 @@ def _funnel_from_pipeline(
     pipeline_path: Path | str | None = None,
     markets_path: Path | str | None = None,
 ) -> Optional[dict[str, Any]]:
-    """Build the Level 2 funnel from the screener's own snapshot.
-
-    `run/pipeline.json` is the same file the sim scan (server/fleet_dash.py)
-    renders, so sourcing the funnel from it makes the live Level 2 lanes
-    compare 1:1 with the sim scan: identical gate names ("volume", "YES:
-    top-3 bid depth", "horizon", ...) and identical counts. GRADUATED is the
-    ranker's run/markets.json picks annotated with this run's live fills and
-    realized PnL, so the lane reads live before any quote exists.
-
-    Returns None when the ranker hasn't written a snapshot yet, so the caller
-    falls back to runtime market-event telemetry.
+    """Build the Level 2 market funnel from the screener's own snapshot and annotate graduated markets with live results.
+    `run/pipeline.json` is the same file the sim scan (server/fleet_dash.py) renders, so sourcing the funnel from it makes the live Level 2 lanes compare 1:1 with the sim scan: identical gate names [...]
+    Parameters:
+        by_mkt (dict[str, Any]): Market metrics used to annotate graduated markets.
+        pipeline_path (Path | str | None): Optional path to the screener snapshot. Defaults to run/pipeline.json.
+        markets_path (Path | str | None): Optional path to graduated market metadata.
+    Returns:
+        Optional[dict[str, Any]]: Funnel data containing counts, rejection filters, graduated markets, and snapshot metadata; None when the ranker hasn't written a snapshot yet (caller falls back to [...]
     """
     pp = Path(pipeline_path) if pipeline_path is not None else (REPO_ROOT / "run" / "pipeline.json")
     if not pp.is_file():
@@ -365,6 +362,12 @@ def _funnel_from_pipeline(
     for s in specs:
         if not isinstance(s, dict):
             continue
+        # Skip markets the ranker recorded as already resolved. The gamma query
+        # already excludes closed markets, but a market can resolve between the
+        # rank pass and the dashboard read; days_to_resolve < 0 means expired.
+        dtr = s.get("days_to_resolve")
+        if isinstance(dtr, (int, float)) and dtr < 0:
+            continue
         cid = s.get("cid") or s.get("condition_id") or ""
         m = by_mkt.get(cid, {})
         graduated.append({
@@ -393,7 +396,16 @@ def _funnel_from_pipeline(
 
 
 def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> dict[str, Any]:
-    """Generate live KPI dictionary mirroring strategy/kpi.py report() structure with live enhancements."""
+    """
+    Generate a live KPI report containing run-level, portfolio, market-level, funnel, and mechanics metrics.
+    
+    Parameters:
+    	db_path (Path | str | None): Path to the registry database. Uses the default database when omitted.
+    	run_id (Optional[str]): Run identifier to report, or `"all"` to aggregate all runs. When omitted, selects the most recent applicable run.
+    
+    Returns:
+    	dict[str, Any]: A dictionary containing KPI metrics, portfolio and account series, market drilldowns, funnel data, settlements, and diagnostics.
+    """
     reg = OrderRegistry(db_path if db_path is not None else DEFAULT_DB_PATH)
     
     all_quotes = reg.get_all_quotes()
@@ -405,6 +417,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     all_venue_errs = reg.get_all_venue_errors()
     all_divergences = reg.get_all_divergence_events()
     all_float_marks = reg.get_all_float_marks()
+    all_orders = reg.get_all_orders()
     # Deliberately NOT filtered by run_id below. An account balance belongs to
     # the wallet, not to a run: slicing it per run would report the account as
     # empty for any run that happened not to sweep.
@@ -449,6 +462,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         venue_errs = [v for v in all_venue_errs if v.get("run_id") == active_run_id]
         divergences = [d for d in all_divergences if d.get("run_id") == active_run_id]
         float_marks = [fm for fm in all_float_marks if fm.get("run_id") == active_run_id]
+        orders = [o for o in all_orders if o.get("run_id") == active_run_id]
     else:
         quotes = all_quotes
         fills = all_fills
@@ -458,6 +472,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         venue_errs = all_venue_errs
         divergences = all_divergences
         float_marks = all_float_marks
+        orders = all_orders
 
     posted_sh = sum(float(q.get("size") or 0.0) for q in quotes)
     filled_sh = sum(float(f.get("size") or 0.0) for f in fills)
@@ -505,7 +520,8 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             [c.get("condition_id") for c in closes] +
             [m.get("condition_id") for m in markouts] +
             [e.get("condition_id") for e in market_events] +
-            [v.get("condition_id") for v in venue_errs]
+            [v.get("condition_id") for v in venue_errs] +
+            [o.get("condition_id") for o in orders]
         ) if cid
     }
 
@@ -579,6 +595,29 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             "venue_errors": m_errs,
             "settlements": m_closes,
         }
+
+    # Drop markets that have already resolved.
+    #
+    # A market leaves "MARKETS IN RUN" once the venue reports it settled. The
+    # account sweep writes those as `closes` rows with method='venue_sync'
+    # (distinct from local merge/sell closes, which are still-open trades the
+    # operator wants to see). A negative `days_to_resolve` from run/markets.json
+    # is the same fact from the ranker's side. Both are durable, venue-free
+    # signals already in the registry.
+    #
+    # Markets that were merely blocked, quoted-then-cancelled, or never opened
+    # here are KEPT: they were touched by the bot this run and belong in the
+    # drill-down. `days_to_resolve` of None is kept (unknown rank freshness
+    # must never silently drop a market).
+    resolved_cids = {
+        c.get("condition_id") for c in closes
+        if c.get("condition_id") and c.get("method") == "venue_sync"
+    }
+    by_mkt = {
+        cid: m for cid, m in by_mkt.items()
+        if cid not in resolved_cids
+        and not (m.get("days_to_resolve") is not None and m.get("days_to_resolve") < 0)
+    }
 
     balances = [m["balance"] for m in by_mkt.values() if m["balance"] is not None]
     pairs = [m["pair_cost"] for m in by_mkt.values() if m["pair_cost"] is not None]

@@ -333,6 +333,17 @@ def test_active_run_sticks_to_most_recent_when_it_has_fills(temp_db):
 
 
 def _make_quote(*, run_id, ts, **over):
+    """
+    Create a quote record with standard test values and optional field overrides.
+    
+    Parameters:
+        run_id: Identifier for the run associated with the quote.
+        ts: Timestamp of the quote.
+        **over: Quote fields that override the standard test values.
+    
+    Returns:
+        A configured QuoteRecord.
+    """
     from engine.order_registry import QuoteRecord
     base = dict(
         ts=ts, market_slug="slug", condition_id="cond-1",
@@ -341,3 +352,22 @@ def _make_quote(*, run_id, ts, **over):
     )
     base.update(over)
     return QuoteRecord(**base)
+
+
+def test_order_only_markets_appear_in_by_market_for_drilldown(temp_db):
+    """Regression: an order that was placed but never filled (no quote telemetry,
+    no fill, no close, no market_events) must still appear in by_market so the
+    operator can drill down on it. Before the fix, order-only markets were excluded
+    from all_cids and thus never reached by_mkt."""
+    from engine.order_registry import OrderRecord
+    reg = OrderRegistry(temp_db)
+    # Market with order only, no other telemetry
+    reg.create_order(OrderRecord(
+        id="ord-order-only", condition_id="cond-order-only", token_id="tok-order-only",
+        side="BUY", price=0.50, original_size=10.0, status="open",
+        posted_ts=1000, last_polled_ts=1000, pair_id="pair-order-only",
+    ))
+
+    rep = report(db_path=str(temp_db), run_id="all")
+    by_mkt = rep["by_market"]
+    assert "cond-order-only" in by_mkt, "Order-only market must appear in by_market for drill-down"
