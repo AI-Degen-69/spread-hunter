@@ -47,9 +47,6 @@ scripts/    Market ranker, pairs EV report, bankroll sensitivity, replay harness
 research/   Lab notebook & experiment logs (RESEARCH_LOG.md, RESEARCH_SUMMARY.md in EN & HE)
 docs/       Architecture records, data flow specs, markout horizons, and CSS documentation
 ```
-
-The sibling repo [`polymarket-taker`](https://github.com/AI-Degen-69/polymarket-taker) uses the same layout.
-
 ---
 
 ## Quickstart & Local Execution
