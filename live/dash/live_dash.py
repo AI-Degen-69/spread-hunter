@@ -1067,6 +1067,17 @@ def api_system_reset_db(request: Request):
     return JSONResponse(reset_database())
 
 
+@app.post("/api/system/venue-sync")
+def api_system_venue_sync(request: Request):
+    """Trigger a one-time venue reconciliation.
+    Reads the account from Polymarket and backfills closes/float_marks.
+    Read-only at the venue; no exposure is opened or increased."""
+    _authorize_control(request)
+    from engine.live_exec import venue_sync
+    db_path = resolve_db_path(_ACTIVE_DB_OVERRIDE)
+    return JSONResponse(venue_sync(db_path=db_path, quiet=False))
+
+
 def relaunch_argv() -> list[str]:
     """Build the command that starts a replacement dashboard process.
 
@@ -1784,10 +1795,24 @@ PAGE_HTML = """<!DOCTYPE html>
       box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
     }
     .btn-restart:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-    .sweep-control {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+        .btn-sync {
+          background: rgba(250, 204, 21, 0.15);
+          color: #facc15;
+          border: 1px solid rgba(250, 204, 21, 0.4);
+        }
+        .btn-sync:hover:not(:disabled) {
+          background: rgba(250, 204, 21, 0.25);
+          color: #ffffff;
+          box-shadow: 0 0 10px rgba(250, 204, 21, 0.4);
+        }
+        .btn-sync:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+        .sweep-control {
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -1855,7 +1880,8 @@ PAGE_HTML = """<!DOCTYPE html>
         <button id="btn-stop-bot" class="btn-bot btn-stop" onclick="stopBot()">⏹ Stop Bot</button>
         <button id="btn-reset-db" class="btn-bot btn-reset" onclick="confirmResetDb()">🔄 Fresh DB</button>
         <button id="btn-restart-dash" class="btn-bot btn-restart" onclick="restartDash()">⚡ Restart Dash</button>
-        <div class="sweep-control">
+                <button id="btn-venue-sync" class="btn-bot btn-sync" onclick="venueSync()">⟳ Sync</button>
+                <div class="sweep-control">
           <label class="sweep-label" for="sweep-interval-input">sweep</label>
           <input id="sweep-interval-input" class="sweep-input" type="number" min="1" step="1" placeholder="every tick" />
           <span class="sweep-unit">s</span>
@@ -3500,7 +3526,36 @@ PAGE_HTML = """<!DOCTYPE html>
       }
     }
 
-    async function restartDash() {
+    async function venueSync() {
+      const btn = document.getElementById('btn-venue-sync');
+              if (btn) btn.disabled = true;
+              const orig = btn ? btn.textContent : '';
+              if (btn) btn.textContent = '⟳ Syncing...';
+              try {
+                const res = await controlFetch('/api/system/venue-sync');
+                const data = await res.json();
+                if (data.ok) {
+                  const msg = `Venue sync complete.
+Account: ` + (data.account_value_usd != null ? '$' + data.account_value_usd.toFixed(2) : '--') + `
+Closed positions: ` + data.closed_positions_count + `
+Open positions: ` + data.open_positions_count + `
+Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_existing + ` existing)`;
+                  alert(msg);
+                  pollState();
+                } else {
+                  alert('Venue sync failed: ' + (data.message || data.error || 'unknown'));
+                }
+              } catch (err) {
+                alert('Venue sync error: ' + err);
+              } finally {
+                if (btn) {
+                  btn.disabled = false;
+                  btn.textContent = orig || '⟳ Sync';
+                }
+              }
+            }
+
+            async function restartDash() {
       const btn = document.getElementById('btn-restart-dash');
       if (btn) btn.disabled = true;
       const pollPill = document.getElementById('poll-pill');

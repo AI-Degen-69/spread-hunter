@@ -2723,6 +2723,203 @@ def account_sweep(funder: str | None = None, db_path: str | None = None,
     return mark
 
 
+def venue_sync(funder=None, db_path=None, quiet=False):
+    """Reconcile the local registry with what the venue currently shows.
+
+    Reads the same five venue endpoints as `account_sweep` (one needs signed
+    CLOB credentials; the rest are address-keyed GETs) and persists the
+    per-trade detail that the sweep drops on the floor:
+
+    * each venue `closed_positions` row becomes a row in `closes` so the
+      dashboard Win Rate, Sharpe, Realized PnL, and Drawdown tiles have data;
+    * the current `open_positions` set becomes one new `float_marks` row
+      so the exposure chart and per-market tiles reflect venue reality.
+
+    Idempotent. Re-running does not duplicate rows: closes use
+    `(condition_id, asset)` as the dedup key (the venue returns one row per
+    closed asset); float marks always write a new row, but they are point-in-
+    time observations and the schema is INSERT, not INSERT OR REPLACE.
+
+    Reads the venue. Never writes an order, places a quote, or opens exposure
+    -- same read-only contract as `account_sweep`. Use from the dashboard
+    Sync button when the page must catch up with state the bot stack missed
+    (overnight fills, on-chain resolutions the local engine never observed).
+    """
+    from engine.account import read_account, fetch_closed_positions, fetch_open_positions
+    from engine.order_registry import (
+        OrderRegistry, CloseRecord, get_run_id,
+    )
+
+    who = funder or os.environ.get("POLY_FUNDER")
+    if not who:
+        raise SystemExit("POLY_FUNDER not set. Cannot identify the account to read.")
+
+    collateral = _fetch_live_balance(who)
+    mark = read_account(who, collateral_usd=collateral)
+
+    registry = OrderRegistry(db_path=Path(db_path) if db_path else None)
+    registry.log_account_mark(mark)
+
+    raw_closed = fetch_closed_positions(who, timeout=15.0) or []
+    closes_written = 0
+    closes_skipped_existing = 0
+    for row in raw_closed:
+        if not isinstance(row, dict):
+            continue
+        cid = row.get("conditionId")
+        asset = row.get("asset")
+        if not cid or not asset:
+            continue
+        # Dedupe: one venue row per (condition_id, asset). The local DB holds
+        # the asset id in tx_hash; a second sync of the same close skips.
+        with registry._conn() as conn:
+            cur = conn.execute(
+                "SELECT id FROM closes WHERE condition_id = ? AND tx_hash = ?",
+                (cid, asset),
+            ).fetchone()
+        if cur is not None:
+            closes_skipped_existing += 1
+            continue
+
+        ts_raw = row.get("timestamp")
+        try:
+            ts = float(ts_raw) if ts_raw is not None else time.time()
+        except (TypeError, ValueError):
+            ts = time.time()
+
+        realized = row.get("realizedPnl")
+        try:
+            realized_pnl = float(realized) if realized is not None else 0.0
+        except (TypeError, ValueError):
+            realized_pnl = 0.0
+        total_bought = row.get("totalBought")
+        try:
+            shares = float(total_bought) if total_bought is not None else None
+        except (TypeError, ValueError):
+            shares = None
+        avg_price = row.get("avgPrice")
+        try:
+            up_price = float(avg_price) if avg_price is not None else None
+        except (TypeError, ValueError):
+            up_price = None
+
+        registry.log_close(CloseRecord(
+            ts=ts,
+            condition_id=cid,
+            market_slug=row.get("slug") or row.get("eventSlug"),
+            method="venue_sync",
+            shares=shares,
+            up_price=up_price,
+            dn_price=None,
+            cost_basis=None,
+            proceeds=None,
+            realized_pnl=realized_pnl,
+            tx_hash=asset,
+        ))
+        closes_written += 1
+
+    # mark from compose_account_mark has no open_positions key -- we never
+    # propagated it. Re-fetch directly so the float_mark reflects venue truth.
+    open_positions = fetch_open_positions(who, timeout=15.0) or []
+    if open_positions:
+        committed = 0.0
+        unrealized = 0.0
+        cur_values = []
+        for op in open_positions:
+            if not isinstance(op, dict):
+                continue
+            try:
+                committed += float(op.get("initialValue") or 0.0)
+                unrealized += float(op.get("cashPnl") or 0.0)
+                cur_values.append(float(op.get("currentValue") or 0.0))
+            except (TypeError, ValueError):
+                continue
+        # Naked = committed capital not paired by the smaller leg. This is a
+        # conservative venue-truthful proxy; the bot own float_marks remain
+        # the authoritative source for the intraday chart.
+        try:
+            naked = max(0.0, committed - (min(cur_values) if cur_values else committed))
+        except Exception:
+            naked = 0.0
+
+        registry.log_float_mark(
+            unrealized_usd=unrealized,
+            committed_open_usd=committed,
+            naked_usd=naked,
+            ts=time.time(),
+            run_id=get_run_id(),
+        )
+
+    summary = {
+        "ok": True,
+        "account_value_usd": mark.get("account_value_usd"),
+        "closed_positions_count": mark.get("closed_positions_count"),
+        "open_positions_count": mark.get("open_positions_count"),
+        "closes_written": closes_written,
+        "closes_skipped_existing": closes_skipped_existing,
+        "raw_closed_rows": len(raw_closed),
+        "raw_open_rows": len(open_positions),
+    }
+    if not quiet:
+        av = mark.get("account_value_usd")
+        av_s = "--" if av is None else f"${av:,.2f}"
+        print(f"venue_sync: account={av_s}  closed={mark.get('closed_positions_count')}  "
+              f"open={mark.get('open_positions_count')}  closes_written={closes_written}  "
+              f"skipped={closes_skipped_existing}")
+    return summary
+
+
+def decide(
+    target: str | None = None,
+    all_graduated: bool = False,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Read-only quote decision for graduated markets using live venue books."""
+    from dataclasses import replace
+    from engine.config import load
+    from engine.market_feed import load_graduated_markets, get_market_by_cid, GraduatedMarket
+    from engine.order_registry import DEFAULT_DB_PATH
+
+    cfg = load()
+    live_bal = _fetch_live_balance()
+    if live_bal is not None and live_bal > 0:
+        cfg = replace(cfg, bankroll_usd=live_bal)
+
+    reg_db = Path(db_path) if db_path else DEFAULT_DB_PATH
+
+    graduated_list = load_graduated_markets()
+    if not graduated_list:
+        raise SystemExit("no graduated markets found in run/markets.json")
+
+    targets: list[tuple[str, GraduatedMarket | None]] = []
+    if all_graduated or target == "all" or target == "--all":
+        targets = [(gm.cid, gm) for gm in graduated_list]
+    elif target is None or target == "":
+        targets = [(graduated_list[0].cid, graduated_list[0])]
+    else:
+        if target.isdigit() and 0 <= int(target) < len(graduated_list):
+            gm = graduated_list[int(target)]
+            targets = [(gm.cid, gm)]
+        else:
+            gm = get_market_by_cid(target)
+            if gm is None:
+                for candidate in graduated_list:
+                    if candidate.slug.lower() == target.lower() or target.lower() in candidate.slug.lower():
+                        gm = candidate
+                        break
+            if gm is not None:
+                targets = [(gm.cid, gm)]
+            else:
+                targets = [(target, None)]
+
+
+    results: list[dict] = []
+    for cid, gm in targets:
+        res = _evaluate_single_market_quote(cid, gm, cfg, reg_db)
+        results.append(res)
+    return results
+
+
 def _evaluate_single_market_quote(
     cid: str,
     gm: "GraduatedMarket" | None,
@@ -2873,54 +3070,8 @@ def _evaluate_single_market_quote(
     }
 
 
-def decide(
-    target: str | None = None,
-    all_graduated: bool = False,
-    db_path: str | Path | None = None,
-) -> list[dict]:
-    """Read-only quote decision for graduated markets using live venue books."""
-    from dataclasses import replace
-    from engine.config import load
-    from engine.market_feed import load_graduated_markets, get_market_by_cid, GraduatedMarket
-    from engine.order_registry import DEFAULT_DB_PATH
 
-    cfg = load()
-    live_bal = _fetch_live_balance()
-    if live_bal is not None and live_bal > 0:
-        cfg = replace(cfg, bankroll_usd=live_bal)
 
-    reg_db = Path(db_path) if db_path else DEFAULT_DB_PATH
-
-    graduated_list = load_graduated_markets()
-    if not graduated_list:
-        raise SystemExit("no graduated markets found in run/markets.json")
-
-    targets: list[tuple[str, GraduatedMarket | None]] = []
-    if all_graduated or target == "all" or target == "--all":
-        targets = [(gm.cid, gm) for gm in graduated_list]
-    elif target is None or target == "":
-        targets = [(graduated_list[0].cid, graduated_list[0])]
-    else:
-        if target.isdigit() and 0 <= int(target) < len(graduated_list):
-            gm = graduated_list[int(target)]
-            targets = [(gm.cid, gm)]
-        else:
-            gm = get_market_by_cid(target)
-            if gm is None:
-                for candidate in graduated_list:
-                    if candidate.slug.lower() == target.lower() or target.lower() in candidate.slug.lower():
-                        gm = candidate
-                        break
-            if gm is not None:
-                targets = [(gm.cid, gm)]
-            else:
-                targets = [(target, None)]
-
-    results: list[dict] = []
-    for cid, gm in targets:
-        res = _evaluate_single_market_quote(cid, gm, cfg, reg_db)
-        results.append(res)
-    return results
 
 
 def main() -> None:

@@ -4469,3 +4469,31 @@ twenty seconds apart separated them; hours of waiting would not have.
 3. **The snapshot is scoped to the production db only.** `report()` uses the screener funnel only when serving the default live.db; a temp/smoke db falls back to runtime market-event telemetry, so a repo-level snapshot can't mislabel another db's refusals.
 
 **Verdict.** **LIVE**. Live suite 382 passed, 1 skipped. The live Level 2 now shows the same gate buckets and counts as the sim scan, sourced from the same snapshot.
+---
+
+## Session — 2026-08-20 (live venue_sync)
+
+### Why does the live dashboard hang on "loading live telemetry" and no button works?
+
+#### Question
+The user opened a fresh live dashboard: telemetry never loaded and Sync / Start Bot / Stop Bot did nothing.
+
+#### Method
+Ran `test_dashboard_script_parses` (extracts the inline `<script>` and runs `node --check`). Reproduced by importing `PAGE_HTML` and checking the served bytes.
+
+#### Findings & Data
+- Root cause: `live/dash/live_dash.py` holds the whole page (including `<script>`) in a Python triple-quoted string `PAGE_HTML`. The `venueSync()` alert I added used `'\n'` escapes inside a JS single-quoted literal. Python converts `\n` in a `"""` string to a real newline at definition time, so the served HTML had a literal line break inside the string literal — invalid JS.
+- `node --check` failed at line 1367: `SyntaxError: Invalid or unexpected token` on `'Venue sync complete.`. Because the inline `<script>` never parsed, `pollState()` never ran (page stuck on loading) and no `onclick` handlers bound (all buttons dead).
+- Fix: rewrote the alert as a JS backtick template literal, which Python leaves intact and which permits real newlines in JS. After the fix, `node --check` on the served script: PASS.
+
+#### Result
+- Added `venue_sync()` in `live/engine/live_exec.py`: read-only one-shot reconciliation that backfills `closes` from Polymarket `closed_positions[]` (dedup on `condition_id + asset`, `method='venue_sync'`) and writes a `float_marks` snapshot from `open_positions[]`. Idempotent — re-running skips already-seen closes.
+- Added `/api/system/venue-sync` endpoint (behind `_authorize_control()`), the Sync button, `venueSync()` JS handler, and `.btn-sync` CSS.
+- Live proof: endpoint HTTP 200, `account_value_usd 103.70`, `closed_positions_count 14` (14 skipped = idempotent), `open_positions_count 2`. DB `closes` table went from 0 rows to 14 after sync.
+- Also restored `decide()` body lost during an earlier rebuild.
+- Full suite: 393 passed, 1 skipped, 0 failed.
+
+**Verdict.** **LIVE**. The dashboard now loads telemetry and all control buttons respond; the sync backfills per-trade closes so the Level-1 Win Rate / Sharpe / Realized PnL / Drawdown tiles populate from `closes` (Polymarket is source of truth). The `node --check` parse test is the regression guard.
+
+#### Hebrew mirror
+שורש הבעיה: `PAGE_HTML` הוא מחרוזת Python במרכאות משולשות, וסימן השורה החדשה `\n` בתוך מחרוזת JS הפך לירידת שורה אמיתית — השלם ה-`<script>` נשבר ולכן שום כפתור לא ענה והדף תקע על "טוען". התיקון: הודעת ה-alert כתובה כ-backtick template literal. נוסף `venue_sync()` שמסנכרן סגירות מ-Polymarket לטבלת `closes` (ללא כפילויות) וכותב `float_marks`; הכפתור Sync וקצה ה-API עובדים. סוויטת הבדיקות: 393 עוברות.

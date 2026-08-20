@@ -3923,3 +3923,29 @@ ACCOUNT VALUE ‏$101.88, רווח והפסד ‎+$0.30 (‎+0.30%), תואם ב
 3. **ה-snapshot מוגבל לבסיס הייצור בלבד.** `report()` משתמש במשפך הסורק רק כשמשרתים את live.db ברירת המחדל; בסיס זמני/עשן נופל לטלמטריית market-event בזמן ריצה, כך ש-snapshot ברמת הריפו לא יכול לתייג דחיות של בסיס אחר.
 
 **הכרעה.** **LIVE**. סוויטת live: 382 עברו, 1 מדולג. Level 2 החי מציג עכשיו את אותם קטגוריות וספירות שערים כמו ה-scan, מאותו snapshot.
+
+---
+
+## מפגש 2026-08-20 (live venue_sync)
+
+### למה הדשבורד החי תקוע על "טוען טלמטריה" ושום כפתור לא עובד?
+
+#### שאלה
+המשתמש פתח דשבורד חי חדש: הטלמטריה לא נטענה ואף כפתור (Sync / Start Bot / Stop Bot) לא הגיב.
+
+#### מתודה
+הרצת `test_dashboard_script_parses` (מחלצת את ה-`<script>` הפנימי ומריצה `node --check`). שיחזור על ידי ייבוא `PAGE_HTML` ובדיקת הבתים שנשלחו.
+
+#### ממצאים
+- שורש הבעיה: `live/dash/live_dash.py` מחזיק את כל הדף (כולל `<script>`) במחרוזת Python במרכאות משולשות `PAGE_HTML`. הודעת ה-alert ב-`venueSync()` שהוספתי השתמשה ב-`'\n'` בתוך מחרוזת JS במרכאות בודדות. Python הופך `\n` במחרוזת `"""` לירידת שורה אמיתית, כך שה-HTML שנשלח הכיל שורה שבורה באמצע המחרוזת — JS לא חוקי.
+- `node --check` נכשל בשורה 1367: `SyntaxError: Invalid or unexpected token` על `'Venue sync complete.`. מכיוון שה-`<script>` לא התפרק, `pollState()` מעולם לא רץ (הדף תקע על טעינה) ואף מאזין `onclick` לא נקשר (כל הכפתורים מתים).
+- תיקון: כתיבת ה-alert מחדש כ-backtick template literal, ש-Python משאיר ללא שינוי ושמאפשר ירידות שורה חוקיות ב-JS. אחרי התיקון, `node --check` על הסקריפט שנשלח: PASS.
+
+#### תוצאה
+- נוסף `venue_sync()` ב-`live/engine/live_exec.py`: סנכרון חד-פעמי לקריאה בלבד שמשלים `closes` מ-`closed_positions[]` של Polymarket (ללא כפילויות על condition_id+asset) וכותב snapshot של `float_marks` מ-`open_positions[]`. אידמפוטנטי — הרצה חוזרת מדלגת על סגירות קיימות.
+- נוסף קצה `/api/system/venue-sync` (מאחורי `_authorize_control()`), כפתור **Sync**, מטפל `venueSync()` ו-CSS ל-`.btn-sync`.
+- הוכחה חיה: קצה HTTP 200, `account_value_usd 103.70`, `closed_positions_count 14` (14 דולגו = אידמפוטנטי), `open_positions_count 2`. טבלת `closes` עברה מ-0 שורות ל-14 אחרי הסנכרון.
+- כמו כן שוחזר גוף `decide()` שאבד during rebuild מוקדם.
+- סוויטה מלאה: **393 עוברות, 1 דילוג, 0 נכשלות.**
+
+**החלטה.** **LIVE**. הדשבורד כעת טוען טלמטריה וכל כפתורי הבקרה מגיבים; הסנכרון משלים סגירות פר-עסקה כך שהאריחים ברמת 1 (Win Rate / Sharpe / Realized PnL / Drawdown) מתמלאים מ-`closes` (Polymarket הוא מקור האמת). בדיקת ה-`node --check` היא שומרת הרגרסיה.
