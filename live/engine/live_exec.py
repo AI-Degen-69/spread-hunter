@@ -2770,16 +2770,6 @@ def venue_sync(funder=None, db_path=None, quiet=False):
         asset = row.get("asset")
         if not cid or not asset:
             continue
-        # Dedupe: one venue row per (condition_id, asset). The local DB holds
-        # the asset id in tx_hash; a second sync of the same close skips.
-        with registry._conn() as conn:
-            cur = conn.execute(
-                "SELECT id FROM closes WHERE condition_id = ? AND tx_hash = ?",
-                (cid, asset),
-            ).fetchone()
-        if cur is not None:
-            closes_skipped_existing += 1
-            continue
 
         ts_raw = row.get("timestamp")
         try:
@@ -2803,7 +2793,12 @@ def venue_sync(funder=None, db_path=None, quiet=False):
         except (TypeError, ValueError):
             up_price = None
 
-        registry.log_close(CloseRecord(
+        # Atomic dedup: INSERT ... ON CONFLICT DO NOTHING. The UNIQUE index on
+        # (condition_id, tx_hash) rejects duplicates; rowcount tells us if we actually inserted.
+        # venue_sync sources account-wide reconciled history that wasn't necessarily opened
+        # by the current run, so we use a sentinel "venue_sync" run_id rather than
+        # incorrectly attributing to the active session's run analytics.
+        close_rec = CloseRecord(
             ts=ts,
             condition_id=cid,
             market_slug=row.get("slug") or row.get("eventSlug"),
@@ -2815,8 +2810,46 @@ def venue_sync(funder=None, db_path=None, quiet=False):
             proceeds=None,
             realized_pnl=realized_pnl,
             tx_hash=asset,
-        ))
-        closes_written += 1
+            run_id="venue_sync",  # Sentinel: not attributed to current run
+        )
+        r_id = close_rec.run_id
+        with registry._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                """
+                INSERT INTO closes (
+                    ts, condition_id, market_slug, method, gas, shares,
+                    up_price, dn_price, cost_basis, proceeds, fee, realized_pnl,
+                    forgone_vs_settlement, up_cost_removed, dn_cost_removed,
+                    tx_hash, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(condition_id, tx_hash) DO NOTHING
+                """,
+                (
+                    close_rec.ts,
+                    close_rec.condition_id,
+                    close_rec.market_slug,
+                    close_rec.method,
+                    close_rec.gas,
+                    close_rec.shares,
+                    close_rec.up_price,
+                    close_rec.dn_price,
+                    close_rec.cost_basis,
+                    close_rec.proceeds,
+                    close_rec.fee,
+                    close_rec.realized_pnl,
+                    close_rec.forgone_vs_settlement,
+                    close_rec.up_cost_removed,
+                    close_rec.dn_cost_removed,
+                    close_rec.tx_hash,
+                    r_id,
+                ),
+            )
+            conn.commit()
+            if cur.rowcount > 0:
+                closes_written += 1
+            else:
+                closes_skipped_existing += 1
 
     # mark from compose_account_mark has no open_positions key -- we never
     # propagated it. Re-fetch directly so the float_mark reflects venue truth.
@@ -2824,21 +2857,34 @@ def venue_sync(funder=None, db_path=None, quiet=False):
     if open_positions:
         committed = 0.0
         unrealized = 0.0
-        cur_values = []
+        # Group positions by condition_id to compute unpaired exposure per market.
+        # A balanced pair (YES/NO on same condition) has naked = 0; a single leg
+        # or imbalanced pair contributes the unpaired amount.
+        condition_groups = {}
         for op in open_positions:
             if not isinstance(op, dict):
                 continue
             try:
                 committed += float(op.get("initialValue") or 0.0)
                 unrealized += float(op.get("cashPnl") or 0.0)
-                cur_values.append(float(op.get("currentValue") or 0.0))
+                cid = op.get("conditionId")
+                if cid:
+                    if cid not in condition_groups:
+                        condition_groups[cid] = []
+                    condition_groups[cid].append(float(op.get("currentValue") or 0.0))
             except (TypeError, ValueError):
                 continue
-        # Naked = committed capital not paired by the smaller leg. This is a
-        # conservative venue-truthful proxy; the bot own float_marks remain
-        # the authoritative source for the intraday chart.
+
+        # Naked = sum of unpaired exposure across all markets. For each condition,
+        # the paired amount is min(values), the remainder is unpaired.
+        naked = 0.0
         try:
-            naked = max(0.0, committed - (min(cur_values) if cur_values else committed))
+            for cid, values in condition_groups.items():
+                if values:
+                    # Paired = the smaller leg; unpaired = sum - 2*paired
+                    total_in_cond = sum(values)
+                    paired = min(values)
+                    naked += max(0.0, total_in_cond - 2 * paired)
         except Exception:
             naked = 0.0
 

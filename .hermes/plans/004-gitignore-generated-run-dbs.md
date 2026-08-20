@@ -79,12 +79,10 @@ git check-ignore run/bankroll_100/fleet.db run/bankroll_500/fleet.db-wal
 # 2. root DB still ignored (regression)
 git check-ignore run/fleet.db
 #    Expected: path printed
-# 3. tracked sources still NOT ignored
-git check-ignore run/live_test_0x14d32732.json run/markets.json
-#    Expected: NOTHING printed (empty output = not ignored = correct)
-# 4. nothing already-tracked becomes ignored
-git status --porcelain --ignored | grep -E "live_test|markets.json" || echo "tracked sources unaffected"
-#    Expected: "tracked sources unaffected"
+# 3. tracked sources still NOT ignored (direct test, exit code 1 = not ignored = correct)
+git check-ignore --no-index --quiet run/live_test_0x14d32732.json && echo "ERROR: live_test JSON is ignored" || echo "OK: live_test JSON not ignored"
+git check-ignore --no-index --quiet run/markets.json && echo "ERROR: markets.json is ignored" || echo "OK: markets.json not ignored"
+#    Expected: both show "OK: ... not ignored"
 ```
 
 Positive check:

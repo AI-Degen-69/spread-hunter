@@ -132,9 +132,11 @@ def test_venue_sync_writes_float_mark(tmp_path, monkeypatch):
         return []
 
     def mock_fetch_open_positions(funder, timeout=15.0):
+        # Balanced pair on same condition: YES=26, NO=24.
+        # Per-market grouping: total=50, min=24, naked=50-2*24=2
         return [
-            {"initialValue": 25.0, "cashPnl": 1.0, "currentValue": 26.0},
-            {"initialValue": 25.0, "cashPnl": 1.0, "currentValue": 24.0},
+            {"conditionId": "0xABC", "initialValue": 25.0, "cashPnl": 1.0, "currentValue": 26.0},
+            {"conditionId": "0xABC", "initialValue": 25.0, "cashPnl": 1.0, "currentValue": 24.0},
         ]
 
     monkeypatch.setattr("engine.account.read_account", mock_read_account)
@@ -157,8 +159,8 @@ def test_venue_sync_writes_float_mark(tmp_path, monkeypatch):
     assert row["unrealized_usd"] == pytest.approx(2.0)
     # committed = 25.0 + 25.0 = 50.0
     assert row["committed_open_usd"] == pytest.approx(50.0)
-    # naked = 50.0 - min(26.0, 24.0) = 26.0
-    assert row["naked_usd"] == pytest.approx(26.0)
+    # Naked per-market: 0xABC has 26+24=50, min=24, naked=50-2*24=2
+    assert row["naked_usd"] == pytest.approx(2.0)
 
 
 def test_venue_sync_preserves_existing_closes_adds_new(tmp_path, monkeypatch):

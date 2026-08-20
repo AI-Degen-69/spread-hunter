@@ -68,15 +68,42 @@ def _resolve_run_id() -> str:
         if lock_file.exists():
             mtime = lock_file.stat().st_mtime
             if time.time() - mtime < 43200:  # 12h
-                return lock_file.read_text().strip()
+                content = lock_file.read_text().strip()
+                if content:  # Validate non-empty before trusting
+                    return content
     except Exception:
         pass
 
     new_id = f"run-{uuid.uuid4().hex[:12]}"
     try:
         lock_file.parent.mkdir(parents=True, exist_ok=True)
-        lock_file.write_text(new_id)
+        # Atomic publish: write to temp, then os.replace. If another process wins,
+        # retry-read its value instead of clobbering.
+        import tempfile
+        temp_fd, temp_path = tempfile.mkstemp(dir=lock_file.parent, prefix=".run_id_tmp_")
+        try:
+            os.write(temp_fd, new_id.encode())
+            os.close(temp_fd)
+            try:
+                os.replace(temp_path, lock_file)
+                # We won the race, return our ID
+                return new_id
+            except Exception:
+                # Another process may have published first; re-read and use theirs
+                if lock_file.exists():
+                    content = lock_file.read_text().strip()
+                    if content:
+                        return content
+                # Fall back to our ID if read failed
+                return new_id
+        finally:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except Exception:
+                pass
     except Exception:
+        # If all file operations fail, return the generated ID anyway
         pass
     return new_id
 
@@ -362,6 +389,16 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     cols = {row["name"] for row in cur.fetchall()}
     if cols and "closed_positions_count" not in cols:
         conn.execute("ALTER TABLE account_marks ADD COLUMN closed_positions_count INTEGER")
+
+    # Add UNIQUE constraint on closes (condition_id, tx_hash) to prevent duplicate venue_sync entries.
+    # Check if index already exists by querying sqlite_master.
+    idx_check = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_closes_cid_tx'"
+    ).fetchone()
+    if not idx_check:
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_closes_cid_tx ON closes(condition_id, tx_hash)"
+        )
 
     conn.commit()
 

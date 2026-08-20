@@ -829,78 +829,149 @@ def get_system_status() -> dict:
 def start_bot() -> dict:
     """Launch background Screener and Reconcile loop."""
     import subprocess
+    import tempfile
 
     # One instance at a time (AGENTS.md): two stacks on one database sum their
     # independent inventories into silently invalid data. The page disables the
     # button while RUNNING, but a double click in the poll gap, a reload, or a
     # direct POST all bypass button state -- and live_procs.json only remembers
     # the newest PIDs, so stop_bot could never reach the first pair.
-    current = get_system_status()
-    if current["bot_state"] == "RUNNING":
+    # Interprocess lock prevents concurrent start_bot calls from racing.
+    lock_file = LIVE_ROOT / "run" / ".bot_start.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Acquire exclusive lock by atomic file creation.
+    lock_fd = None
+    try:
+        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(lock_fd, f"{os.getpid()}\n".encode())
+    except FileExistsError:
+        # Another start_bot call holds the lock; check if it's stale.
+        try:
+            if lock_file.exists():
+                lock_age = time.time() - lock_file.stat().st_mtime
+                if lock_age > 30:  # Stale lock from crashed process
+                    lock_file.unlink()
+                    lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    os.write(lock_fd, f"{os.getpid()}\n".encode())
+                else:
+                    return {
+                        "ok": False,
+                        "message": "Another start_bot request is in progress; refusing concurrent start.",
+                        "status": get_system_status(),
+                    }
+        except Exception:
+            return {
+                "ok": False,
+                "message": "Failed to acquire startup lock; another start may be running.",
+                "status": get_system_status(),
+            }
+    except Exception as e:
         return {
             "ok": False,
-            "message": "Bot stack is already running; refusing to start a second instance.",
-            "status": current,
+            "message": f"Failed to acquire startup lock: {e}",
+            "status": get_system_status(),
         }
 
-    procs_file = LIVE_ROOT / "run" / "live_procs.json"
-    procs_file.parent.mkdir(parents=True, exist_ok=True)
+    launched_procs = []
+    try:
+        # Re-check status now that we hold the lock.
+        current = get_system_status()
+        if current["bot_state"] == "RUNNING":
+            return {
+                "ok": False,
+                "message": "Bot stack is already running; refusing to start a second instance.",
+                "status": current,
+            }
 
-    # Derive a stable run_id so fleet/exec/dash share one session id.
-    # Without this, each process generates its own UUID at import time
-    # and fills/orders are tagged to inconsistent run_ids, which makes
-    # the dashboard default run selector show a misleading zeros grid.
-    from engine.order_registry import get_run_id
-    child_env = {**os.environ, "SH_RUN_ID": get_run_id()}
+        procs_file = LIVE_ROOT / "run" / "live_procs.json"
+        procs_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Launch Screener (rerank_loop)
-    p_scr = subprocess.Popen(
-        [sys.executable, "-m", "scripts.rerank_loop"],
-        cwd=str(REPO_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=child_env,
-    )
+        # Derive a stable run_id so fleet/exec/dash share one session id.
+        # Without this, each process generates its own UUID at import time
+        # and fills/orders are tagged to inconsistent run_ids, which makes
+        # the dashboard default run selector show a misleading zeros grid.
+        from engine.order_registry import get_run_id
+        child_env = {**os.environ, "SH_RUN_ID": get_run_id()}
 
-    # Launch Engine Poll loop (live_exec poll --interval 5). The account sweep
-    # follows LIVE_SWEEP_INTERVAL when set; otherwise it runs every tick. Poll
-    # owns reconcile, the account sweep, and the markout sampler, and it keeps
-    # the registry's open orders fresh for the fleet loop below.
-    sweep_interval = resolve_sweep_interval()
-    poll_cmd = [sys.executable, "-m", "engine.live_exec", "poll", "--interval", "5"]
-    if sweep_interval is not None:
-        poll_cmd += ["--sweep-interval", str(sweep_interval)]
-    p_eng = subprocess.Popen(
-        poll_cmd,
-        cwd=str(LIVE_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=child_env,
-    )
+        # Launch Screener (rerank_loop)
+        p_scr = subprocess.Popen(
+            [sys.executable, "-m", "scripts.rerank_loop"],
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=child_env,
+        )
+        launched_procs.append(p_scr)
 
-    # Launch the Fleet loop (decide -> submit). It reads open orders from the
-    # registry rather than re-reconciling, so it runs with --no-reconcile and
-    # --no-sweep: a second reconcile loop would contend on the reconcile lock
-    # and double the venue reads poll already makes.
-    p_fleet = subprocess.Popen(
-        [sys.executable, "-m", "engine.live_fleet", "--live",
-         "--no-reconcile", "--no-sweep", "--interval", "5"],
-        cwd=str(LIVE_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=child_env,
-    )
+        # Launch Engine Poll loop (live_exec poll --interval 5). The account sweep
+        # follows LIVE_SWEEP_INTERVAL when set; otherwise it runs every tick. Poll
+        # owns reconcile, the account sweep, and the markout sampler, and it keeps
+        # the registry's open orders fresh for the fleet loop below.
+        sweep_interval = resolve_sweep_interval()
+        poll_cmd = [sys.executable, "-m", "engine.live_exec", "poll", "--interval", "5"]
+        if sweep_interval is not None:
+            poll_cmd += ["--sweep-interval", str(sweep_interval)]
+        p_eng = subprocess.Popen(
+            poll_cmd,
+            cwd=str(LIVE_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=child_env,
+        )
+        launched_procs.append(p_eng)
 
-    saved_procs = {
-        "supervisor": {"pid": p_eng.pid, "started_at": time.time()},
-        "screener": {"pid": p_scr.pid, "started_at": time.time()},
-        "engine": {"pid": p_eng.pid, "started_at": time.time(),
-                   "sweep_interval_sec": sweep_interval},
-        "fleet": {"pid": p_fleet.pid, "started_at": time.time()},
-    }
-    procs_file.write_text(json.dumps(saved_procs, indent=2), encoding="utf-8")
+        # Launch the Fleet loop (decide -> submit). It reads open orders from the
+        # registry rather than re-reconciling, so it runs with --no-reconcile and
+        # --no-sweep: a second reconcile loop would contend on the reconcile lock
+        # and double the venue reads poll already makes.
+        p_fleet = subprocess.Popen(
+            [sys.executable, "-m", "engine.live_fleet", "--live",
+             "--no-reconcile", "--no-sweep", "--interval", "5"],
+            cwd=str(LIVE_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=child_env,
+        )
+        launched_procs.append(p_fleet)
 
-    return {"ok": True, "message": "Bot stack started", "status": get_system_status()}
+        saved_procs = {
+            "supervisor": {"pid": p_eng.pid, "started_at": time.time()},
+            "screener": {"pid": p_scr.pid, "started_at": time.time()},
+            "engine": {"pid": p_eng.pid, "started_at": time.time(),
+                       "sweep_interval_sec": sweep_interval},
+            "fleet": {"pid": p_fleet.pid, "started_at": time.time()},
+        }
+        procs_file.write_text(json.dumps(saved_procs, indent=2), encoding="utf-8")
+
+        return {"ok": True, "message": "Bot stack started", "status": get_system_status()}
+    except Exception as e:
+        # Cleanup: terminate any children launched before the failure.
+        for proc in launched_procs:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        return {
+            "ok": False,
+            "message": f"Failed to start bot stack: {e}",
+            "status": get_system_status(),
+        }
+    finally:
+        # Release lock on all exit paths.
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except Exception:
+                pass
+        try:
+            lock_file.unlink()
+        except Exception:
+            pass
 
 
 def stop_bot() -> dict:
@@ -3180,6 +3251,8 @@ PAGE_HTML = """<!DOCTYPE html>
     function toggleLiveMarketExpand(key) {
       if (LIVE_EXPANDED_MARKETS.has(key)) LIVE_EXPANDED_MARKETS.delete(key);
       else LIVE_EXPANDED_MARKETS.add(key);
+      // Trigger re-render to show/hide detail rows.
+      if (lastState) renderOrders(lastState);
     }
 
     function renderOrders(state) {

@@ -17,10 +17,11 @@ Its contents are a serialized `query_db_state()` dashboard blob:
  "last_polled_ts":...,"seconds_since_poll":...,"stale":true,"idle":false,"at_stake":true,
  "reconcile_lock":{"held":false,...}}
 ```
-The filename `nul` (zero characters where a stem should be) is the tell: some
-writer built the output path from a variable that resolved to `""` and concatenated
-`live/<empty>.json` → `live/nul`. AGENTS.md's workspace-hygiene rule is explicit:
-"Delete temporary/scratch files immediately" and "Zero dead weight."
+The filename `nul` (zero characters where a stem should be) suggests a hypothesis: some
+writer may have built the output path from a variable that resolved to `""` and concatenated
+`live/<empty>.json` → `live/nul`. However, no committed code path produces this file (verified
+below). AGENTS.md's workspace-hygiene rule is explicit: "Delete temporary/scratch files
+immediately" and "Zero dead weight."
 
 ## Vetting done (so the executor doesn't re-litigate)
 
