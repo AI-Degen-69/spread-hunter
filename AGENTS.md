@@ -8,8 +8,9 @@ A maker strategy on the same market. It rests bids on BOTH outcomes rather than 
 
 Strategy decisions are simulated. The live path is not a stub: `live/engine/live_exec.py` talks to the
 venue for real — one order was accepted on the live CLOB (`status='live'`,
-`research/RESEARCH_LOG.md:2203`) and gasless `redeem` submits through the relayer. What is forbidden
-is *opening exposure*; see Safety.
+`research/RESEARCH_LOG.md:2203`) and gasless `redeem` submits through the relayer. The live phase
+(Owner-approved 2026-08-21) runs supervised real-money quoting on a $100 account with minimal risk
+per trade; how exposure may be opened is governed by Safety.
 
 ## Non-negotiable: keep the research log current on strategy changes
 
@@ -91,9 +92,12 @@ Commands:
   1. Allowed now: read-only queries, and redeem — it closes a position, never opens one.
   2. **Dry-run is the default.** Every subcommand that can reach the venue takes `--live` through
      `argparse.SUPPRESS`; without that flag nothing is sent.
-  3. **Forbidden until Stages 1–4 land and the Owner approves:** any order that opens or increases
-     exposure — resting a quote, crossing to complete a pair, the automated loop. A one-sided fill
-     with no live stop-loss rides unhedged to resolution at up to 100% loss of that leg.
+  3. **Live quoting is approved (Owner, 2026-08-21):** supervised real-money operation on the $100
+     account, minimal risk per trade — `MAX_ORDER_USD=25`, `MAX_TOTAL_USD=100`, pairs held to
+     resolution. Exposure is opened only through the gated verbs in 4. The staged rule's rationale
+     still stands: a one-sided fill with no live stop-loss rides unhedged to resolution at up to
+     100% loss of that leg, so unattended operation and any budget above $100 wait on the closing
+     stages (1–4: fill detection, merge, stop-loss, second-leg completion).
   4. **`--live` is gated on DIRECTION, not on the command's name.** Owner decision, 2026-08-18,
      replacing the earlier per-command sign-off rule.
      - **Pre-approved — closing commands.** `exit`, `complete`, `merge`, `redeem`, `cancel`,
@@ -104,8 +108,9 @@ Commands:
        or crosses to create a position. `quote` is the only verb in the set that can create a loss,
        so it is the only one that stops for a human. The Owner watches the position on
        Polymarket's own interface while it runs.
-     - **The automated loop stays forbidden** regardless of direction until Stage 5 is separately
-       approved. This rule governs one supervised cycle, not unattended operation.
+     - **Unattended operation stays gated.** The loop may run supervised — the Owner watches the
+       position on Polymarket's own interface while it runs. Fully unattended operation, and any
+       budget above the approved $100, wait on the closing stages (1–4); see SESSION-66-BRIEF §5.
      - **Funding is requested before the cycle, never during.** Tell the Owner the amount and the
        reason ahead of time; do not discover mid-cycle that the wallet is short.
 
