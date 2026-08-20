@@ -82,6 +82,7 @@ Commands:
     cd live && python -m engine.live_exec status      # or, from the repo root:
     python live/engine/live_exec.py status
     cd live && python -m dash.live_dash               # dashboard on :8799
+    supervised live cycle: docs/LIVE_CYCLE_RUNBOOK.md
     cd live && pytest -q                              # live suite
     pytest -q                                         # simulation suite (repo root)
 
