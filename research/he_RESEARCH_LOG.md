@@ -4014,3 +4014,25 @@ ACCOUNT VALUE ‏$101.88, רווח והפסד ‎+$0.30 (‎+0.30%), תואם ב
 נוספו בדיקות רגרסיה: decide מאוחר יותר אינו לוכד עוד את תוצאת ה-submit המוקדם; market_error שומר את ספירות ה-submitted/cancelled החלקיות. סוויטת ה-live וסוויטת השורש עוברות.
 
 **הכרעה.** **LIVE**. אינסטרומנטציה בלבד; ההתנהגות הנמדדת לא השתנתה.
+
+## סשן — 2026-08-21 (העמקת מנוע ה-live: ארבעה מודולים רדודים הפכו למודולים עמוקים)
+
+### שאלה
+
+הארכיטקטורה של עץ הכסף האמיתי נסחפה אל תוך grab-bags. `live_exec` היה בן 3,370 שורות שערבב ניתוח CLI עם מתמטיקת ABI של settlement וצנרת venue; הדשבורד כתב ידנית ~370 שורות SQL גולמי על אותם טבלאות ש-`OrderRegistry` קורא דרך רשומות טיפוסיות; `live_fleet.run()` קיבל 21 פרמטרים (16 יציאות + 5 כפתורי לולאה) וייבא פרטיים של `live_exec` (`_client`, `_open_notional`, `_registry_naked_usd`, ...); ורצף "ציטוט שוק אחד" (הבאת שוק → הבאת שני ספרים → קריאת מלאי → `decide_quotes`) היה קיים בשני עותקים — `live_exec.decide` ו-`live_fleet._visit_one` — שעלולים להיסחף זה מזה. האם העמקת המודולים הללו — הפיכת הממשק לקטן מהמימוש — משתלמת בבדיקות ובלוגיקה בעותק יחיד מבלי לשנות התנהגות?
+
+### שיטה
+
+העתקה טהורה לצורך לוקאליות, בלי שינוי בפרמטרי אסטרטגיה או בלוגיקת החלטה:
+- מתמטיקת settlement ABI/alt-bn128/EIP-712 → `engine/settlement.py` (שש פונקציות טהורות + קבועים; נתיב שליחת ה-RPC/relayer נשאר עם פעלי ה-CLI). `eth-account`/`eth-utils` הוכרזו ב-`requirements.txt` (הותקנו עד כה רק בעקיפין).
+- קריאת מצב הדשבורד + סיווג הגידור (`RESTING`/`BALANCED`/`NAKED`/`SETTLED`/`REFUSED`) → `engine/registry_state.py` (`summarize_state(db_path, now=None)`), תוך שמירת חוזה הקריאה-בלבד `mode=ro`; `live_dash.get_state` הוא צרכן דק.
+- `live_fleet.run()` → `run(seam, *, interval, once, live, markets, sleep_fn)` מעל dataclass `VenueSeam` עם 16 יציאות; היבואים הפרטיים של `live_exec` של ה-fleet קיבלו בתים ציבוריים (`engine/venue.py` client/notional/order-id/caps, `account.fetch_live_balance`/`log_float_mark_if_measured`, `order_registry.registry_naked_usd`/`registry_committed_usd`).
+- `decide` ו-`_visit_one` אוחדו על `engine/quotes.evaluate_market_quote(cid, cfg, clob_host, *, fetch_market, fetch_books, inventory_for, decide)` → `MarketEval`, עם שגיאות טיפוסיות (`MarketUnavailable`/`MarketQuoteError`); כל קורא מעצב את ההצגה שלו.
+
+המעבר חשף שלושה פגמים סמויים שתוקנו באותו שינוי: `poll`/`probe`/`exit_pair` ביצעו כל אחד `client = client()` שבו ההשמה המקומית הסתירה את הבונה (היה נכשל בזמן ריצה); regex אכל קו תחתון ב-`registry.attach_venue_order_id`; ומשטח ה-patch של `_fetch_live_balance` של ה-fleet זז עם הפונקציות.
+
+### תוצאה
+
+`live_exec` 3,370 → ~2,800 שורות; שישה מודולי engine/בדיקות חדשים; רצף ציטוט-שוק אחד קיים בדיוק פעם אחת. סוויטת שורש: 703 עברו; סוויטת live: 423 עברו, 1 מדולג (דילוג ה-POSIX הקיים). הבדיקות למודולים המוצאים חוצות את המודולים החדשים ישירות (46 אסרציות קידוד/חתימה ב-`test_settlement.py`, 14 אסרציות מצב ב-`test_registry_state.py`, 5 אסרציות צעד ב-`test_market_quote.py`); העותקים הישנים נמחקו, לא רובדו.
+
+**הכרעה.** **LIVE**. העתקה שומרת-התנהגות לצורך לוקאליות; נמדדת בשתי הסוויטות שנשארות ירוקות.
