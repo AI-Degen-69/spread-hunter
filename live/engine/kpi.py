@@ -514,7 +514,8 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             [c.get("condition_id") for c in closes] +
             [m.get("condition_id") for m in markouts] +
             [e.get("condition_id") for e in market_events] +
-            [v.get("condition_id") for v in venue_errs]
+            [v.get("condition_id") for v in venue_errs] +
+            [o.get("condition_id") for o in orders]
         ) if cid
     }
 
