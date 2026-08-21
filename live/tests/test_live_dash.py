@@ -390,6 +390,9 @@ def test_guardrail_health_endpoint_absent_heartbeat(client, tmp_path):
     """No heartbeat file at all (watcher never ran / old code) -> DOWN, empty
     fields, no crash.
     """
+    empty_ring = tmp_path / "empty_ring.jsonl"
+    empty_ring.write_text("", encoding="utf-8")
+    set_ring_override(empty_ring)
     set_guardrail_heartbeat_override(tmp_path / "missing.json")
     try:
         res = client.get("/api/guardrail-health")
@@ -400,6 +403,7 @@ def test_guardrail_health_endpoint_absent_heartbeat(client, tmp_path):
         assert h["age_s"] is None
         assert h["alerts_total"] == 0
     finally:
+        set_ring_override(None)
         set_guardrail_heartbeat_override(None)
 
 
