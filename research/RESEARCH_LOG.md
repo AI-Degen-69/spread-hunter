@@ -4609,6 +4609,22 @@ Live suite: 441 passed (12 new), 1 pre-existing skip. Fork-drift test green (onl
 
 **Verdict.** **LIVE**. The sim's ledger convention (close, not fill) is the correct record for a taker exit; the pair-cost cap is a booked-loss bound and must bind on both sides; and the lone-leg gate now refuses the deepening direction, not just the flat case. Negative results kept: the production pair costs of $1.120/$1.011 are the first live measurement of the sim's documented never-executing cap — the cap has now been proven to matter.
 
+## Session — 2026-08-21 (Sync convergence: the ⟳ Sync's closes never retired the phantom rows)
+
+### Question
+
+After the venue sync (⟳) backfilled 22 `venue_sync` closes from Polymarket's closed-positions history, the dashboard still showed the phantom $1.120 and $1.0105 pairs — the same locked-in-loss rows the autopsy measured — even though the account held zero positions. `inventory_from_registry` subtracted only `naked_exit` and `merge` closes, and the KPI report's run slicing dropped the `venue_sync` rows entirely (they carry the sentinel run_id "venue_sync"). Why does the board not converge after a sync, and how should a venue-reported close retire the position?
+
+### Method
+
+Read the sync's close shape: one row per closed leg, but NO leg encoding — both legs write `up_price`, and `cost_basis`/`up_cost_removed`/`dn_cost_removed` are NULL. A per-leg subtraction would guess. The sync is account-level truth: the venue reports the condition's position as closed, so the correct rule is timestamp-based — retire every fill that predates the latest `venue_sync` close on the condition (the same rule the auto-pairs pass's skip already uses). Applied in both `inventory_from_registry` and the KPI `by_market` block, the latter reading from ALL closes because run slicing drops the sentinel run.
+
+### Result
+
+A `venue_sync` close now retires pre-close fills; fills after it are new exposure and survive. Verified on the live DB: 0x3bae865f ($1.12) and 0x8395da44 ($1.0105) read UP=0/DN=0/pair 0.0000 in `inventory_from_registry`, and the KPI by_market shows up_sh=0, dn_sh=0, pair_cost=None. Mixed `naked_exit` + `venue_sync` closes converge to zero, never negative. Live suite: 445 passed (4 new in test_sync_convergence.py), 1 pre-existing skip; fork-drift green; sim untouched.
+
+**Verdict.** **LIVE**. The sync's rows cannot leg-encode, so the timestamp retirement is the right convergence rule; the sentinel run_id is a second, subtler reason the board could not converge and must not hide account-level closes from the display.
+
 ## Session — 2026-08-21 (Guardrail watcher: flag the two failure signatures the moment they happen)
 
 ### Question
