@@ -531,6 +531,25 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         m_quotes = [q for q in quotes if q.get("condition_id") == cid]
         m_fills = [f for f in fills if f.get("condition_id") == cid]
         m_closes = [c for c in closes if c.get("condition_id") == cid]
+        # A `venue_sync` close (the dashboard's Sync) means the venue closed
+        # this condition's position, and its rows carry no leg encoding -- so
+        # retire every fill that predates the latest such close rather than
+        # guess which leg. Same rule as inventory_from_registry; fills after
+        # the close are new exposure and survive. Read from ALL closes, not
+        # the run-filtered `closes`: the sync is account-level truth (its rows
+        # carry the sentinel run_id "venue_sync", so run slicing drops them),
+        # and the retirement must apply no matter which run the report shows.
+        _sync_cutoff_s: Optional[float] = None
+        for _c in all_closes:
+            if (_c.get("condition_id") == cid
+                    and _c.get("method") == "venue_sync" and _c.get("ts")):
+                _sync_cutoff_s = max(_sync_cutoff_s or 0.0, float(_c["ts"]))
+        if _sync_cutoff_s is not None:
+            m_fills = [
+                f for f in m_fills
+                if not (f.get("venue_ts")
+                        and float(f["venue_ts"]) / 1000.0 <= _sync_cutoff_s)
+            ]
         m_markouts = [m for m in markouts if m.get("condition_id") == cid]
         m_events = [e for e in market_events if e.get("condition_id") == cid]
         m_errs = [v for v in venue_errs if v.get("condition_id") == cid]
