@@ -4608,3 +4608,19 @@ CodeRabbit hardening (PR review): the exit also defers while the venue reports h
 Live suite: 441 passed (12 new), 1 pre-existing skip. Fork-drift test green (only the live copies moved; the sim is untouched).
 
 **Verdict.** **LIVE**. The sim's ledger convention (close, not fill) is the correct record for a taker exit; the pair-cost cap is a booked-loss bound and must bind on both sides; and the lone-leg gate now refuses the deepening direction, not just the flat case. Negative results kept: the production pair costs of $1.120/$1.011 are the first live measurement of the sim's documented never-executing cap — the cap has now been proven to matter.
+
+## Session — 2026-08-21 (Guardrail watcher: flag the two failure signatures the moment they happen)
+
+### Question
+
+The production autopsy fixed the two live-run failure signatures at the source (RC-1 records exits so a pair cannot be re-sold; RC-2 blocks the light-side quote that assembles a pair at/over the cap). But a fix is only as good as the first signal when it regresses: a repeat exit (the same pair_id sold twice) and a filled pair at/over `max_pair_cost` are both silent in the telemetry until someone reads the board. Can a standalone watcher flag either the moment it happens, without touching the poll loop?
+
+### Method
+
+`live/scripts/guardrail_watch.py` — pure detection, thin loop. REPEAT-EXIT: group `pairs_exited` ring events by `extra.pair_id`; 2+ within the window (default 900s, the pairs-exit window) is the repeat-sell signature. OVER-CAP-PAIR: for every condition with fills, resolve UP/DOWN from the quotes ledger and read `inventory_from_registry().pair_cost()`; at/over `max_pair_cost` (default 0.995) is a booked loss on an instrument that pays $1.00. Dedupe: one alert per violation, re-armed when it clears (over-cap) or grows (repeat-exit count). Alert to stderr, `run/guardrail_alerts.log`, and a `guardrail_alert` ring event so the dashboard telemetry sees it. `--once` for cron/tests; runs as a third process alongside poll + fleet.
+
+### Result
+
+9 tests in `live/tests/test_guardrail_watch.py` (single exit not flagged; 2/3 exits flagged; different pairs not; outside window not; $1.12 shape flagged at cap 0.995; $0.90 not; single-leg not; dedupe once-per-growth). Live `--once` smoke against the running run: silent (no repeat exits in the ring; the converged inventory shows no over-cap pairs). Live suite: 454 passed (9 new), 1 pre-existing skip; fork-drift green; sim untouched.
+
+**Verdict.** **LIVE**. Both signatures are cheap to detect from the existing ring + registry, and the watcher is a backstop independent of the poll — the operator hears about a regression the cycle it happens, not when they next open the board.
