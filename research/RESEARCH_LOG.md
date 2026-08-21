@@ -4624,3 +4624,19 @@ Read the sync's close shape: one row per closed leg, but NO leg encoding — bot
 A `venue_sync` close now retires pre-close fills; fills after it are new exposure and survive. Verified on the live DB: 0x3bae865f ($1.12) and 0x8395da44 ($1.0105) read UP=0/DN=0/pair 0.0000 in `inventory_from_registry`, and the KPI by_market shows up_sh=0, dn_sh=0, pair_cost=None. Mixed `naked_exit` + `venue_sync` closes converge to zero, never negative. Live suite: 445 passed (4 new in test_sync_convergence.py), 1 pre-existing skip; fork-drift green; sim untouched.
 
 **Verdict.** **LIVE**. The sync's rows cannot leg-encode, so the timestamp retirement is the right convergence rule; the sentinel run_id is a second, subtler reason the board could not converge and must not hide account-level closes from the display.
+
+## Session — 2026-08-21 (Guardrail watcher: flag the two failure signatures the moment they happen)
+
+### Question
+
+The production autopsy fixed the two live-run failure signatures at the source (RC-1 records exits so a pair cannot be re-sold; RC-2 blocks the light-side quote that assembles a pair at/over the cap). But a fix is only as good as the first signal when it regresses: a repeat exit (the same pair_id sold twice) and a filled pair at/over `max_pair_cost` are both silent in the telemetry until someone reads the board. Can a standalone watcher flag either the moment it happens, without touching the poll loop?
+
+### Method
+
+`live/scripts/guardrail_watch.py` — pure detection, thin loop. REPEAT-EXIT: group `pairs_exited` ring events by `extra.pair_id`; 2+ within the window (default 900s, the pairs-exit window) is the repeat-sell signature. OVER-CAP-PAIR: for every condition with fills, resolve UP/DOWN from the quotes ledger and read `inventory_from_registry().pair_cost()`; at/over `max_pair_cost` (default 0.995) is a booked loss on an instrument that pays $1.00. Dedupe: one alert per violation, re-armed when it clears (over-cap) or grows (repeat-exit count). Alert to stderr, `run/guardrail_alerts.log`, and a `guardrail_alert` ring event so the dashboard telemetry sees it. `--once` for cron/tests; runs as a third process alongside poll + fleet.
+
+### Result
+
+9 tests in `live/tests/test_guardrail_watch.py` (single exit not flagged; 2/3 exits flagged; different pairs not; outside window not; $1.12 shape flagged at cap 0.995; $0.90 not; single-leg not; dedupe once-per-growth). Live `--once` smoke against the running run: silent (no repeat exits in the ring; the converged inventory shows no over-cap pairs). Live suite: 454 passed (9 new), 1 pre-existing skip; fork-drift green; sim untouched.
+
+**Verdict.** **LIVE**. Both signatures are cheap to detect from the existing ring + registry, and the watcher is a backstop independent of the poll — the operator hears about a regression the cycle it happens, not when they next open the board.
