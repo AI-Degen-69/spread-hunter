@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
+import os
 import sqlite3
 import sys
 import time
@@ -35,6 +37,7 @@ if str(LIVE_ROOT) not in sys.path:
 DEFAULT_RING = LIVE_ROOT / "run" / "cycle_events.jsonl"
 DEFAULT_DB = LIVE_ROOT / "run" / "live.db"
 DEFAULT_ALERTS_LOG = LIVE_ROOT / "run" / "guardrail_alerts.log"
+DEFAULT_HEARTBEAT = LIVE_ROOT / "run" / "guardrail_watch_heartbeat.json"
 
 
 def _parse_iso(ts: str) -> float:
@@ -114,15 +117,49 @@ class GuardrailWatch:
     def __init__(self, alerts_log: Path | str = DEFAULT_ALERTS_LOG,
                  ring_path: Path | str = DEFAULT_RING,
                  db_path: Path | str = DEFAULT_DB,
-                 cap: float = 0.995, window_s: float = 900.0):
+                 cap: float = 0.995, window_s: float = 900.0,
+                 heartbeat_path: Path | str | None = None):
+        """heartbeat_path=None disables the heartbeat (test default); the CLI
+        main() passes DEFAULT_HEARTBEAT so production self-reports."""
         self.alerts_log = Path(alerts_log)
         self.ring_path = Path(ring_path)
         self.db_path = Path(db_path)
         self.cap = cap
         self.window_s = window_s
+        self.heartbeat_path = (Path(heartbeat_path) if heartbeat_path
+                               is not None else None)
+        self.started_at = time.time()
         self._exit_alerted: dict[str, int] = {}   # pair_id -> last alerted count
         self._cap_alerted: set[str] = set()       # condition_ids currently alerted
         self.cycle = 0
+
+    def _write_heartbeat(self) -> None:
+        """Self-report life signs so the dashboard can show watcher health.
+
+        Written every check (a few tiny bytes per cycle). The `started_at`
+        field doubles as the restart marker: when the poll restarts the
+        watcher, a new process writes a fresh pid + started_at, which the
+        dashboard reads as "restarted". Atomic replace so a concurrent read
+        never sees a torn file.
+        """
+        if self.heartbeat_path is None:
+            return
+        now = datetime.datetime.now(datetime.timezone.utc)
+        payload = {
+            "pid": os.getpid(),
+            "started_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "cycle": self.cycle,
+        }
+        tmp = self.heartbeat_path.with_suffix(".json.tmp")
+        try:
+            # One-element list, matching the poll's heartbeat convention
+            # (live_exec writes [hb_data]; dashboard readers take data[-1]).
+            tmp.write_text(json.dumps([payload]), encoding="utf-8")
+            os.replace(tmp, self.heartbeat_path)
+        except OSError as exc:
+            print(f"guardrail: heartbeat write failed: {exc}",
+                  file=sys.stderr)
 
     def _alert(self, kind: str, subject: str, detail: str) -> None:
         now_iso = datetime.datetime.now(datetime.timezone.utc).strftime(
@@ -181,6 +218,8 @@ class GuardrailWatch:
                     f"pays $1.00")
         self._cap_alerted &= {h["condition_id"] for h in cap_hits}
 
+        self._write_heartbeat()
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -198,7 +237,8 @@ def main() -> None:
     args = ap.parse_args()
 
     w = GuardrailWatch(alerts_log=args.alerts_log, ring_path=args.ring,
-                       db_path=args.db, cap=args.cap, window_s=args.window)
+                       db_path=args.db, cap=args.cap, window_s=args.window,
+                       heartbeat_path=DEFAULT_HEARTBEAT)
     while True:
         try:
             w.check()

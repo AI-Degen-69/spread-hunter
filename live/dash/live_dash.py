@@ -57,6 +57,7 @@ SCAN_STALL_THRESHOLD_SEC = 90.0
 
 _ACTIVE_RING_OVERRIDE: Path | None = None
 _ACTIVE_HEARTBEAT_OVERRIDE: Path | None = None
+_ACTIVE_GUARDRAIL_HB_OVERRIDE: Path | None = None
 
 
 def set_ring_override(path: Path | str | None) -> None:
@@ -71,6 +72,12 @@ def set_heartbeat_override(path: Path | str | None) -> None:
     _ACTIVE_HEARTBEAT_OVERRIDE = Path(path) if path else None
 
 
+def set_guardrail_heartbeat_override(path: Path | str | None) -> None:
+    """Point the guardrail-health endpoint at a specific heartbeat file (tests)."""
+    global _ACTIVE_GUARDRAIL_HB_OVERRIDE
+    _ACTIVE_GUARDRAIL_HB_OVERRIDE = Path(path) if path else None
+
+
 def resolve_ring_path() -> Path:
     if _ACTIVE_RING_OVERRIDE is not None:
         return _ACTIVE_RING_OVERRIDE
@@ -81,6 +88,13 @@ def resolve_heartbeat_path() -> Path:
     if _ACTIVE_HEARTBEAT_OVERRIDE is not None:
         return _ACTIVE_HEARTBEAT_OVERRIDE
     return LIVE_ROOT / "run" / "live_poll_heartbeat.json"
+
+
+def resolve_guardrail_heartbeat_path() -> Path:
+    """The watcher's self-report file (live/scripts/guardrail_watch.py)."""
+    if _ACTIVE_GUARDRAIL_HB_OVERRIDE is not None:
+        return _ACTIVE_GUARDRAIL_HB_OVERRIDE
+    return LIVE_ROOT / "run" / "guardrail_watch_heartbeat.json"
 
 
 def resolve_db_path(custom_path: str | Path | None = None) -> Path:
@@ -1289,6 +1303,62 @@ def _read_engine_heartbeat() -> dict[str, Any]:
     return {}
 
 
+def _read_guardrail_heartbeat() -> dict[str, Any]:
+    """Read the guardrail watcher's self-report, {} when absent/invalid."""
+    try:
+        data = json.loads(resolve_guardrail_heartbeat_path().read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if isinstance(data, list) and data and isinstance(data[-1], dict):
+        return data[-1]
+    return {}
+
+
+def _guardrail_health() -> dict[str, Any]:
+    """Watcher liveness (heartbeat) + alert totals (ring), one payload.
+
+    Liveness: the watcher writes guardrail_watch_heartbeat.json every check
+    (~5s). A heartbeat older than STALE_THRESHOLD_SEC means the watcher is
+    down or dead -- the silent failure this endpoint exists to surface.
+    Alerts: counted from `guardrail_alert` ring events, so the total survives
+    watcher restarts (the heartbeat itself is per-process).
+    """
+    hb = _read_guardrail_heartbeat()
+    ts = hb.get("ts")
+    age_s = None
+    if isinstance(ts, str):
+        try:
+            dt = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+            age_s = (datetime.datetime.now(datetime.timezone.utc) - dt.replace(
+                tzinfo=datetime.timezone.utc)).total_seconds()
+        except ValueError:
+            age_s = None
+
+    ring_alerts = []
+    try:
+        from engine.cycle_stream import read_ring
+        for ev in read_ring(resolve_ring_path(), tail=400):
+            if ev.get("action") == "guardrail_alert":
+                ring_alerts.append(ev)
+    except Exception:
+        pass
+    ring_alerts.sort(key=lambda a: str(a.get("ts") or ""), reverse=True)
+    newest = ring_alerts[0] if ring_alerts else {}
+
+    return {
+        "pid": hb.get("pid"),
+        "started_at": hb.get("started_at"),
+        "last_ts": ts,
+        "cycle": hb.get("cycle"),
+        "running": bool(hb) and age_s is not None and age_s <= STALE_THRESHOLD_SEC,
+        "age_s": age_s,
+        "alerts_total": len(ring_alerts),
+        "last_alert_ts": newest.get("ts"),
+        "last_alert_kind": newest.get("reason"),
+    }
+
+
 def _read_cycle_intent_rows(db_path: Path | str, limit: int = 200) -> list[dict]:
     """Last `limit` cycle_intent rows in read-only mode; [] when unavailable."""
     path = Path(db_path)
@@ -1520,6 +1590,18 @@ def guardrail_alerts():
         })
     alerts.sort(key=lambda a: str(a["ts"] or ""), reverse=True)
     return {"alerts": alerts}
+
+
+@app.get("/api/guardrail-health")
+def guardrail_health():
+    """Watcher health: running pid, restart time, alert count.
+
+    Reads the watcher's self-report heartbeat (guardrail_watch_heartbeat.json,
+    written every check) for liveness and the ring for the cumulative alert
+    count, so a dead watcher is visible on the dashboard instead of failing
+    silently. Read-only; both files are sources of truth.
+    """
+    return _guardrail_health()
 
 
 @app.get("/api/cycle-stream")
@@ -2172,6 +2254,39 @@ PAGE_HTML = """<!DOCTYPE html>
     .guardrail-banner .guardrail-dismiss:hover {
       background: rgba(239, 68, 68, 0.2);
     }
+    .guardrail-health {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      background: var(--bg-surface-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      font-size: 12px;
+      white-space: nowrap;
+      color: var(--text-secondary);
+    }
+    .guardrail-health .gh-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex: none;
+    }
+    .guardrail-health .gh-dot.alive {
+      background: #34d399;
+      box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+    }
+    .guardrail-health .gh-dot.down {
+      background: #f87171;
+      box-shadow: 0 0 6px rgba(248, 113, 113, 0.7);
+    }
+    .guardrail-health .gh-dot.unknown {
+      background: #fbbf24;
+    }
+    .guardrail-health .gh-alerts {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
     .sup-card {
       display: flex;
       align-items: center;
@@ -2384,6 +2499,10 @@ PAGE_HTML = """<!DOCTYPE html>
           <button class="btn-bot btn-sweep" onclick="setSweepInterval()">Set</button>
           <button class="btn-bot btn-sweep" onclick="clearSweepInterval()">Reset</button>
         </div>
+      </div>
+      <div id="guardrail-health" class="guardrail-health" title="Guardrail watcher health">
+        <span class="gh-dot unknown" id="gh-dot"></span>
+        <span id="gh-text">guardrail …</span>
       </div>
     </div>
 
@@ -4227,6 +4346,26 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
       if (banner) banner.style.display = 'none';
     }
 
+    function renderGuardrailHealth(h) {
+      const chip = document.getElementById('guardrail-health');
+      const dot = document.getElementById('gh-dot');
+      const text = document.getElementById('gh-text');
+      if (!chip || !dot || !text) return;
+      h = h || {};
+      if (!h.running) {
+        dot.className = 'gh-dot down';
+        const age = (h.age_s != null) ? Math.round(h.age_s / 60) + 'm' : 'never';
+        text.textContent = 'guardrail DOWN (last heartbeat ' + age + ' ago)';
+        return;
+      }
+      dot.className = 'gh-dot alive';
+      let label = 'guardrail ● pid ' + (h.pid != null ? h.pid : '?');
+      if (h.alerts_total > 0) {
+        label += ' · ' + h.alerts_total + ' alert' + (h.alerts_total === 1 ? '' : 's');
+      }
+      text.textContent = label;
+    }
+
     function renderPairsActivity(pa) {
       if (!pa) return;
       const cycleEl = document.getElementById('bb-pairs-cycle');
@@ -4322,16 +4461,15 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
       });
       es.onerror = () => bbSetScanState('stalled', 'RECONNECTING', 'cycle stream dropped');
       es.onopen = () => bbSetScanState('idle', 'IDLE', 'stream connected');
-    }
-
-    async function pollState() {
+    }      async function pollState() {
       try {
-        const [stateRes, kpiRes, scanRes, pairsRes, guardrailRes] = await Promise.all([
+        const [stateRes, kpiRes, scanRes, pairsRes, guardrailRes, guardrailHealthRes] = await Promise.all([
           fetch('/api/state'),
           fetch(`/api/kpi${selectedRunId ? '?run_id=' + encodeURIComponent(selectedRunId) : ''}`),
           fetch('/api/scan-state'),
           fetch('/api/pairs-activity'),
-          fetch('/api/guardrail-alerts')
+          fetch('/api/guardrail-alerts'),
+          fetch('/api/guardrail-health')
         ]);
 
         fetchSystemStatus();
@@ -4357,6 +4495,7 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
         renderScanState(scanRes);
         if (pairsRes.ok) renderPairsActivity(await pairsRes.json());
         if (guardrailRes.ok) renderGuardrailBanner(await guardrailRes.json());
+        if (guardrailHealthRes.ok) renderGuardrailHealth(await guardrailHealthRes.json());
         renderMarketsTable(kpi);
         renderMechanics(kpi, state);
         renderOrders(state);

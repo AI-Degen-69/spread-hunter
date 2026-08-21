@@ -177,10 +177,11 @@ def test_repeat_exit_re_arms_after_window_ages_out(tmp_path):
             epoch_s, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def write_exits(*epochs: float) -> None:
+        sep = chr(10)
         ring.write_text(
-            "\n".join(json.dumps(
+            sep.join(json.dumps(
                 {"ts": _iso(e), "action": "pairs_exited",
-                 "extra": {"pair_id": "pair-1"}}) for e in epochs) + "\n",
+                 "extra": {"pair_id": "pair-1"}}) for e in epochs) + sep,
             encoding="utf-8")
 
     # Two exits in-window: alert once; the second check must not duplicate.
@@ -198,3 +199,40 @@ def test_repeat_exit_re_arms_after_window_ages_out(tmp_path):
     write_exits(now - 5, now - 3)
     w.check()
     assert log.read_text(encoding="utf-8").count("REPEAT-EXIT") == 2
+
+
+def test_heartbeat_written_each_check(tmp_path):
+    """The watcher self-reports life signs (pid, started_at, ts, cycle)
+    every check so the dashboard can show it alive -- or visibly down when
+    the file goes stale.
+    """
+    import json
+    import os
+    import time
+
+    log = tmp_path / "alerts.log"
+    ring = tmp_path / "ring.jsonl"
+    ring.write_text("", encoding="utf-8")
+    hb = tmp_path / "heartbeat.json"
+    w = GuardrailWatch(alerts_log=log, ring_path=ring,
+                       db_path=tmp_path / "live.db", heartbeat_path=hb)
+
+    w.check()
+    w.check()
+
+    assert hb.is_file()
+    payload = json.loads(hb.read_text(encoding="utf-8"))[-1]
+    assert payload["pid"] == os.getpid()
+    assert payload["cycle"] == 2
+    assert payload["ts"] == payload["started_at"]  # both ISO Z, seconds precision
+    # ts is written this check (fresh); started_at is the process start
+    assert time.time() - datetime.datetime.strptime(
+        payload["ts"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=datetime.timezone.utc).timestamp() < 30
+
+    # a watcher without heartbeat_path (the test default) writes nothing
+    quiet_hb = tmp_path / "quiet.json"
+    quiet = GuardrailWatch(alerts_log=log, ring_path=ring,
+                           db_path=tmp_path / "live.db")
+    quiet.check()
+    assert not quiet_hb.exists()
