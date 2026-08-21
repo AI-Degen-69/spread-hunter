@@ -16,7 +16,9 @@ from pathlib import Path
 from unittest.mock import MagicMock
 import pytest
 
-from engine.order_registry import OrderRegistry, OrderRecord, FillRecord
+from engine.order_registry import (
+    OrderRegistry, OrderRecord, FillRecord, QuoteRecord,
+)
 from engine import live_pairs as lp
 
 
@@ -56,6 +58,18 @@ def _one_sided_pair(registry: OrderRegistry, filled_size: float = 10.0,
         max_pair_cost_at_post=MAX_PAIR_COST,
     )
     registry.create_order(light)
+
+    # The fleet logs a quote row for every order with its UP/DOWN side -- the
+    # quotes ledger is how the exit resolves which leg a token is (the closes
+    # table encodes the sold leg via up_price/dn_price, not a token id).
+    registry.log_quote(QuoteRecord(
+        ts=now / 1000.0, condition_id=COND, token_id=TOK_UP, side="UP",
+        price=fill_price, size=filled_size,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=now / 1000.0, condition_id=COND, token_id=TOK_DN, side="DOWN",
+        price=0.38, size=filled_size,
+    ))
     return pair_id
 
 
@@ -870,6 +884,14 @@ def _overfilling_light_pair(registry: OrderRegistry) -> str:
         max_pair_cost_at_post=MAX_PAIR_COST,
     )
     registry.create_order(light)
+    registry.log_quote(QuoteRecord(
+        ts=now / 1000.0, condition_id=COND, token_id=TOK_UP, side="UP",
+        price=0.60, size=10.0,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=now / 1000.0, condition_id=COND, token_id=TOK_DN, side="DOWN",
+        price=0.30, size=12.0,
+    ))
     return pair_id
 
 

@@ -4579,3 +4579,32 @@ New `live/engine/live_pairs.auto_manage_pairs(client, registry, cfg, *, live, no
 Live suite 429 passed (11 new tests in `test_auto_pairs.py`: window gating, complete-under-cap, exit-at-cap, no-ask → exit, dry-run `would_*` with zero sends, positions-read failure fails closed, one bad pair never stops the others, closed/balanced pairs skipped; +1 in `test_live_dash.py` for the new `/api/pairs-activity` aggregation). All `pairs_*` actions now reach the cycle ring — including the quiet `hold`/`balanced`/`would_*` decisions, which stay out of the console but are no longer dropped — and the dashboard's Bot Brains section gained a live panel showing per-cycle counts of completed/exited/would_complete/would_exit/error plus each pair's last action with timestamp. The measured economics of the rule are unchanged from U35's own record (completion +3.68c/share, exit −3.67c, both re-measured 2026-08-12).
 
 **Verdict.** **LIVE**. The sim's proven guardrail now runs unattended on the live loop within the same window and caps.
+
+
+## Session — 2026-08-21 (Production autopsy: phantom inventory, the never-executing pair-cost cap, and the lone-leg hole)
+
+### Question
+
+The live run surfaced three behaviours that contradicted the strategy's own rules. (1) The auto-pairs pass (U35) sold the SAME shares repeatedly — pair-00845 was exited three times after one fill, pair-eea99 twice in five seconds — because the exit existed only at the venue: `exit_naked_leg` posted the market SELL and wrote nothing to the registry, so the next cycle re-discovered the same naked pair and sold it again. (2) The dashboard showed pair costs of $1.120 and $1.011 — real locked-in losses on an instrument that pays exactly $1.00 — because `risk.hard_block`'s pair-cost arm never fired on a LIGHT-side quote: R4 returned `None` before the arm ran, and a light-side chase went to $0.92 against a held $0.20 leg. (3) A lone resting leg appeared in a fresh market (Cincinnati Swiatek 75c) because the phantom inventory made the market look unbalanced, defeating `_require_two_sided`'s flat check. All three are the sim's own documented failure modes ("wta-kalinsk-kessler bought 14 pairs at $1.0200 each against a $0.995 cap") now reproduced live. What is the root cause of each, and does the sim's ledger convention fix them?
+
+### Method
+
+Read-only autopsy of the live registry, cycle ring, and event log, then the code paths:
+
+- RC-1 (repeat-sell loop): `exit_naked_leg` (live/engine/live_pairs.py) posts a market SELL and returns. Reconcile adopts fills only for orders it knows, and the SELL is a taker order with no resting row — so the sell is invisible to the registry forever. The sim's convention (strategy/stats.py `inventory_from_db`) is a `naked_exit` CLOSE: the side sold is encoded by which of `up_price`/`dn_price` is set, and only that leg's cost is removed. Live's `inventory_from_registry` handled only `merge` closes, and the auto pass skipped a condition for good on any close — so a market exited once could never be managed again even after a fresh one-sided fill.
+- RC-2 (never-executing cap): `risk.hard_block` (live/engine/risk.py) returns `None` immediately on the light side (R4: an order that reduces exposure is never blocked), skipping the pair-cost arm. The arm is not an exposure bound — a light-side fill at pair >= `max_pair_cost` is a booked loss, and "reduces exposure" does not make a guaranteed loss acceptable.
+- RC-3 (lone leg): `_require_two_sided` (live/engine/quotes.py) refused lone intents only when inventory was FLAT. With unbalanced inventory a lone intent on the HEAVY side deepened the imbalance and was allowed through — the docstring assumed the lone intent is the light side but nothing enforced it.
+
+### Result
+
+Three fixes, each with a regression test (`live/tests/test_rc_fixes.py`, 12 tests):
+
+- RC-1: `exit_naked_leg` now resolves the sold token's side from the quotes ledger (fail-closed if unresolvable — a sell that cannot be recorded must not be sent) and writes a `naked_exit` close (cost basis, proceeds at the worst accepted price, realized PnL) before returning. `inventory_from_registry` and the KPI `by_market` block both subtract `naked_exit` closes, so the dashboard's UP/DN SHARES and PAIR COST columns converge after an exit. The auto pass's skip became timestamp-aware: a close covers only fills that predate it, so a NEW fill after an exit re-arms the rule (same semantics as the sim's fill-age window). Tests: exit writes the close with the correct leg/cost/proceeds; inventory drops to zero after an exit; a second pass cycle does NOT re-sell (the repeat-sell regression); a fill after the close is managed again; an unresolvable side refuses before any venue write.
+- RC-2: the pair-cost arm is evaluated up front in `hard_block` and binds on the light side too; the heavy side keeps its existing arm order. Tests: light-side UP at 0.92 against held DOWN 0.20 avg is blocked (the $1.12 production pair); one tick under the cap still rests; the heavy side's cap still fires.
+- RC-3: `_require_two_sided` refuses a lone intent on the HEAVY side ("deepens the imbalance") while the light side alone still rests. Test: UP-heavy inventory where the light-side quote is blocked by the RC-2 cap leaves only a heavy-side intent, which is refused.
+
+CodeRabbit hardening (PR review): the exit also defers while the venue reports heavy matched that the registry has not priced. The close's cost basis extrapolates the registry's average heavy price onto every sold share, and `naked` already counts those venue shares, so recording the close would fabricate an average. `exit_naked_leg` now refuses in exactly that state (mirroring `complete_pair`'s existing guard), and the poll loop's reconcile prices the fill before the exit re-runs. Test: a partial heavy leg whose working size fills at the venue with no registry price defers with no sell and no close.
+
+Live suite: 441 passed (12 new), 1 pre-existing skip. Fork-drift test green (only the live copies moved; the sim is untouched).
+
+**Verdict.** **LIVE**. The sim's ledger convention (close, not fill) is the correct record for a taker exit; the pair-cost cap is a booked-loss bound and must bind on both sides; and the lone-leg gate now refuses the deepening direction, not just the flat case. Negative results kept: the production pair costs of $1.120/$1.011 are the first live measurement of the sim's documented never-executing cap — the cap has now been proven to matter.

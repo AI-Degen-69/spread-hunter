@@ -44,7 +44,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from engine.order_registry import OrderRegistry, SIZE_EPS
+from engine.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
 
 DATA_API_BASE = "https://data-api.polymarket.com"
 
@@ -438,6 +438,81 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]]) ->
     return True
 
 
+def _token_side(registry: OrderRegistry, condition_id: str,
+                token_id: str) -> Optional[str]:
+    """Resolve a token's UP/DOWN label from the quotes ledger.
+
+    The closes table has no token column: a `naked_exit` close records which
+    leg was sold by setting `up_price` OR `dn_price`, so the exit needs to
+    know whether the sold token is the UP or the DOWN leg. The quotes ledger
+    is the in-registry source of that mapping -- every posted order logged a
+    quote row carrying its side, which is exactly how the dashboard KPI
+    renders UP/DN (kpi.py token_side_map). Returns None when the token was
+    never quoted; the caller must fail closed rather than guess, because an
+    exit that cannot be recorded is the repeat-sell bug it exists to stop.
+    """
+    best: Optional[str] = None
+    best_ts: float = -1.0
+    for q in registry.get_all_quotes():
+        if (q.get("condition_id") != condition_id
+                or q.get("token_id") != token_id):
+            continue
+        side = str(q.get("side") or "").upper()
+        if side not in ("UP", "DOWN"):
+            continue
+        ts = float(q.get("ts") or 0.0)
+        if ts >= best_ts:
+            best_ts = ts
+            best = side
+    return best
+
+
+def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
+                       heavy_side: str, size: float, sell_price: float) -> None:
+    """Ledger a completed exit: the sold leg leaves the registry for good.
+
+    Written AFTER the market order succeeds, mirroring the sim's sweep (which
+    logs the close after the walk). The close is the ONLY record of this
+    sell -- the venue's trade never lands in the fills table because reconcile
+    adopts fills only for orders it knows, and the SELL is a taker order with
+    no resting row to attach it to. Without this row the pair reads as still
+    held next cycle and the auto pass sells it again: the repeat-sell loop.
+
+    `sell_price` is the WORST price we accepted (`min_price`), because the
+    market-order response does not carry fills. Recording the floor keeps
+    proceeds honest-conservative; the actual fill can only be better.
+    """
+    leg = (pair.get("legs") or {}).get(heavy_token, {})
+    matched = float(leg.get("matched") or 0.0)
+    notional = float(leg.get("notional") or 0.0)
+    heavy_avg = (notional / matched) if matched > 0 else 0.0
+    cost_basis = size * heavy_avg
+    proceeds = size * sell_price
+    realized = proceeds - cost_basis
+    if heavy_side == "UP":
+        up_price, dn_price = sell_price, None
+        up_removed, dn_removed = cost_basis, 0.0
+    else:
+        up_price, dn_price = None, sell_price
+        up_removed, dn_removed = 0.0, cost_basis
+    registry.log_close(CloseRecord(
+        ts=time.time(),
+        condition_id=pair["condition_id"],
+        method="naked_exit",
+        shares=size,
+        up_price=up_price,
+        dn_price=dn_price,
+        cost_basis=cost_basis,
+        proceeds=proceeds,
+        realized_pnl=realized,
+        # The leg would have paid $1 or $0 at resolution -- unknown, so no
+        # forgone figure rather than a guessed one (same as the sim).
+        forgone_vs_settlement=None,
+        up_cost_removed=up_removed,
+        dn_cost_removed=dn_removed,
+    ))
+
+
 def _naked_after(after: dict, heavy_token: str, light_token: Optional[str],
                  venue_light_extra: float,
                  venue_heavy_extra: float = 0.0) -> tuple[float, float, float]:
@@ -501,6 +576,21 @@ def exit_naked_leg(
     # cancel has already gone out.
     positions_checked = _check_positions(pair, venue_positions)
 
+    # The closes table records which leg was sold by setting `up_price` OR
+    # `dn_price`, so the exit must know the sold token's side before sending
+    # anything. A sell that cannot be recorded is the repeat-sell loop this
+    # ledger entry exists to stop -- resolved now, so an unresolvable side
+    # costs nothing and refuses rather than selling unrecorded.
+    heavy_token = pair["heavy"]["token_id"]
+    heavy_side = _token_side(registry, pair["condition_id"], heavy_token)
+    if heavy_side is None:
+        raise PairExitRefused(
+            f"Cannot resolve whether {heavy_token} is the UP or DOWN leg: the "
+            f"quotes ledger has no side for it, so the exit could not be "
+            f"recorded. Refusing rather than selling a leg the registry would "
+            f"never learn was sold."
+        )
+
     light_token = pair["light"]["token_id"]
     light_ask = None
     if light_token:
@@ -548,8 +638,10 @@ def exit_naked_leg(
     venue_heavy_matched = _venue_extra(client, registry, heavy_working)
     after = load_pair(registry, pair_id)
     heavy_token = pair["heavy"]["token_id"]
-    naked, _, _ = _naked_after(after, heavy_token, light_token,
-                               venue_light_matched, venue_heavy_matched)
+    naked, _, unpriced_heavy = _naked_after(
+        after, heavy_token, light_token, venue_light_matched,
+        venue_heavy_matched,
+    )
 
     if naked < -SIZE_EPS:
         # The light leg overtook the heavy one during the cancel. The position
@@ -573,6 +665,20 @@ def exit_naked_leg(
             "venue_light_matched": venue_light_matched,
             "positions_checked": positions_checked,
         }
+
+    if unpriced_heavy > SIZE_EPS:
+        # The close's cost basis extrapolates the registry's average heavy
+        # price onto every share sold, and `naked` already counts these venue
+        # shares. We can see them but not what they cost, so recording the
+        # close would fabricate an average -- the same refusal `complete_pair`
+        # makes in this exact state. The poll loop's reconcile prices the fill,
+        # then this exit can re-run.
+        raise PairExitRefused(
+            f"The venue reports {unpriced_heavy:.4f} more shares of "
+            f"{heavy_token} than the registry has priced. The naked_exit "
+            f"close needs a real average cost for those shares. Let the "
+            f"poll loop reconcile it, then re-run."
+        )
 
     # 3. Sell, sized by the registry and bounded by a price we will accept.
     heavy_book = client.get_order_book(heavy_token)
@@ -615,11 +721,22 @@ def exit_naked_leg(
                           price=min_price)
     )
 
+    # 4. Record the exit BEFORE returning. A sell that exists only on the
+    #    venue is invisible to the registry -- reconcile adopts fills only
+    #    for orders it knows, and this taker SELL has no resting row, so the
+    #    pair would read as still-held next cycle and be sold again (the
+    #    repeat-sell loop observed in production). The close is the ledger
+    #    entry: `inventory_from_registry` subtracts the sold leg from it, and
+    #    the auto pass skips conditions that have a close.
+    _record_exit_close(registry, after, heavy_token, heavy_side, size,
+                       min_price)
+
     return {
         "action": "exited",
         "pair_id": pair_id,
         "condition_id": after["condition_id"],
         "token_id": heavy_token,
+        "side": heavy_side,
         "size": size,
         "bid": bid,
         "min_price": min_price,
@@ -847,10 +964,11 @@ def auto_manage_pairs(
 
     One pass per poll cycle, run after reconcile so the registry is fresh.
     Discovery is from the fills ledger: every pair that has a fill, whose
-    condition has no close, whose last fill is inside `pairs_exit_window_sec`,
-    and whose legs are unbalanced. Each such pair is routed exactly like the
-    sim's sweep -- complete the missing leg at ask when the pair stays under
-    `max_pair_cost`, else same-window exit of the naked leg at the best bid.
+    last fill is inside `pairs_exit_window_sec`, whose fills are not already
+    covered by a later close on the condition, and whose legs are unbalanced.
+    Each such pair is routed exactly like the sim's sweep -- complete the
+    missing leg at ask when the pair stays under `max_pair_cost`, else
+    same-window exit of the naked leg at the best bid.
 
     Closing actions only, so the direction gate pre-approves them. Per-pair
     failures are isolated and reported: one pair's refusal never stops the
@@ -877,10 +995,27 @@ def auto_manage_pairs(
                 "error": f"positions read failed: {type(e).__name__}: {e}",
             }]
 
-    closed_cids = {
-        r["condition_id"] for r in registry.get_all_closes()
-        if r.get("condition_id")
-    }
+    # A close covers only the fills that PREDATE it. The old condition-level
+    # skip meant one close on a condition permanently disabled the rule for
+    # that condition -- so a market exited once would never be managed again
+    # even if the fleet later re-quoted it and took a new one-sided fill.
+    # The sim has no such flag: its rule keys off fill age, and a fresh fill
+    # re-arms the window. Mirror that: a pair whose last fill is OLDER than
+    # the condition's latest close was the position that close sold (or
+    # merged) -- skip it. A pair filled after the close is new exposure and
+    # must be managed like any other.
+    latest_close_ms: dict[str, int] = {}
+    for r in registry.get_all_closes():
+        cid = r.get("condition_id")
+        ts = r.get("ts")
+        if not cid or not ts:
+            continue
+        try:
+            ts_ms = int(float(ts) * 1000.0)
+        except (TypeError, ValueError):
+            continue
+        if ts_ms > latest_close_ms.get(cid, 0):
+            latest_close_ms[cid] = ts_ms
 
     last_fill_ms: dict[str, int] = {}
     pair_cids: dict[str, str] = {}
@@ -895,7 +1030,8 @@ def auto_manage_pairs(
 
     out: list[dict] = []
     for pid, last_ms in last_fill_ms.items():
-        if pair_cids.get(pid) in closed_cids:
+        cid = pair_cids.get(pid)
+        if cid and last_ms <= latest_close_ms.get(cid, 0):
             continue
         # U35 window: act only while the fill is fresh enough that the measured
         # drift is still ~0. An undated fill (no venue_ts) is left alone --

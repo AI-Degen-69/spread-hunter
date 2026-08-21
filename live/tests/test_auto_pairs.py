@@ -12,7 +12,7 @@ import pytest
 
 from engine.config import MakerConfig
 from engine.order_registry import (
-    OrderRegistry, OrderRecord, FillRecord, CloseRecord,
+    OrderRegistry, OrderRecord, FillRecord, CloseRecord, QuoteRecord,
 )
 from engine import live_pairs as lp
 from engine.live_pairs import auto_manage_pairs
@@ -65,6 +65,17 @@ def _one_sided_pair(registry: OrderRegistry, filled_size: float = 10.0,
         max_pair_cost_at_post=MAX_PAIR_COST,
     )
     registry.create_order(light)
+
+    # Quotes ledger carries the UP/DOWN label the exit needs to encode the
+    # sold leg in the closes table (which has no token column).
+    registry.log_quote(QuoteRecord(
+        ts=now / 1000.0, condition_id=cond, token_id=TOK_UP, side="UP",
+        price=fill_price, size=filled_size,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=now / 1000.0, condition_id=cond, token_id=TOK_DN, side="DOWN",
+        price=0.38, size=filled_size,
+    ))
     return pair_id
 
 

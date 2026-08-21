@@ -338,19 +338,47 @@ def hard_block(cfg, inv, side: str, price: float,
     against a nominal 0.30-0.70 band, and wta-kalinsk-kessler bought 14 pairs
     at $1.0200 each against a $0.995 cap.
 
-    R4 rides above all five: an order that REDUCES exposure is never blocked.
-    The light side is the only resting order that flattens a position, so
-    refusing it would freeze the market at maximum exposure with no route back
-    down -- the failure mode the share cap actually produced, where it stopped
-    the heavy side and then had no further authority. The emergency stop-loss
-    and the merge path reduce exposure too; neither reaches this function.
+    R4 rides above four of the five: an order that REDUCES exposure is never
+    blocked. The light side is the only resting order that flattens a
+    position, so refusing it would freeze the market at maximum exposure with
+    no route back down -- the failure mode the share cap actually produced,
+    where it stopped the heavy side and then had no further authority. The
+    emergency stop-loss and the merge path reduce exposure too; neither
+    reaches this function.
+
+    The PAIR-COST arm is the exception, and deliberately: it is not an
+    exposure bound. A light-side fill that assembles the pair at/over
+    `max_pair_cost` is a booked loss on an instrument that pays exactly
+    $1.00, and "reduces exposure" does not make a guaranteed loss
+    acceptable. It is checked before R4 returns, so the light side is exempt
+    from the exposure arms only -- never from the cap that exists to stop a
+    pair that cannot be profitable.
     """
     if not getattr(cfg, "enable_hard_blocks", True):
         return None
 
     other = OTHER[side]
+
+    # THE PAIR-COST CAP is evaluated up front so it can bind on the LIGHT side
+    # too. R4 exempts the light side from the exposure arms because buying the
+    # light side REDUCES exposure -- but the pair-cost arm is not an exposure
+    # bound. A light-side fill that assembles the pair at/over `max_pair_cost`
+    # is a booked loss on an instrument that pays exactly $1.00; "reduces
+    # exposure" does not make a guaranteed loss acceptable. The old order
+    # skipped this arm entirely for the light side, which is how a light-side
+    # quote chased to $0.92 against a $0.20 held leg produced the $1.12 pair
+    # seen in production (and how the sim's own docstring records buying 14
+    # pairs at $1.0200 against a $0.995 cap). For the heavy side the arm still
+    # reports LAST, preserving the documented "most useful reason first" order.
+    other_avg = inv.avg(other)
+    pair_cost_block = None
+    if other_avg > 0 and (price + other_avg) >= cfg.max_pair_cost:
+        pair_cost_block = (
+            f"pair {price:.3f}+{other_avg:.3f}=${price + other_avg:.4f} "
+            f">= ${cfg.max_pair_cost:.3f} cap -- pays exactly $1.00")
+
     if _shares(inv, side) < _shares(inv, other):
-        return None
+        return pair_cost_block
 
     hedge = book_health(hedge_book, cfg)
     if not hedge.ok:
@@ -378,13 +406,9 @@ def hard_block(cfg, inv, side: str, price: float,
         return (f"{price:.3f} outside band {cfg.price_band_low:.2f}-"
                 f"{cfg.price_band_high:.2f}")
 
-    # THE PAIR-COST CAP. `other_avg > 0` guards it, exactly as the legacy
-    # branch does: a zero average means we hold none of that token, not that
-    # the hedge is free, and without the guard every opening bid would read as
-    # a sub-$1.00 pair. `>=` not `>`, same as every other cap here.
-    other_avg = inv.avg(other)
-    if other_avg > 0 and (price + other_avg) >= cfg.max_pair_cost:
-        return (f"pair {price:.3f}+{other_avg:.3f}=${price + other_avg:.4f} "
-                f">= ${cfg.max_pair_cost:.3f} cap -- pays exactly $1.00")
-
-    return None
+    # PAIR COST, for the heavy side. `other_avg > 0` guards it, exactly as
+    # the legacy branch does: a zero average means we hold none of that token,
+    # not that the hedge is free, and without the guard every opening bid
+    # would read as a sub-$1.00 pair. `>=` not `>`, same as every other cap
+    # here.
+    return pair_cost_block
