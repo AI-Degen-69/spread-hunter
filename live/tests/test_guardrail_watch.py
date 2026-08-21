@@ -154,3 +154,47 @@ def test_watch_alerts_once_per_repeat_exit_growth(tmp_path, capsys):
          ring_path=ring)
     w.check()   # count grew 2 -> 3: alert again
     assert log.read_text(encoding="utf-8").count("REPEAT-EXIT") == 2
+
+
+def test_repeat_exit_re_arms_after_window_ages_out(tmp_path):
+    """A pair alerted at count 2 must re-alert on a FRESH 2-exit recurrence
+    once its original events age out of the window.
+
+    Without the re-arm prune, `_exit_alerted[pair] = 2` persists forever and
+    the fresh recurrence (2 > 2 is False) is silently missed.
+    """
+    import json
+    import time
+
+    log = tmp_path / "alerts.log"
+    ring = tmp_path / "ring.jsonl"
+    w = GuardrailWatch(alerts_log=log, ring_path=ring,
+                       db_path=tmp_path / "live.db", window_s=900.0)
+    now = time.time()
+
+    def _iso(epoch_s: float) -> str:
+        return datetime.datetime.fromtimestamp(
+            epoch_s, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def write_exits(*epochs: float) -> None:
+        ring.write_text(
+            "\n".join(json.dumps(
+                {"ts": _iso(e), "action": "pairs_exited",
+                 "extra": {"pair_id": "pair-1"}}) for e in epochs) + "\n",
+            encoding="utf-8")
+
+    # Two exits in-window: alert once; the second check must not duplicate.
+    write_exits(now - 120, now - 60)
+    w.check()
+    w.check()
+    assert log.read_text(encoding="utf-8").count("REPEAT-EXIT") == 1
+
+    # The events age out of the window: the pair is pruned from _exit_alerted.
+    write_exits(now - 2000, now - 1500)
+    w.check()
+    assert log.read_text(encoding="utf-8").count("REPEAT-EXIT") == 1
+
+    # A FRESH two-exit recurrence re-alerts: count 2 > 0 (pruned), not 2 > 2.
+    write_exits(now - 5, now - 3)
+    w.check()
+    assert log.read_text(encoding="utf-8").count("REPEAT-EXIT") == 2
