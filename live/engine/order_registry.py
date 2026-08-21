@@ -1693,10 +1693,15 @@ def inventory_from_registry(
             if vts:
                 inv.last_fill_ts = vts if inv.last_fill_ts is None else max(inv.last_fill_ts, vts)
 
-        # Subtract executed closes
+        # Subtract executed closes. `naked_exit` is U35: ONE leg was sold, and
+        # which one is encoded by which price field is set -- the same
+        # encoding the sim's stats.inventory_from_db uses and the settled-
+        # positions reader expects. The OTHER leg is untouched, so it must
+        # not be decremented.
         close_rows = conn.execute(
             """
-            SELECT method, shares, up_cost_removed, dn_cost_removed, cost_basis
+            SELECT method, shares, up_cost_removed, dn_cost_removed,
+                   cost_basis, up_price, dn_price
             FROM closes
             WHERE condition_id = ?
             """,
@@ -1707,6 +1712,16 @@ def inventory_from_registry(
             sh = float(cr["shares"] or 0.0)
             up_c = cr["up_cost_removed"]
             dn_c = cr["dn_cost_removed"]
+            if method == "naked_exit":
+                if cr["up_price"] is not None:
+                    inv.up_shares = max(0.0, inv.up_shares - sh)
+                    if up_c is not None:
+                        inv.up_cost = max(0.0, inv.up_cost - float(up_c))
+                else:
+                    inv.down_shares = max(0.0, inv.down_shares - sh)
+                    if dn_c is not None:
+                        inv.down_cost = max(0.0, inv.down_cost - float(dn_c))
+                continue
             if method == "merge":
                 inv.up_shares = max(0.0, inv.up_shares - sh)
                 inv.down_shares = max(0.0, inv.down_shares - sh)

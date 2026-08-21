@@ -551,6 +551,23 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         dn_sh = sum(float(f.get("size") or 0.0) for f in dn_fills)
         up_cost = sum(float(f.get("size") or 0.0) * float(f.get("price") or 0.0) for f in up_fills)
         dn_cost = sum(float(f.get("size") or 0.0) * float(f.get("price") or 0.0) for f in dn_fills)
+
+        # A `naked_exit` close (U35) sold ONE leg; the fills above are the
+        # buys and never see the sell (the SELL is a taker order with no
+        # resting row, so reconcile never adopts it). Without this the board
+        # keeps showing shares the venue no longer holds -- the phantom
+        # position this subtraction exists to retire. Same encoding as
+        # inventory_from_registry: up_price set => the UP leg was sold.
+        for c in m_closes:
+            if c.get("method") != "naked_exit":
+                continue
+            sh = float(c.get("shares") or 0.0)
+            if c.get("up_price") is not None:
+                up_sh = max(0.0, up_sh - sh)
+                up_cost = max(0.0, up_cost - float(c.get("up_cost_removed") or 0.0))
+            else:
+                dn_sh = max(0.0, dn_sh - sh)
+                dn_cost = max(0.0, dn_cost - float(c.get("dn_cost_removed") or 0.0))
         m_pnl = sum(float(c.get("realized_pnl") or 0.0) for c in m_closes)
 
         # Markout horizons for this market

@@ -498,13 +498,25 @@ def _require_two_sided(cfg, inv, intents, why):
     to cross, paying away the spread the quote was resting to earn. The pair is
     the product; half a pair is a directional bet nobody decided to take.
 
-    Unbalanced inventory is the opposite case and is left alone. There the lone
-    intent is the light side, it reduces exposure, and refusing it would hold
-    the position at its widest.
+    Unbalanced inventory is the opposite case: the lone intent is the LIGHT
+    side, it reduces exposure, and refusing it would hold the position at its
+    widest. That is only true when the lone intent really is the light side.
+    A lone intent on the HEAVY side deepens the imbalance instead of closing
+    it -- a directional bet on the side we already over-hold -- and is refused
+    exactly like the flat case. (The phantom-inventory bug made markets look
+    unbalanced when they were flat; that is fixed at the registry, and this
+    guard is the second line that refuses a heavy-side lone leg regardless.)
     """
     if not getattr(cfg, "require_two_sided_when_flat", False):
         return intents, why
-    if risk.naked_side(inv) is not None:
+    heavy = risk.naked_side(inv)
+    if heavy is not None:
+        if len(intents) == 1 and intents[0].side == heavy:
+            lone = intents[0].side
+            return [], (f"inventory is {heavy}-heavy and only {lone} is "
+                        f"quotable; a lone {lone} leg deepens the imbalance, "
+                        f"so the couple is not placed"
+                        + (f" -- {why}" if why else ""))
         return intents, why
     if len(intents) >= 2:
         return intents, why
