@@ -33,6 +33,7 @@ from dash.live_dash import (
     query_db_state,
     resolve_db_path,
     set_db_override,
+    set_guardrail_heartbeat_override,
     set_heartbeat_override,
     set_ring_override,
     _cycle_stream_sse,
@@ -321,6 +322,85 @@ def test_pairs_activity_endpoint_aggregates_ring(client, tmp_path):
         assert by_id["pair-A"]["cycle"] == 2
     finally:
         set_ring_override(None)
+
+
+def test_guardrail_health_endpoint_reports_alive_watcher(client, tmp_path):
+    """/api/guardrail-health reads the watcher's heartbeat: a fresh one means
+    running, with pid/cycle from the file and the alert total from the ring.
+    """
+    ring = tmp_path / "cycle_events.jsonl"
+    hb = tmp_path / "guardrail_watch_heartbeat.json"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    hb.write_text(json.dumps([{
+        "pid": 4242, "started_at": now_iso, "ts": now_iso, "cycle": 9,
+    }]), encoding="utf-8")
+    rows = [
+        {"ts": "2026-08-21T02:00:05Z", "service": "engine", "cycle": 3,
+         "phase": "settling", "action": "guardrail_alert",
+         "market_slug": "", "reason": "REPEAT-EXIT", "latency_ms": 0.0,
+         "pid": 1, "extra": {}},
+        {"ts": "2026-08-21T02:00:10Z", "service": "engine", "cycle": 4,
+         "phase": "settling", "action": "guardrail_alert",
+         "market_slug": "", "reason": "OVER-CAP-PAIR", "latency_ms": 0.0,
+         "pid": 1, "extra": {}},
+    ]
+    ring.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    set_ring_override(ring)
+    set_guardrail_heartbeat_override(hb)
+    try:
+        res = client.get("/api/guardrail-health")
+        assert res.status_code == 200
+        h = res.json()
+        assert h["running"] is True
+        assert h["pid"] == 4242
+        assert h["cycle"] == 9
+        assert h["age_s"] is not None and h["age_s"] <= 30.0
+        assert h["alerts_total"] == 2
+        assert h["last_alert_kind"] == "OVER-CAP-PAIR"  # newest first
+    finally:
+        set_ring_override(None)
+        set_guardrail_heartbeat_override(None)
+
+
+def test_guardrail_health_endpoint_flags_stale_watcher(client, tmp_path):
+    """A heartbeat older than the stale threshold reads as DOWN -- the
+    silent-failure case the chip exists to surface.
+    """
+    hb = tmp_path / "guardrail_watch_heartbeat.json"
+    old = (datetime.datetime.now(datetime.timezone.utc)
+           - datetime.timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    hb.write_text(json.dumps([{
+        "pid": 99, "started_at": old, "ts": old, "cycle": 3,
+    }]), encoding="utf-8")
+    set_guardrail_heartbeat_override(hb)
+    try:
+        res = client.get("/api/guardrail-health")
+        assert res.status_code == 200
+        h = res.json()
+        assert h["running"] is False
+        assert h["age_s"] is not None and h["age_s"] > 30.0
+        assert h["pid"] == 99   # pid still readable; the chip says DOWN
+    finally:
+        set_guardrail_heartbeat_override(None)
+
+
+def test_guardrail_health_endpoint_absent_heartbeat(client, tmp_path):
+    """No heartbeat file at all (watcher never ran / old code) -> DOWN, empty
+    fields, no crash.
+    """
+    set_guardrail_heartbeat_override(tmp_path / "missing.json")
+    try:
+        res = client.get("/api/guardrail-health")
+        assert res.status_code == 200
+        h = res.json()
+        assert h["running"] is False
+        assert h["pid"] is None
+        assert h["age_s"] is None
+        assert h["alerts_total"] == 0
+    finally:
+        set_guardrail_heartbeat_override(None)
 
 
 def test_guardrail_alerts_endpoint_returns_newest_first(client, tmp_path):

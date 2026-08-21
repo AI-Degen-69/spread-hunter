@@ -154,3 +154,40 @@ def test_watch_alerts_once_per_repeat_exit_growth(tmp_path, capsys):
          ring_path=ring)
     w.check()   # count grew 2 -> 3: alert again
     assert log.read_text(encoding="utf-8").count("REPEAT-EXIT") == 2
+
+
+def test_heartbeat_written_each_check(tmp_path):
+    """The watcher self-reports life signs (pid, started_at, ts, cycle)
+    every check so the dashboard can show it alive -- or visibly down when
+    the file goes stale.
+    """
+    import json
+    import os
+    import time
+
+    log = tmp_path / "alerts.log"
+    ring = tmp_path / "ring.jsonl"
+    ring.write_text("", encoding="utf-8")
+    hb = tmp_path / "heartbeat.json"
+    w = GuardrailWatch(alerts_log=log, ring_path=ring,
+                       db_path=tmp_path / "live.db", heartbeat_path=hb)
+
+    w.check()
+    w.check()
+
+    assert hb.is_file()
+    payload = json.loads(hb.read_text(encoding="utf-8"))[-1]
+    assert payload["pid"] == os.getpid()
+    assert payload["cycle"] == 2
+    assert payload["ts"] == payload["started_at"]  # both ISO Z, seconds precision
+    # ts is written this check (fresh); started_at is the process start
+    assert time.time() - datetime.datetime.strptime(
+        payload["ts"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=datetime.timezone.utc).timestamp() < 30
+
+    # a watcher without heartbeat_path (the test default) writes nothing
+    quiet_hb = tmp_path / "quiet.json"
+    quiet = GuardrailWatch(alerts_log=log, ring_path=ring,
+                           db_path=tmp_path / "live.db")
+    quiet.check()
+    assert not quiet_hb.exists()
