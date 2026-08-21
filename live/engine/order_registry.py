@@ -1658,6 +1658,23 @@ def inventory_from_registry(
         return inv
 
     with get_connection(db) as conn:
+        # A `venue_sync` close (the dashboard's Sync) means the venue reports
+        # this condition's position as CLOSED -- the account no longer holds
+        # it. Its rows carry no leg encoding (both legs write `up_price`), so
+        # a per-leg subtraction would guess. Instead, retire every fill that
+        # predates the latest such close; fills after it are new exposure and
+        # survive. Same timestamp rule as the auto-pairs pass's skip: a close
+        # covers the fills that precede it.
+        venue_sync_cutoff_s: Optional[float] = None
+        for cr in conn.execute(
+            """SELECT ts FROM closes
+                WHERE condition_id = ? AND method = 'venue_sync'""",
+            (condition_id,),
+        ).fetchall():
+            t = cr["ts"]
+            if t:
+                venue_sync_cutoff_s = max(venue_sync_cutoff_s or 0.0, float(t))
+
         rows = conn.execute(
             """
             SELECT o.token_id, o.side, f.size, f.price, f.venue_ts
@@ -1674,6 +1691,11 @@ def inventory_from_registry(
             size = float(r["size"] or 0.0)
             price = float(r["price"] or 0.0)
             vts = float(r["venue_ts"] or 0.0) / 1000.0 if r["venue_ts"] else None
+
+            if vts and venue_sync_cutoff_s is not None and vts <= venue_sync_cutoff_s:
+                # Retired by the venue sync: the account no longer holds these
+                # shares, and the close row cannot say which leg they were.
+                continue
 
             if tok == up_token:
                 if side == "BUY":
