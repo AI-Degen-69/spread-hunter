@@ -2294,6 +2294,40 @@ def poll(
                     break
                 continue
 
+        # U35 auto pass: convert in-window one-sided fills (complete under the
+        # cap, exit at/over it). Runs after reconcile so the registry is fresh.
+        # Closing actions only -- pre-approved. Failures are isolated per pair
+        # inside auto_manage_pairs; a pass-level failure must never stop the
+        # loop either.
+        try:
+            from engine.config import load as _load_cfg
+            from engine.live_pairs import auto_manage_pairs
+            for pr in auto_manage_pairs(
+                client, registry, _load_cfg(), funder=funder,
+            ):
+                action = pr.get("action", "?")
+                # Quiet decisions (hold/balanced/dry-run would_*) stay out of
+                # the console but still reach the cycle ring so the dashboard
+                # can count them per cycle.
+                if action not in ("hold", "balanced",
+                                  "would_exit", "would_complete"):
+                    line = f"[POLL {now_iso}] pairs {pr.get('pair_id') or '?':<10s} {action}"
+                    if action == "error":
+                        line += f" ({pr.get('error', '')})"
+                        print(line, file=sys.stderr)
+                    else:
+                        print(line)
+                    _log_event(line)
+                _emit_cycle_event(
+                    service="engine", cycle=cycle, phase="settling",
+                    action="pairs_" + action,
+                    extra={"pair_id": pr.get("pair_id")},
+                )
+        except Exception as exc:
+            err_msg = f"[POLL {now_iso}] pairs pass failed: {exc}"
+            print(err_msg, file=sys.stderr)
+            _log_event(err_msg)
+
         # Write heartbeat
         hb_data = {
             "ts": int(time.time() * 1000),

@@ -274,6 +274,55 @@ def test_api_and_html_endpoints(client, temp_db):
     assert "pairs" in data
 
 
+def test_pairs_activity_endpoint_aggregates_ring(client, tmp_path):
+    """/api/pairs-activity counts pairs_* ring actions per cycle and per pair,
+    ignoring non-pairs events and keeping each pair's most recent action.
+    """
+    ring = tmp_path / "cycle_events.jsonl"
+    rows = [
+        {"ts": "2026-08-21T02:00:01Z", "service": "engine", "cycle": 1,
+         "phase": "settling", "action": "pairs_completed",
+         "market_slug": "", "reason": "", "latency_ms": 0.0, "pid": 1,
+         "extra": {"pair_id": "pair-A"}},
+        {"ts": "2026-08-21T02:00:06Z", "service": "engine", "cycle": 1,
+         "phase": "settling", "action": "pairs_would_complete",
+         "market_slug": "", "reason": "", "latency_ms": 0.0, "pid": 1,
+         "extra": {"pair_id": "pair-B"}},
+        {"ts": "2026-08-21T02:00:11Z", "service": "engine", "cycle": 2,
+         "phase": "settling", "action": "pairs_exited",
+         "market_slug": "", "reason": "", "latency_ms": 0.0, "pid": 1,
+         "extra": {"pair_id": "pair-A"}},
+        {"ts": "2026-08-21T02:00:16Z", "service": "engine", "cycle": 2,
+         "phase": "settling", "action": "pairs_error",
+         "market_slug": "", "reason": "", "latency_ms": 0.0, "pid": 1,
+         "extra": {"pair_id": "pair-C"}},
+        {"ts": "2026-08-21T02:00:21Z", "service": "engine", "cycle": 1,
+         "phase": "quoting", "action": "decide",
+         "market_slug": "x", "reason": "", "latency_ms": 0.0, "pid": 1,
+         "extra": {}},
+    ]
+    ring.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    set_ring_override(ring)
+    try:
+        res = client.get("/api/pairs-activity")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["last_cycle"] == 2
+        assert data["last_cycle_counts"] == {"exited": 1, "error": 1}
+        assert data["totals"] == {
+            "completed": 1, "would_complete": 1,
+            "exited": 1, "error": 1,
+        }
+        by_id = {p["pair_id"]: p for p in data["per_pair"]}
+        assert by_id["pair-A"]["action"] == "exited"   # most recent wins
+        assert by_id["pair-B"]["action"] == "would_complete"
+        assert by_id["pair-C"]["action"] == "error"
+        assert by_id["pair-A"]["cycle"] == 2
+    finally:
+        set_ring_override(None)
+
+
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_dashboard_script_parses(tmp_path):
     """Ensures no syntax errors in the inline JS block."""

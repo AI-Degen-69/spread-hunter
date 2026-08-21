@@ -12,7 +12,7 @@ orders are **sent**, not simulated. See AGENTS.md → Safety.
 | Max order | $25 | `engine/venue.py` `MAX_ORDER_USD` |
 | Max total exposure | $100 | `engine/venue.py` `MAX_TOTAL_USD` |
 | Per-couple sizing | max(bankroll × 1%, $6) ≈ $6, $3/leg | `engine/config.py` `couple_risk_frac` / `min_couple_usd` |
-| Pairs | held to resolution | strategy rule |
+| Pairs | held to resolution (U35 pass may complete/exit in-window, §4) | strategy rule + §4 |
 | Budget above $100 | **not approved** — waits on closing stages | AGENTS.md Safety |
 
 ---
@@ -39,7 +39,7 @@ last cycle went fine.
    ```bash
    cd live && python -m engine.live_exec balance
    ```
-   If the collateral is not ~$100, **stop here** and request funding (see §6).
+   If the collateral is not ~$100, **stop here** and request funding (see §7).
 4. **Registry is the one you think it is** — the fleet writes `live/run/live.db`
    unless `--db` says otherwise. Never point two processes at the same db
    (AGENTS.md: run one instance at a time).
@@ -77,9 +77,19 @@ python -m engine.live_fleet --live --interval 5
 - `--interval 5` — one rotation every 5 seconds (default).
 - `--max-markets N` — cap the rotation (default: all graduated markets).
 - `--funder <addr>` — override `POLY_FUNDER` for this run.
-- `--no-reconcile` / `--no-sweep` — only when the poll loop owns those passes
-  (`python -m engine.live_exec poll`) in a separate process; otherwise leave
-  them on.
+- `--no-reconcile` / `--no-sweep` — when the poll loop owns reconcile/sweep
+  (and the automatic naked-leg exit, §4) in a separate process; otherwise
+  leave them on.
+
+**To get the automatic naked-leg exit (§4), run poll alongside the fleet** —
+the fleet alone never fires it. The dashboard's Start Bot launches both; by
+hand, run them as two processes:
+
+```bash
+cd live
+python -m engine.live_exec poll --interval 5        # reconcile + sweep + auto-pairs
+python -m engine.live_fleet --live --no-reconcile --no-sweep --interval 5
+```
 
 ## 3. Position watch (the Owner's job — this is supervision)
 
@@ -101,9 +111,47 @@ python -m engine.live_exec balance        # venue collateral
 
 **Watch for:** a one-sided fill (one leg filled, the other resting). That is a
 naked leg — it rides unhedged to resolution. It is within the approved risk
-(≤ $25), but it is exactly the state that needs eyes.
+(≤ $25). **In-window naked legs are handled automatically** by the U35 pass
+(§4); the state that still needs your eyes is a naked leg *outside* the
+15-minute window (left alone by design) and any `error` lines in the poll
+output.
 
-## 4. Stop conditions
+## 4. Automatic naked-leg exit (the U35 pass)
+
+The poll loop automatically resolves in-window one-sided fills — the sim's
+proven guardrail, ported to the live tree. It runs in `poll` right after
+reconcile, every cycle, and only sends when poll has a real (authenticated)
+client. **It does not run in the fleet process** — see §2 for the two-process
+invocation.
+
+**Knobs** (all in `engine/config.py`, defaults shown):
+
+| Knob | Default | Meaning |
+| --- | --- | --- |
+| `enable_pairs_rule` | `true` | master switch |
+| `pairs_exit_window_sec` | `900` (15 min) | only pairs whose last fill is inside the window are touched |
+| `max_pair_cost` | `0.995` | complete/exit routing threshold |
+| `HUNTER_PAIRS_RULE=off` (env) | — | runtime kill switch — set it to disable the pass without a config edit |
+
+**Routing, per in-window naked pair** (economics measured in U35):
+- **Under `max_pair_cost` (0.995)** → **complete** — cross the light side at
+  ask to finish the pair (+3.68c/share captured; acting late forfeits it).
+- **At/over the cap, or no ask on the light side** → **exit** — sell the
+  filled leg at best bid, capped at bid depth (−3.67c floor; the pair is a
+  guaranteed loss, so it is closed, not completed).
+- **Balanced or already closed** → skipped.
+- **Older than the window** → left alone. Acting late loses money (measured
+  +0.09c at 5m vs −18.5c at 1h) — the window is where action pays.
+
+**Safety:** positions are read once per cycle and each exit fails closed on
+position divergence; one pair's failure never stops the cycle. All actions
+are closing-only (pre-approved under the direction gate). A dry-run mode
+returns `would_complete` / `would_exit` with zero sends.
+
+**Watch in the logs:** `[POLL ...] pairs <id> completed|exited|error`. An
+`error` means the pair was skipped, not force-closed — read the message.
+
+## 5. Stop conditions
 
 **Clean stop (normal):**
 - **Ctrl-C / SIGTERM** — the loop stops between cycles. Everything already
@@ -127,6 +175,9 @@ python -m engine.live_exec complete <pair_id>   # second-leg completion
 python -m engine.live_exec cancel-all           # pull every resting order, no sells
 python -m engine.live_exec cancel <order_id>    # one order
 ```
+The automatic pass (§4) only touches in-window pairs — these manual verbs
+still exist for out-of-window naked legs and anything you want to close by
+hand.
 After resolution:
 ```bash
 python -m engine.live_exec redeem               # gasless, through the relayer
@@ -135,15 +186,16 @@ python -m engine.live_exec redeem               # gasless, through the relayer
 **Never:** edit `MAX_ORDER_USD` / `MAX_TOTAL_USD` "just for this order." They
 are the difference between a POC and an unbounded loss (venue.py comment).
 
-## 5. What "supervised" means here
+## 6. What "supervised" means here
 
 - The Owner is present for the run, watching Polymarket's interface.
 - One instance of the fleet, one registry.
-- **Unattended operation is not approved.** Fully unattended running, and any
-  budget above the $100, wait on the closing stages (1–4: fill detection,
-  merge, stop-loss, second-leg completion) — see `SESSION-66-BRIEF.md` §5.
+- **Unattended operation is not approved.** In-window second-leg completion
+  and stop-loss now run automatically (§4), but fully unattended running, and
+  any budget above the $100, still wait on the closing stages (1–4) — see
+  `SESSION-66-BRIEF.md` §5.
 
-## 6. Funding rule
+## 7. Funding rule
 
 - **Funding is requested before the cycle, never during.**
 - Tell the Owner (you) the amount and the reason ahead of time. Do not

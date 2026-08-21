@@ -1449,6 +1449,52 @@ def _cycle_stream_sse(
             time.sleep(poll_sec)
 
 
+PAIRS_ACTION_PREFIX = "pairs_"
+
+
+@app.get("/api/pairs-activity")
+def pairs_activity():
+    """Aggregate U35 auto-pairs activity from the cycle ring.
+
+    Counts every pairs_* action (completed/exited/would_complete/would_exit/
+    hold/balanced/error) overall and per latest cycle, plus each pair's most
+    recent action with its timestamp. Read-only; the ring is the source.
+    """
+    from engine.cycle_stream import read_ring
+    events = read_ring(resolve_ring_path(), tail=400)
+    totals: dict[str, int] = {}
+    per_cycle: dict[int, dict[str, int]] = {}
+    per_pair: dict[str, dict] = {}
+    for ev in events:
+        a = str(ev.get("action") or "")
+        if not a.startswith(PAIRS_ACTION_PREFIX):
+            continue
+        action = a[len(PAIRS_ACTION_PREFIX):]
+        totals[action] = totals.get(action, 0) + 1
+        cycle = ev.get("cycle")
+        if cycle is not None:
+            pc = per_cycle.setdefault(int(cycle), {})
+            pc[action] = pc.get(action, 0) + 1
+        pid = (ev.get("extra") or {}).get("pair_id")
+        if pid:
+            per_pair[str(pid)] = {
+                "action": action,
+                "ts": ev.get("ts"),
+                "cycle": ev.get("cycle"),
+            }
+    last_cycle = max(per_cycle) if per_cycle else None
+    return {
+        "totals": totals,
+        "last_cycle": last_cycle,
+        "last_cycle_counts": per_cycle.get(last_cycle, {})
+        if last_cycle is not None else {},
+        "per_pair": [
+            {"pair_id": pid, **info}
+            for pid, info in sorted(per_pair.items())
+        ],
+    }
+
+
 @app.get("/api/cycle-stream")
 def cycle_stream_events():
     """Server-Sent-Events tail of live/run/cycle_events.jsonl."""
@@ -1591,6 +1637,13 @@ PAGE_HTML = """<!DOCTYPE html>
     .bot-brains { border-left: 3px solid rgba(56,189,248,0.4); }
     .bot-brains-grid { display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; }
     .bb-col { background:rgba(15,23,42,0.5); border:1px solid rgba(148,163,184,0.12); border-radius:8px; padding:10px 12px; }
+    .bb-pairs-label { font-size:10px; color:#94a3b8; text-transform:uppercase; letter-spacing:.05em; }
+    .bb-pairs-counts { font-family:'JetBrains Mono',monospace; font-size:11px; margin-top:6px; line-height:1.6; }
+    .bb-pairs-counts .pa-err { color:#f87171; }
+    .bb-pairs-last { margin-top:6px; font-family:'JetBrains Mono',monospace; font-size:10px; color:#94a3b8; line-height:1.5; max-height:66px; overflow-y:auto; }
+    .bb-pairs-last .pa-ok { color:#10b981; }
+    .bb-pairs-last .pa-err { color:#f87171; }
+    .bb-pairs-last .pa-mute { color:#64748b; }
     .bb-status { display:flex; align-items:center; gap:10px; min-width:190px; }
     .bb-status-dot { width:14px; height:14px; border-radius:50%; background:#64748b; flex:0 0 auto; }
     .bb-status-dot.scanning { background:#10b981; animation: bbPulse 1.2s infinite; }
@@ -2334,6 +2387,11 @@ PAGE_HTML = """<!DOCTYPE html>
         <div class="bb-col bb-spark">
           <div class="bb-spark-label">scan latency (ms)</div>
           <canvas id="bb-sparkline" width="220" height="36"></canvas>
+        </div>
+        <div class="bb-col bb-pairs">
+          <div class="bb-pairs-label">auto pairs (U35) &middot; cycle <span id="bb-pairs-cycle">&mdash;</span></div>
+          <div class="bb-pairs-counts" id="bb-pairs-counts">no activity</div>
+          <div class="bb-pairs-last" id="bb-pairs-last">last pair actions appear here</div>
         </div>
       </div>
       <div class="bb-log" id="bb-decision-log"><!-- 12-line color-coded tail --></div>
@@ -4061,6 +4119,43 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
       });
     }
 
+    function renderPairsActivity(pa) {
+      if (!pa) return;
+      const cycleEl = document.getElementById('bb-pairs-cycle');
+      const countsEl = document.getElementById('bb-pairs-counts');
+      const lastEl = document.getElementById('bb-pairs-last');
+      if (!countsEl || !lastEl) return;
+      const total = pa.totals || {};
+      const cc = pa.last_cycle_counts || {};
+      const hasCycle = pa.last_cycle !== null && pa.last_cycle !== undefined;
+      if (cycleEl) cycleEl.textContent = hasCycle ? pa.last_cycle : '—';
+      const c = (m, k) => (m[k] || 0);
+      const errHtml = '<b class="pa-err">' + c(total, 'error') + '</b>';
+      if (hasCycle) {
+        countsEl.innerHTML =
+          'complete <b>' + c(cc, 'completed') + '</b> &middot; exit <b>' + c(cc, 'exited') + '</b>' +
+          ' &middot; would-comp <b>' + c(cc, 'would_complete') + '</b>' +
+          ' &middot; would-exit <b>' + c(cc, 'would_exit') + '</b>' +
+          ' &middot; err ' + errHtml +
+          ' <span style="color:#64748b">(life: closed ' + (c(total,'completed') + c(total,'exited')) +
+          ', would ' + (c(total,'would_complete') + c(total,'would_exit')) + ', err ' + c(total,'error') + ')</span>';
+      } else {
+        countsEl.innerHTML = 'closed <b>' + (c(total,'completed') + c(total,'exited')) +
+          '</b> &middot; would <b>' + (c(total,'would_complete') + c(total,'would_exit')) +
+          '</b> &middot; err ' + errHtml;
+      }
+      const rows = (pa.per_pair || []).slice()
+        .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))
+        .slice(0, 4).map(p => {
+        const t = (p.ts || '').slice(11, 19);
+        const cls = p.action === 'error' ? 'pa-err'
+          : (p.action === 'completed' || p.action === 'exited') ? 'pa-ok' : 'pa-mute';
+        return '<div>' + t + ' <span class="' + cls + '">' + esc(p.action) +
+          '</span> ' + esc(String(p.pair_id).slice(0, 8)) + '</div>';
+      }).join('');
+      lastEl.innerHTML = rows || 'no pair actions yet';
+    }
+
     function renderBotBrainsFunnel(kpi) {
       if (!bbEvalEl) return;
       const f = (kpi && kpi.funnel) || {};
@@ -4123,10 +4218,11 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
 
     async function pollState() {
       try {
-        const [stateRes, kpiRes, scanRes] = await Promise.all([
+        const [stateRes, kpiRes, scanRes, pairsRes] = await Promise.all([
           fetch('/api/state'),
           fetch(`/api/kpi${selectedRunId ? '?run_id=' + encodeURIComponent(selectedRunId) : ''}`),
-          fetch('/api/scan-state')
+          fetch('/api/scan-state'),
+          fetch('/api/pairs-activity')
         ]);
 
         fetchSystemStatus();
@@ -4150,6 +4246,7 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
         renderFunnel(kpi);
         renderBotBrainsFunnel(kpi);
         renderScanState(scanRes);
+        if (pairsRes.ok) renderPairsActivity(await pairsRes.json());
         renderMarketsTable(kpi);
         renderMechanics(kpi, state);
         renderOrders(state);
