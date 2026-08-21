@@ -14,6 +14,8 @@ Stage 2 Invariant Tests:
 """
 
 import contextlib
+import subprocess
+import sys
 import time
 import sqlite3
 import uuid
@@ -1113,3 +1115,72 @@ def test_sweep_due_tick_cadence_is_the_fallback():
     assert _sweep_due(2, now=999.0, last_sweep_ts=0.0, sweep_interval=None, sweep_every=2)
     assert not _sweep_due(3, now=999.0, last_sweep_ts=0.0, sweep_interval=None, sweep_every=2)
     assert _sweep_due(4, now=999.0, last_sweep_ts=0.0, sweep_interval=None, sweep_every=2)
+
+
+# ---------------------------------------------------------------------------
+# guardrail watcher supervision (poll's child process)
+# ---------------------------------------------------------------------------
+
+def test_supervise_watcher_restarts_a_dead_child(tmp_path):
+    """A watcher child that died is replaced with a fresh, running one."""
+    from engine import live_exec
+    dead = subprocess.Popen([sys.executable, "-c", "raise SystemExit(3)"])
+    dead.wait(timeout=10)   # ensure it is actually dead before supervising
+    proc = None
+    try:
+        proc, ts = live_exec._supervise_watcher(dead, tmp_path / "live.db", 0.0)
+        assert proc is not None and proc is not dead
+        assert proc.poll() is None          # the replacement is running
+        assert ts > 0.0
+    finally:
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+
+
+def test_supervise_watcher_throttles_restart_of_a_crash_loop(tmp_path):
+    """A dead child is not restarted inside the throttle window."""
+    from engine import live_exec
+    dead = subprocess.Popen([sys.executable, "-c", "raise SystemExit(3)"])
+    dead.wait(timeout=10)
+    now = time.time()
+    proc, ts = live_exec._supervise_watcher(dead, tmp_path / "live.db", now)
+    assert proc is dead                      # not restarted
+    assert ts == now
+
+
+def test_supervise_watcher_leaves_a_live_child_alone(tmp_path):
+    """A healthy child is never touched."""
+    from engine import live_exec
+    child = subprocess.Popen([sys.executable, "-c",
+                              "import time; time.sleep(30)"])
+    try:
+        now = time.time()
+        proc, ts = live_exec._supervise_watcher(child, tmp_path / "live.db",
+                                                now)
+        assert proc is child
+        assert ts == now
+    finally:
+        child.terminate()
+        try:
+            child.wait(timeout=5)
+        except Exception:
+            child.kill()
+
+
+def test_poll_once_does_not_spawn_the_watcher(monkeypatch, temp_db):
+    """--once runs never launch the watcher child (nor do injected clients)."""
+    from engine import live_exec
+    calls = []
+
+    def _fake_spawn(db_path=None):
+        calls.append(db_path)
+        return None
+
+    monkeypatch.setattr(live_exec, "_spawn_guardrail_watcher", _fake_spawn)
+    live_exec.poll(interval=0.01, once=True, db_path=temp_db,
+                   client=MockClobClient())
+    assert calls == []

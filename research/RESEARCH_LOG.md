@@ -4633,13 +4633,17 @@ The production autopsy fixed the two live-run failure signatures at the source (
 
 ### Method
 
-`live/scripts/guardrail_watch.py` — pure detection, thin loop. REPEAT-EXIT: group `pairs_exited` ring events by `extra.pair_id`; 2+ within the window (default 900s, the pairs-exit window) is the repeat-sell signature. OVER-CAP-PAIR: for every condition with fills, resolve UP/DOWN from the quotes ledger and read `inventory_from_registry().pair_cost()`; at/over `max_pair_cost` (default 0.995) is a booked loss on an instrument that pays $1.00. Dedupe: one alert per violation, re-armed when it clears (over-cap) or grows (repeat-exit count). Alert to stderr, `run/guardrail_alerts.log`, and a `guardrail_alert` ring event so the dashboard telemetry sees it. `--once` for cron/tests; runs as a third process alongside poll + fleet.
+`live/scripts/guardrail_watch.py` — pure detection, thin loop. REPEAT-EXIT: group `pairs_exited` ring events by `extra.pair_id`; 2+ within the window (default 900s, the pairs-exit window) is the repeat-sell signature. OVER-CAP-PAIR: for every condition with fills, resolve UP/DOWN from the quotes ledger and read `inventory_from_registry().pair_cost()`; at/over `max_pair_cost` (default 0.995) is a booked loss on an instrument that pays $1.00. Dedupe: one alert per violation, re-armed when it clears (either signature) or grows (repeat-exit count increasing). Alert to stderr, `run/guardrail_alerts.log`, and a `guardrail_alert` ring event so the dashboard telemetry sees it. `--once` for cron/tests; supervised by `poll()` as a child process on the production path (see the follow-up).
 
 ### Result
 
 9 tests in `live/tests/test_guardrail_watch.py` (single exit not flagged; 2/3 exits flagged; different pairs not; outside window not; $1.12 shape flagged at cap 0.995; $0.90 not; single-leg not; dedupe once-per-growth). Live `--once` smoke against the running run: silent (no repeat exits in the ring; the converged inventory shows no over-cap pairs). Live suite: 454 passed (9 new), 1 pre-existing skip; fork-drift green; sim untouched.
 
+**Follow-up (code review: the re-arm gap).** The repeat-exit dedupe kept an alerted pair "known" forever -- once alerted at count 2, a FRESH 2-exit recurrence after its events aged out of the window was silently missed (2 > 2 is False). `check()` now prunes `_exit_alerted` to pairs still in violation in the current window (mirroring the over-cap re-arm) and computes each detector's hits once per cycle. Regression test `test_repeat_exit_re_arms_after_window_ages_out` fails without the prune (proved). Live suite: 456 passed (10 in test_guardrail_watch.py), 1 pre-existing skip.
+
 **Verdict.** **LIVE**. Both signatures are cheap to detect from the existing ring + registry, and the watcher is a backstop independent of the poll — the operator hears about a regression the cycle it happens, not when they next open the board.
+
+**Follow-up (supervised start).** The watcher is no longer a third process to start by hand: `poll()` spawns `live/scripts/guardrail_watch.py` as a child (production path only — skipped for `--once` runs and injected-client test contexts, the same rule as the markout sampler), supervises it every cycle — a dead child is restarted at most once per 30s so a crash-loop cannot spin — and terminates it on shutdown, so the two failure signatures are flagged whenever the bot runs, including via the dashboard's Start Bot. `--no-watch-guardrails` disables it. Tests: 3 for `_supervise_watcher` (restart / throttle / leave-a-live-child-alone) plus a no-spawn-on-`--once` assertion. Live suite: 459 passed (4 new), 1 skip.
 
 ### Follow-up (dashboard health: the watcher self-reports)
 

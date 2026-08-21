@@ -2055,6 +2055,54 @@ def _log_float_mark_if_measured(registry, mark: dict) -> None:
     )
 
 
+def _spawn_guardrail_watcher(db_path: str | Path | None = None):
+    """Launch the guardrail watcher as a child of the poll process.
+
+    The watcher is read-only (cycle ring + registry, opened read-only); the
+    poll supervises it so the two failure signatures (repeat exit, over-cap
+    pair) are flagged whenever the bot runs -- not only when someone starts a
+    third process by hand. Returns the Popen handle, or None on failure.
+    Never raises.
+    """
+    import subprocess
+    try:
+        argv = [sys.executable, str(ROOT / "scripts" / "guardrail_watch.py"),
+                "--interval", "5"]
+        if db_path is not None:
+            argv += ["--db", str(db_path)]
+        return subprocess.Popen(
+            argv, cwd=str(ROOT),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        print(f"WARNING: guardrail watcher spawn failed: {exc}",
+              file=sys.stderr)
+        return None
+
+
+def _supervise_watcher(proc, db_path, last_restart_ts, log_fn=None,
+                       restart_interval_s: float = 30.0):
+    """Check the guardrail-watcher child; restart it if it died.
+
+    Returns (proc, last_restart_ts). A dead child is restarted at most once
+    per `restart_interval_s` so a crash-loop cannot spin the CPU; throttled
+    checks are silent. Never raises.
+    """
+    if proc is None or proc.poll() is None:
+        return proc, last_restart_ts
+    rc = proc.returncode
+    if time.time() - last_restart_ts < restart_interval_s:
+        return proc, last_restart_ts
+    msg = f"[POLL] guardrail watcher died (rc={rc}); restarting"
+    print(msg, file=sys.stderr)
+    if log_fn is not None:
+        try:
+            log_fn(msg)
+        except Exception:
+            pass
+    return _spawn_guardrail_watcher(db_path), time.time()
+
+
 def poll(
     interval: float = 5.0,
     once: bool = False,
@@ -2062,6 +2110,7 @@ def poll(
     client=None,
     sweep_every: int = 1,
     sweep_interval: float | None = None,
+    watch_guardrails: bool = True,
 ) -> None:
     """Poll CLOB for open orders and fills, reconciling into order registry.
 
@@ -2187,10 +2236,26 @@ def poll(
         )
         markout_worker.start()
 
+    # Supervise the guardrail watcher as a child so the two failure
+    # signatures are flagged whenever the poll runs. Skipped for --once runs
+    # and when a client was injected (test/dry-run context) -- the same rule
+    # that keeps the markout sampler off the non-production path.
+    watcher_proc = None
+    watcher_last_restart = 0.0
+    if watch_guardrails and not once and not injected_client:
+        watcher_proc = _spawn_guardrail_watcher(db_p)
+        if watcher_proc is not None:
+            watcher_last_restart = time.time()
+            _log_event(f"[POLL] guardrail watcher started (pid={watcher_proc.pid})")
+
     while not stop_requested:
         cycle += 1
         cycle_start = time.time()
         now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        if watcher_proc is not None:
+            watcher_proc, watcher_last_restart = _supervise_watcher(
+                watcher_proc, db_p, watcher_last_restart, log_fn=_log_event)
 
         if _sweep_due(cycle, time.time(), last_sweep_ts, sweep_interval, sweep_every):
             sweep_outcome = _sweep_account(now_iso)
@@ -2356,6 +2421,17 @@ def poll(
 
     if markout_worker is not None:
         markout_worker.stop()
+
+    # Take the watcher down with the poll: terminate, escalate to kill.
+    if watcher_proc is not None:
+        try:
+            watcher_proc.terminate()
+            watcher_proc.wait(timeout=5)
+        except Exception:
+            try:
+                watcher_proc.kill()
+            except Exception:
+                pass
 
     exit_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _log_event(f"[{exit_iso}] EXIT cycles={cycle} errors={consecutive_errors}")
@@ -3268,6 +3344,9 @@ def main() -> None:
                     help="Account sweep every N poll cycles when --sweep-interval is not set (default 1 = every tick)")
     pl.add_argument("--sweep-interval", type=float, default=None,
                     help="Account sweep cadence in seconds, independent of the poll interval (overrides --sweep-every)")
+    pl.add_argument("--watch-guardrails", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="Supervise the guardrail watcher as a child process (default: on; --no-watch-guardrails disables)")
     ex = sub.add_parser("exit", help="Stage 3: close a one-sided pair (cancel resting leg, sell filled leg).")
     ex.add_argument("pair_id", help="pair_id as recorded in the order registry")
     ex.add_argument("--db", default=None, help="Custom database path (default: run/live.db)")
@@ -3380,7 +3459,8 @@ def main() -> None:
         )
     elif a.cmd == "poll":
         poll(interval=a.interval, once=a.once, db_path=a.db,
-             sweep_every=a.sweep_every, sweep_interval=a.sweep_interval)
+             sweep_every=a.sweep_every, sweep_interval=a.sweep_interval,
+             watch_guardrails=a.watch_guardrails)
     elif a.cmd == "pairs":
         pairs(db_path=a.db)
     elif a.cmd == "exit":

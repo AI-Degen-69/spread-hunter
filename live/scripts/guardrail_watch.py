@@ -112,7 +112,7 @@ def detect_over_cap_pairs(db_path: Path | str, cap: float = 0.995) -> list[dict]
 
 class GuardrailWatch:
     """Dedupes and reports violations. One alert per violation, re-armed when
-    it clears (over-cap) or grows (repeat-exit count increasing)."""
+    it clears (either signature) or grows (repeat-exit count increasing)."""
 
     def __init__(self, alerts_log: Path | str = DEFAULT_ALERTS_LOG,
                  ring_path: Path | str = DEFAULT_RING,
@@ -186,7 +186,13 @@ class GuardrailWatch:
 
         from engine.cycle_stream import read_ring
         events = read_ring(self.ring_path, tail=0)
-        for hit in detect_repeat_exits(events, self.window_s, now):
+
+        # Repeat-exit: alert on growth; re-arm once the pair leaves the
+        # window. Without the prune a pair alerted at count 2 stays "known"
+        # forever -- after its events age out, a FRESH 2-exit recurrence
+        # (2 > 2 is False) would be silently missed.
+        exit_hits = detect_repeat_exits(events, self.window_s, now)
+        for hit in exit_hits:
             pid = hit["pair_id"]
             if hit["count"] > self._exit_alerted.get(pid, 0):
                 self._exit_alerted[pid] = hit["count"]
@@ -195,8 +201,13 @@ class GuardrailWatch:
                     f"exited {hit['count']}x within {int(self.window_s)}s -- "
                     f"the repeat-sell bug's signature; STOP and check the "
                     f"registry/venue")
+        active_exits = {h["pair_id"] for h in exit_hits}
+        self._exit_alerted = {pid: n for pid, n in self._exit_alerted.items()
+                              if pid in active_exits}
 
-        for hit in detect_over_cap_pairs(self.db_path, self.cap):
+        # Over-cap: alert once; re-arm once the condition clears.
+        cap_hits = detect_over_cap_pairs(self.db_path, self.cap)
+        for hit in cap_hits:
             cid = hit["condition_id"]
             if cid not in self._cap_alerted:
                 self._cap_alerted.add(cid)
@@ -205,11 +216,7 @@ class GuardrailWatch:
                     f"filled pair cost ${hit['pair_cost']:.4f} >= cap "
                     f"${self.cap:.3f} -- booked loss on an instrument that "
                     f"pays $1.00")
-
-        # Re-arm over-cap alerts once the condition clears.
-        current = {h["condition_id"] for h in
-                   detect_over_cap_pairs(self.db_path, self.cap)}
-        self._cap_alerted &= current
+        self._cap_alerted &= {h["condition_id"] for h in cap_hits}
 
         self._write_heartbeat()
 

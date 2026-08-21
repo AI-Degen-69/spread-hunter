@@ -91,6 +91,14 @@ python -m engine.live_exec poll --interval 5        # reconcile + sweep + auto-p
 python -m engine.live_fleet --live --no-reconcile --no-sweep --interval 5
 ```
 
+The **poll supervises the guardrail watcher** (`live/scripts/guardrail_watch.py`)
+as a child process: it launches with the poll, is restarted if it dies
+(throttled to one restart per 30s so a crash-loop cannot spin), and is
+terminated when the poll stops — so the repeat-exit and over-cap alerts are
+on whenever the bot is. No third process to start by hand. Disable with
+`--no-watch-guardrails` on the poll (e.g. to run the watcher standalone for
+debugging).
+
 ## 3. Position watch (the Owner's job — this is supervision)
 
 While the loop runs, watch both:
