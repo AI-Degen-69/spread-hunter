@@ -1495,6 +1495,33 @@ def pairs_activity():
     }
 
 
+@app.get("/api/guardrail-alerts")
+def guardrail_alerts():
+    """Active guardrail violations as a visible banner payload.
+
+    Reads the cycle ring for `guardrail_alert` events (emitted by
+    live/scripts/guardrail_watch.py on a repeated pair exit or an over-cap
+    pair) and returns them newest-first. The dashboard renders the most
+    recent one as a red banner so a violation is visible, not just a log
+    line. Read-only; the ring is the source.
+    """
+    from engine.cycle_stream import read_ring
+    events = read_ring(resolve_ring_path(), tail=400)
+    alerts = []
+    for ev in events:
+        if ev.get("action") != "guardrail_alert":
+            continue
+        alerts.append({
+            "ts": ev.get("ts"),
+            "cycle": ev.get("cycle"),
+            "kind": ev.get("reason"),
+            "subject": (ev.get("extra") or {}).get("subject"),
+            "detail": (ev.get("extra") or {}).get("detail"),
+        })
+    alerts.sort(key=lambda a: str(a["ts"] or ""), reverse=True)
+    return {"alerts": alerts}
+
+
 @app.get("/api/cycle-stream")
 def cycle_stream_events():
     """Server-Sent-Events tail of live/run/cycle_events.jsonl."""
@@ -2105,6 +2132,46 @@ PAGE_HTML = """<!DOCTYPE html>
       border-radius: 12px;
       flex-wrap: wrap;
     }
+    .guardrail-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 12px 0 0;
+      padding: 12px 18px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid var(--red-alert);
+      border-radius: 12px;
+      color: #fecaca;
+      font-weight: 600;
+      box-shadow: 0 0 18px rgba(239, 68, 68, 0.25);
+    }
+    .guardrail-banner .guardrail-kind {
+      color: #f87171;
+      letter-spacing: 0.04em;
+      font-size: 12px;
+      text-transform: uppercase;
+      margin-right: 8px;
+      white-space: nowrap;
+    }
+    .guardrail-banner .guardrail-detail {
+      font-weight: 400;
+      color: #fca5a5;
+      font-size: 13px;
+    }
+    .guardrail-banner .guardrail-dismiss {
+      margin-left: auto;
+      background: transparent;
+      border: 1px solid rgba(239, 68, 68, 0.5);
+      color: #fecaca;
+      border-radius: 6px;
+      padding: 2px 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .guardrail-banner .guardrail-dismiss:hover {
+      background: rgba(239, 68, 68, 0.2);
+    }
     .sup-card {
       display: flex;
       align-items: center;
@@ -2318,6 +2385,15 @@ PAGE_HTML = """<!DOCTYPE html>
           <button class="btn-bot btn-sweep" onclick="clearSweepInterval()">Reset</button>
         </div>
       </div>
+    </div>
+
+    <!-- GUARDRAIL BANNER: shown only while a guardrail_alert ring event
+         is active (repeated pair exit, over-cap pair). Hidden otherwise. -->
+    <div id="guardrail-banner" class="guardrail-banner" style="display:none">
+      <span class="guardrail-kind" id="guardrail-kind"></span>
+      <span id="guardrail-subject"></span>
+      <span class="guardrail-detail" id="guardrail-detail"></span>
+      <button class="guardrail-dismiss" onclick="dismissGuardrailBanner()">✕ dismiss</button>
     </div>
 
     <!-- PORTFOLIO OVERVIEW: the whole run, every market, one reading.
@@ -4119,6 +4195,38 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
       });
     }
 
+    // Guardrail banner: the newest guardrail_alert ring event rendered as a
+    // red banner. A dismissed alert stays hidden while it remains the newest;
+    // a new alert (new ts) re-shows. No alert in the ring hides the banner.
+    let shownGuardrailTs = null;
+    let dismissedGuardrailTs = null;
+    function renderGuardrailBanner(payload) {
+      const banner = document.getElementById('guardrail-banner');
+      if (!banner) return;
+      const alerts = (payload && payload.alerts) || [];
+      const active = alerts.find(a => a && a.subject);
+      if (!active) {
+        banner.style.display = 'none';
+        return;
+      }
+      shownGuardrailTs = active.ts;
+      if (dismissedGuardrailTs === shownGuardrailTs) {
+        banner.style.display = 'none';
+        return;
+      }
+      document.getElementById('guardrail-kind').textContent = (active.kind || 'ALERT') + ': ';
+      document.getElementById('guardrail-subject').textContent = active.subject;
+      const t = (active.ts || '').slice(11, 19);
+      const detail = active.detail || '';
+      document.getElementById('guardrail-detail').textContent = detail ? '\u2014 ' + t + ' ' + detail : '\u2014 ' + t;
+      banner.style.display = 'flex';
+    }
+    function dismissGuardrailBanner() {
+      dismissedGuardrailTs = shownGuardrailTs;
+      const banner = document.getElementById('guardrail-banner');
+      if (banner) banner.style.display = 'none';
+    }
+
     function renderPairsActivity(pa) {
       if (!pa) return;
       const cycleEl = document.getElementById('bb-pairs-cycle');
@@ -4218,11 +4326,12 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
 
     async function pollState() {
       try {
-        const [stateRes, kpiRes, scanRes, pairsRes] = await Promise.all([
+        const [stateRes, kpiRes, scanRes, pairsRes, guardrailRes] = await Promise.all([
           fetch('/api/state'),
           fetch(`/api/kpi${selectedRunId ? '?run_id=' + encodeURIComponent(selectedRunId) : ''}`),
           fetch('/api/scan-state'),
-          fetch('/api/pairs-activity')
+          fetch('/api/pairs-activity'),
+          fetch('/api/guardrail-alerts')
         ]);
 
         fetchSystemStatus();
@@ -4247,6 +4356,7 @@ Closes written: ` + data.closes_written + ` (skipped ` + data.closes_skipped_exi
         renderBotBrainsFunnel(kpi);
         renderScanState(scanRes);
         if (pairsRes.ok) renderPairsActivity(await pairsRes.json());
+        if (guardrailRes.ok) renderGuardrailBanner(await guardrailRes.json());
         renderMarketsTable(kpi);
         renderMechanics(kpi, state);
         renderOrders(state);

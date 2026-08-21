@@ -323,6 +323,46 @@ def test_pairs_activity_endpoint_aggregates_ring(client, tmp_path):
         set_ring_override(None)
 
 
+def test_guardrail_alerts_endpoint_returns_newest_first(client, tmp_path):
+    """/api/guardrail-alerts surfaces guardrail_alert ring events newest-first
+    with kind/subject/detail mapped from reason/extra, ignoring other events.
+    """
+    ring = tmp_path / "cycle_events.jsonl"
+    rows = [
+        {"ts": "2026-08-21T02:00:05Z", "service": "engine", "cycle": 3,
+         "phase": "settling", "action": "guardrail_alert",
+         "market_slug": "", "reason": "REPEAT-EXIT", "latency_ms": 0.0,
+         "pid": 1, "extra": {"subject": "pair-0xAAA exited twice",
+                              "detail": "2 exits in window"}},
+        {"ts": "2026-08-21T02:00:10Z", "service": "engine", "cycle": 4,
+         "phase": "settling", "action": "guardrail_alert",
+         "market_slug": "", "reason": "OVER-CAP-PAIR", "latency_ms": 0.0,
+         "pid": 1, "extra": {"subject": "0x3bae865f pair $1.12",
+                              "detail": "over 0.995 cap"}},
+        {"ts": "2026-08-21T02:00:15Z", "service": "engine", "cycle": 4,
+         "phase": "quoting", "action": "decide",
+         "market_slug": "x", "reason": "", "latency_ms": 0.0, "pid": 1,
+         "extra": {}},
+    ]
+    ring.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    set_ring_override(ring)
+    try:
+        res = client.get("/api/guardrail-alerts")
+        assert res.status_code == 200
+        alerts = res.json()["alerts"]
+        assert len(alerts) == 2
+        # newest first (the decide event is not an alert and is ignored)
+        assert alerts[0]["kind"] == "OVER-CAP-PAIR"
+        assert alerts[0]["subject"] == "0x3bae865f pair $1.12"
+        assert alerts[0]["detail"] == "over 0.995 cap"
+        assert alerts[0]["cycle"] == 4
+        assert alerts[1]["kind"] == "REPEAT-EXIT"
+        assert alerts[1]["subject"] == "pair-0xAAA exited twice"
+    finally:
+        set_ring_override(None)
+
+
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_dashboard_script_parses(tmp_path):
     """Ensures no syntax errors in the inline JS block."""
