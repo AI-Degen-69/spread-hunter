@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Issue #205 | Stray-Order Guard</title>
+  <style>
+    :root {
+      --ink: #eaf1f6;
+      --muted: #9aabb8;
+      --bg: #0b1117;
+      --panel: #121c25;
+      --panel-2: #172530;
+      --line: #29404d;
+      --cyan: #55d6c2;
+      --amber: #f4b860;
+      --red: #f17c78;
+      --green: #79d99b;
+      --shadow: 0 20px 55px rgba(0, 0, 0, .28);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 12% 0%, #183441 0, transparent 38%),
+                  radial-gradient(circle at 90% 15%, #2a2534 0, transparent 32%), var(--bg);
+      font: 16px/1.65 "Segoe UI", Tahoma, sans-serif;
+    }
+    main { max-width: 1100px; margin: auto; padding: 40px 20px 70px; }
+    .eyebrow { color: var(--cyan); letter-spacing: .08em; font-size: .82rem; font-weight: 700; text-transform: uppercase; }
+    h1 { font-size: clamp(2rem, 4.5vw, 3.2rem); margin: 10px 0 16px; line-height: 1.2; }
+    h2 { font-size: 1.5rem; margin: 0 0 14px; }
+    h3 { font-size: 1.05rem; margin: 0 0 10px; }
+    p { color: var(--muted); margin: 0 0 14px; }
+    .status-merged {
+      display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(121,217,155,.45);
+      border-radius: 999px; padding: 4px 14px; font-size: .85rem; font-weight: 700;
+      color: var(--green); background: rgba(121,217,155,.1); margin-top: 10px;
+    }
+    .status-merged::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+    .facts, .panel {
+      background: linear-gradient(145deg, rgba(23,37,48,.94), rgba(14,23,31,.94));
+      border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 18px;
+    }
+    .facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; overflow: hidden; margin: 24px 0; }
+    .fact { padding: 18px 22px; background: rgba(18,28,37,.72); }
+    .fact b { display: block; color: var(--muted); font-size: .8rem; margin-bottom: 6px; }
+    .fact a { color: var(--cyan); text-decoration: none; font-weight: 600; font-size: 1.05rem; }
+    .panel { padding: 26px; margin-top: 24px; }
+    .eli { border-right: 4px solid var(--cyan); background: rgba(85,214,194,.07); }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+    .compare { padding: 22px; border-radius: 14px; border: 1px solid var(--line); }
+    .before { border-top: 4px solid var(--red); background: rgba(241,124,120,.04); }
+    .after { border-top: 4px solid var(--green); background: rgba(121,217,155,.04); }
+    .compare ul { margin: 0; padding-right: 20px; color: var(--muted); }
+    .compare li { margin: 8px 0; }
+    .flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 18px; }
+    .step { padding: 20px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; }
+    .num { color: var(--cyan); font-weight: 800; font-size: .85rem; margin-bottom: 8px; }
+    .code-row { position: relative; margin: 12px 0; }
+    .code {
+      direction: ltr; text-align: left; color: #d9f7ef; background: #091016;
+      border: 1px solid #29434b; border-radius: 10px; padding: 14px 16px;
+      overflow: auto; white-space: pre-wrap; font: .88rem/1.5 Consolas, monospace;
+    }
+    button.copy-btn {
+      position: absolute; left: 10px; top: 10px; cursor: pointer;
+      border: 1px solid #3d5b63; color: var(--ink); background: #172a31;
+      border-radius: 7px; padding: 5px 12px; font-size: 0.8rem; font-weight: 600;
+    }
+    button.copy-btn:hover { background: #223c46; }
+    .expected {
+      border-right: 4px solid var(--green); padding: 12px 16px;
+      background: rgba(121,217,155,.08); margin-top: 10px; border-radius: 0 8px 8px 0;
+    }
+    .expected b { color: var(--green); }
+    table { width: 100%; border-collapse: collapse; color: var(--muted); margin-top: 14px; }
+    th, td { text-align: right; border-bottom: 1px solid var(--line); padding: 12px 10px; }
+    th { color: var(--ink); }
+    .ltr { direction: ltr; text-align: left; unicode-bidi: plaintext; }
+    footer { color: var(--muted); text-align: center; padding-top: 36px; font-size: .9rem; }
+    @media (max-width: 768px) {
+      main { padding: 24px 14px 50px; }
+      .facts, .grid, .flow { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">דוח סיום מחזור · Station VII Showcase</div>
+      <span class="status-merged">מוזג לענף הראשי (main)</span>
+      <h1>Issue #205: שומר הזמנות תועות</h1>
+      <p>הבוט מזהה עכשיו הזמנות ופוזיציות שאיבדו את הקשר לפאר שלהן — מאמץ רגליים משלימות, מבטל רגליים חסרות תקווה, ומסלק פוזיציות חשופות, כדי שההון תמיד זורם לכיוון פאר שלם שמזוג חזרה לדולר.</p>
+
+      <div class="facts">
+        <div class="fact"><b>Issue מקושר</b><a href="https://github.com/AI-Degen-69/spread-hunter-live/issues/205">#205 · סגור ומוזג</a></div>
+        <div class="fact"><b>Pull Request</b><a href="https://github.com/AI-Degen-69/spread-hunter-live/pull/212">#212 · מוזג (Squash) 🟢</a></div>
+      </div>
+    </section>
+
+    <!-- ELI5 Plain Hebrew Metaphor -->
+    <section class="panel eli">
+      <h2>💡 במילים פשוטות: מה השתנה?</h2>
+      <p>דמיינו חניון בלי שומר: מכוניות (הזמנות) נכנסות ונשכחות בלי בעלים. הבוט קודם היה שם רק מכוניות חדשות בחניון, בלי לבדוק אם יש שם מכוניות אבודות. עכשיו יש שומר חניון שעובר כל סיבוב: אם שתי מכוניות שייכות לאותו בעלים — הוא מחבר ביניהן. אם מכונית לא תהיה רווחית בשום מצב — הוא שולח אותה הביתה. ואם יש מכונית שכבר נמצאת בפנים בלי שום סיכוי להשלמה — הוא מפנה אותה בסדר. כך החניון (ההון) תמיד פנוי למכוניות שמביאות רווח.</p>
+    </section>
+
+    <!-- Before vs After -->
+    <section class="panel">
+      <h2>🔄 לפני מול אחרי</h2>
+      <div class="grid">
+        <article class="compare before">
+          <h3>🔴 לפני השינוי:</h3>
+          <ul>
+            <li>רגל שאיבדה את ה-<code>pair_id</code> נשארה תקועה לנצח — הון מת שלא עובד</li>
+            <li>שתי רגליים משלימות באותו שוק לא מזוהות כפאר — הבוט קונה פאר חדש במקום לאמץ את הקיים</li>
+            <li>הזמנות שאין להן סיכוי להפוך לפאר רווחי (&gt;$1.00) נשארות על ספר ההזמנות ותופסות הון</li>
+            <li>פוזיציות חשופות (רגל אחת שנמלאה בלי שנייה) נשארות כהימור כיווני לא מכוון</li>
+          </ul>
+        </article>
+        <article class="compare after">
+          <h3>🟢 אחרי השינוי:</h3>
+          <ul>
+            <li><strong>אימוץ אוטומטי:</strong> שתי רגליים משלימות באותו שוק מקושרות תחת <code>pair_id</code> משותף כשהעלות &lt; <code>max_pair_cost</code></li>
+            <li><strong>ביטול חסרי תקווה:</strong> הזמנות שלא יכולות להוליד פאר רווחי מבוטלות בבורסה + ברישום</li>
+            <li><strong>סילוק פוזיציות חשופות:</strong> רגליים שנמלאו בלי שותף יוצאות דרך <code>exit_single_buy</code> במחיר שוק</li>
+            <li><strong>בטוח ב-dry-run:</strong> עם <code>--no-live</code> רואים מה ישתנה בלי לגעת בכסף</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- 3-Step Visual Flow Cards -->
+    <section class="panel">
+      <h2>⚡ זרימת התהליך החדש</h2>
+      <div class="flow">
+        <div class="step">
+          <div class="num">01 · סריקה וסיווג</div>
+          <h3>classify_market_orders</h3>
+          <p>סורק את כל ההזמנות והפוזיציות הפתוחות בכל שוק. מסווג כל רגל לאחת מ-5 קטגוריות: paired, complementary, hopeless, viable, unhedged.</p>
+        </div>
+        <div class="step">
+          <div class="num">02 · פעולה לפי סיווג</div>
+          <h3>adopt / cancel / remediate</h3>
+          <p>רגליים משלימות → אימוץ לפאר. חסרי תקווה → ביטול בבורסה. פוזיציות חשופות → יציאה במחיר שוק. כל פעולה מתועדת עם סיבה.</p>
+        </div>
+        <div class="step">
+          <div class="num">03 · הון חופשי ונקי</div>
+          <h3>reconciled state</h3>
+          <p>אחרי הסיבוב: כל ההון או בפאר תקין שממתין למיזוג, או חזר לחשבון. אפס רגליים תקועות, אפס הימורים כיווניים בשוגג.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hands-on Verification with 1-Click Copy -->
+    <section class="panel">
+      <h2>🕹️ מדריך בדיקה ידנית (Touch &amp; See)</h2>
+      <p>בדיקה מהירה להוכחת השינוי בעיניים ללא הרצת סוויטות טסטים:</p>
+
+      <h3>1. הרצת Stray Guard ב-Dry Run</h3>
+      <p>מריצים את השומר במצב יבש לראות מה הוא היה עושה:</p>
+      <div class="code-row">
+        <pre class="code">python -m core_brain.order_manager stray-guard --no-live</pre>
+        <button class="copy-btn" data-copy="python -m core_brain.order_manager stray-guard --no-live">העתק</button>
+      </div>
+      <div class="expected">
+        <b>מה אמורים לראות:</b> דוח שמפרט adopt/cancel/exit שהיו מתבצעים — בלי ביצוע בפועל. כל שורה כוללת סיבה (למשל "combined cost $0.96 &lt; $0.99").
+      </div>
+
+      <h3>2. הרצת Shadow Rehearsal מלאה</h3>
+      <p>הרצת סימולציה שמוכיחה את הזרימה מקצה לקצה:</p>
+      <div class="code-row">
+        <pre class="code">python -m core_brain.shadow_run --minutes 5</pre>
+        <button class="copy-btn" data-copy="python -m core_brain.shadow_run --minutes 5">העתק</button>
+      </div>
+      <div class="expected">
+        <b>מה אמורים לראות:</b> בלוג הריצה מופיעות שורות <code>[stray-guard]</code> שמסווגות הזמנות ומבצעות פעולות. אין שגיאות. הריצה מסתיימת בהצלחה.
+      </div>
+
+      <h3>3. בדיקת סטטוס ויתרה</h3>
+      <p>בודקים שהמערכת מדווחת נכון:</p>
+      <div class="code-row">
+        <pre class="code">python -m core_brain.order_manager status</pre>
+        <button class="copy-btn" data-copy="python -m core_brain.order_manager status">העתק</button>
+      </div>
+      <div class="expected">
+        <b>מה אמורים לראות:</b> סטטוס שכולל את מספר הפאריים הפעילים, יתרת החשבון, ואפס הזמנות יתומות.
+      </div>
+    </section>
+
+    <!-- Impacted Files -->
+    <section class="panel">
+      <h2>📁 קבצים שהשתתפו בשינוי</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>קובץ</th>
+            <th>תפקיד והשפעה</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ltr"><code>core_brain/stray_guard.py</code></td>
+            <td><strong>[NEW]</strong> מודול ראשי — סיווג, אימוץ, ביטול, וסילוק רגליים תועות. 545 שורות.</td>
+          </tr>
+          <tr>
+            <td class="ltr"><code>core_brain/order_registry.py</code></td>
+            <td>פונקציות חדשות: <code>adopt_orders_into_pair</code>, <code>get_unpaired_filled_orders</code> + העברת פרמטר <code>live</code> ל-reconcile.</td>
+          </tr>
+          <tr>
+            <td class="ltr"><code>core_brain/order_manager.py</code></td>
+            <td>CLI חדש: <code>stray-guard [--no-live]</code> + שילוב ה-lock של reconcile.</td>
+          </tr>
+          <tr>
+            <td class="ltr"><code>tests/test_stray_guard.py</code></td>
+            <td><strong>[NEW]</strong> 582 שורות בדיקות: adopt, cancel, dry-run safety, e2e, hopeless partial remediation.</td>
+          </tr>
+          <tr>
+            <td class="ltr"><code>CONSTRAINTS.md</code></td>
+            <td>עדכון מגבלות דינמיות ותקרות סיכון.</td>
+          </tr>
+          <tr>
+            <td class="ltr"><code>SPEC.md</code></td>
+            <td>עדכון מפרט להכלת סקציית stray-guard.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      נוצר עבור Issue #205 · Pull Request #212 מוזג בהצלחה
+    </footer>
+  </main>
+
+  <script>
+    document.querySelectorAll("button[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        const original = btn.textContent;
+        btn.textContent = "הועתק! ✔️";
+        setTimeout(() => { btn.textContent = original; }, 1400);
+      });
+    });
+  </script>
+</body>
+</html>

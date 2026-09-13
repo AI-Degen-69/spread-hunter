@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Issue #197 | שיוך רווח/הפסד (PnL) לפי מסלול מילוי</title>
+  <style>
+    :root {
+      --ink: #eaf1f6;
+      --muted: #9aabb8;
+      --bg: #0b1117;
+      --panel: #121c25;
+      --panel-2: #172530;
+      --line: #29404d;
+      --cyan: #55d6c2;
+      --amber: #f4b860;
+      --red: #f17c78;
+      --green: #79d99b;
+      --shadow: 0 20px 55px rgba(0, 0, 0, .28);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 12% 0%, #183441 0, transparent 38%),
+                  radial-gradient(circle at 90% 15%, #2a2534 0, transparent 32%), var(--bg);
+      font: 16px/1.65 "Segoe UI", Tahoma, sans-serif;
+    }
+    main { max-width: 1120px; margin: auto; padding: 44px 22px 72px; }
+    .eyebrow { color: var(--cyan); letter-spacing: .08em; font-size: .8rem; font-weight: 700; }
+    h1, h2, h3 { line-height: 1.2; margin: 0 0 14px; }
+    h1 { font-size: clamp(2rem, 5vw, 3.8rem); max-width: 900px; }
+    h2 { font-size: 1.65rem; }
+    h3 { font-size: 1.08rem; }
+    p { color: var(--muted); margin: 0 0 14px; }
+    .hero { padding: 18px 0 34px; }
+    .status, .tag { display: inline-flex; align-items: center; gap: 8px; border: 1px solid; border-radius: 999px; padding: 4px 12px; font-size: .82rem; font-weight: 700; }
+    .status-merged { color: var(--green); border-color: rgba(121,217,155,.45); background: rgba(121,217,155,.1); }
+    .status-merged::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+    .facts, .panel { background: linear-gradient(145deg, rgba(23,37,48,.94), rgba(14,23,31,.94)); border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 18px; }
+    .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; overflow: hidden; margin-top: 24px; }
+    .fact { padding: 18px; background: rgba(18,28,37,.72); }
+    .fact b { display: block; color: var(--muted); font-size: .78rem; margin-bottom: 4px; }
+    .fact span { direction: ltr; text-align: left; display: block; overflow-wrap: anywhere; }
+    .panel { padding: 26px; margin-top: 22px; }
+    .eli { border-right: 4px solid var(--cyan); background: rgba(85,214,194,.07); }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+    .compare { padding: 22px; border-radius: 14px; border: 1px solid var(--line); }
+    .before { border-top: 4px solid var(--red); }
+    .after { border-top: 4px solid var(--green); }
+    .compare ul { margin: 0; padding-right: 20px; color: var(--muted); }
+    .compare li { margin: 8px 0; }
+    .flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: stretch; margin-top: 20px; }
+    .step { position: relative; padding: 20px 18px; min-height: 140px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; }
+    .num { color: var(--cyan); font-weight: 800; font-size: .85rem; margin-bottom: 6px; }
+    .code { direction: ltr; text-align: left; color: #d9f7ef; background: #091016; border: 1px solid #29434b; border-radius: 10px; padding: 14px 16px; overflow: auto; white-space: pre-wrap; font: .88rem/1.5 Consolas, monospace; }
+    .code-row { position: relative; margin: 12px 0; }
+    button { position: absolute; left: 10px; top: 10px; cursor: pointer; border: 1px solid #3d5b63; color: var(--ink); background: #172a31; border-radius: 7px; padding: 4px 10px; font-size: 0.8rem; }
+    button:hover { background: #223c46; }
+    .expected { border-right: 4px solid var(--green); padding: 14px 17px; background: rgba(121,217,155,.08); margin-top: 14px; border-radius: 0 8px 8px 0; }
+    .expected b { color: var(--green); }
+    table { width: 100%; border-collapse: collapse; color: var(--muted); margin-top: 12px; }
+    th, td { text-align: right; border-bottom: 1px solid var(--line); padding: 12px 10px; vertical-align: top; }
+    th { color: var(--ink); }
+    .ltr { direction: ltr; text-align: left; unicode-bidi: plaintext; }
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    footer { color: var(--muted); text-align: center; padding-top: 32px; font-size: .9rem; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: bold; }
+    .badge-maker { background: rgba(85,214,194,0.15); color: var(--cyan); border: 1px solid rgba(85,214,194,0.3); }
+    .badge-taker { background: rgba(244,184,96,0.15); color: var(--amber); border: 1px solid rgba(244,184,96,0.3); }
+    .badge-rescue { background: rgba(241,124,120,0.15); color: var(--red); border: 1px solid rgba(241,124,120,0.3); }
+    @media (max-width: 760px) {
+      main { padding: 28px 14px 50px; }
+      .facts, .grid, .flow { grid-template-columns: 1fr; }
+      .step { min-height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">דוח הסבר ובדיקה ידנית · תחנה 4</div>
+      <div style="margin: 16px 0">
+        <span class="status status-merged">מוזג לענף הראשי (main)</span>
+      </div>
+      <h1>Issue #197: שיוך רווח/הפסד (PnL) לפי 3 מסלולי מילוי</h1>
+      <p>הדשבורד ודוחות האימות הציגו בעבר מספר PnL בודד ללא פירוט מקורות. הפיצ'ר החדש מסווג ומציג את שיוך הרווח הנקי לשלושה מסלולים נפרדים: מיזוגי Maker פסיביים, השלמות Taker מהירות, ויציאות הצלה מחצי זוג (Rescue Exits).</p>
+      <div class="facts">
+        <div class="fact"><b>Issue מקושר</b><span><a href="https://github.com/AI-Degen-69/spread-hunter-live/issues/197">#197 · סגור</a></span></div>
+        <div class="fact"><b>Pull Request</b><span><a href="https://github.com/AI-Degen-69/spread-hunter-live/pull/211">#211 · מוזג (Squash)</a></span></div>
+        <div class="fact"><b>קומיט מיזוג ב-main</b><span class="ltr">6c7cec7</span></div>
+        <div class="fact"><b>סטטוס בדיקות CI</b><span>עבר בהצלחה (Ubuntu + Windows + Security)</span></div>
+      </div>
+    </section>
+
+    <section class="panel eli">
+      <h2>במילים פשוטות: מה השתנה?</h2>
+      <p>כשהבוט מסיים ריצת סימולציה או מסחר ומדווח שהרווחנו 1.00$+, עד עכשיו ראינו רק שורה אחת כללית: "רווח כולל: 1.01$+". המספר הזה לבדו עלול היה להטעות, כי הוא לא גילה מאיפה הכסף באמת הגיע.</p>
+      <p>הניתוח החדש מפרק את ה-PnL לשלושה מקורות מדויקים: כמה מהרווח הגיע מזוגות נקיים ששני צדדיהם נתפסו כ-Maker (עמלת אפס ומקסימום רווח), כמה הגיע מזוגות שהושלמו באגרסיביות כ-Taker כדי למנוע הישארות עם רגל בודדת, וכמה הגיע מניהול סיכונים של יציאת חירום (Rescue Exit). כך אפשר לראות ברגע האם הרווחיות מגיעה מאסטרטגיית הליבה או מאירועי חירום.</p>
+    </section>
+
+    <section class="panel">
+      <h2>לפני מול אחרי</h2>
+      <div class="grid">
+        <article class="compare before">
+          <h3>לפני: מספר PnL בודד ושטוח</h3>
+          <ul>
+            <li>הדוחות והדשבורד הציגו רק מספר Realized PnL כולל.</li>
+            <li>כדי לדעת כמה הגיע מ-maker, taker או rescue היה צורך לבצע ניתוח ידני ב-SQL/פייתון.</li>
+            <li>אי אפשר היה לדעת האם שורת הרווח נובעת ממזל ביציאות חירום או ממילוי זוגות מוצלח של הבוט.</li>
+            <li>דוח האימות הסטטיסטי היה חסר את הפירוט הקריטי לקבלת החלטות.</li>
+          </ul>
+        </article>
+        <article class="compare after">
+          <h3>אחרי: פילוח תלת-ראשי מדויק</h3>
+          <ul>
+            <li>חישוב אוטומטי של PnL ואחוזי תרומה לפי 3 מסלולים מוגדרים היטב:
+              <br><span class="badge badge-maker">maker_merged</span> זוג מלא שנקנה פסיבית כ-Maker.
+              <br><span class="badge badge-taker">taker_completed</span> זוג שרגל אחת שלו הושלמה כ-Taker.
+              <br><span class="badge badge-rescue">single_buy_exit</span> פוזיציה שנחתכה ביציאת חירום/הצלה.
+            </li>
+            <li>משולב במלואו ב-KPI Core (`core_brain/kpi.py`).</li>
+            <li>מוצג ישירות בדוח האימות הסטטיסטי (`report.md` ו-`report.json`).</li>
+            <li>מוצג ב-UI של הדשבורד בכרטיס ה-Run Profitability.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>שלושת מסלולי המילוי שהוגדרו</h2>
+      <div class="flow">
+        <div class="step">
+          <div class="num">01 · MAKER MERGED</div>
+          <h3><span class="badge badge-maker">maker_merged</span></h3>
+          <p>שתי רגלי הזוג (UP + DOWN) נתפסו בהזמנות Maker פסיביות בספר הפקודות ומוזגו ל-USDC ברווח מרבי ללא עמלות לקיחה.</p>
+        </div>
+        <div class="step">
+          <div class="num">02 · TAKER COMPLETED</div>
+          <h3><span class="badge badge-taker">taker_completed</span></h3>
+          <p>רגל אחת נתפסה אך השנייה לא; הבוט השלים את הרגל החסרה כ-Taker כדי להבטיח זוג שלם ולמזג ל-USDC בבטחה.</p>
+        </div>
+        <div class="step">
+          <div class="num">03 · RESCUE EXIT</div>
+          <h3><span class="badge badge-rescue">single_buy_exit</span></h3>
+          <p>רגל בודדת שנשארה יתומה ולא הצליחה להשלים זוג נחתכה בשוק חזרה ל-USDC כדי להגן על הקרן (חילוץ פוזיציה).</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>מדריך בדיקה ידנית (Touch & See)</h2>
+      <p>אין צורך להריץ טסטים (הסוכן ו-CI עשו זאת). המדריך להלן מאפשר לראות את הנתונים בעיניים על מערכת עובדת:</p>
+      
+      <h3>1. הפקת פלט KPI בטרמינל ובדיקת השיוך</h3>
+      <p>הרץ את מודול ה-KPI. הפלט יציג את הבלוק החדש <code>pnl_by_fill_path</code> עם חלוקה ל-3 המסלולים:</p>
+      <div class="code-row">
+        <pre class="code">python -c "from core_brain import kpi; rep = kpi.report(); import json; print(json.dumps(rep.get('pnl_by_fill_path', {}), indent=2))"</pre>
+        <button data-copy="python -c &quot;from core_brain import kpi; rep = kpi.report(); import json; print(json.dumps(rep.get('pnl_by_fill_path', {}), indent=2))&quot;">העתק</button>
+      </div>
+      <div class="expected">
+        <b>מה אמורים לראות:</b> אובייקט JSON המכיל את המפתחות <code>maker_merged</code>, <code>taker_completed</code>, <code>single_buy_exit</code>, <code>total</code> ואת המילון <code>pct</code>.
+      </div>
+
+      <h3 style="margin-top: 24px">2. הפקת דוח אימות סטטיסטי ובדיקת החלק "Rescue & failure modes"</h3>
+      <p>הרץ את הפקת הדוחות כדי לראות את הייצוג ב-Markdown וב-JSON:</p>
+      <div class="code-row">
+        <pre class="code">python -m statistical_validation_run.artifacts</pre>
+        <button data-copy="python -m statistical_validation_run.artifacts">העתק</button>
+      </div>
+      <div class="expected">
+        <b>מה אמורים לראות:</b> הקובץ <code>reports/report.md</code> עודכן וכולל תחת <code>## Rescue & failure modes</code> שורות מפורטות של Maker-merged PnL, Taker-completed PnL, ו-Single-buy exit PnL עם אחוזי הפיצול.
+      </div>
+
+      <h3 style="margin-top: 24px">3. פתיחת הדשבורד ובדיקת תצוגת ה-Profitability</h3>
+      <p>הדשבורד שלך כבר פעיל ברקע בכתובת <code>http://127.0.0.1:8799</code>. פתח אותו בדפדפן וצפה בכרטיס הרווחיות:</p>
+      <div class="code-row">
+        <pre class="code">Start-Process "http://127.0.0.1:8799"</pre>
+        <button data-copy="Start-Process &quot;http://127.0.0.1:8799&quot;">העתק</button>
+      </div>
+      <div class="expected">
+        <b>מה אמורים לראות:</b> בכרטיס ה-Run Profitability / Analytics מופיע כעת פירוט השיוך בפורמט: <code>maker $X (A%) · taker $Y (B%) · rescue $Z (C%)</code> ללא שבירת העיצוב הקיים.
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>קבצים שהשתתפו בשינוי</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>קובץ</th>
+            <th>תפקיד והשפעה</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ltr">core_brain/kpi.py</td>
+            <td>מימוש הפונקציות <code>find_taker_completed_pairs</code> ו-<code>pnl_by_fill_path</code>, וחיבורן ל-<code>report()</code>.</td>
+          </tr>
+          <tr>
+            <td class="ltr">statistical_validation_run/artifacts.py</td>
+            <td>חילוץ נתוני הפיצול לתוך <code>report.json</code> ועיצוב שורות הפיצול ב-Markdown תחת Failure Modes.</td>
+          </tr>
+          <tr>
+            <td class="ltr">dashboard/static/app.js</td>
+            <td>הצגת פירוט הפיצול (Maker / Taker / Rescue) בשורת הפירוט של כרטיס הרווחיות בריצה.</td>
+          </tr>
+          <tr>
+            <td class="ltr">tests/test_pnl_by_fill_path.py</td>
+            <td>בדיקות ייעודיות שאימתו את הפיצול המדויק 25% maker / 35% taker / 41% rescue ומקרי קצה.</td>
+          </tr>
+          <tr>
+            <td class="ltr">SPEC.md / CONSTRAINTS.md / tasks/</td>
+            <td>נעילת המפרט, הסכמים מול סקירת קוד והגדרת תחנות העבודה.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      נוצר עבור Issue #197 · קומיט מיזוג ב-main: <span class="ltr">6c7cec7</span> · Pull Request #211 מוזג בהצלחה
+    </footer>
+  </main>
+
+  <script>
+    document.querySelectorAll("button[data-copy]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(button.dataset.copy);
+        const original = button.textContent;
+        button.textContent = "הועתק!";
+        setTimeout(() => { button.textContent = original; }, 1200);
+      });
+    });
+  </script>
+</body>
+</html>
