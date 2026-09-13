@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Control Room — Design System Preview · Spread Hunter Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ── Control Room design system — preview build (docs/design/preview.html)
+   Dogfoods the tokens in DESIGN.md. Not served by the dashboard; this file is
+   the owner's look-and-feel sign-off artifact before any refactor. ── */
+:root {
+  --bg-base: #080c14;
+  --bg-surface: #0f172a;
+  --bg-surface-raised: #1e293b;
+  --bg-card: rgba(15, 23, 42, 0.65);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --signal: #10b981;  --green-bg: rgba(6, 78, 59, 0.35);   --green-border: #059669;
+  --warn: #f59e0b;    --amber-bg: rgba(120, 53, 15, 0.35); --amber-border: #d97706;
+  --loss: #ef4444;    --red-bg: rgba(127, 29, 29, 0.45);   --red-border: #dc2626;
+  --open: #38bdf8;    --blue-bg: rgba(12, 74, 110, 0.35);  --blue-border: #0284c7;
+
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-pill: 9999px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px; line-height: 1.5;
+  padding: 24px; min-height: 100vh;
+}
+.font-display { font-family: 'Big Shoulders Display', Impact, sans-serif; font-weight: 800; letter-spacing: 0.03em; }
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+.hero h1 { font-size: 34px; }
+.hero p { color: var(--text-secondary); max-width: 62ch; }
+.section-title { font-size: 15px; letter-spacing: 0.06em; color: var(--text-primary); margin-bottom: 10px; }
+.card {
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg); padding: 16px;
+}
+.note { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
+
+/* ── Palette ── */
+.palette { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.swatch { border: 1px solid var(--border-subtle); border-radius: var(--r-md); overflow: hidden; }
+.swatch .chip { height: 44px; }
+.swatch .lab { padding: 6px 8px; font-size: 10px; color: var(--text-secondary); }
+.swatch .lab b { display: block; color: var(--text-primary); font-size: 11px; }
+
+/* ── Live-state language ── */
+.state-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: var(--r-pill);
+  font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  border: 1px solid; white-space: nowrap;
+}
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; }
+.pill.running { background: var(--green-bg); color: #34d399; border-color: var(--green-border); }
+.pill.running .dot { background: var(--signal); animation: heartbeat 1s steps(1, end) infinite; }
+.pill.degraded { background: var(--amber-bg); color: #fbbf24; border-color: var(--amber-border); }
+.pill.degraded .dot { background: var(--warn); }
+.pill.down { background: var(--red-bg); color: #fca5a5; border-color: var(--red-border); }
+.pill.down .dot { background: var(--loss); }
+.pill.stopped { background: rgba(255,255,255,0.04); color: var(--text-muted); border-color: var(--border-subtle); }
+.pill.unknown { background: rgba(255,255,255,0.04); color: var(--text-muted); border-color: var(--border-subtle); }
+@keyframes heartbeat { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+@media (prefers-reduced-motion: reduce) {
+  .pill.running .dot { animation: none; }
+}
+
+/* ── STALE banner ── */
+.stale-banner {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--amber-bg); border: 1px solid var(--amber-border);
+  border-radius: var(--r-md); padding: 10px 14px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #fbbf24;
+}
+.stale-banner .age { margin-left: auto; color: var(--text-secondary); font-size: 11px; }
+
+/* ── Sample service cards ── */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.svc { display: flex; flex-direction: column; gap: 10px; }
+.svc.alert { border-color: var(--red-border); background: var(--red-bg); }
+.svc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.svc-name { font-size: 14px; }
+.svc-tag { font-size: 9px; letter-spacing: 0.08em; color: var(--open); border: 1px solid var(--blue-border); background: var(--blue-bg); border-radius: var(--r-sm); padding: 1px 6px; font-family: 'JetBrains Mono', monospace; }
+.svc-desc { font-size: 11.5px; color: var(--text-secondary); }
+.svc-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-secondary); }
+.svc-cmd { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-muted); background: rgba(2,6,23,0.5); border-radius: var(--r-sm); padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Sample table ── */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 10px; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); text-transform: uppercase; }
+td { padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); font-size: 12px; }
+td.num, th.num { text-align: right; }
+.pos { color: #34d399; } .neg { color: #fca5a5; }
+
+/* ── Controls ── */
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+button { font-family: inherit; }
+.btn {
+  padding: 8px 16px; border-radius: var(--r-md); border: 1px solid var(--border-strong);
+  background: var(--bg-surface-raised); color: var(--text-primary);
+  font-size: 12px; font-weight: 600; letter-spacing: 0.03em; cursor: pointer;
+}
+.btn.primary { border-color: var(--green-border); color: #34d399; }
+.btn.danger { border-color: var(--red-border); color: #fca5a5; font-weight: 700; }
+.toggle { width: 40px; height: 22px; border-radius: var(--r-pill); background: rgba(255,255,255,0.12); border: 1px solid var(--border-strong); position: relative; display: inline-block; }
+.toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-secondary); transition: left 180ms ease-out, background 180ms ease-out; }
+.toggle.on { background: var(--green-bg); border-color: var(--green-border); }
+.toggle.on::after { left: 20px; background: var(--signal); }
+
+.type-specimen .row { display: flex; align-items: baseline; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; }
+.type-specimen .role { width: 110px; flex-shrink: 0; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <div class="font-display" style="font-size:11px;letter-spacing:0.14em;color:var(--text-muted)">DESIGN SYSTEM PREVIEW · CONTROL ROOM</div>
+    <h1 class="font-display" style="margin-top:4px">SPREAD HUNTER LIVE</h1>
+    <p>"Nothing surprises me." Color means state. Type means data. The only motion is a heartbeat.
+       This page dogfoods the exact tokens the dashboard refactor will use.</p>
+  </div>
+
+  <!-- Palette -->
+  <section>
+    <div class="section-title font-display">COLOR — SEMANTIC ONLY</div>
+    <div class="palette">
+      <div class="swatch"><div class="chip" style="background:#080c14"></div><div class="lab"><b>--bg-base</b>#080c14</div></div>
+      <div class="swatch"><div class="chip" style="background:#0f172a"></div><div class="lab"><b>--bg-surface</b>#0f172a</div></div>
+      <div class="swatch"><div class="chip" style="background:#1e293b"></div><div class="lab"><b>--bg-raised</b>#1e293b</div></div>
+      <div class="swatch"><div class="chip" style="background:#10b981"></div><div class="lab"><b>running / profit</b>#10b981</div></div>
+      <div class="swatch"><div class="chip" style="background:#f59e0b"></div><div class="lab"><b>degraded / stale</b>#f59e0b</div></div>
+      <div class="swatch"><div class="chip" style="background:#ef4444"></div><div class="lab"><b>down / loss</b>#ef4444</div></div>
+      <div class="swatch"><div class="chip" style="background:#38bdf8"></div><div class="lab"><b>info / open</b>#38bdf8</div></div>
+      <div class="swatch"><div class="chip" style="background:#64748b"></div><div class="lab"><b>stopped / unknown</b>#64748b</div></div>
+    </div>
+    <div class="note">A hue may never appear without a state meaning behind it. Stopped is quiet gray, not red.</div>
+  </section>
+
+  <!-- Live-state language -->
+  <section class="card">
+    <div class="section-title font-display">LIVE-STATE LANGUAGE — THE WATCHDOG VOCABULARY</div>
+    <div class="state-grid">
+      <span class="pill running"><span class="dot"></span>RUNNING · 3s</span>
+      <span class="pill degraded"><span class="dot"></span>DEGRADED · 22s</span>
+      <span class="pill down"><span class="dot"></span>DOWN · 74s</span>
+      <span class="pill stopped">STOPPED</span>
+      <span class="pill unknown">--</span>
+    </div>
+    <div class="note">The RUNNING dot blinks at 1 Hz (absence of motion reads as death from across the room; honors
+      prefers-reduced-motion). Heartbeat age is displayed, not implied, and ages green → amber → red on a
+      per-service cadence ramp (5s loop: amber ≥ 15s, red ≥ 60s).</div>
+  </section>
+
+  <!-- STALE banner -->
+  <section>
+    <div class="section-title font-display">BACKEND-CONTACT WATCHDOG — STALE BANNER</div>
+    <div class="stale-banner">⟳ DATA STALE — dashboard lost contact with :8799
+      <span class="age">last seen 19:15:02 · 42s ago</span></div>
+    <div class="note">When polls fail, the page freezes every live tile at its last value with a last-seen age instead
+      of silently continuing to show old numbers. Broken-looking beats lying.</div>
+  </section>
+
+  <!-- Service cards -->
+  <section>
+    <div class="section-title font-display">SERVICE CARDS — ONE OF EACH STATE</div>
+    <div class="card-grid">
+      <div class="card svc">
+        <div class="svc-head">
+          <div><div class="font-display svc-name">Execution Loop &amp; Maker Quoter</div>
+          <span class="svc-tag">SPREAD QUOTER</span></div>
+          <span class="pill running"><span class="dot"></span>RUNNING · 3s</span>
+        </div>
+        <div class="svc-desc">Runs the trading loop every 5s across approved markets.</div>
+        <div class="svc-meta mono"><span>PID: <b>14208</b></span><span class="toggle on" role="switch" aria-checked="true"></span></div>
+        <div class="svc-cmd">$ python -m core_brain.trader_loop --live --interval 5</div>
+      </div>
+      <div class="card svc">
+        <div class="svc-head">
+          <div><div class="font-display svc-name">Market Filter</div>
+          <span class="svc-tag">UNIVERSE SCANNER</span></div>
+          <span class="pill degraded"><span class="dot"></span>DEGRADED · 18s</span>
+        </div>
+        <div class="svc-desc">Scans 500+ markets; heartbeat aging past cadence.</div>
+        <div class="svc-meta mono"><span>PID: <b>9312</b></span><span class="toggle on" role="switch" aria-checked="true"></span></div>
+        <div class="svc-cmd">$ python -m scripts.filter_loop</div>
+      </div>
+      <div class="card svc">
+        <div class="svc-head">
+          <div><div class="font-display svc-name">Guardrail Risk Watchdog</div>
+          <span class="svc-tag">CIRCUIT BREAKER</span></div>
+          <span class="pill down"><span class="dot"></span>DOWN · 74s</span>
+        </div>
+        <div class="svc-desc">Heartbeat beyond the red threshold — dead or killed.</div>
+        <div class="svc-meta mono"><span>PID: <b>--</b></span><span style="font-size:10px;color:var(--text-muted);font-weight:700">AUTO-WATCH</span></div>
+        <div class="svc-cmd">$ python -m scripts.global_stop_loss</div>
+      </div>
+      <div class="card svc">
+        <div class="svc-head">
+          <div><div class="font-display svc-name">Venue Engine &amp; Order Poller</div>
+          <span class="svc-tag">0.5s CLOB FEED</span></div>
+          <span class="pill stopped">STOPPED</span>
+        </div>
+        <div class="svc-desc">Deliberately stopped — quiet gray, not an alarm.</div>
+        <div class="svc-meta mono"><span>PID: <b>--</b></span><span class="toggle" role="switch" aria-checked="false"></span></div>
+        <div class="svc-cmd">$ python -m core_brain.order_manager poll --interval 0.5</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Table + controls -->
+  <section class="card">
+    <div class="section-title font-display">DATA TABLE &amp; CONTROLS — MONO TABULAR MONEY</div>
+    <table>
+      <thead><tr><th>Market</th><th>Pair Cost</th><th class="num">Commit</th><th class="num">Realized</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>atp-mens-final-2026</td><td class="mono">$0.9621</td><td class="mono num">$24.00</td><td class="mono num pos">+$0.0379</td><td><span class="pill running"><span class="dot"></span>RUNNING · 2s</span></td></tr>
+        <tr><td>lcs-summer-split</td><td class="mono">$0.9784</td><td class="mono num">$18.50</td><td class="mono num pos">+$0.0216</td><td><span class="pill degraded"><span class="dot"></span>DEGRADED · 21s</span></td></tr>
+        <tr><td>us-open-round-3</td><td class="mono">$0.9912</td><td class="mono num">$0.00</td><td class="mono num neg">−$0.0012</td><td><span class="pill down"><span class="dot"></span>DOWN · 63s</span></td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top:14px" class="btn-row">
+      <button class="btn primary">START RUN</button>
+      <button class="btn">STOP RUN</button>
+      <button class="btn">SYNC</button>
+      <button class="btn danger">EMERGENCY CANCEL ALL</button>
+      <span style="margin-left:auto;font-size:10px;color:var(--text-muted)">destructive actions demand a typed confirm</span>
+    </div>
+  </section>
+
+  <!-- Type specimen -->
+  <section class="card type-specimen">
+    <div class="section-title font-display">TYPOGRAPHY — THREE FACES, THREE JOBS</div>
+    <div class="row"><span class="role">Display</span>
+      <span class="font-display" style="font-size:24px">BIG SHOULDERS DISPLAY — HEADERS &amp; TITLES</span></div>
+    <div class="row"><span class="role">Body</span>
+      <span style="font-size:13px;max-width:70ch">IBM Plex Sans carries prose, descriptions and labels — designed for technical consoles, replaces Inter.</span></div>
+    <div class="row"><span class="role">Data</span>
+      <span class="mono" style="font-size:14px">$0.96006&nbsp;&nbsp;+$1,172.35&nbsp;&nbsp;476 closes&nbsp;&nbsp;19:15:02&nbsp;&nbsp;PID 14208</span></div>
+    <div class="row"><span class="role">Scale</span>
+      <span class="mono" style="font-size:11px;color:var(--text-secondary)">10 · 11 · 12 · 13 · 15 · 18 · 28 px — 4px spacing base, compact density</span></div>
+  </section>
+
+  <div class="note" style="text-align:center">docs/design/preview.html — Control Room system, generated by /design-consultation 2026-09-13 · source of truth: DESIGN.md</div>
+</div>
+</body>
+</html>

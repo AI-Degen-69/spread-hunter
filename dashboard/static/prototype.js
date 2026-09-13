@@ -242,9 +242,22 @@ function buildNavLabel(doc, text) {
   return label;
 }
 
-/* Where the operator goes next. Both open in a new tab, so leaving the rail
- * never takes the running dashboard down with it. */
+/* Where the operator goes next. Everything here opens in a new tab, so
+ * leaving the rail never takes the running dashboard down with it — including
+ * the research pages: they read stores outside data/orders.db and keep their
+ * own documents (Hebrew RTL, their own poll loops, no control token), so they
+ * are adopted by navigation rather than restyled into the shell. */
 const RAIL_LINKS = [
+  {
+    href: '/tape',
+    label: 'Price Tape',
+    icon: 'M2.4 3.2h11.2 M2.4 8h11.2 M2.4 12.8h11.2 M4.4 3.2v9.6 M11.6 3.2v9.6',
+  },
+  {
+    href: '/reversion',
+    label: 'Reversion Test',
+    icon: 'M2.6 12.6h10.8 M4.2 12.6V8.2 M13.4 3.4l-3 3 3 3 M13.4 6.4H6.2',
+  },
   {
     href: 'https://polymarket.com/markets',
     label: 'Polymarket',
