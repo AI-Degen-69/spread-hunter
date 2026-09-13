@@ -1988,8 +1988,8 @@ class FakeEl {
   }
   querySelectorAll() { return []; }
   appendChild() {}
-  setAttribute() {}
-  getAttribute() { return null; }
+  setAttribute(k, v) { this._attrs = this._attrs || {}; this._attrs[k] = v; }
+  getAttribute(k) { return (this._attrs && this._attrs[k] !== undefined) ? this._attrs[k] : null; }
 }
 
 const elements = new Map();
@@ -2075,10 +2075,14 @@ const RUNNING_STACK = {
   const masterStopBtn = document.getElementById('btn-master-stop');
   const masterIndicator = document.getElementById('master-status-indicator');
 
+  // The indicator carries its label in aria-label since the pulse-dot span
+  // lives in innerHTML; the STOPPING… branch still writes textContent.
+  const indText = (el) => el.getAttribute('aria-label') || el.textContent;
+
   // 1. Initial running state: STOP button should be enabled
   app.renderServiceCards(RUNNING_STACK, null, null);
   const initialStopDisabled = masterStopBtn.disabled;
-  const initialIndicatorText = masterIndicator.textContent;
+  const initialIndicatorText = indText(masterIndicator);
 
   // 2. Click STOP with an in-flight request
   const stopPromiseGate = new Promise((resolve) => {
@@ -2097,7 +2101,7 @@ const RUNNING_STACK = {
   // It MUST NOT re-enable the button or clear the STOPPING indicator!
   app.renderServiceCards(RUNNING_STACK, null, null);
   const stillDisabledDuringPoll = masterStopBtn.disabled;
-  const stillStoppingIndicatorDuringPoll = masterIndicator.textContent;
+  const stillStoppingIndicatorDuringPoll = indText(masterIndicator);
 
   // Try clicking again while in-flight (should be ignored due to guard)
   await masterStopBtn.dispatch('click');
@@ -2111,7 +2115,7 @@ const RUNNING_STACK = {
   const postStopDisabled = masterStopBtn.disabled;
   const postStopHtml = masterStopBtn.innerHTML;
   const isStoppingFlagAfter = app.isStopping;
-  const postStopIndicatorText = masterIndicator.textContent;
+  const postStopIndicatorText = indText(masterIndicator);
 
   process.stdout.write(JSON.stringify({
     initialStopDisabled,

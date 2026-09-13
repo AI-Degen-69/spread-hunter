@@ -144,6 +144,15 @@ function backendSequence() {
     lastSeenMs: app.backendLastSeenMs,
   });
 
+  // Cold start: the backend was never reachable.
+  app.setBackendContact(false, clock());
+  const coldOneFail = app.backendStale;
+  app.setBackendContact(false, clock());
+  const coldTwoFails = app.backendStale;
+  const coldBanner = banner.classList.contains('show')
+    ? banner.querySelector('.stale-age').textContent : null;
+
+  // Warm sequence: contacted first, then lost.
   app.setBackendContact(true, clock());      // healthy poll
   const afterOk = get();
   now += 2000;
@@ -162,6 +171,8 @@ function backendSequence() {
   const bannerShownAfter = banner.classList.contains('show');
 
   return {
+    coldStart: { afterOneFail: coldOneFail, afterTwoFails: coldTwoFails },
+    coldStartBanner: coldBanner,
     afterOk, afterOneFail, afterTwoFails, afterRecovery,
     bannerShownThen, bannerShownAfter,
     staleAgeText: ageText,

@@ -186,7 +186,7 @@ button { font-family: inherit; }
           <span class="pill running"><span class="dot"></span>RUNNING · 3s</span>
         </div>
         <div class="svc-desc">Runs the trading loop every 5s across approved markets.</div>
-        <div class="svc-meta mono"><span>PID: <b>14208</b></span><span class="toggle on" role="switch" aria-checked="true"></span></div>
+        <div class="svc-meta mono"><span>PID: <b>14208</b></span><span class="toggle on"></span></div>
         <div class="svc-cmd">$ python -m core_brain.trader_loop --live --interval 5</div>
       </div>
       <div class="card svc">
@@ -196,7 +196,7 @@ button { font-family: inherit; }
           <span class="pill degraded"><span class="dot"></span>DEGRADED · 18s</span>
         </div>
         <div class="svc-desc">Scans 500+ markets; heartbeat aging past cadence.</div>
-        <div class="svc-meta mono"><span>PID: <b>9312</b></span><span class="toggle on" role="switch" aria-checked="true"></span></div>
+        <div class="svc-meta mono"><span>PID: <b>9312</b></span><span class="toggle on"></span></div>
         <div class="svc-cmd">$ python -m scripts.filter_loop</div>
       </div>
       <div class="card svc">
@@ -216,7 +216,7 @@ button { font-family: inherit; }
           <span class="pill stopped">STOPPED</span>
         </div>
         <div class="svc-desc">Deliberately stopped — quiet gray, not an alarm.</div>
-        <div class="svc-meta mono"><span>PID: <b>--</b></span><span class="toggle" role="switch" aria-checked="false"></span></div>
+        <div class="svc-meta mono"><span>PID: <b>--</b></span><span class="toggle"></span></div>
         <div class="svc-cmd">$ python -m core_brain.order_manager poll --interval 0.5</div>
       </div>
     </div>

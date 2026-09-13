@@ -121,7 +121,10 @@ function setBackendContact(ok, nowMs) {
     backendLastSeenMs = ts;
   } else {
     backendFailures += 1;
-    if (backendFailures >= BACKEND_STALE_AFTER_FAILURES && backendLastSeenMs) {
+    // Stale once the failure streak is long enough, even if no poll ever
+    // succeeded: a dashboard that starts against a dead backend is stale from
+    // the start, not silently blank.
+    if (backendFailures >= BACKEND_STALE_AFTER_FAILURES) {
       backendStale = true;
     }
   }
@@ -140,11 +143,14 @@ function renderBackendContact(nowMs) {
   banner.classList.add('show');
   banner.dataset.stale = 'true';
   const ageEl = banner.querySelector('.stale-age');
-  if (ageEl && backendLastSeenMs) {
-    const ageSec = Math.max(0, Math.round((at - backendLastSeenMs) / 1000));
-    ageEl.textContent = 'last seen ' + fmtLocalTime(new Date(backendLastSeenMs).toISOString())
-      + ' · ' + ageSec + 's ago';
+  if (!ageEl) return;
+  if (!backendLastSeenMs) {
+    ageEl.textContent = 'backend never contacted';
+    return;
   }
+  const ageSec = Math.max(0, Math.round((at - backendLastSeenMs) / 1000));
+  ageEl.textContent = 'last seen ' + fmtLocalTime(new Date(backendLastSeenMs).toISOString())
+    + ' · ' + ageSec + 's ago';
 }
 
 // Heartbeat-age ramp for a cadence: amber at 3x, red at 12x.
@@ -748,6 +754,7 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
     if (isStopping) {
       masterIndicator.className = 'pill stopped font-display';
       masterIndicator.textContent = 'STOPPING…';
+      masterIndicator.setAttribute('aria-label', 'STOPPING…');
     } else {
       // Canonical live-state vocabulary (DESIGN.md): the stack pill carries
       // the blinking liveness dot rather than unicode glyphs. textContent is
@@ -756,7 +763,9 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
       masterIndicator.className = `pill ${isRunning ? 'state-running' : 'state-stopped'} font-display`;
       masterIndicator.innerHTML = (isRunning ? '<span class="pulse-dot active"></span>' : '')
         + esc(stackLabel);
-      masterIndicator.textContent = stackLabel;
+      // aria-label, not textContent: overwriting textContent would delete the
+      // pulse-dot span the line above just created.
+      masterIndicator.setAttribute('aria-label', stackLabel);
     }
   }
   if (livePulseDot) {
@@ -869,9 +878,13 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
     let pill;
     if (def.key === 'guardrail') {
       const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
-      const state = hasAlert ? 'down'
+      // A failed /api/guardrail-health read is UNKNOWN — the watcher's state
+      // is not known, which is not the same as deliberately stopped.
+      const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined;
+      const state = !healthKnown ? 'unknown'
+        : hasAlert ? 'down'
         : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
-      pill = statePillHtml(state, age);
+      pill = statePillHtml(state, healthKnown ? age : null);
     } else {
       pill = statePillHtml(running ? 'running' : 'stopped');
     }
@@ -999,6 +1012,7 @@ if (masterStopBtn && !masterStopBtn.dataset.wired) {
       if (masterIndicator) {
         masterIndicator.className = 'pill stopped font-display';
         masterIndicator.textContent = 'STOPPING…';
+        masterIndicator.setAttribute('aria-label', 'STOPPING…');
       }
       const livePulseDot = document.getElementById('live-ops-pulse-dot');
       if (livePulseDot) {
@@ -4563,7 +4577,8 @@ function renderScreener(kpi, scanState) {
       headerAge.textContent = 'heartbeat: ' + Math.round(hbAge) + 's';
     }
   } else {
-    headerPill.className = 'pill state-stopped';
+    // No scan-state payload: the filter's state is unknown, not stopped.
+    headerPill.className = 'pill state-unknown';
     headerPill.textContent = '--';
   }
 
@@ -4944,9 +4959,11 @@ async function pollStatus() {
       safeJsonFetch('/api/guardrail-health'),
     ]);
 
-    // Backend-contact watchdog: any successful fetch in the batch proves the
-    // backend answers; if every read failed, the page is flying blind.
-    setBackendContact(!!(state || status || kpi));
+    // Backend-contact watchdog: the batch proves the backend answers when ANY
+    // of its reads succeeds; only a batch where every endpoint returned null
+    // counts as a failed poll.
+    setBackendContact([state, status, kpi, scanState, trialReadiness, guardAlerts, guardHealth]
+      .some(r => r !== null && r !== undefined));
 
     if (state) lastState = state;
     if (kpi) lastKpi = kpi;

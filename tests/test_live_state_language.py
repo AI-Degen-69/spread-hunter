@@ -139,6 +139,17 @@ def test_one_failed_poll_is_tolerated_but_two_announce_stale():
 
 
 @requires_node
+def test_a_dashboard_that_never_reached_the_backend_go_stale_too():
+    # Review finding (PR #219): `backendLastSeenMs` starts null, so the old
+    # guard meant a page opened against a dead backend stayed silently blank
+    # instead of announcing it. Two failures from a cold start must go stale.
+    backend = _harness("backend")
+    assert backend["coldStart"]["afterOneFail"] is False
+    assert backend["coldStart"]["afterTwoFails"] is True
+    assert backend["coldStartBanner"] == "backend never contacted"
+
+
+@requires_node
 def test_the_banner_shows_and_clears_with_contact():
     backend = _harness("backend")
     assert backend["bannerShownThen"] is True
@@ -172,9 +183,12 @@ def test_the_stale_banner_exists_in_the_markup():
 
 def test_the_poll_loop_feeds_the_watchdog():
     # Both the success path and the catch path must report contact, or a
-    # thrown batch would never age the page to stale.
+    # thrown batch would never age the page to stale. The success check reads
+    # the WHOLE batch: a poll where only the trial-readiness endpoint answered
+    # is still contact.
     js = APP_JS.read_text(encoding="utf-8")
-    assert "setBackendContact(!!(state || status || kpi));" in js
+    assert "setBackendContact([state, status, kpi, scanState, trialReadiness, guardAlerts, guardHealth]" in js
+    assert ".some(r => r !== null && r !== undefined));" in js
     assert "setBackendContact(false);" in js
 
 

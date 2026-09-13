@@ -74,7 +74,9 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  background: linear-gradient(180deg, var(--bg-base) 0%, #0b111e 100%) fixed;
+  /* Solid color, no gradient: the DESIGN.md decoration rule ("color is never
+     decorative") governs the whole page surface. */
+  background: var(--bg-base);
   color: var(--text-primary);
   font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   min-height: 100vh;
@@ -2112,12 +2114,10 @@ td { font-size: 13px; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  box-shadow: 0 0 14px rgba(16, 185, 129, 0.25);
   transition: all 0.15s ease;
 }
 .btn-start-run:hover:not(:disabled) {
   background: #34d399;
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.45);
   transform: translateY(-1px);
 }
 .btn-start-run:disabled {
