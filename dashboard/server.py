@@ -2522,13 +2522,6 @@ def main():
 
     if args.db:
         set_db_override(args.db)
-
-    if args.reload and args.db:
-        # In reload mode uvicorn re-imports `dashboard.server` in a child
-        # process, which does NOT inherit this module's globals — the override
-        # set above would be lost and a shadow `--db` launch would silently
-        # fall back to the live database. `resolve_db_path` reads this env var
-        # when no CLI override is set, so the child reaches the same store.
         os.environ["LIVE_DB_PATH"] = str(Path(args.db))
 
     port = resolve_port(args.port)
