@@ -65,6 +65,101 @@ let lastKpi = null;
 let lastDbIsProduction = false;
 let isStopping = false;
 
+/* ── Live-state language (DESIGN.md) ──────────────────────────────────
+ * Six states, one vocabulary, applied identically to every process, feed and
+ * tile: RUNNING / DEGRADED / DOWN / STOPPED / UNKNOWN / STALE. Heartbeat age
+ * is displayed, not implied: a live indicator ages green → amber → red on a
+ * ramp calibrated to its own cadence (defaults: 5s loop → amber ≥ 15s, red ≥
+ * 60s). */
+
+// Map (running, age_sec) → state key. `running=false` with a known age means
+// the process died mid-flight (DOWN); with no age at all it is the quiet,
+// intentional STOPPED. Registry unreadable / never seen is UNKNOWN.
+function stateKey(running, ageSec, thresholds) {
+  const th = thresholds || {};
+  const degradedAfter = th.degraded !== undefined ? th.degraded : 15;
+  const downAfter = th.down !== undefined ? th.down : 60;
+  if (running) {
+    if (ageSec === null || ageSec === undefined) return 'running';
+    if (ageSec >= downAfter) return 'down';
+    if (ageSec >= degradedAfter) return 'degraded';
+    return 'running';
+  }
+  if (ageSec !== null && ageSec !== undefined) return 'down';
+  return 'stopped';
+}
+
+// Canonical pill markup: state class + heartbeat age (omitted when unknown or
+// when the state is STOPPED/UNKNOWN — a stopped service has no age to show).
+function statePillHtml(state, ageSec) {
+  const known = ageSec !== null && ageSec !== undefined && isFinite(ageSec);
+  const showAge = (state === 'running' || state === 'degraded' || state === 'down') && known;
+  const age = showAge ? ` · ${Math.max(0, Math.round(ageSec))}s` : '';
+  const label = state.toUpperCase();
+  const dot = (state === 'running' || state === 'degraded' || state === 'down')
+    ? `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`
+    : '';
+  return `<span class="pill state-${state}">${dot}${label}${age}</span>`;
+}
+
+/* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
+ * When the poll loop loses contact with the backend, the page must stop
+ * pretending the last render is live. After 2 consecutive failed polls the
+ * STALE banner appears with the last-seen time; a successful poll clears it.
+ * A single failed poll is tolerated: one dropped request is not a dead
+ * backend. */
+const BACKEND_STALE_AFTER_FAILURES = 2;
+let backendFailures = 0;
+let backendLastSeenMs = null;
+let backendStale = false;
+
+function setBackendContact(ok, nowMs) {
+  const ts = nowMs !== undefined ? nowMs : Date.now();
+  if (ok) {
+    backendFailures = 0;
+    backendStale = false;
+    backendLastSeenMs = ts;
+  } else {
+    backendFailures += 1;
+    // Stale once the failure streak is long enough, even if no poll ever
+    // succeeded: a dashboard that starts against a dead backend is stale from
+    // the start, not silently blank.
+    if (backendFailures >= BACKEND_STALE_AFTER_FAILURES) {
+      backendStale = true;
+    }
+  }
+  renderBackendContact();
+}
+
+function renderBackendContact(nowMs) {
+  const at = nowMs !== undefined ? nowMs : Date.now();
+  const banner = document.getElementById('backend-contact-banner');
+  if (!banner) return;
+  if (!backendStale) {
+    banner.classList.remove('show');
+    delete banner.dataset.stale;
+    return;
+  }
+  banner.classList.add('show');
+  banner.dataset.stale = 'true';
+  const ageEl = banner.querySelector('.stale-age');
+  if (!ageEl) return;
+  if (!backendLastSeenMs) {
+    ageEl.textContent = 'backend never contacted';
+    return;
+  }
+  const ageSec = Math.max(0, Math.round((at - backendLastSeenMs) / 1000));
+  ageEl.textContent = 'last seen ' + fmtLocalTime(new Date(backendLastSeenMs).toISOString())
+    + ' · ' + ageSec + 's ago';
+}
+
+// Heartbeat-age ramp for a cadence: amber at 3x, red at 12x.
+function cadenceThresholds(cadenceSec) {
+  const c = Number(cadenceSec);
+  if (!isFinite(c) || c <= 0) return { degraded: 15, down: 60 };
+  return { degraded: Math.round(c * 3), down: Math.round(c * 12) };
+}
+
 /* ── XSS defense: escape before innerHTML ── */
 function esc(v) {
   if (v === null || v === undefined) return '--';
@@ -658,10 +753,19 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
   if (masterIndicator) {
     if (isStopping) {
       masterIndicator.className = 'pill stopped font-display';
-      masterIndicator.textContent = '○ STOPPING…';
+      masterIndicator.textContent = 'STOPPING…';
+      masterIndicator.setAttribute('aria-label', 'STOPPING…');
     } else {
-      masterIndicator.className = `pill ${isRunning ? 'active' : 'stopped'} font-display`;
-      masterIndicator.textContent = isRunning ? '● STACK RUNNING' : '○ STACK STOPPED';
+      // Canonical live-state vocabulary (DESIGN.md): the stack pill carries
+      // the blinking liveness dot rather than unicode glyphs. textContent is
+      // kept in step for readers that take the text, not the markup.
+      const stackLabel = isRunning ? 'STACK RUNNING' : 'STACK STOPPED';
+      masterIndicator.className = `pill ${isRunning ? 'state-running' : 'state-stopped'} font-display`;
+      masterIndicator.innerHTML = (isRunning ? '<span class="pulse-dot active"></span>' : '')
+        + esc(stackLabel);
+      // aria-label, not textContent: overwriting textContent would delete the
+      // pulse-dot span the line above just created.
+      masterIndicator.setAttribute('aria-label', stackLabel);
     }
   }
   if (livePulseDot) {
@@ -766,8 +870,24 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
 
     const hasAlert = def.key === 'guardrail' && (guardrailAlerts?.alerts?.length > 0);
     const alertCls = hasAlert ? ' alert' : (running ? ' healthy' : '');
-    const pillCls = running ? 'active' : 'stopped';
-    const pillText = running ? 'RUNNING' : 'STOPPED';
+    // Live-state language (DESIGN.md): the pill carries the heartbeat age and
+    // ages green → amber → red on the service's own cadence ramp. The guardrail
+    // heartbeat is served by /api/guardrail-health's `age_s`; the stack
+    // services are liveness-checked by PID here, so they render as plain
+    // RUNNING/STOPPED with no age until a heartbeat payload exists for them.
+    let pill;
+    if (def.key === 'guardrail') {
+      const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
+      // A failed /api/guardrail-health read is UNKNOWN — the watcher's state
+      // is not known, which is not the same as deliberately stopped.
+      const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined;
+      const state = !healthKnown ? 'unknown'
+        : hasAlert ? 'down'
+        : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
+      pill = statePillHtml(state, healthKnown ? age : null);
+    } else {
+      pill = statePillHtml(running ? 'running' : 'stopped');
+    }
 
     let toggleHtml = '';
     if (!def.readOnly) {
@@ -784,10 +904,7 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
               <div class="font-display" style="font-size:14px;letter-spacing:0.02em;color:var(--text-primary)">${def.name}</div>
               <span class="param-code-pill" style="margin-top:2px;display:inline-block">${def.tag}</span>
             </div>
-            <span class="pill ${pillCls}">
-              <span class="pulse-dot ${running ? 'active' : ''}" style="width:5px;height:5px"></span>
-              ${pillText}
-            </span>
+            <span class="service-pill-slot">${pill}</span>
           </div>
           <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.4;margin-bottom:8px">
             ${def.desc}
@@ -894,7 +1011,8 @@ if (masterStopBtn && !masterStopBtn.dataset.wired) {
       const masterIndicator = document.getElementById('master-status-indicator');
       if (masterIndicator) {
         masterIndicator.className = 'pill stopped font-display';
-        masterIndicator.textContent = '○ STOPPING…';
+        masterIndicator.textContent = 'STOPPING…';
+        masterIndicator.setAttribute('aria-label', 'STOPPING…');
       }
       const livePulseDot = document.getElementById('live-ops-pulse-dot');
       if (livePulseDot) {
@@ -4432,17 +4550,35 @@ function renderScreener(kpi, scanState) {
   const headerCensus = document.getElementById('scan-census');
   const headerGates = document.getElementById('scan-gates');
 
-  // Render scan state pill
+  // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
+  // The server's STALLED verdict stays authoritative for DOWN; a SCANNING
+  // heartbeat ages through the ramp on the filter's ~5s cadence thresholds.
+  // This element IS the pill, so it takes the state class and the inner dot
+  // rather than a nested statePillHtml().
   if (scanState) {
-    const state = scanState.scan_state || '--';
-    const pillCls = state === 'SCANNING' ? 'active' : (state === 'STALLED' ? 'error' : 'stopped');
-    headerPill.className = 'pill ' + pillCls;
-    headerPill.textContent = state;
-    if (scanState.seconds_since_heartbeat !== null && scanState.seconds_since_heartbeat !== undefined) {
-      headerAge.textContent = 'heartbeat: ' + Math.round(scanState.seconds_since_heartbeat) + 's';
+    const raw = scanState.scan_state || '--';
+    const hbAge = scanState.seconds_since_heartbeat;
+    let state;
+    if (raw === 'SCANNING') {
+      state = stateKey(true, hbAge, cadenceThresholds(5));
+    } else if (raw === 'STALLED') {
+      state = 'down';
+    } else {
+      state = 'stopped';
+    }
+    headerPill.className = 'pill state-' + state;
+    const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
+      : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
+      : '';
+    const age = (state !== 'stopped' && state !== 'unknown' && hbAge !== null && hbAge !== undefined)
+      ? ' · ' + Math.max(0, Math.round(hbAge)) + 's' : '';
+    headerPill.innerHTML = dot + esc(state.toUpperCase() + age);
+    if (hbAge !== null && hbAge !== undefined) {
+      headerAge.textContent = 'heartbeat: ' + Math.round(hbAge) + 's';
     }
   } else {
-    headerPill.className = 'pill stopped';
+    // No scan-state payload: the filter's state is unknown, not stopped.
+    headerPill.className = 'pill state-unknown';
     headerPill.textContent = '--';
   }
 
@@ -4823,6 +4959,12 @@ async function pollStatus() {
       safeJsonFetch('/api/guardrail-health'),
     ]);
 
+    // Backend-contact watchdog: the batch proves the backend answers when ANY
+    // of its reads succeeds; only a batch where every endpoint returned null
+    // counts as a failed poll.
+    setBackendContact([state, status, kpi, scanState, trialReadiness, guardAlerts, guardHealth]
+      .some(r => r !== null && r !== undefined));
+
     if (state) lastState = state;
     if (kpi) lastKpi = kpi;
 
@@ -4866,7 +5008,9 @@ async function pollStatus() {
     // last reading on screen as if it were current.
     renderTrialReadiness(trialReadiness);
   } catch (e) {
-    // Non-fatal transient error swallowed gracefully
+    // Non-fatal transient error swallowed gracefully — but the watchdog still
+    // counts it: a throw here means the batch never answered.
+    setBackendContact(false);
   } finally {
     isPolling = false;
   }
@@ -4887,6 +5031,7 @@ if (typeof module === 'undefined' || !module.exports) {
   setInterval(pollStatus, POLL_MS);
   setInterval(renderShadowClock, 1000);
   setInterval(renderFilterUptime, 1000);
+  setInterval(renderBackendContact, 1000); // keep the STALE age counting while stale
 }
 
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
@@ -4904,5 +5049,10 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },
-    set isStopping(v) { isStopping = v; } };
+    set isStopping(v) { isStopping = v; },
+    stateKey, statePillHtml, cadenceThresholds,
+    get setBackendContact() { return setBackendContact; },
+    get renderBackendContact() { return renderBackendContact; },
+    get backendStale() { return backendStale; },
+    get backendLastSeenMs() { return backendLastSeenMs; } };
 }

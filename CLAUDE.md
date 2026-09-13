@@ -185,3 +185,12 @@ refresh now:
 ```bash
 gbrain sync --source spread-hunter-live --strategy code
 ```
+
+## Design System
+
+Always read [DESIGN.md](DESIGN.md) before making any visual or UI decision.
+All font choices, colors, spacing, the live-state watchdog language (state pills,
+heartbeat ages, backend-contact STALE banner, 1 Hz blink) and aesthetic direction
+are defined there. Do not deviate without explicit owner approval; record any
+approved deviation in DESIGN.md's Decisions Log. In QA mode, flag any code that
+doesn't match DESIGN.md.

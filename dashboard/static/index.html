@@ -40,7 +40,7 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- KaTeX typesets the hypothesis notation in the decision-gates panel. Both
        files are optional by design: `typesetMath` leaves the element's Unicode
        fallback text in place when the library did not load, so a dashboard on a
@@ -80,6 +80,13 @@
     </div>
   </header>
 
+  <!-- ── Backend-contact watchdog (DESIGN.md): shown when the poll loop
+       loses contact with :8799. app.js drives it via setBackendContact(). ── -->
+  <div id="backend-contact-banner" class="backend-stale-banner" role="alert">
+    <span>DATA STALE — dashboard lost contact with the engine</span>
+    <span class="stale-age mono"></span>
+  </div>
+
   <!-- The tab row the sidebar replaced. `prototype.js` hides it and empties the
        three panels below into the rail's pages; the sections themselves stay,
        because `app.js` still toggles them by id and reads `#tab-3.hidden`
@@ -112,7 +119,7 @@
           </div>
         </div>
         <div class="broker-controls-group">
-          <span id="master-status-indicator" class="pill active font-display" style="font-size:12px;padding:6px 14px">● STACK RUNNING</span>
+          <span id="master-status-indicator" class="pill state-running font-display" style="font-size:12px;padding:6px 14px"><span class="pulse-dot active"></span>STACK RUNNING</span>
           <button id="btn-master-start" class="btn-start-run" type="button" aria-label="Start bot execution stack">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             START RUN
