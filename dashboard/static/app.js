@@ -3003,7 +3003,9 @@ function renderExecutionFunnel(kpi) {
   // Funnel stage widths for tapering geometry:
   const TAPER_WIDTHS = [100, 84, 68, 54];
   const STAGE_THEMES = ['stage-quoted', 'stage-filled', 'stage-closed', 'stage-merged'];
-  const STAGE_ICONS = ['⚡', '🎯', '🔒', '💎'];
+  // No emoji on status surfaces (DESIGN.md): the funnel reads by number and
+  // theme color, so the marker is just the stage's ordinal.
+  const STAGE_MARKERS = ['1', '2', '3', '4'];
 
   const rows = stages.map((st, idx) => {
     const legs = Number(st.legs) || 0;
@@ -3012,7 +3014,7 @@ function renderExecutionFunnel(kpi) {
     const isWorstFrom = worst && worst.from === st.key;
     const widthPct = TAPER_WIDTHS[Math.min(idx, TAPER_WIDTHS.length - 1)];
     const themeCls = STAGE_THEMES[Math.min(idx, STAGE_THEMES.length - 1)];
-    const icon = STAGE_ICONS[Math.min(idx, STAGE_ICONS.length - 1)];
+    const icon = STAGE_MARKERS[Math.min(idx, STAGE_MARKERS.length - 1)];
 
     const retained = drop && drop.retained_pct != null
       ? `${Number(drop.retained_pct).toFixed(1)}% carried on`
@@ -3026,7 +3028,7 @@ function renderExecutionFunnel(kpi) {
         <div class="funnel-drop-note${isWorstFrom ? ' worst' : ''}">
           <span class="funnel-retained-badge mono">${esc(retained)}</span>
           ${drop.lost > 0 ? `<span class="funnel-lost-badge mono"> · lost ${drop.lost}</span>` : ''}
-          ${isWorstFrom ? `<span class="funnel-worst-badge">⚠️ Worst Drop</span>` : ''}
+          ${isWorstFrom ? `<span class="funnel-worst-badge">WORST DROP</span>` : ''}
         </div>
       </div>
     ` : '';
