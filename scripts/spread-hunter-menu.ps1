@@ -834,7 +834,7 @@ function Resume-ShadowRun {
     Nothing is wiped - closes, orders and marks already in the store stay
     there and the loop keeps appending to the same run id. Use this to
     continue a run toward the 60-close sample target (menu option R /
-    `shadow-resume`). -Minutes bounds the resumed session (default 60). #>
+    `shadow-resume`). -Minutes bounds the resumed session (default 1440 / 24h). #>
     if ($null -ne (Get-DashInstance)) { $null = Stop-Dashboard }
     # Stop any rehearsal already running so two loops never write one store,
     # and verify the stop actually worked: an old loop that survives writes
@@ -867,7 +867,7 @@ function Resume-ShadowRun {
     $script:ShadowDbPath = $db.FullName
     $stamp = Get-Date -Format "dd-MM_HH-mm"
     $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
-    $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 60.0 }
+    $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
 
     Lsh-Ok "Resuming $($script:ShadowRunId) from $($db.Name) for $mins minute(s) - no data was wiped."
     if (-not (Start-ShadowDashboard)) { return $false }
@@ -1472,7 +1472,7 @@ function Show-Status {
         Write-SectionHeader -Number "3" -Title "GLOBAL STOP LOSS" -Status $hdrStatus -StatusStyle $hdrStyle
         Write-ProcessRow -Label "Global Stop Loss" -Running ([bool]$gh.running) -PidVal $gh.pid -Path $StackPaths["guardrail"] -HeartbeatAgeSec $ghAge -CadenceSec 5
         $hbAgeText = if ($null -ne $ghAge) { Format-AgeSec $ghAge } else { "Unknown" }
-        Write-FileRow -Label "Heartbeat file" -Status (if ($state -in @('Degraded','Down')) { "STALE" } else { "FOUND" }) -Path "runtime/global_stop_loss_heartbeat.json" -Dynamic ("{0} Old" -f $hbAgeText)
+        Write-FileRow -Label "Heartbeat file" -Status $(if ($state -in @('Degraded','Down')) { "STALE" } else { "FOUND" }) -Path "runtime/global_stop_loss_heartbeat.json" -Dynamic ("{0} Old" -f $hbAgeText)
         Write-FileRow -Label "Alerts log" -Status "FOUND" -Path "runtime/global_stop_loss_alerts.log" -Dynamic ("{0} Alerts" -f $gh.alerts_total)
     } elseif (Test-Path $HbFile) {
         try {
@@ -1485,7 +1485,7 @@ function Show-Status {
             Write-SectionHeader -Number "3" -Title "GLOBAL STOP LOSS" -Status $hdrStatus -StatusStyle $hdrStyle
             $isAlive = ($state -eq 'Running' -or $state -eq 'Degraded')
             Write-ProcessRow -Label "Global Stop Loss" -Running $isAlive -PidVal $(if ($isAlive) { $hb.pid } else { $null }) -Path $StackPaths["guardrail"] -HeartbeatAgeSec $age -CadenceSec 5
-            Write-FileRow -Label "Heartbeat file" -Status (if ($state -in @('Degraded','Down')) { "STALE" } else { "FOUND" }) -Path "runtime/global_stop_loss_heartbeat.json" -Dynamic ("{0} Old" -f (Format-AgeSec $age))
+            Write-FileRow -Label "Heartbeat file" -Status $(if ($state -in @('Degraded','Down')) { "STALE" } else { "FOUND" }) -Path "runtime/global_stop_loss_heartbeat.json" -Dynamic ("{0} Old" -f (Format-AgeSec $age))
             Write-FileRow -Label "Alerts log" -Status "FOUND" -Path "runtime/global_stop_loss_alerts.log" -Dynamic "0 Alerts"
         } catch {
             Write-SectionHeader -Number "3" -Title "GLOBAL STOP LOSS" -Status "OFF" -StatusStyle "Error"
