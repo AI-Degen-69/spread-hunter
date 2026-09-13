@@ -472,3 +472,46 @@ class TestEndToEndHarness:
         assert "**INCONCLUSIVE**" in md
         assert "**GO**" not in md
         assert "**NO-GO**" not in md
+
+    def test_target_closes_defaults_to_config(self, tmp_path, caplog):
+        """Without --target-closes the harness gates on the config target.
+
+        shadow-01's ad-hoc report passed with n=38 against no target at all;
+        the menu-launched harness must collect stat_gate_target_closes (60)
+        closes before its stop rule can fire on sample, so a 'profitable but
+        thin' run is reported underpowered instead of GO. Fails before the
+        fix (a.target_closes stayed None -> gate reported, never failed).
+        """
+        from core_brain.config import load as load_cfg
+
+        db = tmp_path / "shadow_stat_cfg_target.db"
+        report_dir = tmp_path / "stat_cfg_target"
+        target = load_cfg().stat_gate_target_closes
+        now = [1000.0]
+
+        def clock():
+            return now[0]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        with caplog.at_level(logging.WARNING):
+            rc = main(
+                ["--max-hours", "0.001", "--db", str(db),
+                 "--report", str(report_dir)],
+                markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+                client_fn=lambda: object(),
+                decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], ""),
+                fetch_books=_books,
+                clock=clock,
+                sleep=sleep,
+            )
+
+        assert rc == 0
+        # The banner records the effective target, and the underpowered
+        # reason names the config number, proving the default was applied.
+        assert f"target_closes={target}" in caplog.text
+        assert f"closes 0 < {target}" in caplog.text
+        data = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
+        assert data["stat_validation"]["verdict"] == "INCONCLUSIVE"
+        assert data["stat_validation"]["run_result"]["target_closes"] == target

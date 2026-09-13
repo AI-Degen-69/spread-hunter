@@ -11,14 +11,16 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import statistics
 import time
 from pathlib import Path
 from typing import Any, Optional
+from contextlib import closing
 
 from core_brain.statistical_analytics import build as build_statistical_analytics
 from core_brain.order_registry import (
-    OrderRegistry, DEFAULT_DB_PATH, VENUE_SYNC_RUN_ID,
+    OrderRegistry, DEFAULT_DB_PATH, VENUE_SYNC_RUN_ID, get_connection,
 )
 from core_brain.config import MakerConfig, load as load_cfg
 from core_brain.runtime_paths import resolve_runtime_file
@@ -709,16 +711,55 @@ EXECUTION_STAGES = (
 )
 
 
+def _marked_taker_completed_pairs(db_path: Path | str | None) -> set[str] | None:
+    """Pair ids explicitly marked as taker-completed in a shadow store.
+
+    Returns None when the marker table does not exist (plain or live stores),
+    so callers fall back to the order-count heuristic. The marker is written
+    first-hand by the shadow completion path -- see the
+    `_record_taker_completion` writer -- because cancel
+    churn (post, cancel, repost) makes an order-count guess read every pair
+    as taker-completed.
+    """
+    if db_path is None:
+        return None
+    try:
+        with closing(get_connection(Path(db_path))) as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='shadow_taker_completions'"
+            ).fetchone()
+            if exists is None:
+                return None
+            return {
+                str(r[0]) for r in conn.execute(
+                    "SELECT DISTINCT pair_id FROM shadow_taker_completions"
+                )
+            }
+    except sqlite3.Error:
+        return None
+
+
 def find_taker_completed_pairs(
     orders: list[dict] | None = None,
     reg: OrderRegistry | None = None,
+    *,
+    db_path: Path | str | None = None,
 ) -> set[str]:
     """Identify pair IDs that required a taker order to complete the second leg.
 
-    In shadow rehearsals and live taker completions, a taker completion occurs when
-    one leg fails to fill as a maker order and is cancelled/replaced by a taker order,
-    resulting in more than 1 order record under the same (pair_id, token_id).
+    Prefers the explicit `shadow_taker_completions` marker when the store has
+    one. Otherwise, falls back to a heuristic on filled orders: a taker
+    completion occurs when a token has more than one FILLED order under the
+    same (pair_id, token_id) -- a resting maker partially filled, then a
+    replacement taker filled. Cancelled orders are ignored: quoting churn
+    (post, cancel, repost at a new price) is normal and must not read as a
+    taker completion.
     """
+    marked = _marked_taker_completed_pairs(db_path if db_path is not None
+                                           else (reg.db_path if reg is not None else None))
+    if marked is not None:
+        return marked
     taker_pairs: set[str] = set()
     order_list: list[dict] = []
     if orders is not None:
@@ -730,7 +771,8 @@ def find_taker_completed_pairs(
     for o in order_list:
         pid = o.get("pair_id")
         tid = o.get("token_id")
-        if pid and tid:
+        status = str(o.get("status") or "")
+        if pid and tid and status in ("filled", "partial"):
             key = (str(pid), str(tid))
             pair_token_counts[key] = pair_token_counts.get(key, 0) + 1
 
@@ -1852,7 +1894,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         for fm in float_marks
     ]
 
-    taker_pairs = find_taker_completed_pairs(orders=orders, reg=reg)
+    taker_pairs = find_taker_completed_pairs(orders=orders, reg=reg, db_path=db_path)
     pnl_split = pnl_by_fill_path(closes=closes, taker_pairs=taker_pairs)
 
     # Per-trade win rate/expectancy/risk factors (Level 1 tiles). Computed from

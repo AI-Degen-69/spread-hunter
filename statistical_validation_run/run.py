@@ -19,6 +19,7 @@ import shutil
 import sqlite3
 import sys
 import time
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -243,7 +244,8 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "--target-closes",
         type=int,
         default=None,
-        help="target number of completed closes before stopping",
+        help="target number of completed closes before stopping "
+             "(default: stat_gate_target_closes from config, currently 60)",
     )
     ap.add_argument(
         "--min-hours",
@@ -323,6 +325,14 @@ def main(
 
     a = _parse_args(argv)
 
+    # The sample-size gate needs a close count to bite on. Default to the
+    # config target (60): a rehearsal that never collects enough closes must
+    # run to its --max-hours ceiling and be reported underpowered, never
+    # "PASS with adequate sample" at n=16. --target-closes 0 opts out.
+    cfg = dc_replace(load_cfg(), single_buy_grace_sec=0.0)
+    if a.target_closes is None:
+        a.target_closes = cfg.stat_gate_target_closes
+
     run_id = a.run_id or shadow_run_id()
     ts_str = datetime.datetime.now().strftime("%d-%m_%H-%M")
     db_path = Path(a.db) if a.db else Path(f"data/shadow_stat_{ts_str}_{run_id}.db")
@@ -348,8 +358,6 @@ def main(
         else Path(f"reports/stat_{ts_str}_{run_id}")
     )
 
-    from dataclasses import replace as dc_replace
-    cfg = dc_replace(load_cfg(), single_buy_grace_sec=0.0)
     maker = a.funder or os.environ.get("POLY_FUNDER")
     if maker:
         try:

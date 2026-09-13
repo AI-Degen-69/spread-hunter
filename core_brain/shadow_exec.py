@@ -55,6 +55,29 @@ class ShadowOrderRefused(RuntimeError):
     """A simulated order broke a live cap and was not written."""
 
 
+def _record_taker_completion(
+    db_path: Path | str, pair_id: str, token_id: str, run_id: Optional[str]
+) -> None:
+    """Mark (pair_id, token_id) as completed by a taker order.
+
+    The pnl_by_fill_path classifier reads this marker instead of guessing
+    from order counts, which cancel-churn (post, cancel, repost) makes
+    indistinguishable from a real maker-to-taker replacement. Writing it at
+    the moment the completion buy is booked is the only place the fact is
+    known first-hand.
+    """
+    try:
+        with closing(get_connection(Path(db_path))) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO shadow_taker_completions "
+                "(run_id, pair_id, token_id, ts) VALUES (?, ?, ?, ?)",
+                (run_id or "", str(pair_id), str(token_id), time.time()),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:  # pragma: no cover - defensive
+        _log.warning("could not record taker completion marker: %s", exc)
+
+
 def ensure_shadow_tables(db_path: Path | str) -> None:
     """Create the shadow-only tables beside the registry's own schema.
 
@@ -133,6 +156,17 @@ def ensure_shadow_tables(db_path: Path | str) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_queue_marks_level "
             "ON queue_marks (token_id, price, ts)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shadow_taker_completions (
+                run_id TEXT NOT NULL DEFAULT '',
+                pair_id TEXT NOT NULL,
+                token_id TEXT NOT NULL,
+                ts REAL NOT NULL,
+                PRIMARY KEY (pair_id, token_id)
+            )
+            """
         )
         conn.execute(
             """
@@ -1001,6 +1035,8 @@ class ShadowExecutionClient:
             posted_ts=now_ms, last_polled_ts=now_ms, pair_id=pair_id,
         )
         self._registry.create_order(completion)
+        _record_taker_completion(self._registry.db_path, pair_id, token_id,
+                                 self._registry.run_id)
         self._registry.record_fill(FillRecord(
             trade_id=f"{SHADOW_TRADE_PREFIX}{uuid.uuid4().hex[:16]}",
             order_uuid=local_id, size=shares, price=fill_price,

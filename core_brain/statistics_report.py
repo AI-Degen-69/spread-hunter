@@ -44,7 +44,10 @@ def write_statistics_report(
         closes=closes,
         kpi=kpi,
         cfg=cfg,
-        target_closes=None,
+        # The sample-size gate must bite even for ad-hoc reports: shadow-01
+        # showed a profitable 38-close run still failing it, and a report
+        # that says "reported" instead of "FAIL" would hide that.
+        target_closes=cfg.stat_gate_target_closes,
         matured_markouts=None,
         min_markouts=None,
     )
@@ -72,7 +75,7 @@ def write_statistics_report(
         verdict_reason=stat["verdict_reason"],
         run_result={"status": stat["verdict"], "reason": stat["verdict_reason"]},
         closes=closes,
-        target_closes=None,
+        target_closes=cfg.stat_gate_target_closes,
         min_markouts=None,
         sensitivity=build_sensitivity(closes, threshold_pct=cfg.stat_gate_threshold_pct),
     )
