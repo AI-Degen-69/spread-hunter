@@ -12,6 +12,7 @@
 #   .\scripts\spread-hunter-menu.ps1 statistical-run [-Hours N] # overnight shadow statistics + dashboard
 #   .\scripts\spread-hunter-menu.ps1 stop-shadow   # 5 · SHADOW: stop loop, watcher and viewer
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
+#   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] # R · SHADOW: resume the newest rehearsal in place (no wipe, same run id) & reattach dashboard
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
@@ -824,6 +825,144 @@ function Open-Dashboard {
         }
     }
     return $ok
+}
+
+function Resume-ShadowRun {
+    <# Resume the newest shadow rehearsal in place: reopen the latest
+    data/NN_shadow_*.db under its original shadow-NN run id, restart the
+    screener/loop/observer/watcher against it, and host the dashboard on it.
+    Nothing is wiped - closes, orders and marks already in the store stay
+    there and the loop keeps appending to the same run id. Use this to
+    continue a run toward the 60-close sample target (menu option R /
+    `shadow-resume`). -Minutes bounds the resumed session (default 60). #>
+    if ($null -ne (Get-DashInstance)) { $null = Stop-Dashboard }
+    # Stop any rehearsal already running so two loops never write one store,
+    # and verify the stop actually worked: an old loop that survives writes
+    # into the same store concurrently with the resumed one.
+    $null = Stop-ShadowSession
+    $runStopped = Stop-ShadowRun
+    if ($runStopped -eq $null) {
+        Lsh-Fail "Could not verify the previous rehearsal stopped (process scan inconclusive). Resume aborted - stop it manually (stop-shadow), then retry."
+        return $false
+    }
+    Start-Sleep -Seconds 2
+    if (Test-OrphanStackProcess) {
+        Lsh-Fail "A rehearsal process is still alive after the stop. Resume aborted - stop it manually (stop-shadow), then retry."
+        return $false
+    }
+
+    # Newest rehearsal store wins. The seq prefix is the run id: NN_shadow_... -> shadow-NN.
+    $db = Get-ChildItem (Join-Path $ProjectPath "data") -File -Filter "*_shadow_*.db" -ErrorAction SilentlyContinue |
+        Where-Object { $_.BaseName -match '^\d{1,2}_shadow_' } |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $db) {
+        Lsh-Fail "No shadow store to resume. Start one first (option 4 / shadow-run)."
+        return $false
+    }
+    if ($db.BaseName -match '^(\d{1,2})_shadow_') {
+        $script:ShadowRunId = "shadow-" + ([int]$Matches[1]).ToString("D2")
+    } else {
+        $script:ShadowRunId = "shadow-resume"
+    }
+    $script:ShadowDbPath = $db.FullName
+    $stamp = Get-Date -Format "dd-MM_HH-mm"
+    $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
+    $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 60.0 }
+
+    Lsh-Ok "Resuming $($script:ShadowRunId) from $($db.Name) for $mins minute(s) - no data was wiped."
+    if (-not (Start-ShadowDashboard)) { return $false }
+
+    # Universe feed first, exactly as a fresh rehearsal does.
+    Lsh-Step "Refreshing the market universe feed..."
+    Push-Location $ProjectPath
+    try { & python -m scripts.rank_markets } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $ProjectPath "runtime/markets.json"))) {
+        Lsh-Warn "Market ranking failed - the resumed loop may quote nothing. Continuing with the existing feed."
+    } else {
+        Lsh-Ok "Market feed ready (runtime/markets.json)."
+    }
+    $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop" `
+        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $RunDir "resume_screener.out.log") `
+        -RedirectStandardError (Join-Path $RunDir "resume_screener.err.log")
+    # Timebox the screener like the fresh-run path does: filter_loop has no
+    # duration limit of its own, so without a timer it outlives the session.
+    $killSec = [int]($mins * 60)
+
+    # The loop: same run id, same store - the merge pass reads already-merged
+    # shares per pair, so no double merge and no re-close of settled pairs.
+    Lsh-Step "Starting the rehearsal loop against the existing store..."
+    $shadowRun = Invoke-WithRehearsalTrialEnv {
+        Start-Process -FilePath "python" `
+            -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RunDir "shadow_resume.out.log") `
+            -RedirectStandardError (Join-Path $RunDir "shadow_resume.err.log")
+    }
+    Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s))."
+    $observer = Start-Process -FilePath "python" `
+        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--data-dir", $ProjectPath, "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
+        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $RunDir "resume_observer.out.log") `
+        -RedirectStandardError (Join-Path $RunDir "resume_observer.err.log")
+    Lsh-Ok "Statistics observer running (PID $($observer.Id), db=$($script:StatsDbPath))."
+
+    # The ring already exists from the first session: shadow-<NN>.jsonl.
+    $ring = Join-Path $RunDir ("shadow-{0}.jsonl" -f ($script:ShadowRunId -replace "^shadow-", ""))
+    $guardrail = $null
+    if (Test-Path $ring) {
+        $guardrail = Start-Process -FilePath "python" `
+            -ArgumentList "-m", "scripts.global_stop_loss", "--db", $script:ShadowDbPath, "--ring", $ring `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RunDir "resume_guardrail.out.log") `
+            -RedirectStandardError (Join-Path $RunDir "resume_guardrail.err.log")
+        Lsh-Ok "Stop-loss watcher engaged (PID $($guardrail.Id)) on $ring."
+    } else {
+        Lsh-Warn "Ring file $ring not found; stop-loss watcher not engaged."
+    }
+    # Detached self-stop timer for the processes that have no duration limit
+    # of their own (screener + watcher), same pattern as the fresh-run path:
+    # kill only when the PID still carries the recorded start time, so a
+    # recycled PID within the window is never force-stopped.
+    $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
+    if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
+    $killCmd = "Start-Sleep -Seconds $killSec"
+    foreach ($t in $timerTargets) {
+        $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+    }
+    Start-Process -FilePath "powershell" `
+        -ArgumentList "-NoProfile", "-Command", $killCmd `
+        -WindowStyle Hidden
+
+    $session = [ordered]@{
+        started = (Get-Date).ToString("o")
+        started_ticks = (Get-Date).ToUniversalTime().Ticks
+        run_id = $script:ShadowRunId
+        ShadowRunId = $script:ShadowRunId
+        shadow_db = $script:ShadowDbPath
+        ShadowDbPath = $script:ShadowDbPath
+        stats_db = $script:StatsDbPath
+        StatsDbPath = $script:StatsDbPath
+        report_path = (Join-Path $ProjectPath "reports")
+        resumed = $true
+        screener = [ordered]@{ pid = $screener.Id; started_ticks = $screener.StartTime.ToUniversalTime().Ticks }
+        loop = [ordered]@{ pid = $shadowRun.Id; started_ticks = $shadowRun.StartTime.ToUniversalTime().Ticks }
+        observer = [ordered]@{ pid = $observer.Id; started_ticks = $observer.StartTime.ToUniversalTime().Ticks }
+        watcher = if ($guardrail) { [ordered]@{ pid = $guardrail.Id; started_ticks = $guardrail.StartTime.ToUniversalTime().Ticks } } else { $null }
+        ring = $ring
+    }
+    $session | ConvertTo-Json -Depth 5 | Set-Content -Path $ShadowSessionFile -Encoding UTF8
+
+    Start-Sleep -Seconds 3
+    Start-Process $ShadowDashUrl
+    Lsh-Ok "Opened $ShadowDashUrl in default browser (resumed db=$($script:ShadowDbPath))."
+    Lsh-Step "Stop it early" 
+    Write-Host "  .\scripts\spread-hunter-menu.ps1 stop-shadow" -ForegroundColor (Get-ProfileColor -Name Info)
+    if ($Watch) {
+        Lsh-Step "Watching the resumed loop live (Ctrl-C ends the watcher; session self-stops after $mins min)."
+        Get-Content (Join-Path $RunDir "shadow_resume.err.log") -Wait -ErrorAction SilentlyContinue
+    }
+    return $true
 }
 
 # ── Bot stack control through the dashboard API ──
@@ -1848,6 +1987,9 @@ function Reset-Environment {
                 $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop" -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                     -RedirectStandardOutput (Join-Path $RunDir "validation_screener.out.log") -RedirectStandardError (Join-Path $RunDir "validation_screener.err.log")
                 Lsh-Ok "Market screener started (PID $($screener.Id))."
+                # The sample-size gate's close target lives in config
+                # (stat_gate_target_closes, default 60): the harness reads it
+                # itself and stops on the close count, not just the clock.
                 $validation = Start-Process -FilePath "python" -ArgumentList "-m", "statistical_validation_run", "--max-hours", "$runHours", "--db", $ShadowDbPath, "--report", $reportPath, "--run-id", $ShadowRunId `
                     -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                     -RedirectStandardOutput (Join-Path $RunDir "statistical_validation.out.log") -RedirectStandardError (Join-Path $RunDir "statistical_validation.err.log")
@@ -1927,6 +2069,7 @@ function Show-MenuGrid {
             @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Bot + Dashboard";     D = "Stops, wipes data & starts fresh rehearsal (loop + stop loss); prompts minutes" }
             @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
             @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts shadow DB & opens browser" }
+            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run";        D = "Reopens the newest rehearsal DB under its same run id, restarts loop/observer/watcher, reattaches dashboard (no wipe)" }
         ) }
         @{ Header = "MAINTENANCE & STATUS"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop & Clean";       D = "Kills all bot processes/dashboards, wipes data, verifies" }
@@ -2013,6 +2156,13 @@ function Invoke-LiveAction {
             $null = Reset-Environment -Mode "none"
         }
         "8" { Show-Status }
+        "r" {
+            if ($Action -eq "") {
+                $confirm = Read-Host "  Resume the newest shadow run in place (no wipe, same run id, dashboard reattached)? [y/N]"
+                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+            }
+            $null = Resume-ShadowRun
+        }
         "q" { Write-Host "Exiting Spread Hunter Live menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
             Lsh-Warn "Invalid selection: $Key (choose 1-9, or q)."
@@ -2066,6 +2216,9 @@ if ($Action -ne "") {
         "shadow-host"  = "6"
         "open-shadow"  = "6"
         "shadow-open"  = "6"
+        "resume"       = "r"
+        "shadow-resume" = "r"
+        "resume-shadow" = "r"
         "reset"        = "7"
         "clean"        = "7"
         "get"          = "7"
@@ -2081,7 +2234,7 @@ if ($Action -ne "") {
     # Menu numbers work directly too: `.\scripts\spread-hunter-menu.ps1 8`
     # runs option 8 at once, no menu shown. Reject anything else here so a
     # typo fails fast instead of falling into the "invalid selection" path.
-    if (@("1","2","3","4","5","6","7","8","9","q") -notcontains $key) {
+    if (@("1","2","3","4","5","6","7","8","9","r","q") -notcontains $key) {
         Write-Host "ERROR: Unknown action '$Action' (use 1-9, q, or a name like start/stop/status)" -ForegroundColor Red
         exit 1
     }

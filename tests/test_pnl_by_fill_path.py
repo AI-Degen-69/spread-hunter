@@ -82,11 +82,16 @@ def test_pnl_by_fill_path_benchmark_split(temp_db):
     # PnL: +$0.25 (25%)
     _log_close(reg, CID_1, "shadow_merge", 10.0, 0.25, tx="pair-maker")
 
-    # 2. Taker-completed pair: "pair-taker" has 2 orders under (pair-taker, TOK_UP)
-    # e.g., original resting cancelled + replacement taker completion filled
+    # 2. Taker-completed pair: explicitly marked by the shadow completion
+    # path. Order rows alone cannot distinguish a taker replacement from
+    # quoting churn (the old heuristic mis-flagged every churned pair), so
+    # the marker written by _record_taker_completion is the signal.
     _create_order(reg, "o-t-orig", CID_2, TOK_UP, 0.48, 10.0, "cancelled", "pair-taker")
     _create_order(reg, "o-t-taker", CID_2, TOK_UP, 0.51, 10.0, "filled", "pair-taker")
     _create_order(reg, "o-t-dn", CID_2, TOK_DN, 0.48, 10.0, "filled", "pair-taker")
+    from core_brain.shadow_exec import ensure_shadow_tables, _record_taker_completion
+    ensure_shadow_tables(temp_db)
+    _record_taker_completion(temp_db, "pair-taker", TOK_UP, RUN)
     # PnL: +$0.35 (35%)
     _log_close(reg, CID_2, "shadow_merge", 10.0, 0.35, tx="pair-taker")
 
@@ -115,3 +120,50 @@ def test_pnl_by_fill_path_benchmark_split(temp_db):
 
     assert "pnl_by_fill_path" in rep["run_profitability"]
     assert rep["run_profitability"]["pnl_by_fill_path"]["by_path"]["taker_completed"] == pytest.approx(0.35)
+
+
+def test_cancel_churn_is_not_taker_completed(temp_db):
+    """Issue #197 follow-up: quoting churn must not read as taker completion.
+
+    A pair that posted, cancelled (not_quoted / regate_pair_cost) and reposted
+    before its maker legs filled has multiple order rows per (pair_id,
+    token_id) but never used a taker. Its close must land in maker_merged.
+    Fails before the fix: the old >1-orders-per-token heuristic flagged it.
+    """
+    reg = OrderRegistry(temp_db)
+
+    # UP leg churned twice before filling; DN leg filled first try.
+    _create_order(reg, "o-c-up-1", CID_1, TOK_UP, 0.50, 10.0, "cancelled", "pair-churn")
+    _create_order(reg, "o-c-up-2", CID_1, TOK_UP, 0.48, 10.0, "cancelled", "pair-churn")
+    _create_order(reg, "o-c-up-3", CID_1, TOK_UP, 0.48, 10.0, "filled", "pair-churn")
+    _create_order(reg, "o-c-dn", CID_1, TOK_DN, 0.48, 10.0, "filled", "pair-churn")
+    _log_close(reg, CID_1, "shadow_merge", 10.0, 0.20, tx="pair-churn")
+
+    rep = report(db_path=str(temp_db), run_id=RUN)
+    by_path = rep["pnl_by_fill_path"]["by_path"]
+    assert by_path["maker_merged"] == pytest.approx(0.20)
+    assert by_path["taker_completed"] == pytest.approx(0.0)
+
+
+def test_marker_table_overrides_heuristic(temp_db, monkeypatch):
+    """When the shadow store carries the explicit marker, it wins.
+
+    A pair marked taker-completed by the shadow completion path is attributed
+    to taker_completed even when its order rows alone would read as churn
+    (e.g. the maker leg never filled at all before the taker replaced it).
+    """
+    reg = OrderRegistry(temp_db)
+    from core_brain.shadow_exec import ensure_shadow_tables, _record_taker_completion
+
+    # One order per token: the heuristic alone would say maker_merged.
+    _create_order(reg, "o-x-up", CID_1, TOK_UP, 0.48, 10.0, "filled", "pair-marked")
+    _create_order(reg, "o-x-dn", CID_1, TOK_DN, 0.48, 10.0, "filled", "pair-marked")
+    _log_close(reg, CID_1, "shadow_merge", 10.0, 0.30, tx="pair-marked")
+
+    ensure_shadow_tables(temp_db)
+    _record_taker_completion(temp_db, "pair-marked", TOK_UP, RUN)
+
+    rep = report(db_path=str(temp_db), run_id=RUN)
+    by_path = rep["pnl_by_fill_path"]["by_path"]
+    assert by_path["taker_completed"] == pytest.approx(0.30)
+    assert by_path["maker_merged"] == pytest.approx(0.0)

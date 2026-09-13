@@ -889,6 +889,14 @@ class MakerConfig:
     stat_gate_beta: float = 0.20           # beta = 0.20 -> 80% power
     stat_gate_threshold_pct: float = 1.0   # primary gate threshold on return % (1.0%)
     stat_gate_bankroll_fraction: float = 0.01  # dollar twin gate (1% of starting bankroll)
+    # Minimum closes a rehearsal must collect before the sample-size gate can
+    # pass. shadow-01 cleared the economic gates at n=38 but failed this one
+    # (and the CI was still wide enough to dip below zero at n=16), so the
+    # harness now collects at least this many closes before it will issue a
+    # verdict that is not INCONCLUSIVE-for-sample. The statistical_validation_run
+    # harness stops early once the target is met; the menu passes it on every
+    # launch; the report writer gates against it even for ad-hoc reports.
+    stat_gate_target_closes: int = 60
 
     # --- experiment end criteria (decisive test of the maker mechanism) -----
     # Phase A (census): observe this many DISTINCT live markets and measure how
@@ -1252,6 +1260,17 @@ def load(*, for_display: bool = False) -> MakerConfig:
         kw["stat_gate_bankroll_fraction"] = _bounded_float(
             "HUNTER_STAT_GATE_BANKROLL_FRACTION", sgb, 0.0, 1.0
         )
+    stc = os.environ.get("HUNTER_STAT_GATE_TARGET_CLOSES")
+    if stc and stc.strip():
+        try:
+            val = int(stc)
+            if val <= 0:
+                raise ValueError
+        except ValueError as exc:
+            raise ValueError(
+                f"HUNTER_STAT_GATE_TARGET_CLOSES must be a positive integer, got: {stc!r}"
+            ) from exc
+        kw["stat_gate_target_closes"] = val
     return MakerConfig(**kw)
 
 # hook probe

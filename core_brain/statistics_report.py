@@ -44,15 +44,25 @@ def write_statistics_report(
         closes=closes,
         kpi=kpi,
         cfg=cfg,
-        target_closes=None,
+        # The sample-size gate must bite even for ad-hoc reports: shadow-01
+        # showed a profitable 38-close run still failing it, and a report
+        # that says "reported" instead of "FAIL" would hide that.
+        target_closes=cfg.stat_gate_target_closes,
         matured_markouts=None,
         min_markouts=None,
     )
+    # A thin sample must control the verdict, not just the gate row: a
+    # profitable 38-close run below target is INCONCLUSIVE, never GO.
+    n_closes = len(closes)
+    underpowered = n_closes < cfg.stat_gate_target_closes
     stat = resolve_verdict(
         gate_rows=gate_rows,
         kpi=kpi,
-        underpowered=False,
-        underpowered_reasons=[],
+        underpowered=underpowered,
+        underpowered_reasons=(
+            [f"closes {n_closes} < {cfg.stat_gate_target_closes}"]
+            if underpowered else []
+        ),
         threshold_pct=cfg.stat_gate_threshold_pct,
     )
 
@@ -72,7 +82,7 @@ def write_statistics_report(
         verdict_reason=stat["verdict_reason"],
         run_result={"status": stat["verdict"], "reason": stat["verdict_reason"]},
         closes=closes,
-        target_closes=None,
+        target_closes=cfg.stat_gate_target_closes,
         min_markouts=None,
         sensitivity=build_sensitivity(closes, threshold_pct=cfg.stat_gate_threshold_pct),
     )

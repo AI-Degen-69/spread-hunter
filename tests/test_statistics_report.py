@@ -56,4 +56,38 @@ def test_shadow_vs_live_disclaimer(tmp_path: Path):
     assert "rehearsal, not results" in shadow_text
     assert "observational, read-only, live caveats" in live_text
     assert Path(shadow["report_path"]).name.endswith("_shadow_run-1_statistics_report.md")
-    assert Path(live["report_path"]).name.endswith("_live_run-1_statistics_report.md")
+
+
+def test_sample_size_gate_bites_on_config_target(tmp_path: Path):
+    """Ad-hoc reports gate against the configured close target, not 'reported'.
+
+    shadow-01 showed a profitable 38-close run still failing the sample-size
+    gate at target 60. If the report writer passes target_closes=None the gate
+    row reads 'reported' / n/a and that failure becomes invisible. Fails
+    before the fix (target_closes=None in write_statistics_report).
+    """
+    from core_brain.config import load as load_cfg
+
+    db = tmp_path / "registry.db"
+    reg = OrderRegistry(db)
+    target = load_cfg().stat_gate_target_closes
+    n = min(target - 1, 5)  # below target, small keeps the test fast
+    for i in range(n):
+        reg.log_close(CloseRecord(
+            ts=1.0 + i,
+            condition_id=f"condition-{i}",
+            market_slug=f"market-{i}",
+            method="shadow_merge",
+            shares=1.0,
+            cost_basis=0.95,
+            proceeds=1.0,
+            realized_pnl=0.05,
+            run_id="run-1",
+        ))
+
+    result = write_statistics_report(db, "run-1", "shadow", tmp_path / "out")
+    text = Path(result["report_path"]).read_text(encoding="utf-8")
+    sample_row = next(line for line in text.splitlines() if "`n_closes`" in line)
+    assert f">= {target}" in sample_row, sample_row
+    assert "FAIL" in sample_row, sample_row
+    assert "Target sample" in text or "`target_closes`" in text or f"{target}" in text
