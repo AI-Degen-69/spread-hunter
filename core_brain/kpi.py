@@ -752,9 +752,9 @@ def find_taker_completed_pairs(
     one. Otherwise, falls back to a heuristic on filled orders: a taker
     completion occurs when a token has more than one FILLED order under the
     same (pair_id, token_id) -- a resting maker partially filled, then a
-    replacement taker filled. Cancelled orders are ignored: quoting churn
-    (post, cancel, repost at a new price) is normal and must not read as a
-    taker completion.
+    replacement taker filled. Cancelled and partial orders are ignored:
+    quoting churn (post, cancel, repost at a new price) and two partial
+    maker fills are normal and must not read as a taker completion.
     """
     marked = _marked_taker_completed_pairs(db_path if db_path is not None
                                            else (reg.db_path if reg is not None else None))
@@ -772,7 +772,7 @@ def find_taker_completed_pairs(
         pid = o.get("pair_id")
         tid = o.get("token_id")
         status = str(o.get("status") or "")
-        if pid and tid and status in ("filled", "partial"):
+        if pid and tid and status == "filled":
             key = (str(pid), str(tid))
             pair_token_counts[key] = pair_token_counts.get(key, 0) + 1
 

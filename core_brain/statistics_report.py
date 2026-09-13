@@ -51,11 +51,18 @@ def write_statistics_report(
         matured_markouts=None,
         min_markouts=None,
     )
+    # A thin sample must control the verdict, not just the gate row: a
+    # profitable 38-close run below target is INCONCLUSIVE, never GO.
+    n_closes = len(closes)
+    underpowered = n_closes < cfg.stat_gate_target_closes
     stat = resolve_verdict(
         gate_rows=gate_rows,
         kpi=kpi,
-        underpowered=False,
-        underpowered_reasons=[],
+        underpowered=underpowered,
+        underpowered_reasons=(
+            [f"closes {n_closes} < {cfg.stat_gate_target_closes}"]
+            if underpowered else []
+        ),
         threshold_pct=cfg.stat_gate_threshold_pct,
     )
 

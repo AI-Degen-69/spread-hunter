@@ -836,9 +836,20 @@ function Resume-ShadowRun {
     continue a run toward the 60-close sample target (menu option R /
     `shadow-resume`). -Minutes bounds the resumed session (default 60). #>
     if ($null -ne (Get-DashInstance)) { $null = Stop-Dashboard }
-    # Stop any rehearsal already running so two loops never write one store.
+    # Stop any rehearsal already running so two loops never write one store,
+    # and verify the stop actually worked: an old loop that survives writes
+    # into the same store concurrently with the resumed one.
     $null = Stop-ShadowSession
-    $null = Stop-ShadowRun
+    $runStopped = Stop-ShadowRun
+    if ($runStopped -eq $null) {
+        Lsh-Fail "Could not verify the previous rehearsal stopped (process scan inconclusive). Resume aborted - stop it manually (stop-shadow), then retry."
+        return $false
+    }
+    Start-Sleep -Seconds 2
+    if (Test-OrphanStackProcess) {
+        Lsh-Fail "A rehearsal process is still alive after the stop. Resume aborted - stop it manually (stop-shadow), then retry."
+        return $false
+    }
 
     # Newest rehearsal store wins. The seq prefix is the run id: NN_shadow_... -> shadow-NN.
     $db = Get-ChildItem (Join-Path $ProjectPath "data") -File -Filter "*_shadow_*.db" -ErrorAction SilentlyContinue |
@@ -874,6 +885,9 @@ function Resume-ShadowRun {
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "resume_screener.out.log") `
         -RedirectStandardError (Join-Path $RunDir "resume_screener.err.log")
+    # Timebox the screener like the fresh-run path does: filter_loop has no
+    # duration limit of its own, so without a timer it outlives the session.
+    $killSec = [int]($mins * 60)
 
     # The loop: same run id, same store - the merge pass reads already-merged
     # shares per pair, so no double merge and no re-close of settled pairs.
@@ -906,6 +920,19 @@ function Resume-ShadowRun {
     } else {
         Lsh-Warn "Ring file $ring not found; stop-loss watcher not engaged."
     }
+    # Detached self-stop timer for the processes that have no duration limit
+    # of their own (screener + watcher), same pattern as the fresh-run path:
+    # kill only when the PID still carries the recorded start time, so a
+    # recycled PID within the window is never force-stopped.
+    $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
+    if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
+    $killCmd = "Start-Sleep -Seconds $killSec"
+    foreach ($t in $timerTargets) {
+        $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+    }
+    Start-Process -FilePath "powershell" `
+        -ArgumentList "-NoProfile", "-Command", $killCmd `
+        -WindowStyle Hidden
 
     $session = [ordered]@{
         started = (Get-Date).ToString("o")

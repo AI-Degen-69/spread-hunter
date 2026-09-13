@@ -332,6 +332,10 @@ def main(
     cfg = dc_replace(load_cfg(), single_buy_grace_sec=0.0)
     if a.target_closes is None:
         a.target_closes = cfg.stat_gate_target_closes
+    if a.target_closes < 0:
+        # A negative typo must not slip past the stop rule (which only fires
+        # on targets > 0) and read as an ungated run.
+        raise SystemExit("--target-closes must be >= 0 (0 opts out)")
 
     run_id = a.run_id or shadow_run_id()
     ts_str = datetime.datetime.now().strftime("%d-%m_%H-%M")
