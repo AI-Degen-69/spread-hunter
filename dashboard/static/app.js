@@ -4458,11 +4458,17 @@ function renderScreener(kpi, scanState) {
     return;
   }
 
-  // Snapshot age and census
+  // Snapshot age and census. The screener re-ranks the universe every
+  // ~10 min (SH_FILTER_INTERVAL_SEC, default 600 -- scripts/filter_loop.py),
+  // and one failed cycle (e.g. a transient Windows file lock on markets.json)
+  // makes the gap 2x that. Say so inline so "14m ago" reads as normal cadence
+  // plus a miss, not as a dead screener.
   const age = funnel.snapshot_age;
-  headerAge.textContent = 'last scan: ' + fmtAge(age);
-  if (age !== null && age !== undefined && age > 600) {
-    headerAge.style.color = 'var(--warn)';
+  const SCAN_INTERVAL_SEC = 600;
+  headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + Math.round(SCAN_INTERVAL_SEC / 60) + 'm cycle';
+  if (age !== null && age !== undefined && age > SCAN_INTERVAL_SEC) {
+    // Past one full cycle: amber. Past two (a missed retry): red.
+    headerAge.style.color = age > SCAN_INTERVAL_SEC * 2 ? 'var(--error, #e5484d)' : 'var(--warn)';
   } else {
     headerAge.style.color = 'var(--text-secondary)';
   }
