@@ -379,7 +379,7 @@
         <button class="stats-subnav-btn" type="button" data-view="distributions">Distributions &amp; KDE</button>
         <button class="stats-subnav-btn" type="button" data-view="monte-carlo">Monte Carlo &amp; VaR</button>
         <button class="stats-subnav-btn" type="button" data-view="markout">Adverse Selection</button>
-        <button class="stats-subnav-btn" type="button" data-view="simulator">Sensitivity Simulator</button>
+        <button class="stats-subnav-btn" type="button" data-view="simulator" style="display:none !important">Sensitivity Simulator</button>
         <button class="stats-subnav-btn" type="button" data-view="markets">Market Inspection</button>
       </div>
       <div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px">
@@ -518,7 +518,7 @@
       </div>
 
       <!-- Interactive Parameter Sensitivity Matrix & Simulator -->
-      <div id="card-sensitivity-simulator" data-tier="3" class="card" style="margin-top:16px" data-section="simulator">
+      <div id="card-sensitivity-simulator" data-tier="3" class="card" style="display:none !important;margin-top:16px" data-section="simulator">
         <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <div>
             <div class="font-display" style="font-size:13px;letter-spacing:0.06em">INTERACTIVE PARAMETER SENSITIVITY SIMULATOR</div>

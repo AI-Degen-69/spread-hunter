@@ -2764,17 +2764,108 @@ function renderPnlCiReadout(ta) {
   };
   const verdict = verdictMap[ci.verdict] || { cls: 'standby', text: 'VERDICT UNAVAILABLE' };
 
+  // Determine band colors
+  const bandCls = ci.verdict === 'positive' ? 'band-positive'
+    : (ci.verdict === 'negative' ? 'band-negative' : 'band-warn');
+
+  // Find 90% and 95% levels for visual bar
+  const l95 = levels.find(l => Number(l.level) === 95) || levels[levels.length - 1];
+  const l90 = levels.find(l => Number(l.level) === 90) || levels[0];
+  const l95Lower = Number(l95.lower);
+  const l95Upper = Number(l95.upper);
+  const l90Lower = Number(l90.lower);
+  const l90Upper = Number(l90.upper);
+  const meanVal = mean !== null ? mean : (l90Lower + l90Upper) / 2;
+
+  // Scale axis bounds
+  const keyPoints = [0, l95Lower, l95Upper, l90Lower, l90Upper, meanVal];
+  const minVal = Math.min(...keyPoints);
+  const maxVal = Math.max(...keyPoints);
+  const span = (maxVal - minVal) || 0.1;
+  const pad = Math.max(span * 0.14, 0.02);
+  const axisMin = minVal - pad;
+  const axisMax = maxVal + pad;
+  const axisRange = axisMax - axisMin;
+
+  const toPct = (v) => Math.max(2, Math.min(98, ((v - axisMin) / axisRange) * 100));
+
+  const pct95Left = toPct(l95Lower);
+  const pct95Right = toPct(l95Upper);
+  const pct95Width = Math.max(2, pct95Right - pct95Left);
+
+  const pct90Left = toPct(l90Lower);
+  const pct90Right = toPct(l90Upper);
+  const pct90Width = Math.max(2, pct90Right - pct90Left);
+
+  const meanPct = toPct(meanVal);
+  const zeroPct = toPct(0);
+  const showZero = (axisMin <= 0 && 0 <= axisMax);
+
   host.innerHTML = `
-    <div class="pnl-ci-mean mono ${mean === null ? '' : signClass(mean)}">${esc(mean === null ? '--' : fmtSignedUSD(mean))}</div>
-    <div class="pnl-ci-sub">Mean realized PnL per close · ${n} ${n === 1 ? 'close' : 'closes'}</div>
+    <div class="pnl-ci-head-row">
+      <div class="pnl-ci-mean mono ${mean === null ? '' : signClass(mean)}">${esc(mean === null ? '--' : fmtSignedUSD(mean))}</div>
+      <div class="pnl-ci-sub">Mean realized PnL per close · ${n} ${n === 1 ? 'close' : 'closes'}</div>
+    </div>
+
+    <!-- Visual Scale Bar: ---|----------|--- -->
+    <div class="pnl-ci-scale-container">
+      <div class="pnl-ci-mean-pointer" style="left:${meanPct.toFixed(1)}%">
+        <div class="pnl-ci-mean-badge mono ${signClass(meanVal)}">Mean ${esc(fmtSignedUSD(meanVal))}</div>
+        <div class="pnl-ci-mean-pin"></div>
+      </div>
+
+      <div class="pnl-ci-axis-track">
+        <div class="pnl-ci-axis-centerline"></div>
+
+        ${showZero ? `
+          <div class="pnl-ci-zero-line" style="left:${zeroPct.toFixed(1)}%">
+            <span class="pnl-ci-zero-tag mono">$0.00</span>
+          </div>
+        ` : ''}
+
+        <!-- 95% CI Outer Band -->
+        <div class="pnl-ci-band-bar band-95 ${bandCls}" style="left:${pct95Left.toFixed(1)}%;width:${pct95Width.toFixed(1)}%" title="95% Confidence Interval">
+          <span class="pnl-ci-band-tick">|</span>
+          <span class="pnl-ci-band-name">95% CI</span>
+          <span class="pnl-ci-band-tick">|</span>
+        </div>
+
+        <!-- 90% CI Inner Band -->
+        <div class="pnl-ci-band-bar band-90 ${bandCls}" style="left:${pct90Left.toFixed(1)}%;width:${pct90Width.toFixed(1)}%" title="90% Confidence Interval">
+          <span class="pnl-ci-band-tick">|</span>
+          <span class="pnl-ci-band-name">90% CI</span>
+          <span class="pnl-ci-band-tick">|</span>
+        </div>
+      </div>
+
+      <div class="pnl-ci-scale-ticks mono">
+        <div class="pnl-ci-tick-callout tick-95" style="left:${pct95Left.toFixed(1)}%">
+          <span class="pnl-ci-tick-tag">95% Low</span>
+          <span class="pnl-ci-tick-val ${l95Lower < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(l95Lower))}</span>
+        </div>
+        <div class="pnl-ci-tick-callout tick-90" style="left:${pct90Left.toFixed(1)}%">
+          <span class="pnl-ci-tick-tag">90% Low</span>
+          <span class="pnl-ci-tick-val ${l90Lower < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(l90Lower))}</span>
+        </div>
+        <div class="pnl-ci-tick-callout tick-90" style="left:${pct90Right.toFixed(1)}%">
+          <span class="pnl-ci-tick-tag">90% High</span>
+          <span class="pnl-ci-tick-val ${l90Upper < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(l90Upper))}</span>
+        </div>
+        <div class="pnl-ci-tick-callout tick-95" style="left:${pct95Right.toFixed(1)}%">
+          <span class="pnl-ci-tick-tag">95% High</span>
+          <span class="pnl-ci-tick-val ${l95Upper < 0 ? 'negative' : 'positive'}">${esc(fmtSignedUSD(l95Upper))}</span>
+        </div>
+      </div>
+    </div>
+
     <div class="pnl-ci-bands">${rows}</div>
     <div class="pnl-ci-verdict ${verdict.cls}">${esc(verdict.text)}</div>
   `;
 }
 
 /* Tier 1: quoted -> filled -> closed -> merged, and the step that loses most.
- * Bars are scaled against the first stage, so the shape of the drop is the
- * thing being read, not the absolute counts.
+ * A stepped, tapered Funnel representation showing pipeline stages, retention rates,
+ * and drop-off bottlenecks between each phase.
  */
 function renderExecutionFunnel(kpi) {
   const host = document.getElementById('execution-funnel');
@@ -2789,26 +2880,54 @@ function renderExecutionFunnel(kpi) {
   const stages = funnel.stages;
   const dropByFrom = {};
   for (const d of (funnel.drop_off || [])) dropByFrom[d.from] = d;
-  const top = Number(stages[0].legs) || 0;
   const worst = funnel.worst_step || null;
 
-  const rows = stages.map(st => {
+  // Funnel stage widths for tapering geometry:
+  const TAPER_WIDTHS = [100, 84, 68, 54];
+  const STAGE_THEMES = ['stage-quoted', 'stage-filled', 'stage-closed', 'stage-merged'];
+  const STAGE_ICONS = ['⚡', '🎯', '🔒', '💎'];
+
+  const rows = stages.map((st, idx) => {
     const legs = Number(st.legs) || 0;
-    const pct = top > 0 ? Math.max(legs > 0 ? 2 : 0, (100 * legs) / top) : 0;
+    const markets = Number(st.markets) || 0;
     const drop = dropByFrom[st.key];
     const isWorstFrom = worst && worst.from === st.key;
+    const widthPct = TAPER_WIDTHS[Math.min(idx, TAPER_WIDTHS.length - 1)];
+    const themeCls = STAGE_THEMES[Math.min(idx, STAGE_THEMES.length - 1)];
+    const icon = STAGE_ICONS[Math.min(idx, STAGE_ICONS.length - 1)];
+
     const retained = drop && drop.retained_pct != null
       ? `${Number(drop.retained_pct).toFixed(1)}% carried on`
       : (drop ? 'no rate yet' : '');
-    return `
-      <div class="funnel-stage-row${isWorstFrom ? ' worst' : ''}">
-        <div class="funnel-stage-head">
-          <span class="funnel-stage-label">${esc(st.label || st.key)}</span>
-          <span class="funnel-stage-count mono">${legs} ${legs === 1 ? 'leg' : 'legs'} · ${Number(st.markets) || 0} ${Number(st.markets) === 1 ? 'market' : 'markets'}</span>
+
+    const bridgeHtml = drop ? `
+      <div class="funnel-bridge${isWorstFrom ? ' worst' : ''}">
+        <div class="funnel-bridge-connector">
+          <div class="funnel-bridge-arrow">↓</div>
         </div>
-        <div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
-        ${drop ? `<div class="funnel-drop-note${isWorstFrom ? ' worst' : ''}">${esc(retained)}${drop.lost > 0 ? ` · lost ${drop.lost}` : ''}</div>` : ''}
-      </div>`;
+        <div class="funnel-drop-note${isWorstFrom ? ' worst' : ''}">
+          <span class="funnel-retained-badge mono">${esc(retained)}</span>
+          ${drop.lost > 0 ? `<span class="funnel-lost-badge mono"> · lost ${drop.lost}</span>` : ''}
+          ${isWorstFrom ? `<span class="funnel-worst-badge">⚠️ Worst Drop</span>` : ''}
+        </div>
+      </div>
+    ` : '';
+
+    return `
+      <div class="funnel-stage-tier ${themeCls}${isWorstFrom ? ' worst' : ''}" style="width:${widthPct}%">
+        <div class="funnel-stage-head">
+          <span class="funnel-stage-label">
+            <span class="funnel-stage-icon">${icon}</span>
+            ${esc(st.label || st.key)}
+          </span>
+          <span class="funnel-stage-count mono">${legs} ${legs === 1 ? 'leg' : 'legs'} · ${markets} ${markets === 1 ? 'market' : 'markets'}</span>
+        </div>
+        <div class="funnel-bar-track">
+          <div class="funnel-bar-fill" style="width:100%"></div>
+        </div>
+      </div>
+      ${bridgeHtml}
+    `;
   }).join('');
 
   const worstLine = worst
@@ -2822,9 +2941,11 @@ function renderExecutionFunnel(kpi) {
     : '';
 
   host.innerHTML = `
-    <div class="funnel-stages">${rows}</div>
-    <div class="funnel-worst${worst ? ' has-worst' : ''}">${worstLine}</div>
-    ${declinedChips}
+    <div class="funnel-container">
+      <div class="funnel-stages">${rows}</div>
+      <div class="funnel-worst${worst ? ' has-worst' : ''}">${worstLine}</div>
+      ${declinedChips}
+    </div>
   `;
 }
 
