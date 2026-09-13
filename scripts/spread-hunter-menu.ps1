@@ -1015,7 +1015,12 @@ function Write-ProcessRow {
     # is supplied, so a 5s quoter and a 10-min scanner age on their own scale.
     $th = if ($CadenceSec) { Get-CadenceThresholds -CadenceSec $CadenceSec } else { $null }
     $state = Get-LiveState -Running $Running -AgeSec $HeartbeatAgeSec -Thresholds $th
-    $statusWord = "$(Get-StateGlyph -State $state) $state" + $(if ($null -ne $HeartbeatAgeSec -and $state -in @('Running','Degraded','Down')) { " · $(Format-AgeSec ([int]$HeartbeatAgeSec))" } else { "" })
+    # The state cell widens to 22 chars: "◐ Degraded · 42s" does not fit the
+    # old 11-char ON/OFF column, and an overflow shifts every path column.
+    $ageText = if ($null -ne $HeartbeatAgeSec -and $state -in @('Running','Degraded','Down')) {
+        " · {0}" -f (Format-AgeSec ([int]$HeartbeatAgeSec))
+    } else { "" }
+    $statusWord = "$(Get-StateGlyph -State $state) $state$ageText"
     $statusColor = Get-ProfileColor -Name (Get-StateStyle -State $state)
 
     if ($Running) {
@@ -1040,7 +1045,7 @@ function Write-ProcessRow {
     }
 
     Write-Host ("  {0,-27}" -f $Label) -ForegroundColor (Get-ProfileColor -Name Strong) -NoNewline
-    Write-Host ("{0,-11}" -f $statusWord) -ForegroundColor $statusColor -NoNewline
+    Write-Host ("{0,-22}" -f $statusWord) -ForegroundColor $statusColor -NoNewline
     Write-Host ("{0,-35}" -f $Path) -ForegroundColor (Get-ProfileColor -Name Link) -NoNewline
     Write-Host ' ' -NoNewline -ForegroundColor (Get-ProfileColor -Name Neutral)
     Write-DynamicCell -Segments $dynamic -DefaultColor $dynamicColor
@@ -1460,12 +1465,14 @@ function Show-Status {
         # Live-state language (DESIGN.md): the watcher's ~5s heartbeat drives
         # the same ramp the dashboard applies — amber at 15s, red at 60s.
         $th = Get-CadenceThresholds -CadenceSec 5
-        $state = Get-LiveState -Running ([bool]$gh.running) -AgeSec ([int]$gh.age_s) -Thresholds $th
+        $ghAge = if ($null -ne $gh.age_s) { [int]$gh.age_s } else { $null }
+        $state = Get-LiveState -Running ([bool]$gh.running) -AgeSec $ghAge -Thresholds $th
         $hdrStatus = if ($state -eq 'Running') { 'ON' } elseif ($state -in @('Degraded','Down')) { 'STALE' } else { 'OFF' }
         $hdrStyle  = Get-StateStyle -State $state
         Write-SectionHeader -Number "3" -Title "GLOBAL STOP LOSS" -Status $hdrStatus -StatusStyle $hdrStyle
-        Write-ProcessRow -Label "Global Stop Loss" -Running ([bool]$gh.running) -PidVal $gh.pid -Path $StackPaths["guardrail"] -HeartbeatAgeSec ([int]$gh.age_s) -CadenceSec 5
-        Write-FileRow -Label "Heartbeat file" -Status (if ($state -in @('Degraded','Down')) { "STALE" } else { "FOUND" }) -Path "runtime/global_stop_loss_heartbeat.json" -Dynamic ("{0} Old" -f (Format-AgeSec ([int]$gh.age_s)))
+        Write-ProcessRow -Label "Global Stop Loss" -Running ([bool]$gh.running) -PidVal $gh.pid -Path $StackPaths["guardrail"] -HeartbeatAgeSec $ghAge -CadenceSec 5
+        $hbAgeText = if ($null -ne $ghAge) { Format-AgeSec $ghAge } else { "Unknown" }
+        Write-FileRow -Label "Heartbeat file" -Status (if ($state -in @('Degraded','Down')) { "STALE" } else { "FOUND" }) -Path "runtime/global_stop_loss_heartbeat.json" -Dynamic ("{0} Old" -f $hbAgeText)
         Write-FileRow -Label "Alerts log" -Status "FOUND" -Path "runtime/global_stop_loss_alerts.log" -Dynamic ("{0} Alerts" -f $gh.alerts_total)
     } elseif (Test-Path $HbFile) {
         try {

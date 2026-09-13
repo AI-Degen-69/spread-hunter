@@ -122,8 +122,14 @@ def test_the_status_view_wires_the_state_helpers_into_its_rows():
     js = MENU.read_text(encoding="utf-8")
     assert "Write-ProcessRow -Label $r.Name -Running $r.Running -PidVal $r.Pid -Path $r.Path -RunCmd $r.RunCmd -CadenceSec $r.CadenceSec" in js
     assert "CadenceSec = @{ filter = 600; query = 0.5; decide = 5 }[$svc]" in js
-    assert "-HeartbeatAgeSec ([int]$gh.age_s) -CadenceSec 5" in js
+    assert "-HeartbeatAgeSec $ghAge -CadenceSec 5" in js
     assert "Get-LiveState -Running" in js
+    # An unknown age must stay null, not become 0s: [int]$null is 0, which
+    # would render a fictional "· 0s" on a service that never reported.
+    assert "if ($null -ne $gh.age_s) { [int]$gh.age_s } else { $null }" in js
+    # The state cell is wider than the old 11-char ON/OFF column, or
+    # "◐ Degraded · 42s" overflows and shifts every path column.
+    assert '"{0,-22}" -f $statusWord' in js
 
 
 def test_the_state_marks_carry_no_emoji():
