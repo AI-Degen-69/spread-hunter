@@ -128,7 +128,7 @@
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--text-muted);
-  font: 600 12px Inter, sans-serif;
+  font: 600 12px 'IBM Plex Sans', sans-serif;
   cursor: pointer;
 }
 .proto-rail-pin:hover {
@@ -171,7 +171,7 @@
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--text-secondary);
-  font: 600 13px Inter, sans-serif;
+  font: 600 13px 'IBM Plex Sans', sans-serif;
   text-align: left;
   cursor: pointer;
 }

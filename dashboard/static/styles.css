@@ -116,7 +116,7 @@ header {
 }
 
 .brand { display: flex; align-items: center; gap: 12px; }
-.brand-icon { font-size: 24px; }
+.brand-icon { font-size: 24px; display: inline-flex; align-items: center; }
 .brand-title { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
 .brand-sub { font-size: 11px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; }
 
@@ -510,7 +510,7 @@ header {
 .analytics-gates td:first-child { min-width:230px; }
 .analytics-gates .analytics-gate-badge { min-height:24px; align-items:center; }
 .kpi-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
-.kpi-value { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; margin-top: 4px; }
+.kpi-value { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 700; margin-top: 4px; }
 .kpi-value.positive { color: var(--signal); }
 .kpi-value.negative { color: var(--loss); }
 .kpi-value.null { color: var(--text-muted); }
@@ -2671,8 +2671,22 @@ td { font-size: 13px; }
   gap: 6px;
 }
 
+/* Ordinal badge instead of an emoji glyph: a status marker must render
+   identically on every machine (DESIGN.md: no emoji on status surfaces). */
 .funnel-stage-icon {
-  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .funnel-stage-count {
