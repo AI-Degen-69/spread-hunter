@@ -1489,7 +1489,16 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
     tmp = RUN / f"pipeline.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
     try:
         tmp.write_text(json.dumps(snap, indent=1), encoding="utf-8")
-        tmp.replace(f)
+        replaced = False
+        for _attempt in range(5):
+            try:
+                tmp.replace(f)
+                replaced = True
+                break
+            except PermissionError:
+                time.sleep(0.2)
+        if not replaced:
+            f.write_text(json.dumps(snap, indent=1), encoding="utf-8")
     finally:
         if tmp.exists():
             try:
@@ -1781,7 +1790,16 @@ def main() -> None:
         tmp = RUN / f"markets.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         try:
             tmp.write_text(json.dumps(picked, indent=1), encoding="utf-8")
-            tmp.replace(f)
+            replaced = False
+            for _attempt in range(5):
+                try:
+                    tmp.replace(f)
+                    replaced = True
+                    break
+                except PermissionError:
+                    time.sleep(0.2)
+            if not replaced:
+                f.write_text(json.dumps(picked, indent=1), encoding="utf-8")
         finally:
             if tmp.exists():
                 try:

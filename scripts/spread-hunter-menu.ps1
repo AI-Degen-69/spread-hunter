@@ -149,6 +149,42 @@ function Get-ServiceEntry {
     return $null
 }
 
+# The dashboard reads runtime/processes.json to decide whether Market Scan is
+# running -- it never looks at shadow-session.json. A rehearsal that starts
+# filter_loop without registering it here leaves a stale PID in the file, and
+# the dashboard then reports "Market Scan stopped" while a healthy screener is
+# scanning every ten minutes. Merge rather than overwrite: the same file also
+# carries starting_account_value, which the dashboard needs for the PnL header.
+function Register-StackService {
+    <# Record a running stack process in processes.json under its service key. #>
+    param(
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)]$Process
+    )
+    if (-not $Process) { return }
+    $saved = [ordered]@{}
+    if (Test-Path $ProcsFile) {
+        try {
+            $existing = Get-Content $ProcsFile -Raw | ConvertFrom-Json
+            foreach ($prop in $existing.PSObject.Properties) { $saved[$prop.Name] = $prop.Value }
+        } catch {
+            # An unreadable registry is replaced, never inherited: a half-written
+            # file would otherwise keep the dashboard on a dead PID forever.
+            $saved = [ordered]@{}
+        }
+    }
+    $startedAt = [DateTimeOffset]::new($Process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() / 1000.0
+    $saved[$Key] = [ordered]@{ pid = $Process.Id; started_at = $startedAt }
+    # The pre-rename key would otherwise shadow the fresh one in Get-ServiceEntry.
+    $legacyKey = $LegacyServiceKeys[$Key]
+    if ($legacyKey) { $saved.Remove($legacyKey) | Out-Null }
+    try {
+        $saved | ConvertTo-Json -Depth 5 | Set-Content -Path $ProcsFile -Encoding UTF8
+    } catch {
+        Lsh-Warn "Could not register '$Key' (PID $($Process.Id)) in $ProcsFile; the dashboard may report it stopped."
+    }
+}
+
 # Module map: each stack process -> its source file (relative to the repo root).
 $StackPaths = @{
     filter     = "scripts/filter_loop.py"
@@ -885,6 +921,7 @@ function Resume-ShadowRun {
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "resume_screener.out.log") `
         -RedirectStandardError (Join-Path $RunDir "resume_screener.err.log")
+    Register-StackService -Key "filter" -Process $screener
     # Timebox the screener like the fresh-run path does: filter_loop has no
     # duration limit of its own, so without a timer it outlives the session.
     $killSec = [int]($mins * 60)
@@ -2061,6 +2098,7 @@ function Reset-Environment {
                 Lsh-Ok "Market feed ready (runtime/markets.json)."
                 $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop" -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                     -RedirectStandardOutput (Join-Path $RunDir "validation_screener.out.log") -RedirectStandardError (Join-Path $RunDir "validation_screener.err.log")
+                Register-StackService -Key "filter" -Process $screener
                 Lsh-Ok "Market screener started (PID $($screener.Id))."
                 # The sample-size gate's close target lives in config
                 # (stat_gate_target_closes, default 60): the harness reads it
