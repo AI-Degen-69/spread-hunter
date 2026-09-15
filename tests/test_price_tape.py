@@ -27,6 +27,7 @@ import statistics
 import pytest
 import requests
 
+import core_brain.price_tape as price_tape
 from core_brain.price_tape import (
     DriftCell,
     TapeMarket,
@@ -348,6 +349,39 @@ def test_a_resolved_market_is_no_longer_tracked(tmp_path):
     store.mark_resolved("tok-up", True)
 
     assert store.tracked_tokens() == ["other-up"]
+
+
+# ------------------------------------------------------- resolve-only flag
+
+
+def test_resolve_only_stamps_the_backlog_and_records_no_ticks(
+    tmp_path, monkeypatch, capsys
+):
+    db_path = tmp_path / "price_tape.db"
+    store = TapeStore(db_path)
+    store.record_market(_market(token_id="tok-clean", condition_id="0xclean"))
+    store.record_market(_market(token_id="tok-open", condition_id="0xopen"))
+    store.record_market(_market(token_id="tok-amb", condition_id="0xamb"))
+    session = _Session({"/markets": [
+        _row(conditionId="0xclean",
+             clobTokenIds=json.dumps(["tok-clean", "tok-clean-down"]),
+             closed=True, outcomePrices=json.dumps(["1", "0"])),
+        _row(conditionId="0xamb",
+             clobTokenIds=json.dumps(["tok-amb", "tok-amb-down"]),
+             closed=True, outcomePrices=json.dumps(["0.5", "0.5"])),
+    ]})
+    monkeypatch.setattr(price_tape, "_new_session", lambda: session)
+
+    rc = price_tape._main(["--db", str(db_path), "--resolve-only"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "stamped 1" in out
+    assert "pending 2" in out
+    assert TapeStore(db_path).get_market("tok-clean").up_wins is True
+    assert TapeStore(db_path).get_market("tok-open").up_wins is None
+    assert TapeStore(db_path).get_market("tok-amb").up_wins is None
+    assert TapeStore(db_path).summary().ticks == 0
 
 
 # ------------------------------------------------------------------ summary
