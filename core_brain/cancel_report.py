@@ -97,18 +97,27 @@ def summarize(db_path: Path | str) -> dict[str, Any]:
 
 
 def _hold_state() -> str:
-    """Whether the queue hold is actually on, read from the config.
+    """Whether the two re-quote holds are actually on, read from the config.
 
     Printed rather than assumed: a hardcoded "currently off" would keep saying
     so after someone turned it on, which is the reading that matters most.
+
+    BOTH holds are named. They keep a price move for different reasons -- the
+    queue hold for an order near the front of its level, the direction hold for
+    an order the book is falling onto -- and reporting only one of them tells
+    an operator the other is not there.
     """
     try:
         from core_brain.config import load
 
-        shares = float(getattr(load(), "requote_hold_queue_shares", 0.0) or 0.0)
+        cfg = load()
+        shares = float(getattr(cfg, "requote_hold_queue_shares", 0.0) or 0.0)
+        below = float(getattr(cfg, "requote_hold_below_target", 0.0) or 0.0)
     except Exception:
         return "state unread"
-    return f"on at {shares:g} shares" if shares > 0 else "currently off"
+    queue = f"on at {shares:g} shares" if shares > 0 else "off"
+    drop = f"on within {below:g}" if below > 0 else "off"
+    return f"queue {queue}, direction {drop}"
 
 
 def format_report(summary: dict[str, Any]) -> str:
@@ -142,9 +151,10 @@ def format_report(summary: dict[str, Any]) -> str:
         share = 100.0 * price_moved / summary["cancelled"]
         lines.append("")
         lines.append(f"  {share:.0f}% of cancels were price moves. Those are the "
-                     f"only ones the queue hold can keep")
-        lines.append(f"  (core_brain.config.requote_hold_queue_shares, "
-                     f"{_hold_state()}); the rest are gates doing their job.")
+                     f"only ones the re-quote holds can keep")
+        lines.append(f"  (requote_hold_queue_shares / requote_hold_below_target "
+                     f"in core_brain.config: {_hold_state()});")
+        lines.append(f"  the rest are gates doing their job.")
     return "\n".join(lines)
 
 

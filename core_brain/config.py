@@ -835,6 +835,26 @@ class MakerConfig:
     # and picking this threshold is what that record is for. The hold never
     # overrides the pair-cost re-gate.
     requote_hold_queue_shares: float = 0.0
+    # THE DIRECTION HOLD. How far the desired price may fall BELOW a resting
+    # bid before that bid is re-quoted. A resting BUY is a limit order: it
+    # fills at its own price when a seller sweeps down through it, so a
+    # FALLING target is the market arriving, not leaving, and cancelling on it
+    # hands back the queue position at the one moment the order was going to
+    # fill. A RISING target is the opposite -- the book walked away and the
+    # bid is stranded under the market -- and is re-quoted as before.
+    #
+    # Measured on shadow-01 over 2026-09-15 17:06-21:00: 393 of 755
+    # `price_moved` cancels (52%) fired while the best bid was falling toward
+    # the order, median lifetime 42s, and the run booked ZERO fills across
+    # 1,157 orders. Of those 393, 132 (34%) still rested 1c-5c ABOVE the new
+    # best bid -- close enough that the next seller through reaches them. The
+    # rest ran out to a p90 of 36c: the market leaving, and an adverse fill to
+    # hold.
+    #
+    # Ships ENABLED at one band above the dead band: a cap under the band can
+    # never fire, because an order inside the band was already kept by the
+    # tolerance. The hold never overrides the pair-cost re-gate.
+    requote_hold_below_target: float = 0.05
     poll_interval_sec: float = 1.0
 
     # Only quote while the window is open enough to resolve sensibly.
@@ -1179,6 +1199,13 @@ def load(*, for_display: bool = False) -> MakerConfig:
         # anything past it is a typo, not a setting.
         kw["requote_dead_band"] = _bounded_float(
             "HUNTER_REQUOTE_DEAD_BAND", rdb, 0.0, 1.0)
+    rhb = os.environ.get("HUNTER_REQUOTE_HOLD_BELOW") or ""
+    if rhb.strip():
+        # 0 turns the direction hold off and restores the symmetric re-quote,
+        # which is how the change gets attributed a result on its own. The
+        # ceiling is the instrument's whole price range, as for the dead band.
+        kw["requote_hold_below_target"] = _bounded_float(
+            "HUNTER_REQUOTE_HOLD_BELOW", rhb, 0.0, 1.0)
     rwo = os.environ.get("HUNTER_REWARD_OFFSET") or ""
     if rwo.strip():
         # How far below mid to rest, for ONE run, without moving the shipped
