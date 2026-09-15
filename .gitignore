@@ -47,13 +47,16 @@ runtime/.current_run_id
 data/*.db*
 data/archive/
 data/shadow_stat_*/
-data/shadow_stat_*.db*
-reports/stat_*/
+/data/shadow_stat_*.db*
+/reports/stat_*/
 data/*.json
 data/*.jsonl
 data/*.tmp.*
 data/.current_run_id
-reports/
+# Generated statistics reports. ANCHORED: an unanchored `reports/` also
+# matches any nested directory of that name, and it silently swallowed
+# docs/reports/ -- two issue showcases sat there untracked for weeks.
+/reports/
 python-BACKUP/
 
 # Session tooling
