@@ -1,3 +1,11 @@
+# Rules for run/, runtime/, data/ and reports/ are ANCHORED with a leading
+# slash: they match only the directory of that name at the repo root. An
+# unanchored `reports/` matches a directory of that name at ANY depth, and
+# it silently swallowed docs/reports/ -- two issue showcases sat there
+# untracked for weeks. Keep the slash when adding one, and never add a rule
+# to hide a file a writer put in the wrong place; fix the writer instead.
+# See docs/agents/architecture.md, "Where generated files go".
+
 # Python
 __pycache__/
 *.py[cod]
@@ -21,39 +29,40 @@ htmlcov/
 
 # Logs and runtime artifacts
 *.log
-run/*.db-wal
-run/*.db-shm
-run/*.tmp.*
-run/cycle_events.jsonl.tmp.*
-run/*.log
-runtime/*.db-wal
-runtime/*.db-shm
-runtime/*.tmp.*
-runtime/cycle_events.jsonl.tmp.*
-runtime/*.log
+/run/*.db-wal
+/run/*.db-shm
+/run/*.tmp.*
+/run/cycle_events.jsonl.tmp.*
+/run/*.log
+/runtime/*.db-wal
+/runtime/*.db-shm
+/runtime/*.tmp.*
+/runtime/cycle_events.jsonl.tmp.*
+/runtime/*.log
 
 # Local runtime state -- never publish: real order/fill data, heartbeats,
 # universe snapshots, process registries (public repo)
-run/*.db
-run/archive/
-run/*.json
-run/*.jsonl
-run/.current_run_id
-runtime/*.db
-runtime/archive/
-runtime/*.json
-runtime/*.jsonl
-runtime/.current_run_id
-data/*.db*
-data/archive/
-data/shadow_stat_*/
-data/shadow_stat_*.db*
-reports/stat_*/
-data/*.json
-data/*.jsonl
-data/*.tmp.*
-data/.current_run_id
-reports/
+/run/*.db
+/run/archive/
+/run/*.json
+/run/*.jsonl
+/run/.current_run_id
+/runtime/*.db
+/runtime/archive/
+/runtime/*.json
+/runtime/*.jsonl
+/runtime/.current_run_id
+/data/*.db*
+/data/archive/
+/data/shadow_stat_*/
+/data/shadow_stat_*.db*
+/reports/stat_*/
+/data/*.json
+/data/*.jsonl
+/data/*.tmp.*
+/data/.current_run_id
+# Generated statistics reports.
+/reports/
 python-BACKUP/
 
 # Session tooling
@@ -87,11 +96,11 @@ Thumbs.db
 stats_*.db*
 
 # Runtime state in nested per-run directories (runtime/run145/... etc.)
-runtime/**/*.db*
-runtime/**/*.json
-runtime/**/*.jsonl
-runtime/**/*.txt
-runtime/**/*.log
+/runtime/**/*.db*
+/runtime/**/*.json
+/runtime/**/*.jsonl
+/runtime/**/*.txt
+/runtime/**/*.log
 
 # Local agent tooling state (ECC antigravity harness, opencode, rtk).
 # .agents/ itself is tracked (skills, workflows, hooks) -- only the

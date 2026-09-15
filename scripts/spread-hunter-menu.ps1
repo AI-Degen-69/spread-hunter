@@ -947,7 +947,7 @@ function Resume-ShadowRun {
     }
     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s))."
     $observer = Start-Process -FilePath "python" `
-        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--data-dir", $ProjectPath, "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
+        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "resume_observer.out.log") `
         -RedirectStandardError (Join-Path $RunDir "resume_observer.err.log")
@@ -1993,7 +1993,7 @@ function Reset-Environment {
                     }
                     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $Minutes minute(s)) - dashboard updates live from $ShadowDbPath."
                     $observer = Start-Process -FilePath "python" `
-                        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $ShadowDbPath, "--run-id", $ShadowRunId, "--data-dir", $ProjectPath, "--interval", "5", "--max-hours", (($Minutes / 60) + 0.08) `
+                        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $ShadowDbPath, "--run-id", $ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($Minutes / 60) + 0.08) `
                         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                         -RedirectStandardOutput (Join-Path $RunDir "statistics_observer.out.log") `
                         -RedirectStandardError (Join-Path $RunDir "statistics_observer.err.log")

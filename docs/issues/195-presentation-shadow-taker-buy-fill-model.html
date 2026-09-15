@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Issue #195 | מודל מילוי BUY בצל</title>
+  <style>
+    :root {
+      --ink: #eaf1f6;
+      --muted: #9aabb8;
+      --bg: #0b1117;
+      --panel: #121c25;
+      --panel-2: #172530;
+      --line: #29404d;
+      --cyan: #55d6c2;
+      --amber: #f4b860;
+      --red: #f17c78;
+      --green: #79d99b;
+      --shadow: 0 20px 55px rgba(0, 0, 0, .28);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 12% 0%, #183441 0, transparent 38%),
+                  radial-gradient(circle at 90% 15%, #2a2534 0, transparent 32%), var(--bg);
+      font: 16px/1.65 "Segoe UI", Tahoma, sans-serif;
+    }
+    main { max-width: 1120px; margin: auto; padding: 44px 22px 72px; }
+    .eyebrow { color: var(--cyan); letter-spacing: .08em; font-size: .8rem; font-weight: 700; }
+    h1, h2, h3 { line-height: 1.2; margin: 0 0 14px; }
+    h1 { font-size: clamp(2rem, 5vw, 4.5rem); max-width: 850px; }
+    h2 { font-size: 1.65rem; }
+    h3 { font-size: 1.08rem; }
+    p { color: var(--muted); margin: 0 0 14px; }
+    .hero { padding: 18px 0 34px; }
+    .status, .tag { display: inline-flex; align-items: center; gap: 8px; border: 1px solid; border-radius: 999px; padding: 4px 12px; font-size: .82rem; font-weight: 700; }
+    .status { color: var(--amber); border-color: rgba(244,184,96,.45); background: rgba(244,184,96,.1); }
+    .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+    .facts, .panel { background: linear-gradient(145deg, rgba(23,37,48,.94), rgba(14,23,31,.94)); border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 18px; }
+    .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; overflow: hidden; margin-top: 24px; }
+    .fact { padding: 18px; background: rgba(18,28,37,.72); }
+    .fact b { display: block; color: var(--muted); font-size: .78rem; margin-bottom: 4px; }
+    .fact span { direction: ltr; text-align: left; display: block; overflow-wrap: anywhere; }
+    .panel { padding: 26px; margin-top: 22px; }
+    .eli { border-right: 4px solid var(--cyan); background: rgba(85,214,194,.07); }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+    .compare { padding: 22px; border-radius: 14px; border: 1px solid var(--line); }
+    .before { border-top: 4px solid var(--red); }
+    .after { border-top: 4px solid var(--green); }
+    .compare ul { margin: 0; padding-right: 20px; color: var(--muted); }
+    .compare li { margin: 6px 0; }
+    .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: stretch; margin-top: 20px; }
+    .step { position: relative; padding: 18px 15px; min-height: 135px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; }
+    .step:not(:last-child)::after { content: "←"; position: absolute; left: -18px; top: 42%; color: var(--cyan); font-size: 1.5rem; }
+    .num { color: var(--cyan); font-weight: 800; font-size: .8rem; }
+    .code { direction: ltr; text-align: left; color: #d9f7ef; background: #091016; border: 1px solid #29434b; border-radius: 10px; padding: 12px 14px; overflow: auto; white-space: pre-wrap; font: .88rem/1.5 Consolas, monospace; }
+    .code-row { position: relative; margin: 12px 0; }
+    button { position: absolute; left: 9px; top: 9px; cursor: pointer; border: 1px solid #3d5b63; color: var(--ink); background: #172a31; border-radius: 7px; padding: 3px 9px; }
+    .expected { border-right: 4px solid var(--green); padding: 14px 17px; background: rgba(121,217,155,.08); margin-top: 14px; }
+    table { width: 100%; border-collapse: collapse; color: var(--muted); }
+    th, td { text-align: right; border-bottom: 1px solid var(--line); padding: 12px 8px; vertical-align: top; }
+    th { color: var(--ink); }
+    .ltr { direction: ltr; text-align: left; unicode-bidi: plaintext; }
+    a { color: var(--cyan); }
+    footer { color: var(--muted); text-align: center; padding-top: 26px; font-size: .9rem; }
+    @media (max-width: 760px) {
+      main { padding: 28px 14px 50px; }
+      .facts, .grid, .flow { grid-template-columns: 1fr; }
+      .step:not(:last-child)::after { content: "↓"; left: 50%; top: auto; bottom: -25px; }
+      .step { min-height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">דוח הסבר ובדיקה ידנית · תחנה 4</div>
+      <div style="margin: 16px 0"><span class="status" style="color: var(--green); border-color: rgba(121,217,155,.45); background: rgba(121,217,155,.1)">מוזג ל-main</span></div>
+      <h1>Issue #195: מילוי BUY בצל לפי עומק ה-asks</h1>
+      <p>מסלול ה-BUY המדומה היה ממלא את כל הסכום במחיר המגע, גם כשלא הייתה מספיק כמות בשוק. התיקון גורם לחזרה המדומה ללכת לאורך ספר הפקודות, להחזיר מילוי חלקי ומחיר ממוצע אמיתי יותר.</p>
+      <div class="facts">
+        <div class="fact"><b>Issue</b><span><a href="https://github.com/AI-Degen-69/spread-hunter-live/issues/195">#195 · נסגר</a></span></div>
+        <div class="fact"><b>Pull Request</b><span><a href="https://github.com/AI-Degen-69/spread-hunter-live/pull/201">#201 · מוזג</a></span></div>
+        <div class="fact"><b>ענף</b><span>fix/shadow-buy-depth</span></div>
+        <div class="fact"><b>מצב CI</b><span>Ubuntu ו-Windows עברו</span></div>
+      </div>
+    </section>
+
+    <section class="panel eli">
+      <h2>במילים פשוטות</h2>
+      <p>דמיינו שאתם רוצים לקנות ב-1 דולר. קודם יש מוכר שמציע יחידה ב-51 סנט, ואחריו עוד חצי יחידה ב-52 סנט. קודם היה המודל אומר: “קניתי 1.96 יחידות ב-51 סנט”. עכשיו הוא אומר את האמת: “קניתי 1.5 יחידות, במחיר ממוצע של כ-51.33 סנט”.</p>
+    </section>
+
+    <section class="panel">
+      <h2>לפני ואחרי</h2>
+      <div class="grid">
+        <article class="compare before">
+          <h3>לפני: מחיר מגע שטוח</h3>
+          <ul>
+            <li>הסכום חלקי מחיר המגע.</li>
+            <li>אין בדיקה של כמות זמינה בכל ask.</li>
+            <li>נוצר מילוי מלא גם כשאין מספיק עומק.</li>
+            <li>תוצאת החזרה נראית אופטימית מדי.</li>
+          </ul>
+        </article>
+        <article class="compare after">
+          <h3>אחרי: הליכה לאורך asks</h3>
+          <ul>
+            <li>נלקחות רק רמות חיוביות עד 2 סנט מעל המגע.</li>
+            <li>כל רמה מוגבלת לפי ה-notional שנותר.</li>
+            <li>עומק דק מחזיר short fill במקום להמציא כמות.</li>
+            <li>המחיר, הכמות וה-markout שומרים את המילוי בפועל.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>איך המסלול החדש עובד</h2>
+      <div class="flow">
+        <div class="step"><div class="num">01 · קלט</div><h3>סכום ומחיר מגע</h3><p>המסלול מקבל BUY עם סכום בדולרים ומחיר ask ראשוני.</p></div>
+        <div class="step"><div class="num">02 · ספר</div><h3>רמות asks</h3><p>הספר מנורמל לרשימה; רמות לא-תקינות נפסלות והרשימה ממוינת לפי מחיר.</p></div>
+        <div class="step"><div class="num">03 · מילוי</div><h3>הליכה מוגבלת</h3><p>נלקח עומק עד מחיר מגע ועוד 2 סנט, בלי לעבור את הסכום המבוקש.</p></div>
+        <div class="step"><div class="num">04 · רישום</div><h3>ממוצע בפועל</h3><p>הכמות והמחיר המשוקלל נכתבים להזמנה, למילוי, ל-markout ולתגובה.</p></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>מדריך בדיקה ידני</h2>
+      <p>הבדיקה היא על rehearsal בלבד. אין להריץ פקודת venue או פקודה שפותחת מסחר אמיתי.</p>
+      <h3>1. להריץ את בדיקות ה-BUY הממוקדות</h3>
+      <div class="code-row"><pre class="code">python -m pytest -q tests/test_exit_price_realism.py -k "buy"</pre><button data-copy="python -m pytest -q tests/test_exit_price_realism.py -k &quot;buy&quot;">העתק</button></div>
+      <div class="expected"><b>מה אמורים לראות:</b> בדיקות BUY ירוקות, כולל מילוי קצר, מחיר ממוצע, fallback ו-markout.</div>
+      <h3 style="margin-top: 24px">2. לבדוק rehearsal בלי כסף אמיתי</h3>
+      <div class="code-row"><pre class="code">python -m core_brain.shadow_run --minutes 5</pre><button data-copy="python -m core_brain.shadow_run --minutes 5">העתק</button></div>
+      <div class="expected"><b>מה אמורים לראות:</b> בדוח או ב-registry של הצל מופיעות השלמות BUY עם כמות ומחיר מילוי בפועל. כשספר ה-asks דק, הכמות קטנה מהחישוב השטוח והמחיר הממוצע משקף את הרמות שנלקחו.</div>
+      <h3 style="margin-top: 24px">3. לפתוח את ה-PR ולבדוק את שערי הפרויקט</h3>
+      <div class="code-row"><pre class="code">Start-Process "https://github.com/AI-Degen-69/spread-hunter-live/pull/201"</pre><button data-copy="Start-Process &quot;https://github.com/AI-Degen-69/spread-hunter-live/pull/201&quot;">העתק</button></div>
+      <div class="expected"><b>מצב נוכחי:</b> Ubuntu, Windows ו-GitGuardian עברו. ה-PR מוזג ל-main וה-Issue נסגר.</div>
+    </section>
+
+    <section class="panel">
+      <h2>קבצים שנגעו בשינוי</h2>
+      <table>
+        <thead><tr><th>קובץ</th><th>מה השתנה</th></tr></thead>
+        <tbody>
+          <tr><td class="ltr">core_brain/shadow_exec.py</td><td>נוסף מסלול הליכה על asks, תקרת slippage של 2 סנט, סינון רמות לא-תקינות ורישום המילוי האמיתי.</td></tr>
+          <tr><td class="ltr">tests/test_exit_price_realism.py</td><td>נוספו בדיקות למילוי קצר, מחיר משוקלל, תקרת notional, fallback, markout ורשימת asks לא-ממוינת.</td></tr>
+          <tr><td class="ltr">SPEC.md / CONSTRAINTS.md / tasks/</td><td>תיעוד החוזה, מגבלות האיכות ותוכנית הביצוע.</td></tr>
+          <tr><td class="ltr">AGENTS.md</td><td>הבהרת קצב הבדיקות: focused בזמן פיתוח ו-full suite לפני שילוח או מיזוג.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>נוצר עבור Issue #195 · המיזוג נמצא ב-<span class="ltr">9c0d66f</span> · PR #201 מוזג ל-main</footer>
+  </main>
+  <script>
+    document.querySelectorAll("button[data-copy]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(button.dataset.copy);
+        const original = button.textContent;
+        button.textContent = "הועתק";
+        setTimeout(() => { button.textContent = original; }, 1200);
+      });
+    });
+  </script>
+</body>
+</html>
