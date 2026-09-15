@@ -161,3 +161,4 @@ pill 9999px (status pills, exposure bar).
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-09-13 | Initial design system created | /design-consultation: owner confirmed product (single-operator real-money console), memorable thing "nothing surprises me", sidebar shell adopted (already live at `/`), all three watchdog risks adopted (heartbeat ages, backend-contact watchdog, 1Hz blink), IBM Plex Sans body font, preview-first workflow |
+| 2026-09-15 | `LIVE ONLY` scope tag on the two live-stack-only service cards | Owner asked for a label so the two permanently-STOPPED cards during a shadow rehearsal read as out-of-scope, not dead. Scope is not state and never changes at runtime, so it stays outside the live-state colour vocabulary: quiet gray text with a dashed border (`.svc-scope-pill`), sat beside the existing role tag rather than replacing it. The `title` names `core_brain.shadow_run` as what covers those services during a rehearsal. |

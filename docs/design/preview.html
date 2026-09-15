@@ -95,6 +95,7 @@ body {
 .svc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .svc-name { font-size: 14px; }
 .svc-tag { font-size: 9px; letter-spacing: 0.08em; color: var(--open); border: 1px solid var(--blue-border); background: var(--blue-bg); border-radius: var(--r-sm); padding: 1px 6px; font-family: 'JetBrains Mono', monospace; }
+.svc-scope-tag { font-size: 9px; letter-spacing: 0.08em; color: var(--text-muted); border: 1px dashed var(--border-strong); background: transparent; border-radius: var(--r-sm); padding: 1px 6px; margin-left: 4px; font-family: 'JetBrains Mono', monospace; }
 .svc-desc { font-size: 11.5px; color: var(--text-secondary); }
 .svc-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-secondary); }
 .svc-cmd { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-muted); background: rgba(2,6,23,0.5); border-radius: var(--r-sm); padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -182,7 +183,7 @@ button { font-family: inherit; }
       <div class="card svc">
         <div class="svc-head">
           <div><div class="font-display svc-name">Execution Loop &amp; Maker Quoter</div>
-          <span class="svc-tag">SPREAD QUOTER</span></div>
+          <span class="svc-tag">SPREAD QUOTER</span><span class="svc-scope-tag" title="Live stack only. A shadow rehearsal runs this same code inside python -m core_brain.shadow_run.">LIVE ONLY</span></div>
           <span class="pill running"><span class="dot"></span>RUNNING · 3s</span>
         </div>
         <div class="svc-desc">Runs the trading loop every 5s across approved markets.</div>
@@ -212,7 +213,7 @@ button { font-family: inherit; }
       <div class="card svc">
         <div class="svc-head">
           <div><div class="font-display svc-name">Venue Engine &amp; Order Poller</div>
-          <span class="svc-tag">0.5s CLOB FEED</span></div>
+          <span class="svc-tag">0.5s CLOB FEED</span><span class="svc-scope-tag" title="Live stack only. A shadow rehearsal runs this same code inside python -m core_brain.shadow_run.">LIVE ONLY</span></div>
           <span class="pill stopped">STOPPED</span>
         </div>
         <div class="svc-desc">Deliberately stopped — quiet gray, not an alarm.</div>
