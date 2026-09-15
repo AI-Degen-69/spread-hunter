@@ -480,8 +480,11 @@ def _is_pid_alive(pid: int | None, started_at: float | None = None) -> bool:
 # A heartbeat older than this many rotations means nobody is refreshing it:
 # the rehearsal ended or died. A stopwatch that keeps ticking for a dead
 # process is worse than no stopwatch.
+# Sized at 120s (above SCAN_STALL_THRESHOLD_SEC 90s) so multi-market CLOB
+# orderbook queries over the public API (which take ~40-55s per rotation)
+# do not trip a false "ended" / STALLED alert mid-rotation.
 SHADOW_HEARTBEAT_STALE_ROTATIONS = 3.0
-SHADOW_HEARTBEAT_MIN_STALE_S = 30.0
+SHADOW_HEARTBEAT_MIN_STALE_S = 120.0
 
 
 def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dict | None:
@@ -523,7 +526,14 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     stale_after = max(SHADOW_HEARTBEAT_MIN_STALE_S,
                       SHADOW_HEARTBEAT_STALE_ROTATIONS * interval)
     finished = bool(raw.get("finished"))
-    ended = finished or heartbeat_age > stale_after
+    pid = raw.get("pid")
+    started_at_proc = raw.get("started_at")
+    try:
+        pid_alive = _is_pid_alive(int(pid), started_at_proc) if pid else None
+    except (TypeError, ValueError):
+        # A malformed pid in the heartbeat file must not crash the reader.
+        pid_alive = None
+    ended = finished or (heartbeat_age > stale_after) or (pid_alive is False and heartbeat_age > 15.0)
     return {
         "run_id": raw.get("run_id"),
         "pid": raw.get("pid"),
@@ -1894,20 +1904,20 @@ def get_scan_state():
     except Exception:
         events = []
 
-    hb = _read_engine_heartbeat()
-    hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
-    # A running shadow rehearsal is the authority for its own store: it runs no
-    # live poll loop, so the engine heartbeat is either absent or a stale one
-    # left by an earlier live run -- and a stale live heartbeat would still make
-    # compute_scan_state call a healthy rehearsal STALLED after 90s. Whenever
-    # read_shadow_run() matches the active store and reports the run running,
-    # take its heartbeat over the live one.
+    active_db = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     try:
-        shadow = read_shadow_run(str(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
+        shadow = read_shadow_run(active_db)
     except Exception:
         shadow = None
-    if shadow and shadow.get("running"):
+
+    if shadow is not None:
+        # A shadow rehearsal was registered for this active DB: its heartbeat is authoritative.
+        # Even if the rehearsal is ended or stalled, its age is the shadow run's age,
+        # never a stale engine heartbeat from an unrelated live run.
         hb_ts = now - float(shadow.get("heartbeat_age_sec") or 0.0)
+    else:
+        hb = _read_engine_heartbeat()
+        hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
 
     window = now - 60.0
     active_phases: set[str] = set()

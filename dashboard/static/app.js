@@ -4569,7 +4569,9 @@ function renderScreener(kpi, scanState) {
     const hbAge = scanState.seconds_since_heartbeat;
     let state;
     if (raw === 'SCANNING') {
-      state = stateKey(true, hbAge, cadenceThresholds(5));
+      // Rotation takes ~45-55s on shadow public CLOB queries; calibrated so
+      // normal rotations stay RUNNING without false DEGRADED alerts at 15s.
+      state = stateKey(true, hbAge, { degraded: 60, down: 120 });
     } else if (raw === 'STALLED') {
       state = 'down';
     } else {
