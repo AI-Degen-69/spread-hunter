@@ -40,7 +40,7 @@ from scoring.selector import (identity_allowed, maker_queue_allowed,  # noqa: E4
                               pair_books_allowed, top_depth_usd)
 
 
-def _load_repo_env(root: Path = ROOT) -> None:
+def _load_repo_env(root: Path | str = ROOT) -> None:
     """Make the repo's `.env` visible to config, as scripts/filter_loop does.
 
     A staged gate trial lives in `.env` (HUNTER_VOLUME_TRIAL_USD and friends),
@@ -57,12 +57,20 @@ def _load_repo_env(root: Path = ROOT) -> None:
 
     A missing file or an unreadable one is not an error. The permanent bars
     are the safe fallback, and they are what an unstaged repo should gate on.
+
+    The excepts are narrow on purpose. A bare `except Exception` here swallowed
+    a `TypeError` from passing a str root and reported success while loading
+    nothing -- the gate silently reverted to the permanent bar with no trace.
+    Only a missing dependency and an unreadable file are tolerated.
     """
     try:
         from dotenv import load_dotenv
-        load_dotenv(root / ".env", override=False)
-    except Exception:
-        pass
+    except ImportError:
+        return                      # no python-dotenv: permanent bars stand
+    try:
+        load_dotenv(Path(root) / ".env", override=False)
+    except OSError:
+        pass                        # unreadable file: permanent bars stand
 
 
 # Before `_CFG` below: it is built once at import and never rebuilt, so a
