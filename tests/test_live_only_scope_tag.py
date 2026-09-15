@@ -59,20 +59,28 @@ def test_the_scope_tag_names_shadow_run_as_what_covers_them(scoped, key):
 
 
 @requires_node
-@pytest.mark.parametrize("key", ALWAYS_ON)
-def test_services_that_run_in_a_rehearsal_carry_no_scope_tag(scoped, key):
+@pytest.mark.parametrize("key", LIVE_ONLY + ALWAYS_ON)
+def test_the_scope_tag_reaches_the_live_only_cards_and_no_others(scoped, key):
+    # One assertion over every card, so the tag's absence on the guardrail and
+    # screener is checked against its presence next door rather than against a
+    # template that carried no scope tag at all.
     card = scoped[key]
 
     assert card["found"] is True
-    assert card["hasScopePill"] is False
-    assert card["hasLiveOnlyText"] is False
+    assert card["hasScopePill"] is (key in LIVE_ONLY)
+    assert card["hasLiveOnlyText"] is (key in LIVE_ONLY)
 
 
 @requires_node
 @pytest.mark.parametrize("key", LIVE_ONLY + ALWAYS_ON)
 def test_every_card_keeps_its_own_role_tag(scoped, key):
-    # The scope tag is added beside the role tag, never in place of it.
-    assert scoped[key]["keepsOwnTag"] is True
+    # The scope tag is added beside the role tag, never in place of it: on a
+    # live-only card both must be present at once.
+    card = scoped[key]
+
+    assert card["keepsOwnTag"] is True
+    if key in LIVE_ONLY:
+        assert card["hasScopePill"] is True
 
 
 def test_the_scope_tag_stays_out_of_the_state_colour_vocabulary():
