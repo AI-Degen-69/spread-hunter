@@ -39,6 +39,36 @@ from scoring.rewards import score_per_share   # noqa: E402
 from scoring.selector import (identity_allowed, maker_queue_allowed,  # noqa: E402
                               pair_books_allowed, top_depth_usd)
 
+
+def _load_repo_env(root: Path = ROOT) -> None:
+    """Make the repo's `.env` visible to config, as scripts/filter_loop does.
+
+    A staged gate trial lives in `.env` (HUNTER_VOLUME_TRIAL_USD and friends),
+    and `_effective_volume_bar` already falls back to it through config -- but
+    only if something put the file's values in the environment first. Nothing
+    here did, so a direct `python -m scripts.filter_markets` gated on the
+    permanent bar while `scripts/filter_loop`, which loads the file and then
+    passes `--trial-volume` explicitly, gated on the trial.
+
+    The menu's pre-flight is a direct run with no arguments, so the two
+    disagreed and the pre-flight overwrote the screener's trial universe with
+    an untagged one. `override=False`: a value already in the process
+    environment is the more deliberate of the two and keeps winning.
+
+    A missing file or an unreadable one is not an error. The permanent bars
+    are the safe fallback, and they are what an unstaged repo should gate on.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(root / ".env", override=False)
+    except Exception:
+        pass
+
+
+# Before `_CFG` below: it is built once at import and never rebuilt, so a
+# value that lands in the environment after this point is never seen.
+_load_repo_env()
+
 RUN = ROOT / "runtime"
 OFFSET = 0.020          # where we intend to quote, in price units
 C = 3.0                 # venue's one-sided penalty
