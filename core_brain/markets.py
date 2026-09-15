@@ -320,8 +320,9 @@ def full_book(clob_host: str, token_id: str) -> dict:
     return parse_book(r.json(), token_id)
 
 
-def recent_trades(condition_id: str, seen: set, limit: int = 500) -> dict:
-    """Volume by (token_id, price) that has actually TRADED since we last looked.
+def recent_trades(condition_id: str, seen: set, limit: int = 500,
+                  taker_side: str | None = "SELL") -> dict:
+    """Volume by (token_id, price) that could fill a RESTING BID since we looked.
 
     The fill model needs this to tell a level that was TRADED from one that was
     CANCELLED -- from the book they are identical, and guessing costs an order
@@ -340,8 +341,21 @@ def recent_trades(condition_id: str, seen: set, limit: int = 500) -> dict:
     market that silently vanished from every sweep with no status, no err and
     no event. A skipped trade only under-counts volume at a level, which is
     the conservative direction for a fill model.
+
+    `taker_side` is the side the AGGRESSOR took, and it defaults to the only
+    side that can reach a resting bid. A resting BUY at $0.42 fills when
+    somebody SELLS at $0.42; a taker who BUYS at $0.42 lifts an ask or mints
+    against the complement leg and leaves our bid where it was. Returning both
+    directions credited the fill model volume it could never touch -- on a live
+    500-trade sample the endpoint returned 84% BUY, so the shadow queue drained
+    roughly six times too fast and every rehearsal fill rate built on it read
+    fast. A row whose side is missing or unreadable is skipped rather than
+    counted: if the endpoint ever drops the field the rehearsal must report no
+    fills instead of inventing them. Pass `taker_side=None` for the whole tape,
+    which is what a recorder measuring market activity wants.
     """
     out: dict[str, dict[float, float]] = {}
+    wanted = None if taker_side is None else str(taker_side).strip().upper()
     try:
         r = _SESSION.get(TRADES_API,
                          params={"market": condition_id, "limit": limit},
@@ -362,6 +376,10 @@ def recent_trades(condition_id: str, seen: set, limit: int = 500) -> dict:
         if key in seen:
             continue
         seen.add(key)
+        if wanted is not None:
+            side = t.get("side")
+            if side is None or str(side).strip().upper() != wanted:
+                continue
         tok = str(t.get("asset"))
         try:
             p = round(float(t.get("price") or 0), 4)
