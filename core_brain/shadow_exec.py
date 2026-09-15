@@ -1267,8 +1267,13 @@ def record_shadow_merges(
     # commits costs the pair one apportioned merge, not every merge after it.
     leg_writes: list[tuple[str, str, str, float, float]] = []
     # Which token is the UP leg, so each leg is charged its own cost below.
-    # Read once: `get_all_quotes` walks the whole ledger.
-    side_of = _side_by_token(registry)
+    # Read at most once per call, and only once a pair is actually being
+    # closed: `get_all_quotes` is an unindexed scan of the whole quotes table,
+    # this function runs every rotation next to `shadow_positions` which
+    # already pays that scan, and most rotations close nothing. Paying it up
+    # front would double a cost that grows for the length of the run in order
+    # to answer a question no pair asked.
+    side_of: dict[tuple[str, str], str] | None = None
     for pair_id, legs in by_pair.items():
         if len(legs) != 2:
             continue
@@ -1328,6 +1333,8 @@ def record_shadow_merges(
                    if remaining_shares > SIZE_EPS else 0.0)
             leg_costs.append((token, max(0.0, mergeable * avg)))
         cost_basis = sum(c for _token, c in leg_costs)
+        if side_of is None:
+            side_of = _side_by_token(registry)
         up_removed, dn_removed = _leg_cost_removed(
             leg_costs, side_of, str(legs[0]["condition_id"]))
         proceeds = mergeable * 1.0

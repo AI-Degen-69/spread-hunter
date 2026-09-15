@@ -138,3 +138,64 @@ class TestInventoryBasis:
         close = _merge_one_uneven_pair(reg, db)
         up_overcharge = close["up_cost_removed"] - 6.0 * 0.252
         assert round(up_overcharge, 6) == 0.0
+
+
+class TestTheLedgerScanIsPaidOnlyWhenSomethingMerges:
+    """`get_all_quotes` is `SELECT * FROM quotes` with no index.
+
+    `record_shadow_merges` runs every rotation, right after `shadow_positions`
+    already paid that scan once. Most rotations close nothing, and the quotes
+    table only grows for the length of the run -- so reading the side map
+    before knowing whether any pair is eligible doubles a cost that answers a
+    question no pair asked.
+    """
+
+    def _counting_registry(self, reg):
+        calls = {"n": 0}
+        real = reg.get_all_quotes
+
+        def counted():
+            calls["n"] += 1
+            return real()
+
+        reg.get_all_quotes = counted
+        return calls
+
+    def test_nothing_to_merge_reads_no_quotes(self, registry):
+        from core_brain.shadow_exec import (ensure_shadow_tables,
+                                            record_shadow_merges, record_submit)
+        reg, db = registry
+        ensure_shadow_tables(db)
+        # Orders posted, nothing filled: no pair is mergeable.
+        record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                      db_path=db, book_fn=lambda h, t: {"bids": {}})
+        calls = self._counting_registry(reg)
+        assert record_shadow_merges(reg, db) == []
+        assert calls["n"] == 0
+
+    def test_a_merge_reads_the_ledger_once(self, registry):
+        from core_brain.shadow_exec import (ensure_shadow_tables,
+                                            record_shadow_merges, record_submit)
+        reg, db = registry
+        ensure_shadow_tables(db)
+        record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                      db_path=db, book_fn=lambda h, t: {"bids": {}})
+        by_token = {o.token_id: o for o in reg.get_active_orders()}
+        reg.record_fill(FillRecord(trade_id="f-up",
+                                   order_uuid=by_token["tok-up"].id,
+                                   size=6.0, price=0.252))
+        reg.record_fill(FillRecord(trade_id="f-dn",
+                                   order_uuid=by_token["tok-dn"].id,
+                                   size=6.0, price=0.618))
+        now = int(time.time() * 1000)
+        reg.update_order_status(by_token["tok-up"].id, status="filled",
+                                last_polled_ts=now)
+        reg.update_order_status(by_token["tok-dn"].id, status="filled",
+                                last_polled_ts=now)
+        calls = self._counting_registry(reg)
+        assert len(record_shadow_merges(reg, db)) == 1
+        assert calls["n"] == 1
+
+        # And the attribution still lands: laziness must not cost correctness.
+        close = reg.get_all_closes()[0]
+        assert round(close["up_cost_removed"], 4) == round(6.0 * 0.252, 4)
