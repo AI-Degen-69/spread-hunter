@@ -178,10 +178,19 @@ function Register-StackService {
     # The pre-rename key would otherwise shadow the fresh one in Get-ServiceEntry.
     $legacyKey = $LegacyServiceKeys[$Key]
     if ($legacyKey) { $saved.Remove($legacyKey) | Out-Null }
+    # Write-then-rename, never Set-Content over the live path. The dashboard
+    # polls this same file, and a direct write is visible to it half-finished:
+    # start_bot() treats a truncated registry as permission to launch a second
+    # stack. Move-Item -Force on the same directory is a single rename, so a
+    # reader sees either the old file or the new one.
+    $tmp = "$ProcsFile.$PID.tmp"
     try {
-        $saved | ConvertTo-Json -Depth 5 | Set-Content -Path $ProcsFile -Encoding UTF8
+        $saved | ConvertTo-Json -Depth 5 | Set-Content -Path $tmp -Encoding UTF8
+        Move-Item -LiteralPath $tmp -Destination $ProcsFile -Force -ErrorAction Stop
     } catch {
         Lsh-Warn "Could not register '$Key' (PID $($Process.Id)) in $ProcsFile; the dashboard may report it stopped."
+    } finally {
+        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
     }
 }
 

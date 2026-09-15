@@ -117,3 +117,21 @@ def test_resume_registers_the_screener_in_the_process_file():
     assert "started_at" in helper
     # The pre-rename key must not shadow the fresh one in Get-ServiceEntry.
     assert "$saved.Remove($legacyKey)" in helper
+
+
+def test_register_stack_service_publishes_atomically():
+    """The dashboard polls processes.json while we write it.
+
+    A direct Set-Content over the live path is visible half-finished, and
+    start_bot() reads a truncated registry as permission to launch a second
+    stack. Write to a temp file in the same directory, then rename.
+    """
+    src = _menu_source()
+    helper = src.split("function Register-StackService", 1)[1]
+    helper = helper.split(chr(10) + "function ", 1)[0]
+    assert "$tmp = " in helper
+    assert "Move-Item -LiteralPath $tmp -Destination $ProcsFile -Force" in helper
+    # No write straight at the live registry.
+    assert "Set-Content -Path $ProcsFile" not in helper
+    # The temp file never survives a failed publish.
+    assert "Remove-Item $tmp -Force" in helper
