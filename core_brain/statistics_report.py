@@ -8,6 +8,7 @@ from typing import Any
 from core_brain.config import MakerConfig, load as load_cfg
 from core_brain.kpi import report as kpi_report
 from core_brain.order_registry import OrderRegistry
+from core_brain.runtime_paths import LIVE_ROOT
 from statistical_validation_run.artifacts import (
     build_gate_rows,
     build_sensitivity,
@@ -16,6 +17,17 @@ from statistical_validation_run.artifacts import (
 )
 
 _VALID_MODES = {"shadow", "live"}
+
+
+# Where a report goes when the caller does not say. Anchored to the repo, not
+# to the cwd: `Path("reports")` resolved against whatever directory the process
+# happened to start in, so the report only landed correctly because every menu
+# launch passes `-WorkingDirectory $ProjectPath`. Started from a scheduled
+# task, from `scripts/`, or from a test harness, the run's only human-readable
+# artifact went into a `reports/` folder nobody looks in -- the same bug as the
+# statistics store that spilled into the repo root, by the same mechanism: a
+# writer deciding its destination from ambient state.
+DEFAULT_REPORT_DIR = LIVE_ROOT / "reports"
 
 
 def _disclaimer(mode: str) -> str:
@@ -67,7 +79,7 @@ def write_statistics_report(
     )
 
     timestamp = _datetime.datetime.now().strftime("%d-%m_%H-%M")
-    destination = Path(out_dir) if out_dir is not None else Path("reports")
+    destination = Path(out_dir) if out_dir is not None else DEFAULT_REPORT_DIR
     destination.mkdir(parents=True, exist_ok=True)
     safe_run_id = re.sub(r"[^A-Za-z0-9.-]+", "_", run_id).strip("._") or "run"
     report_path = destination / f"{timestamp}_{mode}_{safe_run_id}_statistics_report.md"

@@ -40,12 +40,49 @@ spread-hunter-live/
   strategy/               Signal and sizing logic
   data/
     orders.db             THE primary order and fill registry
+    NN_shadow_*.db        Per-rehearsal shadow stores
+    stats_*_<run-id>.db   Per-run statistics stores (StatisticsStore)
+    price_tape.db         Recorded venue tape, for research
   runtime/
     markets.json          The filtered universe the Trader quotes
     processes.json        PIDs of the running stack (filter / query / decide)
     cycle_events.jsonl    Ring buffer of operational events
+    *.log                 Every process log the menu redirects
+  reports/                Generated statistics reports (gitignored)
+  docs/issues/            Issue showcases: <id>-presentation-<slug>.html
   tests/                  Full hermetic unit & integration test suite
 ```
+
+## Where generated files go
+
+Every writer names an absolute destination anchored to the repo, never a path
+relative to the cwd and never the repo root. Two artifacts violated this and
+each ended up with two homes, decided by which code path produced it:
+
+| Artifact | Home | Anchored by |
+| --- | --- | --- |
+| Statistics store | `data/` | `--data-dir`, default `data`; every menu launch passes it |
+| Statistics report | `reports/` | `statistics_report.DEFAULT_REPORT_DIR` (`LIVE_ROOT / "reports"`) |
+| Runtime state | `runtime/` | `core_brain/runtime_paths.py` |
+| Process logs | `runtime/` | the menu's `-RedirectStandard*` arguments |
+| Issue showcase | `docs/issues/` | Station VII's `<id>-presentation-<slug>.html` contract |
+
+Two rules keep it that way:
+
+1. **A default destination is a module constant, not a literal at the call
+   site.** `Path("reports")` resolves against whatever directory the process
+   started in. It looked correct only because the menu passes
+   `-WorkingDirectory $ProjectPath`; a scheduled task or a shell in `scripts/`
+   would have written the run's only human-readable artifact somewhere nobody
+   looks.
+2. **Never add a `.gitignore` rule to hide a misplaced file.** `stats_*.db*`
+   was added with the comment *"databases dropped in the repo root"* -- the
+   spill was hidden rather than the writer fixed, and 436 MB accumulated.
+   Fix the writer, then move what already landed.
+
+Ignore patterns for these directories are anchored with a leading `/`. An
+unanchored `reports/` matches a directory of that name at ANY depth, and it
+silently swallowed `docs/reports/` -- two issue showcases sat there untracked.
 
 ## Runtime state across the rename
 

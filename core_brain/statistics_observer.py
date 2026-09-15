@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 from core_brain.kpi import report as kpi_report
 from core_brain.order_registry import OrderRegistry
-from core_brain.statistics_report import write_statistics_report
+from core_brain.statistics_report import (DEFAULT_REPORT_DIR,
+                                          write_statistics_report)
 from core_brain.statistics_store import StatisticsStore
 from core_brain.shadow_guard import assert_not_production_registry
 
@@ -46,7 +47,7 @@ def observe(
             if interval:
                 time.sleep(interval)
     finally:
-        write_statistics_report(watch_path, run_id, mode, Path("reports"))
+        write_statistics_report(watch_path, run_id, mode, DEFAULT_REPORT_DIR)
     return SimpleNamespace(count=count, stats_path=store.path)
 
 
