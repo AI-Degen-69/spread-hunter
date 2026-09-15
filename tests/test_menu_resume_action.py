@@ -91,3 +91,47 @@ def test_resume_timeboxes_screener_and_watcher():
     assert "$timerTargets" in body
     assert "$screener.Id" in body
     assert "Start-Sleep -Seconds $killSec" in body
+
+
+def test_resume_default_duration_is_24_hours():
+    """Resume defaults to 1440 minutes (24h) so it can run continuously overnight."""
+    body = _resume_function_source()
+    assert "1440.0" in body
+
+
+def test_resume_registers_the_screener_in_the_process_file():
+    """The dashboard reads runtime/processes.json for the Market Scan state.
+
+    A resume that starts filter_loop without recording it there leaves the
+    previous run's dead PID in place, and the dashboard reports "Market Scan
+    stopped" while the screener is scanning every ten minutes.
+    """
+    body = _resume_function_source()
+    assert 'Register-StackService -Key "filter" -Process $screener' in body
+    src = _menu_source()
+    assert "function Register-StackService" in src
+    helper = src.split("function Register-StackService", 1)[1]
+    helper = helper.split(chr(10) + "function ", 1)[0]
+    # Merge, never overwrite: starting_account_value lives in the same file.
+    assert "$existing.PSObject.Properties" in helper
+    assert "started_at" in helper
+    # The pre-rename key must not shadow the fresh one in Get-ServiceEntry.
+    assert "$saved.Remove($legacyKey)" in helper
+
+
+def test_register_stack_service_publishes_atomically():
+    """The dashboard polls processes.json while we write it.
+
+    A direct Set-Content over the live path is visible half-finished, and
+    start_bot() reads a truncated registry as permission to launch a second
+    stack. Write to a temp file in the same directory, then rename.
+    """
+    src = _menu_source()
+    helper = src.split("function Register-StackService", 1)[1]
+    helper = helper.split(chr(10) + "function ", 1)[0]
+    assert "$tmp = " in helper
+    assert "Move-Item -LiteralPath $tmp -Destination $ProcsFile -Force" in helper
+    # No write straight at the live registry.
+    assert "Set-Content -Path $ProcsFile" not in helper
+    # The temp file never survives a failed publish.
+    assert "Remove-Item $tmp -Force" in helper

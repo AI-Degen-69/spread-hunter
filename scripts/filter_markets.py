@@ -1485,11 +1485,52 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         "picked": [_row(r) for r in picked],
     }
     RUN.mkdir(exist_ok=True)
-    f = RUN / "pipeline.json"
-    tmp = RUN / f"pipeline.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+    _publish_json(RUN / "pipeline.json", snap)
+
+
+# How many times a rename may lose the race to a reader's open handle before
+# the publish gives up. On Windows the dashboard polls these files, and
+# `Path.replace` raises PermissionError while it holds one; the read is short,
+# so a handful of short retries clears it.
+_PUBLISH_ATTEMPTS = 5
+_PUBLISH_BACKOFF_SEC = 0.2
+
+
+def _publish_json(target: Path, payload) -> bool:
+    """Swap `payload` into `target` by rename, or leave the old file in place.
+
+    Write-then-rename, never a write over the live path: the fleet re-reads
+    `runtime/markets.json` on its own schedule and a half-written file is a
+    SystemExit on the next re-rank.
+
+    A rename that loses the race to a reader's open handle raises
+    PermissionError on Windows, which used to kill the swap outright and leave
+    the trader quoting an empty universe -- so the rename retries. When every
+    retry loses, the PREVIOUS file is kept and the caller is told: a
+    `write_text` over the live path would be exactly the torn read the rename
+    exists to prevent, and a stale universe is the safe failure, since the
+    trader keeps the markets it already adopted. Any other OSError (a full
+    disk, a vanished directory) propagates -- it is not this race.
+
+    Returns True when the file was replaced.
+    """
+    target.parent.mkdir(exist_ok=True)
+    tmp = target.parent / f"{target.stem}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
     try:
-        tmp.write_text(json.dumps(snap, indent=1), encoding="utf-8")
-        tmp.replace(f)
+        tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+        last: Optional[PermissionError] = None
+        for attempt in range(_PUBLISH_ATTEMPTS):
+            try:
+                tmp.replace(target)
+                return True
+            except PermissionError as e:
+                last = e
+                if attempt < _PUBLISH_ATTEMPTS - 1:
+                    time.sleep(_PUBLISH_BACKOFF_SEC)
+        print(f"WARN: could not publish {target.name} after "
+              f"{_PUBLISH_ATTEMPTS} attempts ({last}); keeping the previous "
+              f"file rather than truncating it", file=sys.stderr)
+        return False
     finally:
         if tmp.exists():
             try:
@@ -1775,19 +1816,9 @@ def main() -> None:
             for r in picked:
                 r["trial_spread"] = spread_bar
 
-        # Temp file and rename: the fleet re-reads this on its own schedule and
-        # a half-written file is a SystemExit on the next re-rank.
-        f = RUN / "markets.json"
-        tmp = RUN / f"markets.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         try:
-            tmp.write_text(json.dumps(picked, indent=1), encoding="utf-8")
-            tmp.replace(f)
+            _publish_json(RUN / "markets.json", picked)
         finally:
-            if tmp.exists():
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
             # Remove the marker after successful write so subsequent runs aren't blocked
             if marker.exists():
                 try:
