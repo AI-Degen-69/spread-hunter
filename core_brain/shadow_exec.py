@@ -1052,6 +1052,69 @@ class ShadowExecutionClient:
                 "price": fill_price, "size": shares}
 
 
+def _side_by_token(registry: OrderRegistry) -> dict[tuple[str, str], str]:
+    """UP/DOWN per (condition_id, token_id), from the quotes ledger.
+
+    The same mapping `single_buy_saver._token_side` reads, and the same one
+    `kpi.token_side_map` renders from: the closes table has no token column, so
+    every path that has to say WHICH leg something happened to resolves it from
+    the side each posted order logged with its quote. Newest quote wins.
+
+    Built once per caller rather than per lookup -- `get_all_quotes` walks the
+    whole ledger, and the merge pass needs a side for both legs of every pair
+    it closes.
+    """
+    side_of: dict[tuple[str, str], str] = {}
+    seen_ts: dict[tuple[str, str], float] = {}
+    for q in registry.get_all_quotes():
+        cid, token = q.get("condition_id"), q.get("token_id")
+        side = str(q.get("side") or "").upper()
+        if not cid or not token or side not in ("UP", "DOWN"):
+            continue
+        key = (str(cid), str(token))
+        ts = float(q.get("ts") or 0.0)
+        if ts >= seen_ts.get(key, -1.0):
+            seen_ts[key] = ts
+            side_of[key] = side
+    return side_of
+
+
+def _leg_cost_removed(leg_costs: list[tuple[str, float]],
+                      side_of: dict[tuple[str, str], str],
+                      condition_id: str) -> tuple[float, float]:
+    """A merged pair's cost basis, split into the UP and the DOWN column.
+
+    Each leg is charged what it actually cost. On a spread pair the two are
+    never equal -- 0.252 + 0.618 is the whole point of the strategy -- and the
+    live merge already records the real figures (`order_manager`, the
+    `method="merge"` close, `amt * up_unit_cost` / `amt * dn_unit_cost`). This
+    is what makes the rehearsal agree with it.
+
+    It is not presentation. `kpi` subtracts `up_cost_removed` from the running
+    UP inventory cost when a merge closes, so an even split leaves BOTH legs
+    carrying a basis nothing paid: on shadow-01 close #50 the legs cost $1.512
+    and $3.708 and were recorded as $2.61 each, over-charging UP by $1.098 and
+    under-charging DOWN by the same.
+
+    The fallback is the even split, taken whenever the two legs do not resolve
+    to one UP and one DOWN. The quotes ledger is the only side source here, and
+    guessing which leg is which would put the whole discrepancy on the wrong
+    one -- worse than the imprecision it replaced. Returns the total unchanged
+    either way: this function moves cost between the columns, never creates or
+    loses any.
+    """
+    total = sum(float(cost) for _token, cost in leg_costs)
+    labelled: dict[str, float] = {}
+    for token, cost in leg_costs:
+        side = side_of.get((str(condition_id), str(token)))
+        if side in ("UP", "DOWN"):
+            labelled[side] = labelled.get(side, 0.0) + float(cost)
+    if set(labelled) == {"UP", "DOWN"}:
+        return labelled["UP"], labelled["DOWN"]
+    half = total / 2.0 if total else 0.0
+    return half, half
+
+
 def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, float]:
     """Positions as the shadow store knows them, shaped like `fetch_positions`.
 
@@ -1085,21 +1148,9 @@ def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, 
         for r in rows
     }
 
-    # UP/DOWN per token, from the quotes ledger -- the same mapping
-    # `single_buy_saver._token_side` reads, because the closes table has no
-    # token column and an exit records its leg by which price field is set.
-    side_of: dict[tuple[str, str], str] = {}
-    seen_ts: dict[tuple[str, str], float] = {}
-    for q in registry.get_all_quotes():
-        cid, token = q.get("condition_id"), q.get("token_id")
-        side = str(q.get("side") or "").upper()
-        if not cid or not token or side not in ("UP", "DOWN"):
-            continue
-        key = (str(cid), str(token))
-        ts = float(q.get("ts") or 0.0)
-        if ts >= seen_ts.get(key, -1.0):
-            seen_ts[key] = ts
-            side_of[key] = side
+    # An exit records its leg by which price field is set, so it needs to know
+    # which token is UP.
+    side_of = _side_by_token(registry)
 
     for cr in close_rows:
         shares = float(cr["shares"] or 0.0)
@@ -1215,6 +1266,14 @@ def record_shadow_merges(
     # keeps that safe is the backfill below: a cache row lost between the two
     # commits costs the pair one apportioned merge, not every merge after it.
     leg_writes: list[tuple[str, str, str, float, float]] = []
+    # Which token is the UP leg, so each leg is charged its own cost below.
+    # Read at most once per call, and only once a pair is actually being
+    # closed: `get_all_quotes` is an unindexed scan of the whole quotes table,
+    # this function runs every rotation next to `shadow_positions` which
+    # already pays that scan, and most rotations close nothing. Paying it up
+    # front would double a cost that grows for the length of the run in order
+    # to answer a question no pair asked.
+    side_of: dict[tuple[str, str], str] | None = None
     for pair_id, legs in by_pair.items():
         if len(legs) != 2:
             continue
@@ -1274,6 +1333,10 @@ def record_shadow_merges(
                    if remaining_shares > SIZE_EPS else 0.0)
             leg_costs.append((token, max(0.0, mergeable * avg)))
         cost_basis = sum(c for _token, c in leg_costs)
+        if side_of is None:
+            side_of = _side_by_token(registry)
+        up_removed, dn_removed = _leg_cost_removed(
+            leg_costs, side_of, str(legs[0]["condition_id"]))
         proceeds = mergeable * 1.0
         # Version the tx_hash to ensure uniqueness within (condition_id, tx_hash)
         # constraint: first merge uses pair_id as-is, second uses "pair_id:2", etc.
@@ -1285,14 +1348,15 @@ def record_shadow_merges(
             proceeds=proceeds, fee=0.0, gas=0.0,
             realized_pnl=proceeds - cost_basis,
             # Cost has to leave the inventory with the shares, or the decision
-            # keeps paying for a position it no longer holds. Split evenly
-            # across the legs exactly as the live merge does
-            # (`core_brain/order_manager.py`, the `method="merge"` close): the
-            # closes table has no token column, so an even split is the only
-            # attribution either path can record, and a rehearsal must not
-            # invent a more precise one than live keeps.
-            up_cost_removed=cost_basis / 2.0 if cost_basis else 0.0,
-            dn_cost_removed=cost_basis / 2.0 if cost_basis else 0.0,
+            # keeps paying for a position it no longer holds -- and it has to
+            # leave the leg that paid it. `_leg_cost_removed` charges each leg
+            # its own cost, which is what the live merge records
+            # (`core_brain/order_manager.py`, the `method="merge"` close:
+            # `amt * up_unit_cost` / `amt * dn_unit_cost`). The two columns
+            # already exist; the even split this replaced was a divergence from
+            # live, not a limit of the schema.
+            up_cost_removed=up_removed,
+            dn_cost_removed=dn_removed,
             # The pair id rides in tx_hash, versioned to satisfy the unique
             # constraint on (condition_id, tx_hash). Multiple closes reference
             # the same logical pair by sharing a common prefix in tx_hash.
