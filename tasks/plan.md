@@ -15,7 +15,7 @@
 ## API / interface contract (locked before logic)
 - Flag: `--resolve-only`, `action="store_true"`, flat style like `--status`/`--analyse`. Help text states it stamps resolutions and records no ticks.
 - Branch order in `_main()`: after `store = TapeStore(args.db)`, next to `--status`/`--analyse`, before `session = _new_session()` polling section.
-- Branch body: `before = len(store.tracked_tokens())` → `session = _new_session()` → `stamped = refresh_resolutions(store, session=session)` → `pending = len(store.tracked_tokens())` → single summary `print(...)` → `return 0`.
+- Branch body: `session = _new_session()` → `stamped = refresh_resolutions(store, session=session)` → `pending = len(store.tracked_tokens())` → single summary `print(...)` → `return 0`.
 - `refresh_resolutions()` signature unchanged; `analyse()` / `replace_findings` untouched.
 
 ## Tasks

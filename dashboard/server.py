@@ -529,10 +529,13 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     pid = raw.get("pid")
     started_at_proc = raw.get("started_at")
     try:
-        pid_alive = _is_pid_alive(int(pid), started_at_proc) if pid else None
+        pid_int = int(pid)
     except (TypeError, ValueError):
         # A malformed pid in the heartbeat file must not crash the reader.
-        pid_alive = None
+        pid_int = 0
+    # Only a positive integer identifies a process; anything else (0, negative,
+    # bool, junk) is "unknown" and must not declare a live run dead.
+    pid_alive = _is_pid_alive(pid_int, started_at_proc) if isinstance(pid, int) and not isinstance(pid, bool) and pid_int > 0 else None
     ended = finished or (heartbeat_age > stale_after) or (pid_alive is False and heartbeat_age > 15.0)
     return {
         "run_id": raw.get("run_id"),
@@ -1913,11 +1916,16 @@ def get_scan_state():
     if shadow is not None:
         # A shadow rehearsal was registered for this active DB: its heartbeat is authoritative.
         # Even if the rehearsal is ended or stalled, its age is the shadow run's age,
-        # never a stale engine heartbeat from an unrelated live run.
+        # never a stale engine heartbeat from an unrelated live run. Use the shadow's
+        # own stale threshold (SHADOW_HEARTBEAT_MIN_STALE_S), not the 90s engine one,
+        # or a healthy slow rotation would flip to STALLED between 90s and 120s.
         hb_ts = now - float(shadow.get("heartbeat_age_sec") or 0.0)
+        stale_threshold = max(SHADOW_HEARTBEAT_MIN_STALE_S,
+                              SHADOW_HEARTBEAT_STALE_ROTATIONS * float(shadow.get("interval") or 5.0))
     else:
         hb = _read_engine_heartbeat()
         hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
+        stale_threshold = SCAN_STALL_THRESHOLD_SEC
 
     window = now - 60.0
     active_phases: set[str] = set()
@@ -1952,7 +1960,8 @@ def get_scan_state():
         except Exception:
             pass
 
-    state, hb_age = compute_scan_state(last_event_ts, hb_ts, now, active_phases)
+    state, hb_age = compute_scan_state(last_event_ts, hb_ts, now, active_phases,
+                                        stall_threshold=stale_threshold)
 
     rows = _read_cycle_intent_rows(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     skip_counts: dict[str, int] = {}
