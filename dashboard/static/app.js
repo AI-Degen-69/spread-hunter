@@ -725,12 +725,18 @@ const SERVICE_DEFS = [
   { key: 'filter', name: 'Market Filter', cmd: 'python -m scripts.filter_loop',
     tag: 'UNIVERSE SCANNER',
     desc: 'Scans 500+ Polymarket binary markets and screens down to graduated pairs with positive spread.' },
+  // `liveOnly` marks a service that exists only on the live stack. A shadow
+  // rehearsal (`python -m core_brain.shadow_run`) runs the same poll and quote
+  // code in-process against a signer-less client, so these two stay STOPPED
+  // for the whole rehearsal and that is the correct reading, not a fault.
   { key: 'query', name: 'Venue Engine & Order Poller', cmd: 'python -m core_brain.order_manager poll --interval 0.5',
     tag: '0.5s CLOB FEED',
-    desc: 'Queries CLOB every 0.5s, reconciles fills, and executes periodic balance sweeps.' },
+    desc: 'Queries CLOB every 0.5s, reconciles fills, and executes periodic balance sweeps.',
+    liveOnly: true },
   { key: 'decide', name: 'Execution Loop & Maker Quoter', cmd: 'python -m core_brain.trader_loop --live --no-reconcile --no-sweep --interval 5',
     tag: 'SPREAD QUOTER',
-    desc: 'Runs the trading loop (dual-sided maker quotes -> merge execution) every 5s across approved markets.' },
+    desc: 'Runs the trading loop (dual-sided maker quotes -> merge execution) every 5s across approved markets.',
+    liveOnly: true },
 ];
 
 function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
@@ -902,7 +908,8 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
           <div class="service-card-head">
             <div>
               <div class="font-display" style="font-size:14px;letter-spacing:0.02em;color:var(--text-primary)">${def.name}</div>
-              <span class="param-code-pill" style="margin-top:2px;display:inline-block">${def.tag}</span>
+              <span class="param-code-pill" style="margin-top:2px;display:inline-block">${def.tag}</span>${def.liveOnly ? `
+              <span class="svc-scope-pill" title="Live stack only. A shadow rehearsal runs this same code inside python -m core_brain.shadow_run, so this card stays STOPPED during a rehearsal by design.">LIVE ONLY</span>` : ''}
             </div>
             <span class="service-pill-slot">${pill}</span>
           </div>
