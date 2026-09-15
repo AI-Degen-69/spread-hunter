@@ -73,6 +73,7 @@ def plan_orders(
     reasons: Optional[dict] = None,
     queue_ahead: Optional[dict] = None,
     hold_queue_shares: float = 0.0,
+    hold_below_target: float = 0.0,
 ) -> tuple[list[dict], list[QuoteIntent]]:
     """Split open orders + desired intents into (cancel, submit).
 
@@ -141,6 +142,34 @@ def plan_orders(
     `hold_queue_shares` ships at 0.0, which disables the hold entirely. The
     reasons above are recorded either way, and choosing the threshold is what
     that record is for.
+
+    THE DIRECTION HOLD. For a resting BUY the two ways a target can leave the
+    band are not the same event, and re-quoting on both of them cancels the
+    order at the only moment it was ever going to fill:
+
+      * the target RISES -- the book walked away and our bid is stranded under
+        the market. It will not be reached. Re-quote.
+      * the target FALLS -- the book is walking down ONTO our bid. A limit BUY
+        at 0.47 fills at 0.47 when a seller sweeps through it; that is the
+        entire fill mechanism on this venue. Cancelling here hands back the
+        queue position and the fill, and the replacement rests lower down where
+        the same thing happens again.
+
+    `hold_below_target` caps how far the target may fall below a held bid,
+    because a LARGE drop is the market leaving rather than arriving: a bid held
+    36c above the book is an adverse fill, not a queue position. Measured on
+    shadow-01 across 2026-09-15 17:06-21:00, 393 of 755 `price_moved` cancels
+    (52%) fired while the best bid was falling toward the order, median order
+    lifetime 42s, and the run booked zero fills over 1,157 orders. Of those 393,
+    132 (34%) still rested 1c-5c ABOVE the new best bid -- close enough that the
+    next seller through reaches them. The rest ran out to a p90 of 36c, which is
+    the market leaving.
+
+    The direction hold takes the SAME standby conditions as the queue hold --
+    it never overrides the pair-cost re-gate, and it refuses to act on an
+    unarmed one. The two are independent: an order far back in the queue is
+    still held on a downward move, because a limit order fills at its own price
+    whoever is resting in front of it.
     """
     tolerance = max(float(price_eps), float(dead_band))
 
@@ -165,6 +194,18 @@ def plan_orders(
             # never measured is the same guess the hold rule exists to replace.
             return False
         return float(ahead) <= float(hold_queue_shares)
+
+    def _market_arriving(order: dict, targets: list[QuoteIntent]) -> bool:
+        """Is the book walking DOWN onto this bid, and still close to it?
+
+        Compared against the HIGHEST target for the token: that is the price
+        this cycle would rest at, so it is the one that says whether the book
+        has come to the order or left it behind.
+        """
+        if not hold_below_target or hold_below_target <= 0:
+            return False
+        drop = round(float(order["price"]) - max(float(i.price) for i in targets), 4)
+        return 0.0 < drop <= round(float(hold_below_target), 4)
 
     kept: dict[str, list[dict]] = {}
     # Tokens whose order was HELD through a price move. A held order rests at a
@@ -200,7 +241,8 @@ def plan_orders(
             hedge_ask = hedge_asks.get(tok) if hedge_asks else None
             hold_gate_armed = (regate_armed and hedge_ask is not None
                                and float(hedge_ask) > 0)
-            if hold_gate_armed and not regate_blocks and _near_front(o):
+            if hold_gate_armed and not regate_blocks and (
+                    _near_front(o) or _market_arriving(o, targets)):
                 kept.setdefault(tok, []).append(o)
                 held_tokens.add(tok)
                 continue
@@ -665,6 +707,7 @@ def _visit_one(
             cfg=cfg, hedge_asks=hedge_asks, hedge_held=hedge_held,
             reasons=cancel_reasons, queue_ahead=queue_ahead,
             hold_queue_shares=float(getattr(cfg, "requote_hold_queue_shares", 0.0)),
+            hold_below_target=float(getattr(cfg, "requote_hold_below_target", 0.0)),
         )
     except Exception as e:
         emit_fn(service="decide", cycle=cycle, phase="quoting",
