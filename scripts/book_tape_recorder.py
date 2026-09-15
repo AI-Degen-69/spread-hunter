@@ -393,9 +393,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     clob_host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
     log.info("recording %s markets for %.0f min every %.0fs -> %s (run %s)",
              args.markets, args.minutes, args.interval, args.db, run_id)
+    # The WHOLE tape, both taker sides. `recent_trades` defaults to taker
+    # sells because that is the only volume that can fill a resting bid, which
+    # is what the shadow fill model needs -- but `reachable_fraction` divides
+    # by ALL tape, above-mid prints included, so a filtered feed here would
+    # silently shrink the denominator and inflate every reachability number
+    # this recorder has ever written.
+    def whole_tape(condition_id, seen, limit=500):
+        return recent_trades(condition_id, seen, limit=limit, taker_side=None)
+
     return run(args.minutes, args.interval, Path(args.db), run_id,
                Path(args.markets), clob_host,
-               _fetch_market, full_book, recent_trades)
+               _fetch_market, full_book, whole_tape)
 
 
 if __name__ == "__main__":

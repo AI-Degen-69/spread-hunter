@@ -96,3 +96,18 @@ def test_side_matching_ignores_case_and_padding(tape):
 
     # Assert
     assert out == {"tok": {0.42: 7.0}}
+
+
+def test_the_book_tape_recorder_still_reads_the_whole_tape():
+    """`reachable_fraction` divides by ALL tape, above-mid prints included.
+
+    Handing the recorder a SELL-only tape would silently shrink that
+    denominator and inflate every reachability number it has ever recorded.
+    The fill model is the only caller that wants the filtered view.
+    """
+    import inspect
+
+    from scripts import book_tape_recorder
+
+    src = inspect.getsource(book_tape_recorder.main)
+    assert "taker_side=None" in src
