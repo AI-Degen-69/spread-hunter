@@ -141,6 +141,69 @@ def test_the_bar_is_reported_so_the_page_cannot_invent_one(tmp_path):
     assert tape_findings(store.path)["significance_t"] == 3.0
 
 
+def test_findings_report_their_own_age(tmp_path):
+    store = _seeded(tmp_path)
+    analyse(store, cells=(DriftCell(0.03, 60, 60),))
+
+    now = int(analyse_now(store) + 9 * 3600)  # 9h after the compute stamp
+    report = tape_findings(store.path, now_fn=lambda: now)
+
+    assert report["grid_age_hours"] == pytest.approx(9.0, rel=1e-3)
+    assert report["computed_at_h"].startswith("20")
+
+
+def analyse_now(store):
+    return store.findings()[0].computed_at
+
+
+def test_findings_are_stale_when_ticks_were_appended_after_compute(tmp_path):
+    store = _seeded(tmp_path)
+    analyse(store, cells=(DriftCell(0.03, 60, 60),))
+    compute_ts = analyse_now(store)
+    store.append_ticks("tok-up", [(compute_ts + 600, 0.9)])
+
+    report = tape_findings(store.path, now_fn=lambda: compute_ts + 3600)
+
+    assert report["stale"] is True
+    assert report["stale_reason"] == "NEW_TICKS"
+    assert report["ticks_since_computed"] >= 1
+
+
+def test_findings_are_stale_when_the_grid_is_old_even_without_new_ticks(tmp_path):
+    store = _seeded(tmp_path)
+    analyse(store, cells=(DriftCell(0.03, 60, 60),))
+    compute_ts = analyse_now(store)
+
+    report = tape_findings(store.path, now_fn=lambda: compute_ts + 8 * 86400)
+
+    assert report["stale"] is True
+    assert report["stale_reason"] == "GRID_AGE"
+
+
+def test_a_fresh_grid_with_no_new_ticks_is_not_stale(tmp_path):
+    store = _seeded(tmp_path)
+    analyse(store, cells=(DriftCell(0.03, 60, 60),))
+    compute_ts = analyse_now(store)
+
+    report = tape_findings(store.path, now_fn=lambda: compute_ts + 1800)
+
+    assert report["stale"] is False
+    assert report["stale_reason"] is None
+
+
+def test_findings_report_coverage_at_compute_time(tmp_path):
+    store = _seeded(tmp_path)
+    analyse(store, cells=(DriftCell(0.03, 60, 60),))
+    compute_ts = analyse_now(store)
+    store.append_ticks("tok-up", [(compute_ts + 600, 0.9)])
+
+    report = tape_findings(store.path, now_fn=lambda: compute_ts + 3600)
+
+    assert report["computed_over_tape_ticks"] == 400
+    assert report["ticks_since_computed"] == 1
+    assert report["last_tick_ts_h"].startswith("20")
+
+
 def test_mean_is_reported_in_cents(tmp_path):
     store = _seeded(tmp_path)
     analyse(store, cells=(DriftCell(0.03, 60, 60),))

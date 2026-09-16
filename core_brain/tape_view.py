@@ -28,10 +28,12 @@ different schema, so pointing this at it would not fail loudly, it would report
 """
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import sqlite3
+import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from core_brain.price_tape import DEFAULT_TAPE_PATH, SIGNIFICANCE_T
 
@@ -40,6 +42,22 @@ from core_brain.price_tape import DEFAULT_TAPE_PATH, SIGNIFICANCE_T
 REFUSED_STORES = ("orders.db",)
 
 SECONDS_PER_DAY = 86_400.0
+
+#: A grid older than this is stale on age alone, even if no tick was appended
+#: after it was computed: the answer on screen is a week old, not a measurement.
+STALE_GRID_AGE_SEC = 7 * SECONDS_PER_DAY
+
+#: A store whose newest tick is older than this has stopped collecting, and the
+#: page must say so rather than render a healthy, silently frozen coverage tile.
+NOT_COLLECTING_SEC = 24 * 3600.0
+
+
+def _iso(ts: Optional[int]) -> Optional[str]:
+    """A unix stamp as UTC ISO, for a page that should not guess a timezone."""
+    if ts is None:
+        return None
+    return _dt.datetime.fromtimestamp(int(ts), _dt.timezone.utc).isoformat(
+        timespec="seconds").replace("+00:00", "Z")
 
 
 class RefusedStore(ValueError):
@@ -98,6 +116,7 @@ def tape_status(path: str | Path) -> dict[str, Any]:
         "db": str(path), "exists": True, "state": "READY",
         "markets": markets, "resolved": resolved, "ticks": ticks,
         "first_ts": first_ts, "last_ts": last_ts,
+        "last_ts_h": _iso(last_ts),
         "span_days": (last_ts - first_ts) / SECONDS_PER_DAY,
     }
 
@@ -110,12 +129,28 @@ def _verdict(t: float) -> str:
     return "NO_SIGNAL"
 
 
-def tape_findings(path: str | Path) -> dict[str, Any]:
-    """The stored drift grid, read back with each cell's verdict applied."""
+def tape_findings(
+    path: str | Path,
+    *,
+    now_fn: Optional[Callable[[], int]] = None,
+) -> dict[str, Any]:
+    """The stored drift grid, read back with each cell's verdict applied.
+
+    The grid is a snapshot, not a live answer: `analyse` wrote it once and
+    nothing on the page recomputes it. So this reports the grid's own age --
+    when it was computed, how much tape existed at that moment, and how much
+    has been recorded since -- and flags it STALE when ticks were appended
+    after the compute stamp, or when the snapshot itself is older than
+    `STALE_GRID_AGE_SEC`. A page must not let an old verdict pass as current.
+    """
+    now = time.time if now_fn is None else now_fn
     path = Path(path)
     empty: dict[str, Any] = {
         "db": str(path), "state": "MISSING", "cells": [],
-        "computed_at": None, "significance_t": SIGNIFICANCE_T,
+        "computed_at": None, "computed_at_h": None, "grid_age_hours": None,
+        "ticks_since_computed": None, "computed_over_tape_ticks": None,
+        "last_tick_ts_h": None, "stale": None, "stale_reason": None,
+        "significance_t": SIGNIFICANCE_T,
         "continues": 0, "comes_back": 0, "no_signal": 0, "samples": 0,
     }
     if not path.exists():
@@ -126,10 +161,27 @@ def tape_findings(path: str | Path) -> dict[str, Any]:
                 "SELECT label, trigger, lookback_m, horizon_m, n, mean, t_stat, "
                 "computed_at FROM findings "
                 "ORDER BY trigger, lookback_m, horizon_m").fetchall()
+            last_tick = conn.execute("SELECT MAX(ts) FROM ticks").fetchone()[0]
+            tick_count = conn.execute("SELECT COUNT(*) FROM ticks").fetchone()[0]
     except sqlite3.Error:
         return {**empty, "state": "NOT_ANALYSED"}
     if not rows:
         return {**empty, "state": "NOT_ANALYSED"}
+
+    computed_at = rows[0]["computed_at"]
+    now_ts = int(now())
+    has_new_ticks = last_tick is not None and last_tick > computed_at
+    ticks_since = 0
+    if has_new_ticks:
+        ticks_since = conn.execute(
+            "SELECT COUNT(*) FROM ticks WHERE ts > ?", (computed_at,)
+        ).fetchone()[0]
+    if has_new_ticks:
+        stale_reason = "NEW_TICKS"
+    elif now_ts - computed_at > STALE_GRID_AGE_SEC:
+        stale_reason = "GRID_AGE"
+    else:
+        stale_reason = None
 
     cells = []
     tally = {"CONTINUES": 0, "COMES_BACK": 0, "NO_SIGNAL": 0}
@@ -149,7 +201,14 @@ def tape_findings(path: str | Path) -> dict[str, Any]:
         })
     return {
         "db": str(path), "state": "READY", "cells": cells,
-        "computed_at": rows[0]["computed_at"],
+        "computed_at": computed_at,
+        "computed_at_h": _iso(computed_at),
+        "grid_age_hours": (now_ts - computed_at) / 3600.0,
+        "ticks_since_computed": ticks_since,
+        "computed_over_tape_ticks": tick_count - ticks_since,
+        "last_tick_ts_h": _iso(last_tick),
+        "stale": stale_reason is not None,
+        "stale_reason": stale_reason,
         "significance_t": SIGNIFICANCE_T,
         "continues": tally["CONTINUES"],
         "comes_back": tally["COMES_BACK"],
