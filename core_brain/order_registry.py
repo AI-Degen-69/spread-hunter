@@ -558,7 +558,28 @@ def backfill_quote_fill_attribution(conn: sqlite3.Connection) -> int:
     no-op on an already-attributed database and safe to run on every open. A
     quote with no fills is left alone rather than being handed the 0.0 an empty
     aggregate would produce -- the same reason `fill_ts` stays NULL there.
+
+    A no-op UPDATE is still a write: SQLite takes the write lock to run it even
+    when it matches nothing. Every `OrderRegistry()` opens through `init_db`,
+    so an unconditional UPDATE made every reader a writer -- the dashboard
+    builds a registry on each `/api/kpi` poll, and each one queued behind the
+    live loop's writes for up to `BUSY_TIMEOUT_SEC` while holding `_lock`,
+    until the request threadpool was full and the dashboard answered nothing.
+    The read below decides whether there is anything to repair; in WAL a read
+    never waits on the writer, so an attributed database opens lock-free.
     """
+    needs_repair = conn.execute(
+        """
+        SELECT 1 FROM quotes
+         WHERE local_id IS NOT NULL
+           AND COALESCE(filled, 0) = 0
+           AND EXISTS (SELECT 1 FROM fills WHERE order_uuid = quotes.local_id)
+         LIMIT 1
+        """
+    ).fetchone()
+    if needs_repair is None:
+        return 0
+
     cur = conn.execute(
         """
         UPDATE quotes
