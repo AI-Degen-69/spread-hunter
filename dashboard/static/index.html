@@ -613,19 +613,22 @@
 
   <!-- ── Tab 3: Market Filter Pipeline (kanban) ── -->
   <section id="tab-3" role="tabpanel" aria-labelledby="tab-btn-3" hidden>
-    <!-- Market Filter header: scan state, snapshot age, census, gates -->
+    <!-- Market Filter header: whose heartbeat, and how old the snapshot is.
+         The pill is LABELLED, because it reads the trading loop's heartbeat
+         while sitting next to "last scan" -- unlabelled, that pair read as
+         "the market scan is down". The scanner's own liveness is the
+         #market-scan-pill in the top nav. -->
     <div class="card" id="screener-header">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <div style="display:flex;align-items:center;gap:10px">
-          <span id="scan-state-pill" class="pill stopped">--</span>
+          <span class="mono" style="font-size:10px;letter-spacing:.08em;color:var(--text-muted)">TRADING LOOP</span>
+          <span id="scan-state-pill" class="pill stopped"
+                title="Heartbeat age of the loop placing the quotes: runtime/shadow_run.json during a rehearsal, runtime/live_poll_heartbeat.json on the live stack. Not the market scan -- that is the SCAN pill in the top bar.">--</span>
           <span id="scan-snapshot-age" class="mono" style="font-size:12px;color:var(--text-secondary)">last scan: --</span>
           <span id="scan-filter-uptime" class="mono" style="font-size:12px;color:var(--text-secondary)"></span>
           <span id="trial-ready-banner" class="pill stopped mono" style="display:none;margin-left:8px"></span>
         </div>
-        <div id="trial-trackers" class="mono" style="display:none;gap:10px;margin-top:6px;font-size:12px"></div>
-        <div id="scan-census" class="mono" style="font-size:11px;color:var(--text-muted)"></div>
       </div>
-      <div id="scan-gates" class="mono" style="font-size:10px;color:var(--text-muted);margin-top:6px;display:none"></div>
     </div>
     <!-- Kanban carousel container with floating navigation arrows -->
     <div class="kanban-carousel-container" id="kanban-carousel-container">

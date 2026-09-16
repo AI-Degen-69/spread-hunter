@@ -4584,59 +4584,32 @@ function getStageHero(key, funnel) {
 }
 
 // TRIAL READINESS. The ranker's near-miss logs say whether a gate's refusals
-// are consistent enough to license a controlled loosening. Rendered as two
-// tracker cards plus a banner, so the evidence becomes a decision instead of
-// accumulating in a JSONL nobody reads.
-function trackerCard(tracker) {
-  if (!tracker) return '';
-  const t = tracker.thresholds || {};
-  const ready = tracker.ready === true;
-  const cls = ready ? 'filled' : 'stopped';
-  const blockers = (tracker.blockers || []).join(' · ');
-  const label = String(tracker.gate || '').toUpperCase();
-  return `<span class="pill ${cls}" style="font-size:11px" title="${esc(blockers || 'all thresholds met')}">`
-    + `${esc(label)} ${ready ? 'TRIAL READY' : 'gathering'}`
-    + `</span> <span style="color:var(--text-secondary)">`
-    + `${tracker.days.toFixed(1)}d/${t.min_days ?? '--'} · `
-    + `${tracker.unique_markets}/${t.min_unique ?? '--'} markets · `
-    + `${tracker.small_margin}/${t.min_small_margin ?? '--'} near · `
-    + `${Math.round((tracker.stability || 0) * 100)}%/`
-    + `${t.min_stability == null ? '--' : Math.round(t.min_stability * 100) + '%'} stable`
-    + `</span>`;
-}
-
+// are consistent enough to license a controlled loosening.
+//
+// Only the verdict is on screen. The per-gate progress cards ("DEPTH gathering
+// 8.7d/14 · 3/8 markets · 41% stable") were four numbers nobody acted on
+// between the day the run started and the day it turned ready; the ready
+// banner is the moment a decision exists. /api/trial-readiness still carries
+// the full detail for anyone who wants to read it.
 function renderTrialReadiness(readiness) {
   const banner = document.getElementById('trial-ready-banner');
-  const trackers = document.getElementById('trial-trackers');
-  if (!banner || !trackers) return;
-  if (!readiness) {
+  if (!banner) return;
+  const gates = (readiness && readiness.ready_gates) || [];
+  if (!readiness || !readiness.trial_ready || !gates.length) {
     banner.style.display = 'none';
-    trackers.style.display = 'none';
     return;
   }
-
-  const gates = readiness.ready_gates || [];
-  if (readiness.trial_ready && gates.length) {
-    banner.style.display = '';
-    banner.className = 'pill filled mono';
-    banner.textContent = 'TRIAL READY: ' + gates.join(' + ').toUpperCase();
-    banner.title = 'The near-miss evidence for this gate meets every readiness '
-      + 'threshold. Readiness is not profitability — the trial measures that.';
-  } else {
-    banner.style.display = 'none';
-  }
-
-  trackers.style.display = 'flex';
-  trackers.innerHTML = `<div>${trackerCard(readiness.depth)}</div>`
-    + `<div>${trackerCard(readiness.volume)}</div>`;
+  banner.style.display = '';
+  banner.className = 'pill filled mono';
+  banner.textContent = 'TRIAL READY: ' + gates.join(' + ').toUpperCase();
+  banner.title = 'The near-miss evidence for this gate meets every readiness '
+    + 'threshold. Readiness is not profitability — the trial measures that.';
 }
 
 function renderScreener(kpi, scanState) {
   const board = document.getElementById('kanban-board');
   const headerPill = document.getElementById('scan-state-pill');
   const headerAge = document.getElementById('scan-snapshot-age');
-  const headerCensus = document.getElementById('scan-census');
-  const headerGates = document.getElementById('scan-gates');
 
   // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
   // The server's STALLED verdict stays authoritative for DOWN; a SCANNING
@@ -4670,8 +4643,6 @@ function renderScreener(kpi, scanState) {
       <div class="empty-state-title">No Market Filter data yet</div>
       <div class="empty-state-msg">The Market Filter writes runtime/pipeline.json on each scan cycle. Data appears here once it runs.</div>
     </div>`;
-    headerCensus.textContent = '';
-    headerGates.style.display = 'none';
     return;
   }
 
@@ -4688,11 +4659,6 @@ function renderScreener(kpi, scanState) {
     headerAge.style.color = age > SCAN_INTERVAL_SEC * 2 ? 'var(--error, #e5484d)' : 'var(--warn)';
   } else {
     headerAge.style.color = 'var(--text-secondary)';
-  }
-  headerCensus.textContent = funnel.census || '';
-  if (funnel.gates) {
-    headerGates.textContent = funnel.gates;
-    headerGates.style.display = 'block';
   }
 
   // Group rejections by canonical gate
@@ -5123,7 +5089,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds, decisionGatesHtml, decisionGatesRows, gateBadge, typesetMath, renderTrialReadiness, trackerCard, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity,
+  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds, decisionGatesHtml, decisionGatesRows, gateBadge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity,
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     renderPnlCiReadout, renderExecutionFunnel,
     OT_VIEWS, OT_COLUMNS, ordersTradesRows, ordersTradesCounts, otHeadHtml,

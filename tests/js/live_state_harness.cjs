@@ -212,12 +212,26 @@ function marketScanVerdicts() {
   };
 }
 
+/* The TRIAL READY banner: the verdict, and nothing while there is none. */
+function trialBannerVerdicts() {
+  const el = document.getElementById('trial-ready-banner');
+  const show = (r) => { app.renderTrialReadiness(r); return el.style.display; };
+  return {
+    failedFetch: show(null),
+    notReady: show({ trial_ready: false, ready_gates: [], depth: {}, volume: {} }),
+    readyNoGates: show({ trial_ready: true, ready_gates: [] }),
+    ready: show({ trial_ready: true, ready_gates: ['depth'] }),
+    readyText: el.textContent,
+  };
+}
+
 let out;
-if (script === 'marketscan') out = marketScanVerdicts();
+if (script === 'trialbanner') out = trialBannerVerdicts();
+else if (script === 'marketscan') out = marketScanVerdicts();
 else if (script === 'scanpill') out = scanPillVerdicts();
 else if (script === 'pills') out = pillVerdicts();
 else if (script === 'keys') out = keyVerdicts();
 else if (script === 'backend') out = backendSequence();
-else out = { pills: pillVerdicts(), keys: keyVerdicts(), backend: backendSequence(), scanpill: scanPillVerdicts(), marketscan: marketScanVerdicts() };
+else out = { pills: pillVerdicts(), keys: keyVerdicts(), backend: backendSequence(), scanpill: scanPillVerdicts(), marketscan: marketScanVerdicts(), trialbanner: trialBannerVerdicts() };
 
 process.stdout.write(JSON.stringify(out));

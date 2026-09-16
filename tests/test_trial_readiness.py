@@ -13,6 +13,8 @@ both dashboards license a trial on the same evidence.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,18 @@ from core_brain.trial_readiness import (
     readiness,
     volume_tracker,
 )
+
+_HARNESS = Path(__file__).resolve().parent / "js" / "live_state_harness.cjs"
+
+requires_node = pytest.mark.skipif(shutil.which("node") is None,
+                                   reason="node is not installed on this host")
+
+
+def _harness(script: str) -> dict:
+    out = subprocess.run([shutil.which("node"), str(_HARNESS), script],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    return json.loads(out.stdout)
+
 
 DAY = 86400.0
 T0 = 1_788_000_000.0
@@ -243,23 +257,37 @@ def test_the_screener_hero_falls_back_to_the_shipped_bars():
     assert "depth_gate_usd || 1000" not in app_js
 
 
-def test_the_screener_has_the_tracker_and_banner_slots():
+def test_the_screener_has_the_ready_banner_slot():
+    # The per-gate progress trackers were removed (Owner 2026-09-16): "DEPTH
+    # gathering 3/8 markets" is progress nobody acts on. The banner survives
+    # because TRIAL READY is the moment a decision exists, and the full detail
+    # is still on /api/trial-readiness.
     # Arrange / Act
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     app_js = (_STATIC / "app.js").read_text(encoding="utf-8")
 
     # Assert
     assert 'id="trial-ready-banner"' in html
-    assert 'id="trial-trackers"' in html
     assert "renderTrialReadiness" in app_js
 
 
-def test_a_failed_readiness_fetch_hides_the_trackers():
-    # Arrange — the poll must call the renderer even when the fetch returned
+def test_a_failed_readiness_fetch_hides_the_banner():
+    # Arrange -- the poll must call the renderer even when the fetch returned
     # nothing, or the last reading stays on screen as if it were current.
     app_js = (_STATIC / "app.js").read_text(encoding="utf-8")
 
-    # Act / Assert — called unconditionally, and null hides.
-    assert "if (trialReadiness) {\n      renderTrialReadiness" not in app_js
+    # Act / Assert -- called unconditionally.
+    assert "if (trialReadiness) {" + chr(92) + "n      renderTrialReadiness" not in app_js
     assert "renderTrialReadiness(trialReadiness);" in app_js
-    assert "if (!readiness) {" in app_js
+
+
+@requires_node
+def test_the_banner_shows_only_on_a_real_ready_verdict():
+    # Behaviour, not source text: a dead fetch, a not-ready verdict and a
+    # "ready" with no gates named all leave the header empty.
+    v = _harness("trialbanner")
+    assert v["failedFetch"] == "none"
+    assert v["notReady"] == "none"
+    assert v["readyNoGates"] == "none"
+    assert v["ready"] == ""
+    assert v["readyText"] == "TRIAL READY: DEPTH"
