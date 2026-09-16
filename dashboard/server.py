@@ -2385,6 +2385,27 @@ def get_reversion_results(db: str | None = None):
     })
 
 
+@app.get("/api/reversion/sweep")
+def get_reversion_sweep(db: str | None = None, games_from: int | None = None):
+    """The whole jump-by-hold grid from the recorded quote tape.
+
+    `sweep()` walks the entire quote tape on every call, so unlike the status
+    and results routes this one is NOT free: measured against the production
+    store on 2026-09-16 (27k quotes) it answers in well under a second, which
+    the 30-second page poll absorbs. If the tape grows by orders of magnitude,
+    this route needs a cache or an explicit bound before the poll interval.
+    Read-only, through the shared resolver that refuses `data/orders.db`.
+    """
+    from core_brain.reversion_view import reversion_sweep_grid
+    return JSONResponse(
+        reversion_sweep_grid(_reversion_store(db), games_from=games_from),
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        })
+
+
 # PAGE_HTML: backward-compat shim for tests that reference the constant.
 # The actual HTML now lives in dash/static/index.html. Tests that assert on
 # specific HTML strings should read from the static file directly.
