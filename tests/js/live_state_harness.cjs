@@ -179,10 +179,23 @@ function backendSequence() {
   };
 }
 
+function scanPillVerdicts() {
+  return {
+    scanningFresh: app.scanPillState('SCANNING', 3),
+    idleFresh: app.scanPillState('IDLE', 3),
+    idleAging: app.scanPillState('IDLE', 75),
+    idleLongGone: app.scanPillState('IDLE', 300),
+    stalled: app.scanPillState('STALLED', 3),
+    unrecognised: app.scanPillState('WAT', 3),
+    missing: app.scanPillState(undefined, 3),
+  };
+}
+
 let out;
-if (script === 'pills') out = pillVerdicts();
+if (script === 'scanpill') out = scanPillVerdicts();
+else if (script === 'pills') out = pillVerdicts();
 else if (script === 'keys') out = keyVerdicts();
 else if (script === 'backend') out = backendSequence();
-else out = { pills: pillVerdicts(), keys: keyVerdicts(), backend: backendSequence() };
+else out = { pills: pillVerdicts(), keys: keyVerdicts(), backend: backendSequence(), scanpill: scanPillVerdicts() };
 
 process.stdout.write(JSON.stringify(out));

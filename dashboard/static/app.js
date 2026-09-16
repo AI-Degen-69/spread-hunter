@@ -102,6 +102,27 @@ function statePillHtml(state, ageSec) {
   return `<span class="pill state-${state}">${dot}${label}${age}</span>`;
 }
 
+/* Rotation takes ~45-55s on shadow public CLOB queries; calibrated so a normal
+ * rotation stays RUNNING without a false DEGRADED at the 15s default. */
+const SCAN_PILL_THRESHOLDS = { degraded: 60, down: 120 };
+
+/* The scan pill reports liveness, not activity.
+ *
+ * The server's IDLE means "heartbeat fresh but no active-phase work in the
+ * window" -- the filter is alive and between scans, which on a ~10m cycle is
+ * most of the time. Mapping it to STOPPED said "intentionally not running"
+ * (DESIGN.md) about a healthy process, so the pill flipped between SCANNING
+ * and STOPPED every cycle. A live heartbeat ages through the ramp instead, and
+ * a filter that really stops goes DOWN when its heartbeat does. Only a verdict
+ * we do not recognise reads STOPPED. */
+function scanPillState(rawState, hbAgeSec) {
+  if (rawState === 'STALLED') return 'down';
+  if (rawState === 'SCANNING' || rawState === 'IDLE') {
+    return stateKey(true, hbAgeSec, SCAN_PILL_THRESHOLDS);
+  }
+  return 'stopped';
+}
+
 /* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
  * When the poll loop loses contact with the backend, the page must stop
  * pretending the last render is live. After 2 consecutive failed polls the
@@ -4567,16 +4588,7 @@ function renderScreener(kpi, scanState) {
   if (scanState) {
     const raw = scanState.scan_state || '--';
     const hbAge = scanState.seconds_since_heartbeat;
-    let state;
-    if (raw === 'SCANNING') {
-      // Rotation takes ~45-55s on shadow public CLOB queries; calibrated so
-      // normal rotations stay RUNNING without false DEGRADED alerts at 15s.
-      state = stateKey(true, hbAge, { degraded: 60, down: 120 });
-    } else if (raw === 'STALLED') {
-      state = 'down';
-    } else {
-      state = 'stopped';
-    }
+    const state = scanPillState(raw, hbAge);
     headerPill.className = 'pill state-' + state;
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
@@ -5061,7 +5073,7 @@ if (typeof module !== 'undefined' && module.exports) {
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },
     set isStopping(v) { isStopping = v; },
-    stateKey, statePillHtml, cadenceThresholds,
+    stateKey, statePillHtml, cadenceThresholds, scanPillState,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },

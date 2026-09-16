@@ -213,3 +213,38 @@ def test_the_design_system_is_declared_to_every_agent():
     assert "Live-State Language" in design
     for state in ("RUNNING", "DEGRADED", "DOWN", "STOPPED", "UNKNOWN", "STALE"):
         assert state in design
+
+
+# ── the Market Filter's scan pill: liveness, not activity ──────────────────
+#
+# The server's IDLE means "heartbeat fresh but no active-phase work in the
+# window" -- the filter is alive and between scans, which on a ~10m cycle is
+# most of the time. Rendering that as STOPPED told the operator a healthy
+# filter was "intentionally not running", and the pill flipped between
+# SCANNING and STOPPED every cycle.
+
+@requires_node
+def test_an_idle_filter_with_a_fresh_heartbeat_reads_running():
+    assert _harness("scanpill")["idleFresh"] == "running"
+
+
+@requires_node
+def test_a_scanning_filter_with_a_fresh_heartbeat_reads_running():
+    assert _harness("scanpill")["scanningFresh"] == "running"
+
+
+@requires_node
+def test_an_idle_filter_ages_through_the_ramp_like_any_other_service():
+    verdicts = _harness("scanpill")
+    assert (verdicts["idleAging"], verdicts["idleLongGone"]) == ("degraded", "down")
+
+
+@requires_node
+def test_a_stalled_filter_reads_down():
+    assert _harness("scanpill")["stalled"] == "down"
+
+
+@requires_node
+def test_an_unrecognised_verdict_still_reads_stopped():
+    verdicts = _harness("scanpill")
+    assert (verdicts["unrecognised"], verdicts["missing"]) == ("stopped", "stopped")
