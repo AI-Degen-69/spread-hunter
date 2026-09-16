@@ -480,8 +480,11 @@ def _is_pid_alive(pid: int | None, started_at: float | None = None) -> bool:
 # A heartbeat older than this many rotations means nobody is refreshing it:
 # the rehearsal ended or died. A stopwatch that keeps ticking for a dead
 # process is worse than no stopwatch.
+# Sized at 120s (above SCAN_STALL_THRESHOLD_SEC 90s) so multi-market CLOB
+# orderbook queries over the public API (which take ~40-55s per rotation)
+# do not trip a false "ended" / STALLED alert mid-rotation.
 SHADOW_HEARTBEAT_STALE_ROTATIONS = 3.0
-SHADOW_HEARTBEAT_MIN_STALE_S = 30.0
+SHADOW_HEARTBEAT_MIN_STALE_S = 120.0
 
 
 def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dict | None:
@@ -523,7 +526,17 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     stale_after = max(SHADOW_HEARTBEAT_MIN_STALE_S,
                       SHADOW_HEARTBEAT_STALE_ROTATIONS * interval)
     finished = bool(raw.get("finished"))
-    ended = finished or heartbeat_age > stale_after
+    pid = raw.get("pid")
+    started_at_proc = raw.get("started_at")
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        # A malformed pid in the heartbeat file must not crash the reader.
+        pid_int = 0
+    # Only a positive integer identifies a process; anything else (0, negative,
+    # bool, junk) is "unknown" and must not declare a live run dead.
+    pid_alive = _is_pid_alive(pid_int, started_at_proc) if isinstance(pid, int) and not isinstance(pid, bool) and pid_int > 0 else None
+    ended = finished or (heartbeat_age > stale_after) or (pid_alive is False and heartbeat_age > 15.0)
     return {
         "run_id": raw.get("run_id"),
         "pid": raw.get("pid"),
@@ -1894,20 +1907,25 @@ def get_scan_state():
     except Exception:
         events = []
 
-    hb = _read_engine_heartbeat()
-    hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
-    # A running shadow rehearsal is the authority for its own store: it runs no
-    # live poll loop, so the engine heartbeat is either absent or a stale one
-    # left by an earlier live run -- and a stale live heartbeat would still make
-    # compute_scan_state call a healthy rehearsal STALLED after 90s. Whenever
-    # read_shadow_run() matches the active store and reports the run running,
-    # take its heartbeat over the live one.
+    active_db = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     try:
-        shadow = read_shadow_run(str(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
+        shadow = read_shadow_run(active_db)
     except Exception:
         shadow = None
-    if shadow and shadow.get("running"):
+
+    if shadow is not None:
+        # A shadow rehearsal was registered for this active DB: its heartbeat is authoritative.
+        # Even if the rehearsal is ended or stalled, its age is the shadow run's age,
+        # never a stale engine heartbeat from an unrelated live run. Use the shadow's
+        # own stale threshold (SHADOW_HEARTBEAT_MIN_STALE_S), not the 90s engine one,
+        # or a healthy slow rotation would flip to STALLED between 90s and 120s.
         hb_ts = now - float(shadow.get("heartbeat_age_sec") or 0.0)
+        stale_threshold = max(SHADOW_HEARTBEAT_MIN_STALE_S,
+                              SHADOW_HEARTBEAT_STALE_ROTATIONS * float(shadow.get("interval") or 5.0))
+    else:
+        hb = _read_engine_heartbeat()
+        hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
+        stale_threshold = SCAN_STALL_THRESHOLD_SEC
 
     window = now - 60.0
     active_phases: set[str] = set()
@@ -1942,7 +1960,8 @@ def get_scan_state():
         except Exception:
             pass
 
-    state, hb_age = compute_scan_state(last_event_ts, hb_ts, now, active_phases)
+    state, hb_age = compute_scan_state(last_event_ts, hb_ts, now, active_phases,
+                                        stall_threshold=stale_threshold)
 
     rows = _read_cycle_intent_rows(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     skip_counts: dict[str, int] = {}

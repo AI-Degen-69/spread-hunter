@@ -777,6 +777,9 @@ def _main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--analyse", action="store_true",
                         help="answer the drift grid against the recorded tape, "
                              "store the answers, and exit")
+    parser.add_argument("--resolve-only", action="store_true",
+                        help="stamp resolutions onto the recorded tape, "
+                             "record no ticks, and exit")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -798,6 +801,13 @@ def _main(argv: Optional[list[str]] = None) -> int:
                        "comes back" if f.t <= -SIGNIFICANCE_T else "no signal")
             print(f"{f.label:<16}{f.n:>8}{f.mean * 100:>9.3f}c{f.t:>8.2f}   {verdict}")
         print(f"\n{written} cells stored. Bar for a signal: |t| >= {SIGNIFICANCE_T}")
+        return 0
+
+    if args.resolve_only:
+        session = _new_session()
+        stamped = refresh_resolutions(store, session=session)
+        pending = len(store.tracked_tokens())
+        print(f"resolutions stamped {stamped}  pending {pending}")
         return 0
 
     session = _new_session()
