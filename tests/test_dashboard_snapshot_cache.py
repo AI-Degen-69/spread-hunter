@@ -52,9 +52,9 @@ def test_concurrent_readers_share_one_build():
     assert results == ["snapshot"] * 8
 
 
-def test_a_stale_snapshot_is_rebuilt(monkeypatch):
+def test_a_fresh_snapshot_is_not_rebuilt(monkeypatch):
     # Arrange
-    monkeypatch.setattr(server, "SNAPSHOT_TTL_SEC", 0.01, raising=False)
+    monkeypatch.setattr(server, "SNAPSHOT_TTL_SEC", 60.0, raising=False)
     builds: list[int] = []
 
     def build():
@@ -63,11 +63,11 @@ def test_a_stale_snapshot_is_rebuilt(monkeypatch):
 
     # Act
     first = server._cached_snapshot(("probe",), build)
-    time.sleep(0.05)
     second = server._cached_snapshot(("probe",), build)
 
     # Assert
-    assert (first, second) == (1, 2)
+    assert (first, second) == (1, 1)
+    assert len(builds) == 1
 
 
 def test_state_endpoint_reads_the_store_once_per_ttl(monkeypatch, tmp_path):
@@ -98,3 +98,56 @@ def test_kpi_endpoint_builds_the_report_once_per_ttl(monkeypatch, tmp_path):
 
     # Assert
     assert len(calls) == 1, f"the report was built {len(calls)} times for 5 polls"
+
+
+def test_a_stale_snapshot_is_served_without_waiting(monkeypatch):
+    """A reader never pays for a rebuild once any snapshot exists.
+
+    A build costs several seconds of the registry lock -- longer than the TTL
+    -- so making readers wait for a fresh one left a page load sitting for 40
+    seconds behind requests an earlier load had abandoned.
+    """
+    # Arrange — one fast build to prime, then builds that take far too long.
+    monkeypatch.setattr(server, "SNAPSHOT_TTL_SEC", 0.01)
+    calls: list[int] = []
+
+    def build():
+        calls.append(1)
+        if len(calls) > 1:
+            time.sleep(1.0)
+        return f"snapshot-{len(calls)}"
+
+    assert server._cached_snapshot(("probe",), build) == "snapshot-1"
+    time.sleep(0.05)
+
+    # Act — the snapshot is stale now, and rebuilding it is slow.
+    started = time.monotonic()
+    served = server._cached_snapshot(("probe",), build)
+    elapsed = time.monotonic() - started
+
+    # Assert
+    assert served == "snapshot-1", "a stale snapshot must be served as-is"
+    assert elapsed < 0.2, f"a reader waited {elapsed:.2f}s for a background rebuild"
+
+
+def test_the_background_refresh_replaces_the_stale_snapshot(monkeypatch):
+    # Arrange
+    monkeypatch.setattr(server, "SNAPSHOT_TTL_SEC", 0.01)
+    calls: list[int] = []
+
+    def build():
+        calls.append(1)
+        return f"snapshot-{len(calls)}"
+
+    server._cached_snapshot(("probe",), build)
+    time.sleep(0.05)
+
+    # Act — this read triggers the refresh and returns the stale value.
+    server._cached_snapshot(("probe",), build)
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and len(calls) < 2:
+        time.sleep(0.01)
+    time.sleep(0.05)
+
+    # Assert
+    assert server._snapshots[("probe",)][1] == "snapshot-2"

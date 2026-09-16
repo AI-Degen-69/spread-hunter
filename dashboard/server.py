@@ -364,8 +364,12 @@ def _cached_snapshot(key: tuple, build):
     dashboard stops answering anything at all -- which the page reports as lost
     contact with the engine.
 
-    Callers that arrive while a build is running wait for that build instead of
-    starting their own, so N concurrent readers cost exactly one pass.
+    Only the very first caller waits for a build. Once a snapshot exists it is
+    served immediately, stale or not, and one background thread refreshes it --
+    a build costs several seconds of the registry lock, which is longer than
+    the TTL, so making readers wait for a fresh one meant a page load sat for
+    40 seconds behind requests an earlier load had abandoned. Concurrent first
+    callers share one build rather than starting their own.
 
     What is cached is the payload, never a `Response` object. A response
     carries per-request state -- the gzip middleware rewrites its headers as it
@@ -379,6 +383,12 @@ def _cached_snapshot(key: tuple, build):
     with _snapshot_registry_lock:
         builder = _snapshot_builders.setdefault(key, threading.Lock())
 
+    if hit is not None:
+        if builder.acquire(blocking=False):
+            threading.Thread(target=_refresh_snapshot, args=(key, build, builder),
+                             daemon=True).start()
+        return hit[1]
+
     with builder:
         # Re-check: whoever held the builder lock has just refreshed this key.
         hit = _snapshots.get(key)
@@ -387,6 +397,18 @@ def _cached_snapshot(key: tuple, build):
         value = build()
         _snapshots[key] = (time.monotonic(), value)
         return value
+
+
+def _refresh_snapshot(key: tuple, build, builder: threading.Lock) -> None:
+    """Rebuild `key` off the request path, keeping the old value on failure."""
+    try:
+        _snapshots[key] = (time.monotonic(), build())
+    except Exception:
+        # The previous snapshot stays as it was: serving the last good numbers
+        # beats serving none, and the next reader retries the refresh.
+        logger.exception("snapshot refresh failed for %s", key)
+    finally:
+        builder.release()
 
 
 # How many cancelled orders per market survive into `/api/state`.
