@@ -2203,13 +2203,16 @@ def _cycle_stream_sse(
     file_key = None
     if ring_path.exists():
         try:
-            with open(ring_path, "r", encoding="utf-8", errors="replace") as fh:
-                tail_lines = fh.readlines()[-tail:]
+            # Seek to the tail rather than reading every line to keep the
+            # last few: the ring grows for the life of a run (33.8 MB on a
+            # one-day rehearsal) and every page load opens this stream.
+            with open(ring_path, "rb") as fh:
                 # Position actually consumed, not a later stat: an append in the
                 # read-to-stat gap must not be silently skipped.
-                offset = fh.tell()
+                offset = fh.seek(0, os.SEEK_END)
                 file_key = _ring_file_key(os.fstat(fh.fileno()))
-            for line in tail_lines:
+            from core_brain.cycle_stream import tail_lines
+            for line in tail_lines(ring_path, tail):
                 if line.strip():
                     yield _frame(line)
         except OSError:
