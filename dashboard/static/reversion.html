@@ -351,11 +351,14 @@
     meta.append(document.createTextNode(parts.join(" · ")));
 
     document.getElementById("sweep-body").innerHTML = cells.map(function (c) {
-      var name = c.jump_c + "c / " + c.horizon_s + "s";
+      // One cell per header column: the pre-registration label rides with the
+      // jump value, so each metric lands under its own heading.
+      var jumpCell = c.jump_c + "c";
       if (c.pre_registered) {
-        name += ' <span class="pill mid" title="התא שנרשם מראש ב-2026-09-08: קפיצה של 5 סנט, החזקה של 300 שניות">נרשם מראש</span>';
+        jumpCell += ' <span class="pill mid" title="התא שנרשם מראש ב-2026-09-08: קפיצה של 5 סנט, החזקה של 300 שניות">נרשם מראש</span>';
       }
-      return "<tr><td>" + name
+      return "<tr><td>" + jumpCell
+        + '</td><td class="num">' + c.horizon_s + "s"
         + '</td><td class="num">' + comma(c.trades)
         + '</td><td class="num">' + comma(c.matches)
         + '</td><td class="num ' + signClass(c.drift_c) + '">' + cents(c.drift_c)
@@ -369,15 +372,22 @@
 
   function refresh() {
     var qs = window.location.search || "";
+    // The sweep replays the whole quote tape per request (~0.8s here), so it
+    // is fetched once per cut — not on every 30-second poll. Only the two
+    // cheap reads (status/results) ride the poll loop.
+    var sweepPromise = lastSweepCut === qs
+      ? Promise.resolve(null)
+      : fetch("/api/reversion/sweep" + qs).then(function (r) { return r.json(); })
+          .then(function (g) { lastSweepCut = qs; return g; });
     Promise.all([
       fetch("/api/reversion/status" + qs).then(function (r) { return r.json(); }),
       fetch("/api/reversion/results" + qs).then(function (r) { return r.json(); }),
-      fetch("/api/reversion/sweep" + qs).then(function (r) { return r.json(); })
+      sweepPromise
     ]).then(function (both) {
       renderState(both[0]);
       renderStatus(both[0]);
       renderResults(both[1]);
-      renderSweep(both[2]);
+      if (both[2] !== null) { renderSweep(both[2]); }
     }).catch(function () { /* the watch may be mid-write; the next poll retries */ });
   }
 
