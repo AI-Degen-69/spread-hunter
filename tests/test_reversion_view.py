@@ -37,6 +37,7 @@ from core_brain.reversion_view import (
     RefusedStore,
     resolve_reversion_db,
     reversion_results,
+    reversion_sweep_grid,
     reversion_status,
 )
 from core_brain.reversion_watch import (

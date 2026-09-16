@@ -144,6 +144,22 @@
     </table>
   </div>
 
+  <div class="card" id="sweep-card" hidden>
+    <h2>רשת הסוויפ — כל שילוב של קפיצה והמתנה</h2>
+    <div id="sweep-meta" class="empty"></div>
+    <div id="sweep-empty" class="empty">המאגר עוד לא נסרק בהצלחה, או שאין בו קפיצות.</div>
+    <table id="sweep-table" hidden>
+      <thead>
+        <tr>
+          <th>קפיצה</th><th>המתנה</th><th>עסקאות</th><th>משחקים</th>
+          <th>drift</th><th>fade</th><th>follow</th><th>עלות</th>
+          <th>כמה בטוח</th><th>מסקנה</th>
+        </tr>
+      </thead>
+      <tbody id="sweep-body"></tbody>
+    </table>
+  </div>
+
   <div class="card" id="state-card" hidden>
     <div class="warn-row">
       <span>⛔</span>
@@ -284,15 +300,84 @@
     }).join("");
   }
 
+  function sweepVerdictPill(v) {
+    if (v === "TRADABLE") return '<span class="pill pays">משתלם</span>';
+    if (v === "REVERTS") return '<span class="pill mid">חוזר (ללא עלות)</span>';
+    if (v === "PAID_AWAY") return '<span class="pill loses">נאכל בפער</span>';
+    if (v === "THIN") return '<span class="pill tail">דגימה דקה</span>';
+    return '<span class="pill none">לא מספיק ברור</span>';
+  }
+
+  function ageWords(hours) {
+    if (hours === null || hours === undefined) return "—";
+    if (hours < 1) return Math.max(1, Math.round(hours * 60)) + " דק׳";
+    if (hours < 48) return Math.round(hours) + " שע׳";
+    return (hours / 24).toFixed(1) + " ימים";
+  }
+
+  // The sweep replays the whole quote tape per request, so it is the one call
+  // the 30s poll must not hammer: refetch only when the operator asks for it
+  // or when the cut changes.
+  var lastSweepCut = null;
+  function renderSweep(g) {
+    var card = document.getElementById("sweep-card");
+    if (!g || g.state !== "READY") { card.hidden = true; return; }
+    card.hidden = false;
+
+    var cells = g.cells || [];
+    var any = cells.some(function (c) { return c.trades > 0; });
+    document.getElementById("sweep-empty").hidden = any;
+    document.getElementById("sweep-table").hidden = !any;
+
+    var meta = document.getElementById("sweep-meta");
+    meta.innerHTML = "";
+    var parts = [];
+    if (g.games_from) {
+      parts.push("מדוד על משחקים שהתחילו מ-" + g.games_from + " (ההפרדה שנרשמה מראש) — "
+        + "הגריד אינו מעורב עם המדגם שממנו נבחרו הפרמטרים");
+    } else {
+      parts.push("מדוד על כל המאגר — הוסף ?games_from=1788849238 להפרדה שנרשמה מראש");
+    }
+    if (g.last_quote_ts_h) {
+      parts.push("הציטוט החדש ביותר: " + g.last_quote_ts_h.replace("T", " ").replace("Z", " UTC")
+        + " (לפני " + ageWords(g.quote_age_hours) + ")");
+    }
+    if (g.stale) {
+      var w = document.createElement("b");
+      w.style.color = "var(--warn)";
+      w.textContent = "⚠ לא אוסף ";
+      meta.append(w);
+    }
+    meta.append(document.createTextNode(parts.join(" · ")));
+
+    document.getElementById("sweep-body").innerHTML = cells.map(function (c) {
+      var name = c.jump_c + "c / " + c.horizon_s + "s";
+      if (c.pre_registered) {
+        name += ' <span class="pill mid" title="התא שנרשם מראש ב-2026-09-08: קפיצה של 5 סנט, החזקה של 300 שניות">נרשם מראש</span>';
+      }
+      return "<tr><td>" + name
+        + '</td><td class="num">' + comma(c.trades)
+        + '</td><td class="num">' + comma(c.matches)
+        + '</td><td class="num ' + signClass(c.drift_c) + '">' + cents(c.drift_c)
+        + '</td><td class="num ' + signClass(c.fade_c) + '">' + cents(c.fade_c)
+        + '</td><td class="num ' + signClass(c.follow_c) + '">' + cents(c.follow_c)
+        + '</td><td class="num">' + num(c.cost_c, 2)
+        + '</td><td class="num">' + num(c.drift_t, 2)
+        + "</td><td>" + sweepVerdictPill(c.verdict) + "</td></tr>";
+    }).join("");
+  }
+
   function refresh() {
     var qs = window.location.search || "";
     Promise.all([
       fetch("/api/reversion/status" + qs).then(function (r) { return r.json(); }),
-      fetch("/api/reversion/results" + qs).then(function (r) { return r.json(); })
+      fetch("/api/reversion/results" + qs).then(function (r) { return r.json(); }),
+      fetch("/api/reversion/sweep" + qs).then(function (r) { return r.json(); })
     ]).then(function (both) {
       renderState(both[0]);
       renderStatus(both[0]);
       renderResults(both[1]);
+      renderSweep(both[2]);
     }).catch(function () { /* the watch may be mid-write; the next poll retries */ });
   }
 
