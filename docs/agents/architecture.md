@@ -25,11 +25,9 @@ spread-hunter-live/
     audit.py              3-way reconciliation (Registry vs Venue vs Chain)
     config.py             Live tuning configuration
     runtime_paths.py      Where a runtime state file lives, across the run/ rename
-    tape_view.py          Read-only view over the recorded price tape, for /tape
   dashboard/
     server.py             Operations dashboard (:8799), FastAPI + uvicorn
     static/               Dashboard SPA (index.html, app.js, styles.css)
-    static/tape.html      /tape -- what the recorded price tape measures (research only)
   scripts/
     filter_markets.py     Fetch, filter and score PolyMarket candidate pairs
     filter_loop.py        Continuous filter loop (every 10 minutes)

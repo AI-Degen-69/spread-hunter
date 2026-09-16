@@ -45,9 +45,11 @@ Three fixed zones on every page:
 
 Rules:
 - The rail is the only navigation. No competing tab rows.
-- A research page may live on its own path (`/tape`, `/reversion`) — it keeps its
-  own poll loop and carries no control token — but it must carry the shared
-  header, tokens, fonts, and the live-state language.
+- A research page may live on its own path — it keeps its own poll loop and
+  carries no control token — but it must carry the shared header, tokens,
+  fonts, and the live-state language. No research page is served today:
+  `/tape` and `/reversion` were removed once the forward test returned
+  NO_SIGNAL on every cell (#231).
 - The emptied `#tab-1..3` shells stay in the DOM: `app.js` toggles them by id and
   reads `#tab-3.hidden` before scrolling the kanban.
 

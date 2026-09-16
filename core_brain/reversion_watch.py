@@ -14,8 +14,8 @@ what the trade would really have paid, the spread already taken out of it.
 **It sends nothing.** No signer is loaded, no wallet is read, no order is built.
 Two public read endpoints, and its own SQLite file, which is never
 `data/orders.db`: `resolve_store_path` below is the one gate every entry point
-on both sides of this feature -- the writer here, and both readers in
-`reversion_view` -- resolves through.
+on this feature -- the writer here, and the sweep in `reversion_sweep` --
+resolves through.
 
 The gates match the backward measurement exactly, because a forward number
 counted over different markets would not be comparable to it: match-winner
