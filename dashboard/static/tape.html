@@ -82,6 +82,8 @@
     .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); }
     .state-READY .dot { background: var(--signal); }
     .state-READY { border-color: var(--signal); color: var(--signal); }
+    .state-STALE .dot { background: var(--warn); }
+    .state-STALE { border-color: var(--warn); color: var(--warn); }
     .state-NOT_ANALYSED .dot { background: var(--warn); }
     .state-NOT_ANALYSED { border-color: var(--warn); color: var(--warn); }
     .state-MISSING .dot, .state-EMPTY .dot, .state-OFFLINE .dot { background: var(--text-muted); }
@@ -203,6 +205,7 @@
     </div>
     <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
       <span class="pill state-MISSING" id="state-pill"><span class="dot"></span><span id="state-text">טוען</span></span>
+      <span class="muted" style="font-size:11px" id="grid-meta">—</span>
       <span class="muted" style="font-size:11px" id="refreshed">—</span>
     </div>
   </header>
@@ -267,6 +270,7 @@
     קריאה בלבד. פותח את מאגר הטייפ <code id="db-path">—</code> במצב <code>mode=ro</code>,
     ו־<code>data/orders.db</code> נדחה בשם. הדף לא מחשב כלום — הגריד מחושב מראש על ידי
     <code>python -m core_brain.price_tape --analyse</code> ונשמר, כי טעינת הטיקים לוקחת עשרות שניות.
+    הגריד הוא <b>תמונת מצב</b> מאותו רגע; כשטיקים חדשים נרשמים אחריו, הוא מסומן STALE עד שהרצה חדשה.
     <br>איסוף: <code>python -m core_brain.price_tape --interval 1800</code> ·
     מצב: <code>python -m core_brain.price_tape --status</code>
   </footer>
@@ -336,13 +340,20 @@
   function renderCoverage(s) {
     var days = s.span_days || 0;
     var marketDays = days > 0 ? (s.ticks / 1440) : 0;
+    var lastNote = "מהטיק הראשון לאחרון";
+    if (s.last_ts && s.state === "READY") {
+      var ageH = (Date.now() / 1000 - s.last_ts) / 3600;
+      if (ageH > 24) {
+        lastNote = "⚠ לא אוסף — הטיק החדש ביותר לפני " + ageWords(ageH);
+      }
+    }
     var tiles = [
       { label: "שווקים", value: comma(s.markets), note: "מוקלטים כרגע" },
       { label: "נפתרו", value: comma(s.resolved),
         note: s.resolved ? "אפשר לנקד רגל תקועה" : "עד שיש — כלכלת הזוגות ממתינה" },
       { label: "טיקים", value: comma(s.ticks), note: "דקה אחת לכל טיק" },
       { label: "ימי-שוק", value: num(marketDays, 0), note: "זה מה שמחליף המתנה" },
-      { label: "טווח", value: num(days, 1) + "d", note: "מהטיק הראשון לאחרון" }
+      { label: "טווח", value: num(days, 1) + "d", note: lastNote }
     ];
     $("coverage-tiles").innerHTML = tiles.map(function (t) {
       return '<div class="tile"><div class="label">' + t.label + '</div>' +
@@ -549,9 +560,34 @@
     pill.className = "pill state-" + state;
     text.textContent =
       state === "READY" ? "מוכן" :
+      state === "STALE" ? "מיושן — חושב פעם אחת" :
       state === "NOT_ANALYSED" ? "לא חושב" :
       state === "EMPTY" ? "ריק" :
       state === "OFFLINE" ? "אין חיבור" : "אין מאגר";
+  }
+
+  function ageWords(hours) {
+    if (hours === null || hours === undefined) { return "—"; }
+    if (hours < 1) { return Math.max(1, Math.round(hours * 60)) + " דק׳"; }
+    if (hours < 48) { return Math.round(hours) + " שע׳"; }
+    return (hours / 24).toFixed(1) + " ימים";
+  }
+
+  // "Computed" is when analyse last ran over the store; "refreshed" is only
+  // when this browser last polled. Conflating them was how an 8-day-old grid
+  // wore a fresh timestamp.
+  function renderGridMeta(f) {
+    var el = $("grid-meta");
+    if (!f.computed_at_h) { el.textContent = "—"; return; }
+    var line = "חושב " + f.computed_at_h.replace("T", " ").replace("Z", " UTC") +
+               " (לפני " + ageWords(f.grid_age_hours) + ")";
+    if (f.ticks_since_computed > 0) {
+      line += " · נוספו " + comma(f.ticks_since_computed) + " טיקים מאז";
+    }
+    if (f.stale) {
+      line = "⚠ STALE · " + line;
+    }
+    el.textContent = line;
   }
 
   // The message can carry the `?db=` value straight back from the API's refusal,
@@ -579,9 +615,13 @@
       }
       $("error-box").hidden = true;
       $("db-path").textContent = s.db || "—";
+      // This is when the BROWSER last polled, never when the numbers were
+      // computed — that line lives in #grid-meta, fed by the findings payload.
       $("refreshed").textContent = "רוענן " + new Date().toLocaleTimeString("he-IL");
-      setState(s.state === "READY" ? f.state : s.state);
+      setState(f.state === "READY" && f.stale ? "STALE"
+               : s.state === "READY" ? f.state : s.state);
       renderCoverage(s);
+      renderGridMeta(f);
       var cells = f.cells || [];
       renderHeatmap(cells);
       renderBars(cells, f.significance_t || SIG);
