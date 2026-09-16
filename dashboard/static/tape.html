@@ -270,7 +270,8 @@
     קריאה בלבד. פותח את מאגר הטייפ <code id="db-path">—</code> במצב <code>mode=ro</code>,
     ו־<code>data/orders.db</code> נדחה בשם. הדף לא מחשב כלום — הגריד מחושב מראש על ידי
     <code>python -m core_brain.price_tape --analyse</code> ונשמר, כי טעינת הטיקים לוקחת עשרות שניות.
-    הגריד הוא <b>תמונת מצב</b> מאותו רגע; כשטיקים חדשים נרשמים אחריו, הוא מסומן STALE עד שהרצה חדשה.
+    הגריד הוא <b>תמונת מצב</b> מאותו רגע; כשטיקים חדשים נרשמים אחריו, הוא מסומן STALE עד שהרצה חדשה —
+    והפקודה לרענון מופיעה למעלה, בשורת ה-STALE.
     <br>איסוף: <code>python -m core_brain.price_tape --interval 1800</code> ·
     מצב: <code>python -m core_brain.price_tape --status</code>
   </footer>
@@ -573,9 +574,8 @@
     return (hours / 24).toFixed(1) + " ימים";
   }
 
-  // "Computed" is when analyse last ran over the store; "refreshed" is only
-  // when this browser last polled. Conflating them was how an 8-day-old grid
-  // wore a fresh timestamp.
+  // A stale grid is not an error, it is an instruction: the refresh command
+  // belongs where the staleness is, so the next look already knows what to run.
   function renderGridMeta(f) {
     var el = $("grid-meta");
     if (!f.computed_at_h) { el.textContent = "—"; return; }
@@ -585,7 +585,15 @@
       line += " · נוספו " + comma(f.ticks_since_computed) + " טיקים מאז";
     }
     if (f.stale) {
-      line = "⚠ STALE · " + line;
+      el.replaceChildren();
+      var warn = document.createElement("b");
+      warn.style.color = "var(--warn)";
+      warn.textContent = "STALE ";
+      el.append(warn, document.createTextNode(line + " · לרענון הגריד הרץ "));
+      var cmd = document.createElement("code");
+      cmd.textContent = "python -m core_brain.price_tape --analyse";
+      el.append(cmd);
+      return;
     }
     el.textContent = line;
   }
