@@ -107,27 +107,46 @@ def test_a_stale_snapshot_is_served_without_waiting(monkeypatch):
     -- so making readers wait for a fresh one left a page load sitting for 40
     seconds behind requests an earlier load had abandoned.
     """
-    # Arrange — one fast build to prime, then builds that take far too long.
+    # Arrange — one fast build to prime, then a build the test holds open.
+    # `release` gates the background rebuild instead of a sleep, so the timing
+    # assertion is not a race and the refresh thread cannot outlive the test
+    # and write into a later one's cache.
     monkeypatch.setattr(server, "SNAPSHOT_TTL_SEC", 0.01)
     calls: list[int] = []
+    entered = threading.Event()
+    release = threading.Event()
+    key = ("probe-stale-serve",)
+    server._snapshots.pop(key, None)
 
     def build():
         calls.append(1)
         if len(calls) > 1:
-            time.sleep(1.0)
+            entered.set()
+            release.wait(10)
         return f"snapshot-{len(calls)}"
 
-    assert server._cached_snapshot(("probe",), build) == "snapshot-1"
+    assert server._cached_snapshot(key, build) == "snapshot-1"
     time.sleep(0.05)
 
-    # Act — the snapshot is stale now, and rebuilding it is slow.
-    started = time.monotonic()
-    served = server._cached_snapshot(("probe",), build)
-    elapsed = time.monotonic() - started
+    try:
+        # Act — the snapshot is stale now, and rebuilding it is slow.
+        started = time.monotonic()
+        served = server._cached_snapshot(key, build)
+        elapsed = time.monotonic() - started
 
-    # Assert
-    assert served == "snapshot-1", "a stale snapshot must be served as-is"
-    assert elapsed < 0.2, f"a reader waited {elapsed:.2f}s for a background rebuild"
+        # Assert
+        assert served == "snapshot-1", "a stale snapshot must be served as-is"
+        assert elapsed < 0.2, f"a reader waited {elapsed:.2f}s for a background rebuild"
+        assert entered.wait(5), "the background refresh never started"
+    finally:
+        # Let the refresh finish and land before the test drops the key, so
+        # nothing writes into the cache after this test is over.
+        release.set()
+        deadline = time.monotonic() + 5
+        while server._snapshots.get(key, (0, None))[1] != "snapshot-2":
+            assert time.monotonic() < deadline, "the background refresh never landed"
+            time.sleep(0.01)
+        server._snapshots.pop(key, None)
 
 
 def test_the_background_refresh_replaces_the_stale_snapshot(monkeypatch):

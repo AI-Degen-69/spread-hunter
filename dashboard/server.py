@@ -162,6 +162,33 @@ def resolve_db_identity(db_path: Path | str) -> dict:
     }
 
 
+# The Market Filter's default re-rank cadence when SH_FILTER_INTERVAL_SEC is
+# unset -- the same default `scripts/filter_loop.py` applies.
+DEFAULT_SCAN_INTERVAL_SEC = 600.0
+
+
+def resolve_scan_interval() -> float:
+    """Configured Market Filter cadence in seconds.
+
+    `scripts/filter_loop.py` re-ranks the universe every SH_FILTER_INTERVAL_SEC
+    (default 600). The page ages the pipeline snapshot against it, so an
+    operator who sets a 60s cadence must not have a 20-minute-old snapshot
+    still reading LIVE against a 600 baked into app.js. Absent, invalid, or
+    non-positive falls back to the default rather than refusing: the cadence is
+    a display threshold, not a trading parameter.
+    """
+    raw = (os.environ.get("SH_FILTER_INTERVAL_SEC") or "").strip()
+    if not raw:
+        return DEFAULT_SCAN_INTERVAL_SEC
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_SCAN_INTERVAL_SEC
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_SCAN_INTERVAL_SEC
+    return value
+
+
 def resolve_sweep_interval() -> float | None:
     """Configured account-sweep cadence in seconds, or None for every tick.
 
@@ -409,7 +436,12 @@ def _cached_snapshot(key: tuple, build):
 def _refresh_snapshot(key: tuple, build, builder: threading.Lock) -> None:
     """Rebuild `key` off the request path, keeping the old value on failure."""
     try:
-        _snapshots[key] = (time.monotonic(), build())
+        # Build first, THEN read the clock: `(time.monotonic(), build())`
+        # evaluates left to right, so a build slower than SNAPSHOT_TTL_SEC
+        # landed in the cache already expired and the endpoint rebuilt
+        # continuously without ever serving anything fresh.
+        value = build()
+        _snapshots[key] = (time.monotonic(), value)
     except Exception:
         # The previous snapshot stays as it was: serving the last good numbers
         # beats serving none, and the next reader retries the refresh.
@@ -1144,6 +1176,9 @@ def get_system_status() -> dict:
             },
         },
         "bot_state": _bot_state,
+        # How often the Market Filter re-ranks, so the page ages its snapshot
+        # against the configured cadence instead of a constant.
+        "scan_interval_sec": resolve_scan_interval(),
         "registry_path": str(procs_file),
         "registry_unreadable": registry_unreadable,
         # Which store these numbers came from. The page renders identically
@@ -2239,13 +2274,18 @@ def _cycle_stream_sse(
             # Seek to the tail rather than reading every line to keep the
             # last few: the ring grows for the life of a run (33.8 MB on a
             # one-day rehearsal) and every page load opens this stream.
+            from core_brain.cycle_stream import tail_lines_fh
             with open(ring_path, "rb") as fh:
+                # The replay lines, the follow offset and the file identity all
+                # come from THIS handle. Reopening the path between them
+                # straddles a rotation: the replay would be the new ring's tail
+                # while the follow loop resumed at the old ring's end offset.
+                replay = tail_lines_fh(fh, tail)
                 # Position actually consumed, not a later stat: an append in the
                 # read-to-stat gap must not be silently skipped.
                 offset = fh.seek(0, os.SEEK_END)
                 file_key = _ring_file_key(os.fstat(fh.fileno()))
-            from core_brain.cycle_stream import tail_lines
-            for line in tail_lines(ring_path, tail):
+            for line in replay:
                 if line.strip():
                     yield _frame(line)
         except OSError:

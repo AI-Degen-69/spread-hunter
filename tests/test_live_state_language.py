@@ -304,8 +304,12 @@ def test_the_scan_pill_lives_in_the_top_nav_bar():
 
 
 def test_the_poll_loop_drives_the_top_nav_scan_pill():
+    # Isolate pollStatus first: a bare `"renderMarketScanPill(" in js` is
+    # satisfied by the function's own declaration, so it would pass even if
+    # nothing ever called it.
     js = APP_JS.read_text(encoding="utf-8")
-    assert "renderMarketScanPill(" in js
+    poll = js.split("async function pollStatus()", 1)[1].split(chr(10) + "async function ", 1)[0]
+    assert "renderMarketScanPill(status, kpi)" in poll
 
 
 # ── the Market Filter header pill says whose heartbeat it is ───────────────

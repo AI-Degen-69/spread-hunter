@@ -129,10 +129,16 @@ function scanPillState(rawState, hbAgeSec, cadenceSec) {
   return 'stopped';
 }
 
-/* How often scripts/filter_loop.py re-ranks the universe (SH_FILTER_INTERVAL_SEC,
- * default 600). One missed cycle doubles the gap, so the snapshot only reads
- * stale past two of them. */
+/* How often scripts/filter_loop.py re-ranks the universe. The server resolves
+ * SH_FILTER_INTERVAL_SEC and sends it as `scan_interval_sec`; 600 is only the
+ * fallback for a status payload that predates the field. An operator running a
+ * 60s cadence must not see a 20-minute-old snapshot reading LIVE. */
 const SCAN_SNAPSHOT_CYCLE_SEC = 600;
+
+function scanIntervalSec(status) {
+  const n = Number(status && status.scan_interval_sec);
+  return (isFinite(n) && n > 0) ? n : SCAN_SNAPSHOT_CYCLE_SEC;
+}
 
 /* The top-nav MARKET SCAN pill: is the SCANNER alive?
  *
@@ -160,7 +166,7 @@ function marketScanState(status, kpi) {
     return { state: 'degraded', label: 'SCAN NO DATA', ageSec: null,
              title: 'The Market Filter is running but has not written runtime/pipeline.json yet.' };
   }
-  if (age > SCAN_SNAPSHOT_CYCLE_SEC * 2) {
+  if (age > scanIntervalSec(status) * 2) {
     return { state: 'degraded', label: 'SCAN STALE', ageSec: age,
              title: 'The Market Filter is running, but its last snapshot is older than two scan cycles.' };
   }
@@ -4606,7 +4612,7 @@ function renderTrialReadiness(readiness) {
     + 'threshold. Readiness is not profitability — the trial measures that.';
 }
 
-function renderScreener(kpi, scanState) {
+function renderScreener(kpi, scanState, status) {
   const board = document.getElementById('kanban-board');
   const headerPill = document.getElementById('scan-state-pill');
   const headerAge = document.getElementById('scan-snapshot-age');
@@ -4652,7 +4658,7 @@ function renderScreener(kpi, scanState) {
   // makes the gap 2x that. Say so inline so "14m ago" reads as normal cadence
   // plus a miss, not as a dead screener.
   const age = funnel.snapshot_age;
-  const SCAN_INTERVAL_SEC = 600;
+  const SCAN_INTERVAL_SEC = scanIntervalSec(status);
   headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + Math.round(SCAN_INTERVAL_SEC / 60) + 'm cycle';
   if (age !== null && age !== undefined && age > SCAN_INTERVAL_SEC) {
     // Past one full cycle: amber. Past two (a missed retry): red.
@@ -5018,10 +5024,12 @@ async function pollStatus() {
     // Which registry these numbers came from, before anything renders them.
     if (status) renderDbMode(status);
 
-    // Top-nav MARKET SCAN pill. Called on every poll, including the ones where
-    // /api/kpi failed: a scanner that is up with no readable snapshot is
-    // exactly the amber this pill exists to show.
-    renderMarketScanPill(status, kpi || lastKpi);
+    // Top-nav MARKET SCAN pill. Reads THIS poll's kpi, never lastKpi: a
+    // failed /api/kpi leaves `snapshot_age` frozen at whatever the last good
+    // read said, so borrowing it would keep the pill green on an age that
+    // stopped moving. No snapshot this poll is SCAN NO DATA, amber, which is
+    // the honest answer.
+    renderMarketScanPill(status, kpi);
 
     // Service uptime rides on the status payload, so it must not wait on
     // /api/kpi: the Market Filter header still needs a stopwatch when the KPI read
@@ -5051,7 +5059,7 @@ async function pollStatus() {
 
     // Render the Market Filter kanban (Tab 3)
     if (currentKpi) {
-      renderScreener(currentKpi, scanState);
+      renderScreener(currentKpi, scanState, status);
     }
 
     // Trial readiness rides on its own endpoint, so it renders whether or not

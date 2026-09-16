@@ -426,6 +426,37 @@ def emit(
 RING_TAIL_CHUNK_BYTES = 128 * 1024
 
 
+def tail_lines_fh(fh, tail: int) -> list[str]:
+    """`tail_lines`, against a handle the caller already opened.
+
+    The SSE stream has to answer two questions about the SAME file state: what
+    the last lines are, and what byte offset to follow from. Reopening the path
+    between them straddles a rotation -- the replay would come from the new
+    ring while the follow loop resumed at the old ring's end offset, skipping
+    everything before it. One handle answers both.
+
+    The handle is left open and its position is not guaranteed; callers that
+    still need it should seek.
+    """
+    fh.seek(0, os.SEEK_END)
+    size = fh.tell()
+    if size == 0:
+        return []
+    chunk = min(size, RING_TAIL_CHUNK_BYTES)
+    while True:
+        fh.seek(size - chunk)
+        raw = fh.read(chunk)
+        lines = raw.splitlines()
+        # The first line is a fragment unless the read reached the start
+        # of the file.
+        if chunk < size:
+            lines = lines[1:]
+        if len(lines) >= tail or chunk >= size:
+            break
+        chunk = min(size, chunk * 4)
+    return [line.decode("utf-8", errors="replace") for line in lines[-tail:]]
+
+
 def tail_lines(path: Path, tail: int) -> list[str]:
     """The last `tail` lines, read from the end rather than from the start.
 
@@ -436,23 +467,7 @@ def tail_lines(path: Path, tail: int) -> list[str]:
     and the STALE banner flickered on and off.
     """
     with open(path, "rb") as fh:
-        fh.seek(0, os.SEEK_END)
-        size = fh.tell()
-        if size == 0:
-            return []
-        chunk = min(size, RING_TAIL_CHUNK_BYTES)
-        while True:
-            fh.seek(size - chunk)
-            raw = fh.read(chunk)
-            lines = raw.splitlines()
-            # The first line is a fragment unless the read reached the start
-            # of the file.
-            if chunk < size:
-                lines = lines[1:]
-            if len(lines) >= tail or chunk >= size:
-                break
-            chunk = min(size, chunk * 4)
-    return [line.decode("utf-8", errors="replace") for line in lines[-tail:]]
+        return tail_lines_fh(fh, tail)
 
 
 def read_ring(ring_path: Path | None = None, tail: int = 100) -> list[dict]:
