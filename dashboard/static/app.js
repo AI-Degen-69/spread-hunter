@@ -4438,6 +4438,14 @@ function fmtAge(sec) {
   return Math.floor(sec / 3600) + 'h ago';
 }
 
+function formatHeartbeatAge(sec) {
+  if (sec === null || sec === undefined || isNaN(sec)) return '';
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  return Math.floor(s / 3600) + 'h';
+}
+
 // Market Filter uptime stopwatch. The poll carries the service's uptime in
 // seconds; the ticker below extrapolates from it every second so the header
 // reads as a stopwatch instead of stepping once per poll. Anchoring on the
@@ -4612,10 +4620,9 @@ function renderTrialReadiness(readiness) {
     + 'threshold. Readiness is not profitability — the trial measures that.';
 }
 
-function renderScreener(kpi, scanState, status) {
-  const board = document.getElementById('kanban-board');
+function renderScanStatePill(scanState) {
   const headerPill = document.getElementById('scan-state-pill');
-  const headerAge = document.getElementById('scan-snapshot-age');
+  if (!headerPill) return;
 
   // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
   // The server's STALLED verdict stays authoritative for DOWN; a SCANNING
@@ -4630,16 +4637,34 @@ function renderScreener(kpi, scanState, status) {
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
       : '';
-    const age = (state !== 'stopped' && state !== 'unknown' && hbAge !== null && hbAge !== undefined)
-      ? ' · ' + Math.max(0, Math.round(hbAge)) + 's' : '';
+    const formattedAge = formatHeartbeatAge(hbAge);
+    const age = (state !== 'stopped' && state !== 'unknown' && formattedAge)
+      ? ' · ' + formattedAge : '';
     headerPill.innerHTML = dot + esc(state.toUpperCase() + age);
-    if (hbAge !== null && hbAge !== undefined) {
-      headerAge.textContent = 'heartbeat: ' + Math.round(hbAge) + 's';
+    const rawSec = (hbAge !== null && hbAge !== undefined) ? Math.max(0, Math.round(hbAge)) : null;
+    if (rawSec !== null) {
+      headerPill.title = `Trading loop heartbeat: ${rawSec}s ago (${raw.toUpperCase()}) · runtime/shadow_run.json or runtime/live_poll_heartbeat.json`;
+    } else {
+      headerPill.title = 'Trading loop heartbeat: runtime/shadow_run.json or runtime/live_poll_heartbeat.json';
     }
   } else {
-    // No scan-state payload: the filter's state is unknown, not stopped.
+    // No scan-state payload: the loop's state is unknown, not stopped.
     headerPill.className = 'pill state-unknown';
     headerPill.textContent = '--';
+    headerPill.title = 'Trading loop state unknown: no heartbeat payload';
+  }
+}
+
+function renderScreener(kpi, scanState, status) {
+  const board = document.getElementById('kanban-board');
+  const headerAge = document.getElementById('scan-snapshot-age');
+
+  renderScanStatePill(scanState);
+  if (scanState && headerAge) {
+    const hbAge = scanState.seconds_since_heartbeat;
+    if (hbAge !== null && hbAge !== undefined) {
+      headerAge.textContent = 'heartbeat: ' + formatHeartbeatAge(hbAge);
+    }
   }
 
   const funnel = kpi?.funnel;
@@ -5030,6 +5055,7 @@ async function pollStatus() {
     // stopped moving. No snapshot this poll is SCAN NO DATA, amber, which is
     // the honest answer.
     renderMarketScanPill(status, kpi);
+    renderScanStatePill(scanState);
 
     // Service uptime rides on the status payload, so it must not wait on
     // /api/kpi: the Market Filter header still needs a stopwatch when the KPI read

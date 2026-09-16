@@ -1343,6 +1343,30 @@ def test_html_has_kanban_board_container():
     # what each gate refused. See tests/test_live_state_language.py.
 
 
+def test_scan_state_pill_in_top_nav_bar():
+    """#scan-state-pill is positioned inside the top navigation meta header (#225)."""
+    html = _read_static("index.html")
+    top_meta = html.split('<div class="top-meta">', 1)[1].split('</header>', 1)[0]
+    assert 'id="scan-state-pill"' in top_meta
+    assert 'id="market-scan-pill"' in top_meta
+    assert 'id="db-mode-badge"' in top_meta
+    assert 'id="usdc-balance"' in top_meta
+
+    # Screener header retains its label and snapshot age without breaking
+    screener_hdr = html.split('id="screener-header"', 1)[1].split('</div>\n    </div>', 1)[0]
+    assert 'TRADING LOOP' in screener_hdr
+    assert 'scan-snapshot-age' in screener_hdr
+
+
+def test_app_js_formats_heartbeat_duration_as_minutes():
+    """app.js formats heartbeat duration over 60s as minutes and provides tooltip (#225)."""
+    app_js = _read_static("app.js")
+    assert 'formatHeartbeatAge' in app_js
+    assert 'renderScanStatePill' in app_js
+    assert "Math.floor(s / 60) + 'm'" in app_js or "Math.floor(sec / 60) + 'm'" in app_js
+    assert 'Trading loop heartbeat:' in app_js
+
+
 def test_app_js_has_render_screener():
     """app.js has the renderScreener function and kanban bucket logic."""
     app_js = _read_static("app.js")
