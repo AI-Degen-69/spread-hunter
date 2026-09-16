@@ -151,3 +151,36 @@ def test_the_background_refresh_replaces_the_stale_snapshot(monkeypatch):
 
     # Assert
     assert server._snapshots[("probe",)][1] == "snapshot-2"
+
+
+def test_a_refresh_that_never_starts_does_not_freeze_the_key(monkeypatch):
+    """A thread that fails to start must not leave the builder lock held.
+
+    Nothing else releases it, so the key would serve one snapshot forever --
+    silently, which is the failure mode this cache exists to avoid.
+    """
+    # Arrange
+    monkeypatch.setattr(server, "SNAPSHOT_TTL_SEC", 0.01, raising=False)
+    builds: list[int] = []
+
+    def build():
+        builds.append(1)
+        return f"snapshot-{len(builds)}"
+
+    server._cached_snapshot(("probe",), build)
+    time.sleep(0.05)
+
+    class Unstartable:
+        def __init__(self, *a, **kw): pass
+        def start(self): raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(server.threading, "Thread", Unstartable)
+
+    # Act
+    with pytest.raises(RuntimeError):
+        server._cached_snapshot(("probe",), build)
+
+    # Assert — the builder is free, so a later read can still refresh.
+    builder = server._snapshot_builders[("probe",)]
+    assert builder.acquire(blocking=False), "the builder lock was left held"
+    builder.release()

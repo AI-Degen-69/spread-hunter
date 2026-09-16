@@ -385,8 +385,15 @@ def _cached_snapshot(key: tuple, build):
 
     if hit is not None:
         if builder.acquire(blocking=False):
-            threading.Thread(target=_refresh_snapshot, args=(key, build, builder),
-                             daemon=True).start()
+            try:
+                threading.Thread(target=_refresh_snapshot, args=(key, build, builder),
+                                 daemon=True).start()
+            except RuntimeError:
+                # The thread never started, so nothing will release the lock:
+                # hold it and this key freezes on one snapshot forever, which
+                # is the silent kind of stale this whole cache exists to avoid.
+                builder.release()
+                raise
         return hit[1]
 
     with builder:
