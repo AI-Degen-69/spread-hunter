@@ -249,16 +249,6 @@ function buildNavLabel(doc, text) {
  * are adopted by navigation rather than restyled into the shell. */
 const RAIL_LINKS = [
   {
-    href: '/tape',
-    label: 'Price Tape',
-    icon: 'M2.4 3.2h11.2 M2.4 8h11.2 M2.4 12.8h11.2 M4.4 3.2v9.6 M11.6 3.2v9.6',
-  },
-  {
-    href: '/reversion',
-    label: 'Reversion Test',
-    icon: 'M2.6 12.6h10.8 M4.2 12.6V8.2 M13.4 3.4l-3 3 3 3 M13.4 6.4H6.2',
-  },
-  {
     href: 'https://polymarket.com/markets',
     label: 'Polymarket',
     icon: 'M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z M1.6 8h12.8 '

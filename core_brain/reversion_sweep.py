@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import Any, Iterable, NamedTuple, Optional
 
 from core_brain.price_tape import SIGNIFICANCE_T
-from core_brain.reversion_view import MIN_GROUP_TRADES
 from core_brain.reversion_watch import (
     DEFAULT_DB,
     LOOK,
@@ -51,6 +50,10 @@ from core_brain.reversion_watch import (
     RefusedStore,
     resolve_store_path,
 )
+
+#: Below this a cell reports no certainty: with a handful of games any such
+#: number says more about the sample size than about the venue.
+MIN_GROUP_TRADES = 10
 
 log = logging.getLogger(__name__)
 

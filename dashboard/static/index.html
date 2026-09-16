@@ -97,14 +97,6 @@
     <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-3" id="tab-btn-3" type="button">MARKET FILTER</button>
   </nav>
 
-  <!-- Research surfaces sit on their own paths, not in the tab row: they read
-       stores outside `data/orders.db` and can start, stop and price nothing.
-       A link rather than a fourth `.tab-btn` on purpose -- `app.js` toggles
-       tabs by counting `.tab-btn`, and a fourth one would land on tab 3. -->
-  <div class="page-link-row">
-    <a class="page-link" href="/tape">PRICE TAPE — does a move continue or come back? &rarr;</a>
-  </div>
-
   <!-- ── Tab 1: Live Operations ── -->
   <section id="tab-1" role="tabpanel" aria-labelledby="tab-btn-1">
     <!-- Master Execution Control Hero Card -->
