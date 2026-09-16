@@ -130,3 +130,65 @@ def test_the_scan_pill_does_not_age_against_a_previous_polls_snapshot():
     js = (server._STATIC_DIR / "app.js").read_text(encoding="utf-8")
     assert "renderMarketScanPill(status, kpi || lastKpi)" not in js
     assert "renderMarketScanPill(status, kpi)" in js
+
+
+# ── Nothing falls between the replay and the follow offset ─────────────────
+
+def test_an_append_during_the_tail_read_is_not_skipped(tmp_path):
+    """Reading the tail first and the offset second opens a gap.
+
+    `tail_lines_fh` reads up to the EOF it saw when it started. Taking the
+    follow offset AFTER it means the offset is a LATER EOF, so any line
+    appended while the tail was being read is in neither the replay nor the
+    follow range -- a silently lost event. Taking the offset first makes the
+    two ranges overlap instead: the worst case is one line delivered twice,
+    which for a telemetry stream beats one line delivered never.
+    """
+    from dashboard.server import _ring_replay_and_offset
+
+    ring = tmp_path / "ring.jsonl"
+    ring.write_text("".join(f'{{"n": {i}}}\n' for i in range(20)), encoding="utf-8")
+    appended = '{"n": 999}\n'
+
+    class ApppendingStat:
+        """Appends to the ring the moment the offset has been taken."""
+
+        def __init__(self, path):
+            self.path = path
+            self.fired = False
+
+        def __call__(self, fileno):
+            if not self.fired:
+                self.fired = True
+                with open(self.path, "a", encoding="utf-8") as fh:
+                    fh.write(appended)
+            return os.fstat(fileno)
+
+    with open(ring, "rb") as fh:
+        replay, offset, _key = _ring_replay_and_offset(fh, 5,
+                                                       stat_fn=ApppendingStat(ring))
+
+    # The follow loop resumes at `offset`, so every byte past it is streamed.
+    # The appended line must therefore sit at or after `offset` -- never
+    # before it and outside the replay.
+    tail_bytes = ring.stat().st_size - len(appended)
+    assert offset <= tail_bytes, (
+        f"offset {offset} skipped past the append at byte {tail_bytes}"
+    )
+    # And the overlap is the documented trade: the appended line rode along in
+    # the replay AND sits past `offset`, so it is delivered twice rather than
+    # dropped.
+    assert [line.strip() for line in replay][-1] == '{"n": 999}'
+
+
+def test_the_replay_offset_and_key_all_describe_one_file(tmp_path):
+    from dashboard.server import _ring_replay_and_offset
+
+    ring = tmp_path / "ring.jsonl"
+    ring.write_text('{"n": 1}\n{"n": 2}\n', encoding="utf-8")
+    with open(ring, "rb") as fh:
+        replay, offset, key = _ring_replay_and_offset(fh, 10)
+
+    assert [line.strip() for line in replay] == ['{"n": 1}', '{"n": 2}']
+    assert offset == ring.stat().st_size
+    assert key is not None

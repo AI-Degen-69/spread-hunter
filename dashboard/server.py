@@ -2249,6 +2249,27 @@ def _ring_file_key(st: Any) -> tuple:
     return (st.st_dev, st.st_ctime_ns)
 
 
+def _ring_replay_and_offset(fh, tail: int, stat_fn=os.fstat):
+    """(replay lines, follow offset, file identity) for ONE open ring handle.
+
+    All three answers come from the same handle. Reopening the path between
+    them straddles a rotation: the replay would be the new ring's tail while
+    the follow loop resumed at the old ring's end offset.
+
+    The offset is taken BEFORE the tail read, not after. `tail_lines_fh` reads
+    up to the EOF it saw when it started, so a later offset would sit past any
+    line appended while the tail was being read -- that line would be in
+    neither the replay nor the follow range, and silently lost. Taking it first
+    makes the two ranges overlap: the worst case is one line delivered twice,
+    which for a telemetry stream beats one delivered never.
+    """
+    from core_brain.cycle_stream import tail_lines_fh
+
+    offset = fh.seek(0, os.SEEK_END)
+    file_key = _ring_file_key(stat_fn(fh.fileno()))
+    return tail_lines_fh(fh, tail), offset, file_key
+
+
 def _cycle_stream_sse(
     ring_path: Path,
     tail: int = SSE_REPLAY_LINES,
@@ -2274,17 +2295,8 @@ def _cycle_stream_sse(
             # Seek to the tail rather than reading every line to keep the
             # last few: the ring grows for the life of a run (33.8 MB on a
             # one-day rehearsal) and every page load opens this stream.
-            from core_brain.cycle_stream import tail_lines_fh
             with open(ring_path, "rb") as fh:
-                # The replay lines, the follow offset and the file identity all
-                # come from THIS handle. Reopening the path between them
-                # straddles a rotation: the replay would be the new ring's tail
-                # while the follow loop resumed at the old ring's end offset.
-                replay = tail_lines_fh(fh, tail)
-                # Position actually consumed, not a later stat: an append in the
-                # read-to-stat gap must not be silently skipped.
-                offset = fh.seek(0, os.SEEK_END)
-                file_key = _ring_file_key(os.fstat(fh.fileno()))
+                replay, offset, file_key = _ring_replay_and_offset(fh, tail)
             for line in replay:
                 if line.strip():
                     yield _frame(line)
