@@ -506,7 +506,7 @@ function Start-Dashboard {
     }
     Lsh-Step "Launching dashboard (python -m dashboard.server --port $LivePort)..."
     $dash = Start-Process -FilePath "python" `
-        -ArgumentList "-m", "dashboard.server", "--port", "$LivePort", "--reload" `
+        -ArgumentList "-m", "dashboard.server", "--port", "$LivePort" `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $OutLog `
         -RedirectStandardError  $ErrLog
@@ -670,7 +670,7 @@ function Start-ShadowDashboard {
     }
     Lsh-Step "Launching shadow dashboard (python -m dashboard.server --db $ShadowDbPath --port $ShadowPort)..."
     $dash = Start-Process -FilePath "python" `
-        -ArgumentList "-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$ShadowPort", "--reload" `
+        -ArgumentList "-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$ShadowPort" `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $ShadowOutLog `
         -RedirectStandardError  $ShadowErrLog

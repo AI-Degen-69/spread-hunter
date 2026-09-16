@@ -102,6 +102,91 @@ function statePillHtml(state, ageSec) {
   return `<span class="pill state-${state}">${dot}${label}${age}</span>`;
 }
 
+/* Rotation takes ~45-55s on shadow public CLOB queries; calibrated so a normal
+ * rotation stays RUNNING without a false DEGRADED at the 15s default. */
+const SCAN_PILL_THRESHOLDS = { degraded: 60, down: 120 };
+
+/* The scan pill reports liveness, not activity.
+ *
+ * The server's IDLE means "heartbeat fresh but no active-phase work in the
+ * window" -- the filter is alive and between scans, which on a ~10m cycle is
+ * most of the time. Mapping it to STOPPED said "intentionally not running"
+ * (DESIGN.md) about a healthy process, so the pill flipped between SCANNING
+ * and STOPPED every cycle. A live heartbeat ages through the ramp instead, and
+ * a filter that really stops goes DOWN when its heartbeat does. Only a verdict
+ * we do not recognise reads STOPPED. */
+function scanPillState(rawState, hbAgeSec, cadenceSec) {
+  if (rawState === 'STALLED') return 'down';
+  if (rawState === 'SCANNING' || rawState === 'IDLE') {
+    // Ramp off the cadence the server MEASURED for this loop when it sent
+    // one. The fixed 60/120s default assumed a rotation costs seconds; a
+    // rotation that really costs ~160s crossed it every single cycle, so a
+    // healthy loop sat on red.
+    const c = Number(cadenceSec);
+    const th = (isFinite(c) && c > 0) ? cadenceThresholds(c) : SCAN_PILL_THRESHOLDS;
+    return stateKey(true, hbAgeSec, th);
+  }
+  return 'stopped';
+}
+
+/* How often scripts/filter_loop.py re-ranks the universe. The server resolves
+ * SH_FILTER_INTERVAL_SEC and sends it as `scan_interval_sec`; 600 is only the
+ * fallback for a status payload that predates the field. An operator running a
+ * 60s cadence must not see a 20-minute-old snapshot reading LIVE. */
+const SCAN_SNAPSHOT_CYCLE_SEC = 600;
+
+function scanIntervalSec(status) {
+  const n = Number(status && status.scan_interval_sec);
+  return (isFinite(n) && n > 0) ? n : SCAN_SNAPSHOT_CYCLE_SEC;
+}
+
+/* The top-nav MARKET SCAN pill: is the SCANNER alive?
+ *
+ * Distinct from the Market Filter header pill, which reports the trading
+ * loop's heartbeat. This one answers the operator's actual question -- is
+ * `scripts.filter_loop` running, and is the snapshot it writes one this page
+ * can still read -- and it answers it from every tab.
+ *
+ * Red is reserved for "no scanner process". A live process whose file went
+ * stale is amber: something is wrong, but the loop is not gone. "We cannot
+ * read the process registry" is UNKNOWN, never DOWN -- inventing an outage
+ * out of a missing file is the same lie in the other direction. */
+function marketScanState(status, kpi) {
+  if (!status || status.registry_unreadable) {
+    return { state: 'unknown', label: 'SCAN --',
+             title: 'Cannot read the process registry, so the state of the Market Filter is unknown.' };
+  }
+  const svc = (status.services || {}).filter || {};
+  if (!svc.running) {
+    return { state: 'down', label: 'SCAN DOWN',
+             title: 'No Market Filter process (scripts.filter_loop) is running. Nothing is scanning markets.' };
+  }
+  const age = kpi && kpi.funnel ? kpi.funnel.snapshot_age : null;
+  if (age === null || age === undefined) {
+    return { state: 'degraded', label: 'SCAN NO DATA', ageSec: null,
+             title: 'The Market Filter is running but has not written runtime/pipeline.json yet.' };
+  }
+  if (age > scanIntervalSec(status) * 2) {
+    return { state: 'degraded', label: 'SCAN STALE', ageSec: age,
+             title: 'The Market Filter is running, but its last snapshot is older than two scan cycles.' };
+  }
+  return { state: 'running', label: 'SCAN LIVE', ageSec: age,
+           title: 'The Market Filter is running and its snapshot is fresh.' };
+}
+
+function renderMarketScanPill(status, kpi) {
+  const el = document.getElementById('market-scan-pill');
+  if (!el) return;
+  const v = marketScanState(status, kpi);
+  el.className = 'pill state-' + v.state;
+  el.title = v.title;
+  const dot = (v.state === 'running') ? '<span class="pulse-dot active"></span>'
+    : (v.state === 'degraded' || v.state === 'down') ? '<span class="pulse-dot"></span>'
+    : '';
+  const age = (v.ageSec !== null && v.ageSec !== undefined) ? ' · ' + fmtAge(v.ageSec) : '';
+  el.innerHTML = dot + esc(v.label + age);
+}
+
 /* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
  * When the poll loop loses contact with the backend, the page must stop
  * pretending the last render is live. After 2 consecutive failed polls the
@@ -4505,59 +4590,32 @@ function getStageHero(key, funnel) {
 }
 
 // TRIAL READINESS. The ranker's near-miss logs say whether a gate's refusals
-// are consistent enough to license a controlled loosening. Rendered as two
-// tracker cards plus a banner, so the evidence becomes a decision instead of
-// accumulating in a JSONL nobody reads.
-function trackerCard(tracker) {
-  if (!tracker) return '';
-  const t = tracker.thresholds || {};
-  const ready = tracker.ready === true;
-  const cls = ready ? 'filled' : 'stopped';
-  const blockers = (tracker.blockers || []).join(' · ');
-  const label = String(tracker.gate || '').toUpperCase();
-  return `<span class="pill ${cls}" style="font-size:11px" title="${esc(blockers || 'all thresholds met')}">`
-    + `${esc(label)} ${ready ? 'TRIAL READY' : 'gathering'}`
-    + `</span> <span style="color:var(--text-secondary)">`
-    + `${tracker.days.toFixed(1)}d/${t.min_days ?? '--'} · `
-    + `${tracker.unique_markets}/${t.min_unique ?? '--'} markets · `
-    + `${tracker.small_margin}/${t.min_small_margin ?? '--'} near · `
-    + `${Math.round((tracker.stability || 0) * 100)}%/`
-    + `${t.min_stability == null ? '--' : Math.round(t.min_stability * 100) + '%'} stable`
-    + `</span>`;
-}
-
+// are consistent enough to license a controlled loosening.
+//
+// Only the verdict is on screen. The per-gate progress cards ("DEPTH gathering
+// 8.7d/14 · 3/8 markets · 41% stable") were four numbers nobody acted on
+// between the day the run started and the day it turned ready; the ready
+// banner is the moment a decision exists. /api/trial-readiness still carries
+// the full detail for anyone who wants to read it.
 function renderTrialReadiness(readiness) {
   const banner = document.getElementById('trial-ready-banner');
-  const trackers = document.getElementById('trial-trackers');
-  if (!banner || !trackers) return;
-  if (!readiness) {
+  if (!banner) return;
+  const gates = (readiness && readiness.ready_gates) || [];
+  if (!readiness || !readiness.trial_ready || !gates.length) {
     banner.style.display = 'none';
-    trackers.style.display = 'none';
     return;
   }
-
-  const gates = readiness.ready_gates || [];
-  if (readiness.trial_ready && gates.length) {
-    banner.style.display = '';
-    banner.className = 'pill filled mono';
-    banner.textContent = 'TRIAL READY: ' + gates.join(' + ').toUpperCase();
-    banner.title = 'The near-miss evidence for this gate meets every readiness '
-      + 'threshold. Readiness is not profitability — the trial measures that.';
-  } else {
-    banner.style.display = 'none';
-  }
-
-  trackers.style.display = 'flex';
-  trackers.innerHTML = `<div>${trackerCard(readiness.depth)}</div>`
-    + `<div>${trackerCard(readiness.volume)}</div>`;
+  banner.style.display = '';
+  banner.className = 'pill filled mono';
+  banner.textContent = 'TRIAL READY: ' + gates.join(' + ').toUpperCase();
+  banner.title = 'The near-miss evidence for this gate meets every readiness '
+    + 'threshold. Readiness is not profitability — the trial measures that.';
 }
 
-function renderScreener(kpi, scanState) {
+function renderScreener(kpi, scanState, status) {
   const board = document.getElementById('kanban-board');
   const headerPill = document.getElementById('scan-state-pill');
   const headerAge = document.getElementById('scan-snapshot-age');
-  const headerCensus = document.getElementById('scan-census');
-  const headerGates = document.getElementById('scan-gates');
 
   // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
   // The server's STALLED verdict stays authoritative for DOWN; a SCANNING
@@ -4567,16 +4625,7 @@ function renderScreener(kpi, scanState) {
   if (scanState) {
     const raw = scanState.scan_state || '--';
     const hbAge = scanState.seconds_since_heartbeat;
-    let state;
-    if (raw === 'SCANNING') {
-      // Rotation takes ~45-55s on shadow public CLOB queries; calibrated so
-      // normal rotations stay RUNNING without false DEGRADED alerts at 15s.
-      state = stateKey(true, hbAge, { degraded: 60, down: 120 });
-    } else if (raw === 'STALLED') {
-      state = 'down';
-    } else {
-      state = 'stopped';
-    }
+    const state = scanPillState(raw, hbAge, scanState.cadence_sec);
     headerPill.className = 'pill state-' + state;
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
@@ -4600,8 +4649,6 @@ function renderScreener(kpi, scanState) {
       <div class="empty-state-title">No Market Filter data yet</div>
       <div class="empty-state-msg">The Market Filter writes runtime/pipeline.json on each scan cycle. Data appears here once it runs.</div>
     </div>`;
-    headerCensus.textContent = '';
-    headerGates.style.display = 'none';
     return;
   }
 
@@ -4611,18 +4658,13 @@ function renderScreener(kpi, scanState) {
   // makes the gap 2x that. Say so inline so "14m ago" reads as normal cadence
   // plus a miss, not as a dead screener.
   const age = funnel.snapshot_age;
-  const SCAN_INTERVAL_SEC = 600;
+  const SCAN_INTERVAL_SEC = scanIntervalSec(status);
   headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + Math.round(SCAN_INTERVAL_SEC / 60) + 'm cycle';
   if (age !== null && age !== undefined && age > SCAN_INTERVAL_SEC) {
     // Past one full cycle: amber. Past two (a missed retry): red.
     headerAge.style.color = age > SCAN_INTERVAL_SEC * 2 ? 'var(--error, #e5484d)' : 'var(--warn)';
   } else {
     headerAge.style.color = 'var(--text-secondary)';
-  }
-  headerCensus.textContent = funnel.census || '';
-  if (funnel.gates) {
-    headerGates.textContent = funnel.gates;
-    headerGates.style.display = 'block';
   }
 
   // Group rejections by canonical gate
@@ -4982,6 +5024,13 @@ async function pollStatus() {
     // Which registry these numbers came from, before anything renders them.
     if (status) renderDbMode(status);
 
+    // Top-nav MARKET SCAN pill. Reads THIS poll's kpi, never lastKpi: a
+    // failed /api/kpi leaves `snapshot_age` frozen at whatever the last good
+    // read said, so borrowing it would keep the pill green on an age that
+    // stopped moving. No snapshot this poll is SCAN NO DATA, amber, which is
+    // the honest answer.
+    renderMarketScanPill(status, kpi);
+
     // Service uptime rides on the status payload, so it must not wait on
     // /api/kpi: the Market Filter header still needs a stopwatch when the KPI read
     // is the one that failed.
@@ -5010,7 +5059,7 @@ async function pollStatus() {
 
     // Render the Market Filter kanban (Tab 3)
     if (currentKpi) {
-      renderScreener(currentKpi, scanState);
+      renderScreener(currentKpi, scanState, status);
     }
 
     // Trial readiness rides on its own endpoint, so it renders whether or not
@@ -5048,7 +5097,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds, decisionGatesHtml, decisionGatesRows, gateBadge, typesetMath, renderTrialReadiness, trackerCard, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity,
+  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds, decisionGatesHtml, decisionGatesRows, gateBadge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity,
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     renderPnlCiReadout, renderExecutionFunnel,
     OT_VIEWS, OT_COLUMNS, ordersTradesRows, ordersTradesCounts, otHeadHtml,
@@ -5061,7 +5110,7 @@ if (typeof module !== 'undefined' && module.exports) {
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },
     set isStopping(v) { isStopping = v; },
-    stateKey, statePillHtml, cadenceThresholds,
+    stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },

@@ -420,6 +420,56 @@ def emit(
         print(f"WARNING: cycle_stream emit failed: {exc}", file=sys.stderr)
 
 
+# Where a tail read starts, counted back from the end of the ring. A cycle
+# event is a few hundred bytes, so this covers a 100-line tail many times over
+# and the loop below widens it on the rare line that is longer.
+RING_TAIL_CHUNK_BYTES = 128 * 1024
+
+
+def tail_lines_fh(fh, tail: int) -> list[str]:
+    """`tail_lines`, against a handle the caller already opened.
+
+    The SSE stream has to answer two questions about the SAME file state: what
+    the last lines are, and what byte offset to follow from. Reopening the path
+    between them straddles a rotation -- the replay would come from the new
+    ring while the follow loop resumed at the old ring's end offset, skipping
+    everything before it. One handle answers both.
+
+    The handle is left open and its position is not guaranteed; callers that
+    still need it should seek.
+    """
+    fh.seek(0, os.SEEK_END)
+    size = fh.tell()
+    if size == 0:
+        return []
+    chunk = min(size, RING_TAIL_CHUNK_BYTES)
+    while True:
+        fh.seek(size - chunk)
+        raw = fh.read(chunk)
+        lines = raw.splitlines()
+        # The first line is a fragment unless the read reached the start
+        # of the file.
+        if chunk < size:
+            lines = lines[1:]
+        if len(lines) >= tail or chunk >= size:
+            break
+        chunk = min(size, chunk * 4)
+    return [line.decode("utf-8", errors="replace") for line in lines[-tail:]]
+
+
+def tail_lines(path: Path, tail: int) -> list[str]:
+    """The last `tail` lines, read from the end rather than from the start.
+
+    The ring grows for the life of a run -- 33.8 MB and 108,317 lines on a
+    one-day rehearsal -- and three dashboard endpoints call `read_ring` on
+    every 2s poll. Loading every line to keep the last hundred meant ~100 MB of
+    reads per poll: polls ran 5-11s, the page aborted them at its 5s timeout,
+    and the STALE banner flickered on and off.
+    """
+    with open(path, "rb") as fh:
+        return tail_lines_fh(fh, tail)
+
+
 def read_ring(ring_path: Path | None = None, tail: int = 100) -> list[dict]:
     """Read the last `tail` parsed JSON events from the ring file.
 
@@ -427,17 +477,21 @@ def read_ring(ring_path: Path | None = None, tail: int = 100) -> list[dict]:
     resolves the pre-rename `run/cycle_events.jsonl` while only that one
     exists -- otherwise the guardrail watcher reads an empty ring right
     after the rename and misses a repeat-exit alert.
+
+    A non-positive `tail` still means every event.
     """
     p = Path(ring_path) if ring_path else resolve_runtime_file(
         DEFAULT_RING_PATH.name, root=LIVE_ROOT)
     if not p.exists():
         return []
     try:
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        tail_lines = lines[-tail:] if tail > 0 else lines
+        if tail > 0:
+            lines = tail_lines(p, tail)
+        else:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
         events = []
-        for line in tail_lines:
+        for line in lines:
             line_str = line.strip()
             if not line_str:
                 continue

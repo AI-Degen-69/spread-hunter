@@ -26,6 +26,7 @@ import logging
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Generator, Optional
@@ -68,6 +69,8 @@ CYCLE_RING_NAME = "cycle_events.jsonl"
 SSE_REPLAY_LINES = 50
 SSE_POLL_SEC = 0.5
 SSE_KEEPALIVE_SEC = 15.0
+# How long a shutdown waits for open connections before dropping them.
+SHUTDOWN_GRACE_SEC = 5
 SCAN_STALL_THRESHOLD_SEC = 90.0
 
 _ACTIVE_RING_OVERRIDE: Path | None = None
@@ -157,6 +160,33 @@ def resolve_db_identity(db_path: Path | str) -> dict:
         "mode": "LIVE" if same else "SHADOW",
         "is_production": same,
     }
+
+
+# The Market Filter's default re-rank cadence when SH_FILTER_INTERVAL_SEC is
+# unset -- the same default `scripts/filter_loop.py` applies.
+DEFAULT_SCAN_INTERVAL_SEC = 600.0
+
+
+def resolve_scan_interval() -> float:
+    """Configured Market Filter cadence in seconds.
+
+    `scripts/filter_loop.py` re-ranks the universe every SH_FILTER_INTERVAL_SEC
+    (default 600). The page ages the pipeline snapshot against it, so an
+    operator who sets a 60s cadence must not have a 20-minute-old snapshot
+    still reading LIVE against a 600 baked into app.js. Absent, invalid, or
+    non-positive falls back to the default rather than refusing: the cadence is
+    a display threshold, not a trading parameter.
+    """
+    raw = (os.environ.get("SH_FILTER_INTERVAL_SEC") or "").strip()
+    if not raw:
+        return DEFAULT_SCAN_INTERVAL_SEC
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_SCAN_INTERVAL_SEC
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_SCAN_INTERVAL_SEC
+    return value
 
 
 def resolve_sweep_interval() -> float | None:
@@ -340,11 +370,182 @@ def set_db_override(path: Path | str | None) -> None:
     _ACTIVE_DB_OVERRIDE = Path(path) if path else None
 
 
+# How long a built snapshot is served to every caller before it is rebuilt.
+# The page polls on a 2s timer, so this is short enough that nothing on screen
+# lags a cycle behind and long enough that a second reader costs nothing.
+SNAPSHOT_TTL_SEC: float = 1.5
+
+_snapshots: dict[tuple, tuple[float, Any]] = {}
+_snapshot_builders: dict[tuple, threading.Lock] = {}
+_snapshot_registry_lock = threading.Lock()
+
+
+def _cached_snapshot(key: tuple, build):
+    """Build `key`'s snapshot at most once per TTL, however many ask for it.
+
+    Every registry read in the process serialises on one lock in
+    `core_brain.order_registry`, and a full `/api/kpi` plus `/api/state` pass
+    over a run-sized store costs more than a second of it. Without this, two
+    open browser tabs ask for more work per second than the lock can deliver,
+    the request threadpool fills with readers waiting on each other, and the
+    dashboard stops answering anything at all -- which the page reports as lost
+    contact with the engine.
+
+    Only the very first caller waits for a build. Once a snapshot exists it is
+    served immediately, stale or not, and one background thread refreshes it --
+    a build costs several seconds of the registry lock, which is longer than
+    the TTL, so making readers wait for a fresh one meant a page load sat for
+    40 seconds behind requests an earlier load had abandoned. Concurrent first
+    callers share one build rather than starting their own.
+
+    What is cached is the payload, never a `Response` object. A response
+    carries per-request state -- the gzip middleware rewrites its headers as it
+    sends -- so handing one instance to two requests corrupts both
+    ("Response content longer than Content-Length").
+    """
+    hit = _snapshots.get(key)
+    if hit is not None and (time.monotonic() - hit[0]) < SNAPSHOT_TTL_SEC:
+        return hit[1]
+
+    with _snapshot_registry_lock:
+        builder = _snapshot_builders.setdefault(key, threading.Lock())
+
+    if hit is not None:
+        if builder.acquire(blocking=False):
+            try:
+                threading.Thread(target=_refresh_snapshot, args=(key, build, builder),
+                                 daemon=True).start()
+            except RuntimeError:
+                # The thread never started, so nothing will release the lock:
+                # hold it and this key freezes on one snapshot forever, which
+                # is the silent kind of stale this whole cache exists to avoid.
+                builder.release()
+                raise
+        return hit[1]
+
+    with builder:
+        # Re-check: whoever held the builder lock has just refreshed this key.
+        hit = _snapshots.get(key)
+        if hit is not None and (time.monotonic() - hit[0]) < SNAPSHOT_TTL_SEC:
+            return hit[1]
+        value = build()
+        _snapshots[key] = (time.monotonic(), value)
+        return value
+
+
+def _refresh_snapshot(key: tuple, build, builder: threading.Lock) -> None:
+    """Rebuild `key` off the request path, keeping the old value on failure."""
+    try:
+        # Build first, THEN read the clock: `(time.monotonic(), build())`
+        # evaluates left to right, so a build slower than SNAPSHOT_TTL_SEC
+        # landed in the cache already expired and the endpoint rebuilt
+        # continuously without ever serving anything fresh.
+        value = build()
+        _snapshots[key] = (time.monotonic(), value)
+    except Exception:
+        # The previous snapshot stays as it was: serving the last good numbers
+        # beats serving none, and the next reader retries the refresh.
+        logger.exception("snapshot refresh failed for %s", key)
+    finally:
+        builder.release()
+
+
+# How many cancelled orders per market survive into `/api/state`.
+#
+# A run accumulates them without bound -- a requote cycle cancels both legs
+# every few seconds -- and after a day they were the bulk of a 14.78 MB
+# payload the page asked for every two seconds. Gzipping a body that size
+# fails outright ("Response content longer than Content-Length"), the browser
+# gets truncated JSON, and the dashboard renders empty.
+#
+# The page only ever shows them inside one expanded market, behind a "Show N
+# cancelled orders" toggle, so a recent slice per market is all it can
+# display. Live orders and live pairs are never trimmed.
+CANCELLED_ORDERS_PER_MARKET = 5
+
+_CANCELLED_STATUSES = frozenset({"cancelled", "canceled"})
+
+
+def _order_recency(order: dict) -> int:
+    """Newest-first sort key: when the venue last spoke about this order."""
+    for field in ("last_polled_ts", "posted_ts"):
+        value = order.get(field)
+        if isinstance(value, (int, float)):
+            return int(value)
+    return 0
+
+
+def _is_cancelled(order: dict) -> bool:
+    return str(order.get("status") or "").lower() in _CANCELLED_STATUSES
+
+
+def _newest_per_market(dead: dict[str, list[dict]], recency) -> list[dict]:
+    """The newest `CANCELLED_ORDERS_PER_MARKET` of each market's dead entries."""
+    kept: list[dict] = []
+    for entries in dead.values():
+        entries.sort(key=recency, reverse=True)
+        kept.extend(entries[:CANCELLED_ORDERS_PER_MARKET])
+    return kept
+
+
+def _trim_cancelled_orders(state: dict) -> dict:
+    """Drop all but the newest `CANCELLED_ORDERS_PER_MARKET` per market.
+
+    Both lists are trimmed, because `pairs` embeds each pair's orders in full
+    and so carries a second, larger copy of the same dead history -- 10.6 MB of
+    one 14.8 MB payload here. A pair is dead only when every one of its orders
+    is; a pair holding anything live is kept whole.
+
+    Returns a shallow copy: the cached snapshot this reads from is shared, so
+    trimming in place would mutate what other readers get.
+    """
+    trimmed = dict(state)
+
+    orders = state.get("orders")
+    if isinstance(orders, list):
+        live: list[dict] = []
+        dead: dict[str, list[dict]] = {}
+        for order in orders:
+            if _is_cancelled(order):
+                dead.setdefault(str(order.get("condition_id") or ""), []).append(order)
+            else:
+                live.append(order)
+        trimmed["orders"] = live + _newest_per_market(dead, _order_recency)
+        # What the page would have been sent, so nothing has to infer the cap
+        # from a short list.
+        trimmed["cancelled_orders_total"] = sum(len(v) for v in dead.values())
+
+    pairs = state.get("pairs")
+    if isinstance(pairs, list):
+        live_pairs: list[dict] = []
+        dead_pairs: dict[str, list[dict]] = {}
+        for pair in pairs:
+            pair_orders = pair.get("orders") or []
+            if pair_orders and all(_is_cancelled(o) for o in pair_orders):
+                dead_pairs.setdefault(str(pair.get("condition_id") or ""), []).append(pair)
+            else:
+                live_pairs.append(pair)
+
+        def pair_recency(pair: dict) -> int:
+            return max((_order_recency(o) for o in (pair.get("orders") or [])), default=0)
+
+        trimmed["pairs"] = live_pairs + _newest_per_market(dead_pairs, pair_recency)
+        trimmed["cancelled_pairs_total"] = sum(len(v) for v in dead_pairs.values())
+
+    trimmed["cancelled_orders_per_market_cap"] = CANCELLED_ORDERS_PER_MARKET
+    return trimmed
+
+
 @app.get("/api/state")
 def get_state():
     """Return JSON state snapshot for the live execution dashboard."""
     from core_brain.registry_state import summarize_state
-    return JSONResponse(summarize_state(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
+    db_path = resolve_db_path(_ACTIVE_DB_OVERRIDE)
+    payload = _cached_snapshot(
+        ("state", str(db_path)),
+        lambda: _trim_cancelled_orders(summarize_state(db_path)),
+    )
+    return JSONResponse(payload)
 
 
 # How far a process's real creation time may sit from the time we recorded for
@@ -487,6 +688,30 @@ SHADOW_HEARTBEAT_STALE_ROTATIONS = 3.0
 SHADOW_HEARTBEAT_MIN_STALE_S = 120.0
 
 
+def _measured_cadence(cycle: Any, started_at: float, heartbeat_ts: float,
+                      interval: float) -> float:
+    """How long a rotation really takes, from the rotations the loop has run.
+
+    `interval` is the configured SLEEP between rotations, not their length. A
+    rehearsal at `--interval 5` whose rotations spend ~160s on public
+    order-book reads was aged against 5s, so a healthy loop read STALLED every
+    cycle. Dividing the elapsed run by the rotation count gives the real
+    cadence; the configured interval stays the floor, so an early burst of
+    fast rotations cannot shrink the ramp into false alarms, and a heartbeat
+    written before the `cycle` field existed keeps the old behaviour.
+    """
+    try:
+        rotations = int(cycle)
+    except (TypeError, ValueError):
+        return interval
+    if rotations <= 0:
+        return interval
+    elapsed = heartbeat_ts - started_at
+    if elapsed <= 0:
+        return interval
+    return max(interval, elapsed / rotations)
+
+
 def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dict | None:
     """The shadow rehearsal writing THIS store, or None.
 
@@ -523,8 +748,9 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
         return None
 
     heartbeat_age = max(0.0, now - heartbeat_ts)
+    cadence = _measured_cadence(raw.get("cycle"), started_at, heartbeat_ts, interval)
     stale_after = max(SHADOW_HEARTBEAT_MIN_STALE_S,
-                      SHADOW_HEARTBEAT_STALE_ROTATIONS * interval)
+                      SHADOW_HEARTBEAT_STALE_ROTATIONS * cadence)
     finished = bool(raw.get("finished"))
     pid = raw.get("pid")
     started_at_proc = raw.get("started_at")
@@ -543,6 +769,8 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
         "started_at": started_at,
         "minutes": raw.get("minutes"),
         "interval": interval,
+        # What a rotation actually costs, which is what the watchdog ramps off.
+        "cadence_sec": cadence,
         "heartbeat_age_sec": heartbeat_age,
         # Elapsed at the last heartbeat, not at `now`: once a run ends the
         # stopwatch must stop where it stopped.
@@ -948,6 +1176,9 @@ def get_system_status() -> dict:
             },
         },
         "bot_state": _bot_state,
+        # How often the Market Filter re-ranks, so the page ages its snapshot
+        # against the configured cadence instead of a constant.
+        "scan_interval_sec": resolve_scan_interval(),
         "registry_path": str(procs_file),
         "registry_unreadable": registry_unreadable,
         # Which store these numbers came from. The page renders identically
@@ -1681,11 +1912,15 @@ def get_kpi(run_id: str | None = None):
     """Return live KPI report mirroring strategy/kpi.py with Level 1/2/3 diagnostics."""
     from core_brain.kpi import report as generate_kpi_report
     db_path = resolve_db_path(_ACTIVE_DB_OVERRIDE)
-    try:
-        data = generate_kpi_report(db_path=db_path, run_id=run_id)
-        return JSONResponse(data)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+
+    def build() -> tuple[Any, int]:
+        try:
+            return generate_kpi_report(db_path=db_path, run_id=run_id), 200
+        except Exception as e:
+            return {"error": str(e)}, 500
+
+    payload, status = _cached_snapshot(("kpi", str(db_path), run_id), build)
+    return JSONResponse(payload, status_code=status)
 
 
 @app.get("/api/run-profitability")
@@ -1920,11 +2155,13 @@ def get_scan_state():
         # own stale threshold (SHADOW_HEARTBEAT_MIN_STALE_S), not the 90s engine one,
         # or a healthy slow rotation would flip to STALLED between 90s and 120s.
         hb_ts = now - float(shadow.get("heartbeat_age_sec") or 0.0)
+        cadence = float(shadow.get("cadence_sec") or shadow.get("interval") or 5.0)
         stale_threshold = max(SHADOW_HEARTBEAT_MIN_STALE_S,
-                              SHADOW_HEARTBEAT_STALE_ROTATIONS * float(shadow.get("interval") or 5.0))
+                              SHADOW_HEARTBEAT_STALE_ROTATIONS * cadence)
     else:
         hb = _read_engine_heartbeat()
         hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
+        cadence = None
         stale_threshold = SCAN_STALL_THRESHOLD_SEC
 
     window = now - 60.0
@@ -1976,6 +2213,10 @@ def get_scan_state():
 
     return JSONResponse({
         "scan_state": state,
+        # The cadence the verdict above was judged against, so the page can
+        # draw its pill ramp from the same number instead of a second guess.
+        "cadence_sec": round(cadence, 1) if cadence is not None else None,
+        "stale_threshold_sec": round(stale_threshold, 1),
         "seconds_since_heartbeat": round(hb_age, 1) if hb_age is not None else None,
         "seconds_since_scan": (
             round(max(0.0, now - last_scan_ts), 1) if last_scan_ts is not None else None
@@ -2008,6 +2249,27 @@ def _ring_file_key(st: Any) -> tuple:
     return (st.st_dev, st.st_ctime_ns)
 
 
+def _ring_replay_and_offset(fh, tail: int, stat_fn=os.fstat):
+    """(replay lines, follow offset, file identity) for ONE open ring handle.
+
+    All three answers come from the same handle. Reopening the path between
+    them straddles a rotation: the replay would be the new ring's tail while
+    the follow loop resumed at the old ring's end offset.
+
+    The offset is taken BEFORE the tail read, not after. `tail_lines_fh` reads
+    up to the EOF it saw when it started, so a later offset would sit past any
+    line appended while the tail was being read -- that line would be in
+    neither the replay nor the follow range, and silently lost. Taking it first
+    makes the two ranges overlap: the worst case is one line delivered twice,
+    which for a telemetry stream beats one delivered never.
+    """
+    from core_brain.cycle_stream import tail_lines_fh
+
+    offset = fh.seek(0, os.SEEK_END)
+    file_key = _ring_file_key(stat_fn(fh.fileno()))
+    return tail_lines_fh(fh, tail), offset, file_key
+
+
 def _cycle_stream_sse(
     ring_path: Path,
     tail: int = SSE_REPLAY_LINES,
@@ -2030,13 +2292,12 @@ def _cycle_stream_sse(
     file_key = None
     if ring_path.exists():
         try:
-            with open(ring_path, "r", encoding="utf-8", errors="replace") as fh:
-                tail_lines = fh.readlines()[-tail:]
-                # Position actually consumed, not a later stat: an append in the
-                # read-to-stat gap must not be silently skipped.
-                offset = fh.tell()
-                file_key = _ring_file_key(os.fstat(fh.fileno()))
-            for line in tail_lines:
+            # Seek to the tail rather than reading every line to keep the
+            # last few: the ring grows for the life of a run (33.8 MB on a
+            # one-day rehearsal) and every page load opens this stream.
+            with open(ring_path, "rb") as fh:
+                replay, offset, file_key = _ring_replay_and_offset(fh, tail)
+            for line in replay:
                 if line.strip():
                     yield _frame(line)
         except OSError:
@@ -2418,7 +2679,13 @@ def main():
                 # watcher rooted at the project restarts the monitor when
                 # core_brain or scripts change -- the observer must never be
                 # restarted by the thing it is observing.
-                reload_dirs=["dashboard"] if args.reload else None)
+                reload_dirs=["dashboard"] if args.reload else None,
+                # The cycle-telemetry SSE stream never ends on its own, so a
+                # graceful shutdown that waits for open connections waits
+                # forever: a reload or a restart leaves the port bound by a
+                # server that prints "Waiting for connections to close" and
+                # never comes back. Cut the stream off instead.
+                timeout_graceful_shutdown=SHUTDOWN_GRACE_SEC)
 
 
 if __name__ == "__main__":

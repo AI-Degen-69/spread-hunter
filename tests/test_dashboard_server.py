@@ -1338,8 +1338,9 @@ def test_html_has_kanban_board_container():
     assert 'screener-header' in html
     assert 'scan-state-pill' in html
     assert 'scan-snapshot-age' in html
-    assert 'scan-census' in html
-    assert 'scan-gates' in html
+    # The census and gate copy were removed (Owner 2026-09-16): reference text
+    # that never changed a decision at a glance. The kanban below already shows
+    # what each gate refused. See tests/test_live_state_language.py.
 
 
 def test_app_js_has_render_screener():

@@ -213,3 +213,154 @@ def test_the_design_system_is_declared_to_every_agent():
     assert "Live-State Language" in design
     for state in ("RUNNING", "DEGRADED", "DOWN", "STOPPED", "UNKNOWN", "STALE"):
         assert state in design
+
+
+# ── the Market Filter's scan pill: liveness, not activity ──────────────────
+#
+# The server's IDLE means "heartbeat fresh but no active-phase work in the
+# window" -- the filter is alive and between scans, which on a ~10m cycle is
+# most of the time. Rendering that as STOPPED told the operator a healthy
+# filter was "intentionally not running", and the pill flipped between
+# SCANNING and STOPPED every cycle.
+
+@requires_node
+def test_an_idle_filter_with_a_fresh_heartbeat_reads_running():
+    assert _harness("scanpill")["idleFresh"] == "running"
+
+
+@requires_node
+def test_a_scanning_filter_with_a_fresh_heartbeat_reads_running():
+    assert _harness("scanpill")["scanningFresh"] == "running"
+
+
+@requires_node
+def test_an_idle_filter_ages_through_the_ramp_like_any_other_service():
+    verdicts = _harness("scanpill")
+    assert (verdicts["idleAging"], verdicts["idleLongGone"]) == ("degraded", "down")
+
+
+@requires_node
+def test_a_stalled_filter_reads_down():
+    assert _harness("scanpill")["stalled"] == "down"
+
+
+@requires_node
+def test_an_unrecognised_verdict_still_reads_stopped():
+    verdicts = _harness("scanpill")
+    assert (verdicts["unrecognised"], verdicts["missing"]) == ("stopped", "stopped")
+
+
+# ── the top-nav MARKET SCAN pill: the scanner PROCESS, on every page ───────
+#
+# The Data & Markets header pill reports the TRADING loop's heartbeat. Sitting
+# beside "last scan: 3m ago" it read as "the market scan is down" whenever a
+# slow rotation aged the heartbeat, which is a different process entirely.
+# This pill answers the question that was actually being asked: is
+# `scripts.filter_loop` alive, and is the snapshot it writes one the dashboard
+# can still read? It lives in the top nav so the answer travels across tabs.
+
+@requires_node
+def test_a_live_scanner_with_a_fresh_snapshot_is_green():
+    v = _harness("marketscan")["upFresh"]
+    assert (v["state"], v["label"]) == ("running", "SCAN LIVE")
+
+
+@requires_node
+def test_no_scanner_process_is_red_whatever_the_file_says():
+    # The operator's question: red means "no filter loop is running". A fresh
+    # file left behind by a dead process must not paint it green.
+    v = _harness("marketscan")["processDead"]
+    assert (v["state"], v["label"]) == ("down", "SCAN DOWN")
+
+
+@requires_node
+def test_a_live_scanner_whose_snapshot_went_stale_is_amber_not_red():
+    # The process is up, so it is not DOWN; the file it should be refreshing
+    # is older than two full cycles, so it is not healthy either.
+    v = _harness("marketscan")["upStale"]
+    assert (v["state"], v["label"]) == ("degraded", "SCAN STALE")
+
+
+@requires_node
+def test_a_scanner_that_has_not_written_a_snapshot_yet_is_amber():
+    v = _harness("marketscan")["upNoFile"]
+    assert (v["state"], v["label"]) == ("degraded", "SCAN NO DATA")
+
+
+@requires_node
+def test_an_unreadable_or_missing_status_is_unknown_not_down():
+    # "We cannot tell" is its own state; calling it DOWN invents an outage.
+    verdicts = _harness("marketscan")
+    assert verdicts["noStatus"]["state"] == "unknown"
+    assert verdicts["registryUnreadable"]["state"] == "unknown"
+
+
+def test_the_scan_pill_lives_in_the_top_nav_bar():
+    # A pill only in the Market Filter tab cannot be seen from the other tabs,
+    # which is where the operator was when they asked.
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    header = html.split("<header>", 1)[1].split("</header>", 1)[0]
+    assert 'id="market-scan-pill"' in header
+
+
+def test_the_poll_loop_drives_the_top_nav_scan_pill():
+    # Isolate pollStatus first: a bare `"renderMarketScanPill(" in js` is
+    # satisfied by the function's own declaration, so it would pass even if
+    # nothing ever called it.
+    js = APP_JS.read_text(encoding="utf-8")
+    poll = js.split("async function pollStatus()", 1)[1].split(chr(10) + "async function ", 1)[0]
+    assert "renderMarketScanPill(status, kpi)" in poll
+
+
+# ── the Market Filter header pill says whose heartbeat it is ───────────────
+#
+# `#scan-state-pill` reads the TRADING loop's heartbeat (runtime/shadow_run.json
+# during a rehearsal, runtime/live_poll_heartbeat.json otherwise). Unlabelled and
+# sat beside "last scan: 3m ago", the operator read it as the market scan and
+# concluded the scanner was disconnected. The scanner now has its own pill in the
+# top nav, so this one must name the process it actually measures.
+
+def test_the_header_pill_is_labelled_for_the_loop_it_measures():
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    header = html.split('id="screener-header"', 1)[1].split("</section>", 1)[0]
+    assert "TRADING LOOP" in header
+
+
+def test_the_header_pill_names_its_heartbeat_file():
+    # "Which file is this number from" has to be answerable from the page.
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    header = html.split('id="screener-header"', 1)[1].split("</section>", 1)[0]
+    assert "shadow_run.json" in header
+    assert "live_poll_heartbeat.json" in header
+
+
+def test_the_header_pill_does_not_claim_to_be_the_market_scan():
+    # The top-nav pill owns that claim now; two pills answering the same
+    # question with different numbers is how this started.
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    header = html.split('id="screener-header"', 1)[1].split("</section>", 1)[0]
+    assert "SCAN LIVE" not in header
+
+
+# ── the Market Filter header is gate copy, not a dashboard ─────────────────
+#
+# Owner 2026-09-16: the census line, the gate line and the two readiness
+# trackers ("DEPTH gathering 8.7d/14 · 3/8 markets · ...") are reference copy
+# that never changes a decision at a glance. Removed; the kanban below already
+# shows what each gate refused.
+
+def test_the_screener_header_carries_no_gate_copy():
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    header = html.split('id="screener-header"', 1)[1].split("</section>", 1)[0]
+    assert 'id="scan-census"' not in header
+    assert 'id="scan-gates"' not in header
+
+
+def test_the_readiness_trackers_are_gone_but_the_ready_banner_stays():
+    # "Gathering, 3 of 8 markets" is progress nobody acts on; "TRIAL READY" is
+    # a decision, and it is rare. Keep the second, drop the first.
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    js = APP_JS.read_text(encoding="utf-8")
+    assert 'id="trial-trackers"' not in html
+    assert 'id="trial-ready-banner"' in html
+    assert "function trackerCard" not in js, "dead renderer left behind"
