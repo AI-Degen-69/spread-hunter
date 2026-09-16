@@ -248,3 +248,61 @@ def test_a_stalled_filter_reads_down():
 def test_an_unrecognised_verdict_still_reads_stopped():
     verdicts = _harness("scanpill")
     assert (verdicts["unrecognised"], verdicts["missing"]) == ("stopped", "stopped")
+
+
+# ── the top-nav MARKET SCAN pill: the scanner PROCESS, on every page ───────
+#
+# The Data & Markets header pill reports the TRADING loop's heartbeat. Sitting
+# beside "last scan: 3m ago" it read as "the market scan is down" whenever a
+# slow rotation aged the heartbeat, which is a different process entirely.
+# This pill answers the question that was actually being asked: is
+# `scripts.filter_loop` alive, and is the snapshot it writes one the dashboard
+# can still read? It lives in the top nav so the answer travels across tabs.
+
+@requires_node
+def test_a_live_scanner_with_a_fresh_snapshot_is_green():
+    v = _harness("marketscan")["upFresh"]
+    assert (v["state"], v["label"]) == ("running", "SCAN LIVE")
+
+
+@requires_node
+def test_no_scanner_process_is_red_whatever_the_file_says():
+    # The operator's question: red means "no filter loop is running". A fresh
+    # file left behind by a dead process must not paint it green.
+    v = _harness("marketscan")["processDead"]
+    assert (v["state"], v["label"]) == ("down", "SCAN DOWN")
+
+
+@requires_node
+def test_a_live_scanner_whose_snapshot_went_stale_is_amber_not_red():
+    # The process is up, so it is not DOWN; the file it should be refreshing
+    # is older than two full cycles, so it is not healthy either.
+    v = _harness("marketscan")["upStale"]
+    assert (v["state"], v["label"]) == ("degraded", "SCAN STALE")
+
+
+@requires_node
+def test_a_scanner_that_has_not_written_a_snapshot_yet_is_amber():
+    v = _harness("marketscan")["upNoFile"]
+    assert (v["state"], v["label"]) == ("degraded", "SCAN NO DATA")
+
+
+@requires_node
+def test_an_unreadable_or_missing_status_is_unknown_not_down():
+    # "We cannot tell" is its own state; calling it DOWN invents an outage.
+    verdicts = _harness("marketscan")
+    assert verdicts["noStatus"]["state"] == "unknown"
+    assert verdicts["registryUnreadable"]["state"] == "unknown"
+
+
+def test_the_scan_pill_lives_in_the_top_nav_bar():
+    # A pill only in the Market Filter tab cannot be seen from the other tabs,
+    # which is where the operator was when they asked.
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    header = html.split("<header>", 1)[1].split("</header>", 1)[0]
+    assert 'id="market-scan-pill"' in header
+
+
+def test_the_poll_loop_drives_the_top_nav_scan_pill():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "renderMarketScanPill(" in js

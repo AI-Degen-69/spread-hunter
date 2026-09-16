@@ -75,6 +75,7 @@ def write_shadow_heartbeat(
     interval: float,
     started_at: float,
     finished: bool = False,
+    cycle: int = 0,
     path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Publish (or refresh) the rehearsal's heartbeat file.
@@ -92,6 +93,12 @@ def write_shadow_heartbeat(
         "interval": float(interval),
         "db_path": str(Path(db_path).resolve()),
         "heartbeat_ts": time.time(),
+        # Rotations completed so far. The dashboard divides the elapsed run by
+        # this to get the cadence the loop REALLY runs at: `interval` is only
+        # the sleep between rotations, and a rotation that spends two minutes
+        # on public order-book reads makes the configured 5s a fiction to age
+        # the heartbeat against.
+        "cycle": int(cycle),
         "finished": bool(finished),
     }
     try:
@@ -753,11 +760,15 @@ def run_shadow(
 
     heartbeat_kwargs = dict(db_path=db_path, run_id=run_id, minutes=minutes,
                             interval=interval, started_at=started_at)
-    write_shadow_heartbeat(**heartbeat_kwargs)
+    write_shadow_heartbeat(**heartbeat_kwargs, cycle=0)
+
+    rotations = 0
 
     def beating_sleep(seconds: float) -> None:
         """Refresh the heartbeat once per rotation, then sleep as before."""
-        write_shadow_heartbeat(**heartbeat_kwargs)
+        nonlocal rotations
+        rotations += 1
+        write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations)
         resolved_sleep_fn(seconds)
 
     results = loop_run(
@@ -772,7 +783,7 @@ def run_shadow(
     # Only a clean end is marked finished. A crash leaves the heartbeat
     # unrefreshed, which the reader calls ended once it goes stale -- so the
     # two endings stay distinguishable.
-    write_shadow_heartbeat(**heartbeat_kwargs, finished=True)
+    write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations, finished=True)
     return ShadowResult(
         results=results,
         intents=list(intents_sink),

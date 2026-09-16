@@ -191,11 +191,33 @@ function scanPillVerdicts() {
   };
 }
 
+/* The top-nav MARKET SCAN pill: is the scanner PROCESS alive, and is the
+ * dashboard reading a file it actually refreshed? */
+function marketScanVerdicts() {
+  const up = { services: { filter: { running: true } } };
+  const down = { services: { filter: { running: false } } };
+  const fresh = { funnel: { snapshot_age: 120 } };
+  const stale = { funnel: { snapshot_age: 4000 } };
+  const call = (st, kpi) => {
+    const v = app.marketScanState(st, kpi);
+    return { state: v.state, label: v.label };
+  };
+  return {
+    upFresh: call(up, fresh),
+    upStale: call(up, stale),
+    upNoFile: call(up, {}),
+    processDead: call(down, fresh),
+    noStatus: call(null, fresh),
+    registryUnreadable: call({ registry_unreadable: true, services: { filter: { running: true } } }, fresh),
+  };
+}
+
 let out;
-if (script === 'scanpill') out = scanPillVerdicts();
+if (script === 'marketscan') out = marketScanVerdicts();
+else if (script === 'scanpill') out = scanPillVerdicts();
 else if (script === 'pills') out = pillVerdicts();
 else if (script === 'keys') out = keyVerdicts();
 else if (script === 'backend') out = backendSequence();
-else out = { pills: pillVerdicts(), keys: keyVerdicts(), backend: backendSequence(), scanpill: scanPillVerdicts() };
+else out = { pills: pillVerdicts(), keys: keyVerdicts(), backend: backendSequence(), scanpill: scanPillVerdicts(), marketscan: marketScanVerdicts() };
 
 process.stdout.write(JSON.stringify(out));

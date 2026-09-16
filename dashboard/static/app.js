@@ -115,12 +115,70 @@ const SCAN_PILL_THRESHOLDS = { degraded: 60, down: 120 };
  * and STOPPED every cycle. A live heartbeat ages through the ramp instead, and
  * a filter that really stops goes DOWN when its heartbeat does. Only a verdict
  * we do not recognise reads STOPPED. */
-function scanPillState(rawState, hbAgeSec) {
+function scanPillState(rawState, hbAgeSec, cadenceSec) {
   if (rawState === 'STALLED') return 'down';
   if (rawState === 'SCANNING' || rawState === 'IDLE') {
-    return stateKey(true, hbAgeSec, SCAN_PILL_THRESHOLDS);
+    // Ramp off the cadence the server MEASURED for this loop when it sent
+    // one. The fixed 60/120s default assumed a rotation costs seconds; a
+    // rotation that really costs ~160s crossed it every single cycle, so a
+    // healthy loop sat on red.
+    const c = Number(cadenceSec);
+    const th = (isFinite(c) && c > 0) ? cadenceThresholds(c) : SCAN_PILL_THRESHOLDS;
+    return stateKey(true, hbAgeSec, th);
   }
   return 'stopped';
+}
+
+/* How often scripts/filter_loop.py re-ranks the universe (SH_FILTER_INTERVAL_SEC,
+ * default 600). One missed cycle doubles the gap, so the snapshot only reads
+ * stale past two of them. */
+const SCAN_SNAPSHOT_CYCLE_SEC = 600;
+
+/* The top-nav MARKET SCAN pill: is the SCANNER alive?
+ *
+ * Distinct from the Market Filter header pill, which reports the trading
+ * loop's heartbeat. This one answers the operator's actual question -- is
+ * `scripts.filter_loop` running, and is the snapshot it writes one this page
+ * can still read -- and it answers it from every tab.
+ *
+ * Red is reserved for "no scanner process". A live process whose file went
+ * stale is amber: something is wrong, but the loop is not gone. "We cannot
+ * read the process registry" is UNKNOWN, never DOWN -- inventing an outage
+ * out of a missing file is the same lie in the other direction. */
+function marketScanState(status, kpi) {
+  if (!status || status.registry_unreadable) {
+    return { state: 'unknown', label: 'SCAN --',
+             title: 'Cannot read the process registry, so the state of the Market Filter is unknown.' };
+  }
+  const svc = (status.services || {}).filter || {};
+  if (!svc.running) {
+    return { state: 'down', label: 'SCAN DOWN',
+             title: 'No Market Filter process (scripts.filter_loop) is running. Nothing is scanning markets.' };
+  }
+  const age = kpi && kpi.funnel ? kpi.funnel.snapshot_age : null;
+  if (age === null || age === undefined) {
+    return { state: 'degraded', label: 'SCAN NO DATA', ageSec: null,
+             title: 'The Market Filter is running but has not written runtime/pipeline.json yet.' };
+  }
+  if (age > SCAN_SNAPSHOT_CYCLE_SEC * 2) {
+    return { state: 'degraded', label: 'SCAN STALE', ageSec: age,
+             title: 'The Market Filter is running, but its last snapshot is older than two scan cycles.' };
+  }
+  return { state: 'running', label: 'SCAN LIVE', ageSec: age,
+           title: 'The Market Filter is running and its snapshot is fresh.' };
+}
+
+function renderMarketScanPill(status, kpi) {
+  const el = document.getElementById('market-scan-pill');
+  if (!el) return;
+  const v = marketScanState(status, kpi);
+  el.className = 'pill state-' + v.state;
+  el.title = v.title;
+  const dot = (v.state === 'running') ? '<span class="pulse-dot active"></span>'
+    : (v.state === 'degraded' || v.state === 'down') ? '<span class="pulse-dot"></span>'
+    : '';
+  const age = (v.ageSec !== null && v.ageSec !== undefined) ? ' · ' + fmtAge(v.ageSec) : '';
+  el.innerHTML = dot + esc(v.label + age);
 }
 
 /* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
@@ -4588,7 +4646,7 @@ function renderScreener(kpi, scanState) {
   if (scanState) {
     const raw = scanState.scan_state || '--';
     const hbAge = scanState.seconds_since_heartbeat;
-    const state = scanPillState(raw, hbAge);
+    const state = scanPillState(raw, hbAge, scanState.cadence_sec);
     headerPill.className = 'pill state-' + state;
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
@@ -4994,6 +5052,11 @@ async function pollStatus() {
     // Which registry these numbers came from, before anything renders them.
     if (status) renderDbMode(status);
 
+    // Top-nav MARKET SCAN pill. Called on every poll, including the ones where
+    // /api/kpi failed: a scanner that is up with no readable snapshot is
+    // exactly the amber this pill exists to show.
+    renderMarketScanPill(status, kpi || lastKpi);
+
     // Service uptime rides on the status payload, so it must not wait on
     // /api/kpi: the Market Filter header still needs a stopwatch when the KPI read
     // is the one that failed.
@@ -5073,7 +5136,7 @@ if (typeof module !== 'undefined' && module.exports) {
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },
     set isStopping(v) { isStopping = v; },
-    stateKey, statePillHtml, cadenceThresholds, scanPillState,
+    stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },

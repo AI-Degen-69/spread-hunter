@@ -656,6 +656,30 @@ SHADOW_HEARTBEAT_STALE_ROTATIONS = 3.0
 SHADOW_HEARTBEAT_MIN_STALE_S = 120.0
 
 
+def _measured_cadence(cycle: Any, started_at: float, heartbeat_ts: float,
+                      interval: float) -> float:
+    """How long a rotation really takes, from the rotations the loop has run.
+
+    `interval` is the configured SLEEP between rotations, not their length. A
+    rehearsal at `--interval 5` whose rotations spend ~160s on public
+    order-book reads was aged against 5s, so a healthy loop read STALLED every
+    cycle. Dividing the elapsed run by the rotation count gives the real
+    cadence; the configured interval stays the floor, so an early burst of
+    fast rotations cannot shrink the ramp into false alarms, and a heartbeat
+    written before the `cycle` field existed keeps the old behaviour.
+    """
+    try:
+        rotations = int(cycle)
+    except (TypeError, ValueError):
+        return interval
+    if rotations <= 0:
+        return interval
+    elapsed = heartbeat_ts - started_at
+    if elapsed <= 0:
+        return interval
+    return max(interval, elapsed / rotations)
+
+
 def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dict | None:
     """The shadow rehearsal writing THIS store, or None.
 
@@ -692,8 +716,9 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
         return None
 
     heartbeat_age = max(0.0, now - heartbeat_ts)
+    cadence = _measured_cadence(raw.get("cycle"), started_at, heartbeat_ts, interval)
     stale_after = max(SHADOW_HEARTBEAT_MIN_STALE_S,
-                      SHADOW_HEARTBEAT_STALE_ROTATIONS * interval)
+                      SHADOW_HEARTBEAT_STALE_ROTATIONS * cadence)
     finished = bool(raw.get("finished"))
     pid = raw.get("pid")
     started_at_proc = raw.get("started_at")
@@ -712,6 +737,8 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
         "started_at": started_at,
         "minutes": raw.get("minutes"),
         "interval": interval,
+        # What a rotation actually costs, which is what the watchdog ramps off.
+        "cadence_sec": cadence,
         "heartbeat_age_sec": heartbeat_age,
         # Elapsed at the last heartbeat, not at `now`: once a run ends the
         # stopwatch must stop where it stopped.
@@ -2093,11 +2120,13 @@ def get_scan_state():
         # own stale threshold (SHADOW_HEARTBEAT_MIN_STALE_S), not the 90s engine one,
         # or a healthy slow rotation would flip to STALLED between 90s and 120s.
         hb_ts = now - float(shadow.get("heartbeat_age_sec") or 0.0)
+        cadence = float(shadow.get("cadence_sec") or shadow.get("interval") or 5.0)
         stale_threshold = max(SHADOW_HEARTBEAT_MIN_STALE_S,
-                              SHADOW_HEARTBEAT_STALE_ROTATIONS * float(shadow.get("interval") or 5.0))
+                              SHADOW_HEARTBEAT_STALE_ROTATIONS * cadence)
     else:
         hb = _read_engine_heartbeat()
         hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
+        cadence = None
         stale_threshold = SCAN_STALL_THRESHOLD_SEC
 
     window = now - 60.0
@@ -2149,6 +2178,10 @@ def get_scan_state():
 
     return JSONResponse({
         "scan_state": state,
+        # The cadence the verdict above was judged against, so the page can
+        # draw its pill ramp from the same number instead of a second guess.
+        "cadence_sec": round(cadence, 1) if cadence is not None else None,
+        "stale_threshold_sec": round(stale_threshold, 1),
         "seconds_since_heartbeat": round(hb_age, 1) if hb_age is not None else None,
         "seconds_since_scan": (
             round(max(0.0, now - last_scan_ts), 1) if last_scan_ts is not None else None
