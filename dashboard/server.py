@@ -26,6 +26,7 @@ import logging
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Generator, Optional
@@ -68,6 +69,8 @@ CYCLE_RING_NAME = "cycle_events.jsonl"
 SSE_REPLAY_LINES = 50
 SSE_POLL_SEC = 0.5
 SSE_KEEPALIVE_SEC = 15.0
+# How long a shutdown waits for open connections before dropping them.
+SHUTDOWN_GRACE_SEC = 5
 SCAN_STALL_THRESHOLD_SEC = 90.0
 
 _ACTIVE_RING_OVERRIDE: Path | None = None
@@ -340,11 +343,148 @@ def set_db_override(path: Path | str | None) -> None:
     _ACTIVE_DB_OVERRIDE = Path(path) if path else None
 
 
+# How long a built snapshot is served to every caller before it is rebuilt.
+# The page polls on a 2s timer, so this is short enough that nothing on screen
+# lags a cycle behind and long enough that a second reader costs nothing.
+SNAPSHOT_TTL_SEC: float = 1.5
+
+_snapshots: dict[tuple, tuple[float, Any]] = {}
+_snapshot_builders: dict[tuple, threading.Lock] = {}
+_snapshot_registry_lock = threading.Lock()
+
+
+def _cached_snapshot(key: tuple, build):
+    """Build `key`'s snapshot at most once per TTL, however many ask for it.
+
+    Every registry read in the process serialises on one lock in
+    `core_brain.order_registry`, and a full `/api/kpi` plus `/api/state` pass
+    over a run-sized store costs more than a second of it. Without this, two
+    open browser tabs ask for more work per second than the lock can deliver,
+    the request threadpool fills with readers waiting on each other, and the
+    dashboard stops answering anything at all -- which the page reports as lost
+    contact with the engine.
+
+    Callers that arrive while a build is running wait for that build instead of
+    starting their own, so N concurrent readers cost exactly one pass.
+
+    What is cached is the payload, never a `Response` object. A response
+    carries per-request state -- the gzip middleware rewrites its headers as it
+    sends -- so handing one instance to two requests corrupts both
+    ("Response content longer than Content-Length").
+    """
+    hit = _snapshots.get(key)
+    if hit is not None and (time.monotonic() - hit[0]) < SNAPSHOT_TTL_SEC:
+        return hit[1]
+
+    with _snapshot_registry_lock:
+        builder = _snapshot_builders.setdefault(key, threading.Lock())
+
+    with builder:
+        # Re-check: whoever held the builder lock has just refreshed this key.
+        hit = _snapshots.get(key)
+        if hit is not None and (time.monotonic() - hit[0]) < SNAPSHOT_TTL_SEC:
+            return hit[1]
+        value = build()
+        _snapshots[key] = (time.monotonic(), value)
+        return value
+
+
+# How many cancelled orders per market survive into `/api/state`.
+#
+# A run accumulates them without bound -- a requote cycle cancels both legs
+# every few seconds -- and after a day they were the bulk of a 14.78 MB
+# payload the page asked for every two seconds. Gzipping a body that size
+# fails outright ("Response content longer than Content-Length"), the browser
+# gets truncated JSON, and the dashboard renders empty.
+#
+# The page only ever shows them inside one expanded market, behind a "Show N
+# cancelled orders" toggle, so a recent slice per market is all it can
+# display. Live orders and live pairs are never trimmed.
+CANCELLED_ORDERS_PER_MARKET = 5
+
+_CANCELLED_STATUSES = frozenset({"cancelled", "canceled"})
+
+
+def _order_recency(order: dict) -> int:
+    """Newest-first sort key: when the venue last spoke about this order."""
+    for field in ("last_polled_ts", "posted_ts"):
+        value = order.get(field)
+        if isinstance(value, (int, float)):
+            return int(value)
+    return 0
+
+
+def _is_cancelled(order: dict) -> bool:
+    return str(order.get("status") or "").lower() in _CANCELLED_STATUSES
+
+
+def _newest_per_market(dead: dict[str, list[dict]], recency) -> list[dict]:
+    """The newest `CANCELLED_ORDERS_PER_MARKET` of each market's dead entries."""
+    kept: list[dict] = []
+    for entries in dead.values():
+        entries.sort(key=recency, reverse=True)
+        kept.extend(entries[:CANCELLED_ORDERS_PER_MARKET])
+    return kept
+
+
+def _trim_cancelled_orders(state: dict) -> dict:
+    """Drop all but the newest `CANCELLED_ORDERS_PER_MARKET` per market.
+
+    Both lists are trimmed, because `pairs` embeds each pair's orders in full
+    and so carries a second, larger copy of the same dead history -- 10.6 MB of
+    one 14.8 MB payload here. A pair is dead only when every one of its orders
+    is; a pair holding anything live is kept whole.
+
+    Returns a shallow copy: the cached snapshot this reads from is shared, so
+    trimming in place would mutate what other readers get.
+    """
+    trimmed = dict(state)
+
+    orders = state.get("orders")
+    if isinstance(orders, list):
+        live: list[dict] = []
+        dead: dict[str, list[dict]] = {}
+        for order in orders:
+            if _is_cancelled(order):
+                dead.setdefault(str(order.get("condition_id") or ""), []).append(order)
+            else:
+                live.append(order)
+        trimmed["orders"] = live + _newest_per_market(dead, _order_recency)
+        # What the page would have been sent, so nothing has to infer the cap
+        # from a short list.
+        trimmed["cancelled_orders_total"] = sum(len(v) for v in dead.values())
+
+    pairs = state.get("pairs")
+    if isinstance(pairs, list):
+        live_pairs: list[dict] = []
+        dead_pairs: dict[str, list[dict]] = {}
+        for pair in pairs:
+            pair_orders = pair.get("orders") or []
+            if pair_orders and all(_is_cancelled(o) for o in pair_orders):
+                dead_pairs.setdefault(str(pair.get("condition_id") or ""), []).append(pair)
+            else:
+                live_pairs.append(pair)
+
+        def pair_recency(pair: dict) -> int:
+            return max((_order_recency(o) for o in (pair.get("orders") or [])), default=0)
+
+        trimmed["pairs"] = live_pairs + _newest_per_market(dead_pairs, pair_recency)
+        trimmed["cancelled_pairs_total"] = sum(len(v) for v in dead_pairs.values())
+
+    trimmed["cancelled_orders_per_market_cap"] = CANCELLED_ORDERS_PER_MARKET
+    return trimmed
+
+
 @app.get("/api/state")
 def get_state():
     """Return JSON state snapshot for the live execution dashboard."""
     from core_brain.registry_state import summarize_state
-    return JSONResponse(summarize_state(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
+    db_path = resolve_db_path(_ACTIVE_DB_OVERRIDE)
+    payload = _cached_snapshot(
+        ("state", str(db_path)),
+        lambda: _trim_cancelled_orders(summarize_state(db_path)),
+    )
+    return JSONResponse(payload)
 
 
 # How far a process's real creation time may sit from the time we recorded for
@@ -1681,11 +1821,15 @@ def get_kpi(run_id: str | None = None):
     """Return live KPI report mirroring strategy/kpi.py with Level 1/2/3 diagnostics."""
     from core_brain.kpi import report as generate_kpi_report
     db_path = resolve_db_path(_ACTIVE_DB_OVERRIDE)
-    try:
-        data = generate_kpi_report(db_path=db_path, run_id=run_id)
-        return JSONResponse(data)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+
+    def build() -> tuple[Any, int]:
+        try:
+            return generate_kpi_report(db_path=db_path, run_id=run_id), 200
+        except Exception as e:
+            return {"error": str(e)}, 500
+
+    payload, status = _cached_snapshot(("kpi", str(db_path), run_id), build)
+    return JSONResponse(payload, status_code=status)
 
 
 @app.get("/api/run-profitability")
@@ -2418,7 +2562,13 @@ def main():
                 # watcher rooted at the project restarts the monitor when
                 # core_brain or scripts change -- the observer must never be
                 # restarted by the thing it is observing.
-                reload_dirs=["dashboard"] if args.reload else None)
+                reload_dirs=["dashboard"] if args.reload else None,
+                # The cycle-telemetry SSE stream never ends on its own, so a
+                # graceful shutdown that waits for open connections waits
+                # forever: a reload or a restart leaves the port bound by a
+                # server that prints "Waiting for connections to close" and
+                # never comes back. Cut the stream off instead.
+                timeout_graceful_shutdown=SHUTDOWN_GRACE_SEC)
 
 
 if __name__ == "__main__":
