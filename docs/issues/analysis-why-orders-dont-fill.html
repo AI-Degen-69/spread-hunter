@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>למה ההוראות לא מתמלאות</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-base:#080c14; --bg-surface:#0f172a; --bg-surface-raised:#1e293b;
+    --bg-card:rgba(15,23,42,.65);
+    --border-subtle:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.16);
+    --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#8ea2b8;
+    --green:#10b981; --amber:#f59e0b; --red:#ef4444; --cyan:#22d3ee;
+  }
+  *{box-sizing:border-box}
+  html,body{background:var(--bg-base)}
+  body{margin:0;color:var(--text-primary);
+       font:13px/1.7 "IBM Plex Sans",-apple-system,BlinkMacSystemFont,sans-serif}
+  main{max-width:1100px;margin:auto;padding:48px 20px 90px}
+  .mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+  .eyebrow{color:var(--cyan);font-size:10px;font-weight:600;letter-spacing:.1em;
+           text-transform:uppercase;margin:0 0 12px}
+  h1{font-family:"Big Shoulders Display",sans-serif;font-weight:800;
+     font-size:clamp(34px,6vw,60px);line-height:1.05;letter-spacing:.02em;margin:0 0 18px}
+  h2{font-family:"Big Shoulders Display",sans-serif;font-weight:700;letter-spacing:.04em;
+     font-size:28px;margin:0 0 6px;text-transform:uppercase}
+  h3{font-size:15px;font-weight:600;margin:0 0 10px;color:var(--text-primary)}
+  p{color:var(--text-secondary);margin:0 0 14px}
+  .lede{font-size:16px;line-height:1.7;color:var(--text-primary);max-width:74ch}
+  .lede b{color:var(--red)}
+  section{margin:56px 0 0}
+  .rule{height:1px;background:var(--border-subtle);margin:14px 0 26px}
+  .kicker{color:var(--text-muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase;margin:0 0 20px}
+
+  .card{background:var(--bg-card);border:1px solid var(--border-subtle);
+        border-radius:12px;padding:20px 22px}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:860px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+  .stat{background:var(--bg-surface);border:1px solid var(--border-subtle);
+        border-radius:12px;padding:18px 20px}
+  .stat .v{font-family:"JetBrains Mono",monospace;font-variant-numeric:tabular-nums;
+           font-size:30px;font-weight:700;line-height:1.1;display:block}
+  .stat .l{display:block;font-size:11px;color:var(--text-muted);
+           letter-spacing:.04em;margin-top:8px;text-transform:uppercase}
+  .stat .n{display:block;font-size:11px;color:var(--text-secondary);margin-top:6px}
+  .red{color:var(--red)} .amber{color:var(--amber)} .green{color:var(--green)} .cyan{color:var(--cyan)}
+  .mut{color:var(--text-muted)}
+
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--border-subtle)}
+  th{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);font-weight:600}
+  td.num{font-family:"JetBrains Mono",monospace;font-variant-numeric:tabular-nums}
+  tbody tr:last-child td{border-bottom:0}
+  tr.hi td{background:rgba(239,68,68,.07)}
+  tr.ok td{background:rgba(16,185,129,.07)}
+
+  .bar{display:block;height:8px;border-radius:2px;background:var(--bg-surface-raised);overflow:hidden;min-width:60px}
+  .bar i{display:block;height:100%;background:var(--red)}
+  .bar.g i{background:var(--green)}
+
+  .book{background:var(--bg-surface);border:1px solid var(--border-subtle);
+        border-radius:12px;padding:22px;overflow:hidden}
+  .lvl{display:grid;grid-template-columns:78px 1fr 130px;align-items:center;
+       gap:14px;padding:7px 0}
+  .lvl .px{font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:700}
+  .lvl .sz{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text-muted);text-align:left}
+  .wall{height:20px;border-radius:2px}
+  .wall.ask{background:rgba(239,68,68,.30);border:1px solid rgba(239,68,68,.5)}
+  .wall.bid{background:rgba(16,185,129,.30);border:1px solid rgba(16,185,129,.5)}
+  .wall.us{background:var(--cyan);border:1px solid var(--cyan);height:14px;min-width:5px;
+            box-shadow:0 0 0 3px rgba(34,211,238,.18)}
+  .wall.other{background:rgba(100,116,139,.22);border:1px solid rgba(100,116,139,.4)}
+  .midline{display:grid;grid-template-columns:78px 1fr 130px;gap:14px;align-items:center;
+           padding:9px 0;border-top:1px dashed var(--border-strong);
+           border-bottom:1px dashed var(--border-strong);margin:4px 0}
+  .midline .px{font-family:"JetBrains Mono",monospace;font-weight:700;color:var(--amber)}
+  .midline .t{font-size:11px;color:var(--amber);letter-spacing:.04em}
+  .gapnote{display:grid;grid-template-columns:78px 1fr;gap:14px;padding:6px 0}
+  .gapnote .t{font-size:11px;color:var(--red);letter-spacing:.03em}
+
+  .pill{display:inline-flex;align-items:center;gap:7px;border-radius:3px;
+        padding:3px 10px;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+  .pill.good{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.4)}
+
+  .loop{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  @media(max-width:860px){.loop{grid-template-columns:1fr}}
+  .step{background:var(--bg-surface);border:1px solid var(--border-subtle);
+        border-radius:10px;padding:16px}
+  .step .n{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--cyan);font-weight:700}
+  .step .h{font-size:13px;font-weight:600;margin:8px 0 6px}
+  .step .d{font-size:11px;color:var(--text-muted);line-height:1.6}
+  .step.last{border-color:rgba(239,68,68,.4)}
+
+  .tl{border-right:2px solid var(--border-subtle);padding-right:22px;margin-right:6px}
+  .ev{position:relative;padding:0 0 22px}
+  .ev::before{content:"";position:absolute;right:-29px;top:5px;width:10px;height:10px;
+              border-radius:50%;background:var(--bg-base);border:2px solid var(--text-muted)}
+  .ev.fill::before{border-color:var(--green);background:var(--green)}
+  .ev.cancel::before{border-color:var(--red)}
+  .ev.merge::before{border-color:var(--cyan);background:var(--cyan)}
+  .ev .t{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text-muted)}
+  .ev .h{font-size:13px;font-weight:600;margin:3px 0}
+  .ev .d{font-size:12px;color:var(--text-secondary)}
+
+  .quote{border-right:3px solid var(--amber);background:rgba(245,158,11,.06);
+         padding:14px 18px;margin:18px 0;border-radius:0 8px 8px 0}
+  .quote p{margin:0;color:var(--text-primary);font-size:14px}
+  code{font-family:"JetBrains Mono",monospace;font-size:12px;
+       background:var(--bg-surface-raised);padding:2px 6px;border-radius:3px;color:var(--cyan)}
+  .formula{background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:10px;
+           padding:18px 22px;font-family:"JetBrains Mono",monospace;font-size:14px;
+           direction:ltr;text-align:left;line-height:2;color:var(--text-primary)}
+  .formula .c{color:var(--text-muted)}
+  footer{margin-top:70px;padding-top:20px;border-top:1px solid var(--border-subtle);
+         color:var(--text-muted);font-size:11px;line-height:2}
+  ul{color:var(--text-secondary);padding-right:20px;margin:0 0 14px}
+  li{margin-bottom:7px}
+</style>
+</head>
+<body>
+<main>
+
+  <p class="eyebrow">ניתוח נתונים · data/01_shadow_12-09_00-58.db · 7,427 הוראות</p>
+  <h1>למה ההוראות<br>לא מתמלאות</h1>
+  <p class="lede">
+    הבוט מציב את ההצעה שלו <b>2 סנט מתחת לקונה הכי טוב בספר</b>.
+    במחיר הזה כמעט לא נסחר כלום — ב־<b>0.38%</b> מהדגימות בלבד עבר מסחר ברמה שלנו.
+    אחרי 51 שניות של שקט המחיר זז, ההוראה מבוטלת, ומפורסמת מחדש 4 סנט משם.
+    <b>זה לא באג. זו המתמטיקה של האסטרטגיה.</b>
+  </p>
+
+  <div class="grid g4" style="margin-top:30px">
+    <div class="stat"><span class="v red">1.29%</span><span class="l">שיעור מילוי</span><span class="n">96 מתוך 7,427 הוראות</span></div>
+    <div class="stat"><span class="v red">98.2%</span><span class="l">זוגות עם 0 רגליים</span><span class="n">2,831 מתוך 2,884</span></div>
+    <div class="stat"><span class="v red">0.38%</span><span class="l">דגימות עם מסחר</span><span class="n">371 מתוך 98,661</span></div>
+    <div class="stat"><span class="v amber">2.0c</span><span class="l">מתחת ל־best bid</span><span class="n">חציון המיקום שלנו</span></div>
+  </div>
+
+  <section>
+    <h2>1 · מה הבוט מנסה לעשות</h2>
+    <div class="rule"></div>
+    <p class="kicker">core_brain/quotes.py — שכבת ההחלטה</p>
+
+    <p>המטרה היא <b style="color:var(--text-primary)">לא</b> להרוויח מתנועת מחיר. אין כאן שום הימור על כיוון.</p>
+
+    <div class="grid g3">
+      <div class="card">
+        <div class="pill good">שלב 1</div>
+        <h3 style="margin-top:12px">קונים את שני הצדדים</h3>
+        <p style="font-size:12px;margin:0">שיירס UP <b style="color:var(--text-primary)">וגם</b> שיירס DOWN של אותו שוק בינארי.</p>
+      </div>
+      <div class="card">
+        <div class="pill good">שלב 2</div>
+        <h3 style="margin-top:12px">בסכום מתחת ל־$1.00</h3>
+        <p style="font-size:12px;margin:0">אם UP עלה 0.30 ו־DOWN עלה 0.67 — הזוג עלה 0.97.</p>
+      </div>
+      <div class="card">
+        <div class="pill good">שלב 3</div>
+        <h3 style="margin-top:12px">ממזגים חזרה ל־$1.00</h3>
+        <p style="font-size:12px;margin:0">זוג שלם נפדה בדיוק בדולר. ההפרש הוא הרווח: <span class="mono cyan">+$0.03</span>.</p>
+      </div>
+    </div>
+
+    <div class="quote">
+      <p><b>הבעיה המובנית:</b> בשוק בינארי תמיד מתקיים <span class="mono">mid_UP + mid_DOWN ≈ 1.00</span>.
+      לכן הדרך <b>היחידה</b> לקנות זוג מתחת לדולר היא להציע <b>מתחת ל־mid</b> בשתי הרגליים.
+      וזה בדיוק המקום שבו לא נסחר כלום.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · איך הוא מחליט על מחיר</h2>
+    <div class="rule"></div>
+    <p class="kicker">quote_resting_price() — core_brain/quotes.py:103</p>
+
+    <div class="formula">
+      mid   = (best_bid + best_ask) / 2<br>
+      price = mid − offset<br><br>
+      offset = reward_offset <span class="c">(2.0c)</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ skew_offset <span class="c">(מאזן בין הרגליים)</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ band_risk.extra_offset <span class="c">(מרחיק במחירי קיצון)</span><br><br>
+      <span class="c">clamp: 0.5c ≤ offset ≤ 4.5c</span>
+    </div>
+
+    <div class="grid g4" style="margin-top:16px">
+      <div class="stat"><span class="v mono">2.0c</span><span class="l">reward_offset</span><span class="n">הבסיס — מייצר את הרווח</span></div>
+      <div class="stat"><span class="v mono">2.5c</span><span class="l">offset בפועל · חציון</span><span class="n">edge_vs_mid מדוד</span></div>
+      <div class="stat"><span class="v mono">3.5c</span><span class="l">offset בפועל · p90</span><span class="n">אחרי skew + band</span></div>
+      <div class="stat"><span class="v mono">4.5c</span><span class="l">max_spread_from_mid</span><span class="n">התקרה הקשיחה</span></div>
+    </div>
+
+    <h3 style="margin-top:28px">שתי התקרות — ושתיהן רק מורידות</h3>
+    <ul>
+      <li>אם <code>price &gt;= best_ask</code> → מוריד לטיק אחד מתחת ל־ask.</li>
+      <li>אם <code>price &gt; best_bid + 1 tick</code> → מוריד ל־<code>best_bid + 0.001</code>.</li>
+    </ul>
+    <p style="color:var(--red)">
+      <b>אין שום כלל שמרים את ההצעה לקצה הספר.</b> אם המחיר המחושב יוצא מתחת ל־best bid, הוא נשאר שם.
+      זה מה שקורה ב־<span class="mono">95.9%</span> מהזמן.
+    </p>
+  </section>
+
+  <section>
+    <h2>3 · איפה זה נוחת בספר</h2>
+    <div class="rule"></div>
+    <p class="kicker">98,661 דגימות queue_marks · ערכי חציון</p>
+
+    <div class="book">
+      <div class="lvl">
+        <span class="px red">0.345</span>
+        <span class="wall ask" style="width:34%"></span>
+        <span class="sz">best ask</span>
+      </div>
+      <div class="midline">
+        <span class="px">0.340</span>
+        <span class="t">— MID — הבוט מחשב מכאן</span>
+        <span></span>
+      </div>
+      <div class="lvl">
+        <span class="px green">0.335</span>
+        <span class="wall bid" style="width:82%"></span>
+        <span class="sz">21,620 שיירס</span>
+      </div>
+      <div class="gapnote">
+        <span></span>
+        <span class="t">↓ ↓ ↓ &nbsp; פער של 2 סנט — כאן לא עוברות עסקאות &nbsp; ↓ ↓ ↓</span>
+      </div>
+      <div class="lvl">
+        <span class="px cyan">0.315</span>
+        <span class="wall us" style="width:1.5%"></span>
+        <span class="sz cyan">אנחנו · 5 שיירס</span>
+      </div>
+      <div class="lvl" style="opacity:.5">
+        <span class="px mut">0.315</span>
+        <span class="wall other" style="width:96%"></span>
+        <span class="sz">27,000 ברמה</span>
+      </div>
+    </div>
+
+    <div class="grid g3" style="margin-top:16px">
+      <div class="stat"><span class="v mono amber">2.0c</span><span class="l">best_bid − המחיר שלנו</span><span class="n">p25=2.0c · p75=3.0c · p90=4.0c</span></div>
+      <div class="stat"><span class="v mono red">4.1%</span><span class="l">דגימות בקצה או מעליו</span><span class="n">בכל השאר — מאחורי הספר</span></div>
+      <div class="stat"><span class="v mono red">21,620</span><span class="l">שיירס בחומה לפנינו</span><span class="n">p90 = 201,678</span></div>
+    </div>
+
+    <p style="margin-top:18px">
+      הספר צר — המרווח כ־<span class="mono">1 סנט</span>. הצעה של 2.5c מתחת ל־mid נוחתת
+      <b style="color:var(--red)">2 סנט מאחורי הקונה הטוב ביותר</b>.
+      כדי שנתמלא, השוק צריך ליפול 2 סנט <b style="color:var(--text-primary)">דרך</b> חומה של 21,620 שיירס.
+    </p>
+  </section>
+
+  <section>
+    <h2>4 · ברמה שלנו פשוט לא נסחר</h2>
+    <div class="rule"></div>
+    <p class="kicker">זו לא בעיה של תור ארוך — זו בעיה של תור שלא זז</p>
+
+    <div class="grid g4">
+      <div class="stat"><span class="v mono red">0.38%</span><span class="l">דגימות עם מסחר ברמה שלנו</span><span class="n">371 / 98,661</span></div>
+      <div class="stat"><span class="v mono red">0.33%</span><span class="l">תורים שאפשר לחשב להם זמן</span><span class="n">בכל השאר: queue_minutes = ∞</span></div>
+      <div class="stat"><span class="v mono red">0.0</span><span class="l">שיירס שנסחרו לדגימה</span><span class="n">גם החציון וגם p90</span></div>
+      <div class="stat"><span class="v mono amber">2,219</span><span class="l">שיירס לפנינו · חציון</span><span class="n">p75 = 12,050 · p99 = 151,446</span></div>
+    </div>
+
+    <h3 style="margin-top:30px">עומק התור קובע הכל</h3>
+    <div class="card" style="padding:6px 22px 10px">
+      <table>
+        <thead><tr>
+          <th style="width:150px">שיירס לפנינו</th><th style="width:90px">הוראות</th>
+          <th style="width:90px">התמלאו</th><th style="width:80px">אחוז</th><th></th>
+        </tr></thead>
+        <tbody>
+          <tr class="ok"><td class="num">0 – 10</td><td class="num">303</td><td class="num">8</td><td class="num green">2.64%</td><td><span class="bar g"><i style="width:77%"></i></span></td></tr>
+          <tr class="ok"><td class="num">10 – 50</td><td class="num">174</td><td class="num">6</td><td class="num green">3.45%</td><td><span class="bar g"><i style="width:100%"></i></span></td></tr>
+          <tr class="ok"><td class="num">50 – 100</td><td class="num">346</td><td class="num">10</td><td class="num green">2.89%</td><td><span class="bar g"><i style="width:84%"></i></span></td></tr>
+          <tr><td class="num">100 – 500</td><td class="num">1,028</td><td class="num">15</td><td class="num amber">1.46%</td><td><span class="bar g"><i style="width:42%"></i></span></td></tr>
+          <tr class="hi"><td class="num">500 – 2,000</td><td class="num">1,691</td><td class="num">12</td><td class="num red">0.71%</td><td><span class="bar"><i style="width:21%"></i></span></td></tr>
+          <tr class="hi"><td class="num">2,000 – 10,000</td><td class="num">1,774</td><td class="num">5</td><td class="num red">0.28%</td><td><span class="bar"><i style="width:8%"></i></span></td></tr>
+          <tr class="hi"><td class="num">10,000 +</td><td class="num">2,071</td><td class="num">2</td><td class="num red">0.10%</td><td><span class="bar"><i style="width:3%"></i></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">
+      <b style="color:var(--text-primary)">חציון התור שלנו הוא 2,219 שיירס.</b>
+      רוב ההוראות נולדות בדלי שבו שיעור המילוי הוא 0.28%.
+      רק <span class="mono">823</span> הוראות מתוך 7,387 נחתו בשלושת הדליים העליונים — שם שיעור המילוי גבוה פי 10.
+    </p>
+  </section>
+
+  <section>
+    <h2>5 · ומבטלים לפני שיש סיכוי</h2>
+    <div class="rule"></div>
+    <p class="kicker">trader_loop.plan_orders() — כל ביטול שולח אותנו לסוף תור חדש</p>
+
+    <div class="grid g2">
+      <div class="card" style="padding:6px 22px 10px">
+        <table>
+          <thead><tr><th>סיבת ביטול</th><th style="width:90px">הוראות</th><th style="width:70px">חלק</th></tr></thead>
+          <tbody>
+            <tr class="hi"><td>price_moved</td><td class="num">3,907</td><td class="num red">53%</td></tr>
+            <tr><td>not_quoted</td><td class="num">1,523</td><td class="num">21%</td></tr>
+            <tr><td>regate_pair_cost</td><td class="num">1,455</td><td class="num">20%</td></tr>
+            <tr><td>market_dropped</td><td class="num">382</td><td class="num">5%</td></tr>
+            <tr><td class="mut">אחר / ללא סיבה</td><td class="num mut">58</td><td class="num mut">1%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="padding:6px 22px 10px">
+        <table>
+          <thead><tr><th>מדד churn</th><th style="width:110px">ערך</th></tr></thead>
+          <tbody>
+            <tr><td>חיי הוראה · חציון</td><td class="num amber">51.1 שנ׳</td></tr>
+            <tr><td>חיי הוראה שהתמלאה</td><td class="num green">23.2 שנ׳</td></tr>
+            <tr><td>הוראות לטוקן · חציון</td><td class="num">21</td></tr>
+            <tr><td>הוראות לטוקן · מקסימום</td><td class="num red">119</td></tr>
+            <tr><td>פער בין פרסומים</td><td class="num">59.4 שנ׳</td></tr>
+            <tr class="hi"><td>תזוזת מחיר לפרסום</td><td class="num red">4.0c</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="quote">
+      <p><b>ההגנה על מקום בתור מכובה.</b>
+      <code>requote_hold_queue_shares = 0.0</code> בקובץ <code>config.py:837</code> —
+      הכלל שאמור להחזיק הוראה שקרובה לחזית דרך תזוזת מחיר <b>לא פועל בכלל</b>.
+      התוצאה: אנחנו מקפיצים את ההצעה 4 סנט כל דקה, ובכל קפיצה מוותרים על מקום בתור.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>6 · מה זה עושה לזוגות</h2>
+    <div class="rule"></div>
+    <p class="kicker">2,884 זוגות נוסו במהלך הריצה</p>
+
+    <div class="grid g4">
+      <div class="stat"><span class="v mono red">2,831</span><span class="l">זוגות · 0 רגליים</span><span class="n">98.2% מכל הניסיונות</span></div>
+      <div class="stat"><span class="v mono amber">11</span><span class="l">זוגות · רגל אחת</span><span class="n">פוזיציה חשופה</span></div>
+      <div class="stat"><span class="v mono green">41</span><span class="l">זוגות · שתי רגליים</span><span class="n">1.4%</span></div>
+      <div class="stat"><span class="v mono amber">9</span><span class="l">נסגרו ב־taker</span><span class="n">מתוך 43 מיזוגים · 21%</span></div>
+    </div>
+
+    <p style="margin-top:18px">
+      מתוך 43 המיזוגים המוצלחים, <b style="color:var(--amber)">9 לא נסגרו בזכות מילוי maker</b> —
+      הבוט קנה את הרגל השנייה בכוח מעל המחיר שביקש, רק כדי לסגור את הזוג.
+      זה כולל את ניצחון #50.
+    </p>
+  </section>
+
+  <section>
+    <h2>7 · ניצחון #50 — הדגמה חיה</h2>
+    <div class="rule"></div>
+    <p class="kicker">pair-bba614ef0910 · bitcoin-up-or-down-on-september-16-2026 · כל השעות UTC</p>
+
+    <div class="grid g2">
+      <div>
+        <div class="tl">
+          <div class="ev cancel">
+            <div class="t">12:16:18.034</div>
+            <div class="h">פוסט ראשון — שתי הרגליים</div>
+            <div class="d">UP @ <span class="mono">0.32</span> · תור <span class="mono">105</span> שיירס<br>
+            DOWN @ <span class="mono">0.63</span> · תור <span class="mono red">7,517</span> שיירס</div>
+          </div>
+          <div class="ev cancel">
+            <div class="t">12:21:10.437 <span class="mut">· +4 דק׳ 52 שנ׳</span></div>
+            <div class="h">UP בוטל ופורסם מחדש</div>
+            <div class="d">סיבה: <code>regate_pair_cost</code><br>מחיר חדש <span class="mono">0.30</span> · תור <span class="mono">100</span></div>
+          </div>
+          <div class="ev fill">
+            <div class="t">12:23:50.081 <span class="mut">· +2 דק׳ 40 שנ׳</span></div>
+            <div class="h green">UP התמלא — maker</div>
+            <div class="d">5 שיירס @ <span class="mono">0.30</span>. התור היה קצר: 100 שיירס בלבד.</div>
+          </div>
+          <div class="ev cancel">
+            <div class="t">12:23:52.397</div>
+            <div class="h red">DOWN בוטל אחרי 454 שניות</div>
+            <div class="d">ישב ב־<span class="mono">0.63</span> מול תור של <span class="mono red">7,517</span> שיירס. אף מילוי.</div>
+          </div>
+          <div class="ev fill">
+            <div class="t">12:23:52.578 <span class="mut">· 0.2 שנ׳ אחרי</span></div>
+            <div class="h amber">DOWN נלקח ב־taker</div>
+            <div class="d">5 שיירס @ <span class="mono">0.67</span> — 4 סנט מעל הציטוט שלנו.</div>
+          </div>
+          <div class="ev merge">
+            <div class="t">12:23:52.973</div>
+            <div class="h cyan">מיזוג → $5.00</div>
+            <div class="d">עלות זוג <span class="mono">0.97</span> · רווח <span class="mono green">+$0.15</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card" style="padding:6px 22px 10px">
+          <table>
+            <thead><tr><th>רגל</th><th>תור לפנינו</th><th>תוצאה</th></tr></thead>
+            <tbody>
+              <tr class="ok"><td class="mono">UP @ 0.30</td><td class="num green">100</td><td class="green">מילוי maker · 160 שנ׳</td></tr>
+              <tr class="hi"><td class="mono">DOWN @ 0.63</td><td class="num red">7,517</td><td class="red">כלום · 454 שנ׳</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="quote" style="margin-top:18px">
+          <p><b>הלקח:</b> הרגל עם תור של 100 שיירס התמלאה.
+          הרגל עם תור של 7,517 לא התמלאה — ונקנתה בכוח.
+          הפרש של פי 75 בעומק התור החליט איזו רגל נסגרת לבד ואיזו עולה לנו 4 סנט.</p>
+        </div>
+        <div class="grid g2" style="margin-top:14px">
+          <div class="stat"><span class="v mono">455s</span><span class="l">מקצה לקצה</span><span class="n">7 דק׳ 35 שנ׳</span></div>
+          <div class="stat"><span class="v mono green">+$0.15</span><span class="l">רווח סופי</span><span class="n">על 5 זוגות</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>8 · הלולאה הסגורה</h2>
+    <div class="rule"></div>
+    <p class="kicker">כל שלב נכון בפני עצמו. ביחד הם לא משאירים מוצא.</p>
+
+    <div class="loop">
+      <div class="step">
+        <div class="n">01</div>
+        <div class="h">מציעים 2.5c מתחת ל־mid</div>
+        <div class="d">זו הדרך היחידה שהזוג יעלה פחות מדולר. זה כל מקור ההכנסה.</div>
+      </div>
+      <div class="step">
+        <div class="n">02</div>
+        <div class="h">הספר צר — מרווח 1c</div>
+        <div class="d">2.5c מתחת ל־mid = 2c מאחורי הקונה הטוב ביותר.</div>
+      </div>
+      <div class="step">
+        <div class="n">03</div>
+        <div class="h">שם לא נסחר כלום</div>
+        <div class="d">0.38% מהדגימות. חומה של 21,620 שיירס חוסמת.</div>
+      </div>
+      <div class="step">
+        <div class="n">04</div>
+        <div class="h">אחרי 51 שניות — ביטול</div>
+        <div class="d"><code>price_moved</code>. ההגנה על מקום בתור מכובה.</div>
+      </div>
+      <div class="step last">
+        <div class="n">05</div>
+        <div class="h red">פרסום מחדש 4c משם</div>
+        <div class="d">חזרה לסוף תור חדש. חזרה לשלב 01.</div>
+      </div>
+    </div>
+
+    <div class="quote" style="margin-top:26px;border-color:var(--red);background:rgba(239,68,68,.06)">
+      <p style="font-size:15px">
+        <b>כדי להרוויח צריך לשבת רחוק. כדי להתמלא צריך לשבת קרוב.</b><br>
+        בשוק עם מרווח של סנט אחד — אי אפשר את שניהם.
+      </p>
+    </div>
+
+    <p style="margin-top:20px">זה מאשר במדידה ישירה שתי מסקנות שכבר נרשמו:</p>
+    <ul>
+      <li><b style="color:var(--text-primary)">עומק התור, לא המחיר, הוא האילוץ</b> — הוכחה: טבלת עומק־תור מול מילוי, פי 30 הפרש בין הדליים.</li>
+      <li><b style="color:var(--text-primary)">כלום לא מתמלא ברמה שאנחנו מציעים בה</b> — הוכחה: 371 דגימות מסחר מתוך 98,661.</li>
+    </ul>
+    <p>הרחבת היקום לעוד שווקים מוסיפה עוד רגעים, לא עוד זוגות. הבעיה אינה כמה שווקים נסרקים — אלא איפה ההצעה נוחתת בתוך כל ספר.</p>
+  </section>
+
+  <footer>
+    מקור נתונים: <span class="mono">data/01_shadow_12-09_00-58.db</span> —
+    7,427 orders · 7,387 quotes · 98,661 queue_marks · 54 closes · 2,884 pairs<br>
+    קוד שנקרא: <span class="mono">core_brain/quotes.py</span> ·
+    <span class="mono">core_brain/trader_loop.py</span> ·
+    <span class="mono">core_brain/risk.py</span> ·
+    <span class="mono">core_brain/config.py</span>
+  </footer>
+
+</main>
+</body>
+</html>

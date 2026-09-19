@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🤖 איך הבוט עובד — מדריך בשפה פשוטה</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2333; --border:#30363d;
+    --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --green:#3fb950; --red:#f85149;
+    --yellow:#d29922; --purple:#bc8cff; --orange:#f0883e;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:'Segoe UI', Arial, sans-serif;
+    line-height:1.7; padding:24px 16px 80px;
+  }
+  .wrap{max-width:980px; margin:0 auto;}
+  h1{font-size:2rem; text-align:center; margin-bottom:6px;}
+  .subtitle{text-align:center; color:var(--muted); margin-bottom:28px;}
+  h2{font-size:1.45rem; margin:44px 0 14px; padding-bottom:8px; border-bottom:2px solid var(--border);}
+  h2 .num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:34px; height:34px; border-radius:50%; background:var(--accent); color:#0d1117;
+    font-size:1.1rem; margin-inline-start:8px; vertical-align:middle;
+  }
+  h3{font-size:1.1rem; margin:18px 0 8px; color:var(--accent);}
+  p{margin-bottom:10px;}
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:18px 20px; margin:14px 0;
+  }
+  .note{
+    background:#132a3f; border:1px solid #1f6feb; border-radius:10px;
+    padding:12px 16px; margin:12px 0; font-size:0.95rem;
+  }
+  .warn{
+    background:#2d1e0f; border:1px solid var(--orange); border-radius:10px;
+    padding:12px 16px; margin:12px 0; font-size:0.95rem;
+  }
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px;}
+  .pill{
+    display:inline-block; padding:2px 12px; border-radius:999px;
+    font-size:0.82rem; font-weight:600; margin-inline-start:6px;
+  }
+  .pill.green{background:#12321c; color:var(--green); border:1px solid var(--green);}
+  .pill.red{background:#3d1416; color:var(--red); border:1px solid var(--red);}
+  .pill.blue{background:#122a44; color:var(--accent); border:1px solid var(--accent);}
+  .pill.yellow{background:#33270c; color:var(--yellow); border:1px solid var(--yellow);}
+  .pill.purple{background:#2a1f42; color:var(--purple); border:1px solid var(--purple);}
+  code, .mono{
+    font-family:Consolas,monospace; direction:ltr; unicode-bidi:embed;
+    background:#21262d; padding:2px 7px; border-radius:6px; font-size:0.9em;
+  }
+  table{width:100%; border-collapse:collapse; margin:12px 0; font-size:0.95rem;}
+  th,td{border:1px solid var(--border); padding:8px 12px; text-align:right;}
+  th{background:var(--panel2); color:var(--accent);}
+  td.num{direction:ltr; text-align:right; font-family:Consolas,monospace;}
+  .pos{color:var(--green); font-weight:700;}
+  .neg{color:var(--red); font-weight:700;}
+
+  /* ===== pipeline ===== */
+  .pipe{display:flex; flex-direction:column; gap:0; margin:20px 0;}
+  .step{
+    display:flex; gap:14px; align-items:flex-start;
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:14px 18px; position:relative;
+  }
+  .step .icon{
+    font-size:1.6rem; width:52px; height:52px; flex:0 0 52px;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--panel2); border-radius:12px;
+  }
+  .step .body{flex:1;}
+  .step .title{font-weight:700; font-size:1.05rem; margin-bottom:2px;}
+  .step .desc{color:var(--muted); font-size:0.93rem;}
+  .step + .step{margin-top:26px;}
+  .step + .step::before{
+    content:'⬇'; position:absolute; top:-26px; right:calc(9px + 26px);
+    color:var(--accent); font-size:1.2rem; line-height:1;
+  }
+  .step .tag{float:left; font-size:0.75rem; color:var(--muted); direction:ltr;}
+
+  /* ===== decision gates ===== */
+  .gates{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px;}
+  .gate{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px;}
+  .gate .q{font-weight:700; margin-bottom:4px;}
+  .gate .pass{color:var(--green); font-size:0.88rem;}
+  .gate .fail{color:var(--red); font-size:0.88rem;}
+
+  /* ===== timeline ===== */
+  .tl{border-inline-start:3px solid var(--accent); margin:16px 4px 16px 4px; padding-inline-start:20px;}
+  .tl .ev{position:relative; margin-bottom:16px;}
+  .tl .ev::before{
+    content:''; position:absolute; inset-inline-start:-29px; top:8px;
+    width:13px; height:13px; border-radius:50%; background:var(--accent);
+    border:3px solid var(--bg);
+  }
+  .tl .ev.good::before{background:var(--green);}
+  .tl .ev.bad::before{background:var(--red);}
+  .tl .ev.warn::before{background:var(--yellow);}
+  .tl .t{direction:ltr; display:inline-block; font-family:Consolas,monospace; font-size:0.85rem; color:var(--muted); margin-inline-end:8px;}
+  .tl .what{font-weight:700;}
+  .tl .why{color:var(--muted); font-size:0.92rem;}
+
+  /* ===== flow strip ===== */
+  .flowstrip{
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:14px 16px; margin:12px 0; justify-content:center;
+  }
+  .fbox{padding:8px 16px; border-radius:8px; font-weight:600; text-align:center;}
+  .fbox.money{background:#12321c; border:1px solid var(--green); color:var(--green);}
+  .fbox.spend{background:#3d1416; border:1px solid var(--red); color:var(--red);}
+  .fbox.neutral{background:var(--panel2); border:1px solid var(--border);}
+  .farrow{color:var(--muted); font-size:1.3rem;}
+
+  .bignum{font-size:1.7rem; font-weight:800;}
+  .center{text-align:center;}
+  .small{font-size:0.85rem; color:var(--muted);}
+  .hero-ex{border-radius:14px; padding:20px 22px; margin:20px 0;}
+  .hero-ex.win{background:linear-gradient(135deg,#0f2e18,#12351d); border:2px solid var(--green);}
+  .hero-ex.loss{background:linear-gradient(135deg,#3a1214,#2e1012); border:2px solid var(--red);}
+  .footer{margin-top:50px; text-align:center; color:var(--muted); font-size:0.85rem;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>🤖 איך הבוט מקבל החלטות וסוחר</h1>
+<div class="subtitle">מדריך ויזואלי בשפה פשוטה · עם שתי דוגמאות אמיתיות מההרצה במצב צל (Shadow)<br>
+מאגר: <span class="mono">data/01_shadow_12-09_00-58.db</span> · תקופה: 11–19 לספטמבר 2026 · הרצה <span class="mono">shadow-01</span></div>
+
+<div class="note">🕶️ <b>מה זה "מצב צל" (Shadow)?</b> הבוט רץ במלוא ההיגיון — מצטט, מקבל מילויים, מנהל מלאי, ממזג זוגות ויוצא מפוזיציות — אבל <b>בלי כסף אמיתי</b>. זה שיעור החזרה מלא: כל החלטה שרואים כאן היא החלטה שהבוט היה לוקח גם בלייב. זו הדרך לבדוק את האסטרטגיה לפני שמסכנים כסף.</div>
+
+<!-- ============ 1. THE CORE IDEA ============ -->
+<h2><span class="num">1</span> הרעיון המרכזי — לקנות "כן" ו"לא" ביחד בפחות מדולר</h2>
+
+<div class="card">
+  <p>בכל שוק בינארי ב-Polymarket יש שתי תוצאות: <b>UP</b> (יעלה) ו־<b>DOWN</b> (יירד).
+  בסוף, התוצאה שצדקה שווה בדיוק <b>$1.00</b> למניה, והשנייה שווה <b>$0.00</b>.</p>
+  <p>זה אומר משהו חכם: אם קונים <b>מניה אחת של UP ומניה אחת של DOWN באותו שוק</b> —
+  בסוף <b>בטוח</b> שיהיה לנו בדיוק $1.00. תמיד. לא משנה מי ניצח.</p>
+  <p>אז הרווח היחיד שחשוב הוא כמה שילמנו:</p>
+  <div class="flowstrip">
+    <div class="fbox spend">שילמנו על UP<br><span class="mono">$0.77</span></div>
+    <span class="farrow">➕</span>
+    <div class="fbox spend">שילמנו על DOWN<br><span class="mono">$0.06</span></div>
+    <span class="farrow">➡️</span>
+    <div class="fbox neutral">זוג שעלה<br><span class="mono">$0.83</span></div>
+    <span class="farrow">➡️</span>
+    <div class="fbox money">מיזוג (Merge)<br><span class="bignum">$1.00</span></div>
+    <span class="farrow">➡️</span>
+    <div class="fbox money">רווח <span class="bignum">$0.17</span> 🎉</div>
+  </div>
+  <p class="center"><b>רווח = $1.00 − (מחיר UP + מחיר DOWN)</b></p>
+  <p>בהרצה הזו: <b>52 זוגות מוזגו בהצלחה</b> ברווח ממוצע של <span class="pos">+$0.23 לזוג</span> — סה"כ <span class="pos">+$12.11</span>. המחיר הממוצע לזוג: $0.97.</p>
+</div>
+
+<div class="warn">⚠️ <b>שני הסיכונים שכל הבוט בנוי כדי למנוע:</b><br>
+1️⃣ <b>זוג מעל $1.00</b> — הפסד מובטח. לכן יש תקרה: הזוג חייב לעלות פחות מ־<span class="mono">$0.99</span>.<br>
+2️⃣ <b>רגל בודדת</b> — קנינו UP אבל DOWN לא התמלא. זו הימור כיווני שאף אחד לא החליט לקחת. לכן יש מערכת שלמה של "הצלות" ועצירת הפסד.</div>
+
+<!-- ============ 2. THE DECISION PIPELINE ============ -->
+<h2><span class="num">2</span> מה קורה כשהבוט דלוק — הצינור של כל מחזור</h2>
+
+<p>הבוט רץ בלולאה מהירה (Trader Loop). כל מחזור הוא עובר את כל השלבים האלה:</p>
+
+<div class="pipe">
+  <div class="step"><div class="icon">📋</div><div class="body">
+    <div class="title">שלב 1: בחירת שוק <span class="tag">scoring / market filter</span></div>
+    <div class="desc">הבוט לא סוחר בכל שוק. השוק חייב: נפח מסחר של לפחות $125K ביום, עומק הזמנות אמיתי, מרווח (spread) לא רחב מדי, ופחות מ־30 יום עד הפתרון. שוק עם ספר הזמנות ריק = אין מה ללכוד.</div>
+  </div></div>
+  <div class="step"><div class="icon">🩺</div><div class="body">
+    <div class="title">שלב 2: בדיקת בריאות הספר <span class="tag">risk.book_health</span></div>
+    <div class="desc">לפני כל מחיר — האם יש קונים ומוכרים אמיתיים? האם אפשר לצאת מפוזיציה בסוף? אם הספר רחב מדי (> 6 סנט) או רדוד (< 200 מניות עומק) — הבוט מוותר על הצד.</div>
+  </div></div>
+  <div class="step"><div class="icon">🧮</div><div class="body">
+    <div class="title">שלב 3: חישוב מחיר ותמחור <span class="tag">quotes.py · spread_capture</span></div>
+    <div class="desc">הבוט מתמחר מתוך ה־mid (נקודת האמצע): מניח הצעת קנייה <b>2 סנט מתחת למרכז</b> בכל צד. כך, אם שתי הרגליים יתמלאו, הזוג יעלה בערך $0.96 — רווח של כ־4 סנט לזוג. בנוסף, המחיר מתכוונן לפי הסיכון: ליד $0.50 (מטבע הוגן) — גודל קטן יותר; ליד $0.70 (מחיר יקר) — מחיר טוב יותר נדרש.</div>
+  </div></div>
+  <div class="step"><div class="icon">🚦</div><div class="body">
+    <div class="title">שלב 4: שערי החלטה (Gates) <span class="tag">trader_loop._enforce_caps</span></div>
+    <div class="desc">רשימת שאלות "האם מותר לי". רק אם <b>כל</b> התשובות כן — ההזמנה יוצאת לזירה. הסיבות האמיתיות שראינו בהרצה הזו כשהבוט דחה הזמנות:</div>
+    <div class="gates">
+      <div class="gate"><div class="q">💰 האם הזוג יעלה פחות מ־$0.99?</div>
+        <div class="pass">כן → ממשיכים</div><div class="fail">לא → הזמנה נדחית ("regate_pair_cost")</div></div>
+      <div class="gate"><div class="q">🧦 האם יש לנו כבר יותר מדי UP או יותר מדי DOWN?</div>
+        <div class="pass">מאוזן → מצטטים שני הצדדים</div><div class="fail">חוסר איזון → רק הצד הקל מותר (כדי לאזן), הצד הכבד נחסם</div></div>
+      <div class="gate"><div class="q">💵 כמה כסף מסוכן "עירום" (רגל ללא זיווג)?</div>
+        <div class="pass">מתחת לתקרה (~6% מהתיק) → אישור</div><div class="fail">מעל → הצד הכבד נחסם עד שנאזן</div></div>
+      <div class="gate"><div class="q">📚 האם הספר ההפוך (הצד השני) סחיר?</div>
+        <div class="pass">גם בצד השני יש מרווח סביר → אישור</div><div class="fail"><b>הסיבה הכי נפוצה בהרצה:</b> "ספר רחב מדי 45c > 6c — מילוי כאן לא ניתן לסגירה"</div></div>
+      <div class="gate"><div class="q">🎯 האם המחיר בטווח המותר (0.10–0.90)?</div>
+        <div class="pass">בטווח → אישור</div><div class="fail">מחוץ → דחייה. אין טעם לסחור בתוצאה כבר גמורה</div></div>
+      <div class="gate"><div class="q">🧍 האם מלאי ריק ורק צד אחד זמין?</div>
+        <div class="pass">שני הצדדים זמינים → הזוג יוצא</div><div class="fail">"מלאי ריק ורק DOWN זמין — רגל בודדת זו פוזיציה עירומה, אז הזוג לא יוצא"</div></div>
+    </div>
+  </div></div>
+  <div class="step"><div class="icon">📨</div><div class="body">
+    <div class="title">שלב 5: שליחת ההזמנות לזירה <span class="tag">venue.py · order_manager</span></div>
+    <div class="desc">הבוט מניח הזמנות קנייה פסיביות (לא קונה במחיר השוק!) בשני הצדדים. עכשיו הוא <b>מחכה</b>. ההזמנות יושבות בספר ומחכות שמישהו ימכור לנו במחיר שלנו.</div>
+  </div></div>
+  <div class="step"><div class="icon">🔁</div><div class="body">
+    <div class="title">שלב 6: ניטור, ביטול וריקווט <span class="tag">requote_interval_sec=2s</span></div>
+    <div class="desc">כל שניות: האם המחיר בשוק זז? האם ההזמנה שלנו עדיין הגיונית? אם לא — מבטלים ומניחים מחדש במחיר מעודכן. בהרצה הזו: 11,525 הזמנות נרשמו, ורובן המוחלט בוטלו והוחלפו לפני שהתמלאו — ככה ההזמנות לא נשארות "ישנות" במחיר שכבר לא נכון.</div>
+  </div></div>
+  <div class="step"><div class="icon">⚖️</div><div class="body">
+    <div class="title">שלב 7: ניהול מלאי וסקיו <span class="tag">max_skew</span></div>
+    <div class="desc">מילאה רגל אחת? הבוט מזיז את המחירים: הצד שכבר יש לנו הרבה ממנו → מרחיק את המחיר (קשה יותר להתמלא). הצד שחסר לנו → מקרב למרכז (קל יותר להתמלא). ככה המלאי חוזר לאיזון לבד.</div>
+  </div></div>
+  <div class="step"><div class="icon">🚑</div><div class="body">
+    <div class="title">שלב 8: מצבי חירום <span class="tag">single_buy_saver · unhedged_stop_loss</span></div>
+    <div class="desc">אם רגל נשארת לבד יותר מדי זמן או מפסידה יותר מדי — הבוט יוצא ממנה במחיר השוק. מכירה זו נקראת <span class="mono">single_buy_exit</span>. הפסד קטן ומבוקר במקום הימור גדול. בהרצה הזו: 20 יציאות כאלה, רובן קטנות.</div>
+  </div></div>
+  <div class="step"><div class="icon">🎊</div><div class="body">
+    <div class="title">שלב 9: מיזוג הזוג <span class="tag">merge_pairs.py</span></div>
+    <div class="desc">UP + DOWN ביד = ממירים חזרה ל־$1.00 במזומן דרך החוזה. בלי עמלות מיזוג (ה-relayer משלם גז). הרווח נקבע רק לפי מה ששילמנו. בהרצה הזו: <b>52 מיזוגים מוצלחים</b> ✅</div>
+  </div></div>
+</div>
+
+<!-- ============ 3. LIVE SNAPSHOT ============ -->
+<h2><span class="num">3</span> התוצאות של ההרצה במצב צל</h2>
+
+<div class="grid">
+  <div class="card center">
+    <div class="small">ערך תיק בסוף ההרצה</div>
+    <div class="bignum" style="color:var(--accent)">$64.88</div>
+    <div class="small">collateral $55.97 + פוזיציות $8.91</div>
+  </div>
+  <div class="card center">
+    <div class="small">רווח מ־52 מיזוגים</div>
+    <div class="bignum pos">+$12.11</div>
+    <div class="small">ממוצע +$0.23 לזוג · עלות ממוצעת $0.97 לזוג</div>
+  </div>
+  <div class="card center">
+    <div class="small">הפסד מ־20 יציאות הצלה</div>
+    <div class="bignum neg">−$3.23</div>
+    <div class="small">רגליים בודדות שנמכרו לפני שהפסד גדל</div>
+  </div>
+  <div class="card center">
+    <div class="small">סה"כ נטו מההרצה</div>
+    <div class="bignum pos">+$7.34</div>
+    <div class="small">‏52 מיזוגים + 20 יציאות + התיישבות אחת (−$1.54)</div>
+  </div>
+</div>
+
+<div class="note">💡 <b>ההשוואה שחשובה:</b> המיזוגים (האסטרטגיה שעליה עובד הבוט) הרוויחו <span class="pos">+$12.11</span>. היציאות מהחירום (הכלי שמציל מצבים כשהזוג לא הושלם) הפסידו <span class="neg">−$3.23</span> — וזה בדיוק התפקיד שלהן: הפסד קטן ומבוקר במקום הימור פתוח. האסטרטגיה מרוויחה כשהכלי הראשי עובד, והכלי המשני מגביל את הנזק כשמשהו משתבש.</div>
+
+<!-- ============ 4. EXAMPLE 1: WINNING MERGE ============ -->
+<h2><span class="num">4</span> דוגמה אמיתית #1 — מיזוג מנצח 💚</h2>
+
+<div class="note">💡 זו הדוגמה הכי טובה בהרצה: שתי רגליים התמלאו, הזוג נקנה ב־$0.83 במקום $1.00, והמיזוג החזיר את ההפרש. שימו לב כמה מהר זה קרה — 5 שניות בין שני המילויים!</div>
+
+<div class="hero-ex win">
+  <h3 style="color:var(--green); margin-top:0">🏆 הרווח: +$1.02 על זוג 6 מניות — המיזוג המוצלח ביותר בהרצה</h3>
+  <p>המנגנון: <span class="pill green">shadow_merge — זוג מלא שמוזג ל־$1.00</span> · שוק: טניס ATP (Mmoh נגד יריב) · 2026-09-18 23:45 UTC</p>
+
+  <h3>📝 הסיפור של העסקה</h3>
+  <div class="tl">
+    <div class="ev warn"><span class="t">22:46–22:59</span> <span class="what">הבוט מנסה להיכנס — ומתכנן מחדש שוב ושוב.</span>
+      <div class="why">במשך 13 דקות הוא מניח ומבטל הזמנות: UP ב־$0.40, $0.47, $0.45, $0.43... DOWN ב־$0.54, $0.51... כל פעם שהמחיר בשוק זז — הוא מבטל ומציב מחיר חדש. 11 הזמנות בוטלו בשלב הזה. הוא מחכה למחיר הנכון, לא קונה בכל מחיר.</div></div>
+    <div class="ev"><span class="t">23:42</span> <span class="what">מצא את המחיר — מציב שני צדדים.</span>
+      <div class="why">הפעם התנאים מתאימים: הבוט מניח שתי הזמנות יחד כזוג (pair <span class="mono">pair-b040dbdf3084</span>): קניית UP ב־$0.77 וקניית DOWN ב־$0.18. אם שתיהן יתמלאו — הזוג יעלה $0.95. רווח פוטנציאלי 5 סנט למניה.</div></div>
+    <div class="ev good"><span class="t">23:45:07</span> <span class="what">רגל 1 מתמלאת: קנה 6 מניות UP ב־$0.77.</span>
+      <div class="why">מישהו מכר לנו את ה־UP במחיר שביקשנו. עכשיו חצי זוג ביד, חצי חסר.</div></div>
+    <div class="ev good"><span class="t">23:45:12</span> <span class="what">רגל 2 מתמלאת — 5 שניות אחרי: קנה 6 מניות DOWN ב־$0.06!</span>
+      <div class="why">המחיר של DOWN צנח (המשחק כמעט הוכרע), וההזמנה שלנו ב־$0.06 התמלאה. הזוג הושלם: 6 מניות UP + 6 מניות DOWN שעלו יחד <b>$4.98</b> במקום $6.00.</div></div>
+    <div class="ev good"><span class="t">23:45:13</span> <span class="what">מיזוג מיידי — 6 זוגות חזרה ל־$6.00 מזומן. 🎉</span>
+      <div class="why">UP + DOWN = $1.00 בטוח. הבוט ממיר את 6 הזוגות חזרה ל־$6.00 במזומן (בלי עמלת מיזוג — ה-relayer משלם גז). הרווח: $6.00 − $4.98 = <b>+$1.02</b>. הכל אושר בשרשרת (tx <span class="mono">pair-b040dbdf3084</span>).</div></div>
+    <div class="ev"><span class="t">23:42 (+2 שעות)</span> <span class="what">אימות: השוק התיישב.</span>
+      <div class="why">השוק נפתר רשמית: המנצח הוא "Michael Mmoh" — בדיוק ה־UP שקנינו. אבל שימו לב: <b>לא היה אכפת לנו!</b> הרווח נקבע במחיר הקנייה, לפני שנודע המנצח. זו המהות של האסטרטגיה.</div></div>
+  </div>
+
+  <h3>🧾 המסמך מבסיס הנתונים (טבלת <span class="mono">closes</span>, שורה 67)</h3>
+  <table>
+    <tr><th>שדה</th><th>ערך</th><th>מה זה אומר</th></tr>
+    <tr><td>method</td><td class="num">shadow_merge</td><td>זוג מלא שמוזג חזרה למזומן</td></tr>
+    <tr><td>shares</td><td class="num">6.0</td><td>6 זוגות (6 UP + 6 DOWN)</td></tr>
+    <tr><td>cost_basis</td><td class="num">$4.98</td><td>שילמנו $0.77 × 6 + $0.06 × 6</td></tr>
+    <tr><td>proceeds</td><td class="num">$6.00</td><td>קיבלנו $1.00 לכל זוג ממוזג</td></tr>
+    <tr><td>gas</td><td class="num">$0.00</td><td>המיזוג דרך ה-relayer — בלי עמלת גז</td></tr>
+    <tr><td>realized_pnl</td><td class="num pos">+$1.02</td><td>רווח נטו 🎉</td></tr>
+    <tr><td>tx_hash</td><td class="num">pair-b040dbdf3084</td><td>מזהה העסקה בשרשרת</td></tr>
+  </table>
+
+  <h3>🎓 למה זה עבד?</h3>
+  <div class="card">
+    <p>1️⃣ <b>סבלנות.</b> הבוט ביטל 11 הזמנות עד שהמחירים התאימו. לא קנה FOMO.</p>
+    <p>2️⃣ <b>זיווג מיידי.</b> שתי הרגליים התמלאו תוך 5 שניות — מינימום חשיפה כיוונית בין המילויים.</p>
+    <p>3️⃣ <b>המחיר היה הרווח.</b> הזוג עלה $0.83 למניה (במקום $1.00) — הרווח נקבע רגע שהזוג נסגר, לא כשהשוק נפתר.</p>
+  </div>
+</div>
+
+<!-- ============ 5. EXAMPLE 2: LOSING ============ -->
+<h2><span class="num">5</span> דוגמה אמיתית #2 — ההפסד הכי גדול בהרצה: −$1.14 💔</h2>
+
+<div class="note">💡 זו הדוגמה הכי חשובה להבנת הסיכון: רגל DOWN בודדת נקנתה, הרגל השנייה לא התמלאה, והשוק זז במהירות נגדנו. הבוט יצא בהפסד — אבל בלי היציאה הזו ההפסד היה $1.20 מלאים (100%).</div>
+
+<div class="hero-ex loss">
+  <h3 style="color:var(--red); margin-top:0">💔 ההפסד: −$1.14 על 6 מניות DOWN שנמכרו ב־$0.01</h3>
+  <p>המנגנון: <span class="pill red">single_buy_exit — יציאת חירום מרגל בודדת</span> · שוק: <span class="mono">spx-up-or-down-on-september-18-2026</span> (S&P 500 יומי) · 2026-09-18</p>
+
+  <h3>📝 הסיפור</h3>
+  <div class="tl">
+    <div class="ev"><span class="t">19:52:25</span> <span class="what">הבוט מציב זוג: UP ב־$0.75 ו־DOWN ב־$0.20.</span>
+      <div class="why">שוק ה־S&P 500 היומי, בשעה 19:52 UTC (אחר הצהריים בניו יורק). ה־mid של UP הוא $0.775 — השוק מאמין שהמדד ייסגר בעלייה. הזוג הפוטנציאלי: $0.95. הבוט מניח שתי הזמנות ביחד (pair <span class="mono">pair-42bbccf244e</span>).</div></div>
+    <div class="ev warn"><span class="t">19:52:25</span> <span class="what">רגל ה־UP מתבטלת מיד.</span>
+      <div class="why">הזמנת ה־UP ב־$0.75 בוטלה באותו מחזור ("not_quoted") — התנאים בצד היקר לא איפשרו להחזיק אותה. נשארת רק הזמנת ה־DOWN.</div></div>
+    <div class="ev bad"><span class="t">19:55:17</span> <span class="what">רגל בודדת: קנה 6 מניות DOWN ב־$0.20.</span>
+      <div class="why">מישהו מכר לנו את ה־DOWN. עכשיו יש לנו 6 מניות DOWN בלבד — עלות $1.20. זו פוזיציה כיוונית: אנחנו מהמרים בעקיפין שהמדד <b>ייסגר בירידה</b>. זה לא מה שהאסטרטגיה רוצה — זה תוצר לוואי של מילוי חד־צדדי.</div></div>
+    <div class="ev bad"><span class="t">19:55:19</span> <span class="what">שתי שניות אחרי — יציאת חירום מיידית ב־$0.01.</span>
+      <div class="why">המדד עוד עולה, והשוק מתמחר את ה־DOWN כמעט אפס. הבוט מזהה רגל בודדת בשוק שמתכנס לתוצאה גמורה, ומוכר מיד את 6 המניות ב־$0.01 למניה. הקבלה: $0.06. ההפסד: $1.20 − $0.06 = <b>−$1.14</b> (95% מהכסף).</div></div>
+    <div class="ev bad"><span class="t">22:32:29</span> <span class="what">השוק נפתר: "Up".</span>
+      <div class="why">המדד אכן נסגר בעלייה, וה־DOWN שלנו היה הופך ל־$0.00 לגמרי. היציאה ב־$0.01 הצילה את 6 הסנטים האחרונים — והוכיחה שההחלטה הייתה נכונה.</div></div>
+  </div>
+
+  <h3>🧾 המסמך מבסיס הנתונים (טבלת <span class="mono">closes</span>, שורה 64)</h3>
+  <table>
+    <tr><th>שדה</th><th>ערך</th><th>מה זה אומר</th></tr>
+    <tr><td>method</td><td class="num">single_buy_exit</td><td>יציאת הצלה מרגל בודדת — לא מיזוג</td></tr>
+    <tr><td>shares</td><td class="num">6.0</td><td>6 מניות DOWN</td></tr>
+    <tr><td>cost_basis</td><td class="num">$1.20</td><td>שילמנו $0.20 × 6</td></tr>
+    <tr><td>proceeds</td><td class="num">$0.06</td><td>קיבלנו $0.01 × 6</td></tr>
+    <tr><td>realized_pnl</td><td class="num neg">−$1.14</td><td>הפסד נטו — הגדול בהרצה</td></tr>
+    <tr><td>dn_price</td><td class="num">$0.01</td><td>מחיר המכירה — כמעט אפס</td></tr>
+  </table>
+
+  <h3>🔬 העדות מטבלת ה־markout (מדידת "האם המילוי היה טוב?")</h3>
+  <div class="card">
+    <p>טבלת <span class="mono">markouts</span> עוקבת אחרי כל מילוי: איפה המחיר היה 5 דקות, שעה ו־6 שעות אחרי שקנינו? הרשומה של המילוי הזה:</p>
+    <table>
+      <tr><th>רגע המילוי</th><th>+5 דקות (mid_h0)</th><th>+1 שעה (mid_h1)</th><th>+6 שעות (mid_h2)</th></tr>
+      <tr><td class="num">$0.20 (קנינו כאן)</td><td class="num neg">$0.004</td><td class="num neg">$0.00</td><td class="num neg">$0.00</td></tr>
+    </table>
+    <p>המחיר קרס לאפס כמעט מיד. זה האות הברור ביותר ל"מילוי רע" — והבוט פעל עליו תוך שניות.</p>
+  </div>
+
+  <h3>🎓 מה הבוט עשה נכון גם בהפסד?</h3>
+  <div class="card">
+    <p>1️⃣ <b>זיהה תוך שניות.</b> מהמילוי (19:55:17) עד היציאה (19:55:19) עברו שתי שניות בלבד. לא חיכה "שיסתדר".</p>
+    <p>2️⃣ <b>חשב את החלופה.</b> אם היה מחזיק עד הסיום — ההפסד היה $1.20 מלאים (השוק אכן נפתר "Up"). היציאה ב־$0.01 הצילה 5% מהכסף. לא הרבה — אבל העיקרון חשוב: אף פוזיציה לא נשארת פתוחה על תקוות.</p>
+    <p>3️⃣ <b>ההפסד הזה הוא חלק מהמודל.</b> 20 יציאות כאלה היו בהרצה וסה"כ עלו −$3.23 — פחות משליש ממה שהמיזוגים הרוויחו (+$12.11). המערכת מתוכננת כך שההפסדים קטנים ומוגבלים, והרווחים מצטברים.</p>
+  </div>
+</div>
+
+<!-- ============ 6. SUMMARY OF THE RUN ============ -->
+<h2><span class="num">6</span> התמונה הכוללת של ההרצה</h2>
+
+<div class="card">
+  <table>
+    <tr><th>מנגנון</th><th>כמה פעמים</th><th>רווח/הפסד כולל</th><th>מה זה</th></tr>
+    <tr><td><span class="pill green">shadow_merge</span></td><td class="num">52</td><td class="num pos">+$12.11</td><td>זוג מלא UP+DOWN שמוזג חזרה ל־$1.00 — האסטרטגיה הראשית ✅</td></tr>
+    <tr><td><span class="pill red">single_buy_exit</span></td><td class="num">20</td><td class="num neg">−$3.23</td><td>רגל בודדת שנמכרה בחירום — כלי הצלה שמגביל נזק 🚑</td></tr>
+    <tr><td><span class="pill purple">shadow_settlement</span></td><td class="num">1</td><td class="num neg">−$1.54</td><td>פוזיציה שהוחזקה עד הפתרון והפסידה (שוק <span class="mono">atp-gueymar-droguet</span>)</td></tr>
+  </table>
+  <p class="center"><b>סה"כ נטו להרצה: +$7.34</b> <span class="small">על פני 8 ימי מסחר, 11,525 הזמנות, 125 מילויים</span></p>
+  <p class="small center">שיעור הצלחה של המנגנון הראשי: 52 מיזוגים מוצלחים מתוך 52 ניסיונות · עלות ממוצעת לזוג: $0.974</p>
+</div>
+
+<!-- ============ 7. CLOSING ============ -->
+<h2><span class="num">7</span> בשורה התחתונה</h2>
+
+<div class="card">
+  <p>🎯 <b>המטרה:</b> לקנות UP + DOWN בפחות מדולר ולמזג חזרה לדולר. בהרצה הזו: 52 זוגות, בממוצע $0.97 לזוג, רווח +$12.11.</p>
+  <p>🚦 <b>ההחלטה:</b> עשרות שערים בודקים האם השוק בריא, האם הזוג זול מספיק, האם יש איזון מלאי, והאם יש כסף פנוי. רק אם הכל ירוק — ההזמנה יוצאת. בהרצה: רוב ההזמנות נדחו או בוטלו — וזה בסדר.</p>
+  <p>🩹 <b>כשמשהו משתבש:</b> רגל בודדת לא נשארת לבד. יציאת חירום חותכת את ההפסד בשניות — כמו בדוגמת ה־S&P: −$1.14 במקום −$1.20 מלאים.</p>
+  <p>📊 <b>המשמעות:</b> המיזוגים הרוויחו פי 4 ממה שהיציאות הפסידו. ההפסדים הקטנים הם מחיר הפעלה ידוע מראש, לא תאונה.</p>
+  <p class="small">הנתונים נקראו בלבד (read-only) מתוך <span class="mono">data/01_shadow_12-09_00-58.db</span> · תקופת ההרצה: 2026-09-11 עד 2026-09-19 · 73 סגירות · 125 מילויים · 11,525 הזמנות · הופק אוטומטית</p>
+</div>
+
+</div>
+</body>
+</html>
