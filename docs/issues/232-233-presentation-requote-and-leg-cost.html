@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR #232 + #233 | הבוט הפסיק לבטל את עצמו</title>
+<style>
+  :root{
+    --ink:#eaf1f6; --muted:#9aabb8; --bg:#0b1117; --panel:#121c25; --panel-2:#172530;
+    --line:#29404d; --cyan:#55d6c2; --amber:#f4b860; --red:#f17c78; --green:#79d99b;
+    --violet:#b39ddb; --shadow:0 20px 55px rgba(0,0,0,.28);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;color:var(--ink);
+    background:radial-gradient(circle at 12% 0%,#183441 0,transparent 38%),
+               radial-gradient(circle at 90% 15%,#2a2534 0,transparent 32%),var(--bg);
+    font:16px/1.65 "Segoe UI",Tahoma,sans-serif}
+  main{max-width:1100px;margin:auto;padding:40px 20px 70px}
+  .eyebrow{color:var(--cyan);letter-spacing:.08em;font-size:.82rem;font-weight:700;text-transform:uppercase}
+  h1{font-size:clamp(2rem,4.5vw,3.2rem);margin:10px 0 16px;line-height:1.2}
+  h2{font-size:1.5rem;margin:0 0 14px}
+  h3{font-size:1.05rem;margin:0 0 10px}
+  p{color:var(--muted);margin:0 0 14px}
+  .status-merged{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(121,217,155,.45);
+    border-radius:999px;padding:4px 14px;font-size:.85rem;font-weight:700;color:var(--green);
+    background:rgba(121,217,155,.1);margin-top:10px}
+  .status-merged::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green)}
+  .facts,.panel{background:linear-gradient(145deg,rgba(23,37,48,.94),rgba(14,23,31,.94));
+    border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px}
+  .facts{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;overflow:hidden;margin:24px 0}
+  .fact{padding:18px 22px;background:rgba(18,28,37,.72)}
+  .fact b{display:block;color:var(--muted);font-size:.8rem;margin-bottom:6px}
+  .fact a{color:var(--cyan);text-decoration:none;font-weight:600;font-size:1.05rem}
+  .fact a:hover{text-decoration:underline}
+  .panel{padding:26px;margin-top:24px}
+  .eli{border-right:4px solid var(--cyan);background:rgba(85,214,194,.07)}
+  .warn{border-right:4px solid var(--amber);background:rgba(244,184,96,.07)}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+  .compare{padding:22px;border-radius:14px;border:1px solid var(--line)}
+  .before{border-top:4px solid var(--red);background:rgba(241,124,120,.04)}
+  .after{border-top:4px solid var(--green);background:rgba(121,217,155,.04)}
+  .compare ul{margin:0;padding-right:20px;color:var(--muted)}
+  .compare li{margin:8px 0}
+  .flow{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
+  .step{padding:20px;background:var(--panel-2);border:1px solid var(--line);border-radius:14px}
+  .num{color:var(--cyan);font-weight:800;font-size:.85rem;margin-bottom:8px}
+  .code-row{position:relative;margin:12px 0}
+  .code{direction:ltr;text-align:left;color:#d9f7ef;background:#091016;border:1px solid #29434b;
+    border-radius:10px;padding:14px 46px 14px 16px;overflow:auto;white-space:pre-wrap;
+    font:.88rem/1.5 Consolas,monospace;margin:0}
+  button.copy-btn{position:absolute;left:10px;top:10px;cursor:pointer;border:1px solid #3d5b63;
+    color:var(--ink);background:#172a31;border-radius:7px;padding:5px 12px;font-size:.8rem;font-weight:600}
+  button.copy-btn:hover{background:#223c46}
+  .expected{border-right:4px solid var(--green);padding:12px 16px;background:rgba(121,217,155,.08);
+    margin-top:10px;border-radius:0 8px 8px 0}
+  .expected b{color:var(--green)}
+  table{width:100%;border-collapse:collapse;color:var(--muted);margin-top:14px}
+  th,td{text-align:right;border-bottom:1px solid var(--line);padding:12px 10px}
+  th{color:var(--ink)}
+  .ltr{direction:ltr;text-align:left;unicode-bidi:plaintext}
+  .num-cell{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink)}
+  .bad{color:var(--red)} .good{color:var(--green)} .amb{color:var(--amber)}
+  footer{color:var(--muted);text-align:center;padding-top:36px;font-size:.9rem}
+  .toggle-bar{display:flex;gap:10px;margin:18px 0 6px;flex-wrap:wrap}
+  .tg{cursor:pointer;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);
+    border-radius:999px;padding:8px 18px;font-size:.9rem;font-weight:700;font-family:inherit}
+  .tg[aria-pressed="true"]{color:#0b1117;background:var(--cyan);border-color:var(--cyan)}
+  .stage{border:1px solid var(--line);border-radius:14px;background:#091016;padding:10px;margin-top:6px}
+  svg{display:block;width:100%;height:auto}
+  .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
+  .stat{background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center}
+  .stat .k{display:block;font-size:.78rem;color:var(--muted);margin-bottom:8px}
+  .stat .v{font-size:1.7rem;font-weight:800;font-variant-numeric:tabular-nums}
+  .stat .d{font-size:.78rem;color:var(--muted);margin-top:4px}
+  .pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:.75rem;font-weight:700;
+    border:1px solid var(--line);color:var(--muted)}
+  .pill.p232{color:var(--cyan);border-color:rgba(85,214,194,.4);background:rgba(85,214,194,.08)}
+  .pill.p233{color:var(--violet);border-color:rgba(179,157,219,.4);background:rgba(179,157,219,.08)}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:.85rem;color:var(--muted)}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-left:6px;vertical-align:-1px}
+  @media (max-width:768px){
+    main{padding:24px 14px 50px}
+    .facts,.grid,.flow,.stat-row{grid-template-columns:1fr}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+
+  <section class="hero">
+    <div class="eyebrow">דוח סיום מחזור · Station VII Showcase</div>
+    <span class="status-merged">שני ה-PR מוזגו לענף הראשי (main)</span>
+    <h1>הבוט הפסיק לבטל את עצמו ברגע שהוא עמד להרוויח</h1>
+    <p>שני תיקונים נפרדים באותו יום. הראשון עצר ביטול הזמנות ברגע שהשוק ירד אליהן. השני הפסיק לרשום עלות שגויה לכל רגל אחרי מיזוג.</p>
+
+    <div class="facts">
+      <div class="fact">
+        <b>Pull Request · הביטול האסימטרי</b>
+        <a href="https://github.com/AI-Degen-69/spread-hunter-live/pull/232">#232 · מוזג (Squash) 🟢</a>
+      </div>
+      <div class="fact">
+        <b>Pull Request · פיצול העלות</b>
+        <a href="https://github.com/AI-Degen-69/spread-hunter-live/pull/233">#233 · מוזג (Squash) 🟢</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ ELI5 ══════════════ -->
+  <section class="panel eli">
+    <h2>💡 במילים פשוטות</h2>
+    <p><b>דמיין שאתה עומד בתור לקופה.</b> אתה מחכה כבר דקה. פתאום הקופאית קוראת "הבא בתור!" — ובדיוק אז אתה יוצא מהתור והולך להתחיל תור חדש מהסוף.</p>
+    <p>זה בדיוק מה שהבוט עשה. הוא הניח הצעת קנייה במחיר מסוים וחיכה. ברגע שהשוק ירד אל המחיר שלו — הרגע שבו העסקה הייתה נסגרת — הוא ביטל את ההצעה והתחיל מהתחלה נמוך יותר. שוב ושוב.</p>
+    <p><b>התיקון השני</b> פשוט יותר: אחרי שהבוט קונה שתי רגליים במחירים שונים וממזג אותן, הוא רשם בספרים ששתיהן עלו אותו דבר. הרווח היה נכון — אבל הספרים שיקרו לגבי מי שילם כמה.</p>
+  </section>
+
+  <!-- ══════════════ #232 — INTERACTIVE DIAGRAM ══════════════ -->
+  <section class="panel">
+    <span class="pill p232">PR #232</span>
+    <h2 style="margin-top:12px">📉 הבעיה: הבוט רדף את המחיר למטה</h2>
+    <p>הזמנת <b>לימיט</b> נסגרת במחיר שלה כשמוכר סוחף דרכה. לחץ על הכפתורים כדי לראות את שתי ההתנהגויות על אותו אירוע בדיוק.</p>
+
+    <div class="toggle-bar" role="group" aria-label="בחירת התנהגות">
+      <button class="tg" id="btnOld" aria-pressed="true">🔴 הכלל הישן (סימטרי)</button>
+      <button class="tg" id="btnNew" aria-pressed="false">🟢 הכלל החדש (אסימטרי)</button>
+    </div>
+
+    <div class="stage">
+      <svg viewBox="0 0 760 300" role="img" aria-labelledby="ladderTitle ladderDesc">
+        <title id="ladderTitle">סולם מחירים: הצעת הקנייה שלנו מול ההצעה הטובה ביותר לאורך זמן</title>
+        <desc id="ladderDesc">ההצעה שלנו יושבת ב-47 סנט. ההצעה הטובה ביותר בשוק יורדת מ-50 ל-44 סנט על פני שלושה מחזורים.</desc>
+
+        <!-- price axis -->
+        <line x1="90" y1="30" x2="90" y2="255" stroke="#29404d" stroke-width="1.5"/>
+        <g font-family="Consolas,monospace" font-size="12" fill="#9aabb8" text-anchor="end">
+          <text x="80" y="55">$0.50</text>
+          <text x="80" y="105">$0.48</text>
+          <text x="80" y="140">$0.47</text>
+          <text x="80" y="180">$0.45</text>
+          <text x="80" y="225">$0.44</text>
+        </g>
+
+        <!-- our resting bid -->
+        <line x1="90" y1="136" x2="720" y2="136" stroke="#55d6c2" stroke-width="2" stroke-dasharray="6 5" opacity=".65"/>
+        <text x="716" y="128" font-size="12" fill="#55d6c2" text-anchor="end" font-weight="700" direction="ltr">our limit BUY @ $0.47</text>
+
+        <!-- market path: best bid falling -->
+        <polyline points="160,52 320,101 480,176 640,222" fill="none" stroke="#f4b860" stroke-width="3" stroke-linejoin="round"/>
+        <g fill="#f4b860">
+          <circle cx="160" cy="52" r="6"/><circle cx="320" cy="101" r="6"/>
+          <circle cx="480" cy="176" r="6"/><circle cx="640" cy="222" r="6"/>
+        </g>
+        <text x="160" y="268" font-size="12" fill="#9aabb8" text-anchor="middle">מחזור 1</text>
+        <text x="320" y="268" font-size="12" fill="#9aabb8" text-anchor="middle">מחזור 2</text>
+        <text x="480" y="268" font-size="12" fill="#9aabb8" text-anchor="middle">מחזור 3</text>
+        <text x="640" y="268" font-size="12" fill="#9aabb8" text-anchor="middle">מחזור 4</text>
+
+        <!-- OLD overlay -->
+        <g id="gOld">
+          <rect x="405" y="118" width="150" height="36" rx="9" fill="rgba(241,124,120,.16)" stroke="#f17c78"/>
+          <text x="480" y="141" font-size="13" fill="#f17c78" text-anchor="middle" font-weight="700">✖ ביטול — המחיר זז</text>
+          <circle cx="480" cy="176" r="12" fill="none" stroke="#f17c78" stroke-width="2.5"/>
+          <text x="640" y="150" font-size="13" fill="#f17c78" text-anchor="middle" font-weight="700">מפרסם מחדש נמוך יותר</text>
+          <text x="640" y="170" font-size="12" fill="#9aabb8" text-anchor="middle">חוזר לסוף התור</text>
+        </g>
+
+        <!-- NEW overlay -->
+        <g id="gNew" style="display:none">
+          <rect x="398" y="118" width="164" height="36" rx="9" fill="rgba(121,217,155,.16)" stroke="#79d99b"/>
+          <text x="480" y="141" font-size="13" fill="#79d99b" text-anchor="middle" font-weight="700">✔ מחזיק — השוק מגיע אלינו</text>
+          <circle cx="480" cy="176" r="12" fill="none" stroke="#79d99b" stroke-width="2.5"/>
+          <text x="645" y="150" font-size="13" fill="#79d99b" text-anchor="middle" font-weight="700">מוכר סוחף דרך 0.47</text>
+          <text x="645" y="170" font-size="12" fill="#79d99b" text-anchor="middle">🎯 מילוי במחיר שלנו</text>
+        </g>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i style="background:#f4b860"></i>ההצעה הטובה ביותר בשוק</span>
+      <span><i style="background:#55d6c2"></i>ההזמנה הרדומה שלנו</span>
+    </div>
+
+    <div class="grid" style="margin-top:22px">
+      <article class="compare before">
+        <h3>🔴 לפני — ביטול לשני הכיוונים</h3>
+        <ul>
+          <li>המחיר עולה ובורח → ביטול. <b>נכון.</b></li>
+          <li>המחיר יורד אלינו → ביטול. <b>שגוי.</b> זה הרגע שבו הזמנת לימיט נסגרת.</li>
+          <li><b>393 מתוך 755</b> ביטולי <code class="ltr">price_moved</code> (52%) קרו כשהספר ירד לכיווננו.</li>
+          <li>כלל שנועד להחזיק הזמנה בחזית התור היה קיים — אבל <b>מושבת</b> (<code class="ltr">requote_hold_queue_shares = 0.0</code>).</li>
+        </ul>
+      </article>
+      <article class="compare after">
+        <h3>🟢 אחרי — ביטול אסימטרי</h3>
+        <ul>
+          <li>המחיר <b>עולה</b> → ביטול ופרסום מחדש. ללא שינוי.</li>
+          <li>המחיר <b>יורד</b> → מחזיקים, עד תקרה של <b>5 סנט</b>.</li>
+          <li>ירידה גדולה יותר = השוק עוזב, לא מגיע. עדיין מבטלים.</li>
+          <li>שער עלות הזוג <b>עדיין מבטל</b> — מיקום בתור לא שווה הפסד רשום.</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ══════════════ #232 FLOW ══════════════ -->
+  <section class="panel">
+    <span class="pill p232">PR #232</span>
+    <h2 style="margin-top:12px">⚡ זרימת ההחלטה החדשה</h2>
+    <div class="flow">
+      <div class="step">
+        <div class="num">01 · קלט / טריגר</div>
+        <h3>מחיר היעד יצא מהרצועה</h3>
+        <p>בכל מחזור (~19 שניות) המנוע מחשב מחיר יעד חדש מהספר. אם הוא רחוק יותר מ-3 סנט מההזמנה הרדומה — מתעוררת החלטה.</p>
+      </div>
+      <div class="step">
+        <div class="num">02 · עיבוד ולוגיקה</div>
+        <h3>לאיזה כיוון הוא זז?</h3>
+        <p><code class="ltr">_market_arriving()</code> משווה את המחיר שלנו ליעד הגבוה ביותר. ירידה בתוך התקרה = השוק מגיע. עלייה = הוא בורח.</p>
+      </div>
+      <div class="step">
+        <div class="num">03 · תוצאה מאומתת</div>
+        <h3>מחזיק או מבטל</h3>
+        <p>מחזיק רק אם שער עלות הזוג עובר <b>ויש מחיר ask אמיתי</b>. ask חסר נקרא "אין דעה", לא "עבר".</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ MEASURED RESULT ══════════════ -->
+  <section class="panel">
+    <h2>📊 מה נמדד בפועל</h2>
+    <p>שני חלונות רצופים על אותו מסד נתונים, אותה אסטרטגיה, רק כלל הביטול שונה.</p>
+
+    <div class="stat-row">
+      <div class="stat">
+        <span class="k">חיים ממוצעים של הזמנה</span>
+        <span class="v good">×1.9</span>
+        <span class="d">107.2 ← 201.3 שניות</span>
+      </div>
+      <div class="stat">
+        <span class="k">מילויים</span>
+        <span class="v good">0 → 3</span>
+        <span class="d">על פני 1,198 ← 330 הזמנות</span>
+      </div>
+      <div class="stat">
+        <span class="k">מובהקות (Fisher)</span>
+        <span class="v amb">p = 0.010</span>
+        <span class="d">ההבדל אינו רעש</span>
+      </div>
+      <div class="stat">
+        <span class="k">קצב הזמנות</span>
+        <span class="v good">−67%</span>
+        <span class="d">269 ← 88 לשעה</span>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>מדד</th><th>A · סימטרי<br><span style="font-weight:400;font-size:.8rem">17:06→21:33 (4.46ש')</span></th><th>B · אסימטרי<br><span style="font-weight:400;font-size:.8rem">21:33→01:19 (3.76ש')</span></th></tr>
+      </thead>
+      <tbody>
+        <tr><td>הזמנות שפורסמו</td><td class="num-cell">1,198</td><td class="num-cell">330</td></tr>
+        <tr><td>מילויים</td><td class="num-cell bad">0</td><td class="num-cell good">3</td></tr>
+        <tr><td>שיעור מילוי</td><td class="num-cell bad">0.000%</td><td class="num-cell good">0.909%</td></tr>
+        <tr><td>סגירות</td><td class="num-cell">0</td><td class="num-cell">2</td></tr>
+        <tr><td>רווח ממומש</td><td class="num-cell">$0.00</td><td class="num-cell good">+$0.83</td></tr>
+        <tr><td>חיים חציוניים</td><td class="num-cell">41.0 ש'</td><td class="num-cell">45.6 ש'</td></tr>
+        <tr><td><b>חיים ממוצעים</b></td><td class="num-cell">107.2 ש'</td><td class="num-cell good">201.3 ש'</td></tr>
+        <tr><td>שווקים מצוטטים</td><td class="num-cell">21</td><td class="num-cell">13</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:14px">שים לב: חלון B ציטט <b>פחות</b> שווקים והפיק <b>יותר</b> מילויים. ההסבר החלופי "יותר שווקים = יותר מילויים" נשלל.</p>
+  </section>
+
+  <!-- ══════════════ HONEST CAVEAT ══════════════ -->
+  <section class="panel warn">
+    <h2>⚠️ מה עדיין לא הוכח</h2>
+    <p>ההחזקה הכיוונית <b>פעלה</b> — 37 מתוך 320 הזמנות (11.6%) ישבו 3-5 סנט מעל ההצעה הטובה ביותר בזמן שהמתינו, מיקום שהכלל הישן היה מבטל.</p>
+    <p><b>אבל אף אחד משלושת המילויים לא ניצל על ידה.</b> בדקתי כל אחד מול ספר ההזמנות: בשלושתם ההצעה שלנו ישבה <b>מתחת</b> להצעה הטובה ביותר לכל אורך חייה — כלומר ה-dead band הישן שמר עליהם ממילא.</p>
+    <table>
+      <thead><tr><th>מילוי</th><th>המתנה</th><th>פער מול ההצעה הטובה ביותר</th><th>הוחזק?</th></tr></thead>
+      <tbody>
+        <tr><td class="ltr">6sh @ $0.252</td><td class="num-cell">70 ש'</td><td class="ltr">−1.4c, −1.0c, −15.1c</td><td class="bad">לא</td></tr>
+        <tr><td class="ltr">6sh @ $0.618</td><td class="num-cell">0 ש'</td><td>השלמה כתוקפן</td><td class="bad">לא</td></tr>
+        <tr><td class="ltr">5sh @ $0.340</td><td class="num-cell">1,991 ש'</td><td class="ltr">−2c … −3c, −1c</td><td class="bad">לא</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:14px"><b>המסקנה הכנה:</b> המנגנון עובד ומדיד — חיי ההזמנה הוכפלו. ההמרה שלו למילויים עדיין לא מוכחת. 37 הזמנות שהוחזקו הפיקו אפס מילויים, ושני מילויים מייקרים על 330 הזמנות הם מדגם קטן מדי לקבוע.</p>
+  </section>
+
+  <!-- ══════════════ #233 ══════════════ -->
+  <section class="panel">
+    <span class="pill p233">PR #233</span>
+    <h2 style="margin-top:12px">⚖️ הספרים שיקרו לגבי מי שילם כמה</h2>
+    <p>אחרי מיזוג, המערכת רושמת כמה עלות לגרוע מכל רגל. היא רשמה <b>חצי-חצי קשיח</b> — גם כשהרגליים עלו סכומים שונים לגמרי.</p>
+
+    <div class="stage" style="padding:18px">
+      <svg viewBox="0 0 760 210" role="img" aria-labelledby="splitTitle splitDesc">
+        <title id="splitTitle">פיצול עלות בסגירה מספר 50</title>
+        <desc id="splitDesc">הרגליים עלו 1.512 ו-3.708 דולר, אך נרשמו כ-2.61 דולר כל אחת.</desc>
+
+        <text x="740" y="22" font-size="13" fill="#9aabb8" text-anchor="end">סגירה #50 · 6 מניות · סה"כ $5.22</text>
+
+        <!-- ACTUAL -->
+        <text x="740" y="60" font-size="13" fill="#79d99b" text-anchor="end" font-weight="700">מה שבאמת שולם</text>
+        <rect x="40" y="70" width="152" height="30" rx="5" fill="#55d6c2" opacity=".85"/>
+        <rect x="192" y="70" width="372" height="30" rx="5" fill="#b39ddb" opacity=".85"/>
+        <text x="116" y="91" font-size="13" fill="#0b1117" text-anchor="middle" font-weight="800" direction="ltr">UP $1.512</text>
+        <text x="378" y="91" font-size="13" fill="#0b1117" text-anchor="middle" font-weight="800" direction="ltr">DOWN $3.708</text>
+
+        <!-- RECORDED -->
+        <text x="740" y="132" font-size="13" fill="#f17c78" text-anchor="end" font-weight="700">מה שנרשם (הבאג)</text>
+        <rect x="40" y="142" width="262" height="30" rx="5" fill="#f17c78" opacity=".55"/>
+        <rect x="302" y="142" width="262" height="30" rx="5" fill="#f17c78" opacity=".55"/>
+        <text x="171" y="163" font-size="13" fill="#eaf1f6" text-anchor="middle" font-weight="800" direction="ltr">UP $2.610</text>
+        <text x="433" y="163" font-size="13" fill="#eaf1f6" text-anchor="middle" font-weight="800" direction="ltr">DOWN $2.610</text>
+
+        <!-- error bracket -->
+        <line x1="192" y1="106" x2="192" y2="138" stroke="#f4b860" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <line x1="302" y1="106" x2="302" y2="138" stroke="#f4b860" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="247" y="124" font-size="12" fill="#f4b860" text-anchor="middle" font-weight="700" direction="ltr">±$1.098</text>
+
+        <text x="40" y="198" font-size="12" fill="#9aabb8" direction="ltr">total unchanged · realized_pnl +$0.78 was always correct</text>
+      </svg>
+    </div>
+
+    <div class="grid" style="margin-top:22px">
+      <article class="compare before">
+        <h3>🔴 מה שההערה בקוד טענה</h3>
+        <ul>
+          <li>"המיזוג החי מפצל שווה" — <b>לא נכון.</b> <code class="ltr">order_manager.py</code> כותב <code class="ltr">amt * up_unit_cost</code>.</li>
+          <li>"לטבלה אין עמודת טוקן" — <b>לא רלוונטי.</b> יש שתי עמודות נפרדות.</li>
+          <li>התוצאה: סטייה בין החזרה הגנרלית למציאות.</li>
+        </ul>
+      </article>
+      <article class="compare after">
+        <h3>🟢 מה שקורה עכשיו</h3>
+        <ul>
+          <li>כל רגל מחויבת <b>במה שהיא באמת שילמה</b>.</li>
+          <li>הסכום נשמר — הפונקציה מזיזה עלות בין עמודות, לא יוצרת ולא מאבדת.</li>
+          <li>אם צד לא נפתר — <b>נפילה לאחור</b> לפיצול השווה. לנחש היה גרוע יותר.</li>
+          <li>מפת ה-UP/DOWN נבנית <b>עצלנית</b> — רק כשזוג באמת נסגר.</li>
+        </ul>
+      </article>
+    </div>
+    <p style="margin-top:16px"><b>למה זה משנה:</b> <code class="ltr">kpi.py</code> מפחית את <code class="ltr">up_cost_removed</code> מעלות המלאי של רגל ה-UP. בזוג ספרד שתי הרגליים לעולם לא עולות אותו דבר — זו כל האסטרטגיה — אז <b>כל מיזוג</b> השאיר את שתי הרגליים עם בסיס עלות ששום דבר לא שילם.</p>
+  </section>
+
+  <!-- ══════════════ VERIFICATION ══════════════ -->
+  <section class="panel">
+    <h2>🕹️ מדריך בדיקה ידנית (Touch &amp; See)</h2>
+    <p>הכול בעיניים. אין הרצת סוויטות.</p>
+
+    <h3>1. הפעל מחדש את הסטאק כדי שהקוד החדש ייכנס לתוקף</h3>
+    <p>פייתון לא קורא קבצים מחדש בזמן ריצה — התיקונים נכנסים רק בהפעלה מחדש:</p>
+    <div class="code-row">
+      <pre class="code">.\scripts\spread-hunter-menu.ps1 shadow-resume</pre>
+      <button class="copy-btn">העתק</button>
+    </div>
+    <div class="expected">
+      <b>מה אמורים לראות:</b> חמש שורות ירוקות — דשבורד, לופ שווקים, לולאת החזרה, צופה סטטיסטיקה, ו-<code class="ltr">Stop-loss watcher engaged</code>. הדפדפן ייפתח על <span class="ltr">http://127.0.0.1:8799</span>.
+    </div>
+
+    <h3 style="margin-top:26px">2. צפה בהזמנות ששורדות מחזורים במקום להתאבד</h3>
+    <p>הריצו ועקבו אחרי הלוג החי:</p>
+    <div class="code-row">
+      <pre class="code">Get-Content runtime\shadow_resume.err.log -Wait -Tail 30</pre>
+      <button class="copy-btn">העתק</button>
+    </div>
+    <div class="expected">
+      <b>מה אמורים לראות:</b> שורות <code class="ltr">[RESTING] ... 2 quote(s) resting at target spread</code> שחוזרות על אותו שוק <b>כמה מחזורים ברצף</b>. לפני התיקון היה <code class="ltr">[QUOTING] Posted 2 orders</code> כמעט כל 19 שניות. זה ההבדל שאפשר לראות בעין.
+    </div>
+
+    <h3 style="margin-top:26px">3. מדוד בעצמך את אורך החיים של ההזמנות</h3>
+    <p>אחרי כחצי שעה של ריצה, הרץ את הדוח התפעולי:</p>
+    <div class="code-row">
+      <pre class="code">python -m core_brain.cancel_report --db data\01_shadow_12-09_00-58.db</pre>
+      <button class="copy-btn">העתק</button>
+    </div>
+    <div class="expected">
+      <b>מה אמורים לראות:</b> בתחתית הדוח שורה שמציינת את שני כללי ההחזקה ואת מצבם — <code class="ltr">queue off, direction on within 0.05</code>. לפני התיקון הדוח טען שהחזקת התור היא הכלל <b>היחיד</b> שיכול לשמור ביטול מחיר.
+    </div>
+
+    <h3 style="margin-top:26px">4. פתח סגירת מיזוג ובדוק את פיצול העלות</h3>
+    <p>אחרי שהלוג מדפיס <code class="ltr">merged pair-... at $1.00 a share</code>:</p>
+    <div class="code-row">
+      <pre class="code">python -c "import sqlite3;c=sqlite3.connect('file:data/01_shadow_12-09_00-58.db?mode=ro',uri=True);print('id  shares  cost_basis  up_removed  dn_removed');[print('%-3s %5.0f %11.3f %11.3f %11.3f'%r) for r in c.execute('select id,shares,cost_basis,up_cost_removed,dn_cost_removed from closes where method=? order by id desc limit 5',('shadow_merge',))]"</pre>
+      <button class="copy-btn">העתק</button>
+    </div>
+    <div class="expected">
+      <b>מה אמורים לראות:</b> כל המיזוגים <b>הישנים</b> מראים את הבאג בעין — <code class="ltr">up_removed</code> ו-<code class="ltr">dn_removed</code> זהים, בדיוק חצי מ-<code class="ltr">cost_basis</code>:
+      <pre class="code" style="margin-top:10px;padding-right:16px">id  shares  cost_basis  up_removed  dn_removed
+50      6       5.220       2.610       2.610
+47      5       4.650       2.325       2.325
+44      5       4.850       2.425       2.425</pre>
+      כל מיזוג <b>חדש</b> שייווצר אחרי ההפעלה מחדש יראה <b>שני מספרים שונים</b> שעדיין מסתכמים ב-<code class="ltr">cost_basis</code>. זו ההוכחה בעיניים.
+    </div>
+  </section>
+
+  <!-- ══════════════ FILES ══════════════ -->
+  <section class="panel">
+    <h2>📁 קבצים שהשתתפו בשינוי</h2>
+    <table>
+      <thead><tr><th>קובץ</th><th>PR</th><th>תפקיד והשפעה</th></tr></thead>
+      <tbody>
+        <tr><td class="ltr"><code>core_brain/trader_loop.py</code></td><td><span class="pill p232">232</span></td><td>הוסיף את <code class="ltr">_market_arriving()</code> וההחזקה הכיוונית בענף הביטול. ההחזקה כפופה לאותם תנאי בטיחות כמו החזקת התור.</td></tr>
+        <tr><td class="ltr"><code>core_brain/config.py</code></td><td><span class="pill p232">232</span></td><td><code class="ltr">requote_hold_below_target = 0.05</code> — נשלח <b>מופעל</b>, סנטימטר אחד מעל ה-dead band. עקיפה: <code class="ltr">HUNTER_REQUOTE_HOLD_BELOW</code>.</td></tr>
+        <tr><td class="ltr"><code>core_brain/cancel_report.py</code></td><td><span class="pill p232">232</span></td><td>מדווח עכשיו על <b>שני</b> כללי ההחזקה. השורה הקודמת הסתירה כלל שנשלח.</td></tr>
+        <tr><td class="ltr"><code>core_brain/shadow_exec.py</code></td><td><span class="pill p233">233</span></td><td><code class="ltr">_leg_cost_removed()</code> מחייב כל רגל בעלותה, ו-<code class="ltr">_side_by_token()</code> מאחד כפילות שהייתה קיימת ב-<code class="ltr">shadow_positions</code>.</td></tr>
+        <tr><td class="ltr"><code>tests/test_plan_orders_asymmetric_hold.py</code></td><td><span class="pill p232">232</span></td><td>11 בדיקות. המרכזית: אותה תזוזה של 4 סנט, סימן הפוך — אחת מוחזקת, אחת מבוטלת.</td></tr>
+        <tr><td class="ltr"><code>tests/test_shadow_merge_leg_cost.py</code></td><td><span class="pill p233">233</span></td><td>9 בדיקות, כולל שימור הסכום ואימות שהסריקה היקרה נחסכת כשאין מה למזג.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    PR #232 ו-PR #233 מוזגו ל-<code class="ltr">main</code> · נמדד על <code class="ltr">shadow-01</code>, 15–16 בספטמבר 2026
+  </footer>
+</main>
+
+<script>
+  // Copy buttons read their sibling <pre>, so no attribute escaping is needed.
+  document.querySelectorAll("button.copy-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var pre = btn.parentElement.querySelector("pre.code");
+      if (!pre) return;
+      var done = function () {
+        var original = btn.textContent;
+        btn.textContent = "הועתק! ✔️";
+        setTimeout(function () { btn.textContent = original; }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(pre.textContent).then(done, done);
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = pre.textContent;
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); } catch (e) {}
+        document.body.removeChild(ta); done();
+      }
+    });
+  });
+
+  // Before/after overlay toggle on the price-ladder diagram.
+  var btnOld = document.getElementById("btnOld");
+  var btnNew = document.getElementById("btnNew");
+  var gOld = document.getElementById("gOld");
+  var gNew = document.getElementById("gNew");
+  function show(isNew) {
+    gOld.style.display = isNew ? "none" : "";
+    gNew.style.display = isNew ? "" : "none";
+    btnOld.setAttribute("aria-pressed", String(!isNew));
+    btnNew.setAttribute("aria-pressed", String(isNew));
+  }
+  btnOld.addEventListener("click", function () { show(false); });
+  btnNew.addEventListener("click", function () { show(true); });
+</script>
+</body>
+</html>

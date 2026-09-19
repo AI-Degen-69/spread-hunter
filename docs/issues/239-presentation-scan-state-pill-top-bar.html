@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR #239 | סולן סטטוס הס캔 הוצב בטופ בר והזמן מוצג בדקות</title>
+  <style>
+    :root {
+      --ink: #eaf1f6;
+      --muted: #9aabb8;
+      --bg: #0b1117;
+      --panel: #121c25;
+      --panel-2: #172530;
+      --line: #29404d;
+      --cyan: #55d6c2;
+      --amber: #f4b860;
+      --red: #f17c78;
+      --green: #79d99b;
+      --shadow: 0 20px 55px rgba(0, 0, 0, .28);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 12% 0%, #183441 0, transparent 38%),
+                  radial-gradient(circle at 90% 15%, #2a2534 0, transparent 32%), var(--bg);
+      font: 16px/1.65 "Segoe UI", Tahoma, sans-serif;
+    }
+    main { max-width: 1100px; margin: auto; padding: 40px 20px 70px; }
+    .eyebrow { color: var(--cyan); letter-spacing: .08em; font-size: .82rem; font-weight: 700; text-transform: uppercase; }
+    h1 { font-size: clamp(2rem, 4.5vw, 3.2rem); margin: 10px 0 16px; line-height: 1.2; }
+    h2 { font-size: 1.5rem; margin: 0 0 14px; }
+    h3 { font-size: 1.05rem; margin: 0 0 10px; }
+    p { color: var(--muted); margin: 0 0 14px; }
+    .status-merged {
+      display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(121,217,155,.45);
+      border-radius: 999px; padding: 4px 14px; font-size: .85rem; font-weight: 700;
+      color: var(--green); background: rgba(121,217,155,.1); margin-top: 10px;
+    }
+    .status-merged::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+    .facts, .panel {
+      background: linear-gradient(145deg, rgba(23,37,48,.94), rgba(14,23,31,.94));
+      border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 18px;
+    }
+    .facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; overflow: hidden; margin: 24px 0; }
+    .fact { padding: 18px 22px; background: rgba(18,28,37,.72); }
+    .fact b { display: block; color: var(--muted); font-size: .8rem; margin-bottom: 6px; }
+    .fact a { color: var(--cyan); text-decoration: none; font-weight: 600; font-size: 1.05rem; }
+    .panel { padding: 26px; margin-top: 24px; }
+    .eli { border-right: 4px solid var(--cyan); background: rgba(85,214,194,.07); }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+    .compare { padding: 22px; border-radius: 14px; border: 1px solid var(--line); }
+    .before { border-top: 4px solid var(--red); background: rgba(241,124,120,.04); }
+    .after { border-top: 4px solid var(--green); background: rgba(121,217,155,.04); }
+    .compare ul { margin: 0; padding-right: 20px; color: var(--muted); }
+    .compare li { margin: 8px 0; }
+    .code-row { position: relative; margin: 12px 0; }
+    .code {
+      direction: ltr; text-align: left; color: #d9f7ef; background: #091016;
+      border: 1px solid #29434b; border-radius: 10px; padding: 14px 16px;
+      overflow: auto; white-space: pre-wrap; font: .88rem/1.5 Consolas, monospace;
+    }
+    button.copy-btn {
+      position: absolute; left: 10px; top: 10px; cursor: pointer;
+      border: 1px solid #3d5b63; color: var(--ink); background: #172a31;
+      border-radius: 7px; padding: 5px 12px; font-size: 0.8rem; font-weight: 600;
+    }
+    button.copy-btn:hover { background: #223c46; }
+    .expected {
+      border-right: 4px solid var(--green); padding: 12px 16px;
+      background: rgba(121,217,155,.08); margin-top: 10px; border-radius: 0 8px 8px 0;
+    }
+    .expected b { color: var(--green); }
+    table { width: 100%; border-collapse: collapse; color: var(--muted); margin-top: 14px; }
+    th, td { text-align: right; border-bottom: 1px solid var(--line); padding: 12px 10px; }
+    th { color: var(--ink); }
+    .ltr { direction: ltr; text-align: left; unicode-bidi: plaintext; }
+    footer { color: var(--muted); text-align: center; padding-top: 36px; font-size: .9rem; }
+    .diagram { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 10px; }
+    .diagram-stage {
+      border: 1px dashed var(--line); border-radius: 12px; padding: 16px;
+      background: rgba(23,37,48,.6); min-height: 120px;
+    }
+    .diagram-stage .stage-label { color: var(--muted); font-size: .82rem; margin-bottom: 8px; }
+    .pill-demo {
+      display: inline-block; background: var(--panel-2); border: 1px solid var(--line);
+      border-radius: 999px; padding: 4px 12px; font-size: .82rem; font-weight: 600;
+      font-family: Consolas, monospace; color: var(--ink);
+    }
+    .pill-demo.before-pill { border-color: var(--red); color: var(--red); }
+    .pill-demo.after-pill { border-color: var(--green); color: var(--green); }
+    .arrow-col {
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2rem; color: var(--cyan); padding-top: 30px;
+    }
+    @media (max-width: 768px) {
+      main { padding: 24px 14px 50px; }
+      .facts, .grid, .diagram { grid-template-columns: 1fr; }
+      .arrow-col { padding: 8px 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">דוח סיום מחזור · Station VII Showcase</div>
+      <span class="status-merged">מוזג לענף הראשי (main)</span>
+      <h1>PR #239: סולן סטטוס הלופ הוצב בטופ בר והזמן מוצג בדקות</h1>
+      <p>בדרך קודמת הסולן היווה את מצב הלופ של הסקיר השווקים (ההבטט המאיר את זמן ההרצה האחרון) רק בתוך הטאב של הסקיר — והדירוג המתקשה ל"349s" היה קצת לא נקי. עכשיו הסולן נמצא בפס הראשי של כל הדף, והזמן מתחיל להציג בדקות ובשעות ברגע שעוברים על 60 שניות, עם הערך המדויק בסעיף על שימוש.</p>
+
+      <div class="facts">
+        <div class="fact"><b>Issue מקושר</b><a href="https://github.com/AI-Degen-69/spread-hunter-live/issues/225">#225 · סגור ומוזג</a></div>
+        <div class="fact"><b>Pull Request</b><a href="https://github.com/AI-Degen-69/spread-hunter-live/pull/239">#239 · מוזג (Squash) 🟢</a></div>
+      </div>
+    </section>
+
+    <!-- ELI5 Plain Hebrew Metaphor -->
+    <section class="panel eli">
+      <h2>💡 במילים פשוטות: מה השתנה?</h2>
+      <p>
+        בדרך קודמת, המונה שמדד את זמן ההרצה האחרון של הלופ הסקיר היה נבדל רק בתוך טאב ה"סקיר שווקים" — כשעברת לטאבים אחרים (בית, אסטרטגיה, עסקאות, דוחות) היה אי-נגיש.
+        השינוי הוא כמו העברת מדד "טמפרטורת המנוע" מתוך התיקיה ללוח המחיצה הראשי — מכאן ואיתה נוכל לראות את הסטטוס בכל דף.
+        בנוסף, במקום להראות "349s" או "1200s" בעדף כשהלופ עובד זמן רב, המונה עכשיו מתחיל להציג "5m" או "1h", ובסעיף על המונה מצטגינת את השניות המדויקות ומאיר את המקור.
+      </p>
+    </section>
+
+    <!-- Before vs After -->
+    <section class="panel">
+      <h2>🔄 לפני מול אחרי</h2>
+      <div class="grid">
+        <article class="compare before">
+          <h3>🔴 לפני השינוי:</h3>
+          <ul>
+            <li>הסולן על מצב הלופ היה בתוך כותרת הסקיר שווקים בלבד — לא הייתי רואה אותו בטאבים אחרים.</li>
+            <li>זמן ההבטט הייתה "גיל משניות" גס כמו "349s" או "1200s", במיוחד כשהלופ עובד זמן רב.</li>
+            <li>לא היה דרך מהרה להבין בדקה האחרונה מתי הלופ תפס את ההרצה האחרונה.</li>
+          </ul>
+        </article>
+        <article class="compare after">
+          <h3>🟢 אחרי השינוי:</h3>
+          <ul>
+            <li>הסולן נזכר בפס הראשי — גלוי בכל הדפים ובכל הטאבים.</li>
+            <li>הזמן מתחיל בדקות ובשעות ("1m", "5m", "1h") ברגע שעוברים על 60 שניות, והמצב המקורי נשאר בעדינות.</li>
+            <li>על שימוש בסולן מופיע את השניות המדויקות ומאיר את הקובץ המקורי — ללא צורך לחפש בקוד.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- Visual diagram: pill relocation -->
+    <section class="panel">
+      <h2>📍 הסולן עבר משם לשם</h2>
+      <div class="diagram">
+        <div class="diagram-stage">
+          <div class="stage-label">לפני — הסולן בלב הטאב "סקיר שווקים" בלבד</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+            <span class="pill-demo before-pill">--</span>
+            <span style="color:var(--muted);font-size:.82rem">טאב בית</span>
+            <span style="color:var(--muted);font-size:.82rem">טאב אסטרטגיה</span>
+            <span style="color:var(--muted);font-size:.82rem">טאב עסקאות</span>
+            <span style="color:var(--amber);font-size:.85rem">טאב סקיר שווקים ▸ הסולן כאן</span>
+          </div>
+        </div>
+        <div class="arrow-col">➔</div>
+        <div class="diagram-stage">
+          <div class="stage-label">אחרי — הסולן בפס הראשי, גלוי בכל הדפים</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+            <span class="pill-demo after-pill">RUNNING · 1m</span>
+            <span style="color:var(--cyan);font-size:.85rem">פס ראשי</span>
+            <span style="color:var(--muted);font-size:.82rem">טאב בית</span>
+            <span style="color:var(--muted);font-size:.82rem">טאב אסטרטגיה</span>
+            <span style="color:var(--muted);font-size:.82rem">טאב עסקאות</span>
+            <span style="color:var(--muted);font-size:.82rem">טאב סקיר שווקים</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hands-on Verification with 1-Click Copy -->
+    <section class="panel">
+      <h2>🕹️ מדריך בדיקה ידנית (Touch & See)</h2>
+      <p>לפני ההרצה של סיכומי טסט — רק הרצת סיכומי טסט! אנו מתבוננים בעין בלבד:</p>
+
+      <h3>1. פתח את הדשבורד וצפה בפס הראשי</h3>
+      <p>הרצת הדשבורד, ובדיקה שהסולן מופיע בפס הראשי במקום רק בטאב הסקיר:</p>
+      <div class="code-row">
+        <pre class="code">python -m dashboard.server</pre>
+        <button class="copy-btn" data-copy="python -m dashboard.server">העתק</button>
+      </div>
+      <div class="expected">
+        <b>מה אמורים לראות:</b> בפס הראשי (הטופ בר) מופיע סולן עם מצב הלופ (אדום/ירוק/וחומר/לא ידוע) וזמן עדכון — גם כשאתה מסתובב בין טאבים. בסעיף על הסולן מופיע את זמן ההבטט המדויק ואת הקובץ המקורי (למשל "Trading loop heartbeat: 349s ago (runtime/shadow_run.json)").
+      </div>
+    </section>
+
+    <!-- Impacted Files -->
+    <section class="panel">
+      <h2>📁 קבצים שהשתתפו בשינוי</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>קובץ</th>
+            <th>תפקיד והשפעה</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ltr"><code>dashboard/static/index.html</code></td>
+            <td>העתקת הסולן מכותרת הסקיר לטופ בר, שמירה על שאר המבנה.</td>
+          </tr>
+          <tr>
+            <td class="ltr"><code>dashboard/static/app.js</code></td>
+            <td>פונקציית העזר <code>formatHeartbeatAge</code> שמעבר לדקות ושעות, עדכון הסולן והטופט דטאילד.</td>
+          </tr>
+          <tr>
+            <td class="ltr"><code>tests/test_dashboard_server.py</code></td>
+            <td>טסטים חדשים שמאמרים את מיקום הסולן בטופ בר ואת עיצוב ההבטט בדקות.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      נוצר עבור Issue #225 · Pull Request #239 מוזג בהצלחה
+    </footer>
+  </main>
+
+  <script>
+    document.querySelectorAll("button[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        const original = btn.textContent;
+        btn.textContent = "הועתק! ✔️";
+        setTimeout(() => { btn.textContent = original; }, 1400);
+      });
+    });
+  </script>
+</body>
+</html>
