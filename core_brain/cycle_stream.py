@@ -470,16 +470,25 @@ def tail_lines(path: Path, tail: int) -> list[str]:
         return tail_lines_fh(fh, tail)
 
 
-def read_ring(ring_path: Path | None = None, tail: int = 100) -> list[dict]:
+def read_ring(
+    ring_path: Path | None = None,
+    tail: int = 100,
+    *,
+    strict: bool = False,
+) -> list[dict]:
     """Read the last `tail` parsed JSON events from the ring file.
 
     `emit()` always writes `runtime/`, but a reader with no explicit path
-    resolves the pre-rename `run/cycle_events.jsonl` while only that one
-    exists -- otherwise the guardrail watcher reads an empty ring right
-    after the rename and misses a repeat-exit alert.
+    resolves the pre-rename `run/cycle_events.jsonl` while only that one exists
+    -- otherwise the guardrail watcher reads an empty ring right after the rename
+    and misses a repeat-exit alert.
 
-    A non-positive `tail` still means every event.
+    A non-positive `tail` still means every event. When ``strict`` is true,
+    file-read failures are raised so diagnostic callers can distinguish an
+    unavailable ring from a genuinely empty one. Malformed individual JSON
+    lines remain ignored in either mode.
     """
+
     p = Path(ring_path) if ring_path else resolve_runtime_file(
         DEFAULT_RING_PATH.name, root=LIVE_ROOT)
     if not p.exists():
@@ -501,5 +510,7 @@ def read_ring(ring_path: Path | None = None, tail: int = 100) -> list[dict]:
                 continue
         return events
     except Exception as exc:
+        if strict:
+            raise
         print(f"WARNING: cycle_stream read_ring failed: {exc}", file=sys.stderr)
         return []

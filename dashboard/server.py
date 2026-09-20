@@ -2047,7 +2047,7 @@ def _read_cycle_ring(
     """Read a cycle ring and retain a structured error for read-only panels."""
     try:
         from core_brain.cycle_stream import read_ring
-        return read_ring(path or resolve_ring_path(), tail=tail), None
+        return read_ring(path or resolve_ring_path(), tail=tail, strict=True), None
     except Exception as exc:
         return [], {
             "source": "cycle_ring",

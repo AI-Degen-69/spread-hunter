@@ -89,28 +89,29 @@ def test_read_only_report_errors_share_one_json_shape(client, monkeypatch):
         }, path
 
 
-def test_ring_read_failures_are_visible_without_breaking_read_only_shapes(client, monkeypatch):
+def test_ring_read_failures_are_visible_without_breaking_read_only_shapes(client, tmp_path):
     """Telemetry routes keep 200 empty-state shapes but expose ring failures."""
-    from core_brain import cycle_stream
+    unreadable_ring = tmp_path / "ring-directory"
+    unreadable_ring.mkdir()
+    set_ring_override(unreadable_ring)
 
-    def fail(*args, **kwargs):
-        raise OSError("cycle ring unavailable")
-
-    monkeypatch.setattr(cycle_stream, "read_ring", fail)
-
-    for path in (
-        "/api/scan-state",
-        "/api/guardrail-health",
-        "/api/pairs-activity",
-        "/api/guardrail-alerts",
-    ):
-        response = client.get(path)
-        assert response.status_code == 200, path
-        assert response.json()["telemetry_error"] == {
-            "source": "cycle_ring",
-            "error": "cycle ring unavailable",
-            "error_type": "OSError",
-        }, path
+    try:
+        for path in (
+            "/api/scan-state",
+            "/api/guardrail-health",
+            "/api/pairs-activity",
+            "/api/guardrail-alerts",
+        ):
+            response = client.get(path)
+            assert response.status_code == 200, path
+            telemetry_error = response.json()["telemetry_error"]
+            assert telemetry_error["source"] == "cycle_ring", path
+            assert telemetry_error["error_type"] in {
+                "IsADirectoryError", "PermissionError"
+            }, path
+            assert telemetry_error["error"], path
+    finally:
+        set_ring_override(None)
 
 
 def test_api_and_html_endpoints(client, temp_db):
@@ -1450,7 +1451,8 @@ def test_app_js_surfaces_telemetry_errors_as_unknown():
 
     assert "scanState.telemetry_error" in app_js
     assert "Telemetry unavailable:" in app_js
-    assert "esc(telemetryError.error || 'cycle ring read failed')" in app_js
+    assert "title=\"Telemetry unavailable: ${esc(telemetryError.error || 'cycle ring read failed')}\"" in app_js
+    assert "headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`" in app_js
     assert "guardrailHealth?.telemetry_error" in app_js
     assert "state-unknown" in app_js
 

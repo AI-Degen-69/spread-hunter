@@ -4639,7 +4639,7 @@ function renderScanStatePill(scanState) {
     headerPill.innerHTML = dot + esc(state.toUpperCase() + age);
     const rawSec = (hbAge !== null && hbAge !== undefined) ? Math.max(0, Math.round(hbAge)) : null;
     if (telemetryError) {
-      headerPill.title = `Telemetry unavailable: ${esc(telemetryError.error || 'cycle ring read failed')}`;
+      headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`;
     } else if (rawSec !== null) {
       headerPill.title = `Trading loop heartbeat: ${rawSec}s ago (${raw.toUpperCase()}) · runtime/shadow_run.json or runtime/live_poll_heartbeat.json`;
     } else {
