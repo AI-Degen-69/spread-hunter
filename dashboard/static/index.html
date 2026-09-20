@@ -85,7 +85,7 @@
     <!-- Live operations console: status + run controls live here (not in the
          removed hero card) so they stay visible from every tab. Every id below
          is read by app.js via getElementById, so ids stay byte-identical. -->
-    <div class="live-ops-console" role="status" aria-label="Live operations console">
+    <div class="live-ops-console" role="region" aria-label="Live operations console">
       <span id="master-status-indicator" class="pill state-running font-display" style="font-size:12px;padding:6px 14px"><span class="pulse-dot active"></span>STACK RUNNING</span>
       <span class="console-stat" title="Engine status"><span class="console-label">ENGINE</span> <span id="hud-engine-state" class="kpi-value positive mono">RUNNING</span> <span id="hud-engine-sub" class="broker-kpi-sub mono">3 of 3 services active</span></span>
       <span class="console-stat" title="Execution venue"><span class="console-label">VENUE</span> <span id="hud-venue-mode" class="kpi-value mono" style="font-size:16px;color:#38bdf8">POLYMARKET CLOB</span> <span id="hud-venue-sub" class="broker-kpi-sub mono">0.5s poll cadence</span></span>

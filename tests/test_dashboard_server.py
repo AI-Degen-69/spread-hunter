@@ -1361,8 +1361,9 @@ def test_scan_state_pill_in_top_nav_bar():
 def test_live_ops_console_in_top_nav_bar():
     """Live-ops console lives in <header>; hero card and duplicate IDs are gone (#243)."""
     html = _read_static("index.html")
-    header = html.split("</header>", 1)[0]
-    assert "live-ops-console" in header
+    assert "</header>" in html
+    header = html.split("<header", 1)[1].split("</header>", 1)[0]
+    assert 'class="live-ops-console"' in header
 
     moved_ids = (
         "master-status-indicator",
@@ -1382,12 +1383,20 @@ def test_live_ops_console_in_top_nav_bar():
         assert f'id="{element_id}"' in header
         assert html.count(f'id="{element_id}"') == 1
 
-    assert "SYNC VENUE" in header
+    assert 'id="btn-sync"' in header
+    assert ">SYNC VENUE<" in header
     assert "btn-live-sync" not in html
     assert "live-ops-master-card" not in html
     assert "hud-db-mode" not in html
     # Milestone 8 guard: the kpi-grid string must survive the hero removal.
-    assert "kpi-grid" in html
+    assert 'id="kpi-grid"' in html
+
+    # The removed IDs must not be referenced by the client logic either.
+    app_js = _read_static("app.js")
+    assert "btn-live-sync" not in app_js
+    assert "live-ops-master-card" not in app_js
+    assert "hud-db-mode" not in app_js
+    assert "hud-db-sub" not in app_js
 
 
 def test_app_js_formats_heartbeat_duration_as_minutes():
