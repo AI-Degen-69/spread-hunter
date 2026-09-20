@@ -1133,24 +1133,6 @@ if (masterStopBtn && !masterStopBtn.dataset.wired) {
   });
 }
 
-const btnLiveSync = document.getElementById('btn-live-sync');
-if (btnLiveSync && !btnLiveSync.dataset.wired) {
-  btnLiveSync.dataset.wired = 'true';
-  btnLiveSync.addEventListener('click', async () => {
-    try {
-      btnLiveSync.disabled = true;
-      btnLiveSync.classList.add('syncing');
-      await controlFetch('/api/system/sync');
-    } catch (e) {
-      console.error('Venue sync error:', e);
-    } finally {
-      btnLiveSync.classList.remove('syncing');
-      btnLiveSync.disabled = false;
-      pollStatus();
-    }
-  });
-}
-
 /* ── Render: Strategy Parameters (Human-Readable) ── */
 const PARAM_HUMAN_NAMES = {
   'max_pair_cost': 'Pair Cost Entry Ceiling',
