@@ -19,6 +19,7 @@ import json
 import os
 import logging
 import sqlite3
+import statistics
 import threading
 import time
 import uuid
@@ -2294,3 +2295,41 @@ def registry_committed_usd(registry) -> float:
         resting += o.price * max(0.0, o.original_size - registry.get_size_matched(o.id))
 
     return float(inventory) + resting
+
+
+def registry_cycle_cadence_sec(registry, *, limit: int = 20) -> Optional[float]:
+    """Median seconds between consecutive fleet rotations, or None when unknown.
+
+    The loop visits many markets per rotation and writes one `cycle_intent`
+    row per visit, so one timestamp per cycle is `MIN(ts)` grouped by `cycle`.
+    Only this registry's run is included: cycle numbers restart across sessions,
+    and mixing old runs would manufacture a cadence at a process restart. The
+    median gap over the recent cycles resists one stalled or one instant
+    rotation. Fewer than two distinct cycles means nothing to measure yet.
+
+    Never raises: this feeds the endgame gate (#240), which must fail OPEN on
+    unknown cadence, and a telemetry read must not break the rotation that
+    `_fleet_state` runs inside of. Any error -- no table yet, no handle,
+    no registry at all -- reads as "unknown".
+    """
+    if registry is None:
+        return None
+    try:
+        with registry._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT MIN(ts) AS t FROM cycle_intent
+                WHERE run_id = ?
+                GROUP BY cycle ORDER BY cycle DESC LIMIT ?
+                """,
+                (registry._run_id(), int(limit)),
+            ).fetchall()
+    except Exception:
+        return None
+    stamps = sorted(float(r[0]) for r in rows if r[0] is not None)
+    if len(stamps) < 2:
+        return None
+    gaps = [b - a for a, b in zip(stamps, stamps[1:]) if b >= a]
+    if not gaps:
+        return None
+    return float(statistics.median(gaps))

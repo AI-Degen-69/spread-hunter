@@ -1,8 +1,8 @@
-# Todo: Issue #243
+# Todo: Issue #240
 
-- [x] Task 1: [Design/UI] Add top-nav console strip and move status IDs (`dashboard/static/index.html`)
-- [x] Task 2: [Design/UI] Move run controls, dedupe sync button (`dashboard/static/index.html`)
-- [x] Task 3: [Design/UI] Style console responsive (`dashboard/static/styles.css`)
-- [x] Task 4: [Frontend/Logic] Defensive app.js guard + dead-handler cleanup + db-path tooltip (`dashboard/static/app.js`)
-- [x] Task 5: [Design/UI] Update prototype.js layout map (`dashboard/static/prototype.js`)
-- [x] Task 6: [Testing] Regression tests for console move (`tests/test_dashboard_server.py`)
+- [x] T1 — Cadence helper + test
+- [x] T2 — Config knobs + validation tests
+- [x] T3 — Real timing in `evaluate_market_quote`
+- [x] T4 — Per-cycle cadence attach
+- [x] T5 — Gate rule + numbered `why` reason
+- [x] T6 — S&P regression tests + full suite green

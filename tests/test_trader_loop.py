@@ -265,6 +265,9 @@ class FakeMarket:
         self.tick_size = 0.01
         self.neg_risk = False
 
+    def t_remaining(self, now=None):
+        return 14400.0
+
 
 class TestRunLoop:
     def _run(self, live, intents, fetch_raises=False, once=True):

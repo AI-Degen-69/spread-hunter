@@ -1,5 +1,6 @@
 """Unit tests for live_exec decide CLI verb."""
 import json
+import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -17,7 +18,7 @@ def mock_pinned_market():
         up_token="10439858151242",
         down_token="69795149601155",
         start_ts=1000.0,
-        end_ts=9999999.0,
+        end_ts=time.time() + 30 * 86400,
         tick_size=0.01,
         neg_risk=False,
     )

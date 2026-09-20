@@ -36,6 +36,10 @@ class FakeMarket:
     down_token = "tok-dn"
     market_slug = "fake-market"
 
+    @staticmethod
+    def t_remaining(now=None):
+        return 14400.0
+
 
 def _rows(db_path, table="queue_marks"):
     conn = sqlite3.connect(db_path)

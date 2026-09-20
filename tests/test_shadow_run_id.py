@@ -67,6 +67,9 @@ class FakeMarket:
         self.tick_size = 0.01
         self.neg_risk = False
 
+    def t_remaining(self, now=None):
+        return 14400.0
+
 
 def _book(_clob_host, token_id):
     return {"token_id": token_id, "bids": {0.50: 500.0}, "asks": {0.51: 500.0},
