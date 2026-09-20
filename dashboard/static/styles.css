@@ -129,6 +129,52 @@ header {
   flex-wrap: wrap;
 }
 
+/* ── Live ops console (top nav, #243): statuses + run controls stay visible
+   from every tab. Flex with wrap so narrow screens stack instead of scrolling
+   sideways; no grid tracks here so there is no fixed minmax floor. ── */
+.live-ops-console {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+.live-ops-console .console-stat {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9999px;
+  font-size: 12px;
+  min-width: 0;
+}
+.live-ops-console .console-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.live-ops-console .console-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-ops-console .pulse-dot.active {
+    animation-name: none;
+  }
+}
+
 /* DT3: Exposure indicator in top nav */
 .exposure-bar {
   display: flex;

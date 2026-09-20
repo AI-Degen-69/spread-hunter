@@ -873,8 +873,6 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
   const hudVenueSub = document.getElementById('hud-venue-sub');
   const hudGuardrailState = document.getElementById('hud-guardrail-state');
   const hudGuardrailSub = document.getElementById('hud-guardrail-sub');
-  const hudDbMode = document.getElementById('hud-db-mode');
-  const hudDbSub = document.getElementById('hud-db-sub');
 
   let activeCount = 0;
   if (status?.services) {
@@ -912,15 +910,6 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
     const alertsTotal = guardrailHealth?.alerts_total || 0;
     hudGuardrailSub.textContent = `${alertsTotal} violations logged`;
   }
-  if (hudDbMode) {
-    hudDbMode.textContent = isProd ? 'LIVE REGISTRY' : 'SHADOW REHEARSAL';
-    hudDbMode.style.color = isProd ? '#34d399' : '#fbbf24';
-  }
-  if (hudDbSub) {
-    const dbPath = status?.db_path || 'data/orders.db';
-    hudDbSub.textContent = dbPath.split(/[\\/]/).pop();
-  }
-
   if (masterDesc) {
     masterDesc.textContent = isRunning
       ? (isProd ? 'Live Execution Active · Quoting on Polymarket CLOB via Order Manager' : 'Shadow Rehearsal Active · Quoting simulated Polymarket candidates')
@@ -1129,24 +1118,6 @@ if (masterStopBtn && !masterStopBtn.dataset.wired) {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>
         STOP RUN`;
       await pollStatus();
-    }
-  });
-}
-
-const btnLiveSync = document.getElementById('btn-live-sync');
-if (btnLiveSync && !btnLiveSync.dataset.wired) {
-  btnLiveSync.dataset.wired = 'true';
-  btnLiveSync.addEventListener('click', async () => {
-    try {
-      btnLiveSync.disabled = true;
-      btnLiveSync.classList.add('syncing');
-      await controlFetch('/api/system/sync');
-    } catch (e) {
-      console.error('Venue sync error:', e);
-    } finally {
-      btnLiveSync.classList.remove('syncing');
-      btnLiveSync.disabled = false;
-      pollStatus();
     }
   });
 }
