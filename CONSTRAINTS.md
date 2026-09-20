@@ -22,3 +22,13 @@
 - Do not change backend KPI calculations or add an endpoint; consume the existing top-level `kpi.equity_series` payload.
 - Do not add external dependencies or change the chart timeframe/control contract.
 - Do not skip or weaken existing assertions, and do not use fake/synthetic equity points in the production chart path.
+
+## Constraints: Issue #248 — Expectancy vs mean-return audit
+- Zero regressions: focused four-file selection (`tests/test_trade_analytics.py`, `tests/test_mean_pnl_ci.py`, `tests/test_seed_preview_fixture.py`, `tests/test_analytics_api.py`) must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): companion fields, regression fixture, explainer copy.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- Formulas `expectancy_usd`, `mean_return_pct`, `ci90_lower_pct` MUST NOT change; gate verdict (`passed`) provably identical. New fields are display-only companions.
+- Missing or non-positive `cost_basis` stays excluded from percent calculations and renders as unmeasured — never a fabricated zero.
+- Pinned dashboard tile labels ("Average Profit Per Close", "Mean Return Per Trade") stay unchanged; only explainer copy and sublabels added.
+- No new external dependencies; no live-trading, execution, risk-cap, or threshold changes.
+

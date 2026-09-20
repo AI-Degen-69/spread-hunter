@@ -112,3 +112,22 @@ def test_the_tier_1_row_has_styling_of_its_own(styles_css):
     # Tier 1 is a distinct band above the decks, not another card in the grid.
     for selector in (".tier1-decision-row", ".pnl-ci-verdict", ".funnel-bar-fill"):
         assert selector in styles_css
+
+
+# -- Issue #248: the $ vs % sign divergence explains itself -------------------
+
+def test_expectancy_tiles_explain_the_dollar_vs_percent_sign_gap(app_js):
+    # Both grids carry the click-triggered explainer; pinned labels stay put.
+    assert "Why can $ and % disagree?" in app_js
+    assert "percents average % per close over measured closes only" in app_js
+    assert "Average Profit Per Close" in app_js
+    assert "Mean Return Per Trade" in app_js
+
+
+def test_expectancy_tiles_show_the_companion_sublabels(app_js):
+    # Dollar-weighted bridge + measured-count coverage on both surfaces.
+    assert "dollar-weighted" in app_js
+    assert "dollar-weighted unmeasured" in app_js
+    assert "n_measured_returns" in app_js
+    assert "dollar_weighted_return_pct" in app_js
+    assert "measured" in app_js

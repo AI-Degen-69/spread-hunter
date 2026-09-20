@@ -2217,12 +2217,17 @@ function renderQuantRiskGrid(ta, p, stats) {
   const halfKelly = ta.half_kelly != null && n > 0 ? `${(ta.half_kelly * 100).toFixed(1)}%` : '0.0%';
   const profitFactor = ta.profit_factor != null && n > 0 ? `${ta.profit_factor.toFixed(2)}x` : '0.00x';
   const payoffRatio = ta.payoff_ratio != null && n > 0 ? `${ta.payoff_ratio.toFixed(2)}x` : '0.00x';
+  // Issue #248 companions: the percent number may see fewer closes than the
+  // dollar number, and the dollar-weighted percent bridges the sign gap.
+  const nMeas = ta.n_measured_returns != null ? ta.n_measured_returns : null;
+  const dwRet = ta.dollar_weighted_return_pct != null && n > 0
+    ? `${ta.dollar_weighted_return_pct.toFixed(2)}%` : null;
 
   container.innerHTML = `
     <div class="quant-tile">
-      <div class="quant-label">Mathematical Expectancy</div>
+      <div class="quant-label">Mathematical Expectancy <span class="info-bubble" title="Why can $ and % disagree?">?</span><span class="info-tooltip">Dollars average $ per close over ALL closes; percents average % per close over measured closes only. A small trade with a big % loss can pull % negative while larger-$ wins keep $ positive.</span></div>
       <div class="quant-value ${n > 0 ? signClass(ta.expectancy_usd) : ''}">${esc(expectancy)}</div>
-      <div class="quant-sub">${esc(meanRet)} mean return / trade</div>
+      <div class="quant-sub">${esc(meanRet)} mean return / trade${dwRet != null ? ` · ${esc(dwRet)} dollar-weighted` : ' · dollar-weighted unmeasured'}${nMeas != null ? ` · ${nMeas}/${n} measured` : ''}</div>
     </div>
     <div class="quant-tile">
       <div class="quant-label">95% Value at Risk (1D)</div>
@@ -3113,17 +3118,21 @@ function renderAnalyticsSurface(kpi, status) {
   const winRate = ta.win_rate != null ? ta.win_rate * 100 : (n > 0 ? 0.0 : 0.0);
   const lower = ta.ci90_lower_pct != null ? ta.ci90_lower_pct : 0.00;
   const progressPct = Math.min(100, Math.round((n / required) * 100));
+  // Issue #248 companions (display-only): bridge the $ vs % sign gap.
+  const nMeasKpi = ta.n_measured_returns != null ? ta.n_measured_returns : null;
+  const dwRetKpi = ta.dollar_weighted_return_pct != null && n > 0
+    ? fmtPct(ta.dollar_weighted_return_pct) : null;
 
   grid.innerHTML = `
     <div class="kpi-tile">
-      <div class="kpi-label">Average Profit Per Close</div>
+      <div class="kpi-label">Average Profit Per Close <span class="info-bubble" title="Why can $ and % disagree?">?</span><span class="info-tooltip">Dollars average $ per close over ALL closes; percents average % per close over measured closes only. A small trade with a big % loss can pull % negative while larger-$ wins keep $ positive.</span></div>
       ${fmtVal(ta.expectancy_usd != null && n > 0 ? fmtSignedUSD(ta.expectancy_usd) : '$0.000', n > 0 ? ' ' + signClass(ta.expectancy_usd) : '')}
       <div class="hint">Spread capture net of slippage</div>
     </div>
     <div class="kpi-tile">
       <div class="kpi-label">Mean Return Per Trade</div>
       ${fmtVal(ta.mean_return_pct != null && n > 0 ? fmtPct(ta.mean_return_pct) : '0.00%', n > 0 ? ' ' + signClass(ta.mean_return_pct) : '')}
-      <div class="hint">± ${ta.stdev_return_pct != null && n > 0 ? Number(ta.stdev_return_pct).toFixed(2) + '%' : '0.00%'} (σ)</div>
+      <div class="hint">± ${ta.stdev_return_pct != null && n > 0 ? Number(ta.stdev_return_pct).toFixed(2) + '%' : '0.00%'} (σ)${dwRetKpi != null ? ` · ${dwRetKpi} dollar-weighted` : ' · dollar-weighted unmeasured'}</div>
     </div>
     <div class="kpi-tile">
       <div class="kpi-label">Annualized Sharpe Ratio</div>
@@ -3132,7 +3141,7 @@ function renderAnalyticsSurface(kpi, status) {
     </div>
     <div class="kpi-tile">
       <div class="kpi-label">Executed Sample Size</div>
-      ${fmtVal(`${n} Closes (${wins}W / ${losses}L)`)}
+      ${fmtVal(`${n} Closes (${wins}W / ${losses}L)${nMeasKpi != null ? ` · ${nMeasKpi} measured` : ''}`)}
       <div class="hint">Empirical Win Rate: ${n > 0 ? winRate.toFixed(1) + '%' : '0.0%'}</div>
     </div>
   `;

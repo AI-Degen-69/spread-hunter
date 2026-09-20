@@ -349,6 +349,20 @@ def compute_trade_analytics(
 
     expectancy_usd = statistics.mean(wins + losses) if n else None
     mean_return_pct = statistics.mean(return_pcts) if return_pcts else None
+    # Companion fields (display-only, never gate inputs): how many closes the
+    # percent mean actually sees, and the dollar-weighted percent over the same
+    # measured population. NULL when unmeasurable, never a fabricated zero.
+    n_measured_returns = len(return_pcts) if n else None
+    dollar_weighted_return_pct: Optional[float] = None
+    if n:
+        _measured = [
+            (float(c.get("realized_pnl") or 0.0), float(c.get("cost_basis")))
+            for c in closes
+            if c.get("cost_basis") is not None and float(c.get("cost_basis")) > 0
+        ]
+        _meas_cost = sum(cost for _, cost in _measured)
+        if _measured and _meas_cost > 0:
+            dollar_weighted_return_pct = 100.0 * sum(pnl for pnl, _ in _measured) / _meas_cost
     stdev_return_pct = statistics.stdev(return_pcts) if len(return_pcts) > 1 else None
 
     ci90_lower_pct: Optional[float] = None
@@ -421,6 +435,8 @@ def compute_trade_analytics(
         "win_rate_ci95": win_rate_ci95,
         "expectancy_usd": expectancy_usd,
         "mean_return_pct": mean_return_pct,
+        "n_measured_returns": n_measured_returns,
+        "dollar_weighted_return_pct": dollar_weighted_return_pct,
         "stdev_return_pct": stdev_return_pct,
         "ci90_lower_pct": ci90_lower_pct,
         "ci95_return_pct": ci95_return_pct,
