@@ -1,56 +1,39 @@
-# Execution Plan: Issue #243 — Consolidate live operations statuses and buttons into top nav bar
+# Plan: Issue #240 — End-of-window proximity gate
 
-## Classification & Stack
-- **Size Tier:** Standard — 4 files (index.html, styles.css, app.js defensive guard, prototype.js), one layout decision; no new dependency, no schema change.
-- **Task Domain:** `[Design/UI]` primary + `[Frontend/Logic]` (defensive guard only).
-- **Stack:** Python 3.11+, FastAPI dashboard server, Vanilla JS + HTML5 + CSS3, pytest + node JS harnesses (`pytest.ini`: testpaths=tests).
+Size: **Standard** (5 modules + tests, one architectural decision: refuse-vs-deepen default). Task type: **Code + Security** (risk-tightening gate).
+Stack: Python, pytest. Live-money safety rules apply (no opening commands; read-only verification).
 
-## Context & Problem
-The dashboard opens with a large `#live-ops-master-card` hero (`index.html:107`) duplicating what the top nav (`header`, `index.html:58`) partly shows. The operator wants statuses + START/STOP/SYNC in the nav from every tab, freeing space and removing duplicate sources of truth (`#btn-sync` vs `#btn-live-sync` both calling `/api/system/sync`; `#db-mode-badge` vs `#hud-db-mode`). `app.js` finds everything by `getElementById` (app.js:837-842, 870-877, 1064-1152), so moving IDs unchanged keeps behavior identical.
+## Tasks
 
-## Interface Contracts (locked before logic)
-- HTML IDs moved unchanged and unique: `#master-status-indicator`, `#hud-engine-state`, `#hud-engine-sub`, `#hud-venue-mode`, `#hud-venue-sub`, `#hud-guardrail-state`, `#hud-guardrail-sub`, `#live-ops-pulse-dot`, `#master-status-desc`, `#runtime-last-sync`, `#btn-master-start`, `#btn-master-stop`; single sync `#btn-sync` labeled "SYNC VENUE"; `#db-mode-badge` stays in `.top-meta`.
-- Removed: `#hud-db-mode`, `#hud-db-sub` (folded into `#db-mode-badge` title), `#btn-live-sync` (markup + handler).
-- JS: `renderServiceCards` null-guards `#hud-db-mode`/`#hud-db-sub`; `dataset.wired` handler pattern untouched for start/stop; control endpoints `/api/system/start|stop|sync` unchanged.
-- CSS: new `.live-ops-console` (flex, wrap, gap, touch-min, reduced-motion); shrinkable grid tracks only.
-- `prototype.js` `PAGE_LAYOUT[home].selectors`: drop `#live-ops-master-card`, point at console/persisted panels.
+### T1 [Backend/Logic] — Cadence helper in `order_registry.py`
+Read-only query over recent `cycle_intent` rows; median gap between consecutive distinct `cycle` timestamps; `None` when too few rows. Follow `registry_committed_usd` aggregate style.
+- Files: `core_brain/order_registry.py`, `tests/test_endgame_gate.py` (new)
+- Verify: pytest cadence test (known timestamps → expected value; sparse rows → `None`).
 
----
+### T2 [Backend/Logic] — Gate config knobs in `config.py`
+`MakerConfig` fields next to `quote_window_frac`/`enforce_quote_window`: `enforce_endgame_gate=False`, `endgame_horizon_min`, `endgame_max_cadence_sec`, `endgame_action="refuse"`, `endgame_deepen_offset`, `observed_cadence_sec=None`. `HUNTER_*` overrides via `_bounded_float` (numerics) + `enable_pairs_rule` idiom (bool/string). `ValueError` naming the env var on bad values. Comment block pointing to the loss post-mortem.
+- Files: `core_brain/config.py`, `tests/test_endgame_gate.py`
+- Verify: pytest config defaults/overrides/validation tests.
 
-## Tasks (all 6 done [x] on feat/243-top-nav-console)
+### T3 [Backend/Logic] — Real timing in `evaluate_market_quote`
+Compute `t_remaining` from the fetched `market` object (drop fake `1e9`); `window_frac` only for the 5-min series, else `None`. Callers unchanged.
+- Files: `core_brain/quotes.py`
+- Verify: pytest (regression test in T6 covers it; existing quote tests green).
 
-### Task 1: [Design/UI] Add top-nav console strip and move status IDs
-- **Target Files:** `dashboard/static/index.html` (header ~line 58)
-- **Helper Skill:** `frontend-ui-engineering`
-- **Description:** Add console row inside `<header>` below `.top-meta`; move the 10 status IDs unchanged from the hero into compact pills/tiles following `.pill`/`.kpi-tile`; keep `#db-mode-badge` in `.top-meta`; keep each ID unique.
-- **Verification:** `rg 'id="hud-engine-state"' dashboard/static/index.html` shows one hit inside `<header>`; python HTML slice test for `#db-mode-badge` in `.top-meta`.
+### T4 [Backend/Logic] — Per-cycle cadence attach in `trader_loop.py`
+Call T1 helper once per rotation; merge onto per-market config in `_market_cfg` (same pattern as `fleet_posture`).
+- Files: `core_brain/trader_loop.py`
+- Verify: pytest trader-loop tests green + new test asserting the value lands on the config.
 
-### Task 2: [Design/UI] Move run controls, dedupe sync button
-- **Target Files:** `dashboard/static/index.html`
-- **Helper Skill:** `frontend-ui-engineering`
-- **Description:** Move `#btn-master-start`/`#btn-master-stop` markup into the console unchanged; relabel `#btn-sync` to "SYNC VENUE"; delete `#btn-live-sync`; keep `#btn-reset`/`#btn-cancel-all` separate from STOP.
-- **Verification:** grep: one `id="btn-sync"`, zero `btn-live-sync` in HTML; contract test `test_frontend_control_surface_is_expected` passes.
+### T5 [Backend/Logic] — Gate rule in `_decide_quotes_from_mid`
+Per-side loop near the `strict_paired_inventory` block. Fires iff enabled + `t_remaining/60 ≤ horizon` + cadence known and above budget. Light-side balancing (`risk.naked_side`) always allowed; new-exposure sides (`inv.avg(other_side) <= 0`) refused or deepened via existing offset pipeline + clamp. `why` reason carries `endgame_gate` **plus the measured numbers** (minutes-to-resolution, cadence) so shadow runs can count firings.
+- Files: `core_brain/quotes.py`
+- Verify: pytest regression tests (T6).
 
-### Task 3: [Design/UI] Style console responsive
-- **Target Files:** `dashboard/static/styles.css` (near header/`.top-meta` ~line 132)
-- **Helper Skill:** `frontend-ui-engineering`
-- **Description:** Add `.live-ops-console` with `display:flex; flex-wrap:wrap; gap`; touch-min buttons; reuses pill colors; reduced-motion override; shrinkable tracks only (`minmax(0,1fr)` / `minmax(min(Npx,100%),1fr)`).
-- **Verification:** `python -m pytest -q tests/test_dashboard_narrow_viewport.py`; manual resize 1440/768/320 no horizontal scroll.
+### T6 [Backend/Logic] — S&P 2026-09-18 regression tests
+Flat `Inventory()`, hand-built books, `t_remaining≈32min`, cadence `≈210s`: gate-on refuses/deepens, gate-off posts (fails without change). Second case: unhedged inventory → balancing quote allowed.
+- Files: `tests/test_endgame_gate.py`
+- Verify: pytest new tests green; full `python -m pytest -q` green (agent-run).
 
-### Task 4: [Frontend/Logic] Defensive app.js guard + dead-handler cleanup + db-path tooltip
-- **Target Files:** `dashboard/static/app.js` (~lines 876-922, 1136-1152)
-- **Helper Skill:** `test-driven-development`
-- **Description:** Null-guard `#hud-db-mode`/`#hud-db-sub` reads in `renderServiceCards`; delete `#btn-live-sync` click handler; write `status.db_path` filename into `#db-mode-badge` title (keeps registry path visible after hero removal).
-- **Verification:** node fake-DOM harness `test_master_stop_button_state_management` passes; grep zero `getElementById('btn-live-sync')` writers without guard.
-
-### Task 5: [Design/UI] Update prototype.js layout map
-- **Target Files:** `dashboard/static/prototype.js` (~line 45)
-- **Helper Skill:** `frontend-ui-engineering`
-- **Description:** Remove/replace `#live-ops-master-card` in `PAGE_LAYOUT[home].selectors` so the rail no longer targets a missing node (skipped-selector fallback must not hide the console).
-- **Verification:** `python -m pytest -q tests/test_sidebar_prototype.py`.
-
-### Task 6: [Testing] Regression tests for console move
-- **Target Files:** `tests/test_dashboard_server.py` (extend near nav-pill/master-stop tests)
-- **Helper Skill:** `test-driven-development`
-- **Description:** Assert console IDs live inside `<header>` slice, `#db-mode-badge` still in `.top-meta`, each moved ID appears exactly once, `kpi-grid` still present, no `btn-live-sync`; test fails on pre-change HTML.
-- **Verification:** targeted `python -m pytest -q tests/test_dashboard_server.py tests/test_dashboard_narrow_viewport.py tests/test_ts_frontend_contract.py tests/test_sidebar_prototype.py`, then full `python -m pytest -q` (run by agent at build time, never handed to operator).
+## Improvement proposal (adopted by default)
+The `why` reason will include the measured minutes-to-resolution and cadence values, not just the `endgame_gate` tag — otherwise shadow runs can see the gate fired but cannot measure its firing rate (issue Phase 3 Task 4 demands measurable shadow visibility).
