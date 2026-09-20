@@ -1153,7 +1153,7 @@ def _fleet_state(registry, cfg) -> dict:
     from core_brain.unhedged_stop_loss import fleet_posture
     from core_brain.markout import fleet_stats
     from core_brain.order_registry import (
-        registry_committed_usd, registry_naked_usd,
+        registry_committed_usd, registry_cycle_cadence_sec, registry_naked_usd,
     )
     from core_brain.config import derive_dynamic_caps
 
@@ -1206,6 +1206,9 @@ def _fleet_state(registry, cfg) -> dict:
         "committed_usd": registry_committed_usd(registry),
         "fleet_posture": fleet_posture(
             fleet_stats(registry, cfg.markout_fleet_min_sample), cfg),
+        # Feeds the endgame gate (#240). None when unmeasurable; the gate
+        # fails open on None.
+        "observed_cadence_sec": registry_cycle_cadence_sec(registry),
         **dynamic_caps,
     }
 
