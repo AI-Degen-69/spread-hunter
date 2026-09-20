@@ -1,13 +1,13 @@
 # Plan: Issue #254 — Speed up Windows pytest CI job (~10 min → under ~4 min)
 
-Size: **Small** (one workflow file; approach is straightforward once the slowest test files are measured).
+Size: **Small** (workflow + duration-balanced sharder; approach straightforward once slowest files are measured).
 Task type: **Performance** (CI execution strategy; no product-code change).
 
 ## Context
 
-The `tests` workflow (`.github/workflows/tests.yml:17-44`) runs the entire suite —
-143 test files, 2193 tests, single process, no parallelism — on both
-`ubuntu-latest` and `windows-latest`. Observed on PR #253: Ubuntu finishes in
+On the `main` baseline at PR #253 the `tests` workflow (`.github/workflows/tests.yml:17-44`) ran the entire suite —
+145 test files, 2193 tests, single process, no parallelism — on both
+`ubuntu-latest` and `windows-latest`. Observed there: Ubuntu finishes in
 ~1-2 min, Windows takes ~9-14 min (9m28s, 12m13s, 14m18s on rerun), so the
 Windows job dominates every babysit/merge wait. Same run also flaked once on the
 timing-sensitive `stale` assertion (`tests/test_seed_preview_fixture.py:110`)

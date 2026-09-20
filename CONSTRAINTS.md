@@ -42,7 +42,7 @@
 - No new external dependencies; no live-trading, execution, risk-cap, or threshold changes.
 
 ## Constraints: Issue #254 - Speed up Windows pytest CI job
-- Zero regressions: the full suite (all 143 test files, 2193 tests) still runs and passes on both Ubuntu and Windows; `gh pr checks` green is the merge gate.
+- Zero regressions: the full suite (all 145 test files, 2193 tests) still runs and passes on both Ubuntu and Windows; `gh pr checks` green is the merge gate.
 - Anti-Cheat: strictly forbid skipping tests, deleting assertions, lowering coverage, or weakening the timing-sensitive `stale` assertion in `tests/test_seed_preview_fixture.py` to make CI faster.
 - No product-code changes: only `.github/workflows/tests.yml`, CI tooling under `scripts/ci/`, and `pytest.ini` if needed may change; `core_brain/*`, `dashboard/*`, and test files stay untouched.
 - No new dependencies of any kind — not even dev-only (no `pytest-xdist` without explicit operator approval); the speedup must come from job structure, not new packages.
