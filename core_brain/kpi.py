@@ -308,6 +308,35 @@ def evaluate_stat_gate(
     return result
 
 
+def _var_cvar_usd(
+    return_pcts: list[float], costs: list[float]
+) -> tuple[Optional[float], Optional[float]]:
+    """Historical 95% VaR and CVaR as positive loss magnitudes, in dollars.
+
+    VaR is the linearly interpolated 5th percentile of the measured per-close
+    return distribution; CVaR is the mean of the tail at or below it. Both are
+    converted to dollars through the mean cost basis of the same closes, so a
+    "5% worst day costs about $4" reads in the same units as the P&L tiles.
+
+    NULL below ``MIN_RISK_SAMPLE`` measured returns: a 5% tail needs at least
+    one observation, and the mean cost basis needs at least one close.
+    """
+    if len(return_pcts) < MIN_RISK_SAMPLE or not costs:
+        return None, None
+    mean_cost = statistics.mean(costs)
+    if mean_cost <= 0:
+        return None, None
+    ordered = sorted(return_pcts)
+    pos = 0.05 * (len(ordered) - 1)
+    lo = int(math.floor(pos))
+    frac = pos - lo
+    p5 = (ordered[lo] + frac * (ordered[lo + 1] - ordered[lo])
+          if lo + 1 < len(ordered) else ordered[-1])
+    tail = [r for r in ordered if r <= p5]
+    cvar_pct = statistics.mean(tail) if tail else p5
+    return -p5 / 100.0 * mean_cost, -cvar_pct / 100.0 * mean_cost
+
+
 def compute_trade_analytics(
     closes: list[dict],
     starting_capital: float,
@@ -419,31 +448,11 @@ def compute_trade_analytics(
         kelly_fraction = win_rate - (1.0 - win_rate) / payoff_ratio
         half_kelly = kelly_fraction / 2.0
 
-    # Historical VaR / CVaR on the measured per-close return distribution:
-    # interpolated 5th percentile, and the mean of the tail at or below it,
-    # converted to dollars through the mean measured cost basis. Both are
-    # reported as positive loss magnitudes; a profitable tail simply reports
-    # a small number. NULL below MIN_RISK_SAMPLE measured returns.
-    var_95_usd: Optional[float] = None
-    cvar_95_usd: Optional[float] = None
-    if len(return_pcts) >= MIN_RISK_SAMPLE:
-        ordered = sorted(return_pcts)
-        pos = 0.05 * (len(ordered) - 1)
-        lo = int(math.floor(pos))
-        frac = pos - lo
-        if lo + 1 < len(ordered):
-            p5 = ordered[lo] + frac * (ordered[lo + 1] - ordered[lo])
-        else:
-            p5 = ordered[-1]
-        tail = [r for r in ordered if r <= p5]
-        cvar_pct = statistics.mean(tail) if tail else p5
-        mean_cost = (
-            statistics.mean(cost for _, cost in _measured_pairs)
-            if _measured_pairs else None
-        )
-        if mean_cost is not None and mean_cost > 0:
-            var_95_usd = -p5 / 100.0 * mean_cost
-            cvar_95_usd = -cvar_pct / 100.0 * mean_cost
+    # Historical VaR / CVaR on the measured per-close return distribution,
+    # converted to dollars through the mean measured cost basis (see
+    # `_var_cvar_usd`). Both report as positive loss magnitudes.
+    var_95_usd, cvar_95_usd = _var_cvar_usd(
+        return_pcts, [cost for _, cost in _measured_pairs])
 
     # Per-trade Sharpe/Sortino on the return distribution (no annualisation:
     # trades are not daily observations, and annualising a 3-trade sample would
