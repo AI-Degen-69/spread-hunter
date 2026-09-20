@@ -1460,15 +1460,30 @@ function renderBrokerPortfolioOverview(kpi, status) {
 }
 
 function brokerPointLabel(entry, fallback) {
-  const ts = Number(entry && entry.ts);
-  return Number.isFinite(ts) ? new Date(ts * 1000).toISOString() : fallback;
+  const rawTs = entry && entry.ts;
+  if (rawTs === null || rawTs === undefined
+      || (typeof rawTs === 'string' && rawTs.trim() === '')) return fallback;
+  const ts = Number(rawTs);
+  const date = new Date(ts * 1000);
+  return Number.isFinite(ts) && Number.isFinite(date.getTime()) ? date.toISOString() : fallback;
 }
 
-function buildBrokerEquitySeries(kpi, startingCap, totalVal) {
-  const closes = (Array.isArray(kpi?.equity_series) ? kpi.equity_series : [])
+function buildBrokerEquitySeries(kpi, startingCap, totalVal, timeframe = 'ALL') {
+  const windows = { '1D': 86400, '1W': 604800, '1M': 2592000 };
+  const allCloses = (Array.isArray(kpi?.equity_series) ? kpi.equity_series : [])
     .filter(entry => entry && entry.type === 'close' && Number.isFinite(Number(entry.v)))
     .slice()
     .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
+  const validTimestamps = allCloses.map(entry => Number(entry.ts))
+    .filter(ts => Number.isFinite(ts));
+  const latestTs = validTimestamps.length ? Math.max(...validTimestamps) : null;
+  const windowSec = windows[timeframe];
+  const closes = windowSec === undefined || latestTs === null
+    ? allCloses
+    : allCloses.filter(entry => {
+      const ts = Number(entry.ts);
+      return !Number.isFinite(ts) || ts >= latestTs - windowSec;
+    });
   const points = [{ label: 'Start', v: startingCap }];
   closes.forEach((entry, index) => {
     const point = {
@@ -1493,7 +1508,7 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
   const { startingCap, totalVal: currentTotal } = portfolioEquity(
     kpi, lastStartingCapital === null ? null : { starting_capital: lastStartingCapital });
 
-  const series = buildBrokerEquitySeries(kpi, startingCap, currentTotal);
+  const series = buildBrokerEquitySeries(kpi, startingCap, currentTotal, timeframe);
 
   const w = 800;
   const h = 230;

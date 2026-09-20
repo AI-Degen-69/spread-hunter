@@ -71,6 +71,7 @@ const chartSeries = app.buildBrokerEquitySeries(
   input.kpi,
   basis.startingCap,
   basis.totalVal,
+  input.timeframe || 'ALL',
 );
 
 process.stdout.write(JSON.stringify({

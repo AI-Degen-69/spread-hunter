@@ -30,7 +30,8 @@ WALLET = STARTING
 
 
 def _render(portfolio: dict, starting_capital: float | None = STARTING,
-            equity_series: list[dict] | None = None) -> dict:
+            equity_series: list[dict] | None = None,
+            timeframe: str = "ALL") -> dict:
     payload = {
         "kpi": {
             "portfolio": portfolio,
@@ -38,6 +39,7 @@ def _render(portfolio: dict, starting_capital: float | None = STARTING,
             "equity_series": equity_series or [],
         },
         "status": None if starting_capital is None else {"starting_capital": starting_capital},
+        "timeframe": timeframe,
     }
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
                          capture_output=True, text=True, check=True)
@@ -135,7 +137,7 @@ def test_chart_series_uses_real_closes_and_current_value():
 
 
 def test_chart_series_is_flat_when_there_are_no_closes():
-    card = _render(_shadow_portfolio(total_value=STARTING), equity_series=[
+    card = _render(_shadow_portfolio(total_value=90.0), equity_series=[
         {"type": "mark", "ts": 1_700_000_000, "v": 90.0},
     ])
 
@@ -143,3 +145,17 @@ def test_chart_series_is_flat_when_there_are_no_closes():
         {"label": "Start", "v": pytest.approx(STARTING)},
         {"label": "Current", "v": pytest.approx(STARTING)},
     ]
+
+
+def test_chart_timeframe_filters_close_entries():
+    equity_series = [
+        {"type": "close", "ts": 1_699_900_000, "v": 85.70},
+        {"type": "close", "ts": 1_700_086_400, "v": 86.10},
+    ]
+
+    card = _render(_shadow_portfolio(total_value=86.10), equity_series=equity_series,
+                   timeframe="1D")
+
+    assert [point["v"] for point in card["chart_series"]] == pytest.approx([
+        STARTING, 86.10, 86.10,
+    ])
