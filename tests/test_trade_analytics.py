@@ -367,6 +367,16 @@ def test_companion_fields_never_feed_the_go_no_go_gate():
     assert gate_keys <= set(ta)
     assert ta["ci90_lower_pct"] is not None
     assert "passed" not in ta  # the verdict lives in the gate fn, not here
+    # The real GO/NO-GO verdict on the same closes is negative — and the
+    # display-only companions cannot move it: stripping them changes nothing.
+    gate_closes = [dict(c) for c in closes]
+    verdict_with = kpi_mod.evaluate_stat_gate(
+        gate_closes, starting_capital=100.0)
+    assert verdict_with["passed"] is False
+    stripped = [dict(c) for c in closes]
+    verdict_without = kpi_mod.evaluate_stat_gate(
+        stripped, starting_capital=100.0)
+    assert verdict_without == verdict_with
     # Companions exist alongside the gate inputs without replacing any of them.
     assert ta["n_measured_returns"] == 2
     assert ta["dollar_weighted_return_pct"] is not None

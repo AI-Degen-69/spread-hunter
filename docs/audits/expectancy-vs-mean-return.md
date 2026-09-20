@@ -4,6 +4,10 @@ Screenshot case: **+$0.11** average close / expectancy alongside **−0.70%**
 Mean Return Per Trade. Both numbers are correct for their names — they average
 different things over different populations.
 
+> Shape note: the +$0.11/−0.70% pair is the operator's screenshot, not a
+> fixture output. The deterministic regression below is the same shape at a
+> readable scale: **+$0.15** expectancy with **−9.75%** mean return.
+
 ## Metric table
 
 | Metric | Numerator | Denominator | Population | Weighting | Sign interpretation |
