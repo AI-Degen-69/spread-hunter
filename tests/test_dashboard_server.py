@@ -1358,6 +1358,38 @@ def test_scan_state_pill_in_top_nav_bar():
     assert 'scan-snapshot-age' in screener_hdr
 
 
+def test_live_ops_console_in_top_nav_bar():
+    """Live-ops console lives in <header>; hero card and duplicate IDs are gone (#243)."""
+    html = _read_static("index.html")
+    header = html.split("</header>", 1)[0]
+    assert "live-ops-console" in header
+
+    moved_ids = (
+        "master-status-indicator",
+        "hud-engine-state",
+        "hud-engine-sub",
+        "hud-venue-mode",
+        "hud-venue-sub",
+        "hud-guardrail-state",
+        "hud-guardrail-sub",
+        "live-ops-pulse-dot",
+        "master-status-desc",
+        "runtime-last-sync",
+        "btn-master-start",
+        "btn-master-stop",
+    )
+    for element_id in moved_ids:
+        assert f'id="{element_id}"' in header
+        assert html.count(f'id="{element_id}"') == 1
+
+    assert "SYNC VENUE" in header
+    assert "btn-live-sync" not in html
+    assert "live-ops-master-card" not in html
+    assert "hud-db-mode" not in html
+    # Milestone 8 guard: the kpi-grid string must survive the hero removal.
+    assert "kpi-grid" in html
+
+
 def test_app_js_formats_heartbeat_duration_as_minutes():
     """app.js formats heartbeat duration over 60s as minutes and provides tooltip (#225)."""
     app_js = _read_static("app.js")
