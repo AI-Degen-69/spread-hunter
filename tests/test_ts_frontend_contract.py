@@ -32,11 +32,10 @@ def test_every_frontend_call_is_served_by_python():
 
 
 def test_frontend_control_surface_is_expected():
-    """The POST control surface is exactly the 6 endpoints the menu supports."""
+    """The POST control surface is exactly the controls the menu supports."""
     calls = _frontend_api_calls()
     control = {c for c in calls if "/system/" in c}
     assert control == {
-        "/api/system/cancel-all",
         "/api/system/reset",
         "/api/system/service/start",
         "/api/system/service/stop",

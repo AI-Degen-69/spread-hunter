@@ -5,7 +5,6 @@
  *   GET  /api/system/status    — service PIDs, bot state, starting capital
  *   POST /api/system/start     — start bot stack (atomic)
  *   POST /api/system/stop      — stop bot stack
- *   POST /api/system/cancel-all — cancel all venue orders (DT7: typed confirm)
  *   GET  /api/kpi              — all Tab 2 analytics
  *   GET  /api/scan-state       — SCANNING/IDLE/STALLED
  *   GET  /api/pairs-activity   — auto-pairs counts
@@ -102,6 +101,11 @@ function statePillHtml(state, ageSec) {
   return `<span class="pill state-${state}">${dot}${label}${age}</span>`;
 }
 
+function processState(running, unknown) {
+  if (unknown) return 'unknown';
+  return running ? 'running' : 'stopped';
+}
+
 /* Rotation takes ~45-55s on shadow public CLOB queries; calibrated so a normal
  * rotation stays RUNNING without a false DEGRADED at the 15s default. */
 const SCAN_PILL_THRESHOLDS = { degraded: 60, down: 120 };
@@ -153,7 +157,7 @@ function scanIntervalSec(status) {
  * out of a missing file is the same lie in the other direction. */
 function marketScanState(status, kpi) {
   if (!status || status.registry_unreadable) {
-    return { state: 'unknown', label: 'SCAN --',
+    return { state: 'unknown', label: 'SCAN UNKNOWN',
              title: 'Cannot read the process registry, so the state of the Market Filter is unknown.' };
   }
   const svc = (status.services || {}).filter || {};
@@ -163,14 +167,14 @@ function marketScanState(status, kpi) {
   }
   const age = kpi && kpi.funnel ? kpi.funnel.snapshot_age : null;
   if (age === null || age === undefined) {
-    return { state: 'degraded', label: 'SCAN NO DATA', ageSec: null,
+    return { state: 'degraded', label: 'SCAN DEGRADED', ageSec: null,
              title: 'The Market Filter is running but has not written runtime/pipeline.json yet.' };
   }
   if (age > scanIntervalSec(status) * 2) {
-    return { state: 'degraded', label: 'SCAN STALE', ageSec: age,
+    return { state: 'degraded', label: 'SCAN DEGRADED', ageSec: age,
              title: 'The Market Filter is running, but its last snapshot is older than two scan cycles.' };
   }
-  return { state: 'running', label: 'SCAN LIVE', ageSec: age,
+  return { state: 'running', label: 'SCAN RUNNING', ageSec: age,
            title: 'The Market Filter is running and its snapshot is fresh.' };
 }
 
@@ -362,50 +366,10 @@ tabBtns.forEach(b => {
 const savedTab = parseInt(localStorage.getItem('sh-active-tab') || '1', 10);
 switchTab(savedTab === 2 ? 2 : (savedTab === 3 ? 3 : 1));
 
-/* ── Cancel-all modal (DT7: typed confirm) ── */
-const cancelModal = document.getElementById('cancel-modal');
-const cancelInput = document.getElementById('cancel-input');
-const cancelConfirmBtn = document.getElementById('cancel-modal-confirm');
-const cancelCloseBtn = document.getElementById('cancel-modal-close');
-const cancelBtn = document.getElementById('btn-cancel-all');
-
-cancelBtn.addEventListener('click', () => {
-  cancelInput.value = '';
-  cancelConfirmBtn.disabled = true;
-  cancelModal.classList.add('show');
-  cancelInput.focus();
-});
-
-cancelCloseBtn.addEventListener('click', () => cancelModal.classList.remove('show'));
-
-cancelInput.addEventListener('input', () => {
-  cancelConfirmBtn.disabled = (cancelInput.value.trim().toUpperCase() !== 'CANCEL');
-});
-
-cancelConfirmBtn.addEventListener('click', async () => {
-  if (cancelInput.value.trim().toUpperCase() !== 'CANCEL') return;
-  cancelConfirmBtn.disabled = true;
-  cancelConfirmBtn.textContent = 'Cancelling...';
-  try {
-    const res = await controlFetch('/api/system/cancel-all');
-    const data = await res.json();
-    if (data.ok) {
-      cancelModal.classList.remove('show');
-    } else {
-      cancelConfirmBtn.textContent = 'Failed: ' + (data.message || 'error');
-      setTimeout(() => { cancelConfirmBtn.textContent = 'Confirm Cancel All'; cancelConfirmBtn.disabled = false; }, 3000);
-    }
-  } catch (e) {
-    cancelConfirmBtn.textContent = 'Error: ' + e.message;
-    setTimeout(() => { cancelConfirmBtn.textContent = 'Confirm Cancel All'; cancelConfirmBtn.disabled = false; }, 3000);
-  }
-});
-
-// Escape key closes modals
+// Escape key closes the reset modal.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    if (cancelModal.classList.contains('show')) cancelModal.classList.remove('show');
-    if (resetModal.classList.contains('show')) resetModal.classList.remove('show');
+  if (e.key === 'Escape' && resetModal.classList.contains('show')) {
+    resetModal.classList.remove('show');
   }
 });
 
@@ -779,22 +743,22 @@ function renderDbMode(status) {
   lastDbIsProduction = status?.db_is_production === true;
 
   if (!mode) {
-    el.className = 'pill stopped mono';
-    el.textContent = 'DB: --';
+    el.className = 'pill state-unknown mono';
+    el.textContent = 'DB: UNKNOWN';
     el.title = 'Active registry unknown: the status endpoint did not answer.';
     return;
   }
 
   const path = status.db_path || '';
   if (lastDbIsProduction) {
-    el.className = 'pill active mono';
-    el.textContent = 'LIVE REGISTRY';
+    el.className = 'pill mode-live mono';
+    el.textContent = 'DB: LIVE';
     el.title = `Reading the production registry: ${path}`;
   } else {
     // Not a cosmetic state. Every number on the page is a rehearsal, and START
     // is refused while this shows.
-    el.className = 'pill shadow mono';
-    el.textContent = `${mode}: ${path.split(/[\\/]/).pop()}`;
+    el.className = 'pill mode-shadow mono';
+    el.textContent = `DB: ${mode} · ${path.split(/[\\/]/).pop()}`;
     el.title = `Reading ${path}, not the production registry. `
       + `Orders, fills and PnL on this page are not live positions, and START is disabled.`;
   }
@@ -826,51 +790,40 @@ const SERVICE_DEFS = [
 
 function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
   const isRunning = status?.bot_state === 'RUNNING' || (status?.services && Object.values(status.services).some(s => s.running));
-  const isProd = status?.db_is_production === true;
   // `lastDbIsProduction` is the START guard's flag and `renderDbMode` owns it.
   // Writing it from here too gave one safety flag two writers: a status payload
   // that carries service state but not `db_is_production` silently reset the
-  // guard, and whether that ends up safe depended purely on call order. This
-  // function still reads the local `isProd` for its own copy.
+  // guard, and whether that ends up safe depended purely on call order.
 
   // Master Control Header & Buttons
   const masterIndicator = document.getElementById('master-status-indicator');
-  const masterDesc = document.getElementById('master-status-desc');
   const masterStartBtn = document.getElementById('btn-master-start');
   const masterStopBtn = document.getElementById('btn-master-stop');
-  const livePulseDot = document.getElementById('live-ops-pulse-dot');
-  const lastSyncEl = document.getElementById('runtime-last-sync');
+  const enginePill = document.getElementById('hud-engine-pill');
+  const guardrailPill = document.getElementById('hud-guardrail-pill');
 
   if (masterIndicator) {
     if (isStopping) {
-      masterIndicator.className = 'pill stopped font-display';
-      masterIndicator.textContent = 'STOPPING…';
-      masterIndicator.setAttribute('aria-label', 'STOPPING…');
+      masterIndicator.className = 'pill state-degraded font-display';
+      masterIndicator.textContent = 'STACK STOPPING';
+      masterIndicator.setAttribute('aria-label', 'STACK STOPPING');
     } else {
       // Canonical live-state vocabulary (DESIGN.md): the stack pill carries
       // the blinking liveness dot rather than unicode glyphs. textContent is
       // kept in step for readers that take the text, not the markup.
-      const stackLabel = isRunning ? 'STACK RUNNING' : 'STACK STOPPED';
-      masterIndicator.className = `pill ${isRunning ? 'state-running' : 'state-stopped'} font-display`;
-      masterIndicator.innerHTML = (isRunning ? '<span class="pulse-dot active"></span>' : '')
+      const stackState = processState(isRunning, status?.registry_unreadable);
+      const stackLabel = 'STACK ' + stackState.toUpperCase();
+      masterIndicator.className = `pill state-${stackState} font-display`;
+      masterIndicator.innerHTML = (stackState === 'running' ? '<span class="pulse-dot active"></span>' : '')
         + esc(stackLabel);
       // aria-label, not textContent: overwriting textContent would delete the
       // pulse-dot span the line above just created.
       masterIndicator.setAttribute('aria-label', stackLabel);
     }
   }
-  if (livePulseDot) {
-    livePulseDot.className = `pulse-dot ${(isRunning && !isStopping) ? 'active' : ''}`;
-  }
-  if (lastSyncEl) {
-    lastSyncEl.textContent = `Last poll: ${new Date().toLocaleTimeString()}`;
-  }
-
-  // Diagnostic HUD
+  // Status pills use the same live-state vocabulary as every service card.
   const hudEngineState = document.getElementById('hud-engine-state');
   const hudEngineSub = document.getElementById('hud-engine-sub');
-  const hudVenueMode = document.getElementById('hud-venue-mode');
-  const hudVenueSub = document.getElementById('hud-venue-sub');
   const hudGuardrailState = document.getElementById('hud-guardrail-state');
   const hudGuardrailSub = document.getElementById('hud-guardrail-sub');
 
@@ -880,40 +833,26 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
   }
   if (guardrailHealth?.running) activeCount++;
 
-  if (hudEngineState) {
-    hudEngineState.textContent = isRunning ? 'RUNNING' : 'HALTED';
-    hudEngineState.className = `kpi-value ${isRunning ? 'positive' : 'null'} mono`;
+  const engineState = processState(isRunning, status?.registry_unreadable);
+  if (enginePill) enginePill.className = `pill state-${engineState} mono`;
+  if (hudEngineState) hudEngineState.textContent = engineState.toUpperCase();
+  if (hudEngineSub) hudEngineSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
+
+  const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
+  const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
+  const guardrailKnown = guardrailHealth !== null && guardrailHealth !== undefined;
+  let guardrailState = 'unknown';
+  if (guardrailKnown && !guardrailTelemetryError) {
+    if (alertsCount > 0) guardrailState = 'degraded';
+    else if (guardrailHealth.running) guardrailState = 'running';
+    else guardrailState = 'stopped';
   }
-  if (hudEngineSub) {
-    hudEngineSub.textContent = isRunning ? `${activeCount} services active` : 'All background workers stopped';
-  }
-  if (hudVenueMode) {
-    hudVenueMode.textContent = 'POLYMARKET CLOB';
-  }
-  if (hudVenueSub) {
-    hudVenueSub.textContent = '0.5s poll cadence';
-  }
-  if (hudGuardrailState) {
-    const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
-    if (alertsCount > 0) {
-      hudGuardrailState.textContent = 'ALERTING';
-      hudGuardrailState.className = 'kpi-value negative mono';
-    } else if (guardrailHealth?.running) {
-      hudGuardrailState.textContent = 'HEALTHY';
-      hudGuardrailState.className = 'kpi-value positive mono';
-    } else {
-      hudGuardrailState.textContent = 'STANDBY';
-      hudGuardrailState.className = 'kpi-value null mono';
-    }
-  }
+  if (guardrailPill) guardrailPill.className = `pill state-${guardrailState} mono`;
+  if (hudGuardrailState) hudGuardrailState.textContent = guardrailState.toUpperCase();
   if (hudGuardrailSub) {
     const alertsTotal = guardrailHealth?.alerts_total || 0;
-    hudGuardrailSub.textContent = `${alertsTotal} violations logged`;
-  }
-  if (masterDesc) {
-    masterDesc.textContent = isRunning
-      ? (isProd ? 'Live Execution Active · Quoting on Polymarket CLOB via Order Manager' : 'Shadow Rehearsal Active · Quoting simulated Polymarket candidates')
-      : 'All bot execution services halted · Standby mode (no risk exposure)';
+    hudGuardrailSub.textContent = guardrailState === 'unknown'
+      ? 'telemetry unavailable' : `${alertsTotal} alerts`;
   }
   if (masterStartBtn) {
     masterStartBtn.disabled = isRunning;
@@ -963,7 +902,7 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
       const telemetryError = guardrailHealth?.telemetry_error;
       const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined && !telemetryError;
       const state = !healthKnown ? 'unknown'
-        : hasAlert ? 'down'
+        : hasAlert ? 'degraded'
         : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
       pill = statePillHtml(state, healthKnown ? age : null);
       if (telemetryError) {
@@ -1097,15 +1036,10 @@ if (masterStopBtn && !masterStopBtn.dataset.wired) {
 
       const masterIndicator = document.getElementById('master-status-indicator');
       if (masterIndicator) {
-        masterIndicator.className = 'pill stopped font-display';
-        masterIndicator.textContent = 'STOPPING…';
-        masterIndicator.setAttribute('aria-label', 'STOPPING…');
+        masterIndicator.className = 'pill state-degraded font-display';
+        masterIndicator.textContent = 'STACK STOPPING';
+        masterIndicator.setAttribute('aria-label', 'STACK STOPPING');
       }
-      const livePulseDot = document.getElementById('live-ops-pulse-dot');
-      if (livePulseDot) {
-        livePulseDot.className = 'pulse-dot';
-      }
-
       const res = await controlFetch('/api/system/stop');
       try {
         const data = await res.json();
@@ -4306,7 +4240,7 @@ function marketRowPairHtml(cid, m, opts) {
   let badgeHtml = '';
   if (hasOrders) {
     if (activeOrders.length === 0) {
-      badgeHtml = `<span class="pill stopped" style="font-size:10px; padding:2px 8px; margin-left:4px">0 ACTIVE</span>`;
+      badgeHtml = `<span class="pill state-stopped" style="font-size:10px; padding:2px 8px; margin-left:4px">0 ACTIVE</span>`;
     } else {
       const statusCounts = {};
       for (const o of activeOrders) {
@@ -4648,7 +4582,7 @@ function renderScanStatePill(scanState) {
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
     headerPill.className = 'pill state-unknown';
-    headerPill.textContent = '--';
+    headerPill.textContent = 'UNKNOWN';
     headerPill.title = 'Trading loop state unknown: no heartbeat payload';
   }
 }
@@ -5066,13 +5000,7 @@ async function pollStatus() {
     // Render exposure bar (DT3)
     if (kpi || lastKpi) renderExposure(kpi || lastKpi);
 
-    // USDC Balance in top nav bar
     const currentKpi = kpi || lastKpi;
-    const collateral = currentKpi?.portfolio?.account?.collateral_usd ?? currentKpi?.portfolio?.account?.account_value_usd;
-    const usdcEl = document.getElementById('usdc-balance');
-    if (usdcEl) {
-      usdcEl.textContent = (collateral !== null && collateral !== undefined) ? `USDC: ${fmtUSD(collateral)}` : 'USDC: --';
-    }
 
     // Render KPIs (Tab 2)
     if (currentKpi) {

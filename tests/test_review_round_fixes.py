@@ -125,7 +125,7 @@ def test_the_scan_pill_does_not_age_against_a_previous_polls_snapshot():
 
     `snapshot_age` is frozen at whatever the last successful read said, so an
     hour-long KPI outage kept the pill green on an age that stopped moving.
-    The pill has its own honest state for this: SCAN NO DATA, amber.
+    The pill has its own honest state for this: SCAN DEGRADED, amber.
     """
     js = (server._STATIC_DIR / "app.js").read_text(encoding="utf-8")
     assert "renderMarketScanPill(status, kpi || lastKpi)" not in js
