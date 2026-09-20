@@ -68,7 +68,7 @@ let lastKpi = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 251;
+const EXPECTED_PAYLOAD_VERSION = 252;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -1308,15 +1308,19 @@ function initBrokerPortfolioTimeframe() {
   });
 }
 
-// One basis for the whole Portfolio card: registry equity, the figure the
-// chart ends on and the gain pill is measured against. The headline used to
-// read the venue wallet mark while the chart read the registry, so under a
-// shadow run -- where simulated gains never reach the wallet -- the two
-// disagreed by exactly the run's PnL and the headline never moved.
+// One basis for the whole Portfolio card: the run's DB anchor, the figure
+// the chart starts on and the gain pill is measured against. The headline
+// used to read the session snapshot (stack-start wallet) while the backend
+// read the registry, so after a dashboard restart a profitable run rendered
+// as a decline. The portfolio's own starting_capital wins; the session
+// value survives only as a fallback for payloads that predate it.
 function portfolioEquity(kpi, status) {
   const p = kpi?.portfolio || {};
   const ta = kpi?.trade_analytics || {};
-  const startingCap = status?.starting_capital ?? p.starting_capital ?? 100;
+  const startingCap = p.starting_capital ?? status?.starting_capital ?? 100;
+  // Epoch seconds of the mark the anchor came from; null on the config
+  // bankroll fallback (no mark was ever measured).
+  const startingCapTs = p.starting_capital_ts ?? null;
   // An unread realized figure is NOT a flat run. The arithmetic below needs a
   // number, so it gets one, but `realizedMeasured` travels with it so the card
   // can print `--` rather than a confident +$0.00 nobody measured.
@@ -1325,6 +1329,7 @@ function portfolioEquity(kpi, status) {
   const realizedPnL = realizedMeasured ? Number(realizedRaw) : 0;
   return {
     startingCap,
+    startingCapTs,
     realizedPnL,
     realizedMeasured,
     totalVal: p.total_value ?? (startingCap + realizedPnL),
@@ -3236,7 +3241,7 @@ function renderKPIs(kpi, status) {
 
   const p = kpi.portfolio;
   const ta = kpi.trade_analytics || {};
-  const startCap = status?.starting_capital ?? p.starting_capital;
+  const startCap = p.starting_capital ?? status?.starting_capital;
   const realized = p.realized_pnl;
   const unrealized = p.unrealized_usd;
   const total = p.total_pnl;

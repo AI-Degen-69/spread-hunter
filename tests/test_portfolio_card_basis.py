@@ -100,16 +100,17 @@ def test_the_wallet_line_is_hidden_when_it_agrees_with_registry_equity():
 
 
 def test_the_chart_baseline_matches_the_headlines_starting_capital():
-    # Arrange — the status payload's starting capital differs from the
-    # portfolio's, which is what the header renders against.
+    # Arrange — Issue #252: the session snapshot (status) differs from the
+    # run's DB anchor (portfolio). The card describes the run, so the DB
+    # anchor wins everywhere on it.
     portfolio = _shadow_portfolio(starting_capital=100.0)
 
     # Act
     card = _render(portfolio, starting_capital=STARTING)
 
     # Assert
-    assert card["starting_capital"] == "$85.42"
-    assert card["chart_starting_capital"] == pytest.approx(STARTING)
+    assert card["starting_capital"] == "$100.00"
+    assert card["chart_starting_capital"] == pytest.approx(100.0)
 
 
 def test_chart_series_uses_real_closes_and_current_value():
