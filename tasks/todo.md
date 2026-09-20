@@ -1,6 +1,8 @@
-# Todo: Issue #225
+# Todo: Issue #243
 
-- [x] Task 1: [Design/UI] Relocate `#scan-state-pill` to Top Bar & Preserve Screener Header (`dashboard/static/index.html`)
-- [x] Task 2: [Frontend/Logic] Format Heartbeat Duration as Minutes for `>= 60s` (`dashboard/static/app.js`)
-- [x] Task 3: [Design/UI] Responsive Top Nav Styling & Alignment Check (`dashboard/static/styles.css`)
-- [x] Task 4: [Testing] Add Automated Regression Tests (`tests/test_dashboard_server.py`)
+- [x] Task 1: [Design/UI] Add top-nav console strip and move status IDs (`dashboard/static/index.html`)
+- [x] Task 2: [Design/UI] Move run controls, dedupe sync button (`dashboard/static/index.html`)
+- [x] Task 3: [Design/UI] Style console responsive (`dashboard/static/styles.css`)
+- [x] Task 4: [Frontend/Logic] Defensive app.js guard + dead-handler cleanup + db-path tooltip (`dashboard/static/app.js`)
+- [x] Task 5: [Design/UI] Update prototype.js layout map (`dashboard/static/prototype.js`)
+- [x] Task 6: [Testing] Regression tests for console move (`tests/test_dashboard_server.py`)
