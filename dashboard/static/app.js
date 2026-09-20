@@ -843,9 +843,15 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
   const guardrailKnown = guardrailHealth !== null && guardrailHealth !== undefined;
   let guardrailState = 'unknown';
   if (guardrailKnown && !guardrailTelemetryError) {
-    if (alertsCount > 0) guardrailState = 'degraded';
-    else if (guardrailHealth.running) guardrailState = 'running';
-    else guardrailState = 'stopped';
+    const age = Number.isFinite(guardrailHealth.age_s) ? guardrailHealth.age_s : null;
+    const livenessState = stateKey(
+      guardrailHealth.running,
+      age,
+      cadenceThresholds(5),
+    );
+    guardrailState = livenessState === 'running' && alertsCount > 0
+      ? 'degraded'
+      : livenessState;
   }
   if (guardrailPill) guardrailPill.className = `pill state-${guardrailState} mono`;
   if (hudGuardrailState) hudGuardrailState.textContent = guardrailState.toUpperCase();

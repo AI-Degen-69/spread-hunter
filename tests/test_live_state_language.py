@@ -206,6 +206,22 @@ def test_the_service_cards_render_the_canonical_pill():
     assert "cadenceThresholds(5)" in js
 
 
+def test_the_guardrail_hud_preserves_stale_liveness_states():
+    hud = _harness("all")["guardrailHud"]
+    assert hud["stale"] == {
+        "state": "DOWN",
+        "className": "pill state-down mono",
+    }
+    assert hud["alerting"] == {
+        "state": "DEGRADED",
+        "className": "pill state-degraded mono",
+    }
+    assert hud["stopped"] == {
+        "state": "STOPPED",
+        "className": "pill state-stopped mono",
+    }
+
+
 def test_the_design_system_is_declared_to_every_agent():
     # CLAUDE.md routes future work at DESIGN.md; DESIGN.md is the source of truth.
     claude = (_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
