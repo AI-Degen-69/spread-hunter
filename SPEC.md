@@ -31,3 +31,34 @@ When a market is close to resolution and the loop revisits markets slower than t
 - Flat inventory + gate fires → side skipped (`refuse`) or repriced (`deepen`); paired-loss case from the post-mortem cannot post.
 - Unhedged inventory + gate fires → balancing side still posts.
 - `deepen` offset still clamped by `max_spread_from_mid`.
+
+# SPEC: Issue #242 - Portfolio equity chart and header cleanup
+
+## Goal
+Simplify the Portfolio Overview header and replace the synthetic equity curve with the real closed-trade equity series while preserving existing wallet displays and DOM contracts.
+
+## Acceptance criteria
+- [ ] Starting Bankroll appears in the broker title/header area and `broker-starting-cap` remains functional.
+- [ ] The venue badge and old Settlement Currency/right-side content are removed without removing the venue wallet row or its IDs.
+- [ ] The chart uses top-level `kpi.equity_series` close entries in chronological order, with a starting-capital anchor and a final Current point at the current total value.
+- [ ] X-axis labels use real close timestamps; the final label is `Current`.
+- [ ] The starting-capital baseline spans the plot width and is dotted.
+- [ ] With no close entries, the chart is flat at starting capital; no synthetic rising curve is rendered.
+- [ ] Tooltip/crosshair behavior remains available and uses fields present in the real series.
+- [ ] Existing portfolio/header tests remain green and new chart coverage fails if the implementation returns to fake data.
+
+## Scope
+### In scope
+- `dashboard/static/index.html`: broker header and metadata layout.
+- `dashboard/static/styles.css`: obsolete venue-badge styling and only layout adjustments required by the new header.
+- `dashboard/static/app.js`: chart series construction, labels, baseline, empty state, and tooltip fields.
+- `tests/js/portfolio_card_harness.cjs` and portfolio-focused Python/JS test coverage.
+
+### Out of scope
+- Backend KPI calculation, `/api/kpi` schema, wallet number computation, trading behavior, chart controls/timeframe semantics, and new dependencies.
+
+## Edge cases
+- Ignore `equity_series` entries that are not `type === "close"` when building close steps.
+- Preserve chronological order even when input data contains non-close entries.
+- Empty close series must still render a valid flat baseline and a usable tooltip/crosshair surface.
+- Current total value may differ from the last close and must remain the final plotted value.

@@ -1,39 +1,51 @@
-# Plan: Issue #240 — End-of-window proximity gate
+# Issue #242 — Portfolio equity chart and header cleanup
 
-Size: **Standard** (5 modules + tests, one architectural decision: refuse-vs-deepen default). Task type: **Code + Security** (risk-tightening gate).
-Stack: Python, pytest. Live-money safety rules apply (no opening commands; read-only verification).
+## Scope and classification
+- **Size:** Standard — coordinated HTML/CSS/JavaScript changes plus focused dashboard test coverage, with no backend or schema change.
+- **Types:** Design/UI + Code.
+- **Stack:** Browser JavaScript served by the Python dashboard, Python/pytest test suite, and an existing Node-based portfolio harness.
+- **Primary skills:** `frontend-ui-engineering`, `test-driven-development`, `incremental-implementation`, and `verification-before-completion`.
 
-## Tasks
+## Evidence-based improvement proposal
+Extract the chart-point construction into a small deterministic helper inside `dashboard/static/app.js` and test its output directly, because the issue notes that the existing harness skips the chart when its containers are absent; this keeps the new real-data behavior testable without adding a browser dependency.
 
-### T1 [Backend/Logic] — Cadence helper in `order_registry.py`
-Read-only query over recent `cycle_intent` rows; median gap between consecutive distinct `cycle` timestamps; `None` when too few rows. Follow `registry_committed_usd` aggregate style.
-- Files: `core_brain/order_registry.py`, `tests/test_endgame_gate.py` (new)
-- Verify: pytest cadence test (known timestamps → expected value; sparse rows → `None`).
+## Implementation tasks
 
-### T2 [Backend/Logic] — Gate config knobs in `config.py`
-`MakerConfig` fields next to `quote_window_frac`/`enforce_quote_window`: `enforce_endgame_gate=False`, `endgame_horizon_min`, `endgame_max_cadence_sec`, `endgame_action="refuse"`, `endgame_deepen_offset`, `observed_cadence_sec=None`. `HUNTER_*` overrides via `_bounded_float` (numerics) + `enable_pairs_rule` idiom (bool/string). `ValueError` naming the env var on bad values. Comment block pointing to the loss post-mortem.
-- Files: `core_brain/config.py`, `tests/test_endgame_gate.py`
-- Verify: pytest config defaults/overrides/validation tests.
+### Task 1 — Add the chart test seam [Code/Test]
+- **Files:** `tests/js/portfolio_card_harness.cjs`, `tests/test_portfolio_card_basis.py` (or the nearest existing portfolio-card test location).
+- **Build:** Extend the existing harness with non-null chart SVG and tooltip stubs, and add fixtures/assertions for close-series input, empty input, and a final current value.
+- **Verification:** Run the focused portfolio-card test; first confirm the new assertion fails against the current synthetic chart path, then keep the failing test as the RED proof before implementation.
 
-### T3 [Backend/Logic] — Real timing in `evaluate_market_quote`
-Compute `t_remaining` from the fetched `market` object (drop fake `1e9`); `window_frac` only for the 5-min series, else `None`. Callers unchanged.
-- Files: `core_brain/quotes.py`
-- Verify: pytest (regression test in T6 covers it; existing quote tests green).
+### Task 2 — Extract and build real equity points [Code/Frontend]
+- **Files:** `dashboard/static/app.js`.
+- **Build:** Add the deterministic chart-series helper proposed above. Filter to `type === "close"`, preserve chronological order, prepend the starting-capital anchor, append the current total value, and remove the `Math.pow(prog, 0.9)` synthetic fallback.
+- **Verification:** Run the focused portfolio-card test and assert the plotted values represent the known close points plus the final current value.
 
-### T4 [Backend/Logic] — Per-cycle cadence attach in `trader_loop.py`
-Call T1 helper once per rotation; merge onto per-market config in `_market_cfg` (same pattern as `fleet_posture`).
-- Files: `core_brain/trader_loop.py`
-- Verify: pytest trader-loop tests green + new test asserting the value lands on the config.
+### Task 3 — Implement real time labels and baseline [Design/UI]
+- **Files:** `dashboard/static/app.js`.
+- **Build:** Convert epoch-second close timestamps with `new Date(ts * 1000)`, retain the four-tick layout, label the final point `Current`, and make the START baseline full-width and dotted.
+- **Verification:** Focused chart assertions must check real timestamp-derived labels, `Current`, and the baseline `stroke-dasharray`; inspect the rendered chart in a browser preview if the harness cannot expose the final SVG attributes.
 
-### T5 [Backend/Logic] — Gate rule in `_decide_quotes_from_mid`
-Per-side loop near the `strict_paired_inventory` block. Fires iff enabled + `t_remaining/60 ≤ horizon` + cadence known and above budget. Light-side balancing (`risk.naked_side`) always allowed; new-exposure sides (`inv.avg(other_side) <= 0`) refused or deepened via existing offset pipeline + clamp. `why` reason carries `endgame_gate` **plus the measured numbers** (minutes-to-resolution, cadence) so shadow runs can count firings.
-- Files: `core_brain/quotes.py`
-- Verify: pytest regression tests (T6).
+### Task 4 — Handle empty state and preserve interaction [Design/UI]
+- **Files:** `dashboard/static/app.js`, `tests/test_portfolio_card_basis.py`.
+- **Build:** Render a flat starting-capital baseline with zero close entries; preserve mousemove, mouseleave, crosshair, and tooltip behavior. Restrict tooltip rows to real point fields (`v`, `pnl`, and optional `market`).
+- **Verification:** Focused test covers zero closes and tooltip field presence; browser verification confirms no console errors and a usable empty chart.
 
-### T6 [Backend/Logic] — S&P 2026-09-18 regression tests
-Flat `Inventory()`, hand-built books, `t_remaining≈32min`, cadence `≈210s`: gate-on refuses/deepens, gate-off posts (fails without change). Second case: unhedged inventory → balancing quote allowed.
-- Files: `tests/test_endgame_gate.py`
-- Verify: pytest new tests green; full `python -m pytest -q` green (agent-run).
+### Task 5 — Simplify the Portfolio Overview header [Design/UI]
+- **Files:** `dashboard/static/index.html`, `dashboard/static/styles.css`.
+- **Build:** Move Starting Bankroll into `.broker-title-group`; remove the venue badge and Settlement Currency line; retain the venue wallet row and all seven existing tested IDs. Remove only unused venue-badge CSS and adjust layout rules if required.
+- **Verification:** Run `tests/test_portfolio_card_basis.py` and the related headline/overview tests; inspect the Performance & Analytics Portfolio Overview at desktop and narrow viewport widths.
 
-## Improvement proposal (adopted by default)
-The `why` reason will include the measured minutes-to-resolution and cadence values, not just the `endgame_gate` tag — otherwise shadow runs can see the gate fired but cannot measure its firing rate (issue Phase 3 Task 4 demands measurable shadow visibility).
+### Task 6 — Review regression coverage and documentation contracts [Code/Test]
+- **Files:** `tests/test_portfolio_headline_basis.py`, `tests/test_portfolio_overview.py` only if assertions require a behavior-preserving update; no backend files unless a test reveals an existing contract mismatch.
+- **Build:** Keep backend KPI behavior unchanged and ensure wallet divergence/show-hide behavior remains covered.
+- **Verification:** Run focused tests for the changed dashboard behavior. Do not run the full repository suite locally during Station IV/V; GitHub CI runs `python -m pytest -q` on Ubuntu and Windows as the merge gate.
+
+## Acceptance checklist
+- [x] Header layout matches the issue and existing DOM IDs remain intact.
+- [x] Production chart has no synthetic curve path.
+- [x] Real close points, start anchor, and final current point render correctly.
+- [x] Timestamp labels, Current label, dotted baseline, empty state, tooltip, and crosshair are covered.
+- [x] Focused dashboard tests pass after each relevant task and after review fixes.
+- [ ] Browser verification is recorded for the visual change in Station IV.
+- [ ] Full regression is verified by GitHub CI before merge.

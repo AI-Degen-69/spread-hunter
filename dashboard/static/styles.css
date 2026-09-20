@@ -1750,10 +1750,7 @@ td { font-size: 13px; }
   font-weight: 800;
   color: var(--text-primary);
 }
-.broker-venue-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.broker-starting-cap {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   font-weight: 600;
