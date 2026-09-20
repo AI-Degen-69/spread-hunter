@@ -662,7 +662,12 @@ def evaluate_market_quote(
     except Exception as e:
         raise MarketQuoteError(f"book fetch error: {e}") from e
     inv = inventory_for(market)
-    intents, why = decide(cfg, up_book, down_book, inv, 1e9, None)
+    # Real countdown, not the old 1e9 placeholder that skipped every timing
+    # rule on this path. `window_frac` stays None: both production callers
+    # serve pinned markets whose `start_ts` is the load time, not a window
+    # open -- computing a fraction off that would invent a window origin.
+    intents, why = decide(cfg, up_book, down_book, inv,
+                          market.t_remaining(), None)
     return MarketEval(
         cid=cid, market=market, up_book=up_book, down_book=down_book,
         inventory=inv, intents=intents, why=why,

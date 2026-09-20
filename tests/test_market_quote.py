@@ -41,6 +41,9 @@ class _Market:
         self.tick_size = 0.01
         self.neg_risk = False
 
+    def t_remaining(self, now=None):
+        return 3600.0
+
 
 # ---------------------------------------------------------------------------
 # Adapter 1 -- the CLI wiring (real decide_quotes, real book shapes)
@@ -126,7 +129,7 @@ def test_fleet_adapter_slot_shapes():
     assert seen["market"] is ev.market
     cfg, up, dn, inv, t_rem, wf = seen["decide_args"]
     assert inv == Inventory(up_shares=1.0, down_shares=1.0)
-    assert t_rem == 1e9
+    assert t_rem == 3600.0
     assert wf is None
     assert ev.intents == []
     assert ev.why == "declined"
