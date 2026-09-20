@@ -1468,7 +1468,10 @@ function buildBrokerEquitySeries(kpi, startingCap, totalVal, timeframe = 'ALL') 
       const ts = Number(entry.ts);
       return !Number.isFinite(ts) || ts >= latestTs - windowSec;
     });
-  const points = [{ label: 'Start', v: startingCap }];
+  // The run's real start stamp when the backend measured one (Issue #252);
+  // the word "Start" only when the anchor is the config fallback (ts null).
+  const anchorTs = kpi?.portfolio?.starting_capital_ts ?? null;
+  const points = [{ label: brokerPointLabel({ ts: anchorTs }, 'Start'), v: startingCap }];
   closes.forEach((entry, index) => {
     const point = {
       label: brokerPointLabel(entry, `Close ${index + 1}`),

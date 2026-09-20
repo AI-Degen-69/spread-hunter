@@ -137,6 +137,32 @@ def test_chart_series_uses_real_closes_and_current_value():
     assert ">Current</text>" in card["chart_html"]
 
 
+def test_chart_start_point_uses_anchor_timestamp():
+    # Arrange — Issue #252: the payload carries the anchor mark's timestamp.
+    portfolio = _shadow_portfolio(starting_capital_ts=1_700_000_060)
+    equity_series = [
+        {"type": "close", "ts": 1_700_000_120, "v": 86.02, "pnl": 0.30,
+         "market": "second-market"},
+    ]
+
+    # Act
+    card = _render(portfolio, equity_series=equity_series)
+
+    # Assert — left edge shows the run's real start stamp, not "Start".
+    assert card["chart_series"][0] == {
+        "label": "2023-11-14T22:14:20.000Z", "v": pytest.approx(STARTING)}
+
+
+def test_chart_start_point_falls_back_to_start_without_timestamp():
+    # Arrange — degenerate store: anchor is the config bankroll, ts null.
+    card = _render(_shadow_portfolio(starting_capital_ts=None), equity_series=[])
+
+    # Act / Assert
+    assert card["chart_series"][0] == {"label": "Start", "v": pytest.approx(STARTING)}
+    assert "NaN" not in card["chart_html"]
+    assert "undefined" not in card["chart_html"]
+
+
 def test_chart_series_is_flat_when_there_are_no_closes():
     card = _render(_shadow_portfolio(total_value=90.0), equity_series=[
         {"type": "mark", "ts": 1_700_000_000, "v": 90.0},
