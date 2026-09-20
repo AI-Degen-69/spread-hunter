@@ -1,4 +1,4 @@
-"""The queue report's arithmetic, which was wrong in the direction that matters.
+"""The queue report's arithmetic and operator-safe default path.
 
 The first version aggregated per MARKET: it summed every mark's movement and
 divided by the wall-clock span between the first and last retained mark. Two
@@ -395,15 +395,19 @@ class TestThePublicPaths:
         _mark(db, ts=60.0, size=600.0, traded=300.0, decay=0.0)
         assert main(["--db", str(db)]) == 0
 
-    def test_main_defaults_to_the_shadow_store(self):
-        # The default must stay data/shadow.db: an operator typing the bare
-        # command should never be pointed at the production registry.
-        import argparse
-        import inspect
+    def test_main_defaults_to_the_repo_shadow_store(self, tmp_path, monkeypatch):
+        # The bare operator command must resolve the canonical store even when
+        # launched from another working directory.
+        from core_brain.runtime_paths import LIVE_ROOT
+        from scripts import queue_report
 
-        from scripts.queue_report import main
+        captured = []
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            queue_report, "report",
+            lambda db_path, minutes: captured.append((db_path, minutes)) or 0,
+        )
 
-        src = inspect.getsource(main)
-        assert '"data/shadow.db"' in src
-        assert "orders.db" not in src
-        assert argparse  # imported for the reader's benefit
+        assert queue_report.main([]) == 0
+        assert captured == [(LIVE_ROOT / "data" / "shadow.db", None)]
+        assert not (tmp_path / "data" / "shadow.db").exists()

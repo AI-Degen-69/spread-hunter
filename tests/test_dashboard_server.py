@@ -69,6 +69,51 @@ def client(temp_db):
     set_db_override(None)
 
 
+def test_read_only_report_errors_share_one_json_shape(client, monkeypatch):
+    """Read-only report routes expose the same diagnostic error contract."""
+    def fail(*args, **kwargs):
+        raise RuntimeError("report backend unavailable")
+
+    monkeypatch.setattr("core_brain.kpi.report", fail)
+
+    for path in (
+        "/api/kpi?run_id=read-only-error-test",
+        "/api/run-profitability?run_id=read-only-error-test",
+        "/api/closed-markets",
+    ):
+        response = client.get(path)
+        assert response.status_code == 500
+        assert response.json() == {
+            "error": "report backend unavailable",
+            "error_type": "RuntimeError",
+        }, path
+
+
+def test_ring_read_failures_are_visible_without_breaking_read_only_shapes(client, tmp_path):
+    """Telemetry routes keep 200 empty-state shapes but expose ring failures."""
+    unreadable_ring = tmp_path / "ring-directory"
+    unreadable_ring.mkdir()
+    set_ring_override(unreadable_ring)
+
+    try:
+        for path in (
+            "/api/scan-state",
+            "/api/guardrail-health",
+            "/api/pairs-activity",
+            "/api/guardrail-alerts",
+        ):
+            response = client.get(path)
+            assert response.status_code == 200, path
+            telemetry_error = response.json()["telemetry_error"]
+            assert telemetry_error["source"] == "cycle_ring", path
+            assert telemetry_error["error_type"] in {
+                "IsADirectoryError", "PermissionError"
+            }, path
+            assert telemetry_error["error"], path
+    finally:
+        set_ring_override(None)
+
+
 def test_api_and_html_endpoints(client, temp_db):
     """Test the FastAPI / and /api/state endpoints."""
     # Test HTML index
@@ -213,6 +258,7 @@ def test_guardrail_health_endpoint_absent_heartbeat(client, tmp_path):
         assert h["pid"] is None
         assert h["age_s"] is None
         assert h["alerts_total"] == 0
+        assert h["telemetry_error"] is None
     finally:
         set_ring_override(None)
         set_guardrail_heartbeat_override(None)
@@ -1397,6 +1443,18 @@ def test_live_ops_console_in_top_nav_bar():
     assert "live-ops-master-card" not in app_js
     assert "hud-db-mode" not in app_js
     assert "hud-db-sub" not in app_js
+
+
+def test_app_js_surfaces_telemetry_errors_as_unknown():
+    """Telemetry failures must not render as healthy or merely stopped."""
+    app_js = _read_static("app.js")
+
+    assert "scanState.telemetry_error" in app_js
+    assert "Telemetry unavailable:" in app_js
+    assert "title=\"Telemetry unavailable: ${esc(telemetryError.error || 'cycle ring read failed')}\"" in app_js
+    assert "headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`" in app_js
+    assert "guardrailHealth?.telemetry_error" in app_js
+    assert "state-unknown" in app_js
 
 
 def test_app_js_formats_heartbeat_duration_as_minutes():

@@ -12,12 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from core_brain.runtime_paths import resolve_runtime_file
+from core_brain.runtime_paths import resolve_runtime_file, runtime_file
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LIVE_ROOT = PROJECT_ROOT
 REPO_ROOT = PROJECT_ROOT
-DEFAULT_MARKETS_PATH = PROJECT_ROOT / "runtime" / "markets.json"
+# Compatibility seam for callers/tests that replace the feed path. Production
+# resolution belongs to runtime_paths so the current/legacy rename fallback has
+# one owner.
+DEFAULT_MARKETS_PATH = runtime_file("markets.json", root=PROJECT_ROOT)
 
 
 def default_markets_path() -> Path:
@@ -29,7 +32,10 @@ def default_markets_path() -> Path:
     Without the fallback the Trader quotes nothing for a whole filter cycle
     after the rename, because its entire universe still sits in run/.
     """
-    if DEFAULT_MARKETS_PATH.exists():
+    canonical = runtime_file("markets.json", root=PROJECT_ROOT)
+    if DEFAULT_MARKETS_PATH != canonical and DEFAULT_MARKETS_PATH.exists():
+        # Preserve the injectable path used by callers and tests without making
+        # it the production source of runtime-path behavior.
         return DEFAULT_MARKETS_PATH
     return resolve_runtime_file("markets.json", root=PROJECT_ROOT)
 
