@@ -728,6 +728,28 @@ class MakerConfig:
     enforce_price_band: bool = True
     enforce_quote_window: bool = True
 
+    # ENDGAME PROXIMITY GATE (#240). Post-mortem of the largest shadow loss
+    # (close id 64, spx-up-or-down 2026-09-18, -$1.14): a pair posted with
+    # ~32min to resolution, the loop did not revisit the market for 2m52s
+    # (full-cycle cadence ~3.5min), one leg filled alone into convergence and
+    # the saver sold it at $0.01. When the market can converge faster than
+    # the loop can revisit it, a new pair is a one-look bet, not a merge --
+    # so inside `endgame_horizon_min` of resolution, with an observed cadence
+    # slower than `endgame_max_cadence_sec`, new pair legs are refused (or
+    # repriced deeper with `endgame_action="deepen"`). Light-side balancing
+    # quotes are never blocked: they reduce exposure. Off by default so
+    # shadow runs measure the firing rate before it touches live quoting.
+    enforce_endgame_gate: bool = False
+    endgame_horizon_min: float = 45.0
+    endgame_max_cadence_sec: float = 120.0
+    endgame_action: str = "refuse"
+    endgame_deepen_offset: float = 0.02
+    # Rolling median seconds between fleet rotations, recomputed once per
+    # cycle by `_fleet_state` (same pattern as `fleet_posture`). None means
+    # unknown, and the gate fails open on unknown -- a missing clock must
+    # not silently refuse every quote.
+    observed_cadence_sec: float | None = None
+
     # PRICE-DEPENDENT RISK (U4, R6). Every cap above is priced in dollars and
     # none of them notices WHERE in the 0..1 range a fill lands. On a binary
     # market two different risks move in opposite directions across that range,
@@ -1165,6 +1187,35 @@ def load(*, for_display: bool = False) -> MakerConfig:
     pr = os.environ.get("HUNTER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")
+    eg = os.environ.get("HUNTER_ENDGAME_GATE") or ""
+    if eg.strip():
+        kw["enforce_endgame_gate"] = eg.strip().lower() not in ("0", "false", "off")
+    egh = os.environ.get("HUNTER_ENDGAME_HORIZON_MIN") or ""
+    if egh.strip():
+        # Minutes before resolution the rule starts to apply. The ceiling is
+        # a day: past that the "endgame" is the whole market.
+        kw["endgame_horizon_min"] = _bounded_float(
+            "HUNTER_ENDGAME_HORIZON_MIN", egh, 0.0, 1440.0)
+    egc = os.environ.get("HUNTER_ENDGAME_MAX_CADENCE_SEC") or ""
+    if egc.strip():
+        # The convergence budget in seconds. The ceiling is an hour: a loop
+        # slower than that is not a loop.
+        kw["endgame_max_cadence_sec"] = _bounded_float(
+            "HUNTER_ENDGAME_MAX_CADENCE_SEC", egc, 0.0, 3600.0)
+    ega = os.environ.get("HUNTER_ENDGAME_ACTION") or ""
+    if ega.strip():
+        action = ega.strip().lower()
+        if action not in ("refuse", "deepen"):
+            raise ValueError(
+                f"HUNTER_ENDGAME_ACTION={ega!r} must be 'refuse' or 'deepen'")
+        kw["endgame_action"] = action
+    egd = os.environ.get("HUNTER_ENDGAME_DEEPEN_OFFSET") or ""
+    if egd.strip():
+        # Extra offset in price units, applied through the existing offset
+        # pipeline and its clamp. The ceiling is the instrument's whole
+        # price range, as for the dead band.
+        kw["endgame_deepen_offset"] = _bounded_float(
+            "HUNTER_ENDGAME_DEEPEN_OFFSET", egd, 0.0, 1.0)
     pcap = os.environ.get("HUNTER_PAIR_COST_CAP") or ""
     if pcap.strip():
         # PAIR-COST TRIAL (#145). `max_pair_cost = 0.99` is compared with `>=`
