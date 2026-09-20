@@ -528,3 +528,31 @@ def test_starting_capital_ts_is_null_on_bankroll_fallback(temp_db):
     assert p["starting_capital"] == pytest.approx(kpi_mod._CFG.bankroll_usd)
     assert p["starting_capital_ts"] is None
 
+
+# --------------------------------------------------------------------------
+# Issue #252 Task 2: the equity series stacks on the DB anchor
+# --------------------------------------------------------------------------
+
+def test_equity_series_stacks_closes_on_db_anchor(temp_db):
+    """Every curve point is measured from the anchor, not the session snapshot."""
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    reg.log_account_mark(_anchor_mark(53.63), ts=t0 - 10, run_id="run-curve")
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id="0xmarket_a", market_slug="market-a",
+        method="merge", shares=5.0, cost_basis=4.50, proceeds=5.00,
+        realized_pnl=0.50, tx_hash="0xaaa", run_id="run-curve",
+    ))
+    reg.log_close(CloseRecord(
+        ts=t0 + 120, condition_id="0xmarket_b", market_slug="market-b",
+        method="merge", shares=5.0, cost_basis=4.70, proceeds=5.00,
+        realized_pnl=0.30, tx_hash="0xbbb", run_id="run-curve",
+    ))
+
+    data = report(db_path=temp_db, run_id="run-curve")
+    closes = [e for e in data["equity_series"] if e["type"] == "close"]
+    assert closes[0]["v"] == pytest.approx(53.63 + 0.50)
+    assert closes[0]["ts"] == pytest.approx(t0 + 60)
+    assert closes[-1]["v"] == pytest.approx(53.63 + 0.80)
+    assert data["portfolio"]["total_value"] == pytest.approx(closes[-1]["v"])
+
