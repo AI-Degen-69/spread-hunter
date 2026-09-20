@@ -131,3 +131,54 @@ def test_expectancy_tiles_show_the_companion_sublabels(app_js):
     assert "n_measured_returns" in app_js
     assert "dollar_weighted_return_pct" in app_js
     assert "measured" in app_js
+
+
+# -- Issue #251: measured risk metrics, and a stale backend that says so -------
+
+@pytest.fixture(scope="module")
+def kpi_module() -> str:
+    return (STATIC.parent.parent / "core_brain" / "kpi.py").read_text(
+        encoding="utf-8")
+
+
+def test_the_quant_risk_grid_invents_no_zero(app_js):
+    """Every tile in the Quant Risk grid reads its payload field and falls back
+    to the word `unmeasured`, never to `$0.00` / `0.0%` / `0.00x`.
+
+    Scoped to `renderQuantRiskGrid` itself: the broker KPI strip is a different
+    surface with its own honest placeholders (`--`), and Issue #251 is about
+    this grid.
+    """
+    start = app_js.index("function renderQuantRiskGrid(")
+    end = app_js.index("\nfunction ", start + 1)
+    grid = app_js[start:end]
+
+    for field in ("var_95_usd", "cvar_95_usd", "kelly_fraction", "half_kelly",
+                  "payoff_ratio", "sharpe_ratio", "sortino_ratio",
+                  "profit_factor", "win_rate"):
+        assert field in grid
+    assert "unmeasured" in grid
+    for fabricated in ("'$0.00'", "'0.0%'", "'0.00x'", ": '0.00'"):
+        assert fabricated not in grid
+
+
+def test_the_payload_version_is_pinned_on_both_sides(app_js, kpi_module):
+    """The frontend's expectation and the backend's stamp must agree, or every
+    live page claims a stale backend."""
+    import re
+
+    backend = re.search(r"^KPI_PAYLOAD_VERSION\s*=\s*(\d+)", kpi_module, re.M)
+    frontend = re.search(r"^const EXPECTED_PAYLOAD_VERSION\s*=\s*(\d+);",
+                         app_js, re.M)
+    assert backend and frontend
+    assert backend.group(1) == frontend.group(1)
+
+
+def test_a_stale_backend_shows_a_restart_note(app_js, index_html, styles_css):
+    # The note element, its copy, its styling, and the check that drives it.
+    assert 'id="quant-stale-note"' in index_html
+    assert "restart the dashboard" in index_html
+    assert ".quant-stale-note.show" in styles_css
+    assert "quant-stale-note" in app_js
+    assert "payload_version" in app_js
+    assert "applyPayloadVersion" in app_js

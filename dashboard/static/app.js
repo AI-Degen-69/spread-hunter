@@ -59,6 +59,39 @@ window.addEventListener('error', (event) => {
 const POLL_MS = 2000;
 let lastState = null;
 let lastKpi = null;
+
+/* ── Payload version (Issue #251) ─────────────────────────────────────
+ * The static files and the Python backend are served by different processes,
+ * so a page reload can outrun a backend restart: the frontend then reads
+ * fields that do not exist yet, and "absent" is indistinguishable from
+ * "genuinely unmeasured". The backend stamps `payload_version` on the /api/kpi
+ * envelope; anything lower (or missing) means this page is newer than the
+ * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
+ * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
+const EXPECTED_PAYLOAD_VERSION = 251;
+let payloadVersionWarned = false;
+
+// True when the payload is absent, malformed, or predates this page.
+function payloadIsStale(kpi) {
+  const v = kpi ? kpi.payload_version : null;
+  if (typeof v !== 'number' || !Number.isFinite(v)) return true;
+  return v < EXPECTED_PAYLOAD_VERSION;
+}
+
+// Shows the amber "backend older than page" note and warns once — not on
+// every 2s poll, which would bury the message it is trying to deliver.
+function applyPayloadVersion(kpi) {
+  const stale = payloadIsStale(kpi);
+  const note = document.getElementById('quant-stale-note');
+  if (note) note.classList.toggle('show', stale);
+  if (stale && !payloadVersionWarned) {
+    payloadVersionWarned = true;
+    const seen = kpi && kpi.payload_version != null ? kpi.payload_version : 'absent';
+    console.warn(`[App] Dashboard backend is older than this page `
+      + `(payload_version ${seen}; expected ${EXPECTED_PAYLOAD_VERSION}). `
+      + `Restart the dashboard to see all metrics.`);
+  }
+}
 // Whether the page is reading the production registry. Starts false: until the
 // first status arrives we cannot claim a live view, and START is refused on it.
 let lastDbIsProduction = false;
@@ -2200,7 +2233,7 @@ function renderQuantRiskGrid(ta, p, stats) {
     ? `${ta.expectancy_usd < 0 ? '-' : ''}$${Math.abs(ta.expectancy_usd).toFixed(3)}`
     : '$0.000';
   const meanRet = ta.mean_return_pct != null && n > 0 ? `${ta.mean_return_pct.toFixed(2)}%` : '0.00%';
-  const winRate = ta.win_rate != null && n > 0 ? `${(ta.win_rate * 100).toFixed(1)}%` : '0.0%';
+  const winRate = ta.win_rate != null && n > 0 ? `${(ta.win_rate * 100).toFixed(1)}%` : 'unmeasured';
   // `win_rate_ci95` is `{lower, upper}`, not a two-element array. Indexing it
   // gave `undefined * 100` on both ends, so the Wilson interval rendered as
   // `[NaN%–NaN%]` -- an interval that exists in the report and was never once
@@ -2209,14 +2242,16 @@ function renderQuantRiskGrid(ta, p, stats) {
   const ci95 = ciBounds && n > 0
     ? `[${(ciBounds[0] * 100).toFixed(0)}%–${(ciBounds[1] * 100).toFixed(0)}%]`
     : '[0%–0%]';
-  const var95 = ta.var_95_usd != null && n > 0 ? `$${ta.var_95_usd.toFixed(2)}` : '$0.00';
-  const cvar95 = ta.cvar_95_usd != null && n > 0 ? `$${ta.cvar_95_usd.toFixed(2)}` : '$0.00';
-  const sharpe = ta.sharpe_ratio != null && n > 0 ? ta.sharpe_ratio.toFixed(2) : '0.00';
-  const sortino = ta.sortino_ratio != null && n > 0 ? ta.sortino_ratio.toFixed(2) : '0.00';
-  const kelly = ta.kelly_fraction != null && n > 0 ? `${(ta.kelly_fraction * 100).toFixed(1)}%` : '0.0%';
-  const halfKelly = ta.half_kelly != null && n > 0 ? `${(ta.half_kelly * 100).toFixed(1)}%` : '0.0%';
-  const profitFactor = ta.profit_factor != null && n > 0 ? `${ta.profit_factor.toFixed(2)}x` : '0.00x';
-  const payoffRatio = ta.payoff_ratio != null && n > 0 ? `${ta.payoff_ratio.toFixed(2)}x` : '0.00x';
+  const var95 = ta.var_95_usd != null && n > 0 ? `$${ta.var_95_usd.toFixed(2)}` : 'unmeasured';
+  const cvar95 = ta.cvar_95_usd != null && n > 0 ? `$${ta.cvar_95_usd.toFixed(2)}` : 'unmeasured';
+  // Issue #251: no metric in this grid fabricates a zero. A null field is
+  // unmeasured — `$0.00` VaR reads as "no risk", a verdict the run never earned.
+  const sharpe = ta.sharpe_ratio != null && n > 0 ? ta.sharpe_ratio.toFixed(2) : 'unmeasured';
+  const sortino = ta.sortino_ratio != null && n > 0 ? ta.sortino_ratio.toFixed(2) : 'unmeasured';
+  const kelly = ta.kelly_fraction != null && n > 0 ? `${(ta.kelly_fraction * 100).toFixed(1)}%` : 'unmeasured';
+  const halfKelly = ta.half_kelly != null && n > 0 ? `${(ta.half_kelly * 100).toFixed(1)}%` : 'unmeasured';
+  const profitFactor = ta.profit_factor != null && n > 0 ? `${ta.profit_factor.toFixed(2)}x` : 'unmeasured';
+  const payoffRatio = ta.payoff_ratio != null && n > 0 ? `${ta.payoff_ratio.toFixed(2)}x` : 'unmeasured';
   // Issue #248 companions: the percent number may see fewer closes than the
   // dollar number, and the dollar-weighted percent bridges the sign gap.
   const nMeas = ta.n_measured_returns != null ? ta.n_measured_returns : null;
@@ -2251,7 +2286,7 @@ function renderQuantRiskGrid(ta, p, stats) {
     </div>
     <div class="quant-tile">
       <div class="quant-label">Profit Factor &amp; Payoff</div>
-      <div class="quant-value ${n > 0 ? (Number(ta.profit_factor) >= 1 ? 'positive' : 'negative') : ''}">${esc(profitFactor)}</div>
+      <div class="quant-value ${n > 0 && ta.profit_factor != null ? (Number(ta.profit_factor) >= 1 ? 'positive' : 'negative') : ''}">${esc(profitFactor)}</div>
       <div class="quant-sub">Payoff Ratio: ${esc(payoffRatio)}</div>
     </div>
   `;
@@ -4993,6 +5028,10 @@ async function pollStatus() {
     if (state) lastState = state;
     if (kpi) lastKpi = kpi;
 
+    // Issue #251: only a successful read can judge the backend's age — a failed
+    // poll must not flash the stale note for a process that never answered.
+    if (kpi) applyPayloadVersion(kpi);
+
     // Which registry these numbers came from, before anything renders them.
     if (status) renderDbMode(status);
 
@@ -5067,6 +5106,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds, decisionGatesHtml, decisionGatesRows, gateBadge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
+    payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
     renderPnlCiReadout, renderExecutionFunnel,
     OT_VIEWS, OT_COLUMNS, ordersTradesRows, ordersTradesCounts, otHeadHtml,
     activeMarketsRows, openOrdersRows, positionsRows, closedTradesRows,

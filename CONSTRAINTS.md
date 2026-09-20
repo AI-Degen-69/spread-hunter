@@ -32,3 +32,12 @@
 - Pinned dashboard tile labels ("Average Profit Per Close", "Mean Return Per Trade") stay unchanged; only explainer copy and sublabels added.
 - No new external dependencies; no live-trading, execution, risk-cap, or threshold changes.
 
+## Constraints: Issue #251 — Real Quant Risk values + stale-backend note
+- Zero regressions: focused selection (`tests/test_trade_analytics.py`, `tests/test_negative_values_read_as_losses.py`, `tests/test_analytics_api.py`) must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): payoff/kelly/VaR values + null cases, unmeasured rendering, stale-note visibility.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- Existing formulas (`expectancy_usd`, `mean_return_pct`, `ci90_lower_pct`, Sharpe/Sortino, `profit_factor`, `risk_reward_ratio`) MUST NOT change. New fields are display-only companions and never feed a gate.
+- Every new metric is NULL when unmeasurable — never a fabricated zero. VaR/CVaR NULL below `MIN_RISK_SAMPLE = 20` measured returns.
+- `payload_version` is a hand-bumped integer; bump it whenever new payload fields ship.
+- No new external dependencies; no live-trading, execution, risk-cap, or threshold changes.
+

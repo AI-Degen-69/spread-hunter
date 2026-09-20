@@ -30,25 +30,35 @@ from core_brain.kpi import _signed_usd
 
 HARNESS = Path(__file__).resolve().parent / "js" / "sign_colours_harness.cjs"
 
+# The zero fixture these tiles shipped with: numbers the backend never produced.
+_DEFAULT_RISK = {
+    "payoff_ratio": 0.0, "var_95_usd": 0.0, "cvar_95_usd": 0.0,
+    "kelly_fraction": 0.0, "half_kelly": 0.0,
+}
+
 requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")
 
 
 def _render(realized: float = -2.40, *, expectancy: float = -0.343,
             sharpe: float = -0.63, profit_factor: float = 0.13,
-            mc_end: float | None = None, win_rate_ci95=None) -> dict:
-    stats = {
-        "trade_analytics": {
-            "n_closes": 7, "expectancy_usd": expectancy,
-            "mean_return_pct": -13.85, "sharpe_ratio": sharpe,
-            "sortino_ratio": -0.53, "profit_factor": profit_factor,
-            "payoff_ratio": 0.0, "win_rate": 0.286,
-            "var_95_usd": 0.0, "cvar_95_usd": 0.0,
-            "kelly_fraction": 0.0, "half_kelly": 0.0,
-            "win_rate_ci95": (win_rate_ci95 if win_rate_ci95 is not None
-                              else {"lower": 0.0822, "upper": 0.6411}),
-        },
+            mc_end: float | None = None, win_rate_ci95=None,
+            risk: dict | None = None, include_risk_fields: bool = True,
+            payload_version=251) -> dict:
+    ta = {
+        "n_closes": 7, "expectancy_usd": expectancy,
+        "mean_return_pct": -13.85, "sharpe_ratio": sharpe,
+        "sortino_ratio": -0.53, "profit_factor": profit_factor,
+        "win_rate": 0.286,
+        "win_rate_ci95": (win_rate_ci95 if win_rate_ci95 is not None
+                          else {"lower": 0.0822, "upper": 0.6411}),
     }
+    # Issue #251: the risk tiles used to be fed hard-coded zeros. They are real
+    # payload fields now, so a test picks between the historical zero fixture,
+    # genuinely absent fields, and measured values.
+    if include_risk_fields:
+        ta.update(_DEFAULT_RISK if risk is None else risk)
+    stats = {"trade_analytics": ta}
     payload = {
         "kpi": {
             "portfolio": {"starting_capital": 79.78, "realized_pnl": realized,
@@ -57,6 +67,7 @@ def _render(realized: float = -2.40, *, expectancy: float = -0.343,
         },
         "status": {},
         "statistical_analytics": stats,
+        "payload_version": payload_version,
     }
     if mc_end is not None:
         stats["monte_carlo"] = {
@@ -183,3 +194,54 @@ def test_a_confidence_interval_with_a_missing_end_shows_no_interval():
 def test_the_expectancy_tile_puts_the_minus_in_front_of_the_dollar():
     assert _render(expectancy=-0.343)["quant_expectancy_text"] == "-$0.343"
     assert _render(expectancy=0.343)["quant_expectancy_text"] == "$0.343"
+
+
+# -- Issue #251: a measured metric shows its value, never a fabricated zero ----
+
+@requires_node
+def test_the_risk_tiles_show_the_measured_values():
+    """VaR, CVaR, Kelly and Payoff come from the backend now."""
+    rendered = _render(risk={
+        "payoff_ratio": 1.50, "var_95_usd": 4.05, "cvar_95_usd": 5.00,
+        "kelly_fraction": 0.1667, "half_kelly": 0.0833,
+    })
+    assert rendered["quant_var"] == "$4.05"
+    assert rendered["quant_cvar"] == "CVaR Tail: $5.00"
+    assert rendered["quant_kelly"] == "16.7%"
+    assert "8.3%" in rendered["quant_kelly_sub"]
+    assert rendered["quant_payoff"] == "Payoff Ratio: 1.50x"
+
+
+@requires_node
+def test_a_null_risk_metric_reads_unmeasured_not_zero():
+    """A field the payload carries as null is unmeasurable, not zero risk."""
+    rendered = _render(include_risk_fields=False)
+    assert rendered["quant_var"] == "unmeasured"
+    assert rendered["quant_cvar"] == "CVaR Tail: unmeasured"
+    assert rendered["quant_kelly"] == "unmeasured"
+    assert "unmeasured" in rendered["quant_kelly_sub"]
+    assert "unmeasured" in rendered["quant_payoff"]
+
+
+@requires_node
+def test_a_stale_backend_says_so_once():
+    """Field-absent used to be silent. Now the operator is told to restart."""
+    stale = _render(payload_version=250)
+    assert stale["stale_note_shown"] is True
+    assert stale["stale_warn_count"] == 1
+    assert "older than this page" in stale["stale_warn_text"]
+
+
+@requires_node
+def test_a_current_backend_shows_no_note_and_warns_not():
+    fresh = _render(payload_version=251)
+    assert fresh["stale_note_shown"] is False
+    assert fresh["stale_warn_count"] == 0
+
+
+@requires_node
+def test_a_payload_predating_the_version_field_reads_as_stale():
+    """The backend that never heard of `payload_version` is the stale one."""
+    stale = _render(payload_version=None)
+    assert stale["stale_note_shown"] is True
+    assert "absent" in stale["stale_warn_text"]

@@ -167,6 +167,21 @@ header {
 }
 .exposure-bar.safe { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
 .exposure-bar.warn { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
+
+/* Issue #251: a backend older than the page leaves payload fields absent, which
+ * would otherwise read as "genuinely unmeasured". Hidden until the version
+ * check in pollStatus() adds .show. */
+.quant-stale-note {
+  display: none;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-border);
+  color: #fbbf24;
+  font-size: 12px;
+}
+.quant-stale-note.show { display: block; }
 .exposure-bar.danger { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); }
 .exposure-track {
   width: 60px;

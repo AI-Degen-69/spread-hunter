@@ -2102,6 +2102,14 @@ function fakeClassList() {
     add: (c) => set.add(c),
     remove: (c) => set.delete(c),
     contains: (c) => set.has(c),
+    // A real classList has toggle; the dashboard's poll loop uses it (the
+    // stale-backend note, the carousel's active tab), so a stub without it
+    // fails the poll rather than the behaviour under test.
+    toggle: (c, force) => {
+      const on = force === undefined ? !set.has(c) : !!force;
+      if (on) set.add(c); else set.delete(c);
+      return on;
+    },
   };
 }
 
