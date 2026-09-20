@@ -78,9 +78,12 @@ One or two sentences. What was wrong, or what was missing.
 ## Test output
 
 ```
-python -m pytest -q
-<paste the real output>
+python -m pytest -q tests/test_<module>.py
+<paste the real targeted-test output>
 ```
+
+GitHub CI runs the full `python -m pytest -q` regression suite on Ubuntu and Windows; local
+full-suite output is not required at the review/PR stations.
 
 ## How to verify
 
@@ -92,8 +95,8 @@ reads `@coderabbitai summary` after a few minutes, CodeRabbit did not run. Fix t
 by hand rather than leaving a placeholder as the PR title.
 
 **These two placeholders are the only permitted uses of the `@coderabbitai` handle at PR
-creation.** They do not trigger a review — the review fires on PR open regardless. The ban
-in the next section is about comments posted during review rounds.
+creation.** They do not trigger a review. The review must be triggered explicitly after the
+PR is opened, as described below.
 
 ## Review by CodeRabbit
 
@@ -111,8 +114,7 @@ would silently override every UI setting.
 | `@coderabbitai` | the PR **title** placeholder, set once at creation |
 | `@coderabbitai summary` | one line in the PR **body**, set once at creation |
 | `@coderabbitai review` | its own comment, **only** to answer a "Trigger review" notice |
-| `@coderabbitai resolve` | its own comment, closing the threads you accepted |
-| `@coderabbitai autofix` | its own comment, once per round, after triage |
+| `@coderabbitai resolve` | its own comment, closing only replied-to threads |
 
 Every other use is banned, and `full review` is the one that costs real money.
 
@@ -135,7 +137,8 @@ Post it as its own comment:
 gh pr comment <n> --body "@coderabbitai review"
 ```
 
-Then **wait ~30 seconds and read the reply**, which is one of three things:
+Then immediately inspect the PR comments, reviews, and inline threads. If no review content exists,
+use the required 5m → 4m → 3m → 2m → 1m countdown; do not substitute a 30-second wait.
 
 | Reply | What it means | What to do |
 | --- | --- | --- |
@@ -144,46 +147,32 @@ Then **wait ~30 seconds and read the reply**, which is one of three things:
 | `⚠️ Action not completed — Pull request is closed` | The PR was already merged | Too late; nothing gets reviewed |
 
 **Trigger before merging.** A merged PR refuses the trigger outright. The order is: open
-the PR → see the skip notice → post the trigger → wait 30 s → read the reply → merge.
-
-**Every push needs its own trigger.** Measured on PR #173: after pushing the round-1 fix
-commit, the CodeRabbit check went straight back to `Review skipped: manual review required
-for this OSS repository`. The incremental review a push would normally start does not fire
-here either, so each round is *push, then trigger*. The hourly allowance is the limit on
-how many rounds a PR can actually get — a trigger fired inside the same hour answers
-`Review rate limited`, and that is the point where the agent review takes over.
+the PR → post the trigger → inspect immediately → use the countdown only if no review content
+exists. A review trigger is used for the single review round; do not trigger a secondary review
+after accepted fixes are pushed.
 
 A green CodeRabbit status check proves nothing on its own: both `Review skipped: manual
 review required for this OSS repository` and `Review rate limited` report `pass`. Read the
 check's description, never its colour.
 
-### Working a round
+### Working the single round
 
-Judgment stays with the agent; the typing does not have to. CodeRabbit's Autofix
-implements the fixes for threads you accepted, so the agent spends its tokens deciding
-what is right rather than retyping what a reviewer already described.
+Judgment and code changes stay with the agent. Do **not** invoke `@coderabbitai autofix`.
 
-1. **Wait for the review to finish.** Autofix acts on the review that has landed; firing
-   it while a review is still in flight fixes a half-posted round. `gh pr checks <n>`
-   showing the CodeRabbit check as `pass` / `Review completed` is the signal.
-2. **Triage every comment.** Accept the ones that are correct and worth it. Decline the
-   rest **on their own threads**, one concise sentence each — wrong, out of scope, or on a
-   vendored path. Autofix only touches threads that are still unresolved, so a declined
-   thread you resolved is a thread it will leave alone.
-3. **Post exactly one `@coderabbitai autofix` comment.** One per round, never two: each
-   autofix commit is itself a push, and a second one buys a second incremental review for
-   the same round of feedback. Anything Autofix cannot do — a fix that needs a design
-   decision, or one it got wrong — the agent implements by hand, batched into ONE commit
-   and pushed ONCE.
-4. **Judge the autofix commit like any other diff.** It is a machine's patch on your
-   branch: read it, run `python -m pytest -q`, and revert or amend anything that is wrong.
-   An autofix commit that lands unread is worse than no autofix at all.
-5. Post **one** summary comment per round: what changed, what you declined, and why.
-6. In a **separate** comment, post `@coderabbitai resolve` to close the accepted threads.
-   `resolve` does not start a review.
-
-Autofix requires CodeRabbit Pro and is enabled by default. If it does not run, hand-fix
-the round instead of retrying it — a stalled loop costs more than the typing.
+1. **Wait for the review to finish.** Read the PR status and review content; a green check
+   alone is not proof of a completed review. If the review is not finished, use the required
+   5m → 4m → 3m → 2m → 1m countdown.
+2. **Triage every comment.** Accept technically correct findings and reject the rest with a
+   concrete reason on each thread. Reply before resolving: `ACCEPT: <fix>` or
+   `REJECT: <reason>`.
+3. **Apply accepted fixes locally** and run targeted tests covering the touched code, such as
+   `python -m pytest -q tests/test_<module>.py`. If a test fails, make a surgical correction or
+   revert the offending change, reject it with the failure reason, and rerun the targeted tests.
+4. **Batch all accepted fixes into one commit and push once.** Do not trigger a secondary
+   CodeRabbit review. Post one concise summary comment, then use `@coderabbitai resolve` only
+   for threads that already received an explicit reply.
+5. Verify the full regression suite through GitHub CI; local targeted tests are pre-push
+   verification, while `gh pr checks <n>` is the merge gate.
 
 ### Fix by severity, not by comment count
 
@@ -201,14 +190,19 @@ The PR is review-complete when the latest **automatic** review carries no Critic
 Major touching `core_brain/`, `scoring/` or `dashboard/server.py`. Open Minors do not block
 merge.
 
-Three rounds is a runaway guard, not a target. If a PR reaches a fourth review, something
-is wrong with the change or the filters — stop and say so rather than grinding.
+This pipeline runs exactly one focused review round. Do not start a secondary review after
+pushing accepted fixes. If the review is rate-limited or remains stuck after the countdown,
+use the objective agent fallback review and record that status honestly.
 
 ### CodeRabbit limit fallback
 
-1. **Priority 1**: Get a CodeRabbit review. Fire the manual trigger (`@coderabbitai review`), wait ~30 seconds for the reply, then let the review land (2m check cycles).
-2. **Priority 2**: If CodeRabbit reports that its review limit has been reached (or asks to wait 1 hour), **never wait 1 hour**. A "fewer than 10 stars" notice is not this case — that one means fire the trigger. The agent executes an objective diff review directly, checking logic, limits, tests, and regressions.
-3. **Priority 3**: CodeRabbit outages or quota limits must never block development. Triage internal findings, post review summary to the PR, verify CI, and proceed.
+1. **Priority 1**: Get one CodeRabbit review. Fire `@coderabbitai review`, inspect immediately,
+   then use the 5m → 4m → 3m → 2m → 1m countdown only when no review content exists.
+2. **Priority 2**: If CodeRabbit reports a quota limit or remains stuck after the countdown,
+   do not wait an hour. Execute the objective agent fallback review, checking logic, limits,
+   tests, and regressions.
+3. **Priority 3**: CodeRabbit outages or quota limits must never block development. Triage
+   findings, apply accepted fixes locally, run targeted tests, verify CI, and proceed.
 
 
 ### Writing style

@@ -42,18 +42,22 @@ Operator-facing commands are PowerShell; sequence with `;`, never `&&`.
 
 ## Done means
 
-Targeted checks for the changed behaviour must be green during development; the full
-`python -m pytest -q` suite is required before shipping or merging (run by the agent, never
-delegated to the operator). Every changed behaviour needs a test that fails without the
-change, plus a **How to verify** block written for the operator that lists only non-pytest,
-operator-actionable steps. Report the checks actually run, not the impression. Rules and
-examples:
+Targeted checks for the changed behaviour must be green during development and after review
+fixes. For Python changes, use the focused test file or selection matching the touched
+modules (for example, `python -m pytest -q tests/test_<module>.py`). The full
+`python -m pytest -q` regression suite is the GitHub CI merge gate on Ubuntu and Windows;
+do not repeat that full suite locally during the review/PR stations. Every changed behaviour
+needs a test that fails without the change, plus a **How to verify** block written for the
+operator that lists only non-pytest, operator-actionable steps. Report the checks actually
+run, not the impression. Rules and examples:
 [docs/agents/verifying.md](docs/agents/verifying.md).
 
 ## Model conduct — verification
 
-- **The agent runs the test suite itself.** `python -m pytest -q` is an internal gate the
-  agent executes and reports on. It is never handed to the operator as a prompt, suggestion,
+- **The agent runs focused checks itself.** During TDD, run the focused test through the
+  RED/GREEN/REFACTOR loop; after review fixes, rerun the focused checks covering the touched
+  code. The full `python -m pytest -q` suite runs in GitHub CI on Ubuntu and Windows and is
+  the merge gate. These commands are never handed to the operator as a prompt, suggestion,
   or "How to verify" step.
 - **Never tell, ask, or suggest the operator to run `pytest`** (or any `/pytest` prompt) to
   validate work. Report the agent-run results instead.
@@ -82,11 +86,11 @@ Full rules: [docs/agents/git-workflow.md](docs/agents/git-workflow.md).
 
 GitHub operations are **fully autonomous and delegated to the agent**: commit, push, branch, PR creation, review rounds, and merging are decided and executed directly by the agent. No operator sign-off is needed. Keep the operator informed with concise status updates (e.g. `Working on [branch]...`, `Committed & Pushed...`, `PR Opened #...`, `Merged PR #...`).
 
-1. **One push per review round.** Batch every accepted fix into one commit and push once. Each push starts its own incremental review.
-2. **One summary comment per round** — what you changed, what you declined, why. Triage every comment first, declining the rejected ones on their own threads, then post exactly one `@coderabbitai autofix` (only once the review has finished) and read the commit it pushes. Post `@coderabbitai resolve` as a separate comment. The handle is allowed in five places only: the PR title placeholder, the body summary line, `review`, `resolve`, and `autofix`. Reviews do **not** fire on their own here — CodeRabbit opens every PR with a "fewer than 10 stars / Trigger review" notice, and that notice means post `@coderabbitai review`, wait 30 seconds, and read the reply. Trigger before merging; a closed PR refuses it.
-3. **Stop pushing after the 3rd round of fix.** Upon getting a 4th review, conclude whether it can be merged or if there is a serious blocker (Critical/High) that must be addressed. Minors/nits can be skipped once reviewed.
-4. **Read the full diff and check the stack before merging.** A stacked merge can carry another PR onto `main` with it. Merge autonomously when CI checks are green and blockers are resolved.
-5. **Review Priority & CodeRabbit Limit Fallback.** Prefer CodeRabbit for reviews, and fire the manual trigger to get one (rule 2). Only a **quota** reply — `Review rate limited`, or a request to wait 1 hour — justifies giving up on it. A "fewer than 10 stars / manual review required" notice is not a quota reply; it is the trigger prompt. On a real quota reply, do not stall work: perform an objective agent review directly, triage findings, and proceed.
+1. **One push per review round.** Batch every accepted fix into one commit and push once.
+2. **One focused review round.** Triage every CodeRabbit comment before acting. Reply to every accepted or rejected thread with a concrete `ACCEPT:` or `REJECT:` rationale, resolve only replied-to threads, apply accepted fixes locally, and run the targeted checks covering the touched code. Do **not** invoke `@coderabbitai autofix`; the agent applies accepted fixes and performs the verification. Post one concise summary comment for the round. CodeRabbit reviews do **not** fire automatically here: after opening the PR, post `@coderabbitai review` as its own comment. Check immediately for an existing review, then use the required 5m → 4m → 3m → 2m → 1m countdown only when no review content exists.
+3. **No secondary review loop.** This pipeline runs exactly one focused CodeRabbit round. Do not re-trigger a second review after pushing the accepted fixes. If CodeRabbit is rate-limited or remains stuck after the countdown, use the objective agent fallback review and record that status honestly.
+4. **Read the full diff and check the stack before merging.** A stacked merge can carry another PR onto `main` with it. Merge autonomously only when targeted local checks pass, CI is green, and blockers are resolved. GitHub CI, not local pytest, is the merge gate; inspect it with `gh pr checks <pr-number>`.
+5. **Review fallback.** Prefer CodeRabbit for the single review round. A quota response or a review that remains stuck after the allowed countdown triggers the agent fallback review; do not wait an hour or claim a clean CodeRabbit pass.
 
 A `PreToolUse` hook (`scripts/hooks/git_workflow_guard.py`) puts these rules at the command. It **reminds** on rule 1, printing the round discipline before a push, and **guards** against runaway loops (blocking a 4th push without triage).
 

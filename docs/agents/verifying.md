@@ -10,10 +10,18 @@ Every change ships with two proofs. Both are required before reporting the work 
 
 ## 1. Automated — run it yourself
 
-`python -m pytest -q` green, and every changed behaviour covered by a test that fails
-without the change. Paste the real output, not a summary of it. **The agent runs this
-internally and reports the result; it must never prompt or suggest the operator to run the
-test suite.**
+During implementation, run the focused test matching the changed behavior through the
+RED/GREEN/REFACTOR loop. After review fixes, rerun the focused checks covering the touched
+code, for example:
+
+```bash
+python -m pytest -q tests/test_<module>.py
+```
+
+Paste the real targeted-test output, not a summary of it. The full `python -m pytest -q`
+regression suite runs in GitHub CI on Ubuntu and Windows and is the merge gate; do not repeat
+that full suite locally during the review/PR stations. **The agent runs these checks internally
+and reports the result; it must never prompt or suggest the operator to run the test suite.**
 
 Sizing, fill attribution, and merge paths always land with a test.
 
