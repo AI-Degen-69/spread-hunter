@@ -319,6 +319,9 @@ def compute_trade_analytics(
     wins: list[float] = []
     losses: list[float] = []
     return_pcts: list[float] = []
+    # Validated (pnl, cost) pairs behind `return_pcts` — reused below for the
+    # dollar-weighted companion so a non-numeric cost string is parsed once.
+    _measured_pairs: list[tuple[float, float]] = []
 
     for c in closes:
         pnl = float(c.get("realized_pnl") or 0.0)
@@ -327,6 +330,7 @@ def compute_trade_analytics(
         return_pct = (100.0 * pnl / cost_f) if (cost_f is not None and cost_f > 0) else None
         if return_pct is not None:
             return_pcts.append(return_pct)
+            _measured_pairs.append((pnl, cost_f))
         if pnl > 0:
             wins.append(pnl)
         else:
@@ -349,6 +353,19 @@ def compute_trade_analytics(
 
     expectancy_usd = statistics.mean(wins + losses) if n else None
     mean_return_pct = statistics.mean(return_pcts) if return_pcts else None
+    # Companion fields (display-only, never gate inputs): how many closes the
+    # percent mean actually sees, and the dollar-weighted percent over the same
+    # measured population. NULL when unmeasurable, never a fabricated zero.
+    # Reuses the validated (pnl, cost) pairs from the loop above — no second
+    # float() parse that could throw on a non-numeric cost_basis string.
+    n_measured_returns = len(return_pcts) if n else None
+    dollar_weighted_return_pct: Optional[float] = None
+    if n and _measured_pairs:
+        _meas_cost = sum(cost for _, cost in _measured_pairs)
+        if _meas_cost > 0:
+            dollar_weighted_return_pct = (
+                100.0 * sum(pnl for pnl, _ in _measured_pairs) / _meas_cost
+            )
     stdev_return_pct = statistics.stdev(return_pcts) if len(return_pcts) > 1 else None
 
     ci90_lower_pct: Optional[float] = None
@@ -421,6 +438,8 @@ def compute_trade_analytics(
         "win_rate_ci95": win_rate_ci95,
         "expectancy_usd": expectancy_usd,
         "mean_return_pct": mean_return_pct,
+        "n_measured_returns": n_measured_returns,
+        "dollar_weighted_return_pct": dollar_weighted_return_pct,
         "stdev_return_pct": stdev_return_pct,
         "ci90_lower_pct": ci90_lower_pct,
         "ci95_return_pct": ci95_return_pct,

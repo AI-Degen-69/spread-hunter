@@ -1,51 +1,51 @@
-# Issue #242 — Portfolio equity chart and header cleanup
+# Issue #248 — Audit and align dollar expectancy with mean return metrics
 
 ## Scope and classification
-- **Size:** Standard — coordinated HTML/CSS/JavaScript changes plus focused dashboard test coverage, with no backend or schema change.
-- **Types:** Design/UI + Code.
-- **Stack:** Browser JavaScript served by the Python dashboard, Python/pytest test suite, and an existing Node-based portfolio harness.
-- **Primary skills:** `frontend-ui-engineering`, `test-driven-development`, `incremental-implementation`, and `verification-before-completion`.
+- **Size:** Standard — coordinated Python KPI + dashboard JS + audit doc + test updates, one design decision (companion fields, formulas unchanged).
+- **Types:** Code + Docs + Design/UI.
+- **Stack:** Python/pytest (`core_brain/kpi.py`), browser JS served by the Python dashboard (`dashboard/static/app.js`).
+- **Primary skills:** `test-driven-development`, `incremental-implementation`, `verification-before-completion`.
+
+## Spec (embedded — Small surface, no SPEC.md ceremony beyond this)
+- `expectancy_usd` = mean of `realized_pnl` over ALL closes (equal-weighted dollars).
+- `mean_return_pct` = mean of `100*pnl/cost` over closes with valid positive `cost_basis` only (equal-weighted percents, smaller population).
+- Sign divergence (+$ vs −%) is mathematically valid: a small-cost −100% trade dominates the percent mean without outweighing larger-dollar wins.
+- New read-only companions: `n_measured_returns` (len of measured percent population), `dollar_weighted_return_pct` = 100·Σpnl/Σcost over measured trades only. Both `None` when unmeasurable — never fabricated zero.
+- Gate inputs (`pct_pass`, `dollar_pass`, `ci90_lower_pct`, `run_profitability`) MUST NOT change; new fields are display-only.
 
 ## Evidence-based improvement proposal
-Extract the chart-point construction into a small deterministic helper inside `dashboard/static/app.js` and test its output directly, because the issue notes that the existing harness skips the chart when its containers are absent; this keeps the new real-data behavior testable without adding a browser dependency.
+Pin gate-immunity with an explicit test: the GO/NO-GO `passed` verdict is identical before/after the companion fields are added (the issue says "unless the audit proves a metric currently gates a decision incorrectly" — so the audit must prove the gate is untouched, not just promise it).
 
 ## Implementation tasks
 
-### Task 1 — Add the chart test seam [Code/Test]
-- **Files:** `tests/js/portfolio_card_harness.cjs`, `tests/test_portfolio_card_basis.py` (or the nearest existing portfolio-card test location).
-- **Build:** Extend the existing harness with non-null chart SVG and tooltip stubs, and add fixtures/assertions for close-series input, empty input, and a final current value.
-- **Verification:** Run the focused portfolio-card test; first confirm the new assertion fails against the current synthetic chart path, then keep the failing test as the RED proof before implementation.
+### Task 1 — Write the audit document [Docs]
+- **Files:** `docs/audits/expectancy-vs-mean-return.md` (new).
+- **Build:** Five-column table per metric (numerator, denominator, population, weighting, sign interpretation) for `expectancy_usd`, `mean_return_pct`, `dollar_weighted_return_pct`; plain-language conclusion that both formulas are correct for their names.
+- **Verification:** File exists with the table; test in Task 3 pins the same facts as assertions so doc and code cannot drift.
 
-### Task 2 — Extract and build real equity points [Code/Frontend]
-- **Files:** `dashboard/static/app.js`.
-- **Build:** Add the deterministic chart-series helper proposed above. Filter to `type === "close"`, preserve chronological order, prepend the starting-capital anchor, append the current total value, and remove the `Math.pow(prog, 0.9)` synthetic fallback.
-- **Verification:** Run the focused portfolio-card test and assert the plotted values represent the known close points plus the final current value.
+### Task 2 — Add companion fields to trade analytics [Code/Test]
+- **Files:** `core_brain/kpi.py` (`compute_trade_analytics`), `tests/test_trade_analytics.py`.
+- **Build:** Add `n_measured_returns` and `dollar_weighted_return_pct` (measured-trades only, `None` when unmeasurable), placed next to `mean_return_pct`; flows through existing `report()` `trade_analytics` block with no extra handling.
+- **Verification:** New assertions fail before the change (RED), pass after (GREEN); existing `expectancy_usd`/`mean_return_pct`/`ci90_lower_pct` values unchanged.
 
-### Task 3 — Implement real time labels and baseline [Design/UI]
-- **Files:** `dashboard/static/app.js`.
-- **Build:** Convert epoch-second close timestamps with `new Date(ts * 1000)`, retain the four-tick layout, label the final point `Current`, and make the START baseline full-width and dotted.
-- **Verification:** Focused chart assertions must check real timestamp-derived labels, `Current`, and the baseline `stroke-dasharray`; inspect the rendered chart in a browser preview if the harness cannot expose the final SVG attributes.
+### Task 3 — Screenshot-like regression fixture [Code/Test]
+- **Files:** `tests/test_trade_analytics.py`, `tests/test_seed_preview_fixture.py` (operator-facing comment only).
+- **Build:** Deterministic closes reproducing +$0.11 expectancy vs −0.70% mean return shape; assert both new companion fields (`n_measured_returns`, `dollar_weighted_return_pct`) including their `None` behavior on unmeasurable input.
+- **Verification:** `python -m pytest -q tests/test_trade_analytics.py tests/test_seed_preview_fixture.py` green; regression fails if formulas are altered.
 
-### Task 4 — Handle empty state and preserve interaction [Design/UI]
-- **Files:** `dashboard/static/app.js`, `tests/test_portfolio_card_basis.py`.
-- **Build:** Render a flat starting-capital baseline with zero close entries; preserve mousemove, mouseleave, crosshair, and tooltip behavior. Restrict tooltip rows to real point fields (`v`, `pnl`, and optional `market`).
-- **Verification:** Focused test covers zero closes and tooltip field presence; browser verification confirms no console errors and a usable empty chart.
+### Task 4 — Dashboard explainer copy and sublabels [Design/UI]
+- **Files:** `dashboard/static/app.js` (`renderAnalyticsSurface` + `renderQuantRiskGrid`), `tests/test_analytics_api.py`.
+- **Build:** Reuse `.info-bubble`/`.info-tooltip` click pattern for a plain-language sign-divergence explainer in BOTH grids; sublabel dollar-weighted return under mean return, `n_measured_returns` next to `n_closes`; `None` renders "unmeasured", never `0`. Keep pinned tile labels ("Average Profit Per Close", "Mean Return Per Trade") unchanged.
+- **Verification:** `tests/test_analytics_api.py` asserts new copy/sublabels present and pinned labels intact; browser eyeball of `#kpi-grid` + `#quant-grid`.
 
-### Task 5 — Simplify the Portfolio Overview header [Design/UI]
-- **Files:** `dashboard/static/index.html`, `dashboard/static/styles.css`.
-- **Build:** Move Starting Bankroll into `.broker-title-group`; remove the venue badge and Settlement Currency line; retain the venue wallet row and all seven existing tested IDs. Remove only unused venue-badge CSS and adjust layout rules if required.
-- **Verification:** Run `tests/test_portfolio_card_basis.py` and the related headline/overview tests; inspect the Performance & Analytics Portfolio Overview at desktop and narrow viewport widths.
-
-### Task 6 — Review regression coverage and documentation contracts [Code/Test]
-- **Files:** `tests/test_portfolio_headline_basis.py`, `tests/test_portfolio_overview.py` only if assertions require a behavior-preserving update; no backend files unless a test reveals an existing contract mismatch.
-- **Build:** Keep backend KPI behavior unchanged and ensure wallet divergence/show-hide behavior remains covered.
-- **Verification:** Run focused tests for the changed dashboard behavior. Do not run the full repository suite locally during Station IV/V; GitHub CI runs `python -m pytest -q` on Ubuntu and Windows as the merge gate.
+### Task 5 — Gate-immunity and regression sweep [Code/Test]
+- **Files:** `tests/test_trade_analytics.py`, `tests/test_mean_pnl_ci.py` (assertions only unless a mismatch is found).
+- **Build:** Assert GO/NO-GO `passed` verdict identical with/without companions; `run_profitability` untouched; never add new fields to any gate.
+- **Verification:** `python -m pytest -q tests/test_trade_analytics.py tests/test_mean_pnl_ci.py tests/test_seed_preview_fixture.py tests/test_analytics_api.py` green.
 
 ## Acceptance checklist
-- [x] Header layout matches the issue and existing DOM IDs remain intact.
-- [x] Production chart has no synthetic curve path.
-- [x] Real close points, start anchor, and final current point render correctly.
-- [x] Timestamp labels, Current label, dotted baseline, empty state, tooltip, and crosshair are covered.
-- [x] Focused dashboard tests pass after each relevant task and after review fixes.
-- [ ] Browser verification is recorded for the visual change in Station IV.
-- [ ] Full regression is verified by GitHub CI before merge.
+- [ ] Audit table covers numerator/denominator/population/weighting/sign per metric.
+- [ ] +$0.11 vs −0.70% regression demonstrates the valid divergence in operator language.
+- [ ] Formulas preserved with clearer copy, or changed consistently everywhere — no silent meaning change.
+- [ ] Missing/non-positive cost basis excluded from percent calcs, surfaced as unmeasured.
+- [ ] Focused four-file pytest selection green; gate verdict provably unchanged.

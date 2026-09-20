@@ -52,8 +52,13 @@ def test_fixture_exercises_the_closes_based_tiles(temp_db):
     assert ta["losses"] == 3
     assert ta["win_rate"] == pytest.approx(5 / 8)
     # Dollar expectancy is positive, mean return % negative (the -100% trade).
+    # Issue #248: that divergence is valid, not a bug — dollars average $ per
+    # close over all 8, percents average % per close where a small-cost -100%
+    # dominates. The dollar-weighted companion sides with the dollar sign.
     assert ta["expectancy_usd"] == pytest.approx(0.20 / 8)
     assert ta["mean_return_pct"] < 0
+    assert ta["n_measured_returns"] == 8
+    assert ta["dollar_weighted_return_pct"] > 0
     assert ta["sharpe_ratio"] is not None
     assert ta["max_drawdown_usd"] is not None
     assert ta["max_naked_exposure_usd"] == pytest.approx(3.20)

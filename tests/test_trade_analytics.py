@@ -266,3 +266,117 @@ def test_report_exposes_trade_analytics(temp_db, tmp_path, monkeypatch):
     assert data["win_rate"] == pytest.approx(0.5)
     assert data["avg_win"] == pytest.approx(1.50)
     assert data["avg_loss"] == pytest.approx(-1.00)
+
+
+# --------------------------------------------------------------------------
+# Issue #248: companion fields explain the dollar-vs-percent sign divergence
+# --------------------------------------------------------------------------
+
+def test_companion_fields_measure_the_percent_population():
+    """`n_measured_returns` counts the closes the percent mean actually sees,
+    and `dollar_weighted_return_pct` is the dollar-weighted percent over them."""
+    closes = [
+        dict(realized_pnl=1.50, cost_basis=5.00, ts=100.0),   # +30%
+        dict(realized_pnl=-1.00, cost_basis=4.00, ts=200.0),  # -25%
+        dict(realized_pnl=0.75, cost_basis=None, ts=300.0),   # unmeasured
+    ]
+    ta = compute_trade_analytics(closes, starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    assert ta["n_measured_returns"] == 2
+    assert ta["dollar_weighted_return_pct"] == pytest.approx(
+        100.0 * (1.50 - 1.00) / (5.00 + 4.00))
+    # The classic fields are untouched by the companions.
+    assert ta["expectancy_usd"] == pytest.approx((1.50 - 1.00 + 0.75) / 3)
+    assert ta["mean_return_pct"] == pytest.approx((30.0 - 25.0) / 2)
+
+
+def test_companion_fields_are_null_when_nothing_is_measurable():
+    """No valid cost basis anywhere -> both companions are NULL, never zero."""
+    closes = [dict(realized_pnl=1.50, cost_basis=None, ts=100.0)]
+    ta = compute_trade_analytics(closes, starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    assert ta["n_measured_returns"] == 0
+    assert ta["dollar_weighted_return_pct"] is None
+    assert ta["expectancy_usd"] == pytest.approx(1.50)
+
+
+def test_no_closes_means_no_companions():
+    ta = compute_trade_analytics([], starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    assert ta["n_measured_returns"] is None
+    assert ta["dollar_weighted_return_pct"] is None
+
+
+def test_screenshot_like_divergence_is_valid_and_explained():
+    """Issue #248 audit case: positive dollar expectancy alongside a negative
+    equal-weighted mean return. A small-cost -100% trade dominates the percent
+    mean while larger-dollar wins keep the dollar mean positive; the
+    dollar-weighted companion agrees in sign with the dollar number."""
+    closes = [
+        dict(realized_pnl=2.00, cost_basis=10.00, ts=100.0),  # +20%
+        dict(realized_pnl=1.50, cost_basis=10.00, ts=200.0),  # +15%
+        dict(realized_pnl=1.00, cost_basis=10.00, ts=300.0),  # +10%
+        dict(realized_pnl=0.50, cost_basis=10.00, ts=400.0),  # +5%
+        dict(realized_pnl=0.40, cost_basis=10.00, ts=500.0),  # +4%
+        dict(realized_pnl=-0.20, cost_basis=10.00, ts=600.0), # -2%
+        dict(realized_pnl=-3.00, cost_basis=10.00, ts=700.0), # -30%
+        dict(realized_pnl=-1.00, cost_basis=1.00, ts=800.0),  # -100% on $1
+    ]
+    ta = compute_trade_analytics(closes, starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    assert ta["expectancy_usd"] == pytest.approx(1.20 / 8)
+    assert ta["expectancy_usd"] > 0
+    assert ta["mean_return_pct"] == pytest.approx(-78.0 / 8)
+    assert ta["mean_return_pct"] < 0
+    # The bridge metric sides with the dollar sign, not the percent sign.
+    assert ta["dollar_weighted_return_pct"] == pytest.approx(
+        100.0 * 1.20 / 71.00)
+    assert ta["dollar_weighted_return_pct"] > 0
+    assert ta["n_measured_returns"] == 8
+
+
+def test_report_payload_carries_the_companion_fields(temp_db, tmp_path, monkeypatch):
+    """The /api/kpi `trade_analytics` block exposes the new display fields."""
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    reg.log_close(_close(ts=t0 + 60, realized_pnl=1.50, cost_basis=5.00))
+    reg.log_close(_close(ts=t0 + 120, condition_id="0xmarket_b",
+                         market_slug="market-b", realized_pnl=-1.00,
+                         cost_basis=4.00))
+
+    ta = report(db_path=temp_db, run_id=RUN)["trade_analytics"]
+
+    assert ta["n_measured_returns"] == 2
+    assert ta["dollar_weighted_return_pct"] == pytest.approx(
+        100.0 * 0.50 / 9.00)
+
+
+def test_companion_fields_never_feed_the_go_no_go_gate():
+    """Gate-immunity (Issue #248): adding display-only companions must not move
+    the `passed` verdict, `ci90_lower_pct`, or `run_profitability` inputs."""
+    closes = [
+        dict(realized_pnl=1.50, cost_basis=5.00, ts=100.0),
+        dict(realized_pnl=-1.00, cost_basis=4.00, ts=200.0),
+        dict(realized_pnl=0.75, cost_basis=None, ts=300.0),
+    ]
+    ta = compute_trade_analytics(closes, starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    gate_keys = {"expectancy_usd", "mean_return_pct", "stdev_return_pct",
+                 "ci90_lower_pct", "ci95_return_pct", "mean_pnl_ci"}
+    assert gate_keys <= set(ta)
+    assert ta["ci90_lower_pct"] is not None
+    assert "passed" not in ta  # the verdict lives in the gate fn, not here
+    # The real GO/NO-GO verdict on the same closes is negative — and the
+    # display-only companions cannot move it: stripping them changes nothing.
+    gate_closes = [dict(c) for c in closes]
+    verdict_with = kpi_mod.evaluate_stat_gate(
+        gate_closes, starting_capital=100.0)
+    assert verdict_with["passed"] is False
+    stripped = [dict(c) for c in closes]
+    verdict_without = kpi_mod.evaluate_stat_gate(
+        stripped, starting_capital=100.0)
+    assert verdict_without == verdict_with
+    # Companions exist alongside the gate inputs without replacing any of them.
+    assert ta["n_measured_returns"] == 2
+    assert ta["dollar_weighted_return_pct"] is not None
