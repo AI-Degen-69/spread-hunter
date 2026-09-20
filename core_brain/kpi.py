@@ -38,6 +38,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # bucket groups honestly; a blank cell reads as missing data.
 UNCATEGORIZED = "Uncategorized"
 
+# Hand-bumped payload envelope version, returned by report() as
+# `payload_version`. The frontend compares it against its own expectation to
+# tell "backend older than the page" apart from "field genuinely unmeasured".
+# Bump this whenever new payload fields ship.
+KPI_PAYLOAD_VERSION = 251
+
+# Historical VaR/CVaR need a 5% tail to actually contain an observation; below
+# 20 measured per-close returns the tail is empty and the metric stays NULL
+# rather than quoting a percentile of nothing.
+MIN_RISK_SAMPLE = 20
+
 
 def _wilson_ci(successes: int, n: int, z: float = 1.96) -> Optional[dict[str, float]]:
     """Wilson score interval for a binomial proportion (the win rate).
@@ -395,6 +406,45 @@ def compute_trade_analytics(
     gross_losses = abs(sum(losses))
     profit_factor = (gross_wins / gross_losses) if gross_losses > 0 else None
 
+    # Issue #251: the Quant Risk tiles used to render fabricated zeros for
+    # these five; now they are measured, and NULL whenever unmeasurable.
+    # Payoff ratio is the classic reward:risk alias — same win/loss shape,
+    # same NULL rule (an all-win run has no downside to size against).
+    payoff_ratio = risk_reward_ratio
+    # Kelly fraction: f* = p − q/b on the measured win rate and payoff. May go
+    # negative (reads as "no bet"); NULL when there is no loss or no rate yet.
+    kelly_fraction: Optional[float] = None
+    half_kelly: Optional[float] = None
+    if win_rate is not None and payoff_ratio is not None and payoff_ratio > 0:
+        kelly_fraction = win_rate - (1.0 - win_rate) / payoff_ratio
+        half_kelly = kelly_fraction / 2.0
+
+    # Historical VaR / CVaR on the measured per-close return distribution:
+    # interpolated 5th percentile, and the mean of the tail at or below it,
+    # converted to dollars through the mean measured cost basis. Both are
+    # reported as positive loss magnitudes; a profitable tail simply reports
+    # a small number. NULL below MIN_RISK_SAMPLE measured returns.
+    var_95_usd: Optional[float] = None
+    cvar_95_usd: Optional[float] = None
+    if len(return_pcts) >= MIN_RISK_SAMPLE:
+        ordered = sorted(return_pcts)
+        pos = 0.05 * (len(ordered) - 1)
+        lo = int(math.floor(pos))
+        frac = pos - lo
+        if lo + 1 < len(ordered):
+            p5 = ordered[lo] + frac * (ordered[lo + 1] - ordered[lo])
+        else:
+            p5 = ordered[-1]
+        tail = [r for r in ordered if r <= p5]
+        cvar_pct = statistics.mean(tail) if tail else p5
+        mean_cost = (
+            statistics.mean(cost for _, cost in _measured_pairs)
+            if _measured_pairs else None
+        )
+        if mean_cost is not None and mean_cost > 0:
+            var_95_usd = -p5 / 100.0 * mean_cost
+            cvar_95_usd = -cvar_pct / 100.0 * mean_cost
+
     # Per-trade Sharpe/Sortino on the return distribution (no annualisation:
     # trades are not daily observations, and annualising a 3-trade sample would
     # manufacture a number the sample never earned).
@@ -448,6 +498,11 @@ def compute_trade_analytics(
         "avg_loss_usd": avg_loss_usd,
         "risk_reward_ratio": risk_reward_ratio,
         "profit_factor": profit_factor,
+        "payoff_ratio": payoff_ratio,
+        "kelly_fraction": kelly_fraction,
+        "half_kelly": half_kelly,
+        "var_95_usd": var_95_usd,
+        "cvar_95_usd": cvar_95_usd,
         "sharpe_ratio": sharpe_ratio,
         "sortino_ratio": sortino_ratio,
         "max_drawdown_usd": max_drawdown_usd,
@@ -2017,6 +2072,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     return {
         # Multi-run metadata
         "runs": runs,
+        # Envelope version: the frontend tells "backend older than the page"
+        # apart from "field unmeasured" off this. Bump on new payload fields.
+        "payload_version": KPI_PAYLOAD_VERSION,
         "active_run_id": active_run_id,
         "run_profitability": run_profitability,
         "pnl_by_fill_path": pnl_split,
