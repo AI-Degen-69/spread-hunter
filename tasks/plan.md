@@ -1,114 +1,69 @@
-# Plan: Issue #251 — Real values in the Quant Risk grid; stale-backend distinct from unmeasured
+# Plan: Issue #254 — Speed up Windows pytest CI job (~10 min → under ~4 min)
 
-Size: **Standard** (5 files + tests, one architectural decision: payload versioning).
-Task type: **Code** (backend statistics + frontend rendering + copy contract).
+Size: **Small** (one workflow file; approach is straightforward once the slowest test files are measured).
+Task type: **Performance** (CI execution strategy; no product-code change).
 
 ## Context
 
-Owner directive (2026-09-20, issue comment): compute the five missing metrics for
-real instead of rendering them `unmeasured`. Today `var_95_usd`, `cvar_95_usd`,
-`kelly_fraction`, `half_kelly` and `payoff_ratio` exist only as render fallbacks
-in `dashboard/static/app.js:2212-2219` — every run shows a fabricated
-`$0.00` / `0.0%` / `0.00x`. All inputs already exist inside
-`compute_trade_analytics` (`core_brain/kpi.py:300-458`).
+The `tests` workflow (`.github/workflows/tests.yml:17-44`) runs the entire suite —
+143 test files, 2193 tests, single process, no parallelism — on both
+`ubuntu-latest` and `windows-latest`. Observed on PR #253: Ubuntu finishes in
+~1-2 min, Windows takes ~9-14 min (9m28s, 12m13s, 14m18s on rerun), so the
+Windows job dominates every babysit/merge wait. Same run also flaked once on the
+timing-sensitive `stale` assertion (`tests/test_seed_preview_fixture.py:110`)
+and passed on rerun — a symptom of the overloaded Windows runner, not a product
+bug. `requirements-dev.txt` carries only `pytest` + `httpx`, and CONSTRAINTS
+forbids new dependencies without approval, so the fix must come from job
+structure, not new packages.
 
-## Formulas (locked)
+## Spec (embedded — Small, no SPEC.md ceremony)
 
-- `payoff_ratio = avg_win_usd / abs(avg_loss_usd)` — same value as the existing
-  `risk_reward_ratio`; NULL when no loss exists to measure against.
-- `kelly_fraction = p − q / b` where `p = win_rate`, `q = 1 − p`,
-  `b = payoff_ratio`. May be negative (reads as "no bet"). NULL when `b` is NULL
-  (no losses yet) or `win_rate` is NULL.
-- `half_kelly = kelly_fraction / 2` (NULL alongside).
-- `var_95_usd` / `cvar_95_usd` — historical VaR on the per-close `return_pct`
-  distribution: 5th percentile with linear interpolation; CVaR = mean of the
-  tail at or below that percentile. Converted to dollars via the mean
-  `cost_basis` of the measured closes, reported as a positive loss magnitude.
-  NULL below `MIN_RISK_SAMPLE = 20` measured returns — a 5% tail needs at least
-  one observation, and 20 is the smallest sample that provides one.
-- `payload_version = KPI_PAYLOAD_VERSION` (integer, bumped by hand when new
-  payload fields ship) added to the top-level `report()` envelope.
+Goal: cut Windows CI wall time to under ~4 min while the full suite still runs
+green on both OSes.
+
+Acceptance (from issue #254):
+- [ ] Windows CI wall time measurably lower (target under ~4 min) on a representative PR run.
+- [ ] Full suite still runs and passes on both Ubuntu and Windows (`gh pr checks` green).
+- [ ] No test skipped, deleted, or weakened; no product-code change; no new dependency.
+
+Out of scope (per issue): product code, trading logic, test assertions.
 
 ## Tasks
 
-### Task 1 — Backend: real risk metrics [Code]
-- **Files:** `core_brain/kpi.py`, `tests/test_trade_analytics.py`
-- Add `payoff_ratio`, `kelly_fraction`, `half_kelly`, `var_95_usd`,
-  `cvar_95_usd` to the `compute_trade_analytics` return dict, computed from the
-  already-validated `wins` / `losses` / `return_pcts` / `_measured_pairs`.
-  NULL when unmeasurable, never zero. Add `MIN_RISK_SAMPLE = 20` with a comment.
-- **Skill:** test-driven-development
-- **Verification:** new tests in `tests/test_trade_analytics.py` pin exact
-  values on a known close set, plus the null cases (no losses → payoff/kelly
-  NULL; < 20 measured returns → VaR/CVaR NULL). RED first.
+### Task 1 — Measure: slowest test files + baseline [Perf]
+- **Files:** none (read-only research).
+- **Build:** run the full suite locally with durations
+  (`python -m pytest -q --durations=20`) and record total wall time plus the
+  top slowest test files. These become the slow-job candidate list for Task 2.
+- **Skill:** performance-optimization
+- **Verification:** durations table quoted in the PR body or issue comment; all
+  143 files collected (2193 tests).
 
-### Task 2 — Backend: payload version marker [Code]
-- **Files:** `core_brain/kpi.py`, `tests/test_trade_analytics.py`
-- Add `KPI_PAYLOAD_VERSION = 251` module constant (comment: bump when payload
-  fields ship) and `"payload_version": KPI_PAYLOAD_VERSION` in the top-level
-  `report()` return dict, sibling of `trade_analytics`.
-- **Verification:** test asserts `report(...)["payload_version"] ==
-  KPI_PAYLOAD_VERSION`.
+### Task 2 — Split the workflow into fast + slow parallel jobs [CI/Config]
+- **Files:** `.github/workflows/tests.yml` (and `pytest.ini` only if a shared
+  flag is needed).
+- **Build:** two `pytest` jobs from the same matrix (`pytest-fast`,
+  `pytest-slow`) on both OSes. The slow job runs exactly the Task 1 slow-file
+  list; the fast job runs everything else (`--ignore=` per slow file). Both
+  jobs together cover all 143 files with zero overlap and zero omission.
+  No new packages, no test-file edits.
+- **Skill:** incremental-implementation
+- **Verification:** YAML parses (`python -c "import yaml,..."` or equivalent);
+  a collection check proves fast + slow test counts sum to 2193 with no
+  duplicates (`pytest --collect-only -q` per job file list).
 
-### Task 3 — Frontend: render real values, unmeasured when NULL [Code]
-- **Files:** `dashboard/static/app.js` (`renderQuantRiskGrid`, ~2212-2256)
-- Remove every fabricated fallback (`'$0.00'`, `'0.0%'`, `'0.00x'`) for VaR,
-  CVaR, Kelly, Half-Kelly, Payoff. NULL/absent renders `unmeasured`, following
-  the `Median: unmeasured` pattern at `app.js:2275-2278`. A real VaR keeps its
-  `negative`-coloured loss styling.
-- **Skill:** frontend-ui-engineering
-- **Verification:** harness-driven test (Task 5) asserts tile text.
+### Task 3 — Verify on a real PR: green + faster [CI/Verify]
+- **Files:** none (push + observe).
+- **Build:** push the branch, open the PR, and compare both jobs' wall times
+  against the ~9-14 min baseline. Post the timings as a PR comment.
+- **Skill:** incremental-implementation
+- **Verification:** `gh pr checks <n>` all green on both OSes;
+  `gh run watch <run-id> --exit-status` green; Windows wall times recorded
+  under ~4 min target.
 
-### Task 4 — Frontend: stale-backend note via payload_version [Code]
-- **Files:** `dashboard/static/app.js` (`pollStatus` 4973-5044, top-level state),
-  `dashboard/static/index.html`, `dashboard/static/styles.css`
-- `const EXPECTED_PAYLOAD_VERSION = 251;` + `let payloadVersionWarned = false;`.
-  In `pollStatus()`, after `if (kpi) lastKpi = kpi;`: stale when
-  `payload_version` is absent or `< EXPECTED_PAYLOAD_VERSION` → show
-  `#quant-stale-note` (amber tokens, hidden unless `.show`) and one
-  `console.warn` (flag-gated). Not stale → hide. Note copy: "Dashboard backend
-  is older than this page — restart the dashboard to see all metrics."
-- **Verification:** harness test asserts note shown for old/missing version and
-  hidden for current; copy assertions pin the note id/class/copy.
+## Improvement proposal (adopted by default)
 
-### Task 5 — Tests: harness + pinned rendering [Code]
-- **Files:** `tests/js/sign_colours_harness.cjs`,
-  `tests/test_negative_values_read_as_losses.py`, `tests/test_analytics_api.py`
-- Harness: scrape the VaR, Kelly and Payoff tile texts/classes and the stale
-  note visibility (drives `renderQuantRiskGrid` directly; pollStatus logic is
-  pinned via copy assertions). Keep all 12 existing assertions unchanged.
-- `test_negative_values_read_as_losses.py`: new scenario with the five fields
-  absent/null → tiles read `unmeasured`; with real values → tiles show them.
-- `test_analytics_api.py`: copy contracts — no fabricated-zero fallbacks near
-  `var_95_usd`/`kelly_fraction`/`payoff_ratio` reads; `EXPECTED_PAYLOAD_VERSION`
-  and the stale-note id/class/copy present in `app.js` / `index.html` /
-  `styles.css`. No assertion deleted.
-- **Verification:** `python -m pytest -q tests/test_analytics_api.py
-  tests/test_negative_values_read_as_losses.py tests/test_trade_analytics.py`
-
-### Task 6 — Docs: restart flow [Docs]
-- **Files:** `docs/agents/first-run.md` (near "### 5 · Dashboard")
-- Note: `core_brain/*` / `dashboard/server.py` changes need a dashboard
-  restart; a stale backend shows the "backend older than page" note in the
-  Quant Risk grid plus a one-time console warning.
-- **Verification:** doc review only; no copy assertion required.
-
-## Constraints
-
-See `CONSTRAINTS.md` → "Issue #251" section. Headlines: existing formulas
-(`expectancy_usd`, `mean_return_pct`, `ci90_lower_pct`, Sharpe/Sortino,
-`profit_factor`, `risk_reward_ratio`) MUST NOT change; new fields are
-display-only and never feed a gate; no new dependencies; no assertion deleted.
-
-## How to verify (operator, hands-on)
-
-1. Restart the dashboard (`.\scripts\spread-hunter-menu.ps1` → dashboard option,
-   or stop + host again) so the new backend serves the page.
-2. Open http://127.0.0.1:8799 → Analytics → Quant Risk grid: with 75 closes and
-   measurable returns plus a usable win/loss sample, the VaR/CVaR, Kelly and
-   Payoff tiles show real numbers, not `$0.00`/`0.0%`/`0.00x` (`unmeasured`
-   remains valid when those inputs are unavailable).
-3. Open the same page against an old backend (skip the restart): the amber
-   "backend older than page" note appears above the grid, with one console
-   warning — no flood.
-
+Split into fast/slow parallel jobs instead of adding `pytest-xdist`: the issue
+allows xdist only as an example, CONSTRAINTS bans new dependencies without
+approval, and `tests.yml` already uses a job matrix — so a second job follows
+the repo's own idiom with zero approval gates and zero new flakiness surface.
