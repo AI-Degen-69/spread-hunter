@@ -104,8 +104,10 @@ display-only and never feed a gate; no new dependencies; no assertion deleted.
 
 1. Restart the dashboard (`.\scripts\spread-hunter-menu.ps1` → dashboard option,
    or stop + host again) so the new backend serves the page.
-2. Open http://127.0.0.1:8799 → Analytics → Quant Risk grid: with 75 closes the
-   VaR/CVaR, Kelly and Payoff tiles show real numbers, not `$0.00`/`0.0%`/`0.00x`.
+2. Open http://127.0.0.1:8799 → Analytics → Quant Risk grid: with 75 closes and
+   measurable returns plus a usable win/loss sample, the VaR/CVaR, Kelly and
+   Payoff tiles show real numbers, not `$0.00`/`0.0%`/`0.00x` (`unmeasured`
+   remains valid when those inputs are unavailable).
 3. Open the same page against an old backend (skip the restart): the amber
    "backend older than page" note appears above the grid, with one console
    warning — no flood.
