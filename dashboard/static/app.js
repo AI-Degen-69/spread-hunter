@@ -1318,9 +1318,6 @@ function portfolioEquity(kpi, status) {
   const p = kpi?.portfolio || {};
   const ta = kpi?.trade_analytics || {};
   const startingCap = p.starting_capital ?? status?.starting_capital ?? 100;
-  // Epoch seconds of the mark the anchor came from; null on the config
-  // bankroll fallback (no mark was ever measured).
-  const startingCapTs = p.starting_capital_ts ?? null;
   // An unread realized figure is NOT a flat run. The arithmetic below needs a
   // number, so it gets one, but `realizedMeasured` travels with it so the card
   // can print `--` rather than a confident +$0.00 nobody measured.
@@ -1329,7 +1326,6 @@ function portfolioEquity(kpi, status) {
   const realizedPnL = realizedMeasured ? Number(realizedRaw) : 0;
   return {
     startingCap,
-    startingCapTs,
     realizedPnL,
     realizedMeasured,
     totalVal: p.total_value ?? (startingCap + realizedPnL),

@@ -1765,54 +1765,56 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # run's start. Fallbacks, in order: the run's earliest mark -> the
     # store's earliest mark -> config bankroll (timestamp null).
     # ------------------------------------------------------------------
+    def _num(value):
+        """float() that returns None for missing/non-numeric DB values.
+
+        A corrupt mark row (empty string, stray text) must not crash the
+        whole report -- it is skipped like an unmeasured mark.
+        """
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _valued_marks(marks):
+        """(value, ts) pairs for marks with a usable value and timestamp."""
+        pairs = []
+        for m in marks:
+            v, t = _num(m.get("account_value_usd")), _num(m.get("ts"))
+            if v is not None and t is not None:
+                pairs.append((v, t))
+        return pairs
+
     active_first_ts = None
     if active_run_id and active_run_id != "all":
         for _r in runs:
             if _r.get("run_id") == active_run_id:
-                active_first_ts = _r.get("first_ts")
+                active_first_ts = _num(_r.get("first_ts"))
                 break
 
     starting_capital = None
     starting_capital_ts = None
     if active_first_ts is not None:
-        _before = [
-            (float(am["account_value_usd"]), float(am["ts"]))
-            for am in all_account_marks
-            if am.get("account_value_usd") is not None
-            and am.get("ts") is not None
-            and float(am["ts"]) <= float(active_first_ts)
-        ]
+        _before = [(v, t) for v, t in _valued_marks(all_account_marks)
+                   if t <= active_first_ts]
         if _before:
             starting_capital, starting_capital_ts = max(_before, key=lambda vt: vt[1])
 
     if starting_capital is None:
         if active_run_id and active_run_id != "all":
-            _run_marks = [
+            _run_pairs = _valued_marks(
                 am for am in all_account_marks
-                if am.get("run_id") == active_run_id and am.get("account_value_usd") is not None
-            ]
-            if _run_marks:
-                _sorted_rm = sorted(
-                    [m for m in _run_marks if m.get("ts") is not None],
-                    key=lambda m: float(m["ts"]),
-                )
-                if _sorted_rm:
-                    starting_capital = float(_sorted_rm[0]["account_value_usd"])
-                    starting_capital_ts = float(_sorted_rm[0]["ts"])
+                if am.get("run_id") == active_run_id
+            )
+            if _run_pairs:
+                starting_capital, starting_capital_ts = min(
+                    _run_pairs, key=lambda vt: vt[1])
 
     if starting_capital is None:
-        _valid_marks = [
-            am for am in all_account_marks
-            if am.get("account_value_usd") is not None
-        ]
-        if _valid_marks:
-            _sorted_all = sorted(
-                [m for m in _valid_marks if m.get("ts") is not None],
-                key=lambda m: float(m["ts"]),
-            )
-            if _sorted_all:
-                starting_capital = float(_sorted_all[0]["account_value_usd"])
-                starting_capital_ts = float(_sorted_all[0]["ts"])
+        _all_pairs = _valued_marks(all_account_marks)
+        if _all_pairs:
+            starting_capital, starting_capital_ts = min(
+                _all_pairs, key=lambda vt: vt[1])
 
     if starting_capital is None:
         starting_capital = _CFG.bankroll_usd
@@ -1842,7 +1844,8 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # written after the account read, and the safe reading of an unprovable
     # order is "not measured" rather than a float the venue may have replaced.
     latest_account_ts = max(
-        (float(am["ts"]) for am in all_account_marks if am.get("ts") is not None),
+        (t for am in all_account_marks
+         if (t := _num(am.get("ts"))) is not None),
         default=None,
     )
     mark_is_current = (
@@ -1908,7 +1911,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # `core_brain.order_manager account-sweep` and read here from SQLite.
     # ------------------------------------------------------------------
     sorted_account_marks = sorted(
-        [am for am in all_account_marks if am.get("ts") is not None],
+        [am for am in all_account_marks if _num(am.get("ts")) is not None],
         key=lambda am: float(am["ts"]),
     )
     latest_account = next(
@@ -1925,8 +1928,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         """
         if latest_account is None:
             return None
-        v = latest_account.get(field)
-        return None if v is None else float(v)
+        return _num(latest_account.get(field))
 
     account = {
         "measured": latest_account is not None,

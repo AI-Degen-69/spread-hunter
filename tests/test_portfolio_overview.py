@@ -529,6 +529,28 @@ def test_starting_capital_ts_is_null_on_bankroll_fallback(temp_db):
     assert p["starting_capital_ts"] is None
 
 
+def test_corrupt_mark_row_does_not_crash_the_report(temp_db):
+    """A mark with non-numeric value/ts is skipped like an unmeasured mark."""
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    reg.log_account_mark(_anchor_mark(53.63), ts=t0 - 10, run_id="run-dirty")
+    with reg._conn() as conn:
+        conn.execute(
+            "INSERT INTO account_marks (ts, account_value_usd, run_id, source)"
+            " VALUES (?, ?, ?, ?)", ("", "", "run-dirty", "test"))
+        conn.commit()
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id="0xmarket_a", market_slug="market-a",
+        method="merge", shares=5.0, cost_basis=4.50, proceeds=5.00,
+        realized_pnl=0.50, tx_hash="0xaaa", run_id="run-dirty",
+    ))
+
+    data = report(db_path=temp_db, run_id="run-dirty")
+    p = data["portfolio"]
+    assert p["starting_capital"] == pytest.approx(53.63)
+    assert p["starting_capital_ts"] == pytest.approx(t0 - 10)
+
+
 # --------------------------------------------------------------------------
 # Issue #252 Task 2: the equity series stacks on the DB anchor
 # --------------------------------------------------------------------------
