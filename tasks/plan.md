@@ -30,27 +30,29 @@ Out of scope (per issue): product code, trading logic, test assertions.
 
 ## Tasks
 
-### Task 1 — Measure: slowest test files + baseline [Perf]
+### Task 1 — Measure: per-file durations + baseline [Perf] [x]
 - **Files:** none (read-only research).
-- **Build:** run the full suite locally with durations
-  (`python -m pytest -q --durations=20`) and record total wall time plus the
-  top slowest test files. These become the slow-job candidate list for Task 2.
+- **Measured:** full suite locally 2192 passed, 1 skipped in ~156s; flat
+  profile (slowest single test 3.7s, slowest file 7.9s) — no fast/slow split
+  can reach the target, so Task 2 uses duration-balanced sharding instead.
+  Per-file table saved to `scripts/ci/shard_durations.json` (145 files).
 - **Skill:** performance-optimization
-- **Verification:** durations table quoted in the PR body or issue comment; all
-  143 files collected (2193 tests).
+- **Verification:** done — junit XML aggregated per file; 2193 tests.
 
-### Task 2 — Split the workflow into fast + slow parallel jobs [CI/Config]
-- **Files:** `.github/workflows/tests.yml` (and `pytest.ini` only if a shared
-  flag is needed).
-- **Build:** two `pytest` jobs from the same matrix (`pytest-fast`,
-  `pytest-slow`) on both OSes. The slow job runs exactly the Task 1 slow-file
-  list; the fast job runs everything else (`--ignore=` per slow file). Both
-  jobs together cover all 143 files with zero overlap and zero omission.
+### Task 2 — Shard the workflow: ubuntu full + 4 windows shards [CI/Config]
+- **Files:** `.github/workflows/tests.yml`, `scripts/ci/pytest_shard.py` (new),
+  `scripts/ci/shard_durations.json` (new).
+- **Build:** matrix `include`: ubuntu runs the full suite (`--shard all`),
+  windows runs 4 duration-balanced shards from `pytest_shard.py`, which globs
+  `tests/**/test_*.py` at runtime (new files always assigned somewhere) and
+  greedy-partitions by the checked-in durations. `shell: bash` on the test
+  step for identical word-splitting on both OSes; dropped the
+  `pip install --upgrade pip` line (setup-python ships a modern pip).
   No new packages, no test-file edits.
 - **Skill:** incremental-implementation
-- **Verification:** YAML parses (`python -c "import yaml,..."` or equivalent);
-  a collection check proves fast + slow test counts sum to 2193 with no
-  duplicates (`pytest --collect-only -q` per job file list).
+- **Verification:** YAML parses; collect-only per shard sums to exactly 2193
+  (525+527+572+569) with zero overlap/omission; shard 2 executed locally:
+  526 passed, 1 skipped in 38s.
 
 ### Task 3 — Verify on a real PR: green + faster [CI/Verify]
 - **Files:** none (push + observe).
@@ -63,7 +65,9 @@ Out of scope (per issue): product code, trading logic, test assertions.
 
 ## Improvement proposal (adopted by default)
 
-Split into fast/slow parallel jobs instead of adding `pytest-xdist`: the issue
+Shard into duration-balanced jobs instead of adding `pytest-xdist`: the issue
 allows xdist only as an example, CONSTRAINTS bans new dependencies without
-approval, and `tests.yml` already uses a job matrix — so a second job follows
-the repo's own idiom with zero approval gates and zero new flakiness surface.
+approval, and `tests.yml` already uses a job matrix — so extra matrix entries
+follow the repo's own idiom with zero approval gates and zero new flakiness
+surface. Measurement forced one refinement: 4 balanced shards, not fast/slow,
+because the profile is flat (slowest file 7.9s).

@@ -15,12 +15,26 @@ permissions:
 
 jobs:
   pytest:
-    name: pytest (${{ matrix.os }})
+    # Ubuntu runs the full suite (fast runner); Windows splits into 4
+    # duration-balanced shards (slow runner). Union of the shards is the
+    # full suite -- scripts/ci/pytest_shard.py globs tests/ at runtime,
+    # so new test files are always assigned somewhere.
+    name: pytest (${{ matrix.os }} shard ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            shard: all
+          - os: windows-latest
+            shard: 1
+          - os: windows-latest
+            shard: 2
+          - os: windows-latest
+            shard: 3
+          - os: windows-latest
+            shard: 4
 
     steps:
       - uses: actions/checkout@v4
@@ -34,11 +48,11 @@ jobs:
             requirements-dev.txt
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+        run: pip install -r requirements-dev.txt
 
       # tests/conftest.py scrubs credentials and blocks non-loopback sockets,
       # so the suite needs no secrets and makes no outbound calls.
+      # `shell: bash` keeps word-splitting identical on both OSes.
       - name: Run tests
-        run: python -m pytest -q
+        shell: bash
+        run: python -m pytest -q $(python scripts/ci/pytest_shard.py --shard "${{ matrix.shard }}" --of 4)
