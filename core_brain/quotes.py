@@ -24,7 +24,7 @@ is a legacy field; see AGENTS.md.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional
 
 from core_brain import config, risk, unhedged_stop_loss
@@ -293,7 +293,43 @@ def _decide_quotes_from_mid(
             )
             continue
 
-        price, provisional, band, truncated = quote_resting_price(cfg, inv, side, book)
+        # ENDGAME PROXIMITY GATE (#240). A market that can converge faster
+        # than the loop revisits it turns a new pair into a one-look bet:
+        # the post-mortem pair posted with 32min left, sat 2m52s untouched,
+        # and filled one leg into the outcome. Inside the horizon with a
+        # slow measured cadence, opening new exposure is refused (or
+        # repriced deeper); a quote that REDUCES unhedged inventory is never
+        # blocked. Unknown cadence (None) fails open, like every missing
+        # clock on this path.
+        side_cfg = cfg
+        endgame_note = ""
+        if getattr(cfg, "enforce_endgame_gate", False):
+            cadence = getattr(cfg, "observed_cadence_sec", None)
+            horizon = getattr(cfg, "endgame_horizon_min", 45.0)
+            budget = getattr(cfg, "endgame_max_cadence_sec", 120.0)
+            if (t_remaining / 60.0 <= horizon
+                    and cadence is not None and cadence > budget):
+                naked = risk.naked_side(inv)
+                other = "DOWN" if side == "UP" else "UP"
+                if naked is not None and side != naked:
+                    pass  # light-side balancing quote: reduces exposure
+                elif inv.avg(other) <= 0:
+                    stamp = (f"endgame_gate {t_remaining / 60.0:.0f}min left "
+                             f"<= {horizon:.0f}min horizon at {cadence:.0f}s "
+                             f"cadence > {budget:.0f}s budget")
+                    if getattr(cfg, "endgame_action", "refuse") == "deepen":
+                        deepen = float(
+                            getattr(cfg, "endgame_deepen_offset", 0.0) or 0.0)
+                        side_cfg = replace(
+                            cfg, reward_offset=cfg.reward_offset + deepen)
+                        endgame_note = f"; {stamp} deepened +{deepen:.3f}"
+                    else:
+                        blocked.append(
+                            f"{side}: {stamp} refused new pair leg")
+                        continue
+
+        price, provisional, band, truncated = quote_resting_price(
+            side_cfg, inv, side, book)
         if price is None or provisional is None or band is None:
             blocked.append(f"{side}: price calculation failed")
             continue
@@ -419,7 +455,8 @@ def _decide_quotes_from_mid(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
             reason=(f"reward quote {100*s:.1f}c under mid {mid:.3f}, "
-                    f"score {reward_score(cfg, s, size):.0f}{waived}"),
+                    f"score {reward_score(cfg, s, size):.0f}{waived}"
+                    f"{endgame_note}"),
         ))
 
     if not out:
