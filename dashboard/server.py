@@ -1907,6 +1907,16 @@ def api_system_reset(request: Request):
     })
 
 
+def _read_only_error_payload(exc: Exception) -> dict[str, str]:
+    """Describe a read-only report failure with one stable JSON contract."""
+    return {"error": str(exc), "error_type": type(exc).__name__}
+
+
+def _read_only_error_response(exc: Exception) -> JSONResponse:
+    """Return the shared 500 response used by read-only report endpoints."""
+    return JSONResponse(_read_only_error_payload(exc), status_code=500)
+
+
 @app.get("/api/kpi")
 def get_kpi(run_id: str | None = None):
     """Return live KPI report mirroring strategy/kpi.py with Level 1/2/3 diagnostics."""
@@ -1917,7 +1927,7 @@ def get_kpi(run_id: str | None = None):
         try:
             return generate_kpi_report(db_path=db_path, run_id=run_id), 200
         except Exception as e:
-            return {"error": str(e)}, 500
+            return _read_only_error_payload(e), 500
 
     payload, status = _cached_snapshot(("kpi", str(db_path), run_id), build)
     return JSONResponse(payload, status_code=status)
@@ -1938,14 +1948,16 @@ def get_run_profitability(run_id: str | None = None):
         data = generate_kpi_report(db_path=db_path, run_id=run_id)
         rp = data.get("run_profitability")
         if rp is None:
-            return JSONResponse({"error": "run_profitability unavailable"}, status_code=500)
+            return _read_only_error_response(
+                RuntimeError("run_profitability unavailable")
+            )
         # venue_open_orders must come from venue reconciliation, not local SQLite.
         # The profitability endpoint is read-only and must not invent a venue
         # count from stale rows; omit the field when venue reconciliation has
         # not run (call /api/system/sync for that).
         return JSONResponse(rp)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _read_only_error_response(e)
 
 
 @app.post("/api/account/sweep")
@@ -2028,6 +2040,22 @@ def _read_engine_heartbeat() -> dict[str, Any]:
     return {}
 
 
+def _read_cycle_ring(
+    tail: int = 400,
+    path: Path | None = None,
+) -> tuple[list[dict], dict[str, str] | None]:
+    """Read a cycle ring and retain a structured error for read-only panels."""
+    try:
+        from core_brain.cycle_stream import read_ring
+        return read_ring(path or resolve_ring_path(), tail=tail), None
+    except Exception as exc:
+        return [], {
+            "source": "cycle_ring",
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+
+
 def _read_guardrail_heartbeat() -> dict[str, Any]:
     """Read the guardrail watcher's self-report, {} when absent/invalid."""
     try:
@@ -2060,14 +2088,11 @@ def _guardrail_health() -> dict[str, Any]:
         except ValueError:
             age_s = None
 
-    ring_alerts = []
-    try:
-        from core_brain.cycle_stream import read_ring
-        for ev in read_ring(resolve_ring_path(), tail=400):
-            if ev.get("action") == "guardrail_alert":
-                ring_alerts.append(ev)
-    except Exception:
-        pass
+    ring_events, telemetry_error = _read_cycle_ring()
+    ring_alerts = [
+        ev for ev in ring_events
+        if ev.get("action") == "guardrail_alert"
+    ]
     ring_alerts.sort(key=lambda a: str(a.get("ts") or ""), reverse=True)
     newest = ring_alerts[0] if ring_alerts else {}
 
@@ -2082,6 +2107,7 @@ def _guardrail_health() -> dict[str, Any]:
         "alerts_total": len(ring_alerts),
         "last_alert_ts": newest.get("ts"),
         "last_alert_kind": newest.get("reason"),
+        "telemetry_error": telemetry_error,
     }
 
 
@@ -2135,12 +2161,7 @@ def get_trial_readiness():
 def get_scan_state():
     """SCANNING / IDLE / STALLED plus per-cycle skip/pass rationale (read-only)."""
     now = time.time()
-    events = []
-    try:
-        from core_brain.cycle_stream import read_ring
-        events = read_ring(resolve_ring_path(), tail=400)
-    except Exception:
-        events = []
+    events, telemetry_error = _read_cycle_ring()
 
     active_db = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     try:
@@ -2184,18 +2205,18 @@ def get_scan_state():
     # The screener always appends to the live ring, never to a rehearsal's
     # per-run ring. When `events` above came from the shadow ring it carries no
     # filter events, so read the screener timestamp straight from the live ring.
-    if last_scan_ts is None and _ACTIVE_RING_OVERRIDE is None:
-        try:
-            from core_brain.cycle_stream import read_ring as _read_ring
-            live_ring = resolve_runtime_file(CYCLE_RING_NAME, root=LIVE_ROOT)
-            for ev in _read_ring(live_ring, tail=400):
-                if str(ev.get("service") or "") not in ("filter", "screener"):
-                    continue
-                ts = _parse_event_ts(ev.get("ts"))
-                if ts is not None and (last_scan_ts is None or ts > last_scan_ts):
-                    last_scan_ts = ts
-        except Exception:
-            pass
+    if last_scan_ts is None and _ACTIVE_RING_OVERRIDE is None and telemetry_error is None:
+        live_events, live_error = _read_cycle_ring(
+            path=resolve_runtime_file(CYCLE_RING_NAME, root=LIVE_ROOT)
+        )
+        if live_error is not None:
+            telemetry_error = live_error
+        for ev in live_events:
+            if str(ev.get("service") or "") not in ("filter", "screener"):
+                continue
+            ts = _parse_event_ts(ev.get("ts"))
+            if ts is not None and (last_scan_ts is None or ts > last_scan_ts):
+                last_scan_ts = ts
 
     state, hb_age = compute_scan_state(last_event_ts, hb_ts, now, active_phases,
                                         stall_threshold=stale_threshold)
@@ -2235,6 +2256,7 @@ def get_scan_state():
             [{"reason": k, "count": v} for k, v in pass_counts.items()],
             key=lambda x: -x["count"],
         ),
+        "telemetry_error": telemetry_error,
     })
 
 
@@ -2341,8 +2363,7 @@ def pairs_activity():
     hold/balanced/error) overall and per latest cycle, plus each pair's most
     recent action with its timestamp. Read-only; the ring is the source.
     """
-    from core_brain.cycle_stream import read_ring
-    events = read_ring(resolve_ring_path(), tail=400)
+    events, telemetry_error = _read_cycle_ring()
     totals: dict[str, int] = {}
     per_cycle: dict[int, dict[str, int]] = {}
     per_pair: dict[str, dict] = {}
@@ -2373,6 +2394,7 @@ def pairs_activity():
             {"pair_id": pid, **info}
             for pid, info in sorted(per_pair.items())
         ],
+        "telemetry_error": telemetry_error,
     }
 
 
@@ -2386,8 +2408,7 @@ def guardrail_alerts():
     recent one as a red banner so a violation is visible, not just a log
     line. Read-only; the ring is the source.
     """
-    from core_brain.cycle_stream import read_ring
-    events = read_ring(resolve_ring_path(), tail=400)
+    events, telemetry_error = _read_cycle_ring()
     alerts = []
     for ev in events:
         if ev.get("action") != "guardrail_alert":
@@ -2400,7 +2421,7 @@ def guardrail_alerts():
             "detail": (ev.get("extra") or {}).get("detail"),
         })
     alerts.sort(key=lambda a: str(a["ts"] or ""), reverse=True)
-    return {"alerts": alerts}
+    return {"alerts": alerts, "telemetry_error": telemetry_error}
 
 
 @app.get("/api/guardrail-health")
@@ -2550,7 +2571,7 @@ def get_closed_markets():
         ]
         return JSONResponse({"markets": closed})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _read_only_error_response(e)
 
 
 # PAGE_HTML: backward-compat shim for tests that reference the constant.

@@ -1,9 +1,9 @@
 """Unit tests for live/engine/market_feed.py."""
 import json
 import time
-from pathlib import Path
 
 import pytest
+
 from core_brain.market_feed import (
     GraduatedMarket,
     MarketFeedAbsentError,
@@ -12,6 +12,37 @@ from core_brain.market_feed import (
     get_market_by_cid,
     load_graduated_markets,
 )
+
+
+def test_default_path_uses_shared_runtime_resolution(tmp_path, monkeypatch):
+    """The default feed path is owned by runtime_paths, including the fallback."""
+    from core_brain import market_feed
+
+    canonical = tmp_path / "runtime" / "markets.json"
+    legacy = tmp_path / "run" / "markets.json"
+    legacy.parent.mkdir()
+    legacy.write_text("[]", encoding="utf-8")
+    calls = []
+
+    def fake_runtime_file(name, *, root=None, runtime_dir=None):
+        calls.append(("write-path", name, root))
+        return canonical
+
+    def fake_resolve_runtime_file(name, *, root=None, runtime_dir=None, legacy_dir=None):
+        calls.append(("read-path", name, root))
+        return legacy
+
+    monkeypatch.setattr(market_feed, "DEFAULT_MARKETS_PATH", canonical)
+    monkeypatch.setattr(market_feed, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(market_feed, "runtime_file", fake_runtime_file)
+    monkeypatch.setattr(market_feed, "resolve_runtime_file", fake_resolve_runtime_file)
+
+    assert market_feed.default_markets_path() == legacy
+    assert calls == [
+        ("write-path", "markets.json", tmp_path),
+        ("read-path", "markets.json", tmp_path),
+    ]
+
 
 SAMPLE_ROW = {
     "source": "spread",

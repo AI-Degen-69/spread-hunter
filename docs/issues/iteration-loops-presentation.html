@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Four small changes that make the control room easier to trust</title>
+  <style>
+    :root {
+      --ink: #f5f7fb;
+      --muted: #aeb8c9;
+      --soft: #71809a;
+      --line: #29364b;
+      --panel: #121a28;
+      --panel-2: #172235;
+      --bg: #0a101b;
+      --accent: #f0b35a;
+      --accent-2: #6ed6c0;
+      --danger: #f18487;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .3);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 16px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 44px 22px 72px; }
+    .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: .16em; text-transform: uppercase; font-weight: 800; }
+    h1 { max-width: 790px; margin: 12px 0 16px; font-size: clamp(34px, 6vw, 70px); line-height: .98; letter-spacing: -.055em; }
+    .lede { max-width: 700px; margin: 0; color: var(--muted); font-size: clamp(17px, 2vw, 21px); }
+    .hero { padding-bottom: 38px; }
+    .timeline {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .timeline-top { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 22px 24px; border-bottom: 1px solid var(--line); }
+    .timeline-top strong { font-size: 14px; }
+    .round-label { color: var(--accent-2); font-weight: 800; font-size: 13px; text-align: right; }
+    .rail { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; padding: 28px 24px 8px; }
+    .rail::before { content: ""; position: absolute; left: 52px; right: 52px; top: 43px; height: 2px; background: var(--line); }
+    .node { position: relative; z-index: 1; display: grid; justify-items: center; gap: 10px; color: var(--soft); font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
+    .dot { width: 30px; height: 30px; border: 7px solid var(--panel); border-radius: 50%; background: var(--line); box-shadow: 0 0 0 2px var(--line); }
+    .node.active { color: var(--ink); }
+    .node.active .dot { background: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 0 24px rgba(240,179,90,.35); }
+    .story { display: grid; grid-template-columns: 1fr 1.15fr; gap: 26px; padding: 34px 36px 38px; min-height: 292px; }
+    .story h2 { margin: 0 0 12px; font-size: clamp(26px, 4vw, 43px); line-height: 1.02; letter-spacing: -.04em; }
+    .story .number { color: var(--accent); font-size: 13px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+    .story p { margin: 0; color: var(--muted); max-width: 430px; }
+    .result { align-self: center; border-left: 3px solid var(--accent-2); padding: 12px 0 12px 24px; }
+    .result b { display: block; margin-bottom: 7px; color: var(--accent-2); font-size: 13px; text-transform: uppercase; letter-spacing: .1em; }
+    .result span { display: block; font-size: clamp(20px, 3vw, 29px); line-height: 1.16; font-weight: 750; letter-spacing: -.025em; }
+    .result small { display: block; margin-top: 12px; color: var(--soft); }
+    .controls { display: flex; align-items: center; gap: 14px; padding: 0 36px 28px; }
+    .controls button { border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--panel-2); padding: 9px 13px; font: inherit; font-weight: 800; cursor: pointer; }
+    .controls button:hover, .controls button:focus-visible { border-color: var(--accent); outline: none; }
+    input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+    .supports { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
+    .support { border: 1px solid var(--line); border-radius: 18px; padding: 24px; background: var(--panel); }
+    .support h3 { margin: 0 0 12px; font-size: 19px; }
+    .support p { margin: 0; color: var(--muted); }
+    .support ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    .support li { color: var(--muted); padding-left: 25px; position: relative; }
+    .support li::before { content: ""; position: absolute; left: 0; top: .55em; width: 9px; height: 9px; border-radius: 50%; background: var(--accent-2); }
+    .support li.warn::before { background: var(--danger); }
+    .footer { margin-top: 28px; color: var(--soft); font-size: 13px; }
+    @media (max-width: 720px) {
+      main { padding: 30px 14px 48px; }
+      .timeline-top { align-items: flex-start; flex-direction: column; }
+      .round-label { text-align: left; }
+      .rail { padding-left: 14px; padding-right: 14px; }
+      .rail::before { left: 38px; right: 38px; }
+      .node { font-size: 10px; letter-spacing: .04em; }
+      .story { grid-template-columns: 1fr; padding: 28px 22px; }
+      .result { padding-left: 17px; }
+      .controls { padding: 0 22px 24px; }
+      .supports { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero" aria-labelledby="title">
+      <div class="eyebrow">Four improvement rounds</div>
+      <h1 id="title">The control room now tells you what is really happening.</h1>
+      <p class="lede">Small changes removed four kinds of guesswork: where a report is reading, whether old data can still be found, why a report failed, and whether missing telemetry means “quiet” or “broken.”</p>
+    </section>
+
+    <section class="timeline" aria-labelledby="timeline-title">
+      <div class="timeline-top">
+        <strong id="timeline-title">Move the marker through the four rounds</strong>
+        <div class="round-label" id="round-label" aria-live="polite">ROUND 1 OF 4</div>
+      </div>
+      <div class="rail" id="rail" aria-label="Improvement rounds"></div>
+      <div class="story" aria-live="polite">
+        <div>
+          <div class="number" id="story-number">Round 1 · Find the right record</div>
+          <h2 id="story-title">A report no longer depends on where you launched it.</h2>
+          <p id="story-problem">Before, the queue report could look empty simply because it was opened from another folder.</p>
+        </div>
+        <div class="result">
+          <b>Now</b>
+          <span id="story-result">It always looks in the project’s own shadow store.</span>
+          <small id="story-detail">Same report. Same data. No guessing about the current folder.</small>
+        </div>
+      </div>
+      <div class="controls">
+        <button id="prev" type="button" aria-label="Previous round">Back</button>
+        <input id="slider" type="range" min="0" max="3" value="0" step="1" aria-label="Choose an improvement round">
+        <button id="next" type="button" aria-label="Next round">Next</button>
+      </div>
+    </section>
+
+    <section class="supports" aria-label="What this means for the operator">
+      <article class="support">
+        <h3>What is clearer now</h3>
+        <ul>
+          <li>Reports find the same shadow data from any launch location.</li>
+          <li>Older market lists remain readable during a folder change.</li>
+          <li>Failures name themselves instead of looking like empty results.</li>
+          <li>Broken telemetry says UNKNOWN on the screen.</li>
+        </ul>
+      </article>
+      <article class="support">
+        <h3>What did not change</h3>
+        <ul>
+          <li>Live controls still require their existing protection.</li>
+          <li>These updates do not place, cancel, or merge orders.</li>
+          <li class="warn">A rehearsal is still a rehearsal, not trading performance.</li>
+        </ul>
+      </article>
+    </section>
+    <p class="footer">The proof is on the real dashboard: open the alternate local screen, read the shadow badge, and watch the telemetry state explain itself.</p>
+  </main>
+  <script>
+    const rounds = [
+      {
+        label: 'Round 1 · Find the right record',
+        title: 'A report no longer depends on where you launched it.',
+        problem: 'Before, the queue report could look empty simply because it was opened from another folder.',
+        result: 'It always looks in the project’s own shadow store.',
+        detail: 'Same report. Same data. No guessing about the current folder.'
+      },
+      {
+        label: 'Round 2 · Keep the market list',
+        title: 'A folder rename no longer makes the market list disappear.',
+        problem: 'During the move from the old state folder to the new one, the trader could miss a list that was still in the old place.',
+        result: 'The current list wins, and the older list remains a safe fallback.',
+        detail: 'The market feed now has one clear owner for both names.'
+      },
+      {
+        label: 'Round 3 · Explain report failures',
+        title: 'A failed report now says what failed.',
+        problem: 'Three report screens each described a broken data read in a slightly different way.',
+        result: 'Every report failure uses the same clear shape.',
+        detail: 'The screen shows the message and the kind of failure, so the next step is easier to choose.'
+      },
+      {
+        label: 'Round 4 · Tell quiet from broken',
+        title: 'Missing telemetry no longer looks like a quiet system.',
+        problem: 'A broken event stream used to produce an empty green-looking panel.',
+        result: 'The dashboard keeps the screen open and marks the state UNKNOWN.',
+        detail: 'A tooltip says telemetry is unavailable. Empty data and broken data are now different.'
+      }
+    ];
+    const rail = document.getElementById('rail');
+    const slider = document.getElementById('slider');
+    const label = document.getElementById('round-label');
+    const number = document.getElementById('story-number');
+    const title = document.getElementById('story-title');
+    const problem = document.getElementById('story-problem');
+    const result = document.getElementById('story-result');
+    const detail = document.getElementById('story-detail');
+    rounds.forEach((round, index) => {
+      const node = document.createElement('div');
+      node.className = 'node' + (index === 0 ? ' active' : '');
+      node.innerHTML = `<span class="dot" aria-hidden="true"></span><span>${index + 1}</span>`;
+      rail.appendChild(node);
+    });
+    const nodes = [...rail.querySelectorAll('.node')];
+    function render(index) {
+      const round = rounds[index];
+      slider.value = index;
+      label.textContent = `ROUND ${index + 1} OF ${rounds.length}`;
+      number.textContent = round.label;
+      title.textContent = round.title;
+      problem.textContent = round.problem;
+      result.textContent = round.result;
+      detail.textContent = round.detail;
+      nodes.forEach((node, i) => node.classList.toggle('active', i === index));
+    }
+    slider.addEventListener('input', () => render(Number(slider.value)));
+    document.getElementById('prev').addEventListener('click', () => render(Math.max(0, Number(slider.value) - 1)));
+    document.getElementById('next').addEventListener('click', () => render(Math.min(rounds.length - 1, Number(slider.value) + 1)));
+    render(0);
+  </script>
+</body>
+</html>

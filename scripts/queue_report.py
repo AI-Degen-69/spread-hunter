@@ -72,6 +72,8 @@ import statistics as st
 from dataclasses import dataclass
 from pathlib import Path
 
+from core_brain.runtime_paths import LIVE_ROOT
+
 JOINABLE_MAX_MIN = 60.0       # at or under an hour: the queue is joinable
 NEVER_MIN_MIN = 720.0         # at or over 12 hours: effectively never
 
@@ -361,7 +363,7 @@ def report(db_path: Path, minutes: float | None) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Report recorded queue behaviour.")
-    ap.add_argument("--db", default="data/shadow.db")
+    ap.add_argument("--db", default=str(LIVE_ROOT / "data" / "shadow.db"))
     ap.add_argument("--minutes", type=float, default=None,
                     help="only deltas ending in the last N minutes")
     a = ap.parse_args(argv)

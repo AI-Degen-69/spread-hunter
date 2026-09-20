@@ -960,11 +960,17 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
       const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
       // A failed /api/guardrail-health read is UNKNOWN — the watcher's state
       // is not known, which is not the same as deliberately stopped.
-      const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined;
+      const telemetryError = guardrailHealth?.telemetry_error;
+      const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined && !telemetryError;
       const state = !healthKnown ? 'unknown'
         : hasAlert ? 'down'
         : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
       pill = statePillHtml(state, healthKnown ? age : null);
+      if (telemetryError) {
+        // The card remains visible, but UNKNOWN prevents a broken ring from
+        // looking like a healthy watcher in the operator surface.
+        pill = `<span class="pill state-unknown" title="Telemetry unavailable: ${esc(telemetryError.error || 'cycle ring read failed')}">UNKNOWN</span>`;
+      }
     } else {
       pill = statePillHtml(running ? 'running' : 'stopped');
     }
@@ -4621,7 +4627,8 @@ function renderScanStatePill(scanState) {
   if (scanState) {
     const raw = scanState.scan_state || '--';
     const hbAge = scanState.seconds_since_heartbeat;
-    const state = scanPillState(raw, hbAge, scanState.cadence_sec);
+    const telemetryError = scanState.telemetry_error;
+    const state = telemetryError ? 'unknown' : scanPillState(raw, hbAge, scanState.cadence_sec);
     headerPill.className = 'pill state-' + state;
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
@@ -4631,7 +4638,9 @@ function renderScanStatePill(scanState) {
       ? ' · ' + formattedAge : '';
     headerPill.innerHTML = dot + esc(state.toUpperCase() + age);
     const rawSec = (hbAge !== null && hbAge !== undefined) ? Math.max(0, Math.round(hbAge)) : null;
-    if (rawSec !== null) {
+    if (telemetryError) {
+      headerPill.title = `Telemetry unavailable: ${esc(telemetryError.error || 'cycle ring read failed')}`;
+    } else if (rawSec !== null) {
       headerPill.title = `Trading loop heartbeat: ${rawSec}s ago (${raw.toUpperCase()}) · runtime/shadow_run.json or runtime/live_poll_heartbeat.json`;
     } else {
       headerPill.title = 'Trading loop heartbeat: runtime/shadow_run.json or runtime/live_poll_heartbeat.json';
