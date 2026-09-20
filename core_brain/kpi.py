@@ -42,7 +42,7 @@ UNCATEGORIZED = "Uncategorized"
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 251
+KPI_PAYLOAD_VERSION = 252
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -1758,20 +1758,47 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # Starting capital derives from live venue account marks (the account's real
     # balance at start/sweep time), falling back to config bankroll only when no
     # venue measurements exist (e.g. synthetic test fixtures).
+    #
+    # The card describes the RUN, so its anchor is the newest mark at or before
+    # the active run's first recorded activity (list_runs() first_ts, which
+    # excludes account_marks) -- a later session sweep must never move the
+    # run's start. Fallbacks, in order: the run's earliest mark -> the
+    # store's earliest mark -> config bankroll (timestamp null).
     # ------------------------------------------------------------------
-    starting_capital = None
+    active_first_ts = None
     if active_run_id and active_run_id != "all":
-        _run_marks = [
-            am for am in all_account_marks
-            if am.get("run_id") == active_run_id and am.get("account_value_usd") is not None
+        for _r in runs:
+            if _r.get("run_id") == active_run_id:
+                active_first_ts = _r.get("first_ts")
+                break
+
+    starting_capital = None
+    starting_capital_ts = None
+    if active_first_ts is not None:
+        _before = [
+            (float(am["account_value_usd"]), float(am["ts"]))
+            for am in all_account_marks
+            if am.get("account_value_usd") is not None
+            and am.get("ts") is not None
+            and float(am["ts"]) <= float(active_first_ts)
         ]
-        if _run_marks:
-            _sorted_rm = sorted(
-                [m for m in _run_marks if m.get("ts") is not None],
-                key=lambda m: float(m["ts"]),
-            )
-            if _sorted_rm:
-                starting_capital = float(_sorted_rm[0]["account_value_usd"])
+        if _before:
+            starting_capital, starting_capital_ts = max(_before, key=lambda vt: vt[1])
+
+    if starting_capital is None:
+        if active_run_id and active_run_id != "all":
+            _run_marks = [
+                am for am in all_account_marks
+                if am.get("run_id") == active_run_id and am.get("account_value_usd") is not None
+            ]
+            if _run_marks:
+                _sorted_rm = sorted(
+                    [m for m in _run_marks if m.get("ts") is not None],
+                    key=lambda m: float(m["ts"]),
+                )
+                if _sorted_rm:
+                    starting_capital = float(_sorted_rm[0]["account_value_usd"])
+                    starting_capital_ts = float(_sorted_rm[0]["ts"])
 
     if starting_capital is None:
         _valid_marks = [
@@ -1785,6 +1812,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             )
             if _sorted_all:
                 starting_capital = float(_sorted_all[0]["account_value_usd"])
+                starting_capital_ts = float(_sorted_all[0]["ts"])
 
     if starting_capital is None:
         starting_capital = _CFG.bankroll_usd
@@ -1944,6 +1972,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
 
     portfolio = {
         "starting_capital": starting_capital,
+        # Epoch seconds of the mark the anchor came from; null when the
+        # anchor is the config-bankroll fallback (no mark was measured).
+        "starting_capital_ts": starting_capital_ts,
         "realized_pnl": realized_pnl,
         "unrealized_usd": unrealized_usd,
         "unrealized_measured": mark_is_current,

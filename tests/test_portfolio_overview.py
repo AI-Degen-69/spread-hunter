@@ -476,3 +476,55 @@ def test_starting_capital_for_run_uses_run_baseline_mark(temp_db):
     data_all = report(db_path=temp_db, run_id="all")
     assert data_all["portfolio"]["starting_capital"] == pytest.approx(80.00)
 
+
+# --------------------------------------------------------------------------
+# Issue #252: anchor is the newest mark at or before the run's first activity
+# --------------------------------------------------------------------------
+
+def _anchor_mark(collateral):
+    from core_brain import account as acct
+    return acct.compose_account_mark(
+        collateral_usd=collateral, positions_value_usd=0.0,
+        open_positions=[], closed_positions=[], user_pnl_usd=0.0,
+    )
+
+
+def test_starting_capital_prefers_mark_at_or_before_first_activity(temp_db):
+    """A later session sweep must not move the run's start.
+
+    The run's first close is at t0+60. The stack-start sweep at t0+120 reads
+    64.70, but the anchor stays the freshest mark at or before t0+60 (53.63),
+    and the payload carries that mark's timestamp.
+    """
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    reg.log_account_mark(_anchor_mark(53.63), ts=t0 - 10, run_id="run-anchor")
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id="0xmarket_a", market_slug="market-a",
+        method="merge", shares=5.0, cost_basis=4.50, proceeds=5.00,
+        realized_pnl=0.50, tx_hash="0xaaa", run_id="run-anchor",
+    ))
+    reg.log_account_mark(_anchor_mark(64.70), ts=t0 + 120, run_id="run-anchor")
+
+    data = report(db_path=temp_db, run_id="run-anchor")
+    p = data["portfolio"]
+    assert p["starting_capital"] == pytest.approx(53.63)
+    assert p["starting_capital_ts"] == pytest.approx(t0 - 10)
+
+
+def test_starting_capital_ts_is_null_on_bankroll_fallback(temp_db):
+    """With no account marks the anchor is the config bankroll, timestamp null."""
+    from core_brain import kpi as kpi_mod
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id="0xmarket_a", market_slug="market-a",
+        method="merge", shares=5.0, cost_basis=4.50, proceeds=5.00,
+        realized_pnl=0.50, tx_hash="0xaaa", run_id="run-bare",
+    ))
+
+    data = report(db_path=temp_db, run_id="run-bare")
+    p = data["portfolio"]
+    assert p["starting_capital"] == pytest.approx(kpi_mod._CFG.bankroll_usd)
+    assert p["starting_capital_ts"] is None
+
