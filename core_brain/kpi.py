@@ -38,6 +38,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # bucket groups honestly; a blank cell reads as missing data.
 UNCATEGORIZED = "Uncategorized"
 
+# Hand-bumped payload envelope version, returned by report() as
+# `payload_version`. The frontend compares it against its own expectation to
+# tell "backend older than the page" apart from "field genuinely unmeasured".
+# Bump this whenever new payload fields ship.
+KPI_PAYLOAD_VERSION = 251
+
+# Historical VaR/CVaR need a 5% tail to actually contain an observation; below
+# 20 measured per-close returns the tail is empty and the metric stays NULL
+# rather than quoting a percentile of nothing.
+MIN_RISK_SAMPLE = 20
+
 
 def _wilson_ci(successes: int, n: int, z: float = 1.96) -> Optional[dict[str, float]]:
     """Wilson score interval for a binomial proportion (the win rate).
@@ -297,6 +308,35 @@ def evaluate_stat_gate(
     return result
 
 
+def _var_cvar_usd(
+    return_pcts: list[float], costs: list[float]
+) -> tuple[Optional[float], Optional[float]]:
+    """Historical 95% VaR and CVaR as positive loss magnitudes, in dollars.
+
+    VaR is the linearly interpolated 5th percentile of the measured per-close
+    return distribution; CVaR is the mean of the tail at or below it. Both are
+    converted to dollars through the mean cost basis of the same closes, so a
+    "5% worst day costs about $4" reads in the same units as the P&L tiles.
+
+    NULL below ``MIN_RISK_SAMPLE`` measured returns: a 5% tail needs at least
+    one observation, and the mean cost basis needs at least one close.
+    """
+    if len(return_pcts) < MIN_RISK_SAMPLE or not costs:
+        return None, None
+    mean_cost = statistics.mean(costs)
+    if mean_cost <= 0:
+        return None, None
+    ordered = sorted(return_pcts)
+    pos = 0.05 * (len(ordered) - 1)
+    lo = int(math.floor(pos))
+    frac = pos - lo
+    p5 = (ordered[lo] + frac * (ordered[lo + 1] - ordered[lo])
+          if lo + 1 < len(ordered) else ordered[-1])
+    tail = [r for r in ordered if r <= p5]
+    cvar_pct = statistics.mean(tail) if tail else p5
+    return -p5 / 100.0 * mean_cost, -cvar_pct / 100.0 * mean_cost
+
+
 def compute_trade_analytics(
     closes: list[dict],
     starting_capital: float,
@@ -395,6 +435,25 @@ def compute_trade_analytics(
     gross_losses = abs(sum(losses))
     profit_factor = (gross_wins / gross_losses) if gross_losses > 0 else None
 
+    # Issue #251: the Quant Risk tiles used to render fabricated zeros for
+    # these five; now they are measured, and NULL whenever unmeasurable.
+    # Payoff ratio is the classic reward:risk alias — same win/loss shape,
+    # same NULL rule (an all-win run has no downside to size against).
+    payoff_ratio = risk_reward_ratio
+    # Kelly fraction: f* = p − q/b on the measured win rate and payoff. May go
+    # negative (reads as "no bet"); NULL when there is no loss or no rate yet.
+    kelly_fraction: Optional[float] = None
+    half_kelly: Optional[float] = None
+    if win_rate is not None and payoff_ratio is not None and payoff_ratio > 0:
+        kelly_fraction = win_rate - (1.0 - win_rate) / payoff_ratio
+        half_kelly = kelly_fraction / 2.0
+
+    # Historical VaR / CVaR on the measured per-close return distribution,
+    # converted to dollars through the mean measured cost basis (see
+    # `_var_cvar_usd`). Both report as positive loss magnitudes.
+    var_95_usd, cvar_95_usd = _var_cvar_usd(
+        return_pcts, [cost for _, cost in _measured_pairs])
+
     # Per-trade Sharpe/Sortino on the return distribution (no annualisation:
     # trades are not daily observations, and annualising a 3-trade sample would
     # manufacture a number the sample never earned).
@@ -448,6 +507,11 @@ def compute_trade_analytics(
         "avg_loss_usd": avg_loss_usd,
         "risk_reward_ratio": risk_reward_ratio,
         "profit_factor": profit_factor,
+        "payoff_ratio": payoff_ratio,
+        "kelly_fraction": kelly_fraction,
+        "half_kelly": half_kelly,
+        "var_95_usd": var_95_usd,
+        "cvar_95_usd": cvar_95_usd,
         "sharpe_ratio": sharpe_ratio,
         "sortino_ratio": sortino_ratio,
         "max_drawdown_usd": max_drawdown_usd,
@@ -2017,6 +2081,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     return {
         # Multi-run metadata
         "runs": runs,
+        # Envelope version: the frontend tells "backend older than the page"
+        # apart from "field unmeasured" off this. Bump on new payload fields.
+        "payload_version": KPI_PAYLOAD_VERSION,
         "active_run_id": active_run_id,
         "run_profitability": run_profitability,
         "pnl_by_fill_path": pnl_split,

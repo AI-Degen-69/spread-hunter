@@ -380,3 +380,75 @@ def test_companion_fields_never_feed_the_go_no_go_gate():
     # Companions exist alongside the gate inputs without replacing any of them.
     assert ta["n_measured_returns"] == 2
     assert ta["dollar_weighted_return_pct"] is not None
+
+
+# --------------------------------------------------------------------------
+# Issue #251: payoff, Kelly, and historical VaR/CVaR are real, never zeroed
+# --------------------------------------------------------------------------
+
+def test_payoff_kelly_and_half_kelly_are_computed_from_the_win_loss_shape():
+    """1 win of $1.50 + 1 loss of $1.00: payoff 1.5, win rate 0.5 →
+    kelly = 0.5 − 0.5/1.5 ≈ 0.1667; half-kelly is exactly half."""
+    closes = [
+        dict(realized_pnl=1.50, cost_basis=5.00, ts=100.0),
+        dict(realized_pnl=-1.00, cost_basis=4.00, ts=200.0),
+    ]
+    ta = compute_trade_analytics(closes, starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    assert ta["payoff_ratio"] == pytest.approx(1.5)
+    assert ta["payoff_ratio"] == pytest.approx(ta["risk_reward_ratio"])
+    assert ta["kelly_fraction"] == pytest.approx(0.5 - 0.5 / 1.5)
+    assert ta["half_kelly"] == pytest.approx(ta["kelly_fraction"] / 2)
+
+
+def test_payoff_and_kelly_are_null_on_an_all_win_run():
+    """No loss exists to size risk against — NULL, not a fabricated number."""
+    closes = [dict(realized_pnl=1.00, cost_basis=5.00, ts=100.0)]
+    ta = compute_trade_analytics(closes, starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    assert ta["payoff_ratio"] is None
+    assert ta["kelly_fraction"] is None
+    assert ta["half_kelly"] is None
+
+
+def _risk_sample_closes() -> list[dict]:
+    """20 measured closes: 4 losses (-50..-20%) and 16 wins (+10%), $10 each.
+
+    Sorted returns: [-50, -40, -30, -20, 10 ×16]. The interpolated 5th
+    percentile sits at index 0.95 → -40.5%; the tail mean is -50%.
+    Mean cost basis is $10 → VaR $4.05, CVaR $5.00.
+    """
+    losses = [-5.00, -4.00, -3.00, -2.00]  # -50%..-20% on $10
+    wins = [1.00] * 16                      # +10% on $10
+    return [dict(realized_pnl=p, cost_basis=10.00, ts=float(i + 1))
+            for i, p in enumerate(losses + wins)]
+
+
+def test_var_and_cvar_read_the_return_distribution_tail():
+    ta = compute_trade_analytics(_risk_sample_closes(), starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    # Positive loss magnitudes: the percentile and tail-mean losses, converted
+    # from return % through the mean measured cost basis.
+    assert ta["var_95_usd"] == pytest.approx(4.05)
+    assert ta["cvar_95_usd"] == pytest.approx(5.00)
+
+
+def test_var_and_cvar_are_null_below_the_minimum_sample():
+    """19 measured returns: a 5% tail has no observation yet — NULL."""
+    closes = _risk_sample_closes()[:-1]
+    ta = compute_trade_analytics(closes, starting_capital=100.0,
+                                 equity_series=[], float_marks=[])
+    assert len([c for c in closes if c["cost_basis"]]) == 19
+    assert ta["var_95_usd"] is None
+    assert ta["cvar_95_usd"] is None
+
+
+def test_report_payload_carries_a_payload_version(temp_db, tmp_path, monkeypatch):
+    """The frontend tells a stale backend from an unmeasured field off this."""
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    reg = OrderRegistry(temp_db)
+    reg.log_close(_close())
+
+    payload = report(db_path=temp_db, run_id=RUN)
+    assert payload["payload_version"] == kpi_mod.KPI_PAYLOAD_VERSION
+    assert isinstance(payload["payload_version"], int)

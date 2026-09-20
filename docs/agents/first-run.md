@@ -121,6 +121,18 @@ Watchdog, independent of the poll loop. Flags the two live-run failure signature
 - `--port` (default `8799`), `--host` (default `127.0.0.1`),
   `--db` (default `data/orders.db`; `data/shadow.db` for shadow mode)
 
+**A backend change does not reload live.** `core_brain/*` (including `kpi.py`)
+and `dashboard/server.py` are imported once at process start, while
+`dashboard/static/*` is read by the browser on every page load. After changing
+backend code, restart the dashboard — stop and host again
+(`.\scripts\spread-hunter-menu.ps1 stop` then `host`, or the dashboard's restart
+endpoint). A page that is newer than the process answering it says so: the Quant
+Risk grid shows an amber **"Dashboard backend is older than this page — restart
+the dashboard to see all metrics."** note and logs one console warning. A stale
+payload can still carry `unmeasured` tiles for metrics it predates, but the note
+tells you the page itself is newer than the process answering it — restart the
+dashboard so the two agree.
+
 ## One-shot operators (not the stack, but part of a run)
 
 All under `core_brain/order_manager.py`; `--no-live` anywhere is the dry run:

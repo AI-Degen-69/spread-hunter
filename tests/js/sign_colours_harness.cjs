@@ -29,6 +29,9 @@ function stubPolyline() {
 function element(id) {
   if (!elements[id]) {
     const polyline = id === 'broker-hero-pnl' ? stubPolyline() : null;
+    // A real classList: the stale-backend note is shown/hidden by class, so a
+    // stub that swallows toggle() would make "the note appeared" untestable.
+    const classes = new Set();
     elements[id] = {
       id,
       textContent: '',
@@ -36,7 +39,17 @@ function element(id) {
       className: '',
       title: '',
       style: {},
-      classList: { add() {}, remove() {}, contains: () => false, toggle() {} },
+      classList: {
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+        contains: (c) => classes.has(c),
+        toggle: (c, force) => {
+          const on = force === undefined ? !classes.has(c) : !!force;
+          if (on) classes.add(c); else classes.delete(c);
+          return on;
+        },
+      },
+      _classes: classes,
       dataset: {},
       polyline,
       querySelector: (sel) => (sel === 'polyline' ? polyline : null),
@@ -78,6 +91,17 @@ app.renderBrokerPortfolioOverview(kpi, input.status || {});
 app.renderQuantRiskGrid(
   stats.trade_analytics || {}, kpi.portfolio || {}, stats);
 if (input.cycles) app.renderMonteCarloChart(stats, input.cycles);
+
+// Issue #251: the stale-backend check normally runs inside pollStatus(), which
+// a harness never starts. Drive the same exported function directly and count
+// the warnings it emits, so "one warning, not a flood" is measurable.
+const warns = [];
+const realWarn = console.warn;
+console.warn = (...args) => warns.push(args.join(' '));
+if ('payload_version' in input) {
+  app.applyPayloadVersion({ payload_version: input.payload_version });
+}
+console.warn = realWarn;
 
 const pill = element('broker-hero-pnl');
 const spread = element('broker-kpi-spread');
@@ -122,6 +146,14 @@ process.stdout.write(JSON.stringify({
   quant_win_rate: quantClass('Win Rate &amp; Wilson CI'),
   quant_ci: quantSub('Win Rate &amp; Wilson CI'),
   quant_expectancy_text: quantValue('Mathematical Expectancy'),
+  quant_var: quantValue('95% Value at Risk (1D)'),
+  quant_cvar: quantSub('95% Value at Risk (1D)'),
+  quant_kelly: quantValue('Kelly Optimal Sizing'),
+  quant_kelly_sub: quantSub('Kelly Optimal Sizing'),
+  quant_payoff: quantSub('Profit Factor &amp; Payoff'),
+  stale_note_shown: element('quant-stale-note').classList.contains('show'),
+  stale_warn_count: warns.length,
+  stale_warn_text: warns.length ? warns[warns.length - 1] : null,
   mc_end_label: (mcSvg.match(/font-weight="700"[^>]*>([^<]*)</) || [])[1] || null,
   mc_end_x: parseFloat((mcSvg.match(/<text x="([\d.]+)"[^>]*font-size="9"/) || [])[1]),
   mc_end_anchor: /font-size="9"[^>]*text-anchor="end"/.test(mcSvg),
