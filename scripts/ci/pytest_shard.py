@@ -25,9 +25,10 @@ import statistics
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_HERE = Path(__file__).resolve().parent
+REPO_ROOT = _HERE.parent.parent
 TESTS_ROOT = REPO_ROOT / "tests"
-DURATIONS_FILE = Path(__file__).resolve().parent / "shard_durations.json"
+DURATIONS_FILE = _HERE / "shard_durations.json"
 
 
 def discover_files() -> list[str]:
@@ -68,10 +69,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--of", type=int, default=4, help="total shard count")
     args = parser.parse_args(argv)
 
+    if args.of <= 0:
+        parser.error("--of must be a positive integer")
     files = discover_files()
     if args.shard == "all":
         return 0
-    index = int(args.shard) - 1
+    try:
+        index = int(args.shard) - 1
+    except ValueError:
+        parser.error(f"--shard must be 1..{args.of} or 'all'")
     if not 0 <= index < args.of:
         parser.error(f"--shard must be 1..{args.of} or 'all'")
     buckets = partition(files, load_durations(), args.of)
