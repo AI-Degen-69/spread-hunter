@@ -91,30 +91,41 @@ class TestEndgameConfigKnobs:
 
 
 class TestCycleCadenceHelper:
-    def _seed(self, reg, rows):
+    def _seed(self, reg, rows, run_id="r"):
         with reg._conn() as conn:
             for cycle, ts in rows:
                 conn.execute(
                     "INSERT INTO cycle_intent (ts,cycle,market_slug,run_id)"
                     " VALUES (?,?,?,?)",
-                    (ts, cycle, "m", "r"),
+                    (ts, cycle, "m", run_id),
                 )
             conn.commit()
 
     def test_returns_none_without_rows(self, tmp_path):
-        reg = OrderRegistry(db_path=tmp_path / "t.db")
+        reg = OrderRegistry(db_path=tmp_path / "t.db", run_id="r")
         assert registry_cycle_cadence_sec(reg) is None
 
     def test_returns_none_with_a_single_cycle(self, tmp_path):
-        reg = OrderRegistry(db_path=tmp_path / "t.db")
+        reg = OrderRegistry(db_path=tmp_path / "t.db", run_id="r")
         self._seed(reg, [(1, 1000.0), (1, 1001.0)])
         assert registry_cycle_cadence_sec(reg) is None
 
     def test_median_gap_across_cycles(self, tmp_path):
-        reg = OrderRegistry(db_path=tmp_path / "t.db")
+        reg = OrderRegistry(db_path=tmp_path / "t.db", run_id="r")
         self._seed(reg, [(1, 1000.0), (1, 1005.0), (2, 1210.0),
                          (3, 1300.0), (4, 1620.0)])
         # cycle starts at 1000/1210/1300/1620 -> gaps 210/90/320.
+        assert registry_cycle_cadence_sec(reg) == pytest.approx(210.0)
+
+    def test_ignores_cycles_from_other_runs(self, tmp_path):
+        reg = OrderRegistry(db_path=tmp_path / "t.db", run_id="current")
+        self._seed(reg, [(1, 1000.0), (2, 1210.0)], run_id="current")
+        with reg._conn() as conn:
+            conn.execute(
+                "INSERT INTO cycle_intent (ts,cycle,market_slug,run_id) VALUES (?,?,?,?)",
+                (10_000.0, 99, "m", "old"),
+            )
+            conn.commit()
         assert registry_cycle_cadence_sec(reg) == pytest.approx(210.0)
 
     def test_returns_none_without_a_registry(self):

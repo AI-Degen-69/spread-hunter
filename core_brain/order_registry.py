@@ -2302,7 +2302,9 @@ def registry_cycle_cadence_sec(registry, *, limit: int = 20) -> Optional[float]:
 
     The loop visits many markets per rotation and writes one `cycle_intent`
     row per visit, so one timestamp per cycle is `MIN(ts)` grouped by `cycle`.
-    The median gap over the recent cycles resists one stalled or one instant
+    Only this registry's run is included: cycle numbers restart across sessions,
+    and mixing old runs would manufacture a cadence at a process restart. The
+    median gap over the recent cycles resists one stalled or one instant
     rotation. Fewer than two distinct cycles means nothing to measure yet.
 
     Never raises: this feeds the endgame gate (#240), which must fail OPEN on
@@ -2317,9 +2319,10 @@ def registry_cycle_cadence_sec(registry, *, limit: int = 20) -> Optional[float]:
             rows = conn.execute(
                 """
                 SELECT MIN(ts) AS t FROM cycle_intent
+                WHERE run_id = ?
                 GROUP BY cycle ORDER BY cycle DESC LIMIT ?
                 """,
-                (int(limit),),
+                (registry._run_id(), int(limit)),
             ).fetchall()
     except Exception:
         return None
