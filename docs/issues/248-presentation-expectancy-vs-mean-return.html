@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>למה הדולר חיובי והאחוז שלילי — וזה בסדר</title>
+<style>
+  :root {
+    --bg: #171310; --panel: #211b16; --line: #3a2f26;
+    --ink: #f2e8dd; --muted: #b3a08e;
+    --accent: #e8823c; --accent2: #4fbfa5;
+    --bad: #e05c5c; --good: #57c785;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", Arial, sans-serif; line-height: 1.5; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 1.7rem; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 26px; font-size: 1rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 18px; margin-bottom: 22px; }
+  .big-line { font-size: 1.05rem; margin: 0 0 12px; }
+  .big-line b { color: var(--accent); }
+  .rulers { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) { .rulers { grid-template-columns: 1fr; } }
+  .ruler { border: 1px solid var(--line); border-radius: 12px; padding: 14px;
+    background: #1c1611; }
+  .ruler h2 { margin: 0 0 2px; font-size: 1rem; }
+  .ruler .what { color: var(--muted); font-size: .82rem; margin: 0 0 10px; }
+  .ruler .value { font-size: 2rem; font-weight: 700; }
+  .value.pos { color: var(--good); }
+  .value.neg { color: var(--bad); }
+  .bar-track { height: 10px; border-radius: 5px; background: #2b231c;
+    position: relative; overflow: hidden; margin-top: 10px; }
+  .bar-fill { position: absolute; top: 0; height: 100%; transition: all .5s ease; }
+  .verdict { font-size: .85rem; margin-top: 8px; color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px;
+    font-size: .82rem; background: #1c1611; cursor: pointer;
+    transition: all .2s ease; color: var(--ink); }
+  .chip .pc { color: var(--muted); }
+  .chip.off { opacity: .3; text-decoration: line-through; }
+  .chip.loss { border-color: #5c3434; }
+  .chip.win { border-color: #2e5c44; }
+  .chip.hazard { outline: 2px solid var(--bad); outline-offset: 1px; }
+  .chips-hint { color: var(--muted); font-size: .82rem; margin: 0 0 6px; }
+  .bridge { border-right: 3px solid var(--accent); padding-right: 12px;
+    margin: 18px 0 4px; }
+  .bridge .dw { font-size: 1.15rem; font-weight: 700; color: var(--accent); }
+  ol.steps { padding-right: 20px; margin: 0; }
+  ol.steps li { margin-bottom: 8px; }
+  .try { background: #1c1611; border: 1px dashed var(--accent); }
+  .try code { background: #2b231c; padding: 1px 6px; border-radius: 4px; font-size: .85em; }
+  @media (prefers-reduced-motion: reduce) { .bar-fill { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>הדשבורד מראה רווח בדולרים והפסד באחוזים — וזה נכון</h1>
+  <p class="sub">שני מספרים, שתי שאלות שונות. העדכון הזה מסביר את ההפרדה במקום לתקן נוסחאות שהיו נכונות כל הזמן.</p>
+
+  <p class="big-line">בדשבורד הופיעו ביחד <b>רווח ממוצע של $0.15 לסגירה</b> ו<b>תשואה ממוצעת של −9.75% לעסקה</b>. נראה סותר? בעצם כל מספר שוקל את אותן עסקאות אחרת. נסו בעצמכם למטה — הסירו את העסקה הקטנה עם ההפסד הגדול באחוזים, וראו איך האחוזים קופצים בעוד הדולרים בקושי זזים.</p>
+
+  <div class="panel" id="demo">
+    <p class="chips-hint">8 העסקאות של הבדיקה — לחיצה מסירה/מחזירה עסקה מהחשבון:</p>
+    <div class="chips" id="chips"></div>
+    <div class="rulers">
+      <div class="ruler">
+        <h2>סרגל הדולרים</h2>
+        <p class="what">שואל: כמה דולר הרווחה הסגירה הממוצעת? כל עסקה שווה בדיוק דולר אחד, קטנה כגדולה.</p>
+        <div class="value pos" id="usdVal">+$0.00</div>
+        <div class="bar-track"><div class="bar-fill" id="usdBar" style="background:var(--accent2)"></div></div>
+        <div class="verdict" id="usdVerdict"></div>
+      </div>
+      <div class="ruler">
+        <h2>סרגל האחוזים</h2>
+        <p class="what">שואל: כמה אחוזים הרוויחה העסקה הממוצעת? עסקה קטנה עם ‎−100%‎ שווה כמו רווח גדול.</p>
+        <div class="value neg" id="pctVal">0.00%</div>
+        <div class="bar-track"><div class="bar-fill" id="pctBar" style="background:var(--accent)"></div></div>
+        <div class="verdict" id="pctVerdict"></div>
+      </div>
+    </div>
+    <div class="bridge">
+      <div class="dw" id="dwVal"></div>
+      <div style="color:var(--muted);font-size:.85rem">המספר החדש — תשואה משוקללת-דולרים: אותם אחוזים, אבל כל עסקה נשקלת לפי הכסף שהיא השקיעה. תמיד מסכים בסימן עם סרגל הדולרים.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="big-line"><b>מה שונה בפועל</b></p>
+    <ol class="steps">
+      <li><b>כלום לא תוקן במתמטיקה.</b> הבדיקה הוכיחה ששתי הנוסחאות עושות בדיוק את מה שכתוב עליהן.</li>
+      <li><b>סימן שאלה קטן (?) הופיע ליד המספרים</b> בדשבורד — לחיצה עליו מסבירה במשפט אחד למה דולר ואחוז יכולים לחלוק בסימן.</li>
+      <li><b>מתחת לאחוזים מופיעה עכשיו התשואה משוקללת-הדולרים</b> — האחוז שמסכים עם סימן הדולרים.</li>
+      <li><b>ליד ספירת העסקאות רשום כמה מהן בכלל נמדדו באחוזים</b> — עסקה בלי עלות ידועה נשארת "לא נמדדה", אף פעם לא אפס מזויף.</li>
+    </ol>
+  </div>
+
+  <div class="panel try">
+    <p class="big-line"><b>🕹️ לראות את זה בעבודה האמיתית</b></p>
+    <ol class="steps">
+      <li>פתחו את הדשבורד החי: הריצו <code>.\scripts\spread-hunter-menu.ps1 start</code> ופתחו <code>http://127.0.0.1:8799</code>.</li>
+      <li>עברו לטאב <b>Analytics</b> וחפשו את "Average Profit Per Close" — לידו מחכה סימן שאלה. לחצו עליו.</li>
+<script>
+(function () {
+  'use strict';
+  var trades = [
+    { pnl:  2.00, cost: 10.00 },
+    { pnl:  1.50, cost: 10.00 },
+    { pnl:  1.00, cost: 10.00 },
+    { pnl:  0.50, cost: 10.00 },
+    { pnl:  0.40, cost: 10.00 },
+    { pnl: -0.20, cost: 10.00 },
+    { pnl: -3.00, cost: 10.00 },
+    { pnl: -1.00, cost:  1.00, hazard: true }
+  ];
+  var on = trades.map(function () { return true; });
+
+  var chips = document.getElementById('chips');
+  trades.forEach(function (t, i) {
+    var b = document.createElement('button');
+    b.className = 'chip ' + (t.pnl >= 0 ? 'win' : 'loss') + (t.hazard ? ' hazard' : '');
+    var pct = 100 * t.pnl / t.cost;
+    b.textContent = (t.pnl >= 0 ? '+' : '−') + '$' + Math.abs(t.pnl).toFixed(2) +
+      ' (' + (pct >= 0 ? '+' : '−') + Math.abs(pct).toFixed(0) + '%)';
+    b.setAttribute('aria-pressed', 'true');
+    b.addEventListener('click', function () {
+      on[i] = !on[i];
+      b.classList.toggle('off', !on[i]);
+      b.setAttribute('aria-pressed', on[i] ? 'true' : 'false');
+      render();
+    });
+    chips.appendChild(b);
+  });
+
+  function fmtUsd(v) { return (v < 0 ? '−$' : '+$') + Math.abs(v).toFixed(3); }
+  function fmtPct(v) { return (v < 0 ? '−' : '+') + Math.abs(v).toFixed(2) + '%'; }
+  function setBar(el, frac) { el.style.width = Math.max(2, Math.min(100, frac * 100)) + '%'; }
+
+  function render() {
+    var active = trades.filter(function (_, i) { return on[i]; });
+    var usdEl = document.getElementById('usdVal');
+    var pctEl = document.getElementById('pctVal');
+    var dwEl = document.getElementById('dwVal');
+    if (!active.length) {
+      usdEl.textContent = 'אין עסקאות'; usdEl.className = 'value';
+      pctEl.textContent = 'אין עסקאות'; pctEl.className = 'value';
+      document.getElementById('usdVerdict').textContent = '';
+      document.getElementById('pctVerdict').textContent = '';
+      dwEl.textContent = '—';
+      setBar(document.getElementById('usdBar'), 0);
+      setBar(document.getElementById('pctBar'), 0);
+      return;
+    }
+    var sumPnl = active.reduce(function (s, t) { return s + t.pnl; }, 0);
+    var usd = sumPnl / active.length;
+    usdEl.textContent = fmtUsd(usd);
+    usdEl.className = 'value ' + (usd >= 0 ? 'pos' : 'neg');
+    setBar(document.getElementById('usdBar'), Math.min(1, Math.abs(usd) / 0.3));
+    document.getElementById('usdVerdict').textContent =
+      active.length + ' עסקאות · סך הכל ' + fmtUsd(sumPnl);
+
+    var pcts = active.map(function (t) { return 100 * t.pnl / t.cost; });
+    var pct = pcts.reduce(function (s, v) { return s + v; }, 0) / pcts.length;
+    pctEl.textContent = fmtPct(pct);
+    pctEl.className = 'value ' + (pct >= 0 ? 'pos' : 'neg');
+    setBar(document.getElementById('pctBar'), Math.min(1, Math.abs(pct) / 15));
+    document.getElementById('pctVerdict').textContent =
+      'העסקה של ‎−100%‎ נספרת כמו כל עסקה אחרת — אחת מתוך ' + active.length;
+
+    var cost = active.reduce(function (s, t) { return s + t.cost; }, 0);
+    var dw = cost > 0 ? 100 * sumPnl / cost : null;
+    dwEl.textContent = dw === null ? 'unmeasured' : fmtPct(dw) + ' dollar-weighted';
+  }
+  render();
+})();
+</script>
+</body>
+</html>
+      <li>מתחת ל־"Mean Return Per Trade" תראו את השורה <b>dollar-weighted</b>; וב־"Executed Sample Size" — כמה עסקאות <b>measured</b>.</li>
+      <li>ב־run בלי עסקאות שנמדדו באחוזים — במקום אפס תראו <b>"unmeasured"</b>.</li>
+    </ol>
+  </div>
+</div>
