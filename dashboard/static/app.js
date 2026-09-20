@@ -2242,10 +2242,13 @@ function renderQuantRiskGrid(ta, p, stats) {
   const ci95 = ciBounds && n > 0
     ? `[${(ciBounds[0] * 100).toFixed(0)}%–${(ciBounds[1] * 100).toFixed(0)}%]`
     : '[0%–0%]';
-  const var95 = ta.var_95_usd != null && n > 0 ? `$${ta.var_95_usd.toFixed(2)}` : 'unmeasured';
-  const cvar95 = ta.cvar_95_usd != null && n > 0 ? `$${ta.cvar_95_usd.toFixed(2)}` : 'unmeasured';
   // Issue #251: no metric in this grid fabricates a zero. A null field is
   // unmeasured — `$0.00` VaR reads as "no risk", a verdict the run never earned.
+  // A VaR/CVaR tail that happens to be profitable reports a negative
+  // magnitude; the minus goes in front of the currency, never inside it.
+  const fmtLoss = (v) => `${v < 0 ? '-' : ''}$${Math.abs(v).toFixed(2)}`;
+  const var95 = ta.var_95_usd != null && n > 0 ? fmtLoss(ta.var_95_usd) : 'unmeasured';
+  const cvar95 = ta.cvar_95_usd != null && n > 0 ? fmtLoss(ta.cvar_95_usd) : 'unmeasured';
   const sharpe = ta.sharpe_ratio != null && n > 0 ? ta.sharpe_ratio.toFixed(2) : 'unmeasured';
   const sortino = ta.sortino_ratio != null && n > 0 ? ta.sortino_ratio.toFixed(2) : 'unmeasured';
   const kelly = ta.kelly_fraction != null && n > 0 ? `${(ta.kelly_fraction * 100).toFixed(1)}%` : 'unmeasured';
