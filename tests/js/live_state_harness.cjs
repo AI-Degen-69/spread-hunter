@@ -179,6 +179,28 @@ function backendSequence() {
   };
 }
 
+function guardrailHudVerdict() {
+  const render = (health, alerts) => {
+    app.renderServiceCards(
+      { bot_state: 'STOPPED', services: {} },
+      health,
+      alerts,
+    );
+    return {
+      state: document.getElementById('hud-guardrail-state').textContent,
+      className: document.getElementById('hud-guardrail-pill').className,
+    };
+  };
+  return {
+    stale: render({ running: false, age_s: 90, alerts_total: 0 }, null),
+    alerting: render(
+      { running: true, age_s: 3, alerts_total: 1 },
+      { alerts: [{ kind: 'TEST' }] },
+    ),
+    stopped: render({ running: false, age_s: null, alerts_total: 0 }, null),
+  };
+}
+
 function scanPillVerdicts() {
   return {
     scanningFresh: app.scanPillState('SCANNING', 3),
@@ -232,6 +254,14 @@ else if (script === 'scanpill') out = scanPillVerdicts();
 else if (script === 'pills') out = pillVerdicts();
 else if (script === 'keys') out = keyVerdicts();
 else if (script === 'backend') out = backendSequence();
-else out = { pills: pillVerdicts(), keys: keyVerdicts(), backend: backendSequence(), scanpill: scanPillVerdicts(), marketscan: marketScanVerdicts(), trialbanner: trialBannerVerdicts() };
+else out = {
+  pills: pillVerdicts(),
+  keys: keyVerdicts(),
+  backend: backendSequence(),
+  scanpill: scanPillVerdicts(),
+  guardrailHud: guardrailHudVerdict(),
+  marketscan: marketScanVerdicts(),
+  trialbanner: trialBannerVerdicts(),
+};
 
 process.stdout.write(JSON.stringify(out));

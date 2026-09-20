@@ -365,7 +365,7 @@ def test_milestone8_html_contains_required_sections():
     assert "exposure-bar" in _read_static("index.html")
     assert "service-cards" in _read_static("index.html")
     assert "event-ticker" in _read_static("index.html")
-    assert "cancel-modal" in _read_static("index.html")
+    assert "cancel-modal" not in _read_static("index.html")
     assert "market-table" in _read_static("index.html")
     assert "tab-switcher" in _read_static("index.html")
     assert "info-bubble" in _read_static("app.js")  # generated dynamically by JS
@@ -534,15 +534,18 @@ def test_kpi_endpoint_survives_launch_by_file_path(tmp_path):
 
 
 def test_page_html_contains_status_bar_and_bot_buttons():
-    """Verify HTML contains Supervisor, 4 sub-service pills, and Start/Stop/Reset buttons."""
-    assert "service-cards" in _read_static("index.html")
-    assert "btn-cancel-all" in _read_static("index.html")
-    assert "tab-switcher" in _read_static("index.html")
-    assert "/api/system/start" in _read_static("app.js")
-    assert "/api/system/stop" in _read_static("app.js")
-    assert "pill" in _read_static("app.js")
-    assert "btn-cancel-all" in _read_static("index.html")
-    assert "pill" in _read_static("app.js")
+    """Verify the header keeps only the compact status and safe run controls."""
+    html = _read_static("index.html")
+    app_js = _read_static("app.js")
+    assert "service-cards" in html
+    assert "btn-cancel-all" not in html
+    assert "cancel-modal" not in html
+    assert "usdc-balance" not in html
+    assert "hud-venue-mode" not in html
+    assert "tab-switcher" in html
+    assert "/api/system/start" in app_js
+    assert "/api/system/stop" in app_js
+    assert "pill" in app_js
 
 
 def test_system_status_endpoint(client):
@@ -1392,11 +1395,13 @@ def test_html_has_kanban_board_container():
 def test_scan_state_pill_in_top_nav_bar():
     """#scan-state-pill is positioned inside the top navigation meta header (#225)."""
     html = _read_static("index.html")
-    top_meta = html.split('<div class="top-meta">', 1)[1].split('</header>', 1)[0]
+    top_meta = html.split('<div class="top-meta"', 1)[1].split('</header>', 1)[0]
     assert 'id="scan-state-pill"' in top_meta
     assert 'id="market-scan-pill"' in top_meta
     assert 'id="db-mode-badge"' in top_meta
-    assert 'id="usdc-balance"' in top_meta
+    assert 'id="usdc-balance"' not in top_meta
+    assert 'id="hud-venue-mode"' not in top_meta
+    assert 'id="btn-cancel-all"' not in top_meta
 
     # Screener header retains its label and snapshot age without breaking
     screener_hdr = html.split('id="screener-header"', 1)[1].split('</div>\n    </div>', 1)[0]
@@ -1404,33 +1409,44 @@ def test_scan_state_pill_in_top_nav_bar():
     assert 'scan-snapshot-age' in screener_hdr
 
 
-def test_live_ops_console_in_top_nav_bar():
-    """Live-ops console lives in <header>; hero card and duplicate IDs are gone (#243)."""
+def test_operational_statuses_share_one_top_nav_bar():
+    """Operational pills and controls share one compact top navigation bar."""
     html = _read_static("index.html")
     assert "</header>" in html
     header = html.split("<header", 1)[1].split("</header>", 1)[0]
-    assert 'class="live-ops-console"' in header
+    top_meta = header.split('<div class="top-meta"', 1)[1]
+
+    # The former second-row console is gone; the top nav owns the at-a-glance
+    # operational status surface instead.
+    assert 'class="live-ops-console"' not in header
+    assert 'role="group" aria-label="Dashboard status and controls"' in top_meta
+    assert 'id="master-status-indicator" class="pill state-unknown' in top_meta
+    assert 'id="hud-engine-pill"' in top_meta
+    assert 'id="hud-guardrail-pill"' in top_meta
+    assert 'class="top-status-pill"' not in top_meta
+    assert 'class="top-status-context"' not in top_meta
+
+    css = _read_static("styles.css")
+    assert '.pill-label' in css
+    assert '.pill-detail' in css
 
     moved_ids = (
         "master-status-indicator",
+        "hud-engine-pill",
         "hud-engine-state",
         "hud-engine-sub",
-        "hud-venue-mode",
-        "hud-venue-sub",
+        "hud-guardrail-pill",
         "hud-guardrail-state",
         "hud-guardrail-sub",
-        "live-ops-pulse-dot",
-        "master-status-desc",
-        "runtime-last-sync",
         "btn-master-start",
         "btn-master-stop",
     )
     for element_id in moved_ids:
-        assert f'id="{element_id}"' in header
+        assert f'id="{element_id}"' in top_meta
         assert html.count(f'id="{element_id}"') == 1
 
-    assert 'id="btn-sync"' in header
-    assert ">SYNC VENUE<" in header
+    assert 'id="btn-sync"' in top_meta
+    assert ">SYNC VENUE<" in top_meta
     assert "btn-live-sync" not in html
     assert "live-ops-master-card" not in html
     assert "hud-db-mode" not in html
@@ -1443,6 +1459,10 @@ def test_live_ops_console_in_top_nav_bar():
     assert "live-ops-master-card" not in app_js
     assert "hud-db-mode" not in app_js
     assert "hud-db-sub" not in app_js
+    assert "hud-venue-mode" not in app_js
+    assert "usdc-balance" not in app_js
+    assert "btn-cancel-all" not in app_js
+    assert "cancel-modal" not in app_js
 
 
 def test_app_js_surfaces_telemetry_errors_as_unknown():
@@ -2273,12 +2293,12 @@ const RUNNING_STACK = {
     # Criteria 1 & 2: Disables immediately when clicked, visual feedback STOPPING…
     assert out["inFlightDisabled"] is True
     assert "STOPPING…" in out["inFlightHtml"]
-    assert "STOPPING…" in out["inFlightIndicatorText"]
+    assert "STACK STOPPING" in out["inFlightIndicatorText"]
     assert out["isStoppingFlagDuringFlight"] is True
 
     # Criteria 1 & 3: Background poll does NOT re-enable button while stop is in-flight
     assert out["stillDisabledDuringPoll"] is True
-    assert "STOPPING…" in out["stillStoppingIndicatorDuringPoll"]
+    assert "STACK STOPPING" in out["stillStoppingIndicatorDuringPoll"]
 
     # In-flight repeated click was ignored (no double-POST)
     assert out["totalStopFetchesWhileInFlight"] == 1

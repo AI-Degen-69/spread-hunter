@@ -194,7 +194,8 @@ def test_the_poll_loop_feeds_the_watchdog():
 
 def test_the_master_indicator_uses_the_canonical_state_classes():
     js = APP_JS.read_text(encoding="utf-8")
-    assert "state-running" in js
+    assert "state-${stackState}" in js
+    assert "processState(isRunning" in js
     assert "state-stopped" in js
 
 
@@ -203,6 +204,22 @@ def test_the_service_cards_render_the_canonical_pill():
     assert "statePillHtml(" in js
     # The guardrail card ages on the watcher's ~5s heartbeat cadence.
     assert "cadenceThresholds(5)" in js
+
+
+def test_the_guardrail_hud_preserves_stale_liveness_states():
+    hud = _harness("all")["guardrailHud"]
+    assert hud["stale"] == {
+        "state": "DOWN",
+        "className": "pill state-down mono",
+    }
+    assert hud["alerting"] == {
+        "state": "DEGRADED",
+        "className": "pill state-degraded mono",
+    }
+    assert hud["stopped"] == {
+        "state": "STOPPED",
+        "className": "pill state-stopped mono",
+    }
 
 
 def test_the_design_system_is_declared_to_every_agent():
@@ -262,7 +279,7 @@ def test_an_unrecognised_verdict_still_reads_stopped():
 @requires_node
 def test_a_live_scanner_with_a_fresh_snapshot_is_green():
     v = _harness("marketscan")["upFresh"]
-    assert (v["state"], v["label"]) == ("running", "SCAN LIVE")
+    assert (v["state"], v["label"]) == ("running", "SCAN RUNNING")
 
 
 @requires_node
@@ -278,13 +295,13 @@ def test_a_live_scanner_whose_snapshot_went_stale_is_amber_not_red():
     # The process is up, so it is not DOWN; the file it should be refreshing
     # is older than two full cycles, so it is not healthy either.
     v = _harness("marketscan")["upStale"]
-    assert (v["state"], v["label"]) == ("degraded", "SCAN STALE")
+    assert (v["state"], v["label"]) == ("degraded", "SCAN DEGRADED")
 
 
 @requires_node
 def test_a_scanner_that_has_not_written_a_snapshot_yet_is_amber():
     v = _harness("marketscan")["upNoFile"]
-    assert (v["state"], v["label"]) == ("degraded", "SCAN NO DATA")
+    assert (v["state"], v["label"]) == ("degraded", "SCAN DEGRADED")
 
 
 @requires_node
@@ -339,7 +356,7 @@ def test_the_header_pill_does_not_claim_to_be_the_market_scan():
     # question with different numbers is how this started.
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     header = html.split('id="screener-header"', 1)[1].split("</section>", 1)[0]
-    assert "SCAN LIVE" not in header
+    assert "SCAN RUNNING" not in header
 
 
 # ── the Market Filter header is gate copy, not a dashboard ─────────────────

@@ -37,8 +37,10 @@ Three fixed zones on every page:
    **Dashboard → Data & Markets → Strategy → Trades & Positions → Reports & Analytics.**
    External links (Polymarket, repository) sit at the bottom of the rail.
 2. **Status strip** (top header, persistent on every page): brand + wallet,
-   DB-mode badge, shadow-run clock, USDC balance, exposure bar, SYNC, RESET,
-   EMERGENCY CANCEL ALL.
+   scan/loop/stack/engine/watchdog status pills, DB-mode badge, shadow-run
+   clock, exposure bar, SYNC, RESET, and the safe START/STOP controls.
+   Venue name, USDC balance, and the emergency cancel button are not duplicated
+   in this compact at-a-glance strip.
 3. **Content column**: max-width 1900px on wide screens; pages show exactly one
    panel group at a time (`#page-*` sections), chosen page persists
    (`sh-proto-page`).
@@ -103,7 +105,7 @@ One vocabulary, applied identically to every process, feed, connection and tile.
 | `DEGRADED` | heartbeat stale but under the red threshold | amber | static | DEGRADED |
 | `DOWN` | heartbeat beyond the red threshold / process gone | red | static | DOWN |
 | `STOPPED` | intentionally not running | gray | none | STOPPED |
-| `UNKNOWN` | never seen / registry unreadable | gray pill | none | `--` |
+| `UNKNOWN` | never seen / registry unreadable | gray pill | none | UNKNOWN |
 | `STALE` | the page lost backend contact | amber banner | none | DATA STALE — last seen HH:MM:SS |
 
 Implementation contract (`app.js` exports, `styles.css` styles):
@@ -178,4 +180,5 @@ pill 9999px (status pills, exposure bar).
 | 2026-09-13 | Initial design system created | /design-consultation: owner confirmed product (single-operator real-money console), memorable thing "nothing surprises me", sidebar shell adopted (already live at `/`), all three watchdog risks adopted (heartbeat ages, backend-contact watchdog, 1Hz blink), IBM Plex Sans body font, preview-first workflow |
 | 2026-09-16 | `TRADING LOOP` label on the Market Filter header pill; census, gate copy and readiness trackers removed | Owner, after the top-nav SCAN pill landed: what does the other pill mean? It reads the trading loop's heartbeat, so it now says so, with a `title` naming both heartbeat files. Same pass, owner: "clean all that filter text out, and the DEPTH GATHERING / VOLUME GATHERING". The census line, the gate line and the two per-gate progress trackers were reference copy nobody acted on between the start of a run and the day it turned ready; the kanban below already shows what each gate refused, and `/api/trial-readiness` still carries the detail. The `TRIAL READY` banner stays: that one is a decision, not progress. |
 | 2026-09-16 | Top-nav `MARKET SCAN` pill; watchdog ramps read measured cadence | Owner: "I thought the pill expressed the status of the LOOP SCRIPT that scans markets." It did not — the Data & Markets pill reports the trading loop's heartbeat, and sitting beside `last scan: 3m ago` it read as a dead scanner. Two changes: (1) a new `#market-scan-pill` in the top nav reports the Market Filter process itself, visible from every tab; (2) the shadow heartbeat now records its rotation count, so `read_shadow_run` ramps off the cadence a rotation really costs (~160s here) instead of the configured 5s, which was painting a healthy loop red every cycle. |
+| 2026-09-20 | Consolidated status strip and one live-state vocabulary | The header has one compact status row. Operational pills use `RUNNING`, `DEGRADED`, `DOWN`, `STOPPED`, or `UNKNOWN`; `LIVE` and `SHADOW` identify the registry mode only. Venue, USDC balance, and emergency cancel are intentionally omitted from the header to remove duplicated or high-risk controls; the backend cancel-all route remains available to safety tooling. |
 | 2026-09-15 | `LIVE ONLY` scope tag on the two live-stack-only service cards | Owner asked for a label so the two permanently-STOPPED cards during a shadow rehearsal read as out-of-scope, not dead. Scope is not state and never changes at runtime, so it stays outside the live-state colour vocabulary: quiet gray text with a dashed border (`.svc-scope-pill`), sat beside the existing role tag rather than replacing it. The `title` names `core_brain.shadow_run` as what covers those services during a rehearsal. |

@@ -111,7 +111,7 @@ header {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 12px;
 }
 
@@ -123,58 +123,37 @@ header {
 .top-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 6px;
+  row-gap: 4px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.top-meta::-webkit-scrollbar { display: none; }
 
-/* ── Live ops console (top nav, #243): statuses + run controls stay visible
-   from every tab. Flex with wrap so narrow screens stack instead of scrolling
-   sideways; no grid tracks here so there is no fixed minmax floor. ── */
-.live-ops-console {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  margin-top: 8px;
-  padding: 8px 12px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  min-width: 0;
-  max-width: 100%;
-}
-.live-ops-console .console-stat {
-  display: inline-flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 4px 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 9999px;
-  font-size: 12px;
-  min-width: 0;
-}
-.live-ops-console .console-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+/* One compact operational language across the header. Every status uses the
+   same pill shell and the canonical state classes below; labels add context,
+   not a second visual vocabulary. */
+.pill-label {
   color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
 }
-.live-ops-console .console-meta {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  min-width: 0;
+.pill-detail {
+  color: var(--text-muted);
+  font-size: 9px;
 }
-@media (prefers-reduced-motion: reduce) {
-  .live-ops-console .pulse-dot.active {
-    animation-name: none;
-  }
+.top-status-clock {
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
 }
-
 /* DT3: Exposure indicator in top nav */
 .exposure-bar {
   display: flex;
@@ -276,22 +255,6 @@ header {
 .btn-reset:hover { background: var(--amber-bg); color: #fbbf24; border-color: var(--amber-border); }
 
 /* ── Emergency cancel button ── */
-.btn-cancel-all {
-  background: var(--red-alert);
-  color: white;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 8px;
-  font-family: 'IBM Plex Sans', sans-serif;
-  font-size: 13px;
-  font-weight: 800;
-  cursor: pointer;
-  min-height: var(--touch-min);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.btn-cancel-all:hover { background: #dc2626; }
-
 /* ── Cards ── */
 .card {
   background: var(--bg-card);
@@ -316,7 +279,7 @@ header {
 /* Canonical live-state pills (DESIGN.md): statePillHtml() renders these. The
    age rides inside the pill so every live indicator shows seconds since its
    last heartbeat, not just a color. */
-.pill.state-running, .pill.active { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
+.pill.state-running { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
 .pill.state-degraded { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.state-down { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); }
 .pill.state-stopped { background: rgba(100,116,139,0.2); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
@@ -350,9 +313,8 @@ header {
   font-size: 11px;
   white-space: nowrap;
 }
-.pill.active { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
-.pill.stopped { background: rgba(100,116,139,0.2); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
-.pill.shadow { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
+.pill.mode-live { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
+.pill.mode-shadow { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.error { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); }
 .pill.reconnecting { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.finished { background: rgba(100,116,139,0.10); color: #94a3b8; border: 1px solid rgba(148,163,184,0.18); }
@@ -582,7 +544,7 @@ header {
 }
 .skeleton-card { height: 120px; }
 
-/* ── Confirmation modal (DT7: typed confirm for cancel-all) ── */
+/* ── Confirmation modal (DT7: typed confirm for reset) ── */
 .modal-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
@@ -1181,12 +1143,17 @@ td { font-size: 13px; }
 }
 
 /* ── Responsive breakpoints (DT6) ── */
+@media (max-width: 900px) {
+  header { align-items: flex-start; }
+  .top-meta { justify-content: flex-start; flex-wrap: wrap; overflow-x: visible; }
+}
 @media (max-width: 768px) {
   body { padding: 12px 12px 60px; }
   .card-grid { grid-template-columns: 1fr; }
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
   header { flex-direction: column; align-items: stretch; }
-  .top-meta { justify-content: center; }
+  .top-meta { justify-content: flex-start; }
+  .pill-label { font-size: 8px; }
 }
 @media (max-width: 480px) {
   .kpi-grid { grid-template-columns: 1fr; }
