@@ -42,7 +42,10 @@ const PAGE_LAYOUT = [
     icon: 'M2.4 2.4h4.4v4.4H2.4z M9.2 2.4h4.4v4.4H9.2z M2.4 9.2h4.4v4.4H2.4z M9.2 9.2h4.4v4.4H9.2z',
     note: 'Where the account stands right now.',
     // The bankroll strip is part of the portfolio card and travels with it.
-    selectors: ['#live-ops-master-card', '#broker-portfolio-overview',
+    // Live-ops statuses/controls moved to the top-nav console (#243), which is
+    // outside the page panels and visible everywhere, so home keeps portfolio
+    // + orders only.
+    selectors: ['#broker-portfolio-overview',
                 '#orders-trades-card'],
   },
   {
