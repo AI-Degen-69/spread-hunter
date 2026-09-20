@@ -29,9 +29,14 @@ REGISTRY_EQUITY = STARTING + REALIZED
 WALLET = STARTING
 
 
-def _render(portfolio: dict, starting_capital: float | None = STARTING) -> dict:
+def _render(portfolio: dict, starting_capital: float | None = STARTING,
+            equity_series: list[dict] | None = None) -> dict:
     payload = {
-        "kpi": {"portfolio": portfolio, "trade_analytics": {}},
+        "kpi": {
+            "portfolio": portfolio,
+            "trade_analytics": {},
+            "equity_series": equity_series or [],
+        },
         "status": None if starting_capital is None else {"starting_capital": starting_capital},
     }
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
@@ -103,3 +108,38 @@ def test_the_chart_baseline_matches_the_headlines_starting_capital():
     # Assert
     assert card["starting_capital"] == "$85.42"
     assert card["chart_starting_capital"] == pytest.approx(STARTING)
+
+
+def test_chart_series_uses_real_closes_and_current_value():
+    portfolio = _shadow_portfolio(total_value=86.17)
+    equity_series = [
+        {"type": "mark", "ts": 1_700_000_000, "v": 85.50},
+        {"type": "close", "ts": 1_700_000_060, "v": 85.72, "pnl": 0.30,
+         "market": "first-market"},
+        {"type": "close", "ts": 1_700_000_120, "v": 86.02, "pnl": 0.30,
+         "market": "second-market"},
+    ]
+
+    card = _render(portfolio, equity_series=equity_series)
+
+    assert card["chart_series"] == [
+        {"label": "Start", "v": pytest.approx(STARTING)},
+        {"label": "2023-11-14T22:14:20.000Z", "v": 85.72,
+         "pnl": 0.30, "market": "first-market"},
+        {"label": "2023-11-14T22:15:20.000Z", "v": 86.02,
+         "pnl": 0.30, "market": "second-market"},
+        {"label": "Current", "v": 86.17},
+    ]
+    assert 'stroke-dasharray="2,2"' in card["chart_html"]
+    assert ">Current</text>" in card["chart_html"]
+
+
+def test_chart_series_is_flat_when_there_are_no_closes():
+    card = _render(_shadow_portfolio(total_value=STARTING), equity_series=[
+        {"type": "mark", "ts": 1_700_000_000, "v": 90.0},
+    ])
+
+    assert card["chart_series"] == [
+        {"label": "Start", "v": pytest.approx(STARTING)},
+        {"label": "Current", "v": pytest.approx(STARTING)},
+    ]

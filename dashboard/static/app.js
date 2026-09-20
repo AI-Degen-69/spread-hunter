@@ -1459,37 +1459,41 @@ function renderBrokerPortfolioOverview(kpi, status) {
   renderBrokerPortfolioChart(kpi, currentBrokerTimeframe);
 }
 
+function brokerPointLabel(entry, fallback) {
+  const ts = Number(entry && entry.ts);
+  return Number.isFinite(ts) ? new Date(ts * 1000).toISOString() : fallback;
+}
+
+function buildBrokerEquitySeries(kpi, startingCap, totalVal) {
+  const closes = (Array.isArray(kpi?.equity_series) ? kpi.equity_series : [])
+    .filter(entry => entry && entry.type === 'close' && Number.isFinite(Number(entry.v)))
+    .slice()
+    .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
+  const points = [{ label: 'Start', v: startingCap }];
+  closes.forEach((entry, index) => {
+    const point = {
+      label: brokerPointLabel(entry, `Close ${index + 1}`),
+      v: Number(entry.v),
+    };
+    if (entry.pnl !== null && entry.pnl !== undefined) point.pnl = Number(entry.pnl);
+    if (entry.market !== null && entry.market !== undefined) point.market = entry.market;
+    points.push(point);
+  });
+  points.push({ label: 'Current', v: closes.length ? totalVal : startingCap });
+  return points;
+}
+
 function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
   const container = document.getElementById('broker-chart-svg-container');
   const tooltip = document.getElementById('broker-chart-tooltip');
   if (!container) return;
 
-  const p = kpi?.portfolio || {};
   // Same basis the headline and the gain pill use, so the START line, the pill
   // and the hero cannot describe three different runs.
   const { startingCap, totalVal: currentTotal } = portfolioEquity(
     kpi, lastStartingCapital === null ? null : { starting_capital: lastStartingCapital });
 
-  // Retrieve or synthesize timeframe series
-  let series = p.timeseries ? p.timeseries[timeframe] : null;
-  if (!series || series.length === 0) {
-    const count = 24;
-    series = [];
-    const delta = currentTotal - startingCap;
-    const openCommitted = p.open_committed_usd || 0;
-    for (let i = 0; i < count; i++) {
-      const prog = i / (count - 1);
-      const val = Math.abs(delta) > 0.0001 ? (startingCap + delta * Math.pow(prog, 0.9)) : startingCap;
-      const committed = Math.abs(delta) > 0.0001 ? openCommitted : 0;
-      series.push({
-        time_label: `${i}:00`,
-        account_value: Math.round(val * 100) / 100,
-        cash_usd: Math.round((val - committed) * 100) / 100,
-        positions_committed: committed,
-        realized_pnl: Math.round((val - startingCap) * 100) / 100,
-      });
-    }
-  }
+  const series = buildBrokerEquitySeries(kpi, startingCap, currentTotal);
 
   const w = 800;
   const h = 230;
@@ -1500,7 +1504,7 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
   const plotW = w - padL - padR;
   const plotH = h - padT - padB;
 
-  const vals = series.map(s => s.account_value);
+  const vals = series.map(s => s.v);
   const minVal = Math.min(...vals, startingCap * 0.995);
   const maxVal = Math.max(...vals, startingCap * 1.005);
   const valSpan = Math.max(maxVal - minVal, 0.50);
@@ -1508,7 +1512,7 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
   const getX = (idx) => padL + (idx / (series.length - 1)) * plotW;
   const getY = (val) => padT + plotH - ((val - minVal) / valSpan) * plotH;
 
-  const points = series.map((s, i) => ({ x: getX(i), y: getY(s.account_value), data: s }));
+  const points = series.map((s, i) => ({ x: getX(i), y: getY(s.v), data: s }));
   const pathD = points.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
   const areaD = `${pathD} L ${points[points.length - 1].x.toFixed(1)},${(padT + plotH).toFixed(1)} L ${points[0].x.toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
 
@@ -1544,7 +1548,7 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
       `).join('')}
 
       <!-- Baseline Starting Capital Line ($100.00) -->
-      <line x1="${padL}" y1="${baselineY}" x2="${w - padR}" y2="${baselineY}" stroke="rgba(255,255,255,0.25)" stroke-dasharray="4,3" stroke-width="1.2"/>
+      <line x1="${padL}" y1="${baselineY}" x2="${w - padR}" y2="${baselineY}" stroke="rgba(255,255,255,0.25)" stroke-dasharray="2,2" stroke-width="1.2"/>
       <text x="${w - padR}" y="${baselineY - 5}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8" text-anchor="end">START: $${startingCap.toFixed(2)}</text>
 
       <!-- Shaded Area Gradient -->
@@ -1558,10 +1562,10 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
       <circle cx="${latestPt.x}" cy="${latestPt.y}" r="3.5" fill="#34d399" stroke="#020617" stroke-width="1.5"/>
 
       <!-- X-Axis Labels -->
-      <text x="${padL}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">${series[0]?.time_label || 'Start'}</text>
-      <text x="${padL + plotW * 0.33}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${series[Math.floor(series.length * 0.33)]?.time_label || ''}</text>
-      <text x="${padL + plotW * 0.66}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${series[Math.floor(series.length * 0.66)]?.time_label || ''}</text>
-      <text x="${w - padR}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="end">Current (${series[series.length - 1]?.time_label || 'Now'})</text>
+      <text x="${padL}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">${series[0]?.label || 'Start'}</text>
+      <text x="${padL + plotW * 0.33}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${series[Math.floor(series.length * 0.33)]?.label || ''}</text>
+      <text x="${padL + plotW * 0.66}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${series[Math.floor(series.length * 0.66)]?.label || ''}</text>
+      <text x="${w - padR}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="end">Current</text>
 
       <!-- Crosshair Line Element (dynamically updated on mouseover) -->
       <line id="broker-crosshair-line" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="#38bdf8" stroke-width="1" stroke-dasharray="2,2" opacity="0"/>
@@ -1604,11 +1608,10 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
       // Update tooltip content and position
       tooltip.style.display = 'flex';
       tooltip.innerHTML = `
-        <div class="broker-tooltip-time">${data.time_label || data.timestamp || 'Snapshot'}</div>
-        <div class="broker-tooltip-row"><span class="broker-tooltip-label">Account Value:</span> <span class="broker-tooltip-val mono" style="color:#34d399">$${Number(data.account_value).toFixed(2)}</span></div>
-        <div class="broker-tooltip-row"><span class="broker-tooltip-label">Cash (USDC):</span> <span class="broker-tooltip-val mono">$${Number(data.cash_usd).toFixed(2)}</span></div>
-        <div class="broker-tooltip-row"><span class="broker-tooltip-label">Resting Bids:</span> <span class="broker-tooltip-val mono">$${Number(data.positions_committed || 0).toFixed(2)}</span></div>
-        <div class="broker-tooltip-row"><span class="broker-tooltip-label">Realized Spread:</span> <span class="broker-tooltip-val mono" style="color:${Number(data.realized_pnl || 0) < 0 ? '#f87171' : '#34d399'}">${fmtSignedUSD(data.realized_pnl || 0)}</span></div>
+        <div class="broker-tooltip-time">${data.label || 'Snapshot'}</div>
+        <div class="broker-tooltip-row"><span class="broker-tooltip-label">Account Value:</span> <span class="broker-tooltip-val mono" style="color:#34d399">${fmtUSD(data.v)}</span></div>
+        ${data.pnl !== undefined ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Realized Spread:</span> <span class="broker-tooltip-val mono" style="color:${Number(data.pnl) < 0 ? '#f87171' : '#34d399'}">${fmtSignedUSD(data.pnl)}</span></div>` : ''}
+        ${data.market ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Market:</span> <span class="broker-tooltip-val mono">${esc(data.market)}</span></div>` : ''}
       `;
 
       // Position tooltip avoiding overflow
@@ -5094,7 +5097,8 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds, decisionGatesHtml, decisionGatesRows, gateBadge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity,
+  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds, decisionGatesHtml, decisionGatesRows, gateBadge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
+
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     renderPnlCiReadout, renderExecutionFunnel,
     OT_VIEWS, OT_COLUMNS, ordersTradesRows, ordersTradesCounts, otHeadHtml,

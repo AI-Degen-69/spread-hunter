@@ -10,9 +10,9 @@ const path = require('path');
 const input = JSON.parse(process.argv[2]);
 const elements = {};
 
-// The chart needs a real SVG surface; returning null makes renderBrokerPortfolioChart
-// bail at its own guard, which is what we want -- this harness measures the card.
-const NULL_IDS = new Set(['broker-chart-svg-container', 'broker-chart-tooltip']);
+// The chart harness deliberately exposes the chart containers so chart-series
+// behavior can be asserted without starting a browser server.
+const NULL_IDS = new Set();
 
 function element(id) {
   if (!elements[id]) {
@@ -64,13 +64,20 @@ new Function('module', 'exports', 'document', 'window', 'localStorage', 'EventSo
 const app = mod.exports;
 app.renderBrokerPortfolioOverview(input.kpi, input.status);
 
-// The chart's own basis, read through the shared helper the chart uses, so the
-// test can assert the headline and the chart's final point agree.
+// Read the chart's deterministic series helper directly so the focused test
+// can assert real close points, empty-state behavior, and the Current point.
 const basis = app.portfolioEquity(input.kpi, input.status);
+const chartSeries = app.buildBrokerEquitySeries(
+  input.kpi,
+  basis.startingCap,
+  basis.totalVal,
+);
 
 process.stdout.write(JSON.stringify({
   chart_total: basis.totalVal,
   chart_starting_capital: basis.startingCap,
+  chart_series: chartSeries,
+  chart_html: element('broker-chart-svg-container').innerHTML,
   equity: element('broker-hero-equity').textContent,
   pnl: element('broker-pnl-amount').textContent,
   starting_capital: element('broker-starting-cap').textContent,
