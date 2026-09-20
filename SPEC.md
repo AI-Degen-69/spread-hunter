@@ -1,64 +1,34 @@
-# SPEC: Issue #240 - End-of-window proximity gate
+# SPEC: Issue #252 — Portfolio equity chart anchored to the run's DB start
 
 ## Goal
-When a market is close to resolution and the loop revisits markets slower than the market can converge, refuse new pair posts (or demand a deeper entry price) — while never blocking a quote that reduces unhedged inventory. Gate off by default so shadow runs measure it first.
+The Portfolio Overview card must describe the run, not the dashboard session. Its first point, its START baseline, its hero percentage and its Starting Bankroll tile all come from the same registry value: the newest `account_marks` row at or before the active run's first activity.
 
 ## Acceptance criteria (from issue)
-- [ ] `evaluate_market_quote` feeds real `t_remaining` from the market object; no fake `1e9` on the live path.
-- [ ] Rolling fleet cadence measured from `cycle_intent` timestamps (median gap); `None` when too few rows, and the gate fails open on unknown cadence.
-- [ ] Gate fires only when: enabled + minutes-to-resolution ≤ horizon + cadence known and above budget.
-- [ ] Light-side balancing quotes always allowed, even when the gate fires.
-- [ ] `refuse` skips the side with a clear reason; `deepen` adds the offset through the existing pipeline + clamp.
-- [ ] Verdict visible in the `why` reason string, flowing to `cycle_intent.top_skip_reason` and shadow-run log.
-- [ ] `python -m pytest -q` passes.
+- [ ] `report(... )["portfolio"]["starting_capital"]` is the newest `account_marks` row at or before the active run's first recorded activity (`list_runs()` `first_ts`), falling back in order: run's earliest mark → store's earliest mark → `_CFG.bankroll_usd`. On `data/01_shadow_12-09_00-58.db` that is `53.631665`.
+- [ ] Same payload carries `portfolio.starting_capital_ts` = that mark's `ts` (`2026-09-11T21:58:29.910224Z` here), `null` when anchor is the config-bankroll fallback.
+- [ ] `KPI_PAYLOAD_VERSION` and `EXPECTED_PAYLOAD_VERSION` bumped together and `tests/test_analytics_api.py:165` still passes.
+- [ ] Chart's first point equals the anchor and its x-axis label is that anchor's real ISO timestamp (fallback `Start` only when no timestamp).
+- [ ] Dashed baseline and `START: $…` sit at the anchor; not derived from `/api/system/status` `starting_capital`.
+- [ ] `#broker-starting-cap`, hero pill % and KPI-grid Starting Capital tile read the same anchor — on the store above: equity `$62.04`, `+$8.41`, `+15.68%`, `Starting Bankroll: $53.63`, curve rises from `$53.63` to `$62.04`.
+- [ ] Dashboard restart changes none of those four numbers.
+- [ ] Degenerate store (no marks): anchor is config bankroll, label `Start`, SVG contains no `NaN`/`undefined`.
+- [ ] `python -m pytest -q tests/test_portfolio_card_basis.py tests/test_portfolio_overview.py tests/test_account_kpi.py tests/test_analytics_api.py` green; full suite green in CI.
 
 ## Scope
 ### In scope
-- `MakerConfig` fields (`core_brain/config.py`): `enforce_endgame_gate=False`, `endgame_horizon_min`, `endgame_max_cadence_sec`, `endgame_action="refuse"`, `endgame_deepen_offset`, `observed_cadence_sec=None` + `HUNTER_*` overrides + validation.
-- Cadence query helper (`core_brain/order_registry.py`), read-only, median of consecutive distinct-cycle gaps.
-- Real timing in `evaluate_market_quote` (`core_brain/quotes.py`); `window_frac=None` for graduated markets without a stable window start.
-- Per-cycle cadence attach in `core_brain/trader_loop.py` (`_market_cfg`, same pattern as `fleet_posture`).
-- Gate rule in `_decide_quotes_from_mid` per-side loop near the `strict_paired_inventory` block.
-- Tests: S&P 2026-09-18 regression, config validation, cadence helper.
+- `core_brain/kpi.py` anchor selection + `starting_capital_ts`, `equity_series` start point, payload version bump (`kpi.py:45`, 251→252).
+- `dashboard/static/app.js` `portfolioEquity()` precedence fix, `buildBrokerEquitySeries()` Start point + label, chart baseline geometry, hero pill denominator, KPI-grid tile, `EXPECTED_PAYLOAD_VERSION` (`app.js:71`).
+- `dashboard/static/index.html` `#broker-starting-cap` (id/label preserved, value changes).
+- Tests: `tests/test_portfolio_card_basis.py` (+ harness `tests/js/portfolio_card_harness.cjs`), `tests/test_portfolio_overview.py`, `tests/test_account_kpi.py`, `tests/test_analytics_api.py`.
 
 ### Out of scope (per issue)
-- Changing caller signatures in `trader_loop.py` / `order_manager.py`; changing `fetch_live_market`; touching the screener.
-- Enabling the gate live (stays off by default; shadow measurement first).
+- Trading, quoting, sizing, order-registry schema, `data/orders.db`.
+- `Venue wallet` row meaning/copy and the ~$11 top-up gap (stays as-is).
+- Timeframe-control semantics (windowed frames keep pinning run-start at left edge; only value/date change).
+- Deleting `runtime/processes.json` `starting_account_value` writer (stays, just not the card's baseline).
+- New frontend dependencies.
 
 ## Edge cases
-- Unknown cadence (`None`) → gate never fires (fail open, same as missing-clock convention).
-- Market far from resolution → gate never fires regardless of cadence.
-- Flat inventory + gate fires → side skipped (`refuse`) or repriced (`deepen`); paired-loss case from the post-mortem cannot post.
-- Unhedged inventory + gate fires → balancing side still posts.
-- `deepen` offset still clamped by `max_spread_from_mid`.
-
-# SPEC: Issue #242 - Portfolio equity chart and header cleanup
-
-## Goal
-Simplify the Portfolio Overview header and replace the synthetic equity curve with the real closed-trade equity series while preserving existing wallet displays and DOM contracts.
-
-## Acceptance criteria
-- [ ] Starting Bankroll appears in the broker title/header area and `broker-starting-cap` remains functional.
-- [ ] The venue badge and old Settlement Currency/right-side content are removed without removing the venue wallet row or its IDs.
-- [ ] The chart uses top-level `kpi.equity_series` close entries in chronological order, with a starting-capital anchor and a final Current point at the current total value.
-- [ ] X-axis labels use real close timestamps; the final label is `Current`.
-- [ ] The starting-capital baseline spans the plot width and is dotted.
-- [ ] With no close entries, the chart is flat at starting capital; no synthetic rising curve is rendered.
-- [ ] Tooltip/crosshair behavior remains available and uses fields present in the real series.
-- [ ] Existing portfolio/header tests remain green and new chart coverage fails if the implementation returns to fake data.
-
-## Scope
-### In scope
-- `dashboard/static/index.html`: broker header and metadata layout.
-- `dashboard/static/styles.css`: obsolete venue-badge styling and only layout adjustments required by the new header.
-- `dashboard/static/app.js`: chart series construction, labels, baseline, empty state, and tooltip fields.
-- `tests/js/portfolio_card_harness.cjs` and portfolio-focused Python/JS test coverage.
-
-### Out of scope
-- Backend KPI calculation, `/api/kpi` schema, wallet number computation, trading behavior, chart controls/timeframe semantics, and new dependencies.
-
-## Edge cases
-- Ignore `equity_series` entries that are not `type === "close"` when building close steps.
-- Preserve chronological order even when input data contains non-close entries.
-- Empty close series must still render a valid flat baseline and a usable tooltip/crosshair surface.
-- Current total value may differ from the last close and must remain the final plotted value.
+- No `account_marks` rows → fallback to `_CFG.bankroll_usd`, timestamp `null`, label `Start`, no NaN in SVG.
+- Live registry (no active run) → same fallback chain; still one basis for whole card.
+- Shadow store with resumed session (`runtime/shadow-session.json` `resumed:true`) → DB anchor still wins over session snapshot.

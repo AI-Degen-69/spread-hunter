@@ -1,73 +1,46 @@
-# Plan: Issue #254 — Speed up Windows pytest CI job (~10 min → under ~4 min)
+# Plan: Issue #252 — Anchor Portfolio chart to the run's DB start
 
-Size: **Small** (workflow + duration-balanced sharder; approach straightforward once slowest files are measured).
-Task type: **Performance** (CI execution strategy; no product-code change).
+Size: **Standard** (3 files + tests, single architectural decision: DB anchor vs session snapshot).
+Task type: **Code + Design/UI** (backend anchor selection + frontend chart rendering).
 
 ## Context
+`dashboard/server.py:1216` writes the wallet at stack start to `runtime/processes.json`; `app.js:1316` `portfolioEquity()` prefers that session snapshot over `kpi.py`'s own `portfolio.starting_capital`. On `data/01_shadow_12-09_00-58.db` (run `shadow-01`) that makes a +$8.41 / +15.68% run render as a $2.66 decline from a $64.70 START that never belonged to the run. The run's true start is the newest `account_marks` row at or before the run's first activity (`$53.631665` @ `2026-09-11T21:58:29.910Z`).
 
-On the `main` baseline at PR #253 the `tests` workflow (`.github/workflows/tests.yml:17-44`) ran the entire suite —
-145 test files, 2193 tests, single process, no parallelism — on both
-`ubuntu-latest` and `windows-latest`. Observed there: Ubuntu finishes in
-~1-2 min, Windows takes ~9-14 min (9m28s, 12m13s, 14m18s on rerun), so the
-Windows job dominates every babysit/merge wait. Same run also flaked once on the
-timing-sensitive `stale` assertion (`tests/test_seed_preview_fixture.py:110`)
-and passed on rerun — a symptom of the overloaded Windows runner, not a product
-bug. `requirements-dev.txt` carries only `pytest` + `httpx`, and CONSTRAINTS
-forbids new dependencies without approval, so the fix must come from job
-structure, not new packages.
-
-## Spec (embedded — Small, no SPEC.md ceremony)
-
-Goal: cut Windows CI wall time to under ~4 min while the full suite still runs
-green on both OSes.
-
-Acceptance (from issue #254):
-- [ ] Windows CI wall time measurably lower (target under ~4 min) on a representative PR run.
-- [ ] Full suite still runs and passes on both Ubuntu and Windows (`gh pr checks` green).
-- [ ] No test skipped, deleted, or weakened; no product-code change; no new dependency.
-
-Out of scope (per issue): product code, trading logic, test assertions.
+## Spec (see SPEC.md)
+Goals, acceptance, edge cases and out-of-scope copied to `SPEC.md` for the Standard size. Headline: every start figure on the Portfolio card — value and timestamp — comes from the same DB anchor, never from `/api/system/status`.
 
 ## Tasks
 
-### Task 1 — Measure: per-file durations + baseline [Perf] [x]
-- **Files:** none (read-only research).
-- **Measured:** full suite locally 2192 passed, 1 skipped in ~156s; flat
-  profile (slowest single test 3.7s, slowest file 7.9s) — no fast/slow split
-  can reach the target, so Task 2 uses duration-balanced sharding instead.
-  Per-file table saved to `scripts/ci/shard_durations.json` (145 files).
-- **Skill:** performance-optimization
-- **Verification:** done — junit XML aggregated per file; 2193 tests.
+### Task 1 — Backend: DB-anchored starting capital + timestamp [Code]
+- **Files:** `core_brain/kpi.py` (`starting_capital` block 1753-1792, `list_runs()` first_ts), `tests/test_account_kpi.py`
+- **Build:** newest `account_marks` row at or before the active run's `first_ts`; fallback in order run's earliest mark → store's earliest mark → `_CFG.bankroll_usd`. Expose `portfolio.starting_capital_ts` (mark's `ts` or `null`). Bump `KPI_PAYLOAD_VERSION` 251→252.
+- **Skill:** test-driven-development
+- **Verification:** RED test asserting `53.631665` + `2026-09-11T21:58:29.910224Z` on the shadow store; degenerate-store test asserts bankroll fallback with `null` ts.
 
-### Task 2 — Shard the workflow: ubuntu full + 4 windows shards [CI/Config]
-- **Files:** `.github/workflows/tests.yml`, `scripts/ci/pytest_shard.py` (new),
-  `scripts/ci/shard_durations.json` (new).
-- **Build:** matrix `include`: ubuntu runs the full suite (`--shard all`),
-  windows runs 4 duration-balanced shards from `pytest_shard.py`, which globs
-  `tests/**/test_*.py` at runtime (new files always assigned somewhere) and
-  greedy-partitions by the checked-in durations. `shell: bash` on the test
-  step for identical word-splitting on both OSes; dropped the
-  `pip install --upgrade pip` line (setup-python ships a modern pip).
-  No new packages, no test-file edits.
-- **Skill:** incremental-implementation
-- **Verification:** YAML parses; collect-only per shard sums to exactly 2193
-  (525+527+572+569) with zero overlap/omission; shard 2 executed locally:
-  526 passed, 1 skipped in 38s.
+### Task 2 — Backend: equity_series starts at the anchor [Code]
+- **Files:** `core_brain/kpi.py` (equity_series 1830-1860), `tests/test_portfolio_overview.py`
+- **Build:** `running_equity = starting_capital` already exists — verify it now uses the DB anchor and that the series' first point's timestamp matches `starting_capital_ts`.
+- **Skill:** test-driven-development
+- **Verification:** harness test asserts first equity point value+ts equals the anchor; windowed frames (1D/1W/1M) still pin the anchor at left edge.
 
-### Task 3 — Verify on a real PR: green + faster [CI/Verify]
-- **Files:** none (push + observe).
-- **Build:** push the branch, open the PR, and compare both jobs' wall times
-  against the ~9-14 min baseline. Post the timings as a PR comment.
-- **Skill:** incremental-implementation
-- **Verification:** `gh pr checks <n>` all green on both OSes;
-  `gh run watch <run-id> --exit-status` green; Windows wall times recorded
-  under ~4 min target.
+### Task 3 — Frontend: headline + pill read the DB anchor [Design/UI]
+- **Files:** `dashboard/static/app.js` (`portfolioEquity()` 1316, hero pill 1344, KPI-grid tile 3236, `EXPECTED_PAYLOAD_VERSION` 71), `tests/js/portfolio_card_harness.cjs`, `tests/test_portfolio_card_basis.py`
+- **Build:** `portfolioEquity()` prefers `kpi.portfolio.starting_capital` (and its `starting_capital_ts`) over `status.starting_capital`; hero pill denominator and `#broker-starting-cap` / KPI-grid tile read that same figure. Bump `EXPECTED_PAYLOAD_VERSION` 251→252 together with backend.
+- **Skill:** frontend-ui-engineering
+- **Verification:** harness asserts `test_the_chart_baseline_matches_the_headlines_starting_capital` now passes inverted (matches DB anchor, not session snapshot); expects `+$8.41 (+15.68%)` and `Starting Bankroll: $53.63` on the fixture.
+
+### Task 4 — Frontend: chart START point + baseline + x-label [Design/UI]
+- **Files:** `dashboard/static/app.js` (`buildBrokerEquitySeries()` 1450-1478, chart geometry 1480-1562), `dashboard/static/index.html` (#broker-starting-cap)
+- **Build:** synthetic `Start` point at anchor value with real ISO timestamp label (`brokerPointLabel`); dashed `START: $…` baseline and x-axis label sit at anchor; fallback label `Start` only when ts is null; no `NaN`/`undefined` in SVG for degenerate store.
+- **Skill:** frontend-ui-engineering
+- **Verification:** browser harness asserts left-edge label is ISO timestamp before first trade, `START` line at anchor, `Current` at right edge; degenerate-store render has no NaN.
+
+### Task 5 — Tests: version pin + no-regression sweep [Code]
+- **Files:** `tests/test_analytics_api.py:165`, `tests/test_portfolio_overview.py`, `tests/test_account_kpi.py`
+- **Build:** pinned version assertion updated to 252; keep all existing `portfolio`/`equity_series` assertions except the inverted baseline test.
+- **Skill:** test-driven-development
+- **Verification:** `python -m pytest -q tests/test_portfolio_card_basis.py tests/test_portfolio_overview.py tests/test_account_kpi.py tests/test_analytics_api.py` green.
 
 ## Improvement proposal (adopted by default)
+Keep the `Venue wallet` row visible as a secondary figure but never as the card's denominator — the issue already bans changing its copy, so surfacing the gap as labelled information avoids reintroducing the three-figure confusion while preserving the wallet top-up signal.
 
-Shard into duration-balanced jobs instead of adding `pytest-xdist`: the issue
-allows xdist only as an example, CONSTRAINTS bans new dependencies without
-approval, and `tests.yml` already uses a job matrix — so extra matrix entries
-follow the repo's own idiom with zero approval gates and zero new flakiness
-surface. Measurement forced one refinement: 4 balanced shards, not fast/slow,
-because the profile is flat (slowest file 7.9s).

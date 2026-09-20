@@ -48,3 +48,11 @@
 - No new dependencies of any kind — not even dev-only (no `pytest-xdist` without explicit operator approval); the speedup must come from job structure, not new packages.
 - Performance target: Windows wall time under ~4 minutes (baseline ~9-14 min on PR #253) while Ubuntu stays green.
 
+## Constraints: Issue #252 - Portfolio equity chart anchored to DB run-start
+- Zero regressions: focused suites `tests/test_portfolio_card_basis.py`, `tests/test_portfolio_overview.py`, `tests/test_account_kpi.py`, `tests/test_analytics_api.py` must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): DB anchor value + timestamp, version bump, chart baseline, hero pill denominator.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, weakening `test_the_chart_baseline_matches_the_headlines_starting_capital`, or suppressing linters.
+- The card describes the run: every start figure (`starting_capital`, `starting_capital_ts`, chart Start point, START baseline, pill %, Starting Bankroll tile) derives from the same DB anchor; session snapshot `runtime/processes.json` `starting_account_value` never feeds the card.
+- No trading, quoting, sizing, or registry-schema changes; no new endpoint; no new frontend dependencies; `Venue wallet` row stays as-is; timeframe semantics (1D/1W/1M/ALL) keep pinning run-start at left edge.
+- `KPI_PAYLOAD_VERSION` and `EXPECTED_PAYLOAD_VERSION` must be bumped together (251 → 252); degenerate store (no marks) falls back to `_CFG.bankroll_usd` with `starting_capital_ts = null` and renders without NaN.
+
