@@ -2285,10 +2285,12 @@ function renderQuantRiskGrid(ta, p, stats) {
 
   const n = ta.n_closes ?? (ta.closes_count || 0);
   // `$-0.343` puts the minus inside the currency; the sign goes in front.
+  // Issue #260: a null expectancy/mean is unmeasured, not a zero. `$0.000`
+  // and `0.00%` were the last two fabricated zeros in this grid.
   const expectancy = ta.expectancy_usd != null && n > 0
     ? `${ta.expectancy_usd < 0 ? '-' : ''}$${Math.abs(ta.expectancy_usd).toFixed(3)}`
-    : '$0.000';
-  const meanRet = ta.mean_return_pct != null && n > 0 ? `${ta.mean_return_pct.toFixed(2)}%` : '0.00%';
+    : 'unmeasured';
+  const meanRet = ta.mean_return_pct != null && n > 0 ? `${ta.mean_return_pct.toFixed(2)}%` : 'unmeasured';
   const winRate = ta.win_rate != null && n > 0 ? `${(ta.win_rate * 100).toFixed(1)}%` : 'unmeasured';
   // `win_rate_ci95` is `{lower, upper}`, not a two-element array. Indexing it
   // gave `undefined * 100` on both ends, so the Wilson interval rendered as

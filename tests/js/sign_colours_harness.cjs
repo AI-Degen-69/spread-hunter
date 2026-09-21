@@ -146,6 +146,7 @@ process.stdout.write(JSON.stringify({
   quant_win_rate: quantClass('Win Rate &amp; Wilson CI'),
   quant_ci: quantSub('Win Rate &amp; Wilson CI'),
   quant_expectancy_text: quantValue('Mathematical Expectancy'),
+  quant_expectancy_sub: quantSub('Mathematical Expectancy'),
   quant_var: quantValue('95% Value at Risk (1D)'),
   quant_cvar: quantSub('95% Value at Risk (1D)'),
   quant_kelly: quantValue('Kelly Optimal Sizing'),
