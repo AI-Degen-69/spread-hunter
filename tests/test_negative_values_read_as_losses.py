@@ -44,7 +44,7 @@ def _render(realized: float = -2.40, *, expectancy: float = -0.343,
             sharpe: float = -0.63, profit_factor: float = 0.13,
             mc_end: float | None = None, win_rate_ci95=None,
             risk: dict | None = None, include_risk_fields: bool = True,
-            payload_version=251) -> dict:
+            payload_version=252) -> dict:
     ta = {
         "n_closes": 7, "expectancy_usd": expectancy,
         "mean_return_pct": -13.85, "sharpe_ratio": sharpe,
@@ -234,7 +234,7 @@ def test_a_stale_backend_says_so_once():
 
 @requires_node
 def test_a_current_backend_shows_no_note_and_warns_not():
-    fresh = _render(payload_version=251)
+    fresh = _render(payload_version=252)
     assert fresh["stale_note_shown"] is False
     assert fresh["stale_warn_count"] == 0
 

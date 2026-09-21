@@ -42,7 +42,7 @@ UNCATEGORIZED = "Uncategorized"
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 251
+KPI_PAYLOAD_VERSION = 252
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -1758,33 +1758,67 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # Starting capital derives from live venue account marks (the account's real
     # balance at start/sweep time), falling back to config bankroll only when no
     # venue measurements exist (e.g. synthetic test fixtures).
+    #
+    # The card describes the RUN, so its anchor is the newest mark at or before
+    # the active run's first recorded activity (list_runs() first_ts, which
+    # excludes account_marks) -- a later session sweep must never move the
+    # run's start. Fallbacks, in order: the run's earliest mark -> the
+    # store's earliest mark -> config bankroll (timestamp null).
     # ------------------------------------------------------------------
-    starting_capital = None
+    def _num(value):
+        """float() that returns None for missing/non-numeric DB values.
+
+        A corrupt mark row (empty string, stray text) must not crash the
+        whole report -- it is skipped like an unmeasured mark. Non-finite
+        values (NaN/Inf, which SQLite REAL can store) are unmeasurable too:
+        Starlette serializes /api/kpi with allow_nan=False, so one would
+        fail the whole response.
+        """
+        try:
+            parsed = float(value)
+            return parsed if math.isfinite(parsed) else None
+        except (TypeError, ValueError):
+            return None
+
+    def _valued_marks(marks):
+        """(value, ts) pairs for marks with a usable value and timestamp."""
+        pairs = []
+        for m in marks:
+            v, t = _num(m.get("account_value_usd")), _num(m.get("ts"))
+            if v is not None and t is not None:
+                pairs.append((v, t))
+        return pairs
+
+    active_first_ts = None
     if active_run_id and active_run_id != "all":
-        _run_marks = [
-            am for am in all_account_marks
-            if am.get("run_id") == active_run_id and am.get("account_value_usd") is not None
-        ]
-        if _run_marks:
-            _sorted_rm = sorted(
-                [m for m in _run_marks if m.get("ts") is not None],
-                key=lambda m: float(m["ts"]),
-            )
-            if _sorted_rm:
-                starting_capital = float(_sorted_rm[0]["account_value_usd"])
+        for _r in runs:
+            if _r.get("run_id") == active_run_id:
+                active_first_ts = _num(_r.get("first_ts"))
+                break
+
+    starting_capital = None
+    starting_capital_ts = None
+    if active_first_ts is not None:
+        _before = [(v, t) for v, t in _valued_marks(all_account_marks)
+                   if t <= active_first_ts]
+        if _before:
+            starting_capital, starting_capital_ts = max(_before, key=lambda vt: vt[1])
 
     if starting_capital is None:
-        _valid_marks = [
-            am for am in all_account_marks
-            if am.get("account_value_usd") is not None
-        ]
-        if _valid_marks:
-            _sorted_all = sorted(
-                [m for m in _valid_marks if m.get("ts") is not None],
-                key=lambda m: float(m["ts"]),
+        if active_run_id and active_run_id != "all":
+            _run_pairs = _valued_marks(
+                am for am in all_account_marks
+                if am.get("run_id") == active_run_id
             )
-            if _sorted_all:
-                starting_capital = float(_sorted_all[0]["account_value_usd"])
+            if _run_pairs:
+                starting_capital, starting_capital_ts = min(
+                    _run_pairs, key=lambda vt: vt[1])
+
+    if starting_capital is None:
+        _all_pairs = _valued_marks(all_account_marks)
+        if _all_pairs:
+            starting_capital, starting_capital_ts = min(
+                _all_pairs, key=lambda vt: vt[1])
 
     if starting_capital is None:
         starting_capital = _CFG.bankroll_usd
@@ -1814,7 +1848,8 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # written after the account read, and the safe reading of an unprovable
     # order is "not measured" rather than a float the venue may have replaced.
     latest_account_ts = max(
-        (float(am["ts"]) for am in all_account_marks if am.get("ts") is not None),
+        (t for am in all_account_marks
+         if (t := _num(am.get("ts"))) is not None),
         default=None,
     )
     mark_is_current = (
@@ -1880,7 +1915,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # `core_brain.order_manager account-sweep` and read here from SQLite.
     # ------------------------------------------------------------------
     sorted_account_marks = sorted(
-        [am for am in all_account_marks if am.get("ts") is not None],
+        [am for am in all_account_marks if _num(am.get("ts")) is not None],
         key=lambda am: float(am["ts"]),
     )
     latest_account = next(
@@ -1897,8 +1932,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         """
         if latest_account is None:
             return None
-        v = latest_account.get(field)
-        return None if v is None else float(v)
+        return _num(latest_account.get(field))
 
     account = {
         "measured": latest_account is not None,
@@ -1944,6 +1978,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
 
     portfolio = {
         "starting_capital": starting_capital,
+        # Epoch seconds of the mark the anchor came from; null when the
+        # anchor is the config-bankroll fallback (no mark was measured).
+        "starting_capital_ts": starting_capital_ts,
         "realized_pnl": realized_pnl,
         "unrealized_usd": unrealized_usd,
         "unrealized_measured": mark_is_current,

@@ -172,6 +172,8 @@ def test_the_payload_version_is_pinned_on_both_sides(app_js, kpi_module):
                          app_js, re.M)
     assert backend and frontend
     assert backend.group(1) == frontend.group(1)
+    # Issue #252 shipped the DB anchor + timestamp: both sides sit at 252.
+    assert backend.group(1) == "252"
 
 
 def test_a_stale_backend_shows_a_restart_note(app_js, index_html, styles_css):
