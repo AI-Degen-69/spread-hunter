@@ -16,7 +16,7 @@ const NULL_IDS = new Set();
 
 function element(id) {
   if (!elements[id]) {
-    elements[id] = {
+    const el = {
       id,
       textContent: '',
       innerHTML: '',
@@ -25,13 +25,18 @@ function element(id) {
       style: {},
       classList: { add() {}, remove() {}, contains: () => false, toggle() {} },
       dataset: {},
-      querySelector: () => null,
+      _listeners: {},
+      // Issue #259: the equity chart queries its own children and listens for
+      // hover. Child stubs persist per selector so listeners stay attached.
+      querySelector: (sel) => element(id + ' ' + String(sel)),
       querySelectorAll: () => [],
       appendChild() {},
       setAttribute() {},
       getAttribute: () => null,
-      addEventListener() {},
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 230 }),
+      addEventListener(type, fn) { el._listeners[type] = fn; },
     };
+    elements[id] = el;
   }
   return elements[id];
 }
@@ -74,11 +79,27 @@ const chartSeries = app.buildBrokerEquitySeries(
   input.timeframe || 'ALL',
 );
 
+// Issue #259: sweep a synthetic hover across the chart and keep the first
+// close-point tooltip (Start/Current carry no pnl, so they never match).
+let tooltip_html = '';
+const hoverSvg = element('broker-chart-svg-container')
+  .querySelector('#broker-svg-chart');
+if (hoverSvg && hoverSvg._listeners && hoverSvg._listeners.mousemove) {
+  const rect = hoverSvg.getBoundingClientRect();
+  for (let cx = 0; cx <= rect.width; cx += 10) {
+    hoverSvg._listeners.mousemove({ clientX: cx });
+    const html = element('broker-chart-tooltip').innerHTML || '';
+    if (html.includes('Realized Spread')) { tooltip_html = html; break; }
+  }
+  if (!tooltip_html) tooltip_html = element('broker-chart-tooltip').innerHTML || '';
+}
+
 process.stdout.write(JSON.stringify({
   chart_total: basis.totalVal,
   chart_starting_capital: basis.startingCap,
   chart_series: chartSeries,
   chart_html: element('broker-chart-svg-container').innerHTML,
+  tooltip_html,
   equity: element('broker-hero-equity').textContent,
   pnl: element('broker-pnl-amount').textContent,
   starting_capital: element('broker-starting-cap').textContent,
