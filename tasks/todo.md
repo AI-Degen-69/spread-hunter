@@ -1,9 +1,9 @@
-# Issue #252 — Execution checklist
+# Issue #259 — Execution checklist
 
-- [x] Task 1 — Backend: DB-anchored `starting_capital` + `starting_capital_ts` + version bump (RED tests first)
-- [x] Task 2 — Backend: `equity_series` stacks on the anchor (pinning test green)
-- [x] Task 3 — Frontend: headline/pill/tile read the DB anchor (EXPECTED_PAYLOAD_VERSION 252)
-- [x] Task 4 — Frontend: chart START point shows anchor ISO ts, Start fallback, no NaN
-- [x] Task 5 — Tests: version pin 252 + sweep (72 passed)
+- [ ] Task 1 — Backend: close points carry `title`/`cost_basis`/`method`/`hold_seconds` (RED test first)
+- [ ] Task 2 — Frontend: passthrough + `methodBadge()` (old fixtures unchanged)
+- [ ] Task 3 — Frontend: four tooltip rows with `--` fallbacks (title, % , method, held)
+- [ ] Task 4 — Harness: simulated hover captures `tooltip_html`
+- [ ] Task 5 — Tests: pin rows + fallback cases green on focused suite
 - [ ] Review — Run targeted checks after all review fixes
 - [ ] CI — Confirm full regression suite through GitHub CI before merge

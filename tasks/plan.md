@@ -1,46 +1,83 @@
-# Plan: Issue #252 — Anchor Portfolio chart to the run's DB start
+# Plan: Issue #259 — Equity tooltip shows trade facts
 
-Size: **Standard** (3 files + tests, single architectural decision: DB anchor vs session snapshot).
-Task type: **Code + Design/UI** (backend anchor selection + frontend chart rendering).
+Size: **Standard** (4 files across backend + frontend + harness + tests, one architectural decision: compute facts from in-memory data vs new queries — chosen in-memory).
+Task type: **Code + Design/UI** (backend plumbing + tooltip rendering).
 
 ## Context
-`dashboard/server.py:1216` writes the wallet at stack start to `runtime/processes.json`; `app.js:1316` `portfolioEquity()` prefers that session snapshot over `kpi.py`'s own `portfolio.starting_capital`. On `data/01_shadow_12-09_00-58.db` (run `shadow-01`) that makes a +$8.41 / +15.68% run render as a $2.66 decline from a $64.70 START that never belonged to the run. The run's true start is the newest `account_marks` row at or before the run's first activity (`$53.631665` @ `2026-09-11T21:58:29.910Z`).
+Hovering an equity-curve point shows a raw condition_id hex (`Market: 0x6054…`)
+with zero information value. Every requested fact already exists in the
+registry — `_resolve_market_meta()` resolves titles, `closes` carries
+`cost_basis` + `method`, `quotes.ts` gives the first-seen stamp — but the
+equity path never wires them to the tooltip (`kpi.py:1892-1898`,
+`app.js:1451-1511`, `app.js:1656-1663`).
 
 ## Spec (see SPEC.md)
-Goals, acceptance, edge cases and out-of-scope copied to `SPEC.md` for the Standard size. Headline: every start figure on the Portfolio card — value and timestamp — comes from the same DB anchor, never from `/api/system/status`.
+Goals, acceptance, interface contracts, edge cases and out-of-scope copied to
+`SPEC.md` for the Standard size. Headline: each close point carries
+`title`/`cost_basis`/`method`/`hold_seconds`, and the tooltip renders all four
+rows with `--` fallbacks instead of fabricated values.
 
 ## Tasks
 
-### Task 1 — Backend: DB-anchored starting capital + timestamp [Code] [x]
-- **Files:** `core_brain/kpi.py` (`starting_capital` block 1753-1792, `list_runs()` first_ts), `tests/test_account_kpi.py`
-- **Build:** newest `account_marks` row at or before the active run's `first_ts`; fallback in order run's earliest mark → store's earliest mark → `_CFG.bankroll_usd`. Expose `portfolio.starting_capital_ts` (mark's `ts` or `null`). Bump `KPI_PAYLOAD_VERSION` 251→252.
+### Task 1 — Backend: enrich close points with trade facts [Backend/Logic]
+- **Files:** `core_brain/kpi.py` (`report()`, equity loop ~1826-1898)
+- **Build:** before the loop, build a per-`condition_id` title lookup via
+  `_resolve_market_meta()` (once per market) and an earliest-`quotes.ts`
+  lookup from the run-filtered quotes; on each close point append `title`,
+  `cost_basis` (copied), `method` (copied), `hold_seconds`
+  (`close.ts - first_quote_ts`, `None` when missing/negative). Mark points
+  untouched; no new queries, no schema change.
 - **Skill:** test-driven-development
-- **Verification:** RED test asserting `53.631665` + `2026-09-11T21:58:29.910224Z` on the shadow store; degenerate-store test asserts bankroll fallback with `null` ts.
+- **Verification:** focused pytest on `tests/test_portfolio_card_basis.py`
+  plus a new backend assertion on the enriched fields; new test fails without
+  the change.
 
-### Task 2 — Backend: equity_series starts at the anchor [Code] [x]
-- **Files:** `core_brain/kpi.py` (equity_series 1830-1860), `tests/test_portfolio_overview.py`
-- **Build:** `running_equity = starting_capital` already exists — verify it now uses the DB anchor and that the series' first point's timestamp matches `starting_capital_ts`.
-- **Skill:** test-driven-development
-- **Verification:** harness test asserts first equity point value+ts equals the anchor; windowed frames (1D/1W/1M) still pin the anchor at left edge.
-
-### Task 3 — Frontend: headline + pill read the DB anchor [Design/UI] [x]
-- **Files:** `dashboard/static/app.js` (`portfolioEquity()` 1316, hero pill 1344, KPI-grid tile 3236, `EXPECTED_PAYLOAD_VERSION` 71), `tests/js/portfolio_card_harness.cjs`, `tests/test_portfolio_card_basis.py`
-- **Build:** `portfolioEquity()` prefers `kpi.portfolio.starting_capital` (and its `starting_capital_ts`) over `status.starting_capital`; hero pill denominator and `#broker-starting-cap` / KPI-grid tile read that same figure. Bump `EXPECTED_PAYLOAD_VERSION` 251→252 together with backend.
+### Task 2 — Frontend: passthrough + method badge [Design/UI]
+- **Files:** `dashboard/static/app.js` (`buildBrokerEquitySeries()` both
+  ALL + windowed branches, `METHOD_BADGES`/`methodBadge()` near `gateBadge()`)
+- **Build:** conditional-copy `title`, `cost_basis`, `method`,
+  `hold_seconds` onto close points (present-only, old fixtures unchanged);
+  add `methodBadge()` mapping `merge`/`shadow_merge` → `MERGED` with neutral
+  fallback for unknown/missing; export via `module.exports`.
 - **Skill:** frontend-ui-engineering
-- **Verification:** harness asserts `test_the_chart_baseline_matches_the_headlines_starting_capital` now passes inverted (matches DB anchor, not session snapshot); expects `+$8.41 (+15.68%)` and `Starting Bankroll: $53.63` on the fixture.
+- **Verification:** node harness asserts `chart_series` carries the four
+  fields when present and keeps the old shape when absent.
 
-### Task 4 — Frontend: chart START point + baseline + x-label [Design/UI] [x]
-- **Files:** `dashboard/static/app.js` (`buildBrokerEquitySeries()` 1450-1478, chart geometry 1480-1562), `dashboard/static/index.html` (#broker-starting-cap)
-- **Build:** synthetic `Start` point at anchor value with real ISO timestamp label (`brokerPointLabel`); dashed `START: $…` baseline and x-axis label sit at anchor; fallback label `Start` only when ts is null; no `NaN`/`undefined` in SVG for degenerate store.
+### Task 3 — Frontend: render the four tooltip rows [Design/UI]
+- **Files:** `dashboard/static/app.js` (tooltip `innerHTML` ~1658-1672)
+- **Build:** Market row prefers `data.title` over `data.market` (escaped);
+  add P&L % row (`pnl / cost_basis`, `--` when unmeasurable, `fmtPct()` +
+  sign color); add Method row (`methodBadge`, only when present); add Held
+  row (order-age format, `--` when missing). Existing
+  `broker-tooltip-row` markup, short labels, `tooltipW` bump only on
+  overflow, badge reuses `.param-badge`.
 - **Skill:** frontend-ui-engineering
-- **Verification:** browser harness asserts left-edge label is ISO timestamp before first trade, `START` line at anchor, `Current` at right edge; degenerate-store render has no NaN.
+- **Verification:** harness `tooltip_html` contains title (not raw hex),
+  percent, `MERGED`, and hold text on the fixture close.
 
-### Task 5 — Tests: version pin + no-regression sweep [Code] [x]
-- **Files:** `tests/test_analytics_api.py:165`, `tests/test_portfolio_overview.py`, `tests/test_account_kpi.py`
-- **Build:** pinned version assertion updated to 252; keep all existing `portfolio`/`equity_series` assertions except the inverted baseline test.
+### Task 4 — Harness: capture tooltip on simulated hover [Code]
+- **Files:** `tests/js/portfolio_card_harness.cjs`
+- **Build:** stub `querySelector('#broker-svg-chart' / '#broker-crosshair-line' /
+  '#broker-crosshair-dot')` returns working elements; `addEventListener`
+  stores callbacks; fire synthetic `mousemove`, read
+  `broker-chart-tooltip` `innerHTML` into new `tooltip_html` output field
+  (pattern from `markout_chart_harness.cjs`).
 - **Skill:** test-driven-development
-- **Verification:** `python -m pytest -q tests/test_portfolio_card_basis.py tests/test_portfolio_overview.py tests/test_account_kpi.py tests/test_analytics_api.py` green.
+- **Verification:** harness output includes non-empty `tooltip_html` for a
+  close point; previously empty/missing.
+
+### Task 5 — Tests: pin rows + fallbacks [Code]
+- **Files:** `tests/test_portfolio_card_basis.py`
+- **Build:** extend close fixtures with the four fields; assert title (not
+  hex), percent, badge, hold in `tooltip_html`; add missing/zero
+  `cost_basis` → `--` case and missing `hold_seconds` → `--` case; keep
+  existing exact-match `chart_series` assertions green.
+- **Skill:** test-driven-development
+- **Verification:** focused `tests/test_portfolio_card_basis.py` green, with
+  the new tests failing on the pre-change code (RED confirmed).
 
 ## Improvement proposal (adopted by default)
-Keep the `Venue wallet` row visible as a secondary figure but never as the card's denominator — the issue already bans changing its copy, so surfacing the gap as labelled information avoids reintroducing the three-figure confusion while preserving the wallet top-up signal.
-
+Show hold time as a two-part `3h 12m` value in the tooltip instead of the
+current `fmtOrderAge()` single largest unit (`3h`), because the issue's own
+acceptance example reads `e.g. 3h 12m` and `app.js:3373` today truncates to
+one unit.
