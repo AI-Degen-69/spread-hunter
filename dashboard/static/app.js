@@ -390,6 +390,13 @@ function deferPaint(fn) {
   else fn();
 }
 
+// Generation guard for the deferred analytics paint (Issue #264 follow-up):
+// a poll queues the heavy charts one frame out, and a tab switch in between
+// must not pay for a hidden tab's charts. Each renderKPIs bumps the
+// generation; a queued callback paints only when still current and Tab 2 is
+// still visible.
+let analyticsPaintGeneration = 0;
+
 // Header pills stay live on every poll — cheap text updates, always painted.
 // They are deliberately NOT repainted on tab switch: reprinting them from
 // cache could show a frozen age as live.
@@ -3441,8 +3448,16 @@ function renderKPIs(kpi, status) {
     </div>
   `;
   // Heavy charts paint one frame after the tiles, so a click arriving
-  // mid-render is handled between the two paints (Issue #264).
-  deferPaint(() => renderAnalyticsSurface(kpi, status));
+  // mid-render is handled between the two paints (Issue #264). The guard
+  // below drops the paint when a newer render queued behind it or Tab 2 hid
+  // before the frame ran.
+  const paintGeneration = ++analyticsPaintGeneration;
+  deferPaint(() => {
+    if (paintGeneration !== analyticsPaintGeneration) return;
+    const analyticsTab = typeof document !== 'undefined' ? document.getElementById('tab-2') : null;
+    if (analyticsTab && !tabVisible(analyticsTab)) return;
+    renderAnalyticsSurface(kpi, status);
+  });
 }
 
 /* ── Render: Market Table (expandable rows — click to inspect individual orders) ── */

@@ -15,14 +15,14 @@ unless measured proof shows the backend blocks.
 ## Tasks
 
 ### T1 — Confirm the blocker [Performance]
-- **Target files:** `dashboard/static/app.js` (`pollStatus` :5125, render chain :5176-5186, timers :5214-5217)
+- **Target files:** `dashboard/static/app.js` (`pollStatus` :5183, render chain gated per-tab :5234-5267, timers :5287-5292)
 - **Build:** read the poll→render path and note which renders run unconditionally each 2s poll
   (all four sections incl. hidden tabs + Monte Carlo/KDE/markout charts), establishing the long-task hypothesis.
 - **Helper skill:** `performance-optimization` (measure-first)
 - **Verification:** hypothesis recorded here; no code change.
 
 ### T2 — Render only the visible tab per poll [Performance]
-- **Target files:** `dashboard/static/app.js` (`pollStatus`, `switchTab` :373)
+- **Target files:** `dashboard/static/app.js` (`pollStatus`, `switchTab` :426)
 - **Build:** gate each section render (`renderKPIs`/`renderMarkets`/`renderOrdersTrades`/`renderScreener`)
   on its tab's visibility; render the newly shown tab inside `switchTab` so a switch paints
   synchronously from the latest data without waiting for the next poll.

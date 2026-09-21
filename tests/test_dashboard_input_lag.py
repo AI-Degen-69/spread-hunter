@@ -90,6 +90,20 @@ def test_a_failed_poll_never_crashes_and_leaves_hidden_tabs_blank():
     assert res["scanPill"] != ""
 
 
+def test_a_failed_poll_after_a_good_poll_keeps_cache_and_hides_stale_ready():
+    # Arrange — one good poll fills every tab, then the backend dies.
+    # Act — the next poll fails.
+    res = _run("failed-after-cache")
+
+    # Assert — no throw, the cached tiles survive (repainted from cache, still
+    # non-blank), the stale READY banner hides, and the header stays honest.
+    assert res["crashed"] is False
+    assert res["kpiBefore"] != ""
+    assert res["kpiAfter"] != ""
+    assert res["readinessDisplay"] == "none"
+    assert res["scanPill"] != ""
+
+
 def test_heavy_charts_wait_a_frame_while_tiles_paint_now():
     # Arrange/Act — the deferral mechanism itself through the real export.
     res = _run("charts-deferred")
@@ -111,6 +125,6 @@ def test_heavy_charts_paint_after_the_tiles():
 
     # Assert — tiles paint first; the chart surface is deferred one frame so a
     # click arriving mid-render is handled between the two paints.
-    assert re.search(r"deferPaint\(\(\)\s*=>\s*renderAnalyticsSurface", source), \
+    assert re.search(r"deferPaint\(\(\)\s*=>\s*\{[\s\S]*?renderAnalyticsSurface", source), \
         "renderKPIs must route renderAnalyticsSurface through deferPaint"
     assert "requestAnimationFrame" in source

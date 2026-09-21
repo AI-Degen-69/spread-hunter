@@ -859,10 +859,10 @@ def test_the_panel_is_on_the_served_page():
         assert f'data-ot-view="{view}"' in index
 
 
-def test_the_panel_redraws_on_visible_poll_and_switch():
-    # Arrange — the table is worthless if it only fills in on a tab click.
-    # Since #264 it repaints on every poll while its tab is visible, plus
-    # once synchronously on switch.
+def test_the_panel_is_wired_to_visible_poll_and_switch():
+    # Arrange — this is a wiring check only: the panel must be reachable from
+    # the visible-tab poll path and from the synchronous switch repaint. The
+    # real paint behaviour lives in tests/test_dashboard_input_lag.py.
     app = (_STATIC / "app.js").read_text(encoding="utf-8")
 
     # Act / Assert

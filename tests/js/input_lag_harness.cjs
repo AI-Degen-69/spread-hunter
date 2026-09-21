@@ -78,19 +78,22 @@ global.__flushRaf = () => { const q = rafQueue.splice(0); q.forEach((cb) => cb(0
 
 // One full poll snapshot, served per endpoint like the backend would.
 // {fetchOk:false} simulates a dead backend: every endpoint answers unusable.
-const fetchOk = input.fetchOk !== false;
+// The 'failed-after-cache' scenario flips fetch dead mid-run via setFetchOk.
+let fetchLive = input.fetchOk !== false;
 const SNAPSHOT = {
   '/api/state': { orders: [], fills: [] },
   '/api/system/status': { bot_state: 'STOPPED', services: {} },
-  '/api/kpi': {},
+  '/api/kpi': { portfolio: { account: { account_value_usd: 100 } } },
   '/api/scan-state': null,
-  '/api/trial-readiness': null,
+  '/api/trial-readiness': { trial_ready: true, ready_gates: ['gate-a'] },
   '/api/guardrail-alerts': null,
   '/api/guardrail-health': null,
 };
-global.fetch = async (url) => (fetchOk
+global.fetch = async (url) => (fetchLive
   ? { ok: true, json: async () => SNAPSHOT[url] ?? null }
   : { ok: false });
+global.__setFetchOk = (v) => { fetchLive = v !== false; };
+
 
 const source = fs.readFileSync(
   path.resolve(__dirname, '..', '..', 'dashboard', 'static', 'app.js'), 'utf8');
@@ -176,6 +179,29 @@ async function main() {
       kpiGrid: el('kpi-grid').innerHTML,
       marketBody: el('market-body').innerHTML,
       kanbanBoard: el('kanban-board').innerHTML,
+      scanPill: el('market-scan-pill').innerHTML,
+    };
+  } else if (scenario === 'failed-after-cache') {
+    // Arrange — one good poll fills the caches while every tab is visible.
+    setTabs(false, false, false);
+    await app.pollStatus();
+    global.__flushRaf();
+    const kpiBefore = el('kpi-grid').innerHTML;
+    // Act — backend dies; next poll must not throw or blank cached paints.
+    global.__setFetchOk(false);
+    let crashed = null;
+    try {
+      await app.pollStatus();
+      crashed = false;
+    } catch (e) {
+      crashed = String((e && e.message) || e);
+    }
+    // Assert material.
+    result = {
+      crashed,
+      kpiBefore,
+      kpiAfter: el('kpi-grid').innerHTML,
+      readinessDisplay: el('trial-ready-banner').style.display,
       scanPill: el('market-scan-pill').innerHTML,
     };
   } else if (scenario === 'charts-deferred') {
