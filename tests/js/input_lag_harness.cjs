@@ -54,7 +54,14 @@ const store = {};
 global.document = {
   getElementById: (id) => el(id),
   querySelector: () => null,
-  querySelectorAll: (sel) => (sel === '.tab-btn' ? tabButtons : []),
+  querySelectorAll: (sel) => {
+    if (sel === '.tab-btn') return tabButtons;
+    // Sidebar-pages layout (#140): the five rail pages, only when a scenario
+    // mounts the rail. Scenarios without it exercise the tabs-era fallback.
+    if (global.__railMounted && typeof sel === 'string'
+        && sel.startsWith('#page-home,')) return RAIL_PAGES.map((p) => el('page-' + p));
+    return [];
+  },
   createElement: () => stubElement('created'),
   addEventListener: noop,
   body: stubElement('body'),
@@ -108,9 +115,75 @@ function setTabs(t1Hidden, t2Hidden, t3Hidden) {
   el('tab-3').hidden = t3Hidden;
 }
 
+/* Sidebar-pages layout (#95/#140): the live panels live under `#page-*`
+ * sections and `prototype.js` shows exactly one of them. `page-*` stubs
+ * auto-create through el() on first touch, so `hidden` flips are observable
+ * like the real DOM's. */
+const RAIL_PAGES = ['home', 'data-markets', 'strategy', 'trades', 'reports'];
+function setRailPage(target) {
+  for (const page of RAIL_PAGES) el('page-' + page).hidden = (page !== target);
+}
+function railVisible() {
+  return RAIL_PAGES.filter((p) => el('page-' + p).hidden === false);
+}
+
+// Where each rendered-into panel moved when the rail mounted (prototype.js
+// PAGE_LAYOUT). paintable() walks real parents; stubs need the same shape.
+const PANEL_PAGE = {
+  'service-cards': 'trades',
+  'orders-trades-head': 'home',
+  'orders-trades-body': 'home',
+  'kpi-grid': 'reports',
+  'market-body': 'data-markets',
+  'kanban-board': 'data-markets',
+};
+for (const [panelId, page] of Object.entries(PANEL_PAGE)) {
+  el(panelId).parentElement = el('page-' + page);
+}
+
 async function main() {
   let result;
-  if (scenario === 'hidden-tabs-skipped') {
+  if (scenario === 'rail-pages-skipped') {
+    // Arrange — the real post-#140 layout: the rail mounted and shows the
+    // Trades page (service cards + event ticker); the legacy tab shells sit
+    // un-hidden and empty, exactly as prototype.js leaves them.
+    global.__railMounted = true;
+    setTabs(false, true, true);
+    setRailPage('trades');
+    // Act — one real poll tick.
+    await app.pollStatus();
+    // Assert material — the Trades page's sections painted, every other rail
+    // page's targets untouched, header pills live.
+    result = {
+      serviceCards: el('service-cards').innerHTML,
+      ordersHead: el('orders-trades-head').innerHTML,
+      kpiGrid: el('kpi-grid').innerHTML,
+      marketBody: el('market-body').innerHTML,
+      kanbanBoard: el('kanban-board').innerHTML,
+      scanPill: el('market-scan-pill').innerHTML,
+    };
+  } else if (scenario === 'rail-skips-offpage-renders') {
+    // Arrange — the operator sits on the rail's Dashboard (home) while the
+    // legacy tab shells all read visible, exactly as prototype.js leaves them.
+    // Act — one poll tick: the gating must consult the active rail page, so
+    // sections living on other pages are skipped even though the legacy tab
+    // gates all claim to be visible.
+    global.__railMounted = true;
+    setTabs(false, false, false);
+    setRailPage('home');
+    await app.pollStatus();
+    // Assert material — Home's own Orders & Trades painted; the service cards
+    // (Trades), KPI tiles (Reports), markets + kanban (Data & Markets) were
+    // skipped. Header stays live.
+    result = {
+      serviceCards: el('service-cards').innerHTML,
+      ordersHead: el('orders-trades-head').innerHTML,
+      kpiGrid: el('kpi-grid').innerHTML,
+      marketBody: el('market-body').innerHTML,
+      kanbanBoard: el('kanban-board').innerHTML,
+      scanPill: el('market-scan-pill').innerHTML,
+    };
+  } else if (scenario === 'hidden-tabs-skipped') {
     // Arrange — only Tab 1 visible, like the operator sitting on LIVE OPERATIONS.
     setTabs(false, true, true);
     // Act — one real poll tick.

@@ -159,6 +159,15 @@ function showPage(page, doc) {
     }
   });
 
+  // The poll loop paints only the active page (Issue #266), so a page the
+  // polls skipped has to be painted the moment it shows — from the cached
+  // snapshots, synchronously, the way a tab switch used to paint (#264).
+  // Same pattern as the kanban re-measure below: call through when app.js
+  // is present; this file stays fetch-free.
+  if (typeof renderCachedSections === 'function') {
+    renderCachedSections();
+  }
+
   storePage(target);
   // The kanban measures its own scroll width, which reads as zero while the
   // page holding it is hidden. Re-measure once it is on screen.
