@@ -156,6 +156,7 @@ async function main() {
     // page's targets untouched, header pills live.
     result = {
       serviceCards: el('service-cards').innerHTML,
+      masterIndicator: el('master-status-indicator').innerHTML,
       ordersHead: el('orders-trades-head').innerHTML,
       kpiGrid: el('kpi-grid').innerHTML,
       marketBody: el('market-body').innerHTML,
@@ -174,9 +175,12 @@ async function main() {
     await app.pollStatus();
     // Assert material — Home's own Orders & Trades painted; the service cards
     // (Trades), KPI tiles (Reports), markets + kanban (Data & Markets) were
-    // skipped. Header stays live.
+    // skipped. Header stays live — INCLUDING the master/engine/watchdog pills
+    // renderServiceCards paints: they live in the top nav on every page, so
+    // they must update even on a poll whose card grid the gate skipped.
     result = {
       serviceCards: el('service-cards').innerHTML,
+      masterIndicator: el('master-status-indicator').innerHTML,
       ordersHead: el('orders-trades-head').innerHTML,
       kpiGrid: el('kpi-grid').innerHTML,
       marketBody: el('market-body').innerHTML,

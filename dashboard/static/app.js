@@ -441,9 +441,13 @@ function renderCachedSections() {
   // legacy tab shells all read visible and this repainted every page at once.
   const currentKpi = lastKpi;
   // Tab 1: LIVE OPERATIONS (service cards → rail Trades page, orders & trades
-  // → rail Dashboard page).
+  // → rail Dashboard page). The header status is global chrome on every page:
+  // renderServiceCards paints it before the grid, so a page where the grid is
+  // skipped still gets the header via renderServiceHeader.
   if (paintable(tab1, document.getElementById('service-cards'))) {
     if (lastStatus) renderServiceCards(lastStatus, lastGuardHealth, lastGuardAlerts);
+  } else if (lastStatus) {
+    renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
   }
   if (paintable(tab1, document.getElementById('orders-trades-body'))) {
     if (currentKpi) renderOrdersTrades(currentKpi, lastState);
@@ -926,7 +930,11 @@ const SERVICE_DEFS = [
     liveOnly: true },
 ];
 
-function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
+/* Global top-nav status: stack pill, ENGINE/WATCHDOG pills, START/STOP
+ * buttons. Split from the card grid (CodeRabbit round on #267): these are
+ * chrome on every page, so a poll whose card grid the Trades gate skips must
+ * still refresh them. */
+function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const isRunning = status?.bot_state === 'RUNNING' || (status?.services && Object.values(status.services).some(s => s.running));
   // `lastDbIsProduction` is the START guard's flag and `renderDbMode` owns it.
   // Writing it from here too gave one safety flag two writers: a status payload
@@ -1014,6 +1022,10 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
       masterStopBtn.style.cursor = !isRunning ? 'not-allowed' : 'pointer';
     }
   }
+}
+
+function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
+  renderServiceHeader(status, guardrailHealth, guardrailAlerts);
 
   // Render Service Cards Grid
   const container = document.getElementById('service-cards');
@@ -5296,9 +5308,16 @@ async function pollStatus() {
     // `#page-*` sections, the un-hidden legacy tab shells made every gate
     // read visible and put the whole render chain back on every poll.
 
-    // Render service cards (Tab 1 → rail Trades page)
-    if (paintable(tab1, document.getElementById('service-cards')) && status) {
-      renderServiceCards(status, guardHealth, guardAlerts);
+    // Top-nav status (stack pill, ENGINE/WATCHDOG pills, START/STOP buttons)
+    // is global chrome: renderServiceCards paints it before the card grid, so
+    // on any page but Trades the poll paints just the header — and on Trades
+    // one renderServiceCards call covers both.
+    if (status) {
+      if (paintable(tab1, document.getElementById('service-cards'))) {
+        renderServiceCards(status, guardHealth, guardAlerts);
+      } else {
+        renderServiceHeader(status, guardHealth, guardAlerts);
+      }
     }
 
     // Render exposure bar (DT3) — header element, page-independent, cheap.
