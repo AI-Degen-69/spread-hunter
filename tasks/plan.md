@@ -66,7 +66,7 @@ rows with `--` fallbacks instead of fabricated values.
 - **Verification:** harness output includes non-empty `tooltip_html` for a
   close point; previously empty/missing.
 
-### Task 5 — Tests: pin rows + fallbacks [Code]
+### Task 5 — Tests: pin rows + fallbacks [Code] [x]
 - **Files:** `tests/test_portfolio_card_basis.py`
 - **Build:** extend close fixtures with the four fields; assert title (not
   hex), percent, badge, hold in `tooltip_html`; add missing/zero
