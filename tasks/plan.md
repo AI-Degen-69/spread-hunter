@@ -1,83 +1,45 @@
-# Plan: Issue #259 — Equity tooltip shows trade facts
+# Plan — Issue #264: Dashboard input lag (tab clicks freeze 2-4s)
 
-Size: **Standard** (5 files across backend + frontend + harness + tests, one architectural decision: compute facts from in-memory data vs new queries — chosen in-memory).
-Task type: **Code + Design/UI** (backend plumbing + tooltip rendering).
+## Spec (concise — Small tier)
+**Goal:** tab clicks and control clicks respond immediately, even while the 2s poll batch is in flight.
+**Approach:** (1) render only the visible tab each poll, rendering a tab on switch instead of every poll;
+(2) yield the heavy chart renders so input is handled between chunks; (3) keep the existing
+`isPolling` overlap guard intact.
+**Out of scope:** strategy/quoting/sizing, endpoint contracts, visual redesign, backend changes
+unless measured proof shows the backend blocks.
+**Interfaces:** none change — same 7 endpoints, same payloads, same DOM ids.
 
-## Context
-Hovering an equity-curve point shows a raw condition_id hex (`Market: 0x6054…`)
-with zero information value. Every requested fact already exists in the
-registry — `_resolve_market_meta()` resolves titles, `closes` carries
-`cost_basis` + `method`, `quotes.ts` gives the first-seen stamp — but the
-equity path never wires them to the tooltip (`kpi.py:1892-1898`,
-`app.js:1451-1511`, `app.js:1656-1663`).
-
-## Spec (see SPEC.md)
-Goals, acceptance, interface contracts, edge cases and out-of-scope copied to
-`SPEC.md` for the Standard size. Headline: each close point carries
-`title`/`cost_basis`/`method`/`hold_seconds`, and the tooltip renders all four
-rows with `--` fallbacks instead of fabricated values.
+## Task type & size
+- **Type:** Performance (primary). **Size:** Small — one file (`dashboard/static/app.js`), scheduling-only change.
 
 ## Tasks
 
-### Task 1 — Backend: enrich close points with trade facts [Backend/Logic] [x]
-- **Files:** `core_brain/kpi.py` (`report()`, equity loop ~1826-1898)
-- **Build:** before the loop, build a per-`condition_id` title lookup via
-  `_resolve_market_meta()` (once per market) and an earliest-`quotes.ts`
-  lookup from the run-filtered quotes; on each close point append `title`,
-  `cost_basis` (copied), `method` (copied), `hold_seconds`
-  (`close.ts - first_quote_ts`, `None` when missing/negative). Mark points
-  untouched; no new queries, no schema change.
-- **Skill:** test-driven-development
-- **Verification:** focused pytest on `tests/test_portfolio_card_basis.py`
-  plus a new backend assertion on the enriched fields; new test fails without
-  the change.
+### T1 — Confirm the blocker [Performance]
+- **Target files:** `dashboard/static/app.js` (`pollStatus` :5183, render chain gated per-tab :5234-5267, timers :5287-5292)
+- **Build:** read the poll→render path and note which renders run unconditionally each 2s poll
+  (all four sections incl. hidden tabs + Monte Carlo/KDE/markout charts), establishing the long-task hypothesis.
+- **Helper skill:** `performance-optimization` (measure-first)
+- **Verification:** hypothesis recorded here; no code change.
 
-### Task 2 — Frontend: passthrough + method badge [Design/UI] [x]
-- **Files:** `dashboard/static/app.js` (`buildBrokerEquitySeries()` both
-  ALL + windowed branches, `METHOD_BADGES`/`methodBadge()` near `gateBadge()`)
-- **Build:** conditional-copy `title`, `cost_basis`, `method`,
-  `hold_seconds` onto close points (present-only, old fixtures unchanged);
-  add `methodBadge()` mapping `merge`/`shadow_merge` → `MERGED` with neutral
-  fallback for unknown/missing; export via `module.exports`.
-- **Skill:** frontend-ui-engineering
-- **Verification:** node harness asserts `chart_series` carries the four
-  fields when present and keeps the old shape when absent.
+### T2 — Render only the visible tab per poll [Performance]
+- **Target files:** `dashboard/static/app.js` (`pollStatus`, `switchTab` :426)
+- **Build:** gate each section render (`renderKPIs`/`renderMarkets`/`renderOrdersTrades`/`renderScreener`)
+  on its tab's visibility; render the newly shown tab inside `switchTab` so a switch paints
+  synchronously from the latest data without waiting for the next poll.
+- **Helper skill:** `test-driven-development`
+- **Verification:** new pytest static test (RED→GREEN) asserting hidden-tab renders are gated;
+  focused suite green.
 
-### Task 3 — Frontend: render the four tooltip rows [Design/UI] [x]
-- **Files:** `dashboard/static/app.js` (tooltip `innerHTML` ~1658-1672)
-- **Build:** Market row prefers `data.title` over `data.market` (escaped);
-  add P&L % row (`pnl / cost_basis`, `--` when unmeasurable, `fmtPct()` +
-  sign color); add Method row (`methodBadge`, only when present); add Held
-  row (order-age format, `--` when missing). Existing
-  `broker-tooltip-row` markup, short labels, `tooltipW` bump only on
-  overflow, badge reuses `.param-badge`.
-- **Skill:** frontend-ui-engineering
-- **Verification:** harness `tooltip_html` contains title (not raw hex),
-  percent, `MERGED`, and hold text on the fixture close.
+### T3 — Yield heavy chart renders to input [Performance]
+- **Target files:** `dashboard/static/app.js` (chart renders: Monte Carlo :2497, KDE :2377, markout :2688)
+- **Build:** defer off-critical chart work past paint (`requestAnimationFrame`/chunked) so a click
+  arriving mid-render is handled between chunks; keep `isPolling` overlap guard behavior unchanged.
+- **Helper skill:** `test-driven-development`
+- **Verification:** pytest static test pinning the deferral (RED→GREEN); manual rapid-click check shows no queued replay.
 
-### Task 4 — Harness: capture tooltip on simulated hover [Code] [x]
-- **Files:** `tests/js/portfolio_card_harness.cjs`
-- **Build:** stub `querySelector('#broker-svg-chart' / '#broker-crosshair-line' /
-  '#broker-crosshair-dot')` returns working elements; `addEventListener`
-  stores callbacks; fire synthetic `mousemove`, read
-  `broker-chart-tooltip` `innerHTML` into new `tooltip_html` output field
-  (pattern from `markout_chart_harness.cjs`).
-- **Skill:** test-driven-development
-- **Verification:** harness output includes non-empty `tooltip_html` for a
-  close point; previously empty/missing.
-
-### Task 5 — Tests: pin rows + fallbacks [Code] [x]
-- **Files:** `tests/test_portfolio_card_basis.py`
-- **Build:** extend close fixtures with the four fields; assert title (not
-  hex), percent, badge, hold in `tooltip_html`; add missing/zero
-  `cost_basis` → `--` case and missing `hold_seconds` → `--` case; keep
-  existing exact-match `chart_series` assertions green.
-- **Skill:** test-driven-development
-- **Verification:** focused `tests/test_portfolio_card_basis.py` green, with
-  the new tests failing on the pre-change code (RED confirmed).
-
-## Improvement proposal (adopted by default)
-Show hold time as a two-part `3h 12m` value in the tooltip instead of the
-current `fmtOrderAge()` single largest unit (`3h`), because the issue's own
-acceptance example reads `e.g. 3h 12m` and `app.js:3373` today truncates to
-one unit.
+### T4 — Focused verification [Performance]
+- **Target files:** `tests/` (new test from T2/T3) + existing dashboard selection
+- **Build:** run `python -m pytest -q tests/test_dashboard_server.py tests/test_dashboard_snapshot_cache.py tests/test_dashboard_narrow_viewport.py`
+  plus the new test; hands-on: open `http://127.0.0.1:8799`, click tabs rapidly mid-poll, confirm instant switch.
+- **Helper skill:** `incremental-implementation`
+- **Verification:** all focused tests green; hands-on tab-click check passes (reported, not delegated).

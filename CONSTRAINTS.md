@@ -64,3 +64,11 @@
 - Frontend: conditional-copy passthrough (fixtures without new fields keep the old point shape); all strings through `esc()`; percent via `fmtPct()`, hold via the order-age formatter; badge reuses the `gateBadge()` pattern and `.param-badge` style; `tooltipW` changes only if new rows overflow centering.
 - No trading, quoting, sizing, or registry-schema changes; no new endpoint or frontend dependency; out of scope stays out (#252 anchor, #257 geometry, styling beyond content rows).
 
+## Constraints: Issue #264 — Dashboard input lag (tab clicks freeze 2-4s)
+- Zero regressions: focused selection (`tests/test_dashboard_server.py`, `tests/test_dashboard_snapshot_cache.py`, `tests/test_dashboard_narrow_viewport.py`) must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): e.g. a static test pinning that hidden-tab renders are skipped or deferred and that tab switching paints synchronously.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- Poll content MUST NOT change: state, KPIs, markets, orders/trades, and screener still refresh with the same data and endpoints; no endpoint contract changes, no new dependencies.
+- Performance bar: a tab click visibly switches panels immediately even mid-poll; rapid clicks never queue and replay late.
+- Frontend-only: no backend, strategy, quoting, sizing, or registry changes unless measurement proves the backend is the blocker.
+
