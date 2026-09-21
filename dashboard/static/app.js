@@ -1476,6 +1476,10 @@ function buildBrokerEquitySeries(kpi, startingCap, totalVal, timeframe = 'ALL') 
       if (Number.isFinite(entryTs)) point.ts = entryTs;
       if (entry.pnl !== null && entry.pnl !== undefined) point.pnl = Number(entry.pnl);
       if (entry.market !== null && entry.market !== undefined) point.market = entry.market;
+      if (entry.title !== null && entry.title !== undefined) point.title = entry.title;
+      if (entry.cost_basis !== null && entry.cost_basis !== undefined && Number.isFinite(Number(entry.cost_basis))) point.cost_basis = Number(entry.cost_basis);
+      if (entry.method !== null && entry.method !== undefined) point.method = entry.method;
+      if (entry.hold_seconds !== null && entry.hold_seconds !== undefined && Number.isFinite(Number(entry.hold_seconds))) point.hold_seconds = Number(entry.hold_seconds);
       points.push(point);
     });
     const current = { label: 'Current', v: allCloses.length ? totalVal : startingCap };
@@ -1504,6 +1508,10 @@ function buildBrokerEquitySeries(kpi, startingCap, totalVal, timeframe = 'ALL') 
     if (Number.isFinite(entryTs)) point.ts = entryTs;
     if (entry.pnl !== null && entry.pnl !== undefined) point.pnl = Number(entry.pnl);
     if (entry.market !== null && entry.market !== undefined) point.market = entry.market;
+    if (entry.title !== null && entry.title !== undefined) point.title = entry.title;
+    if (entry.cost_basis !== null && entry.cost_basis !== undefined && Number.isFinite(Number(entry.cost_basis))) point.cost_basis = Number(entry.cost_basis);
+    if (entry.method !== null && entry.method !== undefined) point.method = entry.method;
+    if (entry.hold_seconds !== null && entry.hold_seconds !== undefined && Number.isFinite(Number(entry.hold_seconds))) point.hold_seconds = Number(entry.hold_seconds);
     points.push(point);
   });
   points.push({ label: 'Current', v: closes.length || preWindow.length ? totalVal : startingCap, ts: latestTs });
@@ -1657,11 +1665,24 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
 
       // Update tooltip content and position
       tooltip.style.display = 'flex';
+      // Issue #259: trade facts per close -- human title, dollar+pct, method,
+      // hold time. Percent is percent-units like every other pnl_pct here
+      // (100 * pnl / basis); unmeasured pnl or basis renders `--`, never 0%
+      // or NaN%.
+      const pnlNum = Number(data.pnl);
+      const basisNum = Number(data.cost_basis);
+      const hasPnl = Number.isFinite(pnlNum);
+      const hasBasis = data.cost_basis !== null && data.cost_basis !== undefined
+        && Number.isFinite(basisNum) && basisNum > 0;
+      const pnlPct = (hasPnl && hasBasis) ? (100 * pnlNum / basisNum) : null;
       tooltip.innerHTML = `
         <div class="broker-tooltip-time">${data.label || 'Snapshot'}</div>
         <div class="broker-tooltip-row"><span class="broker-tooltip-label">Account Value:</span> <span class="broker-tooltip-val mono" style="color:#34d399">${fmtUSD(data.v)}</span></div>
         ${data.pnl !== undefined ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Realized Spread:</span> <span class="broker-tooltip-val mono" style="color:${Number(data.pnl) < 0 ? '#f87171' : '#34d399'}">${fmtSignedUSD(data.pnl)}</span></div>` : ''}
-        ${data.market ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Market:</span> <span class="broker-tooltip-val mono">${esc(data.market)}</span></div>` : ''}
+        ${data.pnl !== undefined ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">P&L %:</span> <span class="broker-tooltip-val mono" style="color:${pnlPct !== null && pnlPct < 0 ? '#f87171' : '#34d399'}">${pnlPct === null ? '--' : fmtPct(pnlPct)}</span></div>` : ''}
+        ${data.title || data.market ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Market:</span> <span class="broker-tooltip-val mono">${esc(data.title || data.market)}</span></div>` : ''}
+        ${data.method ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Method:</span> <span class="broker-tooltip-val mono">${methodBadge(data.method)}</span></div>` : ''}
+        ${data.pnl !== undefined ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Held:</span> <span class="broker-tooltip-val mono">${data.hold_seconds === null || data.hold_seconds === undefined ? '--' : esc(fmtHoldDuration(data.hold_seconds))}</span></div>` : ''}
       `;
 
       // Position tooltip avoiding overflow
@@ -2806,6 +2827,28 @@ function gateBadge(state) {
   return `<span class="analytics-gate-badge ${verdict.cls}">${verdict.label}</span>`;
 }
 
+// Issue #259: how a close happened, as a small pill in the equity tooltip.
+// Same lookup shape as GATE_VERDICTS/gateBadge above.
+const METHOD_BADGES = {
+  merge: { cls: 'go', label: 'MERGED' },
+  shadow_merge: { cls: 'go', label: 'MERGED' },
+  single_buy_exit: { cls: 'standby', label: 'SINGLE EXIT' },
+  naked_exit: { cls: 'standby', label: 'SINGLE EXIT' },
+  venue_sync: { cls: 'standby', label: 'VENUE SYNC' },
+  shadow_settlement: { cls: 'standby', label: 'SHADOW SETTLEMENT' },
+  sell: { cls: 'standby', label: 'SELL' },
+};
+
+function methodBadge(method) {
+  if (method === null || method === undefined || method === '') {
+    return `<span class="param-badge">-</span>`;
+  }
+  const known = Object.prototype.hasOwnProperty.call(METHOD_BADGES, method);
+  const badge = known ? METHOD_BADGES[method]
+    : { cls: 'standby', label: String(method).toUpperCase() };
+  return `<span class="param-badge ${badge.cls}">${esc(badge.label)}</span>`;
+}
+
 // A value nobody has measured is not a value. Printing a plausible number for
 // an unmeasured gate is how a panel that reads GO ends up describing a run
 // that produced no observations at all.
@@ -3375,6 +3418,19 @@ function fmtOrderAge(sec) {
   if (sec < 60) return sec + 's';
   if (sec < 3600) return Math.floor(sec / 60) + 'm';
   return Math.floor(sec / 3600) + 'h';
+}
+
+// Issue #259: hold time for the equity tooltip. Two-part like `3h 12m` --
+// fmtOrderAge above keeps its single-unit shape for the orders table.
+function fmtHoldDuration(sec) {
+  if (sec === null || sec === undefined) return '--';
+  const s = Math.floor(Number(sec));
+  if (!Number.isFinite(s) || s < 0) return '--';
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
 }
 
 function fmtAgo(tsSec) {
@@ -5164,7 +5220,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds, decisionGatesHtml, decisionGatesRows, gateBadge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
+  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,

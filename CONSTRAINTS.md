@@ -56,3 +56,11 @@
 - No trading, quoting, sizing, or registry-schema changes; no new endpoint; no new frontend dependencies; `Venue wallet` row stays as-is; timeframe semantics (1D/1W/1M/ALL) keep pinning run-start at left edge.
 - `KPI_PAYLOAD_VERSION` and `EXPECTED_PAYLOAD_VERSION` must be bumped together (251 → 252); degenerate store (no marks) falls back to `_CFG.bankroll_usd` with `starting_capital_ts = null` and renders without NaN.
 
+## Constraints: Issue #259 — Equity tooltip trade facts
+- Zero regressions: focused suite `tests/test_portfolio_card_basis.py` must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): harness `tooltip_html` pins all four rows on a fixture close, plus `--` fallbacks for missing/zero `cost_basis` and missing `hold_seconds`.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- Backend: no new DB queries, no schema changes, no new helpers in `order_registry.py`. Reuse `_resolve_market_meta()` (at most once per market) and the run-filtered in-memory `quotes`. `hold_seconds` is `None` when no quote exists or delta is negative. Missing/non-positive `cost_basis` renders unmeasured — never a fabricated 0%.
+- Frontend: conditional-copy passthrough (fixtures without new fields keep the old point shape); all strings through `esc()`; percent via `fmtPct()`, hold via the order-age formatter; badge reuses the `gateBadge()` pattern and `.param-badge` style; `tooltipW` changes only if new rows overflow centering.
+- No trading, quoting, sizing, or registry-schema changes; no new endpoint or frontend dependency; out of scope stays out (#252 anchor, #257 geometry, styling beyond content rows).
+

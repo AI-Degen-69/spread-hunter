@@ -1880,6 +1880,20 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             })
             mark_idx += 1
 
+    # Issue #259: the trade facts each close tooltip shows, resolved once per
+    # market from data already in memory -- no new queries, no schema change.
+    _title_by_cid: dict[str, Any] = {}
+    _first_quote_ts: dict[str, float] = {}
+    for _c in sorted_closes:
+        _cid = _c.get("condition_id")
+        if _cid and _cid not in _title_by_cid:
+            _title_by_cid[_cid] = _resolve_market_meta(_cid, closes, quotes).get("title")
+    for _q in quotes:
+        _qcid = _q.get("condition_id")
+        _qts = _num(_q.get("ts"))
+        if _qcid and _qts is not None and (_qcid not in _first_quote_ts or _qts < _first_quote_ts[_qcid]):
+            _first_quote_ts[_qcid] = _qts
+
     for c in sorted_closes:
         c_ts = float(c["ts"])
         _fold_marks_through(c_ts)
@@ -1889,12 +1903,23 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # the close would count the same dollars twice on the curve, the way the
         # portfolio tile would have before the stale-mark guard above.
         running_float = 0.0
+        _close_cid = c.get("condition_id")
+        _seen_ts = _first_quote_ts.get(_close_cid) if _close_cid else None
+        # Unmeasured when no quote exists or the delta is negative -- never a
+        # fabricated 0 hold.
+        _hold: float | None = c_ts - _seen_ts if _seen_ts is not None else None
+        if _hold is not None and _hold < 0:
+            _hold = None
         equity_series.append({
             "ts": c_ts,
             "v": running_equity,
             "type": "close",
             "pnl": float(c.get("realized_pnl") or 0.0),
             "market": c.get("market_slug") or c.get("condition_id"),
+            "title": _title_by_cid.get(_close_cid),
+            "cost_basis": _num(c.get("cost_basis")),
+            "method": c.get("method"),
+            "hold_seconds": _hold,
         })
     # Marks recorded after the last close: the curve keeps stepping on float alone.
     _fold_marks_through(float("inf"))
