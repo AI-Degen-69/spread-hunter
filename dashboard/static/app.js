@@ -1608,8 +1608,8 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
 
       <!-- X-Axis Labels (time fractions of [minTs, maxTs], Issue #257) -->
       <text x="${padL}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">${series[0]?.label || 'Start'}</text>
-      <text x="${getX(minTs + tsSpan * 0.33)}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${brokerPointLabel({ ts: minTs + tsSpan * 0.33 }, '')}</text>
-      <text x="${getX(minTs + tsSpan * 0.66)}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${brokerPointLabel({ ts: minTs + tsSpan * 0.66 }, '')}</text>
+      <text x="${getX(minTs + tsSpan * 0.33)}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${knownTs.length ? brokerPointLabel({ ts: minTs + tsSpan * 0.33 }, '') : ''}</text>
+      <text x="${getX(minTs + tsSpan * 0.66)}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${knownTs.length ? brokerPointLabel({ ts: minTs + tsSpan * 0.66 }, '') : ''}</text>
       <text x="${w - padR}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="end">Current</text>
 
       <!-- Crosshair Line Element (dynamically updated on mouseover) -->
@@ -1642,7 +1642,7 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
       let bestDist = Infinity;
       for (let k = 0; k < points.length; k += 1) {
         const dist = Math.abs(points[k].x - svgX);
-        if (dist < bestDist) { bestDist = dist; best = k; }
+        if (dist <= bestDist) { bestDist = dist; best = k; }
       }
       const pt = points[best];
       const data = pt.data;
