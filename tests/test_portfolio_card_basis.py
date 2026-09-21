@@ -127,11 +127,11 @@ def test_chart_series_uses_real_closes_and_current_value():
 
     assert card["chart_series"] == [
         {"label": "Start", "v": pytest.approx(STARTING)},
-        {"label": "2023-11-14T22:14:20.000Z", "v": 85.72,
+        {"label": "2023-11-14T22:14:20.000Z", "v": 85.72, "ts": 1_700_000_060,
          "pnl": 0.30, "market": "first-market"},
-        {"label": "2023-11-14T22:15:20.000Z", "v": 86.02,
+        {"label": "2023-11-14T22:15:20.000Z", "v": 86.02, "ts": 1_700_000_120,
          "pnl": 0.30, "market": "second-market"},
-        {"label": "Current", "v": 86.17},
+        {"label": "Current", "v": 86.17, "ts": 1_700_000_120},
     ]
     assert 'stroke-dasharray="2,2"' in card["chart_html"]
     assert ">Current</text>" in card["chart_html"]
@@ -150,7 +150,8 @@ def test_chart_start_point_uses_anchor_timestamp():
 
     # Assert — left edge shows the run's real start stamp, not "Start".
     assert card["chart_series"][0] == {
-        "label": "2023-11-14T22:14:20.000Z", "v": pytest.approx(STARTING)}
+        "label": "2023-11-14T22:14:20.000Z", "v": pytest.approx(STARTING),
+        "ts": 1_700_000_060}
 
 
 def test_chart_start_point_falls_back_to_start_without_timestamp():
@@ -175,6 +176,9 @@ def test_chart_series_is_flat_when_there_are_no_closes():
 
 
 def test_chart_timeframe_filters_close_entries():
+    # Issue #257: windowed frames clip at the window edge instead of drawing a
+    # Start-to-first-close jump. The first point sits at the window edge with
+    # the running value from that moment (here the pre-window close 85.70).
     equity_series = [
         {"type": "close", "ts": 1_699_900_000, "v": 85.70},
         {"type": "close", "ts": 1_700_086_400, "v": 86.10},
@@ -184,5 +188,36 @@ def test_chart_timeframe_filters_close_entries():
                    timeframe="1D")
 
     assert [point["v"] for point in card["chart_series"]] == pytest.approx([
-        STARTING, 86.10, 86.10,
+        85.70, 86.10, 86.10,
     ])
+    assert card["chart_series"][0]["ts"] == pytest.approx(1_700_086_400 - 86400)
+    assert card["chart_series"][0]["label"] != "Start"
+
+
+def test_chart_x_positions_follow_real_time_gaps():
+    # Issue #257 RED: three closes with uneven time gaps (10x ratio). The SVG
+    # line vertices must sit at time-proportional x positions — fails on the
+    # old index-spaced layout where all gaps render equal.
+    import re
+    equity_series = [
+        {"type": "close", "ts": 1_700_000_000, "v": 85.50, "pnl": 0.10,
+         "market": "m1"},
+        {"type": "close", "ts": 1_700_001_000, "v": 85.60, "pnl": 0.10,
+         "market": "m2"},
+        {"type": "close", "ts": 1_700_011_000, "v": 85.80, "pnl": 0.20,
+         "market": "m3"},
+    ]
+
+    card = _render(_shadow_portfolio(total_value=85.80),
+                   equity_series=equity_series)
+
+    series = card["chart_series"]
+    assert len(series) == 5  # Start + 3 closes + Current
+    assert [p.get("ts") for p in series[1:4]] == [1_700_000_000, 1_700_001_000, 1_700_011_000]
+    segment = re.search(r'<path d="([^"]+)"[^>]*stroke="#10b981"', card["chart_html"])
+    assert segment is not None
+    xs = [float(m.split(",")[0]) for m in re.findall(r"[ML]\s*([\d.]+),", segment.group(1))]
+    gap_small = xs[2] - xs[1]
+    gap_large = xs[3] - xs[2]
+    assert gap_large / gap_small == pytest.approx(10.0, rel=0.05)
+

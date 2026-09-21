@@ -1458,26 +1458,55 @@ function buildBrokerEquitySeries(kpi, startingCap, totalVal, timeframe = 'ALL') 
     .filter(ts => Number.isFinite(ts));
   const latestTs = validTimestamps.length ? Math.max(...validTimestamps) : null;
   const windowSec = windows[timeframe];
-  const closes = windowSec === undefined || latestTs === null
-    ? allCloses
-    : allCloses.filter(entry => {
-      const ts = Number(entry.ts);
-      return !Number.isFinite(ts) || ts >= latestTs - windowSec;
-    });
   // The run's real start stamp when the backend measured one (Issue #252);
   // the word "Start" only when the anchor is the config fallback (ts null).
   const anchorTs = kpi?.portfolio?.starting_capital_ts ?? null;
-  const points = [{ label: brokerPointLabel({ ts: anchorTs }, 'Start'), v: startingCap }];
-  closes.forEach((entry, index) => {
+  const anchorNum = Number(anchorTs);
+  const hasAnchorTs = anchorTs !== null && anchorTs !== undefined && Number.isFinite(anchorNum);
+  if (windowSec === undefined || latestTs === null) {
+    // ALL frame (or no timed closes): Start anchor + every close + Current.
+    const points = [{ label: brokerPointLabel({ ts: anchorTs }, 'Start'), v: startingCap }];
+    if (hasAnchorTs) points[0].ts = anchorNum;
+    allCloses.forEach((entry, index) => {
+      const point = {
+        label: brokerPointLabel(entry, `Close ${index + 1}`),
+        v: Number(entry.v),
+      };
+      const entryTs = Number(entry.ts);
+      if (Number.isFinite(entryTs)) point.ts = entryTs;
+      if (entry.pnl !== null && entry.pnl !== undefined) point.pnl = Number(entry.pnl);
+      if (entry.market !== null && entry.market !== undefined) point.market = entry.market;
+      points.push(point);
+    });
+    const current = { label: 'Current', v: allCloses.length ? totalVal : startingCap };
+    if (latestTs !== null) current.ts = latestTs;
+    points.push(current);
+    return points;
+  }
+  // Windowed frames (Issue #257): clip at the window edge instead of drawing a
+  // Start-to-first-close ramp. The edge point carries the running equity at
+  // that moment (last pre-window close, else the anchor), labelled by its
+  // real timestamp — never the word "Start".
+  const windowStart = latestTs - windowSec;
+  const preWindow = allCloses.filter(entry => Number(entry.ts) < windowStart);
+  const closes = allCloses.filter(entry => {
+    const ts = Number(entry.ts);
+    return !Number.isFinite(ts) || ts >= windowStart;
+  });
+  const edgeValue = preWindow.length ? Number(preWindow[preWindow.length - 1].v) : startingCap;
+  const points = [{ label: brokerPointLabel({ ts: windowStart }, 'Start'), v: edgeValue, ts: windowStart }];
+  closes.forEach((entry) => {
     const point = {
-      label: brokerPointLabel(entry, `Close ${index + 1}`),
+      label: brokerPointLabel(entry, `Close`),
       v: Number(entry.v),
     };
+    const entryTs = Number(entry.ts);
+    if (Number.isFinite(entryTs)) point.ts = entryTs;
     if (entry.pnl !== null && entry.pnl !== undefined) point.pnl = Number(entry.pnl);
     if (entry.market !== null && entry.market !== undefined) point.market = entry.market;
     points.push(point);
   });
-  points.push({ label: 'Current', v: closes.length ? totalVal : startingCap });
+  points.push({ label: 'Current', v: closes.length || preWindow.length ? totalVal : startingCap, ts: latestTs });
   return points;
 }
 
@@ -1507,10 +1536,28 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
   const maxVal = Math.max(...vals, startingCap * 1.005);
   const valSpan = Math.max(maxVal - minVal, 0.50);
 
-  const getX = (idx) => padL + (idx / (series.length - 1)) * plotW;
+  // Time-proportional x (Issue #257): a 9-day gap gets 9 days of width.
+  // Points without a ts inherit the nearest known stamp so the line never
+  // collapses to NaN; a zero span falls back to even spacing.
+  const pointTs = (s, fallback) => {
+    const t = Number(s && s.ts);
+    return Number.isFinite(t) ? t : fallback;
+  };
+  const knownTs = series.map(s => Number(s && s.ts)).filter(t => Number.isFinite(t));
+  const minTs = knownTs.length ? Math.min(...knownTs) : 0;
+  const maxTs = knownTs.length ? Math.max(...knownTs) : 1;
+  const tsSpan = maxTs - minTs;
+  const getX = (ts) => tsSpan > 0
+    ? padL + ((Number(ts) - minTs) / tsSpan) * plotW
+    : padL + (plotW / 2);
+  const getXIdx = (idx) => padL + (series.length > 1 ? (idx / (series.length - 1)) * plotW : plotW / 2);
   const getY = (val) => padT + plotH - ((val - minVal) / valSpan) * plotH;
 
-  const points = series.map((s, i) => ({ x: getX(i), y: getY(s.v), data: s }));
+  const points = series.map((s, i) => ({
+    x: tsSpan > 0 ? getX(pointTs(s, i === series.length - 1 ? maxTs : minTs)) : getXIdx(i),
+    y: getY(s.v),
+    data: s,
+  }));
   const pathD = points.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
   const areaD = `${pathD} L ${points[points.length - 1].x.toFixed(1)},${(padT + plotH).toFixed(1)} L ${points[0].x.toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
 
@@ -1559,10 +1606,10 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
       <circle cx="${latestPt.x}" cy="${latestPt.y}" r="6" fill="rgba(16, 185, 129, 0.4)"/>
       <circle cx="${latestPt.x}" cy="${latestPt.y}" r="3.5" fill="#34d399" stroke="#020617" stroke-width="1.5"/>
 
-      <!-- X-Axis Labels -->
+      <!-- X-Axis Labels (time fractions of [minTs, maxTs], Issue #257) -->
       <text x="${padL}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">${series[0]?.label || 'Start'}</text>
-      <text x="${padL + plotW * 0.33}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${series[Math.floor(series.length * 0.33)]?.label || ''}</text>
-      <text x="${padL + plotW * 0.66}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${series[Math.floor(series.length * 0.66)]?.label || ''}</text>
+      <text x="${getX(minTs + tsSpan * 0.33)}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${brokerPointLabel({ ts: minTs + tsSpan * 0.33 }, '')}</text>
+      <text x="${getX(minTs + tsSpan * 0.66)}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="middle">${brokerPointLabel({ ts: minTs + tsSpan * 0.66 }, '')}</text>
       <text x="${w - padR}" y="${h - 10}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="end">Current</text>
 
       <!-- Crosshair Line Element (dynamically updated on mouseover) -->
@@ -1589,10 +1636,15 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
         return;
       }
 
-      // Find closest data point
-      const relX = (svgX - padL) / plotW;
-      const index = Math.min(series.length - 1, Math.max(0, Math.round(relX * (series.length - 1))));
-      const pt = points[index];
+      // Closest point by real pixel x (Issue #257) — index rounding would
+      // snap to the wrong close once spacing is time-proportional.
+      let best = 0;
+      let bestDist = Infinity;
+      for (let k = 0; k < points.length; k += 1) {
+        const dist = Math.abs(points[k].x - svgX);
+        if (dist < bestDist) { bestDist = dist; best = k; }
+      }
+      const pt = points[best];
       const data = pt.data;
 
       crosshairLine.setAttribute('x1', pt.x);
