@@ -1,6 +1,6 @@
 # Plan: Issue #259 — Equity tooltip shows trade facts
 
-Size: **Standard** (4 files across backend + frontend + harness + tests, one architectural decision: compute facts from in-memory data vs new queries — chosen in-memory).
+Size: **Standard** (5 files across backend + frontend + harness + tests, one architectural decision: compute facts from in-memory data vs new queries — chosen in-memory).
 Task type: **Code + Design/UI** (backend plumbing + tooltip rendering).
 
 ## Context
