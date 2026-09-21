@@ -379,7 +379,8 @@ function controlFetch(path, options = {}) {
  * repaints the cheap header pills plus only the visible tab; a hidden tab
  * repaints on switch from the cached snapshot. */
 function tabVisible(el) {
-  return !el || el.hidden !== true;
+  // Fails closed: a missing panel is a bug to notice, not work to perform.
+  return !!el && el.hidden !== true;
 }
 
 function deferPaint(fn) {
@@ -407,14 +408,13 @@ function renderCachedSections() {
     renderKPIs(currentKpi, lastStatus);
     renderMarkets(currentKpi, lastState);
   }
-  // Tab 3: MARKET FILTER. Trial readiness rides on its own endpoint, so it
-  // renders whether or not the KPI read succeeded — and it is called even
-  // when the readiness fetch FAILED, so a dead endpoint hides the trackers
-  // rather than leaving the last reading on screen as if it were current.
+  // Tab 3: MARKET FILTER. The readiness banner lives on this tab, so it
+  // refreshes with it; the poll loop still calls it unconditionally (see
+  // pollStatus) so a dead endpoint hides the trackers on every tick.
   if (tabVisible(tab3) && currentKpi) {
     renderScreener(currentKpi, lastScanState, lastStatus);
+    renderTrialReadiness(lastTrialReadiness);
   }
-  renderTrialReadiness(lastTrialReadiness);
 }
 
 /* ── Tab switching (DT7: localStorage persistence, 3 tabs) ── */
@@ -5203,11 +5203,13 @@ async function pollStatus() {
     if (state) lastState = state;
     if (kpi) lastKpi = kpi;
     // Snapshots for switchTab, which repaints the newly shown tab from cache.
-    lastStatus = status;
-    lastScanState = scanState;
+    // A failed fetch (null) keeps the last good copy — except readiness: a
+    // dead endpoint must hide the trackers, not replay a stale READY claim.
+    if (status) lastStatus = status;
+    if (scanState) lastScanState = scanState;
     lastTrialReadiness = trialReadiness;
-    lastGuardHealth = guardHealth;
-    lastGuardAlerts = guardAlerts;
+    if (guardHealth) lastGuardHealth = guardHealth;
+    if (guardAlerts) lastGuardAlerts = guardAlerts;
 
     // Issue #251: only a successful read can judge the backend's age — a failed
     // poll must not flash the stale note for a process that never answered.

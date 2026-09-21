@@ -69,7 +69,16 @@ global.EventSource = function EventSource() {
   return { addEventListener: noop, close: noop, onerror: null, onmessage: null };
 };
 
+// Controllable rAF: callbacks queue until __flushRaf runs them. Lets the
+// charts-deferred scenario prove the deferral is real, not just wired.
+const rafQueue = [];
+let rafId = 0;
+global.requestAnimationFrame = (cb) => { rafQueue.push(cb); return ++rafId; };
+global.__flushRaf = () => { const q = rafQueue.splice(0); q.forEach((cb) => cb(0)); return q.length; };
+
 // One full poll snapshot, served per endpoint like the backend would.
+// {fetchOk:false} simulates a dead backend: every endpoint answers unusable.
+const fetchOk = input.fetchOk !== false;
 const SNAPSHOT = {
   '/api/state': { orders: [], fills: [] },
   '/api/system/status': { bot_state: 'STOPPED', services: {} },
@@ -79,10 +88,9 @@ const SNAPSHOT = {
   '/api/guardrail-alerts': null,
   '/api/guardrail-health': null,
 };
-global.fetch = async (url) => ({
-  ok: true,
-  json: async () => SNAPSHOT[url] ?? null,
-});
+global.fetch = async (url) => (fetchOk
+  ? { ok: true, json: async () => SNAPSHOT[url] ?? null }
+  : { ok: false });
 
 const source = fs.readFileSync(
   path.resolve(__dirname, '..', '..', 'dashboard', 'static', 'app.js'), 'utf8');
@@ -131,6 +139,58 @@ async function main() {
       marketBody: el('market-body').innerHTML,
       kanbanBoard: el('kanban-board').innerHTML,
     };
+  } else if (scenario === 'switch-tab3-double-click') {
+    // Arrange — caches filled, operator on Tab 1.
+    setTabs(false, false, false);
+    await app.pollStatus();
+    app.switchTab(1);
+    el('kanban-board').innerHTML = '';
+    el('kpi-grid').innerHTML = '';
+    // Act — three rapid clicks: Tab 2, back to Tab 1, then Tab 3. Synchronous
+    // toggles cannot queue, so only the last click's panel ends up painted.
+    app.switchTab(2);
+    app.switchTab(1);
+    app.switchTab(3);
+    // Assert material.
+    result = {
+      tab1Hidden: el('tab-1').hidden,
+      tab2Hidden: el('tab-2').hidden,
+      tab3Hidden: el('tab-3').hidden,
+      kpiGrid: el('kpi-grid').innerHTML,
+      kanbanBoard: el('kanban-board').innerHTML,
+    };
+  } else if (scenario === 'failed-poll') {
+    // Arrange — dead backend (fetchOk:false passed on argv), all tabs visible.
+    setTabs(false, false, false);
+    // Act — one poll tick against failing endpoints must not throw.
+    let crashed = null;
+    try {
+      await app.pollStatus();
+      crashed = false;
+    } catch (e) {
+      crashed = String((e && e.message) || e);
+    }
+    // Assert material.
+    result = {
+      crashed,
+      kpiGrid: el('kpi-grid').innerHTML,
+      marketBody: el('market-body').innerHTML,
+      kanbanBoard: el('kanban-board').innerHTML,
+      scanPill: el('market-scan-pill').innerHTML,
+    };
+  } else if (scenario === 'charts-deferred') {
+    // Arrange/Act — the deferral mechanism itself, no poll needed.
+    let ran = 0;
+    app.deferPaint(() => { ran++; });
+    const queuedBeforeFlush = rafQueue.length;
+    const ranBeforeFlush = ran;
+    const flushed = global.__flushRaf();
+    // And the no-rAF fallback (node without the stub) runs synchronously.
+    global.requestAnimationFrame = undefined;
+    let ranSync = 0;
+    app.deferPaint(() => { ranSync++; });
+    // Assert material.
+    result = { queuedBeforeFlush, ranBeforeFlush, flushed, ranAfterFlush: ran, ranSync };
   } else {
     throw new Error('unknown scenario: ' + scenario);
   }

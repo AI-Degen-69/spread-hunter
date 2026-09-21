@@ -26,9 +26,11 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node is not installed on this host")
 
 
-def _run(scenario: str) -> dict:
-    out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps({"scenario": scenario})],
-                         capture_output=True, text=True, check=True)
+def _run(scenario: str, fetch_ok: bool = True) -> dict:
+    out = subprocess.run(
+        [shutil.which("node"), str(HARNESS),
+         json.dumps({"scenario": scenario, "fetchOk": fetch_ok})],
+        capture_output=True, text=True, check=True)
     return json.loads(out.stdout)
 
 
@@ -58,6 +60,48 @@ def test_tab_switch_paints_synchronously_from_cache():
     assert res["kpiGrid"] != ""
     assert res["marketBody"] != ""
     assert res["kanbanBoard"] == ""
+
+
+def test_rapid_clicks_end_on_the_last_tab_with_no_queued_replay():
+    # Arrange — caches filled by an earlier poll, operator on Tab 1.
+    # Act — three synchronous clicks: Tab 2, back to Tab 1, then Tab 3.
+    res = _run("switch-tab3-double-click")
+
+    # Assert — toggles are synchronous, so nothing queues: only Tab 3 stands
+    # visible and painted. Tab 2 keeps its last paint while hidden, so
+    # switching back is instant instead of flashing blank.
+    assert res["tab1Hidden"] is True
+    assert res["tab2Hidden"] is True
+    assert res["tab3Hidden"] is False
+    assert res["kpiGrid"] != ""
+    assert res["kanbanBoard"] != ""
+
+
+def test_a_failed_poll_never_crashes_and_leaves_hidden_tabs_blank():
+    # Arrange — dead backend, all tabs visible.
+    # Act — one poll tick against failing endpoints.
+    res = _run("failed-poll", fetch_ok=False)
+
+    # Assert — no throw, nothing painted from nothing, header honest.
+    assert res["crashed"] is False
+    assert res["kpiGrid"] == ""
+    assert res["marketBody"] == ""
+    assert res["kanbanBoard"] == ""
+    assert res["scanPill"] != ""
+
+
+def test_heavy_charts_wait_a_frame_while_tiles_paint_now():
+    # Arrange/Act — the deferral mechanism itself through the real export.
+    res = _run("charts-deferred")
+
+    # Assert — with rAF present the callback waits exactly one frame; without
+    # rAF (node fallback) it runs synchronously. Either way tiles are never
+    # stuck behind the charts.
+    assert res["queuedBeforeFlush"] == 1
+    assert res["ranBeforeFlush"] == 0
+    assert res["flushed"] == 1
+    assert res["ranAfterFlush"] == 1
+    assert res["ranSync"] == 1
 
 
 def test_heavy_charts_paint_after_the_tiles():

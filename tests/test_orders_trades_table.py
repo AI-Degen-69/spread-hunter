@@ -859,8 +859,10 @@ def test_the_panel_is_on_the_served_page():
         assert f'data-ot-view="{view}"' in index
 
 
-def test_the_panel_redraws_on_every_poll():
+def test_the_panel_redraws_on_visible_poll_and_switch():
     # Arrange — the table is worthless if it only fills in on a tab click.
+    # Since #264 it repaints on every poll while its tab is visible, plus
+    # once synchronously on switch.
     app = (_STATIC / "app.js").read_text(encoding="utf-8")
 
     # Act / Assert
