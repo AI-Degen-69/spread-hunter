@@ -19,7 +19,7 @@ rows with `--` fallbacks instead of fabricated values.
 
 ## Tasks
 
-### Task 1 — Backend: enrich close points with trade facts [Backend/Logic]
+### Task 1 — Backend: enrich close points with trade facts [Backend/Logic] [x]
 - **Files:** `core_brain/kpi.py` (`report()`, equity loop ~1826-1898)
 - **Build:** before the loop, build a per-`condition_id` title lookup via
   `_resolve_market_meta()` (once per market) and an earliest-`quotes.ts`
@@ -32,7 +32,7 @@ rows with `--` fallbacks instead of fabricated values.
   plus a new backend assertion on the enriched fields; new test fails without
   the change.
 
-### Task 2 — Frontend: passthrough + method badge [Design/UI]
+### Task 2 — Frontend: passthrough + method badge [Design/UI] [x]
 - **Files:** `dashboard/static/app.js` (`buildBrokerEquitySeries()` both
   ALL + windowed branches, `METHOD_BADGES`/`methodBadge()` near `gateBadge()`)
 - **Build:** conditional-copy `title`, `cost_basis`, `method`,
@@ -43,7 +43,7 @@ rows with `--` fallbacks instead of fabricated values.
 - **Verification:** node harness asserts `chart_series` carries the four
   fields when present and keeps the old shape when absent.
 
-### Task 3 — Frontend: render the four tooltip rows [Design/UI]
+### Task 3 — Frontend: render the four tooltip rows [Design/UI] [x]
 - **Files:** `dashboard/static/app.js` (tooltip `innerHTML` ~1658-1672)
 - **Build:** Market row prefers `data.title` over `data.market` (escaped);
   add P&L % row (`pnl / cost_basis`, `--` when unmeasurable, `fmtPct()` +
@@ -55,7 +55,7 @@ rows with `--` fallbacks instead of fabricated values.
 - **Verification:** harness `tooltip_html` contains title (not raw hex),
   percent, `MERGED`, and hold text on the fixture close.
 
-### Task 4 — Harness: capture tooltip on simulated hover [Code]
+### Task 4 — Harness: capture tooltip on simulated hover [Code] [x]
 - **Files:** `tests/js/portfolio_card_harness.cjs`
 - **Build:** stub `querySelector('#broker-svg-chart' / '#broker-crosshair-line' /
   '#broker-crosshair-dot')` returns working elements; `addEventListener`

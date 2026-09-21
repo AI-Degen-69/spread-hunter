@@ -194,8 +194,7 @@ def test_chart_timeframe_filters_close_entries():
     assert card["chart_series"][0]["label"] != "Start"
 
 
-def test_chart_x_positions_follow_real_time_gaps():
-    # Issue #257 RED: three closes with uneven time gaps (10x ratio). The SVG
+def test_chart_x_positions_follow_real_time_gaps():    # Issue #257 RED: three closes with uneven time gaps (10x ratio). The SVG
     # line vertices must sit at time-proportional x positions — fails on the
     # old index-spaced layout where all gaps render equal.
     import re
@@ -220,4 +219,51 @@ def test_chart_x_positions_follow_real_time_gaps():
     gap_small = xs[2] - xs[1]
     gap_large = xs[3] - xs[2]
     assert gap_large / gap_small == pytest.approx(10.0, rel=0.05)
+
+
+def test_tooltip_shows_trade_facts_not_raw_hex():
+    # Issue #259: the hovered close names the market in words, shows dollar +
+    # percent, the close method, and the hold time -- never the bare hex.
+    portfolio = _shadow_portfolio(total_value=86.02)
+    equity_series = [
+        {"type": "close", "ts": 1_700_000_060, "v": 85.72, "pnl": 0.30,
+         "market": "0x6054e1e79b478e61a65cf478b9a0fee265d1f4e8201a91e189af1f1a5a5cff",
+         "title": "Market A resolves up?", "cost_basis": 4.70,
+         "method": "merge", "hold_seconds": 11520},
+        {"type": "close", "ts": 1_700_000_120, "v": 86.02, "pnl": 0.30,
+         "market": "second-market", "title": "Second Market",
+         "cost_basis": 4.90, "method": "single_buy_exit", "hold_seconds": 90},
+    ]
+
+    card = _render(portfolio, equity_series=equity_series)
+    tip = card["tooltip_html"]
+
+    assert "Market A resolves up?" in tip
+    assert "0x6054" not in tip
+    assert "+$0.30" in tip
+    assert "+6.38%" in tip
+    assert "MERGED" in tip
+    assert "3h 12m" in tip
+
+
+def test_tooltip_falls_back_when_basis_and_hold_unmeasured():
+    # Issue #259: missing cost_basis or hold renders `--`, and a missing
+    # method row stays out -- never a fabricated 0% or 0 hold.
+    portfolio = _shadow_portfolio(total_value=86.02)
+    equity_series = [
+        {"type": "close", "ts": 1_700_000_060, "v": 85.72, "pnl": 0.30,
+         "market": "lonely-market"},
+        {"type": "close", "ts": 1_700_000_120, "v": 86.02, "pnl": 0.30,
+         "market": "second-market", "title": "Second Market",
+         "cost_basis": 4.90, "method": "merge", "hold_seconds": 90},
+    ]
+
+    card = _render(portfolio, equity_series=equity_series)
+    tip = card["tooltip_html"]
+
+    assert "lonely-market" in tip  # title missing: slug fallback, not blank
+    assert "P&L %:</span>" in tip and ">--</span>" in tip
+    assert "Method:" not in tip
+    assert "Held:</span>" in tip
+    assert tip.count("--") >= 2  # unmeasured percent AND unmeasured hold
 
