@@ -41,13 +41,14 @@ requires_node = pytest.mark.skipif(shutil.which("node") is None,
 
 
 def _render(realized: float = -2.40, *, expectancy: float = -0.343,
+            mean_return: float | None = -13.85,
             sharpe: float = -0.63, profit_factor: float = 0.13,
             mc_end: float | None = None, win_rate_ci95=None,
             risk: dict | None = None, include_risk_fields: bool = True,
             payload_version=252) -> dict:
     ta = {
         "n_closes": 7, "expectancy_usd": expectancy,
-        "mean_return_pct": -13.85, "sharpe_ratio": sharpe,
+        "mean_return_pct": mean_return, "sharpe_ratio": sharpe,
         "sortino_ratio": -0.53, "profit_factor": profit_factor,
         "win_rate": 0.286,
         "win_rate_ci95": (win_rate_ci95 if win_rate_ci95 is not None
@@ -221,6 +222,17 @@ def test_a_null_risk_metric_reads_unmeasured_not_zero():
     assert rendered["quant_kelly"] == "unmeasured"
     assert "unmeasured" in rendered["quant_kelly_sub"]
     assert "unmeasured" in rendered["quant_payoff"]
+
+
+@requires_node
+def test_a_null_expectancy_and_mean_read_unmeasured_not_zero():
+    """#260: the last two fabricated zeros in the grid. A null expectancy is
+    unmeasured, not $0.000; a null mean is unmeasured, not 0.00%."""
+    rendered = _render(expectancy=None, mean_return=None)
+    assert rendered["quant_expectancy_text"] == "unmeasured"
+    assert rendered["quant_expectancy"] == ""
+    assert rendered["quant_expectancy_sub"].startswith(
+        "unmeasured mean return / trade")
 
 
 @requires_node
