@@ -648,3 +648,21 @@ def test_equity_close_uses_feed_title_and_none_hold_when_quote_after_close(temp_
     assert closes[0]["title"] == "Market A resolves up?"
     assert closes[0]["hold_seconds"] is None
 
+
+def test_equity_close_title_falls_back_to_short_hex_without_slug_or_feed(temp_db, tmp_path, monkeypatch):
+    """No feed row and no slug means the short 0x address -- never blank."""
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    cid = "0x" + "ab" * 32
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id=cid, market_slug=None,
+        method="merge", shares=5.0, cost_basis=4.70, proceeds=5.00,
+        realized_pnl=0.30, tx_hash="0xaaa", run_id=RUN,
+    ))
+
+    data = report(db_path=temp_db, run_id=RUN)
+    closes = [e for e in data["equity_series"] if e["type"] == "close"]
+
+    assert closes[0]["title"] == f"Market {cid[:10]}...{cid[-6:]}"
+
