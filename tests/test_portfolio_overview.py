@@ -556,9 +556,14 @@ def test_corrupt_mark_row_does_not_crash_the_report(temp_db):
 # --------------------------------------------------------------------------
 
 def test_equity_series_stacks_closes_on_db_anchor(temp_db):
-    """Every curve point is measured from the anchor, not the session snapshot."""
+    """Every curve point is measured from the anchor, not the session snapshot.
+
+    The older 40.00 mark is what the previous earliest-mark rule would have
+    picked; the anchor rule keeps the newest mark before the first close.
+    """
     reg = OrderRegistry(temp_db)
     t0 = time.time() - 600
+    reg.log_account_mark(_anchor_mark(40.00), ts=t0 - 100, run_id="run-curve")
     reg.log_account_mark(_anchor_mark(53.63), ts=t0 - 10, run_id="run-curve")
     reg.log_close(CloseRecord(
         ts=t0 + 60, condition_id="0xmarket_a", market_slug="market-a",

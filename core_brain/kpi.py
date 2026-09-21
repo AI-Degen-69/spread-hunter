@@ -1769,10 +1769,14 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         """float() that returns None for missing/non-numeric DB values.
 
         A corrupt mark row (empty string, stray text) must not crash the
-        whole report -- it is skipped like an unmeasured mark.
+        whole report -- it is skipped like an unmeasured mark. Non-finite
+        values (NaN/Inf, which SQLite REAL can store) are unmeasurable too:
+        Starlette serializes /api/kpi with allow_nan=False, so one would
+        fail the whole response.
         """
         try:
-            return float(value)
+            parsed = float(value)
+            return parsed if math.isfinite(parsed) else None
         except (TypeError, ValueError):
             return None
 
