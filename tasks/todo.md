@@ -1,9 +1,6 @@
-# Issue #259 — Execution checklist
+# Todo — Issue #264
 
-- [x] Task 1 — Backend: close points carry `title`/`cost_basis`/`method`/`hold_seconds` (RED test first)
-- [x] Task 2 — Frontend: passthrough + `methodBadge()` (old fixtures unchanged)
-- [x] Task 3 — Frontend: four tooltip rows with `--` fallbacks (title, % , method, held)
-- [x] Task 4 — Harness: simulated hover captures `tooltip_html`
-- [x] Task 5 — Tests: pin rows + fallback cases green on focused suite
-- [ ] Review — Run targeted checks after all review fixes
-- [ ] CI — Confirm full regression suite through GitHub CI before merge
+- [x] T1 — Confirm the blocker (read poll→render path, record hypothesis)
+- [x] T2 — Render only the visible tab per poll (+ RED→GREEN static test)
+- [x] T3 — Yield heavy chart renders to input (+ RED→GREEN static test)
+- [x] T4 — Focused verification (focused pytest selection + hands-on tab-click check)

@@ -59,6 +59,14 @@ window.addEventListener('error', (event) => {
 const POLL_MS = 2000;
 let lastState = null;
 let lastKpi = null;
+/* ── Cached poll snapshots (Issue #264) ─────────────────────────────
+ * The last payload of every poll endpoint, so a tab switch can paint the
+ * newly shown tab synchronously without waiting for the next 2s poll. */
+let lastStatus = null;
+let lastScanState = null;
+let lastTrialReadiness = null;
+let lastGuardHealth = null;
+let lastGuardAlerts = null;
 
 /* ── Payload version (Issue #251) ─────────────────────────────────────
  * The static files and the Python backend are served by different processes,
@@ -364,6 +372,51 @@ function controlFetch(path, options = {}) {
   return fetch(path, { method: 'POST', ...options, headers });
 }
 
+/* ── Visible-tab rendering (Issue #264) ─────────────────────────────
+ * One poll used to re-render every section on every 2s tick — both hidden
+ * tabs plus the Monte Carlo / KDE / markout charts — a single long
+ * main-thread task that a tab click waited behind for 2-4s. Now each poll
+ * repaints the cheap header pills plus only the visible tab; a hidden tab
+ * repaints on switch from the cached snapshot. */
+function tabVisible(el) {
+  return !el || el.hidden !== true;
+}
+
+function deferPaint(fn) {
+  // One frame later the click/tab paint wins over the heavy charts. Outside
+  // a browser (node test harness) there is no rAF — run synchronously there.
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
+  else fn();
+}
+
+// Header pills stay live on every poll — cheap text updates, always painted.
+// They are deliberately NOT repainted on tab switch: reprinting them from
+// cache could show a frozen age as live.
+function renderCachedSections() {
+  // Paints only the visible tab's sections from the cached snapshots. Called
+  // by switchTab so a click paints synchronously without waiting for the
+  // next 2s poll (Issue #264).
+  const currentKpi = lastKpi;
+  // Tab 1: LIVE OPERATIONS.
+  if (tabVisible(tab1)) {
+    if (lastStatus) renderServiceCards(lastStatus, lastGuardHealth, lastGuardAlerts);
+    if (currentKpi) renderOrdersTrades(currentKpi, lastState);
+  }
+  // Tab 2: PERFORMANCE & ANALYTICS.
+  if (tabVisible(tab2) && currentKpi) {
+    renderKPIs(currentKpi, lastStatus);
+    renderMarkets(currentKpi, lastState);
+  }
+  // Tab 3: MARKET FILTER. Trial readiness rides on its own endpoint, so it
+  // renders whether or not the KPI read succeeded — and it is called even
+  // when the readiness fetch FAILED, so a dead endpoint hides the trackers
+  // rather than leaving the last reading on screen as if it were current.
+  if (tabVisible(tab3) && currentKpi) {
+    renderScreener(currentKpi, lastScanState, lastStatus);
+  }
+  renderTrialReadiness(lastTrialReadiness);
+}
+
 /* ── Tab switching (DT7: localStorage persistence, 3 tabs) ── */
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tab1 = document.getElementById('tab-1');
@@ -380,6 +433,9 @@ function switchTab(which) {
   tab2.hidden = (which !== 2);
   tab3.hidden = (which !== 3);
   localStorage.setItem('sh-active-tab', String(which));
+  // Paint the newly shown tab synchronously from the cached poll data, so a
+  // click never waits behind the next 2s poll render.
+  renderCachedSections();
   if (which === 3) {
     setTimeout(updateKanbanNavButtons, 60);
   }
@@ -3384,7 +3440,9 @@ function renderKPIs(kpi, status) {
       ${fmtVal(kpi.resolved_markets !== undefined && kpi.resolved_markets !== null ? kpi.resolved_markets : 0)}
     </div>
   `;
-  renderAnalyticsSurface(kpi, status);
+  // Heavy charts paint one frame after the tiles, so a click arriving
+  // mid-render is handled between the two paints (Issue #264).
+  deferPaint(() => renderAnalyticsSurface(kpi, status));
 }
 
 /* ── Render: Market Table (expandable rows — click to inspect individual orders) ── */
@@ -5144,6 +5202,12 @@ async function pollStatus() {
 
     if (state) lastState = state;
     if (kpi) lastKpi = kpi;
+    // Snapshots for switchTab, which repaints the newly shown tab from cache.
+    lastStatus = status;
+    lastScanState = scanState;
+    lastTrialReadiness = trialReadiness;
+    lastGuardHealth = guardHealth;
+    lastGuardAlerts = guardAlerts;
 
     // Issue #251: only a successful read can judge the backend's age — a failed
     // poll must not flash the stale note for a process that never answered.
@@ -5165,23 +5229,32 @@ async function pollStatus() {
     // is the one that failed.
     if (status) setFilterUptime(status);
 
-    // Render service cards
-    if (status) renderServiceCards(status, guardHealth, guardAlerts);
+    // Issue #264: each section below repaints only while its tab is visible.
+    // A poll used to re-render every section on every tick — both hidden tabs
+    // plus the heavy charts — one long main-thread task that a tab click
+    // waited behind for 2-4s.
+
+    // Render service cards (Tab 1)
+    if (tabVisible(tab1) && status) renderServiceCards(status, guardHealth, guardAlerts);
 
     // Render exposure bar (DT3)
     if (kpi || lastKpi) renderExposure(kpi || lastKpi);
 
     const currentKpi = kpi || lastKpi;
 
-    // Render KPIs (Tab 2)
-    if (currentKpi) {
-      renderKPIs(currentKpi, status);
-      renderMarkets(currentKpi, lastState);
+    // Render Orders & Trades (Tab 1)
+    if (tabVisible(tab1) && currentKpi) {
       renderOrdersTrades(currentKpi, lastState);
     }
 
+    // Render KPIs and markets (Tab 2)
+    if (tabVisible(tab2) && currentKpi) {
+      renderKPIs(currentKpi, status);
+      renderMarkets(currentKpi, lastState);
+    }
+
     // Render the Market Filter kanban (Tab 3)
-    if (currentKpi) {
+    if (tabVisible(tab3) && currentKpi) {
       renderScreener(currentKpi, scanState, status);
     }
 
@@ -5239,5 +5312,6 @@ if (typeof module !== 'undefined' && module.exports) {
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },
-    get backendLastSeenMs() { return backendLastSeenMs; } };
+    get backendLastSeenMs() { return backendLastSeenMs; },
+    switchTab, pollStatus, renderCachedSections, tabVisible, deferPaint };
 }
