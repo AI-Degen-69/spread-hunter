@@ -1477,9 +1477,9 @@ function buildBrokerEquitySeries(kpi, startingCap, totalVal, timeframe = 'ALL') 
       if (entry.pnl !== null && entry.pnl !== undefined) point.pnl = Number(entry.pnl);
       if (entry.market !== null && entry.market !== undefined) point.market = entry.market;
       if (entry.title !== null && entry.title !== undefined) point.title = entry.title;
-      if (entry.cost_basis !== null && entry.cost_basis !== undefined) point.cost_basis = Number(entry.cost_basis);
+      if (entry.cost_basis !== null && entry.cost_basis !== undefined && Number.isFinite(Number(entry.cost_basis))) point.cost_basis = Number(entry.cost_basis);
       if (entry.method !== null && entry.method !== undefined) point.method = entry.method;
-      if (entry.hold_seconds !== null && entry.hold_seconds !== undefined) point.hold_seconds = Number(entry.hold_seconds);
+      if (entry.hold_seconds !== null && entry.hold_seconds !== undefined && Number.isFinite(Number(entry.hold_seconds))) point.hold_seconds = Number(entry.hold_seconds);
       points.push(point);
     });
     const current = { label: 'Current', v: allCloses.length ? totalVal : startingCap };
@@ -1509,9 +1509,9 @@ function buildBrokerEquitySeries(kpi, startingCap, totalVal, timeframe = 'ALL') 
     if (entry.pnl !== null && entry.pnl !== undefined) point.pnl = Number(entry.pnl);
     if (entry.market !== null && entry.market !== undefined) point.market = entry.market;
     if (entry.title !== null && entry.title !== undefined) point.title = entry.title;
-    if (entry.cost_basis !== null && entry.cost_basis !== undefined) point.cost_basis = Number(entry.cost_basis);
+    if (entry.cost_basis !== null && entry.cost_basis !== undefined && Number.isFinite(Number(entry.cost_basis))) point.cost_basis = Number(entry.cost_basis);
     if (entry.method !== null && entry.method !== undefined) point.method = entry.method;
-    if (entry.hold_seconds !== null && entry.hold_seconds !== undefined) point.hold_seconds = Number(entry.hold_seconds);
+    if (entry.hold_seconds !== null && entry.hold_seconds !== undefined && Number.isFinite(Number(entry.hold_seconds))) point.hold_seconds = Number(entry.hold_seconds);
     points.push(point);
   });
   points.push({ label: 'Current', v: closes.length || preWindow.length ? totalVal : startingCap, ts: latestTs });
@@ -1667,17 +1667,19 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
       tooltip.style.display = 'flex';
       // Issue #259: trade facts per close -- human title, dollar+pct, method,
       // hold time. Percent is percent-units like every other pnl_pct here
-      // (100 * pnl / basis); unmeasured basis renders `--`, never 0%.
-      const _pnlNum = Number(data.pnl);
-      const _basisNum = Number(data.cost_basis);
-      const _hasBasis = data.cost_basis !== null && data.cost_basis !== undefined
-        && Number.isFinite(_basisNum) && _basisNum > 0;
-      const _pnlPct = _hasBasis ? (100 * _pnlNum / _basisNum) : null;
+      // (100 * pnl / basis); unmeasured pnl or basis renders `--`, never 0%
+      // or NaN%.
+      const pnlNum = Number(data.pnl);
+      const basisNum = Number(data.cost_basis);
+      const hasPnl = Number.isFinite(pnlNum);
+      const hasBasis = data.cost_basis !== null && data.cost_basis !== undefined
+        && Number.isFinite(basisNum) && basisNum > 0;
+      const pnlPct = (hasPnl && hasBasis) ? (100 * pnlNum / basisNum) : null;
       tooltip.innerHTML = `
         <div class="broker-tooltip-time">${data.label || 'Snapshot'}</div>
         <div class="broker-tooltip-row"><span class="broker-tooltip-label">Account Value:</span> <span class="broker-tooltip-val mono" style="color:#34d399">${fmtUSD(data.v)}</span></div>
         ${data.pnl !== undefined ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Realized Spread:</span> <span class="broker-tooltip-val mono" style="color:${Number(data.pnl) < 0 ? '#f87171' : '#34d399'}">${fmtSignedUSD(data.pnl)}</span></div>` : ''}
-        ${data.pnl !== undefined ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">P&L %:</span> <span class="broker-tooltip-val mono" style="color:${_pnlPct !== null && _pnlPct < 0 ? '#f87171' : '#34d399'}">${_pnlPct === null ? '--' : fmtPct(_pnlPct)}</span></div>` : ''}
+        ${data.pnl !== undefined ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">P&L %:</span> <span class="broker-tooltip-val mono" style="color:${pnlPct !== null && pnlPct < 0 ? '#f87171' : '#34d399'}">${pnlPct === null ? '--' : fmtPct(pnlPct)}</span></div>` : ''}
         ${data.title || data.market ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Market:</span> <span class="broker-tooltip-val mono">${esc(data.title || data.market)}</span></div>` : ''}
         ${data.method ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Method:</span> <span class="broker-tooltip-val mono">${methodBadge(data.method)}</span></div>` : ''}
         ${data.pnl !== undefined ? `<div class="broker-tooltip-row"><span class="broker-tooltip-label">Held:</span> <span class="broker-tooltip-val mono">${data.hold_seconds === null || data.hold_seconds === undefined ? '--' : esc(fmtHoldDuration(data.hold_seconds))}</span></div>` : ''}
@@ -2841,9 +2843,10 @@ function methodBadge(method) {
   if (method === null || method === undefined || method === '') {
     return `<span class="param-badge">-</span>`;
   }
-  const badge = METHOD_BADGES[method]
-    || { cls: 'standby', label: String(method).toUpperCase() };
-  return `<span class="param-badge ${badge.cls}">${badge.label}</span>`;
+  const known = Object.prototype.hasOwnProperty.call(METHOD_BADGES, method);
+  const badge = known ? METHOD_BADGES[method]
+    : { cls: 'standby', label: String(method).toUpperCase() };
+  return `<span class="param-badge ${badge.cls}">${esc(badge.label)}</span>`;
 }
 
 // A value nobody has measured is not a value. Printing a plausible number for

@@ -626,3 +626,25 @@ def test_equity_close_hold_is_none_without_quotes(seeded_db):
     assert closes[0]["cost_basis"] == pytest.approx(4.70)
     assert closes[0]["method"] == "merge"
 
+
+def test_equity_close_uses_feed_title_and_none_hold_when_quote_after_close(temp_db, markets_feed):
+    """The feed title wins over the slug fallback, and a quote stamped after
+    the close is not a hold -- both stay unmeasured, never negative."""
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    reg.log_quote(QuoteRecord(
+        ts=t0 + 120, condition_id="0xmarket_a", token_id="tok-up", side="UP",
+        price=0.45, size=5.0, market_slug="market-a", run_id=RUN,
+    ))
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id="0xmarket_a", market_slug="market-a",
+        method="merge", shares=5.0, cost_basis=4.70, proceeds=5.00,
+        realized_pnl=0.30, tx_hash="0xaaa", run_id=RUN,
+    ))
+
+    data = report(db_path=temp_db, run_id=RUN)
+    closes = [e for e in data["equity_series"] if e["type"] == "close"]
+
+    assert closes[0]["title"] == "Market A resolves up?"
+    assert closes[0]["hold_seconds"] is None
+

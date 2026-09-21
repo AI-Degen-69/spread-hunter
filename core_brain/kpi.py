@@ -1917,7 +1917,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             "pnl": float(c.get("realized_pnl") or 0.0),
             "market": c.get("market_slug") or c.get("condition_id"),
             "title": _title_by_cid.get(_close_cid),
-            "cost_basis": c.get("cost_basis"),
+            "cost_basis": _num(c.get("cost_basis")),
             "method": c.get("method"),
             "hold_seconds": _hold,
         })
