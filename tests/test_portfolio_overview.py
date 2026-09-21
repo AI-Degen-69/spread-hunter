@@ -31,7 +31,7 @@ import pytest
 
 from core_brain import kpi as kpi_mod
 from core_brain.kpi import report
-from core_brain.order_registry import SCHEMA, CloseRecord, MarketEventRecord, OrderRegistry, ResolutionRecord
+from core_brain.order_registry import SCHEMA, CloseRecord, MarketEventRecord, OrderRegistry, QuoteRecord, ResolutionRecord
 from pathlib import Path
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / 'dashboard' / 'static'
@@ -582,4 +582,47 @@ def test_equity_series_stacks_closes_on_db_anchor(temp_db):
     assert closes[0]["ts"] == pytest.approx(t0 + 60)
     assert closes[-1]["v"] == pytest.approx(53.63 + 0.80)
     assert data["portfolio"]["total_value"] == pytest.approx(closes[-1]["v"])
+
+
+# --------------------------------------------------------------------------
+# Issue #259: close points carry the trade facts the tooltip shows
+# --------------------------------------------------------------------------
+
+def test_equity_close_points_carry_title_cost_method_and_hold(temp_db, tmp_path, monkeypatch):
+    """Each close point names the market, prices the basis, labels the close,
+    and measures quote-to-close hold time -- no new queries, in-memory only."""
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    reg = OrderRegistry(temp_db)
+    t0 = time.time() - 600
+    reg.log_quote(QuoteRecord(
+        ts=t0, condition_id="0xmarket_a", token_id="tok-up", side="UP",
+        price=0.45, size=5.0, market_slug="market-a", run_id=RUN,
+    ))
+    reg.log_quote(QuoteRecord(
+        ts=t0 + 10, condition_id="0xmarket_a", token_id="tok-up", side="UP",
+        price=0.46, size=5.0, market_slug="market-a", run_id=RUN,
+    ))
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id="0xmarket_a", market_slug="market-a",
+        method="merge", shares=5.0, cost_basis=4.70, proceeds=5.00,
+        realized_pnl=0.30, tx_hash="0xaaa", run_id=RUN,
+    ))
+
+    data = report(db_path=temp_db, run_id=RUN)
+    closes = [e for e in data["equity_series"] if e["type"] == "close"]
+
+    assert closes[0]["title"] == "Market A"
+    assert closes[0]["cost_basis"] == pytest.approx(4.70)
+    assert closes[0]["method"] == "merge"
+    assert closes[0]["hold_seconds"] == pytest.approx(60.0)
+
+
+def test_equity_close_hold_is_none_without_quotes(seeded_db):
+    """No quote for the market means unmeasured hold -- never a fabricated 0."""
+    data = report(db_path=seeded_db, run_id=RUN)
+    closes = [e for e in data["equity_series"] if e["type"] == "close"]
+
+    assert closes[0]["hold_seconds"] is None
+    assert closes[0]["cost_basis"] == pytest.approx(4.70)
+    assert closes[0]["method"] == "merge"
 
