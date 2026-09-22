@@ -4041,8 +4041,13 @@ function otHeadHtml(view) {
   // The market name is the widest thing in the table and the only cell that
   // wraps; without a floor it folds a three-word title onto three lines and
   // squeezes every number column.
+  // The STATUS column header carries the vocabulary tooltip (issue #272).
+  const statusTitle = ' title="RESTING: orders are resting on the book. '
+    + 'QUOTING: the engine is actively quoting this market. '
+    + 'IDLE: no quote activity observed."';
   const cells = OT_COLUMNS[view]
-    .map((label, i) => `<th${i === 0 ? ' class="ot-market-head"' : ''}>${esc(label)}</th>`)
+    .map((label, i) => `<th${i === 0 ? ' class="ot-market-head"' : ''}>${esc(label)}</th>`
+      .replace('</th>', `${label === 'Status' ? statusTitle : ''}</th>`))
     .join('');
   return `<tr>${cells}</tr>`;
 }
@@ -4071,10 +4076,33 @@ function signedUSD(v) {
   return `<span class="${signClass(v)}">${fmtSignedUSD(v)}</span>`;
 }
 
+/* Per-market status vocabulary for the Active Markets tab (issue #272).
+ *
+ * The pill used to be derived purely from resting-order presence, so a market
+ * being quoted live — but whose orders have not rested, or were
+ * cancelled/filled — read IDLE, the same word the fleet-level scan banner
+ * uses for "no active-phase work". Three states, most specific first:
+ *   RESTING — orders are resting on the book (a subset of QUOTING);
+ *   QUOTING — the engine is actively quoting this market (quotes_count > 0);
+ *   IDLE    — no quote activity. Reserved; must not appear in this tab, since
+ *             everything listed here graduated the filter and is being quoted.
+ */
+function marketStatusPill(m, restingHere) {
+  const quoting = Number(m && m.quotes_count) > 0;
+  if (restingHere) return '<span class="pill quoting-breathing" title="Orders are resting on the book">RESTING</span>';
+  if (quoting) return '<span class="pill quoting-breathing" title="The engine is actively quoting this market (no orders resting on the book right now)">QUOTING</span>';
+  return '<span class="pill stopped" title="No quote activity observed">IDLE</span>';
+}
+
 function activeMarketsRows(kpi, state) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
   const entries = Object.entries((kpi && kpi.by_market) || {})
-    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid]));
+    // Everything listed here is being worked, so IDLE cannot appear: a market
+    // with no quote activity and only a filled/cancelled order has nothing
+    // active to show (issue #272; CodeRabbit round on this PR).
+    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid])
+      && ((m.quotes_count || 0) > 0
+        || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
 
   if (!entries.length) return otEmptyRow('active-markets', 'No markets are being quoted.');
 
@@ -4098,7 +4126,7 @@ function activeMarketsRows(kpi, state) {
       <td class="mono">${edge === null ? '--' : `<span class="${edge > 0 ? 'positive' : 'negative'}">${(edge * 100).toFixed(1)}¢</span>`}</td>
       <td class="mono">${fmtCompactUSD(m.volume_24h)}</td>
       <td class="mono">${(dtr === null || dtr === undefined) ? '--' : `${Number(dtr).toFixed(1)}d`}</td>
-      <td><span class="pill ${restingHere ? 'quoting-breathing' : 'stopped'}">${restingHere ? 'QUOTING' : 'IDLE'}</span></td>
+      <td>${marketStatusPill(m, restingHere)}</td>
     </tr>`;
   }).join('');
 }
@@ -5453,7 +5481,7 @@ if (typeof module !== 'undefined' && module.exports) {
     closedTradesEntries, marketRowPairHtml, wireMarketRowExpansion,
     heldMarketEntries, heldLegs, isFinishedMarket, latestLegMids, latestLegQuotes,
     positionMarkValue, settledMarkValue, winningLeg,
-    isQuotedMarket, isRestingOrder, tokenLegMap, legForOrder,
+    isQuotedMarket, isRestingOrder, tokenLegMap, legForOrder, marketStatusPill,
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },

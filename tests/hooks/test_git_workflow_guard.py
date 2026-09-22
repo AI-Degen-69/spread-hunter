@@ -109,7 +109,7 @@ def test_round_rules_direct_the_autofix_loop():
     # Assert — triage, then exactly one autofix per round, then read the commit.
     assert "autofix" in rules
     assert "ONE" in rules
-    assert "in flight" in rules
+    assert "NOT start a review by itself" in rules
 
 
 def test_round_rules_no_longer_ban_the_handle_outright():
@@ -119,7 +119,7 @@ def test_round_rules_no_longer_ban_the_handle_outright():
 
     # Act / Assert
     assert "must not appear anywhere" not in rules
-    assert "five places only" in rules
+    assert "allowed in four places only" in rules
 
 
 def test_round_rules_still_enforce_one_push_and_one_summary():

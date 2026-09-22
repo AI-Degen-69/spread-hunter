@@ -1,6 +1,5 @@
-# Todo — Issue #264
+# Todo — Issue #272
 
-- [x] T1 — Confirm the blocker (read poll→render path, record hypothesis)
-- [x] T2 — Render only the visible tab per poll (+ RED→GREEN static test)
-- [x] T3 — Yield heavy chart renders to input (+ RED→GREEN static test)
-- [x] T4 — Focused verification (focused pytest selection + hands-on tab-click check)
+- [x] T1 — Status derivation helper (`marketStatusPill`) + RED→GREEN test
+- [x] T2 — Wire into Active Markets tab + STATUS header tooltip
+- [x] T3 — Focused verification (focused pytest + harness tests)
