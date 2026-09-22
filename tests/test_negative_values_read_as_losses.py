@@ -246,7 +246,7 @@ def test_a_stale_backend_says_so_once():
 
 @requires_node
 def test_a_current_backend_shows_no_note_and_warns_not():
-    fresh = _render(payload_version=252)
+    fresh = _render(payload_version=253)
     assert fresh["stale_note_shown"] is False
     assert fresh["stale_warn_count"] == 0
 

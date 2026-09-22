@@ -76,7 +76,7 @@ let lastGuardAlerts = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 252;
+const EXPECTED_PAYLOAD_VERSION = 253;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -452,16 +452,12 @@ function renderCachedSections() {
   if (paintable(tab1, document.getElementById('orders-trades-body'))) {
     if (currentKpi) renderOrdersTrades(currentKpi, lastState);
   }
-  // Tab 2: PERFORMANCE & ANALYTICS (KPI tiles → rail Reports page; the markets
-  // table lives on the rail's Data & Markets page).
+  // Tab 2: PERFORMANCE & ANALYTICS (KPI tiles → rail Reports page)
   if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
     renderPortfolioOverview(currentKpi, lastStatus);
   }
   if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
     renderKPIs(currentKpi, lastStatus);
-  }
-  if (paintable(tab2, document.getElementById('market-body')) && currentKpi) {
-    renderMarkets(currentKpi, lastState);
   }
   // Tab 3: MARKET FILTER (kanban → rail Data & Markets page). The readiness
   // banner lives on this tab, so it refreshes with it; the poll loop still
@@ -1417,7 +1413,6 @@ let currentMcCycles = 100;
 // Starting capital the hero rendered with, so the chart's baseline cannot
 // drift from the one the headline was measured against.
 let lastStartingCapital = null;
-let currentTableFilter = 'all';
 let currentStatsView = 'all';
 let currentBrokerTimeframe = '1D';
 let simParams = { maxCost: 0.990, minVol: 10000, maxHorizon: 60 };
@@ -1854,7 +1849,6 @@ function initStatisticalSubnav() {
   });
 
   initSensitivitySimulator();
-  initMarketTableFilters();
   pruneStatsSubnav();
 }
 
@@ -1876,7 +1870,6 @@ const STATS_VIEW_TARGETS = {
   'monte-carlo': '.stats-chart-card[data-section="monte-carlo"]',
   markout: '.stats-chart-card[data-section="markout"]',
   simulator: '#card-sensitivity-simulator',
-  markets: '#market-inspection-card',
 };
 
 function pruneStatsSubnav() {
@@ -1899,7 +1892,6 @@ function applyStatsViewFilter(view) {
   const chartsMatrix = inScope(document.getElementById('analytics-charts-matrix'));
   const simulatorCard = inScope(document.getElementById('card-sensitivity-simulator'));
   const gatesCard = inScope(document.getElementById('analytics-gates'));
-  const marketCard = inScope(document.getElementById('market-inspection-card'));
   const chartCards = scope.querySelectorAll('.stats-chart-card');
 
   if (view === 'all') {
@@ -1907,14 +1899,12 @@ function applyStatsViewFilter(view) {
     if (chartsMatrix) chartsMatrix.style.display = 'grid';
     if (simulatorCard) simulatorCard.style.display = '';
     if (gatesCard) gatesCard.style.display = '';
-    if (marketCard) marketCard.style.display = '';
     chartCards.forEach(c => c.style.display = '');
   } else if (view === 'distributions') {
     if (quantDeck) quantDeck.style.display = 'none';
     if (chartsMatrix) chartsMatrix.style.display = 'grid';
     if (simulatorCard) simulatorCard.style.display = 'none';
     if (gatesCard) gatesCard.style.display = 'none';
-    if (marketCard) marketCard.style.display = 'none';
     chartCards.forEach(c => {
       c.style.display = (c.dataset.section === 'distributions') ? '' : 'none';
     });
@@ -1923,7 +1913,6 @@ function applyStatsViewFilter(view) {
     if (chartsMatrix) chartsMatrix.style.display = 'grid';
     if (simulatorCard) simulatorCard.style.display = 'none';
     if (gatesCard) gatesCard.style.display = 'none';
-    if (marketCard) marketCard.style.display = 'none';
     chartCards.forEach(c => {
       c.style.display = (c.dataset.section === 'monte-carlo') ? '' : 'none';
     });
@@ -1932,7 +1921,6 @@ function applyStatsViewFilter(view) {
     if (chartsMatrix) chartsMatrix.style.display = 'grid';
     if (simulatorCard) simulatorCard.style.display = 'none';
     if (gatesCard) gatesCard.style.display = 'none';
-    if (marketCard) marketCard.style.display = 'none';
     chartCards.forEach(c => {
       c.style.display = (c.dataset.section === 'markout') ? '' : 'none';
     });
@@ -1941,26 +1929,7 @@ function applyStatsViewFilter(view) {
     if (chartsMatrix) chartsMatrix.style.display = 'none';
     if (simulatorCard) simulatorCard.style.display = '';
     if (gatesCard) gatesCard.style.display = 'none';
-    if (marketCard) marketCard.style.display = 'none';
-  } else if (view === 'markets') {
-    if (quantDeck) quantDeck.style.display = 'none';
-    if (chartsMatrix) chartsMatrix.style.display = 'none';
-    if (simulatorCard) simulatorCard.style.display = 'none';
-    if (gatesCard) gatesCard.style.display = 'none';
-    if (marketCard) marketCard.style.display = '';
   }
-}
-
-function initMarketTableFilters() {
-  const pills = document.querySelectorAll('.table-filter-group .filter-pill');
-  pills.forEach(pill => {
-    pill.addEventListener('click', () => {
-      pills.forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-      currentTableFilter = pill.dataset.tableFilter || 'all';
-      if (lastKpi) renderMarkets(lastKpi, lastState);
-    });
-  });
 }
 
 function initSensitivitySimulator() {
@@ -4498,76 +4467,6 @@ function initOrdersTradesTabs() {
   setOrdersTradesView(currentOrdersTradesView);
 }
 
-function renderMarkets(kpi, state, opts) {
-  const force = opts === null || opts === void 0 ? void 0 : opts.force;
-  const body = document.getElementById('market-body');
-  // Skip-if-unchanged guard (#270): idling on Data & Markets, every 2s poll
-  // rebuilt the whole 367-row table even when nothing changed — ~800ms of
-  // main-thread work per poll that every click queued behind. Fingerprint
-  // the rendered inputs and skip the rebuild when they are identical.
-  // Callers that change UI state without changing data (row expansion,
-  // filter pills) pass {force:true} to bypass the guard.
-  const fingerprint = JSON.stringify([kpi && kpi.by_market, state, currentTableFilter, [...expandedMarkets], [...showCancelledByMarket]]);
-  // The innerHTML check keeps a cleared/never-painted table repainting (tab
-  // switch to a fresh page) even when the fingerprint matches.
-  if (!force && body.innerHTML !== '' && renderMarkets.__lastFingerprint === fingerprint) return;
-  renderMarkets.__lastFingerprint = fingerprint;
-  if (!kpi || !kpi.by_market || Object.keys(kpi.by_market).length === 0) {
-    body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">No active markets</td></tr>`;
-    return;
-  }
-
-  // Group orders from /api/state by condition_id
-  const ordersByMarket = groupOrdersByMarket(state?.orders);
-  const fills = state?.fills || [];
-  const graduatedCids = new Set((kpi.funnel?.graduated || []).map(g => g.cid || g.condition_id));
-
-  // Filter entries based on active table filter pill
-  let entries = Object.entries(kpi.by_market);
-  if (currentTableFilter === 'quoting') {
-    entries = entries.filter(([cid, m]) => (m.quotes_count > 0 || (ordersByMarket[cid] || []).some(o => isActiveOrder(o))));
-  } else if (currentTableFilter === 'graduated') {
-    entries = entries.filter(([cid]) => graduatedCids.has(cid));
-  }
-
-  // Market order: OPEN (pure) → mixed OPEN+FILLED → pure FILLED → zero active / IDLE/FINISHED at bottom
-  entries.sort((a,b) => {
-    const [cidA] = a; const [cidB] = b;
-    const activeA = (ordersByMarket[cidA] || []).filter(o => isActiveOrder(o));
-    const activeB = (ordersByMarket[cidB] || []).filter(o => isActiveOrder(o));
-    const rank = (active) => {
-      if (active.length === 0) return 4;
-      const hasOpen = active.some(o => { const v=String(o.status||'').toLowerCase(); return v==='open'||v==='partial'||v==='pending'; });
-      const hasFilled = active.some(o => String(o.status||'').toLowerCase()==='filled');
-      if (hasOpen && !hasFilled) return 1;
-      if (hasOpen && hasFilled) return 2;
-      if (!hasOpen && hasFilled) return 3;
-      return 2;
-    };
-    const ra = rank(activeA), rb = rank(activeB);
-    if (ra !== rb) return ra - rb;
-    if (activeB.length !== activeA.length) return activeB.length - activeA.length;
-    return (a[1].title||'').localeCompare(b[1].title||'');
-  });
-
-  // Build the whole table as a string and assign once: `innerHTML +=` inside
-  // the loop re-parses the accumulated table on every append (~63MB of
-  // parsing for 366 rows) and froze the page switch for seconds (#270).
-  let marketsHtml = '';
-  for (const [cid, m] of entries) {
-    marketsHtml += marketRowPairHtml(cid, m, {
-      isExpanded: expandedMarkets.has(cid),
-      hasOrders: ordersByMarket[cid] && ordersByMarket[cid].length > 0,
-      allOrders: ordersByMarket[cid] || [],
-      showCancelled: showCancelledByMarket.has(cid),
-      fills: state?.fills || [],
-      graduatedCids,
-    });
-  }
-  body.innerHTML = marketsHtml;
-
-  wireMarketRowExpansion(body, ordersByMarket, () => renderMarkets(kpi, state));
-}
 
 /* Build one finished-or-live market's main row and its optional expanded
  * sub-row, in the Data & Markets table shape. Shared with the Orders &
@@ -5422,13 +5321,9 @@ async function pollStatus() {
       renderPortfolioOverview(currentKpi, status);
     }
 
-    // Render KPIs (Tab 2 → rail Reports page) and markets (→ rail Data &
-    // Markets page)
+    // Render KPIs (Tab 2 → rail Reports page)
     if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
       renderKPIs(currentKpi, status);
-    }
-    if (paintable(tab2, document.getElementById('market-body')) && currentKpi) {
-      renderMarkets(currentKpi, lastState);
     }
 
     // Render the Market Filter kanban (Tab 3 → rail Data & Markets page)
@@ -5471,7 +5366,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, renderMarkets, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
+  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,

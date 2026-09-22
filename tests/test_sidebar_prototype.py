@@ -191,16 +191,18 @@ def test_the_analytics_subnav_filters_only_its_own_page():
 
 
 def test_a_subnav_view_with_nothing_on_the_page_is_dropped():
-    # Arrange — Market Inspection filtered a table that now lives on Data &
-    # Markets. A button that can only hide something elsewhere is not a view.
+    # Arrange — Market Inspection was retired with the Data & Markets table:
+    # the kanban and the dashboard's orders table superseded it. Its button
+    # and STATS_VIEW_TARGETS entry are gone, and the prune still runs.
     app = (_STATIC / "app.js").read_text(encoding="utf-8")
     prototype = (_STATIC / "prototype.js").read_text(encoding="utf-8")
 
     # Act
     targets = app.split("const STATS_VIEW_TARGETS = {")[1].split("};")[0]
 
-    # Assert — and the prune runs again after the panels move.
-    assert "markets: '#market-inspection-card'" in targets
+    # Assert — the retired view has no target left, and the prune runs
+    # again after the panels move.
+    assert "#market-inspection-card" not in targets
     assert "function pruneStatsSubnav()" in app
     assert "pruneStatsSubnav()" in prototype
 

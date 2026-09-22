@@ -315,6 +315,62 @@ def test_kpi_report_parity_and_live_fields(tmp_path):
     assert "three_way_divergences" in kpis
 
 
+def test_active_quoting_markets_counts_only_resting_orders(tmp_path):
+    """`active_quoting_markets` counts markets with a resting order NOW —
+    open/partial/pending status — not markets ever quoted.
+
+    `markets_quoted` reads the append-only quotes ledger, so a market quoted
+    once weeks ago counts forever (the retired 'Active Quoting (371)' pill
+    was this lie). A future UI that needs "how many markets is the bot
+    actually quoting right now" must read a count that decays when orders
+    cancel, fill out, or finish.
+    """
+    db_file = tmp_path / "test_active_quote.db"
+    reg = OrderRegistry(db_file)
+    t_now = time.time()
+
+    def _order(local_id, cid, status):
+        reg.create_order(OrderRecord(
+            id=local_id,
+            order_id="ven-" + local_id,
+            condition_id=cid,
+            token_id="tok-" + local_id,
+            side="BUY",
+            price=0.50,
+            original_size=5.0,
+            status=status,
+            posted_ts=int((t_now - 100) * 1000),
+            last_polled_ts=int(t_now * 1000),
+        ))
+
+    # Market with a resting order now → counts.
+    _order("loc-open", "0xresting", "open")
+    # Another resting market → counts.
+    _order("loc-partial", "0xpartial", "partial")
+    # Quoted markets: ledger rows make them count in markets_quoted forever.
+    # One of the two quoted markets has a terminal (filled) order, so only
+    # one of them is actively quoting.
+    reg.log_quote(QuoteRecord(
+        ts=t_now - 100, condition_id="0xfilled", token_id="tok-f",
+        side="UP", price=0.50, size=5.0, local_id="loc-filled",
+    ))
+    _order("loc-filled", "0xfilled", "filled")
+    reg.log_quote(QuoteRecord(
+        ts=t_now - 100, condition_id="0xpartial", token_id="tok-p",
+        side="UP", price=0.50, size=5.0, local_id="loc-partial",
+    ))
+    # Cancelled order → does not count.
+    _order("loc-cancelled", "0xcancelled", "cancelled")
+
+    kpis = generate_kpi_report(db_path=db_file)
+
+    # The lie and the truth, side by side: markets_quoted counts every market
+    # with a quote row (both quoted ones); active_quoting_markets counts only
+    # markets with a resting order right now.
+    assert kpis["markets_quoted"] == 2
+    assert kpis["active_quoting_markets"] == 2  # 0xresting + 0xpartial
+
+
 def test_decide_is_structurally_read_only(tmp_path):
     """Amendment 4: decide must be incapable of sending orders or creating pending orders."""
     db_file = tmp_path / "test_decide.db"

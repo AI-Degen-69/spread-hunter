@@ -103,25 +103,18 @@ def test_poll_skips_offpage_renders_even_when_tab_gates_all_claim_visible():
 
 def test_poll_with_identical_inputs_skips_heavy_data_markets_repaints():
     """#270: idling on the rail's Data & Markets page, every 2s poll rebuilt
-    the whole 367-row markets table and the 8-stage kanban even when nothing
-    changed — ~800ms of main-thread work per poll that every click queued
-    behind (the page "held" ~3s before switching). An identical-input poll
-    must skip both rebuilds; changed inputs must still repaint."""
+    the 8-stage kanban even when nothing changed — ~800ms of main-thread work
+    per poll that every click queued behind (the page "held" ~3s before
+    switching). An identical-input poll must skip the rebuild; changed inputs
+    must still repaint. The markets table this scenario once also covered was
+    retired from Data & Markets — the kanban is the heavy paint that remains,
+    and the dashboard's orders table paints on the home page instead.
+    """
     res = _run("skip-unchanged-heavy-repaint")
 
     assert res["firstPainted"] is True
-    assert res["skippedMarkets"] is True
     assert res["skippedKanban"] is True
-    assert res["repaintedMarkets"] is True
     assert res["repaintedKanban"] is True
-
-
-def test_forced_render_markets_bypasses_the_unchanged_guard():
-    """#270 guard: row expansion re-invokes renderMarkets with identical
-    inputs. The forced path must repaint regardless of the fingerprint."""
-    res = _run("markets-expand-rerenders")
-
-    assert res["forcedRepaint"] is True
 
 
 def test_tab_switch_paints_synchronously_from_cache():
@@ -130,12 +123,13 @@ def test_tab_switch_paints_synchronously_from_cache():
     res = _run("switch-paints-from-cache")
 
     # Assert — panels flipped immediately and Tab 2 repainted from cache,
-    # while the still-hidden Tab 3 stayed untouched.
+    # while the still-hidden Tab 3 stayed untouched. market-body no longer
+    # exists (retired table) and reads back empty.
     assert res["tab1Hidden"] is True
     assert res["tab2Hidden"] is False
     assert res["tab3Hidden"] is True
     assert res["kpiGrid"] != ""
-    assert res["marketBody"] != ""
+    assert res["marketBody"] == ""
     assert res["kanbanBoard"] == ""
 
 

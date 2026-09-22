@@ -324,7 +324,6 @@
         <button class="stats-subnav-btn" type="button" data-view="monte-carlo">Monte Carlo &amp; VaR</button>
         <button class="stats-subnav-btn" type="button" data-view="markout">Adverse Selection</button>
         <button class="stats-subnav-btn" type="button" data-view="simulator" style="display:none !important">Sensitivity Simulator</button>
-        <button class="stats-subnav-btn" type="button" data-view="markets">Market Inspection</button>
       </div>
       <div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px">
         <span class="pulse-dot active" style="width:6px;height:6px"></span>
@@ -537,23 +536,6 @@
     </div>
 
     <!-- Market Inspection Table -->
-    <div class="card" style="margin-top:16px" id="market-inspection-card" data-tier="2" data-section="markets">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-        <div>
-          <div class="font-display" style="font-size:14px">MARKET INSPECTION &amp; ORDERBOOK DEPTH</div>
-          <div style="font-size:11px;color:var(--text-muted)">Click any row to inspect paired maker bids, execution legs, and fill status</div>
-        </div>
-        <div class="table-filter-group" style="display:flex;gap:6px">
-          <button class="filter-pill active" type="button" data-table-filter="all">All Markets</button>
-          <button class="filter-pill" type="button" data-table-filter="quoting">Active Quoting</button>
-          <button class="filter-pill" type="button" data-table-filter="graduated">Graduated</button>
-        </div>
-      </div>
-      <table id="market-table">
-        <thead><tr><th>Market</th><th>Commit ($)</th><th>Hedge</th><th>Realized P&amp;L</th><th>Fills</th><th>Status</th></tr></thead>
-        <tbody id="market-body"></tbody>
-      </table>
-    </div>
   </section>
 
   <!-- ── Tab 3: Market Filter Pipeline (kanban) ── -->

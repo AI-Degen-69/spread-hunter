@@ -42,7 +42,7 @@ UNCATEGORIZED = "Uncategorized"
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 252
+KPI_PAYLOAD_VERSION = 253
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -1548,10 +1548,21 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         c.get("condition_id") for c in closes
         if c.get("condition_id") and c.get("method") == "venue_sync"
     }
+    # Never-traded drop: a market with zero quotes, zero fills, no orders,
+    # and no closes entered by_market only through diagnostic channels (skip
+    # events, venue errors). Binary markets play once, so a skipped or refused
+    # market's row is obsolete the moment the game ends — and carrying
+    # hundreds of them made every dashboard poll download and fingerprint
+    # dead rows. The kanban's rejection buckets still aggregate why markets
+    # were refused this cycle; the dashboard's Data & Markets table shows only
+    # markets the bot quoted, filled, holds orders on, or closed.
+    order_cids = {o.get("condition_id") for o in orders if o.get("condition_id")}
     by_mkt = {
         cid: m for cid, m in by_mkt.items()
         if cid not in resolved_cids
         and not (m.get("days_to_resolve") is not None and m.get("days_to_resolve") < 0)
+        and (m["quotes_count"] > 0 or m["fills_count"] > 0
+             or cid in order_cids or m["settlements"])
     }
 
     balances = [m["balance"] for m in by_mkt.values() if m["balance"] is not None]
@@ -2165,6 +2176,16 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
 
         # Pace
         "markets_quoted": len({q["condition_id"] for q in quotes if q.get("condition_id")}),
+        # Markets with a resting order RIGHT NOW (open/partial/pending).
+        # `markets_quoted` reads the append-only quotes ledger, so it never
+        # decays: a market quoted once weeks ago counts forever — the lie the
+        # retired 'Active Quoting (371)' pill was built on. A future UI that
+        # needs "how many markets is the bot actually quoting" reads this.
+        "active_quoting_markets": len({
+            o.get("condition_id") for o in orders
+            if o.get("condition_id")
+            and str(o.get("status") or "").lower() in ("open", "pending", "partial")
+        }),
         "markets_filled": len({f["condition_id"] for f in fills if f.get("condition_id")}),
         "markets_settled": len(closes),
         "fills": len(fills),

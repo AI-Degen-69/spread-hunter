@@ -31,7 +31,7 @@ import pytest
 
 from core_brain import kpi as kpi_mod
 from core_brain.kpi import report
-from core_brain.order_registry import SCHEMA, CloseRecord, MarketEventRecord, OrderRegistry, QuoteRecord, ResolutionRecord
+from core_brain.order_registry import SCHEMA, CloseRecord, MarketEventRecord, OrderRegistry, QuoteRecord, ResolutionRecord, VenueErrorRecord
 from pathlib import Path
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / 'dashboard' / 'static'
@@ -209,9 +209,11 @@ def test_markets_only_refused_are_not_counted_as_traded(seeded_db):
     ))
     data = report(db_path=seeded_db, run_id=RUN)
 
-    # The refused market is still visible in the funnel and the drill-down...
-    assert "0xmarket_blocked" in data["by_market"]
-    # ...but the portfolio counts the two markets that actually traded.
+    # The refused market never reached by_market at all: it was skipped
+    # before any quote landed, and binary markets play once, so its audit
+    # line is obsolete (the kanban still shows the refusal this cycle).
+    assert "0xmarket_blocked" not in data["by_market"]
+    # ...and the portfolio counts the two markets that actually traded.
     assert data["portfolio"]["markets_count"] == 2
 
 
@@ -282,9 +284,13 @@ def test_markets_table_links_the_market_name_to_polymarket(seeded_db, markets_fe
 
 
 def test_markets_table_renders_name_as_link_and_category_column():
-    """The rendered table has a Category header and an anchor in the name cell."""
-    assert "Market" in _read_static("index.html")  # table header in static HTML
-    assert "renderMarkets" in _read_static("app.js")  # market rendering in JS
+    """The market-link renderer survives the Data & Markets table retirement:
+    market names still link to Polymarket from the tables that remain (the
+    dashboard's Orders & Trades views read kpi.by_market through the same
+    marketCell/marketLink helpers).
+    """
+    assert "marketLink" in _read_static("app.js")
+    assert "polymarket.com" in _read_static("app.js")
 
 
 # --------------------------------------------------------------------------
@@ -340,6 +346,48 @@ def test_resolved_market_drops_from_by_market_via_venue_sync_close(temp_db, tmp_
     assert "0xopen" in data["by_market"]
 
 
+def test_never_traded_markets_drop_out_of_by_market(temp_db, monkeypatch):
+    """Markets the bot only TOUCHED (skip events / venue errors — zero quotes,
+    zero fills, no orders) never reach by_market at all.
+
+    Binary markets play once: a skipped or refused market is a one-time thing,
+    its audit line is obsolete the moment the game ends, and carrying the
+    entries in /api/kpi made every dashboard poll download and fingerprint
+    hundreds of dead rows. The kanban's rejection buckets still aggregate
+    why markets were refused this cycle.
+
+    How to verify:
+        Open the dashboard → Data & Markets. The table lists only markets
+        the bot quoted, filled, or holds orders on; there is no 'TOUCHED BUT
+        NEVER TRADED' section and no skip-only market rows.
+    """
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", Path("_nonexistent_repo_root"))
+    reg = OrderRegistry(temp_db, run_id=RUN)
+
+    # Traded market: a quote lands it a row.
+    reg.log_quote(QuoteRecord(
+        ts=time.time() - 10, condition_id="0xtraded", token_id="tok",
+        side="UP", price=0.47, size=20, market_slug="traded",
+    ))
+    # Never-traded: skip event only.
+    reg.log_market_event(MarketEventRecord(
+        ts=time.time() - 10, condition_id="0xskipped", kind="SKIP",
+        reason="depth", reason_code="THIN_BOOK", run_id=RUN,
+    ))
+    # Never-traded: venue error only.
+    reg.log_venue_error(VenueErrorRecord(
+        ts=time.time() - 10, condition_id="0xerrored",
+        side=None, price=None, size=None,
+        error_code="REJECTED", raw_error_msg="rejected", run_id=RUN,
+    ))
+
+    data = report(db_path=temp_db, run_id=RUN)
+    by_mkt = data["by_market"]
+    assert "0xtraded" in by_mkt
+    assert "0xskipped" not in by_mkt
+    assert "0xerrored" not in by_mkt
+
+
 def test_resolved_market_drops_when_ranker_records_negative_days_to_resolve(temp_db, tmp_path, monkeypatch):
     """A market whose end date passed (days_to_resolve < 0 in runtime/markets.json)
     leaves "MARKETS IN RUN" even without a closes row yet.
@@ -354,7 +402,17 @@ def test_resolved_market_drops_when_ranker_records_negative_days_to_resolve(temp
     ]), encoding="utf-8")
     monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
 
-    reg = OrderRegistry(temp_db)
+    reg = OrderRegistry(temp_db, run_id=RUN)
+    # Both markets carry a quote so the live one survives the never-traded
+    # drop on its own trading record, not just a decision event.
+    reg.log_quote(QuoteRecord(
+        ts=time.time() - 10, condition_id="0xexpired", token_id="tok",
+        side="UP", price=0.47, size=20, market_slug="expired",
+    ))
+    reg.log_quote(QuoteRecord(
+        ts=time.time() - 10, condition_id="0xlive", token_id="tok",
+        side="UP", price=0.47, size=20, market_slug="live",
+    ))
     reg.log_market_event(MarketEventRecord(
         ts=time.time() - 10, condition_id="0xexpired", kind="DECISION",
         reason="quoting", reason_code="INTENT_GENERATED", run_id=RUN,

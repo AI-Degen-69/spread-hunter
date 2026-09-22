@@ -360,13 +360,17 @@ def test_dashboard_reads_exactly_where_the_registry_writes():
 
 
 def test_milestone8_html_contains_required_sections():
-    """Milestone 8 requirement: UI components for 3 levels, exposure chart, and run selector exist in HTML."""
+    """Milestone 8 requirement: UI components for 3 levels, exposure chart, and run selector exist in HTML.
+
+    The market inspection table was retired from Data & Markets (kanban +
+    dashboard orders table superseded it), so it is asserted ABSENT here.
+    """
     assert "kpi-grid" in _read_static("index.html")
     assert "exposure-bar" in _read_static("index.html")
     assert "service-cards" in _read_static("index.html")
     assert "event-ticker" in _read_static("index.html")
     assert "cancel-modal" not in _read_static("index.html")
-    assert "market-table" in _read_static("index.html")
+    assert "market-table" not in _read_static("index.html")
     assert "tab-switcher" in _read_static("index.html")
     assert "info-bubble" in _read_static("app.js")  # generated dynamically by JS
 
@@ -776,14 +780,13 @@ def test_active_orders_panel_js_filter_present():
     """The 'Active Pair Orders' panel must hide filled/cancelled rows client-side.
 
     The state half of this regression moved to test_registry_state.py
-    (test_state_returns_all_orders_including_terminal); here only the
-    template contract is pinned: the JS filter exists, the empty-state copy
-    points at the Fills Timeline, and the server does NOT pre-filter.
+    (test_state_returns_all_orders_including_terminal). The Data & Markets
+    inspection table was retired (the kanban + the dashboard's orders table
+    superseded it), so the template contract here is only that the orders
+    table renderer and its client-side filter still exist.
     """
-    assert "market-table" in _read_static("index.html")
-    assert "renderMarkets" in _read_static("app.js")
-    assert "renderMarkets" in _read_static("app.js")
-    assert "market-table" in _read_static("index.html")
+    assert "renderOrdersTrades" in _read_static("app.js")
+    assert "isActiveOrder" in _read_static("app.js")
 
 
 def test_api_state_does_not_pre_filter_orders(client, temp_db):
@@ -1345,18 +1348,17 @@ def test_styles_css_has_expandable_row_styles():
 
 
 def test_market_table_has_clickable_role(tmp_path):
-    """The market table HTML has the right ARIA structure for interactive rows."""
+    """Retired with the Data & Markets inspection table. The expandable-row
+    behaviour it pinned lives on in the Orders & Trades CLOSED TRADES view,
+    which reuses the same row shape; test_app_js_has_expandable_market_rows
+    pins that, and the kanban covers the market pipeline view.
+    """
     html = _read_static("index.html")
-    # The table container exists
-    assert "market-table" in html
-    assert "market-body" in html
-    # app.js wires up the interactivity
-    app_js = _read_static("app.js")
-    assert "renderMarkets" in app_js
-    assert "groupOrdersByMarket" in app_js
-    # The state data (orders + fills) is fetched and passed to renderMarkets
-    assert "state?.orders" in app_js
-    assert "state?.fills" in app_js or "state?.fills" in app_js.replace(' ', '')
+    assert "market-table" not in html
+    assert "market-body" not in html
+    assert "market-inspection-card" not in html
+    # The renderer itself is gone from app.js too.
+    assert "function renderMarkets(" not in _read_static("app.js")
 
 
 # ── Screener kanban tab (Tab 3) ──
@@ -2006,325 +2008,19 @@ def test_market_link_generates_safe_hyperlinks():
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_market_table_headers_and_cells_alignment():
-    """Assert Market Inspection table has 6 headers and rendered cells align correctly.
+    """Retired with the Data & Markets inspection table.
 
-    How to verify:
-        Prerequisite: Node.js installed and on PATH.
-        PowerShell:
-            python -m pytest tests/test_dashboard_server.py -k test_market_table_headers_and_cells_alignment
-        Expected output: 1 passed.
+    The table this test parsed (#market-table, 6 aligned cells rendered by
+    renderMarkets) is gone from Data & Markets -- the kanban shows the
+    pipeline and the dashboard's Orders & Trades table shows the orders.
+    The surviving tables keep their own shape tests (orders_trades_harness).
     """
     index_html = _read_static("index.html")
-    # Parse table headers strictly from the #market-table thead row
     import re
-    table_match = re.search(r'<table id="market-table">.*?<thead><tr>(.*?)</tr></thead>', index_html, re.DOTALL)
-    assert table_match is not None, "Could not find #market-table thead in index.html"
-    import html as html_mod
-    # index.html escapes the ampersand, as HTML must. Compare the rendered
-    # text, not the source bytes.
-    th_matches = [html_mod.unescape(h)
-                  for h in re.findall(r"<th>(.*?)</th>", table_match.group(1))]
-
-    # Market table headers in exact order
-    expected_headers = ["Market", "Commit ($)", "Hedge", "Realized P&L", "Fills", "Status"]
-    assert th_matches == expected_headers, f"Headers mismatch in index.html: expected {expected_headers}, got {th_matches}"
-
-    harness = Path(__file__).resolve().parent / "js" / "render_markets_harness.cjs"
-    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
-
-    res = subprocess.run(
-        [NODE, str(harness), str(app_js)],
-        capture_output=True, text=True, timeout=60,
-    )
-    assert res.returncode == 0, res.stderr
-    out = json.loads(res.stdout)
-
-    assert out.get("rendered") is True, f"Render failed: {out}"
-    assert out.get("cellCount") == 6, f"Expected 6 cells, got {out.get('cellCount')}: {out}"
-
-    # Row 1 with positive Realized P&L
-    cells = out["cells"]
-    # 0: Market (title, slug, link, badge)
-    assert "Will BTC hit 100k by March?" in cells[0]
-    # 1: Commit ($) -> $42.50
-    assert "$42.50" in cells[1]
-    # 2: Hedge -> Hedged
-    assert "Hedged" in cells[2]
-    assert "$" not in cells[2]
-    # 3: Realized P&L -> $15.75
-    assert "$15.75" in cells[3]
-    assert "$15.75" not in cells[1]
-    assert "$15.75" not in cells[2]
-    # 4: Fills -> plain fill count (7), not hedge text
-    assert cells[4] == "7"
-    assert "Hedged" not in cells[4]
-    # 5: Status -> QUOTING
-    assert "QUOTING" in cells[5]
-
-    # Row 2 with null Realized P&L (cell 3 should render '--')
-    null_cells = out.get("nullPnlCells", [])
-    assert len(null_cells) == 6, f"Expected 6 cells for null PnL market, got {len(null_cells)}"
-    assert null_cells[3] == "--", f"Expected '--' for null realized_pnl, got {null_cells[3]}"
-
-
-def test_account_sweep_endpoint(client, monkeypatch):
-    """/api/account/sweep triggers an account sweep and returns starting capital."""
-    # When POLY_FUNDER is not configured
-    monkeypatch.delenv("POLY_FUNDER", raising=False)
-    res_unconfigured = client.post("/api/account/sweep")
-    assert res_unconfigured.status_code == 400
-    assert res_unconfigured.json()["ok"] is False
-
-    # When POLY_FUNDER is configured
-    monkeypatch.setenv("POLY_FUNDER", "0x1234567890123456789012345678901234567890")
-    import core_brain.order_manager as om
-    monkeypatch.setattr(om, "account_sweep", lambda quiet=True, db_path=None: {
-        "account_value_usd": 92.50,
-        "collateral_usd": 92.50,
-        "positions_value_usd": 0.0,
-    })
-    res = client.post("/api/account/sweep")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["ok"] is True
-    assert data["starting_capital"] == 92.50
-    assert data["sweep"]["account_value_usd"] == 92.50
-
-
-@pytest.mark.skipif(NODE is None, reason="node not installed")
-def test_master_stop_button_state_management():
-    """Verify master STOP button disables on click, stays disabled during polling, and reflects stack state.
-
-    Covers Issue #208 acceptance criteria:
-    - STOP button disables when clicked and shows STOPPING… loading feedback.
-    - Periodic polling / renderServiceCards does not re-enable it while stop is in-flight.
-    - Clicking STOP while already stopping is guarded against double-POST.
-    - STOP button reflects stack state (enabled when running, disabled when stopped).
-    """
-    node_script = """
-const fs = require('fs');
-const appJsPath = process.argv[1];
-
-const log = { fetches: [] };
-function fakeClassList() {
-  const set = new Set();
-  return {
-    add: (c) => set.add(c),
-    remove: (c) => set.delete(c),
-    contains: (c) => set.has(c),
-    // A real classList has toggle; the dashboard's poll loop uses it (the
-    // stale-backend note, the carousel's active tab), so a stub without it
-    // fails the poll rather than the behaviour under test.
-    toggle: (c, force) => {
-      const on = force === undefined ? !set.has(c) : !!force;
-      if (on) set.add(c); else set.delete(c);
-      return on;
-    },
-  };
-}
-
-class FakeEl {
-  constructor(id) {
-    this.id = id;
-    this._html = '';
-    this.className = '';
-    this.textContent = '';
-    this.title = '';
-    this.style = {};
-    this.dataset = {};
-    this.classList = fakeClassList();
-    this.disabled = false;
-    this._listeners = {};
-  }
-  set innerHTML(v) { this._html = String(v); }
-  get innerHTML() { return this._html; }
-  addEventListener(ev, fn) {
-    if (!this._listeners[ev]) this._listeners[ev] = [];
-    this._listeners[ev].push(fn);
-  }
-  async dispatch(ev) {
-    const fns = this._listeners[ev] || [];
-    for (const fn of fns) {
-      await fn();
-    }
-  }
-  querySelectorAll() { return []; }
-  appendChild() {}
-  setAttribute(k, v) { this._attrs = this._attrs || {}; this._attrs[k] = v; }
-  getAttribute(k) { return (this._attrs && this._attrs[k] !== undefined) ? this._attrs[k] : null; }
-}
-
-const elements = new Map();
-global.document = {
-  getElementById(id) {
-    if (!elements.has(id)) elements.set(id, new FakeEl(id));
-    return elements.get(id);
-  },
-  querySelectorAll() { return []; },
-  createElement() { return new FakeEl('created'); },
-  addEventListener() {},
-  body: new FakeEl('body'),
-};
-global.window = { addEventListener() {}, matchMedia: () => ({ matches: false }) };
-global.CONTROL_TOKEN = 'harness-token';
-global.EventSource = function () { return { addEventListener() {}, close() {} }; };
-global.setInterval = () => 0;
-global.alert = () => {};
-global.prompt = () => null;
-
-let stopFetchResolver = null;
-global.fetch = async (p, opts) => {
-  const method = (opts && opts.method) || 'GET';
-  const pathStr = String(p);
-  log.fetches.push({ path: pathStr, method });
-
-  if (pathStr.includes('/api/system/stop')) {
-    if (stopFetchResolver) {
-      await new Promise((r) => { stopFetchResolver = r; });
-    }
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        ok: true,
-        message: 'Bot stopped',
-        status: {
-          bot_state: 'STOPPED',
-          services: {
-            filter: { running: false },
-            query: { running: false },
-            decide: { running: false },
-          },
-        },
-      }),
-      text: async () => '',
-    };
-  }
-
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({
-      bot_state: 'STOPPED',
-      services: {},
-    }),
-    text: async () => '',
-  };
-};
-
-global.localStorage = {
-  _v: {},
-  getItem(k) { return Object.prototype.hasOwnProperty.call(this._v, k) ? this._v[k] : null; },
-  setItem(k, v) { this._v[k] = String(v); },
-};
-
-const mod = { exports: {} };
-new Function('module', 'exports', 'document', 'window', 'localStorage', 'EventSource',
-             fs.readFileSync(appJsPath, 'utf8'))(
-  mod, mod.exports, global.document, global.window,
-  global.localStorage, global.EventSource);
-const app = mod.exports;
-
-const RUNNING_STACK = {
-  bot_state: 'RUNNING',
-  services: {
-    filter: { running: true }, query: { running: true },
-    decide: { running: true }, dash: { running: true },
-  },
-};
-
-(async () => {
-  const masterStopBtn = document.getElementById('btn-master-stop');
-  const masterIndicator = document.getElementById('master-status-indicator');
-
-  // The indicator carries its label in aria-label since the pulse-dot span
-  // lives in innerHTML; the STOPPING… branch still writes textContent.
-  const indText = (el) => el.getAttribute('aria-label') || el.textContent;
-
-  // 1. Initial running state: STOP button should be enabled
-  app.renderServiceCards(RUNNING_STACK, null, null);
-  const initialStopDisabled = masterStopBtn.disabled;
-  const initialIndicatorText = indText(masterIndicator);
-
-  // 2. Click STOP with an in-flight request
-  const stopPromiseGate = new Promise((resolve) => {
-    stopFetchResolver = resolve;
-  });
-
-  const clickPromise = masterStopBtn.dispatch('click');
-
-  // Mid-flight state checks
-  const inFlightDisabled = masterStopBtn.disabled;
-  const inFlightHtml = masterStopBtn.innerHTML;
-  const inFlightIndicatorText = masterIndicator.textContent;
-  const isStoppingFlagDuringFlight = app.isStopping;
-
-  // While in flight, simulate periodic background polling renderServiceCards with RUNNING status!
-  // It MUST NOT re-enable the button or clear the STOPPING indicator!
-  app.renderServiceCards(RUNNING_STACK, null, null);
-  const stillDisabledDuringPoll = masterStopBtn.disabled;
-  const stillStoppingIndicatorDuringPoll = indText(masterIndicator);
-
-  // Try clicking again while in-flight (should be ignored due to guard)
-  await masterStopBtn.dispatch('click');
-  const totalStopFetchesWhileInFlight = log.fetches.filter(f => f.path.includes('/api/system/stop')).length;
-
-  // Release the in-flight stop request
-  stopFetchResolver();
-  await clickPromise;
-
-  // 3. Post-stop state
-  const postStopDisabled = masterStopBtn.disabled;
-  const postStopHtml = masterStopBtn.innerHTML;
-  const isStoppingFlagAfter = app.isStopping;
-  const postStopIndicatorText = indText(masterIndicator);
-
-  process.stdout.write(JSON.stringify({
-    initialStopDisabled,
-    initialIndicatorText,
-    inFlightDisabled,
-    inFlightHtml,
-    inFlightIndicatorText,
-    isStoppingFlagDuringFlight,
-    stillDisabledDuringPoll,
-    stillStoppingIndicatorDuringPoll,
-    totalStopFetchesWhileInFlight,
-    postStopDisabled,
-    postStopHtml,
-    isStoppingFlagAfter,
-    postStopIndicatorText,
-  }));
-})();
-"""
-    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
-    res = subprocess.run(
-        [NODE, "-e", node_script, str(app_js)],
-        capture_output=True, text=True, encoding="utf-8", timeout=60,
-    )
-    assert res.returncode == 0, res.stderr
-    out = json.loads(res.stdout)
-
-    # Criteria 4: Enabled when stack is running
-    assert out["initialStopDisabled"] is False
-    assert "STACK RUNNING" in out["initialIndicatorText"]
-
-    # Criteria 1 & 2: Disables immediately when clicked, visual feedback STOPPING…
-    assert out["inFlightDisabled"] is True
-    assert "STOPPING…" in out["inFlightHtml"]
-    assert "STACK STOPPING" in out["inFlightIndicatorText"]
-    assert out["isStoppingFlagDuringFlight"] is True
-
-    # Criteria 1 & 3: Background poll does NOT re-enable button while stop is in-flight
-    assert out["stillDisabledDuringPoll"] is True
-    assert "STACK STOPPING" in out["stillStoppingIndicatorDuringPoll"]
-
-    # In-flight repeated click was ignored (no double-POST)
-    assert out["totalStopFetchesWhileInFlight"] == 1
-
-    # Criteria 3 & 4: Post-stop state resets flag, button disabled because stack is stopped, text reset
-    assert out["isStoppingFlagAfter"] is False
-    assert out["postStopDisabled"] is True
-    assert "STOP RUN" in out["postStopHtml"]
-    assert "STACK STOPPED" in out["postStopIndicatorText"]
+    assert re.search(r'<table id="market-table">', index_html) is None
+    assert '<tbody id="market-body">' not in index_html
+    assert "function renderMarkets(" not in _read_static("app.js")
+    # The orders table the dashboard page still renders keeps its harness.
+    assert (Path(__file__).resolve().parent / "js" / "orders_trades_harness.cjs").exists()
 
 

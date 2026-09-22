@@ -53,7 +53,7 @@ const PAGE_LAYOUT = [
     label: 'Data & Markets',
     icon: 'M8 2.2c2.9 0 5 .8 5 1.8s-2.1 1.8-5 1.8-5-.8-5-1.8 2.1-1.8 5-1.8z M3 4v8c0 1 2.1 1.8 5 1.8s5-.8 5-1.8V4 M3 8c0 1 2.1 1.8 5 1.8s5-.8 5-1.8',
     note: 'What the Market Filter saw on its last scan.',
-    selectors: ['#screener-header', '#kanban-carousel-container', '#market-inspection-card'],
+    selectors: ['#screener-header', '#kanban-carousel-container'],
   },
   {
     page: 'strategy',

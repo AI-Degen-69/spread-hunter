@@ -45,7 +45,6 @@ TIER_BY_CARD = {
     "card-markout": "1",
     "card-hist-kde": "2",
     "card-prob-bell": "2",
-    "market-inspection-card": "2",
     "card-monte-carlo": "3",
     "card-sensitivity-simulator": "3",
 }
