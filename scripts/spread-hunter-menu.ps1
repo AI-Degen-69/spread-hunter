@@ -1,6 +1,6 @@
 # SPREAD HUNTER - CONTROL CENTER
 # Standalone menu for the spread hunter execution engine
-# (C:\Users\Tiger\Agents\Projects\spread-hunter-live).
+# (C:\Users\Tiger\Agents\Projects\spread-hunter).
 #
 # Usage:
 #   .\scripts\spread-hunter-menu.ps1          # interactive menu (press 1-9/q, no Enter; one choice, then exits)

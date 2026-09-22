@@ -1,6 +1,6 @@
 # Spread Hunter
 
-[![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/AI-Degen-69/spread-hunter-live?utm_source=oss&utm_medium=github&utm_campaign=AI-Degen-69%2Fspread-hunter-live&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
+[![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/AI-Degen-69/spread-hunter?utm_source=oss&utm_medium=github&utm_campaign=AI-Degen-69%2Fspread-hunter&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
 
 A dedicated **real-money execution engine and operations dashboard** for the Polymarket
 **spread hunter** strategy: buy a complete outcome set for less than it pays, then merge it
@@ -67,7 +67,7 @@ merge is the exit and the P&L event.
 ## Repository layout
 
 ```text
-spread-hunter-live/
+spread-hunter/
   core_brain/             Core trading & execution engine
   dashboard/              Operations dashboard (:8799) + SPA
   scripts/                Market Filter, filter loop, watchdog, PowerShell control center

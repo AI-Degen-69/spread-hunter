@@ -560,7 +560,7 @@ def test_the_rail_ends_in_the_links_the_operator_leaves_for():
     # Act / Assert
     assert "proto-rail-divider" in js
     assert "https://polymarket.com" in js
-    assert "https://github.com/AI-Degen-69/spread-hunter-live" in js
+    assert "https://github.com/AI-Degen-69/spread-hunter" in js
     assert 'rel' in js and 'noopener' in js
 
 

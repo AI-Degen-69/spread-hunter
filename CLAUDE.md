@@ -157,7 +157,7 @@ Overall average: **60-90% token reduction** on common development operations.
 
 ## GBrain search guidance
 
-This repo is indexed in gbrain as source `spread-hunter-live`, pinned by `.gbrain-source` in
+This repo is indexed in gbrain as source `spread-hunter`, pinned by `.gbrain-source` in
 the repo root, so the commands below route here without a `--source` flag.
 
 **Prefer gbrain over Grep for structural questions** — who calls a symbol, where
@@ -183,7 +183,7 @@ hook) and nightly at 03:00; uncommitted work in progress is not in it. To
 refresh now:
 
 ```bash
-gbrain sync --source spread-hunter-live --strategy code
+gbrain sync --source spread-hunter --strategy code
 ```
 
 ## Design System

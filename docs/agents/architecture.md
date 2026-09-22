@@ -3,7 +3,7 @@
 ## Layout
 
 ```
-spread-hunter-live/
+spread-hunter/
   core_brain/             Core trading & execution engine
     quotes.py             THE decision layer: where to rest both legs, and why not to
     risk.py               Sizing ladder, inventory skew, dollar caps, hard blocks

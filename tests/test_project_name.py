@@ -1,13 +1,9 @@
 """Project name guard (issue #283): the product is 'Spread Hunter', not 'Live'.
 
-Scans in-scope files for leftover `Live` name variants. A small allow-list
-covers lines that must keep the old text:
-- github.com URLs: the repo itself is still named spread-hunter-live
-  (owner renames it in settings; links follow in a second pass).
-- local folder-path reality (the checkout dir still carries the old name).
-- gbrain source pin/commands: the external index is still registered under the
-  old name, so the pin follows the repo/folder rename, not this change.
-- docs history: runs, old plans/specs, old showcase pages.
+Scans in-scope files for leftover `Live` name variants. The GitHub repo, the
+local checkout folder, the gbrain source pin, and all URLs have been renamed to
+`spread-hunter`, so no live file should carry the old name. The only allowance
+is docs history: runs, old plans/specs, and old showcase pages.
 """
 from __future__ import annotations
 
@@ -28,23 +24,11 @@ ALLOW_DIRS = {
 }
 
 ALLOW_FILES = {
-    pathlib.Path("docs/agents/git-workflow.md"),  # Repo: line names the GitHub repo
-    pathlib.Path("docs/agents/architecture.md"),  # folder tree = real checkout dir
     pathlib.Path("tests/test_project_name.py"),  # this guard lists the variants
 }
 
 # (relative path, substring): lines that must keep the old text and why.
-ALLOW_LINES = {
-    ("README.md", "AI-Degen-69/spread-hunter-live"): "GitHub repo URL",
-    ("README.md", "spread-hunter-live/"): "folder tree = real checkout dir",
-    ("dashboard/static/prototype.js", "github.com"): "repo link in nav rail",
-    ("tests/test_sidebar_prototype.py", "github.com"): "asserts the repo link",
-    ("scripts/spread-hunter-menu.ps1", "Projects\\spread-hunter-live"): "real path comment",
-    ("AGENTS.md", "spread-hunter-live"): "gbrain source pin/commands",
-    ("CLAUDE.md", "spread-hunter-live"): "gbrain source pin/commands",
-    (".gbrain-source", "spread-hunter-live"): "external index pin",
-    (".mcp.json", "spread-hunter-live"): "real machine path",
-}
+ALLOW_LINES = {}
 
 # Not name carriers: VCS and tool caches, virtualenvs, build output, generated
 # runtime state, agent-harness dirs, and the agent's own work artifacts.
