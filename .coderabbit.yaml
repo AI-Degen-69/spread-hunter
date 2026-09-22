@@ -1,0 +1,53 @@
+# CodeRabbit configuration — Tiger's global vocabulary
+#
+# Canonical home: ~/.agents/config/coderabbit/.coderabbit.yaml
+# Synced into repository roots by ~/.agents/scripts/sync-coderabbit.ps1
+# (CodeRabbit reads YAML only from the git repo root or a central
+#  coderabbit repo — never from a local path — so each repo carries a copy.)
+#
+# This file is intentionally MINIMAL: anything omitted here continues to be
+# governed by the CodeRabbit UI settings, per repo.
+#
+# NOTE for repos with an existing richer .coderabbit.yaml (crypto-spread):
+# do NOT replace that file with this one. Merge the reviews.* blocks below
+# into it instead (the sync script skips such files on purpose).
+
+reviews:
+  # PR titles use Tiger's tag vocabulary — what changed in the world, in plain
+  # English, understandable by a high-schooler. Conventional-Commits types stay
+  # at the commit level only (that is what machines read).
+  auto_title_instructions: >-
+    Title format: "[TAG] short plain-English summary". The summary must be
+    understandable by a high-schooler, with no abbreviations. Choose exactly
+    one TAG:
+    [ADD] new capability on top of what exists
+    [CREATE] a new file, module or service
+    [FIX] wrong behaviour corrected
+    [IMPROVE] same behaviour, better
+    [REFACTOR] moved or renamed, behaviour unchanged
+    [OPTIMIZE] faster or cheaper
+    [TEST] tests only
+    [DOCUMENT] docs only
+    [FORMAT] whitespace, layout, lint
+    [UPDATE] dependency or data refresh
+    [CONFIGURE] settings, workflows, tooling
+    [REVERT] undo a previous change
+
+  # Enforce the vocabulary: a PR whose title does not match the TAG format
+  # cannot merge (request_changes_workflow blocks on error-level checks).
+  pre_merge_checks:
+    title:
+      mode: error
+      requirements: >-
+        Title must start with exactly one of the TAGs: [ADD], [CREATE], [FIX],
+        [IMPROVE], [REFACTOR], [OPTIMIZE], [TEST], [DOCUMENT], [FORMAT],
+        [UPDATE], [CONFIGURE], [REVERT] — followed by a short plain-English
+        summary understandable by a high-schooler, with no abbreviations.
+
+  # Secret scanning on every review: the repos trade on Polymarket and carry
+  # wallet keys — a leaked key is far more expensive than a scan.
+  tools:
+    betterleaks:
+      enabled: true
+    trufflehog:
+      enabled: true

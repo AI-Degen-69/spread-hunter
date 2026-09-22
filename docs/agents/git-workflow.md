@@ -12,56 +12,36 @@ executes them directly, and keeps the operator informed with concise status upda
 (e.g., `Working on [branch]...`, `Committed & Pushed...`, `PR Opened #...`, `Merged PR #...`).
 No operator sign-off is required.
 
-## Tags
-
-One vocabulary, used for the PR title, the branch name and the commit type:
-
-| Tag | Use it for | Branch prefix | Commit type |
-| --- | --- | --- | --- |
-| `[ADD]` | new capability on top of what exists | `add/` | `feat` |
-| `[CREATE]` | a new file, module or service | `create/` | `feat` |
-| `[FIX]` | wrong behaviour corrected | `fix/` | `fix` |
-| `[IMPROVE]` | same behaviour, better | `improve/` | `refactor` |
-| `[REFACTOR]` | moved or renamed, behaviour unchanged | `refactor/` | `refactor` |
-| `[OPTIMIZE]` | faster or cheaper | `optimize/` | `perf` |
-| `[TEST]` | tests only | `test/` | `test` |
-| `[DOCUMENT]` | docs only | `document/` | `docs` |
-| `[FORMAT]` | whitespace, layout, lint | `format/` | `style` |
-| `[UPDATE]` | dependency or data refresh | `update/` | `chore` |
-| `[CONFIGURE]` | settings, workflows, tooling | `configure/` | `chore` |
-| `[REVERT]` | undo a previous change | `revert/` | `revert` |
-
-This table is the full list of commit types for this repo, including `style` and `revert`,
-which `.claude/rules/ecc/common/git-workflow.md` omits.
-
 ## Commits
 
-Conventional commits, imperative, one logical change per commit. The scope is the package
-name — `fix(core_brain): size pair completion against the asks ladder`.
+Conventional Commits format: `<type>(<scope>): <imperative summary>` —
+`fix(dashboard): anchor portfolio card to database marks`.
+
+Types in use: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `style`, `chore`,
+`revert`. The scope is the package name. One logical change per commit; do not mix
+formatting with behavior or refactors with features.
 
 Never commit `.env`, keys, `data/*.db`, or logs. Commit as work completes rather than
 batching a day's edits.
 
 ## Branches
 
-Never commit straight to `main`. One branch per change, named `<prefix><short-slug>` from
-the table — `fix/pair-completion-sizing`.
+Never commit straight to `main`. One branch per change, named `<type>/<short-kebab-desc>`
+using the commit type — `fix/pair-completion-sizing`, `feat/live-portfolio-card`,
+`docs/agent-handbook-refresh`.
 
 ## Pull requests
 
-Push the branch, then open the PR with `gh pr create`. CodeRabbit is configured in its
-repository UI to generate both the title and the summary, so the PR is opened with
-**placeholders**, not with text you wrote:
+Push the branch, then open the PR with `gh pr create`:
 
 ```bash
-gh pr create --title "@coderabbitai" --body-file pr-body.md   # write pr-body.md first, outside the repo
+gh pr create --title "fix(dashboard): anchor portfolio card to database marks" --body-file pr-body.md
 ```
 
-- **Title: the literal string `@coderabbitai`.** This is the auto-title placeholder.
-  CodeRabbit replaces it with `[TAG] short plain-English title a high-schooler
-  understands`, per the auto-title instructions set in its UI. Do not write the title
-  yourself — a hand-written title suppresses nothing, it just means the configured format
-  is never applied.
+- **Title: Conventional Commits format** (`<type>(<scope>): <summary>`), written by the
+  agent. The `[TAG]` placeholder vocabulary was retired 2026-09-22 — CodeRabbit's UI
+  auto-title instructions (if still configured) will simply not match; that is expected
+  and harmless.
 - **Body: must contain the line `@coderabbitai summary`.** This is the high-level summary
   placeholder. CodeRabbit replaces that line with a five-bullet plain-English summary. The
   rest of the body is yours.
@@ -90,9 +70,9 @@ full-suite output is not required at the review/PR stations.
 <the same How to verify block given to the operator — see docs/agents/verifying.md>
 ````
 
-After opening, check the PR: if the title still reads `@coderabbitai` or the body still
-reads `@coderabbitai summary` after a few minutes, CodeRabbit did not run. Fix the title
-by hand rather than leaving a placeholder as the PR title.
+After opening, check the PR: if the body still reads `@coderabbitai summary` after a few
+minutes, CodeRabbit did not process it — re-post the line as its own comment rather than
+leaving an unprocessed placeholder.
 
 **These two placeholders are the only permitted uses of the `@coderabbitai` handle at PR
 creation.** They do not trigger a review. The review must be triggered explicitly after the
@@ -107,11 +87,10 @@ would silently override every UI setting.
 
 #### Where the handle is allowed
 
-`@coderabbitai` may appear in exactly five places, and nowhere else:
+`@coderabbitai` may appear in exactly four places, and nowhere else:
 
 | Use | Where |
 | --- | --- |
-| `@coderabbitai` | the PR **title** placeholder, set once at creation |
 | `@coderabbitai summary` | one line in the PR **body**, set once at creation |
 | `@coderabbitai review` | its own comment, **only** to answer a "Trigger review" notice |
 | `@coderabbitai resolve` | its own comment, closing only replied-to threads |

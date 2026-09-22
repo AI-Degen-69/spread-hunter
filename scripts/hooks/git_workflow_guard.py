@@ -47,12 +47,11 @@ once the review has been triggered. Before this push, from {DOC}:
   * Batch every accepted fix into ONE commit and push ONCE. Each push is its own
     incremental review, so four pushes cost four reviews for one round.
   * Post ONE summary comment per round: what changed, what you declined, why.
-  * Triage first, then post ONE `@coderabbitai autofix` per round -- after the
-    review has finished, never while one is in flight -- and read the commit it
-    pushes before merging.
+  * Do NOT invoke `@coderabbitai autofix` -- the agent applies accepted fixes
+    and performs the verification itself (AGENTS.md rule 2).
   * Post `@coderabbitai resolve` as a SEPARATE comment.
-  * The handle is allowed in five places only: the PR title placeholder, the
-    body summary line, `review`, `resolve`, and `autofix`.
+  * The handle is allowed in four places only: the body summary line,
+    `review`, `resolve` -- and nowhere else.
   * Reviews do NOT fire on their own here. When a pull request opens with the
     "fewer than 10 stars / Trigger review" notice, post `@coderabbitai review`
     as its own comment, wait 30 seconds, and read the reply. Trigger BEFORE

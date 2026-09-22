@@ -106,7 +106,7 @@ A `PreToolUse` hook (`scripts/hooks/git_workflow_guard.py`) puts these rules at 
 | [docs/agents/glossary.md](docs/agents/glossary.md) | Naming anything in code, commits, issues or dashboard copy |
 | [docs/agents/strategy.md](docs/agents/strategy.md) | Changing quoting, sizing, market selection or pricing mode |
 | [docs/agents/python-conventions.md](docs/agents/python-conventions.md) | Writing or reviewing Python in this repo |
-| [docs/agents/git-workflow.md](docs/agents/git-workflow.md) | **In full, before your first push to any branch.** Branching, committing, opening a PR, CodeRabbit review, merging |
+| [docs/agents/git-workflow.md](docs/agents/git-workflow.md) | **In full, before your first push to any branch.** Conventional commits, branching, opening a PR, CodeRabbit review, merging |
 | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) | Working GitHub issues via `gh` |
 | [docs/agents/triage-labels.md](docs/agents/triage-labels.md) | Labelling an issue |
 | [docs/agents/domain.md](docs/agents/domain.md) | `CONTEXT.md` and ADR conventions |
