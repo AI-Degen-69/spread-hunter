@@ -454,6 +454,9 @@ function renderCachedSections() {
   }
   // Tab 2: PERFORMANCE & ANALYTICS (KPI tiles → rail Reports page; the markets
   // table lives on the rail's Data & Markets page).
+  if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
+    renderPortfolioOverview(currentKpi, lastStatus);
+  }
   if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
     renderKPIs(currentKpi, lastStatus);
   }
@@ -3429,9 +3432,22 @@ function renderAnalyticsSurface(kpi, status) {
   if (samplePill) samplePill.textContent = `${n} Closes · Scanned Polymarket Candidates`;
 }
 
-function renderKPIs(kpi, status) {
+/* Portfolio overview card + run pill (Issue #268): one paint for the card
+ * the operator reads on every visit. #140 moved `#broker-portfolio-overview`
+ * and `#run-profitability` onto the rail's Dashboard page while the KPI tiles
+ * stayed on Reports; painting them from renderKPIs — which the poll gates
+ * behind the Reports grid — froze the card at its pre-data standby on every
+ * other page. They are their own paint now, gated by their own target. */
+function renderPortfolioOverview(kpi, status) {
+  // Same contract as renderKPIs: a payload without a portfolio is malformed
+  // for this paint, and computed-from-nothing standby figures must not
+  // overwrite whatever the card last showed.
+  if (!kpi || !kpi.portfolio) return;
   renderRunProfitability(kpi);
   renderBrokerPortfolioOverview(kpi, status);
+}
+
+function renderKPIs(kpi, status) {
   const grid = document.getElementById('kpi-grid');
   if (!kpi || !kpi.portfolio) {
     grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
@@ -5328,6 +5344,13 @@ async function pollStatus() {
     // Render Orders & Trades (Tab 1 → rail Dashboard page)
     if (paintable(tab1, document.getElementById('orders-trades-body')) && currentKpi) {
       renderOrdersTrades(currentKpi, lastState);
+    }
+
+    // Portfolio overview + run pill (Tab 2 → rail Dashboard page) get their
+    // own gate: the card lives on page-home since #140, and painting it only
+    // behind the Reports grid froze it at standby on every other page (#268).
+    if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
+      renderPortfolioOverview(currentKpi, status);
     }
 
     // Render KPIs (Tab 2 → rail Reports page) and markets (→ rail Data &
