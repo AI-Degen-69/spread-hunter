@@ -136,6 +136,7 @@ const PANEL_PAGE = {
   'kpi-grid': 'reports',
   'market-body': 'data-markets',
   'kanban-board': 'data-markets',
+  'broker-hero-equity': 'home',
 };
 for (const [panelId, page] of Object.entries(PANEL_PAGE)) {
   el(panelId).parentElement = el('page-' + page);
@@ -157,6 +158,7 @@ async function main() {
     result = {
       serviceCards: el('service-cards').innerHTML,
       masterIndicator: el('master-status-indicator').innerHTML,
+      brokerHero: el('broker-hero-equity').textContent,
       ordersHead: el('orders-trades-head').innerHTML,
       kpiGrid: el('kpi-grid').innerHTML,
       marketBody: el('market-body').innerHTML,
@@ -181,6 +183,7 @@ async function main() {
     result = {
       serviceCards: el('service-cards').innerHTML,
       masterIndicator: el('master-status-indicator').innerHTML,
+      brokerHero: el('broker-hero-equity').textContent,
       ordersHead: el('orders-trades-head').innerHTML,
       kpiGrid: el('kpi-grid').innerHTML,
       marketBody: el('market-body').innerHTML,

@@ -61,10 +61,11 @@ def test_poll_paints_only_the_active_rail_page():
     res = _run("rail-pages-skipped")
 
     # Assert — the active rail page's sections painted; the pages the rail
-    # keeps hidden (Dashboard's Orders & Trades, Reports tiles, Data & Markets
-    # tables) untouched. The header stays live regardless of the page shown.
+    # keeps hidden (Reports tiles, Data & Markets tables, kanban) untouched.
+    # The header stays live regardless of the page shown.
     assert res["serviceCards"] != ""
     assert res["masterIndicator"] != ""
+    assert res["brokerHero"] == ""
     assert res["ordersHead"] == ""
     assert res["kpiGrid"] == ""
     assert res["marketBody"] == ""
@@ -84,9 +85,12 @@ def test_poll_skips_offpage_renders_even_when_tab_gates_all_claim_visible():
     # living on other rail pages were skipped even though the tab gates all
     # claimed to be visible. Header stays live — including the master-stack
     # pill renderServiceCards paints: it sits in the top nav on every page,
-    # so a poll that skips the Trades grid must still refresh it.
+    # so a poll that skips the Trades grid must still refresh it. The
+    # portfolio hero is Home's own section (#140 moved it there), so it must
+    # paint with Home even though renderKPIs also owns the Reports tiles.
     assert res["serviceCards"] == ""
     assert res["masterIndicator"] != ""
+    assert res["brokerHero"] != ""
     assert res["ordersHead"] != ""
     assert res["kpiGrid"] == ""
     assert res["marketBody"] == ""
