@@ -944,7 +944,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const masterIndicator = document.getElementById('master-status-indicator');
   const masterStartBtn = document.getElementById('btn-master-start');
   const masterStopBtn = document.getElementById('btn-master-stop');
-  const enginePill = document.getElementById('hud-engine-pill');
+  const servicesPill = document.getElementById('hud-services-pill');
   const guardrailPill = document.getElementById('hud-guardrail-pill');
 
   if (masterIndicator) {
@@ -967,8 +967,8 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     }
   }
   // Status pills use the same live-state vocabulary as every service card.
-  const hudEngineState = document.getElementById('hud-engine-state');
-  const hudEngineSub = document.getElementById('hud-engine-sub');
+  const hudServicesState = document.getElementById('hud-services-state');
+  const hudServicesSub = document.getElementById('hud-services-sub');
   const hudGuardrailState = document.getElementById('hud-guardrail-state');
   const hudGuardrailSub = document.getElementById('hud-guardrail-sub');
 
@@ -978,10 +978,10 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   }
   if (guardrailHealth?.running) activeCount++;
 
-  const engineState = processState(isRunning, status?.registry_unreadable);
-  if (enginePill) enginePill.className = `pill state-${engineState} mono`;
-  if (hudEngineState) hudEngineState.textContent = engineState.toUpperCase();
-  if (hudEngineSub) hudEngineSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
+  const servicesState = processState(isRunning, status?.registry_unreadable);
+  if (servicesPill) servicesPill.className = `pill state-${servicesState} mono`;
+  if (hudServicesState) hudServicesState.textContent = servicesState.toUpperCase();
+  if (hudServicesSub) hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
 
   const alertsCount = guardrailAlerts?.alerts?.length || guardrailHealth?.alerts_total || 0;
   const guardrailTelemetryError = guardrailHealth?.telemetry_error || guardrailAlerts?.telemetry_error;
@@ -3748,8 +3748,8 @@ const OT_NOTES = {
 const OT_COLUMNS = {
   'active-markets': ['Market', 'Category', 'UP Quote', 'DOWN Quote', 'Pair Cost',
                      'Edge', '24h Volume', 'Resolves', 'Status'],
-  'open-orders': ['Market', 'Leg', 'Price', 'Size', 'Filled', 'Remaining',
-                  'Total Cost', 'Queue Ahead', 'Age', 'Order Status'],
+  'open-orders': ['Market', 'Leg', 'Price', 'Size',
+                  'Total Cost', 'Queue Ahead', 'Age'],
   // Per-leg on the left, pair-level on the right. Mark Value and both PnLs
   // span the pair because they are pair numbers: a matched pair merges at par
   // and only the remainder is marked, which cannot be split across two rows
@@ -4015,8 +4015,7 @@ function otHeadHtml(view) {
     + 'QUOTING: the engine is actively quoting this market. '
     + 'IDLE: no quote activity observed."';
   const cells = OT_COLUMNS[view]
-    .map((label, i) => `<th${i === 0 ? ' class="ot-market-head"' : ''}>${esc(label)}</th>`
-      .replace('</th>', `${label === 'Status' ? statusTitle : ''}</th>`))
+    .map((label, i) => `<th${i === 0 ? ' class="ot-market-head"' : ''}${label === 'Status' ? statusTitle : ''}>${esc(label)}</th>`)
     .join('');
   return `<tr>${cells}</tr>`;
 }
@@ -4222,7 +4221,6 @@ function openOrdersRows(kpi, state) {
       const size = Number(o.original_size) || 0;
       const price = Number(o.price) || 0;
       const queue = queues[o.order_id];
-      const status = String(o.status || '').toUpperCase();
       const rowClass = ['ot-pair-row'];
       if (legIndex === 0) rowClass.push('ot-pair-start');
       if (groupIndex % 2 === 1) rowClass.push('ot-pair-alt');
@@ -4236,12 +4234,9 @@ function openOrdersRows(kpi, state) {
       <td><span class="pill ${leg === 'UP' ? 'active' : (leg === 'DN' ? 'reconnecting' : 'stopped')}">${esc(leg === 'DN' ? 'DOWN' : leg)}</span></td>
       <td class="mono">${fmtPrice(price)}</td>
       <td class="mono">${fmtShares(size)}</td>
-      <td class="mono">${fmtShares(o.size_matched)}</td>
-      <td class="mono">${fmtShares(o.size_remaining)}</td>
       <td class="mono">${fmtUSD(price * size)}</td>
       <td class="mono">${(queue === null || queue === undefined) ? '--' : fmtCompactUSD(queue)}</td>
       <td class="mono">${o.age_sec === null || o.age_sec === undefined ? '--' : fmtStopwatch(Number(o.age_sec))}</td>
-      <td><span class="pill ${status === 'OPEN' ? 'open' : 'reconnecting'}">${esc(status || '--')}</span></td>
     </tr>`;
     }).join('');
   }).join('');
@@ -4815,6 +4810,8 @@ function renderTrialReadiness(readiness) {
 function renderScanStatePill(scanState) {
   const headerPill = document.getElementById('scan-state-pill');
   if (!headerPill) return;
+  const stateText = document.getElementById('scan-engine-state');
+  if (!stateText) return;
 
   // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
   // The server's STALLED verdict stays authoritative for DOWN; a SCANNING
@@ -4833,20 +4830,22 @@ function renderScanStatePill(scanState) {
     const formattedAge = formatHeartbeatAge(hbAge);
     const age = (state !== 'stopped' && state !== 'unknown' && formattedAge)
       ? ' · ' + formattedAge : '';
-    headerPill.innerHTML = dot + esc(state.toUpperCase() + age);
+    // Write the verdict into the inner state span only: overwriting the pill's
+    // own innerHTML would erase the ENGINE label that names this measurement.
+    stateText.innerHTML = dot + esc(state.toUpperCase() + age);
     const rawSec = (hbAge !== null && hbAge !== undefined) ? Math.max(0, Math.round(hbAge)) : null;
     if (telemetryError) {
       headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`;
     } else if (rawSec !== null) {
-      headerPill.title = `Trading loop heartbeat: ${rawSec}s ago (${raw.toUpperCase()}) · runtime/shadow_run.json or runtime/live_poll_heartbeat.json`;
+      headerPill.title = `Quote engine heartbeat: ${rawSec}s ago (${raw.toUpperCase()}) · runtime/shadow_run.json or runtime/live_poll_heartbeat.json`;
     } else {
-      headerPill.title = 'Trading loop heartbeat: runtime/shadow_run.json or runtime/live_poll_heartbeat.json';
+      headerPill.title = 'Quote engine heartbeat: runtime/shadow_run.json or runtime/live_poll_heartbeat.json';
     }
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
     headerPill.className = 'pill state-unknown';
-    headerPill.textContent = 'UNKNOWN';
-    headerPill.title = 'Trading loop state unknown: no heartbeat payload';
+    stateText.textContent = 'UNKNOWN';
+    headerPill.title = 'Quote engine state unknown: no heartbeat payload';
   }
 }
 

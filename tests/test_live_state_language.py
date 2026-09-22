@@ -331,16 +331,18 @@ def test_the_poll_loop_drives_the_top_nav_scan_pill():
 
 # ── the Market Filter header pill says whose heartbeat it is ───────────────
 #
-# `#scan-state-pill` reads the TRADING loop's heartbeat (runtime/shadow_run.json
-# during a rehearsal, runtime/live_poll_heartbeat.json otherwise). Unlabelled and
-# sat beside "last scan: 3m ago", the operator read it as the market scan and
-# concluded the scanner was disconnected. The scanner now has its own pill in the
-# top nav, so this one must name the process it actually measures.
+# `#scan-state-pill` reads the QUOTE ENGINE's heartbeat (runtime/shadow_run.json
+# during a rehearsal, runtime/live_poll_heartbeat.json otherwise). Sat on the
+# kanban market-scan page labelled "TRADING LOOP", the operator read it as the
+# scanner. The scanner has its own pill in the top nav, so this one is labelled
+# ENGINE -- the engine is what it actually measures -- and its copy must name
+# the engine, not the loop or the scan.
 
 def test_the_header_pill_is_labelled_for_the_loop_it_measures():
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     header = html.split('id="screener-header"', 1)[1].split("</section>", 1)[0]
-    assert "TRADING LOOP" in header
+    assert "ENGINE" in header
+    assert "TRADING LOOP" not in header
 
 
 def test_the_header_pill_names_its_heartbeat_file():
@@ -359,7 +361,7 @@ def test_the_header_pill_does_not_claim_to_be_the_market_scan():
     assert "SCAN RUNNING" not in header
 
 
-# ── the Market Filter header is gate copy, not a dashboard ─────────────────
+# ── every pill names the exact process it measures ─────────────────────────
 #
 # Owner 2026-09-16: the census line, the gate line and the two readiness
 # trackers ("DEPTH gathering 8.7d/14 · 3/8 markets · ...") are reference copy
@@ -381,3 +383,40 @@ def test_the_readiness_trackers_are_gone_but_the_ready_banner_stays():
     assert 'id="trial-trackers"' not in html
     assert 'id="trial-ready-banner"' in html
     assert "function trackerCard" not in js, "dead renderer left behind"
+
+
+# ── every pill names the exact process it measures ─────────────────────────
+#
+# Owner, after the ENGINE relabel: an unlabelled verdict pill sitting next to
+# SCAN reads as the scan, and a pill that counts ALL stack services must not
+# claim the ENGINE name the quote engine's heartbeat pill carries.
+
+def test_the_top_nav_engine_pill_carries_a_visible_label():
+    # `#scan-state-pill` shows the quote engine's heartbeat from every tab, so
+    # its verdict must never stand alone: next to SCAN, an unlabelled RUNNING
+    # reads as "the market scan is running".
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    pill = html.split('id="scan-state-pill"', 1)[1][:400]
+    assert 'class="pill-label"' in pill
+    assert ">ENGINE<" in pill
+
+
+def test_the_poller_writes_the_engine_verdict_without_erasing_its_label():
+    js = APP_JS.read_text(encoding="utf-8")
+    fn = js.split("function renderScanStatePill", 1)[1].split("\nfunction ", 1)[0]
+    # The verdict goes into the inner state span, not the pill's innerHTML.
+    assert "scan-engine-state" in fn
+    assert "headerPill.innerHTML" not in fn
+
+
+def test_the_services_pill_does_not_claim_to_be_the_engine():
+    # `#hud-services-pill` counts how many stack services are running -- it is
+    # not the quote engine, whose heartbeat pill sits right beside it. Two
+    # pills named ENGINE answering different questions is the confusion this
+    # audit exists to prevent.
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    pill = html.split('id="hud-services-pill"', 1)[1][:400]
+    assert ">SERVICES<" in pill
+    assert ">ENGINE<" not in pill
+    # And the tooltip says what it actually counts.
+    assert "how many of the stack's services" in html

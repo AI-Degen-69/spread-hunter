@@ -174,9 +174,11 @@ def test_open_orders_carries_no_pnl():
     joined = " ".join(rendered["columns"]).lower()
     assert "pnl" not in joined
     assert "unrealized" not in joined
-    assert rendered["columns"] == ["Market", "Leg", "Price", "Size", "Filled",
-                                   "Remaining", "Total Cost", "Queue Ahead",
-                                   "Age", "Order Status"]
+    # Orders that are still resting have neither fills to split out nor a
+    # non-open status to explain: Filled, Remaining and Order Status only
+    # described closed work this tab never shows.
+    assert rendered["columns"] == ["Market", "Leg", "Price", "Size",
+                                   "Total Cost", "Queue Ahead", "Age"]
 
 
 @requires_node
@@ -881,11 +883,15 @@ def test_active_markets_status_header_explains_the_vocabulary():
     head = _render("active-markets", _kpi(), _state())["head"]
 
     # Assert
-    status_th = head.split("Status")[0].rsplit("<th", 1)[1] if False else None
-    rendered = _render("active-markets", _kpi(), _state())
-    assert 'title=' in rendered["head"]
-    assert "RESTING" in rendered["head"]
-    assert "QUOTING" in rendered["head"]
+    head = _render("active-markets", _kpi(), _state())["head"]
+
+    # Assert — the vocabulary must ride as a title attribute on the Status
+    # <th>, not leak into the cell text as a literal `title="..."` string.
+    status_th = next(th for th in head.split("<th")[1:] if ">Status<" in th)
+    tag = status_th.split(">")[0]
+    assert 'title="RESTING' in tag
+    assert 'IDLE: no quote activity observed."' in tag
+    assert "title=" not in status_th.split(">")[-1]
 
 
 
