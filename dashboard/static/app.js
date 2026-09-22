@@ -383,6 +383,39 @@ function tabVisible(el) {
   return !!el && el.hidden !== true;
 }
 
+/* Is `el` somewhere the operator can actually see? (Issue #266)
+ * The sidebar-pages layout (#140) moved every live panel under `#page-*`
+ * sections and shows exactly one of them; the legacy `#tab-1..3` shells stay
+ * in the document un-hidden (prototype.js unhides them after moving the
+ * panels out), so after the rail mounts `tabVisible()` reports "visible" for
+ * all three gates and every poll re-rendered ALL pages' content — multi-second
+ * main-thread freezes the operator felt as hover/click lag. A section paints
+ * only when its own closest `#page-*` ancestor is the one the rail shows. */
+function railActivePage(doc) {
+  if (typeof document === 'undefined') return null;
+  const scope = doc || document;
+  const pages = scope.querySelectorAll('#page-home, #page-data-markets, #page-strategy, #page-trades, #page-reports');
+  if (!pages || pages.length === 0) return null; // tabs-only page: no rail
+  for (const page of pages) {
+    if (page.hidden !== true) return page.id;
+  }
+  return null;
+}
+
+function paintable(section, target, doc) {
+  // Gate 1 — the legacy tab section the panel belongs to (fails closed).
+  if (!tabVisible(section)) return false;
+  // Gate 2 — the active rail page, once the sidebar layout has mounted.
+  const active = railActivePage(doc);
+  if (active === null) return true; // no rail in the document: tabs-era page
+  let node = target;
+  while (node) {
+    if (node.id === active) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
 function deferPaint(fn) {
   // One frame later the click/tab paint wins over the heavy charts. Outside
   // a browser (node test harness) there is no rAF — run synchronously there.
@@ -403,22 +436,35 @@ let analyticsPaintGeneration = 0;
 function renderCachedSections() {
   // Paints only the visible tab's sections from the cached snapshots. Called
   // by switchTab so a click paints synchronously without waiting for the
-  // next 2s poll (Issue #264).
+  // next 2s poll (Issue #264). Gating consults the active rail page too
+  // (Issue #266): after #140 moved the panels under `#page-*` sections, the
+  // legacy tab shells all read visible and this repainted every page at once.
   const currentKpi = lastKpi;
-  // Tab 1: LIVE OPERATIONS.
-  if (tabVisible(tab1)) {
+  // Tab 1: LIVE OPERATIONS (service cards → rail Trades page, orders & trades
+  // → rail Dashboard page). The header status is global chrome on every page:
+  // renderServiceCards paints it before the grid, so a page where the grid is
+  // skipped still gets the header via renderServiceHeader.
+  if (paintable(tab1, document.getElementById('service-cards'))) {
     if (lastStatus) renderServiceCards(lastStatus, lastGuardHealth, lastGuardAlerts);
+  } else if (lastStatus) {
+    renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
+  }
+  if (paintable(tab1, document.getElementById('orders-trades-body'))) {
     if (currentKpi) renderOrdersTrades(currentKpi, lastState);
   }
-  // Tab 2: PERFORMANCE & ANALYTICS.
-  if (tabVisible(tab2) && currentKpi) {
+  // Tab 2: PERFORMANCE & ANALYTICS (KPI tiles → rail Reports page; the markets
+  // table lives on the rail's Data & Markets page).
+  if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
     renderKPIs(currentKpi, lastStatus);
+  }
+  if (paintable(tab2, document.getElementById('market-body')) && currentKpi) {
     renderMarkets(currentKpi, lastState);
   }
-  // Tab 3: MARKET FILTER. The readiness banner lives on this tab, so it
-  // refreshes with it; the poll loop still calls it unconditionally (see
-  // pollStatus) so a dead endpoint hides the trackers on every tick.
-  if (tabVisible(tab3) && currentKpi) {
+  // Tab 3: MARKET FILTER (kanban → rail Data & Markets page). The readiness
+  // banner lives on this tab, so it refreshes with it; the poll loop still
+  // calls it unconditionally (see pollStatus) so a dead endpoint hides the
+  // trackers on every tick.
+  if (paintable(tab3, document.getElementById('kanban-board')) && currentKpi) {
     renderScreener(currentKpi, lastScanState, lastStatus);
     renderTrialReadiness(lastTrialReadiness);
   }
@@ -884,7 +930,11 @@ const SERVICE_DEFS = [
     liveOnly: true },
 ];
 
-function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
+/* Global top-nav status: stack pill, ENGINE/WATCHDOG pills, START/STOP
+ * buttons. Split from the card grid (CodeRabbit round on #267): these are
+ * chrome on every page, so a poll whose card grid the Trades gate skips must
+ * still refresh them. */
+function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const isRunning = status?.bot_state === 'RUNNING' || (status?.services && Object.values(status.services).some(s => s.running));
   // `lastDbIsProduction` is the START guard's flag and `renderDbMode` owns it.
   // Writing it from here too gave one safety flag two writers: a status payload
@@ -972,6 +1022,10 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
       masterStopBtn.style.cursor = !isRunning ? 'not-allowed' : 'pointer';
     }
   }
+}
+
+function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
+  renderServiceHeader(status, guardrailHealth, guardrailAlerts);
 
   // Render Service Cards Grid
   const container = document.getElementById('service-cards');
@@ -5249,29 +5303,44 @@ async function pollStatus() {
     // Issue #264: each section below repaints only while its tab is visible.
     // A poll used to re-render every section on every tick — both hidden tabs
     // plus the heavy charts — one long main-thread task that a tab click
-    // waited behind for 2-4s.
+    // waited behind for 2-4s. Issue #266: "visible" must mean the section's
+    // rail page is the one showing — after #140 moved the panels under
+    // `#page-*` sections, the un-hidden legacy tab shells made every gate
+    // read visible and put the whole render chain back on every poll.
 
-    // Render service cards (Tab 1)
-    if (tabVisible(tab1) && status) renderServiceCards(status, guardHealth, guardAlerts);
+    // Top-nav status (stack pill, ENGINE/WATCHDOG pills, START/STOP buttons)
+    // is global chrome: renderServiceCards paints it before the card grid, so
+    // on any page but Trades the poll paints just the header — and on Trades
+    // one renderServiceCards call covers both.
+    if (status) {
+      if (paintable(tab1, document.getElementById('service-cards'))) {
+        renderServiceCards(status, guardHealth, guardAlerts);
+      } else {
+        renderServiceHeader(status, guardHealth, guardAlerts);
+      }
+    }
 
-    // Render exposure bar (DT3)
+    // Render exposure bar (DT3) — header element, page-independent, cheap.
     if (kpi || lastKpi) renderExposure(kpi || lastKpi);
 
     const currentKpi = kpi || lastKpi;
 
-    // Render Orders & Trades (Tab 1)
-    if (tabVisible(tab1) && currentKpi) {
+    // Render Orders & Trades (Tab 1 → rail Dashboard page)
+    if (paintable(tab1, document.getElementById('orders-trades-body')) && currentKpi) {
       renderOrdersTrades(currentKpi, lastState);
     }
 
-    // Render KPIs and markets (Tab 2)
-    if (tabVisible(tab2) && currentKpi) {
+    // Render KPIs (Tab 2 → rail Reports page) and markets (→ rail Data &
+    // Markets page)
+    if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
       renderKPIs(currentKpi, status);
+    }
+    if (paintable(tab2, document.getElementById('market-body')) && currentKpi) {
       renderMarkets(currentKpi, lastState);
     }
 
-    // Render the Market Filter kanban (Tab 3)
-    if (tabVisible(tab3) && currentKpi) {
+    // Render the Market Filter kanban (Tab 3 → rail Data & Markets page)
+    if (paintable(tab3, document.getElementById('kanban-board')) && currentKpi) {
       renderScreener(currentKpi, scanState, status);
     }
 

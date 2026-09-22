@@ -6,6 +6,12 @@ tab click waited behind for 2-4 seconds. Now each poll repaints the cheap
 header pills plus only the visible tab, and switching tabs repaints the newly
 shown tab synchronously from the cached poll snapshot.
 
+#266 follow-up: the sidebar-pages layout (#140) moved every live panel under
+`#page-*` sections and shows one at a time, leaving the legacy `#tab-1..3`
+shells un-hidden — which made every tab-visibility gate read "visible" and put
+the whole render chain back on every poll (multi-second freezes, ~5k DOM
+nodes/sec of churn). Poll gating must consult the active rail page.
+
 Driven through node against the real `dashboard/static/app.js` and a stub DOM,
 so these are the paints the page would actually perform.
 """
@@ -45,6 +51,47 @@ def test_poll_skips_hidden_tabs_but_keeps_header_live():
     assert res["kpiGrid"] == ""
     assert res["marketBody"] == ""
     assert res["kanbanBoard"] == ""
+
+
+def test_poll_paints_only_the_active_rail_page():
+    # Arrange — the real post-#140 layout: the rail mounted and shows the
+    # Trades page (service cards + ticker), while the legacy tab shells sit
+    # un-hidden (prototype.js unhides them after moving every panel out).
+    # Act
+    res = _run("rail-pages-skipped")
+
+    # Assert — the active rail page's sections painted; the pages the rail
+    # keeps hidden (Dashboard's Orders & Trades, Reports tiles, Data & Markets
+    # tables) untouched. The header stays live regardless of the page shown.
+    assert res["serviceCards"] != ""
+    assert res["masterIndicator"] != ""
+    assert res["ordersHead"] == ""
+    assert res["kpiGrid"] == ""
+    assert res["marketBody"] == ""
+    assert res["kanbanBoard"] == ""
+    assert res["scanPill"] != ""
+
+
+def test_poll_skips_offpage_renders_even_when_tab_gates_all_claim_visible():
+    # Arrange — exactly the state prototype.js leaves the page in: the operator
+    # on the rail's Dashboard while every legacy tab gate reads visible. This
+    # is the regression that froze hover/click input for seconds per poll.
+    # Act
+    res = _run("rail-skips-offpage-renders")
+
+    # Assert — Home's own Orders & Trades painted; the service cards (Trades),
+    # the KPI tiles (Reports) and the market table + kanban (Data & Markets)
+    # living on other rail pages were skipped even though the tab gates all
+    # claimed to be visible. Header stays live — including the master-stack
+    # pill renderServiceCards paints: it sits in the top nav on every page,
+    # so a poll that skips the Trades grid must still refresh it.
+    assert res["serviceCards"] == ""
+    assert res["masterIndicator"] != ""
+    assert res["ordersHead"] != ""
+    assert res["kpiGrid"] == ""
+    assert res["marketBody"] == ""
+    assert res["kanbanBoard"] == ""
+    assert res["scanPill"] != ""
 
 
 def test_tab_switch_paints_synchronously_from_cache():
