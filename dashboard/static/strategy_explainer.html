@@ -6,24 +6,25 @@
   <title>Spread Hunter — Strategy, Timing & Risk Engine</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <style>
     :root {
-      --bg-primary: #0a0d14;
-      --bg-card: rgba(18, 24, 38, 0.75);
-      --bg-card-hover: rgba(26, 35, 56, 0.85);
+      --bg-base: #080c14;
+      --bg-surface: #0f172a;
+      --bg-surface-raised: #1e293b;
+      --bg-card: rgba(15, 23, 42, 0.65);
+      --bg-card-hover: rgba(30, 41, 59, 0.85);
       --border-subtle: rgba(255, 255, 255, 0.08);
       --border-accent: rgba(56, 189, 248, 0.35);
-      --text-main: #f1f5f9;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
       --cyan: #38bdf8;
       --emerald: #10b981;
       --amber: #f59e0b;
       --rose: #f43f5e;
-      --purple: #a855f7;
-      --shadow-glow: 0 0 25px rgba(56, 189, 248, 0.15);
+      --font-display: 'Big Shoulders Display', Impact, sans-serif;
       --font-main: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
       --font-mono: 'JetBrains Mono', monospace;
     }
@@ -31,11 +32,8 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      background-color: var(--bg-primary);
-      background-image: 
-        radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
-        radial-gradient(circle at 85% 85%, rgba(168, 85, 247, 0.06) 0%, transparent 45%);
-      color: var(--text-main);
+      background-color: var(--bg-base);
+      color: var(--text-primary);
       font-family: var(--font-main);
       line-height: 1.6;
       min-height: 100vh;
@@ -43,6 +41,11 @@
     }
 
     .container { max-width: 1200px; margin: 0 auto; }
+
+    .font-display {
+      font-family: var(--font-display);
+      letter-spacing: 0.02em;
+    }
 
     header {
       text-align: center;
@@ -72,16 +75,14 @@
       height: 6px;
       background: var(--emerald);
       border-radius: 50%;
-      box-shadow: 0 0 8px var(--emerald);
     }
 
     h1 {
+      font-family: var(--font-display);
       font-size: 2.75rem;
       font-weight: 800;
-      letter-spacing: -0.03em;
-      background: linear-gradient(135deg, #ffffff 30%, #94a3b8 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      letter-spacing: 0.02em;
+      color: var(--text-primary);
       margin-bottom: 0.75rem;
     }
 
@@ -114,7 +115,7 @@
 
     .tab-btn:hover {
       background: var(--bg-card-hover);
-      color: var(--text-main);
+      color: var(--text-primary);
       border-color: var(--border-accent);
     }
 
@@ -122,7 +123,6 @@
       background: rgba(56, 189, 248, 0.15);
       border-color: var(--cyan);
       color: #ffffff;
-      box-shadow: var(--shadow-glow);
     }
 
     .section-card {
@@ -145,8 +145,10 @@
     }
 
     .card-title {
+      font-family: var(--font-display);
       font-size: 1.35rem;
       font-weight: 700;
+      letter-spacing: 0.02em;
       color: #ffffff;
       display: flex;
       align-items: center;
@@ -164,7 +166,7 @@
     .pill-cyan { background: rgba(56, 189, 248, 0.15); color: var(--cyan); }
     .pill-emerald { background: rgba(16, 185, 129, 0.15); color: var(--emerald); }
     .pill-amber { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
-    .pill-purple { background: rgba(168, 85, 247, 0.15); color: var(--purple); }
+    .pill-purple { background: rgba(100, 116, 139, 0.16); color: var(--text-secondary); }
 
     .grid-2 {
       display: grid;
@@ -188,6 +190,7 @@
     }
 
     .subcard h4 {
+      font-family: var(--font-display);
       font-size: 1.05rem;
       margin-bottom: 0.5rem;
       color: #ffffff;
@@ -247,7 +250,7 @@
     td {
       padding: 0.85rem 1rem;
       border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-      color: var(--text-main);
+      color: var(--text-primary);
     }
 
     tr:hover td {
@@ -264,7 +267,7 @@
     }
 
     .calculator-container {
-      background: linear-gradient(145deg, rgba(18, 24, 38, 0.9), rgba(10, 15, 26, 0.95));
+      background: var(--bg-surface);
       border: 1px solid var(--border-accent);
       border-radius: 14px;
       padding: 1.75rem;
@@ -302,7 +305,6 @@
       border-radius: 50%;
       background: var(--cyan);
       cursor: pointer;
-      box-shadow: 0 0 10px var(--cyan);
     }
 
     .calc-results {
@@ -335,7 +337,7 @@
     footer {
       text-align: center;
       padding: 2rem 0;
-      color: var(--text-dim);
+      color: var(--text-muted);
       font-size: 0.85rem;
       border-top: 1px solid var(--border-subtle);
     }
@@ -348,7 +350,7 @@
         <span class="badge-dot"></span>
         Polymarket Real-Money Engine
       </div>
-      <h1>Spread Hunter Live</h1>
+      <h1 class="font-display">Spread Hunter Live</h1>
       <p class="subtitle">
         System architecture, loop execution cadences, risk parameters, and order management mechanics.
       </p>
