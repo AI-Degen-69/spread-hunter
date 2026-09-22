@@ -1033,7 +1033,10 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
   // Render Service Cards Grid
   const container = document.getElementById('service-cards');
   if (!container) return;
-  container.innerHTML = '';
+
+  // Build all cards as one string, assign once (#270): per-card `innerHTML +=`
+  // re-parses the accumulated grid on every append.
+  let cardsHtml = '';
 
   for (const def of SERVICE_DEFS) {
     let svc, running, pid;
@@ -1080,7 +1083,7 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
       toggleHtml = `<span style="font-size:10px;font-weight:700;color:var(--text-muted);font-family:'JetBrains Mono',monospace">AUTO-WATCH</span>`;
     }
 
-    container.innerHTML += `
+    cardsHtml += `
       <div class="card${alertCls}" role="region" aria-label="${def.name}" style="display:flex;flex-direction:column;justify-content:space-between;gap:10px">
         <div>
           <div class="service-card-head">
@@ -1110,6 +1113,7 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
         </div>
       </div>`;
   }
+  container.innerHTML = cardsHtml;
 
   // Wire up toggle switches for individual services. Each toggle drives
   // exactly its own service (dashboard/server.py:start_service/stop_service):
@@ -1251,12 +1255,13 @@ async function renderParameters() {
     const cardsContainer = document.getElementById('params-cards-container');
     if (cardsContainer) {
       cardsContainer.innerHTML = '';
+      let paramCardsHtml = '';
       for (const p of params) {
         const rawKey = p.key || p.code || p.name;
         const displayName = p.name && p.name !== rawKey ? p.name : (PARAM_HUMAN_NAMES[rawKey] || rawKey);
         const meta = PARAM_CATEGORIES[rawKey] || { category: p.category || 'Safeguard Rule', badge: 'dynamic', label: p.badge || 'Config' };
 
-        cardsContainer.innerHTML += `
+        paramCardsHtml += `
           <div class="param-card">
             <div>
               <div class="param-card-top">
@@ -1279,18 +1284,20 @@ async function renderParameters() {
             </div>
           </div>`;
       }
+      cardsContainer.innerHTML = paramCardsHtml;
     }
 
     // Render Detailed Table
     const body = document.getElementById('params-body');
     if (body) {
       body.innerHTML = '';
+      let paramsRowsHtml = '';
       for (const p of params) {
         const rawKey = p.key || p.code || p.name;
         const displayName = p.name && p.name !== rawKey ? p.name : (PARAM_HUMAN_NAMES[rawKey] || rawKey);
         const meta = PARAM_CATEGORIES[rawKey] || { category: p.category || 'Safeguard Rule', badge: 'dynamic', label: p.badge || 'Config' };
 
-        body.innerHTML += `<tr>
+        paramsRowsHtml += `<tr>
           <td>
             <div style="font-weight:700;color:var(--text-primary)">${esc(displayName)}</div>
             <div class="mono" style="font-size:10px;color:var(--text-muted)">${esc(rawKey)}</div>
@@ -1305,6 +1312,7 @@ async function renderParameters() {
           <td style="font-size:12px;color:#34d399">${esc(p.action)}</td>
         </tr>`;
       }
+      body.innerHTML = paramsRowsHtml;
     }
   } catch (e) {
     console.debug('Failed to render parameters:', e);
@@ -4462,8 +4470,20 @@ function initOrdersTradesTabs() {
   setOrdersTradesView(currentOrdersTradesView);
 }
 
-function renderMarkets(kpi, state) {
+function renderMarkets(kpi, state, opts) {
+  const force = opts === null || opts === void 0 ? void 0 : opts.force;
   const body = document.getElementById('market-body');
+  // Skip-if-unchanged guard (#270): idling on Data & Markets, every 2s poll
+  // rebuilt the whole 367-row table even when nothing changed — ~800ms of
+  // main-thread work per poll that every click queued behind. Fingerprint
+  // the rendered inputs and skip the rebuild when they are identical.
+  // Callers that change UI state without changing data (row expansion,
+  // filter pills) pass {force:true} to bypass the guard.
+  const fingerprint = JSON.stringify([kpi && kpi.by_market, state, currentTableFilter, [...expandedMarkets], [...showCancelledByMarket]]);
+  // The innerHTML check keeps a cleared/never-painted table repainting (tab
+  // switch to a fresh page) even when the fingerprint matches.
+  if (!force && body.innerHTML !== '' && renderMarkets.__lastFingerprint === fingerprint) return;
+  renderMarkets.__lastFingerprint = fingerprint;
   if (!kpi || !kpi.by_market || Object.keys(kpi.by_market).length === 0) {
     body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">No active markets</td></tr>`;
     return;
@@ -4502,9 +4522,12 @@ function renderMarkets(kpi, state) {
     return (a[1].title||'').localeCompare(b[1].title||'');
   });
 
-  body.innerHTML = '';
+  // Build the whole table as a string and assign once: `innerHTML +=` inside
+  // the loop re-parses the accumulated table on every append (~63MB of
+  // parsing for 366 rows) and froze the page switch for seconds (#270).
+  let marketsHtml = '';
   for (const [cid, m] of entries) {
-    body.innerHTML += marketRowPairHtml(cid, m, {
+    marketsHtml += marketRowPairHtml(cid, m, {
       isExpanded: expandedMarkets.has(cid),
       hasOrders: ordersByMarket[cid] && ordersByMarket[cid].length > 0,
       allOrders: ordersByMarket[cid] || [],
@@ -4513,6 +4536,7 @@ function renderMarkets(kpi, state) {
       graduatedCids,
     });
   }
+  body.innerHTML = marketsHtml;
 
   wireMarketRowExpansion(body, ordersByMarket, () => renderMarkets(kpi, state));
 }
@@ -4908,6 +4932,17 @@ function renderScreener(kpi, scanState, status) {
       headerAge.textContent = 'heartbeat: ' + formatHeartbeatAge(hbAge);
     }
   }
+
+  // Skip-if-unchanged guard (#270): the kanban is the heaviest paint on the
+  // page (8 stages × example cards). Idling on Data & Markets re-rendered it
+  // every 2s poll even when the funnel data was byte-identical — ~800ms of
+  // main-thread work per poll that every click queued behind. Only the board
+  // rebuild skips; the pills/heartbeat above still update every call, and
+  // the 'last scan' header below is derived from funnel.snapshot_age, which
+  // is part of the fingerprint — identical fingerprint means identical text.
+  const boardFingerprint = JSON.stringify([kpi && kpi.funnel]);
+  if (renderScreener.__lastFingerprint === boardFingerprint && board.innerHTML !== '') return;
+  renderScreener.__lastFingerprint = boardFingerprint;
 
   const funnel = kpi?.funnel;
   if (!funnel) {

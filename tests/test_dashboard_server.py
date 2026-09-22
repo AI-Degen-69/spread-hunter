@@ -1597,6 +1597,16 @@ def test_app_js_preserves_kanban_scroll_across_renders():
     assert 'boardHtml' in app_js
 
 
+def test_app_js_never_appends_to_innerhtml_in_a_loop():
+    """`el.innerHTML +=` re-serializes and re-parses the whole accumulated
+    subtree on every append. With 366 market rows (~348KB of table HTML)
+    that is ~63MB of parsing per render — the Data & Markets page switch
+    froze ~3s on it (issue #270). Collections are built into a plain string
+    and assigned to `innerHTML` exactly once."""
+    app_js = _read_static("app.js")
+    assert '.innerHTML +=' not in app_js
+
+
 def test_app_js_escapes_snapshot_derived_values():
     """Snapshot fields are escaped before they reach the page."""
     app_js = _read_static("app.js")
