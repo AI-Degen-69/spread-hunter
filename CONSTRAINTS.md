@@ -71,6 +71,12 @@
 - UI-only: only `dashboard/static/strategy_explainer.html` plus the new test may change; no content/script/backend change; info copy stays identical.
 - No new dependencies; fonts only extend the existing Google Fonts request.
 
+## Constraints: Issue #277 — 44px touch targets + focus-visible
+- Zero regressions: focused dashboard suites covering touched files must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): static test pinning >=44px control heights, compact marked meta chips, signal-color focus ring.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- UI-only: only `dashboard/static/styles.css` plus the new test may change; no layout reflow (wrap stays), no backend change; mobile 360px still wraps cleanly.
+
 ## Constraints: Issue #264 — Dashboard input lag (tab clicks freeze 2-4s)
 - Zero regressions: focused selection (`tests/test_dashboard_server.py`, `tests/test_dashboard_snapshot_cache.py`, `tests/test_dashboard_narrow_viewport.py`) must pass; full `python -m pytest -q` stays with GitHub CI.
 - New/changed behavior needs a test that fails without the change (RED before GREEN): e.g. a static test pinning that hidden-tab renders are skipped or deferred and that tab switching paints synchronously.
