@@ -1,4 +1,4 @@
-# AGENTS.md — Spread Hunter Live
+# AGENTS.md — Spread Hunter
 @RTK.md
 Real-money execution engine and operations dashboard for the Polymarket **spread hunter**
 strategy: buy one UP share and one DOWN share of the same binary market for less than

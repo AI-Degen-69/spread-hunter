@@ -327,7 +327,7 @@ def _bootstrap_sweep_interval() -> None:
 _bootstrap_sweep_interval()
 
 
-app = FastAPI(title="Spread Hunter Live Monitor")
+app = FastAPI(title="Spread Hunter Monitor")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Mount static files (CSS/JS) for the extracted frontend.
@@ -2670,7 +2670,7 @@ def resolve_port(explicit: int | None) -> int:
 def main():
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Spread Hunter Live Execution Monitor")
+    parser = argparse.ArgumentParser(description="Spread Hunter Execution Monitor")
     parser.add_argument("--port", type=int, default=None,
                         help="Port to bind (default: $PORT, else 8799)")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host interface (default: 127.0.0.1)")

@@ -1,4 +1,4 @@
-# Spread Hunter Live
+# Spread Hunter
 
 [![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/AI-Degen-69/spread-hunter-live?utm_source=oss&utm_medium=github&utm_campaign=AI-Degen-69%2Fspread-hunter-live&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
 

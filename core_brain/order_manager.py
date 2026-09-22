@@ -1609,7 +1609,7 @@ def probe(series: str | None = None,
 
     target_desc = f"series '{series}'" if series else f"fixed token '{token_id}'"
     print("=" * 80)
-    print(f"SPREAD-HUNTER LIVE LATENCY PROBE (N={cycles} cycles on {target_desc})")
+    print(f"SPREAD-HUNTER LATENCY PROBE (N={cycles} cycles on {target_desc})")
     print("=" * 80)
     print("Guardrails & Architecture:")
     print("  - Target: Dynamic live market discovery across 5m windows")
