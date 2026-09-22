@@ -1407,7 +1407,8 @@ def test_scan_state_pill_in_top_nav_bar():
 
     # Screener header retains its label and snapshot age without breaking
     screener_hdr = html.split('id="screener-header"', 1)[1].split('</div>\n    </div>', 1)[0]
-    assert 'TRADING LOOP' in screener_hdr
+    assert 'ENGINE' in screener_hdr
+    assert 'TRADING LOOP' not in screener_hdr
     assert 'scan-snapshot-age' in screener_hdr
 
 
@@ -1423,7 +1424,7 @@ def test_operational_statuses_share_one_top_nav_bar():
     assert 'class="live-ops-console"' not in header
     assert 'role="group" aria-label="Dashboard status and controls"' in top_meta
     assert 'id="master-status-indicator" class="pill state-unknown' in top_meta
-    assert 'id="hud-engine-pill"' in top_meta
+    assert 'id="hud-services-pill"' in top_meta
     assert 'id="hud-guardrail-pill"' in top_meta
     assert 'class="top-status-pill"' not in top_meta
     assert 'class="top-status-context"' not in top_meta
@@ -1434,9 +1435,9 @@ def test_operational_statuses_share_one_top_nav_bar():
 
     moved_ids = (
         "master-status-indicator",
-        "hud-engine-pill",
-        "hud-engine-state",
-        "hud-engine-sub",
+        "hud-services-pill",
+        "hud-services-state",
+        "hud-services-sub",
         "hud-guardrail-pill",
         "hud-guardrail-state",
         "hud-guardrail-sub",
@@ -1485,7 +1486,7 @@ def test_app_js_formats_heartbeat_duration_as_minutes():
     assert 'formatHeartbeatAge' in app_js
     assert 'renderScanStatePill' in app_js
     assert "Math.floor(s / 60) + 'm'" in app_js or "Math.floor(sec / 60) + 'm'" in app_js
-    assert 'Trading loop heartbeat:' in app_js
+    assert 'Quote engine heartbeat:' in app_js
 
 
 def test_app_js_has_render_screener():
