@@ -5218,6 +5218,28 @@ function initKanbanCarousel() {
   window.addEventListener('resize', updateKanbanNavButtons, { passive: true });
 }
 
+/* ── Issue #278: status-strip scroll cue ── */
+// Adds .is-scrollable to .top-meta exactly when the desktop row overflows
+// (drives the edge cue in styles.css) and .is-end once scrolled fully
+// right so the cue retires at the end. No-ops on mobile, where the strip
+// wraps instead of scrolling.
+function updateTopMetaScrollCue() {
+  const strip = document.querySelector('.top-meta');
+  if (!strip) return;
+  const canScroll = strip.scrollWidth > strip.clientWidth + 1;
+  strip.classList.toggle('is-scrollable', canScroll);
+  strip.classList.toggle('is-end',
+    canScroll && (strip.scrollLeft + strip.clientWidth >= strip.scrollWidth - 1));
+}
+
+function initTopMetaScrollCue() {
+  const strip = document.querySelector('.top-meta');
+  if (!strip) return;
+  updateTopMetaScrollCue();
+  strip.addEventListener('scroll', updateTopMetaScrollCue, { passive: true });
+  window.addEventListener('resize', updateTopMetaScrollCue, { passive: true });
+}
+
 /* ── Helper: Safe JSON fetch with timeout ── */
 async function safeJsonFetch(url, timeoutMs = 5000) {
   try {
@@ -5356,6 +5378,7 @@ if (typeof module === 'undefined' || !module.exports) {
   initStatisticalSubnav();
   initOrdersTradesTabs();
   initDistControls();
+  initTopMetaScrollCue();
   pollStatus();
   renderParameters();
   setInterval(pollStatus, POLL_MS);
@@ -5387,5 +5410,6 @@ if (typeof module !== 'undefined' && module.exports) {
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },
     get backendLastSeenMs() { return backendLastSeenMs; },
-    switchTab, pollStatus, renderCachedSections, tabVisible, deferPaint };
+    switchTab, pollStatus, renderCachedSections, tabVisible, deferPaint,
+    initTopMetaScrollCue, updateTopMetaScrollCue };
 }

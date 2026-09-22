@@ -136,6 +136,28 @@ header {
 }
 .top-meta::-webkit-scrollbar { display: none; }
 
+/* Issue #278: the strip is one scrolling desktop row with a hidden
+   scrollbar, so an overflow needs its own cue. Pills never shrink or
+   wrap on desktop; the JS toggle adds .is-scrollable exactly when the
+   row overflows, and the sticky end-cap casts a monochrome shadow over
+   the cut-off edge (functional state cue, not decorative color). */
+.top-meta > * { flex-shrink: 0; }
+.top-meta:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+.top-meta.is-scrollable::after {
+  content: "";
+  position: sticky;
+  right: 0;
+  flex: 0 0 18px;
+  align-self: stretch;
+  margin-left: -18px;
+  pointer-events: none;
+  box-shadow: -14px 0 12px -4px rgba(0, 0, 0, 0.85);
+}
+.top-meta.is-scrollable.is-end::after { content: none; }
+
 /* One compact operational language across the header. Every status uses the
    same pill shell and the canonical state classes below; labels add context,
    not a second visual vocabulary. */
