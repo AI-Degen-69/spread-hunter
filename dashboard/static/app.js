@@ -4933,18 +4933,39 @@ function renderScreener(kpi, scanState, status) {
     }
   }
 
+  const funnel = kpi?.funnel;
+
+  // Snapshot age and census — must run on EVERY call (CodeRabbit round on
+  // #271): the heartbeat branch above rewrites this same header each poll,
+  // so an unchanged-board early return below would freeze the header on
+  // 'heartbeat: …' text with a stale snapshot color. Two cheap property
+  // writes; only the board rebuild is expensive enough to guard.
+  // The screener re-ranks the universe every ~10 min (SH_FILTER_INTERVAL_SEC,
+  // default 600 -- scripts/filter_loop.py), and one failed cycle (e.g. a
+  // transient Windows file lock on markets.json) makes the gap 2x that. Say
+  // so inline so "14m ago" reads as normal cadence plus a miss, not as a
+  // dead screener.
+  if (funnel && headerAge) {
+    const age = funnel.snapshot_age;
+    const SCAN_INTERVAL_SEC = scanIntervalSec(status);
+    headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + Math.round(SCAN_INTERVAL_SEC / 60) + 'm cycle';
+    if (age !== null && age !== undefined && age > SCAN_INTERVAL_SEC) {
+      // Past one full cycle: amber. Past two (a missed retry): red.
+      headerAge.style.color = age > SCAN_INTERVAL_SEC * 2 ? 'var(--error, #e5484d)' : 'var(--warn)';
+    } else {
+      headerAge.style.color = 'var(--text-secondary)';
+    }
+  }
+
   // Skip-if-unchanged guard (#270): the kanban is the heaviest paint on the
   // page (8 stages × example cards). Idling on Data & Markets re-rendered it
   // every 2s poll even when the funnel data was byte-identical — ~800ms of
   // main-thread work per poll that every click queued behind. Only the board
-  // rebuild skips; the pills/heartbeat above still update every call, and
-  // the 'last scan' header below is derived from funnel.snapshot_age, which
-  // is part of the fingerprint — identical fingerprint means identical text.
-  const boardFingerprint = JSON.stringify([kpi && kpi.funnel]);
+  // rebuild skips; the pills/heartbeat/header above update every call.
+  const boardFingerprint = JSON.stringify([funnel]);
   if (renderScreener.__lastFingerprint === boardFingerprint && board.innerHTML !== '') return;
   renderScreener.__lastFingerprint = boardFingerprint;
 
-  const funnel = kpi?.funnel;
   if (!funnel) {
     // No pipeline data — show empty state
     board.innerHTML = `<div class="kanban-empty" style="flex:1">
@@ -4952,21 +4973,6 @@ function renderScreener(kpi, scanState, status) {
       <div class="empty-state-msg">The Market Filter writes runtime/pipeline.json on each scan cycle. Data appears here once it runs.</div>
     </div>`;
     return;
-  }
-
-  // Snapshot age and census. The screener re-ranks the universe every
-  // ~10 min (SH_FILTER_INTERVAL_SEC, default 600 -- scripts/filter_loop.py),
-  // and one failed cycle (e.g. a transient Windows file lock on markets.json)
-  // makes the gap 2x that. Say so inline so "14m ago" reads as normal cadence
-  // plus a miss, not as a dead screener.
-  const age = funnel.snapshot_age;
-  const SCAN_INTERVAL_SEC = scanIntervalSec(status);
-  headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + Math.round(SCAN_INTERVAL_SEC / 60) + 'm cycle';
-  if (age !== null && age !== undefined && age > SCAN_INTERVAL_SEC) {
-    // Past one full cycle: amber. Past two (a missed retry): red.
-    headerAge.style.color = age > SCAN_INTERVAL_SEC * 2 ? 'var(--error, #e5484d)' : 'var(--warn)';
-  } else {
-    headerAge.style.color = 'var(--text-secondary)';
   }
 
   // Group rejections by canonical gate

@@ -238,6 +238,12 @@ async function main() {
     await app.pollStatus();
     if (!el('market-body').innerHTML.includes('Expandable')) throw new Error('markets did not paint');
     el('market-body').innerHTML = 'SENTINEL-BEFORE-EXPAND';
+    // Negative first (CodeRabbit round): identical inputs without `force`
+    // must NOT repaint — that is the whole point of the guard.
+    app.renderMarkets(SNAPSHOT['/api/kpi'], SNAPSHOT['/api/state']);
+    if (el('market-body').innerHTML !== 'SENTINEL-BEFORE-EXPAND') {
+      throw new Error('unchanged markets repainted without force');
+    }
     app.renderMarkets(SNAPSHOT['/api/kpi'], SNAPSHOT['/api/state'], { force: true });
     result = {
       forcedRepaint: el('market-body').innerHTML !== 'SENTINEL-BEFORE-EXPAND'
