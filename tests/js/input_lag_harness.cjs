@@ -193,6 +193,62 @@ async function main() {
       kanbanBoard: el('kanban-board').innerHTML,
       scanPill: el('market-scan-pill').innerHTML,
     };
+  } else if (scenario === 'skip-unchanged-heavy-repaint') {
+    // Issue #270: idling on the rail's Data & Markets page, every 2s poll
+    // rebuilt the whole 367-row markets table and the 8-stage kanban even
+    // when no input changed — ~800ms of main thread per poll that every
+    // click queued behind. A poll whose inputs are identical to the last
+    // PAINT must skip both rebuilds; changed inputs (or a cleared board)
+    // must still paint.
+    global.__railMounted = true;
+    setTabs(false, false, false);
+    setRailPage('data-markets');
+    await app.pollStatus();
+    const firstMarkets = el('market-body').innerHTML;
+    const firstKanban = el('kanban-board').innerHTML;
+    if (!firstMarkets) throw new Error('markets did not paint on first poll');
+    if (!firstKanban) throw new Error('kanban did not paint on first poll');
+    // Act — one identical poll (same snapshots): nothing heavy repaints.
+    el('market-body').innerHTML = 'UNTOUCHED-MARKETS';
+    el('kanban-board').innerHTML = 'UNTOUCHED-KANBAN';
+    await app.pollStatus();
+    const skippedMarkets = el('market-body').innerHTML === 'UNTOUCHED-MARKETS';
+    const skippedKanban = el('kanban-board').innerHTML === 'UNTOUCHED-KANBAN';
+    // Act — changed data: both must repaint over the sentinels. The kanban
+    // fingerprint covers kpi.funnel, so the changed payload varies it.
+    SNAPSHOT['/api/kpi'] = { portfolio: { account: { account_value_usd: 100 } }, by_market: { '0xchanged': { title: 'Changed Market', total_cost: 1 } }, funnel: { snapshot_age: 777, filters: [], graduated: [], final: [] } };
+    SNAPSHOT['/api/scan-state'] = { seconds_since_heartbeat: 5 };
+    await app.pollStatus();
+    const repaintedMarkets = el('market-body').innerHTML !== 'UNTOUCHED-MARKETS'
+      && el('market-body').innerHTML.includes('Changed Market');
+    const repaintedKanban = el('kanban-board').innerHTML !== 'UNTOUCHED-KANBAN';
+    result = {
+      firstPainted: firstMarkets.length > 0 && firstKanban.length > 0,
+      skippedMarkets, skippedKanban, repaintedMarkets, repaintedKanban,
+    };
+  } else if (scenario === 'markets-expand-rerenders') {
+    // Issue #270 guard: the skip must never freeze the row-expansion UX.
+    // Expanding a row re-invokes renderMarkets with IDENTICAL data, so the
+    // forced path must bypass the fingerprint guard and repaint.
+    global.__railMounted = true;
+    setTabs(false, false, false);
+    setRailPage('data-markets');
+    SNAPSHOT['/api/kpi'] = { portfolio: { account: { account_value_usd: 100 } }, by_market: { '0xmkt': { title: 'Expandable', total_cost: 1 } } };
+    SNAPSHOT['/api/state'] = { orders: [{ condition_id: '0xmkt', status: 'open' }], fills: [] };
+    await app.pollStatus();
+    if (!el('market-body').innerHTML.includes('Expandable')) throw new Error('markets did not paint');
+    el('market-body').innerHTML = 'SENTINEL-BEFORE-EXPAND';
+    // Negative first (CodeRabbit round): identical inputs without `force`
+    // must NOT repaint — that is the whole point of the guard.
+    app.renderMarkets(SNAPSHOT['/api/kpi'], SNAPSHOT['/api/state']);
+    if (el('market-body').innerHTML !== 'SENTINEL-BEFORE-EXPAND') {
+      throw new Error('unchanged markets repainted without force');
+    }
+    app.renderMarkets(SNAPSHOT['/api/kpi'], SNAPSHOT['/api/state'], { force: true });
+    result = {
+      forcedRepaint: el('market-body').innerHTML !== 'SENTINEL-BEFORE-EXPAND'
+        && el('market-body').innerHTML.includes('Expandable'),
+    };
   } else if (scenario === 'hidden-tabs-skipped') {
     // Arrange — only Tab 1 visible, like the operator sitting on LIVE OPERATIONS.
     setTabs(false, true, true);
