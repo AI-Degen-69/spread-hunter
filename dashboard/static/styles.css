@@ -441,8 +441,11 @@ header {
 .analytics-total .kpi-value { font-size:24px; margin-top:4px; }
 .analytics-chip-row { display:flex; flex-direction:column; gap:8px; }
 .analytics-chip-row-line { display:flex; flex-wrap:wrap; gap:8px; }
-.analytics-chip { display:inline-flex; align-items:center; min-height:28px; padding:6px 10px; border-radius:999px; border:1px solid var(--border-strong); background:rgba(255,255,255,.04); color:var(--text-secondary); font:600 11px/1.2 'IBM Plex Sans',sans-serif; }
+.analytics-chip { display:inline-flex; align-items:center; min-height:28px; padding:6px 10px; border-radius:999px; border:1px solid var(--border-strong); background:rgba(255,255,255,.04); color:var(--text-secondary); font:600 11px/1.2 'IBM Plex Sans',sans-serif; cursor:default; }
+/* Interactive variant — a chip that acts as a control (click/keyboard).
+   Meta .analytics-chip above is read-only status text, never a control. */
 .analytics-chip b { color:var(--text-primary); margin-left:4px; }
+.analytics-chip-control { display:inline-flex; align-items:center; min-height:var(--touch-min); padding:6px 12px; border-radius:999px; border:1px solid var(--border-strong); background:rgba(255,255,255,.04); color:var(--text-secondary); font:600 11px/1.2 'IBM Plex Sans',sans-serif; cursor:pointer; }
 .analytics-chip.live { color:#34d399; background:var(--green-bg); border-color:var(--green-border); }
 .analytics-chip.warn { color:#fbbf24; background:var(--amber-bg); border-color:var(--amber-border); }
 .analytics-chip.bad { color:#fca5a5; background:var(--red-bg); border-color:var(--red-border); }
@@ -469,7 +472,7 @@ header {
 .analytics-rail-zero { position:absolute; top:-3px; bottom:-3px; width:2px; background:rgba(255,255,255,.55); }
 .analytics-rail-mean { position:absolute; top:50%; width:11px; height:11px; transform:translate(-50%,-50%); border:2px solid var(--signal); border-radius:50%; background:#fff; }
 .analytics-ci-buttons { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-.analytics-ci-buttons button { min-height:36px; padding:7px 10px; border:1px solid var(--border-strong); border-radius:7px; background:var(--bg-surface-raised); color:var(--text-secondary); font:600 11px 'IBM Plex Sans',sans-serif; cursor:pointer; }
+.analytics-ci-buttons button { min-height:var(--touch-min); padding:7px 10px; border:1px solid var(--border-strong); border-radius:7px; background:var(--bg-surface-raised); color:var(--text-secondary); font:600 11px 'IBM Plex Sans',sans-serif; cursor:pointer; }
 .analytics-ci-buttons button.active { color:var(--text-primary); border-color:var(--signal); }
 .analytics-line { width:100%; min-height:150px; height:calc(100% - 38px); display:block; }
 .analytics-line-unmeasured { stroke-dasharray:4 3; }
@@ -1177,7 +1180,14 @@ td { font-size: 13px; }
 
 /* ── Accessibility (DT6) ── */
 :focus-visible {
-  outline: 2px solid var(--open);
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+/* Every clickable thing in dashboard scope carries the same keyboard ring:
+   2px signal color, 2px offset. The generic rule above stays as fallback. */
+button:focus-visible, a:focus-visible, [role="button"]:focus-visible,
+input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--signal);
   outline-offset: 2px;
 }
 /* ── Run Profitability Banner ── */
@@ -2013,6 +2023,7 @@ td { font-size: 13px; }
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   font-weight: 700;
+  min-height: var(--touch-min);
   padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
