@@ -1,4 +1,4 @@
-/* Spread Hunter Live — Dashboard Application Logic
+/* Spread Hunter — Dashboard Application Logic
  *
  * Consumes existing API endpoints:
  *   GET  /api/state            — order/fill state

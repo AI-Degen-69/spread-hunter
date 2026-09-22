@@ -1,5 +1,5 @@
 {
-  "name": "Spread Hunter Live",
+  "name": "Spread Hunter",
   "description": "Real-money execution engine and operations dashboard for the Polymarket spread hunter strategy",
   "requestFramePermissions": [],
   "majorCapabilities": [

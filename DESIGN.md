@@ -1,4 +1,4 @@
-# Design System — Spread Hunter Live
+# Design System — Spread Hunter
 
 > **The single source of truth for every visual and UI decision in this repo.**
 > Read this file before touching `dashboard/static/` or any operator-facing page.

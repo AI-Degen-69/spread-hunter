@@ -427,14 +427,14 @@ function Save-DashInstance {
     }
     New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
     [pscustomobject]@{
-        strategy = "spread-hunter-live"
+        strategy = "spread-hunter"
         saved    = (Get-Date).ToString("o")
         dash     = $record
     } | ConvertTo-Json -Depth 4 | Set-Content -Path $DashPidFile -Encoding UTF8
 }
 
 function Test-DashboardServer {
-    <# True when whatever answers on :LivePort is a spread-hunter LIVE dashboard
+    <# True when whatever answers on :LivePort is a spread-hunter dashboard
     (answers /api/system/status with a services.dash entry AND reports the
     production registry). Guards adoption so a menu-unowned shadow dashboard
     (or unrelated process) squatting on the port is never adopted as live nor
@@ -580,7 +580,7 @@ function Save-ShadowDashInstance {
     }
     New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
     [pscustomobject]@{
-        strategy = "spread-hunter-live"
+        strategy = "spread-hunter"
         mode     = "shadow"
         saved    = (Get-Date).ToString("o")
         dash     = $record
@@ -2285,7 +2285,7 @@ function Invoke-LiveAction {
             }
             $null = Resume-ShadowRun
         }
-        "q" { Write-Host "Exiting Spread Hunter Live menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
+        "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
             Lsh-Warn "Invalid selection: $Key (choose 1-9, or q)."
             Start-Sleep -Seconds 1
@@ -2372,7 +2372,7 @@ if ($Action -ne "") {
     exit 0
 }
 
-Lsh-Banner -Title "SPREAD HUNTER LIVE - CONTROL CENTER"
+Lsh-Banner -Title "SPREAD HUNTER - CONTROL CENTER"
 Show-MenuGrid
 Write-Host "  Select " -ForegroundColor (Get-ProfileColor -Name Text) -NoNewline
 Write-Host "[1-9, q]" -ForegroundColor (Get-ProfileColor -Name Command) -NoNewline

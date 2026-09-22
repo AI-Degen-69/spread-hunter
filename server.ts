@@ -1,5 +1,5 @@
 /**
- * Spread Hunter Live — TS dashboard bridge (read-only reverse proxy)
+ * Spread Hunter — TS dashboard bridge (read-only reverse proxy)
  *
  * Serves the frontend from dashboard/static on PORT (default 8800) and
  * reverse-proxies all GET /api/* requests to the live Python FastAPI backend

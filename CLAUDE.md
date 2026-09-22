@@ -1,4 +1,4 @@
-# CLAUDE.md — Spread Hunter Live
+# CLAUDE.md — Spread Hunter
 
 @AGENTS.md
 

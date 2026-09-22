@@ -1,5 +1,5 @@
 {
-  "name": "spread-hunter-live",
+  "name": "spread-hunter",
   "version": "1.0.0",
   "description": "Real-money execution engine and operations dashboard for the Polymarket spread hunter strategy",
   "type": "module",
