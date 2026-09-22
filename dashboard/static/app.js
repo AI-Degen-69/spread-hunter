@@ -4535,7 +4535,9 @@ function marketRowPairHtml(cid, m, opts) {
     <td class="mono">${esc(m.realized_pnl !== null && m.realized_pnl !== undefined ? fmtUSD(m.realized_pnl) : '--')}</td>
     <td class="mono">${esc(fills_count)}</td>
     <td>
-      <span class="pill ${isFinished ? 'finished' : (m.quotes_count > 0 ? 'quoting-breathing' : 'stopped')}">${isFinished ? 'FINISHED' : (m.quotes_count > 0 ? 'QUOTING' : 'IDLE')}</span>
+      ${isFinished
+        ? '<span class="pill finished">FINISHED</span>'
+        : marketStatusPill(m, (allOrders || []).some(o => isRestingOrder(o)))}
       ${m.resolution ? `<div class="caption-muted" title="resolved ${new Date(m.resolution.resolved_ts * 1000).toLocaleString()}">${m.resolution.winner ? ('Winner: ' + esc(m.resolution.winner)) : 'Resolved'} · ${fmtAgo(m.resolution.resolved_ts)}</div>` : ''}
     </td>
   </tr>`;
