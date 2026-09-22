@@ -77,6 +77,12 @@
 - Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
 - UI-only: only `dashboard/static/styles.css` plus the new test may change; no layout reflow (wrap stays), no backend change; mobile 360px still wraps cleanly.
 
+## Constraints: Issue #278 — status strip overflow cue + keyboard scroll
+- Zero regressions: focused dashboard suites covering touched files must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): static test pinning tabindex, no-shrink desktop row, `.is-scrollable` cue, focus ring, JS toggle, intact mobile wrap.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- UI-only: only `dashboard/static/index.html` (one attr), `styles.css` (cue rules), `app.js` (toggle + export) plus the new test may change; no control moves, no backend change; mobile wrap at 900px unchanged.
+
 ## Constraints: Issue #264 — Dashboard input lag (tab clicks freeze 2-4s)
 - Zero regressions: focused selection (`tests/test_dashboard_server.py`, `tests/test_dashboard_snapshot_cache.py`, `tests/test_dashboard_narrow_viewport.py`) must pass; full `python -m pytest -q` stays with GitHub CI.
 - New/changed behavior needs a test that fails without the change (RED before GREEN): e.g. a static test pinning that hidden-tab renders are skipped or deferred and that tab switching paints synchronously.
