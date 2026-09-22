@@ -4097,7 +4097,12 @@ function marketStatusPill(m, restingHere) {
 function activeMarketsRows(kpi, state) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
   const entries = Object.entries((kpi && kpi.by_market) || {})
-    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid]));
+    // Everything listed here is being worked, so IDLE cannot appear: a market
+    // with no quote activity and only a filled/cancelled order has nothing
+    // active to show (issue #272; CodeRabbit round on this PR).
+    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid])
+      && ((m.quotes_count || 0) > 0
+        || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
 
   if (!entries.length) return otEmptyRow('active-markets', 'No markets are being quoted.');
 

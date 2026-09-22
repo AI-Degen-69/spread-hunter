@@ -857,6 +857,23 @@ def test_active_markets_labels_a_market_with_resting_orders_resting():
 
 
 @requires_node
+def test_active_markets_excludes_a_zero_quote_market_with_only_a_filled_order():
+    # Arrange — issue #272 (CodeRabbit round): a market with no quote activity
+    # and only a filled order passes `isQuotedMarket` via its alive order, but
+    # it has nothing active to show and would render IDLE — the exact state
+    # the tab must not display.
+    kpi = _kpi()
+    kpi["by_market"][CID_HELD]["quotes_count"] = 0
+
+    # Act
+    rendered = _render("active-markets", kpi, _state())
+
+    # Assert
+    assert "Held Market" not in rendered["html"]
+    assert rendered["rows"] == 1
+
+
+@requires_node
 def test_active_markets_status_header_explains_the_vocabulary():
     # Arrange — issue #272: the operator must be able to read what each
     # status means without leaving the table.
