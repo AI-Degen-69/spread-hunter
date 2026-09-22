@@ -49,8 +49,10 @@ Direction: `Spread Hunter Live` → `Spread Hunter`,
 - [x] GitHub URLs untouched and still resolve
 - [x] Dashboard brand reads SPREAD HUNTER; explainer footer matches
 - [x] `strategy` pid value reads `spread-hunter`; nothing reads it back
-- [ ] gbrain pin + gbrain examples in AGENTS.md/CLAUDE.md — deferred to the
-      repo-rename pass (see In scope above); allow-listed in the guard
+- [x] gbrain pin + gbrain examples in AGENTS.md/CLAUDE.md — done in the
+      repo-rename pass: GitHub repo renamed `spread-hunter-live` → `spread-hunter`,
+      URLs, folder trees, `.mcp.json` path, and gbrain pin updated; allow-list
+      pruned from the guard
 
 ## How to verify (hands-on, operator)
 1. Open `http://127.0.0.1:8799` — brand shows SPREAD HUNTER.

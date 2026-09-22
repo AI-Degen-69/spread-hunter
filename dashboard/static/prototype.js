@@ -267,7 +267,7 @@ const RAIL_LINKS = [
           + 'M8 1.6a9.6 9.6 0 0 1 0 12.8 M8 1.6a9.6 9.6 0 0 0 0 12.8',
   },
   {
-    href: 'https://github.com/AI-Degen-69/spread-hunter-live',
+    href: 'https://github.com/AI-Degen-69/spread-hunter',
     label: 'Repository',
     icon: 'M6.2 13.4c-2.6.8-2.6-1.3-3.6-1.6 M9.8 14.4v-2.3c0-.7.2-1 .5-1.2 '
           + '-2.3-.3-3.9-1.1-3.9-3.9 0-1 .3-1.7.8-2.3-.1-.3-.4-1.2.1-2.3 0 0 .7-.2 '

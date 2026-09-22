@@ -1,6 +1,6 @@
 # Git and GitHub
 
-Repo: `AI-Degen-69/spread-hunter-live` (`origin`), default branch `main`. CodeRabbit
+Repo: `AI-Degen-69/spread-hunter` (`origin`), default branch `main`. CodeRabbit
 reviews every pull request; the conventions below match its configuration, so its title
 check passes on the first try.
 
