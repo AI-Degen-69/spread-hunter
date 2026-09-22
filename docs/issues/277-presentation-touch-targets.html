@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>#277 — כפתורים שאפשר ללחוץ באצבע</title>
+<style>
+  :root {
+    --bg: #080c14; --panel: #0f172a; --line: rgba(255,255,255,.12);
+    --text: #f8fafc; --muted: #94a3b8;
+    --green: #10b981; --green-dim: rgba(16,185,129,.14);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; line-height: 1.6; padding: 24px; }
+  main { max-width: 720px; margin: 0 auto; text-align: center; }
+  h1 { font-size: 1.7rem; margin-bottom: 8px; }
+  .lede { color: var(--muted); margin-bottom: 26px; }
+  .lede b { color: var(--text); }
+  .demo { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px 22px 30px; }
+  .demo .sub { color: var(--muted); font-size: .9rem; margin-bottom: 18px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; margin-bottom: 22px; }
+  .seg button { background: transparent; color: var(--muted); border: 0; padding: 10px 22px; font-size: .9rem; font-weight: 700; cursor: pointer; min-height: 44px; }
+  .seg button[aria-pressed="true"] { background: var(--green-dim); color: var(--green); }
+  .seg button:focus-visible, .sample:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  .stage { position: relative; display: flex; justify-content: center; padding: 26px 0 10px; }
+  .sample { background: #1e293b; color: var(--text); border: 1px solid rgba(255,255,255,.2); border-radius: 8px; font-weight: 700; font-size: .85rem; cursor: pointer; }
+  .finger { position: absolute; top: 0; width: 88px; height: 88px; border-radius: 50%;
+    border: 2px dashed var(--green); background: rgba(16,185,129,.1);
+    display: flex; align-items: flex-end; justify-content: center;
+    font-size: .72rem; color: var(--green); padding-bottom: 6px; pointer-events: none; }
+  .verdict { margin-top: 14px; font-weight: 700; }
+  .verdict.ok { color: var(--green); }
+  .verdict.miss { color: #f87171; }
+  .hint { margin-top: 20px; color: var(--muted); font-size: .88rem; }
+  .hint kbd { background: #1e293b; border: 1px solid var(--line); border-radius: 6px; padding: 1px 8px; font-family: inherit; }
+  @media (prefers-reduced-motion: no-preference) {
+    .sample { transition: height .25s ease, padding .25s ease; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>כפתורים שאפשר ללחוץ באצבע</h1>
+  <p class="lede">
+    חלק מהכפתורים היו נמוכים מדי — <b>36 פיקסלים</b> במקום <b>44</b> —
+    אז לחיצה באצבע פספסה. עכשיו כולם בגובה מלא, ומי שמנווט עם מקלדת רואה מסגרת ירוקה ברורה.
+  </p>
+
+  <section class="demo" aria-label="הדמיה">
+    <p class="sub">בחר גובה כפתור וראה איך קצה אצבע מכסה אותו</p>
+    <div class="seg" role="group" aria-label="גובה כפתור">
+      <button id="b36" aria-pressed="false">36 — לפני</button>
+      <button id="b44" aria-pressed="true">44 — אחרי</button>
+    </div>
+    <div class="stage">
+      <div class="finger" aria-hidden="true">אצבע</div>
+      <button class="sample" id="sample">סנן גרף</button>
+    </div>
+    <p class="verdict ok" id="verdict">מכסה היטב — לחיצה פוגעת</p>
+    <p class="hint">טיפ: לחץ <kbd>Tab</kbd> עד שהכפתור מקבל מסגרת ירוקה — ככה זה נראה בדשבורד האמיתי.</p>
+  </section>
+</main>
+
+<script>
+(function () {
+  var sample = document.getElementById('sample');
+  var verdict = document.getElementById('verdict');
+  var b36 = document.getElementById('b36');
+  var b44 = document.getElementById('b44');
+  function set(h) {
+    var small = h === 36;
+    sample.style.height = h + 'px';
+    sample.style.padding = small ? '0 14px' : '0 18px';
+    b36.setAttribute('aria-pressed', small ? 'true' : 'false');
+    b44.setAttribute('aria-pressed', small ? 'false' : 'true');
+    verdict.textContent = small ? 'קטן מהאצבע — קל לפספס' : 'מכסה היטב — לחיצה פוגעת';
+    verdict.className = 'verdict ' + (small ? 'miss' : 'ok');
+  }
+  b36.addEventListener('click', function () { set(36); });
+  b44.addEventListener('click', function () { set(44); });
+  set(44);
+})();
+</script>
+</body>
+</html>

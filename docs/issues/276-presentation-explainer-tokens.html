@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>#276 — דף ההסבר חזר לדבר באותה שפה</title>
+<style>
+  :root {
+    --bg: #080c14; --panel: #0f172a; --line: rgba(255,255,255,.12);
+    --text: #f8fafc; --muted: #94a3b8;
+    --cyan: #38bdf8; --cyan-dim: rgba(56,189,248,.14);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; line-height: 1.6; padding: 24px; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.7rem; margin-bottom: 8px; letter-spacing: .02em; }
+  .lede { color: var(--muted); margin-bottom: 24px; }
+  .lede b { color: var(--text); }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .split { grid-template-columns: 1fr; } }
+  .mock { border-radius: 12px; padding: 18px; border: 1px solid var(--line); }
+  .mock h2 { font-size: 1rem; margin-bottom: 10px; }
+  .mock .bar { height: 34px; border-radius: 8px; display: flex; align-items: center; padding: 0 12px; font-weight: 800; letter-spacing: .06em; font-size: .85rem; margin-bottom: 10px; }
+  .mock p { font-size: .88rem; }
+  .chips { display: flex; gap: 8px; margin-top: 12px; }
+  .chips span { width: 34px; height: 22px; border-radius: 6px; }
+  .before { background: #0a0d14; background-image: radial-gradient(circle at 20% 20%, rgba(56,189,248,.18) 0%, transparent 45%); }
+  .before .bar { background: #121826; color: #f1f5f9; box-shadow: 0 0 25px rgba(56,189,248,.35); font-family: "Segoe UI", sans-serif; }
+  .after { background: #080c14; }
+  .after .bar { background: #0f172a; color: var(--cyan); border: 1px solid rgba(56,189,248,.35); font-family: Impact, "Arial Narrow", sans-serif; }
+  .tag { display: inline-block; font-size: .75rem; font-weight: 700; padding: 3px 12px; border-radius: 999px; margin-bottom: 10px; }
+  .tag.bad { background: rgba(248,113,113,.14); color: #f87171; border: 1px solid rgba(248,113,113,.4); }
+  .tag.good { background: var(--cyan-dim); color: var(--cyan); border: 1px solid rgba(56,189,248,.4); }
+  .foot { margin-top: 24px; color: var(--muted); font-size: .92rem; }
+  .foot b { color: var(--cyan); }
+</style>
+</head>
+<body>
+<main>
+  <h1>דף ההסבר חזר לדבר באותה שפה</h1>
+  <p class="lede">
+    דף ההסבר של האסטרטגיה נראה כמו אפליקציה אחרת: <b>צבעים משלו, רקע זוהר, גופן אחר</b>.
+    עכשיו הוא משתמש באותם צבעים, אותו רקע שטוח ואותו גופן כותרות כמו שאר המסכים.
+  </p>
+
+  <div class="split">
+    <section class="mock before" aria-label="לפני">
+      <span class="tag bad">לפני</span>
+      <h2>הדמיה של המראה הישן</h2>
+      <div class="bar">STRATEGY</div>
+      <p>רקע עם הילה זוהרת, גוונים שלא קיימים בשום מסך אחר, כותרת בגופן רגיל.</p>
+      <div class="chips" aria-hidden="true">
+        <span style="background:#0a0d14;border:1px solid #333"></span>
+        <span style="background:#f43f5e"></span>
+        <span style="background:#a855f7"></span>
+      </div>
+    </section>
+    <section class="mock after" aria-label="אחרי">
+      <span class="tag good">אחרי</span>
+      <h2>הדמיה של המראה החדש</h2>
+      <div class="bar">STRATEGY</div>
+      <p>רקע שטוח כהה, אותם צבעי מצב כמו בדשבורד, כותרת בגופן המותג הצר.</p>
+      <div class="chips" aria-hidden="true">
+        <span style="background:#080c14;border:1px solid #555"></span>
+        <span style="background:#10b981"></span>
+        <span style="background:#38bdf8"></span>
+      </div>
+    </section>
+  </div>
+
+  <p class="foot">
+    <b>מה השתנה בפועל:</b> הוסרו המעברונים והזוהר, הגוונים הוחלפו לאלה של הדשבורד,
+    והכותרות עברו לגופן המותג. התוכן עצמו לא השתנה — רק הבגדים.
+  </p>
+</main>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>#278 — שורת המצב כבר לא בולעת כדורים</title>
+<style>
+  :root {
+    --bg: #080c14; --panel: #0f172a; --line: rgba(255,255,255,.12);
+    --text: #f8fafc; --muted: #94a3b8;
+    --amber: #f59e0b; --amber-dim: rgba(245,158,11,.13);
+    --green: #10b981; --red: #ef4444; --cyan: #38bdf8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; line-height: 1.7; padding: 24px; }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 1.7rem; margin-bottom: 8px; }
+  .lede { color: var(--muted); margin-bottom: 24px; }
+  .lede b { color: var(--text); }
+  .strip-wrap { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 0; }
+  .strip-wrap .cap { padding: 0 16px 10px; color: var(--muted); font-size: .85rem; }
+  .strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px 16px 10px; scrollbar-width: none; }
+  .strip::-webkit-scrollbar { display: none; }
+  .strip:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; border-radius: 12px; }
+  .pill { flex: 0 0 auto; font-size: .75rem; font-weight: 700; padding: 5px 12px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+  .g { color: var(--green); border-color: rgba(16,185,129,.5); background: rgba(16,185,129,.12); }
+  .r { color: var(--red); border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.12); }
+  .c { color: var(--cyan); border-color: rgba(56,189,248,.5); background: rgba(56,189,248,.12); }
+  .cue { position: absolute; top: 0; bottom: 0; width: 44px; pointer-events: none; opacity: 0; }
+  html[dir="rtl"] .cue.end { left: 0; border-radius: 12px 0 0 12px; background: linear-gradient(to right, rgba(245,158,11,.28), transparent); }
+  .strip-wrap[data-cut="end"] .cue.end { opacity: 1; }
+  .cue-label { padding: 10px 16px 0; font-size: .82rem; font-weight: 700; color: var(--amber); min-height: 1.6em; }
+  .foot { margin-top: 22px; color: var(--muted); font-size: .92rem; }
+  .foot b { color: var(--amber); }
+</style>
+</head>
+<body>
+<main>
+  <h1>שורת המצב כבר לא בולעת כדורים</h1>
+  <p class="lede">
+    שורת המצב העליונה נחתכה במסכים צרים <b>בלי שום סימן</b> —
+    כדור אדום יכול היה להתחבא מחוץ למסך. עכשיו יש <b>הילה ענברית</b> בקצה החתוך,
+    והשורה נגללת גם מהמקלדת.
+  </p>
+
+  <section class="strip-wrap" data-cut="end" aria-label="הדמיה">
+    <p class="cap">גרור הצידה או לחץ Tab ואז חצים — ההילה נעלמת כשהגעת לסוף</p>
+    <div class="strip" id="strip" tabindex="0" role="region" aria-label="שורת מצב לדוגמה — גלול לראות את כל הכדורים">
+      <span class="pill g">SCAN RUNNING</span>
+      <span class="pill g">ENGINE RUNNING</span>
+      <span class="pill c">SERVICES 5/5</span>
+      <span class="pill g">WATCHDOG RUNNING</span>
+      <span class="pill c">DB: LIVE</span>
+      <span class="pill g">EXPOSURE SAFE</span>
+      <span class="pill r">GATE DOWN</span>
+      <span class="pill c">SYNC VENUE</span>
+      <span class="pill g">STACK RUNNING</span>
+    </div>
+    <div class="cue end" aria-hidden="true"></div>
+    <p class="cue-label" id="cueLabel">יש עוד כדורים בהמשך ←</p>
+  </section>
+
+  <p class="foot">
+    <b>בדשבורד האמיתי:</b> אותה הילה ואותה גלילה יושבות על שורת המצב העליונה —
+    שום כדור לא נחתך בשקט. במסך צר (טלפון) השורה עדיין נשברת לכמה שורות כרגיל.
+  </p>
+</main>
+
+<script>
+(function () {
+  var strip = document.getElementById('strip');
+  var wrap = strip.parentElement;
+  var label = document.getElementById('cueLabel');
+  function update() {
+    var cut = strip.scrollWidth - strip.clientWidth - Math.abs(strip.scrollLeft) > 4;
+    wrap.setAttribute('data-cut', cut ? 'end' : 'none');
+    label.textContent = cut ? 'יש עוד כדורים בהמשך ←' : 'הגעת לסוף — הכל גלוי';
+  }
+  strip.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+  update();
+})();
+</script>
+</body>
+</html>
