@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>#273 — הכדור שצעק IDLE בזמן שהבוט עבד</title>
+<style>
+  :root {
+    --bg: #0e1420; --panel: #161e2e; --line: #26314a;
+    --text: #e8edf6; --muted: #93a1ba;
+    --teal: #2dd4bf; --amber: #fbbf24; --red: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    line-height: 1.6; padding: 24px;
+  }
+  main { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 1.7rem; margin-bottom: 8px; }
+  .lede { color: var(--muted); margin-bottom: 28px; }
+  .lede b { color: var(--text); }
+  .demo { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  .demo h2 { font-size: 1.05rem; margin-bottom: 4px; }
+  .demo .sub { color: var(--muted); font-size: .9rem; margin-bottom: 16px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 12px 10px; border-radius: 10px; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .mkt { flex: 1; font-weight: 600; }
+  .mkt small { display: block; color: var(--muted); font-weight: 400; font-size: .82rem; }
+  .pill {
+    font-size: .78rem; font-weight: 700; letter-spacing: .4px;
+    padding: 5px 14px; border-radius: 999px; white-space: nowrap;
+  }
+  .pill.quoting { background: rgba(45,212,191,.15); color: var(--teal); border: 1px solid rgba(45,212,191,.4); }
+  .pill.resting { background: rgba(45,212,191,.32); color: var(--teal); border: 1px solid var(--teal); }
+  .pill.idle { background: rgba(248,113,113,.12); color: var(--red); border: 1px solid rgba(248,113,113,.4); }
+  .pill.dim { opacity: .45; text-decoration: line-through; }
+  .then { text-align: center; color: var(--muted); font-size: .8rem; margin: 2px 0; }
+  .arrow { color: var(--muted); }
+  .foot { margin-top: 26px; color: var(--muted); font-size: .92rem; }
+  .foot b { color: var(--teal); }
+  @media (prefers-reduced-motion: no-preference) {
+    .pill.quoting, .pill.resting { animation: breathe 2.4s ease-in-out infinite; }
+    @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .72; } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>הכדור שצעק IDLE בזמן שהבוט עבד</h1>
+  <p class="lede">
+    בטאב <b>Active Markets</b> שוק שהבוט מצטט ברגע זה הוצג כ־<b>IDLE</b> — כאילו שום דבר לא קורה.
+    הסיבה: הכדור הסתכל רק על הזמנות שמונחות על הספר, לא על פעילות הציטוט עצמה.
+    עכשיו יש מילון ברור בן שלושה מצבים.
+  </p>
+
+  <section class="demo">
+    <h2>מה תראה עכשיו בטבלה</h2>
+    <p class="sub">לחץ על כל שוק כדי לראות לפני ← אחרי</p>
+
+    <div class="row" id="r1" role="button" tabindex="0">
+      <div class="mkt">MLB · Yankees vs Red Sox<small>מצוטט עכשיו, אין הזמנות על הספר</small></div>
+      <span class="pill idle" id="p1">IDLE</span>
+    </div>
+    <div class="row" id="r2" role="button" tabindex="0">
+      <div class="mkt">NBA · Lakers vs Celtics<small>מצוטט + הזמנות מונחות על הספר</small></div>
+      <span class="pill quoting" id="p2">QUOTING</span>
+    </div>
+    <div class="row" id="r3" role="button" tabindex="0">
+      <div class="mkt">LOL · T1 vs Gen.G<small>הציטוט הפסיק, ההזמנות בוטלו</small></div>
+      <span class="pill quoting" id="p3">QUOTING</span>
+    </div>
+  </section>
+
+  <p class="foot">
+    <b>שלושה מצבים, בלי כפילות משמעויות:</b>
+    RESTING — יש הזמנות מונחות על הספר ·
+    QUOTING — המנוע מצטט כרגע ·
+    IDLE — אין פעילות ציטוט (לא יופיע יותר בטאב הזה).
+    ריחוף על כותרת העמודה בדשבורד מסביר כל מצב.
+  </p>
+</main>
+
+<script>
+(function () {
+  var states = {
+    r1: { then: ['idle', 'IDLE'], now: ['quoting', 'QUOTING'] },
+    r2: { then: ['quoting', 'QUOTING'], now: ['resting', 'RESTING'] },
+    r3: { then: ['quoting', 'QUOTING'], now: ['idle', 'IDLE'] }
+  };
+  Object.keys(states).forEach(function (id) {
+    var row = document.getElementById(id);
+    var pill = document.getElementById(id.replace('r', 'p'));
+    var flipped = false;
+    function flip() {
+      flipped = !flipped;
+      var s = flipped ? states[id].now : states[id].then;
+      pill.className = 'pill ' + s[0];
+      pill.textContent = s[1];
+    }
+    row.addEventListener('click', flip);
+    row.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
