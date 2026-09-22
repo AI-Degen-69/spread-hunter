@@ -3439,6 +3439,10 @@ function renderAnalyticsSurface(kpi, status) {
  * behind the Reports grid — froze the card at its pre-data standby on every
  * other page. They are their own paint now, gated by their own target. */
 function renderPortfolioOverview(kpi, status) {
+  // Same contract as renderKPIs: a payload without a portfolio is malformed
+  // for this paint, and computed-from-nothing standby figures must not
+  // overwrite whatever the card last showed.
+  if (!kpi || !kpi.portfolio) return;
   renderRunProfitability(kpi);
   renderBrokerPortfolioOverview(kpi, status);
 }

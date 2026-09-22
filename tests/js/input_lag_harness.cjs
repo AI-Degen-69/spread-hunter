@@ -141,6 +141,10 @@ const PANEL_PAGE = {
 for (const [panelId, page] of Object.entries(PANEL_PAGE)) {
   el(panelId).parentElement = el('page-' + page);
 }
+// Seeded sentinel (CodeRabbit round on #269): an empty initial hero cannot
+// distinguish "skipped" from "cleared and never painted". A sentinel the
+// paint must replace proves both directions.
+el('broker-hero-equity').textContent = 'SENTINEL-STANDBY';
 
 async function main() {
   let result;
@@ -166,7 +170,6 @@ async function main() {
       scanPill: el('market-scan-pill').innerHTML,
     };
   } else if (scenario === 'rail-skips-offpage-renders') {
-    // Arrange — the operator sits on the rail's Dashboard (home) while the
     // legacy tab shells all read visible, exactly as prototype.js leaves them.
     // Act — one poll tick: the gating must consult the active rail page, so
     // sections living on other pages are skipped even though the legacy tab

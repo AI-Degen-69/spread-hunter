@@ -62,10 +62,11 @@ def test_poll_paints_only_the_active_rail_page():
 
     # Assert — the active rail page's sections painted; the pages the rail
     # keeps hidden (Reports tiles, Data & Markets tables, kanban) untouched.
-    # The header stays live regardless of the page shown.
+    # The header stays live regardless of the page shown. The portfolio hero
+    # was seeded with a sentinel: the Trades gate must leave it untouched.
     assert res["serviceCards"] != ""
     assert res["masterIndicator"] != ""
-    assert res["brokerHero"] == ""
+    assert res["brokerHero"] == "SENTINEL-STANDBY"
     assert res["ordersHead"] == ""
     assert res["kpiGrid"] == ""
     assert res["marketBody"] == ""
@@ -86,10 +87,12 @@ def test_poll_skips_offpage_renders_even_when_tab_gates_all_claim_visible():
     # claimed to be visible. Header stays live — including the master-stack
     # pill renderServiceCards paints: it sits in the top nav on every page,
     # so a poll that skips the Trades grid must still refresh it. The
-    # portfolio hero is Home's own section (#140 moved it there), so it must
-    # paint with Home even though renderKPIs also owns the Reports tiles.
+    # portfolio hero is Home's own section (#140 moved it there): the seeded
+    # sentinel must be REPLACED by a real paint, which distinguishes "painted
+    # from data" from "cleared and never painted".
     assert res["serviceCards"] == ""
     assert res["masterIndicator"] != ""
+    assert res["brokerHero"] != "SENTINEL-STANDBY"
     assert res["brokerHero"] != ""
     assert res["ordersHead"] != ""
     assert res["kpiGrid"] == ""
