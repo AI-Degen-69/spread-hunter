@@ -827,6 +827,50 @@ def test_active_markets_retains_live_quoting_status_pill():
     assert "QUOTING" in rendered["html"]
 
 
+@requires_node
+def test_active_markets_does_not_call_a_quoted_market_without_resting_orders_idle():
+    # Arrange — issue #272: a market that is being quoted but whose orders have
+    # not rested (or were cancelled/filled) is NOT idle. CID_HELD is quoted
+    # (quotes_count=2) and holds only a filled and a cancelled order, so
+    # nothing is resting on the book.
+    rendered = _render("active-markets", _kpi(), _state())
+
+    # Act
+    held_row = rendered["html"].split("Held Market")[1].split("</tr>")[0]
+
+    # Assert — active quoting, no resting order: QUOTING, never IDLE.
+    assert "QUOTING" in held_row
+    assert "IDLE" not in held_row
+
+
+@requires_node
+def test_active_markets_labels_a_market_with_resting_orders_resting():
+    # Arrange — CID_QUOTED has both legs resting on the book; the more
+    # specific state outranks plain QUOTING.
+    rendered = _render("active-markets", _kpi(), _state())
+
+    # Act
+    quoted_row = rendered["html"].split("Quoted Market")[1].split("</tr>")[0]
+
+    # Assert
+    assert "RESTING" in quoted_row
+
+
+@requires_node
+def test_active_markets_status_header_explains_the_vocabulary():
+    # Arrange — issue #272: the operator must be able to read what each
+    # status means without leaving the table.
+    # Act
+    head = _render("active-markets", _kpi(), _state())["head"]
+
+    # Assert
+    status_th = head.split("Status")[0].rsplit("<th", 1)[1] if False else None
+    rendered = _render("active-markets", _kpi(), _state())
+    assert 'title=' in rendered["head"]
+    assert "RESTING" in rendered["head"]
+    assert "QUOTING" in rendered["head"]
+
+
 
 # ── Tab counts ──────────────────────────────────────────────────────────────
 
