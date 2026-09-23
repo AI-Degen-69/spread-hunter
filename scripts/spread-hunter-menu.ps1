@@ -113,10 +113,6 @@ $ShadowPidFile = Join-Path $RunDir "shadow-dash.pids.json"
 $ShadowDbPath  = $null
 $StatsDbPath   = $null
 $ShadowRunId   = $null
-$ShadowPort    = 8799
-$ShadowDashUrl = "http://127.0.0.1:$ShadowPort"
-$ShadowOutLog  = Join-Path $RunDir "shadow_dash.out.log"
-$ShadowErrLog  = Join-Path $RunDir "shadow_dash.err.log"
 
 # Shadow dashboard ports derive from the run id (#288): shadow-01 -> 8801,
 # shadow-02 -> 8802. :8799 is live-only and is never derived here. The
@@ -2335,7 +2331,7 @@ function Reset-Environment {
                 Write-ProfileSuccess -Message "Market screener" -Detail "(PID $($screener.Id)) - refreshes the market feed"
                 Write-ProfileSuccess -Message "Statistics observer" -Detail "(PID $($observer.Id)) - snapshots every 5s"
                 Write-ProfileSuccess -Message "Stop-loss watcher" -Detail "(PID $($guardrail.Id)) - flags repeat-exit / over-cap pairs"
-                Write-ProfileSuccess -Message "Dashboard" -Detail "$ShadowDashUrl (db=$ShadowDbPath)"
+                Write-ProfileSuccess -Message "Dashboard" -Detail "$(Get-ShadowDashUrl $ShadowRunId) (db=$ShadowDbPath)"
                 Write-ProfileInfo -Message "Report lands at" -Detail $reportPath
                 Write-ProfileInfo -Message "Check it" -Detail ".\scripts\spread-hunter-menu.ps1 status"
                 Write-ProfileInfo -Message "Stop it early" -Detail ".\scripts\spread-hunter-menu.ps1 stop-shadow"
