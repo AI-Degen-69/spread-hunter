@@ -59,11 +59,40 @@ DEFAULT_SHADOW_DB = Path("data/shadow.db")
 # a clean end is distinguishable from a crash (a crash simply stops refreshing,
 # and the reader calls a stale heartbeat ended).
 SHADOW_HEARTBEAT_NAME = "shadow_run.json"
+#: Per-run heartbeat name: `shadow_run_<run_id>.json`. Two rehearsals writing
+#: at once (a menu stack and a hand-launched rehearsal, say) must not fight
+#: over one liveness slot -- the last writer used to win, so a dashboard pointed
+#: at either store flickered to "not running" between the two refreshes. Same
+#: fix the per-run cycle ring got (`shadow-<run_id>.jsonl`).
+SHADOW_HEARTBEAT_PREFIX = "shadow_run_"
 
 
-def shadow_heartbeat_path(root=None) -> Path:
-    """Where a shadow run publishes its liveness (writer path)."""
+def _run_heartbeat_name(run_id: str) -> str:
+    """File name for a run-scoped heartbeat: `shadow_run_<run_id>.json`.
+
+    Sanitized exactly like `_run_ring_name`: the id is not ours to trust (it
+    can come from `SH_RUN_ID` verbatim), so anything outside
+    `[A-Za-z0-9_.-]` becomes a dash, leading/trailing dots and dashes go, and
+    the result is capped. Ids already carrying the `shadow-` prefix are not
+    prefixed twice.
+    """
+    token = re.sub(r"[^A-Za-z0-9_.-]", "-", run_id).strip("-.")[:64] or "unnamed"
+    if token.startswith("shadow-"):
+        return f"{SHADOW_HEARTBEAT_PREFIX}{token}.json"
+    return f"{SHADOW_HEARTBEAT_PREFIX}shadow-{token}.json"
+
+
+def shadow_heartbeat_path(root=None, run_id: str = "") -> Path:
+    """Where a shadow run publishes its liveness (writer path).
+
+    Per run id when one is given (`shadow_run_<run_id>.json`), so concurrent
+    rehearsals never overwrite each other's dashboard state; the legacy shared
+    name is kept only as a read fallback for heartbeats written by older code
+    (readers: `dashboard/server.py`).
+    """
     from core_brain.runtime_paths import runtime_file
+    if run_id:
+        return runtime_file(_run_heartbeat_name(run_id), root=root)
     return runtime_file(SHADOW_HEARTBEAT_NAME, root=root)
 
 
@@ -84,7 +113,7 @@ def write_shadow_heartbeat(
     convenience file could not be written, so every failure degrades to a debug
     line and None.
     """
-    target = Path(path) if path is not None else shadow_heartbeat_path()
+    target = Path(path) if path is not None else shadow_heartbeat_path(run_id=run_id)
     payload = {
         "pid": os.getpid(),
         "run_id": run_id,

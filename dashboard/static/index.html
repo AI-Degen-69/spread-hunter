@@ -68,7 +68,7 @@
       <!-- All at-a-glance operational state lives in this single bar. Keep the
            IDs stable: app.js updates these pills and the existing controls. -->
       <span id="market-scan-pill" class="pill state-unknown mono" title="Market Filter (scripts.filter_loop) liveness">SCAN UNKNOWN</span>
-      <span id="scan-state-pill" class="pill state-unknown mono" title="Quote engine heartbeat: runtime/shadow_run.json or runtime/live_poll_heartbeat.json"><span class="pill-label">ENGINE</span> <span id="scan-engine-state">UNKNOWN</span></span>
+      <span id="scan-state-pill" class="pill state-unknown mono" title="Quote engine heartbeat: runtime/shadow_run_<run_id>.json or runtime/live_poll_heartbeat.json"><span class="pill-label">ENGINE</span> <span id="scan-engine-state">UNKNOWN</span></span>
       <span id="master-status-indicator" class="pill state-unknown font-display" style="font-size:11px;padding:4px 10px">STACK UNKNOWN</span>
       <span id="hud-services-pill" class="pill state-unknown mono" title="Stack services liveness: how many of the stack's services (and the watchdog) are running. The quote engine's own heartbeat is the ENGINE pill beside this."><span class="pill-label">SERVICES</span> <span id="hud-services-state">UNKNOWN</span> <span id="hud-services-sub" class="pill-detail">--</span></span>
       <span id="hud-guardrail-pill" class="pill state-unknown mono" title="Risk watchdog status"><span class="pill-label">WATCHDOG</span> <span id="hud-guardrail-state">UNKNOWN</span> <span id="hud-guardrail-sub" class="pill-detail">--</span></span>
@@ -542,7 +542,7 @@
   <section id="tab-3" role="tabpanel" aria-labelledby="tab-btn-3" hidden>
     <!-- Market Filter header: the scan's snapshot age, plus the engine's
          heartbeat as a secondary measurement. The pill reads the QUOTE ENGINE's
-         heartbeat (shadow_run.json / live_poll_heartbeat.json) -- it has never
+         heartbeat (shadow_run_<run_id>.json / live_poll_heartbeat.json) -- it has never
          measured the scan, which the #market-scan-pill in the top nav owns.
          Labelled ENGINE because "TRADING LOOP" read as the scanner to an
          operator sitting on the kanban market-scan page. -->
@@ -550,7 +550,7 @@
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <div style="display:flex;align-items:center;gap:10px">
           <span class="mono" style="font-size:10px;letter-spacing:.08em;color:var(--text-muted)"
-                title="Heartbeat age of the quote engine: runtime/shadow_run.json during a rehearsal, runtime/live_poll_heartbeat.json on the live stack. Not the market scan -- that is the SCAN pill in the top bar.">ENGINE</span>
+                title="Heartbeat age of the quote engine: runtime/shadow_run_<run_id>.json during a rehearsal, runtime/live_poll_heartbeat.json on the live stack. Not the market scan -- that is the SCAN pill in the top bar.">ENGINE</span>
           <span id="scan-snapshot-age" class="mono" style="font-size:12px;color:var(--text-secondary)">last scan: --</span>
           <span id="scan-filter-uptime" class="mono" style="font-size:12px;color:var(--text-secondary)"></span>
           <span id="trial-ready-banner" class="pill state-unknown mono" style="display:none;margin-left:8px"></span>

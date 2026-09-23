@@ -716,13 +716,44 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     """The shadow rehearsal writing THIS store, or None.
 
     A shadow run is not in `runtime/processes.json`, so it publishes its own
-    liveness in `runtime/shadow_run.json` (see
-    `core_brain.shadow_run.write_shadow_heartbeat`). Only a heartbeat whose
-    `db_path` matches the store this page is reading is surfaced: a stopwatch
-    for a run writing somewhere else would be describing numbers that are not
-    on the screen.
+    liveness in a per-run heartbeat, `runtime/shadow_run_<run_id>.json` (see
+    `core_brain.shadow_run.write_shadow_heartbeat`). Concurrent rehearsals
+    each write their own file -- the old single shared `shadow_run.json` made
+    the last writer win, so a dashboard pointed at either store flickered to
+    "not running" whenever the other run refreshed. The legacy shared name is
+    still read as a fallback for heartbeats written by older code. Only a
+    heartbeat whose `db_path` matches the store this page is reading is
+    surfaced: a stopwatch for a run writing somewhere else would be
+    describing numbers that are not on the screen.
     """
-    path = resolve_runtime_file("shadow_run.json", root=LIVE_ROOT)
+    for path in _shadow_heartbeat_candidates():
+        run = _read_shadow_heartbeat_file(path, active_db_path, now)
+        if run is not None:
+            return run
+    return None
+
+
+def _shadow_heartbeat_candidates() -> list[Path]:
+    """Every heartbeat file that might hold the run for the active store.
+
+    The per-run names are scanned, then the legacy shared name. Older files
+    missing from the listing (or an unreadable directory) degrade to the
+    legacy fallback rather than an error.
+    """
+    candidates: list[Path] = []
+    try:
+        runtime_dir = Path(resolve_runtime_file("shadow_run.json", root=LIVE_ROOT)).parent
+        candidates.extend(sorted(runtime_dir.glob("shadow_run_*.json")))
+    except OSError:
+        pass
+    candidates.append(resolve_runtime_file("shadow_run.json", root=LIVE_ROOT))
+    return candidates
+
+
+def _read_shadow_heartbeat_file(
+    path: Path, active_db_path: str | None, now: float | None,
+) -> dict | None:
+    """One heartbeat file as a stopwatch payload, or None on any mismatch."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

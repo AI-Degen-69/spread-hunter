@@ -331,8 +331,9 @@ def test_the_poll_loop_drives_the_top_nav_scan_pill():
 
 # ── the Market Filter header pill says whose heartbeat it is ───────────────
 #
-# `#scan-state-pill` reads the QUOTE ENGINE's heartbeat (runtime/shadow_run.json
-# during a rehearsal, runtime/live_poll_heartbeat.json otherwise). Sat on the
+# `#scan-state-pill` reads the QUOTE ENGINE's heartbeat (per-run
+# runtime/shadow_run_<run_id>.json during a rehearsal,
+# runtime/live_poll_heartbeat.json otherwise). Sat on the
 # kanban market-scan page labelled "TRADING LOOP", the operator read it as the
 # scanner. The scanner has its own pill in the top nav, so this one is labelled
 # ENGINE -- the engine is what it actually measures -- and its copy must name
@@ -349,7 +350,7 @@ def test_the_header_pill_names_its_heartbeat_file():
     # "Which file is this number from" has to be answerable from the page.
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     header = html.split('id="screener-header"', 1)[1].split("</section>", 1)[0]
-    assert "shadow_run.json" in header
+    assert "shadow_run_<run_id>.json" in header
     assert "live_poll_heartbeat.json" in header
 
 

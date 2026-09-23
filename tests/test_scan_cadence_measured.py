@@ -24,7 +24,8 @@ from core_brain.shadow_run import write_shadow_heartbeat
 
 @pytest.fixture()
 def shadow_heartbeat(tmp_path, monkeypatch):
-    """Write runtime/shadow_run.json for a store this page is 'reading'."""
+    """Write a legacy shared-name heartbeat for a store this page is 'reading'
+    (the per-run names resolve to this same tmp runtime and are empty)."""
     db = tmp_path / "99_shadow_test.db"
     db.write_bytes(b"")
     runtime = tmp_path / "runtime"

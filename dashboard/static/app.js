@@ -4837,9 +4837,9 @@ function renderScanStatePill(scanState) {
     if (telemetryError) {
       headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`;
     } else if (rawSec !== null) {
-      headerPill.title = `Quote engine heartbeat: ${rawSec}s ago (${raw.toUpperCase()}) · runtime/shadow_run.json or runtime/live_poll_heartbeat.json`;
+      headerPill.title = `Quote engine heartbeat: ${rawSec}s ago (${raw.toUpperCase()}) · runtime/shadow_run_<run_id>.json or runtime/live_poll_heartbeat.json`;
     } else {
-      headerPill.title = 'Quote engine heartbeat: runtime/shadow_run.json or runtime/live_poll_heartbeat.json';
+      headerPill.title = 'Quote engine heartbeat: runtime/shadow_run_<run_id>.json or runtime/live_poll_heartbeat.json';
     }
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
