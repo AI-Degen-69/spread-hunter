@@ -21,6 +21,7 @@ refresh for the rest of the night.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -110,7 +111,33 @@ def _emit_scan_event(record: dict) -> None:
         pass
 
 
-def _rank_cmd(top: int = 2) -> list[str]:
+def parse_args(argv=None) -> argparse.Namespace:
+    """Loop-level flags. Both reroute one trial loop; the baseline loop runs
+    bare and its command is byte-identical to before."""
+    p = argparse.ArgumentParser(
+        prog="python -m scripts.filter_loop",
+        description="Re-run the market filter every SH_FILTER_INTERVAL_SEC.")
+    p.add_argument("--out-dir", default=None, metavar="DIR",
+                   help="refresh the ranker into DIR and write rerank.log "
+                        "and cycle_events.jsonl there instead of runtime/ "
+                        "(trial loop, e.g. runtime/trials/<run-id>/)")
+    p.add_argument("--trial-depth", type=float, default=None, metavar="USD",
+                   help="forward this top-3 bid-depth bar to the ranker; wins "
+                        "over the configured HUNTER_DEPTH_TRIAL_USD")
+    return p.parse_args(argv)
+
+
+def _loop_paths(out_dir=None) -> tuple[Path, Path]:
+    """Where this loop writes its log and ring: the shared runtime/ by
+    default, the trial output directory when rerouted."""
+    if out_dir is None:
+        return LOG, RING_PATH
+    base = Path(out_dir)
+    return base / "rerank.log", base / "cycle_events.jsonl"
+
+
+def _rank_cmd(top: int = 2, out_dir=None,
+              trial_depth: float | None = None) -> list[str]:
     """The ranker invocation, with any staged gate trials from config appended.
 
     The depth trial (U32) and the volume trial (U36) stay opt-in: when
@@ -122,10 +149,14 @@ def _rank_cmd(top: int = 2) -> list[str]:
     a restart of this one process away -- no fleet restart needed.
     """
     cmd = [sys.executable, "-m", "scripts.filter_markets", "--top", str(top)]
+    if out_dir is not None:
+        cmd += ["--out-dir", str(out_dir)]
     try:
         from scoring.config import load as _load_cfg
         cfg = _load_cfg()
-        if cfg.select_min_top3_depth_usd_trial:
+        if trial_depth is not None:
+            cmd += ["--trial-depth", str(trial_depth)]
+        elif cfg.select_min_top3_depth_usd_trial:
             cmd += ["--trial-depth", str(cfg.select_min_top3_depth_usd_trial)]
         if cfg.select_min_volume_24h_usd_trial:
             cmd += ["--trial-volume", str(cfg.select_min_volume_24h_usd_trial)]
@@ -142,8 +173,11 @@ def _rank_cmd(top: int = 2) -> list[str]:
     return cmd
 
 
-def main() -> None:
-    LOG.parent.mkdir(exist_ok=True)
+def main(argv=None) -> None:
+    global LOG, RING_PATH
+    args = parse_args(argv)
+    LOG, RING_PATH = _loop_paths(args.out_dir)
+    LOG.parent.mkdir(parents=True, exist_ok=True)
     cycle = 0
     while True:
         # Rank FIRST, then sleep. Sleeping first left a newly started fleet
@@ -156,7 +190,8 @@ def main() -> None:
         try:
             top_n = _get_top_markets()
             r = subprocess.run(
-                _rank_cmd(top_n),
+                _rank_cmd(top_n, out_dir=args.out_dir,
+                          trial_depth=args.trial_depth),
                 cwd=str(ROOT), capture_output=True, text=True, timeout=600)
             out = r.stdout or ""
             err = "" if r.returncode == 0 else f"\nEXIT {r.returncode}\n{r.stderr}"
