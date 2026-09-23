@@ -942,6 +942,11 @@ def _parse_args(argv: Optional[list[str]] = None):
                          "the db, stats store and report. Defaults to shadow_run_id()")
     ap.add_argument("--max-markets", type=int, default=None,
                     help="cap the number of markets rotated (default: all)")
+    ap.add_argument("--markets-path", default=None,
+                    help="read the universe from this feed file instead of the "
+                         "default runtime/markets.json (a trial run's own "
+                         "feed, e.g. runtime/trials/shadow-03/markets.json). "
+                         "An injected markets_fn still wins.")
     ap.add_argument("--funder", default=None,
                     help="funder address for the live balance read "
                          "(default: POLY_FUNDER)")
@@ -974,19 +979,30 @@ def main(
     if not a.db:
         raise ValueError("shadow runs require an explicit per-run --db path")
     db = Path(a.db)
+    # Feed precedence: an injected markets_fn wins, then --markets-path, then
+    # the pathless default -- so a trial run reads only its own feed while
+    # every existing caller resolves exactly as before.
+    from core_brain.trader_loop import _market_specs
+    if markets_fn is not None:
+        resolved_markets_fn = markets_fn
+    elif a.markets_path is not None:
+        trial_feed = a.markets_path
+        resolved_markets_fn = (lambda max_markets=None:
+                               _market_specs(a.max_markets, path=trial_feed))
+    else:
+        resolved_markets_fn = (lambda max_markets=None:
+                               _default_markets_fn()(a.max_markets))
     log.warning(
         "SHADOW RUN starting: mode=shadow minutes=%s interval=%ss store=%s "
-        "max_markets=%s -- NO SIGNER LOADED: this process cannot place, cancel "
+        "max_markets=%s markets_path=%s -- NO SIGNER LOADED: this process cannot place, cancel "
         "or merge anything. Numbers below are rehearsal, not results.",
-        a.minutes, a.interval, db, a.max_markets)
+        a.minutes, a.interval, db, a.max_markets,
+        a.markets_path if a.markets_path is not None else "default")
 
     result = run_shadow(
         minutes=a.minutes,
         db_path=db,
-        markets_fn=(
-            markets_fn or
-            (lambda max_markets=None: _default_markets_fn()(a.max_markets))
-        ),
+        markets_fn=resolved_markets_fn,
         client_fn=client_fn,
         decide_fn=decide_fn,
         fetch_books=fetch_books or _default_fetch_books(),

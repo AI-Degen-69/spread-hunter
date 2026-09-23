@@ -788,14 +788,18 @@ def _visit_one(
 
 # --- production wiring ------------------------------------------------------
 
-def _market_specs(max_markets: Optional[int] = None, registry=None) -> list[dict]:
+def _market_specs(max_markets: Optional[int] = None, registry=None,
+                  path=None) -> list[dict]:
     """Graduated markets as per-market dict specs, mirroring fleet.MarketState.
 
     If max_markets is 1 and a market already has active open orders in the registry,
     prioritise that active market so we never quote a second market concurrently.
+
+    `path` reroutes the feed read (a trial shadow run's own markets file);
+    None keeps the default feed every other caller uses.
     """
     from core_brain.market_feed import load_graduated_markets
-    gms = load_graduated_markets()
+    gms = load_graduated_markets(path=path)
     if not gms:
         return []
 
