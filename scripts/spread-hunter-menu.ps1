@@ -888,26 +888,9 @@ function Resume-ShadowRun {
     Use this to continue the pinned run toward the 60-close sample target
     (menu option R / `shadow-resume`). -Minutes bounds the resumed session
     (default 1440 / 24h). #>
-    if ($null -ne (Get-DashInstance)) { $null = Stop-Dashboard }
-    # Stop any rehearsal already running so two loops never write one store,
-    # and verify the stop actually worked: an old loop that survives writes
-    # into the same store concurrently with the resumed one.
-    $null = Stop-ShadowSession
-    $runStopped = Stop-ShadowRun
-    if ($runStopped -eq $null) {
-        Lsh-Fail "Could not verify the previous rehearsal stopped (process scan inconclusive). Resume aborted - stop it manually (stop-shadow), then retry."
-        return $false
-    }
-    Start-Sleep -Seconds 2
-    if (Test-OrphanStackProcess) {
-        Lsh-Fail "A rehearsal process is still alive after the stop. Resume aborted - stop it manually (stop-shadow), then retry."
-        return $false
-    }
-
-    # The resume target is pinned: option R always reopens the Owner's long-
-    # running rehearsal store under run id shadow-01, never the newest store
-    # (a newer file being written must not steal the resume). -ResumeDb
-    # overrides the store for one launch only.
+    # Select and validate the resume target FIRST: a missing store must abort
+    # with the current rehearsal and dashboard still running, not after they
+    # have been stopped. Only then is anything torn down.
     if ($ResumeDb -ne "") {
         $db = Get-Item -LiteralPath $ResumeDb -ErrorAction SilentlyContinue
         if (-not $db) {
@@ -929,6 +912,40 @@ function Resume-ShadowRun {
         }
         $script:ShadowDbPath = $db.FullName
         $script:ShadowRunId = "shadow-01"
+    }
+    # The rehearsal must never touch the production registry. Only the Python
+    # loop carries that guard (core_brain.shadow_guard.assert_not_production_registry),
+    # so the menu refuses data/orders.db here, before ANY child -- dashboard,
+    # observer or watcher included -- is pointed at it. Separators normalize on
+    # both sides, and a path that cannot be resolved refuses rather than passes
+    # (fail-closed, matching the guard: a false refusal costs a re-run with a
+    # plainer path; a false pass points rehearsal writes at the real registry).
+    $prodFull = [System.IO.Path]::GetFullPath((Join-Path $ProjectPath "data/orders.db")).Replace('/', '\')
+    try {
+        $storeFull = [System.IO.Path]::GetFullPath($script:ShadowDbPath).Replace('/', '\')
+    } catch {
+        Lsh-Fail "Could not resolve the resume store path; refusing to resume."
+        return $false
+    }
+    if ($storeFull -ieq $prodFull) {
+        Lsh-Fail "Resume refused: $($script:ShadowDbPath) is the production registry (data/orders.db). A rehearsal fabricates fills; those rows must never enter the real order history."
+        return $false
+    }
+
+    # Stop any rehearsal already running so two loops never write one store,
+    # and verify the stop actually worked: an old loop that survives writes
+    # into the same store concurrently with the resumed one.
+    if ($null -ne (Get-DashInstance)) { $null = Stop-Dashboard }
+    $null = Stop-ShadowSession
+    $runStopped = Stop-ShadowRun
+    if ($runStopped -eq $null) {
+        Lsh-Fail "Could not verify the previous rehearsal stopped (process scan inconclusive). Resume aborted - stop it manually (stop-shadow), then retry."
+        return $false
+    }
+    Start-Sleep -Seconds 2
+    if (Test-OrphanStackProcess) {
+        Lsh-Fail "A rehearsal process is still alive after the stop. Resume aborted - stop it manually (stop-shadow), then retry."
+        return $false
     }
     $stamp = Get-Date -Format "dd-MM_HH-mm"
     $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
@@ -2300,7 +2317,8 @@ function Invoke-LiveAction {
         "8" { Show-Status }
         "r" {
             if ($Action -eq "") {
-                $confirm = Read-Host "  Resume the pinned shadow-01 rehearsal (data/01_shadow_12-09_00-58.db, no wipe, dashboard reattached)? [y/N]"
+                $store = if ($ResumeDb -ne "") { $ResumeDb } else { "data/01_shadow_12-09_00-58.db (shadow-01)" }
+                $confirm = Read-Host "  Resume rehearsal ($store, no wipe, dashboard reattached)? [y/N]"
                 if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
             }
             $null = Resume-ShadowRun

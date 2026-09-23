@@ -104,6 +104,37 @@ def test_resume_verifies_previous_processes_stopped():
     assert "return $false" in body
 
 
+def test_resume_validates_the_store_before_stopping_anything():
+    """A missing store must abort with the current rehearsal still running.
+
+    The store lookup and the production-registry refusal sit above the teardown
+    in the function body: if they fired after Stop-ShadowSession/Stop-ShadowRun,
+    a typo'd -ResumeDb would stop the operator's live rehearsal and dashboard
+    and then leave nothing running.
+    """
+    body = _resume_function_source()
+    first_stop = body.find("Stop-ShadowSession")
+    assert first_stop != -1
+    assert body.find("Resume store not found") < first_stop
+    assert body.find("Pinned rehearsal store not found") < first_stop
+    assert body.find("is the production registry") < first_stop
+
+
+def test_resume_refuses_the_production_registry_before_launching():
+    """Only the Python loop guards data/orders.db (shadow_guard); the menu must
+    refuse it too, before the dashboard, observer or watcher are pointed at it.
+    Separators normalize, and an unresolvable path refuses rather than passes.
+    """
+    body = _resume_function_source()
+    assert 'Join-Path $ProjectPath "data/orders.db"' in body
+    assert "GetFullPath" in body
+    assert "Replace('/', '\\')" in body
+    assert '-ieq $prodFull' in body
+    assert "must never enter the real order history" in body
+    # The refusal fires before anything is launched.
+    assert body.find("-ieq $prodFull") < body.find("Start-ShadowDashboard")
+
+
 def test_resume_timeboxes_screener_and_watcher():
     """filter_loop and global_stop_loss have no duration of their own; the
     resumed session must give them the same detached timer the fresh run
