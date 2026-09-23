@@ -1,60 +1,36 @@
-# SPEC: Issue #288 - Shadow dashboards get run-id-derived ports
+# SPEC: Issue #291 - Shadow-03 depth-bar trial on its own feed
 
 ## Goal
-Every shadow rehearsal instance serves its dashboard on a port derived from
-its run id: shadow-01 on :8801, shadow-02 on :8802, a future shadow-03 on
-:8803. :8799 becomes live-only. No two instances fight over one port, and the
-port number tells the operator which instance is answering.
+A third parallel shadow rehearsal (shadow-03) trials a loosened top-3
+bid-depth bar ($250 instead of $500) on its own ranker feed and output area,
+measuring forward on live books whether depth-rejected markets pay — without
+contaminating the shadow-01/02 baselines.
 
 ## Acceptance criteria (from issue)
-- [ ] `shadow-resume` hosts the shadow-01 dashboard on :8801 and records it
-  in a per-instance PID file
-- [ ] A second instance is hostable on :8802 through the menu (no
-  hand-launched processes, no ad-hoc log names) and both dashboards answer
-  simultaneously
-- [ ] With live running on :8799, starting or resuming a shadow no longer
-  reports a port conflict
-- [ ] `docs/agents/first-run.md` documents :8799 as live-only and the 880x
-  range as shadow instances
-- [ ] `curl http://127.0.0.1:8801/api/system/status` and
-  `curl http://127.0.0.1:8802/api/system/status` each answer as a shadow
-  dashboard for the expected store while
-  `.\scripts\spread-hunter-menu.ps1 status` lists both instances with ports
+- [ ] shadow-03 loop quotes trial-depth markets from its own feed while the 01/02 feed bytes are unchanged
+- [ ] Menu R lists 01/02/03 and port 8803 serves the 03 store
+- [ ] New feed-override tests fail without the change and pass with it
+- [ ] python -m pytest -q tests/test_trial_readiness.py
 
 ## Scope
 ### In scope
-- `scripts/spread-hunter-menu.ps1`: port-derivation helper (`8800 + NN`),
-  per-instance PID files (`runtime/shadow-dash-<run-id>.pids.json`) and log
-  names, rewire of every `$ShadowPort` / `$ShadowDashUrl` reader (launch,
-  adopt, stop, status rows, open-browser sites, TS bridge target)
-- Second-instance hosting through the menu; migrate the hand-launched :8801
-  dash, retire the `buffy_dash_8801` ad-hoc log
-- `docs/agents/first-run.md` shadow sections
-- New menu port test (`tests/test_menu_shadow_ports.py`, pwsh-subprocess
-  harness following `tests/test_menu_shadow_seq.py`)
+- Ranker `--out-dir` (all RUN-anchored artifacts) + loop forwarding of `--out-dir` / `--trial-depth`
+- `_market_specs(path=None)` + shadow `--markets-path` (precedence: injected fn → flag → default)
+- Menu `shadow-trial` non-destructive launch, trial manifest (`data/<store>.trial.json`, absolute paths), manifest-driven Menu R resume
+- `docs/agents/architecture.md` trial-feeds note
 
-### Out of scope (per issue)
-- Live stack, rehearsal loop, or any trading behavior -- ports and hosting
-  only
-- Moving existing databases or renaming run ids
+### Out of scope (per issue + CodeRabbit plan)
+- Shipped $500 bar stays untouched; no 01/02 baseline behavior change; no live execution
+- No volume trial; no ladder work (#49)
+- Dashboard graduated-market/KPI panels keep reading the shared feed (port 8803 serves the 03 store)
 
 ## Interface contracts
-- `Get-ShadowDashPort <run-id: string> -> int`: parses the leading `NN`
-  from `shadow-NN`, returns `8800 + NN`; the menu's own unnumbered
-  `shadow-resume` fallback id returns 8900. Empty or garbage ids throw --
-  never silently fall back to :8799 beside the live stack (same rule as
-  `resolve_port` in `dashboard/server.py`, pinned by
-  `tests/test_dashboard_port.py`).
-- `Get-ShadowDashUrl <run-id> -> string`: the single builder of
-  `http://127.0.0.1:<port>`; all open-browser and status call sites use it.
-- PID record schema unchanged (`pid`, `port`, `db`, ...), file name gains
-  the run id: `runtime/shadow-dash-shadow-01.pids.json`.
-- `dashboard/server.py` unchanged (`--port` / `--db` already suffice).
+- `filter_markets --out-dir <dir=RUN>`; `filter_loop --out-dir <dir> --trial-depth <usd>` (CLI trial wins over `HUNTER_DEPTH_TRIAL_USD`; absent flags → byte-identical command)
+- `_market_specs(max_markets, path=None) -> list[8-field dict]`; `shadow_run --markets-path <file=None>`
+- Trial manifest `{trial_depth_usd: 250, ranker_out_dir: <abs>, markets_path: <abs>}` next to the store; mirrored in `runtime/shadow-session-<run-id>.json`; `*.trial.json` never matches `NN_shadow_*.db` discovery
 
 ## Edge cases
-- Run id 99 wraps the sequence (existing `Get-NextShadowSeq` behavior);
-  port math holds for any two-digit id (01-99 -> 8801-8899).
-- A foreign process already on the instance port: refuse with the owning
-  PID, same as today -- never adopt blindly, never kill.
-- Live on :8799 while shadow starts: no conflict, no message (the old
-  "stop live first" failure path is deleted, not reworded).
+- Invalid initial feed fails loudly; failed refresh keeps the last list
+- No-manifest resume is byte-for-byte the current path (01/02 unaffected)
+- Trial screener never registered as the global `filter` entry in `runtime/processes.json`
+- While 01/02 live: no fresh start (menu 4), no stop without a run ID

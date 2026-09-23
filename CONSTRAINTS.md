@@ -83,6 +83,15 @@
 - Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
 - UI-only: only `dashboard/static/index.html` (one attr), `styles.css` (cue rules), `app.js` (toggle + export) plus the new test may change; no control moves, no backend change; mobile wrap at 900px unchanged.
 
+## Constraints: Issue #291 — shadow-03 depth-bar trial on its own feed
+- Zero regressions: focused suites (`tests/test_filter_markets_out_dir.py`, `tests/test_filter_loop.py`, `tests/test_shadow_run.py`, `tests/test_trader_loop.py`, `tests/test_menu_shadow_trial.py`) plus `tests/test_trial_readiness.py` (untouched) must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): out-dir isolation, flag forwarding, feed override, menu launch/resume contracts.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- Shipped bars immutable: `core_brain/config.py` ($500 depth bar), `core_brain/market_feed.py`, `core_brain/trial_readiness.py`, dashboard feed/KPI sources stay untouched.
+- Baseline byte-identical: without new flags, ranker command, loop logs, shadow default feed, and no-manifest resume behave exactly as today; shared `runtime/` artifacts never receive trial writes.
+- No new external dependencies; no live execution; no volume trial; no ladder work.
+- While 01/02 are live: no fresh start (menu 4), no stop without a run ID.
+
 ## Constraints: Issue #264 — Dashboard input lag (tab clicks freeze 2-4s)
 - Zero regressions: focused selection (`tests/test_dashboard_server.py`, `tests/test_dashboard_snapshot_cache.py`, `tests/test_dashboard_narrow_viewport.py`) must pass; full `python -m pytest -q` stays with GitHub CI.
 - New/changed behavior needs a test that fails without the change (RED before GREEN): e.g. a static test pinning that hidden-tab renders are skipped or deferred and that tab switching paints synchronously.
