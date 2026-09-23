@@ -187,3 +187,35 @@ def test_register_stack_service_publishes_atomically():
     assert "Set-Content -Path $ProcsFile" not in helper
     # The temp file never survives a failed publish.
     assert "Remove-Item $tmp -Force" in helper
+
+
+def _resume_stores_helper_source() -> str:
+    src = _menu_source()
+    return src.split("function Get-ShadowResumeStores", 1)[1].split("\nfunction ", 1)[0]
+
+
+def test_resume_candidates_helper_derives_run_ids_from_store_names():
+    """R must know which runs exist before asking: one helper lists every
+    data/NN_shadow_*.db store with its shadow-NN run id, so 01 and 02 (and
+    later runs) are discovered, never hardcoded."""
+    src = _menu_source()
+    assert "function Get-ShadowResumeStores" in src
+    helper = _resume_stores_helper_source()
+    assert r"^(\d{1,2})_shadow_" in helper
+    assert '"shadow-"' in helper
+
+
+def test_r_branch_lists_available_runs_and_offers_all():
+    """With 01 and 02 on disk, R lists what is available and lets the
+    operator resume one run or all of them — in clear English."""
+    branch = _branch_source("r")
+    assert "Get-ShadowResumeStores" in branch
+    assert "All" in branch
+    assert "Resume-ShadowRun" in branch
+
+
+def test_r_branch_resume_db_all_resumes_every_store():
+    """-ResumeDb all (non-interactive) resumes every candidate store instead
+    of only the pinned 01."""
+    branch = _branch_source("r")
+    assert '"all"' in branch
