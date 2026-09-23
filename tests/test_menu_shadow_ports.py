@@ -179,3 +179,18 @@ def test_session_files_are_per_instance_with_a_legacy_fallback(tmp_path):
     assert second["value"].endswith("shadow-session-shadow-02.json"), second
     assert legacy["value"].endswith("shadow-session.json"), legacy
     assert first["value"] != second["value"]
+
+
+def test_ts_bridge_proxies_an_explicit_dashboard_url():
+    # Arrange — static pin: the bridge must take the instance URL as a
+    # parameter instead of reading the hardcoded :8799 global, or the
+    # bridged view silently shows the wrong instance (or the live stack).
+    text = MENU.read_text(encoding="utf-8")
+    match = re.search(r"^function Start-TsBridge \{.*?^\}", text,
+                      re.MULTILINE | re.DOTALL)
+    assert match, "Start-TsBridge is no longer defined in the menu script"
+    body = match.group(0)
+
+    # Act / Assert
+    assert "PyDashUrl" in body
+    assert "$ShadowDashUrl" not in body

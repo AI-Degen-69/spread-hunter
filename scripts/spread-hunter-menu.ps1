@@ -881,9 +881,16 @@ function Stop-ShadowRun {
 
 function Start-TsBridge {
     <# Launch the TypeScript dashboard bridge (server.ts) detached on :8800.
-       It reverse-proxies GET /api/* to the Python dashboard on :8799 and
-       injects the live control token into the HTML it serves. #>
-    param([string]$LogPrefix = "ts-bridge")
+       It reverse-proxies GET /api/* to the Python dashboard at -PyDashUrl
+       and injects the live control token into the HTML it serves. The URL is
+       a parameter so the bridged view follows the instance (#288) instead of
+       a hardcoded port. #>
+    param([string]$LogPrefix = "ts-bridge",
+          [string]$PyDashUrl = "")
+    if (-not $PyDashUrl) {
+        if (-not $script:ShadowRunId) { throw "Start-TsBridge needs -PyDashUrl or a shadow run id in scope." }
+        $PyDashUrl = Get-ShadowDashUrl $script:ShadowRunId
+    }
     $log = Join-Path $RunDir "$LogPrefix.log"
     $err = Join-Path $RunDir "$LogPrefix.err.log"
     # Stop any orphaned bridge (only node running server.ts in this repo).
@@ -891,7 +898,7 @@ function Start-TsBridge {
     Start-Sleep -Milliseconds 500
     # cmd.exe redirects node's stdout/stderr to the per-session log files while
     # the bridge stays fully detached (no stream readers to buffer or block).
-    $cmd = "set PORT=8800&& set PY_DASH_URL=$ShadowDashUrl&& node server.ts >""" + $log + """ 2>""" + $err + """"
+    $cmd = "set PORT=8800&& set PY_DASH_URL=$PyDashUrl&& node server.ts >""" + $log + """ 2>""" + $err + """"
     $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru
     $deadline = (Get-Date).AddSeconds(8)
@@ -2285,11 +2292,12 @@ function Reset-Environment {
                 Lsh-Ok "Stop-loss watcher started (PID $($guardrail.Id))."
                 $session = [ordered]@{ started=(Get-Date).ToString("o"); run_id=$ShadowRunId; shadow_db=$ShadowDbPath; stats_db=$StatsDbPath; report_path=$reportPath; loop=[ordered]@{pid=$validation.Id; started_ticks=$validation.StartTime.ToUniversalTime().Ticks}; screener=[ordered]@{pid=$screener.Id; started_ticks=$screener.StartTime.ToUniversalTime().Ticks}; observer=[ordered]@{pid=$observer.Id; started_ticks=$observer.StartTime.ToUniversalTime().Ticks}; watcher=[ordered]@{pid=$guardrail.Id; started_ticks=$guardrail.StartTime.ToUniversalTime().Ticks}; ring=$ring }
                 try {
-                    $tsBridge = Start-TsBridge -LogPrefix "ts-bridge-$ShadowRunId"
+                    $bridgeUrl = Get-ShadowDashUrl $ShadowRunId
+                    $tsBridge = Start-TsBridge -LogPrefix "ts-bridge-$ShadowRunId" -PyDashUrl $bridgeUrl
                     $session.ts_bridge = [ordered]@{ pid = $tsBridge.pid; port = $tsBridge.port }
-                    Lsh-Ok "TS dashboard bridge on http://127.0.0.1:8800 (PID $($tsBridge.pid)) -> proxies :8799"
+                    Lsh-Ok "TS dashboard bridge on http://127.0.0.1:8800 (PID $($tsBridge.pid)) -> proxies $bridgeUrl"
                 } catch {
-                    Lsh-Warn ".TS bridge did not start: $($_.Exception.Message). Dashboard still available at $ShadowDashUrl."
+                    Lsh-Warn ".TS bridge did not start: $($_.Exception.Message). Dashboard still available at $(Get-ShadowDashUrl $ShadowRunId)."
                 }
                 $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile -RunId $ShadowRunId) -Encoding UTF8
                 Write-Host ""
