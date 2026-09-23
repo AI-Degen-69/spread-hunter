@@ -85,15 +85,29 @@ def test_trial_run_leaves_the_shared_directories_untouched(tmp_path, monkeypatch
     assert (trial / "volume_near_misses.jsonl").exists()
 
 
-def test_main_with_out_dir_tags_the_trial_feed(tmp_path, monkeypatch, capsys):
-    # Arrange -- no network: an empty universe ranks to an empty feed.
+def test_main_with_out_dir_publishes_a_tagged_trial_feed(tmp_path, monkeypatch, capsys):
+    # Arrange -- one scored winner, no network; the heavy writers are stubbed
+    # so this proves the publish path: marker, tagged feed, trial directory.
     trial = tmp_path / "trials" / "shadow-03"
+    winner = {"cid": "0xtrial", "title": "trial pick", "source": "spread",
+              "eligible": True, "return_pct_day": 1.5,
+              "est_income": 2.0, "est_capital": 100.0}
+    seen = {}
     monkeypatch.setattr(fm, "RUN", tmp_path / "shared")
     monkeypatch.setattr(fm, "gamma_universe",
                         lambda s, min_volume_usd=None, full_scan=False: (
                             [], {"pages_fetched": 0, "rows_scanned": 0,
                                  "truncated": False, "cheap_rejects": {}}))
-    monkeypatch.setattr(fm, "_score_universe", lambda *a, **k: ([], 0))
+    monkeypatch.setattr(fm, "_score_universe", lambda *a, **k: ([winner], 1))
+    monkeypatch.setattr(fm, "_if_adopted", lambda r: {})
+    monkeypatch.setattr(fm, "_write_universe_file",
+                        lambda *a, **k: seen.setdefault("universe", k.get("out_dir")))
+    monkeypatch.setattr(fm, "_write_pipeline_snapshot",
+                        lambda *a, **k: seen.setdefault("pipeline", k.get("out_dir")))
+    monkeypatch.setattr(fm, "_log_rank_near_misses",
+                        lambda *a, **k: seen.setdefault("depth", k.get("out_dir")) or 0)
+    monkeypatch.setattr(fm, "_log_rank_volume_near_misses",
+                        lambda *a, **k: seen.setdefault("volume", k.get("out_dir")) or 0)
     monkeypatch.setattr("sys.argv", ["filter_markets", "--out-dir", str(trial),
                                      "--trial-depth", "250"])
 
@@ -101,10 +115,13 @@ def test_main_with_out_dir_tags_the_trial_feed(tmp_path, monkeypatch, capsys):
     fm.main()
     capsys.readouterr()
 
-    # Assert -- the trial feed exists under the output dir, tagged with the
-    # trial bar; nothing was written to the shared directory.
+    # Assert -- the trial feed carries the one winner tagged with the trial
+    # bar; every writer was routed to the trial directory; the shared
+    # directory was never touched.
     feed = json.loads((trial / "markets.json").read_text(encoding="utf-8"))
-    assert feed == []
+    assert len(feed) == 1
+    assert feed[0]["cid"] == "0xtrial"
+    assert feed[0]["trial_depth_usd"] == 250.0
     assert (trial / "ranking.marker").exists() is False
-    assert not (tmp_path / "shared" / "markets.json").exists()
-    assert not (tmp_path / "shared" / "near_misses.jsonl").exists()
+    assert {str(v) for v in seen.values()} == {str(trial)}
+    assert not (tmp_path / "shared").exists()

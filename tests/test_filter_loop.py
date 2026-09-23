@@ -44,18 +44,18 @@ def test_loop_flags_default_to_none():
     assert args.trial_depth is None
 
 
-def test_rank_cmd_without_flags_carries_no_new_options():
+def test_rank_cmd_without_flags_carries_no_new_options(monkeypatch):
+    from types import SimpleNamespace
+
+    import scoring.config as scoring_config
+
+    monkeypatch.setattr(scoring_config, "load", lambda: SimpleNamespace(
+        select_min_top3_depth_usd_trial=None,
+        select_min_volume_24h_usd_trial=None))
+
     cmd = filter_loop._rank_cmd(2)
-    assert cmd[:5] == [filter_loop.sys.executable, "-m",
-                       "scripts.filter_markets", "--top", "2"]
-    assert "--out-dir" not in cmd
-    assert "--trial-depth" not in cmd or _config_depth_in(cmd)
-
-
-def _config_depth_in(cmd):
-    # The configured HUNTER_DEPTH_TRIAL_USD passes through even without flags;
-    # that is today's behavior and must survive.
-    return "--trial-depth" in cmd
+    assert cmd == [filter_loop.sys.executable, "-m",
+                   "scripts.filter_markets", "--top", "2"]
 
 
 def test_rank_cmd_forwards_out_dir_and_trial_depth(tmp_path):
@@ -115,15 +115,15 @@ def test_main_replays_argv_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(filter_loop.subprocess, "run", fake_run)
     monkeypatch.setattr(filter_loop.time, "sleep",
                         lambda _s: (_ for _ in ()).throw(_StopLoop()))
-    monkeypatch.setattr(filter_loop, "LOG", filter_loop.LOG)
-    monkeypatch.setattr(filter_loop, "RING_PATH", filter_loop.RING_PATH)
-
-    with pytest.raises(_StopLoop):
-        filter_loop.main(["--out-dir", str(tmp_path / "t"),
-                          "--trial-depth", "250"])
+    old_log, old_ring = filter_loop.LOG, filter_loop.RING_PATH
+    try:
+        with pytest.raises(_StopLoop):
+            filter_loop.main(["--out-dir", str(tmp_path / "t"),
+                              "--trial-depth", "250"])
+    finally:
+        filter_loop.LOG, filter_loop.RING_PATH = old_log, old_ring
 
     assert "--out-dir" in seen["cmd"]
     assert seen["cmd"][seen["cmd"].index("--out-dir") + 1] == str(tmp_path / "t")
-    assert "250" in seen["cmd"][seen["cmd"].index("--trial-depth") + 1]
-    assert filter_loop.LOG == tmp_path / "t" / "rerank.log"
-    assert filter_loop.RING_PATH == tmp_path / "t" / "cycle_events.jsonl"
+    assert seen["cmd"][seen["cmd"].index("--trial-depth") + 1] == "250.0"
+    assert (tmp_path / "t" / "rerank.log").exists()

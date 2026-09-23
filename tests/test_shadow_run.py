@@ -714,26 +714,30 @@ class TestMain:
         def no_default():
             raise AssertionError("pathless default loader must not run")
 
+        real_specs = loop_mod._market_specs
+        calls = []
+
+        def counting(max_markets=None, registry=None, path=None):
+            calls.append(path)
+            return real_specs(max_markets, registry=registry, path=path)
+
         monkeypatch.setattr(shadow_mod, "_default_markets_fn", no_default)
+        monkeypatch.setattr(loop_mod, "_market_specs", counting)
         monkeypatch.setattr(loop_mod, "_fetch_market",
                             lambda cid: FakeMarket(cid))
-
-        quoted = []
-
-        def decide(cfg, up, dn, inv, t_rem, wf):
-            quoted.append(getattr(up, "condition_id", "?"))
-            return ([], "declined")
 
         with caplog.at_level(logging.WARNING, logger="shadow_run"):
             rc = main(
                 ["--minutes", "0", "--db", str(tmp_path / "shadow.db"),
                  "--markets-path", str(feed)],
                 client_fn=lambda: object(),
-                decide_fn=decide,
+                decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
                 fetch_books=_books,
             )
 
         assert rc == 0
+        assert len(calls) >= 1
+        assert set(calls) == {str(feed)}
         assert str(feed).lower() in caplog.text.lower()
 
     def test_main_prefers_an_injected_markets_fn_over_the_flag(
@@ -771,7 +775,6 @@ class TestMain:
         from core_brain.shadow_run import main
 
         seen = {}
-        real_specs = loop_mod._market_specs
 
         def spy(max_markets=None, registry=None):
             seen["max_markets"] = max_markets

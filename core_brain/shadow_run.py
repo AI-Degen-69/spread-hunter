@@ -987,8 +987,8 @@ def main(
         resolved_markets_fn = markets_fn
     elif a.markets_path is not None:
         trial_feed = a.markets_path
-        resolved_markets_fn = (lambda max_markets=None:
-                               _market_specs(a.max_markets, path=trial_feed))
+        resolved_markets_fn = (lambda cap=None: _market_specs(
+            cap if cap is not None else a.max_markets, path=trial_feed))
     else:
         resolved_markets_fn = (lambda max_markets=None:
                                _default_markets_fn()(a.max_markets))

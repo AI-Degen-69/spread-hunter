@@ -1076,7 +1076,6 @@ class TestMarketSpecsPath:
         from core_brain.trader_loop import _market_specs
 
         seen = {}
-        real = feed_mod.load_graduated_markets
 
         def spy(path=None, max_age_sec=None):
             seen["path"] = path
