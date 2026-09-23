@@ -41,7 +41,7 @@ port number tells the operator which instance is answering.
 ## Interface contracts
 - `Get-ShadowDashPort <run-id: string> -> int`: parses the leading `NN`
   from `shadow-NN`, returns `8800 + NN`; the menu's own unnumbered
-  `shadow-resume` fallback id returns 8899. Empty or garbage ids throw --
+  `shadow-resume` fallback id returns 8900. Empty or garbage ids throw --
   never silently fall back to :8799 beside the live stack (same rule as
   `resolve_port` in `dashboard/server.py`, pinned by
   `tests/test_dashboard_port.py`).

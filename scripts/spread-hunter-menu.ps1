@@ -115,19 +115,19 @@ $StatsDbPath   = $null
 $ShadowRunId   = $null
 
 # Shadow dashboard ports derive from the run id (#288): shadow-01 -> 8801,
-# shadow-02 -> 8802. :8799 is live-only and is never derived here. The
-# unnumbered "shadow-resume" fallback id gets :8899 -- off the live port and
-# outside any numbered instance. Anything else fails loudly rather than
-# silently landing back beside the live stack.
+# shadow-02 -> 8802, through shadow-99 -> 8899. :8799 is live-only and is
+# never derived here. The unnumbered "shadow-resume" fallback id gets :8900 --
+# off the live port and outside every numbered instance. Anything else fails
+# loudly rather than silently landing back beside the live stack.
 function Get-ShadowDashPort {
     param([Parameter(Mandatory)][string]$RunId)
-    if ($RunId -match '^shadow-(\d{1,2})$') {
+    if ($RunId -match '^shadow-(0[1-9]|[1-9][0-9])$') {
         return 8800 + [int]$Matches[1]
     }
     if ($RunId -eq "shadow-resume") {
-        return 8899
+        return 8900
     }
-    throw "Cannot derive a shadow dashboard port from run id '$RunId' (expected 'shadow-NN'). Refusing rather than reusing the live dashboard port."
+    throw "Cannot derive a shadow dashboard port from run id '$RunId' (expected 'shadow-NN', 01-99). Refusing rather than reusing the live dashboard port."
 }
 function Get-ShadowDashUrl {
     <# The single builder of shadow dashboard URLs -- every open-browser and
@@ -346,16 +346,20 @@ function Test-PidAlive {
 }
 
 function Test-Port {
-    <# True when $PortNumber is in LISTENING state (default :8799 live). #>
+    <# True when a port is in LISTENING state. No port passed means the live
+       :8799; an explicit 0 is never a port and reads $false without probing. #>
     param([int]$PortNumber = 0)
-    if ($PortNumber -le 0) { $PortNumber = $Port }
+    if (-not $PSBoundParameters.ContainsKey('PortNumber')) { $PortNumber = $Port }
+    if ($PortNumber -le 0) { return $false }
     return [bool](netstat -ano | Select-String ":$PortNumber\s+.*LISTENING")
 }
 
 function Get-PortPid {
-    <# PID of the process LISTENING on $PortNumber, or $null (default :8799). #>
+    <# PID LISTENING on a port, or $null. No port passed means the live :8799;
+       an explicit 0 is never a port and reads $null without probing. #>
     param([int]$PortNumber = 0)
-    if ($PortNumber -le 0) { $PortNumber = $Port }
+    if (-not $PSBoundParameters.ContainsKey('PortNumber')) { $PortNumber = $Port }
+    if ($PortNumber -le 0) { return $null }
     $line = netstat -ano | Select-String ":$PortNumber\s+.*LISTENING" | Select-Object -First 1
     if (-not $line) { return $null }
     return [int](($line.ToString() -split "\s+")[-1])
@@ -644,7 +648,12 @@ function Get-ShadowDashInstances {
         if ($f.BaseName -match '^shadow-dash-(.+)\.pids$') { $rid = $Matches[1] }
         $rec = _ReadShadowDashRecord $f.FullName $rid
         if ($null -ne $rec) { $out += $rec }
-        else { $out += [pscustomobject]@{ pid = $null; proc = $null; port = 0; db = $null; run_id = $rid; pidfile = $f.FullName; alive = $false } }
+        else {
+            # Stale file: keep its recorded port/db for display, marked
+            # not-alive so stop prunes it and status shows STALE.
+            $stalePort = 0; $staleDb = $null
+            try { $raw = Get-Content $f.FullName -Raw | ConvertFrom-Json; if ($raw.dash.port) { $stalePort = [int]$raw.dash.port }; $staleDb = $raw.dash.db } catch {}
+            $out += [pscustomobject]@{ pid = $null; proc = $null; port = $stalePort; db = $staleDb; run_id = $rid; pidfile = $f.FullName; alive = $false } }
     }
     return $out
 }
@@ -729,6 +738,10 @@ function Start-ShadowDashboard {
         }
     }
     $runId = $script:ShadowRunId
+    if (-not $runId) {
+        Lsh-Fail "Start-ShadowDashboard needs a shadow run id in scope (or a store name it can be derived from)."
+        return $false
+    }
     $port = Get-ShadowDashPort $runId
     $url = Get-ShadowDashUrl $runId
     $inst = Get-ShadowDashInstance -RunId $runId
@@ -827,12 +840,14 @@ function Stop-ShadowDashboard {
             Lsh-Warn "Shadow dashboard $label PID $($inst.pid) did not exit; record kept."
         }
     }
+    $foreign = $false
     foreach ($inst in $targets) {
         if ($inst.port -gt 0 -and (Test-Port -PortNumber $inst.port)) {
             Lsh-Warn "Port $($inst.port) still LISTENING — not owned by shadow menu, left running."
-            return $false
+            $foreign = $true
         }
     }
+    if ($foreign -and -not $stopped) { return $false }
     return $stopped
 }
 
@@ -849,17 +864,18 @@ function Stop-ShadowRun {
     watcher, matched by command line inside THIS repo. Live processes never pass
     --db <per-run-shadow-db>, so the production stack is never matched. Used by the
     shadow Stop action and by every global stop / reset wipe. A run id narrows
-    the match to that instance's `--run-id` (loop, observer) and ring/db
-    markers (watcher), so resuming one instance never kills a live sibling. #>
+    the match to the `--run-id` token (loop and observer both carry it) and to
+    the ring/db markers (the watcher carries no --run-id; its ring path embeds
+    the full id by construction, e.g. shadow-02.jsonl, so the substring is
+    exact in practice). Resuming one instance never kills a live sibling. #>
     param([string]$RunId = $null)
     try {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
                 ($_.CommandLine -like "*$ProjectPath*") -and `
-                (($_.CommandLine -like "*core_brain.shadow_run*") -or `
-                 ($_.CommandLine -like "*scripts.global_stop_loss*" -and ($_.CommandLine -like "*shadow_*.db*" -or $_.CommandLine -like "*shadow.db*"))) -and `
-                ((-not $RunId) -or ($_.CommandLine -like "*$RunId*"))
+                ((($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*--run-id*")) -and ((-not $RunId) -or ($_.CommandLine -like "*--run-id $RunId*")) -or `
+                 (($_.CommandLine -like "*scripts.global_stop_loss*") -and ($_.CommandLine -like "*shadow_*.db*" -or $_.CommandLine -like "*shadow.db*") -and ((-not $RunId) -or ($_.CommandLine -like "*$RunId*"))))
             })
     } catch {
         # An unreadable process table is not proof of an empty one. $null means
@@ -871,7 +887,7 @@ function Stop-ShadowRun {
     if ($procs.Count -eq 0) { return $false }
     $killed = $false
     foreach ($p in $procs) {
-        $what = if ($p.CommandLine -like "*core_brain.shadow_run*") { "rehearsal loop" } else { "shadow stop-loss watcher" }
+        $what = if ($p.CommandLine -like "*core_brain.shadow_run*") { "rehearsal loop" } elseif ($p.CommandLine -like "*statistics_observer*") { "statistics observer" } else { "shadow stop-loss watcher" }
         Lsh-Step "Stopping unrecorded $what PID $($p.ProcessId)..."
         taskkill /F /T /PID $p.ProcessId 2>$null | Out-Null
         if (Wait-ProcessGone -ProcessId $p.ProcessId) {
@@ -1064,10 +1080,31 @@ function Resume-ShadowRun {
         return $false
     }
     Start-Sleep -Seconds 2
-    $stalePids = @($ownSession.screener.pid, $ownSession.loop.pid, $ownSession.watcher.pid, $ownSession.observer.pid) |
-        Where-Object { $_ -and (Test-PidAlive -ProcessId $_) }
+    $stalePids = @($ownSession.screener, $ownSession.loop, $ownSession.watcher, $ownSession.observer) |
+        Where-Object { $_ -and $_.pid } |
+        Where-Object { $null -ne (Get-ProcessRecord -Entry $_) } |
+        ForEach-Object { $_.pid }
     if ($stalePids.Count -gt 0) {
         Lsh-Fail "A rehearsal process for $($script:ShadowRunId) is still alive after the stop (PID $($stalePids -join ', ')). Resume aborted - stop it manually (stop-shadow), then retry."
+        return $false
+    }
+    # Belt and braces: an UNRECORDED loop/observer for this run id (crashed
+    # supervisor, lost session file) would write the same store as the
+    # resumed loop. The recorded-PID check above cannot see it; the
+    # --run-id token can. Fail closed when the table cannot be read.
+    try {
+        $strays = @(Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object {
+                $_.Name -match '^python' -and $_.CommandLine -and `
+                (($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*")) -and `
+                ($_.CommandLine -like "*--run-id $($script:ShadowRunId)*")
+            })
+    } catch {
+        Lsh-Fail "Could not verify the previous rehearsal stopped (process scan inconclusive). Resume aborted - stop it manually (stop-shadow), then retry."
+        return $false
+    }
+    if ($strays.Count -gt 0) {
+        Lsh-Fail "An unrecorded rehearsal process for $($script:ShadowRunId) is still alive (PID $($strays[0].ProcessId)). Resume aborted - stop it manually (stop-shadow), then retry."
         return $false
     }
     $stamp = Get-Date -Format "dd-MM_HH-mm"
@@ -1579,7 +1616,7 @@ function Show-Status {
             $dbInfo = if ($shadowInst.db) { $shadowInst.db } elseif ($sess -and $sess.shadow_db) { $sess.shadow_db } else { $ShadowDbPath }
             if (-not $dbInfo) { $dbInfo = "per-run shadow_*.db" }
             $dbRel = if ($dbInfo -like "per-run*") { $dbInfo } else { ConvertTo-RelativePath $dbInfo }
-            $instUrl = "http://127.0.0.1:$($shadowInst.port)"
+            $instUrl = if ($shadowInst.run_id) { Get-ShadowDashUrl $shadowInst.run_id } else { "http://127.0.0.1:$($shadowInst.port)" }
             $instLabel = if ($shadowInst.run_id) { "Shadow Dashboard ($($shadowInst.run_id))" } else { "Shadow Dashboard (legacy)" }
             $extraInfo = @(
                 @{ t = $instUrl; c = 'Link' },
@@ -1590,9 +1627,24 @@ function Show-Status {
             Write-ProcessRow -Label $instLabel -Running $true -PidVal $shadowInst.pid -Path $StackPaths["shadowDash"] -ExtraInfo $extraInfo
             Write-FileRow -Label "PID file" -Status "FOUND" -Path (ConvertTo-RelativePath $shadowInst.pidfile) -Dynamic ("PID {0} recorded" -f $shadowInst.pid)
         }
-        $tsPid = if ($sess -and $sess.ts_bridge -and $sess.ts_bridge.pid) { $sess.ts_bridge.pid } else { $null }
-        $tsAlive = $null -ne $tsPid -and (Get-Process -Id $tsPid -ErrorAction SilentlyContinue)
-        $tsTarget = " -> :$($shadowLive[0].port)"
+        # The bridge is a singleton: show the instance whose session recorded
+        # it, not the legacy-only session and not an arbitrary live one.
+        $tsPid = $null; $tsPort = 8800
+        $bridgeFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
+        if (Test-Path $ShadowSessionFile) { $bridgeFiles += Get-Item $ShadowSessionFile }
+        foreach ($bf in $bridgeFiles) {
+            $bs = $null
+            try { $bs = Get-Content $bf.FullName -Raw | ConvertFrom-Json } catch {}
+            if ($bs -and $bs.ts_bridge -and $bs.ts_bridge.pid -and (Get-Process -Id $bs.ts_bridge.pid -ErrorAction SilentlyContinue)) {
+                $tsPid = $bs.ts_bridge.pid
+                if ($bs.run_id) {
+                    try { $tsPort = Get-ShadowDashPort ([string]$bs.run_id) } catch {}
+                }
+                break
+            }
+        }
+        $tsAlive = $null -ne $tsPid
+        $tsTarget = " -> :$tsPort"
         Write-ProcessRow -Label "TS Bridge" -Running $tsAlive -PidVal $(if ($tsAlive) { $tsPid } else { $null }) -Path "server.ts" -ExtraInfo @(@{ t = "http://127.0.0.1:8800"; c = 'Link' }, @{ t = $tsTarget; c = 'Neutral' })
     } elseif ($shadowStale.Count -gt 0) {
         # pidfiles but nothing alive — stale

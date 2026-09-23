@@ -7,8 +7,9 @@ instances never fight over one port and the number tells you who is answering.
 
 Journeys under test:
 1. As the operator, shadow-01/-02/-03 dashboards land on 8801/8802/8803.
-2. As the operator, the unnumbered "shadow-resume" fallback id gets :8899 --
-   outside any numbered instance, never the live :8799.
+2. As the operator, the unnumbered "shadow-resume" fallback id gets :8900 --
+   outside every numbered instance (01-99 land on 8801-8899), never the live
+   :8799.
 3. As the operator, a garbage run id fails loudly instead of silently
    landing back on :8799 beside the live stack.
 4. As the operator, the dashboard URL and PID-file path are built from the
@@ -74,17 +75,18 @@ def test_numbered_instances_derive_their_port(tmp_path):
     assert _invoke("shadow-01", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8801"
     assert _invoke("shadow-02", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8802"
     assert _invoke("shadow-03", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8803"
+    assert _invoke("shadow-99", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8899"
 
 
 def test_unnumbered_resume_id_gets_its_own_port_off_the_live_one(tmp_path):
     result = _invoke("shadow-resume", "Get-ShadowDashPort $RunId", tmp_path)
 
     assert result["threw"] is False, result["message"]
-    assert result["value"] == "8899"
+    assert result["value"] == "8900"
 
 
 def test_garbage_run_id_fails_loudly_instead_of_landing_on_live(tmp_path):
-    for bad in ("", "live", "shadow-", "shadow-1x"):
+    for bad in ("", "live", "shadow-", "shadow-1x", "shadow-1", "shadow-00", "shadow-100"):
         result = _invoke(bad, "Get-ShadowDashPort $RunId", tmp_path)
 
         assert result["threw"] is True, bad
@@ -249,3 +251,40 @@ def test_resume_stop_kills_only_its_own_instances_pieces(tmp_path):
     assert sorted(result["killed"]) == [111, 222]
     assert result["kept02"] is True
     assert result["kept01"] is False
+
+
+def test_instance_enumeration_lists_every_record_file(tmp_path):
+    # Arrange — two stale records (dead PIDs read back as not-alive
+    # placeholders, which is exactly what the stop path prunes).
+    run_dir = str(tmp_path).replace("'", "''")
+    script = "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        _lift("Get-ShadowDashInstances", "_ReadShadowDashRecord",
+              "Get-ShadowDashPidFile", "Get-ShadowDashPort"),
+        f"$RunDir = '{run_dir}'",
+        f"$ShadowPidFile = '{run_dir}/shadow-dash.pids.json'",
+        "@{ dash = @{ pid = 111; started_ticks = 1; port = 8801; db = 'a' } } |",
+        "  ConvertTo-Json -Depth 4 |",
+        f"  Set-Content -Path '{run_dir}/shadow-dash-shadow-01.pids.json' -Encoding UTF8",
+        "@{ dash = @{ pid = 222; started_ticks = 1; port = 8802; db = 'b' } } |",
+        "  ConvertTo-Json -Depth 4 |",
+        f"  Set-Content -Path '{run_dir}/shadow-dash-shadow-02.pids.json' -Encoding UTF8",
+        "try {",
+        "  $all = @(Get-ShadowDashInstances)",
+        "  $out = @{ threw = $false;",
+        "            ids = @($all | ForEach-Object { [string]$_.run_id }) -join ',';",
+        "            ports = @($all | ForEach-Object { [string]$_.port }) -join ',' }",
+        "} catch {",
+        "  $out = @{ threw = $true; message = $_.Exception.Message }",
+        "}",
+        "$out | ConvertTo-Json -Compress",
+    ])
+    out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", script],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    result = json.loads(out.stdout)
+
+    # Assert — both files discovered, each carrying its own identity
+    # (discovery order is filesystem order; the contract is the set).
+    assert result["threw"] is False, result.get("message")
+    assert sorted(result["ids"].split(",")) == ["shadow-01", "shadow-02"], result
+    assert sorted(result["ports"].split(",")) == ["8801", "8802"], result
