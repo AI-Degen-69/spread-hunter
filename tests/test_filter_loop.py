@@ -127,3 +127,19 @@ def test_main_replays_argv_flags(tmp_path, monkeypatch):
     assert seen["cmd"][seen["cmd"].index("--out-dir") + 1] == str(tmp_path / "t")
     assert seen["cmd"][seen["cmd"].index("--trial-depth") + 1] == "250.0"
     assert (tmp_path / "t" / "rerank.log").exists()
+
+def test_explicit_trial_depth_survives_a_config_read_failure(tmp_path, monkeypatch):
+    # A config read failure must not silently rank the trial feed at the
+    # permanent bar: the explicit CLI flag travels independently of config.
+    import scoring.config as scoring_config
+
+    def boom():
+        raise RuntimeError("config store unreachable")
+
+    monkeypatch.setattr(scoring_config, "load", boom)
+    monkeypatch.setattr(filter_loop, "LOG", tmp_path / "rerank.log")
+
+    cmd = filter_loop._rank_cmd(2, out_dir=tmp_path / "t", trial_depth=250.0)
+
+    assert cmd[cmd.index("--trial-depth") + 1] == "250.0"
+    assert cmd[cmd.index("--out-dir") + 1] == str(tmp_path / "t")

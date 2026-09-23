@@ -151,12 +151,15 @@ def _rank_cmd(top: int = 2, out_dir=None,
     cmd = [sys.executable, "-m", "scripts.filter_markets", "--top", str(top)]
     if out_dir is not None:
         cmd += ["--out-dir", str(out_dir)]
+    # The explicit CLI flag travels independently of config: if the config
+    # read below fails, dropping it would silently rank the trial feed at
+    # the permanent bar, untagged -- baseline rows in the trial feed.
+    if trial_depth is not None:
+        cmd += ["--trial-depth", str(trial_depth)]
     try:
         from scoring.config import load as _load_cfg
         cfg = _load_cfg()
-        if trial_depth is not None:
-            cmd += ["--trial-depth", str(trial_depth)]
-        elif cfg.select_min_top3_depth_usd_trial:
+        if trial_depth is None and cfg.select_min_top3_depth_usd_trial:
             cmd += ["--trial-depth", str(cfg.select_min_top3_depth_usd_trial)]
         if cfg.select_min_volume_24h_usd_trial:
             cmd += ["--trial-volume", str(cfg.select_min_volume_24h_usd_trial)]

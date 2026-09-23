@@ -96,3 +96,11 @@ def test_manifest_files_are_never_resume_candidates():
     helper = src.split("function Get-ShadowResumeStores", 1)[1].split("\nfunction ", 1)[0]
     assert '"*_shadow_*.db"' in helper
     assert ".trial.json" not in helper
+
+def test_trial_resolves_its_own_ring_by_fixed_name():
+    # With 01/02 still running, newest-file selection would hand the watcher
+    # a sibling ring while --db points at the trial store. The trial waits
+    # for shadow-<NN>.jsonl exactly as Resume-ShadowRun does.
+    body = _function_source("Start-ShadowTrial")
+    assert "shadow-{0}.jsonl" in body
+    assert "Sort-Object LastWriteTime -Descending" not in body

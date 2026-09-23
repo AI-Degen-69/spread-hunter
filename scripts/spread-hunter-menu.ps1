@@ -1360,11 +1360,14 @@ function Start-ShadowTrial {
     Lsh-Ok "Statistics observer running (PID $($observer.Id), db=$($script:StatsDbPath))."
 
     $ring = $null
+    # The trial's own ring, by fixed name (as Resume-ShadowRun does): with
+    # 01/02 still running, "newest shadow-*.jsonl" would hand the watcher a
+    # sibling's ring while --db points at the trial store -- no working
+    # stop-loss coverage and a wrong ring in the session file.
+    $expectedRing = Join-Path $RunDir ("shadow-{0}.jsonl" -f ($runId -replace "^shadow-", ""))
     $deadline = (Get-Date).AddSeconds(30)
     while ($null -eq $ring -and (Get-Date) -lt $deadline) {
-        $ringFile = Get-ChildItem $RunDir -Filter "shadow-*.jsonl" -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($ringFile) { $ring = $ringFile.FullName; break }
+        if (Test-Path $expectedRing) { $ring = $expectedRing; break }
         Start-Sleep -Milliseconds 500
         if ($shadowRun.HasExited) { break }
     }
