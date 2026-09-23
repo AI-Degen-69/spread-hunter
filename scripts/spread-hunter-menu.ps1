@@ -1031,17 +1031,29 @@ function Get-ShadowResumeStores {
     <# Every resumable shadow store: data/NN_shadow_*.db, each paired with
        its shadow-NN run id. Sorted by run number so the list grows on its
        own as runs 03..99 appear. Anything else in data/ (stats, legacy
-       names) is never a candidate. #>
+       names) is never a candidate. `00` is excluded: it has no shadow
+       dashboard port, so offering it would abort an "all" resume before
+       the valid stores. When two files share a run number (the sequence
+       wrapped past 99 while an older 01 store remains), only the newest
+       one is a candidate: resuming both would stop the first session
+       while starting the second under the same run id. #>
     $dataDir = Join-Path $ProjectPath "data"
-    $files = @(Get-ChildItem $dataDir -File -Filter "*_shadow_*.db" -ErrorAction SilentlyContinue |
-        Where-Object { $_.BaseName -match '^(\d{1,2})_shadow_' } |
-        Sort-Object { if ($_.BaseName -match '^(\d{1,2})_shadow_') { [int]$Matches[1] } else { 99 } })
-    foreach ($f in $files) {
-        $null = $f.BaseName -match '^(\d{1,2})_shadow_'
+    $byRun = @{}
+    Get-ChildItem $dataDir -File -Filter "*_shadow_*.db" -ErrorAction SilentlyContinue |
+        Where-Object { $_.BaseName -match '^(\d{1,2})_shadow_' -and $Matches[1] -ne '00' } |
+        ForEach-Object {
+            $file = $_
+            $null = $file.BaseName -match '^(\d{1,2})_shadow_'
+            $runId = "shadow-" + ([int]$Matches[1]).ToString("D2")
+            if ((-not $byRun.ContainsKey($runId)) -or ($file.LastWriteTime -gt $byRun[$runId].File.LastWriteTime)) {
+                $byRun[$runId] = @{ File = $file; Seq = [int]$Matches[1] }
+            }
+        }
+    foreach ($entry in ($byRun.GetEnumerator() | Sort-Object { $_.Value.Seq })) {
         [pscustomobject]@{
-            RunId = "shadow-" + ([int]$Matches[1]).ToString("D2")
-            Name  = $f.Name
-            Path  = $f.FullName
+            RunId = $entry.Key
+            Name  = $entry.Value.File.Name
+            Path  = $entry.Value.File.FullName
         }
     }
 }
@@ -2605,9 +2617,32 @@ function Invoke-LiveAction {
                     }
                 }
             }
+            $resumeDbBefore = $ResumeDb
+            $watchBefore = $Watch
+            if ($resumeDbList.Count -gt 1 -and $watchBefore) {
+                Lsh-Warn "-Watch streams the last resumed run's log; earlier runs start without it."
+            }
+            $failedResumes = @()
             foreach ($resumeDb in $resumeDbList) {
-                $ResumeDb = $resumeDb
-                $null = Resume-ShadowRun
+                # Script scope: this branch runs inside Invoke-LiveAction, and
+                # Resume-ShadowRun reads the script-level $ResumeDb/$Watch, so
+                # a bare assignment here would stay local and resume the wrong
+                # store. A multi-run resume streams the last run's log only:
+                # the first watched run would block on Get-Content -Wait and
+                # the later runs would never start.
+                $script:ResumeDb = $resumeDb
+                if ($resumeDbList.Count -gt 1 -and $resumeDb -ne $resumeDbList[-1]) {
+                    $script:Watch = $false
+                } else {
+                    $script:Watch = $watchBefore
+                }
+                if (-not (Resume-ShadowRun)) { $failedResumes += $resumeDb }
+            }
+            $script:ResumeDb = $resumeDbBefore
+            $script:Watch = $watchBefore
+            if ($failedResumes.Count -gt 0) {
+                $failedNames = @($failedResumes | ForEach-Object { if ($_ -eq "") { "(pinned default)" } else { Split-Path -Leaf $_ } })
+                Lsh-Fail ("Resume incomplete: {0} store(s) failed: {1}." -f $failedResumes.Count, ($failedNames -join ", "))
             }
         }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
