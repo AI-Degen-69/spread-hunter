@@ -645,7 +645,7 @@ function Get-ShadowDashInstances {
     if (Test-Path $ShadowPidFile) { $files += Get-Item $ShadowPidFile }
     foreach ($f in $files) {
         $rid = $null
-        if ($f.BaseName -match '^shadow-dash-(.+)$') { $rid = $Matches[1] }
+        if ($f.BaseName -match '^shadow-dash-(.+)\.pids$') { $rid = $Matches[1] }
         $rec = _ReadShadowDashRecord $f.FullName $rid
         if ($null -ne $rec) { $out += $rec }
         else { $out += [pscustomobject]@{ pid = $null; proc = $null; port = 0; db = $null; run_id = $rid; pidfile = $f.FullName; alive = $false } }
