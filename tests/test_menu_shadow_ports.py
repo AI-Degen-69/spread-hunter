@@ -194,3 +194,58 @@ def test_ts_bridge_proxies_an_explicit_dashboard_url():
     # Act / Assert
     assert "PyDashUrl" in body
     assert "$ShadowDashUrl" not in body
+
+
+def _stop_one_instance(tmp_path: Path) -> dict:
+    """Two fabricated single-file sessions, stop only shadow-01's.
+
+    PIDs are dead, so the stubbed killer only records calls -- nothing can
+    actually die. Returns the kill log plus which session files survived.
+    """
+    run_dir = str(tmp_path).replace("'", "''")
+    script = "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        _lift("Stop-ShadowSession", "Get-ShadowSessionFile"),
+        f"$RunDir = '{run_dir}'",
+        f"$ShadowSessionFile = '{run_dir}/shadow-session.json'",
+        "$killed = @()",
+        "function Kill-RecordedPid { param($Name, $TargetPid, $StartedTicks)",
+        "  $script:killed += [int]$TargetPid; return $true }",
+        "function Stop-TsBridge { return $false }",
+        "function Stop-ShadowDashboard { return $false }",
+        "function Lsh-Step([string]$t) {}",
+        "function Lsh-Ok([string]$t) {}",
+        "function Lsh-Warn([string]$t) {}",
+        "function Lsh-Fail([string]$t) {}",
+        "@{ run_id = 'shadow-01'; screener = @{ pid = 111 };",
+        "   loop = @{ pid = 222 }; observer = $null; watcher = $null } |",
+        "  ConvertTo-Json -Depth 4 |",
+        f"  Set-Content -Path '{run_dir}/shadow-session-shadow-01.json' -Encoding UTF8",
+        "@{ run_id = 'shadow-02'; screener = $null;",
+        "   loop = @{ pid = 333 }; observer = $null; watcher = $null } |",
+        "  ConvertTo-Json -Depth 4 |",
+        f"  Set-Content -Path '{run_dir}/shadow-session-shadow-02.json' -Encoding UTF8",
+        "try {",
+        "  $r = Stop-ShadowSession -RunId 'shadow-01'",
+        "  $out = @{ threw = $false; killed = @($script:killed);",
+        "            kept02 = (Test-Path '" + run_dir + "/shadow-session-shadow-02.json');",
+        "            kept01 = (Test-Path '" + run_dir + "/shadow-session-shadow-01.json') }",
+        "} catch {",
+        "  $out = @{ threw = $true; message = $_.Exception.Message }",
+        "}",
+        "$out | ConvertTo-Json -Compress",
+    ])
+    out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", script],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    return json.loads(out.stdout)
+
+
+def test_resume_stop_kills_only_its_own_instances_pieces(tmp_path):
+    # Arrange / Act — resuming 01 beside a live 02 must not touch 02.
+    result = _stop_one_instance(tmp_path)
+
+    # Assert
+    assert result["threw"] is False, result.get("message")
+    assert sorted(result["killed"]) == [111, 222]
+    assert result["kept02"] is True
+    assert result["kept01"] is False

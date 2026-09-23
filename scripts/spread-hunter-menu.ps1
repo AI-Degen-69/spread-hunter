@@ -801,10 +801,15 @@ function Start-ShadowDashboard {
 }
 
 function Stop-ShadowDashboard {
-    <# Stop every menu-owned shadow dashboard; leaves foreign processes on
-       any port alone. #>
+    <# Stop menu-owned shadow dashboards; leaves foreign processes on any
+       port alone. No run id stops every instance (the stop-shadow action);
+       a run id stops only that instance plus the pre-#288 legacy record. #>
+    param([string]$RunId = $null)
+    $targets = @(Get-ShadowDashInstances | Where-Object {
+        (-not $RunId) -or ($_.run_id -eq $RunId) -or (-not $_.run_id)
+    })
     $stopped = $false
-    foreach ($inst in @(Get-ShadowDashInstances)) {
+    foreach ($inst in $targets) {
         if (-not $inst.alive) {
             Remove-Item $inst.pidfile -ErrorAction SilentlyContinue
             continue
@@ -826,8 +831,8 @@ function Stop-ShadowDashboard {
             Lsh-Warn "Shadow dashboard $label PID $($inst.pid) did not exit; record kept."
         }
     }
-    foreach ($inst in @(Get-ShadowDashInstances)) {
-        if ($inst.alive -and $inst.port -gt 0 -and (Test-Port -PortNumber $inst.port)) {
+    foreach ($inst in $targets) {
+        if ($inst.port -gt 0 -and (Test-Port -PortNumber $inst.port)) {
             Lsh-Warn "Port $($inst.port) still LISTENING — not owned by shadow menu, left running."
             return $false
         }
@@ -847,14 +852,18 @@ function Stop-ShadowRun {
     <# Kill the shadow rehearsal bot (shadow_run) plus its scoped stop-loss
     watcher, matched by command line inside THIS repo. Live processes never pass
     --db <per-run-shadow-db>, so the production stack is never matched. Used by the
-    shadow Stop action and by every global stop / reset wipe. #>
+    shadow Stop action and by every global stop / reset wipe. A run id narrows
+    the match to that instance's `--run-id` (loop, observer) and ring/db
+    markers (watcher), so resuming one instance never kills a live sibling. #>
+    param([string]$RunId = $null)
     try {
         $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
                 ($_.CommandLine -like "*$ProjectPath*") -and `
                 (($_.CommandLine -like "*core_brain.shadow_run*") -or `
-                 ($_.CommandLine -like "*scripts.global_stop_loss*" -and ($_.CommandLine -like "*shadow_*.db*" -or $_.CommandLine -like "*shadow.db*")))
+                 ($_.CommandLine -like "*scripts.global_stop_loss*" -and ($_.CommandLine -like "*shadow_*.db*" -or $_.CommandLine -like "*shadow.db*"))) -and `
+                ((-not $RunId) -or ($_.CommandLine -like "*$RunId*"))
             })
     } catch {
         # An unreadable process table is not proof of an empty one. $null means
@@ -1042,19 +1051,27 @@ function Resume-ShadowRun {
         return $false
     }
 
-    # Stop any rehearsal already running so two loops never write one store,
-    # and verify the stop actually worked: an old loop that survives writes
-    # into the same store concurrently with the resumed one.
-    if ($null -ne (Get-DashInstance)) { $null = Stop-Dashboard }
-    $null = Stop-ShadowSession
-    $runStopped = Stop-ShadowRun
+    # Stop THIS rehearsal if already running so two loops never write one
+    # store, and verify the stop actually worked: an old loop that survives
+    # writes into the same store concurrently with the resumed one. Sibling
+    # instances keep running -- their stores, ports and sessions are disjoint
+    # -- and the live dashboard on :8799 is never touched.
+    $ownSession = $null
+    $ownSessionFile = Get-ShadowSessionFile -RunId $script:ShadowRunId
+    if (Test-Path $ownSessionFile) {
+        try { $ownSession = Get-Content $ownSessionFile -Raw | ConvertFrom-Json } catch {}
+    }
+    $null = Stop-ShadowSession -RunId $script:ShadowRunId
+    $runStopped = Stop-ShadowRun -RunId $script:ShadowRunId
     if ($runStopped -eq $null) {
         Lsh-Fail "Could not verify the previous rehearsal stopped (process scan inconclusive). Resume aborted - stop it manually (stop-shadow), then retry."
         return $false
     }
     Start-Sleep -Seconds 2
-    if (Test-OrphanStackProcess) {
-        Lsh-Fail "A rehearsal process is still alive after the stop. Resume aborted - stop it manually (stop-shadow), then retry."
+    $stalePids = @($ownSession.screener.pid, $ownSession.loop.pid, $ownSession.watcher.pid, $ownSession.observer.pid) |
+        Where-Object { $_ -and (Test-PidAlive -ProcessId $_) }
+    if ($stalePids.Count -gt 0) {
+        Lsh-Fail "A rehearsal process for $($script:ShadowRunId) is still alive after the stop (PID $($stalePids -join ', ')). Resume aborted - stop it manually (stop-shadow), then retry."
         return $false
     }
     $stamp = Get-Date -Format "dd-MM_HH-mm"
@@ -2001,16 +2018,23 @@ function Get-ProcessRecord {
 }
 
 function Stop-ShadowSession {
-    <# Stop every menu-driven shadow session before its timebox ends: the
-    market screener, the rehearsal loop (shadow_run), the stop-loss watcher,
-    and the shadow viewer, per run id. Recorded PIDs are killed only when
+    <# Stop menu-driven shadow sessions before their timeboxes end: the market
+    screener, the rehearsal loop (shadow_run), the stop-loss watcher, and the
+    shadow viewer. No run id stops every session (the stop-shadow action); a
+    run id stops only that session, so resuming one instance beside a live
+    sibling leaves the sibling alone. Recorded PIDs are killed only when
     their start times match. #>
+    param([string]$RunId = $null)
     $killedAny = $false
     $sessionFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
     if (Test-Path $ShadowSessionFile) { $sessionFiles += Get-Item $ShadowSessionFile }
     foreach ($sf in $sessionFiles) {
         $s = $null
         try { $s = Get-Content $sf.FullName -Raw | ConvertFrom-Json } catch {}
+        $fileRunId = $null
+        if ($sf.BaseName -match '^shadow-session-(.+)$') { $fileRunId = $Matches[1] }
+        elseif ($s -and $s.run_id) { $fileRunId = [string]$s.run_id }
+        if ($RunId -and $fileRunId -and ($fileRunId -ne $RunId)) { continue }
         if ($s) {
             if ($s.screener.pid)   { $res = Kill-RecordedPid -Name "shadow screener" -TargetPid $s.screener.pid   -StartedTicks $s.screener.started_ticks; if ($res) { $killedAny = $true } }
             if ($s.loop.pid)       { $res = Kill-RecordedPid -Name "shadow loop"      -TargetPid $s.loop.pid       -StartedTicks $s.loop.started_ticks; if ($res) { $killedAny = $true } }
@@ -2019,9 +2043,14 @@ function Stop-ShadowSession {
         }
         Remove-Item $sf.FullName -ErrorAction SilentlyContinue
     }
-    $tsRes = Stop-TsBridge
+    $tsRes = $false
+    if (-not $RunId) {
+        # The bridge is a singleton on :8800: a scoped stop must not take it
+        # down from under a sibling instance. stop-all still owns it.
+        $tsRes = Stop-TsBridge
+    }
     if ($tsRes) { $killedAny = $true }
-    $dashRes = Stop-ShadowDashboard
+    $dashRes = Stop-ShadowDashboard -RunId $RunId
     if ($dashRes) { $killedAny = $true }
     return $killedAny
 }
