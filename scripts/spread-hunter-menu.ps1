@@ -12,7 +12,7 @@
 #   .\scripts\spread-hunter-menu.ps1 statistical-run [-Hours N] # overnight shadow statistics + dashboard
 #   .\scripts\spread-hunter-menu.ps1 stop-shadow   # 5 · SHADOW: stop loop, watcher and viewer
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
-#   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] # R · SHADOW: resume the pinned 01_shadow_12-09_00-58.db rehearsal (shadow-01) in place (no wipe) & reattach dashboard
+#   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] [-ResumeDb <path|all>] # R · SHADOW: resume shadow run(s) in place (no wipe) & reattach dashboard(s) — interactive picks 01 / 02 / all
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
@@ -1027,6 +1027,36 @@ function Open-Dashboard {
     return $ok
 }
 
+function Get-ShadowResumeStores {
+    <# Every resumable shadow store: data/NN_shadow_*.db, each paired with
+       its shadow-NN run id. Sorted by run number so the list grows on its
+       own as runs 03..99 appear. Anything else in data/ (stats, legacy
+       names) is never a candidate. `00` is excluded: it has no shadow
+       dashboard port, so offering it would abort an "all" resume before
+       the valid stores. When two files share a run number (the sequence
+       wrapped past 99 while an older 01 store remains), only the newest
+       one is a candidate: resuming both would stop the first session
+       while starting the second under the same run id. #>
+    $dataDir = Join-Path $ProjectPath "data"
+    $byRun = @{}
+    Get-ChildItem $dataDir -File -Filter "*_shadow_*.db" -ErrorAction SilentlyContinue |
+        Where-Object { $_.BaseName -match '^(\d{1,2})_shadow_' -and $Matches[1] -ne '00' } |
+        ForEach-Object {
+            $file = $_
+            $null = $file.BaseName -match '^(\d{1,2})_shadow_'
+            $runId = "shadow-" + ([int]$Matches[1]).ToString("D2")
+            if ((-not $byRun.ContainsKey($runId)) -or ($file.LastWriteTime -gt $byRun[$runId].File.LastWriteTime)) {
+                $byRun[$runId] = @{ File = $file; Seq = [int]$Matches[1] }
+            }
+        }
+    foreach ($entry in ($byRun.GetEnumerator() | Sort-Object { $_.Value.Seq })) {
+        [pscustomobject]@{
+            RunId = $entry.Key
+            Name  = $entry.Value.File.Name
+            Path  = $entry.Value.File.FullName
+        }
+    }
+}
 function Resume-ShadowRun {
     <# Resume the PINNED shadow rehearsal in place: reopen
     data/01_shadow_12-09_00-58.db under its original shadow-01 run id, restart
@@ -2452,7 +2482,7 @@ function Show-MenuGrid {
             @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Bot + Dashboard";     D = "Stops, wipes data & starts fresh rehearsal (loop + stop loss); prompts minutes" }
             @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
             @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts shadow DB & opens browser" }
-            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run";        D = "Reopens the pinned 01_shadow_12-09_00-58.db DB as shadow-01, restarts loop/observer/watcher, reattaches dashboard (no wipe)" }
+            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all, dashboard(s) reattached" }
         ) }
         @{ Header = "MAINTENANCE & STATUS"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop & Clean";       D = "Kills all bot processes/dashboards, wipes data, verifies" }
@@ -2540,12 +2570,80 @@ function Invoke-LiveAction {
         }
         "8" { Show-Status }
         "r" {
-            if ($Action -eq "") {
-                $store = if ($ResumeDb -ne "") { $ResumeDb } else { "data/01_shadow_12-09_00-58.db (shadow-01)" }
-                $confirm = Read-Host "  Resume rehearsal ($store, no wipe, dashboard reattached)? [y/N]"
-                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+            # Resume one shadow run or all of them. -ResumeDb <path> resumes
+            # that single store; -ResumeDb all resumes every candidate store.
+            # Interactive with no -ResumeDb lists what is on disk and asks.
+            # Non-interactive with no -ResumeDb keeps the pinned 01 default.
+            $resumeDbList = @()
+            if ($ResumeDb -eq "all") {
+                $resumeDbList = @(Get-ShadowResumeStores | ForEach-Object { $_.Path })
+                if ($resumeDbList.Count -eq 0) {
+                    Lsh-Fail "No resumable shadow stores found in data/ (expected NN_shadow_*.db)."
+                    return
+                }
+                Lsh-Step ("Resuming all {0} shadow runs (no data wiped)." -f $resumeDbList.Count)
+            } elseif ($ResumeDb -ne "") {
+                $resumeDbList = @($ResumeDb)
+            } elseif ($Action -ne "") {
+                $resumeDbList = @("")
+            } else {
+                $stores = @(Get-ShadowResumeStores)
+                if ($stores.Count -eq 0) {
+                    Lsh-Fail "No resumable shadow stores found in data/ (expected NN_shadow_*.db)."
+                    return
+                } elseif ($stores.Count -eq 1) {
+                    $confirm = Read-Host ("  Resume {0} from {1} (no data wiped)? [y/N]" -f $stores[0].RunId, $stores[0].Name)
+                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                    $resumeDbList = @($stores[0].Path)
+                } else {
+                    Write-Host "  Available shadow runs to resume:" -ForegroundColor (Get-ProfileColor -Name Info)
+                    for ($i = 0; $i -lt $stores.Count; $i++) {
+                        Write-Host ("    [{0}] {1} ({2})" -f ($i + 1), $stores[$i].RunId, $stores[$i].Name)
+                    }
+                    Write-Host "    [A] All runs"
+                    $choice = Read-Host ("  Resume which run? [1-{0}/A, C to cancel]" -f $stores.Count)
+                    if ($choice -match '^[aA]') {
+                        $confirm = Read-Host ("  Resume all {0} runs (no data wiped)? [y/N]" -f $stores.Count)
+                        if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                        $resumeDbList = @($stores | ForEach-Object { $_.Path })
+                    } elseif ($choice -match '^\s*(\d+)\s*$' -and [int]$Matches[1] -ge 1 -and [int]$Matches[1] -le $stores.Count) {
+                        $picked = $stores[[int]$Matches[1] - 1]
+                        $confirm = Read-Host ("  Resume {0} from {1} (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
+                        if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                        $resumeDbList = @($picked.Path)
+                    } else {
+                        Lsh-Warn "Resume cancelled."
+                        return
+                    }
+                }
             }
-            $null = Resume-ShadowRun
+            $resumeDbBefore = $ResumeDb
+            $watchBefore = $Watch
+            if ($resumeDbList.Count -gt 1 -and $watchBefore) {
+                Lsh-Warn "-Watch streams the last resumed run's log; earlier runs start without it."
+            }
+            $failedResumes = @()
+            foreach ($resumeDb in $resumeDbList) {
+                # Script scope: this branch runs inside Invoke-LiveAction, and
+                # Resume-ShadowRun reads the script-level $ResumeDb/$Watch, so
+                # a bare assignment here would stay local and resume the wrong
+                # store. A multi-run resume streams the last run's log only:
+                # the first watched run would block on Get-Content -Wait and
+                # the later runs would never start.
+                $script:ResumeDb = $resumeDb
+                if ($resumeDbList.Count -gt 1 -and $resumeDb -ne $resumeDbList[-1]) {
+                    $script:Watch = $false
+                } else {
+                    $script:Watch = $watchBefore
+                }
+                if (-not (Resume-ShadowRun)) { $failedResumes += $resumeDb }
+            }
+            $script:ResumeDb = $resumeDbBefore
+            $script:Watch = $watchBefore
+            if ($failedResumes.Count -gt 0) {
+                $failedNames = @($failedResumes | ForEach-Object { if ($_ -eq "") { "(pinned default)" } else { Split-Path -Leaf $_ } })
+                Lsh-Fail ("Resume incomplete: {0} store(s) failed: {1}." -f $failedResumes.Count, ($failedNames -join ", "))
+            }
         }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
@@ -2600,7 +2698,7 @@ if ($Action -ne "") {
         "shadow-host"  = "6"
         "open-shadow"  = "6"
         "shadow-open"  = "6"
-        # Pinned resume: option R always reopens 01_shadow_12-09_00-58.db as shadow-01.
+        # Resume: option R offers every NN_shadow_ store (01 / 02 / all); default with no pick is still the pinned 01 store.
         "resume"       = "r"
         "shadow-resume" = "r"
         "resume-shadow" = "r"

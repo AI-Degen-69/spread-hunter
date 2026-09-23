@@ -187,3 +187,66 @@ def test_register_stack_service_publishes_atomically():
     assert "Set-Content -Path $ProcsFile" not in helper
     # The temp file never survives a failed publish.
     assert "Remove-Item $tmp -Force" in helper
+
+
+def _resume_stores_helper_source() -> str:
+    src = _menu_source()
+    return src.split("function Get-ShadowResumeStores", 1)[1].split("\nfunction ", 1)[0]
+
+
+def test_resume_candidates_helper_derives_run_ids_from_store_names():
+    """R must know which runs exist before asking: one helper lists every
+    data/NN_shadow_*.db store with its shadow-NN run id, so 01 and 02 (and
+    later runs) are discovered, never hardcoded."""
+    src = _menu_source()
+    assert "function Get-ShadowResumeStores" in src
+    helper = _resume_stores_helper_source()
+    assert r"^(\d{1,2})_shadow_" in helper
+    assert '"shadow-"' in helper
+
+
+def test_r_branch_lists_available_runs_and_offers_all():
+    """With 01 and 02 on disk, R lists what is available and lets the
+    operator resume one run or all of them — in clear English."""
+    branch = _branch_source("r")
+    assert "Get-ShadowResumeStores" in branch
+    assert "All" in branch
+    assert "Resume-ShadowRun" in branch
+
+
+def test_r_branch_resume_db_all_resumes_every_store():
+    """-ResumeDb all (non-interactive) resumes every candidate store instead
+    of only the pinned 01."""
+    branch = _branch_source("r")
+    assert '"all"' in branch
+
+
+def test_resume_candidates_exclude_the_zero_prefix():
+    """`00` has no shadow dashboard port, so it must never be a candidate —
+    otherwise an "all" resume aborts before reaching the valid stores."""
+    helper = _resume_stores_helper_source()
+    assert "'00'" in helper
+
+
+def test_resume_candidates_dedup_a_shared_run_number_to_the_newest():
+    """Two files with the same run number (sequence wrapped past 99) share
+    one run id — only the newest store is a candidate."""
+    helper = _resume_stores_helper_source()
+    assert "LastWriteTime" in helper
+
+
+def test_r_branch_resumes_each_store_in_script_scope_and_reports_failures():
+    """The r branch runs inside Invoke-LiveAction while Resume-ShadowRun
+    reads script-level state, so each pick must cross that scope boundary —
+    and a failed store must be reported, never silently skipped."""
+    branch = _branch_source("r")
+    assert "$script:ResumeDb" in branch
+    assert "failedResumes" in branch
+    assert "Resume incomplete" in branch
+
+
+def test_r_branch_streams_only_the_last_run_log():
+    """-Watch with several runs must not block the first resume on
+    Get-Content -Wait while later runs never start."""
+    branch = _branch_source("r")
+    assert "last resumed run" in branch
