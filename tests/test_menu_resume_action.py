@@ -1,14 +1,16 @@
 """shadow-resume action exists, is wired, and never wipes.
 
-`Resume-ShadowRun` reopens the newest `data/NN_shadow_*.db` under its
-original `shadow-NN` run id and restarts the loop/observer/watcher against
-it, so a rehearsal interrupted partway (shadow-01 at 38 closes, say) can be
-continued toward the 60-close sample target instead of starting a fresh
-run. The wiring is text-level in the menu script (the script takes over the
-console when dot-sourced, so it cannot be imported), so the tests parse the
-source directly. No PowerShell host is needed: these are string assertions,
-so they run everywhere and a removal of the resume flow fails the suite on
-any runner.
+`Resume-ShadowRun` reopens the PINNED rehearsal store
+`data/01_shadow_12-09_00-58.db` under its original `shadow-01` run id and
+restarts the loop/observer/watcher against it, so the long-running rehearsal
+(83 closes and counting) can always be continued with one menu press — never
+capturing a newer store that merely happens to have the freshest mtime.
+`-ResumeDb <path>` overrides the store for one launch. The wiring is
+text-level in the menu script (the script takes over the console when
+dot-sourced, so it cannot be imported), so the tests parse the source
+directly. No PowerShell host is needed: these are string assertions, so they
+run everywhere and a removal of the resume flow fails the suite on any
+runner.
 """
 from __future__ import annotations
 
@@ -50,17 +52,36 @@ def test_shadow_resume_maps_to_resume_call():
     assert mapping.get("shadow-resume") == "r"
     assert mapping.get("resume") == "r"
     assert mapping.get("resume-shadow") == "r"
+    assert mapping.get("resume-01") == "r"
     branch = _branch_source("r")
     assert "Resume-ShadowRun" in branch, "the r branch must invoke Resume-ShadowRun"
 
 
-def test_resume_derives_run_id_from_newest_store():
+def test_resume_pins_the_owner_store_and_run_id():
+    """Option R always reopens 01_shadow_12-09_00-58.db as shadow-01.
+
+    The Owner's standing choice (2026-09-23): resume must never silently
+    grab whatever store has the newest mtime — a live trial DB being written
+    right now must not steal the resume.
+    """
     body = _resume_function_source()
-    # Newest *_shadow_*.db wins, and the seq prefix becomes the run id.
-    assert "*_shadow_*.db" in body
-    assert re.search(r"Sort-Object\s+LastWriteTime\s+-Descending", body)
-    assert re.search(r"'(\^\\d\{1,2\})_shadow_'", body) or "^\\d{1,2}_shadow_" in body
-    assert '"shadow-" + ' in body or "shadow-$" in body
+    # The pinned default is defined once, as a project path.
+    src = _menu_source()
+    assert '$script:DefaultResumeDb = Join-Path $ProjectPath "data/01_shadow_12-09_00-58.db"' in src
+    # The no-override path resolves that constant and fixes the run id.
+    assert "Get-Item -LiteralPath $script:DefaultResumeDb" in body
+    assert '$script:ShadowRunId = "shadow-01"' in body
+    # A missing pinned store aborts instead of falling back to newest.
+    assert "Pinned rehearsal store not found" in body
+
+
+def test_resume_db_override_keeps_seq_prefix_run_id():
+    """-ResumeDb overrides the store for one launch, run id from its seq prefix."""
+    body = _resume_function_source()
+    assert "$ResumeDb -ne" in body
+    assert 'if ($db.BaseName -match \'^(\\d{1,2})_shadow_\')' in body
+    assert '"shadow-" + ' in body
+    assert "Resume store not found" in body
 
 
 def test_resume_reuses_store_and_run_id_without_wiping():
@@ -81,6 +102,37 @@ def test_resume_verifies_previous_processes_stopped():
     # The inconclusive result ($null) aborts, and the loop-kill result is used.
     assert "$runStopped -eq $null" in body
     assert "return $false" in body
+
+
+def test_resume_validates_the_store_before_stopping_anything():
+    """A missing store must abort with the current rehearsal still running.
+
+    The store lookup and the production-registry refusal sit above the teardown
+    in the function body: if they fired after Stop-ShadowSession/Stop-ShadowRun,
+    a typo'd -ResumeDb would stop the operator's live rehearsal and dashboard
+    and then leave nothing running.
+    """
+    body = _resume_function_source()
+    first_stop = body.find("Stop-ShadowSession")
+    assert first_stop != -1
+    assert body.find("Resume store not found") < first_stop
+    assert body.find("Pinned rehearsal store not found") < first_stop
+    assert body.find("is the production registry") < first_stop
+
+
+def test_resume_refuses_the_production_registry_before_launching():
+    """Only the Python loop guards data/orders.db (shadow_guard); the menu must
+    refuse it too, before the dashboard, observer or watcher are pointed at it.
+    Separators normalize, and an unresolvable path refuses rather than passes.
+    """
+    body = _resume_function_source()
+    assert 'Join-Path $ProjectPath "data/orders.db"' in body
+    assert "GetFullPath" in body
+    assert "Replace('/', '\\')" in body
+    assert '-ieq $prodFull' in body
+    assert "must never enter the real order history" in body
+    # The refusal fires before anything is launched.
+    assert body.find("-ieq $prodFull") < body.find("Start-ShadowDashboard")
 
 
 def test_resume_timeboxes_screener_and_watcher():
