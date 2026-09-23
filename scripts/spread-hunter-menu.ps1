@@ -155,6 +155,13 @@ function Open-ShadowDashboard {
     Start-Process $url
     return $url
 }
+function Get-ShadowSessionFile {
+    <# Session record per run id; empty id falls back to the pre-#288 single
+       file so a stale record is still found and pruned, never orphaned. #>
+    param([string]$RunId = $script:ShadowRunId)
+    if (-not $RunId) { return $ShadowSessionFile }
+    return Join-Path $RunDir "shadow-session-$RunId.json"
+}
 $ProcsFile   = Resolve-RuntimeFile -Name "processes.json" -LegacyName "live_procs.json"
 $OutLog      = Join-Path $RunDir "live_dash.out.log"
 $ErrLog      = Join-Path $RunDir "live_dash.err.log"
@@ -1061,8 +1068,8 @@ function Resume-ShadowRun {
     }
     $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop" `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $RunDir "resume_screener.out.log") `
-        -RedirectStandardError (Join-Path $RunDir "resume_screener.err.log")
+        -RedirectStandardOutput (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).out.log") `
+        -RedirectStandardError (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).err.log")
     Register-StackService -Key "filter" -Process $screener
     # Timebox the screener like the fresh-run path does: filter_loop has no
     # duration limit of its own, so without a timer it outlives the session.
@@ -1075,15 +1082,15 @@ function Resume-ShadowRun {
         Start-Process -FilePath "python" `
             -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput (Join-Path $RunDir "shadow_resume.out.log") `
-            -RedirectStandardError (Join-Path $RunDir "shadow_resume.err.log")
+            -RedirectStandardOutput (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).out.log") `
+            -RedirectStandardError (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log")
     }
     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s))."
     $observer = Start-Process -FilePath "python" `
         -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $RunDir "resume_observer.out.log") `
-        -RedirectStandardError (Join-Path $RunDir "resume_observer.err.log")
+        -RedirectStandardOutput (Join-Path $RunDir "resume_observer-$($script:ShadowRunId).out.log") `
+        -RedirectStandardError (Join-Path $RunDir "resume_observer-$($script:ShadowRunId).err.log")
     Lsh-Ok "Statistics observer running (PID $($observer.Id), db=$($script:StatsDbPath))."
 
     # The ring already exists from the first session: shadow-<NN>.jsonl.
@@ -1093,8 +1100,8 @@ function Resume-ShadowRun {
         $guardrail = Start-Process -FilePath "python" `
             -ArgumentList "-m", "scripts.global_stop_loss", "--db", $script:ShadowDbPath, "--ring", $ring `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput (Join-Path $RunDir "resume_guardrail.out.log") `
-            -RedirectStandardError (Join-Path $RunDir "resume_guardrail.err.log")
+            -RedirectStandardOutput (Join-Path $RunDir "resume_guardrail-$($script:ShadowRunId).out.log") `
+            -RedirectStandardError (Join-Path $RunDir "resume_guardrail-$($script:ShadowRunId).err.log")
         Lsh-Ok "Stop-loss watcher engaged (PID $($guardrail.Id)) on $ring."
     } else {
         Lsh-Warn "Ring file $ring not found; stop-loss watcher not engaged."
@@ -1130,7 +1137,7 @@ function Resume-ShadowRun {
         watcher = if ($guardrail) { [ordered]@{ pid = $guardrail.Id; started_ticks = $guardrail.StartTime.ToUniversalTime().Ticks } } else { $null }
         ring = $ring
     }
-    $session | ConvertTo-Json -Depth 5 | Set-Content -Path $ShadowSessionFile -Encoding UTF8
+    $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile) -Encoding UTF8
 
     Start-Sleep -Seconds 3
     $openedUrl = Open-ShadowDashboard
@@ -1139,7 +1146,7 @@ function Resume-ShadowRun {
     Write-Host "  .\scripts\spread-hunter-menu.ps1 stop-shadow" -ForegroundColor (Get-ProfileColor -Name Info)
     if ($Watch) {
         Lsh-Step "Watching the resumed loop live (Ctrl-C ends the watcher; session self-stops after $mins min)."
-        Get-Content (Join-Path $RunDir "shadow_resume.err.log") -Wait -ErrorAction SilentlyContinue
+        Get-Content (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log") -Wait -ErrorAction SilentlyContinue
     }
     return $true
 }
@@ -1580,11 +1587,17 @@ function Show-Status {
         Write-FileRow -Label "PID file" -Status "MISSING" -Path "runtime/shadow-dash.pids.json" -Dynamic "no PID file"
     }
 
-    # ── 1c · SHADOW RUN (recorded session: screener + rehearsal loop + scoped watcher) ──
-    if ($sess -and $sess.screener -and $sess.screener.pid) {
-        Write-SectionHeader -Number "1c" -Title "SHADOW RUN" -Status "RECORDED" -StatusStyle "Info"
+    # ── 1c · SHADOW RUNS (recorded sessions, one row-set per run id) ──
+    $sessionFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
+    if (Test-Path $ShadowSessionFile) { $sessionFiles += Get-Item $ShadowSessionFile }
+    foreach ($sf in $sessionFiles) {
+        $one = $null
+        try { $one = Get-Content $sf.FullName -Raw | ConvertFrom-Json } catch {}
+        if (-not ($one -and $one.screener -and $one.screener.pid)) { continue }
+        $runTag = if ($one.run_id) { " ($($one.run_id))" } else { "" }
+        Write-SectionHeader -Number "1c" -Title "SHADOW RUN$runTag" -Status "RECORDED" -StatusStyle "Info"
         foreach ($key in @(@{k="screener";l="Shadow Screener"}, @{k="loop";l="Rehearsal Loop"}, @{k="observer";l="Statistics Observer"}, @{k="watcher";l="Stop-loss Watcher"})) {
-            $ent = $sess.($key.k)
+            $ent = $one.($key.k)
             $p = Get-ProcessRecord -Entry $ent
             $alive = $null -ne $p
             $runCmd = if ($key.k -eq "observer") { "python -m core_brain.statistics_observer" }
@@ -1594,17 +1607,17 @@ function Show-Status {
             Write-ProcessRow -Label $key.l -Running $alive -PidVal $(if ($alive) { $ent.pid } else { $null }) -Path $StackPaths["shadowDash"] -RunCmd $runCmd
         }
         $sessSegs = @()
-        $sessSegs += @{ t = "Started {0}; " -f (Format-Uptime (Get-Date $sess.started)); c = 'Neutral' }
-        if ($sess.shadow_db) {
+        $sessSegs += @{ t = "Started {0}; " -f (Format-Uptime (Get-Date $one.started)); c = 'Neutral' }
+        if ($one.shadow_db) {
             $sessSegs += @{ t = "shadow_db="; c = 'Neutral' }
-            $sessSegs += @{ t = (ConvertTo-RelativePath $sess.shadow_db); c = 'Link' }
+            $sessSegs += @{ t = (ConvertTo-RelativePath $one.shadow_db); c = 'Link' }
         } else { $sessSegs += @{ t = "No Shadow DB"; c = 'Neutral' } }
         $sessSegs += @{ t = "; "; c = 'Neutral' }
-        if ($sess.stats_db) {
+        if ($one.stats_db) {
             $sessSegs += @{ t = "stats_db="; c = 'Neutral' }
-            $sessSegs += @{ t = (ConvertTo-RelativePath $sess.stats_db); c = 'Link' }
+            $sessSegs += @{ t = (ConvertTo-RelativePath $one.stats_db); c = 'Link' }
         } else { $sessSegs += @{ t = "No Stats DB"; c = 'Neutral' } }
-        Write-FileRow -Label "Session file" -Status "FOUND" -Path "runtime/shadow-session.json" -Dynamic $sessSegs
+        Write-FileRow -Label "Session file" -Status "FOUND" -Path (ConvertTo-RelativePath $sf.FullName) -Dynamic $sessSegs
     }
 
     # ── 2 · BOT STACK (dashboard API when up, processes.json otherwise) ──
@@ -1981,20 +1994,23 @@ function Get-ProcessRecord {
 }
 
 function Stop-ShadowSession {
-    <# Stop a menu-driven shadow session before its timebox ends: the market
-    screener, the rehearsal loop (shadow_run), the stop-loss watcher, and the
-    shadow viewer. Recorded PIDs are killed only when their start times match. #>
+    <# Stop every menu-driven shadow session before its timebox ends: the
+    market screener, the rehearsal loop (shadow_run), the stop-loss watcher,
+    and the shadow viewer, per run id. Recorded PIDs are killed only when
+    their start times match. #>
     $killedAny = $false
-    if (Test-Path $ShadowSessionFile) {
+    $sessionFiles = @(Get-ChildItem $RunDir -Filter "shadow-session-*.json" -ErrorAction SilentlyContinue)
+    if (Test-Path $ShadowSessionFile) { $sessionFiles += Get-Item $ShadowSessionFile }
+    foreach ($sf in $sessionFiles) {
         $s = $null
-        try { $s = Get-Content $ShadowSessionFile -Raw | ConvertFrom-Json } catch {}
+        try { $s = Get-Content $sf.FullName -Raw | ConvertFrom-Json } catch {}
         if ($s) {
             if ($s.screener.pid)   { $res = Kill-RecordedPid -Name "shadow screener" -TargetPid $s.screener.pid   -StartedTicks $s.screener.started_ticks; if ($res) { $killedAny = $true } }
             if ($s.loop.pid)       { $res = Kill-RecordedPid -Name "shadow loop"      -TargetPid $s.loop.pid       -StartedTicks $s.loop.started_ticks; if ($res) { $killedAny = $true } }
             if ($s.watcher.pid)    { $res = Kill-RecordedPid -Name "shadow watcher"   -TargetPid $s.watcher.pid    -StartedTicks $s.watcher.started_ticks; if ($res) { $killedAny = $true } }
             if ($s.observer.pid)   { $res = Kill-RecordedPid -Name "statistics observer" -TargetPid $s.observer.pid -StartedTicks $s.observer.started_ticks; if ($res) { $killedAny = $true } }
         }
-        Remove-Item $ShadowSessionFile -ErrorAction SilentlyContinue
+        Remove-Item $sf.FullName -ErrorAction SilentlyContinue
     }
     $tsRes = Stop-TsBridge
     if ($tsRes) { $killedAny = $true }
@@ -2102,8 +2118,8 @@ function Reset-Environment {
                     $seed = Start-Process -FilePath "python" `
                         -ArgumentList "-m", "scripts.filter_markets" `
                         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-                        -RedirectStandardOutput (Join-Path $RunDir "screener_seed.out.log") `
-                        -RedirectStandardError (Join-Path $RunDir "screener_seed.err.log")
+                        -RedirectStandardOutput (Join-Path $RunDir "screener_seed-$ShadowRunId.out.log") `
+                        -RedirectStandardError (Join-Path $RunDir "screener_seed-$ShadowRunId.err.log")
                     $feed = Join-Path $ProjectPath "runtime/markets.json"
                     $deadline = (Get-Date).AddSeconds(120)
                     while (-not (Test-Path $feed) -and (Get-Date) -lt $deadline) {
@@ -2116,8 +2132,8 @@ function Reset-Environment {
                     $screener = Start-Process -FilePath "python" `
                         -ArgumentList "-m", "scripts.filter_loop" `
                         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-                        -RedirectStandardOutput (Join-Path $RunDir "screener.out.log") `
-                        -RedirectStandardError (Join-Path $RunDir "screener.err.log")
+                        -RedirectStandardOutput (Join-Path $RunDir "screener-$ShadowRunId.out.log") `
+                        -RedirectStandardError (Join-Path $RunDir "screener-$ShadowRunId.err.log")
                     Lsh-Ok "Market screener loop running (PID $($screener.Id))."
                     # The rehearsal loop (the executor) - started now that the
                     # universe exists.
@@ -2130,15 +2146,15 @@ function Reset-Environment {
                         Start-Process -FilePath "python" `
                             -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$Minutes", "--db", $ShadowDbPath, "--run-id", $ShadowRunId `
                             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-                            -RedirectStandardOutput (Join-Path $RunDir "shadow_run.out.log") `
-                            -RedirectStandardError (Join-Path $RunDir "shadow_run.err.log")
+                            -RedirectStandardOutput (Join-Path $RunDir "shadow_run-$ShadowRunId.out.log") `
+                            -RedirectStandardError (Join-Path $RunDir "shadow_run-$ShadowRunId.err.log")
                     }
                     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $Minutes minute(s)) - dashboard updates live from $ShadowDbPath."
                     $observer = Start-Process -FilePath "python" `
                         -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $ShadowDbPath, "--run-id", $ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($Minutes / 60) + 0.08) `
                         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-                        -RedirectStandardOutput (Join-Path $RunDir "statistics_observer.out.log") `
-                        -RedirectStandardError (Join-Path $RunDir "statistics_observer.err.log")
+                        -RedirectStandardOutput (Join-Path $RunDir "statistics_observer-$ShadowRunId.out.log") `
+                        -RedirectStandardError (Join-Path $RunDir "statistics_observer-$ShadowRunId.err.log")
                     Lsh-Ok "Statistics observer running (PID $($observer.Id), db=$StatsDbPath)."
                     # Scope the stop-loss watcher to this rehearsal's ring (the
                     # newest shadow-*.jsonl the loop just began writing). No
@@ -2158,8 +2174,8 @@ function Reset-Environment {
                         $guardrail = Start-Process -FilePath "python" `
                             -ArgumentList "-m", "scripts.global_stop_loss",                            "--db", $ShadowDbPath, "--ring", $ring `
                             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-                            -RedirectStandardOutput (Join-Path $RunDir "guardrail.out.log") `
-                            -RedirectStandardError (Join-Path $RunDir "guardrail.err.log")
+                            -RedirectStandardOutput (Join-Path $RunDir "guardrail-$ShadowRunId.out.log") `
+                            -RedirectStandardError (Join-Path $RunDir "guardrail-$ShadowRunId.err.log")
                         Lsh-Ok "Stop-loss watcher engaged (PID $($guardrail.Id)) on $ring."
                     } else {
                         Lsh-Warn "Could not resolve the rehearsal ring; stop-loss watcher not engaged."
@@ -2183,7 +2199,7 @@ function Reset-Environment {
                         watcher = if ($guardrail) { [ordered]@{ pid = $guardrail.Id; started_ticks = $guardrail.StartTime.ToUniversalTime().Ticks } } else { $null }
                         ring = $ring
                     }
-                    $session | ConvertTo-Json -Depth 5 | Set-Content -Path $ShadowSessionFile -Encoding UTF8
+                    $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile -RunId $ShadowRunId) -Encoding UTF8
                     $killSec = [int]($Minutes * 60)
                     $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
                     if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
@@ -2207,12 +2223,12 @@ function Reset-Environment {
                 if ($Watch -and $Minutes -gt 0) {
                     # -Watch: stream the rehearsal loop's stderr to THIS console
                     # instead of backgrounding it silently. The loop logs its
-                    # [QUOTING] lines to runtime/shadow_run.err.log. Ctrl-C ends
+                    # [QUOTING] lines to its per-instance log. Ctrl-C ends
                     # the watcher; the session still self-stops after $Minutes
                     # min (detached timer) or via option 5 / stop-shadow.
                     Write-Host ""
                     Lsh-Step "Watching the rehearsal loop live (Ctrl-C ends the watcher; session self-stops after $Minutes min or via stop-shadow)."
-                    Get-Content (Join-Path $RunDir "shadow_run.err.log") -Wait -ErrorAction SilentlyContinue
+                    Get-Content (Join-Path $RunDir "shadow_run-$ShadowRunId.err.log") -Wait -ErrorAction SilentlyContinue
                 }
             } else {
                 return $false
@@ -2275,7 +2291,7 @@ function Reset-Environment {
                 } catch {
                     Lsh-Warn ".TS bridge did not start: $($_.Exception.Message). Dashboard still available at $ShadowDashUrl."
                 }
-                $session | ConvertTo-Json -Depth 5 | Set-Content -Path $ShadowSessionFile -Encoding UTF8
+                $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile -RunId $ShadowRunId) -Encoding UTF8
                 Write-Host ""
                 Write-ProfileRuleWithText -Text "OVERNIGHT STATISTICS RUNNING" -Style "Success"
                 Write-ProfileSuccess -Message "Validation loop" -Detail "(PID $($validation.Id)) - rotates for $runHours hour(s)"

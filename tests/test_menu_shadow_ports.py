@@ -148,3 +148,34 @@ def test_url_and_pidfile_derive_from_the_same_port(tmp_path):
     assert url["value"] == "http://127.0.0.1:8802"
     assert pidfile["threw"] is False, pidfile["message"]
     assert pidfile["value"].endswith("shadow-dash-shadow-02.pids.json")
+
+
+def _session_file(run_id_expr: str, tmp_path: Path) -> dict:
+    run_dir = str(tmp_path).replace("'", "''")
+    script = "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        _lift("Get-ShadowSessionFile"),
+        f"$RunDir = '{run_dir}'",
+        f"$ShadowSessionFile = '{run_dir}/shadow-session.json'",
+        "try {",
+        f"  $v = Get-ShadowSessionFile {run_id_expr}",
+        "  $out = @{ threw = $false; value = [string]$v; message = $null }",
+        "} catch {",
+        "  $out = @{ threw = $true; value = $null; message = $_.Exception.Message }",
+        "}",
+        "$out | ConvertTo-Json -Compress",
+    ])
+    out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", script],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    return json.loads(out.stdout)
+
+
+def test_session_files_are_per_instance_with_a_legacy_fallback(tmp_path):
+    first = _session_file("-RunId 'shadow-01'", tmp_path)
+    second = _session_file("-RunId 'shadow-02'", tmp_path)
+    legacy = _session_file("", tmp_path)
+
+    assert first["value"].endswith("shadow-session-shadow-01.json"), first
+    assert second["value"].endswith("shadow-session-shadow-02.json"), second
+    assert legacy["value"].endswith("shadow-session.json"), legacy
+    assert first["value"] != second["value"]
