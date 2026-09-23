@@ -1,54 +1,60 @@
-# SPEC: Issue #259 — Equity tooltip shows trade facts
+# SPEC: Issue #288 - Shadow dashboards get run-id-derived ports
 
 ## Goal
-Hovering a Portfolio equity-curve close point must show trade facts in words:
-which market (human title), dollar + percent PnL, close method (MERGED badge),
-and hold time from first quote to close. Never a bare 64-hex condition_id as
-the primary line.
+Every shadow rehearsal instance serves its dashboard on a port derived from
+its run id: shadow-01 on :8801, shadow-02 on :8802, a future shadow-03 on
+:8803. :8799 becomes live-only. No two instances fight over one port, and the
+port number tells the operator which instance is answering.
 
 ## Acceptance criteria (from issue)
-- [ ] Tooltip first line is the human market title (falls back to slug, then
-  short `0x…` only when unresolvable) — never a bare 64-hex address as primary
-- [ ] Tooltip shows dollar PnL AND percent PnL (`realized_pnl / cost_basis`),
-  with `--` / unmeasured when cost_basis is missing or non-positive — never a
-  fabricated 0%
-- [ ] Tooltip shows the close method (`MERGED` for merge closes, otherwise the
-  method label) as a distinct row/badge
-- [ ] Tooltip shows hold duration from first quote (`quotes.ts` for that
-  condition_id) to close (`closes.ts`), human format (e.g. `3h 12m`); `--`
-  when no quote exists
-- [ ] Harness test pins all four rows on a fixture close (fails without change)
-- [ ] `tests/test_portfolio_card_basis.py` passes; full suite green in GitHub CI
+- [ ] `shadow-resume` hosts the shadow-01 dashboard on :8801 and records it
+  in a per-instance PID file
+- [ ] A second instance is hostable on :8802 through the menu (no
+  hand-launched processes, no ad-hoc log names) and both dashboards answer
+  simultaneously
+- [ ] With live running on :8799, starting or resuming a shadow no longer
+  reports a port conflict
+- [ ] `docs/agents/first-run.md` documents :8799 as live-only and the 880x
+  range as shadow instances
+- [ ] `curl http://127.0.0.1:8801/api/system/status` and
+  `curl http://127.0.0.1:8802/api/system/status` each answer as a shadow
+  dashboard for the expected store while
+  `.\scripts\spread-hunter-menu.ps1 status` lists both instances with ports
 
 ## Scope
 ### In scope
-- `core_brain/kpi.py` equity_series close points: add `title`, `cost_basis`,
-  `method`, `hold_seconds` (reuse `_resolve_market_meta()`, in-memory quotes)
-- `dashboard/static/app.js` `buildBrokerEquitySeries()` passthrough +
-  tooltip rows + `methodBadge()` helper
-- `tests/js/portfolio_card_harness.cjs` hover capture (`tooltip_html`)
-- `tests/test_portfolio_card_basis.py` row + fallback assertions
+- `scripts/spread-hunter-menu.ps1`: port-derivation helper (`8800 + NN`),
+  per-instance PID files (`runtime/shadow-dash-<run-id>.pids.json`) and log
+  names, rewire of every `$ShadowPort` / `$ShadowDashUrl` reader (launch,
+  adopt, stop, status rows, open-browser sites, TS bridge target)
+- Second-instance hosting through the menu; migrate the hand-launched :8801
+  dash, retire the `buffy_dash_8801` ad-hoc log
+- `docs/agents/first-run.md` shadow sections
+- New menu port test (`tests/test_menu_shadow_ports.py`, pwsh-subprocess
+  harness following `tests/test_menu_shadow_seq.py`)
 
 ### Out of scope (per issue)
-- Trading/quoting/sizing behavior; START anchor (#252); time-axis
-  geometry (#257); tooltip styling beyond content rows.
+- Live stack, rehearsal loop, or any trading behavior -- ports and hosting
+  only
+- Moving existing databases or renaming run ids
 
 ## Interface contracts
-- Backend close point gains optional fields:
-  `title: str | None`, `cost_basis: float | None`, `method: str | None`,
-  `hold_seconds: float | None` (`None` when no quote or negative delta).
-  Mark points unchanged.
-- Frontend `buildBrokerEquitySeries()` copies the four fields only when
-  present (not `null`/`undefined`), same conditional-copy as `pnl`/`market`.
-- `methodBadge(method)` returns an HTML badge string; `merge`/`shadow_merge`
-  → `MERGED`; unknown/missing → neutral fallback (never throws).
-- Tooltip rows use existing `broker-tooltip-row` markup; strings via `esc()`,
-  percent via `fmtPct(pnl / cost_basis)`, hold via hold formatter.
+- `Get-ShadowDashPort <run-id: string> -> int`: parses the leading `NN`
+  from `shadow-NN`, returns `8800 + NN`; the menu's own unnumbered
+  `shadow-resume` fallback id returns 8900. Empty or garbage ids throw --
+  never silently fall back to :8799 beside the live stack (same rule as
+  `resolve_port` in `dashboard/server.py`, pinned by
+  `tests/test_dashboard_port.py`).
+- `Get-ShadowDashUrl <run-id> -> string`: the single builder of
+  `http://127.0.0.1:<port>`; all open-browser and status call sites use it.
+- PID record schema unchanged (`pid`, `port`, `db`, ...), file name gains
+  the run id: `runtime/shadow-dash-shadow-01.pids.json`.
+- `dashboard/server.py` unchanged (`--port` / `--db` already suffice).
 
 ## Edge cases
-- Unresolvable title → slug → short `0x…` (resolver's existing fallback).
-- `cost_basis` missing / ≤ 0 / non-numeric → percent renders `--`.
-- No quote for condition_id, or close ts before first quote → `hold_seconds`
-  `None` → tooltip `--`.
-- Fixtures without the new fields render exactly the old point shape
-  (existing exact-match assertions keep passing).
+- Run id 99 wraps the sequence (existing `Get-NextShadowSeq` behavior);
+  port math holds for any two-digit id (01-99 -> 8801-8899).
+- A foreign process already on the instance port: refuse with the owning
+  PID, same as today -- never adopt blindly, never kill.
+- Live on :8799 while shadow starts: no conflict, no message (the old
+  "stop live first" failure path is deleted, not reworded).
