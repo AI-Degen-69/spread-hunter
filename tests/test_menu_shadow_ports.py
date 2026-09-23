@@ -91,6 +91,55 @@ def test_garbage_run_id_fails_loudly_instead_of_landing_on_live(tmp_path):
         assert "8799" not in (result["message"] or ""), bad
 
 
+def _roundtrip(run_id: str, tmp_path: Path) -> dict:
+    """Save a fake-but-live process record, read it back as an instance."""
+    run_dir = str(tmp_path).replace("'", "''")
+    script = "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        _lift("Get-ShadowDashPort", "Get-ShadowDashPidFile",
+              "Save-ShadowDashInstance", "Get-ShadowDashInstance",
+              "_ReadShadowDashRecord"),
+        f"$RunDir = '{run_dir}'",
+        f"$RunId = '{run_id}'",
+        "$self = Get-Process -Id $PID",
+        "$fake = [pscustomobject]@{ Id = $self.Id; HasExited = $false; StartTime = $self.StartTime }",
+        "try {",
+        "  Save-ShadowDashInstance -DashProcess $fake -RunId $RunId -Port (Get-ShadowDashPort $RunId)",
+        "  $inst = Get-ShadowDashInstance -RunId $RunId",
+        "  $out = @{ threw = $false; pid = [string]$inst.pid; port = [string]$inst.port; message = $null }",
+        "} catch {",
+        "  $out = @{ threw = $true; pid = $null; port = $null; message = $_.Exception.Message }",
+        "}",
+        "$out | ConvertTo-Json -Compress",
+    ])
+    out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", script],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    return json.loads(out.stdout)
+
+
+def test_instance_record_roundtrips_with_its_own_port(tmp_path):
+    # Arrange / Act — a stand-in for a dashboard the menu launched itself.
+    result = _roundtrip("shadow-02", tmp_path)
+
+    # Assert — readable back under its own run id, carrying its own port.
+    assert result["threw"] is False, result["message"]
+    assert result["port"] == "8802"
+    assert result["pid"] is not None
+
+
+def test_instance_records_do_not_share_one_file(tmp_path):
+    # Arrange — two instances recorded side by side.
+    _roundtrip("shadow-01", tmp_path)
+    result = _roundtrip("shadow-02", tmp_path)
+
+    # Act
+    first = _roundtrip("shadow-01", tmp_path)
+
+    # Assert — each run id still reads its own port back.
+    assert result["port"] == "8802"
+    assert first["port"] == "8801"
+
+
 def test_url_and_pidfile_derive_from_the_same_port(tmp_path):
     url = _invoke("shadow-02", "Get-ShadowDashUrl $RunId", tmp_path)
     pidfile = _invoke("shadow-02", "Get-ShadowDashPidFile $RunId", tmp_path)
