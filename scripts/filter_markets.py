@@ -1140,6 +1140,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                "reads as its market universe.")
     p.add_argument("--top", type=_positive_int, default=20, metavar="N",
                    help="how many markets to write (default: 20)")
+    p.add_argument("--out-dir", default=None, metavar="DIR",
+                   help="write every artifact (markets.json, pipeline.json, "
+                        "market_universe.json, near-miss logs, ranking.marker) "
+                        "under DIR instead of runtime/ -- a trial ranker run "
+                        "publishes to runtime/trials/<run-id>/ so it cannot "
+                        "leak into the shared baseline feed. Default: runtime/")
     p.add_argument("--dry-run", action="store_true",
                    help="score and print the ranking, but leave "
                         "runtime/markets.json untouched")
@@ -1207,7 +1213,8 @@ _VOLUME_RE = re.compile(
     r"24h volume \$([\d,.]+) < \$([\d,.]+)", re.IGNORECASE)
 
 
-def _log_rank_near_misses(out, rejected, verdicts, ts=None) -> int:
+def _log_rank_near_misses(out, rejected, verdicts, ts=None,
+                          out_dir: Path | str | None = None) -> int:
     """Append this rank's near-misses to runtime/near_misses.jsonl.
 
     A NEAR-MISS is a rejected market whose if-adopted first-dollar marginal
@@ -1260,13 +1267,15 @@ def _log_rank_near_misses(out, rejected, verdicts, ts=None) -> int:
             "scored": len(out), "rejected": rejected,
             "depth_unparsed": depth_unparsed,
             "greens": greens}
-    RUN.mkdir(exist_ok=True)
-    with open(RUN / "near_misses.jsonl", "a", encoding="utf-8") as fh:
+    d = Path(out_dir) if out_dir is not None else RUN
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "near_misses.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps(line) + "\n")
     return len(greens)
 
 
-def _log_rank_volume_near_misses(out, rejected, verdicts=None, ts=None) -> int:
+def _log_rank_volume_near_misses(out, rejected, verdicts=None, ts=None,
+                                 out_dir: Path | str | None = None) -> int:
     """Append this rank's volume-rejects to runtime/volume_near_misses.jsonl.
 
     The DEPTH near-miss log records only would-fund greens, and U33's triage
@@ -1326,15 +1335,17 @@ def _log_rank_volume_near_misses(out, rejected, verdicts=None, ts=None) -> int:
             "scored": len(out), "rejected": rejected,
             "volume_unknown": volume_unknown,
             "volumes": vols}
-    RUN.mkdir(exist_ok=True)
-    with open(RUN / "volume_near_misses.jsonl", "a",
+    d = Path(out_dir) if out_dir is not None else RUN
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "volume_near_misses.jsonl", "a",
               encoding="utf-8") as fh:
         fh.write(json.dumps(line) + "\n")
     return len(vols)
 
 
 def _write_universe_file(universe_rows: list[dict],
-                         discovery_meta: dict | None = None) -> None:
+                         discovery_meta: dict | None = None,
+                         out_dir: Path | str | None = None) -> None:
     """Persist the auditable raw population to runtime/market_universe.json.
 
     The funnel answers "how many, and which gate?"; this file answers "which
@@ -1353,9 +1364,10 @@ def _write_universe_file(universe_rows: list[dict],
         "discovery": discovery_meta or {},
         "rows": universe_rows,
     }
-    RUN.mkdir(exist_ok=True)
-    f = RUN / "market_universe.json"
-    tmp = RUN / f"market_universe.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+    d = Path(out_dir) if out_dir is not None else RUN
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "market_universe.json"
+    tmp = d / f"market_universe.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
     try:
         tmp.write_text(json.dumps(snap), encoding="utf-8")
         tmp.replace(f)
@@ -1376,7 +1388,8 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
                              trial_volume_usd: Optional[float] = None,
                              spread_gate: Optional[float] = None,
                              trial_spread: Optional[float] = None,
-                             discovery: Optional[dict] = None) -> None:
+                             discovery: Optional[dict] = None,
+                             out_dir: Path | str | None = None) -> None:
     """Persist the whole selection funnel to runtime/pipeline.json.
 
     runtime/markets.json keeps only the winners, so the dashboard can show the
@@ -1522,8 +1535,9 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
         "final": [_row(r) for r in eligible],
         "picked": [_row(r) for r in picked],
     }
-    RUN.mkdir(exist_ok=True)
-    _publish_json(RUN / "pipeline.json", snap)
+    d = Path(out_dir) if out_dir is not None else RUN
+    d.mkdir(parents=True, exist_ok=True)
+    _publish_json(d / "pipeline.json", snap)
 
 
 # How many times a rename may lose the race to a reader's open handle before
@@ -1731,6 +1745,10 @@ def _legacy_reward_candidates(s: requests.Session) -> tuple[list[dict], list[dic
 def main() -> None:
     args = parse_args()
     top = args.top
+    # Trial isolation (#291): every artifact below lands under out_dir, which
+    # is runtime/ unless --out-dir reroutes it. No prior-feed reads exist to
+    # reroute -- the ranker only writes.
+    out_dir = Path(args.out_dir) if args.out_dir is not None else RUN
     # DEPTH-GATE TRIAL (U32): the bar this run gates on. Same contract as the
     # permanent config value, but opt-in per run and never written back to
     # config; adopted markets are tagged so the trial's markouts can be
@@ -1805,8 +1823,8 @@ def main() -> None:
     picked = eligible[:top]
 
     if not args.dry_run:
-        RUN.mkdir(exist_ok=True)
-        marker = RUN / "ranking.marker"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        marker = out_dir / "ranking.marker"
         # Validate marker both for PID liveness AND timestamp freshness
         if marker.exists():
             try:
@@ -1855,7 +1873,7 @@ def main() -> None:
                 r["trial_spread"] = spread_bar
 
         try:
-            _publish_json(RUN / "markets.json", picked)
+            _publish_json(out_dir / "markets.json", picked)
         finally:
             # Remove the marker after successful write so subsequent runs aren't blocked
             if marker.exists():
@@ -1909,7 +1927,7 @@ def main() -> None:
               "decision evidence")
 
     verdicts = {id(r): _if_adopted(r) for r in out}
-    _write_universe_file(out, disc_meta)
+    _write_universe_file(out, disc_meta, out_dir=out_dir)
     _write_pipeline_snapshot(
         cands=cands, spread_cands=universe, out=out, eligible=eligible,
         picked=picked, causes=causes, census=census, gates=gates,
@@ -1920,18 +1938,21 @@ def main() -> None:
         volume_gate_usd=volume_bar,
         trial_volume_usd=(volume_bar if volume_trial_active else None),
         spread_gate=spread_bar,
-        trial_spread=(spread_bar if spread_trial_active else None))
+        trial_spread=(spread_bar if spread_trial_active else None),
+        out_dir=out_dir)
     # The near-miss log is the accumulated evidence for a gate decision; a
     # dry-run audit must not pollute it (it would double-count against the
     # supervised every-10-min ranks).
     if not args.dry_run:
-        n_greens = _log_rank_near_misses(out, rejected, verdicts)
+        n_greens = _log_rank_near_misses(out, rejected, verdicts,
+                                         out_dir=out_dir)
         if n_greens:
             print(f"near-misses logged: {n_greens} would clear the floor")
         # The VOLUME tracker (U34): every volume-reject with a measured
         # reading, for the gate U33 showed actually binds. Same dry-run guard
         # as the depth log -- an audit must not pollute the evidence.
-        n_vols = _log_rank_volume_near_misses(out, rejected, verdicts)
+        n_vols = _log_rank_volume_near_misses(out, rejected, verdicts,
+                                                 out_dir=out_dir)
         if n_vols:
             print(f"volume-rejects logged: {n_vols} measured "
                   "(volume near-miss tracker)")
