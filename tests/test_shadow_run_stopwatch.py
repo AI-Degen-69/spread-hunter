@@ -167,7 +167,7 @@ def test_run_shadow_publishes_and_refreshes_its_heartbeat(tmp_path, monkeypatch)
     from core_brain import trader_loop
 
     target = tmp_path / "runtime" / "shadow_run.json"
-    monkeypatch.setattr(sr, "shadow_heartbeat_path", lambda root=None: target)
+    monkeypatch.setattr(sr, "shadow_heartbeat_path", lambda root=None, run_id="": target)
 
     # A clock that steps one rotation per read, so a run that stopped
     # refreshing the heartbeat fails this test instead of passing on ties.
