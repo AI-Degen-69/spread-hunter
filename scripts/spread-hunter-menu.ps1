@@ -13,6 +13,7 @@
 #   .\scripts\spread-hunter-menu.ps1 stop-shadow   # 5 · SHADOW: stop loop, watcher and viewer
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
 #   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] [-ResumeDb <path|all>] # R · SHADOW: resume shadow run(s) in place (no wipe) & reattach dashboard(s) — interactive picks 01 / 02 / all
+#   .\scripts\spread-hunter-menu.ps1 shadow-trial [-Minutes N] [-TrialDepth USD] # T · SHADOW: start a depth-bar trial rehearsal on its own feed (no wipe, siblings keep running)
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
@@ -34,7 +35,8 @@ param(
     [int]$Minutes = 0,
     [double]$Hours = 0,
     [switch]$Watch,
-    [string]$ResumeDb = ""
+    [string]$ResumeDb = "",
+    [double]$TrialDepth = 250
 )
 
 $ErrorActionPreference = "Stop"
@@ -1111,6 +1113,18 @@ function Resume-ShadowRun {
         return $false
     }
 
+    # Trial replay (#291): a store with a sibling <store>.trial.json manifest
+    # resumes on its own feed -- the trial ranker reseeds the trial output
+    # directory, the trial loop refreshes it, and the shadow loop reads it via
+    # --markets-path. No manifest: the baseline path below runs byte-for-byte
+    # as before. Manifest paths are absolute (Station II), so replay works
+    # from any working directory.
+    $trial = $null
+    $manifestPath = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".trial.json")
+    if (Test-Path $manifestPath) {
+        try { $trial = Get-Content $manifestPath -Raw | ConvertFrom-Json } catch { $trial = $null }
+    }
+
     # Stop THIS rehearsal if already running so two loops never write one
     # store, and verify the stop actually worked: an old loop that survives
     # writes into the same store concurrently with the resumed one. Sibling
@@ -1162,30 +1176,55 @@ function Resume-ShadowRun {
     Lsh-Ok "Resuming $($script:ShadowRunId) from $($db.Name) for $mins minute(s) - no data was wiped."
     if (-not (Start-ShadowDashboard)) { return $false }
 
-    # Universe feed first, exactly as a fresh rehearsal does.
-    Lsh-Step "Refreshing the market universe feed..."
-    Push-Location $ProjectPath
-    try { & python -m scripts.rank_markets } finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $ProjectPath "runtime/markets.json"))) {
-        Lsh-Warn "Market ranking failed - the resumed loop may quote nothing. Continuing with the existing feed."
+    # Universe feed first, exactly as a fresh rehearsal does. A trial store
+    # reseeds its own output directory instead of the shared feed.
+    if ($trial) {
+        Lsh-Step "Refreshing the trial universe feed..."
+        Push-Location $ProjectPath
+        try { & python -m scripts.filter_markets --trial-depth $trial.trial_depth_usd --out-dir $trial.ranker_out_dir } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $trial.markets_path)) {
+            Lsh-Warn "Trial ranking failed - the resumed loop may quote nothing. Continuing with the existing trial feed."
+        } else {
+            Lsh-Ok "Trial feed ready ($($trial.markets_path))."
+        }
     } else {
-        Lsh-Ok "Market feed ready (runtime/markets.json)."
+        Lsh-Step "Refreshing the market universe feed..."
+        Push-Location $ProjectPath
+        try { & python -m scripts.rank_markets } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $ProjectPath "runtime/markets.json"))) {
+            Lsh-Warn "Market ranking failed - the resumed loop may quote nothing. Continuing with the existing feed."
+        } else {
+            Lsh-Ok "Market feed ready (runtime/markets.json)."
+        }
     }
-    $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop" `
-        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).out.log") `
-        -RedirectStandardError (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).err.log")
-    Register-StackService -Key "filter" -Process $screener
+    if ($trial) {
+        $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop", "--trial-depth", "$($trial.trial_depth_usd)", "--out-dir", $trial.ranker_out_dir `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).out.log") `
+            -RedirectStandardError (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).err.log")
+        # Trial screener stays per-run: registering it as the global "filter"
+        # entry would replace the baseline screener in dashboard status and
+        # stop paths. It is recorded in this run's session file below instead.
+    } else {
+        $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop" `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).out.log") `
+            -RedirectStandardError (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).err.log")
+        Register-StackService -Key "filter" -Process $screener
+    }
     # Timebox the screener like the fresh-run path does: filter_loop has no
     # duration limit of its own, so without a timer it outlives the session.
     $killSec = [int]($mins * 60)
 
     # The loop: same run id, same store - the merge pass reads already-merged
     # shares per pair, so no double merge and no re-close of settled pairs.
+    # A trial store replays its manifest feed via --markets-path.
     Lsh-Step "Starting the rehearsal loop against the existing store..."
+    $shadowArgs = @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId)
+    if ($trial) { $shadowArgs += @("--markets-path", $trial.markets_path) }
     $shadowRun = Invoke-WithRehearsalTrialEnv {
         Start-Process -FilePath "python" `
-            -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId `
+            -ArgumentList $shadowArgs `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).out.log") `
             -RedirectStandardError (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log")
@@ -1242,6 +1281,14 @@ function Resume-ShadowRun {
         watcher = if ($guardrail) { [ordered]@{ pid = $guardrail.Id; started_ticks = $guardrail.StartTime.ToUniversalTime().Ticks } } else { $null }
         ring = $ring
     }
+    if ($trial) {
+        $session["trial_depth_usd"] = $trial.trial_depth_usd
+        $session["TrialDepthUsd"] = $trial.trial_depth_usd
+        $session["ranker_out_dir"] = $trial.ranker_out_dir
+        $session["RankerOutDir"] = $trial.ranker_out_dir
+        $session["markets_path"] = $trial.markets_path
+        $session["MarketsPath"] = $trial.markets_path
+    }
     $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile) -Encoding UTF8
 
     Start-Sleep -Seconds 3
@@ -1252,6 +1299,136 @@ function Resume-ShadowRun {
     if ($Watch) {
         Lsh-Step "Watching the resumed loop live (Ctrl-C ends the watcher; session self-stops after $mins min)."
         Get-Content (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log") -Wait -ErrorAction SilentlyContinue
+    }
+    return $true
+}
+function Start-ShadowTrial {
+    <# Start a depth-bar TRIAL rehearsal (#291) on its own feed: mint the next
+    store/run id, seed runtime/trials/<run-id>/ with --trial-depth/--out-dir,
+    refresh it with a trial filter_loop, and quote it with --markets-path.
+    NON-DESTRUCTIVE: nothing is stopped or wiped -- sibling 01/02 sessions
+    keep running on the shared feed. The feed choice persists in
+    data/<store>.trial.json (absolute paths) so Menu R replays it; the trial
+    screener is recorded in the per-run session file only, never as the
+    global "filter" entry. -TrialDepth defaults to 250, -Minutes to 1440. #>
+    $depth = if ($TrialDepth -gt 0) { [double]$TrialDepth } else { 250.0 }
+    $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
+    $stamp = Get-Date -Format "dd-MM_HH-mm"
+    $dbSeq = Get-NextShadowSeq
+    $script:ShadowRunId = "shadow-$dbSeq"
+    $script:ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_${stamp}.db"
+    $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
+    $runId = $script:ShadowRunId
+    $trialDir = Join-Path $ProjectPath "runtime/trials/$runId"
+    $feedPath = Join-Path $trialDir "markets.json"
+    $manifestPath = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".trial.json")
+
+    Lsh-Ok "Starting depth-bar trial $runId (bar `$$depth, $mins minute(s)) - nothing stopped, nothing wiped."
+    if (-not (Start-ShadowDashboard)) { return $false }
+
+    Lsh-Step "Seeding the trial universe feed..."
+    Push-Location $ProjectPath
+    try { & python -m scripts.filter_markets --trial-depth $depth --out-dir $trialDir } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $feedPath)) {
+        Lsh-Fail "Trial ranking produced no feed at $feedPath - trial aborted, siblings untouched."
+        return $false
+    }
+    Lsh-Ok "Trial feed ready ($feedPath)."
+    $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop", "--trial-depth", "$depth", "--out-dir", $trialDir `
+        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $RunDir "trial_screener-$runId.out.log") `
+        -RedirectStandardError (Join-Path $RunDir "trial_screener-$runId.err.log")
+    Lsh-Ok "Trial screener loop running (PID $($screener.Id))."
+    # Deliberately no global filter registration: the trial screener is
+    # per-run. Registering it under the shared filter key would replace the
+    # baseline screener in dashboard status and stop paths. It is recorded in
+    # the session below instead.
+    Lsh-Step "Starting the trial rehearsal loop..."
+    $shadowRun = Invoke-WithRehearsalTrialEnv {
+        Start-Process -FilePath "python" `
+            -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $runId, "--markets-path", $feedPath `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RunDir "shadow_trial-$runId.out.log") `
+            -RedirectStandardError (Join-Path $RunDir "shadow_trial-$runId.err.log")
+    }
+    Lsh-Ok "Trial loop running (PID $($shadowRun.Id), $mins minute(s))."
+    $observer = Start-Process -FilePath "python" `
+        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $runId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
+        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $RunDir "trial_observer-$runId.out.log") `
+        -RedirectStandardError (Join-Path $RunDir "trial_observer-$runId.err.log")
+    Lsh-Ok "Statistics observer running (PID $($observer.Id), db=$($script:StatsDbPath))."
+
+    $ring = $null
+    # The trial's own ring, by fixed name (as Resume-ShadowRun does): with
+    # 01/02 still running, "newest shadow-*.jsonl" would hand the watcher a
+    # sibling's ring while --db points at the trial store -- no working
+    # stop-loss coverage and a wrong ring in the session file.
+    $expectedRing = Join-Path $RunDir ("shadow-{0}.jsonl" -f ($runId -replace "^shadow-", ""))
+    $deadline = (Get-Date).AddSeconds(30)
+    while ($null -eq $ring -and (Get-Date) -lt $deadline) {
+        if (Test-Path $expectedRing) { $ring = $expectedRing; break }
+        Start-Sleep -Milliseconds 500
+        if ($shadowRun.HasExited) { break }
+    }
+    $guardrail = $null
+    if ($ring) {
+        $guardrail = Start-Process -FilePath "python" `
+            -ArgumentList "-m", "scripts.global_stop_loss", "--db", $script:ShadowDbPath, "--ring", $ring `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RunDir "trial_guardrail-$runId.out.log") `
+            -RedirectStandardError (Join-Path $RunDir "trial_guardrail-$runId.err.log")
+        Lsh-Ok "Stop-loss watcher engaged (PID $($guardrail.Id)) on $ring."
+    } else {
+        Lsh-Warn "Could not resolve the rehearsal ring; stop-loss watcher not engaged."
+    }
+    $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
+    if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
+    $killSec = [int]($mins * 60)
+    $killCmd = "Start-Sleep -Seconds $killSec"
+    foreach ($t in $timerTargets) {
+        $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+    }
+    Start-Process -FilePath "powershell" `
+        -ArgumentList "-NoProfile", "-Command", $killCmd `
+        -WindowStyle Hidden
+
+    [ordered]@{
+        trial_depth_usd = $depth
+        ranker_out_dir = $trialDir
+        markets_path = $feedPath
+    } | ConvertTo-Json | Set-Content -Path $manifestPath -Encoding UTF8
+    Lsh-Ok "Trial manifest written ($manifestPath)."
+    $session = [ordered]@{
+        started = (Get-Date).ToString("o")
+        started_ticks = (Get-Date).ToUniversalTime().Ticks
+        run_id = $runId
+        ShadowRunId = $runId
+        shadow_db = $script:ShadowDbPath
+        ShadowDbPath = $script:ShadowDbPath
+        stats_db = $script:StatsDbPath
+        StatsDbPath = $script:StatsDbPath
+        report_path = (Join-Path $ProjectPath "reports")
+        trial_depth_usd = $depth
+        TrialDepthUsd = $depth
+        ranker_out_dir = $trialDir
+        RankerOutDir = $trialDir
+        markets_path = $feedPath
+        MarketsPath = $feedPath
+        screener = [ordered]@{ pid = $screener.Id; started_ticks = $screener.StartTime.ToUniversalTime().Ticks }
+        loop = [ordered]@{ pid = $shadowRun.Id; started_ticks = $shadowRun.StartTime.ToUniversalTime().Ticks }
+        observer = [ordered]@{ pid = $observer.Id; started_ticks = $observer.StartTime.ToUniversalTime().Ticks }
+        watcher = if ($guardrail) { [ordered]@{ pid = $guardrail.Id; started_ticks = $guardrail.StartTime.ToUniversalTime().Ticks } } else { $null }
+        ring = $ring
+    }
+    $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile -RunId $runId) -Encoding UTF8
+
+    Start-Sleep -Seconds 3
+    $openedUrl = Open-ShadowDashboard
+    Lsh-Ok "Opened $openedUrl in default browser (trial db=$($script:ShadowDbPath))."
+    if ($Watch) {
+        Lsh-Step "Watching the trial loop live (Ctrl-C ends the watcher; session self-stops after $mins min)."
+        Get-Content (Join-Path $RunDir "shadow_trial-$runId.err.log") -Wait -ErrorAction SilentlyContinue
     }
     return $true
 }
@@ -2483,6 +2660,7 @@ function Show-MenuGrid {
             @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
             @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts shadow DB & opens browser" }
             @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all, dashboard(s) reattached" }
+            @{ K = "t"; Icon = "◈"; IconColor = "Info";    V = "Start Depth-Bar Trial";  D = "Start a trial rehearsal on its own feed (no wipe, siblings keep running); prompts depth" }
         ) }
         @{ Header = "MAINTENANCE & STATUS"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop & Clean";       D = "Kills all bot processes/dashboards, wipes data, verifies" }
@@ -2645,6 +2823,19 @@ function Invoke-LiveAction {
                 Lsh-Fail ("Resume incomplete: {0} store(s) failed: {1}." -f $failedResumes.Count, ($failedNames -join ", "))
             }
         }
+        "t" {
+            # Depth-bar trial: a new rehearsal on its own feed. Nothing is
+            # stopped or wiped; sibling sessions keep running untouched.
+            $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
+            if ($Action -eq "") {
+                $resp = Read-Host "  Trial depth bar in USD (default 250)?"
+                if ($resp -and $resp -match '^\s*[0-9]+(?:\.[0-9]+)?\s*$') { $script:TrialDepth = [double]$resp }
+                $confirm = Read-Host "  Start a $mins-minute depth-bar trial rehearsal (no wipe, siblings keep running)? [y/N]"
+                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Shadow trial cancelled."; return }
+            }
+            $script:Minutes = [int]$mins
+            $null = Start-ShadowTrial
+        }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
             Lsh-Warn "Invalid selection: $Key (choose 1-9, or q)."
@@ -2703,6 +2894,8 @@ if ($Action -ne "") {
         "shadow-resume" = "r"
         "resume-shadow" = "r"
         "resume-01"    = "r"
+        "shadow-trial" = "t"
+        "trial-shadow" = "t"
         "reset"        = "7"
         "clean"        = "7"
         "get"          = "7"
@@ -2718,7 +2911,7 @@ if ($Action -ne "") {
     # Menu numbers work directly too: `.\scripts\spread-hunter-menu.ps1 8`
     # runs option 8 at once, no menu shown. Reject anything else here so a
     # typo fails fast instead of falling into the "invalid selection" path.
-    if (@("1","2","3","4","5","6","7","8","9","r","q") -notcontains $key) {
+    if (@("1","2","3","4","5","6","7","8","9","r","t","q") -notcontains $key) {
         Write-Host "ERROR: Unknown action '$Action' (use 1-9, q, or a name like start/stop/status)" -ForegroundColor Red
         exit 1
     }

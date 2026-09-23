@@ -637,6 +637,14 @@ class TestMain:
         assert a.interval == 5.0
         assert a.db is None
         assert a.max_markets is None
+        assert a.markets_path is None
+
+    def test_markets_path_parses(self):
+        from core_brain.shadow_run import _parse_args
+
+        a = _parse_args(["--markets-path", "runtime/trials/shadow-03/markets.json"])
+
+        assert a.markets_path == "runtime/trials/shadow-03/markets.json"
 
     def test_main_refuses_the_production_registry_via__db(self):
         """The guard sits between argv and the registry, not inside a flag."""
@@ -686,6 +694,108 @@ class TestMain:
         )
 
         assert rc == 0
+
+    def test_main_reads_the_universe_from_the_flag_feed(
+            self, tmp_path, monkeypatch, caplog):
+        """`--markets-path` reroutes the initial load and every refresh to the
+        trial feed; the pathless default loader is never consulted."""
+        import json
+        import logging
+
+        import core_brain.shadow_run as shadow_mod
+        import core_brain.trader_loop as loop_mod
+        from core_brain.shadow_run import main
+
+        feed = tmp_path / "trial-markets.json"
+        feed.write_text(json.dumps([{"cid": "0xtrial0", "title": "trial 0"},
+                                    {"cid": "0xtrial1", "title": "trial 1"}]),
+                        encoding="utf-8")
+
+        def no_default():
+            raise AssertionError("pathless default loader must not run")
+
+        real_specs = loop_mod._market_specs
+        calls = []
+
+        def counting(max_markets=None, registry=None, path=None):
+            calls.append(path)
+            return real_specs(max_markets, registry=registry, path=path)
+
+        monkeypatch.setattr(shadow_mod, "_default_markets_fn", no_default)
+        monkeypatch.setattr(loop_mod, "_market_specs", counting)
+        monkeypatch.setattr(loop_mod, "_fetch_market",
+                            lambda cid: FakeMarket(cid))
+
+        with caplog.at_level(logging.WARNING, logger="shadow_run"):
+            rc = main(
+                ["--minutes", "0", "--db", str(tmp_path / "shadow.db"),
+                 "--markets-path", str(feed)],
+                client_fn=lambda: object(),
+                decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+                fetch_books=_books,
+            )
+
+        assert rc == 0
+        assert len(calls) >= 1
+        assert set(calls) == {str(feed)}
+        assert str(feed).lower() in caplog.text.lower()
+
+    def test_main_prefers_an_injected_markets_fn_over_the_flag(
+            self, tmp_path, monkeypatch):
+        """An injected `markets_fn` wins; the flag only builds the default."""
+        import core_brain.trader_loop as loop_mod
+        from core_brain.shadow_run import main
+
+        seen = {}
+
+        def injected(max_markets=None):
+            seen["used"] = True
+            return [FakeMarket("0xabc")]
+
+        monkeypatch.setattr(loop_mod, "_fetch_market",
+                            lambda cid: FakeMarket(cid))
+
+        rc = main(
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db"),
+             "--markets-path", str(tmp_path / "unused.json")],
+            markets_fn=injected,
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+        )
+
+        assert rc == 0
+        assert seen == {"used": True}
+
+    def test_main_without_the_flag_delegates_pathless(
+            self, tmp_path, monkeypatch):
+        """No flag: the default wrapper calls `_market_specs` with no path."""
+        import core_brain.shadow_run as shadow_mod
+        import core_brain.trader_loop as loop_mod
+        from core_brain.shadow_run import main
+
+        seen = {}
+
+        def spy(max_markets=None, registry=None):
+            seen["max_markets"] = max_markets
+            return [FakeMarket("0xabc")]
+
+        monkeypatch.setattr(loop_mod, "_market_specs", spy)
+        monkeypatch.setattr(shadow_mod, "_default_markets_fn",
+                            lambda: loop_mod._market_specs)
+        monkeypatch.setattr(loop_mod, "_fetch_market",
+                            lambda cid: FakeMarket(cid))
+
+        rc = main(
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db"),
+             "--max-markets", "7"],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+        )
+
+        assert rc == 0
+        assert seen == {"max_markets": 7}
 
     def test_main_wires_the_real_book_source_when_none_is_injected(
             self, tmp_path, monkeypatch):

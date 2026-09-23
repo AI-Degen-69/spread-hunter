@@ -98,6 +98,19 @@ Two of those files are money, not cosmetics:
 - **`markets.json`.** The Trader quotes only what this file lists. A feed the code cannot
   find is an empty universe until the Market Filter regenerates it.
 
+### Trial feeds (shadow-03, #291)
+
+A depth-bar trial ranker publishes to `runtime/trials/<run-id>/` (via
+`scripts/filter_markets.py --out-dir`, refreshed by `scripts/filter_loop.py`
+with the same flag plus `--trial-depth`) instead of the shared feed above, so
+the shadow-01/02 baselines never see trial rows. The trial shadow loop reads
+only its own feed through `core_brain/shadow_run.py --markets-path`
+(`_market_specs(path=...)` underneath). The feed choice persists in
+`data/<store>.trial.json` (absolute paths) and Menu R replays it; stores
+without a manifest resume on the shared feed exactly as before. The trial
+screener is recorded in its per-run session file only, never as the global
+`filter` entry in `processes.json`.
+
 Add a state file: write it through `runtime_file(...)`, read it through
 `resolve_runtime_file(...)`, and if you ever rename one, add the old name to
 `LEGACY_FILE_NAMES` in the same commit.

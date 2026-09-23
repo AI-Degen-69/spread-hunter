@@ -18,6 +18,8 @@ injected, so the loop's behavior is tested without a network.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from core_brain.trader_loop import (
@@ -1041,3 +1043,45 @@ class TestReGateRespectsHeldInventory:
         _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
 
         assert seen["hedge_held"] == set()
+
+
+class TestMarketSpecsPath:
+    """`_market_specs` reads the feed it is told to, converting exactly as live."""
+
+    def _feed(self, tmp_path, n=2):
+        rows = [{"cid": f"0xtrial{i}", "title": f"trial market {i}"}
+                for i in range(n)]
+        feed = tmp_path / "trial-markets.json"
+        feed.write_text(json.dumps(rows), encoding="utf-8")
+        return feed
+
+    def test_specs_come_from_the_supplied_feed(self, tmp_path):
+        from core_brain.trader_loop import _market_specs
+
+        specs = _market_specs(path=str(self._feed(tmp_path)))
+
+        assert [s["cid"] for s in specs] == ["0xtrial0", "0xtrial1"]
+        assert set(specs[0]) == {"cid", "min_size", "shares", "max_spread",
+                                 "tick", "daily", "title", "slug"}
+
+    def test_max_markets_still_caps_a_pathed_feed(self, tmp_path):
+        from core_brain.trader_loop import _market_specs
+
+        specs = _market_specs(1, path=str(self._feed(tmp_path, n=3)))
+
+        assert [s["cid"] for s in specs] == ["0xtrial0"]
+
+    def test_no_path_reads_the_default_feed(self, tmp_path, monkeypatch):
+        import core_brain.market_feed as feed_mod
+        from core_brain.trader_loop import _market_specs
+
+        seen = {}
+
+        def spy(path=None, max_age_sec=None):
+            seen["path"] = path
+            return []
+
+        monkeypatch.setattr(feed_mod, "load_graduated_markets", spy)
+
+        assert _market_specs() == []
+        assert seen["path"] is None
