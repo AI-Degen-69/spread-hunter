@@ -12,7 +12,7 @@
 #   .\scripts\spread-hunter-menu.ps1 statistical-run [-Hours N] # overnight shadow statistics + dashboard
 #   .\scripts\spread-hunter-menu.ps1 stop-shadow   # 5 · SHADOW: stop loop, watcher and viewer
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
-#   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] # R · SHADOW: resume the newest rehearsal in place (no wipe, same run id) & reattach dashboard
+#   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] # R · SHADOW: resume the pinned 01_shadow_12-09_00-58.db rehearsal (shadow-01) in place (no wipe) & reattach dashboard
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
@@ -33,7 +33,8 @@ param(
     [switch]$Yes,
     [int]$Minutes = 0,
     [double]$Hours = 0,
-    [switch]$Watch
+    [switch]$Watch,
+    [string]$ResumeDb = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +44,11 @@ $LivePort     = $Port
 $DashUrl     = "http://127.0.0.1:$Port"
 $RunDir      = Join-Path $ProjectPath "runtime"
 $LegacyRunDir = Join-Path $ProjectPath "run"
+
+# The pinned rehearsal: every shadow-resume reopens this store under run id
+# shadow-01 (Owner's standing choice, 2026-09-23). -ResumeDb overrides it for
+# a single launch.
+$script:DefaultResumeDb = Join-Path $ProjectPath "data/01_shadow_12-09_00-58.db"
 
 # Runtime state moved run/ -> runtime/ and some files were renamed with it. A
 # stack started before that move still records itself under the old names, and
@@ -873,13 +879,15 @@ function Open-Dashboard {
 }
 
 function Resume-ShadowRun {
-    <# Resume the newest shadow rehearsal in place: reopen the latest
-    data/NN_shadow_*.db under its original shadow-NN run id, restart the
-    screener/loop/observer/watcher against it, and host the dashboard on it.
-    Nothing is wiped - closes, orders and marks already in the store stay
-    there and the loop keeps appending to the same run id. Use this to
-    continue a run toward the 60-close sample target (menu option R /
-    `shadow-resume`). -Minutes bounds the resumed session (default 1440 / 24h). #>
+    <# Resume the PINNED shadow rehearsal in place: reopen
+    data/01_shadow_12-09_00-58.db under its original shadow-01 run id, restart
+    the screener/loop/observer/watcher against it, and host the dashboard on
+    it. Nothing is wiped - closes, orders and marks already in the store stay
+    there and the loop keeps appending to the same run id. -ResumeDb <path>
+    overrides the store for one launch (run id derived from its seq prefix).
+    Use this to continue the pinned run toward the 60-close sample target
+    (menu option R / `shadow-resume`). -Minutes bounds the resumed session
+    (default 1440 / 24h). #>
     if ($null -ne (Get-DashInstance)) { $null = Stop-Dashboard }
     # Stop any rehearsal already running so two loops never write one store,
     # and verify the stop actually worked: an old loop that survives writes
@@ -896,20 +904,32 @@ function Resume-ShadowRun {
         return $false
     }
 
-    # Newest rehearsal store wins. The seq prefix is the run id: NN_shadow_... -> shadow-NN.
-    $db = Get-ChildItem (Join-Path $ProjectPath "data") -File -Filter "*_shadow_*.db" -ErrorAction SilentlyContinue |
-        Where-Object { $_.BaseName -match '^\d{1,2}_shadow_' } |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if (-not $db) {
-        Lsh-Fail "No shadow store to resume. Start one first (option 4 / shadow-run)."
-        return $false
-    }
-    if ($db.BaseName -match '^(\d{1,2})_shadow_') {
-        $script:ShadowRunId = "shadow-" + ([int]$Matches[1]).ToString("D2")
+    # The resume target is pinned: option R always reopens the Owner's long-
+    # running rehearsal store under run id shadow-01, never the newest store
+    # (a newer file being written must not steal the resume). -ResumeDb
+    # overrides the store for one launch only.
+    if ($ResumeDb -ne "") {
+        $db = Get-Item -LiteralPath $ResumeDb -ErrorAction SilentlyContinue
+        if (-not $db) {
+            Lsh-Fail "Resume store not found: $ResumeDb"
+            return $false
+        }
+        $script:ShadowDbPath = $db.FullName
+        # Seq prefix is the run id: NN_shadow_... -> shadow-NN.
+        if ($db.BaseName -match '^(\d{1,2})_shadow_') {
+            $script:ShadowRunId = "shadow-" + ([int]$Matches[1]).ToString("D2")
+        } else {
+            $script:ShadowRunId = "shadow-resume"
+        }
     } else {
-        $script:ShadowRunId = "shadow-resume"
+        $db = Get-Item -LiteralPath $script:DefaultResumeDb -ErrorAction SilentlyContinue
+        if (-not $db) {
+            Lsh-Fail "Pinned rehearsal store not found: $script:DefaultResumeDb"
+            return $false
+        }
+        $script:ShadowDbPath = $db.FullName
+        $script:ShadowRunId = "shadow-01"
     }
-    $script:ShadowDbPath = $db.FullName
     $stamp = Get-Date -Format "dd-MM_HH-mm"
     $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
     $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
@@ -2191,7 +2211,7 @@ function Show-MenuGrid {
             @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Bot + Dashboard";     D = "Stops, wipes data & starts fresh rehearsal (loop + stop loss); prompts minutes" }
             @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
             @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts shadow DB & opens browser" }
-            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run";        D = "Reopens the newest rehearsal DB under its same run id, restarts loop/observer/watcher, reattaches dashboard (no wipe)" }
+            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run";        D = "Reopens the pinned 01_shadow_12-09_00-58.db DB as shadow-01, restarts loop/observer/watcher, reattaches dashboard (no wipe)" }
         ) }
         @{ Header = "MAINTENANCE & STATUS"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop & Clean";       D = "Kills all bot processes/dashboards, wipes data, verifies" }
@@ -2280,7 +2300,7 @@ function Invoke-LiveAction {
         "8" { Show-Status }
         "r" {
             if ($Action -eq "") {
-                $confirm = Read-Host "  Resume the newest shadow run in place (no wipe, same run id, dashboard reattached)? [y/N]"
+                $confirm = Read-Host "  Resume the pinned shadow-01 rehearsal (data/01_shadow_12-09_00-58.db, no wipe, dashboard reattached)? [y/N]"
                 if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
             }
             $null = Resume-ShadowRun
@@ -2338,9 +2358,11 @@ if ($Action -ne "") {
         "shadow-host"  = "6"
         "open-shadow"  = "6"
         "shadow-open"  = "6"
+        # Pinned resume: option R always reopens 01_shadow_12-09_00-58.db as shadow-01.
         "resume"       = "r"
         "shadow-resume" = "r"
         "resume-shadow" = "r"
+        "resume-01"    = "r"
         "reset"        = "7"
         "clean"        = "7"
         "get"          = "7"

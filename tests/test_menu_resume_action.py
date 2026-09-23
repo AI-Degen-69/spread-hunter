@@ -1,14 +1,16 @@
 """shadow-resume action exists, is wired, and never wipes.
 
-`Resume-ShadowRun` reopens the newest `data/NN_shadow_*.db` under its
-original `shadow-NN` run id and restarts the loop/observer/watcher against
-it, so a rehearsal interrupted partway (shadow-01 at 38 closes, say) can be
-continued toward the 60-close sample target instead of starting a fresh
-run. The wiring is text-level in the menu script (the script takes over the
-console when dot-sourced, so it cannot be imported), so the tests parse the
-source directly. No PowerShell host is needed: these are string assertions,
-so they run everywhere and a removal of the resume flow fails the suite on
-any runner.
+`Resume-ShadowRun` reopens the PINNED rehearsal store
+`data/01_shadow_12-09_00-58.db` under its original `shadow-01` run id and
+restarts the loop/observer/watcher against it, so the long-running rehearsal
+(83 closes and counting) can always be continued with one menu press — never
+capturing a newer store that merely happens to have the freshest mtime.
+`-ResumeDb <path>` overrides the store for one launch. The wiring is
+text-level in the menu script (the script takes over the console when
+dot-sourced, so it cannot be imported), so the tests parse the source
+directly. No PowerShell host is needed: these are string assertions, so they
+run everywhere and a removal of the resume flow fails the suite on any
+runner.
 """
 from __future__ import annotations
 
@@ -50,17 +52,36 @@ def test_shadow_resume_maps_to_resume_call():
     assert mapping.get("shadow-resume") == "r"
     assert mapping.get("resume") == "r"
     assert mapping.get("resume-shadow") == "r"
+    assert mapping.get("resume-01") == "r"
     branch = _branch_source("r")
     assert "Resume-ShadowRun" in branch, "the r branch must invoke Resume-ShadowRun"
 
 
-def test_resume_derives_run_id_from_newest_store():
+def test_resume_pins_the_owner_store_and_run_id():
+    """Option R always reopens 01_shadow_12-09_00-58.db as shadow-01.
+
+    The Owner's standing choice (2026-09-23): resume must never silently
+    grab whatever store has the newest mtime — a live trial DB being written
+    right now must not steal the resume.
+    """
     body = _resume_function_source()
-    # Newest *_shadow_*.db wins, and the seq prefix becomes the run id.
-    assert "*_shadow_*.db" in body
-    assert re.search(r"Sort-Object\s+LastWriteTime\s+-Descending", body)
-    assert re.search(r"'(\^\\d\{1,2\})_shadow_'", body) or "^\\d{1,2}_shadow_" in body
-    assert '"shadow-" + ' in body or "shadow-$" in body
+    # The pinned default is defined once, as a project path.
+    src = _menu_source()
+    assert '$script:DefaultResumeDb = Join-Path $ProjectPath "data/01_shadow_12-09_00-58.db"' in src
+    # The no-override path resolves that constant and fixes the run id.
+    assert "Get-Item -LiteralPath $script:DefaultResumeDb" in body
+    assert '$script:ShadowRunId = "shadow-01"' in body
+    # A missing pinned store aborts instead of falling back to newest.
+    assert "Pinned rehearsal store not found" in body
+
+
+def test_resume_db_override_keeps_seq_prefix_run_id():
+    """-ResumeDb overrides the store for one launch, run id from its seq prefix."""
+    body = _resume_function_source()
+    assert "$ResumeDb -ne" in body
+    assert 'if ($db.BaseName -match \'^(\\d{1,2})_shadow_\')' in body
+    assert '"shadow-" + ' in body
+    assert "Resume store not found" in body
 
 
 def test_resume_reuses_store_and_run_id_without_wiping():
