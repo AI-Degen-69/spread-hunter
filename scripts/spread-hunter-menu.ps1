@@ -117,6 +117,44 @@ $ShadowPort    = 8799
 $ShadowDashUrl = "http://127.0.0.1:$ShadowPort"
 $ShadowOutLog  = Join-Path $RunDir "shadow_dash.out.log"
 $ShadowErrLog  = Join-Path $RunDir "shadow_dash.err.log"
+
+# Shadow dashboard ports derive from the run id (#288): shadow-01 -> 8801,
+# shadow-02 -> 8802. :8799 is live-only and is never derived here. The
+# unnumbered "shadow-resume" fallback id gets :8899 -- off the live port and
+# outside any numbered instance. Anything else fails loudly rather than
+# silently landing back beside the live stack.
+function Get-ShadowDashPort {
+    param([Parameter(Mandatory)][string]$RunId)
+    if ($RunId -match '^shadow-(\d{1,2})$') {
+        return 8800 + [int]$Matches[1]
+    }
+    if ($RunId -eq "shadow-resume") {
+        return 8899
+    }
+    throw "Cannot derive a shadow dashboard port from run id '$RunId' (expected 'shadow-NN'). Refusing rather than reusing the live dashboard port."
+}
+function Get-ShadowDashUrl {
+    <# The single builder of shadow dashboard URLs -- every open-browser and
+       status call site uses this so none can disagree about where an
+       instance lives. #>
+    param([Parameter(Mandatory)][string]$RunId)
+    return "http://127.0.0.1:$(Get-ShadowDashPort $RunId)"
+}
+function Get-ShadowDashPidFile {
+    param([Parameter(Mandatory)][string]$RunId)
+    return Join-Path $RunDir "shadow-dash-$RunId.pids.json"
+}
+function Get-ShadowDashLogs {
+    param([Parameter(Mandatory)][string]$RunId)
+    return @{ out = (Join-Path $RunDir "shadow_dash_$RunId.out.log"); err = (Join-Path $RunDir "shadow_dash_$RunId.err.log") }
+}
+function Open-ShadowDashboard {
+    <# Open the dashboard browser for one shadow instance. Returns the URL. #>
+    param([string]$RunId = $script:ShadowRunId)
+    $url = Get-ShadowDashUrl $RunId
+    Start-Process $url
+    return $url
+}
 $ProcsFile   = Resolve-RuntimeFile -Name "processes.json" -LegacyName "live_procs.json"
 $OutLog      = Join-Path $RunDir "live_dash.out.log"
 $ErrLog      = Join-Path $RunDir "live_dash.err.log"
@@ -871,8 +909,8 @@ function Open-Dashboard {
     } else {
         $ok = Start-ShadowDashboard
         if ($ok) {
-            Start-Process $ShadowDashUrl
-            Lsh-Ok "Opened $ShadowDashUrl (shadow db=$ShadowDbPath) in default browser."
+            $openedUrl = Open-ShadowDashboard
+            Lsh-Ok "Opened $openedUrl (shadow db=$ShadowDbPath) in default browser."
         }
     }
     return $ok
@@ -1037,8 +1075,8 @@ function Resume-ShadowRun {
     $session | ConvertTo-Json -Depth 5 | Set-Content -Path $ShadowSessionFile -Encoding UTF8
 
     Start-Sleep -Seconds 3
-    Start-Process $ShadowDashUrl
-    Lsh-Ok "Opened $ShadowDashUrl in default browser (resumed db=$($script:ShadowDbPath))."
+    $openedUrl = Open-ShadowDashboard
+    Lsh-Ok "Opened $openedUrl in default browser (resumed db=$($script:ShadowDbPath))."
     Lsh-Step "Stop it early" 
     Write-Host "  .\scripts\spread-hunter-menu.ps1 stop-shadow" -ForegroundColor (Get-ProfileColor -Name Info)
     if ($Watch) {
@@ -2097,8 +2135,8 @@ function Reset-Environment {
                 # has written its universe + pipeline, so the dashboard's first
                 # frame already shows the screener feed instead of blank/STALLED.
                 Start-Sleep -Seconds 3
-                Start-Process $ShadowDashUrl
-                Lsh-Ok "Opened $ShadowDashUrl in default browser (shadow db=$ShadowDbPath)."
+                $openedUrl = Open-ShadowDashboard
+                Lsh-Ok "Opened $openedUrl in default browser (shadow db=$ShadowDbPath)."
                 if ($Watch -and $Minutes -gt 0) {
                     # -Watch: stream the rehearsal loop's stderr to THIS console
                     # instead of backgrounding it silently. The loop logs its
@@ -2186,8 +2224,8 @@ function Reset-Environment {
                 # feed exists, so the dashboard's first frame already shows the
                 # validation/rehearsal data instead of a blank/STALLED state.
                 Start-Sleep -Seconds 3
-                Start-Process $ShadowDashUrl
-                Lsh-Ok "Opened $ShadowDashUrl in default browser (validation db=$ShadowDbPath)."
+                $openedUrl = Open-ShadowDashboard
+                Lsh-Ok "Opened $openedUrl in default browser (validation db=$ShadowDbPath)."
             } else { return $false }
         }
         "live" {
