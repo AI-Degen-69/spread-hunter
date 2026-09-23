@@ -132,14 +132,15 @@ def test_instance_record_roundtrips_with_its_own_port(tmp_path):
 def test_instance_records_do_not_share_one_file(tmp_path):
     # Arrange — two instances recorded side by side.
     _roundtrip("shadow-01", tmp_path)
-    result = _roundtrip("shadow-02", tmp_path)
+    _roundtrip("shadow-02", tmp_path)
 
-    # Act
-    first = _roundtrip("shadow-01", tmp_path)
+    # Act — read both records without rewriting either.
+    one = json.loads((tmp_path / "shadow-dash-shadow-01.pids.json").read_text(encoding="utf-8-sig"))
+    two = json.loads((tmp_path / "shadow-dash-shadow-02.pids.json").read_text(encoding="utf-8-sig"))
 
-    # Assert — each run id still reads its own port back.
-    assert result["port"] == "8802"
-    assert first["port"] == "8801"
+    # Assert — saving shadow-02 left shadow-01's record intact.
+    assert one["dash"]["port"] == 8801
+    assert two["dash"]["port"] == 8802
 
 
 def test_url_and_pidfile_derive_from_the_same_port(tmp_path):

@@ -17,7 +17,7 @@ them → wipe runtime state → verify nothing blocks → start the chosen mode*
 | `host` | **3 · LIVE Host**: release :8799 (live-only) from whatever menu-owned dashboard holds it (no wipe), host the live dashboard (`data/orders.db`) & open browser | Yes |
 | `shadow-run [-Minutes N]` | **4 · SHADOW Start**: preflight-stop everywhere, wipe data, verify clean, then the shadow dashboard + rehearsal loop (`shadow_run`) + a stop-loss watcher scoped to that session's ring (self-stops after N minutes). Prompts for minutes interactively; default 5 | Yes (spends nothing) |
 | `stop-shadow` | **5 · SHADOW Stop**: stop the rehearsal loop (if still running), watcher, and viewer | Yes (spends nothing) |
-| `open-shadow` | **6 · SHADOW Host**: claim the instance port (no wipe), host the shadow dashboard (`data/shadow.db`) & open browser | Yes (spends nothing) |
+| `open-shadow` | **6 · SHADOW Host**: mint a new sequenced store (`data/NN_shadow_<stamp>.db`) and host it on its instance port (no wipe) & open browser. To reopen an existing instance, use `shadow-resume` (pinned shadow-01) or its instance URL | Yes (spends nothing) |
 | `clean` | **7 · Global Stop & Clean**: kill all bot processes/dashboards, wipe data, verify clean — starts nothing | Yes |
 | `status` | **8 · Status**: dashboard + every stack process + feed + repo identity | Yes |
 
@@ -35,8 +35,9 @@ port derived from its run id — 8800 plus the two-digit sequence:
 | shadow-03 (next) | `data/03_shadow_*.db` | http://127.0.0.1:8803 |
 
 The menu derives the port itself (`shadow-resume` reopens the pinned store as
-shadow-01 on :8801; `shadow-resume -ResumeDb data/02_shadow_*.db` hosts the
-second instance on :8802). Each instance keeps its own dashboard PID file
+shadow-01 on :8801; `shadow-resume -ResumeDb data/02_shadow_exit-regime_23-09.db`
+(the exact file name; wildcards are not expanded) hosts the second instance
+on :8802). Each instance keeps its own dashboard PID file
 (`runtime/shadow-dash-<run-id>.pids.json`), session file
 (`runtime/shadow-session-<run-id>.json`) and loop logs, so `status` lists
 every running instance with its port and `stop-shadow` stops them all. Live

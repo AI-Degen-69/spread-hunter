@@ -702,8 +702,23 @@ function Test-ShadowDashboardServer {
 function Adopt-ShadowDashboardInstance {
     param([string]$RunId = $script:ShadowRunId)
     if (-not $RunId) { return $false }
-    $portPid = Get-PortPid -PortNumber (Get-ShadowDashPort $RunId)
+    $port = Get-ShadowDashPort $RunId
+    $portPid = Get-PortPid -PortNumber $port
     if (-not $portPid) { return $false }
+    # Adopt only the store we asked for: a foreign shadow store answering on
+    # this port must never be recorded (and later stopped) as ours.
+    try {
+        $url = Get-ShadowDashUrl $RunId
+        $r = Invoke-RestMethod -Uri "$url/api/system/status" -UseBasicParsing -TimeoutSec 4
+        $served = [string]$r.db_path
+        if (-not $served -or -not $ShadowDbPath) { return $false }
+        $want = [System.IO.Path]::GetFullPath($ShadowDbPath)
+        $got = [System.IO.Path]::GetFullPath($served)
+        if ($want -ine $got) {
+            Lsh-Warn "Port $port serves a different store; not adopting."
+            return $false
+        }
+    } catch { return $false }
     try {
         $proc = Get-Process -Id $portPid -ErrorAction Stop
         Save-ShadowDashInstance -DashProcess $proc -RunId $RunId
@@ -813,9 +828,11 @@ function Stop-ShadowDashboard {
     <# Stop menu-owned shadow dashboards; leaves foreign processes on any
        port alone. No run id stops every instance (the stop-shadow action);
        a run id stops only that instance plus the pre-#288 legacy record. #>
-    param([string]$RunId = $null)
+    param([string]$RunId = $null, [switch]$LegacyOnly)
     $targets = @(Get-ShadowDashInstances | Where-Object {
-        (-not $RunId) -or ($_.run_id -eq $RunId) -or (-not $_.run_id)
+        if ($LegacyOnly) { -not $_.run_id }
+        elseif (-not $RunId) { $true }
+        else { ($_.run_id -eq $RunId) -or (-not $_.run_id) }
     })
     $stopped = $false
     foreach ($inst in $targets) {
@@ -961,17 +978,18 @@ function Stop-TsBridge {
 }
 
 function Open-Dashboard {
-    <# "Host & Open Dashboard": claim :8799 for the requested store and open
-    the dashboard in the browser WITHOUT wiping any trading or runtime state.
-    If the other mode's dashboard is holding the port, stop it first; the
-    Start-<mode> dashboard handles adopting/killing anything else it owns. #>
+    <# "Host & Open Dashboard": host the requested store's dashboard on its own
+    port and open it in the browser WITHOUT wiping any trading or runtime
+    state. Live owns :8799 and every shadow instance owns its 880x port, so
+    the modes never contend: hosting one side leaves the other side alone.
+    The only exception is a pre-#288 legacy shadow record, which can still
+    hold :8799 and is stopped when hosting live. #>
     param([Parameter(Mandatory)][string]$Mode)
     if ($Mode -ne "live" -and $Mode -ne "shadow") {
         Lsh-Fail "Open-Dashboard: unknown mode '$Mode'."
         return $false
     }
-    if ($Mode -eq "shadow" -and $null -ne (Get-DashInstance))        { $null = Stop-Dashboard }
-    if ($Mode -eq "live"   -and (Test-ShadowDashAlive))  { $null = Stop-ShadowDashboard }
+    if ($Mode -eq "live"   -and (Test-ShadowDashAlive))  { $null = Stop-ShadowDashboard -LegacyOnly }
     $ok = $false
     if ($Mode -eq "live") {
         $ok = Start-Dashboard
