@@ -1477,6 +1477,38 @@ def test_sorting_open_orders_reorders_pairs_without_splitting_the_legs():
     # The rowspan cell rides on the first row of each pair, once per pair.
     assert rendered["html"].count('class="ot-market" rowspan=') == 2
 
+@requires_node
+def test_sorting_open_orders_by_total_cost_ranks_pairs_by_the_sum_of_their_legs():
+    # Arrange — Total Cost is the pair's build cost, so it is the SUM of the
+    # legs. CID_DEEP is 10*0.60 + 10*0.50 = 11.00; CID_SHALLOW is
+    # 5*0.45 + 5*0.48 = 4.65, and it is the default order too, so descending
+    # has to be checked against a genuinely different order than the baseline.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    rendered = _render("open-orders", kpi, state, sort={"col": 4, "dir": "asc"})
+
+    # Assert — ascending puts the cheaper pair first, and every row still renders.
+    assert _pairs(rendered) == ["p-shallow", "p-shallow", "p-deep", "p-deep"]
+    assert rendered["html"].count('class="ot-market" rowspan=') == 2
+
+
+@requires_node
+def test_every_open_orders_column_sorts_without_throwing():
+    # Arrange — a column whose accessor references a name it does not have
+    # throws on every render, and the view silently stops updating. This walks
+    # every column of the view so a broken accessor cannot hide.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    for col in range(7):
+        for direction in ("asc", "desc"):
+            rendered = _render("open-orders", kpi, state,
+                               sort={"col": col, "dir": direction})
+            # Two pairs, two legs each, every one of them present.
+            assert _pairs(rendered) == ["p-deep", "p-deep", "p-shallow", "p-shallow"] \
+                or _pairs(rendered) == ["p-shallow", "p-shallow", "p-deep", "p-deep"]
+
+
 
 
 

@@ -4385,12 +4385,15 @@ function openOrdersRows(kpi, state, sort) {
       case 2: return otExtreme(g.orders.map(o => o.price), dir);
       case 3: return otSum(g.orders.map(o => o.original_size));
       case 4: {
-        // A leg with no size is unmeasured, not zero: `null` keeps the whole
-        // pair out of the measured set so a pair the registry could not price
-        // ranks last instead of beating every real cost.
-        const p = otNum(o.price);
-        const s = otNum(o.original_size);
-        return (p === null || s === null) ? null : p * s;
+        // A leg with no price or no size is unmeasured, not zero. Any
+        // unmeasured leg makes the PAIR unmeasured, so a pair the registry
+        // could not price ranks last instead of beating every real cost.
+        const costs = g.orders.map(o => {
+          const p = otNum(o.price);
+          const s = otNum(o.original_size);
+          return (p === null || s === null) ? null : p * s;
+        });
+        return costs.some(c => c === null) ? null : otSum(costs);
       }
       case 5: return otExtreme(g.orders.map(o => otNum(queues[o.order_id])), dir);
       case 6: return otExtreme(g.orders.map(o => o.age_sec), dir);
@@ -4687,16 +4690,21 @@ function renderOrdersTrades(kpi, state) {
   // <body> and strand a keyboard user on the first column: a listener that
   // survives a re-render is not enough if the focused element is destroyed. The
   // button is the same control after the rewrite, so its focus is restored.
-  const focusedCol = (head.contains(document.activeElement)
-    && document.activeElement.dataset
-    && document.activeElement.dataset.otSort !== undefined)
-    ? document.activeElement.dataset.otSort : null;
+  //
+  // `contains` and `focus` are called defensively: the Node harnesses stub the
+  // DOM with only part of the element surface, and an unguarded call throws
+  // inside the render and leaves every table unpainted.
+  const active0 = document.activeElement;
+  const focusedCol = (typeof head.contains === 'function' && head.contains(active0)
+    && active0 && active0.dataset
+    && active0.dataset.otSort !== undefined)
+    ? active0.dataset.otSort : null;
   head.innerHTML = otHeadHtml(view, sort);
   body.innerHTML = ordersTradesRows(view, kpi, state, sort);
   if (focusedCol !== null) {
     const restore = Array.from(head.querySelectorAll('button[data-ot-sort]'))
       .find(b => b.getAttribute('data-ot-sort') === focusedCol);
-    if (restore) restore.focus();
+    if (restore && typeof restore.focus === 'function') restore.focus();
   }
 
   // The closed-trades view reuses the Data & Markets row shape, so it gets
