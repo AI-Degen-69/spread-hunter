@@ -269,3 +269,45 @@ def test_harmonized_pair_below_floor_drops_both():
     out, why = _require_two_sided(cfg, Inventory(), intents, "")
     assert out == []
     assert "3sh" in why and "5sh" in why
+
+
+def test_unbalanced_deficit_leg_keeps_its_size():
+    """Deficit rebalancing is deliberately asymmetric and stays untouched.
+
+    On unbalanced inventory only the light side quotes, sized to the deficit
+    by `risk.size_for`. The harmonizer must not clamp a repair it did not make.
+    """
+    from core_brain.quotes import _require_two_sided
+    cfg = MakerConfig(
+        objective="rewards",
+        size_mode="shares",
+        quote_shares=120,
+        min_quote_shares=5,
+        reward_offset=0.02,
+        price_band_low=0.10,
+        price_band_high=0.90,
+    )
+    heavy = Inventory(up_shares=40, down_shares=0, up_cost=4.0, down_cost=0.0)
+    up_book = {
+        "best_bid": 0.54, "best_ask": 0.56,
+        "bids": {0.54: 1000.0}, "asks": {0.56: 1000.0}
+    }
+    down_book = {
+        "best_bid": 0.44, "best_ask": 0.46,
+        "bids": {0.44: 1000.0}, "asks": {0.46: 1000.0}
+    }
+    intents, why = decide_quotes(cfg, up_book, down_book, heavy, 1e9, None)
+    assert [i.side for i in intents] == ["DOWN"]
+    assert all("clamped" not in i.reason for i in intents)
+
+    # Gate level: even a crafted two-sided input on unbalanced inventory
+    # passes through byte-identical.
+    both = [
+        QuoteIntent(side="UP", token_id="tok_up", price=0.50, size=9,
+                    mid=0.52, edge_vs_mid=0.02),
+        QuoteIntent(side="DOWN", token_id="tok_dn", price=0.43, size=10,
+                    mid=0.45, edge_vs_mid=0.02),
+    ]
+    out, _ = _require_two_sided(cfg, heavy, both, "")
+    assert [i.size for i in out] == [9, 10]
+    assert all("clamped" not in i.reason for i in out)
