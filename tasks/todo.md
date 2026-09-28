@@ -1,5 +1,5 @@
-# Todo — Issue #296
+# Todo — Issue #293
 
-- [x] T1. DB slot: role-keyed `instance_lock` table + `InstanceInUse` + context manager + seam (`core_brain/order_registry.py`)
-- [x] T2. Gates: `fleet` slot in `trader_loop.run()` + `poll` slot in `order_manager.poll()`, heartbeat, eviction-stop, exit-2 mapping
-- [x] T3. Tests: `tests/test_instance_lock.py` (17 passed) + targeted suites green (`test_order_registry`, `test_trader_loop`, `test_trader_loop_state`: 111 passed)
+- [x] T1. RED tests: skewed-price pair divergence pinned in `tests/test_live_quotes.py` (clamp-to-min, reason note, below-floor drop)
+- [x] T2. Gate: harmonize flat-inventory pairs in `_require_two_sided` (`core_brain/quotes.py`)
+- [x] T3. Deficit path intact + focused suites green (`test_live_quotes`, `test_paired_inventory_accounting`, `test_rc_fixes`, `test_trader_loop`)

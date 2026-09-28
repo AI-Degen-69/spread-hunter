@@ -106,6 +106,13 @@
 - No new external dependencies; no live execution; no volume trial; no ladder work.
 - While 01/02 are live: no fresh start (menu 4), no stop without a run ID.
 
+## Constraints: Issue #293 — Symmetric paired share sizes
+- Zero regressions: focused selection (`tests/test_live_quotes.py`, `tests/test_paired_inventory_accounting.py`, `tests/test_rc_fixes.py`, `tests/test_trader_loop.py`) must pass; full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): skewed-price pair clamps to the min with a reason note; below-floor pair dropped with a reason; deficit-rebalancing leg untouched.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- Harmonize ONLY flat-inventory two-sided pairs (`risk.naked_side(inv) is None`): unbalanced deficit sizing (`size_for` strict-paired path, `quotes.py:288-294` heavy-side block) stays untouched; emergency-hedge crossed intents are never flat, never touched.
+- No signature changes to `decide_quotes` / `_require_two_sided` callers; no sizing change in the rest-under-ask path (fixed `cfg.quote_shares` is already symmetric); no new dependencies; no venue, order-manager, or UI changes.
+
 ## Constraints: Issue #264 — Dashboard input lag (tab clicks freeze 2-4s)
 - Zero regressions: focused selection (`tests/test_dashboard_server.py`, `tests/test_dashboard_snapshot_cache.py`, `tests/test_dashboard_narrow_viewport.py`) must pass; full `python -m pytest -q` stays with GitHub CI.
 - New/changed behavior needs a test that fails without the change (RED before GREEN): e.g. a static test pinning that hidden-tab renders are skipped or deferred and that tab switching paints synchronously.
