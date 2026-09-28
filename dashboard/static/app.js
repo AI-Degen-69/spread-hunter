@@ -4153,7 +4153,8 @@ function otHeadHtml(view, sort) {
       const ariaSort = isActive
         ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"`
         : '';
-      const button = `<button type="button" class="ot-sort-btn" data-ot-sort="${i}">`
+      const button = `<button type="button" class="ot-sort-btn" data-ot-sort="${i}"`
+        + ` style="appearance:none;-webkit-appearance:none;background:transparent;border:1px solid transparent;border-radius:4px;color:inherit;font:inherit;cursor:pointer;padding:4px 6px;line-height:inherit;display:inline-flex;align-items:center;gap:5px;">`
         + `<span class="ot-sort-label">${esc(label)}</span>`
         + (isActive
           ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>`
