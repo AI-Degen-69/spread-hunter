@@ -147,6 +147,9 @@ def test_run_adopts_stale_fleet_slot(tmp_path):
     results = run(_seam(reg), interval=0.0, once=True, live=False,
                   markets=[_FakeMarket()], sleep_fn=lambda s: None)
     assert results
+    # Adopted means owned: the run held the slot and released it on exit.
+    with _reg(tmp_path).instance_lock("fleet", _now_ms()):
+        pass
 
 
 def test_run_releases_fleet_slot_on_exit(tmp_path):
@@ -160,7 +163,7 @@ def test_run_releases_fleet_slot_on_exit(tmp_path):
 def test_run_without_registry_needs_no_slot():
     results = run(_seam(None), interval=0.0, once=True, live=False,
                   markets=[_FakeMarket()], sleep_fn=lambda s: None)
-    assert results
+    assert results and results[0].status == "DECLINED"
 
 
 def test_poll_refusal_exits_2(tmp_path):

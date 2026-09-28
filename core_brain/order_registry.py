@@ -26,7 +26,7 @@ import uuid
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Literal, Optional
 
 from core_brain.runtime_paths import resolve_runtime_file, runtime_file
 
@@ -176,6 +176,11 @@ class InstanceInUse(RuntimeError):
     Deliberately NOT a subclass of ReconcileInProgress: the poll loop catches
     that per cycle to skip, and a startup refusal must never be swallowed there.
     """
+
+
+# Legal instance_lock roles. A typo ("Fleet", "fleet ") must fail loudly at
+# the call site, never silently mint a third slot nobody else checks.
+SlotRole = Literal["fleet", "poll"]
 
 
 SCHEMA = """
@@ -862,7 +867,7 @@ class OrderRegistry:
             )
             conn.commit()
 
-    def _write_instance_lock(self, role: str, holder: str, acquired_ts: int) -> None:
+    def _write_instance_lock(self, role: SlotRole, holder: str, acquired_ts: int) -> None:
         """Force one role's row. Test and recovery seam."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -873,7 +878,7 @@ class OrderRegistry:
             )
             conn.commit()
 
-    def refresh_instance_lock(self, role: str, holder: str, now_ms: int) -> bool:
+    def refresh_instance_lock(self, role: SlotRole, holder: str, now_ms: int) -> bool:
         """Heartbeat: re-stamp our row so a long run never looks stale.
 
         Only touches the row our holder owns; a no-op when it is gone.
@@ -897,7 +902,7 @@ class OrderRegistry:
             return True
 
     @contextmanager
-    def instance_lock(self, role: str, now_ms: int) -> Iterator[str]:
+    def instance_lock(self, role: SlotRole, now_ms: int) -> Iterator[str]:
         """Hold one role's writer slot for this database, or refuse.
 
         Held for the whole fleet/poll loop by the one process that owns the
