@@ -166,14 +166,28 @@ def test_run_without_registry_needs_no_slot():
     assert results and results[0].status == "DECLINED"
 
 
-def test_poll_refusal_exits_2(tmp_path):
+def test_poll_refusal_exits_2(tmp_path, monkeypatch):
+    import core_brain.order_manager as om
     from core_brain.order_manager import poll
 
+    monkeypatch.setattr(om, "RUN", tmp_path / "runtime")
     db = tmp_path / "poll_refused.db"
     OrderRegistry(db_path=db)._write_instance_lock("poll", "live-holder", _now_ms())
     with pytest.raises(SystemExit) as exc_info:
         poll(once=True, db_path=db, client=object())
     assert exc_info.value.code == 2
+
+
+def test_poll_releases_slot_when_cycle_fails(tmp_path, monkeypatch):
+    import core_brain.order_manager as om
+    from core_brain.order_manager import poll
+
+    monkeypatch.setattr(om, "RUN", tmp_path / "runtime")
+    db = tmp_path / "poll_failed.db"
+    with pytest.raises(SystemExit):
+        poll(once=True, db_path=db, client=object())
+    with OrderRegistry(db_path=db).instance_lock("poll", _now_ms()):
+        pass
 
 
 def test_readers_work_while_slot_held(tmp_path):
@@ -190,5 +204,9 @@ def test_main_maps_fleet_refusal_to_exit_2(tmp_path, monkeypatch):
 
     monkeypatch.setattr(fleet_mod, "run", _refuse)
     monkeypatch.setattr(fleet_mod, "_market_specs", lambda *a, **k: [])
+    monkeypatch.setattr("core_brain.account.fetch_live_balance", lambda *a, **k: None)
+    monkeypatch.delenv("POLY_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("POLY_KEY", raising=False)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
     rc = fleet_mod.main(["--once", "--no-live", "--db", str(tmp_path / "m.db")])
     assert rc == 2

@@ -2146,6 +2146,17 @@ def poll(
     # so the designed pair keeps working.
     try:
         with registry.instance_lock("poll", int(time.time() * 1000)) as _poll_holder:
+            def _beat() -> bool:
+                """Refresh our slot; False means another loop adopted it."""
+                return registry.refresh_instance_lock(
+                    "poll", _poll_holder, int(time.time() * 1000))
+
+            def _evict(now_iso: str) -> None:
+                _evict_msg = (f"[POLL {now_iso}] EVICTED: instance slot adopted by "
+                              f"another loop; stopping before further writes")
+                print(_evict_msg, file=sys.stderr)
+                _log_event(_evict_msg)
+
             _boot_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             _log_event(
                 f"[{_boot_iso}] START pid={os.getpid()} interval={interval}s once={once} db={db_p}"
@@ -2187,6 +2198,12 @@ def poll(
                 cycle += 1
                 cycle_start = time.time()
                 now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                # Heartbeat first: the error/contention `continue` paths below
+                # must never let a live holder go stale enough to be adopted.
+                if not _beat():
+                    _evict(now_iso)
+                    break
 
                 if watch_guardrails and not once and not injected_client:
                     # Called even when watcher_proc is None: a transient Popen failure
@@ -2330,14 +2347,10 @@ def poll(
                     print(err_msg, file=sys.stderr)
                     _log_event(err_msg)
 
-                # Heartbeat: re-stamp our slot so a long run never looks stale. An
-                # adopted slot means another loop owns the registry now -- stop
-                # writing rather than record into a database we no longer own.
-                if not registry.refresh_instance_lock("poll", _poll_holder, int(time.time() * 1000)):
-                    _evict_msg = (f"[POLL {now_iso}] EVICTED: instance slot adopted by "
-                                  f"another loop; stopping before further writes")
-                    print(_evict_msg, file=sys.stderr)
-                    _log_event(_evict_msg)
+                # Second heartbeat: a cycle whose own work stalled past the TTL
+                # must still notice adoption before the next cycle writes.
+                if not _beat():
+                    _evict(now_iso)
                     break
 
                 # Write heartbeat
@@ -2366,6 +2379,10 @@ def poll(
                     print(f"[POLL {stop_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
                     break
 
+            # Take the sampler down with the poll so no writer outlives the slot
+            # (an eviction-stop must stop writing, not just stop looping).
+            if markout_worker is not None:
+                markout_worker.stop()
             # Take the watcher down with the poll: terminate, escalate to kill.
             if watcher_proc is not None:
                 try:
@@ -2386,6 +2403,11 @@ def poll(
             if once and last_cycle_failed:
                 sys.exit(1)
     except InstanceInUse as exc:
+        _refuse_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _refuse_msg = f"[POLL {_refuse_iso}] REFUSED: {exc}"
+        print(_refuse_msg, file=sys.stderr)
+        _log_event(_refuse_msg)
+        raise SystemExit(2) from exc
         _refuse_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _refuse_msg = f"[POLL {_refuse_iso}] REFUSED: {exc}"
         print(_refuse_msg, file=sys.stderr)
