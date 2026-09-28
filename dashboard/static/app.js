@@ -351,6 +351,101 @@ function fmtLocalTime(ts) {
   return d.toLocaleTimeString();
 }
 
+/* Format timestamp into DD/MM/YYYY, HH:mm (24 hour local time).
+ * The one time a row was added to the table, whatever view it renders in:
+ *   Active Markets — the moment the latest quote was logged for the market.
+ *   Open Orders    — the moment the order was posted (`posted_ts`, ms).
+ *   Positions      — the moment the leg filled (latest fill `venue_ts`, ms).
+ *   Closed Trades  — the moment the trade closed (settlement close `ts`, s;
+ *                      the resolution record is the fallback).
+ * Second-resolution values are ms-vs-s ambiguous only below the registry's
+ * first real timestamps, so `× 1000` is applied only to plainly-seconds
+ * magnitudes — the same heuristic the backend run rollup already uses. */
+function toMs(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return (n < 1e11) ? n * 1000 : n;
+}
+
+function fmtTimestamp(ts) {
+  const ms = toMs(ts);
+  if (ms === null) return '--';
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) return '--';
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const HH = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy}, ${HH}:${min}`;
+}
+
+/* When each stage's row entered the table, one accessor per view. Each
+ * returns milliseconds (via `toMs`, so seconds and milliseconds sources mix
+ * safely) or null when nothing measured:
+ *   latestQuoteTs — Active Markets: the latest quote logged for the market.
+ *   latestFillTs  — Positions: the latest fill; a held market with quotes but
+ *                    no fills shows `--`, not a quote time posing as a fill.
+ *   closeTsOf     — Closed Trades: the latest settlement close, with the
+ *                    resolution record as fallback. Sort and render share it.
+ * All three take the maximum of their own source only, so a later quote can
+ * never replace a measured fill time or a booked close. */
+function latestQuoteTs(m) {
+  let best = null;
+  for (const q of (m && m.quotes) || []) {
+    const t = toMs(q && q.ts);
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  return best;
+}
+
+function latestFillTs(m) {
+  let best = null;
+  for (const f of (m && m.fills) || []) {
+    const t = toMs(f && f.venue_ts);
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  return best;
+}
+
+function closeTsOf(m) {
+  let best = null;
+  for (const s of (m && m.settlements) || []) {
+    const t = toMs(s && s.ts);
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  if (best === null && m && m.resolution && m.resolution.resolved_ts) {
+    best = toMs(m.resolution.resolved_ts);
+  }
+  return best;
+}
+
+/* Relative age beside the absolute Timestamp: "3m ago" reads how fresh a row
+ * is without the operator subtracting clock faces. Milliseconds in, so the
+ * same value that feeds `fmtTimestamp` feeds this one. A future timestamp
+ * (clock skew between this page and the registry) clamps to "just now"
+ * rather than counting down from a negative age. */
+function fmtRelAgo(tsMs) {
+  const ms = toMs(tsMs);
+  if (ms === null) return '';
+  const sec = Math.max(0, (Date.now() - ms) / 1000);
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+  return Math.floor(sec / 86400) + 'd ago';
+}
+
+/* One Timestamp cell, shared by every view: the absolute local time on the
+ * first line, the relative age in a muted caption under it. Both re-render
+ * with the poll, so the age never freezes between repaints. */
+function timestampCell(ts, opts) {
+  const o = opts || {};
+  const rowspan = o.rowspan ? ` rowspan="${o.rowspan}"` : '';
+  const rel = fmtRelAgo(ts);
+  const relHtml = rel ? `<div class="caption-muted">${esc(rel)}</div>` : '';
+  return `<td class="mono" style="white-space:nowrap;"${rowspan}>${fmtTimestamp(ts)}${relHtml}</td>`;
+}
+
 /**
  * Render a safe external anchor tag or escaped text for a market object.
  * @param {Object|null|undefined} m - Market object with title, slug, or url
@@ -3746,19 +3841,19 @@ const OT_NOTES = {
 };
 
 const OT_COLUMNS = {
-  'active-markets': ['Market', 'Category', 'UP Quote', 'DOWN Quote', 'Pair Cost',
+  'active-markets': ['Timestamp', 'Market', 'Category', 'UP Quote', 'DOWN Quote', 'Pair Cost',
                      'Edge', '24h Volume', 'Resolves', 'Status'],
-  'open-orders': ['Market', 'Leg', 'Price', 'Size',
+  'open-orders': ['Timestamp', 'Market', 'Leg', 'Price', 'Size',
                   'Total Cost', 'Queue Ahead', 'Age'],
   // Per-leg on the left, pair-level on the right. Mark Value and both PnLs
   // span the pair because they are pair numbers: a matched pair merges at par
   // and only the remainder is marked, which cannot be split across two rows
   // without inventing a per-leg figure that does not exist.
-  'positions': ['Market', 'Leg', 'Size', 'Avg Price', 'Cost',
+  'positions': ['Timestamp', 'Market', 'Leg', 'Size', 'Avg Price', 'Cost',
                 'Mark Value', 'Unrealized', 'Realized'],
   // The Data & Markets table shape, reused so a closed trade reads the same
   // in both places: commit, hedge state, realized P&L, fills, status.
-  'closed-trades': ['Market', 'Commit ($)', 'Hedge', 'Realized P&L', 'Fills', 'Status'],
+  'closed-trades': ['Timestamp', 'Market', 'Commit ($)', 'Hedge', 'Realized P&L', 'Fills', 'Status'],
 };
 
 /* The quote log writes the down leg as `DOWN`; orders and the pair summary
@@ -3788,10 +3883,10 @@ function normalizeLeg(side) {
  * other column answers "which is biggest / deepest / oldest" and starts
  * descending. One rule, two directions, no per-column special cases. */
 const OT_TEXT_COLUMNS = {
-  'active-markets': new Set([0, 1, 8]),   // Market, Category, Status
-  'open-orders': new Set([0, 1]),         // Market, Leg
-  'positions': new Set([0, 1]),           // Market, Leg
-  'closed-trades': new Set([0, 2, 5]),    // Market, Hedge, Status
+  'active-markets': new Set([1, 2, 9]),   // Market, Category, Status
+  'open-orders': new Set([1, 2]),         // Market, Leg
+  'positions': new Set([1, 2]),           // Market, Leg
+  'closed-trades': new Set([1, 3, 6]),    // Market, Hedge, Status
 };
 
 function otIsTextColumn(view, col) {
@@ -4159,7 +4254,11 @@ function otHeadHtml(view, sort) {
           ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>`
           : '')
         + `</button>`;
-      return `<th${i === 0 ? ' class="ot-market-head"' : ''}${ariaSort}${label === 'Status' ? statusTitle : ''}>${button}</th>`;
+      // The width floor rides on the MARKET column, not on position 0: the
+      // Timestamp column is first now, and the market name is still the only
+      // cell that wraps.
+      const isMarketHead = label === 'Market';
+      return `<th${isMarketHead ? ' class="ot-market-head"' : ''}${ariaSort}${label === 'Status' ? statusTitle : ''}>${button}</th>`;
     })
     .join('');
   return `<tr>${cells}</tr>`;
@@ -4229,20 +4328,22 @@ function activeMarketsRows(kpi, state, sort) {
     const pairCost = (upQuote !== null && dnQuote !== null) ? (upQuote + dnQuote) : null;
     const edge = pairCost === null ? null : 1 - pairCost;
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
-    return { cid, m, upQuote, dnQuote, pairCost, edge, restingHere };
+    const ts = latestQuoteTs(m);
+    return { cid, m, upQuote, dnQuote, pairCost, edge, restingHere, ts };
   });
 
   const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
     switch (col) {
-      case 0: return String(r.m.title || r.m.name || r.m.slug || '');
-      case 1: return marketCategory(r.m);
-      case 2: return otNum(r.upQuote);
-      case 3: return otNum(r.dnQuote);
-      case 4: return otNum(r.pairCost);
-      case 5: return otNum(r.edge);
-      case 6: return otNum(r.m.volume_24h);
-      case 7: return otNum(r.m.days_to_resolve);
-      case 8: return r.restingHere ? 'RESTING' : ((r.m.quotes_count || 0) > 0 ? 'QUOTING' : 'IDLE');
+      case 0: return otNum(r.ts);
+      case 1: return String(r.m.title || r.m.name || r.m.slug || '');
+      case 2: return marketCategory(r.m);
+      case 3: return otNum(r.upQuote);
+      case 4: return otNum(r.dnQuote);
+      case 5: return otNum(r.pairCost);
+      case 6: return otNum(r.edge);
+      case 7: return otNum(r.m.volume_24h);
+      case 8: return otNum(r.m.days_to_resolve);
+      case 9: return r.restingHere ? 'RESTING' : ((r.m.quotes_count || 0) > 0 ? 'QUOTING' : 'IDLE');
       default: return null;
     }
   }) : rows;
@@ -4252,7 +4353,8 @@ function activeMarketsRows(kpi, state, sort) {
       || String(a.m.title || '').localeCompare(String(b.m.title || '')));
   }
 
-  return sorted.map(({ cid, m, upQuote, dnQuote, pairCost, edge, restingHere }) => `<tr data-cid="${esc(cid)}">
+  return sorted.map(({ cid, m, upQuote, dnQuote, pairCost, edge, restingHere, ts }) => `<tr data-cid="${esc(cid)}">
+      ${timestampCell(ts)}
       <td class="ot-market">${marketCell(m, cid)}</td>
       <td class="mono">${esc(marketCategory(m))}</td>
       <td class="mono">${fmtPrice(upQuote)}</td>
@@ -4380,11 +4482,12 @@ function openOrdersRows(kpi, state, sort) {
     const first = g.orders[0];
     const market = orderGroupMarket(g, first.condition_id, byMarket, state);
     switch (col) {
-      case 0: return String((market && (market.title || market.name || market.slug)) || '');
-      case 1: return legForOrder(first, legs, byMarket) || '';
-      case 2: return otExtreme(g.orders.map(o => o.price), dir);
-      case 3: return otSum(g.orders.map(o => o.original_size));
-      case 4: {
+      case 0: return otExtreme(g.orders.map(o => Number(o.posted_ts) || 0), dir);
+      case 1: return String((market && (market.title || market.name || market.slug)) || '');
+      case 2: return legForOrder(first, legs, byMarket) || '';
+      case 3: return otExtreme(g.orders.map(o => o.price), dir);
+      case 4: return otSum(g.orders.map(o => o.original_size));
+      case 5: {
         // A leg with no price or no size is unmeasured, not zero. Any
         // unmeasured leg makes the PAIR unmeasured, so a pair the registry
         // could not price ranks last instead of beating every real cost.
@@ -4395,8 +4498,8 @@ function openOrdersRows(kpi, state, sort) {
         });
         return costs.some(c => c === null) ? null : otSum(costs);
       }
-      case 5: return otExtreme(g.orders.map(o => otNum(queues[o.order_id])), dir);
-      case 6: return otExtreme(g.orders.map(o => o.age_sec), dir);
+      case 6: return otExtreme(g.orders.map(o => otNum(queues[o.order_id])), dir);
+      case 7: return otExtreme(g.orders.map(o => o.age_sec), dir);
       default: return null;
     }
   }) : groups;
@@ -4428,6 +4531,7 @@ function openOrdersRows(kpi, state, sort) {
         ? `<td class="ot-market" rowspan="${group.orders.length}">${marketCell(market, o.condition_id, { categoryCaption: true })}${pairTags}</td>`
         : '';
       return `<tr class="${rowClass.join(' ')}" data-order-id="${esc(o.order_id)}" data-pair="${esc(group.key)}">
+      <td class="mono" style="white-space:nowrap;">${fmtTimestamp(o.posted_ts)}<div class="caption-muted">${esc(fmtRelAgo(o.posted_ts))}</div></td>
       ${marketTd}
       <td><span class="pill ${leg === 'UP' ? 'active' : (leg === 'DN' ? 'reconnecting' : 'stopped')}">${esc(leg === 'DN' ? 'DOWN' : leg)}</span></td>
       <td class="mono">${fmtPrice(price)}</td>
@@ -4498,13 +4602,14 @@ function closedTradesRows(kpi, state, sort) {
   // would drop the sub-row under a different market.
   const sorted = sort ? otSortGroups(entries, sort, ([cid, m]) => {
     switch (sort.col) {
-      case 0: return String(m.title || m.name || m.slug || '');
-      case 1: return otNum(m.total_cost);
-      case 2: return (m.balance !== null && m.balance !== undefined && m.balance >= 0.99)
+      case 0: return closeTsOf(m);
+      case 1: return String(m.title || m.name || m.slug || '');
+      case 2: return otNum(m.total_cost);
+      case 3: return (m.balance !== null && m.balance !== undefined && m.balance >= 0.99)
         ? 'Hedged' : 'One-Sided';
-      case 3: return otNum(m.realized_pnl);
-      case 4: return otNum(m.fills_count);
-      case 5: return 'FINISHED';
+      case 4: return otNum(m.realized_pnl);
+      case 5: return otNum(m.fills_count);
+      case 6: return 'FINISHED';
       default: return null;
     }
   }) : entries;
@@ -4570,27 +4675,29 @@ function positionsRows(kpi, state, sort) {
       cid, m, held,
       mark,
       unrealized: mark === null ? null : mark - cost,
+      ts: latestFillTs(m),
     };
   }).filter(r => r.held.length);
 
   const sorted = sort ? otSortGroups(rows, sort, (r, col, dir) => {
     switch (col) {
-      case 0: return String(r.m.title || r.m.name || r.m.slug || '');
+      case 0: return otNum(r.ts);
+      case 1: return String(r.m.title || r.m.name || r.m.slug || '');
       // Both legs, not one: a pair is UP and DN and its Leg cell should rank by
       // the pair it belongs to, not by whichever leg the registry handed over
       // first. A separator keeps 'DN,UP' from colliding with other combinations.
-      case 1: return r.held.map(e => e.leg).sort().join(',');
-      case 2: return otSum(r.held.map(e => e.size));
-      case 3: return otExtreme(r.held.map(e => (e.size > 0 ? e.cost / e.size : null)), dir);
-      case 4: return otSum(r.held.map(e => e.cost));
-      case 5: return otNum(r.mark);
-      case 6: return otNum(r.unrealized);
-      case 7: return otNum(r.m.realized_pnl);
+      case 2: return r.held.map(e => e.leg).sort().join(',');
+      case 3: return otSum(r.held.map(e => e.size));
+      case 4: return otExtreme(r.held.map(e => (e.size > 0 ? e.cost / e.size : null)), dir);
+      case 5: return otSum(r.held.map(e => e.cost));
+      case 6: return otNum(r.mark);
+      case 7: return otNum(r.unrealized);
+      case 8: return otNum(r.m.realized_pnl);
       default: return null;
     }
   }) : rows;
 
-  return sorted.map(({ cid, m, held, mark, unrealized }, marketIndex) => {
+  return sorted.map(({ cid, m, held, mark, unrealized, ts }, marketIndex) => {
     const cost = Number(m.total_cost) || 0;
     const up = Number(m.up_sh) || 0;
     const dn = Number(m.dn_sh) || 0;
@@ -4610,6 +4717,7 @@ function positionsRows(kpi, state, sort) {
       const avgPrice = entry.size > 0 ? entry.cost / entry.size : null;
       // The market and every pair-level number span the pair, for the same
       // reason the market name does: they describe the pair, not one leg.
+      const tsHtml = legIndex === 0 ? timestampCell(ts, { rowspan: span }) : '';
       const pairCells = legIndex === 0
         ? `<td class="ot-market" rowspan="${span}">${marketCell(m, cid, { categoryCaption: true })}${pairTags}</td>`
         : '';
@@ -4619,6 +4727,7 @@ function positionsRows(kpi, state, sort) {
       <td class="mono ot-pair-value" rowspan="${span}">${signedUSD(m.realized_pnl)}</td>`
         : '';
       return `<tr class="${rowClass.join(' ')}" data-cid="${esc(cid)}" data-leg="${esc(entry.leg)}">
+      ${tsHtml}
       ${pairCells}
       <td><span class="pill ${entry.leg === 'UP' ? 'active' : 'reconnecting'}">${esc(entry.leg)}</span></td>
       <td class="mono">${fmtShares(entry.size)}</td>
@@ -4835,8 +4944,15 @@ function marketRowPairHtml(cid, m, opts) {
     }
     // cancelled-count — header no longer shows cancelled per UX, kept for expanded toggle only
   }
-  // Main row — clickable to expand
+  // Main row — clickable to expand. The Timestamp is when the trade closed:
+  // the latest settlement close, with the resolution record as the fallback.
+  // `closeTsOf` is the same accessor the column-0 sort reads, so what the
+  // operator sees ordered is exactly what is displayed.
+  const closeTs = closeTsOf(m);
+  const tsHtml = timestampCell(closeTs);
+
   let html = `<tr class="market-row${isExpanded ? ' expanded' : ''}" data-cid="${esc(cid)}" tabindex="0" role="button" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} market orders for ${esc(m.title || m.slug || cid.slice(0,10))}">
+    ${tsHtml}
     <td>
       <span class="expand-chevron${isExpanded ? ' expanded' : ''}" aria-hidden="true">${hasOrders ? '▶' : ''}</span>
       ${marketLink(m)}
@@ -4858,7 +4974,7 @@ function marketRowPairHtml(cid, m, opts) {
   // Expanded sub-row with individual orders
   if (isExpanded && hasOrders) {
     html += `<tr class="orders-expand-row">
-      <td colspan="6" style="padding:0">
+      <td colspan="7" style="padding:0">
         <div class="orders-expand-content">
           ${renderExpandedOrders(allOrders, fills, showCancelled)}
         </div>
@@ -5721,6 +5837,7 @@ if (typeof module !== 'undefined' && module.exports) {
     positionMarkValue, settledMarkValue, winningLeg,
     isQuotedMarket, isRestingOrder, tokenLegMap, legForOrder, marketStatusPill,
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
+    fmtTimestamp, toMs, latestQuoteTs, latestFillTs, closeTsOf, fmtRelAgo, timestampCell,
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },
     set isStopping(v) { isStopping = v; },
