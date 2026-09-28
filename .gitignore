@@ -51,6 +51,7 @@ htmlcov/
 /runtime/archive/
 /runtime/*.json
 /runtime/*.jsonl
+/runtime/*.pid
 /runtime/.current_run_id
 /data/*.db*
 /data/archive/

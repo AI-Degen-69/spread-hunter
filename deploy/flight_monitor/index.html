@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta http-equiv="refresh" content="300">
+  <title>Spread Hunter — Flight Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased selection:bg-indigo-500 selection:text-white">
+  <div class="max-w-6xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+    <div id="stale-warning" role="alert" class="hidden mb-5 rounded-xl border border-rose-500/60 bg-rose-950 px-4 py-3 text-sm font-semibold text-rose-200">
+      STALE SNAPSHOT — latest data is about 0 minutes old. Do not assume any run is still active.
+    </div>
+    
+    <!-- Top Header -->
+    <header class="flex flex-col md:flex-row md:items-center md:justify-between pb-8 border-b border-slate-800 gap-4">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="text-2xl">✈️</span>
+          <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">Spread Hunter Flight Monitor</h1>
+          <span id="snapshot-status-badge" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border bg-amber-500/20 text-amber-400 border-amber-500/40">
+            STATUS DATA INCOMPLETE
+          </span>
+        </div>
+        <p class="text-sm text-slate-400 mt-1">Read-only shadow-run checkup. Snapshot freshness is monitored on this page.</p>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-right">
+          <div class="text-[11px] uppercase tracking-wider text-slate-500">Last Snapshot</div>
+          <div class="font-mono text-sm font-semibold text-slate-200">28/09/2026 09:49:26</div>
+        </div>
+        <button onclick="window.location.reload()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl text-xs font-medium transition shadow-lg shadow-indigo-600/20">
+          ↻ Refresh
+        </button>
+      </div>
+    </header>
+
+    <!-- Global Key Metric Summary -->
+    <section class="grid grid-cols-2 sm:grid-cols-4 gap-4 my-8">
+      <div class="bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
+        <div class="text-xs text-slate-400 uppercase tracking-wider">Combined Net PnL</div>
+        <div class="text-2xl sm:text-3xl font-mono font-bold mt-1 text-slate-300">N/A</div>
+
+        <div class="text-xs text-slate-500 mt-1">Across 3 configured shadow runs</div>
+      </div>
+      <div class="bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
+        <div class="text-xs text-slate-400 uppercase tracking-wider">Total Settlements</div>
+        <div class="text-2xl sm:text-3xl font-mono font-bold mt-1 text-white">N/A</div>
+        <div class="text-xs text-slate-500 mt-1">Fully merged pairs</div>
+      </div>
+      <div class="bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
+        <div class="text-xs text-slate-400 uppercase tracking-wider">Total Fills</div>
+        <div class="text-2xl sm:text-3xl font-mono font-bold mt-1 text-white">N/A</div>
+        <div class="text-xs text-slate-500 mt-1">Legs filled across runs</div>
+      </div>
+      <div class="bg-slate-900/80 border border-slate-800 p-5 rounded-2xl">
+        <div class="text-xs text-slate-400 uppercase tracking-wider">Data Health</div>
+        <div class="text-2xl sm:text-3xl font-mono font-bold mt-1 text-indigo-400">1/3 OK</div>
+        <div class="text-xs text-slate-500 mt-1">Status + KPI endpoints reachable</div>
+      </div>
+    </section>
+
+    <!-- Supervisor health -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 mb-8">
+      <h2 class="text-lg font-bold text-slate-200 mb-3">This System — Supervisor Health</h2>
+      <p class="text-xs text-amber-300">Supervisor health unavailable in this snapshot.</p>
+    </section>
+
+    <!-- 3 Active Runs -->
+    <section class="space-y-4 mb-10">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-bold text-slate-200">Active Rehearsal Instances</h2>
+        <span class="text-xs text-slate-500 font-mono">Expected update every 2h • stale warning after 3h</span>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        <div class="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-6 shadow-xl relative overflow-hidden backdrop-blur-sm">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="font-mono text-xs uppercase tracking-wider text-slate-400">shadow-01 • Port 8801</span>
+              </div>
+              <h3 class="text-xl font-bold text-white mt-1">Shadow-01 (Baseline Pinned)</h3>
+              <p class="text-xs text-slate-400 mt-0.5">Original baseline store (12-09), standard parameters</p>
+            </div>
+            <div class="text-right">
+              <span class="px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-emerald-500/20 text-slate-200 border border-emerald-500/40">
+                RUNNING
+              </span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4 my-5 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+            <div>
+              <div class="text-xs text-slate-400">Total Net PnL</div>
+              <div class="text-2xl font-mono font-bold text-emerald-400">$+8.27</div>
+              <div class="text-[11px] text-slate-500">ROI: +2.03%</div>
+            </div>
+            <div>
+              <div class="text-xs text-slate-400">Settled Pairs</div>
+              <div class="text-2xl font-mono font-bold text-white">60</div>
+              <div class="text-[11px] text-slate-500">Win Rate: 76.9% (80W / 24L)</div>
+            </div>
+          </div>
+
+          <div class="space-y-2.5 text-sm">
+            <div class="flex justify-between items-center text-xs">
+              <span class="text-slate-400">Elapsed / Timebox:</span>
+              <span class="font-mono text-slate-200">1.52h / 24.0h (6.3%)</span>
+            </div>
+            <div class="w-full bg-slate-700/50 rounded-full h-1.5 overflow-hidden">
+              <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-500" style="width: 6.3%"></div>
+            </div>
+
+            <div class="pt-2 grid grid-cols-3 gap-2 text-center text-xs">
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Fills / Quotes</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">171 / 16883</div>
+              </div>
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Fill Rate</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">0.967%</div>
+              </div>
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Active Mkts</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">4</div>
+              </div>
+            </div>
+
+            <div class="flex justify-between items-center text-[11px] text-slate-500 pt-1">
+              <span>Avg Edge: <span class="font-mono text-slate-400">2.97¢</span></span>
+              <span>Median Pair Cost: <span class="font-mono text-slate-400">$0.0</span></span>
+              <span>Heartbeat: <span class="font-mono text-slate-400">17.7s ago</span></span>
+            </div>
+          </div>
+          
+        </div>
+        
+        <div class="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-6 shadow-xl relative overflow-hidden backdrop-blur-sm">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+                <span class="font-mono text-xs uppercase tracking-wider text-slate-400">shadow-02 • Port 8802</span>
+              </div>
+              <h3 class="text-xl font-bold text-white mt-1">Shadow-02 (Exit Regime)</h3>
+              <p class="text-xs text-slate-400 mt-0.5">Active exit-regime model, dynamic thresholding</p>
+            </div>
+            <div class="text-right">
+              <span class="px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-amber-500/20 text-slate-200 border border-amber-500/40">
+                UNKNOWN
+              </span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4 my-5 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+            <div>
+              <div class="text-xs text-slate-400">Total Net PnL</div>
+              <div class="text-2xl font-mono font-bold text-emerald-400">N/A</div>
+              <div class="text-[11px] text-slate-500">ROI: N/A</div>
+            </div>
+            <div>
+              <div class="text-xs text-slate-400">Settled Pairs</div>
+              <div class="text-2xl font-mono font-bold text-white">N/A</div>
+              <div class="text-[11px] text-slate-500">Win Rate: N/A</div>
+            </div>
+          </div>
+
+          <div class="space-y-2.5 text-sm">
+            <div class="flex justify-between items-center text-xs">
+              <span class="text-slate-400">Elapsed / Timebox:</span>
+              <span class="font-mono text-slate-200">N/A — status unavailable</span>
+            </div>
+            <div class="w-full bg-slate-700/50 rounded-full h-1.5 overflow-hidden">
+              <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-500" style="width: 0.0%"></div>
+            </div>
+
+            <div class="pt-2 grid grid-cols-3 gap-2 text-center text-xs">
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Fills / Quotes</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">N/A</div>
+              </div>
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Fill Rate</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">N/A</div>
+              </div>
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Active Mkts</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">N/A</div>
+              </div>
+            </div>
+
+            <div class="flex justify-between items-center text-[11px] text-slate-500 pt-1">
+              <span>Avg Edge: <span class="font-mono text-slate-400">N/A</span></span>
+              <span>Median Pair Cost: <span class="font-mono text-slate-400">N/A</span></span>
+              <span>Heartbeat: <span class="font-mono text-slate-400">N/A</span></span>
+            </div>
+          </div>
+          <p class="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">Telemetry unavailable: Dashboard status API unavailable or invalid; Dashboard KPI API unavailable or invalid</p>
+        </div>
+        
+        <div class="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-6 shadow-xl relative overflow-hidden backdrop-blur-sm">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+                <span class="font-mono text-xs uppercase tracking-wider text-slate-400">shadow-03 • Port 8803</span>
+              </div>
+              <h3 class="text-xl font-bold text-white mt-1">Shadow-03 (Trial $250 Depth)</h3>
+              <p class="text-xs text-slate-400 mt-0.5">Depth-bar trial rehearsal on its own universe feed ($250)</p>
+            </div>
+            <div class="text-right">
+              <span class="px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-amber-500/20 text-slate-200 border border-amber-500/40">
+                UNKNOWN
+              </span>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4 my-5 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+            <div>
+              <div class="text-xs text-slate-400">Total Net PnL</div>
+              <div class="text-2xl font-mono font-bold text-emerald-400">N/A</div>
+              <div class="text-[11px] text-slate-500">ROI: N/A</div>
+            </div>
+            <div>
+              <div class="text-xs text-slate-400">Settled Pairs</div>
+              <div class="text-2xl font-mono font-bold text-white">N/A</div>
+              <div class="text-[11px] text-slate-500">Win Rate: N/A</div>
+            </div>
+          </div>
+
+          <div class="space-y-2.5 text-sm">
+            <div class="flex justify-between items-center text-xs">
+              <span class="text-slate-400">Elapsed / Timebox:</span>
+              <span class="font-mono text-slate-200">N/A — status unavailable</span>
+            </div>
+            <div class="w-full bg-slate-700/50 rounded-full h-1.5 overflow-hidden">
+              <div class="bg-indigo-500 h-1.5 rounded-full transition-all duration-500" style="width: 0.0%"></div>
+            </div>
+
+            <div class="pt-2 grid grid-cols-3 gap-2 text-center text-xs">
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Fills / Quotes</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">N/A</div>
+              </div>
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Fill Rate</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">N/A</div>
+              </div>
+              <div class="bg-slate-900/40 p-2 rounded-lg">
+                <div class="text-slate-500">Active Mkts</div>
+                <div class="font-mono font-medium text-slate-300 mt-0.5">N/A</div>
+              </div>
+            </div>
+
+            <div class="flex justify-between items-center text-[11px] text-slate-500 pt-1">
+              <span>Avg Edge: <span class="font-mono text-slate-400">N/A</span></span>
+              <span>Median Pair Cost: <span class="font-mono text-slate-400">N/A</span></span>
+              <span>Heartbeat: <span class="font-mono text-slate-400">N/A</span></span>
+            </div>
+          </div>
+          <p class="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">Telemetry unavailable: Dashboard status API unavailable or invalid; Dashboard KPI API unavailable or invalid</p>
+        </div>
+        
+      </div>
+    </section>
+
+    <!-- Side-by-Side Comparison Table -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 mb-10">
+      <h3 class="text-base font-bold text-white mb-4">Direct Run Comparison</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead>
+            <tr class="border-b border-slate-800 text-slate-400 uppercase">
+              <th class="pb-3 font-semibold">Instance</th>
+              <th class="pb-3 font-semibold">Status</th>
+              <th class="pb-3 font-semibold">Elapsed</th>
+              <th class="pb-3 font-semibold">Net PnL</th>
+              <th class="pb-3 font-semibold">Pairs</th>
+              <th class="pb-3 font-semibold">Win Rate</th>
+              <th class="pb-3 font-semibold">Fill Rate</th>
+              <th class="pb-3 font-semibold">Bankroll</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/60">
+            
+            <tr class="hover:bg-slate-800/30">
+              <td class="py-3 font-medium text-slate-200">Shadow-01 (Baseline Pinned)</td>
+              <td class="py-3"><span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-400">ACTIVE</span></td>
+              <td class="py-3 font-mono text-slate-300">1.52h / 24.0h</td>
+              <td class="py-3 font-mono font-bold">$+8.27</td>
+              <td class="py-3 font-mono text-slate-200">60</td>
+              <td class="py-3 font-mono text-slate-200">76.9%</td>
+              <td class="py-3 font-mono text-slate-200">0.967%</td>
+              <td class="py-3 font-mono text-slate-400">$100.00</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30">
+              <td class="py-3 font-medium text-slate-200">Shadow-02 (Exit Regime)</td>
+              <td class="py-3"><span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300">UNKNOWN</span></td>
+              <td class="py-3 font-mono text-slate-300">N/A</td>
+              <td class="py-3 font-mono font-bold">N/A</td>
+              <td class="py-3 font-mono text-slate-200">N/A</td>
+              <td class="py-3 font-mono text-slate-200">N/A</td>
+              <td class="py-3 font-mono text-slate-200">N/A</td>
+              <td class="py-3 font-mono text-slate-400">N/A</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30">
+              <td class="py-3 font-medium text-slate-200">Shadow-03 (Trial $250 Depth)</td>
+              <td class="py-3"><span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300">UNKNOWN</span></td>
+              <td class="py-3 font-mono text-slate-300">N/A</td>
+              <td class="py-3 font-mono font-bold">N/A</td>
+              <td class="py-3 font-mono text-slate-200">N/A</td>
+              <td class="py-3 font-mono text-slate-200">N/A</td>
+              <td class="py-3 font-mono text-slate-200">N/A</td>
+              <td class="py-3 font-mono text-slate-400">N/A</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- History Log -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 mb-8">
+      <h3 class="text-base font-bold text-white mb-2">Snapshot History Timeline</h3>
+      <p class="text-xs text-slate-400 mb-4">Historical record of updates during the flight</p>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left">
+          <thead>
+            <tr class="border-b border-slate-800 text-xs text-slate-500 uppercase">
+              <th class="pb-2">Timestamp (Local)</th>
+              <th class="pb-2">State</th>
+              <th class="pb-2">Combined PnL</th>
+              <th class="pb-2 text-right">Settled Pairs</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">28/09/2026 09:49:26</td>
+          <td class="py-2.5 text-slate-400">1/3 Active</td>
+          <td class="py-2.5 font-mono text-slate-400 font-medium">N/A</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">N/A</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">28/09/2026 07:49:01</td>
+          <td class="py-2.5 text-slate-400">0/3 Active</td>
+          <td class="py-2.5 font-mono text-slate-400 font-medium">N/A</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">N/A</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">28/09/2026 05:49:02</td>
+          <td class="py-2.5 text-slate-400">0/3 Active</td>
+          <td class="py-2.5 font-mono text-slate-400 font-medium">N/A</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">N/A</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">28/09/2026 03:49:02</td>
+          <td class="py-2.5 text-slate-400">1/3 Active</td>
+          <td class="py-2.5 font-mono text-slate-400 font-medium">N/A</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">N/A</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">28/09/2026 01:49:03</td>
+          <td class="py-2.5 text-slate-400">0/3 Active</td>
+          <td class="py-2.5 font-mono text-slate-400 font-medium">N/A</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">N/A</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">27/09/2026 23:57:15</td>
+          <td class="py-2.5 text-slate-400">1/3 Active</td>
+          <td class="py-2.5 font-mono text-emerald-400 font-medium">$+13.35</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">98 pairs</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">27/09/2026 23:49:08</td>
+          <td class="py-2.5 text-slate-400">1/3 Active</td>
+          <td class="py-2.5 font-mono text-emerald-400 font-medium">$+13.35</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">98 pairs</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">27/09/2026 23:49:02</td>
+          <td class="py-2.5 text-slate-400">0/3 Active</td>
+          <td class="py-2.5 font-mono text-slate-400 font-medium">N/A</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">N/A</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">27/09/2026 23:33:11</td>
+          <td class="py-2.5 text-slate-400">0/3 Active</td>
+          <td class="py-2.5 font-mono text-emerald-400 font-medium">$+13.35</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">98 pairs</td>
+        </tr>
+        
+        <tr class="border-b border-slate-800 text-xs hover:bg-slate-800/40 transition">
+          <td class="py-2.5 font-mono text-slate-300">27/09/2026 23:32:41</td>
+          <td class="py-2.5 text-slate-400">0/3 Active</td>
+          <td class="py-2.5 font-mono text-emerald-400 font-medium">$+13.35</td>
+          <td class="py-2.5 text-right font-mono text-slate-400">98 pairs</td>
+        </tr>
+        
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="pt-6 border-t border-slate-800/80 text-center text-xs text-slate-500 flex flex-col sm:flex-row justify-between items-center gap-2">
+      <div>Spread Hunter Execution Engine • Read-only shadow telemetry</div>
+      <div>Page auto-refreshes every 5 minutes. Snapshot timestamp: 28/09/2026 09:49:26</div>
+    </footer>
+
+  </div>
+  <script>
+    const snapshotTimeMs = 1790578166064;
+    const staleAfterMs = 10800000;
+    const supervisorDegraded = false;
+    function updateSnapshotFreshness() {
+      const ageMs = Date.now() - snapshotTimeMs;
+      const warning = document.getElementById('stale-warning');
+      if (ageMs > staleAfterMs || supervisorDegraded) {
+        warning.classList.remove('hidden');
+        const badge = document.getElementById('snapshot-status-badge');
+        if (ageMs > staleAfterMs) {
+          warning.textContent = `STALE SNAPSHOT — latest data is about ${Math.floor(ageMs / 60000)} minutes old. Do not assume any run is still active.`;
+          badge.textContent = 'SNAPSHOT STALE';
+        } else {
+          warning.textContent = 'SUPERVISOR DEGRADED — a required run component is down or stale.';
+          badge.textContent = 'SUPERVISOR DEGRADED';
+        }
+        badge.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border bg-rose-500/20 text-rose-300 border-rose-500/50';
+      }
+    }
+    updateSnapshotFreshness();
+    window.setInterval(updateSnapshotFreshness, 60000);
+    window.setInterval(() => window.location.reload(), 300000);
+  </script>
+</body>
+</html>

@@ -255,6 +255,13 @@ def record_submit(
     if not intents:
         return 0
 
+    paired_context = getattr(registry, "paired_context", None)
+    paired_enabled = isinstance(paired_context, dict)
+    if paired_enabled:
+        from core_brain.paired_shadow import validate_paired_market_admission
+        validate_paired_market_admission(
+            db_path, run_id=registry._run_id(),
+            condition_id=market.condition_id)
     for i in intents:
         if i.price * i.size > MAX_ORDER_USD:
             raise ShadowOrderRefused(
@@ -284,15 +291,29 @@ def record_submit(
     try:
         for i in intents:
             local_id = str(uuid.uuid4())
+            attribution_written = False
+            if paired_enabled:
+                from core_brain.paired_shadow import record_paired_order_attribution
+                record_paired_order_attribution(
+                    db_path, run_id=registry._run_id(), local_id=local_id,
+                    condition_id=market.condition_id, pair_id=pair_id)
+                attribution_written = True
+
             order_id = f"{SHADOW_ORDER_PREFIX}{uuid.uuid4().hex[:12]}"
-            registry.create_order(OrderRecord(
-                id=local_id,
-                order_id=order_id,
-                condition_id=market.condition_id, token_id=str(i.token_id),
-                side="BUY", price=i.price, original_size=i.size, status="open",
-                posted_ts=now_ms, last_polled_ts=now_ms, pair_id=pair_id,
-                max_pair_cost_at_post=max_pair_cost,
-            ))
+            try:
+                registry.create_order(OrderRecord(
+                    id=local_id,
+                    order_id=order_id,
+                    condition_id=market.condition_id, token_id=str(i.token_id),
+                    side="BUY", price=i.price, original_size=i.size, status="open",
+                    posted_ts=now_ms, last_polled_ts=now_ms, pair_id=pair_id,
+                ))
+            except Exception:
+                if attribution_written:
+                    from core_brain.paired_shadow import remove_paired_order_attribution
+                    remove_paired_order_attribution(
+                        db_path, run_id=registry._run_id(), local_id=local_id)
+                raise
             created_local_ids.append(local_id)
             try:
                 book = book_fn(clob_host, str(i.token_id))
@@ -1027,6 +1048,13 @@ class ShadowExecutionClient:
 
         now_ms = int(time.time() * 1000)
         local_id = str(uuid.uuid4())
+        paired_context = getattr(self._registry, "paired_context", None)
+        paired_enabled = isinstance(paired_context, dict)
+        if paired_enabled:
+            from core_brain.paired_shadow import copy_paired_order_attribution
+            copy_paired_order_attribution(
+                self._db_path, run_id=self._registry._run_id(), pair_id=pair_id,
+                local_id=local_id, condition_id=condition_id)
         completion = OrderRecord(
             id=local_id,
             order_id=f"{SHADOW_ORDER_PREFIX}{uuid.uuid4().hex[:12]}",
@@ -1034,7 +1062,14 @@ class ShadowExecutionClient:
             price=fill_price, original_size=shares, status="filled",
             posted_ts=now_ms, last_polled_ts=now_ms, pair_id=pair_id,
         )
-        self._registry.create_order(completion)
+        try:
+            self._registry.create_order(completion)
+        except Exception:
+            if paired_enabled:
+                from core_brain.paired_shadow import remove_paired_order_attribution
+                remove_paired_order_attribution(
+                    self._db_path, run_id=self._registry._run_id(), local_id=local_id)
+            raise
         _record_taker_completion(self._registry.db_path, pair_id, token_id,
                                  self._registry.run_id)
         self._registry.record_fill(FillRecord(
@@ -1347,6 +1382,7 @@ def record_shadow_merges(
             method="shadow_merge", shares=mergeable, cost_basis=cost_basis,
             proceeds=proceeds, fee=0.0, gas=0.0,
             realized_pnl=proceeds - cost_basis,
+            run_id=registry._run_id(),
             # Cost has to leave the inventory with the shares, or the decision
             # keeps paying for a position it no longer holds -- and it has to
             # leave the leg that paid it. `_leg_cost_removed` charges each leg

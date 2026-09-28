@@ -29,7 +29,7 @@ Full rules, including which commands are pre-approved: [docs/agents/safety.md](d
 ```bash
 python -m pytest -q                          # full test suite
 python -m core_brain.order_manager status    # status and balance (read-only)
-python -m core_brain.shadow_run --minutes 5  # full-loop rehearsal; no signer, spends nothing
+python -m core_brain.shadow_run --minutes 5 --db data/NN_shadow_<stamp>.db  # full-loop rehearsal; no signer, spends nothing
 python -m dashboard.server                   # dashboard on http://127.0.0.1:8799
 ```
 

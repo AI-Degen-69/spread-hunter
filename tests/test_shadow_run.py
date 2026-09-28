@@ -175,6 +175,77 @@ class TestRunShadow:
                 markets_fn=self._markets(), client_fn=lambda: object(),
             )
 
+    def test_paired_run_audits_selected_markets_it_never_visited(
+            self, tmp_path, monkeypatch):
+        """A selection the visit cap or an error kept unvisited must still show
+        up in the paired audit: an unvisited market cannot be allowed to vanish
+        from the coverage the report reads."""
+        import json
+        import sqlite3
+
+        from core_brain.paired_shadow import ensure_paired_shadow_tables
+        from core_brain.shadow_run import run_shadow
+
+        db = tmp_path / "paired.db"
+        ensure_paired_shadow_tables(db)
+
+        # A minimal valid paired bundle: the run's paired gate reads its feed
+        # from --markets-path and refuses a paired run without one.
+        feed = tmp_path / "paired_markets.json"
+        feed.write_text(json.dumps({
+            "format": "spread_hunter.paired-depth.v1",
+            "snapshot_id": "snapshot-audit",
+            "control_depth_usd": 500,
+            "treatment_depth_usd": 250,
+            "control": [],
+            "treatment": [{
+                "cid": "0xfeed-row",
+                "paired_depth_arm": "treatment",
+                "paired_depth_cutoff_usd": 250,
+                "paired_depth_snapshot_id": "snapshot-audit",
+                "event_id": "event-feed",
+            }],
+        }), encoding="utf-8")
+
+        # The market that IS visited fails resolution (no tokens), so no
+        # admission row is written for it either; the other market in the
+        # feed is never reached. Both must appear in the audit event.
+        class BrokenMarket:
+            condition_id = "0xvisited"
+            up_token = ""
+            down_token = ""
+            market_slug = "broken"
+            tick_size = 0.01
+            neg_risk = False
+
+            def t_remaining(self, now=None):
+                return 14400.0
+
+        markets = [BrokenMarket(), FakeMarket("0xnever-visited")]
+        monkeypatch.setattr(
+            "core_brain.trader_loop._fetch_market",
+            lambda cid: (_ for _ in ()).throw(LookupError("no tradeable market")))
+
+        run_shadow(
+            minutes=0.01, db_path=db,
+            markets_fn=lambda max_markets=None: markets,
+            markets_path=str(feed),
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+            paired_depth_arm="treatment",
+            paired_depth_cutoff_usd=250.0,
+            starting_bankroll_usd=100.0,
+        )
+
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute(
+                "SELECT detail FROM shadow_paired_feed_events "
+                "WHERE kind = 'unvisited_selected_markets'").fetchall()
+        assert rows, "unvisited selected markets were not audited"
+        detail = rows[0][0]
+        assert "0xnever-visited" in detail
+
     def test_decided_intents_are_recorded_and_never_submitted(self, tmp_path):
         """The submission boundary. The loop decides; nothing leaves the process."""
         from core_brain.shadow_run import run_shadow
@@ -626,25 +697,41 @@ class TestProgressLog:
 class TestMain:
     """The command line: `python -m core_brain.shadow_run --minutes N`."""
 
-    def test_argument_defaults_match_the_plan(self):
-        from pathlib import Path
-
+    def test_explicit_run_arguments_keep_their_defaults(self):
         from core_brain.shadow_run import _parse_args
 
-        a = _parse_args([])
+        a = _parse_args([
+            "--db", "data/04_shadow_test.db",
+            "--run-id", "shadow-04",
+        ])
 
         assert a.minutes == 5.0
         assert a.interval == 5.0
-        assert a.db is None
+        assert a.db == "data/04_shadow_test.db"
         assert a.max_markets is None
         assert a.markets_path is None
 
-    def test_markets_path_parses(self):
+    def test_main_reports_missing_db_as_a_cli_error(self, capsys):
+        from core_brain.shadow_run import main
+
+        with pytest.raises(SystemExit) as exc:
+            main(["--minutes", "0"])
+
+        assert exc.value.code == 2
+        assert "--db" in capsys.readouterr().err
+
+    def test_markets_path_and_paired_depth_arm_parse(self):
         from core_brain.shadow_run import _parse_args
 
-        a = _parse_args(["--markets-path", "runtime/trials/shadow-03/markets.json"])
+        a = _parse_args([
+            "--db", "data/04_shadow_test.db",
+            "--run-id", "shadow-04",
+            "--markets-path", "runtime/trials/paired/paired_markets.json",
+            "--paired-depth-arm", "treatment",
+        ])
 
-        assert a.markets_path == "runtime/trials/shadow-03/markets.json"
+        assert a.markets_path == "runtime/trials/paired/paired_markets.json"
+        assert a.paired_depth_arm == "treatment"
 
     def test_main_refuses_the_production_registry_via__db(self):
         """The guard sits between argv and the registry, not inside a flag."""
