@@ -34,3 +34,54 @@ contaminating the shadow-01/02 baselines.
 - No-manifest resume is byte-for-byte the current path (01/02 unaffected)
 - Trial screener never registered as the global `filter` entry in `runtime/processes.json`
 - While 01/02 live: no fresh start (menu 4), no stop without a run ID
+
+# SPEC: Issue #295 — Orders & Trades markets show Uncategorized instead of venue category
+
+## Goal
+Every graduated market shows its real venue category in all four Orders & Trades
+views (Active Markets, Open Orders, Positions, Closed Trades) — the venue label
+verbatim when Gamma publishes one, a deterministic E-Sports/Politics keyword
+fallback when it does not — instead of `Uncategorized` / `--`.
+
+## Acceptance criteria (from issue)
+- [ ] `Lol Kcb Wd 2026 09 26`-shaped markets resolve to an E-Sports label and
+  `Will Luiz Incio Lula Da Silva Win The 2026 Brazilian Presidential Election`-shaped
+  markets resolve to Politics when venue metadata is empty
+- [ ] Markets with real venue category/tags show the venue label verbatim (no keyword override)
+- [ ] Active Markets, Open Orders, Positions, and Closed Trades all show the same
+  non-empty category for the same market (kpi + registry_state unified)
+- [ ] New regression test pins both operator examples plus the venue-label-verbatim case
+- [ ] Verification: `python -m pytest -q tests/test_orders_trades_table.py`
+
+## Scope
+### In scope
+- Gamma category/tag extraction in the filter (`gamma_universe` + eligible rows)
+- Category persistence in graduated `runtime/markets.json` rows and `market_universe.json` rows
+- One shared resolver (`core_brain/market_meta.py`) serving `kpi.py` and `registry_state.py`
+- Frontend fallback rendering (Active Markets cell + Market-cell captions elsewhere)
+- Tests pinning the two operator examples
+
+### Out of scope (per issue)
+- Changing market selection/ranking by category
+- Backfilling `data/orders.db` history
+- New dashboard filter UI
+
+## Interface contracts
+- `core_brain/market_meta.py::resolve_market_meta(cid, closes, quotes) -> dict`
+  with keys `condition_id, title, slug, url, category, days_to_resolve, min_size,
+  volume_24h, source`; `category` never blank (falls back to `UNCATEGORIZED`)
+- `classify_display_category(title, event_title, slug) -> str | None`
+  pure function; returns `E-Sports`, `Politics`, or `None`
+- `UNCATEGORIZED` lives in `market_meta` and is re-exported from `kpi`
+- Category precedence: feed `category` → `series_title` → `market_group` →
+  first `tags` label → keyword fallback → `Uncategorized`
+- Eligible/universe rows gain a `tags: list[str]` field; no ranking input changes
+
+## Edge cases
+- Malformed Gamma shapes (events as dict/string/empty, series missing) never raise;
+  fields stay blank and the keyword fallback still applies
+- Slug-only markets (left the top-20 feed, absent from universe) classify from
+  title/slug alone
+- Venue label always wins over keywords (`Crypto` row with election title stays `Crypto`)
+- Open Orders with no KPI entry falls back to the `state.pairs` market identity,
+  then truncated condition id; category caption shows `Uncategorized`

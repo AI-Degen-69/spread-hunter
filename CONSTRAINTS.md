@@ -121,3 +121,24 @@
 - Performance bar: a tab click visibly switches panels immediately even mid-poll; rapid clicks never queue and replay late.
 - Frontend-only: no backend, strategy, quoting, sizing, or registry changes unless measurement proves the backend is the blocker.
 
+## Constraints: Issue #295 — Venue category instead of Uncategorized
+- Zero regressions: focused selection (`tests/test_orders_trades_table.py`,
+  `tests/test_market_meta.py` (new), `tests/test_portfolio_overview.py`,
+  `tests/test_registry_state.py`, `tests/test_unified_universe.py`) must pass;
+  full `python -m pytest -q` stays with GitHub CI.
+- New/changed behavior needs a test that fails without the change (RED before GREEN):
+  filter extraction shapes, resolver precedence + keyword cases, four-view display,
+  KPI/registry parity, both operator examples.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- Category is display-only: no selection/ranking input, no `identity_allowed` change,
+  no `data/orders.db` backfill, no new dashboard filter UI.
+- Venue verbatim wins: a feed label is never overridden by the keyword fallback;
+  keyword vocabulary stays the two display labels (`E-Sports`, `Politics`) and must
+  NOT import private regexes from `scoring/selector.py`.
+- Frontend shape frozen: `OT_COLUMNS`, empty-row colspans, expanded-row `colspan`,
+  `rowspan` pairing, and Data & Markets output unchanged; STATUS-header tooltip test
+  (`test_active_markets_status_header_explains_the_vocabulary`) passes unmodified.
+- `tests/test_portfolio_overview.py` lines 259-277 stay green without changes.
+- No new external dependencies; no live execution; never run the filter CLI
+  (even `--dry-run`) — it writes snapshots; no test writes into live `data/` or `run/`.
+
