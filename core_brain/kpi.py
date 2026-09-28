@@ -23,6 +23,7 @@ from core_brain.order_registry import (
     OrderRegistry, DEFAULT_DB_PATH, VENUE_SYNC_RUN_ID, get_connection,
 )
 from core_brain.config import MakerConfig, load as load_cfg
+from core_brain.market_meta import UNCATEGORIZED, resolve_market_meta
 from core_brain.runtime_paths import resolve_runtime_file
 
 # Display-only: this module computes report numbers, never places an order.
@@ -34,9 +35,8 @@ from core_brain.runtime_paths import resolve_runtime_file
 _CFG = load_cfg(for_display=True)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Shown when neither the ranker feed nor its fallbacks name a category. A named
-# bucket groups honestly; a blank cell reads as missing data.
-UNCATEGORIZED = "Uncategorized"
+# Re-exported from market_meta (the single owner); kept here so existing
+# `kpi.UNCATEGORIZED` readers keep working.
 
 # Hand-bumped payload envelope version, returned by report() as
 # `payload_version`. The frontend compares it against its own expectation to
@@ -524,71 +524,7 @@ def compute_trade_analytics(
 
 def _resolve_market_meta(cid: str, closes: list[dict], quotes: list[dict]) -> dict[str, Any]:
     """Resolve human-readable title, slug, and Polymarket link for a condition_id from disk."""
-    out = {
-        "condition_id": cid,
-        "title": None,
-        "slug": None,
-        "url": None,
-        "category": None,
-        "days_to_resolve": None,
-        "min_size": None,
-        "volume_24h": None,
-        "source": None,
-    }
-    if not cid:
-        out["category"] = UNCATEGORIZED
-        return out
-    
-    # Try reading runtime/markets.json from repo root (written by ranker)
-    try:
-        feed_path = resolve_runtime_file("markets.json", root=REPO_ROOT)
-        if feed_path.exists():
-            feed = json.loads(feed_path.read_text(encoding="utf-8"))
-            for row in feed if isinstance(feed, list) else []:
-                if (row.get("cid") or "").lower() == cid.lower():
-                    out.update({
-                        "title": row.get("title") or row.get("event_title"),
-                        "slug": row.get("slug"),
-                        # The live feed ships category="" on most rows, so the
-                        # series and the group are the labels that actually
-                        # survive. An empty cell teaches the reader nothing.
-                        "category": (
-                            (row.get("category") or "").strip()
-                            or (row.get("series_title") or "").strip()
-                            or (row.get("market_group") or "").strip()
-                            or None
-                        ),
-                        "days_to_resolve": row.get("days_to_resolve"),
-                        "min_size": row.get("min_size"),
-                        "volume_24h": row.get("volume_24h"),
-                        "source": row.get("source"),
-                    })
-                    break
-    except Exception:
-        pass
-
-    # Fallback to closes or quotes market_slug
-    if not out["slug"]:
-        for c in closes:
-            if c.get("condition_id") == cid and c.get("market_slug"):
-                out["slug"] = c["market_slug"]
-                break
-    if not out["slug"]:
-        for q in quotes:
-            if q.get("condition_id") == cid and q.get("market_slug"):
-                out["slug"] = q["market_slug"]
-                break
-
-    if not out["title"] and out["slug"]:
-        out["title"] = out["slug"].replace("-", " ").title()
-    elif not out["title"]:
-        out["title"] = f"Market {cid[:10]}...{cid[-6:]}" if len(cid) > 16 else cid
-
-    if out["slug"]:
-        out["url"] = f"https://polymarket.com/market/{out['slug']}"
-    if not out["category"]:
-        out["category"] = UNCATEGORIZED
-    return out
+    return resolve_market_meta(cid, closes, quotes, root=REPO_ROOT)
 
 
 def list_runs(reg: OrderRegistry) -> list[dict[str, Any]]:

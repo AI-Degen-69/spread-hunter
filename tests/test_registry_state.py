@@ -378,3 +378,39 @@ def test_state_returns_all_orders_including_terminal(temp_db):
     terminal_count = sum(1 for o in state["orders"] if o["status"] in {"filled", "cancelled"})
     assert active_count == 3
     assert terminal_count == 2
+
+
+def test_pair_market_category_matches_kpi_for_same_feed(temp_db, tmp_path,
+                                                        monkeypatch):
+    """Issue #295: the pair identity and KPI agree on category per market."""
+    import json as _json
+
+    from core_brain import kpi as kpi_mod
+    from core_brain import registry_state as rs_mod
+
+    run_dir = tmp_path / "runtime"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "markets.json").write_text(_json.dumps([{
+        "cid": "cond-1", "slug": "dota-match", "title": "Dota match",
+        "category": "", "series_title": "Dota 2", "market_group": "",
+        "tags": [], "volume_24h": 42000.0,
+    }]), encoding="utf-8")
+    monkeypatch.setattr(rs_mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+
+    now_ms = int(time.time() * 1000)
+    con = sqlite3.connect(str(temp_db))
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO orders (id, order_id, condition_id, token_id, side, price, original_size, status, posted_ts, last_polled_ts, pair_id, max_pair_cost_at_post)
+        VALUES ('uuid-up', 'clob-up', 'cond-1', 'tok-up', 'BUY', 0.54, 10.0, 'open', ?, ?, 'pair-1', 0.98),
+               ('uuid-dn', 'clob-dn', 'cond-1', 'tok-dn', 'BUY', 0.43, 10.0, 'open', ?, ?, 'pair-1', 0.98)
+    """, (now_ms, now_ms, now_ms, now_ms))
+    con.commit()
+    con.close()
+
+    state = summarize_state(temp_db)
+    kpi_meta = kpi_mod._resolve_market_meta("cond-1", [], [])
+
+    assert state["pairs"][0]["market"]["category"] == "Dota 2"
+    assert state["pairs"][0]["market"]["category"] == kpi_meta["category"]
