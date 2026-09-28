@@ -1355,6 +1355,15 @@ input:focus-visible, select:focus-visible {
   min-width: 200px;
 }
 
+/* The relative age under the Timestamp cell ("3m ago"): secondary to the
+   absolute time it annotates, so it reads small and muted. Reuses the table's
+   muted token — no new colour. Re-rendered with every 2s poll, so the age
+   never freezes between repaints. */
+#orders-trades-table td .caption-muted {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 /* ── Sortable column headers (issue #294) ──
    Every column can be sorted, so the header has to say it is a control before
    the operator clicks it: pointer cursor, hover, and a visible focus ring. The
