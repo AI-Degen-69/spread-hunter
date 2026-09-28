@@ -117,6 +117,30 @@ def test_no_metadata_and_no_keyword_is_uncategorized(tmp_path):
     assert meta["category"] == "Uncategorized"
 
 
+def test_venue_category_wins_over_market_category(tmp_path):
+    _write_feed(tmp_path, [{
+        "cid": CID_SERIES, "slug": "lol-match",
+        "title": "LoL match", "category": "", "venue_category": "E-Sports",
+        "series_title": "League of Legends", "market_group": "",
+        "tags": [], "volume_24h": 1.0,
+    }])
+    meta = mm.resolve_market_meta(CID_SERIES, [], [], root=tmp_path)
+
+    assert meta["category"] == "E-Sports"
+
+
+def test_non_string_feed_fields_never_raise(tmp_path):
+    _write_feed(tmp_path, [{
+        "cid": CID_BLANK, "slug": "weird-match",
+        "title": "Weird match", "category": 123, "venue_category": None,
+        "series_title": ["League of Legends"], "market_group": {},
+        "tags": "nope", "volume_24h": 1.0,
+    }])
+    meta = mm.resolve_market_meta(CID_BLANK, [], [], root=tmp_path)
+
+    assert meta["category"] == "Uncategorized"
+
+
 def test_esports_checked_before_politics():
     assert mm.classify_display_category(
         "Will he win the Dota election", "", "dota-election") == "E-Sports"

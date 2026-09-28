@@ -3948,7 +3948,8 @@ function marketCell(market, conditionId, opts) {
   }
   const cid = String(conditionId || '');
   if (!cid) return '--';
-  const fallbackCaption = wantCaption ? '<div class="caption-muted">Uncategorized</div>' : '';
+  const fallbackCaption = wantCaption
+    ? `<div class="caption-muted">${esc(marketCategory(market))}</div>` : '';
   return `<span class="mono" title="${esc(cid)}">${esc(cid.slice(0, 10))}…</span>${fallbackCaption}`;
 }
 

@@ -74,9 +74,15 @@ def _feed_rows(name: str, root: Path | str) -> list[dict]:
         return []
 
 
+def _text_of(row: dict, key: str) -> str:
+    """A feed text field: truthy non-strings are malformed, not labels."""
+    value = row.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _find_row(rows: list[dict], cid: str) -> Optional[dict]:
     for row in rows:
-        if (row.get("cid") or "").lower() == cid.lower():
+        if _text_of(row, "cid").lower() == cid.lower():
             return row
     return None
 
@@ -106,8 +112,8 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
 
     `root` is the caller's repo root (KPI and registry state each pass their
     own, which is also how tests redirect the feed). Precedence for category:
-    feed `category` verbatim, `series_title`, `market_group`, first tag label,
-    keyword fallback, `Uncategorized`.
+    feed `venue_category` verbatim, `category`, `series_title`,
+    `market_group`, first tag label, keyword fallback, `Uncategorized`.
     """
     out: dict[str, Any] = {
         "condition_id": cid,
@@ -135,13 +141,14 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
         out.update({
             "title": row.get("title") or event_title,
             "slug": row.get("slug"),
-            # The live feed ships category="" on most rows, so the series,
-            # the group, and the tags are the labels that actually survive.
-            # An empty cell teaches the reader nothing.
+            # The live feed ships category="" on most rows, so the venue
+            # label, the series, the group, and the tags are the labels that
+            # actually survive. An empty cell teaches the reader nothing.
             "category": (
-                (row.get("category") or "").strip()
-                or (row.get("series_title") or "").strip()
-                or (row.get("market_group") or "").strip()
+                _text_of(row, "venue_category")
+                or _text_of(row, "category")
+                or _text_of(row, "series_title")
+                or _text_of(row, "market_group")
                 or _first_tag_label(row)
                 or None
             ),

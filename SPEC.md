@@ -73,8 +73,11 @@ fallback when it does not — instead of `Uncategorized` / `--`.
 - `classify_display_category(title, event_title, slug) -> str | None`
   pure function; returns `E-Sports`, `Politics`, or `None`
 - `UNCATEGORIZED` lives in `market_meta` and is re-exported from `kpi`
-- Category precedence: feed `category` → `series_title` → `market_group` →
-  first `tags` label → keyword fallback → `Uncategorized`
+- Category precedence: feed `venue_category` (market→event display label) →
+  `category` → `series_title` → `market_group` → first `tags` label →
+  keyword fallback → `Uncategorized`
+- Gate separation (review round): the identity gate keeps reading market-level
+  `category` only; `venue_category` is display-only and never feeds selection
 - Eligible/universe rows gain a `tags: list[str]` field; no ranking input changes
 
 ## Edge cases

@@ -372,6 +372,11 @@ def gamma_volume(session: requests.Session,
     return out
 
 
+def _str(value) -> str:
+    """Venue text or blank: a truthy non-string is malformed, not a label."""
+    return value if isinstance(value, str) else ""
+
+
 def _first_event(m: dict) -> dict:
     """First Gamma event, guarded: lists, JSON-string lists, or blank."""
     events = m.get("events")
@@ -398,7 +403,7 @@ def _first_series_title(event: dict) -> str:
     first = series[0]
     if not isinstance(first, dict):
         return ""
-    return first.get("title") or ""
+    return _str(first.get("title"))
 
 
 def _tag_labels(value) -> list[str]:
@@ -553,15 +558,23 @@ def gamma_universe(session: requests.Session,
                 "condition_id": m.get("conditionId"),
                 "question": m.get("question") or "",
                 "market_slug": m.get("slug") or "",
-                "category": (m.get("category") or m.get("categorySlug")
-                             or event.get("category")
-                             or event.get("categorySlug") or ""),
+                # Market-level only: the identity gate reads this field, so
+                # event-level enrichment must never land here (review round:
+                # enriching it would silently admit/reject markets).
+                "category": (_str(m.get("category"))
+                             or _str(m.get("categorySlug"))),
+                # The display label: market first, then event. Read by the
+                # resolver, never by the gate.
+                "venue_category": (
+                    _str(m.get("category")) or _str(m.get("categorySlug"))
+                    or _str(event.get("category"))
+                    or _str(event.get("categorySlug"))),
                 "tags": _tag_labels(m.get("tags"))
                 + _tag_labels(event.get("tags")),
                 "market_type": m.get("marketType") or m.get("type") or "",
                 "market_group": m.get("groupItemTitle") or "",
                 "series_title": _first_series_title(event),
-                "event_title": event.get("title") or "",
+                "event_title": _str(event.get("title")),
                 "tokens": [{"token_id": str(t)} for t in toks],
                 # Reward config, when the venue publishes one, feeds the score
                 # WINDOW only. It is not a filter and not an income source:
@@ -969,8 +982,10 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "title": m.get("question", "")[:90],
         "slug": m.get("market_slug", ""),
         "category": m.get("category") or m.get("categorySlug") or "",
+        "venue_category": m.get("venue_category") or "",
         "tags": list(m.get("tags") or []),
-        "market_type": m.get("market_type") or "",
+        "market_type": (m.get("market_type")
+                        or m.get("marketType") or m.get("type") or ""),
         "market_group": m.get("market_group") or m.get("groupItemTitle") or "",
         "series_title": m.get("series_title") or "",
         "event_title": m.get("event_title") or "",
