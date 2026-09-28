@@ -380,18 +380,44 @@ function fmtTimestamp(ts) {
   return `${dd}/${mm}/${yyyy}, ${HH}:${min}`;
 }
 
-/* The newest moment anything happened to a market: the max over the quote
- * log, the fills and the settlements. This is "when was this row last
- * touched", which is what a Timestamp column that sorts promises. */
-function marketTimestamp(m) {
-  const stamps = [];
-  for (const q of (m && m.quotes) || []) stamps.push(Number(q.ts) || 0);
-  for (const f of (m && m.fills) || []) stamps.push(toMs(f.venue_ts) || 0);
-  for (const s of (m && m.settlements) || []) stamps.push(Number(s.ts) || 0);
-  if (m && m.resolution && m.resolution.resolved_ts) {
-    stamps.push(toMs(m.resolution.resolved_ts) || 0);
+/* When each stage's row entered the table, one accessor per view. Each
+ * returns milliseconds (via `toMs`, so seconds and milliseconds sources mix
+ * safely) or null when nothing measured:
+ *   latestQuoteTs — Active Markets: the latest quote logged for the market.
+ *   latestFillTs  — Positions: the latest fill; a held market with quotes but
+ *                    no fills shows `--`, not a quote time posing as a fill.
+ *   closeTsOf     — Closed Trades: the latest settlement close, with the
+ *                    resolution record as fallback. Sort and render share it.
+ * All three take the maximum of their own source only, so a later quote can
+ * never replace a measured fill time or a booked close. */
+function latestQuoteTs(m) {
+  let best = null;
+  for (const q of (m && m.quotes) || []) {
+    const t = toMs(q && q.ts);
+    if (t !== null && (best === null || t > best)) best = t;
   }
-  return stamps.length ? Math.max(...stamps) : null;
+  return best;
+}
+
+function latestFillTs(m) {
+  let best = null;
+  for (const f of (m && m.fills) || []) {
+    const t = toMs(f && f.venue_ts);
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  return best;
+}
+
+function closeTsOf(m) {
+  let best = null;
+  for (const s of (m && m.settlements) || []) {
+    const t = toMs(s && s.ts);
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  if (best === null && m && m.resolution && m.resolution.resolved_ts) {
+    best = toMs(m.resolution.resolved_ts);
+  }
+  return best;
 }
 
 /* Relative age beside the absolute Timestamp: "3m ago" reads how fresh a row
@@ -4302,7 +4328,7 @@ function activeMarketsRows(kpi, state, sort) {
     const pairCost = (upQuote !== null && dnQuote !== null) ? (upQuote + dnQuote) : null;
     const edge = pairCost === null ? null : 1 - pairCost;
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
-    const ts = marketTimestamp(m);
+    const ts = latestQuoteTs(m);
     return { cid, m, upQuote, dnQuote, pairCost, edge, restingHere, ts };
   });
 
@@ -4576,13 +4602,13 @@ function closedTradesRows(kpi, state, sort) {
   // would drop the sub-row under a different market.
   const sorted = sort ? otSortGroups(entries, sort, ([cid, m]) => {
     switch (sort.col) {
-      case 0: return marketTimestamp(m);
+      case 0: return closeTsOf(m);
       case 1: return String(m.title || m.name || m.slug || '');
       case 2: return otNum(m.total_cost);
       case 3: return (m.balance !== null && m.balance !== undefined && m.balance >= 0.99)
         ? 'Hedged' : 'One-Sided';
       case 4: return otNum(m.realized_pnl);
-      case 5: return otNum(r.fills_count);
+      case 5: return otNum(m.fills_count);
       case 6: return 'FINISHED';
       default: return null;
     }
@@ -4649,7 +4675,7 @@ function positionsRows(kpi, state, sort) {
       cid, m, held,
       mark,
       unrealized: mark === null ? null : mark - cost,
-      ts: marketTimestamp(m),
+      ts: latestFillTs(m),
     };
   }).filter(r => r.held.length);
 
@@ -4920,13 +4946,9 @@ function marketRowPairHtml(cid, m, opts) {
   }
   // Main row — clickable to expand. The Timestamp is when the trade closed:
   // the latest settlement close, with the resolution record as the fallback.
-  let closeTs = null;
-  if (m.settlements && m.settlements.length > 0) {
-    closeTs = Math.max(...m.settlements.map(s => Number(s.ts) || 0));
-  }
-  if (!closeTs && m.resolution && m.resolution.resolved_ts) {
-    closeTs = m.resolution.resolved_ts;
-  }
+  // `closeTsOf` is the same accessor the column-0 sort reads, so what the
+  // operator sees ordered is exactly what is displayed.
+  const closeTs = closeTsOf(m);
   const tsHtml = timestampCell(closeTs);
 
   let html = `<tr class="market-row${isExpanded ? ' expanded' : ''}" data-cid="${esc(cid)}" tabindex="0" role="button" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} market orders for ${esc(m.title || m.slug || cid.slice(0,10))}">
@@ -5815,7 +5837,7 @@ if (typeof module !== 'undefined' && module.exports) {
     positionMarkValue, settledMarkValue, winningLeg,
     isQuotedMarket, isRestingOrder, tokenLegMap, legForOrder, marketStatusPill,
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
-    fmtTimestamp, toMs, marketTimestamp, fmtRelAgo, timestampCell,
+    fmtTimestamp, toMs, latestQuoteTs, latestFillTs, closeTsOf, fmtRelAgo, timestampCell,
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },
     set isStopping(v) { isStopping = v; },

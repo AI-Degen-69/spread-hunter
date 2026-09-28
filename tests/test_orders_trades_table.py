@@ -858,25 +858,53 @@ def test_closed_trades_says_so_when_nothing_has_closed():
 
 # ── Relative age beside the Timestamp ──────────────────────────────────
 
+def _now_ms() -> float:
+    """The JS-side wall clock the relative age reads, in milliseconds."""
+    return __import__("time").time() * 1000
+
+
+def _first_cell(html: str, marker: str) -> str:
+    """The first <td> of the row whose markup follows `marker`.
+
+    The Timestamp cell is the row's first cell in every view, so asserting
+    against it alone cannot be satisfied by another caption or another `--`
+    elsewhere in the row.
+    """
+    i = html.index(marker)
+    row_start = html.rindex("<tr", 0, i)
+    row = html[row_start:html.index("</tr>", i)]
+    cell_start = row.index("<td") + 1
+    cell = row[cell_start:row.index("</td>", cell_start)]
+    return cell
+
+
+
 @requires_node
 def test_every_timestamp_cell_carries_a_relative_age_caption():
     # Arrange — the Timestamp column answers "when exactly"; the muted caption
     # under it answers "how long ago". `fmtRelAgo` reads the wall clock, so the
     # exact word is not assertable for real timestamps — but a PRESENT caption
-    # is, and so is the `--` cell rendering no caption at all.
+    # inside the FIRST cell of a row with a measured time is.
     kpi, state = _kpi(), _state()
+    # The base held-market fixture carries quotes but no fill rows; a Position
+    # timestamps its FILL, so give it one (recent, in milliseconds) to assert
+    # against. Quotes-at-ts-200 still date from 1970 and carry their own caption.
+    kpi["by_market"][CID_HELD]["fills"] = [
+        {"token_id": "tok-h-up", "venue_ts": _now_ms() - 120000},
+    ]
 
-    # Act — every view renders at least one row with a real timestamp.
+    # Act / Assert — one caption inside the first cell of a market row.
     active = _render("active-markets", kpi, state)["html"]
-    orders = _render("open-orders", kpi, state)["html"]
-    positions = _render("positions", kpi, state)["html"]
-    closed = _render("closed-trades", kpi, state)["html"]
+    assert '<div class="caption-muted">' in _first_cell(active, CID_HELD)
 
-    # Assert — one caption per rendered row, wherever a timestamp exists.
-    assert '<div class="caption-muted">' in active
-    assert '<div class="caption-muted">' in orders
-    assert '<div class="caption-muted">' in positions
-    assert '<div class="caption-muted">' in closed
+    orders = _render("open-orders", kpi, state)["html"]
+    assert '<div class="caption-muted">' in _first_cell(orders, "data-pair=")
+
+    positions = _render("positions", kpi, state)["html"]
+    assert '<div class="caption-muted">' in _first_cell(positions, CID_HELD)
+
+    closed = _render("closed-trades", kpi, state)["html"]
+    assert '<div class="caption-muted">' in _first_cell(closed, CID_SETTLED)
 
 
 @requires_node
@@ -893,19 +921,13 @@ def test_a_row_with_no_timestamp_renders_no_age_caption():
     # Act
     rendered = _render("active-markets", kpi, _state())
 
-    # Assert — the Quoted Market row is still listed; its own row (from its
-    # <tr> to its closing </tr>) renders no date and no age caption.
+    # Assert — the Quoted Market row's FIRST cell is exactly the `--`
+    # placeholder: no date, no age caption.
     html = rendered["html"]
     assert "Quoted Market" in html
-    row_start = html.index('data-cid="' + CID_QUOTED + '"')
-    row = html[html.rindex("<tr", 0, row_start):html.index("</tr>", row_start)]
-    assert "caption-muted" not in row
-    assert fmt_placeholder_still_visible(row)
-
-
-def fmt_placeholder_still_visible(row_html: str) -> bool:
-    """The `--` placeholder must survive: unmeasured is rendered, not hidden."""
-    return "--" in row_html
+    cell = _first_cell(html, CID_QUOTED)
+    assert "caption-muted" not in cell
+    assert "--" in cell
 
 
 @requires_node
@@ -920,6 +942,25 @@ def test_the_age_caption_uses_the_table_muted_token():
     # Assert
     assert "var(--text-muted)" in block
     assert "font-size" in block
+
+
+@requires_node
+def test_a_position_with_quotes_but_no_fills_shows_no_timestamp():
+    # Arrange — a held market whose quotes carry timestamps but whose fills
+    # list is empty: the position's Timestamp is the FILL time, and no fill
+    # time is measured, so the cell must read `--` — a quote time would dress
+    # a quoting event up as an ownership event.
+    kpi = _kpi()
+    held = kpi["by_market"][CID_HELD]
+    held["fills"] = []
+
+    # Act
+    rendered = _render("positions", kpi, None)
+
+    # Assert — the held market's first cell has no date and no caption.
+    cell = _first_cell(rendered["html"], CID_HELD)
+    assert "caption-muted" not in cell
+    assert "--" in cell
 
 
 @requires_node
@@ -1215,7 +1256,10 @@ def _sort_kpi() -> dict:
     Deliberately inverted: alphabetically `0xdeep` would sort last, by volume
     it is the largest, and its pair cost is the highest of the three. A sort
     that reads the rendered string instead of the underlying value cannot
-    produce the expected order for any of these columns.
+    produce the expected order for any of these columns. The quote timestamps
+    are inverted against the titles too — `Zeta Deep` quoted first, `Alpha
+    Quiet` (no quotes) unmeasured — so a Timestamp sort is assertable as a
+    real value order, not a constant.
     """
     return {
         "by_market": {
@@ -1235,8 +1279,8 @@ def _sort_kpi() -> dict:
                 "quotes_count": 7, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
                 "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
                 "quotes": [
-                    _quote("tk-s-up", "UP", 0.50, 100.0, "o-sh-up", 10.0, price=0.45),
-                    _quote("tk-s-dn", "DN", 0.50, 101.0, "o-sh-dn", 20.0, price=0.48),
+                    _quote("tk-s-up", "UP", 0.50, 500.0, "o-sh-up", 10.0, price=0.45),
+                    _quote("tk-s-dn", "DN", 0.50, 501.0, "o-sh-dn", 20.0, price=0.48),
                 ],
             },
             # No quotes at all: every price column is `--`. A column of
@@ -1306,6 +1350,23 @@ def test_sorting_a_numeric_column_ranks_by_the_value_not_the_rendered_text():
 
 
 @requires_node
+def test_sorting_by_timestamp_ranks_by_the_quote_time():
+    # Arrange — column 0 is Timestamp: the latest quote time per market. The
+    # titles disagree with the quote times, so a constant or name-based sort
+    # cannot produce this order. The unmeasured market ranks last in BOTH
+    # directions, like every other unmeasured column.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    desc = _render("active-markets", kpi, state, sort={"col": 0, "dir": "desc"})
+    asc = _render("active-markets", kpi, state, sort={"col": 0, "dir": "asc"})
+
+    # Assert — SHALLOW quoted at ts 500/501, DEEP at 100/101, QUIET never.
+    assert _cids(desc) == [CID_SHALLOW, CID_DEEP, CID_QUIET]
+    assert _cids(asc) == [CID_DEEP, CID_SHALLOW, CID_QUIET]
+
+
+@requires_node
 def test_a_text_column_sorts_ascending_on_the_market_name():
     # Arrange
     kpi, state = _sort_kpi(), _sort_state()
@@ -1333,7 +1394,6 @@ def test_an_unmeasured_cell_ranks_last_in_both_directions():
 
 
 
-@requires_node
 def _two_held_markets() -> dict:
     """Two held markets whose default order is the reverse of the sorted one.
 
