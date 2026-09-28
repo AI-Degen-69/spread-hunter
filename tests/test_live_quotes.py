@@ -215,3 +215,57 @@ def test_flat_inventory_refuses_a_lone_leg():
     intents, why = decide_quotes(cfg, up, down, naked, 1e9, None)
     assert [i.side for i in intents] == ["DOWN"]
     assert why == ""
+
+
+def test_flat_pair_sizes_harmonize_to_minimum():
+    """Skewed books taper each leg differently; the resting pair must be symmetric.
+
+    UP near the coin flip is cut harder than DOWN further out, so the two legs
+    come out of sizing at different share counts. A pair that fills asymmetric
+    leaves a naked surplus that cannot merge, so both legs clamp to the min.
+    """
+    cfg = MakerConfig(
+        objective="rewards",
+        size_mode="shares",
+        quote_shares=120,
+        min_quote_shares=5,
+        reward_offset=0.02,
+        price_band_low=0.10,
+        price_band_high=0.90,
+    )
+    up_book = {
+        "best_bid": 0.54, "best_ask": 0.56,
+        "bids": {0.54: 1000.0}, "asks": {0.56: 1000.0}
+    }
+    down_book = {
+        "best_bid": 0.44, "best_ask": 0.46,
+        "bids": {0.44: 1000.0}, "asks": {0.46: 1000.0}
+    }
+    inv = Inventory()
+    intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
+
+    assert len(intents) == 2
+    assert not why
+    up_qi = [i for i in intents if i.side == "UP"][0]
+    dn_qi = [i for i in intents if i.side == "DOWN"][0]
+    assert up_qi.size == dn_qi.size
+    assert "clamped" in up_qi.reason + dn_qi.reason
+
+
+def test_harmonized_pair_below_floor_drops_both():
+    """A pair whose common size cannot clear the venue floor posts nothing.
+
+    Half a pair is a directional bet nobody chose, so both legs are refused
+    with an informative reason rather than resting a single leg.
+    """
+    from core_brain.quotes import _require_two_sided
+    cfg = MakerConfig(min_quote_shares=5)
+    intents = [
+        QuoteIntent(side="UP", token_id="tok_up", price=0.50, size=4,
+                    mid=0.52, edge_vs_mid=0.02),
+        QuoteIntent(side="DOWN", token_id="tok_dn", price=0.43, size=3,
+                    mid=0.45, edge_vs_mid=0.02),
+    ]
+    out, why = _require_two_sided(cfg, Inventory(), intents, "")
+    assert out == []
+    assert "3sh" in why and "5sh" in why
