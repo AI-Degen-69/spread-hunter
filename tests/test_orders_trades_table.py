@@ -17,6 +17,7 @@ settled flat booked nothing, and a row of zeros is not a trade.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -37,11 +38,26 @@ CID_CLOSED = "0xclosed"
 CID_SETTLED = "0xsettled"
 
 
-def _render(view: str, kpi: dict | None = None, state: dict | None = None) -> dict:
-    payload = {"view": view, "kpi": kpi or {}, "state": state or {}}
+def _render(view: str, kpi: dict | None = None, state: dict | None = None,
+            sort: dict | None = None) -> dict:
+    payload = {"view": view, "kpi": kpi or {}, "state": state or {}, "sort": sort}
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
                          capture_output=True, text=True, check=True, encoding="utf-8")
     return json.loads(out.stdout)
+
+
+def _cids(rendered: dict) -> list[str]:
+    """The market order the rows render in."""
+    return re.findall(r'data-cid="([^"]+)"', rendered["html"])
+
+
+def _pairs(rendered: dict) -> list[str]:
+    """The pair order the Open Orders rows render in."""
+    return re.findall(r'data-pair="([^"]+)"', rendered["html"])
+
+
+def _order_ids(rendered: dict) -> list[str]:
+    return re.findall(r'data-order-id="([^"]+)"', rendered["html"])
 
 
 def _quote(token: str, side: str, mid: float, ts: float, order_id: str | None = None,
@@ -1107,3 +1123,238 @@ def test_the_panel_lands_on_the_dashboard_page():
     assert "#orders-trades-card" in home
     assert "#broker-portfolio-overview" in home
     assert "label: 'Dashboard'" in home
+
+
+# ── Click-to-sort (issue #294) ───────────────────────────────────────────────
+#
+# The operator opens Orders & Trades to answer "which one" — the deepest
+# queue, the costliest pair, the oldest order, the biggest loss — and the
+# builders answer "what just happened" instead. Clicking a header has to
+# answer the other question without breaking the row shape: Orders and OPEN
+# POSITIONS render one row per leg with the pair's numbers in rowspan cells,
+# and CLOSED TRADES renders a main row plus an optional expanded sub-row, so
+# the sort has to re-order the backing groups BEFORE rows are paired into HTML.
+
+CID_DEEP = "0xdeep"
+CID_SHALLOW = "0xshallow"
+CID_QUIET = "0xquiet"
+
+
+def _sort_kpi() -> dict:
+    """Three quoted markets whose numeric columns disagree with their names.
+
+    Deliberately inverted: alphabetically `0xdeep` would sort last, by volume
+    it is the largest, and its pair cost is the highest of the three. A sort
+    that reads the rendered string instead of the underlying value cannot
+    produce the expected order for any of these columns.
+    """
+    return {
+        "by_market": {
+            CID_DEEP: {
+                "condition_id": CID_DEEP, "title": "Zeta Deep", "category": "MLB",
+                "days_to_resolve": 1.5, "volume_24h": 1000.0, "resolved": False,
+                "quotes_count": 1, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
+                "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
+                "quotes": [
+                    _quote("tk-d-up", "UP", 0.50, 100.0, "o-deep-up", 5000.0, price=0.60),
+                    _quote("tk-d-dn", "DN", 0.50, 101.0, "o-deep-dn", 4800.0, price=0.50),
+                ],
+            },
+            CID_SHALLOW: {
+                "condition_id": CID_SHALLOW, "title": "Mid Shallow", "category": "NBA",
+                "days_to_resolve": 10.0, "volume_24h": 95.0, "resolved": False,
+                "quotes_count": 7, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
+                "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
+                "quotes": [
+                    _quote("tk-s-up", "UP", 0.50, 100.0, "o-sh-up", 10.0, price=0.45),
+                    _quote("tk-s-dn", "DN", 0.50, 101.0, "o-sh-dn", 20.0, price=0.48),
+                ],
+            },
+            # No quotes at all: every price column is `--`. A column of
+            # unmeasured cells must never outrank a measured one.
+            CID_QUIET: {
+                "condition_id": CID_QUIET, "title": "Alpha Quiet", "category": "LOL",
+                "days_to_resolve": None, "volume_24h": 0.0, "resolved": False,
+                "quotes_count": 1, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
+                "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
+                "quotes": [],
+            },
+        }
+    }
+
+
+def _sort_state() -> dict:
+    return {
+        "orders": [
+            # CID_DEEP: the deepest queue on the book, but posted EARLIER than
+            # the shallow pair. The default order (newest first) therefore puts
+            # p-shallow ahead of it, so only a real sort on Queue Ahead can
+            # produce p-deep first.
+            {"order_id": "o-deep-up", "condition_id": CID_DEEP, "token_id": "tk-d-up",
+             "pair_id": "p-deep", "side": "BUY", "price": 0.60, "original_size": 10.0,
+             "size_matched": 0.0, "size_remaining": 10.0, "status": "open",
+             "posted_ts": 100, "age_sec": 5.0},
+            {"order_id": "o-deep-dn", "condition_id": CID_DEEP, "token_id": "tk-d-dn",
+             "pair_id": "p-deep", "side": "BUY", "price": 0.50, "original_size": 10.0,
+             "size_matched": 0.0, "size_remaining": 10.0, "status": "open",
+             "posted_ts": 100, "age_sec": 5.0},
+            # CID_SHALLOW: the newest pair on the book, with almost nothing
+            # queued ahead of it.
+            {"order_id": "o-sh-up", "condition_id": CID_SHALLOW, "token_id": "tk-s-up",
+             "pair_id": "p-shallow", "side": "BUY", "price": 0.45, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 900, "age_sec": 900.0},
+            {"order_id": "o-sh-dn", "condition_id": CID_SHALLOW, "token_id": "tk-s-dn",
+             "pair_id": "p-shallow", "side": "BUY", "price": 0.48, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 900, "age_sec": 900.0},
+        ]
+    }
+
+
+@requires_node
+def test_no_sort_leaves_every_view_in_the_order_it_renders_today():
+    # Arrange — the baseline each sorted view has to be distinguishable from.
+    kpi, state = _kpi(), _state()
+
+    # Act / Assert
+    assert _cids(_render("active-markets", kpi, state)) == [CID_HELD, CID_QUOTED]
+    assert _cids(_render("positions", kpi, state)) == [CID_HELD, CID_HELD]
+    assert _cids(_render("closed-trades", kpi, state)) == [CID_SETTLED, CID_CLOSED]
+    assert _pairs(_render("open-orders", kpi, state)) == ["pair-a", "pair-a"]
+
+
+@requires_node
+def test_sorting_a_numeric_column_ranks_by_the_value_not_the_rendered_text():
+    # Arrange — 1000.00 must outrank 95.00 even though "1" < "9" as text.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    rendered = _render("active-markets", kpi, state, {"col": 6, "dir": "desc"})
+
+    # Assert — column 6 is 24h Volume.
+    assert _cids(rendered) == [CID_DEEP, CID_SHALLOW, CID_QUIET]
+
+
+@requires_node
+def test_a_text_column_sorts_ascending_on_the_market_name():
+    # Arrange
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    rendered = _render("active-markets", kpi, state, {"col": 0, "dir": "asc"})
+
+    # Assert — by name, not by markup and not by condition_id.
+    assert _cids(rendered) == [CID_QUIET, CID_SHALLOW, CID_DEEP]
+
+
+@requires_node
+def test_an_unmeasured_cell_ranks_last_in_both_directions():
+    # Arrange — CID_QUIET has no quotes, so every price column is `--`.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    desc = _render("active-markets", kpi, state, {"col": 4, "dir": "desc"})
+    asc = _render("active-markets", kpi, state, {"col": 4, "dir": "asc"})
+
+    # Assert — pair cost: 1.10 and 0.93 are measured, `--` is not, and the
+    # unmeasured row must not lead in either direction.
+    assert _cids(desc)[-1] == CID_QUIET
+    assert _cids(asc)[-1] == CID_QUIET
+
+
+
+@requires_node
+def test_sorting_positions_reorders_markets_and_keeps_the_pair_cells_anchored():
+    # Arrange — OPEN POSITIONS also renders one row per held leg with the
+    # market and every pair-level number in rowspan cells.
+    kpi, state = _kpi(), _state()
+
+    # Act — column 6 is Unrealized.
+    rendered = _render("positions", kpi, state, {"col": 6, "dir": "desc"})
+
+    # Assert — one market holds both legs, so both rows stay together and the
+    # rowspan cells ride on the pair's first row.
+    assert _cids(rendered) == [CID_HELD, CID_HELD]
+    assert rendered["html"].count('class="ot-pair-row ot-pair-start') == 1
+    assert rendered["html"].count('class="ot-market" rowspan=') == 1
+    assert rendered["html"].count('ot-pair-value" rowspan=') == 3
+
+
+@requires_node
+def test_sorting_closed_trades_keeps_an_expanded_sub_row_under_its_market():
+    # Arrange — CLOSED TRADES reuses the Data & Markets row shape, so a main
+    # row can carry an expanded sub-row beneath it.
+    kpi, state = _kpi(), _state()
+
+    # Act — column 3 is Realized P&L; ascending puts the losing trade first,
+    # which is the opposite of the order the view renders by default.
+    rendered = _render("closed-trades", kpi, state, {"col": 3, "dir": "asc"})
+
+    # Assert
+    assert _cids(rendered) == [CID_CLOSED, CID_SETTLED]
+    assert _cids(_render("closed-trades", kpi, state)) == [CID_SETTLED, CID_CLOSED]
+
+
+@requires_node
+def test_every_column_header_is_a_real_button_the_keyboard_can_reach():
+    # Arrange
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    head = _render("active-markets", kpi, state)["head"]
+
+    # Assert — one button per column, and a native button turns Enter and
+    # Space into a click without any key handling of its own.
+    assert head.count('<button type="button"') == 9
+
+
+@requires_node
+def test_exactly_one_header_carries_the_direction_indicator():
+    # Arrange
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    head = _render("active-markets", kpi, state, {"col": 0, "dir": "desc"})["head"]
+
+    # Assert — aria-sort on the sorted <th> only, and it names the direction.
+    assert head.count("aria-sort=") == 1
+    assert 'aria-sort="descending"' in head
+    assert "aria-sort=" not in head.replace('aria-sort="descending"', "")
+
+
+@requires_node
+def test_the_sorted_column_says_its_direction_in_text_and_not_only_in_an_arrow():
+    # Arrange — the direction must not be carried by the arrow glyph alone.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    head = _render("active-markets", kpi, state, {"col": 0, "dir": "desc"})["head"]
+
+    # Assert — the button carries a visually-hidden direction word.
+    assert "descending" in head
+    assert "aria-hidden" in head
+
+
+@requires_node
+def test_sorting_open_orders_reorders_pairs_without_splitting_the_legs():
+    # Arrange — the pair is the unit. Sorting its rows instead of its groups
+    # would strand the rowspan market cell and the pair tags on the wrong row.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act — column 5 is Queue Ahead, the operator's "which order is stuck" question.
+    rendered = _render("open-orders", kpi, state, {"col": 5, "dir": "desc"})
+
+    # Assert — the deepest queue first, even though that pair is the older one
+    # and therefore second in the view's default newest-first order.
+    assert _pairs(_render("open-orders", kpi, state)) == ["p-shallow", "p-shallow",
+                                                          "p-deep", "p-deep"]
+    assert _pairs(rendered) == ["p-deep", "p-deep", "p-shallow", "p-shallow"]
+    # UP still above DN inside each pair, and the first row of each pair is the
+    # one carrying the rowspan market cell.
+    assert _order_ids(rendered) == ["o-deep-up", "o-deep-dn", "o-sh-up", "o-sh-dn"]
+    assert rendered["html"].count('class="ot-pair-row ot-pair-start') == 2
+    # The rowspan cell rides on the first row of each pair, once per pair.
+    assert rendered["html"].count('class="ot-market" rowspan=') == 2
+
+

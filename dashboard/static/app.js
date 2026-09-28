@@ -3771,6 +3771,105 @@ function normalizeLeg(side) {
   return null;
 }
 
+/* ── Click-to-sort (issue #294) ──
+ *
+ * The sort unit is never the rendered <tr>. Orders and OPEN POSITIONS emit one
+ * row per leg with the market name and every pair-level number in rowspan
+ * cells, and CLOSED TRADES reuses `marketRowPairHtml`, which emits a main row
+ * plus an optional expanded sub-row. Re-ordering the rows would separate a
+ * pair's UP from its DOWN and strand every rowspan cell, so every builder sorts
+ * its backing groups FIRST and the rows are then paired into HTML from the
+ * sorted groups. Sorting is a re-ordering of what already exists; it never
+ * invents, drops, or merges a row.
+ */
+
+/* Columns that hold a word rather than a number. The operator's first click on
+ * one of these reads "which name comes first", so it starts ascending; every
+ * other column answers "which is biggest / deepest / oldest" and starts
+ * descending. One rule, two directions, no per-column special cases. */
+const OT_TEXT_COLUMNS = {
+  'active-markets': new Set([0, 1, 8]),   // Market, Category, Status
+  'open-orders': new Set([0, 1]),         // Market, Leg
+  'positions': new Set([0, 1]),           // Market, Leg
+  'closed-trades': new Set([0, 2, 5]),    // Market, Hedge, Status
+};
+
+function otIsTextColumn(view, col) {
+  return (OT_TEXT_COLUMNS[view] || new Set()).has(col);
+}
+
+/* The direction a column takes on its first click. */
+function otDefaultDir(view, col) {
+  return otIsTextColumn(view, col) ? 'asc' : 'desc';
+}
+
+/* A number, or null when the cell renders as `--`. Coercion here rather than
+ * in the comparator, so every accessor agrees on what "unmeasured" means. */
+function otNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/* Sum across a group's legs: which pair costs the most to build is the sum of
+ * its legs, not one of them. A group with nothing measured is unmeasured. */
+function otSum(values) {
+  let total = 0;
+  let seen = false;
+  for (const v of values) {
+    const n = otNum(v);
+    if (n === null) continue;
+    total += n;
+    seen = true;
+  }
+  return seen ? total : null;
+}
+
+/* The extreme leg in the sort direction: which order has the deepest queue or
+ * is the oldest is answered by the worst leg, and "worst" depends on which way
+ * the operator is reading. */
+function otExtreme(values, dir) {
+  let best = null;
+  for (const v of values) {
+    const n = otNum(v);
+    if (n === null) continue;
+    if (best === null) { best = n; continue; }
+    if (dir === 'asc' ? n < best : n > best) best = n;
+  }
+  return best;
+}
+
+/* Unmeasured ranks LAST in both directions. A column of `--` must never
+ * outrank a measured value, and flipping the direction must not promote the
+ * empties to the top -- "ascending" still means "measured first". */
+function otCompare(a, b, dir) {
+  const aMiss = a === null || a === undefined;
+  const bMiss = b === null || b === undefined;
+  if (aMiss && bMiss) return 0;
+  if (aMiss) return 1;
+  if (bMiss) return -1;
+  const mul = dir === 'asc' ? 1 : -1;
+  if (typeof a === 'string' || typeof b === 'string') {
+    return mul * String(a).localeCompare(String(b));
+  }
+  if (a === b) return 0;
+  return mul * (a < b ? -1 : 1);
+}
+
+/* Sort a builder's backing groups by one column. `valueOf(group, col, dir)`
+ * reads the same underlying value the row will render, never the formatted
+ * string -- `$1,000.00` has to outrank `$95.00`, and reading the string gives
+ * the opposite. Stable: equal values keep the order the builder produced, so a
+ * sort never shuffles rows that tie. */
+function otSortGroups(groups, sort, valueOf) {
+  if (!sort || typeof sort.col !== 'number') return groups;
+  const dir = sort.dir === 'asc' ? 'asc' : 'desc';
+  return groups
+    .map((g, i) => ({ g, i, v: valueOf(g, sort.col, dir) }))
+    .sort((x, y) => otCompare(x.v, y.v, dir) || (x.i - y.i))
+    .map(e => e.g);
+}
+
 /* The newest quote this market logged on each leg: the price the bot is
  * bidding and the mid it was priced against. */
 function latestLegQuotes(market) {
@@ -4090,7 +4189,7 @@ function marketStatusPill(m, restingHere) {
   return '<span class="pill stopped" title="No quote activity observed">IDLE</span>';
 }
 
-function activeMarketsRows(kpi, state) {
+function activeMarketsRows(kpi, state, sort) {
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
   const entries = Object.entries((kpi && kpi.by_market) || {})
     // Everything listed here is being worked, so IDLE cannot appear: a market
@@ -4102,18 +4201,40 @@ function activeMarketsRows(kpi, state) {
 
   if (!entries.length) return otEmptyRow('active-markets', 'No markets are being quoted.');
 
-  entries.sort((a, b) => (b[1].quotes_count || 0) - (a[1].quotes_count || 0)
-    || String(a[1].title || '').localeCompare(String(b[1].title || '')));
-
-  return entries.map(([cid, m]) => {
+  // One row per market, so a market IS the sort unit here — the only question
+  // is which of its own values the column stands for. Each accessor reads the
+  // same derived number the cell below it renders.
+  const rows = entries.map(([cid, m]) => {
     const legs = latestLegQuotes(m);
     const upQuote = legs.up ? legs.up.price : null;
     const dnQuote = legs.dn ? legs.dn.price : null;
     const pairCost = (upQuote !== null && dnQuote !== null) ? (upQuote + dnQuote) : null;
     const edge = pairCost === null ? null : 1 - pairCost;
-    const dtr = m.days_to_resolve;
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
-    return `<tr data-cid="${esc(cid)}">
+    return { cid, m, upQuote, dnQuote, pairCost, edge, restingHere };
+  });
+
+  const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
+    switch (col) {
+      case 0: return String(r.m.title || r.m.name || r.m.slug || '');
+      case 1: return marketCategory(r.m);
+      case 2: return otNum(r.upQuote);
+      case 3: return otNum(r.dnQuote);
+      case 4: return otNum(r.pairCost);
+      case 5: return otNum(r.edge);
+      case 6: return otNum(r.m.volume_24h);
+      case 7: return otNum(r.m.days_to_resolve);
+      case 8: return r.restingHere ? 'RESTING' : ((r.m.quotes_count || 0) > 0 ? 'QUOTING' : 'IDLE');
+      default: return null;
+    }
+  }) : rows;
+
+  if (!sort) {
+    sorted.sort((a, b) => (b.m.quotes_count || 0) - (a.m.quotes_count || 0)
+      || String(a.m.title || '').localeCompare(String(b.m.title || '')));
+  }
+
+  return sorted.map(({ cid, m, upQuote, dnQuote, pairCost, edge, restingHere }) => `<tr data-cid="${esc(cid)}">
       <td class="ot-market">${marketCell(m, cid)}</td>
       <td class="mono">${esc(marketCategory(m))}</td>
       <td class="mono">${fmtPrice(upQuote)}</td>
@@ -4121,10 +4242,9 @@ function activeMarketsRows(kpi, state) {
       <td class="mono">${fmtPrice(pairCost)}</td>
       <td class="mono">${edge === null ? '--' : `<span class="${edge > 0 ? 'positive' : 'negative'}">${(edge * 100).toFixed(1)}¢</span>`}</td>
       <td class="mono">${fmtCompactUSD(m.volume_24h)}</td>
-      <td class="mono">${(dtr === null || dtr === undefined) ? '--' : `${Number(dtr).toFixed(1)}d`}</td>
+      <td class="mono">${(m.days_to_resolve === null || m.days_to_resolve === undefined) ? '--' : `${Number(m.days_to_resolve).toFixed(1)}d`}</td>
       <td>${marketStatusPill(m, restingHere)}</td>
-    </tr>`;
-  }).join('');
+    </tr>`).join('');
 }
 
 /* Group the resting book by the pair each order belongs to.
@@ -4222,7 +4342,7 @@ function restingPairCost(orders, kpi) {
   return found.UP.price + found.DN.price;
 }
 
-function openOrdersRows(kpi, state) {
+function openOrdersRows(kpi, state, sort) {
   const orders = ((state && state.orders) || []).filter(isRestingOrder);
   if (!orders.length) return otEmptyRow('open-orders', 'No orders are resting on the book.');
 
@@ -4231,7 +4351,29 @@ function openOrdersRows(kpi, state) {
   const queues = queueAheadByOrder(kpi);
   const groups = groupOrdersByPair(orders, kpi);
 
-  return groups.map((group, groupIndex) => {
+  // The pair is the sort unit, never the row: a pair renders as two rows with
+  // the market cell and the pair tags spanning both, so sorting the rows would
+  // strand those cells on the wrong leg. Money columns (Size, Total Cost) are
+  // the sum across the pair -- "which pair costs the most to build" is a
+  // question about the whole thing. Measurement columns (Price, Queue Ahead,
+  // Age) are the extreme leg in the sort direction -- "which order is stuck
+  // deepest or is oldest" is a question about the worst leg.
+  const sorted = sort ? otSortGroups(groups, sort, (g, col, dir) => {
+    const first = g.orders[0];
+    const market = orderGroupMarket(g, first.condition_id, byMarket, state);
+    switch (col) {
+      case 0: return String((market && (market.title || market.name || market.slug)) || '');
+      case 1: return legForOrder(first, legs, byMarket) || '';
+      case 2: return otExtreme(g.orders.map(o => o.price), dir);
+      case 3: return otSum(g.orders.map(o => o.original_size));
+      case 4: return otSum(g.orders.map(o => otNum(o.price) === null ? null : otNum(o.price) * (Number(o.original_size) || 0)));
+      case 5: return otExtreme(g.orders.map(o => otNum(queues[o.order_id])), dir);
+      case 6: return otExtreme(g.orders.map(o => o.age_sec), dir);
+      default: return null;
+    }
+  }) : groups;
+
+  return sorted.map((group, groupIndex) => {
     const first = group.orders[0];
     const market = orderGroupMarket(group, first.condition_id, byMarket, state);
     // The same two tags the Positions view carries, read against the book
@@ -4310,7 +4452,7 @@ function closedTradesEntries(kpi, state) {
     .sort((a, b) => (Number(b[1].realized_pnl) || 0) - (Number(a[1].realized_pnl) || 0));
 }
 
-function closedTradesRows(kpi, state) {
+function closedTradesRows(kpi, state, sort) {
   const entries = closedTradesEntries(kpi, state);
 
   if (!entries.length) {
@@ -4322,7 +4464,24 @@ function closedTradesRows(kpi, state) {
   const graduatedCids = new Set(((kpi && kpi.funnel && kpi.funnel.graduated) || [])
     .map(g => g.cid || g.condition_id));
 
-  return entries.map(([cid, m]) =>
+  // The trade is the sort unit: `marketRowPairHtml` returns a main row plus an
+  // optional expanded sub-row as one string, so re-ordering whole trades keeps
+  // every sub-row attached to the market it belongs to. Sorting rows instead
+  // would drop the sub-row under a different market.
+  const sorted = sort ? otSortGroups(entries, sort, ([cid, m]) => {
+    switch (sort.col) {
+      case 0: return String(m.title || m.name || m.slug || '');
+      case 1: return otNum(m.total_cost);
+      case 2: return (m.balance !== null && m.balance !== undefined && m.balance >= 0.99)
+        ? 'Hedged' : 'One-Sided';
+      case 3: return otNum(m.realized_pnl);
+      case 4: return otNum(m.fills_count);
+      case 5: return 'FINISHED';
+      default: return null;
+    }
+  }) : entries;
+
+  return sorted.map(([cid, m]) =>
     marketRowPairHtml(cid, m, {
       isExpanded: expandedMarkets.has(cid),
       hasOrders: ordersByMarket[cid] && ordersByMarket[cid].length > 0,
@@ -4362,21 +4521,47 @@ function isMarketInferredPosition(cid, kpi, state) {
   return true;
 }
 
-function positionsRows(kpi, state) {
+function positionsRows(kpi, state, sort) {
   const entries = heldMarketEntries(kpi, false);
 
   if (!entries.length) return otEmptyRow('positions', 'No legs have filled, so nothing is held.');
 
-  return entries.map(([cid, m], marketIndex) => {
+  // The held market is the sort unit, for the same reason the pair is in Open
+  // Orders: a market renders as one row per held leg, with the market name and
+  // all three pair-level numbers spanning them.
+  const rows = entries.map(([cid, m], marketIndex) => {
     const mids = latestLegMids(m);
     const mark = positionMarkValue(m, mids);
     const cost = Number(m.total_cost) || 0;
-    const unrealized = mark === null ? null : mark - cost;
+    const held = heldLegs(m);
+    return {
+      cid, m, marketIndex, held,
+      mark,
+      unrealized: mark === null ? null : mark - cost,
+    };
+  }).filter(r => r.held.length);
+
+  const sorted = sort ? otSortGroups(rows, sort, (r, col, dir) => {
+    switch (col) {
+      case 0: return String(r.m.title || r.m.name || r.m.slug || '');
+      case 1: return r.held.map(e => e.leg).sort().join('');
+      case 2: return otSum(r.held.map(e => e.size));
+      case 3: return otExtreme(r.held.map(e => (e.size > 0 ? e.cost / e.size : null)), dir);
+      case 4: return otSum(r.held.map(e => e.cost));
+      case 5: return otNum(r.mark);
+      case 6: return otNum(r.unrealized);
+      case 7: return otNum(r.m.realized_pnl);
+      default: return null;
+    }
+  }) : rows;
+
+  return sorted.map(({ cid, m, marketIndex, held, mark, unrealized }) => {
+    const cost = Number(m.total_cost) || 0;
     const up = Number(m.up_sh) || 0;
     const dn = Number(m.dn_sh) || 0;
     const status = pairStatus(up, dn);
 
-    const legs = heldLegs(m);
+    const legs = held;
     if (!legs.length) return '';
 
     const isInferred = (status !== 'unpaired') && isMarketInferredPosition(cid, kpi, state);
@@ -4422,11 +4607,11 @@ function ordersTradesCounts(kpi, state) {
   };
 }
 
-function ordersTradesRows(view, kpi, state) {
-  if (view === 'open-orders') return openOrdersRows(kpi, state);
-  if (view === 'positions') return positionsRows(kpi, state);
-  if (view === 'closed-trades') return closedTradesRows(kpi, state);
-  return activeMarketsRows(kpi, state);
+function ordersTradesRows(view, kpi, state, sort) {
+  if (view === 'open-orders') return openOrdersRows(kpi, state, sort);
+  if (view === 'positions') return positionsRows(kpi, state, sort);
+  if (view === 'closed-trades') return closedTradesRows(kpi, state, sort);
+  return activeMarketsRows(kpi, state, sort);
 }
 
 function renderOrdersTrades(kpi, state) {

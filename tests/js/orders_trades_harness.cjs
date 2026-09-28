@@ -52,12 +52,14 @@ const app = mod.exports;
 const kpi = input.kpi || {};
 const state = input.state || {};
 const view = input.view || 'active-markets';
-const html = app.ordersTradesRows(view, kpi, state);
+const sort = input.sort || null;
+const html = app.ordersTradesRows(view, kpi, state, sort);
 
 process.stdout.write(JSON.stringify({
   view,
+  sort,
   columns: app.OT_COLUMNS[view],
-  head: app.otHeadHtml(view),
+  head: app.otHeadHtml(view, sort),
   html,
   rows: (html.match(/<tr /g) || []).length,
   counts: app.ordersTradesCounts(kpi, state),
