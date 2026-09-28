@@ -1361,40 +1361,53 @@ input:focus-visible, select:focus-visible {
    affordances reuse the tokens the rest of the table already uses — no new
    colour, no glow. The direction arrow rides beside the label and only the
    sorted column shows one, so the eye finds the active sort at a glance. */
-#orders-trades-table th .ot-sort-btn {
+#orders-trades-table th .ot-sort-btn,
+.ot-sort-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   margin: 0;
   /* A header control has to be reachable by touch as well as by mouse (the
      #277 bar): 4px of vertical padding keeps the target well past 24px without
      changing the row height, which the numeric columns depend on. */
   padding: 4px 6px;
-  background: none;
+  background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
+  box-shadow: none;
   color: inherit;
   font: inherit;
   line-height: inherit;
   white-space: nowrap;
   cursor: pointer;
+  user-select: none;
   transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
 }
-#orders-trades-table th .ot-sort-btn:hover {
+#orders-trades-table th .ot-sort-btn:hover,
+.ot-sort-btn:hover {
   background: var(--bg-surface-raised);
   color: var(--text-primary);
   border-color: var(--border-strong);
 }
-#orders-trades-table th .ot-sort-btn:focus-visible {
+#orders-trades-table th .ot-sort-btn:focus-visible,
+.ot-sort-btn:focus-visible {
   outline: 2px solid var(--open);
   outline-offset: 1px;
 }
-#orders-trades-table th[aria-sort] .ot-sort-btn {
-  color: var(--text-primary);
+#orders-trades-table th[aria-sort] .ot-sort-btn,
+th[aria-sort] .ot-sort-btn {
+  color: var(--open);
+  font-weight: 700;
 }
-#orders-trades-table th .ot-sort-arrow {
-  color: var(--text-secondary);
+#orders-trades-table th .ot-sort-arrow,
+.ot-sort-btn .ot-sort-arrow {
+  color: var(--open);
   font-size: 0.8em;
+  display: inline-block;
+  line-height: 1;
 }
 
 /* ── Open Orders: one pair, two rows ──
