@@ -856,6 +856,30 @@ class MakerConfig:
     # the queue it held (`orders.cancel_reason`, `orders.cancel_queue_ahead`),
     # and picking this threshold is what that record is for. The hold never
     # overrides the pair-cost re-gate.
+    #
+    # #304 picked the threshold off that record, from the 396h shadow-01 run
+    # (17,393 quotes). Fill rate collapses with queue depth:
+    #
+    #   queue_ahead     quotes   share   fill rate
+    #   0 (front)         988    5.7%      9.4%
+    #   1-50              486    2.8%     15.8%
+    #   50-500          2,864   16.5%      7.0%
+    #   500-5k          5,779   33.2%      2.5%
+    #   5k-20k          4,861   27.9%      0.4%
+    #   >20k            2,417   13.9%      0.4%
+    #
+    # Median queue 2,756, p90 25,231, max 1,999,936 -- against a 5-share
+    # resting size. 9,914 of 17,288 cancels were `price_moved` (avg queue held
+    # 8,280), each re-posting at the BACK of a new level; cancelled lifetime
+    # median 148s, p10 23s. A 200-share hold keeps 1,568 of those cancels
+    # (15.8%), and of the 108 quotes that did fill, 59 were posted under 200
+    # shares ahead.
+    #
+    # The default stays 0.0 anyway. The threshold is a lever on real money, and
+    # this repo changes those from a recorded rehearsal, not from a read of a
+    # prior store. `HUNTER_REQUOTE_HOLD_QUEUE` turns it on for ONE rehearsal
+    # without moving the shipped default, which is what the next measurement
+    # needs.
     requote_hold_queue_shares: float = 0.0
     # THE DIRECTION HOLD. How far the desired price may fall BELOW a resting
     # bid before that bid is re-quoted. A resting BUY is a limit order: it
@@ -1257,6 +1281,15 @@ def load(*, for_display: bool = False) -> MakerConfig:
         # ceiling is the instrument's whole price range, as for the dead band.
         kw["requote_hold_below_target"] = _bounded_float(
             "HUNTER_REQUOTE_HOLD_BELOW", rhb, 0.0, 1.0)
+    rhq = os.environ.get("HUNTER_REQUOTE_HOLD_QUEUE") or ""
+    if rhq.strip():
+        # 0 turns the queue hold off and restores the symmetric re-quote, so
+        # the change can be attributed a result on its own. The ceiling is a
+        # share count, not a price: the largest queue measured on this venue
+        # was 1,999,936 shares, and a threshold past that holds every order
+        # forever, which is not a setting.
+        kw["requote_hold_queue_shares"] = _bounded_float(
+            "HUNTER_REQUOTE_HOLD_QUEUE", rhq, 0.0, 2_000_000.0)
     rwo = os.environ.get("HUNTER_REWARD_OFFSET") or ""
     if rwo.strip():
         # How far below mid to rest, for ONE run, without moving the shipped
