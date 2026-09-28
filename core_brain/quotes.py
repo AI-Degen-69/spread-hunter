@@ -624,6 +624,30 @@ def _require_two_sided(cfg, inv, intents, why):
     unbalanced when they were flat; that is fixed at the registry, and this
     guard is the second line that refuses a heavy-side lone leg regardless.)
     """
+    # SYMMETRIC PAIR SIZES (#293). Each leg is sized independently -- price
+    # skew plus the per-side band taper and int() truncation diverge the two
+    # counts (e.g. 9 UP vs 10 DOWN), and a pair that fills asymmetric leaves a
+    # naked surplus that cannot merge. A flat-book pair therefore rests at the
+    # common minimum, never at two different sizes.
+    #
+    # Deliberately NOT applied to unbalanced inventory: the lone light-side
+    # intent there is deficit rebalancing, sized by `risk.size_for` to flatten
+    # the position, and touching it would break the repair it performs.
+    if risk.naked_side(inv) is None:
+        ups = [i for i in intents if i.side == "UP"]
+        dns = [i for i in intents if i.side == "DOWN"]
+        if ups and dns:
+            common = min(i.size for i in intents)
+            if common < cfg.min_quote_shares:
+                return [], (f"harmonized size {common}sh below venue floor "
+                            f"{cfg.min_quote_shares}sh -- the couple is not placed"
+                            + (f" -- {why}" if why else ""))
+            for i in intents:
+                if i.size != common:
+                    other = "DOWN" if i.side == "UP" else "UP"
+                    i.reason += (f", size clamped from {i.size} to {common} "
+                                 f"to match {other} leg")
+                    i.size = common
     if not getattr(cfg, "require_two_sided_when_flat", False):
         return intents, why
     heavy = risk.naked_side(inv)
