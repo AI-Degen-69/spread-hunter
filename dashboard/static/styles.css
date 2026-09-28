@@ -1355,6 +1355,45 @@ input:focus-visible, select:focus-visible {
   min-width: 200px;
 }
 
+/* ── Sortable column headers (issue #294) ──
+   Every column can be sorted, so the header has to say it is a control before
+   the operator clicks it: pointer cursor, hover, and a visible focus ring. The
+   affordances reuse the tokens the rest of the table already uses — no new
+   colour, no glow. The direction arrow rides beside the label and only the
+   sorted column shows one, so the eye finds the active sort at a glance. */
+#orders-trades-table th .ot-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 2px 4px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+#orders-trades-table th .ot-sort-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+#orders-trades-table th .ot-sort-btn:focus-visible {
+  outline: 2px solid var(--open);
+  outline-offset: 1px;
+}
+#orders-trades-table th[aria-sort] .ot-sort-btn {
+  color: var(--text-primary);
+}
+#orders-trades-table th .ot-sort-arrow {
+  color: var(--text-secondary);
+  font-size: 0.8em;
+}
+
 /* ── Open Orders: one pair, two rows ──
    Both legs have to fill for the pair to merge back into $1.00, so the book
    reads pair by pair — UP above DOWN, the market named once across both rows.

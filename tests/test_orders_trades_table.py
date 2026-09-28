@@ -1335,6 +1335,26 @@ def test_the_sorted_column_says_its_direction_in_text_and_not_only_in_an_arrow()
     assert "descending" in head
     assert "aria-hidden" in head
 
+@requires_node
+def test_the_sortable_header_has_hover_focus_and_a_pointer_without_new_colours():
+    # Arrange — issue #294: the header has to read as a control before it is
+    # clicked, and every affordance has to come from the existing tokens.
+    css = (_STATIC / "styles.css").read_text(encoding="utf-8")
+    block = css.split(".ot-sort-btn {")[1].split("}")[0]
+    hover = css.split(".ot-sort-btn:hover {")[1].split("}")[0]
+    focus = css.split(".ot-sort-btn:focus-visible {")[1].split("}")[0]
+
+    # Assert
+    assert "cursor: pointer" in block
+    assert "var(--border-strong)" in hover
+    assert "var(--text-primary)" in hover
+    assert ":focus-visible" in css
+    assert "outline: 2px solid var(--open)" in focus
+    # No new colours and no glow: the rule may only name tokens DESIGN.md has.
+    for value in list(block.split()) + list(hover.split()) + list(focus.split()):
+        if value.startswith("#") and len(value) in (4, 7):
+            raise AssertionError(f"hard-coded colour in the sortable header: {value}")
+
 
 @requires_node
 def test_sorting_open_orders_reorders_pairs_without_splitting_the_legs():

@@ -4156,7 +4156,7 @@ function otHeadHtml(view, sort) {
         + `<span class="ot-sort-label">${esc(label)}</span>`
         + (isActive
           ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>`
-            + `<span class="ot-sort-word">${word}</span>`
+            + `<span class="sr-only">${word}</span>`
           : '')
         + `</button>`;
       return `<th${i === 0 ? ' class="ot-market-head"' : ''}${ariaSort}${label === 'Status' ? statusTitle : ''}>${button}</th>`;
