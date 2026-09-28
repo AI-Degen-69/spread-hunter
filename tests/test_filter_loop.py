@@ -42,6 +42,7 @@ def test_loop_flags_default_to_none():
     args = filter_loop.parse_args([])
     assert args.out_dir is None
     assert args.trial_depth is None
+    assert args.paired_depth_control_usd is None
 
 
 def test_rank_cmd_without_flags_carries_no_new_options(monkeypatch):
@@ -65,6 +66,94 @@ def test_rank_cmd_forwards_out_dir_and_trial_depth(tmp_path):
     assert cmd[cmd.index("--out-dir") + 1] == str(tmp_path / "t")
     assert "--trial-depth" in cmd
     assert cmd[cmd.index("--trial-depth") + 1] == "250.0"
+
+
+def test_rank_cmd_forwards_paired_control_cutoff(tmp_path):
+    cmd = filter_loop._rank_cmd(
+        2, out_dir=tmp_path / "pair", trial_depth=250.0,
+        paired_depth_control_usd=500.0,
+    )
+
+    assert cmd[cmd.index("--paired-depth-control-usd") + 1] == "500.0"
+
+
+def test_paired_loop_flags_require_explicit_isolated_inputs():
+    with pytest.raises(SystemExit):
+        filter_loop.parse_args(["--paired-depth-control-usd", "500"])
+    with pytest.raises(SystemExit):
+        filter_loop.parse_args(["--out-dir", "runtime/trials/pair",
+                                "--trial-depth", "250",
+                                "--paired-depth-control-usd", "200"])
+
+
+def test_truncated_paired_universe_raises_a_dedicated_event(tmp_path, monkeypatch, capsys):
+    """A paired ranker refusal on a truncated Gamma listing is an environment
+    condition, not a ranker crash. The loop must say so: a dedicated
+    paired_universe_truncated event beside the generic rerank_error, plus a
+    loud banner in the log -- hours of this must never read as routine noise."""
+    from types import SimpleNamespace
+
+    events = []
+    monkeypatch.setattr(filter_loop, "_emit_scan_event", events.append)
+    monkeypatch.setattr(filter_loop, "LOG", tmp_path / "rerank.log")
+    monkeypatch.setattr(filter_loop, "_get_top_markets", lambda: 2)
+
+    marker = filter_loop.PAIRED_TRUNCATED_MARKER
+    captured = {"cmd": None}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(
+            returncode=1,
+            stdout="universe: 23 tradable binaries (2 pages, 200 rows, TRUNCATED)",
+            stderr=(f"{marker} refusing to publish a paired bundle on a partial "
+                    "Gamma listing\n"
+                    "SystemExit: paired-depth mode requires a complete Gamma universe"),
+        )
+
+    monkeypatch.setattr(filter_loop.subprocess, "run", fake_run)
+    monkeypatch.setattr(filter_loop.time, "sleep",
+                        lambda _s: (_ for _ in ()).throw(_StopLoop()))
+
+    with pytest.raises(_StopLoop):
+        filter_loop.main(["--out-dir", str(tmp_path / "t"),
+                          "--trial-depth", "250",
+                          "--paired-depth-control-usd", "500"])
+
+    actions = [e["action"] for e in events]
+    assert "paired_universe_truncated" in actions
+    assert "rerank_error" in actions
+    dedicated = next(e for e in events
+                     if e["action"] == "paired_universe_truncated")
+    assert "environment" in dedicated["reason"]
+    out = capsys.readouterr().err
+    assert "TRUNCATED" in out
+    assert "do NOT loosen gates" in out
+
+
+def test_ordinary_ranker_failure_does_not_raise_the_paired_event(tmp_path, monkeypatch, capsys):
+    """The dedicated event is reserved for the truncation marker: a generic
+    ranker crash keeps producing exactly one rerank_error and no paired noise."""
+    from types import SimpleNamespace
+
+    events = []
+    monkeypatch.setattr(filter_loop, "_emit_scan_event", events.append)
+    monkeypatch.setattr(filter_loop, "LOG", tmp_path / "rerank.log")
+    monkeypatch.setattr(filter_loop, "_get_top_markets", lambda: 2)
+
+    def fake_run(cmd, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr="KeyError: volume24hr")
+
+    monkeypatch.setattr(filter_loop.subprocess, "run", fake_run)
+    monkeypatch.setattr(filter_loop.time, "sleep",
+                        lambda _s: (_ for _ in ()).throw(_StopLoop()))
+
+    with pytest.raises(_StopLoop):
+        filter_loop.main(["--out-dir", str(tmp_path / "t")])
+
+    actions = [e["action"] for e in events]
+    assert actions == ["rerank_error"]
+    assert "TRUNCATED" not in capsys.readouterr().err
 
 
 def test_cli_trial_depth_overrides_the_configured_trial(monkeypatch):
@@ -119,13 +208,15 @@ def test_main_replays_argv_flags(tmp_path, monkeypatch):
     try:
         with pytest.raises(_StopLoop):
             filter_loop.main(["--out-dir", str(tmp_path / "t"),
-                              "--trial-depth", "250"])
+                              "--trial-depth", "250",
+                              "--paired-depth-control-usd", "500"])
     finally:
         filter_loop.LOG, filter_loop.RING_PATH = old_log, old_ring
 
     assert "--out-dir" in seen["cmd"]
     assert seen["cmd"][seen["cmd"].index("--out-dir") + 1] == str(tmp_path / "t")
     assert seen["cmd"][seen["cmd"].index("--trial-depth") + 1] == "250.0"
+    assert seen["cmd"][seen["cmd"].index("--paired-depth-control-usd") + 1] == "500.0"
     assert (tmp_path / "t" / "rerank.log").exists()
 
 def test_explicit_trial_depth_survives_a_config_read_failure(tmp_path, monkeypatch):

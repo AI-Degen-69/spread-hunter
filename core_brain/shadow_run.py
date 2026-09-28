@@ -1,6 +1,6 @@
 """Shadow run: the whole loop, against the live book, spending nothing.
 
-`python -m core_brain.shadow_run --minutes 5`
+`python -m core_brain.shadow_run --minutes 5 --db data/NN_shadow_<stamp>.db`
 
 What this is for: watching the machine work. Every other way to see the full
 loop -- screener through quoting through fills through the merge path -- costs
@@ -13,8 +13,8 @@ What it changes, and it is only three things:
    CLOB client with no private key and no API credentials, wrapped in a
    deny-by-default proxy. Submission is not disabled by a flag; there is
    nothing loaded to sign with.
-2. **The store is not the production registry.** `data/shadow.db` by default,
-   and `data/orders.db` is refused outright.
+2. **The store is not the production registry.** Every run requires an explicit
+   per-run `--db` path, and `data/orders.db` is refused outright.
 3. **The run stops on a wall clock.** Driven from the injected `sleep_fn`, so
    `core_brain/trader_loop.py` needs no edit.
 
@@ -40,15 +40,17 @@ import sqlite3
 import sys
 import uuid
 import time
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from core_brain import rehearsal
+from core_brain.order_registry import get_connection
 
 log = logging.getLogger("shadow_run")
 
-# Deprecated compatibility alias; operational callers must provide a per-run path.
+# Deprecated compatibility alias; the CLI still requires an explicit per-run path.
 DEFAULT_SHADOW_DB = Path("data/shadow.db")
 
 # A shadow run is not part of the supervised stack -- it does not appear in
@@ -96,6 +98,55 @@ def shadow_heartbeat_path(root=None, run_id: str = "") -> Path:
     return runtime_file(SHADOW_HEARTBEAT_NAME, root=root)
 
 
+def _process_start_time(pid: int) -> float | None:
+    """Return an OS process creation time for PID-reuse-safe supervision."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class FileTime(ctypes.Structure):
+                _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetProcessTimes.argtypes = [
+                wintypes.HANDLE, ctypes.POINTER(FileTime), ctypes.POINTER(FileTime),
+                ctypes.POINTER(FileTime), ctypes.POINTER(FileTime),
+            ]
+            kernel32.GetProcessTimes.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return None
+            try:
+                created = FileTime()
+                exited = FileTime()
+                kernel = FileTime()
+                user = FileTime()
+                if not kernel32.GetProcessTimes(
+                    handle, ctypes.byref(created), ctypes.byref(exited),
+                    ctypes.byref(kernel), ctypes.byref(user),
+                ):
+                    return None
+                ticks = (created.high << 32) | created.low
+                return ticks / 1e7 - 11644473600.0 if ticks else None
+            finally:
+                kernel32.CloseHandle(handle)
+
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        fields = stat[stat.rindex(")") + 2:].split()
+        start_ticks = float(fields[19])
+        hz = os.sysconf("SC_CLK_TCK")
+        with open("/proc/stat", encoding="utf-8") as stream:
+            boot_time = next(float(line.split()[1]) for line in stream if line.startswith("btime "))
+        return boot_time + start_ticks / hz
+    except (OSError, ValueError, StopIteration, IndexError, AttributeError):
+        return None
+
+
 def write_shadow_heartbeat(
     *,
     db_path,
@@ -116,6 +167,7 @@ def write_shadow_heartbeat(
     target = Path(path) if path is not None else shadow_heartbeat_path(run_id=run_id)
     payload = {
         "pid": os.getpid(),
+        "process_started_at": _process_start_time(os.getpid()),
         "run_id": run_id,
         "started_at": float(started_at),
         "minutes": float(minutes),
@@ -387,6 +439,8 @@ def build_shadow_seam(
     cfg=None,
     registry=None,
     run_id: Optional[str] = None,
+    paired_depth_arm: Optional[str] = None,
+    paired_depth_cutoff_usd: Optional[float] = None,
 ):
     """The seam a shadow run rotates over: live reads, recorded writes.
 
@@ -435,6 +489,13 @@ def build_shadow_seam(
         raise ValueError("shadow runs require an explicit per-run db_path")
     assert_not_production_registry(db_path)
     ensure_shadow_tables(db_path)
+    if paired_depth_arm is not None:
+        if paired_depth_arm not in {"control", "treatment"}:
+            raise ValueError("paired-depth arm must be control or treatment")
+        if paired_depth_cutoff_usd is None or paired_depth_cutoff_usd <= 0:
+            raise ValueError("paired-depth run requires its positive depth cutoff")
+        from core_brain.paired_shadow import ensure_paired_shadow_tables
+        ensure_paired_shadow_tables(db_path)
 
     if intents_sink is None:
         intents_sink = []
@@ -502,6 +563,13 @@ def build_shadow_seam(
         inv = base_inventory_fn(market)
         last_inventory_by_market[market.condition_id] = inv
         return inv
+
+    if paired_depth_arm is not None:
+        registry.paired_context = {
+            "db_path": Path(db_path), "run_id": run_id,
+            "arm": paired_depth_arm,
+            "cutoff_usd": float(paired_depth_cutoff_usd),
+        }
 
     def shadow_submit(client, reg, market, intents, cfg_in) -> int:
         for qi in intents:
@@ -602,6 +670,10 @@ def run_shadow(
     run_id: Optional[str] = None,
     sleep_fn: Optional[Callable[[float], None]] = None,
     cfg: Optional[MakerConfig] = None,
+    markets_path: Optional[str] = None,
+    paired_depth_arm: Optional[str] = None,
+    paired_depth_cutoff_usd: Optional[float] = None,
+    starting_bankroll_usd: Optional[float] = None,
 ) -> ShadowResult:
     """One shadow session: rotate until `minutes` elapse, record, spend nothing.
 
@@ -634,6 +706,12 @@ def run_shadow(
     # a live order created afterwards in the same process is stamped
     # `shadow-...`. See `shadow_run_id` and `OrderRegistry._run_id`.
     run_id = run_id if run_id is not None else shadow_run_id()
+    started_at = time.time()
+
+    if paired_depth_arm is not None and (markets_path is None or not markets_path):
+        raise ValueError("paired-depth run requires --markets-path")
+    if paired_depth_arm is not None and starting_bankroll_usd is None:
+        raise ValueError("paired-depth run requires an explicit equal starting bankroll")
 
     if cfg is None:
         cfg = shadow_cfg()
@@ -642,7 +720,7 @@ def run_shadow(
         # balance read (it needs only the public funder address), fall back to the
         # configured bankroll on any failure.
         maker = funder or os.environ.get("POLY_FUNDER")
-        if maker:
+        if maker and paired_depth_arm is None:
             try:
                 from core_brain.account import fetch_live_balance
                 live_bal = fetch_live_balance(maker)
@@ -650,6 +728,11 @@ def run_shadow(
                     cfg = dc_replace(cfg, bankroll_usd=live_bal)
             except Exception as e:  # noqa: BLE001 - degrade, do not stop
                 log.warning("live balance read failed, using config bankroll: %s", e)
+
+    if paired_depth_arm is not None:
+        if starting_bankroll_usd is None or starting_bankroll_usd <= 0:
+            raise ValueError("paired starting bankroll must be positive")
+        cfg = dc_replace(cfg, bankroll_usd=float(starting_bankroll_usd))
 
     # One line that retires "what did this rehearsal actually run under?".
     # The two offset knobs are env-overridable per run, and recovering what a
@@ -670,7 +753,35 @@ def run_shadow(
     def dynamic_markets_fn():
         current = resolved_markets_fn()
         markets_holder[0] = current
+        if paired_depth_arm is not None and not current:
+            from core_brain.paired_shadow import record_paired_feed_event
+            record_paired_feed_event(
+                db_path, run_id=run_id, kind="empty_feed",
+                detail="paired feed refresh returned no selected markets")
         return current
+
+    paired_meta = None
+    if paired_depth_arm is not None:
+        from core_brain.market_feed import load_graduated_markets
+        initial_rows = load_graduated_markets(path=markets_path, paired_arm=paired_depth_arm)
+        if not initial_rows:
+            raise ValueError("paired-depth feed arm is empty; refusing an unmeasurable run")
+        snapshots = {gm.paired_depth_snapshot_id for gm in initial_rows}
+        cutoffs = {gm.paired_depth_cutoff_usd for gm in initial_rows}
+        if len(snapshots) != 1 or len(cutoffs) != 1:
+            raise ValueError("paired-depth initial feed must have one common snapshot and cutoff")
+        paired_meta = {"snapshot_id": next(iter(snapshots)),
+                       "cutoff_usd": next(iter(cutoffs))}
+        if paired_depth_cutoff_usd is not None and paired_meta["cutoff_usd"] != paired_depth_cutoff_usd:
+            raise ValueError("paired-depth CLI cutoff does not match the feed")
+        if any(not (gm.event_id or gm.event_slug) for gm in initial_rows):
+            raise ValueError("paired-depth feed contains a row with no stable Gamma event id or slug")
+        expected_cutoff = 500.0 if paired_depth_arm == "control" else 250.0
+        if paired_meta["cutoff_usd"] != expected_cutoff:
+            raise ValueError(
+                f"{paired_depth_arm} feed cutoff must be ${expected_cutoff:g}, "
+                f"got ${paired_meta['cutoff_usd']:g}")
+        paired_depth_cutoff_usd = paired_meta["cutoff_usd"]
 
     intents_sink: list = []
     seam = build_shadow_seam(
@@ -682,7 +793,29 @@ def run_shadow(
         fetch_books=fetch_books,
         cfg=cfg,
         run_id=run_id,
+        paired_depth_arm=paired_depth_arm,
+        paired_depth_cutoff_usd=paired_depth_cutoff_usd,
     )
+    if paired_depth_arm is not None:
+        from core_brain.paired_shadow import (
+            record_paired_equity_mark, record_paired_run_start,
+        )
+        bankroll = float(starting_bankroll_usd)
+        record_paired_run_start(
+            db_path, run_id=run_id, arm=paired_depth_arm,
+            cutoff_usd=float(paired_depth_cutoff_usd),
+            starting_bankroll_usd=bankroll, started_at=started_at,
+            planned_minutes=minutes)
+        # The per-run mark writer is wired only in shadow mode. Every inventory
+        # read and public book read happens against this isolated store.
+        seam.paired_mark_fn = lambda ts=None: record_paired_equity_mark(
+            seam.registry, db_path, run_id=run_id,
+            starting_bankroll_usd=bankroll, book_fn=seam.fetch_books,
+            clob_host=seam.clob_host, ts=ts)
+        initial_mark = seam.paired_mark_fn(ts=started_at)
+        if not initial_mark["valid"]:
+            log.warning("paired opening equity mark incomplete: %s",
+                        ", ".join(initial_mark["missing_conditions"]))
     # Fleet aggregates recomputed per cycle off the SHADOW store, so the gates
     # see the same shape of numbers they would live.
     seam.fleet_state_fn = lambda r: _fleet_state(r, cfg)
@@ -737,6 +870,16 @@ def run_shadow(
         if sampled:
             log.info("markouts: %d horizon(s) sampled", sampled)
 
+        paired_mark = getattr(seam, "paired_mark_fn", None)
+        if paired_mark is not None:
+            try:
+                mark = paired_mark()
+                if not mark["valid"]:
+                    log.warning("paired equity mark incomplete: %s",
+                                ", ".join(mark["missing_conditions"]))
+            except Exception as e:  # noqa: BLE001 - retain rehearsal, report missing mark
+                log.warning("paired equity mark failed: %s: %s", type(e).__name__, e)
+
         # Confirm externally-ended markets and record the terminal marker.
         # Runs after the pairs pass so a market this sweep resolves is not
         # acted on by auto_manage_pairs in the same rotation. The gamma read
@@ -749,6 +892,22 @@ def run_shadow(
                 resolve_fn()
         except Exception as e:  # noqa: BLE001 - degrade, do not stop
             log.warning("shadow resolution pass failed: %s", e)
+        if paired_mark is not None:
+            try:
+                mark = paired_mark()
+                if not mark["valid"]:
+                    log.warning("paired post-resolution equity mark incomplete: %s",
+                                ", ".join(mark["missing_conditions"]))
+            except Exception as e:  # noqa: BLE001 - retain rehearsal, report missing mark
+                log.warning("paired post-resolution mark failed: %s: %s",
+                            type(e).__name__, e)
+
+    # Snapshot-level coverage must be complete before a paired run can be
+    # reported as a decision. A max-market cap or market lookup failure must
+    # never make an unvisited selection disappear from the audit.
+    paired_coverage = getattr(seam, "paired_coverage_fn", None)
+    if paired_coverage is not None:
+        paired_coverage()
 
     # Close the write-side gap: markets that ended on the venue but whose
     # resting rows + quotes_count keep the dashboard reading QUOTING. The
@@ -783,7 +942,6 @@ def run_shadow(
     shadow_sweep._resolve_fn = resolve_markets_fn  # type: ignore[attr-defined]
     seam.sweep_fn = shadow_sweep
 
-    started_at = time.time()
     deadline_ts = started_at + max(0.0, minutes * 60.0)
     resolved_sleep_fn = sleep_fn if sleep_fn is not None else make_deadline_sleep(deadline_ts)
 
@@ -813,6 +971,35 @@ def run_shadow(
     # unrefreshed, which the reader calls ended once it goes stale -- so the
     # two endings stay distinguishable.
     write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations, finished=True)
+    if paired_depth_arm is not None:
+        # Snapshot-level coverage must be audited before the run is marked
+        # finished: a max-market visit cap, a market lookup failure, or an
+        # early deadline must never make an unvisited selection disappear
+        # from the report. Only this function holds the run's full selected
+        # feed set (markets_holder), so only here can "selected but never
+        # visited" be computed honestly.
+        from core_brain.paired_shadow import record_paired_feed_event
+        from core_brain.trader_loop import _cid
+        try:
+            selected_ids = {_cid(row) for row in (markets_holder[0] or [])}
+            with closing(get_connection(Path(db_path))) as conn:
+                visited_ids = {
+                    str(row["condition_id"])
+                    for row in conn.execute(
+                        "SELECT DISTINCT condition_id FROM shadow_paired_admissions "
+                        "WHERE run_id = ?", (run_id,))
+                }
+            unvisited = sorted(cid for cid in selected_ids - visited_ids if cid)
+            if unvisited:
+                record_paired_feed_event(
+                    db_path, run_id=run_id, kind="unvisited_selected_markets",
+                    detail=f"{len(unvisited)} selected market(s) not visited: "
+                           f"{','.join(unvisited[:10])}")
+        except (sqlite3.Error, OSError) as e:
+            log.warning("paired coverage audit failed: %s", e)
+        from core_brain.paired_shadow import record_paired_run_finish
+        seam.paired_mark_fn(ts=time.time())
+        record_paired_run_finish(db_path, run_id=run_id)
     return ShadowResult(
         results=results,
         intents=list(intents_sink),
@@ -934,8 +1121,8 @@ def _parse_args(argv: Optional[list[str]] = None):
                     help="time box in minutes (default: 5.0)")
     ap.add_argument("--interval", type=float, default=5.0,
                     help="rotation cadence in seconds (default: 5.0)")
-    ap.add_argument("--db", default=None,
-                    help="explicit per-run shadow store path; data/orders.db is refused")
+    ap.add_argument("--db", required=True,
+                    help="required per-run shadow store path; data/orders.db is refused")
     ap.add_argument("--run-id", default=None,
                     help="run id stamped on every row (e.g. shadow-01); matches the "
                          "statistics observer's --run-id so records line up across "
@@ -947,6 +1134,13 @@ def _parse_args(argv: Optional[list[str]] = None):
                          "default runtime/markets.json (a trial run's own "
                          "feed, e.g. runtime/trials/shadow-03/markets.json). "
                          "An injected markets_fn still wins.")
+    ap.add_argument("--paired-depth-arm", choices=("control", "treatment"),
+                    default=None,
+                    help="read this arm from --markets-path as an atomic paired-depth bundle")
+    ap.add_argument("--paired-depth-cutoff-usd", type=float, default=None,
+                    help="expected cutoff in this paired bundle (must match its arm metadata)")
+    ap.add_argument("--paired-starting-bankroll-usd", type=float, default=100.0,
+                    help="equal fixed bankroll for paired shadow arms (default: $100)")
     ap.add_argument("--funder", default=None,
                     help="funder address for the live balance read "
                          "(default: POLY_FUNDER)")
@@ -976,19 +1170,24 @@ def main(
 
     a = _parse_args(argv)
 
-    if not a.db:
-        raise ValueError("shadow runs require an explicit per-run --db path")
     db = Path(a.db)
     # Feed precedence: an injected markets_fn wins, then --markets-path, then
     # the pathless default -- so a trial run reads only its own feed while
     # every existing caller resolves exactly as before.
     from core_brain.trader_loop import _market_specs
+    if a.paired_depth_arm is not None and a.markets_path is None:
+        raise SystemExit("--paired-depth-arm requires --markets-path")
     if markets_fn is not None:
         resolved_markets_fn = markets_fn
     elif a.markets_path is not None:
         trial_feed = a.markets_path
-        resolved_markets_fn = (lambda cap=None: _market_specs(
-            cap if cap is not None else a.max_markets, path=trial_feed))
+        if a.paired_depth_arm is None:
+            resolved_markets_fn = (lambda cap=None: _market_specs(
+                cap if cap is not None else a.max_markets, path=trial_feed))
+        else:
+            resolved_markets_fn = (lambda cap=None: _market_specs(
+                cap if cap is not None else a.max_markets, path=trial_feed,
+                paired_arm=a.paired_depth_arm))
     else:
         resolved_markets_fn = (lambda max_markets=None:
                                _default_markets_fn()(a.max_markets))
@@ -1009,6 +1208,11 @@ def main(
         interval=a.interval,
         funder=a.funder,
         run_id=a.run_id,
+        markets_path=a.markets_path,
+        paired_depth_arm=a.paired_depth_arm,
+        paired_depth_cutoff_usd=a.paired_depth_cutoff_usd,
+        starting_bankroll_usd=(a.paired_starting_bankroll_usd
+                               if a.paired_depth_arm is not None else None),
     )
 
     quoted = sum(1 for r in result.results if r.status == "QUOTED")

@@ -2330,34 +2330,65 @@ def registry_naked_usd(registry) -> float:
     Pairs whose condition already has a close are skipped: a merged pair has
     no open exposure, and counting its fills would bill risk the venue no
     longer carries. A partially-exited pair is skipped whole rather than
-    over-stated, which is the safe direction for a risk figure.
+    over-stated, which is the safe direction for a risk figure. Aggregate the
+    fills by pair and token in SQL so this remains one database round-trip,
+    even when the registry has thousands of unclosed pairs.
     """
-    from core_brain.single_buy_saver import load_pair, PairExitRefused
-
     with registry._conn() as conn:
-        closed_cids = {
-            r["condition_id"]
-            for r in conn.execute(
-                "SELECT DISTINCT condition_id FROM closes WHERE condition_id IS NOT NULL"
-            ).fetchall()
-        }
-        rows = conn.execute(
-            "SELECT DISTINCT condition_id, pair_id FROM orders "
-            "WHERE pair_id IS NOT NULL"
-        ).fetchall()
-
-    total = 0.0
-    for r in rows:
-        if r["condition_id"] in closed_cids:
-            continue
-        try:
-            pair = load_pair(registry, r["pair_id"])
-        except PairExitRefused:
-            continue
-        naked_sh = pair.get("naked") or 0.0
-        if naked_sh > 0:
-            total += naked_sh * (pair.get("fill_cost") or 0.0)
-    return total
+        row = conn.execute(
+            """
+            WITH closed_conditions AS (
+                SELECT DISTINCT condition_id
+                FROM closes
+                WHERE condition_id IS NOT NULL
+            ),
+            eligible_pairs AS (
+                SELECT DISTINCT o.pair_id, o.condition_id
+                FROM orders o
+                LEFT JOIN closed_conditions c ON c.condition_id = o.condition_id
+                WHERE o.pair_id IS NOT NULL
+                  AND c.condition_id IS NULL
+            ),
+            token_stats AS (
+                SELECT o.pair_id, o.condition_id, o.token_id,
+                       COALESCE(SUM(f.size), 0.0) AS matched,
+                       COALESCE(SUM(f.size * f.price), 0.0) AS notional
+                FROM orders o
+                JOIN eligible_pairs e
+                  ON e.pair_id = o.pair_id AND e.condition_id = o.condition_id
+                LEFT JOIN fills f ON f.order_uuid = o.id
+                GROUP BY o.pair_id, o.condition_id, o.token_id
+            ),
+            ranked_legs AS (
+                SELECT pair_id, condition_id, token_id, matched, notional,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY pair_id, condition_id
+                           ORDER BY matched DESC, token_id
+                       ) AS leg_rank,
+                       COUNT(*) OVER (PARTITION BY pair_id, condition_id) AS token_count
+                FROM token_stats
+            ),
+            pair_exposure AS (
+                SELECT pair_id, condition_id,
+                       MAX(CASE WHEN leg_rank = 1 THEN matched END) AS heavy_matched,
+                       MAX(CASE WHEN leg_rank = 1 THEN notional END) AS heavy_notional,
+                       MAX(CASE WHEN leg_rank = 2 THEN matched ELSE 0.0 END) AS light_matched,
+                       MAX(token_count) AS token_count
+                FROM ranked_legs
+                GROUP BY pair_id, condition_id
+            )
+            SELECT COALESCE(SUM(
+                CASE
+                    WHEN p.token_count <= 2 AND p.heavy_matched > 0.0 THEN
+                        (p.heavy_matched - p.light_matched)
+                        * p.heavy_notional / p.heavy_matched
+                    ELSE 0.0
+                END
+            ), 0.0) AS naked_usd
+            FROM pair_exposure p
+            """
+        ).fetchone()
+    return float(row["naked_usd"]) if row else 0.0
 
 
 def registry_committed_usd(registry) -> float:

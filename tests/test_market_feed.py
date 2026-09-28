@@ -95,9 +95,9 @@ def test_load_graduated_markets_real_file():
     contents are not.
 
     The feed is generated, not committed, so a clean checkout (CI) has no file
-    to read, and the ranker writes `[]` whenever nothing clears its gates.
-    Skip in both cases rather than fail: the assertion is about the ranker's
-    output shape, and neither case has output to check.
+    to read, and the ranker writes `[]` whenever nothing clears its gates. Skip
+    in both cases rather than fail: the assertion is about the ranker's output
+    shape, and neither case has output to check.
     """
     markets = _real_feed_or_skip()
     for m in markets:
@@ -127,7 +127,6 @@ def test_load_graduated_markets_stale(tmp_path):
     """File older than max_age_sec raises MarketFeedStaleError."""
     stale_file = tmp_path / "stale.json"
     stale_file.write_text(json.dumps([SAMPLE_ROW]), encoding="utf-8")
-    # max_age_sec = 0.001 should trigger stale error after tiny sleep
     time.sleep(0.01)
     with pytest.raises(MarketFeedStaleError, match="is stale"):
         load_graduated_markets(path=stale_file, max_age_sec=0.001)
@@ -163,3 +162,58 @@ def test_get_market_by_cid():
 
     not_found = get_market_by_cid("0x0000000000000000000000000000000000000000")
     assert not_found is None
+
+
+def _paired_bundle() -> dict:
+    return {
+        "format": "spread_hunter.paired-depth.v1",
+        "snapshot_id": "snapshot-123",
+        "control_depth_usd": 500,
+        "treatment_depth_usd": 250,
+        "control": [{**SAMPLE_ROW, "paired_depth_arm": "control",
+                      "paired_depth_cutoff_usd": 500,
+                      "paired_depth_snapshot_id": "snapshot-123"}],
+        "treatment": [{**SAMPLE_ROW, "cid": "0xtreatment",
+                        "paired_depth_arm": "treatment",
+                        "paired_depth_cutoff_usd": 250,
+                        "paired_depth_snapshot_id": "snapshot-123"}],
+    }
+
+
+def test_load_each_arm_from_same_paired_bundle(tmp_path):
+    path = tmp_path / "paired_markets.json"
+    path.write_text(json.dumps(_paired_bundle()), encoding="utf-8")
+
+    control = load_graduated_markets(path=path, paired_arm="control")
+    treatment = load_graduated_markets(path=path, paired_arm="treatment")
+
+    assert [m.cid for m in control] == [SAMPLE_ROW["cid"]]
+    assert [m.cid for m in treatment] == ["0xtreatment"]
+
+
+def test_paired_feed_rejects_mismatched_snapshot_arm_or_format(tmp_path):
+    path = tmp_path / "paired_markets.json"
+    bundle = _paired_bundle()
+    bundle["treatment"][0]["paired_depth_snapshot_id"] = "snapshot-old"
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+
+    with pytest.raises(MarketFeedError, match="inconsistent treatment"):
+        load_graduated_markets(path=path, paired_arm="treatment")
+
+    bundle = _paired_bundle()
+    bundle["format"] = "unexpected"
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+    with pytest.raises(MarketFeedError, match="unsupported format"):
+        load_graduated_markets(path=path, paired_arm="control")
+
+
+def test_paired_feed_checks_age_and_arm_name(tmp_path):
+    path = tmp_path / "paired_markets.json"
+    path.write_text(json.dumps(_paired_bundle()), encoding="utf-8")
+    time.sleep(0.01)
+
+    with pytest.raises(MarketFeedStaleError, match="paired-depth feed.*stale"):
+        load_graduated_markets(path=path, max_age_sec=0.001,
+                               paired_arm="control")
+    with pytest.raises(MarketFeedError, match="unknown paired-depth arm"):
+        load_graduated_markets(path=path, paired_arm="other")

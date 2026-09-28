@@ -673,9 +673,43 @@ def _visit_one(
     cid = _cid(spec)
     if emit_fn is None:
         emit_fn = lambda *a, **k: None
+    feed_metadata = spec if isinstance(spec, dict) else {}
+    paired_context = getattr(seam.registry, "paired_context", None)
+    paired_enabled = isinstance(paired_context, dict)
+    if paired_enabled and not cid:
+        from core_brain.paired_shadow import record_paired_feed_event
+        record_paired_feed_event(
+            paired_context["db_path"], run_id=paired_context["run_id"],
+            kind="missing_condition_id", detail="selected paired feed row has no condition id")
+        return LiveFleetResult(
+            status="ERROR", error="paired feed row has no condition id")
+    if paired_enabled:
+        from core_brain.paired_shadow import (
+            PairedShadowError, record_paired_market_selection,
+        )
+        try:
+            record_paired_market_selection(
+                paired_context["db_path"], run_id=paired_context["run_id"],
+                arm=paired_context["arm"], cutoff_usd=paired_context["cutoff_usd"],
+                spec={**feed_metadata, "cid": cid},
+            )
+        except PairedShadowError as exc:
+            emit_fn(service="decide", cycle=cycle, phase="quoting",
+                    action="market_error", market_slug=cid[:16],
+                    reason=f"paired attribution: {exc}",
+                    extra={"condition_id": cid})
+            return LiveFleetResult(
+                status="ERROR", condition_id=cid,
+                error=f"paired attribution: {exc}")
     try:
         market = seam.fetch_market(cid)
     except Exception as e:
+        if paired_enabled:
+            from core_brain.paired_shadow import record_paired_feed_event
+            record_paired_feed_event(
+                paired_context["db_path"], run_id=paired_context["run_id"],
+                kind="market_resolution_failed",
+                detail=f"market={cid} error={type(e).__name__}")
         log.warning("[MARKET LOOKUP ERROR] %s | %s", cid[:16], e)
         emit_fn(service="decide", cycle=cycle, phase="quoting",
                 action="market_error", market_slug="",
@@ -684,6 +718,23 @@ def _visit_one(
                                error=f"{type(e).__name__}: {e}")
 
     title = getattr(market, "market_slug", "") or cid[:16]
+    if paired_enabled:
+        from core_brain.paired_shadow import PairedShadowError, record_paired_market_tokens
+        try:
+            record_paired_market_tokens(
+                paired_context["db_path"], run_id=paired_context["run_id"],
+                condition_id=cid,
+                up_token_id=getattr(market, "up_token", ""),
+                down_token_id=getattr(market, "down_token", ""),
+            )
+        except PairedShadowError as exc:
+            emit_fn(service="decide", cycle=cycle, phase="quoting",
+                    action="market_error", market_slug=title,
+                    reason=f"paired attribution: {exc}",
+                    extra={"condition_id": cid})
+            return LiveFleetResult(
+                status="ERROR", condition_id=cid, title=title,
+                error=f"paired attribution: {exc}")
     cfg = _market_cfg(seam.base_cfg, spec)
     try:
         ev = evaluate_market_quote(
@@ -738,9 +789,17 @@ def _visit_one(
         return LiveFleetResult(status="ERROR", condition_id=cid, title=title,
                                error=f"{type(e).__name__}: {e}")
 
+    event_extra = {"intent_count": len(intents), "condition_id": cid}
+    if feed_metadata.get("paired_depth_arm"):
+        event_extra.update({
+            "paired_depth_arm": feed_metadata["paired_depth_arm"],
+            "paired_depth_cutoff_usd": feed_metadata["paired_depth_cutoff_usd"],
+            "paired_depth_snapshot_id": feed_metadata["paired_depth_snapshot_id"],
+        })
     emit_fn(service="decide", cycle=cycle, phase="quoting", action="decide",
-            market_slug=title, reason=why,
-            extra={"intent_count": len(intents), "condition_id": cid})
+            market_slug=title, reason=why, extra=event_extra)
+
+
 
     if not live:
         if intents:
@@ -811,17 +870,21 @@ def _visit_one(
 # --- production wiring ------------------------------------------------------
 
 def _market_specs(max_markets: Optional[int] = None, registry=None,
-                  path=None) -> list[dict]:
+                  path=None, paired_arm: Optional[str] = None) -> list[dict]:
     """Graduated markets as per-market dict specs, mirroring fleet.MarketState.
 
     If max_markets is 1 and a market already has active open orders in the registry,
     prioritise that active market so we never quote a second market concurrently.
 
     `path` reroutes the feed read (a trial shadow run's own markets file);
-    None keeps the default feed every other caller uses.
+    None keeps the default feed every other caller uses. `paired_arm` reads one
+    side of an atomic paired-depth bundle without changing the live path.
     """
     from core_brain.market_feed import load_graduated_markets
-    gms = load_graduated_markets(path=path)
+    if paired_arm is None:
+        gms = load_graduated_markets(path=path)
+    else:
+        gms = load_graduated_markets(path=path, paired_arm=paired_arm)
     if not gms:
         return []
 
@@ -845,16 +908,29 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
 
     if max_markets:
         gms = gms[:max_markets]
-    return [{
-        "cid": gm.cid,
-        "min_size": gm.min_size,
-        "shares": gm.shares,
-        "max_spread": gm.max_spread,
-        "tick": gm.tick,
-        "daily": gm.daily,
-        "title": gm.title,
-        "slug": gm.slug,
-    } for gm in gms]
+    specs = []
+    for gm in gms:
+        spec = {
+            "cid": gm.cid,
+            "min_size": gm.min_size,
+            "shares": gm.shares,
+            "max_spread": gm.max_spread,
+            "tick": gm.tick,
+            "daily": gm.daily,
+            "title": gm.title,
+            "slug": gm.slug,
+        }
+        if paired_arm is not None:
+            spec.update({
+                "paired_depth_arm": gm.paired_depth_arm,
+                "paired_depth_cutoff_usd": gm.paired_depth_cutoff_usd,
+                "paired_depth_snapshot_id": gm.paired_depth_snapshot_id,
+                "event_id": gm.event_id,
+                "event_slug": gm.event_slug,
+                "event_title": gm.event_title or gm.title,
+            })
+        specs.append(spec)
+    return specs
 
 
 def _fetch_market(cid: str):

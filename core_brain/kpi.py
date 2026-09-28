@@ -984,11 +984,9 @@ def _pipeline_sourced_dbs() -> set[Path]:
     `runtime/pipeline.json` describes them 1:1. Any other path is a test or
     smoke db whose telemetry the repo snapshot would misrepresent.
 
-    `shadow_run.DEFAULT_SHADOW_DB` is repo-relative, so it resolves against the
-    process CWD. Both that resolution and the repo-rooted one are accepted:
-    a shadow run started from another directory must not silently lose its
-    screener funnel, and the constant is imported rather than restated so the
-    two modules cannot drift apart.
+    `shadow_run.DEFAULT_SHADOW_DB` is kept as a legacy, repo-relative alias.
+    The command-line rehearsal now requires an explicit per-run path, so the
+    only pipeline-sourced registry here is the production database.
     """
     return {DEFAULT_DB_PATH.resolve()}
 

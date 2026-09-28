@@ -31,12 +31,12 @@ so in that session.
 
 ## 3a. Shadow run is the one loop command an agent may run
 
-`python -m core_brain.shadow_run --minutes N` rehearses the full loop against the live
-book and is pre-approved, unlike every other loop command. The reason is structural, not
-procedural: it builds its venue client with **no private key and no API credentials**,
-wrapped in a deny-by-default proxy (`core_brain/shadow_guard.py`), so there is nothing
-loaded with which a write could be signed. It writes only to `data/shadow.db`;
-`data/orders.db` is refused outright. It stops itself on a wall-clock time box.
+`python -m core_brain.shadow_run --minutes N --db <unique-shadow-store>` rehearses the full
+loop against the live book and is pre-approved, unlike every other loop command. The reason
+is structural, not procedural: it builds its venue client with **no private key and no API
+credentials**, wrapped in a deny-by-default proxy (`core_brain/shadow_guard.py`), so there
+is nothing loaded with which a write could be signed. It requires an explicit per-run
+store path; `data/orders.db` is refused outright. It stops itself on a wall-clock time box.
 
 Two cautions:
 
@@ -49,8 +49,8 @@ Two cautions:
 ### Watching one on the dashboard
 
 ```powershell
-python -m dashboard.server --db data\shadow.db --port 8799   # terminal 1, read-only
-python -m core_brain.shadow_run --minutes 10 --interval 5     # terminal 2
+python -m dashboard.server --db data\04_shadow_24-09_test.db --port 8799   # terminal 1, read-only
+python -m core_brain.shadow_run --minutes 10 --interval 5 --db data\04_shadow_24-09_test.db --run-id shadow-04  # terminal 2
 ```
 
 The page badges itself **SHADOW** with the store it is reading, and **START is refused**
@@ -59,16 +59,18 @@ be invisible on a page reading anything else.
 
 What a shadow run does now is more than decide: it rests simulated orders, credits fills
 from the trade tape, runs the production single-buy rescue pass, and records a merge close
-per balanced pair -- all inside `data/shadow.db`, next to the decision path (scan state,
-decisions logged, skip and pass reasons, the cycle stream). So the order, fill, position
-and PnL panels no longer read zero during a run -- and a zero there is no longer proof that
+per balanced pair -- all inside the explicit per-run shadow store, next to the decision
+path (scan state, decisions logged, skip and pass reasons, the cycle stream). So the order,
+fill, position and PnL panels no longer read zero during a run -- and a zero there is no
+longer proof that
 nothing happened. Read it as what it is: the shadow store's honest state at that moment,
-nothing more.
+nothing more. For a manual run, use a fresh, unique path and point the dashboard at that
+same path.
 
-**What tells a simulated row from a real one is the store file it is in.** `data/shadow.db`
-versus `data/orders.db`, and a shadow run is refused the production registry before it
-constructs anything. Row-level labels are a second line on top of that, and they do not
-cover every row:
+**What tells a simulated row from a real one is the store file it is in.** The explicit
+per-run shadow store versus `data/orders.db`, and a shadow run is refused the production
+registry before it constructs anything. Row-level labels are a second line on top of that,
+and they do not cover every row:
 
 - `orders.order_id` and `fills.trade_id` start `shadow-`.
 - A **merge** close carries `method='shadow_merge'`.
