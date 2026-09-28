@@ -1,44 +1,36 @@
-# Plan — Issue #296: Port single-instance ownership lock to core_brain trader loop
+# Plan — Issue #293: Enforce symmetric share sizes across UP and DOWN paired quotes
 
-Branch: `i296/port-single-instance-ownership-lock-to-corebrain` | Issue: #296
+Branch: `i293/enforce-symmetric-share-sizes-across-up-and-down` | Issue: #293
 
 ## Classification
-Size: **Large** — new database table plus gates in two entry points (schema change per tier rule), though the change is additive and boring. Type: **Code** (`[Backend/Logic]`; skill `test-driven-development`).
+Size: **Small** — one gate function plus tests; no new files, no schema, API, or dependency change. Type: **Code** (bug fix) (`[Backend/Logic]`; skill `test-driven-development`).
 
 ## Spec (concise — embedded; root SPEC.md is product-level, issue spec lives here)
-**Problem:** `reconcile_lock` (`order_registry.py:361`, `:844`) guards one reconcile call. Nothing owns the whole loop, so two writers on one `data/orders.db` (`order_registry.py:38`) silently sum independent inventories.
-
-**Key design input (resolved from code, not assumed):** the supported stack is a *pair* on one DB — `scripts/spread-hunter-menu.ps1:258-259` launches `order_manager poll` (query/reconcile/sweep) beside `trader_loop --live --no-reconcile --no-sweep` (decide/execute), and `trader_loop.py:1304-1308` says so explicitly. A single blanket lock would break the supported stack. Therefore: **role-keyed slots** — one `instance_lock` table, rows keyed by role (`fleet` / `poll`); a second holder of the *same* role is refused, the designed pair coexists.
-
-**Approach:** mirror the `reconcile_lock` pattern exactly (holder `pid:token`, `acquired_ts`, stale TTL, `BEGIN IMMEDIATE`, release only our own holder in `finally`). New `InstanceInUse(RuntimeError)` sibling — NOT a subclass of `ReconcileInProgress`, because `order_manager.py:2246` (and `:417`) catches `ReconcileInProgress` per cycle to skip, which must never swallow a startup refusal.
-
-**Contracts:**
-- `OrderRegistry.instance_lock(role, now_ms)` context manager + `_write_instance_lock(role, holder, acquired_ts)` test seam.
-- `INSTANCE_LOCK_STALE_MS = 300_000` (same 5-min as `RECONCILE_LOCK_STALE_MS`, `order_registry.py:68`).
-- Gates in `trader_loop.run()` (role `fleet`) and `order_manager.poll()` (role `poll`), both `once=True` and long-loop. Per-cycle heartbeat refresh of `acquired_ts`; a heartbeat that reports adoption stops the loop before it writes (eviction-stop).
-- `trader_loop.main()` and the poll CLI entry map `InstanceInUse` → stderr message + exit 2.
-- `run()` requires the slot whenever a real registry is present (fail closed, no duck-type fail-open). Read-only consumers (`dashboard/server.py`, `mode=ro` readers) untouched — they never take the lock.
-
-**Out of scope:** one-shot verbs, lockfiles, dashboard changes, menu/supervisor changes, simulation code.
+**Problem:** `_decide_quotes_from_mid` sizes each leg independently (`quotes.py:407-411`: `size = int(ladder * band.size_mult * truncated)` per side). Price skew plus per-side band taper and `int()` truncation diverge the two legs (e.g. 9 UP vs 10 DOWN), leaving a naked surplus that cannot merge and trips the dashboard `Partial` flag.
+**Approach:** after both intents exist, clamp flat-inventory UP+DOWN pairs to `min(up.size, down.size)` with a reason note; if the common size falls below `cfg.min_quote_shares`, drop both legs with an informative reason instead of resting half a pair. Deficit-rebalancing quotes on unbalanced inventory are deliberately asymmetric and stay untouched.
+**Out of scope:** venue post/cancel (`order_manager.py`), UI rendering (`app.js`), rest-under-ask path (fixed `cfg.quote_shares`, already symmetric — verified at `quotes.py:599-603`).
 
 ## CodeRabbit plan intake
-No `coderabbitai` plan comment existed at plan time (only our `@coderabbitai plan` trigger) — nothing adopted, nothing rejected, nothing pending. Adopted: none. Rejected: none. Unverified: none from CodeRabbit.
+Zero comments on the issue at plan time — nothing adopted, nothing rejected, nothing `[UNVERIFIED]` from CodeRabbit. All issue file:line pointers spot-checked verbatim against live code (`quotes.py:406-423`, `:467-485`, `:610-647`; `risk.py:85-165`).
 
-## Resolved open question (needs-answers)
-Q: Does the menu/supervisor already serialize starts, making the DB lock redundant? A (from code): menu has best-effort PID guards (`spread-hunter-menu.ps1:1649` "Bot stack is already running", `:1128` rehearsal guard) but no DB-level enforcement — any direct `python -m` invocation bypasses them. The lock is the hard guarantee; implemented regardless. Label `needs-answers` can be dropped at build.
+## Resolved open questions
+None — no `needs-answers` label and no Open-questions section; the issue is fully specified.
 
-## Depends graph
-T1 → T2 → T3 (linear; T3's RED tests are written against T1's seam first per TDD, then turned green by T2).
-
-## Tasks
-1. `[Backend/Logic]` **DB slot (M)** — `core_brain/order_registry.py`: `instance_lock` table (`role TEXT PRIMARY KEY`-ish, `holder`, `acquired_ts`), `INSTANCE_LOCK_STALE_MS`, `InstanceInUse`, `instance_lock(role, now_ms)` + `_write_instance_lock()` seam. Files: `core_brain/order_registry.py`. Skill: `test-driven-development`. Depends on: —. Verify: T3 tests pass.
-2. `[Backend/Logic]` **Gates (M)** — `trader_loop.run()`: acquire role `fleet` before the cycle loop, heartbeat per cycle, eviction-stop, release in `finally`; `main()` maps `InstanceInUse` → message + exit 2. `order_manager.poll()`: same with role `poll` at startup + poll CLI entry exit 2. Files: `core_brain/trader_loop.py`, `core_brain/order_manager.py`. Skill: `test-driven-development`. Depends on: T1. Verify: T3 + `tests/test_trader_loop.py` + `tests/test_order_registry.py` green.
-3. `[Backend/Logic]` **Tests (M)** — `tests/test_instance_lock.py` (new, `tmp_path` convention per `tests/test_order_registry.py:62`): second same-role holder refused with holder+age; fleet+poll pair coexists on one DB; release on normal exit and exception; stale adoption after TTL; heartbeat keeps live holder fresh; eviction-stop halts before write; `ReconcileInProgress` per-cycle path unchanged; read-only smoke while a slot is held; exit-2 mapping for both CLIs. Prior art (reference only, unmergeable lineage): branch `feat/instance-lock-65`, commits `f29d951` + `b88dd28`. Skill: `test-driven-development`. Depends on: T1, T2. Verify: `python -m pytest tests/test_instance_lock.py tests/test_order_registry.py -q`.
-
-Checkpoint after T2: slot + gates in place, pair coexists, second same-role refused (shown by T3 RED→GREEN).
+## Interface contracts
+No signature changes. `_require_two_sided(cfg, inv, intents, why)` gains internal harmonization before the `require_two_sided_when_flat` early return; `QuoteIntent` is mutated in place (`size`, `reason` suffix). Callers (`decide_quotes`) unchanged.
 
 ## 💡 Improvement (adopted by default — architectural fit, evidence-based)
-Role-keyed single table instead of copying the old single-slot design. Evidence: `scripts/spread-hunter-menu.ps1:258-259` — "query = `python -m core_brain.order_manager poll --interval 0.5`" beside "decide = `python -m core_brain.trader_loop --live --no-reconcile --no-sweep`" — the supported stack is two loops on one DB by design, so one blanket lock would refuse the legal pair. Adopted into the contracts above; drop only on explicit operator rejection.
+Harmonize inside `_require_two_sided`, not `_decide_quotes_from_mid`. Evidence, verbatim from the code: `_require_two_sided` docstring opens "A flat book quotes a couple or nothing at all." (`quotes.py:611`) — the couple-or-nothing invariant, including the below-floor drop-both shape, already lives in that gate.
 
-## Do-not-touch (local runtime junk, untracked, never commit)
-`archive/`, `books.db`, `hunter.db`, `live/`, `logs/`, `run/`, `spread-hunter/` — pre-existing local files newly visible under the new `.gitignore`. Stale pipeline leftovers of the old lineage are backed up at `C:\Users\Tiger\AppData\Local\Temp\opencode\stash-296-backup\` (old `tasks/`, `CONSTRAINTS.md`, `.collab/`, two `run/` files).
+## Depends graph
+T1 → T2 → T3 (linear; T1's RED tests target T2's gate first per TDD).
+
+## Tasks
+1. `[x]` `[Backend/Logic]` **RED tests (S)** — `tests/test_live_quotes.py`: flat inventory with skewed prices/bands yields divergent leg sizes today; assert post-fix `up.size == down.size == min` plus a clamp note in `reason`; assert a below-floor pair (crafted via direct `_require_two_sided` call) returns `[]` with an informative reason. Files: `tests/test_live_quotes.py`. Skill: `test-driven-development`. Depends on: -. Verify: fail on untouched code.
+2. `[x]` `[Backend/Logic]` **Gate (S)** — `core_brain/quotes.py::_require_two_sided`: when both UP and DOWN intents are present and `risk.naked_side(inv) is None`, set both sizes to the min with a reason suffix; when the min is below `cfg.min_quote_shares`, return `[]` with a reason. Files: `core_brain/quotes.py`. Skill: `test-driven-development`. Depends on: T1. Verify: T1 green.
+3. `[x]` `[Backend/Logic]` **Deficit + regressions (S)** — new test: unbalanced inventory deficit leg passes through at its `size_for` deficit size, untouched; then run `tests/test_live_quotes.py`, `tests/test_paired_inventory_accounting.py`, `tests/test_rc_fixes.py`, `tests/test_trader_loop.py`. Files: `tests/test_live_quotes.py` (or paired-inventory suite). Skill: `test-driven-development`. Depends on: T2. Verify: focused suites green.
+
+Checkpoint after T2: skewed pair clamps to symmetric sizes (shown by T1 RED→GREEN); deficit path proven intact in T3.
+
+## Plan history
+Supersedes the completed #296 plan (merged via #297) — its todo is all `[x]`.
