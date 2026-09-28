@@ -1,3 +1,37 @@
+# Constraints: Issue #306 — Rescue-exit forensics + reason instrumentation
+
+## Quality & Tests
+- Zero regressions: focused suites `tests/test_rescue_exit_report.py` (new),
+  `tests/test_single_buy_saver.py`, `tests/test_dual_stop_loss.py`,
+  `tests/test_auto_pairs.py`, `tests/test_shadow_run.py` must stay 100% green.
+  Full-repo sweep stays with GitHub CI on push (merge gate).
+- New behaviour needs tests RED against untouched code and GREEN after; each added
+  assertion must fail without its change.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions,
+  or bypassing linters.
+
+## Read-only guarantees
+- `scripts/rescue_exit_report.py` opens every SQLite store read-only
+  (`file:...?mode=ro`, the `grace_sweep_report.py::_ro` pattern). A test asserts
+  both stores are unchanged after a report run (schema_version + row counts).
+- `data/**` is never committed. The findings doc carries aggregate output only.
+
+## Behavior Boundaries (the fail-closed order is frozen)
+- Do NOT change `should_exit()`, `single_buy_max_loss_pct` (0.10),
+  `single_buy_max_loss_usd` (0.045), grace defaults, `pairs_exit_window_sec` (900),
+  or the route order: complete → adverse-drift → hold-in-grace → grace-expiry.
+- `exit_single_buy` gains `reason: Optional[str] = None`; stray-guard and any other
+  caller without a reason must keep working unchanged.
+- The close reason is written only AFTER a successful venue sale — never before,
+  never on a refusal. The close is still the only ledger record of the sell.
+- `closes.reason` is added by the existing `PRAGMA table_info` + `ALTER TABLE`
+  migration pattern (tx_hash/run_id precedent, order_registry.py:492-494); old
+  stores must still open and old close rows must read as NULL reason.
+- The report labels Question 1 results "sampled upper bound, not an executable
+  fill" or emits "unanswerable from this store" when no opposite-leg samples exist.
+- Classification is `late_trigger` / `gapped` / `unresolved`; NULL `best_bid`
+  rows and missing windows resolve to `unresolved`, never guessed.
+- n=4 cannot calibrate a gate: the report states this; no policy change ships.
 # Constraints: Issue #294 — Click-to-sort Orders & Trades columns
 
 ## Quality & Tests

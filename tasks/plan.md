@@ -1,63 +1,128 @@
-﻿Branch: i294/sort-orders-trades-columns | Issue: #294
+# Plan: Issue #306 — Single-buy rescue consumes 49% of the strategy's profit
 
-# Plan: Issue #294 â€” Click-to-sort the Orders & Trades tables
+**Branch:** `feat/306-rescue-exit-forensics` | **Issue:** #306
 
-**Size tier:** Standard â€” one JS file plus one CSS file plus the Node harness and the focused suite, with one architectural decision (sort unit = backing group, not row). **Task type:** Code + UX/Accessibility (Design/UI).
+**Size tier:** Standard — one new read-only report script + one small behavioural
+instrumentation change (persist the route reason) + one rehearsal/verification
+document. **Task type:** Code + Measurement. **No rescue-policy change ships.**
 
-**Stack (auto-detected):** vanilla ES2020 in `dashboard/static/app.js`, plain CSS, Node v24 harness (`tests/js/orders_trades_harness.cjs`), pytest wrapper (`tests/test_orders_trades_table.py`).
+## Locked constraints (from the issue + CodeRabbit plan)
 
-## Dependency graph
-```
-T1 (sort model + comparators) --> T2 (builders sort backing groups) --> T3 (header controls + a11y) --> T4 (CSS affordances)
-        |                                        |                              |
-        +-------------------------------------- +------------------------------+--> harness pass-through (part of T1/T2)
-```
-T2 cannot be written before T1 (no comparator). T3 is independent of T2's internals but is verified against T2's rendered output, so it runs after. T4 is styling only and is last so it can be checked against the real markup T3 emits.
+- Do NOT change `should_exit()`, drift thresholds (`single_buy_max_loss_pct=0.10`,
+  `single_buy_max_loss_usd=0.045`), grace defaults, `pairs_exit_window_sec=900`,
+  or the route order (complete → drift → hold → expiry). The fail-closed order stays.
+- The report script is **read-only**: SQLite stores opened in `mode=ro` URI
+  (`scripts/grace_sweep_report.py::_ro` is the pattern). Never write to either store.
+- Never commit `data/` files. The findings doc carries aggregate report output only.
+- New/changed behaviour needs a test that is RED without the change.
+- Anti-cheat: no skipped tests, no weakened assertions.
 
-## Tasks
+## Verified seams (all read verbatim from the repo, zero guesswork)
 
-### T1 â€” Sort model and comparators (risk-first: the semantics live here)
-- **Size:** M | **Domain:** [Backend/Logic] | **Helper:** `test-driven-development`
-- **Files:** `dashboard/static/app.js`, `tests/js/orders_trades_harness.cjs`, `tests/test_orders_trades_table.py`
-- **Build:** `otSortSpec(view)` returning one spec per `OT_COLUMNS[view]` entry â€” `{kind: 'text'|'number', get(item, ctx)}` â€” plus a stable `compareOtv` that ranks unmeasured (`null`/`undefined`/`--`) last in both directions and compares numerics by value, not by formatted string. Add the optional `sort` input passthrough to the harness and export both helpers from `module.exports` (`app.js:5424-5431`).
-- **Depends on:** â€”
-- **Verify:** `python -m pytest -q tests/test_orders_trades_table.py` â€” new tests assert `$1,000.00` outranks `$95.00`, 9 ranks below 10, `1.5d` above `10.0d`, and that a `--` cell ranks last both ascending and descending. RED before the change.
+- `scripts/grace_sweep_report.py` — read-only report pattern: `_ro()` ro-URI
+  connection, argparse, limitations stated in the docstring.
+- `core_brain/single_buy_saver.py` — `_route_pair()` sets
+  `res["reason"] = "adverse_drift" | "grace_expired"` **in the returned dict only**;
+  `exit_single_buy(...)` writes the close via `_record_exit_close()` →
+  `registry.log_close(CloseRecord(...))`. `CloseRecord` has **no** reason field.
+- `core_brain/order_registry.py` — `closes` table (line 283) has no reason column;
+  migration pattern exists: `cols` check + `ALTER TABLE closes ADD COLUMN ...`
+  (tx_hash/run_id precedents at lines 492-494). `log_close()` INSERT is explicit-column.
+- `core_brain/shadow_exec.py` — `queue_marks` table: `ts, condition_id, market_slug,
+  token_id, price, level_size, traded, cancel_decay, queue_minutes, run_id,
+  best_bid, best_bid_size` (best_bid added by migration; older rows may be NULL).
+- `scripts/book_tape_recorder.py` — separate store, `book_samples` table with
+  `ts, run_id, condition_id, market_slug, tick, best_bid_up, best_ask_up,
+  best_bid_down, best_ask_down, mid_up, mid_down, mid_sum, touch_pair_cost, ...`.
+- `core_brain/market_resolution.py` — close method value `shadow_settlement`.
+- Config fields verified: `pairs_exit_window_sec`, `single_buy_grace_sec`,
+  `single_buy_max_loss_pct`, `single_buy_max_loss_usd` in `core_brain/config.py`.
+- Callers of `exit_single_buy`: `core_brain/single_buy_saver.py::_route_pair` and
+  `core_brain/stray_guard.py` — the reason parameter must default to `None` so
+  stray-guard keeps working.
+- Stores present locally (operator-owned, git-ignored): `data/01_shadow_12-09_00-58.db`
+  (shadow-01) and book-tape stores `data/13_booktape_*.db`, `data/16_booktape_grace.db`.
+- Findings-doc structural precedent: `docs/runs/2026-09-02-run153-grace-sweep.md`.
 
-### T2 â€” Sort the backing groups in all four builders
-- **Size:** M | **Domain:** [Backend/Logic] | **Helper:** `test-driven-development`
-- **Files:** `dashboard/static/app.js`, `tests/test_orders_trades_table.py`
-- **Build:** thread `sort` through `ordersTradesRows` (`:4425`) into `activeMarketsRows` (`:4093`), `openOrdersRows` (`:4225`), `positionsRows` (`:4365`), `closedTradesRows` (`:4313`); each sorts its groups/entries **before** mapping to rows. Pair grouping stays intact: `groupOrdersByPair` groups (`:4140`), `heldMarketEntries` (`:4278`), `closedTradesEntries` (`:4304`). When `sort` is null, the existing comparator and output are untouched. `renderOrdersTrades` (`:4432`) reads per-view state and passes it to both `otHeadHtml` and `ordersTradesRows`.
-- **Depends on:** T1
-- **Verify:** focused suite â€” pair rows stay adjacent with `ot-pair-start`/`rowspan` anchored after sorting Orders and Positions; a CLOSED TRADES main row keeps its expanded sub-row beneath it; and with no sort every view's order is byte-identical to the pre-change output.
+## Assumptions & risks
 
-### T3 â€” Sortable header controls and accessibility
-- **Size:** S | **Domain:** [Design/UI] | **Helper:** `frontend-ui-engineering`
-- **Files:** `dashboard/static/app.js`, `tests/test_orders_trades_table.py`
-- **Build:** `otHeadHtml(view, sort)` emits a `<button type="button">` in every `<th>`, the active column's `<th>` carries `aria-sort` and a direction indicator, and clicking the same column flips direction while a different column starts fresh. One delegated `click` listener on the persistent `#orders-trades-head`, wired in `initOrdersTradesTabs` (`:4477`), so it survives every 2s `innerHTML` rewrite. Per-view state map `{col, dir}` in memory.
-- **Depends on:** T2
-- **Verify:** focused suite â€” `otHeadHtml` output contains a real button per column, `aria-sort` appears on exactly one `<th>`, and `test_active_markets_status_header_explains_the_vocabulary` (`:930-945`) still passes unmodified. Hands-on: open the dashboard, click a header, click it again, switch tabs and come back.
+- The local `data/01_shadow_12-09_00-58.db` is assumed to be the shadow-01 store
+  named in the issue; it is git-ignored and read-only to this work.
+- No same-window book tape for shadow-01 is known to exist → Question 1 may be
+  "unanswerable from this store"; the report must emit that verdict explicitly.
+- `queue_marks.best_bid` is NULL on older rows → classifier has an `unresolved` path.
+- Phase 3's rehearsal step (shadow_run + book_tape_recorder) reaches the venue's
+  data API in shadow mode but spends nothing; it is listed as an operator-run step
+  per repo safety rules, NOT executed by the agent without a go-ahead.
 
-### T4 â€” Header affordances in CSS
-- **Size:** XS | **Domain:** [Design/UI] | **Helper:** `frontend-design`
-- **Files:** `dashboard/static/styles.css`
-- **Build:** hover and `:focus-visible` states plus `cursor: pointer` for the sortable header, using existing `DESIGN.md` tokens (`--border-strong`, `--text-secondary`, `--text-primary`) following the `.toggle-cancelled-btn` pattern at `styles.css:702-711`. The `.ot-market-head` width floor (`:1353`) keeps matching.
-- **Depends on:** T3
-- **Verify:** `python -m pytest -q tests/test_orders_trades_table.py` still green; hands-on check of hover, focus ring and the direction indicator in the browser.
+## Tasks (dependency order)
 
-## Checkpoints
-- **After T1:** comparators proven against the `--`/numeric edge cases.
-- **After T2:** all four views sort with pair structure intact and no-sort output unchanged.
-- **After T3+T4:** browser pass â€” click, flip, tab switch, 2s re-render.
+### T1 — Read-only rescue exit report (`scripts/rescue_exit_report.py`) [x]
+- **Size:** M | **Domain:** Measurement tooling | **Helper:** `test-driven-development`
+- **Files:** `scripts/rescue_exit_report.py` (new), `tests/test_rescue_exit_report.py` (new)
+- **Build:** ro-URI registry connection; optional `--booktape` path; `--top N` (default 4).
+  Select `single_buy_exit` + `shadow_settlement` closes; join fills by
+  `fills.order_uuid = orders.id`; per exit emit shares, paid/share, sold/share,
+  P&L, fill-to-exit seconds, P&L share of total rescue loss; summary table of
+  path/n/PnL/capital; flag `shadow_settlement` legs that were one-sided and aged
+  past `pairs_exit_window_sec` before market end (the fail-closed gap).
+  Bid-path classifier from `queue_marks.best_bid` (+ optional `book_samples`):
+  drift threshold from run-configured dollar/pct values → `late_trigger` /
+  `gapped` / `unresolved`. Question 1 = sampled upper bound vs light-leg quote
+  price within exit window, else "unanswerable from this store". Question 3 =
+  quote-time feature comparison vs merged pairs + absent-fields list + n=4 caveat.
+- **Depends on:** —
+- **Verify:** focused suite `python -m pytest -q tests/test_rescue_exit_report.py`
+  — synthetic tmp stores: loss ranking, all three classifications, NULL best_bid,
+  unanswerable verdict without book tape, Question 1 upper bound, aged-out
+  settlement detection, and **both stores byte-unchanged after a run** (assert
+  no write: open ro and compare `PRAGMA schema_version` + row counts). RED first.
 
-## Assumptions resolved at plan time
-- **Sort unit is the backing group, never the DOM row** â€” the issue's central structural constraint, confirmed against `rowspan` at `:4257-4258` and `:4393-4399` and the sub-row at `:4573-4580`.
-- **Issue line numbers are stale** and were re-verified; anchors in this plan are the checked ones.
-- **In-memory state only**, no new `localStorage` key â€” `OT_STORAGE_KEY` keeps meaning "which view".
-- Baseline is green (62 passed) and Node is present, so the harness is not skipped.
+### T2 — Persist the route reason on `single_buy_exit` closes [x]
+- **Size:** S | **Domain:** Instrumentation | **Helper:** `test-driven-development`
+- **Files:** `core_brain/single_buy_saver.py`, `core_brain/order_registry.py`,
+  `scripts/rescue_exit_report.py`, `tests/test_dual_stop_loss.py`,
+  `tests/test_single_buy_saver.py`
+- **Build:** `exit_single_buy(..., reason: Optional[str] = None)`; `_route_pair`
+  passes `"adverse_drift"` / `"grace_expired"`; `_record_exit_close` writes it only
+  after a successful sale. `CloseRecord.reason: Optional[str] = None` field +
+  nullable `closes.reason` column via the existing `PRAGMA table_info` migration
+  pattern; `log_close` INSERT extended. Report prefers a recorded reason over the
+  reconstructed classification. **No threshold, grace, window, or route-order change.**
+- **Depends on:** T1 (report consumes the reason)
+- **Verify:** focused suites `tests/test_dual_stop_loss.py`,
+  `tests/test_single_buy_saver.py`, `tests/test_rescue_exit_report.py` —
+  reason persisted on drift + expiry exits; reasonless callers (stray-guard path)
+  still record; old stores without the column still open; route order
+  completion → drift → hold → expiry unchanged. RED first.
 
+### T3 — Findings document `docs/runs/2026-09-29-shadow01-rescue-exits.md` [x]
+- **Size:** S | **Domain:** Documentation | **Helper:** —
+- **Files:** `docs/runs/2026-09-29-shadow01-rescue-exits.md` (new)
+- **Build:** follow `2026-09-02-run153-grace-sweep.md` structure. Run the report
+  (agent may run it read-only on local stores) against `data/01_shadow_12-09_00-58.db`
+  and any same-window book-tape store; paste **aggregate output only**. Each of the
+  three questions gets an answer or an explicit "unanswerable from this store" naming
+  the missing store. Cite run 153 (4/13 companions within 1.5s, no gain at 5–120s),
+  the shadow-01 grace setting, classification counts, Question 3 feature comparison,
+  absent fields, and the n=4 limit. Record the aged-out/settlement gap as a follow-up
+  and the future policy-change rehearsal procedure (max-setting rehearsal on its own
+  store + same-window book tape; any longer hold needs a market-end-aware deadline).
+- **Depends on:** T1 + T2
+- **Verify:** operator reads the doc; report output included is aggregate only;
+  `git status` shows nothing under `data/`.
 
-## CodeRabbit plan intake (costed once â€” do not re-read the comment)
-- **Adopted:** sort backing groups before pairing; in-memory per-view state; one delegated listener on the persistent `<thead>`; native `<button type="button">`; all columns sortable with fixed first-click direction; additive columns by group sum, measurement columns by the extreme leg in sort direction.
-- **Rejected:** its stale file/line anchors; its per-builder accessor threading, folded into a single `otSortSpec` table.
-- **UNVERIFIED:** none.
+## Explicitly NOT modified
 
+- `core_brain/quotes.py`, `core_brain/trader_loop.py`, `core_brain/shadow_exec.py`
+  (beyond none), `core_brain/config.py` thresholds, `scripts/filter_markets.py`.
+- `data/**` — never committed.
+
+## Verification & TDD summary
+
+- Focused suites: `tests/test_rescue_exit_report.py`,
+  `tests/test_single_buy_saver.py`, `tests/test_dual_stop_loss.py`,
+  `tests/test_auto_pairs.py`, `tests/test_shadow_run.py`.
+- Full `python -m pytest -q` stays with GitHub CI on push (merge gate).
+- Operator "How to verify" lives in the PR description: run the report on
+  shadow-01, open the findings doc, see reasons recorded in fresh shadow stores.
