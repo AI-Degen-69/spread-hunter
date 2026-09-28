@@ -137,6 +137,57 @@ def _state() -> dict:
     }
 
 
+CID_ESPORTS = "0xesports"
+CID_POLITICS = "0xpolitics"
+CID_GHOST = "0xghost"
+
+
+def _category_kpi() -> dict:
+    return {
+        "by_market": {
+            CID_ESPORTS: {
+                "condition_id": CID_ESPORTS, "title": "Lol Kcb Wd 2026 09 26",
+                "category": "E-Sports",
+                "days_to_resolve": 6.9, "volume_24h": 165792.64, "resolved": False,
+                "quotes_count": 2, "up_sh": 0, "dn_sh": 0, "total_sh": 0,
+                "total_cost": 0, "pair_cost": None, "realized_pnl": 0,
+                "quotes": [
+                    _quote("tok-e-up", "UP", 0.49, 100.0, "ord-e-up", 5186.53, price=0.45),
+                    _quote("tok-e-dn", "DN", 0.51, 101.0, "ord-e-dn", 1200.0, price=0.48),
+                ],
+            },
+            CID_POLITICS: {
+                "condition_id": CID_POLITICS,
+                "title": "Will Luiz Incio Lula Da Silva Win The 2026 "
+                         "Brazilian Presidential Election",
+                "category": "Politics",
+                "days_to_resolve": 30.0, "volume_24h": 42000.0, "resolved": False,
+                "quotes_count": 2, "up_sh": 10, "dn_sh": 6, "total_sh": 16,
+                "total_cost": 15.0, "pair_cost": 0.98, "realized_pnl": 0.25,
+                "quotes": [
+                    _quote("tok-p-up", "UP", 0.60, 200.0),
+                    _quote("tok-p-dn", "DN", 0.42, 201.0),
+                ],
+            },
+        }
+    }
+
+
+def _category_state() -> dict:
+    return {
+        "orders": [
+            {"order_id": "ord-e-up", "condition_id": CID_ESPORTS, "token_id": "tok-e-up",
+             "pair_id": "pair-e", "side": "BUY", "price": 0.45, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1000, "age_sec": 90.0},
+            {"order_id": "ord-e-dn", "condition_id": CID_ESPORTS, "token_id": "tok-e-dn",
+             "pair_id": "pair-e", "side": "BUY", "price": 0.48, "original_size": 5.0,
+             "size_matched": 0.0, "size_remaining": 5.0, "status": "open",
+             "posted_ts": 1001, "age_sec": 89.0},
+        ]
+    }
+
+
 # ── The shape of the three views ────────────────────────────────────────────
 
 @requires_node
@@ -893,6 +944,113 @@ def test_active_markets_status_header_explains_the_vocabulary():
     assert 'IDLE: no quote activity observed."' in tag
     assert "title=" not in status_th.split(">")[-1]
 
+
+
+# ── Venue categories (issue #295) ────────────────────────────────────────────
+
+@requires_node
+def test_active_markets_shows_venue_categories_not_dashes():
+    # Arrange — the two operator markets with their resolved categories.
+    rendered = _render("active-markets", _category_kpi(), _category_state())
+
+    # Act / Assert — the Category cell carries the label, never `--`.
+    assert '<td class="mono">E-Sports</td>' in rendered["html"]
+    assert '<td class="mono">Politics</td>' in rendered["html"]
+
+
+@requires_node
+def test_open_orders_and_positions_carry_category_captions():
+    # Arrange
+    orders = _render("open-orders", _category_kpi(), _category_state())
+    positions = _render("positions", _category_kpi(), _category_state())
+
+    # Act / Assert — the caption rides inside the row-spanning Market cell,
+    # so the pair rows stay adjacent and the rowspan is untouched.
+    assert '<div class="caption-muted">E-Sports</div>' in orders["html"]
+    assert 'rowspan="2"' in orders["html"]
+    assert '<div class="caption-muted">Politics</div>' in positions["html"]
+    assert 'rowspan="2"' in positions["html"]
+
+
+@requires_node
+def test_closed_trades_carries_the_category_caption():
+    # Arrange — a settled politics market with a booked profit is a trade.
+    kpi = _category_kpi()
+    kpi["by_market"][CID_POLITICS].update({
+        "resolved": True, "total_sh": 0, "up_sh": 0, "dn_sh": 0,
+        "realized_pnl": 0.5,
+        "settlements": [{"method": "merge", "pnl": 0.5}],
+    })
+    rendered = _render("closed-trades", kpi, _category_state())
+
+    # Act / Assert
+    assert '<div class="caption-muted">Politics</div>' in rendered["html"]
+
+
+@requires_node
+def test_unmatched_open_order_falls_back_to_the_pair_identity():
+    # Arrange — resting order whose market left the KPI feed; the registry
+    # pair identity still names it.
+    state = {
+        "orders": [
+            {"order_id": "ord-ghost", "condition_id": CID_GHOST, "token_id": "tok-g",
+             "pair_id": "pair-ghost", "side": "BUY", "price": 0.45,
+             "original_size": 5.0, "size_matched": 0.0, "size_remaining": 5.0,
+             "status": "open", "posted_ts": 1000, "age_sec": 90.0},
+        ],
+        "pairs": [
+            {"pair_id": "pair-ghost", "condition_id": CID_GHOST,
+             "market": {"condition_id": CID_GHOST, "title": "Ghost Market",
+                        "slug": "ghost-market", "category": "Politics"}},
+        ],
+    }
+    rendered = _render("open-orders", {"by_market": {}}, state)
+
+    # Act / Assert — the identity title shows with its category caption.
+    assert "Ghost Market" in rendered["html"]
+    assert '<div class="caption-muted">Politics</div>' in rendered["html"]
+
+
+def test_kpi_report_resolves_operator_slugs_without_a_feed(tmp_path, monkeypatch):
+    """Python-level feed miss: closes name the market, keywords label it."""
+    import sqlite3
+    import time
+
+    from core_brain import kpi as kpi_mod
+    from core_brain.kpi import report
+    from core_brain.order_registry import (
+        SCHEMA, CloseRecord, OrderRegistry,
+    )
+
+    (tmp_path / "runtime").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "runtime" / "markets.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+
+    db_file = tmp_path / "live.db"
+    con = sqlite3.connect(str(db_file))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+    reg = OrderRegistry(db_file)
+    t0 = time.time() - 600
+    run = "run-operator-slugs"
+    reg.log_close(CloseRecord(
+        ts=t0 + 60, condition_id="0xlol", market_slug="lol-kcb-wd-2026-09-26",
+        method="merge", shares=5.0, cost_basis=4.70, proceeds=5.00,
+        realized_pnl=0.30, tx_hash="0xaaa", run_id=run,
+    ))
+    reg.log_close(CloseRecord(
+        ts=t0 + 180, condition_id="0xlula",
+        market_slug=("will-luiz-incio-lula-da-silva-win-the-2026-"
+                     "brazilian-presidential-election"),
+        method="merge", shares=5.0, cost_basis=4.90, proceeds=5.00,
+        realized_pnl=0.10, tx_hash="0xbbb", run_id=run,
+    ))
+
+    data = report(db_path=db_file, run_id=run)
+
+    assert data["by_market"]["0xlol"]["category"] == "E-Sports"
+    assert data["by_market"]["0xlula"]["category"] == "Politics"
 
 
 # ── Tab counts ──────────────────────────────────────────────────────────────

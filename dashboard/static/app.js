@@ -3930,12 +3930,39 @@ function winningLeg(m) {
  * leaves the graduated universe, the report stops carrying its title -- and
  * `marketLink` has nothing to render but `--`. A truncated condition id is
  * still something the operator can search the registry for. */
-function marketCell(market, conditionId) {
+/* One category string for every Orders & Trades view: the resolved venue
+ * label when the feed named one, `Uncategorized` when nothing did. A named
+ * bucket groups honestly; `--` reads as missing data. */
+function marketCategory(m) {
+  const label = m && typeof m.category === 'string' ? m.category.trim() : '';
+  return label || 'Uncategorized';
+}
+
+function marketCell(market, conditionId, opts) {
+  const wantCaption = Boolean(opts && opts.categoryCaption);
   const named = market && (market.title || market.name || market.slug);
-  if (named) return marketLink(market);
+  if (named) {
+    const caption = wantCaption
+      ? `<div class="caption-muted">${esc(marketCategory(market))}</div>` : '';
+    return marketLink(market) + caption;
+  }
   const cid = String(conditionId || '');
   if (!cid) return '--';
-  return `<span class="mono" title="${esc(cid)}">${esc(cid.slice(0, 10))}…</span>`;
+  const fallbackCaption = wantCaption ? '<div class="caption-muted">Uncategorized</div>' : '';
+  return `<span class="mono" title="${esc(cid)}">${esc(cid.slice(0, 10))}…</span>${fallbackCaption}`;
+}
+
+/* The market an open-order group belongs to: the KPI entry first, then the
+ * registry pair identity (matched by the group's pair_id, else by
+ * condition_id), then a bare condition id that still renders as a truncated,
+ * searchable cell. */
+function orderGroupMarket(group, conditionId, byMarket, state) {
+  if (byMarket[conditionId]) return byMarket[conditionId];
+  const pairs = (state && state.pairs) || [];
+  const hit = pairs.find(p => p.pair_id && p.pair_id === group.key)
+    || pairs.find(p => (p.condition_id || (p.market && p.market.condition_id)) === conditionId);
+  if (hit && hit.market) return { ...hit.market, condition_id: conditionId };
+  return { condition_id: conditionId };
 }
 
 /* ── Pair status: one vocabulary for both tables ──
@@ -4087,7 +4114,7 @@ function activeMarketsRows(kpi, state) {
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
     return `<tr data-cid="${esc(cid)}">
       <td class="ot-market">${marketCell(m, cid)}</td>
-      <td class="mono">${esc(m.category || '--')}</td>
+      <td class="mono">${esc(marketCategory(m))}</td>
       <td class="mono">${fmtPrice(upQuote)}</td>
       <td class="mono">${fmtPrice(dnQuote)}</td>
       <td class="mono">${fmtPrice(pairCost)}</td>
@@ -4205,7 +4232,7 @@ function openOrdersRows(kpi, state) {
 
   return groups.map((group, groupIndex) => {
     const first = group.orders[0];
-    const market = byMarket[first.condition_id] || { condition_id: first.condition_id };
+    const market = orderGroupMarket(group, first.condition_id, byMarket, state);
     // The same two tags the Positions view carries, read against the book
     // instead of against what filled: what state the pair is in, and what it
     // would cost to merge if both legs filled.
@@ -4227,7 +4254,7 @@ function openOrdersRows(kpi, state) {
       // One market name for both legs: the merged cell is what makes the two
       // rows read as one pair rather than two unrelated orders.
       const marketTd = legIndex === 0
-        ? `<td class="ot-market" rowspan="${group.orders.length}">${marketCell(market, o.condition_id)}${pairTags}</td>`
+        ? `<td class="ot-market" rowspan="${group.orders.length}">${marketCell(market, o.condition_id, { categoryCaption: true })}${pairTags}</td>`
         : '';
       return `<tr class="${rowClass.join(' ')}" data-order-id="${esc(o.order_id)}" data-pair="${esc(group.key)}">
       ${marketTd}
@@ -4303,6 +4330,7 @@ function closedTradesRows(kpi, state) {
       fills,
       graduatedCids,
       forceFinished: true,
+      categoryCaption: true,
     })).join('');
 }
 
@@ -4362,7 +4390,7 @@ function positionsRows(kpi, state) {
       // The market and every pair-level number span the pair, for the same
       // reason the market name does: they describe the pair, not one leg.
       const pairCells = legIndex === 0
-        ? `<td class="ot-market" rowspan="${span}">${marketCell(m, cid)}${pairTags}</td>`
+        ? `<td class="ot-market" rowspan="${span}">${marketCell(m, cid, { categoryCaption: true })}${pairTags}</td>`
         : '';
       const pairNumbers = legIndex === 0
         ? `<td class="mono ot-pair-value" rowspan="${span}">${mark === null ? '--' : fmtUSD(mark)}</td>
@@ -4468,7 +4496,9 @@ function initOrdersTradesTabs() {
  * Trades CLOSED TRADES view so a closed trade reads identically in both
  * tables. Pure: no DOM reads or writes, everything arrives as arguments. */
 function marketRowPairHtml(cid, m, opts) {
-  const { isExpanded, hasOrders, allOrders, showCancelled, fills, graduatedCids, forceFinished } = opts;
+  const { isExpanded, hasOrders, allOrders, showCancelled, fills, graduatedCids, forceFinished, categoryCaption } = opts;
+  const categoryHtml = categoryCaption
+    ? `<div class="caption-muted">${esc(marketCategory(m))}</div>` : '';
   const fills_count = m.fills_count || 0;
   const hedged = m.balance !== null && m.balance !== undefined && m.balance >= 0.99 ? 'Hedged' : 'One-Sided';
   // Merged legs are finished, not active: a fully-merged market must not
@@ -4523,6 +4553,7 @@ function marketRowPairHtml(cid, m, opts) {
     <td>
       <span class="expand-chevron${isExpanded ? ' expanded' : ''}" aria-hidden="true">${hasOrders ? '▶' : ''}</span>
       ${marketLink(m)}
+      ${categoryHtml}
       ${badgeHtml}
     </td>
     <td class="mono">${fmtUSD(m.total_cost)}</td>
