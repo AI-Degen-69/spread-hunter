@@ -217,9 +217,64 @@ class TestPlanOrders:
         assert to_submit[0].token_id == "tok-dn"
         assert to_submit[0].pair_id == "pair-aaa111"
 
+    def test_the_queue_hold_keeps_a_near_front_order_through_a_price_move(self):
+        # #304: the hold is the whole point of the issue, so it gets its own
+        # test at the threshold the recorded cancels picked. 50 shares ahead,
+        # 200-share threshold: the order is held at 0.73 even though the
+        # desired price has walked to 0.60, because a cancel would re-post it
+        # at the back of a new level and the queue is what fills here.
+        open_orders = [_open(price=0.73, oid="o-up")]
+        intents = [_intent(price=0.60)]
+        to_cancel, to_submit = plan_orders(
+            open_orders, intents, dead_band=0.01,
+            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            hedge_asks={"tok-up": 0.20},
+            queue_ahead={"o-up": 50.0},
+            hold_queue_shares=200.0)
+        assert to_cancel == []
+        assert to_submit == []
+
+    def test_the_queue_hold_releases_an_order_that_is_far_back(self):
+        # The same price move, 5,000 shares ahead: holding here would keep an
+        # order the market has already left, and it is the population where the
+        # recorded fill rate is 0.4%.
+        open_orders = [_open(price=0.73, oid="o-up")]
+        intents = [_intent(price=0.60)]
+        to_cancel, _ = plan_orders(
+            open_orders, intents, dead_band=0.01,
+            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            hedge_asks={"tok-up": 0.20},
+            queue_ahead={"o-up": 5000.0},
+            hold_queue_shares=200.0)
+        assert [o["order_id"] for o in to_cancel] == ["o-up"]
+
+    def test_the_queue_hold_declines_on_a_queue_it_never_measured(self):
+        # An absent position is not a good one. Holding on a queue we never
+        # read is the same unmeasured bet the hold exists to replace.
+        open_orders = [_open(price=0.73, oid="o-up")]
+        intents = [_intent(price=0.60)]
+        to_cancel, _ = plan_orders(
+            open_orders, intents, dead_band=0.01,
+            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            hedge_asks={"tok-up": 0.20},
+            queue_ahead={},
+            hold_queue_shares=200.0)
+        assert [o["order_id"] for o in to_cancel] == ["o-up"]
+
+    def test_the_queue_hold_never_overrides_the_pair_cost_re_gate(self):
+        # Queue position is not worth a booked loss. The order is at the front
+        # of the queue and still goes, because completing it costs $1.02.
+        open_orders = [_open(price=0.73, oid="o-up")]
+        intents = [_intent(price=0.60)]
+        to_cancel, _ = plan_orders(
+            open_orders, intents, dead_band=0.01,
+            cfg=MakerConfig(max_completable_pair_cost=1.00),
+            hedge_asks={"tok-up": 0.42},
+            queue_ahead={"o-up": 5.0},
+            hold_queue_shares=200.0)
+        assert [o["order_id"] for o in to_cancel] == ["o-up"]
+
     def test_the_larger_of_dead_band_and_price_eps_wins(self):
-        # Two independent reasons to keep an order; neither may silently
-        # disable the other.
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, _ = plan_orders(open_orders, intents,
