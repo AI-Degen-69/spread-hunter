@@ -2060,6 +2060,7 @@ def poll(
         compute_backoff_delay,
         DEFAULT_DB_PATH,
         ReconcileInProgress,
+        InstanceInUse,
     )
 
     db_p = Path(db_path) if db_path else DEFAULT_DB_PATH
@@ -2140,238 +2141,278 @@ def poll(
     # first second of a run. Without them a quiet session leaves no file at all,
     # and "it never started" is indistinguishable from "it ran and saw nothing"
     # -- which is exactly the question the log is here to answer.
-    _boot_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _log_event(
-        f"[{_boot_iso}] START pid={os.getpid()} interval={interval}s once={once} db={db_p}"
-    )
+    # Whole-loop ownership: one poll loop per database. A second poll is
+    # refused with exit 2; the fleet loop's own "fleet" slot is untouched
+    # so the designed pair keeps working.
+    try:
+        with registry.instance_lock("poll", int(time.time() * 1000)) as _poll_holder:
+            def _beat() -> bool:
+                """Refresh our slot; False means another loop adopted it."""
+                return registry.refresh_instance_lock(
+                    "poll", _poll_holder, int(time.time() * 1000))
 
-    consecutive_errors = 0
-    cycle = 0
-    last_cycle_failed = False
+            def _evict(now_iso: str) -> None:
+                _evict_msg = (f"[POLL {now_iso}] EVICTED: instance slot adopted by "
+                              f"another loop; stopping before further writes")
+                print(_evict_msg, file=sys.stderr)
+                _log_event(_evict_msg)
 
-    # The markout sampler fills the adverse-selection horizons out-of-band, so
-    # it never blocks reconcile. It is a daemon thread, started only on the
-    # production path (no injected client), and stopped when the loop exits.
-    markout_worker = None
-    if not once and not injected_client:
-        from core_brain.markout import MarkoutWorker
-        markout_worker = MarkoutWorker(
-            registry=registry,
-            clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
-        )
-        markout_worker.start()
-
-    # Supervise the guardrail watcher as a child so the two failure
-    # signatures are flagged whenever the poll runs. Skipped for --once runs
-    # and when a client was injected (test/dry-run context) -- the same rule
-    # that keeps the markout sampler off the non-production path.
-    watcher_proc = None
-    watcher_last_restart = 0.0
-    if watch_guardrails and not once and not injected_client:
-        watcher_proc = _spawn_global_stop_losser(db_p)
-        if watcher_proc is not None:
-            watcher_last_restart = time.time()
-            _log_event(f"[POLL] guardrail watcher started (pid={watcher_proc.pid})")
-        else:
-            # Leave watcher_last_restart at 0.0 so the first supervision pass
-            # retries immediately rather than waiting out the throttle.
-            _log_event("[POLL] guardrail watcher failed to start; will retry")
-
-    while not stop_requested:
-        cycle += 1
-        cycle_start = time.time()
-        now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        if watch_guardrails and not once and not injected_client:
-            # Called even when watcher_proc is None: a transient Popen failure
-            # at startup must not disable the guardrail for the session.
-            watcher_proc, watcher_last_restart = _supervise_watcher(
-                watcher_proc, db_p, watcher_last_restart, log_fn=_log_event)
-
-        if _sweep_due(cycle, time.time(), last_sweep_ts, sweep_interval, sweep_every):
-            sweep_outcome = _sweep_account(now_iso)
-            sweep_action = (
-                "sweep_done" if sweep_outcome == "success"
-                else "sweep_skipped" if sweep_outcome == "skipped"
-                else "sweep_error"
-            )
-            _emit_cycle_event(
-                service="query", cycle=cycle, phase="settling",
-                action=sweep_action,
+            _boot_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _log_event(
+                f"[{_boot_iso}] START pid={os.getpid()} interval={interval}s once={once} db={db_p}"
             )
 
-        try:
-            summary = reconcile_orders(client, registry, maker_address=funder)
             consecutive_errors = 0
+            cycle = 0
+            last_cycle_failed = False
 
-            # Log any state transitions to event log
-            if summary.transitions:
-                for t in summary.transitions:
-                    _log_event(f"[{now_iso}] {t}")
-
-            active = registry.get_active_orders()
-            open_count = sum(1 for o in active if o.status == "open")
-            partial_count = sum(1 for o in active if o.status == "partial")
-            pending_count = sum(1 for o in active if o.status == "pending")
-
-            elapsed = time.time() - cycle_start
-            print(
-                f"[POLL {now_iso}] orders={len(active)} (open={open_count} partial={partial_count} pending={pending_count}) | "
-                f"fills=+{summary.fills_recorded} (dup={summary.duplicates_ignored}) | "
-                f"open_orders={summary.open_orders_count} trades={summary.trades_polled} | "
-                f"cycle={elapsed:.2f}s | errors=0"
-            )
-            _emit_cycle_event(
-                service="query", cycle=cycle, phase="reconciling",
-                action="reconcile_ok", latency_ms=elapsed * 1000.0,
-                extra={
-                    "fills": summary.fills_recorded,
-                    "duplicates_ignored": summary.duplicates_ignored,
-                    "transitions": len(summary.transitions),
-                    "open": open_count,
-                    "partial": partial_count,
-                    "pending": pending_count,
-                },
-            )
-
-        except KeyboardInterrupt:
-            # Ctrl-C is not an error. It is a BaseException, so the handler
-            # below never sees it, and the operator would get a traceback
-            # instead of a clean stop on the one process meant to run for hours.
-            stop_requested = True
-            _log_event(f"[{now_iso}] STOP KeyboardInterrupt during cycle {cycle}")
-            print(f"[POLL {now_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
-            break
-
-        except ReconcileInProgress as exc:
-            # Another pass holds the lock -- most often the operator running a
-            # one-shot reconcile from a second shell. That is contention, not a
-            # venue failure: counting it as an error would drive the exponential
-            # backoff to 60s and degrade the poller for something that resolves
-            # itself in milliseconds. Skip the cycle, keep the normal interval,
-            # leave consecutive_errors alone.
-            #
-            # A --once run still reports failure, because it genuinely did not
-            # reconcile and the caller must not read exit 0 as "state checked".
-            skip_msg = f"[POLL {now_iso}] SKIPPED cycle {cycle}: {exc}"
-            print(skip_msg, file=sys.stderr)
-            _log_event(skip_msg)
-            _emit_cycle_event(
-                service="query", cycle=cycle, phase="waiting",
-                action="reconcile_contended",
-            )
-            if once:
-                last_cycle_failed = True
-                break
-            if not stop_requested:
-                try:
-                    time.sleep(max(0.0, interval - (time.time() - cycle_start)))
-                except KeyboardInterrupt:
-                    stop_requested = True
-                    break
-                continue
-
-        except Exception as exc:
-            consecutive_errors += 1
-            last_cycle_failed = True
-            backoff_s = compute_backoff_delay(consecutive_errors, base_sec=2.0, max_sec=60.0)
-            err_msg = f"[POLL {now_iso}] ERROR (count={consecutive_errors}, backoff={backoff_s:.1f}s): {exc}"
-            print(err_msg, file=sys.stderr)
-            _log_event(err_msg)
-            _emit_cycle_event(
-                service="query", cycle=cycle, phase="reconciling",
-                action="reconcile_error", reason=str(exc),
-            )
-            if not once and not stop_requested:
-                try:
-                    time.sleep(backoff_s)
-                except KeyboardInterrupt:
-                    stop_requested = True
-                    break
-                continue
-
-        # U35 auto pass: convert in-window one-sided fills (complete under the
-        # cap, exit at/over it). Runs after reconcile so the registry is fresh.
-        # Closing actions only -- pre-approved. Failures are isolated per pair
-        # inside auto_manage_pairs; a pass-level failure must never stop the
-        # loop either.
-        try:
-            from core_brain.config import load as _load_cfg
-            from core_brain.single_buy_saver import auto_manage_pairs
-            for pr in auto_manage_pairs(
-                client, registry, _load_cfg(), funder=funder,
-            ):
-                action = pr.get("action", "?")
-                # Quiet decisions (hold/balanced/dry-run would_*) stay out of
-                # the console but still reach the cycle ring so the dashboard
-                # can count them per cycle.
-                if action not in ("hold", "balanced",
-                                  "would_exit", "would_complete"):
-                    line = f"[POLL {now_iso}] pairs {pr.get('pair_id') or '?':<10s} {action}"
-                    if action == "error":
-                        line += f" ({pr.get('error', '')})"
-                        print(line, file=sys.stderr)
-                    else:
-                        print(line)
-                    _log_event(line)
-                _emit_cycle_event(
-                    service="query", cycle=cycle, phase="settling",
-                    action="pairs_" + action,
-                    extra={"pair_id": pr.get("pair_id")},
+            # The markout sampler fills the adverse-selection horizons out-of-band, so
+            # it never blocks reconcile. It is a daemon thread, started only on the
+            # production path (no injected client), and stopped when the loop exits.
+            markout_worker = None
+            if not once and not injected_client:
+                from core_brain.markout import MarkoutWorker
+                markout_worker = MarkoutWorker(
+                    registry=registry,
+                    clob_host=os.environ.get("CLOB_HOST", "https://clob.polymarket.com"),
                 )
-        except Exception as exc:
-            err_msg = f"[POLL {now_iso}] pairs pass failed: {exc}"
-            print(err_msg, file=sys.stderr)
-            _log_event(err_msg)
+                markout_worker.start()
 
-        # Write heartbeat
-        hb_data = {
-            "ts": int(time.time() * 1000),
-            "iso": now_iso,
-            "pid": os.getpid(),
-            "cycle": cycle,
-            "errors": consecutive_errors,
-        }
-        _atomic_write_json(heartbeat_path, [hb_data])
+            # Supervise the guardrail watcher as a child so the two failure
+            # signatures are flagged whenever the poll runs. Skipped for --once runs
+            # and when a client was injected (test/dry-run context) -- the same rule
+            # that keeps the markout sampler off the non-production path.
+            watcher_proc = None
+            watcher_last_restart = 0.0
+            if watch_guardrails and not once and not injected_client:
+                watcher_proc = _spawn_global_stop_losser(db_p)
+                if watcher_proc is not None:
+                    watcher_last_restart = time.time()
+                    _log_event(f"[POLL] guardrail watcher started (pid={watcher_proc.pid})")
+                else:
+                    # Leave watcher_last_restart at 0.0 so the first supervision pass
+                    # retries immediately rather than waiting out the throttle.
+                    _log_event("[POLL] guardrail watcher failed to start; will retry")
 
-        if once or stop_requested:
-            break
+            while not stop_requested:
+                cycle += 1
+                cycle_start = time.time()
+                now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        sleep_time = max(0.0, interval - (time.time() - cycle_start))
-        try:
-            time.sleep(sleep_time)
-        except KeyboardInterrupt:
-            # Ctrl-C almost always lands here rather than mid-reconcile, since
-            # the loop spends nearly all its time asleep. It must announce
-            # itself the same way the mid-cycle handler does.
-            stop_requested = True
-            stop_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            _log_event(f"[{stop_iso}] STOP KeyboardInterrupt while idle after cycle {cycle}")
-            print(f"[POLL {stop_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
-            break
+                # Heartbeat first: the error/contention `continue` paths below
+                # must never let a live holder go stale enough to be adopted.
+                if not _beat():
+                    _evict(now_iso)
+                    break
 
-    if markout_worker is not None:
-        markout_worker.stop()
+                if watch_guardrails and not once and not injected_client:
+                    # Called even when watcher_proc is None: a transient Popen failure
+                    # at startup must not disable the guardrail for the session.
+                    watcher_proc, watcher_last_restart = _supervise_watcher(
+                        watcher_proc, db_p, watcher_last_restart, log_fn=_log_event)
 
-    # Take the watcher down with the poll: terminate, escalate to kill.
-    if watcher_proc is not None:
-        try:
-            watcher_proc.terminate()
-            watcher_proc.wait(timeout=5)
-        except Exception:
-            try:
-                watcher_proc.kill()
-            except Exception:
-                pass
+                if _sweep_due(cycle, time.time(), last_sweep_ts, sweep_interval, sweep_every):
+                    sweep_outcome = _sweep_account(now_iso)
+                    sweep_action = (
+                        "sweep_done" if sweep_outcome == "success"
+                        else "sweep_skipped" if sweep_outcome == "skipped"
+                        else "sweep_error"
+                    )
+                    _emit_cycle_event(
+                        service="query", cycle=cycle, phase="settling",
+                        action=sweep_action,
+                    )
 
-    exit_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _log_event(f"[{exit_iso}] EXIT cycles={cycle} errors={consecutive_errors}")
+                try:
+                    summary = reconcile_orders(client, registry, maker_address=funder)
+                    consecutive_errors = 0
 
-    # A --once run that failed its only cycle must exit non-zero. Returning 0
-    # after printing an error to stderr makes the failure invisible to any
-    # supervisor, cron entry or shell check that reads the exit status.
-    if once and last_cycle_failed:
-        sys.exit(1)
+                    # Log any state transitions to event log
+                    if summary.transitions:
+                        for t in summary.transitions:
+                            _log_event(f"[{now_iso}] {t}")
+
+                    active = registry.get_active_orders()
+                    open_count = sum(1 for o in active if o.status == "open")
+                    partial_count = sum(1 for o in active if o.status == "partial")
+                    pending_count = sum(1 for o in active if o.status == "pending")
+
+                    elapsed = time.time() - cycle_start
+                    print(
+                        f"[POLL {now_iso}] orders={len(active)} (open={open_count} partial={partial_count} pending={pending_count}) | "
+                        f"fills=+{summary.fills_recorded} (dup={summary.duplicates_ignored}) | "
+                        f"open_orders={summary.open_orders_count} trades={summary.trades_polled} | "
+                        f"cycle={elapsed:.2f}s | errors=0"
+                    )
+                    _emit_cycle_event(
+                        service="query", cycle=cycle, phase="reconciling",
+                        action="reconcile_ok", latency_ms=elapsed * 1000.0,
+                        extra={
+                            "fills": summary.fills_recorded,
+                            "duplicates_ignored": summary.duplicates_ignored,
+                            "transitions": len(summary.transitions),
+                            "open": open_count,
+                            "partial": partial_count,
+                            "pending": pending_count,
+                        },
+                    )
+
+                except KeyboardInterrupt:
+                    # Ctrl-C is not an error. It is a BaseException, so the handler
+                    # below never sees it, and the operator would get a traceback
+                    # instead of a clean stop on the one process meant to run for hours.
+                    stop_requested = True
+                    _log_event(f"[{now_iso}] STOP KeyboardInterrupt during cycle {cycle}")
+                    print(f"[POLL {now_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
+                    break
+
+                except ReconcileInProgress as exc:
+                    # Another pass holds the lock -- most often the operator running a
+                    # one-shot reconcile from a second shell. That is contention, not a
+                    # venue failure: counting it as an error would drive the exponential
+                    # backoff to 60s and degrade the poller for something that resolves
+                    # itself in milliseconds. Skip the cycle, keep the normal interval,
+                    # leave consecutive_errors alone.
+                    #
+                    # A --once run still reports failure, because it genuinely did not
+                    # reconcile and the caller must not read exit 0 as "state checked".
+                    skip_msg = f"[POLL {now_iso}] SKIPPED cycle {cycle}: {exc}"
+                    print(skip_msg, file=sys.stderr)
+                    _log_event(skip_msg)
+                    _emit_cycle_event(
+                        service="query", cycle=cycle, phase="waiting",
+                        action="reconcile_contended",
+                    )
+                    if once:
+                        last_cycle_failed = True
+                        break
+                    if not stop_requested:
+                        try:
+                            time.sleep(max(0.0, interval - (time.time() - cycle_start)))
+                        except KeyboardInterrupt:
+                            stop_requested = True
+                            break
+                        continue
+
+                except Exception as exc:
+                    consecutive_errors += 1
+                    last_cycle_failed = True
+                    backoff_s = compute_backoff_delay(consecutive_errors, base_sec=2.0, max_sec=60.0)
+                    err_msg = f"[POLL {now_iso}] ERROR (count={consecutive_errors}, backoff={backoff_s:.1f}s): {exc}"
+                    print(err_msg, file=sys.stderr)
+                    _log_event(err_msg)
+                    _emit_cycle_event(
+                        service="query", cycle=cycle, phase="reconciling",
+                        action="reconcile_error", reason=str(exc),
+                    )
+                    if not once and not stop_requested:
+                        try:
+                            time.sleep(backoff_s)
+                        except KeyboardInterrupt:
+                            stop_requested = True
+                            break
+                        continue
+
+                # U35 auto pass: convert in-window one-sided fills (complete under the
+                # cap, exit at/over it). Runs after reconcile so the registry is fresh.
+                # Closing actions only -- pre-approved. Failures are isolated per pair
+                # inside auto_manage_pairs; a pass-level failure must never stop the
+                # loop either.
+                try:
+                    from core_brain.config import load as _load_cfg
+                    from core_brain.single_buy_saver import auto_manage_pairs
+                    for pr in auto_manage_pairs(
+                        client, registry, _load_cfg(), funder=funder,
+                    ):
+                        action = pr.get("action", "?")
+                        # Quiet decisions (hold/balanced/dry-run would_*) stay out of
+                        # the console but still reach the cycle ring so the dashboard
+                        # can count them per cycle.
+                        if action not in ("hold", "balanced",
+                                          "would_exit", "would_complete"):
+                            line = f"[POLL {now_iso}] pairs {pr.get('pair_id') or '?':<10s} {action}"
+                            if action == "error":
+                                line += f" ({pr.get('error', '')})"
+                                print(line, file=sys.stderr)
+                            else:
+                                print(line)
+                            _log_event(line)
+                        _emit_cycle_event(
+                            service="query", cycle=cycle, phase="settling",
+                            action="pairs_" + action,
+                            extra={"pair_id": pr.get("pair_id")},
+                        )
+                except Exception as exc:
+                    err_msg = f"[POLL {now_iso}] pairs pass failed: {exc}"
+                    print(err_msg, file=sys.stderr)
+                    _log_event(err_msg)
+
+                # Second heartbeat: a cycle whose own work stalled past the TTL
+                # must still notice adoption before the next cycle writes.
+                if not _beat():
+                    _evict(now_iso)
+                    break
+
+                # Write heartbeat
+                hb_data = {
+                    "ts": int(time.time() * 1000),
+                    "iso": now_iso,
+                    "pid": os.getpid(),
+                    "cycle": cycle,
+                    "errors": consecutive_errors,
+                }
+                _atomic_write_json(heartbeat_path, [hb_data])
+
+                if once or stop_requested:
+                    break
+
+                sleep_time = max(0.0, interval - (time.time() - cycle_start))
+                try:
+                    time.sleep(sleep_time)
+                except KeyboardInterrupt:
+                    # Ctrl-C almost always lands here rather than mid-reconcile, since
+                    # the loop spends nearly all its time asleep. It must announce
+                    # itself the same way the mid-cycle handler does.
+                    stop_requested = True
+                    stop_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    _log_event(f"[{stop_iso}] STOP KeyboardInterrupt while idle after cycle {cycle}")
+                    print(f"[POLL {stop_iso}] stopping on KeyboardInterrupt", file=sys.stderr)
+                    break
+
+            # Take the sampler down with the poll so no writer outlives the slot
+            # (an eviction-stop must stop writing, not just stop looping).
+            if markout_worker is not None:
+                markout_worker.stop()
+            # Take the watcher down with the poll: terminate, escalate to kill.
+            if watcher_proc is not None:
+                try:
+                    watcher_proc.terminate()
+                    watcher_proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        watcher_proc.kill()
+                    except Exception:
+                        pass
+
+            exit_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _log_event(f"[{exit_iso}] EXIT cycles={cycle} errors={consecutive_errors}")
+
+            # A --once run that failed its only cycle must exit non-zero. Returning 0
+            # after printing an error to stderr makes the failure invisible to any
+            # supervisor, cron entry or shell check that reads the exit status.
+            if once and last_cycle_failed:
+                sys.exit(1)
+    except InstanceInUse as exc:
+        _refuse_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _refuse_msg = f"[POLL {_refuse_iso}] REFUSED: {exc}"
+        print(_refuse_msg, file=sys.stderr)
+        _log_event(_refuse_msg)
+        raise SystemExit(2) from exc
+        _refuse_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _refuse_msg = f"[POLL {_refuse_iso}] REFUSED: {exc}"
+        print(_refuse_msg, file=sys.stderr)
+        _log_event(_refuse_msg)
+        raise SystemExit(2) from exc
 
 
 def exit_pair(pair_id: str, live: bool, db_path: str | Path | None = None,

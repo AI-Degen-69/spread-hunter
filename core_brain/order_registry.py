@@ -26,7 +26,7 @@ import uuid
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Literal, Optional
 
 from core_brain.runtime_paths import resolve_runtime_file, runtime_file
 
@@ -66,6 +66,10 @@ ORDER_STATUSES = ("pending", "open", "partial", "filled", "cancelled", "unattrib
 TERMINAL_UNFILLED_STATUSES = frozenset({"cancelled", "unattributed"})
 
 RECONCILE_LOCK_STALE_MS: int = 300_000
+
+# Whole-loop ownership: a crashed fleet/poll loop releases implicitly after
+# this TTL; the live loop's per-cycle heartbeat keeps it fresh forever.
+INSTANCE_LOCK_STALE_MS: int = 300_000
 
 _CURRENT_RUN_ID: Optional[str] = None
 
@@ -164,6 +168,19 @@ def set_run_id(run_id: str) -> None:
 
 class ReconcileInProgress(RuntimeError):
     """Raised when a reconcile pass is already in flight against this database."""
+
+
+class InstanceInUse(RuntimeError):
+    """Raised when a second loop wants a role slot another loop already holds.
+
+    Deliberately NOT a subclass of ReconcileInProgress: the poll loop catches
+    that per cycle to skip, and a startup refusal must never be swallowed there.
+    """
+
+
+# Legal instance_lock roles. A typo ("Fleet", "fleet ") must fail loudly at
+# the call site, never silently mint a third slot nobody else checks.
+SlotRole = Literal["fleet", "poll"]
 
 
 SCHEMA = """
@@ -360,6 +377,16 @@ CREATE TABLE IF NOT EXISTS divergence_events (
 
 CREATE TABLE IF NOT EXISTS reconcile_lock (
     id INTEGER PRIMARY KEY CHECK (id = 1),
+    holder TEXT NOT NULL,
+    acquired_ts INTEGER NOT NULL
+);
+
+-- Whole-loop ownership, one row per role ("fleet" / "poll"). The supported
+-- stack runs one fleet loop beside one poll loop on this database, so a
+-- single blanket slot would refuse the legal pair; only a second holder of
+-- the SAME role is refused.
+CREATE TABLE IF NOT EXISTS instance_lock (
+    role TEXT PRIMARY KEY,
     holder TEXT NOT NULL,
     acquired_ts INTEGER NOT NULL
 );
@@ -839,6 +866,88 @@ class OrderRegistry:
                 (holder, int(acquired_ts)),
             )
             conn.commit()
+
+    def _write_instance_lock(self, role: SlotRole, holder: str, acquired_ts: int) -> None:
+        """Force one role's row. Test and recovery seam."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR REPLACE INTO instance_lock (role, holder, acquired_ts) "
+                "VALUES (?, ?, ?)",
+                (role, holder, int(acquired_ts)),
+            )
+            conn.commit()
+
+    def refresh_instance_lock(self, role: SlotRole, holder: str, now_ms: int) -> bool:
+        """Heartbeat: re-stamp our row so a long run never looks stale.
+
+        Only touches the row our holder owns; a no-op when it is gone.
+        Returns True while this holder still owns the slot. False means
+        another loop adopted the row after it went stale -- the caller must
+        stop writing rather than record into a registry it no longer owns.
+        A DB hiccup returns True (keep running, retry next cycle) so a
+        transient error can never stop the loop by itself.
+        """
+        try:
+            with self._conn() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cur = conn.execute(
+                    "UPDATE instance_lock SET acquired_ts = ? "
+                    "WHERE role = ? AND holder = ?",
+                    (int(now_ms), role, holder),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+        except sqlite3.Error:
+            return True
+
+    @contextmanager
+    def instance_lock(self, role: SlotRole, now_ms: int) -> Iterator[str]:
+        """Hold one role's writer slot for this database, or refuse.
+
+        Held for the whole fleet/poll loop by the one process that owns the
+        role; a second loop wanting the SAME role gets InstanceInUse naming
+        the holder and how long it has held the slot. A holder older than
+        INSTANCE_LOCK_STALE_MS is treated as a crashed process and adopted.
+        Readers never take this lock and are never blocked by it.
+        """
+        holder = f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT holder, acquired_ts FROM instance_lock WHERE role = ?",
+                (role,),
+            ).fetchone()
+            if row is not None:
+                age_ms = int(now_ms) - int(row["acquired_ts"])
+                if age_ms < INSTANCE_LOCK_STALE_MS:
+                    conn.rollback()
+                    raise InstanceInUse(
+                        f"Another {role} loop already owns {self.db_path} "
+                        f"(holder={row['holder']}, held for "
+                        f"{age_ms} ms). Refusing rather than recording an "
+                        f"independent inventory into the same registry."
+                    )
+            conn.execute(
+                "INSERT OR REPLACE INTO instance_lock (role, holder, acquired_ts) "
+                "VALUES (?, ?, ?)",
+                (role, holder, int(now_ms)),
+            )
+            conn.commit()
+
+        try:
+            yield holder
+        finally:
+            try:
+                with self._conn() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(
+                        "DELETE FROM instance_lock WHERE role = ? AND holder = ?",
+                        (role, holder),
+                    )
+                    conn.commit()
+            except sqlite3.Error:
+                pass
 
     @contextmanager
     def reconcile_lock(self, now_ms: int) -> Iterator[str]:

@@ -1,3 +1,17 @@
+# Constraints: Issue #296 — Port single-instance ownership lock to core_brain
+
+## Quality & Tests
+- Zero regressions: `tests/test_order_registry.py` and `tests/test_trader_loop.py` must pass 100%; full `python -m pytest -q` stays with GitHub CI on push.
+- New/changed behavior needs a test that fails without the change (RED before GREEN): second same-role holder refused, pair coexists, eviction-stop.
+- Anti-Cheat: strictly forbid skipping tests, deleting assertions, or bypassing linters.
+- Tests use `tmp_path` DBs only (`tests/test_order_registry.py:62` pattern); no test ever writes into live `data/` or `run/`.
+
+## Risk & Behavior Boundaries
+- `InstanceInUse` must NOT subclass `ReconcileInProgress` (`order_manager.py:2246` per-cycle skip must never swallow a startup refusal).
+- The designed fleet+poll pair on one DB must keep working; only a second holder of the SAME role is refused.
+- Read-only consumers (`dashboard/server.py`, ro readers) never take the lock.
+- No new external dependencies; refusal exits non-zero (2) with holder + age on stderr.
+
 # Constraints: Issue #240 — End-of-window proximity gate
 
 ## Quality & Tests

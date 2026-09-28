@@ -21,6 +21,7 @@ import os
 import sys
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -29,6 +30,7 @@ from typing import Any, Callable, Optional
 from core_brain.quotes import Inventory, QuoteIntent, evaluate_market_quote
 from core_brain import risk
 from core_brain.cycle_stream import emit as _emit_cycle_event
+from core_brain.order_registry import InstanceInUse, OrderRegistry
 
 log = logging.getLogger("main_spread_hunter_loop")
 
@@ -418,77 +420,97 @@ def run(
     last_cycle: list[LiveFleetResult] = []
     current_markets = list(markets or [])
     cycle = 0
-    while True:
-        cycle += 1
-        # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
-        # are recomputed once per cycle and merged into the base config, so the
-        # fleet-level gates inside decide_quotes see live numbers rather than
-        # their 0.0 defaults. A failure here degrades to the defaults.
-        if seam.fleet_state_fn is not None:
-            try:
-                seam.base_cfg = replace(seam.base_cfg, **seam.fleet_state_fn(seam.registry))
-            except Exception as e:
-                log.warning("fleet state failed: %s: %s", type(e).__name__, e)
+    registry = seam.registry
+    # Whole-loop ownership: one fleet loop per database. A second fleet gets
+    # InstanceInUse naming the holder; the poll loop's own "poll" slot is
+    # untouched so the designed pair keeps working. Fakes/MagicMock/None skip
+    # the gate -- only a real OrderRegistry writes a real database.
+    lock_cm = (
+        registry.instance_lock("fleet", int(time.time() * 1000))
+        if isinstance(registry, OrderRegistry)
+        else nullcontext(None)
+    )
+    with lock_cm as holder:
+        while True:
+            cycle += 1
+            # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
+            # are recomputed once per cycle and merged into the base config, so the
+            # fleet-level gates inside decide_quotes see live numbers rather than
+            # their 0.0 defaults. A failure here degrades to the defaults.
+            if seam.fleet_state_fn is not None:
+                try:
+                    seam.base_cfg = replace(seam.base_cfg, **seam.fleet_state_fn(seam.registry))
+                except Exception as e:
+                    log.warning("fleet state failed: %s: %s", type(e).__name__, e)
 
-        try:
-            seam.reconcile_fn(seam.client, seam.registry, seam.maker_address)
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            log.warning("reconcile failed: %s: %s", type(e).__name__, e)
-
-        # An empty refresh is never obeyed. `load_graduated_markets` raises on a
-        # missing, empty, malformed or stale feed, but a well-formed `[]` -- the
-        # ranker finding nothing that cycle -- returns cleanly. Adopting it would
-        # empty the active universe and hand every resting order to the dropped-
-        # market cleanup below, cancelling the whole book on a transient scan.
-        if markets_fn is not None:
             try:
-                fresh = markets_fn()
+                seam.reconcile_fn(seam.client, seam.registry, seam.maker_address)
+            except KeyboardInterrupt:
+                raise
             except Exception as e:
-                log.warning("markets_fn failed: %s: %s", type(e).__name__, e)
-            else:
-                if fresh:
-                    current_markets = list(fresh)
+                log.warning("reconcile failed: %s: %s", type(e).__name__, e)
+
+            # An empty refresh is never obeyed. `load_graduated_markets` raises on a
+            # missing, empty, malformed or stale feed, but a well-formed `[]` -- the
+            # ranker finding nothing that cycle -- returns cleanly. Adopting it would
+            # empty the active universe and hand every resting order to the dropped-
+            # market cleanup below, cancelling the whole book on a transient scan.
+            if markets_fn is not None:
+                try:
+                    fresh = markets_fn()
+                except Exception as e:
+                    log.warning("markets_fn failed: %s: %s", type(e).__name__, e)
                 else:
-                    log.warning(
-                        "markets_fn returned no markets; keeping the previous %d",
-                        len(current_markets))
+                    if fresh:
+                        current_markets = list(fresh)
+                    else:
+                        log.warning(
+                            "markets_fn returned no markets; keeping the previous %d",
+                            len(current_markets))
 
-        cycle_results: list[LiveFleetResult] = []
-        for spec in list(current_markets or []):
-            cycle_results.append(_visit_one(
-                seam=seam, spec=spec, live=live, cycle=cycle,
-                emit_fn=emit_fn,
-            ))
+            cycle_results: list[LiveFleetResult] = []
+            for spec in list(current_markets or []):
+                cycle_results.append(_visit_one(
+                    seam=seam, spec=spec, live=live, cycle=cycle,
+                    emit_fn=emit_fn,
+                ))
 
-        # An empty universe is not evidence that every market was dropped: it is
-        # the state before the first successful refresh, or after one that
-        # graduated nothing. "Dropped" is only meaningful against a real set.
-        if (live and current_markets and seam.registry is not None
-                and seam.cancel_fn is not None):
-            cycle_results.extend(_cancel_dropped_markets(
-                seam=seam, current_markets=current_markets, cycle=cycle,
-                emit_fn=emit_fn,
-            ))
+            # An empty universe is not evidence that every market was dropped: it is
+            # the state before the first successful refresh, or after one that
+            # graduated nothing. "Dropped" is only meaningful against a real set.
+            if (live and current_markets and seam.registry is not None
+                    and seam.cancel_fn is not None):
+                cycle_results.extend(_cancel_dropped_markets(
+                    seam=seam, current_markets=current_markets, cycle=cycle,
+                    emit_fn=emit_fn,
+                ))
 
-        last_cycle = cycle_results
-        if once:
-            once_results.extend(cycle_results)
+            last_cycle = cycle_results
+            if once:
+                once_results.extend(cycle_results)
 
-        try:
-            seam.sweep_fn()
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            log.warning("sweep failed: %s: %s", type(e).__name__, e)
+            try:
+                seam.sweep_fn()
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                log.warning("sweep failed: %s: %s", type(e).__name__, e)
 
-        if once:
-            break
-        try:
-            sleep_fn(max(0.0, interval))
-        except KeyboardInterrupt:
-            break
+            # Heartbeat: re-stamp our slot so a long run never looks stale. An
+            # adopted slot means another loop owns the registry now -- stop writing
+            # rather than record into a database we no longer own.
+            if holder is not None and not registry.refresh_instance_lock(
+                    "fleet", holder, int(time.time() * 1000)):
+                log.error("instance slot adopted by another loop; stopping "
+                          "before further writes")
+                break
+
+            if once:
+                break
+            try:
+                sleep_fn(max(0.0, interval))
+            except KeyboardInterrupt:
+                break
 
     return once_results if once else last_cycle
 
@@ -1390,11 +1412,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.info("resolution sweeper started (every %ss, background)",
                  a.resolution_interval)
 
-    results = run(
-        seam,
-        interval=a.interval, once=a.once, live=a.live, markets=specs,
-        markets_fn=lambda: _market_specs(a.max_markets, registry=registry),
-    )
+    try:
+        results = run(
+            seam,
+            interval=a.interval, once=a.once, live=a.live, markets=specs,
+            markets_fn=lambda: _market_specs(a.max_markets, registry=registry),
+        )
+    except InstanceInUse as exc:
+        print(f"fleet refused: {exc}", file=sys.stderr)
+        return 2
     return 0 if results else 1
 
 
