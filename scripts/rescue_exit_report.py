@@ -34,7 +34,6 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
 
 # The rescue window: `pairs_exit_window_sec` in core_brain/config.py. Aged-out
 # detection is measured against it; a store carries no config, so the default
@@ -61,7 +60,7 @@ def _ro(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _usd(x: Optional[float]) -> str:
+def _usd(x: float | None) -> str:
     if x is None:
         return "--"
     return f"-${abs(x):.2f}" if x < 0 else f"${x:.2f}"
@@ -93,7 +92,7 @@ def _orders_by_condition(reg: sqlite3.Connection) -> dict[str, list[sqlite3.Row]
     return out
 
 
-def _settlement_row(close, cfills, heavy_token) -> Optional[dict]:
+def _settlement_row(close, cfills, heavy_token) -> dict | None:
     """Reconstruct a `shadow_settlement` close: the one-sided leg held to the end.
 
     Its P&L is the whole story -- the leg redeemed at $1.00 or died at $0.00 --
@@ -113,7 +112,7 @@ def _settlement_row(close, cfills, heavy_token) -> Optional[dict]:
         "cid": close["condition_id"],
         "pair_id": leg_fills[0]["pair_id"] or "--",
         "method": close["method"],
-        "reason": close["reason"] if "reason" in close.keys() else None,
+        "reason": close["reason"] if "reason" in dict(close) else None,
         "token": heavy_token,
         "sold_side": "--",
         "shares": close["shares"],
@@ -128,7 +127,7 @@ def _settlement_row(close, cfills, heavy_token) -> Optional[dict]:
     }
 
 
-def _exit_row(close, fills, orders) -> Optional[dict]:
+def _exit_row(close, fills, orders) -> dict | None:
     """Reconstruct one rescue close from its condition's rows.
 
     The sold leg is the one the close prices (`up_price` or `dn_price` set);
@@ -153,12 +152,9 @@ def _exit_row(close, fills, orders) -> Optional[dict]:
         # The settlement books whichever token the venue resolved; both held
         # tokens belong to this condition, so reconstruct from the heavier one.
         heavy_token = max(by_token, key=by_token.get)
-        row_q = orders.get(cid, [])
-        heavy_side = None
-        for o in row_q:
-            if o["token_id"] == heavy_token:
-                heavy_side = "UP"  # resolved below from the fills' quote side
-                break
+        # The settlement books the venue's resolved token; the heavier held
+        # side is the one that was one-sided. The lighter side, if any, was
+        # the companion the rescue never caught.
         return _settlement_row(close, cfills, heavy_token)
     sold_price = close["up_price"] if sold_side == "UP" else close["dn_price"]
 
@@ -187,7 +183,7 @@ def _exit_row(close, fills, orders) -> Optional[dict]:
         "cid": cid,
         "pair_id": pair_id or "--",
         "method": close["method"],
-        "reason": close["reason"] if "reason" in close.keys() else None,
+        "reason": close["reason"] if "reason" in dict(close) else None,
         "token": heavy_token,
         "sold_side": sold_side,
         "shares": shares,
@@ -203,7 +199,7 @@ def _exit_row(close, fills, orders) -> Optional[dict]:
     }
 
 
-def _light_leg_quote(reg: sqlite3.Connection, cid: str, sold_side: str) -> Optional[dict]:
+def _light_leg_quote(reg: sqlite3.Connection, cid: str, sold_side: str) -> dict | None:
     """The companion quote: side opposite the sold leg, most recent first."""
     want = "DOWN" if sold_side == "UP" else "UP"
     row = reg.execute(
@@ -273,7 +269,7 @@ def classify_exit(reg: sqlite3.Connection, row: dict) -> str:
 
 
 def q1_grace_upper_bound(reg: sqlite3.Connection, row: dict,
-                         tape: Optional[sqlite3.Connection],
+                         tape: sqlite3.Connection | None,
                          window_sec: float = PAIRS_EXIT_WINDOW_SEC) -> str:
     """Did the sampled opposite-leg book reach the companion quote price?
 
@@ -355,7 +351,7 @@ def q3_feature_rows(reg: sqlite3.Connection, exits: list[dict]) -> tuple[int, in
 # --- report -------------------------------------------------------------------
 
 
-def report(registry_path: Path, booktape_path: Optional[Path], top: int) -> str:
+def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
     reg = _ro(registry_path)
     tape = None
     if booktape_path is not None:
@@ -385,7 +381,7 @@ def report(registry_path: Path, booktape_path: Optional[Path], top: int) -> str:
         f"  capital at risk: {_usd(total_capital)}")
     say("")
 
-    n_e, _, q3_lines = q3_feature_rows(reg, rows[:top])
+    _, _, q3_lines = q3_feature_rows(reg, rows[:top])
     for line in q3_lines:
         say(line)
     say("")
@@ -422,7 +418,7 @@ def report(registry_path: Path, booktape_path: Optional[Path], top: int) -> str:
     return "\n".join(out)
 
 
-def main(argv: Optional[list[str]] = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(
         description="Read-only forensic report on single-buy rescue exits (#306).")
     ap.add_argument("--registry", required=True, help="registry store (read-only)")

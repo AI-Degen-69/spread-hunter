@@ -447,4 +447,9 @@ class TestCli:
         add_exit_close(reg, cid="c2", shares=10.0, sell_price=0.45,
                        heavy_avg=e2["heavy_price"], ts=3000.0)
         out = run_report(tmp_path / "reg.db", ["--top", "1"])
-        assert "p1" in out and "p2" not in out
+        # p2's own detail row must be absent (header/name mentions aside).
+        detail = [ln for ln in out.splitlines() if ln.strip().startswith("[single_buy_exit]")]
+        assert len(detail) == 1
+        assert "p1" in detail[0] and "p2" not in detail[0]
+        # Q3 features still summarize the full set, only rows are truncated.
+        assert "loss share" in out
