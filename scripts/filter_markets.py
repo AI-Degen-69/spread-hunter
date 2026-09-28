@@ -2067,6 +2067,10 @@ def main() -> None:
     else:
         picked = eligible[:top]
 
+    # Conditions the ranker recovered from, reported rather than raised: a run
+    # that published something must still say what it could not.
+    warnings: list[str] = []
+
     if not args.dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
         marker = out_dir / "ranking.marker"
@@ -2122,19 +2126,30 @@ def main() -> None:
             if paired_bundle is not None:
                 # One atomic file feeds both arms, so they can never read a
                 # control list from one rank and a treatment list from another.
-                _publish_json(out_dir / "paired_markets.json", paired_bundle)
-                audit_path = out_dir / "paired_depth_audit.jsonl"
-                with audit_path.open("a", encoding="utf-8") as stream:
-                    stream.write(json.dumps({
-                        "format": paired_bundle["format"],
-                        "snapshot_id": paired_bundle["snapshot_id"],
-                        "ranked_at": paired_bundle["ranked_at"],
-                        "control_depth_usd": paired_bundle["control_depth_usd"],
-                        "treatment_depth_usd": paired_bundle["treatment_depth_usd"],
-                        "volume_gate_usd": paired_bundle["volume_gate_usd"],
-                        "counts": paired_bundle["counts"],
-                        "audit": paired_bundle["audit"],
-                    }) + "\n")
+                if _publish_json(out_dir / "paired_markets.json", paired_bundle):
+                    audit_path = out_dir / "paired_depth_audit.jsonl"
+                    with audit_path.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps({
+                            "format": paired_bundle["format"],
+                            "snapshot_id": paired_bundle["snapshot_id"],
+                            "ranked_at": paired_bundle["ranked_at"],
+                            "control_depth_usd": paired_bundle["control_depth_usd"],
+                            "treatment_depth_usd": paired_bundle["treatment_depth_usd"],
+                            "volume_gate_usd": paired_bundle["volume_gate_usd"],
+                            "counts": paired_bundle["counts"],
+                            "audit": paired_bundle["audit"],
+                        }) + "\n")
+                else:
+                    # The swap lost every retry to a reader's open handle, so
+                    # the feed still holds the PREVIOUS snapshot. Recording
+                    # this one in the audit would name a snapshot no arm could
+                    # ever have read, and the report compares the audit's
+                    # snapshot set against what the arms actually observed.
+                    # An honest gap beats a phantom one.
+                    warnings.append(
+                        f"paired bundle for {paired_bundle['snapshot_id']} was NOT "
+                        "written (rename lost to a reader); skipped the audit "
+                        "line so it does not list an unobservable snapshot")
         finally:
             # Remove the marker after successful write so subsequent runs aren't blocked
             if marker.exists():
@@ -2159,6 +2174,8 @@ def main() -> None:
               f"{'would write' if args.dry_run else 'wrote'} top {len(picked)}"
               f" -> runtime/markets.json")
     print(census)
+    for warning in warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
     depth_bar_str = (f"${trial_bar:,.0f}"
                      + (f" [TRIAL vs permanent ${MIN_TOP3_DEPTH_USD:,.0f}]"
                         if trial_active else ""))

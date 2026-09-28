@@ -175,3 +175,56 @@ def test_ranker_writes_atomic_pair_with_shared_snapshot_and_pins_volume(
     assert bundle["treatment"][1]["paired_depth_snapshot_id"] == bundle["snapshot_id"]
     assert len(audit) == 1
     assert json.loads(audit[0])["snapshot_id"] == bundle["snapshot_id"]
+
+
+def test_ranker_skips_the_audit_line_when_the_bundle_swap_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """A bundle that was not written must not appear in the audit.
+
+    `_publish_json` returns False when every rename loses to a reader's open
+    handle -- realistic on Windows, where both shadow arms hold the feed. The
+    feed then still holds the PREVIOUS snapshot, so auditing this one would
+    name a snapshot no arm could ever have read, and the report compares the
+    audit's snapshot set against what each arm actually observed.
+    """
+    from scripts import filter_markets as fm
+
+    scored = [
+        {"cid": "0xdeep", "title": "deep", "slug": "deep", "source": "spread",
+         "eligible": True, "return_pct_day": 4.0, "yes_depth_usd": 800,
+         "no_depth_usd": 900, "est_income": 1.0, "est_capital": 100.0,
+         "event_id": "event-deep", "event_slug": "event-deep"},
+    ]
+    monkeypatch.setattr(
+        fm, "gamma_universe",
+        lambda session, *a, **kw: ([{"condition_id": "0xdeep"}],
+                                   {"pages_fetched": 1, "rows_scanned": 1,
+                                    "truncated": False, "cheap_rejects": {}}))
+    monkeypatch.setattr(fm, "_score_universe",
+                        lambda universe, **kw: (scored, len(universe)))
+    monkeypatch.setattr(fm, "_if_adopted", lambda _row: None)
+    monkeypatch.setattr(fm, "_write_universe_file", lambda *a, **kw: None)
+    monkeypatch.setattr(fm, "_write_pipeline_snapshot", lambda *a, **kw: None)
+    monkeypatch.setattr(fm, "_log_rank_near_misses", lambda *a, **kw: 0)
+    monkeypatch.setattr(fm, "_log_rank_volume_near_misses", lambda *a, **kw: 0)
+
+    real_publish = fm._publish_json
+
+    def refuse_the_bundle(target, payload):
+        # markets.json still publishes; only the paired swap loses.
+        if target.name == "paired_markets.json":
+            return False
+        return real_publish(target, payload)
+
+    monkeypatch.setattr(fm, "_publish_json", refuse_the_bundle)
+    monkeypatch.setattr("sys.argv", [
+        "filter_markets", "--top", "5", "--out-dir", str(tmp_path / "paired"),
+        "--trial-depth", "250", "--paired-depth-control-usd", "500",
+    ])
+
+    fm.main()
+
+    audit_path = tmp_path / "paired" / "paired_depth_audit.jsonl"
+    assert not audit_path.exists()
+    err = capsys.readouterr().err
+    assert "was NOT written" in err

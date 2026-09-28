@@ -252,6 +252,36 @@ def _two_arms(tmp_path, *, control=None, treatment=None, **kwargs):
     return control_db, treatment_db
 
 
+def test_report_is_inconclusive_for_a_run_that_never_finished(tmp_path):
+    """A killed shadow loop must not crash the analyzer.
+
+    A loop that crashes or is stopped never reaches
+    `record_paired_run_finish`, so its row keeps `status='running'` and
+    `finished_at=NULL`. The operator then gets a report, not a TypeError out
+    of `float(None)` -- the documented outcome for a run that cannot be
+    measured is `inconclusive` plus the reason.
+    """
+    control_db, treatment_db = _two_arms(tmp_path)
+    for path, run_id in ((control_db, "control-run"), (treatment_db, "treatment-run")):
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "UPDATE shadow_paired_runs SET status='running', finished_at=NULL "
+            "WHERE run_id=?", (run_id,))
+        conn.commit()
+        conn.close()
+
+    report = _report(control_db, treatment_db)
+
+    assert report["measurement_status"] == "inconclusive"
+    assert report["decision"] == "inconclusive"
+    joined = " ".join(report["limitations"])
+    assert "control run is not marked finished" in joined
+    assert "treatment run is not marked finished" in joined
+    # A zero-length window cannot support a measurement, and saying so is the
+    # whole point of returning a report instead of raising.
+    assert "no positive overlapping run window" in joined
+
+
 def test_report_cluster_bootstrap_uses_uplift_sum_and_requires_pilot_variance(tmp_path):
     control_db, treatment_db = _two_arms(tmp_path)
 

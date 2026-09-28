@@ -307,6 +307,7 @@ def record_submit(
                     condition_id=market.condition_id, token_id=str(i.token_id),
                     side="BUY", price=i.price, original_size=i.size, status="open",
                     posted_ts=now_ms, last_polled_ts=now_ms, pair_id=pair_id,
+                    max_pair_cost_at_post=max_pair_cost,
                 ))
             except Exception:
                 if attribution_written:

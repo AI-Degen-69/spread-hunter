@@ -389,8 +389,22 @@ def analyze_paired_depth(
             limitations.append(f"{label} encountered a paired feed/market coverage gap")
 
     crun, trun = control["run"], treatment["run"]
+
+    def _finished(run: dict) -> float:
+        """End of a run's window, or its start when it never finished.
+
+        A shadow loop that crashes or is killed never reaches
+        `record_paired_run_finish`, so its row keeps `finished_at = NULL`.
+        Collapsing that window to zero length keeps the report on its
+        documented path -- a list of limitations and an inconclusive status --
+        instead of a TypeError out of `float(None)`, which the CLI's error
+        handler does not catch.
+        """
+        raw = run["finished_at"]
+        return float(raw) if raw is not None else float(run["started_at"])
+
     starts = [float(crun["started_at"]), float(trun["started_at"])]
-    ends = [float(crun["finished_at"]), float(trun["finished_at"])]
+    ends = [_finished(crun), _finished(trun)]
     common_start, common_end = max(starts), min(ends)
     elapsed_hours = max(0.0, (common_end - common_start) / 3600.0)
     if common_end <= common_start:
@@ -403,7 +417,7 @@ def analyze_paired_depth(
     if equal_bankroll <= 0:
         limitations.append("starting bankroll is not positive")
     for label, run in (("control", crun), ("treatment", trun)):
-        actual = float(run["finished_at"]) - float(run["started_at"])
+        actual = _finished(run) - float(run["started_at"])
         planned = float(run["planned_minutes"]) * 60.0
         if actual + max_mark_age_sec < planned:
             limitations.append(f"{label} run ended before its planned duration")
