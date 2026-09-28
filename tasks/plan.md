@@ -36,7 +36,7 @@ T4 Depends on: T1, T2, T3 (final parity + verification).
 
 ## Tasks
 
-### T1 [Backend/Logic] Gamma label extraction + persistence in the filter (M)
+### T1 [Backend/Logic] Gamma label extraction + persistence in the filter (M) [x]
 Target files: `scripts/filter_markets.py`, `tests/test_unified_universe.py`.
 - Guarded first-event / first-series helpers in `gamma_universe` (tolerate
   list, JSON-string list, null, dict).
@@ -49,7 +49,7 @@ Target files: `scripts/filter_markets.py`, `tests/test_unified_universe.py`.
 - Helper skill: test-driven-development. Depends on: —.
 - Verify: `python -m pytest -q tests/test_unified_universe.py` (RED first, then GREEN).
 
-### T2 [Backend/Logic] Shared `core_brain/market_meta.py` resolver + wiring (L)
+### T2 [Backend/Logic] Shared `core_brain/market_meta.py` resolver + wiring (L) [x]
 Target files: `core_brain/market_meta.py` (new), `core_brain/kpi.py`,
 `core_brain/registry_state.py`, `tests/test_market_meta.py` (new),
 `tests/test_registry_state.py`.
@@ -68,7 +68,7 @@ Target files: `core_brain/market_meta.py` (new), `core_brain/kpi.py`,
 - Verify: `python -m pytest -q tests/test_market_meta.py tests/test_registry_state.py tests/test_portfolio_overview.py`
   (`test_portfolio_overview.py:259-277` unchanged).
 
-### T3 [Backend/Logic + Display] Same category in all four views (M)
+### T3 [Backend/Logic + Display] Same category in all four views (M) [x]
 Target files: `dashboard/static/app.js`, `tests/test_orders_trades_table.py`,
 `tests/js/orders_trades_harness.cjs` (only if `state.pairs` forwarding needed).
 - `marketCategory(m)` helper (non-blank or `Uncategorized`); Active Markets
@@ -84,7 +84,7 @@ Target files: `dashboard/static/app.js`, `tests/test_orders_trades_table.py`,
 - Helper skill: test-driven-development. Depends on: T2.
 - Verify: `python -m pytest -q tests/test_orders_trades_table.py`.
 
-### T4 [Backend/Logic] Final parity gate + closeout hygiene (S)
+### T4 [Backend/Logic] Final parity gate + closeout hygiene (S) [x]
 Target files: none (verification only).
 - Rerun the full focused selection T1–T39922 together; confirm the STATUS-header
   vocabulary test passes unmodified; confirm no filter CLI was run and no
