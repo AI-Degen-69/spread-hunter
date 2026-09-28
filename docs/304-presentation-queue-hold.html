@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>התור קובע הכול — ועכשיו יש גלגלת לכך</title>
+<style>
+  :root {
+    --bg: #0c1412; --panel: #12201c; --line: #1f3830;
+    --ink: #e8f5f0; --muted: #86a79b;
+    --accent: #4fd1a5; --warn: #ffb454; --bad: #f2726f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", Arial, sans-serif; line-height: 1.5;
+    padding: 28px 16px 64px; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.85rem; margin: 0 0 8px; line-height: 1.25; }
+  .sub { color: var(--muted); margin: 0 0 8px; }
+  .lede { color: var(--muted); margin: 0 0 26px; font-size: 1rem; max-width: 46em; }
+  .lede b { color: var(--ink); }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 20px 18px; margin-bottom: 22px; }
+  h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  .hint { color: var(--muted); font-size: .86rem; margin: 0 0 18px; }
+  .ladder { display: flex; flex-direction: column; gap: 6px; }
+  .rung { display: grid; grid-template-columns: 92px 1fr 92px; align-items: center;
+    gap: 12px; cursor: pointer; border: 1px solid transparent; border-radius: 10px;
+    padding: 5px 8px; transition: background .18s ease, border-color .18s ease; }
+  .rung:hover { background: #16302750; border-color: var(--line); }
+  .rung.on { background: #16302750; border-color: var(--accent); }
+  .rung .lbl { color: var(--muted); font-size: .84rem; text-align: start;
+    font-variant-numeric: tabular-nums; }
+  .rung.on .lbl { color: var(--ink); }
+  .track { height: 26px; background: #0a120f; border-radius: 6px; overflow: hidden;
+    display: flex; align-items: center; }
+  .bar { height: 100%; border-radius: 6px; min-width: 3px; transition: width .5s ease; }
+  .pct { font-size: .84rem; text-align: end; color: var(--muted);
+    font-variant-numeric: tabular-nums; }
+  .rung.on .pct { color: var(--ink); }
+  .readout { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 16px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+  .stat .v { font-size: 1.9rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--muted); font-size: .82rem; margin-top: 2px; }
+  .v.hi { color: var(--accent); } .v.mid { color: var(--warn); } .v.lo { color: var(--bad); }
+  .dial { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 18px; }
+  .dial-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .dial-row input[type=range] { flex: 1 1 220px; accent-color: var(--accent); }
+  .dial-val { font-size: 1.5rem; font-weight: 700; min-width: 5.5em; text-align: center;
+    font-variant-numeric: tabular-nums; }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .chip { border: 1px solid var(--line); background: #0e1b17; color: var(--ink);
+    border-radius: 999px; padding: 7px 13px; font-size: .84rem; cursor: pointer; }
+  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .verdict { margin-top: 14px; font-size: .92rem; color: var(--muted); }
+  .verdict b { color: var(--accent); }
+  .foot { color: var(--muted); font-size: .9rem; margin-top: 8px; line-height: 1.8; }
+  .foot b { color: var(--ink); }
+  .links { margin-top: 14px; font-size: .9rem; }
+  .links a { color: var(--accent); }
+  @media (max-width: 560px) {
+    .rung { grid-template-columns: 76px 1fr 64px; gap: 8px; }
+    h1 { font-size: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>התור קובע הכול — ועכשיו יש גלגלת לכך</h1>
+  <p class="sub">17,540 הזמנות אמיתיות, שבועיים של ניסוי. התוצאה: המרחק מראש התור הוא המספר שקובע אם יש סיכוי בכלל.</p>
+  <p class="lede">
+    <b>לפני:</b> ההזמנה הייתה מוצבת, נבטלת ומוצבת מחדש לפני שמישה הגיע אליה. כשהמחיר זז, ההזמנה חזרה <b>לסוף התור</b> — וזה קרה 9,941 פעמים.<br>
+    <b>עכשיו:</b> יש הגדרה אחת שאומרת "החזק הזמנה כשהיא כזה קרובה לראש התור". היא נמדדה, נרשמה, ומוכנה לניסוי.<br>
+    <b>התוצאה:</b> הגלגלת קיימת. אם לסובב אותה ובאיזה מספר — זה נמדד עכשיו, לא נחשך עכשיו.
+  </p>
+  <div class="panel">
+    <h2>איפה ההזמנות עמדו — והאם מילאו אי פעם</h2>
+    <p class="hint">לחץ על שורה כדי לראות את הפירוט. הגובה הוא כמה מכלל ההזמנות עמדו בעומק הזה; הצבע הוא שיעור המילוי.</p>
+    <div class="ladder" id="ladder"></div>
+    <div class="readout">
+      <div class="stat"><div class="v" id="sN">&mdash;</div><div class="l">הזמנות בעומק הזה</div></div>
+      <div class="stat"><div class="v" id="sShare">&mdash;</div><div class="l">מכלל ההזמנות</div></div>
+      <div class="stat"><div class="v" id="sRate">&mdash;</div><div class="l">שיעור מילוי</div></div>
+      <div class="stat"><div class="v" id="sVerdict">&mdash;</div><div class="l">מה זה אומר</div></div>
+    </div>
+    <div class="dial">
+      <h2>הגלגלת: עד איפה לשמור?</h2>
+      <p class="hint">גרירה וראה כמה הזמנות נשמרות, ומה זה עושה לשיעור המילוי.</p>
+      <div class="dial-row">
+        <span class="dial-val" id="dialVal">200</span>
+        <input type="range" id="dial" min="0" max="2000000" step="50" value="200" aria-label="סף התור">
+      </div>
+      <div class="presets" id="presets"></div>
+      <div class="verdict" id="verdict"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>מה זה לא נוגע</h2>
+    <p class="foot">
+      ההגדרה <b>לא</b> דורסת את בדיקת עלות הזוג. אם השמירה על ההזמנה גורמת לזוג להיסגר מעל דולר, ההזמנה נפסלת בכל זאת — עמדה בתור לא שווה הפסד מובטח.<br>
+      היא גם <b>לא</b> מנסה לנחש: הזמנה שמעולם לא נמדדה נשארת כמות שהיא, כי "לא יודע" אינו "טוב".<br>
+      וההגדרה <b>כבויה כברירת מחדל</b>. זה מנוף על כסף אמיתי, והמערכת מזיזה אותו רק אחרי ניסוי מתועד.
+    </p>
+  </div>
+  <p class="foot">
+    <b>הכלכלה כבר הוכחה:</b> כל זוג שמוזג הכיל 5.4%. מה שחסר היה קצב, לא רווח.<br>
+    <b>מה הבעיה האמיתית:</b> ההזמנה שלך היא 5 מניות. התור שלה הוא 2,788 מניות בחציון. 5 מול 2,788.
+  </p>
+  <p class="links">
+    <a href="https://github.com/AI-Degen-69/spread-hunter/issues/304">הבעיה</a> ·
+    <a href="https://github.com/AI-Degen-69/spread-hunter/pull/305">העדכון</a>
+  </p>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  // Measured on data/01_shadow_12-09_00-58.db: 17,540 quotes carrying a
+  // recorded queue position, and 9,941 `price_moved` cancels.
+  var RUNGS = [
+    { lo: 0,       hi: 50,      n: 1482, rate: 11.47 },
+    { lo: 50,      hi: 200,     n: 1389, rate: 8.48 },
+    { lo: 200,     hi: 500,     n: 1489, rate: 5.57 },
+    { lo: 500,     hi: 2000,    n: 3388, rate: 3.10 },
+    { lo: 2000,    hi: 5000,    n: 2429, rate: 1.52 },
+    { lo: 5000,    hi: 10000,   n: 1995, rate: 0.55 },
+    { lo: 10000,   hi: 20000,   n: 2909, rate: 0.34 },
+    { lo: 20000,   hi: 50000,   n: 1908, rate: 0.52 },
+    { lo: 50000,   hi: 200000,  n: 468,  rate: 0.00 },
+    { lo: 200000,  hi: 1000000, n: 66,   rate: 0.00 },
+    { lo: 1000000, hi: 2000000, n: 17,   rate: 0.00 }
+  ];
+  var TOTAL_QUOTES = 17540;
+  var TOTAL_CANCELLED = 9941;
+  var MAX_N = 3388;
+  // price_moved cancels whose held queue was at or under each threshold.
+  var KEPT = { "50": 620, "200": 1580, "500": 2412, "2000": 4422, "5000": 6903 };
+  // cumulative share of orders / cumulative fill rate, measured not modelled.
+  var SWEEP = [
+    { th: 0, share: 5.7, rate: 9.36 }, { th: 50, share: 9.2, rate: 11.21 },
+    { th: 100, share: 12.1, rate: 11.18 }, { th: 200, share: 16.5, rate: 9.95 },
+    { th: 500, share: 24.9, rate: 8.49 }, { th: 1000, share: 34.4, rate: 7.01 },
+    { th: 2000, share: 44.5, rate: 6.16 }, { th: 5000, share: 58.0, rate: 5.04 },
+    { th: 10000, share: 69.4, rate: 4.30 }, { th: 20000, share: 86.0, rate: 3.54 },
+    { th: 50000, share: 96.9, rate: 3.20 }, { th: 100000, share: 99.0, rate: 3.13 },
+    { th: 2000000, share: 100.0, rate: 3.10 }
+  ];
+
+  function rateColour(r) { return r >= 8 ? "var(--accent)" : r >= 2 ? "var(--warn)" : "var(--bad)"; }
+  function rateClass(r) { return r >= 8 ? "hi" : r >= 2 ? "mid" : "lo"; }
+  function bandName(r) {
+    if (r.lo === 0) return "בראש התור";
+    if (r.hi >= 1000000) return "מיליון+";
+    if (r.hi >= 1000) return "עד " + (r.hi / 1000) + " אלף";
+    return r.lo + "–" + r.hi;
+  }
+  function verdictFor(r) {
+    if (r >= 8) return "כאן מחכים לך";
+    if (r >= 2) return "אפשר, לא בטוח";
+    return "כמעט אפס";
+  }
+  function fmt(n) { return Math.round(n).toLocaleString("he-IL"); }
+
+  var ladder = document.getElementById("ladder"), nodes = [];
+  RUNGS.forEach(function (r, i) {
+    var el = document.createElement("div");
+    el.className = "rung";
+    el.setAttribute("role", "button");
+    el.tabIndex = 0;
+    el.innerHTML = '<span class="lbl">' + bandName(r) + '</span>' +
+      '<span class="track"><span class="bar" style="width:' +
+      (100 * r.n / MAX_N).toFixed(1) + '%;background:' + rateColour(r.rate) +
+      ';opacity:' + (0.35 + 0.65 * (r.n / MAX_N)).toFixed(2) + '"></span></span>' +
+      '<span class="pct">' + (100 * r.n / TOTAL_QUOTES).toFixed(1) + '%</span>';
+    function select() { pick(i); }
+    el.addEventListener("click", select);
+    el.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); }
+    });
+    ladder.appendChild(el);
+    nodes.push(el);
+  });
+
+  var sN = document.getElementById("sN"), sShare = document.getElementById("sShare"),
+      sRate = document.getElementById("sRate"), sVerdict = document.getElementById("sVerdict");
+  function pick(i) {
+    var r = RUNGS[i];
+    nodes.forEach(function (el, j) { el.classList.toggle("on", i === j); });
+    sN.textContent = fmt(r.n);
+    sShare.textContent = (100 * r.n / TOTAL_QUOTES).toFixed(1) + "%";
+    sRate.textContent = r.rate.toFixed(2) + "%";
+    sRate.className = "v " + rateClass(r.rate);
+    sVerdict.textContent = verdictFor(r.rate);
+    sVerdict.className = "v " + rateClass(r.rate);
+  }
+  pick(0);
+
+  function interp(th, key) {
+    if (th <= SWEEP[0].th) return SWEEP[0][key];
+    for (var i = SWEEP.length - 1; i >= 0; i--) {
+      if (th >= SWEEP[i].th) {
+        var a = SWEEP[i], b = SWEEP[Math.min(i + 1, SWEEP.length - 1)];
+        if (b.th === a.th) return a[key];
+        var t = (th - a.th) / (b.th - a.th);
+        return a[key] + (b[key] - a[key]) * t;
+      }
+    }
+    return SWEEP[SWEEP.length - 1][key];
+  }
+  function keptAt(th) {
+    var best = 0, k;
+    for (k in KEPT) { if (th >= Number(k)) best = Math.max(best, KEPT[k]); }
+    if (th < 50) best = Math.round(KEPT["50"] * (th / 50));
+    return best;
+  }
+
+  var dial = document.getElementById("dial"),
+      dialVal = document.getElementById("dialVal"),
+      verdict = document.getElementById("verdict"),
+      presets = document.getElementById("presets");
+
+  function renderDial() {
+    var th = Number(dial.value);
+    dialVal.textContent = th >= 1000 ? fmt(th / 1000) + "K" : fmt(th);
+    var rate = interp(th, "rate"), kept = keptAt(th);
+    var pctKept = 100 * kept / TOTAL_CANCELLED, msg;
+    if (th === 0) {
+      msg = "<b>כרגע כל הזמנה שמחירה זז — נמחקת.</b> זה מה שקרה בשבועיים האחרונים.";
+    } else if (th <= 200) {
+      msg = "שומרים <b>" + fmt(kept) + "</b> מתוך " + fmt(TOTAL_CANCELLED) +
+            " הזמנות שנבטלו (" + pctKept.toFixed(1) + "%) — והן בדיוק האלה שהכי הרבה פעמים נמלאו: <b>" +
+            rate.toFixed(1) + "%</b> מילוי מול 9.4% בראש התור. זה המספר שהמדידה מצביעה עליו.";
+    } else if (th <= 2000) {
+      msg = "כבר מחזיקים יותר ממחצית מההזמנות שנבטלו (" + pctKept.toFixed(1) +
+            "%), אבל שיעור המילוי יורד ל־" + rate.toFixed(1) +
+            "% — מתחילים לשמור הזמנות שהשוק כבר עזב.";
+    } else {
+      msg = "מרחק רב מדי: " + pctKept.toFixed(1) +
+            "% מההזמנות נשמרות, אבל שיעור המילוי צונח ל־" + rate.toFixed(1) +
+            "%. שומרים הזמנות שאף אחד לא יבוא לקחת.";
+    }
+    verdict.innerHTML = msg;
+  }
+
+  [0, 50, 200, 500, 2000, 20000, 2000000].forEach(function (th) {
+    var b = document.createElement("button");
+    b.className = "chip";
+    b.type = "button";
+    b.textContent = th === 0 ? "כבוי" : th >= 1000 ? fmt(th / 1000) + "K" : fmt(th);
+    b.addEventListener("click", function () {
+      dial.value = th;
+      Array.prototype.forEach.call(presets.children, function (c) {
+        c.setAttribute("aria-pressed", c === b ? "true" : "false");
+      });
+      renderDial();
+    });
+    if (th === 200) b.setAttribute("aria-pressed", "true");
+    presets.appendChild(b);
+  });
+
+  dial.addEventListener("input", function () {
+    Array.prototype.forEach.call(presets.children, function (c) {
+      c.setAttribute("aria-pressed", "false");
+    });
+    renderDial();
+  });
+  renderDial();
+})();
+</script>
+
+</body>
+</html>
