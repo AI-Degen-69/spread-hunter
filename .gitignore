@@ -51,6 +51,7 @@ htmlcov/
 /runtime/archive/
 /runtime/*.json
 /runtime/*.jsonl
+/runtime/*.pid
 /runtime/.current_run_id
 /data/*.db*
 /data/archive/
@@ -64,6 +65,9 @@ htmlcov/
 # Generated statistics reports.
 /reports/
 python-BACKUP/
+
+# Local Vercel CLI project links (never publish; recreated by `vercel link`).
+.vercel/
 
 # Session tooling
 .freebuff/
