@@ -472,3 +472,74 @@ def test_the_universe_file_records_rejections_and_discovery(tmp_path,
     assert snap["discovery"]["truncated"] is True
     assert snap["discovery"]["cheap_rejects"]["not binary"] == 4
     assert [r["cid"] for r in snap["rows"]] == ["0xr", "0xe"]
+
+
+# --- venue taxonomy extraction (issue #295) -----------------------------------
+
+
+def test_null_category_with_series_title_keeps_the_series():
+    s = _FakeSession([[
+        _gamma_row("lol", 900_000.0, category=None, categorySlug=None,
+                   events=[{"title": "LoL event",
+                            "series": [{"title": "League of Legends"}]}]),
+    ]])
+    universe, _ = gamma_universe(s, min_volume_usd=125_000.0)
+
+    assert [m["condition_id"] for m in universe] == ["lol"]
+    assert universe[0]["category"] == ""
+    assert universe[0]["series_title"] == "League of Legends"
+
+
+def test_market_category_slug_survives_when_category_is_null():
+    s = _FakeSession([[
+        _gamma_row("cry", 900_000.0, category=None, categorySlug="Crypto"),
+    ]])
+    universe, _ = gamma_universe(s, min_volume_usd=125_000.0)
+
+    assert universe[0]["category"] == "Crypto"
+
+
+def test_event_category_and_tags_carried_verbatim():
+    s = _FakeSession([[
+        _gamma_row("ev", 900_000.0, category=None, categorySlug=None,
+                   tags=[{"label": "Politics", "slug": "politics"}],
+                   events=[{"category": "Politics",
+                            "tags": [{"label": "Elections",
+                                      "slug": "elections"}],
+                            "series": []}]),
+    ]])
+    universe, _ = gamma_universe(s, min_volume_usd=125_000.0)
+
+    assert universe[0]["category"] == "Politics"
+    assert universe[0]["tags"] == ["Politics", "Elections"]
+
+
+@pytest.mark.parametrize("bad_events", [
+    "nope",
+    [{"series": {"title": "Dictionary series"}}],
+    [{"series": "string series"}],
+    [{"series": None}],
+])
+def test_malformed_event_shapes_never_raise(bad_events):
+    s = _FakeSession([[
+        _gamma_row("bad", 900_000.0, category=None, categorySlug=None,
+                   events=bad_events),
+    ]])
+    universe, _ = gamma_universe(s, min_volume_usd=125_000.0)
+
+    assert [m["condition_id"] for m in universe] == ["bad"]
+    assert universe[0]["category"] == ""
+    assert universe[0]["series_title"] == ""
+
+
+def test_eligible_row_persists_tags_and_market_type():
+    m = _universe_candidate("0xtags")
+    m["tags"] = ["Politics", "Elections"]
+    m["market_type"] = "binary"
+    trades = [{"timestamp": _time.time(), "price": 0.5, "size": 4000.0}]
+    row = evaluate(_FakeSession([], trades=trades), 5.0, m,
+                   volume_24h=250_000.0, source="spread")
+
+    assert row["eligible"] is True
+    assert row["tags"] == ["Politics", "Elections"]
+    assert row["market_type"] == "binary"

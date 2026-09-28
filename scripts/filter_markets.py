@@ -372,6 +372,53 @@ def gamma_volume(session: requests.Session,
     return out
 
 
+def _first_event(m: dict) -> dict:
+    """First Gamma event, guarded: lists, JSON-string lists, or blank."""
+    events = m.get("events")
+    if isinstance(events, str):
+        try:
+            events = json.loads(events)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(events, list) or not events:
+        return {}
+    return events[0] if isinstance(events[0], dict) else {}
+
+
+def _first_series_title(event: dict) -> str:
+    """First series title, guarded: only a list of dicts yields a label."""
+    series = event.get("series")
+    if isinstance(series, str):
+        try:
+            series = json.loads(series)
+        except (TypeError, ValueError):
+            return ""
+    if not isinstance(series, list) or not series:
+        return ""
+    first = series[0]
+    if not isinstance(first, dict):
+        return ""
+    return first.get("title") or ""
+
+
+def _tag_labels(value) -> list[str]:
+    """Tag labels from a Gamma tags field; every other shape is ignored."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(value, list):
+        return []
+    out = []
+    for tag in value:
+        if isinstance(tag, dict):
+            label = tag.get("label") or tag.get("slug")
+            if label:
+                out.append(str(label))
+    return out
+
+
 def gamma_universe(session: requests.Session,
                    per_page: int = 100,
                    min_volume_usd: Optional[float] = None,
@@ -501,15 +548,20 @@ def gamma_universe(session: requests.Session,
             if spread <= 0:
                 _cheap_reject("no book spread", m)
                 continue
+            event = _first_event(m)
             out.append({
                 "condition_id": m.get("conditionId"),
                 "question": m.get("question") or "",
                 "market_slug": m.get("slug") or "",
-                "category": m.get("category") or m.get("categorySlug") or "",
+                "category": (m.get("category") or m.get("categorySlug")
+                             or event.get("category")
+                             or event.get("categorySlug") or ""),
+                "tags": _tag_labels(m.get("tags"))
+                + _tag_labels(event.get("tags")),
                 "market_type": m.get("marketType") or m.get("type") or "",
                 "market_group": m.get("groupItemTitle") or "",
-                "series_title": ((m.get("events") or [{}])[0].get("series") or [{}])[0].get("title", ""),
-                "event_title": ((m.get("events") or [{}])[0].get("title") or ""),
+                "series_title": _first_series_title(event),
+                "event_title": event.get("title") or "",
                 "tokens": [{"token_id": str(t)} for t in toks],
                 # Reward config, when the venue publishes one, feeds the score
                 # WINDOW only. It is not a filter and not an income source:
@@ -525,7 +577,7 @@ def gamma_universe(session: requests.Session,
                 # pre-start gate reads. Absent on everything else, which reads
                 # as "already trading".
                 "_start_iso": (m.get("gameStartTime")
-                               or ((m.get("events") or [{}])[0] or {}).get("gameStartTime")),
+                               or event.get("gameStartTime")),
                 "_order_min": float(m.get("orderMinSize") or 5),
                 "_volume_24h": vol,
                 "_spread": spread,
@@ -917,7 +969,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "title": m.get("question", "")[:90],
         "slug": m.get("market_slug", ""),
         "category": m.get("category") or m.get("categorySlug") or "",
-        "market_type": m.get("marketType") or m.get("type") or "",
+        "tags": list(m.get("tags") or []),
+        "market_type": m.get("market_type") or "",
         "market_group": m.get("market_group") or m.get("groupItemTitle") or "",
         "series_title": m.get("series_title") or "",
         "event_title": m.get("event_title") or "",
