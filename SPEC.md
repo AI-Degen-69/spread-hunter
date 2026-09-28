@@ -1,3 +1,61 @@
+# SPEC: Issue #294 - Click-to-sort the Orders & Trades tables
+
+## Goal
+Every column header in the dashboard's Orders & Trades table becomes a sort
+control: one click sorts the view by that column, a second click flips the
+direction, and exactly one header shows which direction is active — so the
+operator can rank the book by queue depth, pair cost, age or P&L instead of
+reading rows in whatever order the builder produced.
+
+## Acceptance criteria (from issue)
+- [ ] Any `<th>` in `#orders-trades-table` sorts the visible rows by that column in all four `OT_VIEWS`; a second click flips; one indicator at a time
+- [ ] Sorting re-orders the backing groups before row pairing, so pair rows stay adjacent, `rowspan` cells stay on `ot-pair-start`, and a CLOSED TRADES main row keeps its expanded sub-row beneath it
+- [ ] Numeric columns sort from the underlying value (`$1,000.00` > `$95.00`, 9 < 10 shares, `1.5d` > `10.0d`); `Market` sorts by `localeCompare` on the title
+- [ ] `--` ranks last in both directions
+- [ ] Sort state is per view and survives tab switching and the 2s poll re-render
+- [ ] With no header clicked, every view's row order is byte-identical to today
+- [ ] The STATUS column keeps its `title` vocabulary inside the `<th>` opening tag; `test_active_markets_status_header_explains_the_vocabulary` passes unmodified
+- [ ] Keyboard operable (real `<button type="button">`), `aria-sort` on the sorted `<th>`, arrow not the only signal
+- [ ] `styles.css` gives the sortable header hover and `:focus-visible` using existing DESIGN.md tokens
+- [ ] Added tests are RED against untouched `app.js`, GREEN after; existing tests stay green
+
+## Scope
+### In scope
+- Per-view sort state `{col, dir}` in memory, threaded from `renderOrdersTrades` (`app.js:4432`) through `ordersTradesRows` (`:4425`) into the four builders
+- Sort specs parallel to `OT_COLUMNS` (`:3748-3762`), one accessor per column reading the same raw values the builders use
+- A sort control in every `<th>` from `otHeadHtml` (`:4037-4049`), with a delegated click listener on the persistent `#orders-trades-head`
+- Export of new pure helpers via `module.exports` (`:5424-5431`) and pass-through of the sort input in `tests/js/orders_trades_harness.cjs`
+- `dashboard/static/styles.css` sortable-header affordances
+
+### Out of scope
+- Any new endpoint, backend KPI change, or persisted sort storage
+- The Data & Markets table, the other dashboard tables, or `OT_COLUMNS` label text
+- Any change to the money path (`core_brain/`), the venue, or live execution
+
+## Interface contracts (as shipped)
+- `otHeadHtml(view, sort = null) -> string` — unchanged output when `sort` is null; the sorted `<th>` gains `aria-sort` and an indicator; the first `<th>` keeps `class="ot-market-head"`; the STATUS `<th>` keeps its `title` attribute. The direction is announced **once**, on the `<th>`; the arrow is `aria-hidden`.
+- `ordersTradesRows(view, kpi, state, sort = null) -> string` — each builder sorts its backing groups/entries when `sort` is given, before mapping to HTML.
+- `otSortGroups(groups, sort, valueOf)` — stable re-ordering; `valueOf(group, col, dir)` reads the underlying value per view. Each builder owns its own accessor switch, so a column's value sits next to the cell that renders it.
+- `otCompare(a, b, dir)` — unmeasured (`null`/`undefined`) ranks last in both directions.
+- `otDefaultDir(view, col)` / `otIsTextColumn(view, col)` — text columns start ascending, everything else descending.
+- `otToggleSort(view, col)` / `otActiveSort(view)` — per-view in-memory state; `col` is validated with `Number.isInteger`, so a garbage index cannot silently disable sorting.
+- Harness input gains `sort` (`{col, dir}`) and `toggle` (a list of clicks to replay).
+
+## Defaults (per issue, unless the operator says otherwise)
+- First click: text columns (`Market`, `Category`, `Leg`, `Status`, `Hedge`) ascending; every other column descending.
+- Sort state is per view and in memory only.
+
+## Evidence notes (verified against the tree, 2026-09-28)
+- Issue line numbers are stale: `otHeadHtml` is 4037 (not 4009), `renderOrdersTrades` 4432 (not 4403), `module.exports` 5408-5431 (not 5392-5414). The issue's `:4448-4463` and `:4415-4418` anchors map to `initOrdersTradesTabs` 4477-4492 and the `closed-trades` expansion re-render at 4444-4447.
+- Baseline: `python -m pytest -q tests/test_orders_trades_table.py` → 62 passed. Node v24.14.1 present, so the harness is not skipped.
+- `aria-sort`, `data-sort` and `sortable` appear 0 times in `app.js`, confirming no partial sort work exists.
+- `wireMarketRowExpansion` (`:4588`) is re-wired per render for the closed-trades body, so a delegated header listener on the persistent `<thead>` is the correct pattern (the `<thead>` element itself is never replaced).
+
+## CodeRabbit plan intake (costed once)
+- **Adopted:** sort the backing groups before row pairing (its central constraint); in-memory-only per-view state; delegated listener on the persistent `<thead>`; native `<button type="button">`; every column sortable with fixed first-click direction; additive columns sort by group sum, measurement columns by the extreme leg in sort direction.
+- **Rejected:** its file/line anchors (stale, see above). Its suggestion to thread sort state through each builder separately is folded into one spec table rather than per-builder accessors, which is the same behavior in one place.
+- **UNVERIFIED:** none left. Every seam it cited was re-checked in the tree.
+
 # SPEC: Issue #291 - Shadow-03 depth-bar trial on its own feed
 
 ## Goal
