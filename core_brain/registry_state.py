@@ -20,13 +20,12 @@ report "stale"; it is never allowed to corrupt.
 from __future__ import annotations
 
 import datetime
-import json
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
 
-from core_brain.runtime_paths import resolve_runtime_file
+from core_brain.market_meta import resolve_market_meta
 
 # The repo root, one level up from core_brain/. Same tree-boundary rule as the
 # order manager: `core_brain` must resolve inside this repo and nowhere else.
@@ -44,36 +43,11 @@ MERGE_CLOSE_METHODS = ("merge", "shadow_merge")
 
 def _market_identity(condition_id: str, closes_by_cid: dict) -> dict:
     """Who is this market, in words a human recognises."""
-    out = {"condition_id": condition_id, "title": None, "slug": None,
-           "url": None, "days_to_resolve": None, "min_size": None,
-           "volume_24h": None, "source": None}
-    if not condition_id:
-        return out
-    try:
-        feed = json.loads(resolve_runtime_file("markets.json", root=REPO_ROOT).read_text(encoding="utf-8"))
-    except Exception:
-        feed = []
-    for row in feed if isinstance(feed, list) else []:
-        if (row.get("cid") or "").lower() == condition_id.lower():
-            out.update({
-                "title": row.get("title") or row.get("event_title"),
-                "slug": row.get("slug"),
-                "days_to_resolve": row.get("days_to_resolve"),
-                "min_size": row.get("min_size"),
-                "volume_24h": row.get("volume_24h"),
-                "source": row.get("source"),
-            })
-            break
-    if not out["slug"]:
-        closed = closes_by_cid.get(condition_id) or {}
-        out["slug"] = closed.get("market_slug")
-    if not out["title"] and out["slug"]:
-        out["title"] = out["slug"].replace("-", " ").title()
-    elif not out["title"]:
-        out["title"] = f"Market {condition_id[:10]}...{condition_id[-6:]}" if len(condition_id) > 16 else condition_id
-    if out["slug"]:
-        out["url"] = f"https://polymarket.com/market/{out['slug']}"
-    return out
+    closed = (closes_by_cid.get(condition_id) if condition_id else None) or {}
+    closes = ([{"condition_id": condition_id,
+                "market_slug": closed.get("market_slug")}]
+              if closed.get("market_slug") else [])
+    return resolve_market_meta(condition_id, closes, [], root=REPO_ROOT)
 
 
 def get_readonly_connection(db_path: Path | str):
