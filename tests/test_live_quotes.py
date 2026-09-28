@@ -217,6 +217,29 @@ def test_flat_inventory_refuses_a_lone_leg():
     assert why == ""
 
 
+def test_flat_lone_leg_refusal_names_blocked_side():
+    """A refused lone leg keeps the blocked side's reason, not just the generic.
+
+    When UP is blocked and DOWN survives on flat inventory, the two-sided
+    gate refuses the survivor -- and the refusal must say WHY up was blocked
+    (band, floor, ...) instead of only naming the survivor.
+    """
+    from dataclasses import replace
+    from core_brain.config import load
+
+    cfg = replace(load(), bankroll_usd=5000.0, price_band_low=0.30, price_band_high=0.70)
+    flat = Inventory(up_shares=0, down_shares=0, up_cost=0.0, down_cost=0.0)
+    up = {"best_bid": 0.24, "best_ask": 0.26,
+          "bids": {0.24: 9999.0}, "asks": {0.26: 9999.0}}
+    down = {"best_bid": 0.64, "best_ask": 0.66,
+            "bids": {0.64: 9999.0}, "asks": {0.66: 9999.0}}
+
+    intents, why = decide_quotes(cfg, up, down, flat, 1e9, None)
+    assert intents == []
+    assert "lone resting leg is a naked position" in why
+    assert "outside band" in why
+
+
 def test_flat_pair_sizes_harmonize_to_minimum():
     """Skewed books taper each leg differently; the resting pair must be symmetric.
 

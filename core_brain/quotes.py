@@ -461,6 +461,13 @@ def _decide_quotes_from_mid(
 
     if not out:
         return [], "; ".join(blocked) or "no side quotable"
+    # Lone survivor on a flat book: the two-sided gate below refuses it, so
+    # carry the blocked side's reason into that refusal instead of dropping
+    # it here. The flag-off opt-out keeps its one-sided result unchanged.
+    if (risk.naked_side(inv) is None
+            and getattr(cfg, "require_two_sided_when_flat", False)
+            and len(out) == 1):
+        return out, "; ".join(blocked)
     return out, ""
 
 
