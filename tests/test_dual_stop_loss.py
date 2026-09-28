@@ -125,11 +125,24 @@ def test_adverse_drift_triggers_immediate_exit_within_grace(registry):
     # best_bid collapsed from 0.60 to 0.52 (loss of 0.08 > 0.045 max loss)
     client = FakeClient(best_ask=0.45, best_bid=0.52)
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
-    
+
     assert len(results) == 1
     assert results[0]["action"] == "exited"
     assert results[0]["reason"] == "adverse_drift"
     assert any(c.startswith("sell:") for c in client.calls)
+
+
+def test_drift_exit_close_persists_route_reason(registry):
+    """The drift exit's CLOSE carries `adverse_drift`, written after the sale."""
+    _one_sided_pair(registry, fill_price=0.60)
+    now_s = (FILL_TS_MS / 1000.0) + 5.0
+    client = FakeClient(best_ask=0.45, best_bid=0.52)
+    results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
+    assert results[0]["action"] == "exited"
+
+    closes = [c for c in registry.get_all_closes() if c["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["reason"] == "adverse_drift"
 
 
 def test_grace_period_expiry_triggers_exit(registry):
@@ -138,11 +151,24 @@ def test_grace_period_expiry_triggers_exit(registry):
     now_s = (FILL_TS_MS / 1000.0) + 50.0
     client = FakeClient(best_ask=0.42, best_bid=0.58)
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
-    
+
     assert len(results) == 1
     assert results[0]["action"] == "exited"
     assert results[0]["reason"] == "grace_expired"
     assert any(c.startswith("sell:") for c in client.calls)
+
+
+def test_grace_expiry_exit_close_persists_route_reason(registry):
+    """The grace-expiry exit's CLOSE carries `grace_expired`, written after the sale."""
+    _one_sided_pair(registry, fill_price=0.60)
+    now_s = (FILL_TS_MS / 1000.0) + 50.0
+    client = FakeClient(best_ask=0.42, best_bid=0.58)
+    results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
+    assert results[0]["action"] == "exited"
+
+    closes = [c for c in registry.get_all_closes() if c["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["reason"] == "grace_expired"
 
 
 def test_profitable_ask_within_grace_completes_pair(registry):
@@ -155,6 +181,19 @@ def test_profitable_ask_within_grace_completes_pair(registry):
     assert len(results) == 1
     assert results[0]["action"] == "completed"
     assert any(c.startswith("buy:") for c in client.calls)
+
+
+def test_route_order_unchanged_reason_is_instrumentation_only(registry):
+    """Reason persistence must not reorder completion -> drift -> hold -> expiry."""
+    # Completion still wins when the cap allows it, and its close has no reason.
+    _one_sided_pair(registry, fill_price=0.60, pair_id="pair-complete")
+    now_s = (FILL_TS_MS / 1000.0) + 15.0
+    client = FakeClient(best_ask=0.38, best_bid=0.58)
+    results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
+    assert results[0]["action"] == "completed"
+    mergeish = [c for c in registry.get_all_closes()
+                if c["condition_id"] == COND and c["method"] != "single_buy_exit"]
+    assert all(c["reason"] is None for c in mergeish)
 
 
 def test_completion_refusal_falls_through_to_grace(registry):

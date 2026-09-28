@@ -1284,3 +1284,57 @@ def test_taker_paths_never_set_post_only(registry):
     assert res_comp["action"] == "completed"
     assert len(client_comp.orders) == 1
     assert client_comp.orders[0]["side"] == "BUY"
+
+
+# ---------------------------------------------------------------------------
+# Issue #306 — route-reason instrumentation on the close
+# ---------------------------------------------------------------------------
+
+
+def test_exit_close_without_a_reason_still_records(registry: OrderRegistry):
+    """A caller with no reason (stray-guard path) records the close as before."""
+    pair_id = _one_sided_pair(registry)
+    client = FakeClient(best_ask=0.40)
+
+    result = lp.exit_single_buy(client, registry, pair_id,
+                                max_pair_cost=MAX_PAIR_COST, live=True)
+
+    assert result["action"] == "exited"
+    closes = [c for c in registry.get_all_closes()
+              if c["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["reason"] is None
+
+
+def test_exit_close_carries_reason_only_after_a_successful_sale(
+    registry: OrderRegistry,
+):
+    """The reason reaches the close only when the venue sale succeeded.
+
+    A refused exit writes nothing -- the close is the ledger record of a
+    sell that happened, so an aborted exit must leave no close, reason or not.
+    """
+    pair_id = _one_sided_pair(registry)
+
+    # Refused BEFORE the sale: failed cancel. No close, no reason anywhere.
+    refused_client = FakeClient(best_ask=0.40, cancel_ok=False)
+    with pytest.raises(lp.PairExitRefused):
+        lp.exit_single_buy(refused_client, registry, pair_id,
+                           max_pair_cost=MAX_PAIR_COST, live=True,
+                           reason="grace_expired")
+    assert registry.get_all_closes() == []
+
+    # Then the real exit with a reason records it, only after the sell.
+    client = FakeClient(best_ask=0.40)
+    result = lp.exit_single_buy(client, registry, pair_id,
+                                max_pair_cost=MAX_PAIR_COST, live=True,
+                                reason="grace_expired")
+    assert result["action"] == "exited"
+    sell_i = next(i for i, c in enumerate(client.calls) if c.startswith("sell:"))
+    closes = [c for c in registry.get_all_closes()
+              if c["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["reason"] == "grace_expired"
+    # The close is written after the sale by construction; assert the sell
+    # happened at all so the ordering claim has teeth.
+    assert any(c.startswith("sell:") for c in client.calls)
