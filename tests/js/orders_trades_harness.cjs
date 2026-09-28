@@ -55,13 +55,26 @@ const view = input.view || 'active-markets';
 const sort = input.sort || null;
 const html = app.ordersTradesRows(view, kpi, state, sort);
 
-process.stdout.write(JSON.stringify({
-  view,
-  sort,
-  columns: app.OT_COLUMNS[view],
-  head: app.otHeadHtml(view, sort),
-  html,
-  rows: (html.match(/<tr /g) || []).length,
-  counts: app.ordersTradesCounts(kpi, state),
-  views: app.OT_VIEWS,
-}));
+// `toggle` drives the click path itself, not just the resulting sort: the issue
+// is about a header you click, so the sequence a click produces is part of the
+// behaviour under test rather than an implementation detail of the harness.
+const toggle = input.toggle || null;
+if (toggle) {
+  const out = [];
+  for (const step of toggle) {
+    out.push(app.otToggleSort(step.view || view, step.col));
+  }
+  process.stdout.write(JSON.stringify({ view, toggles: out,
+    heads: toggle.map((s) => app.otHeadHtml(s.view || view, app.otActiveSort(s.view || view))) }));
+} else {
+  process.stdout.write(JSON.stringify({
+    view,
+    sort,
+    columns: app.OT_COLUMNS[view],
+    head: app.otHeadHtml(view, sort),
+    html,
+    rows: (html.match(/<tr /g) || []).length,
+    counts: app.ordersTradesCounts(kpi, state),
+    views: app.OT_VIEWS,
+  }));
+}

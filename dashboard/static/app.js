@@ -3862,7 +3862,7 @@ function otCompare(a, b, dir) {
  * the opposite. Stable: equal values keep the order the builder produced, so a
  * sort never shuffles rows that tie. */
 function otSortGroups(groups, sort, valueOf) {
-  if (!sort || typeof sort.col !== 'number') return groups;
+  if (!sort || !Number.isInteger(sort.col)) return groups;
   const dir = sort.dir === 'asc' ? 'asc' : 'desc';
   return groups
     .map((g, i) => ({ g, i, v: valueOf(g, sort.col, dir) }))
@@ -4141,22 +4141,22 @@ function otHeadHtml(view, sort) {
   const statusTitle = ' title="RESTING: orders are resting on the book. '
     + 'QUOTING: the engine is actively quoting this market. '
     + 'IDLE: no quote activity observed."';
-  const active = (sort && typeof sort.col === 'number') ? sort : null;
+  const active = (sort && Number.isInteger(sort.col)) ? sort : null;
   const cells = OT_COLUMNS[view]
     .map((label, i) => {
       const isActive = Boolean(active && active.col === i);
       const dir = isActive ? active.dir : null;
-      // `aria-sort` names the direction for assistive tech, and the button
-      // carries the same word in text for a screen reader that reads the
-      // control itself. The arrow is `aria-hidden` decoration: direction must
-      // never be signalled by a glyph alone.
-      const word = dir === 'asc' ? 'ascending' : 'descending';
-      const ariaSort = isActive ? ` aria-sort="${word}"` : '';
+      // `aria-sort` on the <th> is the direction signal, and the arrow is
+      // `aria-hidden` decoration. Announcing the direction a second time inside
+      // the button makes a screen reader say it twice, so the button carries the
+      // column name and the <th> carries the direction -- one signal, one voice.
+      const ariaSort = isActive
+        ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"`
+        : '';
       const button = `<button type="button" class="ot-sort-btn" data-ot-sort="${i}">`
         + `<span class="ot-sort-label">${esc(label)}</span>`
         + (isActive
           ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>`
-            + `<span class="sr-only">${word}</span>`
           : '')
         + `</button>`;
       return `<th${i === 0 ? ' class="ot-market-head"' : ''}${ariaSort}${label === 'Status' ? statusTitle : ''}>${button}</th>`;
@@ -4384,7 +4384,14 @@ function openOrdersRows(kpi, state, sort) {
       case 1: return legForOrder(first, legs, byMarket) || '';
       case 2: return otExtreme(g.orders.map(o => o.price), dir);
       case 3: return otSum(g.orders.map(o => o.original_size));
-      case 4: return otSum(g.orders.map(o => otNum(o.price) === null ? null : otNum(o.price) * (Number(o.original_size) || 0)));
+      case 4: {
+        // A leg with no size is unmeasured, not zero: `null` keeps the whole
+        // pair out of the measured set so a pair the registry could not price
+        // ranks last instead of beating every real cost.
+        const p = otNum(o.price);
+        const s = otNum(o.original_size);
+        return (p === null || s === null) ? null : p * s;
+      }
       case 5: return otExtreme(g.orders.map(o => otNum(queues[o.order_id])), dir);
       case 6: return otExtreme(g.orders.map(o => o.age_sec), dir);
       default: return null;
@@ -4547,13 +4554,17 @@ function positionsRows(kpi, state, sort) {
   // The held market is the sort unit, for the same reason the pair is in Open
   // Orders: a market renders as one row per held leg, with the market name and
   // all three pair-level numbers spanning them.
-  const rows = entries.map(([cid, m], marketIndex) => {
+  // The band index is taken from the SORTED map, not from the entry order: the
+  // banding is what makes two rows read as one pair, so it has to follow the
+  // order the operator is actually looking at. Reading a pre-sort index left
+  // adjacent pairs sharing a band after any sort.
+  const rows = entries.map(([cid, m]) => {
     const mids = latestLegMids(m);
     const mark = positionMarkValue(m, mids);
     const cost = Number(m.total_cost) || 0;
     const held = heldLegs(m);
     return {
-      cid, m, marketIndex, held,
+      cid, m, held,
       mark,
       unrealized: mark === null ? null : mark - cost,
     };
@@ -4562,7 +4573,10 @@ function positionsRows(kpi, state, sort) {
   const sorted = sort ? otSortGroups(rows, sort, (r, col, dir) => {
     switch (col) {
       case 0: return String(r.m.title || r.m.name || r.m.slug || '');
-      case 1: return r.held.map(e => e.leg).sort().join('');
+      // Both legs, not one: a pair is UP and DN and its Leg cell should rank by
+      // the pair it belongs to, not by whichever leg the registry handed over
+      // first. A separator keeps 'DN,UP' from colliding with other combinations.
+      case 1: return r.held.map(e => e.leg).sort().join(',');
       case 2: return otSum(r.held.map(e => e.size));
       case 3: return otExtreme(r.held.map(e => (e.size > 0 ? e.cost / e.size : null)), dir);
       case 4: return otSum(r.held.map(e => e.cost));
@@ -4573,7 +4587,7 @@ function positionsRows(kpi, state, sort) {
     }
   }) : rows;
 
-  return sorted.map(({ cid, m, marketIndex, held, mark, unrealized }) => {
+  return sorted.map(({ cid, m, held, mark, unrealized }, marketIndex) => {
     const cost = Number(m.total_cost) || 0;
     const up = Number(m.up_sh) || 0;
     const dn = Number(m.dn_sh) || 0;
@@ -4642,7 +4656,10 @@ const otSortByView = {};
 
 function otActiveSort(view) {
   const s = otSortByView[view];
-  return (s && typeof s.col === 'number') ? s : null;
+  // `Number.isInteger`, not `typeof === 'number'`: a garbage column index
+  // coerces to NaN, which passes a typeof check, matches no accessor case, and
+  // silently degrades every sort into a no-op.
+  return (s && Number.isInteger(s.col)) ? s : null;
 }
 
 /* Clicking the sorted column flips it; clicking any other column starts that
@@ -4666,8 +4683,21 @@ function renderOrdersTrades(kpi, state) {
   // Read the sort once and hand the same object to the header and the body, so
   // the indicator and the row order can never disagree after a poll tick.
   const sort = otActiveSort(view);
+  // The header row is rebuilt on every tick, which would drop keyboard focus to
+  // <body> and strand a keyboard user on the first column: a listener that
+  // survives a re-render is not enough if the focused element is destroyed. The
+  // button is the same control after the rewrite, so its focus is restored.
+  const focusedCol = (head.contains(document.activeElement)
+    && document.activeElement.dataset
+    && document.activeElement.dataset.otSort !== undefined)
+    ? document.activeElement.dataset.otSort : null;
   head.innerHTML = otHeadHtml(view, sort);
   body.innerHTML = ordersTradesRows(view, kpi, state, sort);
+  if (focusedCol !== null) {
+    const restore = Array.from(head.querySelectorAll('button[data-ot-sort]'))
+      .find(b => b.getAttribute('data-ot-sort') === focusedCol);
+    if (restore) restore.focus();
+  }
 
   // The closed-trades view reuses the Data & Markets row shape, so it gets
   // the same click-to-expand behaviour on its rows.

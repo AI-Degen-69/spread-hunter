@@ -39,7 +39,10 @@ CID_SETTLED = "0xsettled"
 
 
 def _render(view: str, kpi: dict | None = None, state: dict | None = None,
-            sort: dict | None = None) -> dict:
+            *, sort: dict | None = None) -> dict:
+    # `sort` is keyword-only on purpose: as a positional third argument it lands
+    # in `state`, the render comes back unsorted, and the sort assertion passes
+    # against output the sort never touched.
     payload = {"view": view, "kpi": kpi or {}, "state": state or {}, "sort": sort}
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
                          capture_output=True, text=True, check=True, encoding="utf-8")
@@ -1230,7 +1233,7 @@ def test_sorting_a_numeric_column_ranks_by_the_value_not_the_rendered_text():
     kpi, state = _sort_kpi(), _sort_state()
 
     # Act
-    rendered = _render("active-markets", kpi, state, {"col": 6, "dir": "desc"})
+    rendered = _render("active-markets", kpi, state, sort={"col": 6, "dir": "desc"})
 
     # Assert — column 6 is 24h Volume.
     assert _cids(rendered) == [CID_DEEP, CID_SHALLOW, CID_QUIET]
@@ -1242,7 +1245,7 @@ def test_a_text_column_sorts_ascending_on_the_market_name():
     kpi, state = _sort_kpi(), _sort_state()
 
     # Act
-    rendered = _render("active-markets", kpi, state, {"col": 0, "dir": "asc"})
+    rendered = _render("active-markets", kpi, state, sort={"col": 0, "dir": "asc"})
 
     # Assert — by name, not by markup and not by condition_id.
     assert _cids(rendered) == [CID_QUIET, CID_SHALLOW, CID_DEEP]
@@ -1254,8 +1257,8 @@ def test_an_unmeasured_cell_ranks_last_in_both_directions():
     kpi, state = _sort_kpi(), _sort_state()
 
     # Act
-    desc = _render("active-markets", kpi, state, {"col": 4, "dir": "desc"})
-    asc = _render("active-markets", kpi, state, {"col": 4, "dir": "asc"})
+    desc = _render("active-markets", kpi, state, sort={"col": 4, "dir": "desc"})
+    asc = _render("active-markets", kpi, state, sort={"col": 4, "dir": "asc"})
 
     # Assert — pair cost: 1.10 and 0.93 are measured, `--` is not, and the
     # unmeasured row must not lead in either direction.
@@ -1265,35 +1268,96 @@ def test_an_unmeasured_cell_ranks_last_in_both_directions():
 
 
 @requires_node
-def test_sorting_positions_reorders_markets_and_keeps_the_pair_cells_anchored():
-    # Arrange — OPEN POSITIONS also renders one row per held leg with the
-    # market and every pair-level number in rowspan cells.
-    kpi, state = _kpi(), _state()
+def _two_held_markets() -> dict:
+    """Two held markets whose default order is the reverse of the sorted one.
 
-    # Act — column 6 is Unrealized.
-    rendered = _render("positions", kpi, state, {"col": 6, "dir": "desc"})
+    `heldMarketEntries` sorts by total_cost descending, so the costlier market is
+    listed FIRST. Here the costlier market is also the one further underwater, so
+    a sort that quietly did nothing would still look plausible unless the test
+    names the whole sequence.
 
-    # Assert — one market holds both legs, so both rows stay together and the
-    # rowspan cells ride on the pair's first row.
-    assert _cids(rendered) == [CID_HELD, CID_HELD]
-    assert rendered["html"].count('class="ot-pair-row ot-pair-start') == 1
-    assert rendered["html"].count('class="ot-market" rowspan=') == 1
-    assert rendered["html"].count('ot-pair-value" rowspan=') == 3
+    BIG is a full pair, so both legs merge and its mark is exactly $1.00/share.
+    SMALL holds a naked UP leg, marked at the UP mid. That is what separates the
+    two Unrealized values -- a paired position cannot be underwater.
+    """
+    def held(cid, title, up_sh, dn_sh, up_cost, dn_cost):
+        return {
+            "condition_id": cid, "title": title, "category": "MLB",
+            "days_to_resolve": 2.0, "volume_24h": 1000.0, "resolved": False,
+            "quotes_count": 2, "up_sh": up_sh, "dn_sh": dn_sh,
+            "total_sh": up_sh + dn_sh, "total_cost": up_cost + dn_cost,
+            "pair_cost": 0.98, "realized_pnl": 0.0,
+            "quotes": [_quote(cid + "-up", "UP", 0.60, 200.0),
+                       _quote(cid + "-dn", "DN", 0.42, 201.0)],
+        }
+    # BIG: 10 UP + 10 DN, all paired -> mark 10*1.00 = 10.00, cost 12.00 -> -2.00
+    # SMALL: 10 UP only, naked -> mark 10*0.60 = 6.00, cost 5.20 -> +0.80
+    return {"by_market": {
+        "0xposbig": held("0xposbig", "Alpha Big", 10, 10, 7.20, 4.80),
+        "0xpossmall": held("0xpossmall", "Zulu Small", 10, 0, 5.20, 0.0),
+    }}
 
 
 @requires_node
-def test_sorting_closed_trades_keeps_an_expanded_sub_row_under_its_market():
-    # Arrange — CLOSED TRADES reuses the Data & Markets row shape, so a main
-    # row can carry an expanded sub-row beneath it.
+def test_sorting_positions_reorders_two_held_markets_and_keeps_legs_adjacent():
+    # Arrange - OPEN POSITIONS renders one row per held leg with the market name
+    # and all three pair-level numbers spanning them, so a sort that re-ordered
+    # the ROWS rather than the held markets would strand the rowspan cells.
+    kpi = _two_held_markets()
+
+    # Act - column 6 is Unrealized, in both directions. `sort` is the FOURTH
+    # argument: passing it third hands it to `state` and silently renders the
+    # unsorted view, which would make every assertion below vacuous.
+    default = _render("positions", kpi)
+    asc = _render("positions", kpi, None, sort={"col": 6, "dir": "asc"})
+    desc = _render("positions", kpi, None, sort={"col": 6, "dir": "desc"})
+
+    # Assert - BIG is the loser (-2.00, a full pair marked at $1.00/share) and
+    # SMALL is in the black (+0.80, a naked UP leg marked at the 0.60 mid), so
+    # ascending puts the loser first and descending puts the winner first. Both
+    # differ from the default cost-descending order, and the legs of each market
+    # stay adjacent with one market cell and three pair-level numbers on the
+    # first row of the pair.
+    assert _cids(default) == ["0xposbig", "0xposbig", "0xpossmall"]
+    assert _cids(asc) == ["0xposbig", "0xposbig", "0xpossmall"]
+    assert _cids(desc) == ["0xpossmall", "0xposbig", "0xposbig"]
+    assert desc["html"].count('class="ot-pair-row ot-pair-start') == 2
+    assert desc["html"].count('class="ot-market" rowspan=') == 2
+    assert desc["html"].count('ot-pair-value" rowspan=') == 6
+
+
+@requires_node
+def test_sorting_positions_keeps_the_pair_banding_alternating_in_rendered_order():
+    # Arrange - the banding is what makes two rows read as ONE pair. Computed
+    # from the pre-sort index it desynchronises from the order on screen, so
+    # adjacent pairs share a background and the pair boundary is lost.
+    kpi = _two_held_markets()
+
+    # Act - descending, which is the direction that actually reorders these two.
+    rendered = _render("positions", kpi, None, sort={"col": 6, "dir": "desc"})
+
+    # Assert - each market's first row alternates, in the order rendered: the
+    # market that moved to first is the one that now carries the band.
+    banded = re.findall(r'class="([^"]*ot-pair-start[^"]*)"', rendered["html"])
+    assert len(banded) == 2
+    assert ("ot-pair-alt" in banded[0]) != ("ot-pair-alt" in banded[1])
+
+
+@requires_node
+def test_sorting_closed_trades_reorders_trades_against_the_default_order():
+    # Arrange — CLOSED TRADES reuses the Data & Markets row shape, so a trade
+    # renders as a main row plus an optional expanded sub-row as ONE string.
+    # Sorting the entries keeps each trade whole; sorting the rows would not.
     kpi, state = _kpi(), _state()
 
     # Act — column 3 is Realized P&L; ascending puts the losing trade first,
     # which is the opposite of the order the view renders by default.
-    rendered = _render("closed-trades", kpi, state, {"col": 3, "dir": "asc"})
+    default = _render("closed-trades", kpi, state)
+    rendered = _render("closed-trades", kpi, state, sort={"col": 3, "dir": "asc"})
 
     # Assert
+    assert _cids(default) == [CID_SETTLED, CID_CLOSED]
     assert _cids(rendered) == [CID_CLOSED, CID_SETTLED]
-    assert _cids(_render("closed-trades", kpi, state)) == [CID_SETTLED, CID_CLOSED]
 
 
 @requires_node
@@ -1315,7 +1379,7 @@ def test_exactly_one_header_carries_the_direction_indicator():
     kpi, state = _sort_kpi(), _sort_state()
 
     # Act
-    head = _render("active-markets", kpi, state, {"col": 0, "dir": "desc"})["head"]
+    head = _render("active-markets", kpi, state, sort={"col": 0, "dir": "desc"})["head"]
 
     # Assert — aria-sort on the sorted <th> only, and it names the direction.
     assert head.count("aria-sort=") == 1
@@ -1329,7 +1393,7 @@ def test_the_sorted_column_says_its_direction_in_text_and_not_only_in_an_arrow()
     kpi, state = _sort_kpi(), _sort_state()
 
     # Act
-    head = _render("active-markets", kpi, state, {"col": 0, "dir": "desc"})["head"]
+    head = _render("active-markets", kpi, state, sort={"col": 0, "dir": "desc"})["head"]
 
     # Assert — the button carries a visually-hidden direction word.
     assert "descending" in head
@@ -1350,10 +1414,46 @@ def test_the_sortable_header_has_hover_focus_and_a_pointer_without_new_colours()
     assert "var(--text-primary)" in hover
     assert ":focus-visible" in css
     assert "outline: 2px solid var(--open)" in focus
-    # No new colours and no glow: the rule may only name tokens DESIGN.md has.
-    for value in list(block.split()) + list(hover.split()) + list(focus.split()):
-        if value.startswith("#") and len(value) in (4, 7):
-            raise AssertionError(f"hard-coded colour in the sortable header: {value}")
+
+    # No hard-coded colour in any spelling: `#abc`, `#aabbcc`, `rgb()`,
+    # `rgba()`, `hsl()`. Checking only `#` hexes would have passed while the
+    # hover rule shipped a literal `rgba(255, 255, 255, 0.05)`. Comments are
+    # stripped first: an issue reference like `#277` is not a colour.
+    hard_coded = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
+    for name, rule in (("base", block), ("hover", hover), ("focus", focus)):
+        declarations = re.sub(r"/\*.*?\*/", "", rule, flags=re.S)
+        found = hard_coded.search(declarations)
+        assert found is None, f"hard-coded colour in the sortable header ({name}): {found.group(0)}"
+
+
+@requires_node
+def test_the_direction_is_announced_once_not_twice():
+    # Arrange — `aria-sort` on the <th> already carries the direction. A second
+    # copy inside the button makes a screen reader say it twice per column.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    head = _render("active-markets", kpi, state, sort={"col": 0, "dir": "desc"})["head"]
+
+    # Assert — the direction word rides on the <th> only, and the arrow stays
+    # aria-hidden decoration that no assistive tech reads.
+    body = head.split(">")[2]
+    assert "descending" not in body
+    assert 'aria-sort="descending"' in head
+    assert head.count("descending") == 1
+
+
+@requires_node
+def test_a_garbage_column_index_does_not_silently_disable_sorting():
+    # Arrange — a NaN column passes `typeof x === 'number'`, matches no
+    # accessor case, and degrades every sort into a no-op with no indicator.
+    kpi, state = _sort_kpi(), _sort_state()
+
+    # Act
+    rendered = _render("active-markets", kpi, state, sort={"col": "nonsense", "dir": "desc"})
+
+    # Assert — the guard rejects it, so no header claims to be sorted.
+    assert "aria-sort=" not in rendered["head"]
 
 
 @requires_node
@@ -1363,7 +1463,7 @@ def test_sorting_open_orders_reorders_pairs_without_splitting_the_legs():
     kpi, state = _sort_kpi(), _sort_state()
 
     # Act — column 5 is Queue Ahead, the operator's "which order is stuck" question.
-    rendered = _render("open-orders", kpi, state, {"col": 5, "dir": "desc"})
+    rendered = _render("open-orders", kpi, state, sort={"col": 5, "dir": "desc"})
 
     # Assert — the deepest queue first, even though that pair is the older one
     # and therefore second in the view's default newest-first order.
@@ -1376,5 +1476,79 @@ def test_sorting_open_orders_reorders_pairs_without_splitting_the_legs():
     assert rendered["html"].count('class="ot-pair-row ot-pair-start') == 2
     # The rowspan cell rides on the first row of each pair, once per pair.
     assert rendered["html"].count('class="ot-market" rowspan=') == 2
+
+
+
+
+def _clicks(steps: list[dict]) -> dict:
+    """Drive the click path itself: each step is one header click."""
+    out = subprocess.run([shutil.which("node"), str(HARNESS),
+                          json.dumps({"kpi": _sort_kpi(), "state": _sort_state(),
+                                      "toggle": steps})],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    return json.loads(out.stdout)
+
+
+@requires_node
+def test_the_first_click_on_a_money_column_sorts_descending():
+    # Arrange — the operator's question is "which is biggest", not "which comes
+    # first alphabetically", so every non-text column starts descending.
+    # Act
+    result = _clicks([{"view": "active-markets", "col": 6}])
+
+    # Assert — column 6 is 24h Volume, and the head shows the direction.
+    assert result["toggles"][0] == {"col": 6, "dir": "desc"}
+    assert 'aria-sort="descending"' in result["heads"][0]
+
+
+@requires_node
+def test_the_first_click_on_a_text_column_sorts_ascending():
+    # Arrange / Act
+    result = _clicks([{"view": "active-markets", "col": 0}])
+
+    # Assert — the Market column is the exception: its question is "which name
+    # comes first", so it starts ascending.
+    assert result["toggles"][0] == {"col": 0, "dir": "asc"}
+    assert 'aria-sort="ascending"' in result["heads"][0]
+
+
+@requires_node
+def test_clicking_the_sorted_column_again_flips_the_direction():
+    # Act — the same header twice.
+    result = _clicks([{"view": "active-markets", "col": 6},
+                      {"view": "active-markets", "col": 6}])
+
+    # Assert
+    assert result["toggles"] == [{"col": 6, "dir": "desc"}, {"col": 6, "dir": "asc"}]
+    assert 'aria-sort="ascending"' in result["heads"][1]
+
+
+@requires_node
+def test_clicking_a_different_column_starts_it_fresh():
+    # Act — switch columns rather than flipping the previous one.
+    result = _clicks([{"view": "active-markets", "col": 6},
+                      {"view": "active-markets", "col": 0}])
+
+    # Assert — the new column starts on its own natural direction, it does not
+    # inherit the direction the operator last used elsewhere.
+    assert result["toggles"][1] == {"col": 0, "dir": "asc"}
+
+
+@requires_node
+def test_sorting_one_view_does_not_disturb_another_views_sort():
+    # Arrange — the operator sorts Orders, goes to look at Positions, and comes
+    # back. Each view has to still be sorted the way they left it.
+    # Act
+    result = _clicks([{"view": "open-orders", "col": 5},
+                      {"view": "positions", "col": 6},
+                      {"view": "open-orders", "col": 5}])
+
+    # Assert — Orders is still on Queue Ahead descending, Positions kept its own
+    # Unrealized sort, and the last Orders click merely flipped it.
+    assert result["toggles"] == [{"col": 5, "dir": "desc"},
+                                 {"col": 6, "dir": "desc"},
+                                 {"col": 5, "dir": "asc"}]
+    assert 'aria-sort="ascending"' in result["heads"][2]
+
 
 

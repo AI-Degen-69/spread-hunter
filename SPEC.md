@@ -32,12 +32,14 @@ reading rows in whatever order the builder produced.
 - The Data & Markets table, the other dashboard tables, or `OT_COLUMNS` label text
 - Any change to the money path (`core_brain/`), the venue, or live execution
 
-## Interface contracts
-- `otHeadHtml(view, sort = null) -> string` — unchanged output when `sort` is null; the sorted `<th>` gains `aria-sort` and an indicator; the first `<th>` keeps `class="ot-market-head"`; the STATUS `<th>` keeps its `title` attribute.
+## Interface contracts (as shipped)
+- `otHeadHtml(view, sort = null) -> string` — unchanged output when `sort` is null; the sorted `<th>` gains `aria-sort` and an indicator; the first `<th>` keeps `class="ot-market-head"`; the STATUS `<th>` keeps its `title` attribute. The direction is announced **once**, on the `<th>`; the arrow is `aria-hidden`.
 - `ordersTradesRows(view, kpi, state, sort = null) -> string` — each builder sorts its backing groups/entries when `sort` is given, before mapping to HTML.
-- `otSortSpec(view) -> Array<{kind: 'text'|'number'|'age', get(group, ctx) -> value|null}>` — parallel to `OT_COLUMNS[view]`; `null`/undefined means unmeasured and ranks last.
-- `compareOtv(a, b, dir) -> number` — stable; unmeasured last in both directions.
-- Harness input gains an optional `sort` field (`{col, dir}`) passed through to `ordersTradesRows` and `otHeadHtml`.
+- `otSortGroups(groups, sort, valueOf)` — stable re-ordering; `valueOf(group, col, dir)` reads the underlying value per view. Each builder owns its own accessor switch, so a column's value sits next to the cell that renders it.
+- `otCompare(a, b, dir)` — unmeasured (`null`/`undefined`) ranks last in both directions.
+- `otDefaultDir(view, col)` / `otIsTextColumn(view, col)` — text columns start ascending, everything else descending.
+- `otToggleSort(view, col)` / `otActiveSort(view)` — per-view in-memory state; `col` is validated with `Number.isInteger`, so a garbage index cannot silently disable sorting.
+- Harness input gains `sort` (`{col, dir}`) and `toggle` (a list of clicks to replay).
 
 ## Defaults (per issue, unless the operator says otherwise)
 - First click: text columns (`Market`, `Category`, `Leg`, `Status`, `Hedge`) ascending; every other column descending.
