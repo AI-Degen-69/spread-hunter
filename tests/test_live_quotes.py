@@ -248,7 +248,8 @@ def test_flat_pair_sizes_harmonize_to_minimum():
     assert not why
     up_qi = [i for i in intents if i.side == "UP"][0]
     dn_qi = [i for i in intents if i.side == "DOWN"][0]
-    assert up_qi.size == dn_qi.size
+    # Pre-fix sizes were 63 UP vs 77 DOWN: the pair must rest at the MINIMUM.
+    assert up_qi.size == dn_qi.size == 63
     assert "clamped" in up_qi.reason + dn_qi.reason
 
 
