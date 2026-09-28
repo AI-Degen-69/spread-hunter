@@ -4133,7 +4133,7 @@ function otEmptyRow(view, message) {
   return `<tr><td colspan="${OT_COLUMNS[view].length}" style="text-align:center;color:var(--text-muted);padding:20px">${esc(message)}</td></tr>`;
 }
 
-function otHeadHtml(view) {
+function otHeadHtml(view, sort) {
   // The market name is the widest thing in the table and the only cell that
   // wraps; without a floor it folds a three-word title onto three lines and
   // squeezes every number column.
@@ -4141,8 +4141,26 @@ function otHeadHtml(view) {
   const statusTitle = ' title="RESTING: orders are resting on the book. '
     + 'QUOTING: the engine is actively quoting this market. '
     + 'IDLE: no quote activity observed."';
+  const active = (sort && typeof sort.col === 'number') ? sort : null;
   const cells = OT_COLUMNS[view]
-    .map((label, i) => `<th${i === 0 ? ' class="ot-market-head"' : ''}${label === 'Status' ? statusTitle : ''}>${esc(label)}</th>`)
+    .map((label, i) => {
+      const isActive = Boolean(active && active.col === i);
+      const dir = isActive ? active.dir : null;
+      // `aria-sort` names the direction for assistive tech, and the button
+      // carries the same word in text for a screen reader that reads the
+      // control itself. The arrow is `aria-hidden` decoration: direction must
+      // never be signalled by a glyph alone.
+      const word = dir === 'asc' ? 'ascending' : 'descending';
+      const ariaSort = isActive ? ` aria-sort="${word}"` : '';
+      const button = `<button type="button" class="ot-sort-btn" data-ot-sort="${i}">`
+        + `<span class="ot-sort-label">${esc(label)}</span>`
+        + (isActive
+          ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>`
+            + `<span class="ot-sort-word">${word}</span>`
+          : '')
+        + `</button>`;
+      return `<th${i === 0 ? ' class="ot-market-head"' : ''}${ariaSort}${label === 'Status' ? statusTitle : ''}>${button}</th>`;
+    })
     .join('');
   return `<tr>${cells}</tr>`;
 }
@@ -4614,6 +4632,30 @@ function ordersTradesRows(view, kpi, state, sort) {
   return activeMarketsRows(kpi, state, sort);
 }
 
+/* Per-view sort state, in memory. Each view keeps its own column and direction:
+ * sorting Orders and then switching to OPEN POSITIONS and back has to return
+ * the Orders sort exactly as it was, because the two views answer different
+ * questions and the operator did not ask for either one to be forgotten.
+ * Deliberately not persisted -- a reload restores the shipped order, which is
+ * the honest default, and adds no storage surface beside the view choice. */
+const otSortByView = {};
+
+function otActiveSort(view) {
+  const s = otSortByView[view];
+  return (s && typeof s.col === 'number') ? s : null;
+}
+
+/* Clicking the sorted column flips it; clicking any other column starts that
+ * column fresh on its natural first direction. */
+function otToggleSort(view, col) {
+  const current = otSortByView[view];
+  const next = (current && current.col === col)
+    ? { col, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+    : { col, dir: otDefaultDir(view, col) };
+  otSortByView[view] = next;
+  return next;
+}
+
 function renderOrdersTrades(kpi, state) {
   const head = document.getElementById('orders-trades-head');
   const body = document.getElementById('orders-trades-body');
@@ -4621,8 +4663,11 @@ function renderOrdersTrades(kpi, state) {
 
   const view = OT_VIEWS.includes(currentOrdersTradesView)
     ? currentOrdersTradesView : OT_VIEWS[0];
-  head.innerHTML = otHeadHtml(view);
-  body.innerHTML = ordersTradesRows(view, kpi, state);
+  // Read the sort once and hand the same object to the header and the body, so
+  // the indicator and the row order can never disagree after a poll tick.
+  const sort = otActiveSort(view);
+  head.innerHTML = otHeadHtml(view, sort);
+  body.innerHTML = ordersTradesRows(view, kpi, state, sort);
 
   // The closed-trades view reuses the Data & Markets row shape, so it gets
   // the same click-to-expand behaviour on its rows.
@@ -4673,6 +4718,24 @@ function initOrdersTradesTabs() {
   document.querySelectorAll('.ot-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => setOrdersTradesView(btn.dataset.otView));
   });
+
+  // One delegated listener on the <thead> that is never replaced. The header row
+  // is rewritten by innerHTML on every 2s poll tick, so a listener attached to
+  // each button would have to be re-attached after every render and would miss
+  // a tick; this one outlives every re-render. A native <button> turns Enter
+  // and Space into a click, so the keyboard works without extra key handling.
+  const head = document.getElementById('orders-trades-head');
+  if (head) {
+    head.addEventListener('click', (ev) => {
+      const btn = ev.target && ev.target.closest ? ev.target.closest('[data-ot-sort]') : null;
+      if (!btn) return;
+      const view = OT_VIEWS.includes(currentOrdersTradesView)
+        ? currentOrdersTradesView : OT_VIEWS[0];
+      otToggleSort(view, Number(btn.dataset.otSort));
+      renderOrdersTrades(lastKpi, lastState);
+    });
+  }
+
   setOrdersTradesView(currentOrdersTradesView);
 }
 
@@ -5613,6 +5676,7 @@ if (typeof module !== 'undefined' && module.exports) {
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
     renderPnlCiReadout, renderExecutionFunnel,
     OT_VIEWS, OT_COLUMNS, ordersTradesRows, ordersTradesCounts, otHeadHtml,
+    otSortGroups, otCompare, otDefaultDir, otIsTextColumn, otToggleSort, otActiveSort,
     activeMarketsRows, openOrdersRows, positionsRows, closedTradesRows,
     closedTradesEntries, marketRowPairHtml, wireMarketRowExpansion,
     heldMarketEntries, heldLegs, isFinishedMarket, latestLegMids, latestLegQuotes,
