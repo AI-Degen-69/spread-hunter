@@ -93,6 +93,41 @@ def _orders_by_condition(reg: sqlite3.Connection) -> dict[str, list[sqlite3.Row]
     return out
 
 
+def _settlement_row(close, cfills, heavy_token) -> Optional[dict]:
+    """Reconstruct a `shadow_settlement` close: the one-sided leg held to the end.
+
+    Its P&L is the whole story -- the leg redeemed at $1.00 or died at $0.00 --
+    and its fill-to-settlement age is the measure of the fail-closed gap.
+    """
+    leg_fills = [f for f in cfills if f["side"] == "BUY"
+                 and f["token_id"] == heavy_token]
+    if not leg_fills:
+        return None
+    matched = sum(f["size"] for f in leg_fills)
+    notional = sum(f["size"] * f["price"] for f in leg_fills)
+    paid = (notional / matched) if matched > 0 else 0.0
+    fill_ts_ms = min(f["venue_ts"] or 0 for f in leg_fills)
+    fill_ts_s = fill_ts_ms / 1000.0 if fill_ts_ms else None
+    close_ts = close["ts"]
+    return {
+        "cid": close["condition_id"],
+        "pair_id": leg_fills[0]["pair_id"] or "--",
+        "method": close["method"],
+        "reason": close["reason"] if "reason" in close.keys() else None,
+        "token": heavy_token,
+        "sold_side": "--",
+        "shares": close["shares"],
+        "paid": paid,
+        "sold": None,
+        "pnl": close["realized_pnl"],
+        "fill_ts_s": fill_ts_s,
+        "close_ts": close_ts,
+        "fill_to_exit": (close_ts - fill_ts_s) if (fill_ts_s and close_ts) else None,
+        "aged_out": bool(fill_ts_s and close_ts
+                         and (close_ts - fill_ts_s) > PAIRS_EXIT_WINDOW_SEC),
+    }
+
+
 def _exit_row(close, fills, orders) -> Optional[dict]:
     """Reconstruct one rescue close from its condition's rows.
 
@@ -103,7 +138,28 @@ def _exit_row(close, fills, orders) -> Optional[dict]:
     sold_side = "UP" if close["up_price"] is not None else (
         "DOWN" if close["dn_price"] is not None else None)
     if sold_side is None:
-        return None
+        # A `shadow_settlement` close prices neither leg: it books the leg the
+        # venue settled at $1.00/$0.00, not a market sell. Reconstruct the
+        # one-sided held leg from its BUY fills instead of dropping the row.
+        if close["method"] != "shadow_settlement":
+            return None
+        cfills = fills.get(cid, [])
+        buys = [f for f in cfills if f["side"] == "BUY"]
+        if not buys:
+            return None
+        by_token: dict[str, float] = {}
+        for f in buys:
+            by_token[f["token_id"]] = by_token.get(f["token_id"], 0.0) + f["size"]
+        # The settlement books whichever token the venue resolved; both held
+        # tokens belong to this condition, so reconstruct from the heavier one.
+        heavy_token = max(by_token, key=by_token.get)
+        row_q = orders.get(cid, [])
+        heavy_side = None
+        for o in row_q:
+            if o["token_id"] == heavy_token:
+                heavy_side = "UP"  # resolved below from the fills' quote side
+                break
+        return _settlement_row(close, cfills, heavy_token)
     sold_price = close["up_price"] if sold_side == "UP" else close["dn_price"]
 
     cfills = fills.get(cid, [])
