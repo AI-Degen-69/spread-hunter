@@ -1,3 +1,23 @@
+# Constraints: Issue #294 — Click-to-sort Orders & Trades columns
+
+## Quality & Tests
+- Zero regressions: `python -m pytest -q tests/test_orders_trades_table.py` must stay 100% green (baseline verified: 62 passed, 2026-09-28). Full-repo sweep stays with GitHub CI on push.
+- New sort behavior needs tests that are RED against untouched `app.js` and GREEN after; each added assertion must fail without its change.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions, or bypassing linters.
+- Every new pure helper must be reachable from tests: add it to the `module.exports` block (`app.js:5424-5431`).
+
+## Behavior Boundaries
+- **Backing data is the sort unit, never the DOM `<tr>`.** Orders and OPEN POSITIONS emit one row per leg with `rowspan` pair cells (`app.js:4257-4258`, `:4393-4399`); CLOSED TRADES reuses `marketRowPairHtml` which emits a main row plus an optional expanded sub-row (`app.js:4553`, `:4573-4580`). Sorting rendered rows would split pairs and strand every `rowspan`. Sort the groups/entries first, then build HTML.
+- **`app.js` line numbers in the issue text are stale** (issue says `otHeadHtml` 4009 / `renderOrdersTrades` 4403 / exports 5392; actual 4037 / 4432 / 5408-5431). Verified anchors are the ones named in this file.
+- **No-sort output must be byte-identical to today.** Active Markets stays `quotes_count` desc then title (`app.js:4105-4106`); CLOSED TRADES stays `realized_pnl` desc (`:4310`); Orders stays `groupOrdersByPair` order (`:4198`, `b.newest - a.newest`); Positions stays `heldMarketEntries` order (`:4282`, `total_cost` desc).
+- **Numeric columns sort from the underlying value, not the rendered string.** `fmtPrice`/`fmtUSD`/`fmtCompactUSD`/`fmtStopwatch` are display formatters (`:4051-4066`); `$1,000.00` must outrank `$95.00`, 9 shares must rank below 10, `1.5d` above `10.0d`.
+- **Unmeasured cells (`--`) rank last in both directions** so a column of `--` never outranks a measured value. Unmeasured sources: `queueAheadByOrder` misses (`:4266`), `age_sec` null (`:4267`), `days_to_resolve` null (`:4124`), null quote price.
+- **`Market` sorts by `localeCompare` on the market title**, never on markup or `condition_id`.
+- **`title="RESTING…"` must stay inside the `<th>` opening tag.** `test_active_markets_status_header_explains_the_vocabulary` (`tests/test_orders_trades_table.py:930-945`) reads `head.split("<th")[1:]` and asserts `title=` is absent from the cell body. A sort button must not push the tooltip off the `<th>`.
+- **The `.ot-market-head` width floor must keep matching** (`styles.css:1353`); the sort affordance must not remove the class from the first `<th>`.
+- Accessibility: the control is a real `<button type="button">`, the sorted `<th>` carries `aria-sort="ascending"|"descending"`, the arrow is not the only direction signal, and CSS adds hover + `:focus-visible` using existing `DESIGN.md` tokens (`--border-strong`, `--text-secondary`, `--text-primary`) — no new colours, no glow.
+- No new external dependencies. No change to `OT_COLUMNS` label lists or to `OT_STORAGE_KEY` view persistence semantics.
+
 # Constraints: Issue #296 — Port single-instance ownership lock to core_brain
 
 ## Quality & Tests
