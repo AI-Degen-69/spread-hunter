@@ -91,6 +91,14 @@ except Exception as e:
     raise ValueError(f"Invalid SH_FILTER_INTERVAL_SEC {raw_interval!r}: {e}") from e
 
 
+# Paired-depth mode: a truncated Gamma listing is an ENVIRONMENT failure, not
+# a ranker failure. The ranker prints this exact marker to stderr before
+# refusing, so the loop can raise a dedicated event instead of a generic
+# rerank_error that reads as "the ranker broke again". Kept here as the one
+# place the contract with the ranker's stderr lives.
+PAIRED_TRUNCATED_MARKER = "PAIRED_UNIVERSE_TRUNCATED:"
+
+
 def _emit_scan_event(record: dict) -> None:
     """Inline NDJSON append to the live cycle ring. Never raises.
 
@@ -124,7 +132,20 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--trial-depth", type=float, default=None, metavar="USD",
                    help="forward this top-3 bid-depth bar to the ranker; wins "
                         "over the configured HUNTER_DEPTH_TRIAL_USD")
-    return p.parse_args(argv)
+    p.add_argument("--paired-depth-control-usd", type=float, default=None,
+                   metavar="USD",
+                   help="forward a paired control depth bar; requires --out-dir "
+                        "and an explicit lower --trial-depth")
+    args = p.parse_args(argv)
+    if args.paired_depth_control_usd is not None:
+        if args.out_dir is None:
+            p.error("--paired-depth-control-usd requires an isolated --out-dir")
+        if args.trial_depth is None:
+            p.error("--paired-depth-control-usd requires an explicit --trial-depth")
+        if (args.trial_depth <= 0
+                or args.paired_depth_control_usd <= args.trial_depth):
+            p.error("control depth must be positive and greater than treatment depth")
+    return args
 
 
 def _loop_paths(out_dir=None) -> tuple[Path, Path]:
@@ -137,7 +158,8 @@ def _loop_paths(out_dir=None) -> tuple[Path, Path]:
 
 
 def _rank_cmd(top: int = 2, out_dir=None,
-              trial_depth: float | None = None) -> list[str]:
+              trial_depth: float | None = None,
+              paired_depth_control_usd: float | None = None) -> list[str]:
     """The ranker invocation, with any staged gate trials from config appended.
 
     The depth trial (U32) and the volume trial (U36) stay opt-in: when
@@ -156,12 +178,15 @@ def _rank_cmd(top: int = 2, out_dir=None,
     # the permanent bar, untagged -- baseline rows in the trial feed.
     if trial_depth is not None:
         cmd += ["--trial-depth", str(trial_depth)]
+    if paired_depth_control_usd is not None:
+        cmd += ["--paired-depth-control-usd", str(paired_depth_control_usd)]
     try:
         from scoring.config import load as _load_cfg
         cfg = _load_cfg()
         if trial_depth is None and cfg.select_min_top3_depth_usd_trial:
             cmd += ["--trial-depth", str(cfg.select_min_top3_depth_usd_trial)]
-        if cfg.select_min_volume_24h_usd_trial:
+        if (paired_depth_control_usd is None
+                and cfg.select_min_volume_24h_usd_trial):
             cmd += ["--trial-volume", str(cfg.select_min_volume_24h_usd_trial)]
     except Exception as e:
         # A config read failure must not stop the loop -- but a silently
@@ -194,7 +219,8 @@ def main(argv=None) -> None:
             top_n = _get_top_markets()
             r = subprocess.run(
                 _rank_cmd(top_n, out_dir=args.out_dir,
-                          trial_depth=args.trial_depth),
+                          trial_depth=args.trial_depth,
+                          paired_depth_control_usd=args.paired_depth_control_usd),
                 cwd=str(ROOT), capture_output=True, text=True, timeout=600)
             out = r.stdout or ""
             err = "" if r.returncode == 0 else f"\nEXIT {r.returncode}\n{r.stderr}"
@@ -203,6 +229,27 @@ def main(argv=None) -> None:
         with LOG.open("a", encoding="utf-8", errors="replace") as f:
             f.write(f"\n===== {stamp} =====\n{out}{err}")
         if err:
+            # Paired mode failing on a truncated universe must stand out from
+            # an ordinary ranker crash: it is the venue's listing read that is
+            # incomplete, the safe refusal is CORRECT behaviour, and the fix is
+            # environmental (wait for the venue), not a code change. One
+            # dedicated event per occurrence, plus a WARNING banner in the log,
+            # so hours of this condition cannot scroll past as routine noise.
+            if PAIRED_TRUNCATED_MARKER in err:
+                print(f"\n!!!!! PAIRED-DEPTH: Gamma universe TRUNCATED -- the paired "
+                      f"ranker is refusing to publish. This is a venue-side "
+                      f"condition, not a code failure. Waiting for the venue to "
+                      f"recover; do NOT loosen gates to force a bundle. !!!!!",
+                      file=sys.stderr)
+                _emit_scan_event({
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "service": "filter", "cycle": cycle, "phase": "scanning",
+                    "action": "paired_universe_truncated", "market_slug": "",
+                    "reason": "paired ranker refused: Gamma listing truncated "
+                              "(environment, not a ranker fault)",
+                    "latency_ms": round((time.time() - t0) * 1000.0, 2),
+                    "pid": os.getpid(), "extra": {},
+                })
             _emit_scan_event({
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "service": "filter", "cycle": cycle, "phase": "scanning",

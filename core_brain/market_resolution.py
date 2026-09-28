@@ -309,6 +309,8 @@ def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dic
                 """,
                 (condition_id, run_id, run_id),
             ).fetchall()
+            if not rows:
+                return {}, {}
             close_rows = conn.execute(
                 """
                 SELECT method, shares, up_price, up_cost_removed, dn_cost_removed
@@ -317,6 +319,16 @@ def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dic
                   AND (run_id = ? OR (? IS NULL AND run_id IS NULL))
                 """,
                 (condition_id, run_id, run_id),
+            ).fetchall()
+            quote_rows = conn.execute(
+                """
+                SELECT token_id, side, ts
+                FROM quotes
+                WHERE lower(condition_id) = lower(?)
+                  AND side IN ('UP', 'DOWN', 'up', 'down')
+                ORDER BY ts ASC
+                """,
+                (condition_id,),
             ).fetchall()
     except Exception:
         return {}, {}
@@ -339,18 +351,10 @@ def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dic
     # `single_buy_saver._token_side` read -- so a merge or settlement can drip
     # the right per-leg shares/cost.
     side_of: dict[str, str] = {}
-    seen_ts: dict[str, float] = {}
-    for q in registry.get_all_quotes():
-        cid = str(q.get("condition_id") or "")
-        token = str(q.get("token_id") or "")
-        side = str(q.get("side") or "").upper()
-        if not cid or not token or side not in ("UP", "DOWN"):
-            continue
-        if cid.lower() != str(condition_id).lower():
-            continue
-        ts = float(q.get("ts") or 0.0)
-        if ts >= seen_ts.get(token, -1.0):
-            seen_ts[token] = ts
+    for q in quote_rows:
+        token = str(q["token_id"] or "")
+        side = str(q["side"] or "").upper()
+        if token and side in ("UP", "DOWN"):
             side_of[token] = side
     up_token = next((t for t, s in side_of.items() if s == "UP"), None)
     down_token = next((t for t, s in side_of.items() if s == "DOWN"), None)

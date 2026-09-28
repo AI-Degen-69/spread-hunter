@@ -523,9 +523,16 @@ def test_env_write_is_atomic_and_never_truncates_on_failure(tmp_path, monkeypatc
     assert list(tmp_path.glob("*.tmp.*")) == []
 
 
-def test_registry_naked_usd_counts_open_pairs_only(tmp_path):
+def test_registry_naked_usd_counts_open_pairs_only(tmp_path, monkeypatch):
     """Naked dollars come from open pairs; a merged pair contributes nothing."""
     import time
+
+    def unexpected_load_pair(*args, **kwargs):
+        raise AssertionError("registry_naked_usd must aggregate pairs in SQL")
+
+    monkeypatch.setattr(
+        "core_brain.single_buy_saver.load_pair", unexpected_load_pair
+    )
 
     from core_brain import order_manager as live_exec
     from core_brain.order_registry import (
@@ -547,6 +554,15 @@ def test_registry_naked_usd_counts_open_pairs_only(tmp_path):
     reg.record_fill(FillRecord(trade_id="t2", order_uuid="o2", size=2.0,
                                price=0.32, venue_ts=now, recorded_ts=now, run_id="run-a"))
 
+    # Common case in the large registry: an open pair with no fills has no
+    # exposure and must not require loading a Python pair object.
+    for oid, tok in (("o8", "tok-h"), ("o9", "tok-i")):
+        reg.create_order(OrderRecord(
+            id=oid, condition_id="cond-unfilled", token_id=tok, side="BUY",
+            price=0.50, original_size=5.0, status="open",
+            posted_ts=now, last_polled_ts=now, pair_id="pair-unfilled",
+        ))
+
     # Closed pair: fully filled then merged -> no open exposure remains.
     for oid, tok, price in (("o3", "tok-c", 0.60), ("o4", "tok-d", 0.40)):
         reg.create_order(OrderRecord(
@@ -561,6 +577,24 @@ def test_registry_naked_usd_counts_open_pairs_only(tmp_path):
     reg.log_close(CloseRecord(ts=time.time(), condition_id="cond-closed",
                               method="merge", shares=5.0, cost_basis=5.0,
                               proceeds=5.0, realized_pnl=0.0, run_id="run-a"))
+
+    # Three token IDs make this malformed as a pair even though the third
+    # order has no fill. load_pair refuses the whole pair rather than dropping
+    # that leg and reporting an incomplete position.
+    for oid, tok, price in (
+        ("o5", "tok-e", 0.20),
+        ("o6", "tok-f", 0.30),
+        ("o7", "tok-g", 0.40),
+    ):
+        reg.create_order(OrderRecord(
+            id=oid, condition_id="cond-invalid", token_id=tok, side="BUY",
+            price=price, original_size=5.0, status="partial",
+            posted_ts=now, last_polled_ts=now, pair_id="pair-invalid",
+        ))
+    reg.record_fill(FillRecord(trade_id="t5", order_uuid="o5", size=5.0,
+                               price=0.20, venue_ts=now, recorded_ts=now, run_id="run-a"))
+    reg.record_fill(FillRecord(trade_id="t6", order_uuid="o6", size=2.0,
+                               price=0.30, venue_ts=now, recorded_ts=now, run_id="run-a"))
 
     assert registry_naked_usd(reg) == pytest.approx(3.0 * 0.62)
 

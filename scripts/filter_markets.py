@@ -573,8 +573,12 @@ def gamma_universe(session: requests.Session,
                 + _tag_labels(event.get("tags")),
                 "market_type": m.get("marketType") or m.get("type") or "",
                 "market_group": m.get("groupItemTitle") or "",
+                # main's guarded readers win; the paired bundle also needs the
+                # stable event identity the completeness gate refuses without.
                 "series_title": _first_series_title(event),
                 "event_title": _str(event.get("title")),
+                "event_id": _str(event.get("id")),
+                "event_slug": _str(event.get("slug")),
                 "tokens": [{"token_id": str(t)} for t in toks],
                 # Reward config, when the venue publishes one, feeds the score
                 # WINDOW only. It is not a filter and not an income source:
@@ -989,6 +993,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "market_group": m.get("market_group") or m.get("groupItemTitle") or "",
         "series_title": m.get("series_title") or "",
         "event_title": m.get("event_title") or "",
+        "event_id": m.get("event_id") or "",
+        "event_slug": m.get("event_slug") or "",
         # THE REWARD POT, and zero is the honest figure for a market that pays
         # none. `fleet.reallocate` keys the spread path off `daily <= 0` and
         # recomputes the pot from `volume_24h` and `spread`, so the capture
@@ -1132,6 +1138,103 @@ def _if_adopted(r: dict) -> dict | None:
     }
 
 
+PAIRED_DEPTH_BUNDLE_FORMAT = "spread_hunter.paired-depth.v1"
+
+
+def build_paired_depth_bundle(
+    eligible: list[dict], *, top: int, control_depth_usd: float,
+    treatment_depth_usd: float, volume_gate_usd: float,
+    snapshot_id: str, ranked_at: float,
+) -> dict:
+    """Build two top-N feeds from the same scored universe and book snapshot.
+
+    `eligible` must already be ordered by the ranker's common score. Treatment
+    uses the explicit lower depth cutoff; control is the strict subset that
+    also clears the higher cutoff on BOTH outcome books. Every other ranker
+    gate and every score is identical between arms.
+    """
+    if top < 1:
+        raise ValueError("paired depth top must be at least one")
+    if control_depth_usd <= treatment_depth_usd or treatment_depth_usd <= 0:
+        raise ValueError("control depth must be greater than a positive treatment depth")
+
+    def clears(row: dict, cutoff: float) -> bool:
+        try:
+            yes_depth = float(row["yes_depth_usd"])
+            no_depth = float(row["no_depth_usd"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return yes_depth > cutoff and no_depth > cutoff
+
+    control_pool = [row for row in eligible if clears(row, control_depth_usd)]
+    treatment_pool = [row for row in eligible if clears(row, treatment_depth_usd)]
+    control = control_pool[:top]
+    treatment = treatment_pool[:top]
+
+    def arm_rows(rows: list[dict], arm: str, cutoff: float) -> list[dict]:
+        return [
+            {
+                **row,
+                "paired_depth_arm": arm,
+                "paired_depth_cutoff_usd": cutoff,
+                "paired_depth_snapshot_id": snapshot_id,
+            }
+            for row in rows
+        ]
+
+    control_rows = arm_rows(control, "control", control_depth_usd)
+    treatment_rows = arm_rows(treatment, "treatment", treatment_depth_usd)
+    control_ids = {str(row.get("cid") or "") for row in control}
+    treatment_only_pool = [
+        row for row in treatment_pool
+        if str(row.get("cid") or "") not in {
+            str(candidate.get("cid") or "") for candidate in control_pool
+        }
+    ]
+
+    def market_evidence(rows: list[dict]) -> list[dict]:
+        return [{
+            "cid": row.get("cid"),
+            "slug": row.get("slug", ""),
+            "event_title": row.get("event_title") or row.get("title", ""),
+            "event_id": row.get("event_id", ""),
+            "event_slug": row.get("event_slug", ""),
+            "yes_depth_usd": row.get("yes_depth_usd"),
+            "no_depth_usd": row.get("no_depth_usd"),
+        } for row in rows]
+
+    return {
+        "format": PAIRED_DEPTH_BUNDLE_FORMAT,
+        "snapshot_id": snapshot_id,
+        "ranked_at": float(ranked_at),
+        "depth_measure": "top-three bid notional on each outcome token; strict greater-than cutoff",
+        "control_depth_usd": float(control_depth_usd),
+        "treatment_depth_usd": float(treatment_depth_usd),
+        "volume_gate_usd": float(volume_gate_usd),
+        "other_gate_trials": False,
+        "counts": {
+            "treatment_eligible": len(treatment_pool),
+            "control_eligible": len(control_pool),
+            "incremental_eligible": len(treatment_only_pool),
+            "treatment_selected": len(treatment_rows),
+            "control_selected": len(control_rows),
+        },
+        "control": control_rows,
+        "treatment": treatment_rows,
+        "audit": {
+            "treatment_only_candidates": market_evidence(treatment_only_pool),
+            "control_candidates": market_evidence(control_pool),
+            "treatment_candidates": market_evidence(treatment_pool),
+            "control_selected": market_evidence(control),
+            "treatment_selected": market_evidence(treatment),
+            "treatment_only_selected": market_evidence([
+                row for row in treatment
+                if str(row.get("cid") or "") not in control_ids
+            ]),
+        },
+    }
+
+
 def _effective_depth_bar(cli_trial_usd: Optional[float]) -> float:
     """The depth bar this run gates on: CLI trial > config trial > permanent.
 
@@ -1227,6 +1330,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "permanently. See scripts/trial_depth_gate.py for the "
                         "recorded-data replay that shows which markets a bar "
                         "adopts." % MIN_TOP3_DEPTH_USD)
+    p.add_argument("--paired-depth-control-usd", type=float, default=None,
+                   metavar="USD",
+                   help="write one atomic paired_markets.json containing a "
+                        "control feed at this top-3 bid depth bar and a "
+                        "treatment feed at --trial-depth, both selected from "
+                        "this rank pass; requires --out-dir and a lower trial bar")
     p.add_argument("--trial-spread", type=float, default=None, metavar="SPREAD",
                    help="WIDE-BOOK TRIAL (#145): admit books up to this spread "
                         "instead of the permanent ceiling (%.2f). Run 145 "
@@ -1265,7 +1374,23 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "unified scan; this flag exists only to measure that "
                         "claim against the live funnel before the code comes "
                         "out.")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.paired_depth_control_usd is not None:
+        if args.out_dir is None:
+            p.error("--paired-depth-control-usd requires an isolated --out-dir")
+        if args.trial_depth is None:
+            p.error("--paired-depth-control-usd requires an explicit --trial-depth")
+        if args.dry_run:
+            p.error("paired-depth feeds cannot be written with --dry-run")
+        if args.trial_volume is not None or args.trial_spread is not None:
+            p.error("paired depth mode cannot be combined with volume or spread trials")
+        if args.legacy_rewards:
+            p.error("paired depth mode cannot be combined with --legacy-rewards")
+        if args.trial_depth <= 0 or args.paired_depth_control_usd <= args.trial_depth:
+            p.error("control depth must be positive and greater than the treatment depth")
+        if Path(args.out_dir).resolve() == RUN.resolve():
+            p.error("paired-depth mode refuses the shared runtime directory")
+    return args
 
 
 # A depth-gate reason embeds its measurement -- "YES: top-3 bid depth
@@ -1823,7 +1948,11 @@ def main() -> None:
     # watched before the bar is loosened permanently.
     trial_bar = _effective_depth_bar(args.trial_depth)
     trial_active = trial_bar != MIN_TOP3_DEPTH_USD
-    volume_bar = _effective_volume_bar(args.trial_volume)
+    # A paired depth comparison varies only the depth bar. It deliberately
+    # pins volume to the shipped threshold even if a trial override is present
+    # in the process environment or config.
+    volume_bar = (MIN_VOLUME_24H if args.paired_depth_control_usd is not None
+                  else _effective_volume_bar(args.trial_volume))
     volume_trial_active = volume_bar != MIN_VOLUME_24H
     movement_bar = MIN_MOVEMENT_USD
     # WIDE-BOOK TRIAL (#145). Resolved here so the bar travels as an argument
@@ -1841,8 +1970,21 @@ def main() -> None:
     # not. `end_date_min`/`end_date_max` are left OFF the request on purpose:
     # long-dated markets are fetched and refused auditably by the horizon
     # gate, so the funnel shows what the horizon actually removes.
-    universe, disc_meta = gamma_universe(s, min_volume_usd=volume_bar,
-                                         full_scan=args.full_scan)
+    universe, disc_meta = gamma_universe(
+        s, min_volume_usd=volume_bar,
+        # PAIRED MODE NEEDS THE COMPLETE LISTING. The plain rank's boundary
+        # economy (stop one page past the volume floor, flag `truncated`) is
+        # a POLICY stop, not a fetch failure -- and the paired gate below
+        # refuses on that flag, so paired mode without a full scan would
+        # refuse on EVERY rank and never produce a bundle. The two arms must
+        # rank one shared universe anyway, so a complete listing is the
+        # requirement, not an economy: `full_scan` paginates to exhaustion,
+        # and if the listing still cannot be exhausted within `max_pages`,
+        # the flag is genuinely a failed read and the gate refuses as
+        # designed. Sub-floor rows are cheap-rejected inside the scan, so
+        # scoring cost is unchanged -- only pagination pays more.
+        full_scan=(args.full_scan
+                   or args.paired_depth_control_usd is not None))
     volume_str = (f"${volume_bar:,.0f}"
                   + (f" [TRIAL vs permanent ${MIN_VOLUME_24H:,.0f}]"
                      if volume_trial_active else ""))
@@ -1888,7 +2030,46 @@ def main() -> None:
     eligible = [r for r in out if r["eligible"]]
     rejected = len(out) - len(eligible)
     eligible.sort(key=lambda r: -r["return_pct_day"])
-    picked = eligible[:top]
+    paired_bundle = None
+    if args.paired_depth_control_usd is not None:
+        if args.legacy_rewards:
+            raise SystemExit("paired-depth mode cannot combine with --legacy-rewards")
+        if disc_meta.get("truncated"):
+            # Machine-readable marker for the loop that runs this ranker every
+            # ten minutes. A truncated universe is an ENVIRONMENT condition
+            # (the venue's listing read is incomplete), not a ranker bug -- but
+            # the loop's generic rerank_error event cannot tell them apart, and
+            # an operator watching a repeated failure needs to know that no
+            # amount of retrying the ranker will help and no gate was loosened.
+            # The loop greps for this exact string to raise its own
+            # paired_universe_truncated event.
+            print("PAIRED_UNIVERSE_TRUNCATED: refusing to publish a paired bundle "
+                  "on a partial Gamma listing", file=sys.stderr)
+            raise SystemExit(
+                "paired-depth mode requires a complete Gamma universe; "
+                "the current scan was truncated")
+        missing_event = [r.get("cid") or "?" for r in eligible
+                         if not (r.get("event_id") or r.get("event_slug"))]
+        if missing_event:
+            raise SystemExit(
+                "paired-depth mode requires stable Gamma event ids/slugs; "
+                f"missing for {len(missing_event)} eligible market(s)")
+        paired_bundle = build_paired_depth_bundle(
+            eligible,
+            top=top,
+            control_depth_usd=args.paired_depth_control_usd,
+            treatment_depth_usd=trial_bar,
+            volume_gate_usd=volume_bar,
+            snapshot_id=f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
+            ranked_at=time.time(),
+        )
+        picked = paired_bundle["treatment"]
+    else:
+        picked = eligible[:top]
+
+    # Conditions the ranker recovered from, reported rather than raised: a run
+    # that published something must still say what it could not.
+    warnings: list[str] = []
 
     if not args.dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1942,6 +2123,33 @@ def main() -> None:
 
         try:
             _publish_json(out_dir / "markets.json", picked)
+            if paired_bundle is not None:
+                # One atomic file feeds both arms, so they can never read a
+                # control list from one rank and a treatment list from another.
+                if _publish_json(out_dir / "paired_markets.json", paired_bundle):
+                    audit_path = out_dir / "paired_depth_audit.jsonl"
+                    with audit_path.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps({
+                            "format": paired_bundle["format"],
+                            "snapshot_id": paired_bundle["snapshot_id"],
+                            "ranked_at": paired_bundle["ranked_at"],
+                            "control_depth_usd": paired_bundle["control_depth_usd"],
+                            "treatment_depth_usd": paired_bundle["treatment_depth_usd"],
+                            "volume_gate_usd": paired_bundle["volume_gate_usd"],
+                            "counts": paired_bundle["counts"],
+                            "audit": paired_bundle["audit"],
+                        }) + "\n")
+                else:
+                    # The swap lost every retry to a reader's open handle, so
+                    # the feed still holds the PREVIOUS snapshot. Recording
+                    # this one in the audit would name a snapshot no arm could
+                    # ever have read, and the report compares the audit's
+                    # snapshot set against what the arms actually observed.
+                    # An honest gap beats a phantom one.
+                    warnings.append(
+                        f"paired bundle for {paired_bundle['snapshot_id']} was NOT "
+                        "written (rename lost to a reader); skipped the audit "
+                        "line so it does not list an unobservable snapshot")
         finally:
             # Remove the marker after successful write so subsequent runs aren't blocked
             if marker.exists():
@@ -1966,6 +2174,8 @@ def main() -> None:
               f"{'would write' if args.dry_run else 'wrote'} top {len(picked)}"
               f" -> runtime/markets.json")
     print(census)
+    for warning in warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
     depth_bar_str = (f"${trial_bar:,.0f}"
                      + (f" [TRIAL vs permanent ${MIN_TOP3_DEPTH_USD:,.0f}]"
                         if trial_active else ""))
@@ -2003,6 +2213,7 @@ def main() -> None:
         discovery=disc_meta,
         depth_gate_usd=trial_bar,
         trial_depth_usd=(trial_bar if trial_active else None),
+
         volume_gate_usd=volume_bar,
         trial_volume_usd=(volume_bar if volume_trial_active else None),
         spread_gate=spread_bar,

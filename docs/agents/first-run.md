@@ -139,7 +139,7 @@ Watchdog, independent of the poll loop. Flags the two live-run failure signature
 
 ### 5 · Dashboard — `dashboard/server.py`
 - `--port` (default `8799`), `--host` (default `127.0.0.1`),
-  `--db` (default `data/orders.db`; `data/shadow.db` for shadow mode)
+  `--db` (default `data/orders.db`; explicit per-run path for shadow mode)
 
 **A backend change does not reload live.** `core_brain/*` (including `kpi.py`)
 and `dashboard/server.py` are imported once at process start, while
@@ -172,19 +172,24 @@ All under `core_brain/order_manager.py`; `--no-live` anywhere is the dry run:
 
 ## Shadow rehearsal (the `--minutes` command)
 
-`python -m core_brain.shadow_run --minutes 5` runs the **same full loop**
-(screener → quoting → fills → merge path) against the live book, spending
-nothing — no signer is loaded.
+`python -m core_brain.shadow_run --minutes 5 --db data/NN_shadow_<stamp>.db --run-id shadow-NN`
+runs the **same full loop** (screener → quoting → fills → merge path) against
+the live book, spending nothing — no signer is loaded. Use a fresh, unique
+store path for every run; the command no longer chooses a shared default.
+Example: `python -m core_brain.shadow_run --minutes 5 --db data/04_shadow_24-09_test.db --run-id shadow-04`.
+
+The operations menu's `shadow-run` action selects and passes a unique per-run
+store automatically.
 - `--minutes` — time box (default `5.0`); the run stops on this wall clock
 - `--interval` — rotation cadence (default `5.0`)
-- `--db` — shadow store (default `data/shadow.db`; `data/orders.db` is refused)
+- `--db` — required, explicit per-run shadow store (for example, `data/04_shadow_24-09_test.db`); `data/orders.db` is refused
 - `--max-markets N` — cap rotation universe
 - `--funder ADDR` — balance-read funder
 
 It rehearses everything: the same `MakerConfig`, the same `MAX_ORDER_USD` /
 `MAX_TOTAL_USD`, the same gates, the same `decide_quotes`. Only the signer, the
-store, and the wall clock differ. Point the shadow dashboard at `data/shadow.db`
-and it updates live while the rehearsal runs.
+store, and the wall clock differ. Point the shadow dashboard at the same per-run
+store path and it updates live while the rehearsal runs.
 
 ## The wiring rule that prevents contradictions
 

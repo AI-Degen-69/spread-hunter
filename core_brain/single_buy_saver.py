@@ -540,6 +540,14 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
     else:
         up_price, dn_price = None, sell_price
         up_removed, dn_removed = 0.0, cost_basis
+    close_run_id = None
+    paired_context = getattr(registry, "paired_context", None)
+    if isinstance(paired_context, dict):
+        from core_brain.paired_shadow import validate_paired_pair_attribution
+        validate_paired_pair_attribution(
+            paired_context["db_path"], run_id=paired_context["run_id"],
+            pair_id=str(pair["pair_id"]))
+        close_run_id = paired_context["run_id"]
     registry.log_close(CloseRecord(
         ts=time.time(),
         condition_id=pair["condition_id"],
@@ -555,6 +563,7 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
         forgone_vs_settlement=None,
         up_cost_removed=up_removed,
         dn_cost_removed=dn_removed,
+        run_id=close_run_id,
     ))
 
 

@@ -1044,6 +1044,39 @@ class TestReGateRespectsHeldInventory:
 
         assert seen["hedge_held"] == set()
 
+    def test_paired_depth_metadata_is_emitted_for_ranker_attribution(self):
+        from core_brain.config import MakerConfig
+        from core_brain.trader_loop import _visit_one
+
+        market = FakeMarket("0xpaired")
+        emitted = []
+        seam = VenueSeam(
+            base_cfg=MakerConfig(),
+            fetch_market=lambda cid: market,
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.47, "best_ask": 0.49,
+                "bids": {0.47: 100}, "asks": {0.49: 100},
+            },
+            decide=lambda *a: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+        )
+        _visit_one(
+            seam,
+            {"cid": "0xpaired", "paired_depth_arm": "treatment",
+             "paired_depth_cutoff_usd": 250,
+             "paired_depth_snapshot_id": "snapshot-z"},
+            live=False,
+            emit_fn=lambda **event: emitted.append(event),
+        )
+
+        decision = next(event for event in emitted if event.get("action") == "decide")
+        assert decision["extra"]["paired_depth_arm"] == "treatment"
+        assert decision["extra"]["paired_depth_cutoff_usd"] == 250
+        assert decision["extra"]["paired_depth_snapshot_id"] == "snapshot-z"
+
 
 class TestMarketSpecsPath:
     """`_market_specs` reads the feed it is told to, converting exactly as live."""
@@ -1070,6 +1103,30 @@ class TestMarketSpecsPath:
         specs = _market_specs(1, path=str(self._feed(tmp_path, n=3)))
 
         assert [s["cid"] for s in specs] == ["0xtrial0"]
+
+    def test_market_specs_select_one_paired_depth_arm(self, tmp_path):
+        from core_brain.trader_loop import _market_specs
+
+        path = tmp_path / "paired.json"
+        path.write_text(json.dumps({
+            "format": "spread_hunter.paired-depth.v1",
+            "snapshot_id": "snapshot-a",
+            "control_depth_usd": 500,
+            "treatment_depth_usd": 250,
+            "control": [{"cid": "0xcontrol", "paired_depth_arm": "control",
+                          "paired_depth_cutoff_usd": 500,
+                          "paired_depth_snapshot_id": "snapshot-a"}],
+            "treatment": [{"cid": "0xtreatment", "paired_depth_arm": "treatment",
+                            "paired_depth_cutoff_usd": 250,
+                            "paired_depth_snapshot_id": "snapshot-a"}],
+        }), encoding="utf-8")
+
+        specs = _market_specs(path=str(path), paired_arm="treatment")
+
+        assert [spec["cid"] for spec in specs] == ["0xtreatment"]
+        assert specs[0]["paired_depth_arm"] == "treatment"
+        assert specs[0]["paired_depth_cutoff_usd"] == 250
+        assert specs[0]["paired_depth_snapshot_id"] == "snapshot-a"
 
     def test_no_path_reads_the_default_feed(self, tmp_path, monkeypatch):
         import core_brain.market_feed as feed_mod
