@@ -528,3 +528,49 @@ class TestAmbiguousAttribution:
         ))
         out = run_report(tmp_path / "reg.db", ["--top", "5"])
         assert "-$7.50" in out and "-$3.00" in out  # both rows ranked by ledger P&L
+
+
+class TestAgedOutRescueCount:
+    """The one number #311's acceptance criterion asks the operator to read.
+
+    An aged-out leg that the new arm rescued is a `single_buy_exit` carrying
+    `reason=aged_out_rescue`; an aged-out leg that was NOT rescued is a
+    `shadow_settlement` whose close came more than the window after its fill.
+    The first must be visible as the success shape, the second must be counted
+    so "zero" is a number the operator can check rather than an absence.
+    """
+
+    def test_a_rescued_aged_out_leg_is_reported_as_the_success_shape(
+            self, tmp_path):
+        # Arrange - fill 2h old, exited 60s later, i.e. after the window.
+        reg = build_registry(tmp_path / "reg.db")
+        add_pair_orders(reg, pair_id="p1", cid="c1", up_token="u1",
+                        dn_token="d1", heavy_price=0.55,
+                        fill_ts=1_700_000_000_000)
+        add_exit_close(reg, cid="c1", shares=10.0, sell_price=0.40,
+                       heavy_avg=0.55, ts=1_700_000_060.0,
+                       reason="aged_out_rescue")
+
+        # Act
+        out = run_report(tmp_path / "reg.db")
+
+        # Assert
+        assert "AGED-OUT RESCUE" in out
+        assert "aged-out settlements: 0" in out
+
+    def test_an_aged_out_settlement_is_counted(self, tmp_path):
+        # Arrange - the same leg, except it aged out and settlement took it.
+        reg = build_registry(tmp_path / "reg.db")
+        add_pair_orders(reg, pair_id="p1", cid="c1", up_token="u1",
+                        dn_token="d1", heavy_price=0.55,
+                        fill_ts=1_700_000_000_000)
+        add_exit_close(reg, cid="c1", shares=10.0, sell_price=0.0,
+                       heavy_avg=0.55, ts=1_700_010_000.0,
+                       method="shadow_settlement")
+
+        # Act
+        out = run_report(tmp_path / "reg.db")
+
+        # Assert
+        assert "AGED OUT" in out
+        assert "aged-out settlements: 1" in out
