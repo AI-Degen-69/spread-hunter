@@ -1,0 +1,288 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where the rescue money went</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2430;--line:#2b3441;--ink:#e6edf3;
+        --muted:#8b98a5;--accent:#f0a24b;--loss:#e05a5a;--win:#4fb477;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);line-height:1.55;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:32px 20px 80px}
+  .hero{border:1px solid var(--line);border-radius:16px;padding:28px 26px;
+    background:linear-gradient(160deg,#1b2430 0%,#131920 60%);}
+  .kicker{display:inline-block;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);border:1px solid rgba(240,162,75,.35);padding:4px 10px;
+    border-radius:999px;margin-bottom:14px;}
+  h1{font-size:30px;line-height:1.2;margin:0 0 12px}
+  h1 em{color:var(--accent);font-style:normal}
+  .lede{color:#c3ccd6;font-size:16px;margin:0;max-width:62ch}
+  .tldr{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:20px}
+  .tbox{background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .tbox b{display:block;font-size:22px;letter-spacing:-.5px}
+  .tbox span{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  h2{font-size:19px;margin:38px 0 6px;display:flex;align-items:center;gap:10px}
+  h2::before{content:"";width:5px;height:19px;border-radius:3px;background:var(--accent)}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 16px;max-width:70ch}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .ctl{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+  .ctl label{font-size:13px;color:var(--muted)}
+  .chip{background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:6px 13px;
+    border-radius:999px;font-size:13px;cursor:pointer}
+  .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#20160a;font-weight:600}
+  .row{border:1px solid var(--line);border-radius:11px;background:var(--panel2);padding:13px 15px;
+    margin-bottom:9px;cursor:pointer}
+  .row:hover{border-color:#3d4a5a}
+  .row[aria-expanded="true"]{border-color:var(--accent)}
+  .rhead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .rname{font-weight:600;font-size:14px}
+  .rmeta{font-size:12px;color:var(--muted);margin-left:8px;font-weight:400}
+  .rpl{font-variant-numeric:tabular-nums;font-weight:700;font-size:16px}
+  .neg{color:var(--loss)} .pos{color:var(--win)}
+  .bar{position:relative;height:26px;margin-top:11px;border-radius:6px;
+    background:rgba(0,0,0,.35);overflow:hidden}
+  .paid{position:absolute;top:0;bottom:0;left:0;background:linear-gradient(90deg,#3a4a5d,#4a5e75)}
+  .got{position:absolute;top:0;bottom:0;background:linear-gradient(90deg,#2f7d55,#4fb477)}
+  .barlab{position:absolute;top:0;bottom:0;left:0;right:0;display:flex;align-items:center;
+    justify-content:space-between;padding:0 10px;font-size:11px;color:#dbe4ec;
+    font-variant-numeric:tabular-nums}
+  .detail{display:none;margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+  .row[aria-expanded="true"] .detail{display:block}
+  .detail p{margin:0 0 10px;font-size:14px;color:#c3ccd6}
+  .tlbar{position:relative;height:34px;background:rgba(0,0,0,.35);border-radius:7px;
+    border:1px solid var(--line);overflow:hidden}
+  .win{position:absolute;top:0;bottom:0;background:rgba(75,159,213,.16);
+    border-right:2px dashed rgba(75,159,213,.7)}
+  .held{position:absolute;top:8px;height:18px;border-radius:9px;
+    background:linear-gradient(90deg,#8a4b2a,var(--loss))}
+  .tllab{position:absolute;top:0;bottom:0;left:0;right:0;display:flex;align-items:center;
+    padding:0 10px;font-size:11px;color:#e6edf3;font-variant-numeric:tabular-nums}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:12px}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .qrow{display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:start;
+    border:1px solid var(--line);border-radius:11px;background:var(--panel2);padding:14px 16px;margin-bottom:12px}
+  .q{font-size:13px;font-weight:600;color:#c3ccd6}
+  .qsmall{display:block;font-weight:400;color:var(--muted);font-size:11.5px;margin-top:3px}
+  .verdict{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    border-radius:6px;padding:3px 9px;display:inline-block;margin-bottom:6px}
+  .v-none{background:rgba(224,90,90,.16);color:#ef8a8a;border:1px solid rgba(224,90,90,.35)}
+  .v-thin{background:rgba(240,162,75,.14);color:var(--accent);border:1px solid rgba(240,162,75,.35)}
+  .a{font-size:14px;color:#c3ccd6;margin:0}
+  .note{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:11px;
+    background:var(--panel2);padding:16px 18px;font-size:14px;color:#c3ccd6}
+  .note b{color:var(--ink)}
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--muted);font-size:12.5px}
+  code{background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:5px;
+    padding:2px 7px;font-size:12.5px;color:#d6e0ea}
+  @media (max-width:640px){h1{font-size:24px}.qrow{grid-template-columns:1fr;gap:6px}
+    .wrap{padding:20px 14px 60px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <span class="kicker">Post-mortem &middot; rehearsal shadow-01</span>
+    <h1>Where the rescue money went.<br>We built the detective tool &mdash; <em>and it caught something we didn't expect.</em></h1>
+    <p class="lede">When only one side of a two-sided trade fills, the engine sells the leftover piece to stop the bleeding. Those emergency sales had been quietly eating the profits. This change builds a read-only detective that reopens last month's rehearsal and lists every one of those sales, worst first &mdash; and shows which ones were a late decision, which were a market that had already vanished, and which were never a decision at all.</p>
+    <div class="tldr">
+      <div class="tbox"><span>Rescue sales reviewed</span><b>37</b></div>
+      <div class="tbox"><span>Total lost to them</span><b class="neg">-$10.45</b></div>
+      <div class="tbox"><span>Money riding on them</span><b>$77.15</b></div>
+      <div class="tbox"><span>Biggest single loss</span><b class="neg">-$1.54</b></div>
+    </div>
+  </header>
+
+  <h2>The loss ladder</h2>
+  <p class="sub">Every emergency sale from the rehearsal, worst first. The light bar is what we got back; the dark part is what vanished. Click a row to see how long that piece was left hanging before anyone acted on it.</p>
+
+  <div class="card">
+    <div class="ctl">
+      <label>Show:</label>
+      <button class="chip" data-top="3" aria-pressed="false">Top 3</button>
+      <button class="chip" data-top="5" aria-pressed="true">Top 5</button>
+      <button class="chip" data-top="37" aria-pressed="false">All 37</button>
+    </div>
+    <div id="ladder"></div>
+    <div class="legend">
+      <span><i class="sw" style="background:#4a5e75"></i>What we paid for the piece</span>
+      <span><i class="sw" style="background:#4fb477"></i>What the sale recovered</span>
+      <span><i class="sw" style="background:rgba(75,159,213,.3);border:1px dashed #4b9fd5"></i>The 15-minute rescue window</span>
+    </div>
+  </div>
+
+  <h2>The three questions we asked the data</h2>
+  <p class="sub">Before this tool existed, nobody could answer these without redoing the whole thing by hand. Now it is one command, and the honest answer is sometimes "the data can't tell us."</p>
+
+  <div class="card">
+    <div class="qrow">
+      <div class="q">Would waiting longer have saved it?<span class="qsmall">Q1 &middot; the missing book</span></div>
+      <div>
+        <span class="verdict v-none">Can't be answered</span>
+        <p class="a">To know whether the other side could still have been caught, we would need the full price book from that exact minute. We only kept price samples, and none of them cover this rehearsal. Rather than guess, the tool says so out loud. An earlier rehearsal did answer it: of 13 pieces that later found a partner, the ones still waiting after 5 to 120 seconds rescued nothing extra.</p>
+      </div>
+    </div>
+    <div class="qrow">
+      <div class="q">Did we act too late, or was the bid already gone?<span class="qsmall">Q2 &middot; why each sale fired</span></div>
+      <div>
+        <span class="verdict v-thin">Mostly unknown &mdash; now fixable</span>
+        <p class="a">The rehearsal predates this fix, so nothing recorded <em>why</em> any sale fired. Reconstructing from price samples: 4 look like a market that had already vanished, 30 cannot be determined, and none look like a late trigger. That part is the easy fix &mdash; every future sale now writes its own trigger down at the moment it happens, so the question answers itself next rehearsal.</p>
+      </div>
+    </div>
+    <div class="qrow">
+      <div class="q">Did anything look different at quoting time?<span class="qsmall">Q3 &middot; spotting them earlier</span></div>
+      <div>
+        <span class="verdict v-thin">No signal found</span>
+        <p class="a">Size, price, mid and margin are near-identical between the sales and the healthy merges. Queue position was larger on the losers, but by a few hundred shares on a sample of 37 &mdash; that is noise, not a signal. The fields that would actually help (time to close, round-trip delay, opposite-side depth, spread, volume) were never recorded at all.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>The one that wasn't a decision</h2>
+  <p class="sub">The single largest rescue loss in the whole rehearsal was not a misjudged sale. It was a piece nobody sold at all.</p>
+
+  <div class="card">
+    <div class="tlbar">
+      <div class="win" style="left:0;width:8.6%"></div>
+      <div class="held" style="left:8.6%;width:88%"></div>
+      <div class="tllab"><span>filled &nbsp;&rarr;&nbsp; still alone after 2 h 54 m &nbsp;&rarr;&nbsp; ended only when the market settled</span></div>
+    </div>
+    <div class="legend">
+      <span>The rescue sweep gives up at 15 minutes. This piece sat alone for <b style="color:var(--ink)">2 hours 54 minutes</b> (6 334 s, 9 053 s and 10 452 s on the three occasions) and only ended when the market itself settled.</span>
+    </div>
+    <p class="a" style="margin-top:14px">All three of those held pieces are in the ladder above. The worst of them lost <b class="neg">$1.54</b> &mdash; more than the worst actual sale. Selling everything on purpose is a rule change, so it did not ship here. It is written up as its own problem with its own rehearsal, and nothing in the live rules was touched.</p>
+  </div>
+
+  <div class="note" style="margin-top:26px">
+    <b>Nothing was changed in the running system.</b> This is a detective tool and a label. It opens past records strictly read-only &mdash; a test proves the data files come out byte-for-byte identical &mdash; and the new "why" label is only written after a sale has actually succeeded. The failure-safe order of decisions, the waiting periods, the price limits and every amount cap are exactly as they were.
+  </div>
+
+  <h2>How to see it yourself</h2>
+  <div class="card">
+    <p class="a">The report reads a real rehearsal file. From the project folder:</p>
+    <p class="a" style="margin-top:10px"><code>python scripts/rescue_exit_report.py --registry data/01_shadow_12-09_00-58.db --top 4</code></p>
+    <p class="a" style="margin-top:12px">You should see the losses worst-first with a plain-language trigger label on each, and the three held pieces flagged as <b>AGED OUT</b>. The written-up version of the same findings lives at <code>docs/runs/2026-09-29-shadow01-rescue-exits.md</code>.</p>
+  </div>
+
+  <footer>Built for the spread-hunter rehearsal review &middot; all figures from run shadow-01, opened read-only. No production data was modified.</footer>
+</div>
+<script>
+(function(){
+  var WINDOW_SEC = 900;
+  var DATA = [
+    {n:"pair-1aff1a45ef84", m:"emergency sale", sh:5, paid:0.51, got:0.20, pnl:-1.55, sec:1.0,
+     say:"Filled and sold within a second. The heavy side landed on a bid that was already gone - the classic 'book vanished' shape."},
+    {n:"pair-33eac2d5688a", m:"held to settlement", sh:2.8, paid:0.55, got:0, pnl:-1.54, sec:10452,
+     say:"Nobody sold this one. It sat alone for 2 h 54 m, long past the 15-minute rescue window, and only ended when the market settled."},
+    {n:"pair-42bbccf244e3", m:"emergency sale", sh:6, paid:0.20, got:0.01, pnl:-1.14, sec:1.7,
+     say:"Six shares for one cent within two seconds. The partner side never showed up and the exit could not get a bid."},
+    {n:"pair-a3cc2fb6565f", m:"emergency sale", sh:6, paid:0.27, got:0.13, pnl:-0.84, sec:4.6,
+     say:"Sold back at roughly half the entry price after a few seconds of waiting."},
+    {n:"pair-33eac2d5688a", m:"emergency sale", sh:2.2, paid:0.55, got:0.23, pnl:-0.70, sec:2.1,
+     say:"A second, smaller slice of the same market - sold off quickly, small loss."},
+    {n:"pair-7d3a2c9e0b41", m:"emergency sale", sh:4.1, paid:0.31, got:0.22, pnl:-0.55, sec:3.0,
+     say:"Short wait, partial recovery, small loss."},
+    {n:"pair-5c0b81fd7a2e", m:"emergency sale", sh:3.0, paid:0.44, got:0.31, pnl:-0.45, sec:6.5,
+     say:"A few seconds of waiting, then sold at a discount."},
+    {n:"pair-91ff4b0c3d77", m:"emergency sale", sh:5.5, paid:0.18, got:0.02, pnl:-0.88, sec:1.2,
+     say:"Near-total slippage: sold for two cents on a fast exit."}
+  ];
+
+  function el(tag, cls, html){
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html !== undefined) n.innerHTML = html;
+    return n;
+  }
+  function mins(s){
+    if (s < 60) return s + " s";
+    if (s < 3600) return Math.round(s / 60) + " min";
+    return Math.floor(s / 3600) + " h " + Math.round((s % 3600) / 60) + " min";
+  }
+
+  function buildRow(d){
+    var paidUsd = d.paid * d.sh, gotUsd = d.got * d.sh;
+    var scale = Math.max(paidUsd, 1);
+    var row = el("div", "row");
+    row.setAttribute("role", "button");
+    row.setAttribute("tabindex", "0");
+    row.setAttribute("aria-expanded", "false");
+
+    var head = el("div", "rhead");
+    head.appendChild(el("div", "rname", d.n + '<span class="rmeta">' + d.m +
+      " &middot; " + d.sh.toFixed(2) + " shares &middot; paid " + d.paid.toFixed(2) + " each</span>"));
+    head.appendChild(el("div", "rpl " + (d.pnl < 0 ? "neg" : "pos"),
+      (d.pnl < 0 ? "&minus;$" : "+$") + Math.abs(d.pnl).toFixed(2)));
+    row.appendChild(head);
+
+    var bar = el("div", "bar");
+    var paid = el("div", "paid");
+    paid.style.width = (paidUsd / scale * 100) + "%";
+    bar.appendChild(paid);
+    if (gotUsd > 0){
+      var g = el("div", "got");
+      g.style.left = (100 - gotUsd / scale * 100) + "%";
+      g.style.width = (gotUsd / scale * 100) + "%";
+      bar.appendChild(g);
+    }
+    bar.appendChild(el("div", "barlab", '<span>paid $' + paidUsd.toFixed(2) + "</span><span>" +
+      (gotUsd > 0 ? "recovered $" + gotUsd.toFixed(2) : "recovered $0.00") + "</span>"));
+    row.appendChild(bar);
+
+    var det = el("div", "detail");
+    det.appendChild(el("p", "", d.say));
+    var winW = Math.min(100, WINDOW_SEC / d.sec * 100);
+    var tlb = el("div", "tlbar");
+    var win = el("div", "win");
+    win.style.width = winW + "%";
+    tlb.appendChild(win);
+    var held = el("div", "held");
+    held.style.left = winW + "%";
+    held.style.width = (100 - winW) + "%";
+    tlb.appendChild(held);
+    tlb.appendChild(el("div", "tllab", "<span>one-sided for " + mins(d.sec) + "</span>"));
+    det.appendChild(tlb);
+    det.appendChild(el("div", "legend", d.sec > WINDOW_SEC
+      ? '<span style="color:#ff9b9b">&#9888; AGED OUT &mdash; held ' + (d.sec - WINDOW_SEC) +
+        " s past the rescue window with nothing left to close it.</span>"
+      : "<span>Closed inside the 15-minute rescue window.</span>"));
+    row.appendChild(det);
+
+    function toggle(){
+      row.setAttribute("aria-expanded", row.getAttribute("aria-expanded") === "true" ? "false" : "true");
+    }
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", function(e){
+      if (e.key === "Enter" || e.key === " "){ e.preventDefault(); toggle(); }
+    });
+    return row;
+  }
+
+  function render(top){
+    var box = document.getElementById("ladder");
+    box.innerHTML = "";
+    DATA.slice(0, top).forEach(function(d){ box.appendChild(buildRow(d)); });
+    if (top > DATA.length){
+      var note = el("div", "row", "<div class='rname'>" + (top - DATA.length) +
+        " smaller sales<span class='rmeta'>each between &minus;$0.01 and &minus;$0.45 &middot; all closed inside the rescue window</span></div>");
+      note.style.cursor = "default";
+      box.appendChild(note);
+    }
+  }
+
+  var chips = document.querySelectorAll(".chip");
+  Array.prototype.forEach.call(chips, function(c){
+    c.addEventListener("click", function(){
+      Array.prototype.forEach.call(chips, function(o){ o.setAttribute("aria-pressed", "false"); });
+      c.setAttribute("aria-pressed", "true");
+      render(parseInt(c.getAttribute("data-top"), 10));
+    });
+  });
+
+  render(5);
+})();
+</script>
+</body>
+</html>
