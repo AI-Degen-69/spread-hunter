@@ -963,7 +963,7 @@ def test_the_expanded_row_names_the_leg_it_belongs_to():
     kpi = _kpi()
     kpi["by_market"][CID_SETTLED]["quotes"] = [
         {"token_id": "tok-up", "side": "UP"},
-        {"token_id": "tok-dn", "side": "DOWN"},
+        {"token_id": "tok-dn", "side": "DN"},
     ]
     state = _state()
     state["orders"] = [

@@ -5055,7 +5055,9 @@ function legResolverForMarket(m) {
   for (const q of ((m && m.quotes) || [])) {
     const side = String(q.side || '').toUpperCase();
     const token = String(q.token_id || '');
-    if (token && (side === 'UP' || side === 'DOWN')) byToken[token] = side;
+    if (token && (side === 'UP' || side === 'DOWN' || side === 'DN')) {
+      byToken[token] = side === 'DN' ? 'DOWN' : side;
+    }
   }
   return (tokenId) => byToken[String(tokenId || '')] || null;
 }
