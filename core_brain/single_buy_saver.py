@@ -42,6 +42,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from typing import Optional
 
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
@@ -1002,6 +1003,112 @@ def complete_pair(
     }
 
 
+# --- aged-out legs (the window's complement) ---------------------------------
+
+
+# Verdicts that are not news: they repeat on every rotation until the condition
+# changes, so they reach the cycle ring (where the dashboard counts them) but
+# stay out of the console. A long-dated market sits in `awaiting_lead` for
+# hours; printing that every five seconds is how an operator stops reading the
+# log. `end_unknown` and `venue_closed` stay LOUD -- one is a failing read and
+# the other means the position is now settlement's, and both stop on their own.
+AGED_OUT_QUIET_ACTIONS = (
+    "awaiting_lead", "hold", "balanced", "would_exit", "would_complete",
+)
+
+# The verdicts `aged_out_verdict` returns. `due` is the only one that acts.
+AGED_OUT_DUE = "due"
+AGED_OUT_AWAITING_LEAD = "awaiting_lead"
+AGED_OUT_END_UNKNOWN = "end_unknown"
+AGED_OUT_VENUE_CLOSED = "venue_closed"
+AGED_OUT_NOT_AGED_OUT = "not_aged_out"
+
+
+def aged_out_verdict(
+    *,
+    last_fill_ms: int,
+    window_ms: int,
+    now_s: float,
+    end_ts: Optional[float],
+    lead_sec: float,
+    venue_closed: Optional[bool],
+    venue_accepting: Optional[bool],
+) -> tuple[str, str]:
+    """Should this leg be rescued now, left alone, or refused (Issue #311)?
+
+    `pairs_exit_window_sec` is a *discovery filter*: past it, a naked leg drops
+    out of `auto_manage_pairs` and nothing else closes it, so it sits unmanaged
+    until settlement pays out whatever the outcome is. This is the decision for
+    that complement -- the leg the window deliberately does not reach -- and it
+    is market-end aware rather than clock-based, because a wall-clock deadline
+    would still fire after the market itself is gone.
+
+    Pure: no registry, no clock, no network. Inputs are primitives so the whole
+    fail-closed ladder is testable without a venue.
+
+    Verdicts (the second element is the human reason, and it carries the values
+    behind the decision -- #312's legibility rule):
+
+    * `not_aged_out`    -- undated, or still inside the window. The in-window
+      route order owns this leg; this arm never touches it.
+    * `end_unknown`     -- the venue's own state, or its stated end, could not
+      be read. The leg stays naked and the read is retried next rotation. A
+      deadline is never invented and a blind close is never sent.
+    * `venue_closed`    -- the venue already closed the market (or stopped
+      accepting orders). Selling into a closed market is not available, so the
+      resolution/settlement path owns the position.
+    * `awaiting_lead`   -- genuinely open, with a stated end further away than
+      the lead window. Wait.
+    * `due`             -- act: either the leg is inside `lead_sec` of the
+      venue's stated end, or that end has already passed while the venue still
+      accepts orders. The second is the sports case from #312: a live in-play
+      market's `endDate` is the kickoff, so there is no future end to wait for
+      and the closing phase is now.
+    """
+    # Undated fills cannot be placed in time. "Older than the window is left
+    # alone" reads both directions, exactly as `auto_manage_pairs` reads it.
+    if not last_fill_ms or last_fill_ms <= 0:
+        return AGED_OUT_NOT_AGED_OUT, "undated fill (no venue_ts); left alone"
+
+    age_s = now_s - (last_fill_ms / 1000.0)
+    # Strictly older, matching the discovery filter's `>` so the two arms
+    # partition the fills exactly once and no leg belongs to both.
+    if age_s <= (window_ms / 1000.0):
+        return (AGED_OUT_NOT_AGED_OUT,
+                f"inside window ({age_s:.0f}s <= {window_ms / 1000.0:.0f}s)")
+
+    # Fail closed: a missing venue flag is unreadable, never "false". Reading
+    # an absent `closed` as live is what #312's review fixed at the gate.
+    if venue_closed is None or venue_accepting is None:
+        return (AGED_OUT_END_UNKNOWN,
+                f"market state unreadable (closed={venue_closed}, "
+                f"accepting={venue_accepting})")
+    if bool(venue_closed) or not bool(venue_accepting):
+        return (AGED_OUT_VENUE_CLOSED,
+                f"venue closed the market (closed={bool(venue_closed)}, "
+                f"accepting={bool(venue_accepting)}); settlement owns it")
+
+    if end_ts is None:
+        return (AGED_OUT_END_UNKNOWN,
+                f"market end unreadable (aged out {age_s:.0f}s, no stated end)")
+
+    remaining_s = end_ts - now_s
+    if remaining_s <= 0:
+        return (AGED_OUT_DUE,
+                f"aged out {age_s:.0f}s (window {window_ms / 1000.0:.0f}s); "
+                f"stated end passed {abs(remaining_s):.0f}s ago and the venue "
+                f"still accepts orders")
+    if remaining_s <= lead_sec:
+        return (AGED_OUT_DUE,
+                f"aged out {age_s:.0f}s (window {window_ms / 1000.0:.0f}s); "
+                f"{remaining_s:.0f}s to market end, inside the "
+                f"{lead_sec:.0f}s lead")
+    return (AGED_OUT_AWAITING_LEAD,
+            f"aged out {age_s:.0f}s (window {window_ms / 1000.0:.0f}s); "
+            f"{remaining_s:.0f}s to market end, outside the "
+            f"{lead_sec:.0f}s lead")
+
+
 # --- U35 in the live loop ----------------------------------------------------
 
 
@@ -1050,38 +1157,8 @@ def auto_manage_pairs(
                 "error": f"positions read failed: {type(e).__name__}: {e}",
             }]
 
-    # A close covers only the fills that PREDATE it. The old condition-level
-    # skip meant one close on a condition permanently disabled the rule for
-    # that condition -- so a market exited once would never be managed again
-    # even if the fleet later re-quoted it and took a new one-sided fill.
-    # The paper run has no such flag: its rule keys off fill age, and a fresh fill
-    # re-arms the window. Mirror that: a pair whose last fill is OLDER than
-    # the condition's latest close was the position that close sold (or
-    # merged) -- skip it. A pair filled after the close is new exposure and
-    # must be managed like any other.
-    latest_close_ms: dict[str, int] = {}
-    for r in registry.get_all_closes():
-        cid = r.get("condition_id")
-        ts = r.get("ts")
-        if not cid or not ts:
-            continue
-        try:
-            ts_ms = int(float(ts) * 1000.0)
-        except (TypeError, ValueError):
-            continue
-        if ts_ms > latest_close_ms.get(cid, 0):
-            latest_close_ms[cid] = ts_ms
-
-    last_fill_ms: dict[str, int] = {}
-    pair_cids: dict[str, str] = {}
-    for f in registry.get_all_fills():
-        pid = f.get("pair_id")
-        if not pid:
-            continue
-        pair_cids.setdefault(pid, f.get("condition_id") or "")
-        vts = f.get("venue_ts")
-        if vts:
-            last_fill_ms[pid] = max(last_fill_ms.get(pid, 0), int(vts))
+    latest_close_ms = _latest_close_ms_by_condition(registry)
+    last_fill_ms, pair_cids = _last_fill_ms_by_pair(registry)
 
     out: list[dict] = []
     for pid, last_ms in last_fill_ms.items():
@@ -1106,6 +1183,327 @@ def auto_manage_pairs(
             out.append({"pair_id": pid, "action": "error",
                         "error": f"{type(e).__name__}: {e}"})
     return out
+
+
+@contextmanager
+def _completion_target(client, pair_id: str):
+    """Name the pair the next completion BUY belongs to, when the client cares (#311).
+
+    A venue market order carries no pair id -- only token, side, size, price --
+    so the rehearsal's execution shim has to reconstruct which pair a
+    completion buy belongs to, and its inference prefers an in-window naked
+    pair on that token. That preference is right for the in-window pass and
+    wrong for this arm: the pair being completed here has its last fill
+    OUTSIDE the window by construction, so when a freshly re-quoted pair is
+    also naked on the token, the fresh one wins the fill -- the pair we
+    actually crossed for still reads naked and is bought a second time next
+    rotation. The caller that knows the pair says so instead.
+
+    Cleared on the way out whatever happens: a cross that refused or raised
+    must not leave a target aimed at some later, unrelated completion. The
+    live CLOB client has no such method, so live is untouched by this -- the
+    binding is a no-op there.
+    """
+    bind = getattr(client, "bind_completion_target", None)
+    if not callable(bind):
+        yield
+        return
+    bind(str(pair_id))
+    try:
+        yield
+    finally:
+        bind(None)
+
+
+def _latest_close_ms_by_condition(registry) -> dict[str, int]:
+    """When each condition was last closed, in venue milliseconds.
+
+    A close covers only the fills that PREDATE it. The old condition-level
+    skip meant one close on a condition permanently disabled the rule for that
+    condition -- so a market exited once would never be managed again even if
+    the fleet later re-quoted it and took a new one-sided fill. The paper run
+    has no such flag: its rule keys off fill age, and a fresh fill re-arms the
+    window. Mirror that: a pair whose last fill is OLDER than the condition's
+    latest close was the position that close sold (or merged) -- skip it. A
+    pair filled after the close is new exposure and must be managed like any
+    other.
+
+    Shared by both arms on purpose: "never sell a leg the ledger says is
+    already gone" has exactly one definition.
+    """
+    latest_close_ms: dict[str, int] = {}
+    for r in registry.get_all_closes():
+        cid = r.get("condition_id")
+        ts = r.get("ts")
+        if not cid or not ts:
+            continue
+        try:
+            ts_ms = int(float(ts) * 1000.0)
+        except (TypeError, ValueError):
+            continue
+        if ts_ms > latest_close_ms.get(cid, 0):
+            latest_close_ms[cid] = ts_ms
+    return latest_close_ms
+
+
+def _last_fill_ms_by_pair(registry) -> tuple[dict[str, int], dict[str, str]]:
+    """The newest fill time per pair, and the condition each pair belongs to.
+
+    Discovery for both arms comes from the fills ledger. An undated fill (no
+    `venue_ts`) has no entry and is left alone by both.
+    """
+    last_fill_ms: dict[str, int] = {}
+    pair_cids: dict[str, str] = {}
+    for f in registry.get_all_fills():
+        pid = f.get("pair_id")
+        if not pid:
+            continue
+        pair_cids.setdefault(pid, f.get("condition_id") or "")
+        vts = f.get("venue_ts")
+        if vts:
+            last_fill_ms[pid] = max(last_fill_ms.get(pid, 0), int(vts))
+    return last_fill_ms, pair_cids
+
+
+# --- the aged-out arm (#311) -------------------------------------------------
+
+
+# How long a parsed market state is reused by the aged-out pass. `poll` defaults
+# to `--interval 0.5`, so an arm reading the venue on every cycle spends
+# thousands of Gamma calls an hour per waiting leg on a fact -- the stated end
+# of a market -- that moves on the scale of hours, and every one of those reads
+# is synchronous, delaying the heartbeat and the next cycle. Thirty seconds of
+# staleness costs at most thirty seconds of a 900s lead.
+DEFAULT_AGED_OUT_STATE_TTL_SEC = 30.0
+
+# When the cached deadline is at least this far beyond `end_ts - lead_sec`, no
+# read this cycle could change the verdict, so none is made until the deadline
+# gets close enough to matter. `awaiting_lead` is the long-dated case, and it is
+# the one that would otherwise be read forever.
+AGED_OUT_STATE_SKIP_MARGIN_SEC = 300.0
+
+
+class AgedOutMarketStateCache:
+    """One venue read per condition per TTL, shared across cycles (#311).
+
+    Explicit rather than module state on purpose: whoever owns the clock owns
+    the entries, so a cache cannot outlive the run it was built for and answer
+    for another. `rescue_aged_out_legs` builds its own when it is not handed
+    one, which still keeps a single pass from reading one condition once per
+    naked pair.
+
+    Two answers are never cached, both because caching them would turn a
+    transient failure into a standing decision:
+
+    * `unreachable=True` -- a failed read is not knowledge. The leg stays naked
+      and the next cycle retries the venue, which is the fail-closed direction;
+    * `None` -- the market is not in the venue's open listing. That is a state
+      to re-ask about, not one to remember.
+    """
+
+    def __init__(
+        self,
+        ttl_sec: float = DEFAULT_AGED_OUT_STATE_TTL_SEC,
+        skip_margin_sec: float = AGED_OUT_STATE_SKIP_MARGIN_SEC,
+    ) -> None:
+        self._ttl_sec = max(0.0, float(ttl_sec))
+        self._skip_margin_sec = max(0.0, float(skip_margin_sec))
+        self._entries: dict[str, tuple[float, object]] = {}
+
+    def state_for(self, condition_id: str, fetch, *, now_s: float,
+                  lead_sec: float):
+        """The market state for `condition_id`, reading the venue at most once
+        per TTL.
+
+        `fetch` is the reader itself, so a rehearsal or a test injects its own
+        and no caller has to know which one is in use.
+        """
+        hit = self._entries.get(condition_id)
+        if hit is not None:
+            fetched_at, state = hit
+            if (now_s - fetched_at) < self._ttl_sec:
+                return state
+            if self._deadline_is_far(state, now_s=now_s, lead_sec=lead_sec):
+                return state
+        state = fetch(condition_id)
+        if state is not None and not getattr(state, "unreachable", False):
+            self._entries[condition_id] = (now_s, state)
+        return state
+
+    def _deadline_is_far(self, state, *, now_s: float, lead_sec: float) -> bool:
+        """True when the cached end cannot change this cycle's verdict.
+
+        Only a stated end counts. A market with no end on record, or one whose
+        stated end has already passed (#312: for sports that is the kickoff,
+        not the close of trading), is re-read on the plain TTL schedule -- the
+        cases we cannot reason about are the ones that stay fresh.
+        """
+        end_ts = getattr(state, "end_ts", None)
+        if end_ts is None:
+            return False
+        return (float(end_ts) - float(lead_sec) - now_s) > self._skip_margin_sec
+
+
+def rescue_aged_out_legs(
+    client,
+    registry: OrderRegistry,
+    cfg,
+    *,
+    live: bool = True,
+    now: Optional[float] = None,
+    venue_positions: Optional[dict[str, float]] = None,
+    funder: Optional[str] = None,
+    market_state_fn=None,
+    state_cache: Optional[AgedOutMarketStateCache] = None,
+    gamma_host: Optional[str] = None,
+) -> list[dict]:
+    """Close a naked leg the rescue window deliberately does not reach (#311).
+
+    `auto_manage_pairs` discovers pairs whose last fill is INSIDE
+    `pairs_exit_window_sec`; this arm is the complement -- dated last fill
+    strictly older than the window -- which is the set that used to sit
+    unmanaged until settlement booked whatever the outcome was.
+
+    Per discovery: the same close-coverage guard the in-window pass uses (a leg
+    already closed by merge, exit or settlement is never sold again), naked legs
+    only, and then `aged_out_verdict` on the venue's own market state. `due`
+    routes exactly like the in-window cap check -- complete under
+    `max_pair_cost` when that is available, otherwise exit the naked leg at the
+    best bid with reason `aged_out_rescue`.    Everything else is a no-op that is reported, never acted on.
+
+    Fail closed at every port: an unreadable market state or end time leaves the
+    leg naked and the read is retried next rotation; the venue's own position
+    read failing fails the whole pass rather than selling blind. Per-pair
+    failures are isolated -- one pair's refusal never stops the cycle.
+
+    Market state comes through `state_cache`: one read per condition per TTL,
+    shared across cycles when the caller owns the cache. A caller with no cache
+    still gets one read per condition per pass, never one per naked pair.
+    """
+    if not getattr(cfg, "enable_aged_out_rescue", True):
+        return []
+
+    now_s = now if now is not None else time.time()
+    window_ms = int(getattr(cfg, "pairs_exit_window_sec", 900.0) * 1000)
+    lead_sec = float(getattr(cfg, "aged_out_rescue_lead_sec", 900.0))
+    max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
+
+    if market_state_fn is None:
+        from core_brain.market_resolution import (
+            DEFAULT_GAMMA_HOST, fetch_open_market_state,
+        )
+        host = gamma_host or DEFAULT_GAMMA_HOST
+        market_state_fn = lambda cid: fetch_open_market_state(host, cid)  # noqa: E731
+
+    if state_cache is None:
+        state_cache = AgedOutMarketStateCache()
+
+    # The same pre-flight the in-window pass uses: selling a size the venue
+    # does not agree we hold is an oversell. An unreadable endpoint fails this
+    # pass closed, so the leg stays naked one more tick and the read is retried.
+    if venue_positions is None and live and funder:
+        try:
+            venue_positions = fetch_positions(funder)
+        except Exception as e:
+            return [{
+                "pair_id": None, "action": "error",
+                "error": f"positions read failed: {type(e).__name__}: {e}",
+            }]
+
+    latest_close_ms = _latest_close_ms_by_condition(registry)
+    last_fill_ms, pair_cids = _last_fill_ms_by_pair(registry)
+
+    out: list[dict] = []
+    for pid, fill_ms in last_fill_ms.items():
+        cid = pair_cids.get(pid)
+        if cid and fill_ms <= latest_close_ms.get(cid, 0):
+            continue
+        # Undated fills never reach here (`_last_fill_ms_by_pair` drops them),
+        # and the verdict re-checks the window so the two arms partition the
+        # fills exactly once.
+        #
+        # Balance is checked BEFORE the market read: an old pair that is already
+        # whole is the ordinary state of every merged pair, and it has nothing
+        # to rescue -- no reason to spend a venue read on it, or a log line
+        # every rotation.
+        try:
+            pair = load_pair(registry, pid)
+            if pair["naked"] <= SIZE_EPS:
+                continue
+        except Exception as e:
+            out.append({"pair_id": pid, "condition_id": cid, "action": "error",
+                        "error": f"{type(e).__name__}: {e}"})
+            continue
+        try:
+            state = (state_cache.state_for(cid, market_state_fn, now_s=now_s,
+                                           lead_sec=lead_sec)
+                     if cid else None)
+            verdict, reason = aged_out_verdict(
+                last_fill_ms=fill_ms, window_ms=window_ms, now_s=now_s,
+                end_ts=getattr(state, "end_ts", None),
+                lead_sec=lead_sec,
+                venue_closed=getattr(state, "closed", None),
+                venue_accepting=(
+                    getattr(state, "accepting_orders", None)
+                    if state is not None else None),
+            )
+            if verdict == AGED_OUT_NOT_AGED_OUT:
+                continue
+            if verdict != AGED_OUT_DUE:
+                out.append({"pair_id": pid, "condition_id": cid,
+                            "action": verdict, "reason": reason})
+                continue
+            out.append(_route_aged_out_pair(
+                client, registry, pair, cfg, max_pair_cost, live,
+                venue_positions, reason))
+        except (PairExitRefused, PairCompletionRefused) as e:
+            out.append({"pair_id": pid, "condition_id": cid,
+                        "action": "error", "error": str(e)})
+        except Exception as e:
+            out.append({"pair_id": pid, "condition_id": cid,
+                        "action": "error",
+                        "error": f"{type(e).__name__}: {e}"})
+    return out
+
+
+def _route_aged_out_pair(client, registry, pair, cfg, max_pair_cost, live,
+                         venue_positions, reason: str) -> dict:
+    """Complete under the cap if that is still available, else sell the leg.
+
+    The same priority as the in-window route: assembling a pair under
+    `max_pair_cost` and merging at parity beats dumping a leg into the bid. The
+    reason travels with whichever route fired, so the forensics can tell an
+    aged-out rescue from an in-window one without reconstructing it.
+    """
+    light_token = pair["light"]["token_id"]
+    ask = best_ask(client.get_order_book(light_token)) if light_token else None
+    if not should_exit(pair["fill_cost"], ask, max_pair_cost):
+        try:
+            max_order = getattr(cfg, "max_order_usd", None)
+            # Name the pair for the crossing: an in-window naked pair on the
+            # same token is the shim's default target, and the fill would be
+            # booked to it while this pair stayed naked and was bought again.
+            with _completion_target(client, pair["pair_id"]):
+                res = complete_pair(client, registry, pair["pair_id"],
+                                    max_pair_cost, live=live,
+                                    max_order_usd=max_order)
+            if isinstance(res, dict):
+                res["route"] = "completed"
+                res["reason"] = reason
+                if res.get("action") == "completed":
+                    res["action"] = "aged_out_rescue"
+            return res
+        except PairCompletionRefused:
+            pass  # fall through to the same-window exit
+    res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
+                          live=live, venue_positions=venue_positions,
+                          reason="aged_out_rescue")
+    if isinstance(res, dict):
+        res["route"] = "exited"
+        res["reason"] = reason
+        if res.get("action") == "exited":
+            res["action"] = "aged_out_rescue"
+    return res
 
 
 def _route_pair(client, registry, pair, max_pair_cost, live,

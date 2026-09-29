@@ -2166,6 +2166,15 @@ def poll(
             cycle = 0
             last_cycle_failed = False
 
+            # One market-state read per condition per TTL, carried across
+            # cycles (#311). The aged-out pass below runs on EVERY tick and its
+            # read is synchronous, so without this a leg waiting for its lead
+            # would spend thousands of Gamma calls an hour -- and delay the
+            # second heartbeat and the next cycle doing it -- for a deadline
+            # that moves in hours.
+            from core_brain.single_buy_saver import AgedOutMarketStateCache
+            aged_out_state_cache = AgedOutMarketStateCache()
+
             # The markout sampler fills the adverse-selection horizons out-of-band, so
             # it never blocks reconcile. It is a daemon thread, started only on the
             # production path (no injected client), and stopped when the loop exits.
@@ -2344,6 +2353,44 @@ def poll(
                         )
                 except Exception as exc:
                     err_msg = f"[POLL {now_iso}] pairs pass failed: {exc}"
+                    print(err_msg, file=sys.stderr)
+                    _log_event(err_msg)
+
+                # Aged-out pass (#311): the U35 window above is a discovery
+                # filter, so a one-sided fill older than it used to be invisible
+                # to every arm and was held into settlement with no risk ceiling.
+                # This pass closes those legs against the market's own end time.
+                # Closing actions only, and fail-closed inside: an unreadable
+                # market end leaves the leg naked and retries next cycle.
+                try:
+                    from core_brain.config import load as _load_cfg2
+                    from core_brain.single_buy_saver import (
+                        AGED_OUT_QUIET_ACTIONS, rescue_aged_out_legs,
+                    )
+                    for pr in rescue_aged_out_legs(
+                        client, registry, _load_cfg2(), funder=funder,
+                        state_cache=aged_out_state_cache,
+                    ):
+                        action = pr.get("action", "?")
+                        # The waiting verdicts repeat every cycle until the
+                        # market end moves; they stay out of the console and
+                        # still reach the cycle ring below.
+                        if action not in AGED_OUT_QUIET_ACTIONS:
+                            line = (f"[POLL {now_iso}] aged-out "
+                                    f"{pr.get('pair_id') or '?':<10s} {action}")
+                            if action == "error":
+                                line += f" ({pr.get('error', '')})"
+                                print(line, file=sys.stderr)
+                            else:
+                                print(line)
+                            _log_event(line)
+                        _emit_cycle_event(
+                            service="query", cycle=cycle, phase="settling",
+                            action="aged_out_" + action,
+                            extra={"pair_id": pr.get("pair_id")},
+                        )
+                except Exception as exc:
+                    err_msg = f"[POLL {now_iso}] aged-out pass failed: {exc}"
                     print(err_msg, file=sys.stderr)
                     _log_event(err_msg)
 

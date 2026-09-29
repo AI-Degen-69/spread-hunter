@@ -414,9 +414,20 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
         for r in rows if r["paid"] is not None
     )
 
+    # The number #311's acceptance criterion asks to go to zero: settlement
+    # closes whose one-sided leg outlived the rescue window. An aged-out leg
+    # that the new arm rescued shows up as a `single_buy_exit` carrying
+    # `reason=aged_out_rescue` instead, so this counts the failure mode alone.
+    aged_out_settlements = sum(
+        1 for r in rows
+        if r["method"] == "shadow_settlement" and r["aged_out"] is True)
+
     say(f"Rescue exit forensics -- {registry_path.name}")
     say(f"  rescue closes: {len(rows)}  total rescue loss: {_usd(total_loss)}"
         f"  capital at risk: {_usd(total_capital)}")
+    say(f"  aged-out settlements: {aged_out_settlements}"
+        f"  (settlement closes whose leg outlived the "
+        f"{PAIRS_EXIT_WINDOW_SEC:.0f}s rescue window; #311 target: 0)")
     say("")
 
     _, _, q3_lines = q3_feature_rows(reg, rows[:top])
@@ -445,6 +456,13 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
                     f"(fail-closed gap: nothing else closes it).")
             else:
                 say("    settlement close, aged_out=no.")
+        elif r["reason"] == "aged_out_rescue":
+            # The success shape of #311: a leg past the window that was sold (or
+            # completed) BEFORE its market ended, instead of being carried into
+            # settlement. Said out loud, because "no AGED OUT line" is not
+            # evidence an operator can see.
+            say("    AGED-OUT RESCUE: leg past the rescue window closed "
+                "before market end (reason=aged_out_rescue).")
         say("")
 
     if not rows:

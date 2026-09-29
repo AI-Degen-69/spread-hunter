@@ -924,7 +924,25 @@ class MakerConfig:
     # How long after a one-sided fill the rule may still act. 15 minutes is
     # where the measured drift is still ~0 (+0.09c/share at the 5m horizon)
     # and long before the 1h mark where it is -18.5c.
+    #
+    # This is a DISCOVERY FILTER, not a deadline (#311). Lengthening it here
+    # would widen every exposure it gates and leave the aged-out class open, so
+    # the rescue for legs past it is a separate arm with its own end-aware
+    # deadline below. Do not raise this to "fix" an aged-out leg.
     pairs_exit_window_sec: float = 900.0
+    # --- aged-out rescue (#311) -------------------------------------------
+    # A one-sided leg older than the window fell out of the pass above and
+    # nothing else closed it: on shadow-01 the worst such leg held 2.8 shares
+    # for 10,452s (2h54m, ~7x the window) and lost $1.54 at settlement, and the
+    # other two won -- an unmanaged coin-flip with no risk ceiling. This arm
+    # sells (or completes) it before the market ends instead.
+    enable_aged_out_rescue: bool = True
+    # How long before the venue's stated market end the rescue fires. Measured
+    # from the MARKET's end, never from wall clock: a market whose stated end
+    # has already passed while the venue still takes orders is treated as being
+    # in its closing phase and is due immediately (sports `endDate` is the
+    # kickoff -- see #312). An unreadable end leaves the leg naked and retried.
+    aged_out_rescue_lead_sec: float = 900.0
     # The EV formula's payoffs (cents per share of a one-sided fill), RE-
     # MEASURED 2026-08-12 (Session 44) on the rule's own recorded decisions:
     # a completion pays the realized merge capture on rule-era completed
@@ -1355,6 +1373,14 @@ def load(*, for_display: bool = False) -> MakerConfig:
         if not math.isfinite(val) or val < 0:
             raise ValueError(f"HUNTER_SINGLE_BUY_MAX_LOSS_USD must be finite and non-negative, got: {val}")
         kw["single_buy_max_loss_usd"] = val
+    aorl = os.environ.get("HUNTER_AGED_OUT_RESCUE_LEAD_SEC")
+    if aorl and aorl.strip():
+        val = float(aorl)
+        if not math.isfinite(val) or val < 0:
+            raise ValueError(
+                "HUNTER_AGED_OUT_RESCUE_LEAD_SEC must be finite and "
+                f"non-negative, got: {val}")
+        kw["aged_out_rescue_lead_sec"] = val
     mqs = os.environ.get("HUNTER_MAX_SHARES") or os.environ.get("SPREAD_HUNTER_MAX_SHARES")
     if mqs and mqs.strip():
         val = float(mqs)

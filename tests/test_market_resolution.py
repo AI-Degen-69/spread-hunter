@@ -10,6 +10,7 @@ from core_brain.market_resolution import (
     MarketEndState,
     book_shadow_settlement,
     fetch_market_end_state,
+    fetch_open_market_state,
     parse_end_state,
     sweep_market_resolutions,
 )
@@ -106,6 +107,159 @@ def test_fetch_returns_state_on_success():
         urlopen=lambda url, timeout=10: _FakeResp(payload))
     assert state.resolved is True
     assert state.unreachable is False
+
+
+# ---------------------------------------------------------------------------
+# The stated end itself, and the OPEN listing (#311)
+#
+# The resolution read asks for `closed=true`, which is the only way to see an
+# ended market -- and which returns an EMPTY list for a market that is still
+# open. An aged-out leg needs the opposite read: the open market's own stated
+# end. Measured against the live venue (2026-09-29): the `closed=true` filter
+# returned 0 rows for an open ATP market while the unfiltered read returned it
+# with `endDate` a week out and `gameStartTime` hours past.
+# ---------------------------------------------------------------------------
+
+_OPEN_END_ISO = "2027-01-01T00:00:00Z"
+_OPEN_END_TS = 1798761600.0  # the same instant, in epoch seconds
+
+
+def test_parse_end_state_carries_the_stated_end_timestamp():
+    # Arrange - the epoch the parser already computes was thrown away.
+    row = {"condition_id": "0xC", "closed": False, "acceptingOrders": True,
+           "endDate": _OPEN_END_ISO}
+
+    # Act
+    state = parse_end_state(row, now_ts=1_790_000_000.0)
+
+    # Assert - an aged-out deadline needs the instant, not just "not passed".
+    assert state.end_ts == _OPEN_END_TS
+    assert state.resolved is False
+
+
+def test_parse_end_state_carries_the_order_acceptance_flag():
+    # Arrange - `closed=False` alone cannot tell "live" from "closing phase".
+    row = {"condition_id": "0xC", "closed": False, "acceptingOrders": True,
+           "endDate": _OPEN_END_ISO}
+
+    # Act
+    state = parse_end_state(row, now_ts=1_790_000_000.0)
+
+    # Assert
+    assert state.accepting_orders is True
+
+
+def test_a_non_boolean_acceptance_flag_reads_unreadable():
+    # Arrange - a string shape is not a boolean; #312's review fixed exactly
+    # this at the gate, where `bool("false")` read as live.
+    for raw in ("false", "true", 0, 1):
+        state = parse_end_state(
+            {"condition_id": "0xC", "closed": False,
+             "acceptingOrders": raw, "endDate": _OPEN_END_ISO},
+            now_ts=1_790_000_000.0)
+
+        # Assert
+        assert state.accepting_orders is None, raw
+
+
+def test_parse_end_state_keeps_end_ts_none_when_the_date_is_unreadable():
+    # Arrange / Act - a malformed end is unreadable, never a guessed instant.
+    state = parse_end_state(
+        {"condition_id": "0xC", "closed": False, "endDate": "not-a-date"},
+        now_ts=1_790_000_000.0)
+
+    # Assert
+    assert state.end_ts is None
+
+
+def test_the_open_read_returns_the_market_the_closed_read_cannot_see():
+    # Arrange - an open market, exactly the shape the live probe returned.
+    payload = [{"condition_id": "0xC", "closed": False,
+                "acceptingOrders": True, "endDate": _OPEN_END_ISO}]
+    seen = {}
+
+    def urlopen(req, timeout=10):
+        seen["url"] = req.full_url
+        return _FakeResp(payload)
+
+    # Act
+    state = fetch_open_market_state("https://gamma", "0xC", urlopen=urlopen)
+
+    # Assert
+    assert state is not None
+    assert state.closed is False
+    assert state.end_ts == _OPEN_END_TS
+    assert state.unreachable is False
+
+
+def test_the_open_read_asks_for_the_side_the_closed_read_excludes():
+    # Arrange - asking with `closed=true` is what made this read return
+    # "unreachable" for every live leg, i.e. an arm that never fires.
+    payload = [{"condition_id": "0xC", "closed": False,
+                "acceptingOrders": True, "endDate": _OPEN_END_ISO}]
+    seen = {}
+
+    def urlopen(req, timeout=10):
+        seen["url"] = req.full_url
+        return _FakeResp(payload)
+
+    # Act
+    fetch_open_market_state("https://gamma", "0xC", urlopen=urlopen)
+
+    # Assert
+    assert "condition_ids=0xC" in seen["url"]
+    assert "closed=true" not in seen["url"]
+
+
+def test_the_closed_read_keeps_asking_for_the_closed_side():
+    # Arrange / Act - the two reads must not be collapsed into one: resolution
+    # detection depends on the closed filter.
+    seen = {}
+
+    def urlopen(req, timeout=10):
+        seen["url"] = req.full_url
+        return _FakeResp([{"condition_id": "0xC", "closed": True}])
+
+    fetch_market_end_state("https://gamma", "0xC", urlopen=urlopen)
+
+    # Assert
+    assert "closed=true" in seen["url"]
+
+
+def test_the_open_read_refuses_to_claim_a_market_it_cannot_see():
+    # Arrange - the venue's open listing does not carry this market, so it is
+    # no longer open. That is "nothing to act on", distinct from a failed read.
+    state = fetch_open_market_state(
+        "https://gamma", "0xC",
+        urlopen=lambda req, timeout=10: _FakeResp([]))
+
+    # Act / Assert
+    assert state is None
+
+
+def test_the_open_read_is_unreachable_on_a_network_error():
+    # Arrange
+    def boom(req, timeout=10):
+        raise OSError("network down")
+
+    # Act
+    state = fetch_open_market_state("https://gamma", "0xC", urlopen=boom)
+
+    # Assert - unreadable, never None: a failed read must not read as
+    # "closed by the venue" either.
+    assert state is not None
+    assert state.unreachable is True
+
+
+def test_the_open_read_is_unreachable_on_a_malformed_row():
+    # Arrange / Act
+    state = fetch_open_market_state(
+        "https://gamma", "0xC",
+        urlopen=lambda req, timeout=10: _FakeResp([{"nope": 1}]))
+
+    # Assert
+    assert state is not None
+    assert state.unreachable is True
 
 
 def test_fetch_returns_unreachable_on_network_error():

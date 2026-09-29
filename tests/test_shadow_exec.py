@@ -680,10 +680,18 @@ def test_a_completion_lands_on_the_in_window_pair_not_the_stale_one(registry):
     assert completion_order.pair_id != stale_pair_id
 
 
-def test_a_completion_is_refused_when_every_naked_pair_is_out_of_window(registry):
-    """No in-window naked pair means the pass could not have asked for this
-    buy. Booking it to a stale pair anyway would credit shares to a position
-    nothing is managing; refusing says so out loud instead.
+def test_a_completion_is_refused_when_no_naked_pair_exists(registry):
+    """No naked pair on the token means nothing could have asked for this buy.
+    Booking it anyway would credit shares to a position nothing is managing;
+    refusing says so out loud instead.
+
+    Before #311 this test seeded a pair whose only fill was OUT of window and
+    expected the same refusal, because `auto_manage_pairs` was the only arm
+    that could complete a pair. That premise is gone: a second arm completes
+    aged-out pairs by design, so an out-of-window naked pair is now a real
+    target (see `test_a_completion_is_booked_to_the_aged_out_naked_pair`).
+    The refusal itself is what survives, and it is pinned here against a pair
+    that is BALANCED -- two filled legs, nothing naked, nothing to attach to.
     """
     from py_clob_client_v2.clob_types import MarketOrderArgsV2
 
@@ -700,8 +708,10 @@ def test_a_completion_is_refused_when_every_naked_pair_is_out_of_window(registry
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: long_ago)
+    # Both legs filled: the pair is whole, so no pair is naked here.
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
+                                               "tok-dn": {0.51: 20.0}},
                   now_fn=lambda: long_ago)
 
     client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
@@ -712,8 +722,284 @@ def test_a_completion_is_refused_when_every_naked_pair_is_out_of_window(registry
             MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
                               price=0.51))
 
+
+
+def test_a_completion_is_booked_to_the_aged_out_naked_pair(registry):
+    """The aged-out arm's completion must be attributable (#311).
+
+    Its pair's last fill is outside the window by construction, so an
+    in-window-only attribution rule would refuse every completion that arm
+    makes -- the rehearsal would book its exits and lose its completions. The
+    in-window set keeps priority; this pins the fallback.
+    """
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ensure_shadow_tables, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: long_ago)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: long_ago)
+
+    aged_pair_id = [o["pair_id"] for o in reg.get_all_orders()
+                    if o["token_id"] == "tok-up"][0]
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+    resp = client.create_and_post_market_order(
+        MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                          price=0.51))
+
+    assert reg.get_order(resp["orderID"]).pair_id == aged_pair_id
+
+
+def test_two_aged_out_naked_pairs_on_one_token_are_refused_not_guessed(
+        registry):
+    """Ambiguity is refused, because the wrong answer is a double buy.
+
+    A market re-quoted across rotations accumulates pair_ids, and the aged-out
+    arm acts on the OLDEST first (the fills ledger orders by `recorded_ts`),
+    while attribution would have to pick one. Guessing books the completion to
+    the other pair, which then reads over-filled while the intended one stays
+    naked and is bought again next rotation -- the N+1 defect this function
+    exists to prevent. Refusing is loud and costs one completion.
+    """
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ShadowOrderRefused, ensure_shadow_tables,
+        record_submit, settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    # Two rounds of the same market, each leaving only tok-up filled.
+    for _ in range(2):
+        record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                      db_path=db, book_fn=lambda h, t: {"bids": {}},
+                      now_fn=lambda: long_ago)
+        settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                      traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                      now_fn=lambda: long_ago)
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+
+    with pytest.raises(ShadowOrderRefused) as err:
+        client.create_and_post_market_order(
+            MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                              price=0.51))
+
+    assert "aged-out" in str(err.value)
     assert [o for o in reg.get_all_orders()
             if o["token_id"] == "tok-dn" and o["status"] == "filled"] == []
+
+
+def test_an_in_window_pair_still_wins_over_an_aged_out_one(registry):
+    """The fresh pair keeps priority, so the in-window path is unchanged."""
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ensure_shadow_tables, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: long_ago)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: long_ago)
+    stale_pair = [o["pair_id"] for o in reg.get_all_orders()
+                  if o["token_id"] == "tok-up"][0]
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: now)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: now)
+    fresh_pair = [o["pair_id"] for o in reg.get_all_orders()
+                  if o["token_id"] == "tok-up"][-1]
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+    resp = client.create_and_post_market_order(
+        MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                          price=0.51))
+
+    booked = reg.get_order(resp["orderID"]).pair_id
+    assert booked == fresh_pair
+    assert booked != stale_pair
+
+
+def test_a_named_target_wins_over_an_in_window_pair(registry):
+    """The arm that is crossing names its pair, and the name wins (#311).
+
+    The fallback rule above cannot be right for the aged-out arm when an
+    in-window pair also exists on the token: the fresh pair wins by preference,
+    the completion fill is booked to it, and the aged-out pair -- the one the
+    rescue actually crossed for -- still reads naked and is bought AGAIN next
+    rotation. `bind_completion_target` is how the caller that knows the pair
+    says so; the fallback stays for callers that do not.
+    """
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ensure_shadow_tables, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: long_ago)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: long_ago)
+    aged_pair = [o["pair_id"] for o in reg.get_all_orders()
+                 if o["token_id"] == "tok-up"][0]
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: now)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: now)
+    fresh_pair = [o["pair_id"] for o in reg.get_all_orders()
+                  if o["token_id"] == "tok-up"][-1]
+    assert fresh_pair != aged_pair
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+    client.bind_completion_target(aged_pair)
+    resp = client.create_and_post_market_order(
+        MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                          price=0.51))
+
+    assert reg.get_order(resp["orderID"]).pair_id == aged_pair
+    assert reg.get_order(resp["orderID"]).pair_id != fresh_pair
+
+
+def test_a_binding_that_names_a_pair_with_nothing_naked_is_refused(registry):
+    """A named target that the store does not agree is naked fails LOUD.
+
+    Falling back to another pair here is the mis-attribution this binding
+    exists to prevent, and it fails silently -- the rehearsal would report a
+    completion for a position the caller never touched.
+    """
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ShadowOrderRefused, ensure_shadow_tables,
+        record_submit, settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: long_ago)
+    # Both legs filled: this pair has nothing naked to complete.
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
+                                               "tok-dn": {0.51: 20.0}},
+                  now_fn=lambda: long_ago)
+    whole_pair = reg.get_all_orders()[0]["pair_id"]
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+    client.bind_completion_target(whole_pair)
+    orders_before = len(reg.get_all_orders())
+
+    with pytest.raises(ShadowOrderRefused) as err:
+        client.create_and_post_market_order(
+            MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                              price=0.51))
+
+    assert "does not read as naked" in str(err.value)
+    # Nothing was booked: a refused cross writes no order and no fill.
+    assert len(reg.get_all_orders()) == orders_before
+
+
+def test_a_spent_binding_is_not_re_aimed_at_its_own_pair(registry):
+    """One binding, one cross -- a target must not survive to the next call.
+
+    The rescue binds its pair immediately before crossing and clears it after;
+    the shim clears it on use as well, so a binding can never aim a later,
+    unrelated completion at a pair that already got its shares.
+    """
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ensure_shadow_tables, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: long_ago)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: long_ago)
+    aged_pair = [o["pair_id"] for o in reg.get_all_orders()
+                 if o["token_id"] == "tok-up"][0]
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+    client.bind_completion_target(aged_pair)
+    resp = client.create_and_post_market_order(
+        MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                          price=0.51))
+    assert reg.get_order(resp["orderID"]).pair_id == aged_pair
+
+    # A market re-quoted this rotation leaves a fresh naked pair on the same
+    # token. The spent binding must not be re-aimed at `aged_pair` (which is
+    # whole now) or the second cross falls over: it belongs to the fresh pair.
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: now)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: now)
+    fresh_pair = [o["pair_id"] for o in reg.get_all_orders()
+                  if o["token_id"] == "tok-up"][-1]
+
+    second = client.create_and_post_market_order(
+        MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                          price=0.51))
+
+    assert reg.get_order(second["orderID"]).pair_id == fresh_pair
 
 
 def test_the_shim_refuses_a_method_it_does_not_implement(registry):

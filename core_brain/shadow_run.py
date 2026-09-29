@@ -674,6 +674,7 @@ def run_shadow(
     paired_depth_arm: Optional[str] = None,
     paired_depth_cutoff_usd: Optional[float] = None,
     starting_bankroll_usd: Optional[float] = None,
+    market_state_fn: Optional[Callable] = None,
 ) -> ShadowResult:
     """One shadow session: rotate until `minutes` elapse, record, spend nothing.
 
@@ -863,6 +864,36 @@ def run_shadow(
         except (sqlite3.Error, OSError, ValueError) as e:
             log.warning("shadow pairs pass failed: %s", e)
 
+        # Aged-out pass (#311): the U35 window above is a discovery filter, so a
+        # one-sided fill older than it was invisible to every arm and sat into
+        # settlement. This arm closes those legs against the market's own end,
+        # and its read is the injectable seam `_market_state_fn` (the same shape
+        # as `_resolve_fn` below) so a rehearsal or a test never hits the network.
+        # It runs BEFORE the resolution sweep on purpose: a market that sweep
+        # resolves must not be sold the same rotation.
+        try:
+            from core_brain.single_buy_saver import (
+                AGED_OUT_QUIET_ACTIONS, rescue_aged_out_legs,
+            )
+
+            state_fn = getattr(shadow_sweep, "_market_state_fn", None)
+            for pr in rescue_aged_out_legs(
+                exec_client, seam.registry, cfg,
+                venue_positions=shadow_positions(seam.registry, db_path),
+                market_state_fn=state_fn,
+                state_cache=getattr(shadow_sweep, "_state_cache", None),
+            ):
+                action = pr.get("action", "?")
+                pair_id = pr.get("pair_id") or "?"
+                if action == "error":
+                    log.warning("aged-out %s error: %s", pair_id,
+                                pr.get("error"))
+                elif action not in AGED_OUT_QUIET_ACTIONS:
+                    log.info("aged-out %s %s -- %s", pair_id, action,
+                             pr.get("reason", ""))
+        except (sqlite3.Error, OSError, ValueError) as e:
+            log.warning("shadow aged-out pass failed: %s", e)
+
         # Mature any adverse-selection horizon that has come due. Placed after
         # the pairs pass and before the resolution read so a fill booked this
         # rotation is already in the store when the next rotation samples it.
@@ -940,6 +971,15 @@ def run_shadow(
                 log.debug("resolve read failed %s: %s", r.condition_id[:12], r.reason)
 
     shadow_sweep._resolve_fn = resolve_markets_fn  # type: ignore[attr-defined]
+    # The aged-out pass (#311) reads each leg's market state through this seam.
+    # Left None it uses the public gamma read -- an injected fn keeps a test or
+    # a rehearsal off the network, the same shape as `_resolve_fn` above.
+    shadow_sweep._market_state_fn = market_state_fn  # type: ignore[attr-defined]
+    # One market read per condition per TTL for the whole session, the same
+    # reuse the live loop does: a rotation is seconds apart and every one of
+    # those reads is synchronous against a deadline that moves in hours.
+    from core_brain.single_buy_saver import AgedOutMarketStateCache
+    shadow_sweep._state_cache = AgedOutMarketStateCache()  # type: ignore[attr-defined]
     seam.sweep_fn = shadow_sweep
 
     deadline_ts = started_at + max(0.0, minutes * 60.0)

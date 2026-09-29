@@ -723,6 +723,25 @@ class ShadowExecutionClient:
         # one `MakerConfig` carries.
         self._window_sec = float(window_sec)
         self._now_fn = now_fn
+        # The pair the next completion BUY is for, when the caller knows it.
+        # `None` means "infer it", which is what every caller did before #311.
+        self._completion_target: Optional[str] = None
+
+    def bind_completion_target(self, pair_id: Optional[str]) -> None:
+        """Name the pair the next completion BUY belongs to (#311).
+
+        The venue call carries no pair id, so this shim reconstructs one from
+        the store -- and its inference prefers an in-window naked pair, which
+        is wrong for the aged-out arm whenever a fresh pair is ALSO naked on
+        the same token: the fresh pair wins the fill, the aged-out pair the
+        arm actually crossed for still reads naked, and it is bought again
+        next rotation. A caller that knows the pair says so here instead.
+
+        One shot by design: the binding is consumed by the cross it names, so
+        it can never aim a later, unrelated completion at a pair that already
+        got its shares. Pass `None` to clear it without crossing.
+        """
+        self._completion_target = (str(pair_id) if pair_id else None)
 
     def get_order_book(self, token_id: str) -> dict:
         """The book, adapted for `single_buy_saver._book_levels`.
@@ -776,9 +795,18 @@ class ShadowExecutionClient:
             order.id, status="cancelled", last_polled_ts=now_ms)
         return {"success": True, "orderID": target}
 
-    def _naked_pair_for_token(self, token_id: str) -> tuple[str, str] | None:
+    def _naked_pair_for_token(self, token_id: str, *,
+                              target_pair_id: Optional[str] = None,
+                              ) -> tuple[str, str] | None:
         """(condition_id, pair_id) of the pair on this token the pairs pass is
         currently acting on, or `None` if there is no such pair.
+
+        `target_pair_id` skips the inference entirely: the caller named the
+        pair (`bind_completion_target`), so the answer is that pair or a
+        refusal. Inference cannot be right for the aged-out arm when an
+        in-window pair is also naked on this token -- the preference below
+        would hand it the fill -- and guessing a substitute here is the
+        mis-attribution the two tiers exist to avoid.
 
         `MarketOrderArgsV2` carries no condition id or pair id -- only
         `token_id`, `amount`, `side`, `price` -- so a completion buy has no
@@ -793,19 +821,26 @@ class ShadowExecutionClient:
         Picking the OLDEST naked pair (the version after that) is wrong for
         the opposite reason. It assumed `auto_manage_pairs` reaches the oldest
         naked pair first; it does not -- it SKIPS any pair whose last fill is
-        older than `pairs_exit_window_sec`, so the oldest naked pair is
-        precisely the one it never acts on. `data/shadow.db` survives between
+        older than `pairs_exit_window_sec`. `data/shadow.db` survives between
         sessions, so stale naked pairs accumulate, and every completion made
         for a fresh pair was booked to a stale one instead: the fresh pair
         read naked again next cycle and was bought again. With N stale naked
         pairs that is N+1 completion buys.
 
-        So this reproduces `auto_manage_pairs`' own discovery rule instead: of
-        the pairs actually naked on this token, keep those whose LAST FILL is
-        inside the window, and take the most recent of them (`posted_ts`
-        breaks a tie). An undated fill is left out, exactly as the pass leaves
-        it out. When nothing qualifies the caller refuses -- loudly -- rather
-        than crediting shares to a position nothing is managing.
+        So this reproduces the pass's own discovery rule instead, in two
+        tiers: of the pairs actually naked on this token, those whose LAST
+        FILL is inside the window win, and the most recent of them is taken
+        (`posted_ts` breaks a tie). An undated fill is left out, exactly as
+        both arms leave it out.
+
+        The second tier exists because of the aged-out rescue (#311): a pair
+        that arm completes has its last fill OUTSIDE the window by
+        construction, so an in-window-only rule would refuse every such
+        completion in rehearsal -- the shadow run would book only the exits
+        and measure half the arm. When no in-window candidate exists, the most
+        recent aged-out naked pair is the target. When nothing qualifies at
+        all the caller refuses -- loudly -- rather than crediting shares to a
+        position nothing is managing.
         """
         with closing(get_connection(self._db_path)) as conn:
             rows = conn.execute(
@@ -840,7 +875,9 @@ class ShadowExecutionClient:
         target = str(token_id)
         window_ms = self._window_sec * 1000.0
         now_ms = self._now_fn() * 1000.0
-        naked_candidates = []
+        in_window = []
+        aged_out = []
+        named = None
         for pid, info in by_pair.items():
             legs = info["legs"]
             this_matched = legs.get(target, 0.0)
@@ -850,11 +887,62 @@ class ShadowExecutionClient:
             if naked <= SIZE_EPS:
                 continue
             last_fill_ms = info["last_fill_ts"]
-            if last_fill_ms <= 0 or (now_ms - last_fill_ms) > window_ms:
+            if last_fill_ms <= 0:
                 continue
-            naked_candidates.append(
-                (last_fill_ms, info["posted_ts"], pid, info["condition_id"]))
+            slot = (last_fill_ms, info["posted_ts"], pid, info["condition_id"])
+            if target_pair_id is not None and str(pid) == target_pair_id:
+                named = slot
+            if (now_ms - last_fill_ms) > window_ms:
+                aged_out.append(slot)
+            else:
+                in_window.append(slot)
 
+        if target_pair_id is not None:
+            # The caller named the pair, so there is nothing to infer and
+            # nothing to prefer. If the store does not agree that this pair is
+            # naked on this token, the two views disagree and the shares have
+            # no defensible home: refuse, loudly, rather than credit them to a
+            # pair the caller never acted on.
+            if named is None:
+                raise ShadowOrderRefused(
+                    f"cannot record completion buy for {target[:12]}: the "
+                    f"caller named pair {target_pair_id} for it, but that pair "
+                    f"does not read as naked on this token. The store and the "
+                    f"caller disagree, so the fill has no position it can be "
+                    f"booked to.")
+            _, _, pid, cid = named
+            if not cid:
+                raise ShadowOrderRefused(
+                    f"cannot record completion buy for {target[:12]}: pair "
+                    f"{pid} has empty condition_id, which would make the "
+                    f"completion row invisible to inventory tracking")
+            return str(cid), str(pid)
+
+        # The in-window set keeps priority, unchanged: a completion made for a
+        # fresh naked pair must never be booked to a stale one (that defect is
+        # why this function exists). But a pair the AGED-OUT arm is completing
+        # has its last fill OUTSIDE the window by construction, so refusing it
+        # here would make the rehearsal unable to complete what the pass
+        # decided to complete -- the shadow run would measure only half the
+        # arm. Fall back to the aged-out set, and only when no in-window
+        # candidate exists.
+        if not in_window and len(aged_out) > 1:
+            # Two or more aged-out naked pairs on this token and nothing to
+            # tell them apart. The arm acts on the OLDEST first (the fills
+            # ledger orders by `recorded_ts`), and guessing books the
+            # completion to the wrong pair: that pair reads over-filled while
+            # the intended one stays naked and is bought AGAIN next rotation --
+            # the N+1 defect this function exists to prevent. Refusing is
+            # loud, costs one completion, and inflates nothing.
+            pairs = ", ".join(sorted(str(c[2]) for c in aged_out))
+            raise ShadowOrderRefused(
+                f"cannot record completion buy for {target[:12]}: "
+                f"{len(aged_out)} aged-out naked pairs on this token "
+                f"({pairs}) and nothing in the venue call says which one this "
+                f"buy is for. Refusing rather than booking shares to the "
+                f"wrong position.")
+
+        naked_candidates = in_window or aged_out
         if not naked_candidates:
             return None
         naked_candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
@@ -1038,7 +1126,12 @@ class ShadowExecutionClient:
 
         shares, fill_price = self._buy_from_asks(token_id, amount, price=price)
 
-        found = self._naked_pair_for_token(token_id)
+        # Spent on use: a binding aims at ONE cross, and a surviving one would
+        # hand the next unrelated completion to a pair that is already whole.
+        target_pair_id = self._completion_target
+        self._completion_target = None
+        found = self._naked_pair_for_token(token_id,
+                                           target_pair_id=target_pair_id)
         if found is None:
             raise ShadowOrderRefused(
                 f"cannot record completion buy for {token_id[:12]}: no pair "
