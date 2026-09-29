@@ -1,3 +1,52 @@
+# SPEC: Issue #311 - Aged-out one-sided legs are never revisited
+
+## Goal
+A one-sided leg that passes `pairs_exit_window_sec` (900 s) without being closed
+is no longer invisible. A separate, market-end-aware arm discovers it, reads the
+venue's own state for that market, and sells (or completes) the naked leg before
+the market ends — instead of the leg sitting unmanaged until settlement pays out
+whatever the outcome is. On shadow-01 all three `shadow_settlement` closes aged
+out this way; the worst held 2.8 shares for 10 452 s (2 h 54 m, ~7x the window)
+and lost $1.54, and the other two won — an unmanaged coin-flip with no risk cap.
+
+## Acceptance criteria (from issue)
+- [ ] A one-sided leg older than `pairs_exit_window_sec` is sold (or completed) before its market end, not at settlement
+- [ ] An unreadable/unknown market end leaves the leg naked and retries; no invented deadline, no blind close
+- [ ] Legs inside the 900 s window follow the unchanged route order
+- [ ] The `aged_out` flag in `scripts/rescue_exit_report.py` goes to zero across a fresh rehearsal on the new build
+- [ ] Focused test RED before / GREEN after: an aged-past-window leg with a known end is exited before it; the same leg with an unreadable end is not
+
+## Scope
+### In scope
+- `aged_out_verdict(...)` — the pure, fail-closed decision (no clock, no registry, no network)
+- `rescue_aged_out_legs(...)` — discovery by the window's complement, the existing close-coverage guard, `complete_pair` under `max_pair_cost` else `exit_single_buy(reason="aged_out_rescue")`
+- `fetch_open_market_state(...)` + an additive `end_ts` field on `MarketEndState` in `core_brain/market_resolution.py`
+- Two new config knobs (`enable_aged_out_rescue`, `aged_out_rescue_lead_sec`)
+- Wiring in the live loop (`order_manager`) and the shadow sweep (`shadow_run`), with an injectable market-state seam
+- Report: the rescue reason printed explicitly, plus the aged-out settlement count in the summary
+
+### Out of scope
+- Raising or redefining `pairs_exit_window_sec`; any change to `should_exit()`, the drift thresholds, grace defaults, the route order, `max_pair_cost` or the dynamic risk caps
+- Backfilling the existing shadow-01/02/03 stores (they predate `closes.reason`)
+- Changing `filter_markets.py`, the ranker, or `fetch_market_end_state`'s `closed=true` semantics; any live execution or new dependency
+
+## Interface contracts
+- `aged_out_verdict(*, last_fill_ms, window_ms, now_s, end_ts, lead_sec, venue_closed, venue_accepting) -> tuple[str, str]`
+  — verdicts `not_aged_out | end_unknown | venue_closed | awaiting_lead | due`
+- `fetch_open_market_state(gamma_host, condition_id, *, timeout=10.0, now_ts=None, urlopen=...) -> MarketEndState | None`
+  — unfiltered gamma read; `None` = not in the venue's open listing; `unreachable=True` = failed read
+- `MarketEndState.end_ts: Optional[float] = None` — filled by `parse_end_state` from the epoch it already computes
+- `rescue_aged_out_legs(client, registry, cfg, *, live=True, now=None, venue_positions=None, market_state_fn=None, gamma_host=...) -> list[dict]`
+  — per-pair isolation; actions `aged_out_rescue | awaiting_lead | end_unknown | venue_closed | balanced | error`
+- Close reason vocabulary gains `aged_out_rescue`
+
+## Edge cases (measured, not assumed)
+- The `closed=true` gamma query returns **zero rows** for a still-open market (`condition_ids=0xd65042fa…`), so the resolution read cannot serve this deadline; the unfiltered query returns `closed=False`, `acceptingOrders=True`, `endDate`, `gameStartTime`
+- Sports `endDate` may already be past while the venue still accepts orders (kickoff case from #312; the probe market shows a week-out `endDate` with `gameStartTime` hours past) — treated as the closing phase
+- A market the venue no longer lists as open: no action, settlement owns it
+- A pair that still completes under `max_pair_cost`: completed, never dumped at the bid
+- An undated fill (no `venue_ts`): left alone by both arms
+
 # SPEC: Issue #294 - Click-to-sort the Orders & Trades tables
 
 ## Goal

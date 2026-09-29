@@ -1,3 +1,48 @@
+# Constraints: Issue #311 — Aged-out one-sided legs are never revisited (fail-closed gap)
+
+## Quality & Tests
+- Zero regressions: `tests/test_single_buy_saver.py`, `tests/test_auto_pairs.py`,
+  `tests/test_dual_stop_loss.py`, `tests/test_market_resolution_settlement.py`,
+  `tests/test_shadow_run.py` stay 100% green. Full-repo sweep stays with GitHub CI
+  on push (merge gate).
+- New behaviour needs tests RED against untouched code and GREEN after; each added
+  assertion must fail without its change. The new harness is
+  `tests/test_aged_out_rescue.py` (pure verdict + full pass on a synthetic store).
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions, or
+  bypassing linters. Tests use `tmp_path` fixtures; no test writes into live `data/`
+  or `run/`. `data/orders.db` is never touched by a report or a test.
+
+## Behaviour Boundaries
+- **`pairs_exit_window_sec` stays 900.0 and keeps its meaning** (a discovery
+  filter). It is never raised to close this gap; the fix is a separate arm.
+- **New defaults only.** `enable_aged_out_rescue = True` and
+  `aged_out_rescue_lead_sec = 900.0` are additions; no existing config default may
+  change (`should_exit()`, `single_buy_max_loss_pct` 0.10,
+  `single_buy_max_loss_usd` 0.045, grace defaults, `max_pair_cost`, the dynamic
+  risk caps, the direction gate).
+- **The in-window route order is frozen**: complete → adverse-drift →
+  hold-in-grace → grace-expiry. The new arm acts only on a pair whose dated last
+  fill is strictly older than the window; an undated fill is never acted on, in
+  either arm.
+- **Fail closed, both directions.** An unreadable end, or a market the venue no
+  longer lists as open, means no action: the leg stays naked and the read is
+  retried next rotation. A deadline is never invented and a blind close is never
+  sent. A venue-closed market is left to the resolution/settlement path.
+- **Never sell twice.** The arm reuses the existing close-coverage guard
+  (`last_fill_ms` vs `latest_close_ms` per condition) so a leg already closed by
+  merge, single-buy exit or settlement is not sold again.
+- A close row is written only after a successful venue sale; a refusal is reported
+  per pair and retried, never forced. Per-pair failures are isolated.
+- The deadline read is the venue's own market state (public GET, read-only).
+  `fetch_market_end_state`'s `closed=true` semantics are not changed — a
+  `closed=true` read returns zero rows for a still-open market, which classifies as
+  `unreachable` and would silently disable this arm.
+- Sports `endDate` is not the end of trading (verified: `endDate` a week out while
+  `gameStartTime` is hours past; #312 established the kickoff case). A market whose
+  stated end has passed while the venue still accepts orders is treated as its
+  closing phase, not as "resolved".
+- No new external dependencies; no schema change; no live execution during build.
+
 # Constraints: Issue #306 — Rescue-exit forensics + reason instrumentation
 
 ## Quality & Tests
