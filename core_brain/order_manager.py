@@ -2347,6 +2347,37 @@ def poll(
                     print(err_msg, file=sys.stderr)
                     _log_event(err_msg)
 
+                # Aged-out pass (#311): the U35 window above is a discovery
+                # filter, so a one-sided fill older than it used to be invisible
+                # to every arm and was held into settlement with no risk ceiling.
+                # This pass closes those legs against the market's own end time.
+                # Closing actions only, and fail-closed inside: an unreadable
+                # market end leaves the leg naked and retries next cycle.
+                try:
+                    from core_brain.config import load as _load_cfg2
+                    from core_brain.single_buy_saver import rescue_aged_out_legs
+                    for pr in rescue_aged_out_legs(
+                        client, registry, _load_cfg2(), funder=funder,
+                    ):
+                        action = pr.get("action", "?")
+                        line = (f"[POLL {now_iso}] aged-out "
+                                f"{pr.get('pair_id') or '?':<10s} {action}")
+                        if action == "error":
+                            line += f" ({pr.get('error', '')})"
+                            print(line, file=sys.stderr)
+                        else:
+                            print(line)
+                        _log_event(line)
+                        _emit_cycle_event(
+                            service="query", cycle=cycle, phase="settling",
+                            action="aged_out_" + action,
+                            extra={"pair_id": pr.get("pair_id")},
+                        )
+                except Exception as exc:
+                    err_msg = f"[POLL {now_iso}] aged-out pass failed: {exc}"
+                    print(err_msg, file=sys.stderr)
+                    _log_event(err_msg)
+
                 # Second heartbeat: a cycle whose own work stalled past the TTL
                 # must still notice adoption before the next cycle writes.
                 if not _beat():

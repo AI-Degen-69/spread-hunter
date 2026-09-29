@@ -793,19 +793,26 @@ class ShadowExecutionClient:
         Picking the OLDEST naked pair (the version after that) is wrong for
         the opposite reason. It assumed `auto_manage_pairs` reaches the oldest
         naked pair first; it does not -- it SKIPS any pair whose last fill is
-        older than `pairs_exit_window_sec`, so the oldest naked pair is
-        precisely the one it never acts on. `data/shadow.db` survives between
+        older than `pairs_exit_window_sec`. `data/shadow.db` survives between
         sessions, so stale naked pairs accumulate, and every completion made
         for a fresh pair was booked to a stale one instead: the fresh pair
         read naked again next cycle and was bought again. With N stale naked
         pairs that is N+1 completion buys.
 
-        So this reproduces `auto_manage_pairs`' own discovery rule instead: of
-        the pairs actually naked on this token, keep those whose LAST FILL is
-        inside the window, and take the most recent of them (`posted_ts`
-        breaks a tie). An undated fill is left out, exactly as the pass leaves
-        it out. When nothing qualifies the caller refuses -- loudly -- rather
-        than crediting shares to a position nothing is managing.
+        So this reproduces the pass's own discovery rule instead, in two
+        tiers: of the pairs actually naked on this token, those whose LAST
+        FILL is inside the window win, and the most recent of them is taken
+        (`posted_ts` breaks a tie). An undated fill is left out, exactly as
+        both arms leave it out.
+
+        The second tier exists because of the aged-out rescue (#311): a pair
+        that arm completes has its last fill OUTSIDE the window by
+        construction, so an in-window-only rule would refuse every such
+        completion in rehearsal -- the shadow run would book only the exits
+        and measure half the arm. When no in-window candidate exists, the most
+        recent aged-out naked pair is the target. When nothing qualifies at
+        all the caller refuses -- loudly -- rather than crediting shares to a
+        position nothing is managing.
         """
         with closing(get_connection(self._db_path)) as conn:
             rows = conn.execute(
@@ -840,7 +847,8 @@ class ShadowExecutionClient:
         target = str(token_id)
         window_ms = self._window_sec * 1000.0
         now_ms = self._now_fn() * 1000.0
-        naked_candidates = []
+        in_window = []
+        aged_out = []
         for pid, info in by_pair.items():
             legs = info["legs"]
             this_matched = legs.get(target, 0.0)
@@ -850,11 +858,23 @@ class ShadowExecutionClient:
             if naked <= SIZE_EPS:
                 continue
             last_fill_ms = info["last_fill_ts"]
-            if last_fill_ms <= 0 or (now_ms - last_fill_ms) > window_ms:
+            if last_fill_ms <= 0:
                 continue
-            naked_candidates.append(
-                (last_fill_ms, info["posted_ts"], pid, info["condition_id"]))
+            slot = (last_fill_ms, info["posted_ts"], pid, info["condition_id"])
+            if (now_ms - last_fill_ms) > window_ms:
+                aged_out.append(slot)
+            else:
+                in_window.append(slot)
 
+        # The in-window set keeps priority, unchanged: a completion made for a
+        # fresh naked pair must never be booked to a stale one (that defect is
+        # why this function exists). But a pair the AGED-OUT arm is completing
+        # has its last fill OUTSIDE the window by construction, so refusing it
+        # here would make the rehearsal unable to complete what the pass
+        # decided to complete -- the shadow run would measure only half the
+        # arm. Fall back to the most recent aged-out naked pair, and only when
+        # no in-window candidate exists.
+        naked_candidates = in_window or aged_out
         if not naked_candidates:
             return None
         naked_candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)

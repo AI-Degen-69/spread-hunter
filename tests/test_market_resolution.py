@@ -137,6 +137,31 @@ def test_parse_end_state_carries_the_stated_end_timestamp():
     assert state.resolved is False
 
 
+def test_parse_end_state_carries_the_order_acceptance_flag():
+    # Arrange - `closed=False` alone cannot tell "live" from "closing phase".
+    row = {"condition_id": "0xC", "closed": False, "acceptingOrders": True,
+           "endDate": _OPEN_END_ISO}
+
+    # Act
+    state = parse_end_state(row, now_ts=1_790_000_000.0)
+
+    # Assert
+    assert state.accepting_orders is True
+
+
+def test_a_non_boolean_acceptance_flag_reads_unreadable():
+    # Arrange - a string shape is not a boolean; #312's review fixed exactly
+    # this at the gate, where `bool("false")` read as live.
+    for raw in ("false", "true", 0, 1):
+        state = parse_end_state(
+            {"condition_id": "0xC", "closed": False,
+             "acceptingOrders": raw, "endDate": _OPEN_END_ISO},
+            now_ts=1_790_000_000.0)
+
+        # Assert
+        assert state.accepting_orders is None, raw
+
+
 def test_parse_end_state_keeps_end_ts_none_when_the_date_is_unreadable():
     # Arrange / Act - a malformed end is unreadable, never a guessed instant.
     state = parse_end_state(

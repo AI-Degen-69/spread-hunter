@@ -680,10 +680,18 @@ def test_a_completion_lands_on_the_in_window_pair_not_the_stale_one(registry):
     assert completion_order.pair_id != stale_pair_id
 
 
-def test_a_completion_is_refused_when_every_naked_pair_is_out_of_window(registry):
-    """No in-window naked pair means the pass could not have asked for this
-    buy. Booking it to a stale pair anyway would credit shares to a position
-    nothing is managing; refusing says so out loud instead.
+def test_a_completion_is_refused_when_no_naked_pair_exists(registry):
+    """No naked pair on the token means nothing could have asked for this buy.
+    Booking it anyway would credit shares to a position nothing is managing;
+    refusing says so out loud instead.
+
+    Before #311 this test seeded a pair whose only fill was OUT of window and
+    expected the same refusal, because `auto_manage_pairs` was the only arm
+    that could complete a pair. That premise is gone: a second arm completes
+    aged-out pairs by design, so an out-of-window naked pair is now a real
+    target (see `test_a_completion_is_booked_to_the_aged_out_naked_pair`).
+    The refusal itself is what survives, and it is pinned here against a pair
+    that is BALANCED -- two filled legs, nothing naked, nothing to attach to.
     """
     from py_clob_client_v2.clob_types import MarketOrderArgsV2
 
@@ -700,8 +708,10 @@ def test_a_completion_is_refused_when_every_naked_pair_is_out_of_window(registry
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: long_ago)
+    # Both legs filled: the pair is whole, so no pair is naked here.
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
+                                               "tok-dn": {0.51: 20.0}},
                   now_fn=lambda: long_ago)
 
     client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
@@ -712,8 +722,45 @@ def test_a_completion_is_refused_when_every_naked_pair_is_out_of_window(registry
             MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
                               price=0.51))
 
-    assert [o for o in reg.get_all_orders()
-            if o["token_id"] == "tok-dn" and o["status"] == "filled"] == []
+
+
+def test_a_completion_is_booked_to_the_aged_out_naked_pair(registry):
+    """The aged-out arm's completion must be attributable (#311).
+
+    Its pair's last fill is outside the window by construction, so an
+    in-window-only attribution rule would refuse every completion that arm
+    makes -- the rehearsal would book its exits and lose its completions. The
+    in-window set keeps priority; this pins the fallback.
+    """
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ensure_shadow_tables, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: long_ago)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: long_ago)
+
+    aged_pair_id = [o["pair_id"] for o in reg.get_all_orders()
+                    if o["token_id"] == "tok-up"][0]
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+    resp = client.create_and_post_market_order(
+        MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                          price=0.51))
+
+    assert reg.get_order(resp["orderID"]).pair_id == aged_pair_id
 
 
 def test_the_shim_refuses_a_method_it_does_not_implement(registry):

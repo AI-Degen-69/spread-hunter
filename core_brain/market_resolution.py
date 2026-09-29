@@ -109,6 +109,10 @@ class MarketEndState:
     # already computes is carried out rather than discarded.
     end_ts: Optional[float] = None
     end_date_passed: Optional[bool] = None
+    # The venue's own order-acceptance flag. `closed=False` alone is not enough
+    # to call a market live: #312's gate uses both, and the aged-out rescue
+    # (#311) needs both to tell "still tradable" from "closing phase".
+    accepting_orders: Optional[bool] = None
     winner_token: Optional[str] = None
     # The winning label ("Up" / "Down" / team name) is the human-readable
     # headline. ``winning_token_id`` is the venue token id (from
@@ -158,6 +162,16 @@ def parse_end_state(row: dict, now_ts: Optional[float] = None) -> Optional[Marke
             closed = bool(closed)
         except Exception:
             closed = None
+
+    accepting = row.get("acceptingOrders", row.get("accepting_orders"))
+    accepting_orders: Optional[bool] = None
+    if accepting is not None:
+        # #312's review lesson: the venue's shape is a boolean, and a string
+        # like "false" must read as UNREADABLE rather than as false-live.
+        if isinstance(accepting, bool):
+            accepting_orders = accepting
+        else:
+            accepting_orders = None
 
     end_iso = row.get("endDate") or row.get("end_date_iso") or row.get("endDateIso")
     end_passed: Optional[bool] = None
@@ -226,6 +240,7 @@ def parse_end_state(row: dict, now_ts: Optional[float] = None) -> Optional[Marke
         closed=closed,
         end_date_iso=str(end_iso) if end_iso else None,
         end_ts=end_epoch,
+        accepting_orders=accepting_orders,
         end_date_passed=end_passed,
         winner_token=winner_token,
         winning_token_id=winning_token_id,
