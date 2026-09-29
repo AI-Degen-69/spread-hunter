@@ -13,21 +13,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "rescue_exit_report.py"
 
 sys.path.insert(0, str(REPO))
 
-from core_brain.order_registry import (  # noqa: E402
+from core_brain.order_registry import (
     CloseRecord,
     FillRecord,
-    OrderRegistry,
     OrderRecord,
+    OrderRegistry,
     QuoteRecord,
 )
-from core_brain.shadow_exec import ensure_shadow_tables  # noqa: E402
+from core_brain.shadow_exec import ensure_shadow_tables
 
 RUN = "run-306-test"
 
@@ -162,7 +160,7 @@ def add_merged_pair(reg: OrderRegistry, *, cid: str, up_token: str, dn_token: st
 
 def run_report(reg_path: Path, extra: list[str] | None = None) -> str:
     cmd = [sys.executable, str(SCRIPT), "--registry", str(reg_path)] + (extra or [])
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO)
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO, check=False)
     assert proc.returncode == 0, f"report failed:\n{proc.stdout}\n{proc.stderr}"
     return proc.stdout
 
@@ -431,7 +429,7 @@ class TestCli:
     def test_missing_registry_file_fails_cleanly(self, tmp_path):
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), "--registry", str(tmp_path / "nope.db")],
-            capture_output=True, text=True, cwd=REPO,
+            capture_output=True, text=True, cwd=REPO, check=False,
         )
         assert proc.returncode != 0
         assert "not found" in (proc.stderr + proc.stdout).lower()
@@ -453,3 +451,80 @@ class TestCli:
         assert "p1" in detail[0] and "p2" not in detail[0]
         # Q3 features still summarize the full set, only rows are truncated.
         assert "loss share" in out
+
+
+class TestReasonPrecedenceWithoutMarkStore:
+    def test_recorded_reason_wins_even_without_queue_marks(self, tmp_path):
+        """A plain registry (no queue_marks table) must still honor a reason."""
+        reg = build_registry(tmp_path / "reg.db")
+        e = add_pair_orders(reg, pair_id="p1", cid="c1", up_token="u1", dn_token="d1")
+        add_exit_close(reg, cid="c1", shares=10.0, sell_price=0.30,
+                       heavy_avg=e["heavy_price"], ts=2000.0, reason="adverse_drift")
+        # No ensure_shadow_tables / add_queue_marks call here on purpose.
+        out = run_report(tmp_path / "reg.db")
+        assert "adverse_drift" in out
+        assert "classifier=adverse_drift" in out
+
+    def test_plain_store_without_reason_stays_unresolved(self, tmp_path):
+        reg = build_registry(tmp_path / "reg.db")
+        e = add_pair_orders(reg, pair_id="p1", cid="c1", up_token="u1", dn_token="d1")
+        add_exit_close(reg, cid="c1", shares=10.0, sell_price=0.30,
+                       heavy_avg=e["heavy_price"], ts=2000.0)
+        out = run_report(tmp_path / "reg.db")
+        assert "classifier=unresolved" in out
+
+
+class TestAmbiguousAttribution:
+    def test_multi_group_settlement_fails_closed(self, tmp_path):
+        """Two viable (pair, token) groups: no age claim, no reconstruction."""
+        reg = build_registry(tmp_path / "reg.db")
+        # Group 1: the rescue pair that aged out.
+        add_pair_orders(reg, pair_id="p1", cid="c1", up_token="u1", dn_token="d1",
+                        fill_ts=10_000_000)
+        # Group 2: a fresh re-quote of the same condition into a new pair.
+        reg.create_order(OrderRecord(
+            id="p2-heavy", condition_id="c1", token_id="u1", side="BUY",
+            price=0.40, original_size=5.0, status="filled", posted_ts=99_000,
+            last_polled_ts=99_000, pair_id="p2",
+        ))
+        reg.record_fill(FillRecord(
+            trade_id="p2-t1", order_uuid="p2-heavy", size=5.0, price=0.40,
+            venue_ts=99_000_000, run_id=RUN,
+        ))
+        # A settlement close prices neither leg (that is why it needs
+        # reconstruction at all).
+        reg.log_close(CloseRecord(
+            ts=12_000.0, condition_id="c1", method="shadow_settlement",
+            shares=15.0, cost_basis=7.5, proceeds=7.5, realized_pnl=0.0,
+            forgone_vs_settlement=None, run_id=RUN,
+        ))
+
+        out = run_report(tmp_path / "reg.db")
+        assert "AMBIGUOUS" in out          # fail-closed: no age claim
+        assert "AGED OUT" not in out
+
+    def test_ambiguous_row_still_ranks_its_ledger_pnl(self, tmp_path):
+        """Ledger P&L is exact even when attribution is not."""
+        reg = build_registry(tmp_path / "reg.db")
+        add_pair_orders(reg, pair_id="p1", cid="c1", up_token="u1", dn_token="d1",
+                        heavy_price=0.60)
+        add_exit_close(reg, cid="c1", shares=10.0, sell_price=0.30,
+                       heavy_avg=0.60, ts=2000.0, method="shadow_settlement")
+        # Second condition so the settlement close shares its condition with
+        # two pairs? No -- ambiguity needs two pairs on ONE condition.
+        reg.create_order(OrderRecord(
+            id="p2-heavy", condition_id="c1", token_id="u1", side="BUY",
+            price=0.40, original_size=5.0, status="filled", posted_ts=99_000,
+            last_polled_ts=99_000, pair_id="p2",
+        ))
+        reg.record_fill(FillRecord(
+            trade_id="p2-t1", order_uuid="p2-heavy", size=5.0, price=0.40,
+            venue_ts=99_000_000, run_id=RUN,
+        ))
+        reg.log_close(CloseRecord(
+            ts=3000.0, condition_id="c1", method="shadow_settlement", shares=15.0,
+            cost_basis=7.5, proceeds=0.0, realized_pnl=-7.5,
+            forgone_vs_settlement=None, run_id=RUN,
+        ))
+        out = run_report(tmp_path / "reg.db", ["--top", "5"])
+        assert "-$7.50" in out and "-$3.00" in out  # both rows ranked by ledger P&L

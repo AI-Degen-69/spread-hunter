@@ -92,14 +92,15 @@ def _orders_by_condition(reg: sqlite3.Connection) -> dict[str, list[sqlite3.Row]
     return out
 
 
-def _settlement_row(close, cfills, heavy_token) -> dict | None:
+def _settlement_row(close, cfills, heavy_token, heavy_pair) -> dict | None:
     """Reconstruct a `shadow_settlement` close: the one-sided leg held to the end.
 
     Its P&L is the whole story -- the leg redeemed at $1.00 or died at $0.00 --
     and its fill-to-settlement age is the measure of the fail-closed gap.
     """
     leg_fills = [f for f in cfills if f["side"] == "BUY"
-                 and f["token_id"] == heavy_token]
+                 and f["token_id"] == heavy_token
+                 and f["pair_id"] == heavy_pair]
     if not leg_fills:
         return None
     matched = sum(f["size"] for f in leg_fills)
@@ -127,6 +128,31 @@ def _settlement_row(close, cfills, heavy_token) -> dict | None:
     }
 
 
+def _ambiguous_row(close) -> dict:
+    """A close whose owning fills cannot be pinned to one position.
+
+    Ledger P&L stays exact (it comes from the close row), but every
+    reconstruction -- age, token, sold price -- is withheld. The report prints
+    the row without an aged-out claim and the classifier stays `unresolved`.
+    """
+    return {
+        "cid": close["condition_id"],
+        "pair_id": "--",
+        "method": close["method"],
+        "reason": close["reason"] if "reason" in dict(close) else None,
+        "token": None,
+        "sold_side": "--",
+        "shares": close["shares"],
+        "paid": None,
+        "sold": None,
+        "pnl": close["realized_pnl"],
+        "fill_ts_s": None,
+        "close_ts": close["ts"],
+        "fill_to_exit": None,
+        "aged_out": None,
+    }
+
+
 def _exit_row(close, fills, orders) -> dict | None:
     """Reconstruct one rescue close from its condition's rows.
 
@@ -146,16 +172,18 @@ def _exit_row(close, fills, orders) -> dict | None:
         buys = [f for f in cfills if f["side"] == "BUY"]
         if not buys:
             return None
-        by_token: dict[str, float] = {}
+        # Attribution must be unambiguous before any claim is made: group the
+        # fills by the position they built. Several groups can be viable when
+        # a condition was re-quoted into a fresh pair after an earlier close --
+        # mixing them would fabricate an age and a token for a close whose
+        # owner is not recorded, so fail closed instead.
+        groups: dict[tuple[str, str], list] = {}
         for f in buys:
-            by_token[f["token_id"]] = by_token.get(f["token_id"], 0.0) + f["size"]
-        # The settlement books whichever token the venue resolved; both held
-        # tokens belong to this condition, so reconstruct from the heavier one.
-        heavy_token = max(by_token, key=by_token.get)
-        # The settlement books the venue's resolved token; the heavier held
-        # side is the one that was one-sided. The lighter side, if any, was
-        # the companion the rescue never caught.
-        return _settlement_row(close, cfills, heavy_token)
+            groups.setdefault((f["pair_id"] or "", f["token_id"]), []).append(f)
+        if len(groups) != 1:
+            return _ambiguous_row(close)
+        heavy_pair, heavy_token = next(iter(groups))
+        return _settlement_row(close, cfills, heavy_token, heavy_pair)
     sold_price = close["up_price"] if sold_side == "UP" else close["dn_price"]
 
     cfills = fills.get(cid, [])
@@ -199,16 +227,21 @@ def _exit_row(close, fills, orders) -> dict | None:
     }
 
 
-def _light_leg_quote(reg: sqlite3.Connection, cid: str, sold_side: str) -> dict | None:
-    """The companion quote: side opposite the sold leg, most recent first."""
+def _light_leg_quote(reg: sqlite3.Connection, cid: str, sold_side: str,
+                     close_ts: float) -> dict | None:
+    """The companion quote as it stood at the exit.
+
+    Constrained to `ts <= close_ts`: a quote posted after the exit is not the
+    one the rescue raced against, and using it would fabricate a Q1 bound.
+    """
     want = "DOWN" if sold_side == "UP" else "UP"
     row = reg.execute(
         """
         SELECT ts, token_id, side, price FROM quotes
-        WHERE condition_id = ? AND side = ? AND price IS NOT NULL
+        WHERE condition_id = ? AND side = ? AND ts <= ? AND price IS NOT NULL
         ORDER BY ts DESC LIMIT 1
         """,
-        (cid, want),
+        (cid, want, close_ts),
     ).fetchone()
     return dict(row) if row else None
 
@@ -219,8 +252,8 @@ def _light_leg_quote(reg: sqlite3.Connection, cid: str, sold_side: str) -> dict 
 def classify_exit(reg: sqlite3.Connection, row: dict) -> str:
     """`late_trigger` / `gapped` / `unresolved` from the sampled bid path.
 
-    A recorded reason always wins: the reconstruction brackets bid changes,
-    it does not observe them.
+    A recorded reason always wins -- even when this store carries no
+    `queue_marks` table at all, which a plain `OrderRegistry` store does not.
 
     Semantics: `late_trigger` needs a sample that crossed the drift threshold
     while still bid-safe (a rotation where selling was not yet necessary).
@@ -228,14 +261,14 @@ def classify_exit(reg: sqlite3.Connection, row: dict) -> str:
     sold price -- the bid was gone when the trigger could first have fired.
     A NULL best_bid in the window, or no samples at all, is `unresolved`.
     """
+    if row["reason"]:
+        return row["reason"]
     marks_table = reg.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='queue_marks'"
     ).fetchone()
     if marks_table is None:
         return "unresolved"  # no mark store in this registry
-    if row["reason"]:
-        return row["reason"]
-    if not row["fill_ts_s"] or not row["close_ts"]:
+    if row["token"] is None or not row["fill_ts_s"] or not row["close_ts"]:
         return "unresolved"
     samples = reg.execute(
         """
@@ -276,7 +309,9 @@ def q1_grace_upper_bound(reg: sqlite3.Connection, row: dict,
     Upper bound only: reaching the price is necessary, never sufficient, for
     a maker fill on a quote that was already cancelled.
     """
-    quote = _light_leg_quote(reg, row["cid"], row["sold_side"])
+    if row["sold_side"] == "--" or row["close_ts"] is None:
+        return "unanswerable from this store (attribution ambiguous or no close time)"
+    quote = _light_leg_quote(reg, row["cid"], row["sold_side"], row["close_ts"])
     if quote is None:
         return "unanswerable from this store (no companion quote recorded)"
     if tape is None:
@@ -374,7 +409,10 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
     say = out.append
 
     total_loss = sum(r["pnl"] for r in rows if r["pnl"] and r["pnl"] < 0)
-    total_capital = sum((r["shares"] or 0) * (r["paid"] or 0) for r in rows)
+    total_capital = sum(
+        ((r["shares"] or 0) * r["paid"])
+        for r in rows if r["paid"] is not None
+    )
 
     say(f"Rescue exit forensics -- {registry_path.name}")
     say(f"  rescue closes: {len(rows)}  total rescue loss: {_usd(total_loss)}"
@@ -390,20 +428,23 @@ def report(registry_path: Path, booktape_path: Path | None, top: int) -> str:
         share = (abs(r["pnl"]) / abs(total_loss) * 100) if total_loss else 0.0
         cls = classify_exit(reg, r)
         say(f"  [{r['method']}] pair={r['pair_id']} cond={r['cid']}")
-        say(f"    shares={r['shares']:.4g}  paid/share={r['paid']:.4f}  "
+        paid = (f"{r['paid']:.4f}" if r["paid"] is not None else "--")
+        say(f"    shares={r['shares']:.4g}  paid/share={paid}  "
             f"sold/share={r['sold'] if r['sold'] is not None else '--'}  "
             f"pnl={_usd(r['pnl'])}  loss share={share:.1f}%")
         f2e = f"{r['fill_to_exit']:.1f}s" if r["fill_to_exit"] else "--"
         say(f"    fill_to_exit={f2e}  classifier={cls}")
         say(f"    Q1: {q1_grace_upper_bound(reg, r, tape)}")
         if r["method"] == "shadow_settlement":
-            one_sided = True  # a rescue close on this path is one-sided by construction
-            if r["aged_out"]:
+            if r["aged_out"] is None:
+                say("    AMBIGUOUS: fills span more than one position for this "
+                    "condition, so no settlement-age claim is made.")
+            elif r["aged_out"]:
                 say(f"    AGED OUT: one-sided leg held past "
                     f"{PAIRS_EXIT_WINDOW_SEC:.0f}s into settlement "
                     f"(fail-closed gap: nothing else closes it).")
             else:
-                say(f"    settlement close, aged_out=no (one_sided={one_sided}).")
+                say("    settlement close, aged_out=no.")
         say("")
 
     if not rows:
