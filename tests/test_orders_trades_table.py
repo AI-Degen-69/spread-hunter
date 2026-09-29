@@ -9,10 +9,14 @@ a PnL column beside it invites the reading that it is.
 
 The column sets encode that. ACTIVE MARKETS carries no share count -- nothing
 is owned yet. Orders carries no PnL -- nothing is exposed yet. OPEN POSITIONS
-carries both. CLOSED TRADES reuses the Data & Markets table shape -- Commit,
-Hedge, Realized P&L, Fills, Status -- so a closed trade reads identically in
-both places, and lists only trades where money actually moved: a market that
-settled flat booked nothing, and a row of zeros is not a trade.
+carries both. CLOSED TRADES lists only trades where money actually moved -- a
+market that settled flat booked nothing, and a row of zeros is not a trade --
+and, because its row is a MARKET and the positions under it are one click
+down, it carries no cost column at all: `Commit ($)` read $0.00 on a closed
+market, beside a booked loss. What is left on the market row is what a market
+can answer -- when it closed, what state the positions under it rolled up to,
+what money it booked, how many times something executed here, and that it is
+finished.
 """
 from __future__ import annotations
 
@@ -39,11 +43,12 @@ CID_SETTLED = "0xsettled"
 
 
 def _render(view: str, kpi: dict | None = None, state: dict | None = None,
-            *, sort: dict | None = None) -> dict:
+            *, sort: dict | None = None, expand: list[str] | None = None) -> dict:
     # `sort` is keyword-only on purpose: as a positional third argument it lands
     # in `state`, the render comes back unsorted, and the sort assertion passes
     # against output the sort never touched.
-    payload = {"view": view, "kpi": kpi or {}, "state": state or {}, "sort": sort}
+    payload = {"view": view, "kpi": kpi or {}, "state": state or {}, "sort": sort,
+               "expand": expand or []}
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
                          capture_output=True, text=True, check=True, encoding="utf-8")
     return json.loads(out.stdout)
@@ -797,15 +802,234 @@ def test_closed_trades_lists_markets_that_booked_a_profit_or_loss():
 
 
 @requires_node
-def test_closed_trades_uses_the_data_and_markets_table_shape():
-    # Arrange — the tab exists so a closed trade reads like the same market
-    # in the Data & Markets table; two shapes for one fact is two reads.
+def test_closed_trades_carries_no_market_level_cost():
+    # Arrange — a CLOSED TRADES row is a market, and the positions are the rows
+    # inside it. `Commit ($)` is the cost of what is HELD, so on a closed market
+    # it read $0.00 next to a booked loss: a number that contradicts the row it
+    # sits on. The cost still exists one click down, per position.
     rendered = _render("closed-trades", _kpi(), _state())
 
     # Act / Assert
-    assert rendered["columns"] == ["Timestamp", "Market", "Commit ($)", "Hedge",
-                                   "Realized P&L", "Fills", "Status"]
+    assert rendered["columns"] == ["Timestamp", "Market", "Hedge",
+                                   "Realized P&L", "Fill events", "Status"]
     assert 'class="market-row"' in rendered["html"]
+    # The settled market holds 23 + 23 shares at a $22.14 basis; none of that
+    # belongs on the market row.
+    assert "$22.14" not in rendered["html"]
+    assert rendered["html"].count('colspan="6"') == rendered["html"].count('class="orders-expand-row"')
+
+
+@requires_node
+def test_the_hedge_header_says_it_is_a_roll_up_of_the_rows_inside():
+    # Arrange — the column is the positions under the market, summed. Read as a
+    # fact about the market it contradicted the trades it sat on.
+    head = _render("closed-trades", _kpi(), _state())["head"]
+
+    # Act
+    hedge_th = next(th for th in head.split("<th")[1:] if ">Hedge<" in th)
+    tag = hedge_th.split(">")[0]
+
+    # Assert — the vocabulary rides on the <th>, not in the cell text.
+    assert "Every position under this market, rolled up" in tag
+    assert "Hedge: " not in _render("closed-trades", _kpi(), _state())["html"]
+
+
+# ── The Hedge roll-up on a market row ─────────────────────────────────────
+
+CID_PARTIAL = "0xpartial"
+
+
+def _hedged_kpi() -> dict:
+    """Four closed markets, one per state of the positions under them: both legs
+    matched, both legs at different sizes, one leg alone, and nothing at all."""
+    kpi = _kpi()
+    kpi["by_market"][CID_SETTLED].update({"up_sh": 23, "dn_sh": 23})
+    kpi["by_market"][CID_CLOSED].update({"up_sh": 0, "dn_sh": 0})
+    kpi["by_market"][CID_DONE] = {
+        **kpi["by_market"][CID_SETTLED],
+        "condition_id": CID_DONE, "title": "Naked Market", "category": "MLB",
+        "up_sh": 10.0, "dn_sh": 0.0, "realized_pnl": -1.4,
+    }
+    kpi["by_market"][CID_PARTIAL] = {
+        **kpi["by_market"][CID_SETTLED],
+        "condition_id": CID_PARTIAL, "title": "Partly Paired Market", "category": "MLB",
+        "up_sh": 10.0, "dn_sh": 6.0, "realized_pnl": -0.5,
+    }
+    return kpi
+
+
+def _hedge_cell(html: str, marker: str) -> str:
+    """The Hedge cell of the row that names `marker`, on its own.
+
+    The row's cell order is Timestamp, Market, Hedge, ... and this reads the
+    third cell by position. Searching the row for the word instead would let a
+    tooltip or a legend anywhere in it satisfy the assertion.
+    """
+    idx = html.index(marker)
+    row_start = html.rindex('<tr class="market-row', 0, idx)
+    row = html[row_start:html.index("</tr>", idx)]
+    return row.split("<td")[3]
+
+
+@requires_node
+def test_the_market_roll_up_speaks_the_vocabulary_of_the_rows_inside_it():
+    # Arrange -- the four states of the positions under a market. Paired,
+    # Partial and Unpaired are the three words the OPEN POSITIONS table already
+    # uses on the positions themselves, and Flat is the fourth case that
+    # vocabulary cannot name: a market holding nothing at all.
+    rendered = _render("closed-trades", _hedged_kpi(), _state())
+
+    # Act
+    html = rendered["html"]
+
+    # Assert
+    assert ">Paired<" in _hedge_cell(html, "Settled Market")
+    assert ">Partial<" in _hedge_cell(html, "Partly Paired Market")
+    assert ">Unpaired<" in _hedge_cell(html, "Naked Market")
+    assert ">Flat<" in _hedge_cell(html, "Closed Market")
+    # The words the glossary retired from a state name.
+    assert "One-Sided" not in html
+    assert ">Hedged<" not in html
+
+
+@requires_node
+def test_a_market_holding_nothing_says_flat_instead_of_unpaired():
+    # Arrange -- the case that made the column unreadable: a closed market holds
+    # nothing, and "nothing held" used to fall into the same branch as "held
+    # and unbalanced". On shadow-01 all 82 closed markets read One-Sided, and
+    # `Unpaired` would claim a single buy that is not there.
+    rendered = _render("closed-trades", _hedged_kpi(), _state())
+
+    # Assert
+    cell = _hedge_cell(rendered["html"], "Closed Market")
+    assert "Flat" in cell
+    assert "Unpaired" not in cell
+    assert "nothing held" in cell
+
+
+@requires_node
+def test_the_four_roll_up_states_use_the_pair_status_tones():
+    # Arrange -- Paired, Partial and Unpaired take the tones the OPEN POSITIONS
+    # table already gives them (good, warn, alert); Flat is quieter still,
+    # because "nothing here" is not a verdict.
+    rendered = _render("closed-trades", _hedged_kpi(), _state())
+
+    # Act
+    html = rendered["html"]
+
+    # Assert
+    assert 'class="ot-tag is-good"' in _hedge_cell(html, "Settled Market")
+    assert 'class="ot-tag is-warn"' in _hedge_cell(html, "Partly Paired Market")
+    assert 'class="ot-tag is-alert"' in _hedge_cell(html, "Naked Market")
+    assert 'class="ot-tag is-quiet"' in _hedge_cell(html, "Closed Market")
+
+
+@requires_node
+def test_the_lone_leg_says_which_leg_and_how_much():
+    # Arrange -- 10 UP against nothing: the risk the column exists to show.
+    rendered = _render("closed-trades", _hedged_kpi(), _state())
+
+    # Assert
+    cell = _hedge_cell(rendered["html"], "Naked Market")
+    assert "10.0000 UP held with no DOWN partner: a single buy" in cell
+
+
+# ── The expanded rows: leg, units, status ─────────────────────────────────
+
+def _expanded(rendered: dict) -> str:
+    """The sub-table the click path renders under the opened market row.
+
+    Sliced out of the real render rather than rebuilt from the same helpers: an
+    assertion against the whole row could be satisfied by the outer row's own
+    badges, which is the confusion this round is about.
+    """
+    html = rendered["html"]
+    start = html.index('class="orders-expand-row"')
+    return html[start:html.index("</table>", start)]
+
+
+def _render_expanded(kpi: dict, state: dict) -> str:
+    """CLOSED TRADES with the settled market opened, as a click opens it."""
+    return _expanded(_render("closed-trades", kpi, state, expand=[CID_SETTLED]))
+
+
+@requires_node
+def test_the_expanded_row_names_the_leg_it_belongs_to():
+    # Arrange -- the "Outcome / Leg" column asked the payload for `token_side`
+    # and `outcome`, which the server never sends, so it rendered BUY for every
+    # row and the UP/DOWN colouring could never fire. The leg is resolvable from
+    # the market's own quotes, which is how the Orders and Positions tables
+    # already do it.
+    kpi = _kpi()
+    kpi["by_market"][CID_SETTLED]["quotes"] = [
+        {"token_id": "tok-up", "side": "UP"},
+        {"token_id": "tok-dn", "side": "DOWN"},
+    ]
+    state = _state()
+    state["orders"] = [
+        _settled_order("ord-up", "tok-up", pair_id="pair-s", price=0.95),
+        _settled_order("ord-dn", "tok-dn", pair_id="pair-s", price=0.40),
+    ]
+
+    # Act
+    rendered = _render("closed-trades", kpi, state, expand=[CID_SETTLED])
+    expanded = _expanded(rendered)
+
+    # Assert -- both legs named, and each pill coloured by its own leg.
+    assert "UP · BUY" in expanded
+    assert "DOWN · BUY" in expanded
+    assert "badge-down" in expanded
+
+
+def _settled_order(order_id: str, token: str, **over) -> dict:
+    """One filled leg on the settled market, which is what the opened row
+    shows. The market is a closed trade only while it has orders to expand."""
+    order = {"id": order_id, "order_id": order_id, "condition_id": CID_SETTLED,
+             "token_id": token, "side": "BUY", "price": 0.50,
+             "original_size": 10.0, "size_matched": 10.0, "status": "filled",
+             "display_status": "filled", "is_merged": False,
+             "posted_ts": 900, "age_sec": 60.0}
+    order.update(over)
+    return order
+
+
+@requires_node
+def test_the_inner_table_says_shares_and_the_outer_says_events():
+    # Arrange -- the outer row counted fill EVENTS while the single row inside
+    # it counted SHARES, and both were captioned "Fills": the same word for two
+    # units. Now each says its own unit.
+    state = _state()
+    state["orders"] = [_settled_order("ord-up", "tok-up", pair_id="pair-s")]
+
+    # Act
+    rendered = _render("closed-trades", _kpi(), state, expand=[CID_SETTLED])
+    expanded = _expanded(rendered)
+
+    # Assert -- the market row counts events, the legs count shares.
+    assert "Fill events" in rendered["head"]
+    assert "Size (sh)" in expanded
+    assert "Filled (sh)" in expanded
+
+
+@requires_node
+def test_the_inner_status_says_what_it_means():
+    # Arrange -- FILLED and MERGED sit in one column and are not alternatives:
+    # FILLED is the order executing, MERGED is what happened to the shares next.
+    state = _state()
+    state["orders"] = [
+        _settled_order("ord-f", "tok-up", pair_id="pair-f"),
+        _settled_order("ord-m", "tok-dn", pair_id="pair-m",
+                       display_status="merged", is_merged=True),
+    ]
+
+    # Act
+    expanded = _render_expanded(_kpi(), state)
+
+    # Assert
+    assert ">FILLED<" in expanded
+    assert ">MERGED<" in expanded
+    assert "the shares are on the books" in expanded
+    assert "merged back into $1.00 a share" in expanded
 
 
 @requires_node
@@ -1111,6 +1335,124 @@ def test_closed_trades_carries_the_category_caption():
 
     # Act / Assert
     assert '<div class="caption-muted">Politics</div>' in rendered["html"]
+
+
+# ── The close reason on a closed trade ──────────────────────────────────
+# A closes row already carries `reason` -- the store writes it -- and the
+# dashboard dropped it, so an aged-out rescue and a grace-expiry exit both read
+# as a bare One-Sided row with a loss. Telling them apart meant opening the
+# forensic report. The reason is provenance, not state, so it renders quietly.
+
+def _with_settlements(*closes: dict, cid: str = CID_SETTLED) -> dict:
+    kpi = _kpi()
+    kpi["by_market"][cid]["settlements"] = list(closes)
+    return kpi
+
+
+@requires_node
+def test_a_closed_trade_names_the_reason_it_closed_with():
+    # Arrange -- the rescue exit from #311: a leg past the 900s window sold
+    # before its market ended.
+    kpi = _with_settlements({"method": "single_buy_exit", "pnl": -2.6,
+                             "reason": "aged_out_rescue", "ts": 1788526463.0})
+
+    # Act
+    rendered = _render("closed-trades", kpi, _state())
+
+    # Assert -- the label is what the operator reads, and the raw token stays
+    # reachable beside it so the row can be matched to the registry and to
+    # `scripts/rescue_exit_report.py` without a translation table.
+    assert "close-reason-pill" in rendered["html"]
+    assert "Aged-out rescue" in rendered["html"]
+    assert "aged_out_rescue" in rendered["html"]
+
+
+@requires_node
+def test_a_close_that_carried_no_reason_shows_no_reason_chip():
+    # Arrange -- a merge and a settlement book their close without one.
+    kpi = _with_settlements({"method": "merge", "pnl": 1.21, "ts": 1788526463.0},
+                            {"method": "shadow_settlement", "pnl": 0.4,
+                             "ts": 1788526470.0})
+
+    # Act
+    rendered = _render("closed-trades", kpi, _state())
+
+    # Assert
+    assert "close-reason-pill" not in rendered["html"]
+
+
+@requires_node
+def test_a_later_close_without_a_reason_does_not_hide_the_named_one():
+    # Arrange -- the rescue exit, then the settlement that followed it. The
+    # settlement is newer but says nothing, and the row's PnL is the exit's.
+    kpi = _with_settlements({"method": "single_buy_exit", "pnl": -2.6,
+                             "reason": "aged_out_rescue", "ts": 1788526463.0},
+                            {"method": "shadow_settlement", "pnl": -0.2,
+                             "ts": 1788526499.0})
+
+    # Act
+    rendered = _render("closed-trades", kpi, _state())
+
+    # Assert
+    assert "Aged-out rescue" in rendered["html"]
+
+
+@requires_node
+def test_the_newest_named_close_wins_when_a_market_names_two():
+    # Arrange -- an adverse-drift stop, then the grace expiry that finished it.
+    kpi = _with_settlements({"method": "single_buy_exit", "pnl": -1.0,
+                             "reason": "adverse_drift", "ts": 1788526400.0},
+                            {"method": "single_buy_exit", "pnl": -0.4,
+                             "reason": "grace_expired", "ts": 1788526500.0})
+
+    # Act
+    rendered = _render("closed-trades", kpi, _state())
+
+    # Assert -- one chip, the newest reason, no pile-up of every close.
+    assert "Grace expired" in rendered["html"]
+    assert "Adverse drift" not in rendered["html"]
+    assert rendered["html"].count("close-reason-pill") == 1
+
+
+@requires_node
+def test_a_reason_the_page_has_never_seen_still_renders_its_own_words():
+    # Arrange -- a reason added on the Python side without touching this page.
+    kpi = _with_settlements({"method": "single_buy_exit", "pnl": -1.0,
+                             "reason": "collateral_sweep", "ts": 1788526463.0})
+
+    # Act
+    rendered = _render("closed-trades", kpi, _state())
+
+    # Assert -- unreadable-in-practice beats invisible: the operator sees a
+    # reason the page does not know rather than a row with no reason at all.
+    assert "Collateral sweep" in rendered["html"]
+
+
+@requires_node
+@pytest.mark.parametrize("view", ["active-markets", "open-orders", "positions"])
+def test_the_close_reason_stays_on_closed_trades(view):
+    # Arrange -- the same market with a named close, read in the other views.
+    kpi = _with_settlements({"method": "single_buy_exit", "pnl": -2.6,
+                             "reason": "aged_out_rescue", "ts": 1788526463.0})
+
+    # Act
+    rendered = _render(view, kpi, _state())
+
+    # Assert -- how a trade closed is not a property of an open position.
+    assert "close-reason-pill" not in rendered["html"]
+
+
+def test_the_close_reason_pill_stays_out_of_the_state_colour_vocabulary():
+    # DESIGN.md: a hue may never appear without a state meaning behind it. How a
+    # trade closed is provenance, so the chip lives in the quiet gray band.
+    css = (_STATIC / "styles.css").read_text(encoding="utf-8")
+    start = css.index(".close-reason-pill {")
+    rule = css[start:css.index("}", start)]
+
+    assert "var(--text-muted)" in rule
+    for hue in ("--signal", "--warn", "--loss", "--open",
+                "--green-", "--amber-", "--red-", "--blue-"):
+        assert hue not in rule
 
 
 @requires_node
@@ -1476,10 +1818,10 @@ def test_sorting_closed_trades_reorders_trades_against_the_default_order():
     # Sorting the entries keeps each trade whole; sorting the rows would not.
     kpi, state = _kpi(), _state()
 
-    # Act — column 4 is Realized P&L; ascending puts the losing trade first,
+    # Act — column 3 is Realized P&L; ascending puts the losing trade first,
     # which is the opposite of the order the view renders by default.
     default = _render("closed-trades", kpi, state)
-    rendered = _render("closed-trades", kpi, state, sort={"col": 4, "dir": "asc"})
+    rendered = _render("closed-trades", kpi, state, sort={"col": 3, "dir": "asc"})
 
     # Assert
     assert _cids(default) == [CID_SETTLED, CID_CLOSED]

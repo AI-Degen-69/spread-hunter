@@ -1638,8 +1638,13 @@ function renderBrokerPortfolioOverview(kpi, status) {
   if (elCash) elCash.textContent = fmtUSD(cashVal);
   if (elCashPct) elCashPct.textContent = `${cashPct}% Liquid USDC`;
   if (elCommitted) elCommitted.textContent = fmtUSD(committedVal);
-  if (elCommittedPct) elCommittedPct.textContent = `${committedPct}% Committed Risk`;
-  if (elPairs) elPairs.textContent = `${activePairs} Pairs`;
+  // The unit is part of the number: "42.6% Committed Risk" read as a risk
+  // figure while the value is the tile's share of the equity headline.
+  if (elCommittedPct) elCommittedPct.textContent = `${committedPct}% of Equity`;
+  // `graduated` counts MARKETS the Market Filter quoted, not pairs held --
+  // "3 Pairs" once sat above an OPEN POSITIONS table showing one Unpaired
+  // position, and nothing about a graduated market is hedged yet.
+  if (elPairs) elPairs.textContent = `${activePairs} Markets`;
   if (elSpread) {
     // Same rule as the hero pill: an unread realized figure is not $0.00.
     elSpread.textContent = realizedMeasured ? fmtSignedUSD(realizedPnL) : '--';
@@ -1648,8 +1653,10 @@ function renderBrokerPortfolioOverview(kpi, status) {
   if (elExpectancy) elExpectancy.textContent = `Avg ${expectancy} / close`;
   if (elWinrate) elWinrate.textContent = `${winRate}%`;
   if (elWins) {
+    // `losses` is every close that is not a win, zeroes included -- which is
+    // exactly what the word Losses says. "Flat" claimed nothing happened.
     elWins.textContent = `${wins == null ? '--' : wins} Wins / `
-      + `${losses == null ? '--' : losses} Flat`;
+      + `${losses == null ? '--' : losses} Losses`;
   }
   if (elPf) elPf.innerHTML = `${profitFactor} <span style="font-size:10px;color:var(--text-muted);font-weight:500">· SR ${sharpe}</span>`;
 
@@ -3697,7 +3704,26 @@ function collapseMergedPair(legs) {
   };
 }
 
-function renderExpandedOrders(orders, fills, showCancelled) {
+/* What each inner status means, in one plain sentence. The words FILLED and
+ * MERGED sit in the same column and are not alternatives -- FILLED is the
+ * order executing, MERGED is what happened to those shares afterwards -- so
+ * each carries its own explanation on hover. */
+const ORDER_STATUS_TITLES = {
+  open: 'resting on the book, nothing filled yet',
+  pending: 'sent to the venue, not yet accepted',
+  partial: 'partly filled, the remainder is still resting',
+  filled: 'executed in full: the shares are on the books',
+  merged: 'these filled shares were merged back into $1.00 a share and retired',
+  cancelled: 'cancelled before it executed: nothing was bought or sold',
+  unattributed: 'filled, but the store cannot tie it to a pair',
+};
+
+function orderStatusTitle(status) {
+  const key = String(status || '').toLowerCase();
+  return ORDER_STATUS_TITLES[key] || '';
+}
+
+function renderExpandedOrders(orders, fills, showCancelled, legOf) {
   if (!orders || orders.length === 0) {
     return `<div class="orders-empty">No individual orders for this market.</div>`;
   }
@@ -3730,14 +3756,17 @@ function renderExpandedOrders(orders, fills, showCancelled) {
 
   let html = '';
 
+  // `(sh)` on Size and Filled, because the row above counts FILL EVENTS and
+  // these count SHARES. Same word, two units, was the whole confusion: the
+  // outer row said 2 while the single row inside it said 10.
   html += `<table class="orders-subtable">`;
   html += `<thead><tr>
     <th>Pair ID</th>
     <th>Age</th>
     <th>Outcome / Leg</th>
     <th>Price</th>
-    <th>Size</th>
-    <th>Filled</th>
+    <th>Size (sh)</th>
+    <th>Filled (sh)</th>
     <th>Status</th>
   </tr></thead><tbody>`;
 
@@ -3784,9 +3813,16 @@ function renderExpandedOrders(orders, fills, showCancelled) {
       const fillCount = oFills.length;
       const rowStatus = isMergedOrder(o) ? 'merged' : o.status;
       const statusCls = pillForStatus(rowStatus);
-      const isDown = o.token_side === 'DOWN' || (o.outcome && (o.outcome.toLowerCase().includes('no') || o.outcome.toLowerCase().includes('down')));
+      // The leg, resolved from this market's own quotes. `token_side` and
+      // `outcome` are legacy shapes the server does not send, so they stay as
+      // a last resort rather than the primary source.
+      const leg = typeof legOf === 'function' ? legOf(o.token_id) : null;
+      const sideLabel = o.token_side || leg;
+      const isDown = sideLabel === 'DOWN'
+        || (o.outcome && (o.outcome.toLowerCase().includes('no') || o.outcome.toLowerCase().includes('down')));
       const badgeCls = isDown ? 'badge-down' : 'badge-up';
-      const label = o.outcome ? `${o.outcome} (${fmtSide(o.side)})` : (o.token_side ? `${o.token_side} (${fmtSide(o.side)})` : fmtSide(o.side));
+      const label = o.outcome ? `${o.outcome} (${fmtSide(o.side)})`
+        : (sideLabel ? `${sideLabel} · ${fmtSide(o.side)}` : fmtSide(o.side));
       const isCancelled = isCancelledStatus(o.status);
       html += `<tr class="${isCancelled ? 'order-cancelled ' : ''}pair-row" style="--pair-hue:${hue}; background: hsla(${hue},72%,60%,0.06)">
         <td class="mono" style="font-size:11px;color:var(--text-muted)"><span class="pair-label"${pairTitle}><span class="pair-dot" style="--pair-hue:${hue}"></span>${esc(pairDisplay)}</span></td>
@@ -3795,7 +3831,7 @@ function renderExpandedOrders(orders, fills, showCancelled) {
         <td class="mono">${esc(o.price !== null && o.price !== undefined ? o.price.toFixed(4) : '--')}</td>
         <td class="mono">${esc(o.original_size !== null && o.original_size !== undefined ? o.original_size : '--')}</td>
         <td class="mono">${esc(o.size_matched !== null && o.size_matched !== undefined ? o.size_matched : '--')}</td>
-        <td><span class="pill ${statusCls}">${fmtOrderStatus(rowStatus)}</span></td>
+        <td><span class="pill ${statusCls}" title="${esc(orderStatusTitle(rowStatus))}">${fmtOrderStatus(rowStatus)}</span></td>
       </tr>`;
     }
   }
@@ -3851,9 +3887,16 @@ const OT_COLUMNS = {
   // without inventing a per-leg figure that does not exist.
   'positions': ['Timestamp', 'Market', 'Leg', 'Size', 'Avg Price', 'Cost',
                 'Mark Value', 'Unrealized', 'Realized'],
-  // The Data & Markets table shape, reused so a closed trade reads the same
-  // in both places: commit, hedge state, realized P&L, fills, status.
-  'closed-trades': ['Timestamp', 'Market', 'Commit ($)', 'Hedge', 'Realized P&L', 'Fills', 'Status'],
+  // A CLOSED TRADE row is a MARKET, not a position: the positions are the rows
+  // inside it, one click down. So this view carries no cost column -- a market
+  // holds nothing once it closes, and `Commit ($)` read $0.00 beside a booked
+  // loss. What is left is what a market-level row can honestly answer: when it
+  // closed, what closed it (`Hedge` roll-up below), what money it booked, how
+  // many times something executed here ("Fill events": the shares of each are
+  // one click down, and calling both of them "Fills" is what made the outer 2
+  // and the inner 10 look contradictory), and that it is finished.
+  'closed-trades': ['Timestamp', 'Market', 'Hedge', 'Realized P&L',
+                    'Fill events', 'Status'],
 };
 
 /* The quote log writes the down leg as `DOWN`; orders and the pair summary
@@ -3886,7 +3929,7 @@ const OT_TEXT_COLUMNS = {
   'active-markets': new Set([1, 2, 9]),   // Market, Category, Status
   'open-orders': new Set([1, 2]),         // Market, Leg
   'positions': new Set([1, 2]),           // Market, Leg
-  'closed-trades': new Set([1, 3, 6]),    // Market, Hedge, Status
+  'closed-trades': new Set([1, 2, 5]),    // Market, Hedge, Status
 };
 
 function otIsTextColumn(view, col) {
@@ -4218,10 +4261,11 @@ function pairSummary(status, pairCost, inferred) {
 /* A labelled status tag: a named condition, optionally with the number behind
  * it. `tone` is one of good / warn / alert, so the same three colours mean the
  * same three things everywhere in this table. */
-function otTag(tone, label, value) {
+function otTag(tone, label, value, title) {
   const valueHtml = (value === null || value === undefined)
     ? '' : ` <span class="ot-tag-value mono">${esc(value)}</span>`;
-  return `<div class="ot-tag is-${esc(tone)}">${esc(label)}${valueHtml}</div>`;
+  const titleHtml = title ? ` title="${esc(title)}"` : '';
+  return `<div class="ot-tag is-${esc(tone)}"${titleHtml}>${esc(label)}${valueHtml}</div>`;
 }
 
 function otEmptyRow(view, message) {
@@ -4236,6 +4280,11 @@ function otHeadHtml(view, sort) {
   const statusTitle = ' title="RESTING: orders are resting on the book. '
     + 'QUOTING: the engine is actively quoting this market. '
     + 'IDLE: no quote activity observed."';
+  // The Hedge cell is a roll-up of the rows INSIDE the market row, so the
+  // header has to say so: read as a fact about the market it was a word that
+  // contradicted the trades it sat on.
+  const hedgeTitle = ' title="Every position under this market, rolled up: '
+    + 'Paired, Partial, Unpaired, or Flat when nothing is held."';
   const active = (sort && Number.isInteger(sort.col)) ? sort : null;
   const cells = OT_COLUMNS[view]
     .map((label, i) => {
@@ -4258,7 +4307,8 @@ function otHeadHtml(view, sort) {
       // Timestamp column is first now, and the market name is still the only
       // cell that wraps.
       const isMarketHead = label === 'Market';
-      return `<th${isMarketHead ? ' class="ot-market-head"' : ''}${ariaSort}${label === 'Status' ? statusTitle : ''}>${button}</th>`;
+      const vocabTitle = label === 'Status' ? statusTitle : (label === 'Hedge' ? hedgeTitle : '');
+      return `<th${isMarketHead ? ' class="ot-market-head"' : ''}${ariaSort}${vocabTitle}>${button}</th>`;
     })
     .join('');
   return `<tr>${cells}</tr>`;
@@ -4604,12 +4654,11 @@ function closedTradesRows(kpi, state, sort) {
     switch (sort.col) {
       case 0: return closeTsOf(m);
       case 1: return String(m.title || m.name || m.slug || '');
-      case 2: return otNum(m.total_cost);
-      case 3: return (m.balance !== null && m.balance !== undefined && m.balance >= 0.99)
-        ? 'Hedged' : 'One-Sided';
-      case 4: return otNum(m.realized_pnl);
-      case 5: return otNum(m.fills_count);
-      case 6: return 'FINISHED';
+      // Sorts on the label the row shows, three states included.
+      case 2: return hedgeStateOf(m).state;
+      case 3: return otNum(m.realized_pnl);
+      case 4: return otNum(m.fills_count);
+      case 5: return 'FINISHED';
       default: return null;
     }
   }) : entries;
@@ -4887,6 +4936,130 @@ function initOrdersTradesTabs() {
 }
 
 
+/* Why a trade closed, in the operator's words.
+ *
+ * The registry has always written a `reason` on the closes that have one --
+ * `aged_out_rescue` for the leg the 900s window cannot reach, `grace_expired`
+ * and `adverse_drift` for the two stops -- and the dashboard dropped it, so a
+ * rescue and a stop both read as a bare One-Sided row with a loss and telling
+ * them apart meant opening `scripts/rescue_exit_report.py`. A merge or a
+ * settlement books its close without a reason, and a close with nothing to say
+ * gets no chip: an empty label is worse than no label.
+ *
+ * Anything missing from this map still renders, from its own token. A reason
+ * the page has never seen is exactly the one nobody can read, so it must not
+ * be the one the page hides. */
+const CLOSE_REASON_LABELS = {
+  aged_out_rescue: 'Aged-out rescue',
+  adverse_drift: 'Adverse drift',
+  grace_expired: 'Grace expired',
+};
+
+function closeReasonLabel(reason) {
+  const raw = String(reason === null || reason === undefined ? '' : reason).trim();
+  if (!raw) return '';
+  if (CLOSE_REASON_LABELS[raw]) return CLOSE_REASON_LABELS[raw];
+  const words = raw.replace(/[_-]+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/* The newest close that names a reason, or null when none of them does.
+ *
+ * A market can close more than once -- a rescue exit now, a settlement later --
+ * and only the named ones explain the PnL the row is showing. Newest named,
+ * not newest overall: a settlement that followed the exit says nothing and
+ * must not blank the reason the row exists to carry. `method` and `ts` come
+ * along for the tooltip, which is where the raw facts stay. */
+function closeReasonOf(m) {
+  const named = ((m && m.settlements) || [])
+    .filter(c => c && String(c.reason === null || c.reason === undefined ? '' : c.reason).trim());
+  if (!named.length) return null;
+  const newest = named.reduce((a, b) => ((Number(b.ts) || 0) >= (Number(a.ts) || 0) ? b : a));
+  return {
+    reason: String(newest.reason).trim(),
+    method: newest.method || '',
+    ts: newest.ts,
+    namedCount: named.length,
+    closeCount: ((m && m.settlements) || []).length,
+  };
+}
+
+function closeReasonTitle(info) {
+  const parts = [`reason=${info.reason}`];
+  if (info.method) parts.push(`method=${info.method}`);
+  const ts = Number(info.ts);
+  if (Number.isFinite(ts) && ts > 0) {
+    parts.push(new Date(ts * 1000).toLocaleString());
+  }
+  parts.push(info.namedCount === 1
+    ? 'the one close that names a reason'
+    : `${info.namedCount} of ${info.closeCount} closes name a reason`);
+  return parts.join(' · ');
+}
+
+/* The state of the positions under a MARKET, rolled up.
+ *
+ * The column used to read `min(up, down) / max(up, down)` and answer
+ * "Hedged"/"One-Sided". On a closed market it then read `One-Sided` on every
+ * single row, because a closed market holds nothing and "nothing held" fell
+ * into the same branch as "held and unbalanced" -- on shadow-01 all 82 closed
+ * markets said One-Sided with zero shares held.
+ *
+ * It now speaks the vocabulary the rows inside it speak. `Paired`, `Partial`
+ * and `Unpaired` are `PAIR_STATUS` -- the same three words and the same three
+ * tones the OPEN POSITIONS table uses on the positions themselves -- and
+ * `Flat` is added for a market holding nothing, which those three cannot say:
+ * `Unpaired` would claim a single buy that is not there. So the market row and
+ * the rows under it agree, and DESIGN.md's rule holds -- no saturated hue for
+ * something that is not a live state (Flat is gray).
+ *
+ * Both share counts are read directly rather than `m.balance`: the same ratio,
+ * but it cannot go missing with a payload, and a missing number must never be
+ * what decides whether a position reads as paired. */
+function hedgeStateOf(m) {
+  const up = Number((m && m.up_sh) || 0);
+  const dn = Number((m && m.dn_sh) || 0);
+  if (!(up + dn > 0)) {
+    return { state: 'Flat', tone: 'quiet',
+             title: 'nothing held: every position under this market is closed' };
+  }
+  const status = pairStatus(up, dn);
+  return { state: PAIR_STATUS[status].label, tone: PAIR_STATUS[status].tone,
+           title: hedgeTitle(status, up, dn) };
+}
+
+/* The roll-up in shares, so a tag that says `Unpaired` also says how much and
+ * on which leg without the operator opening the row. */
+function hedgeTitle(status, up, dn) {
+  const upSh = `${up.toFixed(4)} UP`;
+  const dnSh = `${dn.toFixed(4)} DOWN`;
+  if (status === 'paired') {
+    return `${upSh} against ${dnSh}: paired, merges at $1.00 a share`;
+  }
+  if (status === 'partial') {
+    const same = Math.min(up, dn).toFixed(4);
+    return `${upSh} against ${dnSh}: ${same} shares are paired, the remainder is a single buy`;
+  }
+  return up > 0
+    ? `${upSh} held with no DOWN partner: a single buy`
+    : `${dnSh} held with no UP partner: a single buy`;
+}
+
+/* A token -> UP/DOWN lookup for one market, from its own quotes ledger.
+ * The dashboard's Orders and OPEN POSITIONS tables resolve a leg this way; the
+ * expanded table below never did, and asked the server for `token_side` and
+ * `outcome`, which it does not send -- so its "Outcome / Leg" column rendered
+ * BUY for every row and the UP/DOWN pill colouring was dead. */
+function legResolverForMarket(m) {
+  const byToken = {};
+  for (const q of ((m && m.quotes) || [])) {
+    const side = String(q.side || '').toUpperCase();
+    const token = String(q.token_id || '');
+    if (token && (side === 'UP' || side === 'DOWN')) byToken[token] = side;
+  }
+  return (tokenId) => byToken[String(tokenId || '')] || null;
+}
+
 /* Build one finished-or-live market's main row and its optional expanded
  * sub-row, in the Data & Markets table shape. Shared with the Orders &
  * Trades CLOSED TRADES view so a closed trade reads identically in both
@@ -4896,7 +5069,6 @@ function marketRowPairHtml(cid, m, opts) {
   const categoryHtml = categoryCaption
     ? `<div class="caption-muted">${esc(marketCategory(m))}</div>` : '';
   const fills_count = m.fills_count || 0;
-  const hedged = m.balance !== null && m.balance !== undefined && m.balance >= 0.99 ? 'Hedged' : 'One-Sided';
   // Merged legs are finished, not active: a fully-merged market must not
   // rank or badge as if it still had resting work.
   const activeOrders = allOrders.filter(o => isActiveOrder(o));
@@ -4950,6 +5122,15 @@ function marketRowPairHtml(cid, m, opts) {
   // operator sees ordered is exactly what is displayed.
   const closeTs = closeTsOf(m);
   const tsHtml = timestampCell(closeTs);
+  const hedge = hedgeStateOf(m);
+
+  // How this trade closed, under the name it closed under (see
+  // `closeReasonOf`). A quiet chip: DESIGN.md keeps every saturated hue for the
+  // live-state vocabulary, and provenance is not a state.
+  const reasonInfo = closeReasonOf(m);
+  const reasonHtml = reasonInfo
+    ? `<div class="close-reason-line"><span class="close-reason-pill" title="${esc(closeReasonTitle(reasonInfo))}">${esc(closeReasonLabel(reasonInfo.reason))}</span></div>`
+    : '';
 
   let html = `<tr class="market-row${isExpanded ? ' expanded' : ''}" data-cid="${esc(cid)}" tabindex="0" role="button" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} market orders for ${esc(m.title || m.slug || cid.slice(0,10))}">
     ${tsHtml}
@@ -4958,9 +5139,9 @@ function marketRowPairHtml(cid, m, opts) {
       ${marketLink(m)}
       ${categoryHtml}
       ${badgeHtml}
+      ${reasonHtml}
     </td>
-    <td class="mono">${fmtUSD(m.total_cost)}</td>
-    <td><span class="pill ${hedged === 'Hedged' ? 'active' : 'reconnecting'}">${hedged}</span></td>
+    <td>${otTag(hedge.tone, hedge.state, null, hedge.title)}</td>
     <td class="mono">${esc(m.realized_pnl !== null && m.realized_pnl !== undefined ? fmtUSD(m.realized_pnl) : '--')}</td>
     <td class="mono">${esc(fills_count)}</td>
     <td>
@@ -4974,9 +5155,10 @@ function marketRowPairHtml(cid, m, opts) {
   // Expanded sub-row with individual orders
   if (isExpanded && hasOrders) {
     html += `<tr class="orders-expand-row">
-      <td colspan="7" style="padding:0">
+      <td colspan="6" style="padding:0">
         <div class="orders-expand-content">
-          ${renderExpandedOrders(allOrders, fills, showCancelled)}
+          ${renderExpandedOrders(allOrders, fills, showCancelled,
+                                 legResolverForMarket(m))}
         </div>
       </td>
     </tr>`;
@@ -5833,6 +6015,8 @@ if (typeof module !== 'undefined' && module.exports) {
     otSortGroups, otCompare, otDefaultDir, otIsTextColumn, otToggleSort, otActiveSort,
     activeMarketsRows, openOrdersRows, positionsRows, closedTradesRows,
     closedTradesEntries, marketRowPairHtml, wireMarketRowExpansion,
+    closeReasonOf, closeReasonLabel, closeReasonTitle, CLOSE_REASON_LABELS,
+    hedgeStateOf, legResolverForMarket, orderStatusTitle, ORDER_STATUS_TITLES,
     heldMarketEntries, heldLegs, isFinishedMarket, latestLegMids, latestLegQuotes,
     positionMarkValue, settledMarkValue, winningLeg,
     isQuotedMarket, isRestingOrder, tokenLegMap, legForOrder, marketStatusPill,
@@ -5840,6 +6024,9 @@ if (typeof module !== 'undefined' && module.exports) {
     fmtTimestamp, toMs, latestQuoteTs, latestFillTs, closeTsOf, fmtRelAgo, timestampCell,
     pairStatus, PAIR_STATUS, isMarketInferredPosition, pairSummary,
     get isStopping() { return isStopping; },
+    // The table's own expand state, so a harness can open a row and read the
+    // sub-table that the real click path renders.
+    get expandedMarkets() { return expandedMarkets; },
     set isStopping(v) { isStopping = v; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState,
     get setBackendContact() { return setBackendContact; },
