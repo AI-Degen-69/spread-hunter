@@ -5859,7 +5859,7 @@ function initTopMetaScrollCue() {
 }
 
 /* ── Helper: Safe JSON fetch with timeout ── */
-async function safeJsonFetch(url, timeoutMs = 5000) {
+async function safeJsonFetch(url, timeoutMs = 8000) {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -5879,9 +5879,9 @@ async function pollStatus() {
   isPolling = true;
   try {
     const [state, status, kpi, scanState, trialReadiness, guardAlerts, guardHealth] = await Promise.all([
-      safeJsonFetch('/api/state'),
+      safeJsonFetch('/api/state', 15000),
       safeJsonFetch('/api/system/status'),
-      safeJsonFetch('/api/kpi'),
+      safeJsonFetch('/api/kpi', 15000),
       safeJsonFetch('/api/scan-state'),
       safeJsonFetch('/api/trial-readiness'),
       safeJsonFetch('/api/guardrail-alerts'),

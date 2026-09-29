@@ -58,18 +58,29 @@ def classify_display_category(title: Any, event_title: Any,
     return None
 
 
+_FEED_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+
+
 def _feed_rows(name: str, root: Path | str) -> list[dict]:
     """Rows of a runtime feed file; unreadable or misshapen reads as empty."""
     try:
         path = resolve_runtime_file(name, root=root)
         if not path.exists():
             return []
+        mtime = path.stat().st_mtime
+        cache_key = (name, str(path))
+        cached = _FEED_CACHE.get(cache_key)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
         payload = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
             payload = payload.get("rows") or []
         if not isinstance(payload, list):
-            return []
-        return [row for row in payload if isinstance(row, dict)]
+            rows: list[dict] = []
+        else:
+            rows = [row for row in payload if isinstance(row, dict)]
+        _FEED_CACHE[cache_key] = (mtime, rows)
+        return rows
     except Exception:
         return []
 
