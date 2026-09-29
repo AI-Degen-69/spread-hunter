@@ -512,7 +512,8 @@ def _exit_fill_size(resp, requested_size: float) -> float:
 
 
 def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
-                       heavy_side: str, size: float, sell_price: float) -> None:
+                       heavy_side: str, size: float, sell_price: float,
+                       reason: Optional[str] = None) -> None:
     """Ledger a completed exit: the sold leg leaves the registry for good.
 
     Written AFTER the market order succeeds, mirroring the paper run's sweep (which
@@ -526,6 +527,9 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
     price we accepted -- only when it reported none. The live SDK's response
     carries no fills, so live still records the floor; the rehearsal walks the
     bid ladder and knows better. See `_exit_fill_price`.
+
+    `reason` is the route's trigger (`adverse_drift` / `grace_expired`), and is
+    part of this close -- written here, after the sale succeeded, never before.
     """
     leg = (pair.get("legs") or {}).get(heavy_token, {})
     matched = float(leg.get("matched") or 0.0)
@@ -564,6 +568,7 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
         up_cost_removed=up_removed,
         dn_cost_removed=dn_removed,
         run_id=close_run_id,
+        reason=reason,
     ))
 
 
@@ -591,8 +596,14 @@ def exit_single_buy(
     max_pair_cost: float,
     live: bool = True,
     venue_positions: Optional[dict[str, float]] = None,
+    reason: Optional[str] = None,
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
+
+    `reason` is the caller's route trigger (`adverse_drift` / `grace_expired`),
+    persisted on the close so later forensics need not reconstruct it. Purely
+    instrumentation: it changes no trigger, threshold, or route decision, and
+    callers without one (stray-guard) keep working unchanged.
 
     `action` in the returned dict is one of:
       balanced       -- nothing single, nothing to do
@@ -769,7 +780,7 @@ def exit_single_buy(
     sold = _exit_fill_size(resp, size)
     fill_price = _exit_fill_price(resp, min_price)
     _record_exit_close(registry, after, heavy_token, heavy_side, sold,
-                       fill_price)
+                       fill_price, reason=reason)
 
     return {
         "action": "exited",
@@ -1144,7 +1155,8 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
 
     if is_adverse:
         res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
-                              live=live, venue_positions=venue_positions)
+                              live=live, venue_positions=venue_positions,
+                              reason="adverse_drift")
         if isinstance(res, dict):
             res["reason"] = "adverse_drift"
         return res
@@ -1159,7 +1171,8 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
         }
 
     res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
-                          live=live, venue_positions=venue_positions)
+                          live=live, venue_positions=venue_positions,
+                          reason="grace_expired")
     if isinstance(res, dict):
         res["reason"] = "grace_expired"
     return res

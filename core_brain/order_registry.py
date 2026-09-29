@@ -492,6 +492,8 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE closes ADD COLUMN tx_hash TEXT")
         if "run_id" not in cols:
             conn.execute("ALTER TABLE closes ADD COLUMN run_id TEXT")
+        if "reason" not in cols:
+            conn.execute("ALTER TABLE closes ADD COLUMN reason TEXT")
 
     # Check columns in resolutions. `winning_token` is the label the operator
     # reads ("Up", a team name); `winning_token_id` is the venue token id, and
@@ -755,6 +757,10 @@ class CloseRecord:
     dn_cost_removed: Optional[float] = None
     tx_hash: Optional[str] = None
     run_id: Optional[str] = None
+    # Why a rescue route fired (`adverse_drift` / `grace_expired`). Only the
+    # single-buy exit writes it, and only after the venue sale succeeded --
+    # recorded data beats reconstructing the trigger from bid marks later.
+    reason: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -1480,8 +1486,8 @@ class OrderRegistry:
                     ts, condition_id, market_slug, method, gas, shares,
                     up_price, dn_price, cost_basis, proceeds, fee, realized_pnl,
                     forgone_vs_settlement, up_cost_removed, dn_cost_removed,
-                    tx_hash, run_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tx_hash, run_id, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     close.ts,
@@ -1501,6 +1507,7 @@ class OrderRegistry:
                     close.dn_cost_removed,
                     close.tx_hash,
                     r_id,
+                    close.reason,
                 ),
             )
             conn.commit()
