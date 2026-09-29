@@ -872,7 +872,9 @@ def run_shadow(
         # It runs BEFORE the resolution sweep on purpose: a market that sweep
         # resolves must not be sold the same rotation.
         try:
-            from core_brain.single_buy_saver import rescue_aged_out_legs
+            from core_brain.single_buy_saver import (
+                AGED_OUT_QUIET_ACTIONS, rescue_aged_out_legs,
+            )
 
             state_fn = getattr(shadow_sweep, "_market_state_fn", None)
             for pr in rescue_aged_out_legs(
@@ -885,7 +887,7 @@ def run_shadow(
                 if action == "error":
                     log.warning("aged-out %s error: %s", pair_id,
                                 pr.get("error"))
-                elif action not in ("hold", "balanced", "awaiting_lead"):
+                elif action not in AGED_OUT_QUIET_ACTIONS:
                     log.info("aged-out %s %s -- %s", pair_id, action,
                              pr.get("reason", ""))
         except (sqlite3.Error, OSError, ValueError) as e:

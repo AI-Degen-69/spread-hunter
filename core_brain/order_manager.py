@@ -2355,19 +2355,25 @@ def poll(
                 # market end leaves the leg naked and retries next cycle.
                 try:
                     from core_brain.config import load as _load_cfg2
-                    from core_brain.single_buy_saver import rescue_aged_out_legs
+                    from core_brain.single_buy_saver import (
+                        AGED_OUT_QUIET_ACTIONS, rescue_aged_out_legs,
+                    )
                     for pr in rescue_aged_out_legs(
                         client, registry, _load_cfg2(), funder=funder,
                     ):
                         action = pr.get("action", "?")
-                        line = (f"[POLL {now_iso}] aged-out "
-                                f"{pr.get('pair_id') or '?':<10s} {action}")
-                        if action == "error":
-                            line += f" ({pr.get('error', '')})"
-                            print(line, file=sys.stderr)
-                        else:
-                            print(line)
-                        _log_event(line)
+                        # The waiting verdicts repeat every cycle until the
+                        # market end moves; they stay out of the console and
+                        # still reach the cycle ring below.
+                        if action not in AGED_OUT_QUIET_ACTIONS:
+                            line = (f"[POLL {now_iso}] aged-out "
+                                    f"{pr.get('pair_id') or '?':<10s} {action}")
+                            if action == "error":
+                                line += f" ({pr.get('error', '')})"
+                                print(line, file=sys.stderr)
+                            else:
+                                print(line)
+                            _log_event(line)
                         _emit_cycle_event(
                             service="query", cycle=cycle, phase="settling",
                             action="aged_out_" + action,

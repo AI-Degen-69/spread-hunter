@@ -171,6 +171,19 @@ def test_the_new_knobs_are_on_by_default():
     assert cfg.aged_out_rescue_lead_sec == 900.0
 
 
+def test_the_repeating_wait_verdicts_are_the_quiet_ones():
+    # Arrange - pinning the console contract: a long-dated market sits in
+    # `awaiting_lead` for hours, and a line every five seconds is how an
+    # operator stops reading the log. The signals that mean something is wrong
+    # or gone (`end_unknown`, `venue_closed`) stay loud on purpose.
+
+    # Act / Assert
+    assert set(lp.AGED_OUT_QUIET_ACTIONS) == {
+        "awaiting_lead", "hold", "balanced", "would_exit", "would_complete"}
+    assert lp.AGED_OUT_END_UNKNOWN not in lp.AGED_OUT_QUIET_ACTIONS
+    assert lp.AGED_OUT_VENUE_CLOSED not in lp.AGED_OUT_QUIET_ACTIONS
+
+
 def test_no_existing_default_moved():
     # Arrange - the issue forbids touching any shipped default.
     cfg = MakerConfig()

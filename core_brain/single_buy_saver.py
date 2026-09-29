@@ -1005,6 +1005,16 @@ def complete_pair(
 # --- aged-out legs (the window's complement) ---------------------------------
 
 
+# Verdicts that are not news: they repeat on every rotation until the condition
+# changes, so they reach the cycle ring (where the dashboard counts them) but
+# stay out of the console. A long-dated market sits in `awaiting_lead` for
+# hours; printing that every five seconds is how an operator stops reading the
+# log. `end_unknown` and `venue_closed` stay LOUD -- one is a failing read and
+# the other means the position is now settlement's, and both stop on their own.
+AGED_OUT_QUIET_ACTIONS = (
+    "awaiting_lead", "hold", "balanced", "would_exit", "would_complete",
+)
+
 # The verdicts `aged_out_verdict` returns. `due` is the only one that acts.
 AGED_OUT_DUE = "due"
 AGED_OUT_AWAITING_LEAD = "awaiting_lead"

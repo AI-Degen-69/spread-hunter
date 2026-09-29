@@ -763,6 +763,94 @@ def test_a_completion_is_booked_to_the_aged_out_naked_pair(registry):
     assert reg.get_order(resp["orderID"]).pair_id == aged_pair_id
 
 
+def test_two_aged_out_naked_pairs_on_one_token_are_refused_not_guessed(
+        registry):
+    """Ambiguity is refused, because the wrong answer is a double buy.
+
+    A market re-quoted across rotations accumulates pair_ids, and the aged-out
+    arm acts on the OLDEST first (the fills ledger orders by `recorded_ts`),
+    while attribution would have to pick one. Guessing books the completion to
+    the other pair, which then reads over-filled while the intended one stays
+    naked and is bought again next rotation -- the N+1 defect this function
+    exists to prevent. Refusing is loud and costs one completion.
+    """
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ShadowOrderRefused, ensure_shadow_tables,
+        record_submit, settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    # Two rounds of the same market, each leaving only tok-up filled.
+    for _ in range(2):
+        record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                      db_path=db, book_fn=lambda h, t: {"bids": {}},
+                      now_fn=lambda: long_ago)
+        settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                      traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                      now_fn=lambda: long_ago)
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+
+    with pytest.raises(ShadowOrderRefused) as err:
+        client.create_and_post_market_order(
+            MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                              price=0.51))
+
+    assert "aged-out" in str(err.value)
+    assert [o for o in reg.get_all_orders()
+            if o["token_id"] == "tok-dn" and o["status"] == "filled"] == []
+
+
+def test_an_in_window_pair_still_wins_over_an_aged_out_one(registry):
+    """The fresh pair keeps priority, so the in-window path is unchanged."""
+    from py_clob_client_v2.clob_types import MarketOrderArgsV2
+
+    from core_brain.shadow_exec import (
+        ShadowExecutionClient, ensure_shadow_tables, record_submit,
+        settle_market,
+    )
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    now = 1_700_000_000.0
+    long_ago = now - 7200.0
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: long_ago)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: long_ago)
+    stale_pair = [o["pair_id"] for o in reg.get_all_orders()
+                  if o["token_id"] == "tok-up"][0]
+
+    record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
+                  db_path=db, book_fn=lambda h, t: {"bids": {}},
+                  now_fn=lambda: now)
+    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  now_fn=lambda: now)
+    fresh_pair = [o["pair_id"] for o in reg.get_all_orders()
+                  if o["token_id"] == "tok-up"][-1]
+
+    client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
+                                   window_sec=900.0, now_fn=lambda: now)
+    resp = client.create_and_post_market_order(
+        MarketOrderArgsV2(token_id="tok-dn", amount=10.2, side="BUY",
+                          price=0.51))
+
+    booked = reg.get_order(resp["orderID"]).pair_id
+    assert booked == fresh_pair
+    assert booked != stale_pair
+
+
 def test_the_shim_refuses_a_method_it_does_not_implement(registry):
     """A silent no-op for an unimplemented SDK call would make a rehearsal look
     successful where the live path would have done something."""

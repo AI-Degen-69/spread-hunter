@@ -872,8 +872,24 @@ class ShadowExecutionClient:
         # has its last fill OUTSIDE the window by construction, so refusing it
         # here would make the rehearsal unable to complete what the pass
         # decided to complete -- the shadow run would measure only half the
-        # arm. Fall back to the most recent aged-out naked pair, and only when
-        # no in-window candidate exists.
+        # arm. Fall back to the aged-out set, and only when no in-window
+        # candidate exists.
+        if not in_window and len(aged_out) > 1:
+            # Two or more aged-out naked pairs on this token and nothing to
+            # tell them apart. The arm acts on the OLDEST first (the fills
+            # ledger orders by `recorded_ts`), and guessing books the
+            # completion to the wrong pair: that pair reads over-filled while
+            # the intended one stays naked and is bought AGAIN next rotation --
+            # the N+1 defect this function exists to prevent. Refusing is
+            # loud, costs one completion, and inflates nothing.
+            pairs = ", ".join(sorted(str(c[2]) for c in aged_out))
+            raise ShadowOrderRefused(
+                f"cannot record completion buy for {target[:12]}: "
+                f"{len(aged_out)} aged-out naked pairs on this token "
+                f"({pairs}) and nothing in the venue call says which one this "
+                f"buy is for. Refusing rather than booking shares to the "
+                f"wrong position.")
+
         naked_candidates = in_window or aged_out
         if not naked_candidates:
             return None
