@@ -146,14 +146,24 @@ def resolve_state(closed: object = None,
     """Resolved, live, or unreadable â€” started is not resolved (#312).
 
     Returns (resolved, reason, end_iso carried along for the reason string).
-    Fail closed: anything unreadable reads resolved, never live.
+    Fail closed: anything unreadable reads resolved, never live. Unreadable
+    includes a signal that is not a boolean -- an absent field, and a venue
+    string like `"false"`, which a truthiness test reads as its opposite.
+
+    The reason names the signal that actually refused the market: a closed
+    market and a market the venue stopped taking orders on are different
+    evidence, and reporting them as one string is how a reason stops being
+    auditable. Both stay in the `_cause()` horizon bucket.
     """
     end = str(end_iso) if end_iso else None
-    if closed is None or accepting_orders is None:
+    if not isinstance(closed, bool) or not isinstance(accepting_orders, bool):
         return True, "resolved: resolution state unreadable", end
-    if bool(closed) or not bool(accepting_orders):
-        return True, "resolved: market closed on the venue", end
-    return False, f"open (endDate {end or 'unknown'})", end
+    dated = f"endDate {end or 'unknown'}"
+    if closed:
+        return True, f"resolved: market closed on the venue ({dated})", end
+    if not accepting_orders:
+        return True, f"resolved: venue stopped accepting orders ({dated})", end
+    return False, f"open ({dated})", end
 
 
 
@@ -665,12 +675,16 @@ def gamma_universe(session: requests.Session,
                 "_order_min": float(m.get("orderMinSize") or 5),
                 "_volume_24h": vol,
                 "_spread": spread,
-                # The resolution state travels with the row: `evaluate` reads
-                # it so a live market past its `endDate` is not refused as
-                # resolved (#312). Both survive the cheap filters above, which
-                # already require an order book and active order acceptance.
-                "closed": bool(m.get("closed")),
-                "accepting_orders": bool(m.get("acceptingOrders")),
+                # The resolution state travels with the row RAW, not coerced:
+                # `evaluate` reads it so a live market past its `endDate` is
+                # not refused as resolved (#312), and the resolve gate can only
+                # fail closed on a signal it can still see. `bool()` here turned
+                # an absent `closed` into `False` -- a live market -- and a
+                # venue string like `"false"` into `True`. Both survive the
+                # cheap filters above, which already require an order book and
+                # active order acceptance.
+                "closed": m.get("closed"),
+                "accepting_orders": m.get("acceptingOrders"),
             })
         # Sorted by volume, so the first market under the floor ends the
         # useful part of the listing -- when the sort holds. Verified

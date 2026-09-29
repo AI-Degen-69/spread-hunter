@@ -709,9 +709,48 @@ def test_a_market_no_longer_accepting_orders_is_refused_as_resolved():
     verdict, reason, _ = resolve_state(
         m.get("closed"), m.get("accepting_orders"), m.get("end_date_iso"))
 
-    # Assert
+    # Assert -- the signal that fired is named, and it is not the closed one.
     assert verdict is True
-    assert "resolved" in reason
+    assert "stopped accepting orders" in reason
+    assert "closed" not in reason
+    assert _KICKOFF_PAST in reason
+
+
+def test_a_closed_market_names_the_signal_that_closed_it():
+    # Arrange - the venue's closed flag, with the date it was judged on.
+    # Act
+    verdict, reason, _ = resolve_state(True, True, _KICKOFF_PAST)
+
+    # Assert - the signal and the date, still in the horizon bucket.
+    assert verdict is True
+    assert "market closed on the venue" in reason
+    assert _KICKOFF_PAST in reason
+    assert fm._cause(reason) == "horizon"
+
+
+def test_a_malformed_resolution_signal_is_unreadable_not_live():
+    # Arrange - venue strings, not booleans; "false" is truthy in Python.
+    # Act
+    verdict, reason, _ = resolve_state("false", "true", _KICKOFF_PAST)
+
+    # Assert - fail closed, never assume live.
+    assert verdict is True
+    assert "unreadable" in reason
+
+
+def test_an_absent_closed_flag_reaches_the_gate_as_absent():
+    # Arrange - Gamma omitted `closed` on this row entirely.
+    s = _FakeSession([[_gamma_row("gap", 500_000.0)]])
+    universe, _ = gamma_universe(s, min_volume_usd=125_000.0)
+
+    # Assert - the row keeps the gap instead of filling it with False, so the
+    # gate refuses it instead of reading a live market.
+    assert universe[0]["closed"] is None
+    verdict, reason, _ = resolve_state(
+        universe[0]["closed"], universe[0]["accepting_orders"],
+        universe[0]["end_date_iso"])
+    assert verdict is True
+    assert "unreadable" in reason
 
 
 def test_tradable_admits_a_live_market_past_kickoff_to_the_horizon_arm():
@@ -746,7 +785,8 @@ def test_tradable_refuses_a_resolved_market_with_a_resolved_verdict():
 
     # Assert
     assert ok is False
-    assert reason == "resolved: market closed on the venue"
+    assert reason == ("resolved: market closed on the venue "
+                      f"(endDate {_KICKOFF_PAST})")
     assert fm._cause(reason) == "horizon"
 
 
