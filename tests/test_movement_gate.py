@@ -206,6 +206,10 @@ def _candidate() -> dict:
         "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
         "_order_min": 5,
         "_spread": 0.04,
+        # The resolution state every real gamma_universe row carries; the
+        # horizon gate reads it (#312).
+        "closed": False,
+        "accepting_orders": True,
     }
 
 
