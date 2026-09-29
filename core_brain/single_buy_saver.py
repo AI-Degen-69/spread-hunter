@@ -1002,6 +1002,102 @@ def complete_pair(
     }
 
 
+# --- aged-out legs (the window's complement) ---------------------------------
+
+
+# The verdicts `aged_out_verdict` returns. `due` is the only one that acts.
+AGED_OUT_DUE = "due"
+AGED_OUT_AWAITING_LEAD = "awaiting_lead"
+AGED_OUT_END_UNKNOWN = "end_unknown"
+AGED_OUT_VENUE_CLOSED = "venue_closed"
+AGED_OUT_NOT_AGED_OUT = "not_aged_out"
+
+
+def aged_out_verdict(
+    *,
+    last_fill_ms: int,
+    window_ms: int,
+    now_s: float,
+    end_ts: Optional[float],
+    lead_sec: float,
+    venue_closed: Optional[bool],
+    venue_accepting: Optional[bool],
+) -> tuple[str, str]:
+    """Should this leg be rescued now, left alone, or refused (Issue #311)?
+
+    `pairs_exit_window_sec` is a *discovery filter*: past it, a naked leg drops
+    out of `auto_manage_pairs` and nothing else closes it, so it sits unmanaged
+    until settlement pays out whatever the outcome is. This is the decision for
+    that complement -- the leg the window deliberately does not reach -- and it
+    is market-end aware rather than clock-based, because a wall-clock deadline
+    would still fire after the market itself is gone.
+
+    Pure: no registry, no clock, no network. Inputs are primitives so the whole
+    fail-closed ladder is testable without a venue.
+
+    Verdicts (the second element is the human reason, and it carries the values
+    behind the decision -- #312's legibility rule):
+
+    * `not_aged_out`    -- undated, or still inside the window. The in-window
+      route order owns this leg; this arm never touches it.
+    * `end_unknown`     -- the venue's own state, or its stated end, could not
+      be read. The leg stays naked and the read is retried next rotation. A
+      deadline is never invented and a blind close is never sent.
+    * `venue_closed`    -- the venue already closed the market (or stopped
+      accepting orders). Selling into a closed market is not available, so the
+      resolution/settlement path owns the position.
+    * `awaiting_lead`   -- genuinely open, with a stated end further away than
+      the lead window. Wait.
+    * `due`             -- act: either the leg is inside `lead_sec` of the
+      venue's stated end, or that end has already passed while the venue still
+      accepts orders. The second is the sports case from #312: a live in-play
+      market's `endDate` is the kickoff, so there is no future end to wait for
+      and the closing phase is now.
+    """
+    # Undated fills cannot be placed in time. "Older than the window is left
+    # alone" reads both directions, exactly as `auto_manage_pairs` reads it.
+    if not last_fill_ms or last_fill_ms <= 0:
+        return AGED_OUT_NOT_AGED_OUT, "undated fill (no venue_ts); left alone"
+
+    age_s = now_s - (last_fill_ms / 1000.0)
+    # Strictly older, matching the discovery filter's `>` so the two arms
+    # partition the fills exactly once and no leg belongs to both.
+    if age_s <= (window_ms / 1000.0):
+        return (AGED_OUT_NOT_AGED_OUT,
+                f"inside window ({age_s:.0f}s <= {window_ms / 1000.0:.0f}s)")
+
+    # Fail closed: a missing venue flag is unreadable, never "false". Reading
+    # an absent `closed` as live is what #312's review fixed at the gate.
+    if venue_closed is None or venue_accepting is None:
+        return (AGED_OUT_END_UNKNOWN,
+                f"market state unreadable (closed={venue_closed}, "
+                f"accepting={venue_accepting})")
+    if bool(venue_closed) or not bool(venue_accepting):
+        return (AGED_OUT_VENUE_CLOSED,
+                f"venue closed the market (closed={bool(venue_closed)}, "
+                f"accepting={bool(venue_accepting)}); settlement owns it")
+
+    if end_ts is None:
+        return (AGED_OUT_END_UNKNOWN,
+                f"market end unreadable (aged out {age_s:.0f}s, no stated end)")
+
+    remaining_s = end_ts - now_s
+    if remaining_s <= 0:
+        return (AGED_OUT_DUE,
+                f"aged out {age_s:.0f}s (window {window_ms / 1000.0:.0f}s); "
+                f"stated end passed {abs(remaining_s):.0f}s ago and the venue "
+                f"still accepts orders")
+    if remaining_s <= lead_sec:
+        return (AGED_OUT_DUE,
+                f"aged out {age_s:.0f}s (window {window_ms / 1000.0:.0f}s); "
+                f"{remaining_s:.0f}s to market end, inside the "
+                f"{lead_sec:.0f}s lead")
+    return (AGED_OUT_AWAITING_LEAD,
+            f"aged out {age_s:.0f}s (window {window_ms / 1000.0:.0f}s); "
+            f"{remaining_s:.0f}s to market end, outside the "
+            f"{lead_sec:.0f}s lead")
+
+
 # --- U35 in the live loop ----------------------------------------------------
 
 
