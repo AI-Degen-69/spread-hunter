@@ -723,6 +723,25 @@ class ShadowExecutionClient:
         # one `MakerConfig` carries.
         self._window_sec = float(window_sec)
         self._now_fn = now_fn
+        # The pair the next completion BUY is for, when the caller knows it.
+        # `None` means "infer it", which is what every caller did before #311.
+        self._completion_target: Optional[str] = None
+
+    def bind_completion_target(self, pair_id: Optional[str]) -> None:
+        """Name the pair the next completion BUY belongs to (#311).
+
+        The venue call carries no pair id, so this shim reconstructs one from
+        the store -- and its inference prefers an in-window naked pair, which
+        is wrong for the aged-out arm whenever a fresh pair is ALSO naked on
+        the same token: the fresh pair wins the fill, the aged-out pair the
+        arm actually crossed for still reads naked, and it is bought again
+        next rotation. A caller that knows the pair says so here instead.
+
+        One shot by design: the binding is consumed by the cross it names, so
+        it can never aim a later, unrelated completion at a pair that already
+        got its shares. Pass `None` to clear it without crossing.
+        """
+        self._completion_target = (str(pair_id) if pair_id else None)
 
     def get_order_book(self, token_id: str) -> dict:
         """The book, adapted for `single_buy_saver._book_levels`.
@@ -776,9 +795,18 @@ class ShadowExecutionClient:
             order.id, status="cancelled", last_polled_ts=now_ms)
         return {"success": True, "orderID": target}
 
-    def _naked_pair_for_token(self, token_id: str) -> tuple[str, str] | None:
+    def _naked_pair_for_token(self, token_id: str, *,
+                              target_pair_id: Optional[str] = None,
+                              ) -> tuple[str, str] | None:
         """(condition_id, pair_id) of the pair on this token the pairs pass is
         currently acting on, or `None` if there is no such pair.
+
+        `target_pair_id` skips the inference entirely: the caller named the
+        pair (`bind_completion_target`), so the answer is that pair or a
+        refusal. Inference cannot be right for the aged-out arm when an
+        in-window pair is also naked on this token -- the preference below
+        would hand it the fill -- and guessing a substitute here is the
+        mis-attribution the two tiers exist to avoid.
 
         `MarketOrderArgsV2` carries no condition id or pair id -- only
         `token_id`, `amount`, `side`, `price` -- so a completion buy has no
@@ -849,6 +877,7 @@ class ShadowExecutionClient:
         now_ms = self._now_fn() * 1000.0
         in_window = []
         aged_out = []
+        named = None
         for pid, info in by_pair.items():
             legs = info["legs"]
             this_matched = legs.get(target, 0.0)
@@ -861,10 +890,33 @@ class ShadowExecutionClient:
             if last_fill_ms <= 0:
                 continue
             slot = (last_fill_ms, info["posted_ts"], pid, info["condition_id"])
+            if target_pair_id is not None and str(pid) == target_pair_id:
+                named = slot
             if (now_ms - last_fill_ms) > window_ms:
                 aged_out.append(slot)
             else:
                 in_window.append(slot)
+
+        if target_pair_id is not None:
+            # The caller named the pair, so there is nothing to infer and
+            # nothing to prefer. If the store does not agree that this pair is
+            # naked on this token, the two views disagree and the shares have
+            # no defensible home: refuse, loudly, rather than credit them to a
+            # pair the caller never acted on.
+            if named is None:
+                raise ShadowOrderRefused(
+                    f"cannot record completion buy for {target[:12]}: the "
+                    f"caller named pair {target_pair_id} for it, but that pair "
+                    f"does not read as naked on this token. The store and the "
+                    f"caller disagree, so the fill has no position it can be "
+                    f"booked to.")
+            _, _, pid, cid = named
+            if not cid:
+                raise ShadowOrderRefused(
+                    f"cannot record completion buy for {target[:12]}: pair "
+                    f"{pid} has empty condition_id, which would make the "
+                    f"completion row invisible to inventory tracking")
+            return str(cid), str(pid)
 
         # The in-window set keeps priority, unchanged: a completion made for a
         # fresh naked pair must never be booked to a stale one (that defect is
@@ -1074,7 +1126,12 @@ class ShadowExecutionClient:
 
         shares, fill_price = self._buy_from_asks(token_id, amount, price=price)
 
-        found = self._naked_pair_for_token(token_id)
+        # Spent on use: a binding aims at ONE cross, and a surviving one would
+        # hand the next unrelated completion to a pair that is already whole.
+        target_pair_id = self._completion_target
+        self._completion_target = None
+        found = self._naked_pair_for_token(token_id,
+                                           target_pair_id=target_pair_id)
         if found is None:
             raise ShadowOrderRefused(
                 f"cannot record completion buy for {token_id[:12]}: no pair "

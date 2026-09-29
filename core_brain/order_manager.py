@@ -2166,6 +2166,15 @@ def poll(
             cycle = 0
             last_cycle_failed = False
 
+            # One market-state read per condition per TTL, carried across
+            # cycles (#311). The aged-out pass below runs on EVERY tick and its
+            # read is synchronous, so without this a leg waiting for its lead
+            # would spend thousands of Gamma calls an hour -- and delay the
+            # second heartbeat and the next cycle doing it -- for a deadline
+            # that moves in hours.
+            from core_brain.single_buy_saver import AgedOutMarketStateCache
+            aged_out_state_cache = AgedOutMarketStateCache()
+
             # The markout sampler fills the adverse-selection horizons out-of-band, so
             # it never blocks reconcile. It is a daemon thread, started only on the
             # production path (no injected client), and stopped when the loop exits.
@@ -2360,6 +2369,7 @@ def poll(
                     )
                     for pr in rescue_aged_out_legs(
                         client, registry, _load_cfg2(), funder=funder,
+                        state_cache=aged_out_state_cache,
                     ):
                         action = pr.get("action", "?")
                         # The waiting verdicts repeat every cycle until the

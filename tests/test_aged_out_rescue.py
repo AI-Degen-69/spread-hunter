@@ -369,6 +369,33 @@ def test_a_pair_that_still_completes_under_the_cap_is_completed_not_dumped(regis
     assert not any(c.startswith("sell:") for c in client.calls)
 
 
+def test_the_aged_out_cross_names_its_own_pair_to_the_client(registry):
+    # Arrange - a pair that completes under the cap, with a client that records
+    # who it was aimed at.
+    _naked_pair(registry, fill_price=0.50, pair_id="pair-aged")
+
+    class _BindingClient(FakeClient):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.bindings: list = []
+
+        def bind_completion_target(self, pair_id):
+            self.bindings.append(pair_id)
+
+    client = _BindingClient(best_ask=0.40)
+
+    # Act
+    results = rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S,
+                                   market_state_fn=_states(_open_state()))
+
+    # Assert - named for the crossing, and cleared afterwards: a binding left
+    # aimed would mis-route the next completion, which belongs to the in-window
+    # pass and to a different pair. A client with no such method (the live one)
+    # is a no-op, so this is rehearsal-only wiring.
+    assert results[0]["route"] == "completed"
+    assert client.bindings == ["pair-aged", None]
+
+
 def test_the_stated_end_already_passed_while_the_venue_accepts_is_due_now(registry):
     # Arrange - the sports case from #312: `endDate` is the kickoff.
     _naked_pair(registry, fill_price=0.60)
@@ -646,6 +673,174 @@ def test_the_shadow_sweep_runs_the_aged_out_arm(tmp_path):
                 + float(row["size"] or 0.0)
     assert fills.get("tok-dn", 0.0) > 0.0, (
         "the shadow sweep did not run the aged-out arm")
+
+
+# --- 9. one venue read per condition per TTL, not one per cycle -------------
+# The live loop polls every 0.5s and the sweep runs every rotation, so an arm
+# that reads gamma on every cycle spends thousands of HTTP calls an hour per
+# leg on a fact -- the stated end of a market -- that changes on the scale of
+# hours. These pin the reuse, and that nothing is reused that must not be.
+
+def test_one_market_read_serves_every_cycle_inside_the_ttl(registry):
+    # Arrange - a leg waiting for its lead, four cycles inside one TTL.
+    _naked_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.45)
+    reads: list[str] = []
+
+    def fn(condition_id):
+        reads.append(condition_id)
+        return _open_state(end_ts=NOW_S + 1000.0)
+
+    cache = lp.AgedOutMarketStateCache()
+
+    # Act
+    for tick in (0.0, 5.0, 10.0, 29.0):
+        results = rescue_aged_out_legs(
+            client, registry, _cfg(), now=NOW_S + tick,
+            market_state_fn=fn, state_cache=cache)
+        assert results[0]["action"] == "awaiting_lead"
+
+    # Assert - one venue read, and nothing sent.
+    assert reads == [COND]
+    assert client.calls == []
+
+
+def test_a_deadline_hours_away_is_not_read_again_at_all(registry):
+    # Arrange - ends in 2h, so the read cannot change a verdict this rotation.
+    _naked_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.45)
+    reads: list[str] = []
+
+    def fn(condition_id):
+        reads.append(condition_id)
+        return _open_state(end_ts=NOW_S + 7200.0)
+
+    cache = lp.AgedOutMarketStateCache()
+
+    # Act - three cycles, two of them far beyond the TTL.
+    for tick in (0.0, 600.0, 3600.0):
+        results = rescue_aged_out_legs(
+            client, registry, _cfg(), now=NOW_S + tick,
+            market_state_fn=fn, state_cache=cache)
+        assert results[0]["action"] == "awaiting_lead"
+
+    # Assert
+    assert reads == [COND]
+
+
+def test_the_read_resumes_once_the_ttl_expires_near_the_deadline(registry):
+    # Arrange - the deadline is inside the lead window, so freshness matters
+    # again and the cached state must not be reused indefinitely.
+    _naked_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.45)
+    reads: list[float] = []
+
+    def fn(condition_id):
+        reads.append(NOW_S)
+        return _open_state(end_ts=NOW_S + 1000.0)
+
+    cache = lp.AgedOutMarketStateCache()
+
+    # Act
+    rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S,
+                         market_state_fn=fn, state_cache=cache)
+    rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S + 5.0,
+                         market_state_fn=fn, state_cache=cache)
+    rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S + 31.0,
+                         market_state_fn=fn, state_cache=cache)
+
+    # Assert - the first two share a read; the third is past the TTL.
+    assert len(reads) == 2
+
+
+def test_an_unreachable_read_is_never_cached(registry):
+    # Arrange - a failed read is not knowledge, so it must not be reused: the
+    # leg stays naked and the next cycle retries the venue.
+    _naked_pair(registry, fill_price=0.60)
+    client = FakeClient()
+    reads: list[str] = []
+    unreachable = MarketEndState(condition_id=COND, unreachable=True)
+
+    def fn(condition_id):
+        reads.append(condition_id)
+        return unreachable
+
+    cache = lp.AgedOutMarketStateCache()
+
+    # Act
+    for tick in (0.0, 0.5):
+        results = rescue_aged_out_legs(
+            client, registry, _cfg(), now=NOW_S + tick,
+            market_state_fn=fn, state_cache=cache)
+        assert results[0]["action"] == "end_unknown"
+
+    # Assert
+    assert len(reads) == 2
+
+
+def test_a_market_absent_from_the_open_listing_is_never_cached(registry):
+    # Arrange - `None` means "not in the venue's open listing", which is a
+    # state the next cycle must re-ask about; only a parsed state is cached.
+    _naked_pair(registry, fill_price=0.60)
+    client = FakeClient()
+    reads: list[str] = []
+
+    def fn(condition_id):
+        reads.append(condition_id)
+        return None
+
+    cache = lp.AgedOutMarketStateCache()
+
+    # Act
+    for tick in (0.0, 0.5):
+        results = rescue_aged_out_legs(
+            client, registry, _cfg(), now=NOW_S + tick,
+            market_state_fn=fn, state_cache=cache)
+        assert results[0]["action"] == "end_unknown"
+
+    # Assert
+    assert len(reads) == 2
+
+
+def test_two_pairs_on_one_condition_share_one_read_in_a_pass(registry):
+    # Arrange - the same market re-quoted into two pairs.
+    _naked_pair(registry, fill_price=0.60, pair_id="pair-a")
+    _naked_pair(registry, fill_price=0.60, pair_id="pair-b")
+    client = FakeClient(best_ask=0.45)
+    reads: list[str] = []
+
+    def fn(condition_id):
+        reads.append(condition_id)
+        return _open_state(end_ts=NOW_S + 7200.0)
+
+    # Act - no cache object: the pass still shares its own reads.
+    results = rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S,
+                                   market_state_fn=fn)
+
+    # Assert
+    assert reads == [COND]
+    assert {r["pair_id"] for r in results} == {"pair-a", "pair-b"}
+
+
+def test_without_a_cache_reads_do_not_carry_into_the_next_pass(registry):
+    # Arrange - the default must stay per-pass, so no stale state can outlive
+    # the caller that owns the clock.
+    _naked_pair(registry, fill_price=0.60)
+    client = FakeClient()
+    reads: list[float] = []
+
+    def fn(condition_id):
+        reads.append(NOW_S)
+        return _open_state(end_ts=NOW_S + 7200.0)
+
+    # Act
+    rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S,
+                         market_state_fn=fn)
+    rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S + 0.5,
+                         market_state_fn=fn)
+
+    # Assert
+    assert len(reads) == 2
 
 
 def test_a_balanced_pair_is_not_aged_out(registry):

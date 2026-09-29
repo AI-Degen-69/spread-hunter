@@ -42,6 +42,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from typing import Optional
 
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
@@ -1184,6 +1185,36 @@ def auto_manage_pairs(
     return out
 
 
+@contextmanager
+def _completion_target(client, pair_id: str):
+    """Name the pair the next completion BUY belongs to, when the client cares (#311).
+
+    A venue market order carries no pair id -- only token, side, size, price --
+    so the rehearsal's execution shim has to reconstruct which pair a
+    completion buy belongs to, and its inference prefers an in-window naked
+    pair on that token. That preference is right for the in-window pass and
+    wrong for this arm: the pair being completed here has its last fill
+    OUTSIDE the window by construction, so when a freshly re-quoted pair is
+    also naked on the token, the fresh one wins the fill -- the pair we
+    actually crossed for still reads naked and is bought a second time next
+    rotation. The caller that knows the pair says so instead.
+
+    Cleared on the way out whatever happens: a cross that refused or raised
+    must not leave a target aimed at some later, unrelated completion. The
+    live CLOB client has no such method, so live is untouched by this -- the
+    binding is a no-op there.
+    """
+    bind = getattr(client, "bind_completion_target", None)
+    if not callable(bind):
+        yield
+        return
+    bind(str(pair_id))
+    try:
+        yield
+    finally:
+        bind(None)
+
+
 def _latest_close_ms_by_condition(registry) -> dict[str, int]:
     """When each condition was last closed, in venue milliseconds.
 
@@ -1237,6 +1268,82 @@ def _last_fill_ms_by_pair(registry) -> tuple[dict[str, int], dict[str, str]]:
 # --- the aged-out arm (#311) -------------------------------------------------
 
 
+# How long a parsed market state is reused by the aged-out pass. `poll` defaults
+# to `--interval 0.5`, so an arm reading the venue on every cycle spends
+# thousands of Gamma calls an hour per waiting leg on a fact -- the stated end
+# of a market -- that moves on the scale of hours, and every one of those reads
+# is synchronous, delaying the heartbeat and the next cycle. Thirty seconds of
+# staleness costs at most thirty seconds of a 900s lead.
+DEFAULT_AGED_OUT_STATE_TTL_SEC = 30.0
+
+# When the cached deadline is at least this far beyond `end_ts - lead_sec`, no
+# read this cycle could change the verdict, so none is made until the deadline
+# gets close enough to matter. `awaiting_lead` is the long-dated case, and it is
+# the one that would otherwise be read forever.
+AGED_OUT_STATE_SKIP_MARGIN_SEC = 300.0
+
+
+class AgedOutMarketStateCache:
+    """One venue read per condition per TTL, shared across cycles (#311).
+
+    Explicit rather than module state on purpose: whoever owns the clock owns
+    the entries, so a cache cannot outlive the run it was built for and answer
+    for another. `rescue_aged_out_legs` builds its own when it is not handed
+    one, which still keeps a single pass from reading one condition once per
+    naked pair.
+
+    Two answers are never cached, both because caching them would turn a
+    transient failure into a standing decision:
+
+    * `unreachable=True` -- a failed read is not knowledge. The leg stays naked
+      and the next cycle retries the venue, which is the fail-closed direction;
+    * `None` -- the market is not in the venue's open listing. That is a state
+      to re-ask about, not one to remember.
+    """
+
+    def __init__(
+        self,
+        ttl_sec: float = DEFAULT_AGED_OUT_STATE_TTL_SEC,
+        skip_margin_sec: float = AGED_OUT_STATE_SKIP_MARGIN_SEC,
+    ) -> None:
+        self._ttl_sec = max(0.0, float(ttl_sec))
+        self._skip_margin_sec = max(0.0, float(skip_margin_sec))
+        self._entries: dict[str, tuple[float, object]] = {}
+
+    def state_for(self, condition_id: str, fetch, *, now_s: float,
+                  lead_sec: float):
+        """The market state for `condition_id`, reading the venue at most once
+        per TTL.
+
+        `fetch` is the reader itself, so a rehearsal or a test injects its own
+        and no caller has to know which one is in use.
+        """
+        hit = self._entries.get(condition_id)
+        if hit is not None:
+            fetched_at, state = hit
+            if (now_s - fetched_at) < self._ttl_sec:
+                return state
+            if self._deadline_is_far(state, now_s=now_s, lead_sec=lead_sec):
+                return state
+        state = fetch(condition_id)
+        if state is not None and not getattr(state, "unreachable", False):
+            self._entries[condition_id] = (now_s, state)
+        return state
+
+    def _deadline_is_far(self, state, *, now_s: float, lead_sec: float) -> bool:
+        """True when the cached end cannot change this cycle's verdict.
+
+        Only a stated end counts. A market with no end on record, or one whose
+        stated end has already passed (#312: for sports that is the kickoff,
+        not the close of trading), is re-read on the plain TTL schedule -- the
+        cases we cannot reason about are the ones that stay fresh.
+        """
+        end_ts = getattr(state, "end_ts", None)
+        if end_ts is None:
+            return False
+        return (float(end_ts) - float(lead_sec) - now_s) > self._skip_margin_sec
+
+
 def rescue_aged_out_legs(
     client,
     registry: OrderRegistry,
@@ -1247,6 +1354,7 @@ def rescue_aged_out_legs(
     venue_positions: Optional[dict[str, float]] = None,
     funder: Optional[str] = None,
     market_state_fn=None,
+    state_cache: Optional[AgedOutMarketStateCache] = None,
     gamma_host: Optional[str] = None,
 ) -> list[dict]:
     """Close a naked leg the rescue window deliberately does not reach (#311).
@@ -1261,13 +1369,16 @@ def rescue_aged_out_legs(
     only, and then `aged_out_verdict` on the venue's own market state. `due`
     routes exactly like the in-window cap check -- complete under
     `max_pair_cost` when that is available, otherwise exit the naked leg at the
-    best bid with reason `aged_out_rescue`. Everything else is a no-op that is
-    reported, never acted on.
+    best bid with reason `aged_out_rescue`.    Everything else is a no-op that is reported, never acted on.
 
     Fail closed at every port: an unreadable market state or end time leaves the
     leg naked and the read is retried next rotation; the venue's own position
     read failing fails the whole pass rather than selling blind. Per-pair
     failures are isolated -- one pair's refusal never stops the cycle.
+
+    Market state comes through `state_cache`: one read per condition per TTL,
+    shared across cycles when the caller owns the cache. A caller with no cache
+    still gets one read per condition per pass, never one per naked pair.
     """
     if not getattr(cfg, "enable_aged_out_rescue", True):
         return []
@@ -1283,6 +1394,9 @@ def rescue_aged_out_legs(
         )
         host = gamma_host or DEFAULT_GAMMA_HOST
         market_state_fn = lambda cid: fetch_open_market_state(host, cid)  # noqa: E731
+
+    if state_cache is None:
+        state_cache = AgedOutMarketStateCache()
 
     # The same pre-flight the in-window pass uses: selling a size the venue
     # does not agree we hold is an oversell. An unreadable endpoint fails this
@@ -1321,7 +1435,9 @@ def rescue_aged_out_legs(
                         "error": f"{type(e).__name__}: {e}"})
             continue
         try:
-            state = market_state_fn(cid) if cid else None
+            state = (state_cache.state_for(cid, market_state_fn, now_s=now_s,
+                                           lead_sec=lead_sec)
+                     if cid else None)
             verdict, reason = aged_out_verdict(
                 last_fill_ms=fill_ms, window_ms=window_ms, now_s=now_s,
                 end_ts=getattr(state, "end_ts", None),
@@ -1364,8 +1480,13 @@ def _route_aged_out_pair(client, registry, pair, cfg, max_pair_cost, live,
     if not should_exit(pair["fill_cost"], ask, max_pair_cost):
         try:
             max_order = getattr(cfg, "max_order_usd", None)
-            res = complete_pair(client, registry, pair["pair_id"], max_pair_cost,
-                                live=live, max_order_usd=max_order)
+            # Name the pair for the crossing: an in-window naked pair on the
+            # same token is the shim's default target, and the fill would be
+            # booked to it while this pair stayed naked and was bought again.
+            with _completion_target(client, pair["pair_id"]):
+                res = complete_pair(client, registry, pair["pair_id"],
+                                    max_pair_cost, live=live,
+                                    max_order_usd=max_order)
             if isinstance(res, dict):
                 res["route"] = "completed"
                 res["reason"] = reason

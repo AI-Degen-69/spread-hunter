@@ -881,6 +881,7 @@ def run_shadow(
                 exec_client, seam.registry, cfg,
                 venue_positions=shadow_positions(seam.registry, db_path),
                 market_state_fn=state_fn,
+                state_cache=getattr(shadow_sweep, "_state_cache", None),
             ):
                 action = pr.get("action", "?")
                 pair_id = pr.get("pair_id") or "?"
@@ -974,6 +975,11 @@ def run_shadow(
     # Left None it uses the public gamma read -- an injected fn keeps a test or
     # a rehearsal off the network, the same shape as `_resolve_fn` above.
     shadow_sweep._market_state_fn = market_state_fn  # type: ignore[attr-defined]
+    # One market read per condition per TTL for the whole session, the same
+    # reuse the live loop does: a rotation is seconds apart and every one of
+    # those reads is synchronous against a deadline that moves in hours.
+    from core_brain.single_buy_saver import AgedOutMarketStateCache
+    shadow_sweep._state_cache = AgedOutMarketStateCache()  # type: ignore[attr-defined]
     seam.sweep_fn = shadow_sweep
 
     deadline_ts = started_at + max(0.0, minutes * 60.0)
