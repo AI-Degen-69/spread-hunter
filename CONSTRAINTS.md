@@ -196,3 +196,33 @@
 - No new external dependencies; no live execution; never run the filter CLI
   (even `--dry-run`) — it writes snapshots; no test writes into live `data/` or `run/`.
 
+# Constraints: Issue #312 — Market universe is empty / sports endDate misread + submarket admission trial
+
+## Quality & Tests
+- Zero regressions: `tests/test_unified_universe.py`, `tests/test_movement_gate.py`,
+  `tests/test_pre_start_gate.py`, `tests/test_family_probe.py` stay 100% green.
+  Full-repo sweep stays with GitHub CI on push (merge gate).
+- New behaviour needs tests RED against untouched code and GREEN after; each added
+  assertion must fail without its change. The pre-start suite (`test_pre_start_gate.py`)
+  pins its own gate — do not weaken it to fix the resolve side.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions,
+  or bypassing linters. Tests use `tmp_path` fixtures; no test writes into live
+  `data/` or `run/`. Never run the filter CLI (even `--dry-run`) — it writes snapshots.
+
+## Behavior Boundaries
+- **Started ≠ resolved.** Fix the sports `endDate`-as-kickoff misread using real
+  venue signals (`closed`, `acceptingOrders`, resolution state). A market that is
+  `closed=False` and still accepting orders is not resolved, whatever `end_date_iso` says.
+- **Fail closed on ambiguity.** A market whose resolution state cannot be read is
+  refused, never assumed live. Unknown start time keeps its current fail-open
+  behaviour (`pre_start` returns False) — that precedent is pinned by
+  `test_an_unknown_start_time_is_not_pre_start` and stays.
+- **No in-play policy change.** Admitting live sports past the horizon gate is fixing
+  a misclassification, not opening in-play quoting. `identity_allowed` keeps refusing
+  genuine submarkets; the submarket family stays refused until the trial (ADDENDUM)
+  runs on its own feed with a pre-registered success criterion.
+- Do NOT touch `should_exit()`, risk caps, grace, `pairs_exit_window_sec`, rescue
+  route order, or `identity_allowed`'s blocked-keyword arm.
+- `_cause()` bucketing (`filter_markets.py:1023`) must keep collapsing to the same
+  gate cards — new reason text must still bucket identically; existing bucket tests stay green.
+- No new external dependencies; no live execution.

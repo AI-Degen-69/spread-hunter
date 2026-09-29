@@ -139,6 +139,34 @@ def q_min(a: float, b: float) -> float:
     return max(min(a, b), max(a / C, b / C))
 
 
+
+def resolve_state(closed: object = None,
+                  accepting_orders: object = None,
+                  end_iso: object = None) -> tuple[bool, str, str | None]:
+    """Resolved, live, or unreadable â€” started is not resolved (#312).
+
+    Returns (resolved, reason, end_iso carried along for the reason string).
+    Fail closed: anything unreadable reads resolved, never live. Unreadable
+    includes a signal that is not a boolean -- an absent field, and a venue
+    string like `"false"`, which a truthiness test reads as its opposite.
+
+    The reason names the signal that actually refused the market: a closed
+    market and a market the venue stopped taking orders on are different
+    evidence, and reporting them as one string is how a reason stops being
+    auditable. Both stay in the `_cause()` horizon bucket.
+    """
+    end = str(end_iso) if end_iso else None
+    if not isinstance(closed, bool) or not isinstance(accepting_orders, bool):
+        return True, "resolved: resolution state unreadable", end
+    dated = f"endDate {end or 'unknown'}"
+    if closed:
+        return True, f"resolved: market closed on the venue ({dated})", end
+    if not accepting_orders:
+        return True, f"resolved: venue stopped accepting orders ({dated})", end
+    return False, f"open ({dated})", end
+
+
+
 def days_to_resolve(end_iso: Optional[str],
                     now_iso: Optional[str] = None) -> Optional[float]:
     """Days from now until the venue's stated end date, or None if unstated.
@@ -301,13 +329,15 @@ def movement_reject(movement_usd: Optional[float],
                   f"{minutes}m under ${bar:,.0f} (flat)")
 
 
-def tradable(volume_24h: Optional[float],
-             days: Optional[float],
+def tradable(volume_24h: float | None,
+             days: float | None,
              title: object = "", slug: object = "",
              category: object = "", market_type: object = "",
              market_group: object = "", series_title: object = "",
              event_title: object = "",
-             min_volume_usd: Optional[float] = None) -> tuple[bool, str]:
+             min_volume_usd: float | None = None,
+             state: object = None,
+             key: object = None) -> tuple[bool, str]:
     """Can this market produce the two observations the run needs?
 
     A fill needs someone to trade at our price; a settled P&L needs the market
@@ -330,6 +360,8 @@ def tradable(volume_24h: Optional[float],
             title, slug, category, market_type,
             market_group, series_title, event_title)
         if not identity_ok:
+            _ok, identity_reason = identity_reason_with_value(
+                identity_reason, market_group)
             return False, identity_reason
     if volume_24h is None:
         return False, "volume unknown"
@@ -338,11 +370,56 @@ def tradable(volume_24h: Optional[float],
         return False, f"24h volume ${volume_24h:,.0f} < ${volume_bar:,.0f}"
     if days is None:
         return False, "horizon unknown"
-    if days < 0:
-        return False, "horizon passed"
+    if state is None:
+        # Legacy caller: no resolution signal supplied. Behaviour is exactly
+        # as it was before this gate learned about resolution state, which is
+        # what the boundary tests and the numeric-only callers rely on.
+        if days < 0:
+            return False, "horizon passed"
+    else:
+        resolved, verdict, end, _gate = _unpack_state(state)
+        if resolved is True:
+            return False, verdict
+        if resolved is None:
+            return False, verdict or "resolved: resolution state unreadable"
+        if days < 0 and not end:
+            # Past the venue's end date with no `end_date_iso` to audit the
+            # negative against: keep the refusal rather than admit a market on
+            # an unexamined date. With a date present, a market still open past
+            # it is usually a sports event under way -- `endDate` is kickoff,
+            # not the final whistle -- and falls through to the distance arm.
+            return False, "horizon passed (market open, endDate unknown)"
     if days > MAX_DAYS_TO_RESOLVE:
         return False, f"horizon {days:.1f}d > {MAX_DAYS_TO_RESOLVE:.0f}d"
+    if isinstance(key, str) and key:
+        return True, key
     return True, ""
+
+
+
+def _unpack_state(state: object) -> tuple[bool | None, str, str | None,
+                                        str | None]:
+    """Normalize the resolution signal `tradable` receives.
+
+    Accepts the full `resolve_state` triple (verdict, reason, end_iso), a
+    plain (verdict, reason) pair, or a bare verdict. Anything else â€” including
+    a missing signal â€” reads unreadable so the gate fails closed.
+    """
+    verdict: bool | None = None
+    reason = ""
+    end: str | None = None
+    gate: str | None = None
+    if isinstance(state, bool):
+        verdict = state
+    elif isinstance(state, (tuple, list)) and len(state) in (2, 3):
+        first, second = state[0], state[1]
+        if isinstance(first, bool):
+            verdict = first
+        if isinstance(second, str):
+            reason = second
+        if len(state) == 3 and isinstance(state[2], str):
+            end = state[2]
+    return verdict, reason, end, gate
 
 
 def gamma_volume(session: requests.Session,
@@ -598,6 +675,16 @@ def gamma_universe(session: requests.Session,
                 "_order_min": float(m.get("orderMinSize") or 5),
                 "_volume_24h": vol,
                 "_spread": spread,
+                # The resolution state travels with the row RAW, not coerced:
+                # `evaluate` reads it so a live market past its `endDate` is
+                # not refused as resolved (#312), and the resolve gate can only
+                # fail closed on a signal it can still see. `bool()` here turned
+                # an absent `closed` into `False` -- a live market -- and a
+                # venue string like `"false"` into `True`. Both survive the
+                # cheap filters above, which already require an order book and
+                # active order acceptance.
+                "closed": m.get("closed"),
+                "accepting_orders": m.get("acceptingOrders"),
             })
         # Sorted by volume, so the first market under the floor ends the
         # useful part of the listing -- when the sort holds. Verified
@@ -640,6 +727,16 @@ def gamma_universe(session: requests.Session,
                 # exhaustion.
     else:
         meta["truncated"] = True            # stopped at max_pages, not exhaustion
+    # The scan's own condition rides on every row it returns. `meta` carries it
+    # to the snapshot's discovery block, but a ROW is what a reader holds in
+    # `market_universe.json` and `markets.json`, and at row level a capped pass
+    # used to look exactly like a thin market -- the 2026-09-29 pass that wrote
+    # `top 0` was three pages of a capped listing and read as "no liquid market
+    # exists". Stamped AFTER the loop, because a stop at `max_pages` flips the
+    # flag with the rows already collected.
+    capped = bool(meta["truncated"])
+    for row in out:
+        row["fetch_truncated"] = capped
     return out, meta
 
 
@@ -729,6 +826,10 @@ def _reject_row(source: str, reason: str, m: dict,
         "cid": m.get("condition_id"),
         "title": m.get("question", "")[:90],
         "slug": m.get("market_slug", ""),
+        # Inherited from the discovery pass: every row from a capped scan says
+        # so, so an empty or thin result is auditable as an environment
+        # condition rather than read as "no liquid market exists" (#312).
+        "fetch_truncated": bool(m.get("fetch_truncated")),
     }
     row.update(extra)
     return row
@@ -764,12 +865,20 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         m.get("category"), m.get("market_type"),
         m.get("market_group"), m.get("series_title"), m.get("event_title"))
     if not identity_ok:
+        # Name the line value that refused it. Without the value, all 89
+        # submarkets of the #312 pass died as one identical string and the
+        # screener could not tell a $281K main-adjacent line from a $200 tail
+        # line. The gate decision is unchanged -- this only annotates it.
+        _ok, identity_reason = identity_reason_with_value(
+            identity_reason,
+            m.get("market_group") or m.get("groupItemTitle"))
         return {
             "source": source, "eligible": False,
             "reject_reason": identity_reason,
             "cid": m.get("condition_id"),
             "title": m.get("question", "")[:90],
             "slug": m.get("market_slug", ""),
+            "fetch_truncated": bool(m.get("fetch_truncated")),
         }
     # THE PRE-START GATE, before the two book fetches below. A market whose
     # event has not begun prints nothing at any price, so paying for its books
@@ -859,7 +968,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         # Outside [0.20, 0.80] the book is one-sided in practice and the
         # position is mostly a bet on a near-settled outcome.
         # Tightened 2026-08-28 from [0.05, 0.95] per operator directive:
-        # 5c left no room to work — a finished market at 100%/0.1% was still
+        # 5c left no room to work â€” a finished market at 100%/0.1% was still
         # quotable until the settled-book arm caught it. 20c keeps a real
         # spread to capture and prevents a decided leg from ever entering the
         # graduated universe.
@@ -914,6 +1023,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             "title": m.get("question", "")[:90],
             "slug": m.get("market_slug", ""),
             "movement_usd": movement_usd,
+            "fetch_truncated": bool(m.get("fetch_truncated")),
             **_book_stats(book_spreads, book_depths),
         }
 
@@ -955,7 +1065,9 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         m.get("market_slug") or m.get("slug"),
         m.get("category"), m.get("market_type"),
         m.get("market_group"), m.get("series_title"), m.get("event_title"),
-        min_volume_usd=min_volume_usd)
+        min_volume_usd=min_volume_usd,
+        state=resolve_state(m.get("closed"), m.get("accepting_orders"),
+                            m.get("end_date_iso")))
     # The movement gate has already been enforced above, before the book
     # fetches -- `flat` cannot be true here. The payout floor is a REWARD
     # rule -- the venue's minimum distribution -- and only under
@@ -977,6 +1089,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "eligible": pays and can_trade,
         "reject_reason": why,
         "volume_24h": _vol(volume_24h),
+        "fetch_truncated": bool(m.get("fetch_truncated")),
         # Recorded on every scanned market, gated or not: the bar for
         # `select_min_movement_usd` is meant to be chosen from this column.
         "movement_usd": movement_usd,
@@ -1020,6 +1133,41 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     }
 
 
+# The identity refusals whose cause IS a venue field value, keyed by the
+# refusal's own text and mapping to the venue's field name. `market_group` is
+# this module's key for Gamma's `groupItemTitle` (see `gamma_universe`); the
+# reason names the venue field an operator would look up on the market page.
+_IDENTITY_VALUE_REASONS = {
+    "carries a submarket group label": "groupItemTitle",
+}
+
+
+def identity_reason_with_value(reason: str,
+                               value: object = "") -> tuple[bool, str]:
+    """An identity verdict with the venue value that caused it named in the text.
+
+    Returns `(ok, reason)` so a caller can use the pair as the gate verdict: an
+    empty reason is an admission and stays one whatever the row carried, and
+    any refusal reads as a refusal.
+
+    Only the refusals whose cause IS a venue field value are annotated -- the
+    submarket arm refuses on `market_group` (the venue's `groupItemTitle`, the
+    LINE value: "Spread -3.5", "Total 48.5"), and a bare
+    "carries a submarket group label" names the rule while hiding the cause.
+    A refusal that is a verdict about the market's SHAPE rather than one of its
+    fields ("not a primary Moneyline/Outright or Macro/Politics market") has no
+    offending value to name, so it is returned untouched rather than annotated
+    with an unrelated field. The annotation is parenthetical and the gate text
+    still leads, so `_cause()` keeps the same card.
+    """
+    if not reason:
+        return True, ""
+    named = str(value or "")
+    if named and reason in _IDENTITY_VALUE_REASONS:
+        return False, f'{reason} ({_IDENTITY_VALUE_REASONS[reason]} "{named}")'
+    return False, reason
+
+
 def _cause(reason: str) -> str:
     """Bucket a rejection reason by GATE, not by first word.
 
@@ -1029,9 +1177,14 @@ def _cause(reason: str) -> str:
     cannot answer the question this bucketing exists to answer.
     """
     r = reason.lower()
+    # Matched before every gate keyword below, because the value this reason is
+    # annotated with can itself read like a gate: "Spread -3.5" contains
+    # "spread". The rule is the bucket, never the value it refused (#312).
+    if "submarket group label" in r:
+        return "carries a submarket group label"
     if "volume" in r:
         return "volume"
-    if "horizon" in r:
+    if "resolved" in r or "horizon" in r:
         return "horizon"
     if "income" in r:
         return "income"

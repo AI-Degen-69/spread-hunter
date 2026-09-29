@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import scripts.filter_markets as fm
-from scripts.filter_markets import evaluate, gamma_universe
+from scripts.filter_markets import evaluate, gamma_universe, resolve_state
 
 
 class _Resp:
@@ -97,6 +97,8 @@ def _universe_candidate(cid: str) -> dict:
         "_order_min": 5,
         "_spread": 0.04,
         "_volume_24h": 250_000.0,
+        "closed": False,
+        "accepting_orders": True,
     }
 
 
@@ -157,6 +159,39 @@ def test_exhaustion_at_the_boundary_is_not_truncation():
     assert [m["condition_id"] for m in universe] == ["a", "b"]
     assert meta["pages_fetched"] == 2
     assert meta["truncated"] is False
+
+
+def test_a_truncated_scan_marks_every_row_it_returns():
+    # Arrange - the bounded stop: one qualifying page, then the boundary page.
+    s = _FakeSession([
+        [_gamma_row("a", 900_000.0), _gamma_row("b", 500_000.0),
+         _gamma_row("z", 1_000.0)],
+        [_gamma_row("c", 10_000.0), _gamma_row("d", 20_000.0),
+         _gamma_row("e", 30_000.0)],
+    ])
+
+    # Act
+    universe, meta = gamma_universe(s, min_volume_usd=125_000.0)
+
+    # Assert - the row says the listing behind it was capped, so a reader
+    # holding only the row can tell a capped pass from a thin market.
+    assert meta["truncated"] is True
+    assert [m["fetch_truncated"] for m in universe] == [True, True]
+
+
+def test_an_exhausted_scan_marks_no_row_as_truncated():
+    # Arrange - the listing ran out on its own.
+    s = _FakeSession([
+        [_gamma_row("a", 900_000.0), _gamma_row("b", 500_000.0)],
+        [_gamma_row("c", 10_000.0)],        # short page: the listing ended
+    ])
+
+    # Act
+    universe, meta = gamma_universe(s, min_volume_usd=125_000.0)
+
+    # Assert
+    assert meta["truncated"] is False
+    assert [m["fetch_truncated"] for m in universe] == [False, False]
 
 
 def test_inverted_sort_uses_a_bounded_per_row_fallback():
@@ -602,3 +637,312 @@ def test_non_string_venue_fields_read_as_blank():
     assert universe[0]["venue_category"] == ""
     assert universe[0]["series_title"] == ""
     assert universe[0]["event_title"] == ""
+
+
+# --- resolve state: a started market is not a resolved one (#312) ----------------
+
+
+def _live_sports_market(cid: str, end_iso: str) -> dict:
+    """A main-line sports market past kickoff but still open on the venue."""
+    m = _universe_candidate(cid)
+    m["question"] = "Eagles vs. Bears"
+    m["market_slug"] = f"nfl-phi-chi-{cid}"
+    m["category"] = "Sports"
+    m["market_type"] = ""
+    m["market_group"] = ""
+    m["series_title"] = "NFL 2026"
+    m["event_title"] = "Eagles vs. Bears"
+    m["end_date_iso"] = end_iso
+    m["closed"] = False
+    m["accepting_orders"] = True
+    return m
+
+
+_KICKOFF_PAST = "2026-09-29T00:15:00Z"
+_TRADES = [{"timestamp": _time.time(), "price": 0.5, "size": 4000.0}]
+
+
+def test_a_live_market_past_its_end_date_is_not_refused_as_resolved():
+    # Arrange â€” main line, past the venue kickoff timestamp, still open.
+    m = _live_sports_market("0xlive", _KICKOFF_PAST)
+
+    # Act
+    verdict, reason, end_iso = resolve_state(
+        m.get("closed"), m.get("accepting_orders"), m.get("end_date_iso"))
+
+    # Assert â€” live, and the reason says so with the timestamp.
+    assert verdict is False
+    assert _KICKOFF_PAST in reason
+    assert end_iso == _KICKOFF_PAST
+
+
+def test_a_closed_market_is_refused_as_resolved():
+    # Arrange
+    m = _live_sports_market("0xdone", _KICKOFF_PAST)
+    m["closed"] = True
+
+    # Act
+    verdict, reason, _ = resolve_state(
+        m.get("closed"), m.get("accepting_orders"), m.get("end_date_iso"))
+
+    # Assert
+    assert verdict is True
+    assert "resolved" in reason
+
+
+def test_an_unreadable_market_is_refused_not_assumed_live():
+    # Arrange â€” venue gave us nothing to read; fail closed.
+    # Act
+    verdict, reason, _ = resolve_state(None, None, _KICKOFF_PAST)
+
+    # Assert
+    assert verdict is True
+    assert "unreadable" in reason
+
+
+def test_a_market_no_longer_accepting_orders_is_refused_as_resolved():
+    # Arrange â€” closed flag off but the venue stopped taking orders.
+    m = _live_sports_market("0xlocked", _KICKOFF_PAST)
+    m["accepting_orders"] = False
+
+    # Act
+    verdict, reason, _ = resolve_state(
+        m.get("closed"), m.get("accepting_orders"), m.get("end_date_iso"))
+
+    # Assert -- the signal that fired is named, and it is not the closed one.
+    assert verdict is True
+    assert "stopped accepting orders" in reason
+    assert "closed" not in reason
+    assert _KICKOFF_PAST in reason
+
+
+def test_a_closed_market_names_the_signal_that_closed_it():
+    # Arrange - the venue's closed flag, with the date it was judged on.
+    # Act
+    verdict, reason, _ = resolve_state(True, True, _KICKOFF_PAST)
+
+    # Assert - the signal and the date, still in the horizon bucket.
+    assert verdict is True
+    assert "market closed on the venue" in reason
+    assert _KICKOFF_PAST in reason
+    assert fm._cause(reason) == "horizon"
+
+
+def test_a_malformed_resolution_signal_is_unreadable_not_live():
+    # Arrange - venue strings, not booleans; "false" is truthy in Python.
+    # Act
+    verdict, reason, _ = resolve_state("false", "true", _KICKOFF_PAST)
+
+    # Assert - fail closed, never assume live.
+    assert verdict is True
+    assert "unreadable" in reason
+
+
+def test_an_absent_closed_flag_reaches_the_gate_as_absent():
+    # Arrange - Gamma omitted `closed` on this row entirely.
+    s = _FakeSession([[_gamma_row("gap", 500_000.0)]])
+    universe, _ = gamma_universe(s, min_volume_usd=125_000.0)
+
+    # Assert - the row keeps the gap instead of filling it with False, so the
+    # gate refuses it instead of reading a live market.
+    assert universe[0]["closed"] is None
+    verdict, reason, _ = resolve_state(
+        universe[0]["closed"], universe[0]["accepting_orders"],
+        universe[0]["end_date_iso"])
+    assert verdict is True
+    assert "unreadable" in reason
+
+
+def test_tradable_admits_a_live_market_past_kickoff_to_the_horizon_arm():
+    # Arrange
+    m = _live_sports_market("0xadm", _KICKOFF_PAST)
+
+    # Act
+    ok, reason = fm.tradable(
+        250_000.0, fm.days_to_resolve(_KICKOFF_PAST), m["question"],
+        m["market_slug"], m["category"], m["market_type"], m["market_group"],
+        m["series_title"], m["event_title"],
+        state=fm.resolve_state(m.get("closed"), m.get("accepting_orders"),
+                               m.get("end_date_iso")))
+
+    # Assert â€” not a horizon refusal; the distance arm still applies.
+    assert ok is True
+    assert reason == ""
+
+
+def test_tradable_refuses_a_resolved_market_with_a_resolved_verdict():
+    # Arrange
+    m = _live_sports_market("0xres", _KICKOFF_PAST)
+    m["closed"] = True
+
+    # Act
+    ok, reason = fm.tradable(
+        250_000.0, fm.days_to_resolve(_KICKOFF_PAST), m["question"],
+        m["market_slug"], m["category"], m["market_type"], m["market_group"],
+        m["series_title"], m["event_title"],
+        state=fm.resolve_state(m.get("closed"), m.get("accepting_orders"),
+                               m.get("end_date_iso")))
+
+    # Assert
+    assert ok is False
+    assert reason == ("resolved: market closed on the venue "
+                      f"(endDate {_KICKOFF_PAST})")
+    assert fm._cause(reason) == "horizon"
+
+
+def test_tradable_refuses_an_unreadable_market():
+    # Arrange
+    m = _live_sports_market("0xunk", _KICKOFF_PAST)
+    m["closed"] = None
+    m["accepting_orders"] = None
+
+    # Act
+    ok, reason = fm.tradable(
+        250_000.0, fm.days_to_resolve(_KICKOFF_PAST), m["question"],
+        m["market_slug"], m["category"], m["market_type"], m["market_group"],
+        m["series_title"], m["event_title"],
+        state=fm.resolve_state(m.get("closed"), m.get("accepting_orders"),
+                               m.get("end_date_iso")))
+
+    # Assert â€” fail closed.
+    assert ok is False
+    assert "unreadable" in reason
+    assert fm._cause(reason) == "horizon"
+
+
+def test_tradable_reads_a_plain_three_tuple_state():
+    # Arrange â€” callers may pass only (verdict, reason); end_iso rides along.
+    m = _live_sports_market("0xplain", _KICKOFF_PAST)
+
+    # Act
+    ok, _ = fm.tradable(
+        250_000.0, fm.days_to_resolve(_KICKOFF_PAST), m["question"],
+        m["market_slug"], m["category"], m["market_type"], m["market_group"],
+        m["series_title"], m["event_title"],
+        state=(False, "open", _KICKOFF_PAST))
+
+    # Assert
+    assert ok is True
+
+
+def test_tradable_refuses_a_past_market_with_no_end_date_to_audit():
+    # Arrange - the negative cannot be explained, so the refusal stands.
+    # Act
+    ok, reason = fm.tradable(
+        250_000.0, -1.0, "Eagles vs. Bears", "nfl-phi-chi", "Sports", "",
+        "", "NFL 2026", "Eagles vs. Bears", state=(False, "open"))
+
+    # Assert
+    assert ok is False
+    assert "endDate unknown" in reason
+    assert fm._cause(reason) == "horizon"
+
+
+def test_a_far_market_keeps_its_distance_refusal():
+    # Arrange â€” two days out reads live but too far, whatever the venue adds.
+    m = _live_sports_market(
+        "0xfar",
+        (datetime.now(timezone.utc) + timedelta(days=40)).isoformat())
+
+    # Act
+    ok, reason = fm.tradable(
+        250_000.0, fm.days_to_resolve(m["end_date_iso"]), m["question"],
+        m["market_slug"], m["category"], m["market_type"], m["market_group"],
+        m["series_title"], m["event_title"],
+        state=fm.resolve_state(m.get("closed"), m.get("accepting_orders"),
+                               m.get("end_date_iso")))
+
+    # Assert
+    assert ok is False
+    assert reason.startswith("horizon 40")
+    assert fm._cause(reason) == "horizon"
+
+
+def test_a_submarket_refusal_names_the_label_that_refused_it():
+    # Arrange - the venue field is the line value, so the reason must carry it.
+    # Act
+    ok, reason = fm.identity_reason_with_value(
+        "carries a submarket group label", "Spread -2.5")
+
+    # Assert
+    assert ok is False
+    assert "Spread -2.5" in reason
+    assert reason.startswith("carries a submarket group label")
+    assert fm._cause(reason) == "carries a submarket group label"
+
+
+def test_a_refusal_without_a_value_is_left_alone():
+    # Arrange / Act / Assert - unknown vocabulary passes through untouched.
+    ok, reason = fm.identity_reason_with_value("not a primary Moneyline", "")
+
+    assert ok is False
+    assert reason == "not a primary Moneyline"
+
+
+def test_an_admissible_market_stays_admissible():
+    # Arrange / Act
+    ok, reason = fm.identity_reason_with_value("", "Spread -2.5")
+
+    # Assert
+    assert ok is True
+    assert reason == ""
+
+
+def test_evaluate_reports_the_group_value_on_a_submarket_refusal():
+    # Arrange - a real submarket: title carries the group label the venue gave.
+    m = _universe_candidate("0xsub")
+    m["question"] = "Spread: Eagles (-3.5)"
+    m["market_slug"] = "nfl-phi-chi-spread-away-3pt5"
+    m["market_group"] = "Spread -3.5"
+
+    # Act
+    row = evaluate(_FakeSession([], trades=_TRADES), 5.0, m,
+                   volume_24h=250_000.0, source="spread")
+
+    # Assert
+    assert row["eligible"] is False
+    assert "Spread -3.5" in row["reject_reason"]
+    assert fm._cause(row["reject_reason"]) == "carries a submarket group label"
+
+
+def test_a_capped_pass_stamps_the_condition_on_its_rejection_rows():
+    # Arrange - the candidate came from a capped scan; the row must say so.
+    m = _universe_candidate("0xcapped")
+    m["market_group"] = "Spread -3.5"
+    m["fetch_truncated"] = True
+
+    # Act
+    row = evaluate(_FakeSession([]), 5.0, m, volume_24h=250_000.0,
+                   source="spread")
+
+    # Assert
+    assert row["eligible"] is False
+    assert row["fetch_truncated"] is True
+
+
+def test_a_complete_pass_does_not_stamp_its_rows():
+    # Arrange - the scan reached exhaustion, so the row carries no cap.
+    m = _universe_candidate("0xwhole")
+    m["market_group"] = "Spread -3.5"
+    m["fetch_truncated"] = False
+
+    # Act
+    row = evaluate(_FakeSession([]), 5.0, m, volume_24h=250_000.0,
+                   source="spread")
+
+    # Assert
+    assert row["eligible"] is False
+    assert row["fetch_truncated"] is False
+
+
+def test_an_eligible_live_market_past_kickoff_reaches_the_books():
+    # Arrange â€” end-to-end through evaluate: venue open, past endDate, tape alive.
+    m = _live_sports_market("0xe2e", _KICKOFF_PAST)
+
+    # Act
+    row = evaluate(_FakeSession([], trades=_TRADES), 5.0, m,
+                   volume_24h=250_000.0, source="spread")
+
+    # Assert
+    assert row["eligible"] is True
+    assert row["reject_reason"] == ""
