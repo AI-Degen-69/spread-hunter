@@ -103,6 +103,11 @@ class MarketEndState:
     condition_id: str
     closed: Optional[bool] = None
     end_date_iso: Optional[str] = None
+    # The venue's stated end as an instant, not just a yes/no. The resolution
+    # sweeper only needs `end_date_passed`, but the aged-out rescue (#311) has to
+    # measure a deadline BACKWARDS from the stated end, so the epoch the parser
+    # already computes is carried out rather than discarded.
+    end_ts: Optional[float] = None
     end_date_passed: Optional[bool] = None
     winner_token: Optional[str] = None
     # The winning label ("Up" / "Down" / team name) is the human-readable
@@ -156,6 +161,7 @@ def parse_end_state(row: dict, now_ts: Optional[float] = None) -> Optional[Marke
 
     end_iso = row.get("endDate") or row.get("end_date_iso") or row.get("endDateIso")
     end_passed: Optional[bool] = None
+    end_epoch: Optional[float] = None
     if end_iso:
         try:
             from datetime import datetime, timezone
@@ -164,9 +170,11 @@ def parse_end_state(row: dict, now_ts: Optional[float] = None) -> Optional[Marke
                 end = end.replace(tzinfo=timezone.utc)
             now = datetime.fromtimestamp(now_ts if now_ts is not None else time.time(),
                                          tz=timezone.utc)
-            end_passed = end.timestamp() <= now.timestamp()
+            end_epoch = end.timestamp()
+            end_passed = end_epoch <= now.timestamp()
         except Exception:
             end_passed = None
+            end_epoch = None
 
     resolved = bool((closed is True) or (end_passed is True))
 
@@ -217,6 +225,7 @@ def parse_end_state(row: dict, now_ts: Optional[float] = None) -> Optional[Marke
         condition_id=cid,
         closed=closed,
         end_date_iso=str(end_iso) if end_iso else None,
+        end_ts=end_epoch,
         end_date_passed=end_passed,
         winner_token=winner_token,
         winning_token_id=winning_token_id,
@@ -275,6 +284,58 @@ def fetch_market_end_state(
     if state is None:
         return MarketEndState(condition_id=condition_id, unreachable=True)
     return state
+
+
+def fetch_open_market_state(
+    gamma_host: str,
+    condition_id: str,
+    *,
+    timeout: float = 10.0,
+    now_ts: Optional[float] = None,
+    urlopen: Callable[..., Any] = urllib.request.urlopen,
+) -> Optional[MarketEndState]:
+    """Public gamma read for a market that is still OPEN (#311).
+
+    `fetch_market_end_state` above asks for `closed=true`, the only way to see
+    an ended market -- and the reason it cannot serve an aged-out deadline: the
+    live venue returns an EMPTY list for a market that is still open, which that
+    function correctly reports as `unreachable`. Reusing it here would make every
+    live leg fail closed and the rescue arm would never fire.
+
+    So this read asks the unfiltered question, which returns the open market
+    with `closed`, `acceptingOrders`, `endDate` and `gameStartTime`. Semantics:
+
+    * a parsed state -> the market is in the venue's open listing;
+    * `None`         -> it is NOT in the open listing (it ended or was delisted).
+      That is "nothing to sell into", distinct from a failed read, and the
+      caller must not read it as "still open";
+    * `unreachable=True` -> the read failed. Degrade and retry next rotation.
+
+    Read-only, no key, and the same host the sweeper and the shadow book source
+    already talk to.
+    """
+    cid = (condition_id or "").strip()
+    if not cid:
+        return MarketEndState(condition_id=condition_id, unreachable=True)
+    url = f"{gamma_host.rstrip('/')}/markets?condition_ids={cid}"
+    headers = {"User-Agent": "spread-hunter/0.1 (aged-out rescue)"}
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return MarketEndState(condition_id=condition_id, unreachable=True)
+    rows = None
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = payload.get("data") or payload.get("markets")
+    if not isinstance(rows, list) or not rows:
+        return None
+    # A row IS present but cannot be parsed: we cannot say what the market's
+    # state is, which is unreadable rather than "not open". Fail closed.
+    return (parse_end_state(rows[0], now_ts=now_ts)
+            or MarketEndState(condition_id=condition_id, unreachable=True))
 
 
 def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dict[str, float], dict[str, float]]:
