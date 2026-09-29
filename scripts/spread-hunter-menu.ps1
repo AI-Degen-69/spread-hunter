@@ -569,7 +569,7 @@ function Start-Dashboard {
         -RedirectStandardError  $ErrLog
     Save-DashInstance -DashProcess $dash
 
-    $deadline = (Get-Date).AddSeconds(25)
+    $deadline = (Get-Date).AddSeconds(45)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 500
         if (Test-Port) { break }
@@ -579,6 +579,9 @@ function Start-Dashboard {
     if (-not (Test-Port)) {
         Lsh-Fail "Dashboard failed to bind port $LivePort. See $ErrLog"
         Remove-Item $DashPidFile -ErrorAction SilentlyContinue
+        if ($dash -and -not $dash.HasExited) {
+            taskkill /T /F /PID $($dash.Id) 2>$null | Out-Null
+        }
         return $false
     }
     Lsh-Ok "Dashboard serving on $DashUrl (PID $($dash.Id))."
@@ -810,7 +813,7 @@ function Start-ShadowDashboard {
         -RedirectStandardOutput $logs.out `
         -RedirectStandardError  $logs.err
     Save-ShadowDashInstance -DashProcess $dash -RunId $runId -Port $port
-    $deadline = (Get-Date).AddSeconds(25)
+    $deadline = (Get-Date).AddSeconds(45)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 500
         if (Test-Port -PortNumber $port) { break }
@@ -820,6 +823,9 @@ function Start-ShadowDashboard {
     if (-not (Test-Port -PortNumber $port)) {
         Lsh-Fail "Shadow dashboard failed to bind port $port. See $($logs.err)"
         Remove-Item (Get-ShadowDashPidFile $runId) -ErrorAction SilentlyContinue
+        if ($dash -and -not $dash.HasExited) {
+            taskkill /T /F /PID $($dash.Id) 2>$null | Out-Null
+        }
         return $false
     }
     Lsh-Ok "Shadow dashboard serving on $url (PID $($dash.Id), db=$ShadowDbPath)."
