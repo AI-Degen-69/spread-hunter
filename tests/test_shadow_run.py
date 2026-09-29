@@ -1221,3 +1221,61 @@ class TestExplicitDb:
         from core_brain.kpi import _pipeline_sourced_dbs
 
         assert Path("data/shadow.db").resolve() not in _pipeline_sourced_dbs()
+
+
+class TestUnlimitedSession:
+    """Negative minutes means "run until stopped": no deadline is installed.
+
+    Zero keeps its long-standing test meaning (deadline at once, exactly one
+    rotation); only a negative value lifts the time box. See TestSecondRotation.
+    """
+
+    @staticmethod
+    def _capture_sleep_fn(tmp_path, monkeypatch, minutes):
+        from core_brain import shadow_run as sr
+        from core_brain import trader_loop
+
+        target = tmp_path / "runtime" / "shadow_run.json"
+        monkeypatch.setattr(sr, "shadow_heartbeat_path", lambda root=None, run_id="": target)
+
+        # Patched BEFORE the run: unlimited mode resolves `time.sleep` at
+        # setup, so a recorder installed afterwards would never be seen
+        # (and the test would sleep for real).
+        sleeps = []
+        monkeypatch.setattr(sr.time, "sleep", lambda s: sleeps.append(s))
+
+        captured = {}
+
+        def fake_loop_run(seam, **kwargs):
+            captured["sleep_fn"] = kwargs["sleep_fn"]
+            return []
+
+        monkeypatch.setattr(trader_loop, "run", fake_loop_run)
+        monkeypatch.setattr(sr, "build_shadow_seam", lambda **kw: type("Seam", (), {})())
+        sr.run_shadow(minutes=minutes, db_path=tmp_path / "shadow.db",
+                      markets_fn=lambda: [], client_fn=lambda: None,
+                      decide_fn=lambda *a, **k: [], fetch_books=lambda *a, **k: {},
+                      cfg=_load_cfg(), run_id="shadow-unlimited", sleep_fn=None)
+        return captured["sleep_fn"], sleeps
+
+    def test_negative_minutes_installs_no_deadline(self, tmp_path, monkeypatch):
+        # Arrange
+        sleep_fn, sleeps = self._capture_sleep_fn(tmp_path, monkeypatch, minutes=-1.0)
+
+        # Act — far past any clock: wall sleep, not _Deadline.
+        sleep_fn(3600.0)
+
+        # Assert
+        assert sleeps == [3600.0]
+
+    def test_zero_minutes_still_ends_at_once(self, tmp_path, monkeypatch):
+        # Arrange
+        import pytest
+
+        from core_brain.shadow_run import _Deadline
+
+        sleep_fn, _ = self._capture_sleep_fn(tmp_path, monkeypatch, minutes=0.0)
+
+        # Act / Assert — the old contract is untouched.
+        with pytest.raises(_Deadline):
+            sleep_fn(3600.0)
