@@ -250,3 +250,17 @@ def test_r_branch_streams_only_the_last_run_log():
     Get-Content -Wait while later runs never start."""
     branch = _branch_source("r")
     assert "last resumed run" in branch
+
+
+def test_dashboard_startup_bind_timeout_and_orphan_cleanup():
+    """Start-Dashboard and Start-ShadowDashboard must allow 45s for large shadow
+    stores to bind without false timeouts, and must terminate the spawned
+    process if binding fails or times out so no orphans linger."""
+    src = _menu_source()
+    start_dash = src.split("function Start-Dashboard {", 1)[1].split("\nfunction ", 1)[0]
+    start_shadow_dash = src.split("function Start-ShadowDashboard {", 1)[1].split("\nfunction ", 1)[0]
+
+    for body in (start_dash, start_shadow_dash):
+        assert ".AddSeconds(45)" in body, "bind timeout must be at least 45s for large shadow DBs"
+        assert "taskkill /T /F /PID" in body, "timed-out dashboard must be terminated to prevent orphans"
+
