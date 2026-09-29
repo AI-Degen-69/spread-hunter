@@ -731,6 +731,16 @@ function Adopt-ShadowDashboardInstance {
     return ($null -ne (Get-ShadowDashInstance -RunId $RunId))
 }
 
+function Q($s) {
+    <# Quote one command-line argument for Start-Process -ArgumentList arrays.
+       Array elements are joined with spaces WITHOUT quoting, so any path
+       under a directory containing spaces (e.g. "AI Trading") must carry
+       its own double quotes or the child sees it as several arguments.
+       Flags and numbers pass through untouched. #>
+    if ($null -eq $s) { return '""' }
+    return '"{0}"' -f $s
+}
+
 function Start-ShadowDashboard {
     <# Launch shadow dashboard detached with the current per-run shadow database. #>
     if (-not $ShadowDbPath) {
@@ -808,7 +818,7 @@ function Start-ShadowDashboard {
     $logs = Get-ShadowDashLogs $runId
     Lsh-Step "Launching shadow dashboard (python -m dashboard.server --db $ShadowDbPath --port $port)..."
     $dash = Start-Process -FilePath "python" `
-        -ArgumentList "-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$port" `
+        -ArgumentList "-m", "dashboard.server", "--db", (Q $ShadowDbPath), "--port", "$port" `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $logs.out `
         -RedirectStandardError  $logs.err
@@ -1204,7 +1214,7 @@ function Resume-ShadowRun {
         }
     }
     if ($trial) {
-        $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop", "--trial-depth", "$($trial.trial_depth_usd)", "--out-dir", $trial.ranker_out_dir `
+        $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop", "--trial-depth", "$($trial.trial_depth_usd)", "--out-dir", (Q $trial.ranker_out_dir) `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).out.log") `
             -RedirectStandardError (Join-Path $RunDir "resume_screener-$($script:ShadowRunId).err.log")
@@ -1226,8 +1236,8 @@ function Resume-ShadowRun {
     # shares per pair, so no double merge and no re-close of settled pairs.
     # A trial store replays its manifest feed via --markets-path.
     Lsh-Step "Starting the rehearsal loop against the existing store..."
-    $shadowArgs = @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId)
-    if ($trial) { $shadowArgs += @("--markets-path", $trial.markets_path) }
+    $shadowArgs = @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", (Q $script:ShadowDbPath), "--run-id", $script:ShadowRunId)
+    if ($trial) { $shadowArgs += @("--markets-path", (Q $trial.markets_path)) }
     $shadowRun = Invoke-WithRehearsalTrialEnv {
         Start-Process -FilePath "python" `
             -ArgumentList $shadowArgs `
@@ -1237,7 +1247,7 @@ function Resume-ShadowRun {
     }
     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s))."
     $observer = Start-Process -FilePath "python" `
-        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
+        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", (Q $script:ShadowDbPath), "--run-id", $script:ShadowRunId, "--data-dir", (Q (Join-Path $ProjectPath "data")), "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "resume_observer-$($script:ShadowRunId).out.log") `
         -RedirectStandardError (Join-Path $RunDir "resume_observer-$($script:ShadowRunId).err.log")
@@ -1248,7 +1258,7 @@ function Resume-ShadowRun {
     $guardrail = $null
     if (Test-Path $ring) {
         $guardrail = Start-Process -FilePath "python" `
-            -ArgumentList "-m", "scripts.global_stop_loss", "--db", $script:ShadowDbPath, "--ring", $ring `
+            -ArgumentList "-m", "scripts.global_stop_loss", "--db", (Q $script:ShadowDbPath), "--ring", (Q $ring) `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $RunDir "resume_guardrail-$($script:ShadowRunId).out.log") `
             -RedirectStandardError (Join-Path $RunDir "resume_guardrail-$($script:ShadowRunId).err.log")
@@ -1340,7 +1350,7 @@ function Start-ShadowTrial {
         return $false
     }
     Lsh-Ok "Trial feed ready ($feedPath)."
-    $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop", "--trial-depth", "$depth", "--out-dir", $trialDir `
+    $screener = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.filter_loop", "--trial-depth", "$depth", "--out-dir", (Q $trialDir) `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "trial_screener-$runId.out.log") `
         -RedirectStandardError (Join-Path $RunDir "trial_screener-$runId.err.log")
@@ -1352,14 +1362,14 @@ function Start-ShadowTrial {
     Lsh-Step "Starting the trial rehearsal loop..."
     $shadowRun = Invoke-WithRehearsalTrialEnv {
         Start-Process -FilePath "python" `
-            -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $runId, "--markets-path", $feedPath `
+            -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", (Q $script:ShadowDbPath), "--run-id", $runId, "--markets-path", (Q $feedPath) `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $RunDir "shadow_trial-$runId.out.log") `
             -RedirectStandardError (Join-Path $RunDir "shadow_trial-$runId.err.log")
     }
     Lsh-Ok "Trial loop running (PID $($shadowRun.Id), $mins minute(s))."
     $observer = Start-Process -FilePath "python" `
-        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $runId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
+        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", (Q $script:ShadowDbPath), "--run-id", $runId, "--data-dir", (Q (Join-Path $ProjectPath "data")), "--interval", "5", "--max-hours", (($mins / 60) + 0.08) `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "trial_observer-$runId.out.log") `
         -RedirectStandardError (Join-Path $RunDir "trial_observer-$runId.err.log")
@@ -1380,7 +1390,7 @@ function Start-ShadowTrial {
     $guardrail = $null
     if ($ring) {
         $guardrail = Start-Process -FilePath "python" `
-            -ArgumentList "-m", "scripts.global_stop_loss", "--db", $script:ShadowDbPath, "--ring", $ring `
+            -ArgumentList "-m", "scripts.global_stop_loss", "--db", (Q $script:ShadowDbPath), "--ring", (Q $ring) `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $RunDir "trial_guardrail-$runId.out.log") `
             -RedirectStandardError (Join-Path $RunDir "trial_guardrail-$runId.err.log")
@@ -2459,14 +2469,14 @@ function Reset-Environment {
                     # strips it again before the observer launches.
                     $shadowRun = Invoke-WithRehearsalTrialEnv {
                         Start-Process -FilePath "python" `
-                            -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$Minutes", "--db", $ShadowDbPath, "--run-id", $ShadowRunId `
+                            -ArgumentList "-m", "core_brain.shadow_run", "--minutes", "$Minutes", "--db", (Q $ShadowDbPath), "--run-id", $ShadowRunId `
                             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                             -RedirectStandardOutput (Join-Path $RunDir "shadow_run-$ShadowRunId.out.log") `
                             -RedirectStandardError (Join-Path $RunDir "shadow_run-$ShadowRunId.err.log")
                     }
                     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $Minutes minute(s)) - dashboard updates live from $ShadowDbPath."
                     $observer = Start-Process -FilePath "python" `
-                        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $ShadowDbPath, "--run-id", $ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($Minutes / 60) + 0.08) `
+                        -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", (Q $ShadowDbPath), "--run-id", $ShadowRunId, "--data-dir", (Q (Join-Path $ProjectPath "data")), "--interval", "5", "--max-hours", (($Minutes / 60) + 0.08) `
                         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                         -RedirectStandardOutput (Join-Path $RunDir "statistics_observer-$ShadowRunId.out.log") `
                         -RedirectStandardError (Join-Path $RunDir "statistics_observer-$ShadowRunId.err.log")
@@ -2487,7 +2497,7 @@ function Reset-Environment {
                     $guardrail = $null
                     if ($ring) {
                         $guardrail = Start-Process -FilePath "python" `
-                            -ArgumentList "-m", "scripts.global_stop_loss",                            "--db", $ShadowDbPath, "--ring", $ring `
+                            -ArgumentList "-m", "scripts.global_stop_loss",                            "--db", (Q $ShadowDbPath), "--ring", (Q $ring) `
                             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                             -RedirectStandardOutput (Join-Path $RunDir "guardrail-$ShadowRunId.out.log") `
                             -RedirectStandardError (Join-Path $RunDir "guardrail-$ShadowRunId.err.log")
@@ -2585,17 +2595,17 @@ function Reset-Environment {
                 # The sample-size gate's close target lives in config
                 # (stat_gate_target_closes, default 60): the harness reads it
                 # itself and stops on the close count, not just the clock.
-                $validation = Start-Process -FilePath "python" -ArgumentList "-m", "statistical_validation_run", "--max-hours", "$runHours", "--db", $ShadowDbPath, "--report", $reportPath, "--run-id", $ShadowRunId `
+                $validation = Start-Process -FilePath "python" -ArgumentList "-m", "statistical_validation_run", "--max-hours", "$runHours", "--db", (Q $ShadowDbPath), "--report", (Q $reportPath), "--run-id", $ShadowRunId `
                     -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                     -RedirectStandardOutput (Join-Path $RunDir "statistical_validation.out.log") -RedirectStandardError (Join-Path $RunDir "statistical_validation.err.log")
                 Lsh-Ok "Validation loop started (PID $($validation.Id), $runHours hour(s))."
-                $observer = Start-Process -FilePath "python" -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $ShadowDbPath, "--run-id", $ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", ($runHours + 0.08) -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+                $observer = Start-Process -FilePath "python" -ArgumentList "-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", (Q $ShadowDbPath), "--run-id", $ShadowRunId, "--data-dir", (Q (Join-Path $ProjectPath "data")), "--interval", "5", "--max-hours", ($runHours + 0.08) -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                     -RedirectStandardOutput (Join-Path $RunDir "validation_observer.out.log") -RedirectStandardError (Join-Path $RunDir "validation_observer.err.log")
                 Lsh-Ok "Statistics observer started (PID $($observer.Id))."
                 # The loop names its ring shadow-<run_id>.jsonl (the id is
                 # already shadow-prefixed; the runner never double-prefixes).
                 $ring = Join-Path $RunDir ("shadow-{0}.jsonl" -f ($ShadowRunId -replace "^shadow-", ""))
-                $guardrail = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.global_stop_loss", "--db", $ShadowDbPath, "--ring", $ring -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+                $guardrail = Start-Process -FilePath "python" -ArgumentList "-m", "scripts.global_stop_loss", "--db", (Q $ShadowDbPath), "--ring", (Q $ring) -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                     -RedirectStandardOutput (Join-Path $RunDir "validation_guardrail.out.log") -RedirectStandardError (Join-Path $RunDir "validation_guardrail.err.log")
                 Lsh-Ok "Stop-loss watcher started (PID $($guardrail.Id))."
                 $session = [ordered]@{ started=(Get-Date).ToString("o"); run_id=$ShadowRunId; shadow_db=$ShadowDbPath; stats_db=$StatsDbPath; report_path=$reportPath; loop=[ordered]@{pid=$validation.Id; started_ticks=$validation.StartTime.ToUniversalTime().Ticks}; screener=[ordered]@{pid=$screener.Id; started_ticks=$screener.StartTime.ToUniversalTime().Ticks}; observer=[ordered]@{pid=$observer.Id; started_ticks=$observer.StartTime.ToUniversalTime().Ticks}; watcher=[ordered]@{pid=$guardrail.Id; started_ticks=$guardrail.StartTime.ToUniversalTime().Ticks}; ring=$ring }
