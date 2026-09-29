@@ -47,7 +47,7 @@
        box with no internet reads `H₁: μ > 0` rather than raw LaTeX. -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=2">
+  <link rel="stylesheet" href="/static/styles.css?v=5">
   <!-- Sidebar-pages layout. Every rule is scoped to a class `prototype.js`
        only adds on /prototype, so this is inert on the live page. -->
   <link rel="stylesheet" href="/static/prototype.css">
@@ -289,14 +289,20 @@
           <div class="broker-kpi-sub mono" id="broker-kpi-cash-pct">100.0% Liquid USDC</div>
         </div>
         <div class="broker-kpi-tile">
-          <div class="broker-kpi-label">In Resting Bids</div>
+          <!-- The value is the venue's initialValue sum over OPEN positions:
+               the cost of what is HELD. "In Resting Bids" said the money was
+               still on the book, which filled inventory is not. -->
+          <div class="broker-kpi-label">Held Positions</div>
           <div class="broker-kpi-val mono text-primary" id="broker-kpi-committed">$0.00</div>
-          <div class="broker-kpi-sub mono" id="broker-kpi-committed-pct">0.0% Committed Risk</div>
+          <div class="broker-kpi-sub mono" id="broker-kpi-committed-pct">0.0% of Equity</div>
         </div>
         <div class="broker-kpi-tile">
-          <div class="broker-kpi-label">Hedged Pairs</div>
-          <div class="broker-kpi-val mono text-signal" id="broker-kpi-pairs">0 Pairs</div>
-          <div class="broker-kpi-sub mono">100% Directional Neutral</div>
+          <!-- The value is `kpi.funnel.graduated`: markets the Market Filter
+               quoted, not pairs held. "Hedged Pairs" claimed a hedge nothing
+               had measured. -->
+          <div class="broker-kpi-label">Markets Quoted</div>
+          <div class="broker-kpi-val mono text-signal" id="broker-kpi-pairs">0 Markets</div>
+          <div class="broker-kpi-sub mono">by the Market Filter</div>
         </div>
         <div class="broker-kpi-tile">
           <div class="broker-kpi-label">Realized Spread</div>
@@ -306,7 +312,7 @@
         <div class="broker-kpi-tile">
           <div class="broker-kpi-label">Win Rate</div>
           <div class="broker-kpi-val mono" id="broker-kpi-winrate">0.0%</div>
-          <div class="broker-kpi-sub mono" id="broker-kpi-wins">0 Wins / 0 Flat</div>
+          <div class="broker-kpi-sub mono" id="broker-kpi-wins">0 Wins / 0 Losses</div>
         </div>
         <div class="broker-kpi-tile">
           <div class="broker-kpi-label">Profit Factor</div>
@@ -600,7 +606,7 @@
 <script>
   const CONTROL_TOKEN = "__LIVE_DASH_CONTROL_TOKEN__";
 </script>
-<script src="/static/app.js?v=2"></script>
+<script src="/static/app.js?v=5"></script>
 <!-- Runs after app.js has bound every panel, and only on /prototype: it moves
      those same nodes into the sidebar pages rather than re-rendering them. -->
 <script src="/static/prototype.js"></script>

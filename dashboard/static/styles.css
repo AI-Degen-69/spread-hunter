@@ -1529,6 +1529,15 @@ th[aria-sort] .ot-sort-btn {
   border-color: var(--red-border);
   color: #fca5a5;
 }
+/* Nothing to report, and it must not look like a verdict either way: on a
+   CLOSED TRADES row a market with nothing left under it used to wear the same
+   tag as a market holding a single buy. Quiet gray, the same band the finished
+   pills use. */
+.ot-tag.is-quiet {
+  background: rgba(100, 116, 139, 0.10);
+  border-color: rgba(148, 163, 184, 0.18);
+  color: #94a3b8;
+}
 .ot-tag.is-info {
   background: var(--blue-bg);
   border-color: var(--blue-border);
@@ -2354,6 +2363,24 @@ th[aria-sort] .ot-sort-btn {
   display: inline-block;
   border-radius: 4px;
   border: 1px dashed var(--border-strong);
+}
+/* Why a trade closed. Provenance, not state: an aged-out rescue and a grace
+   expiry are both finished trades, and DESIGN.md reserves every saturated hue
+   for the live-state vocabulary -- so the reason sits in the quiet gray band,
+   under the market name, beside the category caption it reads with. */
+.close-reason-line {
+  margin-top: 4px;
+}
+.close-reason-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 2px 6px;
+  display: inline-block;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
 }
 .param-value-box {
   display: flex;

@@ -107,4 +107,10 @@ process.stdout.write(JSON.stringify({
   wallet_row_display: element('broker-venue-wallet-row').style.display,
   wallet: element('broker-venue-wallet').textContent,
   wallet_note: element('broker-venue-wallet-note').textContent,
+  // The KPI strip's dynamic tiles, so the focused test can assert the words
+  // each tile prints beside its number.
+  pairs: element('broker-kpi-pairs').textContent,
+  wins: element('broker-kpi-wins').textContent,
+  committed: element('broker-kpi-committed').textContent,
+  committed_pct: element('broker-kpi-committed-pct').textContent,
 }));

@@ -211,7 +211,8 @@ def test_the_merged_row_uses_the_muted_pill():
     rendered = _render([_leg("up"), _leg("down", price=0.51)])
 
     # Assert — the same muted family as `.pill.finished`, not OPEN or FILLED.
-    assert 'class="pill finished">MERGED' in rendered["html"]
+    assert 'class="pill finished"' in rendered["html"]
+    assert ">MERGED</span>" in rendered["html"]
 
 
 @requires_node
