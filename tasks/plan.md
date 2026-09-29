@@ -76,7 +76,7 @@ T4 verifies the assembled change.
   refused; (c) unreadable state refused; (d) far-future market keeps its
   distance refusal; (e) pre-start suite still green unmodified.
 
-### T2 â€” Legible reject reasons: carry the value that caused them [ ]
+### T2 â€” Legible reject reasons: carry the value that caused them [x]
 - **Size:** S | **Domain:** Reporting | **Helper:** `test-driven-development`
 - **Files:** `scripts/filter_markets.py`, `tests/test_unified_universe.py`
 - **Build:** the venue field behind each refusal rides in the reason string.
@@ -86,7 +86,7 @@ T4 verifies the assembled change.
   refusal carries endDate + state; `_cause()` output equals today's bucket.
 
 
-### T3 â€” Fetch truncation is an explicit condition, not a silent cap [ ]
+### T3 â€” Fetch truncation is an explicit condition, not a silent cap [x]
 - **Size:** S | **Domain:** Discovery | **Helper:** `test-driven-development`
 - **Files:** `scripts/filter_markets.py`, `tests/test_unified_universe.py`
 - **Build:** the `truncated` meta already exists (`:511,628,633`); carry it onto

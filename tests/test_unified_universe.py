@@ -161,6 +161,39 @@ def test_exhaustion_at_the_boundary_is_not_truncation():
     assert meta["truncated"] is False
 
 
+def test_a_truncated_scan_marks_every_row_it_returns():
+    # Arrange - the bounded stop: one qualifying page, then the boundary page.
+    s = _FakeSession([
+        [_gamma_row("a", 900_000.0), _gamma_row("b", 500_000.0),
+         _gamma_row("z", 1_000.0)],
+        [_gamma_row("c", 10_000.0), _gamma_row("d", 20_000.0),
+         _gamma_row("e", 30_000.0)],
+    ])
+
+    # Act
+    universe, meta = gamma_universe(s, min_volume_usd=125_000.0)
+
+    # Assert - the row says the listing behind it was capped, so a reader
+    # holding only the row can tell a capped pass from a thin market.
+    assert meta["truncated"] is True
+    assert [m["fetch_truncated"] for m in universe] == [True, True]
+
+
+def test_an_exhausted_scan_marks_no_row_as_truncated():
+    # Arrange - the listing ran out on its own.
+    s = _FakeSession([
+        [_gamma_row("a", 900_000.0), _gamma_row("b", 500_000.0)],
+        [_gamma_row("c", 10_000.0)],        # short page: the listing ended
+    ])
+
+    # Act
+    universe, meta = gamma_universe(s, min_volume_usd=125_000.0)
+
+    # Assert
+    assert meta["truncated"] is False
+    assert [m["fetch_truncated"] for m in universe] == [False, False]
+
+
 def test_inverted_sort_uses_a_bounded_per_row_fallback():
     pages = [
         [_gamma_row("a", 900_000.0), _gamma_row("low-1", 1_000.0),
@@ -783,6 +816,83 @@ def test_a_far_market_keeps_its_distance_refusal():
     assert ok is False
     assert reason.startswith("horizon 40")
     assert fm._cause(reason) == "horizon"
+
+
+def test_a_submarket_refusal_names_the_label_that_refused_it():
+    # Arrange - the venue field is the line value, so the reason must carry it.
+    # Act
+    ok, reason = fm.identity_reason_with_value(
+        "carries a submarket group label", "Spread -2.5")
+
+    # Assert
+    assert ok is False
+    assert "Spread -2.5" in reason
+    assert reason.startswith("carries a submarket group label")
+    assert fm._cause(reason) == "carries a submarket group label"
+
+
+def test_a_refusal_without_a_value_is_left_alone():
+    # Arrange / Act / Assert - unknown vocabulary passes through untouched.
+    ok, reason = fm.identity_reason_with_value("not a primary Moneyline", "")
+
+    assert ok is False
+    assert reason == "not a primary Moneyline"
+
+
+def test_an_admissible_market_stays_admissible():
+    # Arrange / Act
+    ok, reason = fm.identity_reason_with_value("", "Spread -2.5")
+
+    # Assert
+    assert ok is True
+    assert reason == ""
+
+
+def test_evaluate_reports_the_group_value_on_a_submarket_refusal():
+    # Arrange - a real submarket: title carries the group label the venue gave.
+    m = _universe_candidate("0xsub")
+    m["question"] = "Spread: Eagles (-3.5)"
+    m["market_slug"] = "nfl-phi-chi-spread-away-3pt5"
+    m["market_group"] = "Spread -3.5"
+
+    # Act
+    row = evaluate(_FakeSession([], trades=_TRADES), 5.0, m,
+                   volume_24h=250_000.0, source="spread")
+
+    # Assert
+    assert row["eligible"] is False
+    assert "Spread -3.5" in row["reject_reason"]
+    assert fm._cause(row["reject_reason"]) == "carries a submarket group label"
+
+
+def test_a_capped_pass_stamps_the_condition_on_its_rejection_rows():
+    # Arrange - the candidate came from a capped scan; the row must say so.
+    m = _universe_candidate("0xcapped")
+    m["market_group"] = "Spread -3.5"
+    m["fetch_truncated"] = True
+
+    # Act
+    row = evaluate(_FakeSession([]), 5.0, m, volume_24h=250_000.0,
+                   source="spread")
+
+    # Assert
+    assert row["eligible"] is False
+    assert row["fetch_truncated"] is True
+
+
+def test_a_complete_pass_does_not_stamp_its_rows():
+    # Arrange - the scan reached exhaustion, so the row carries no cap.
+    m = _universe_candidate("0xwhole")
+    m["market_group"] = "Spread -3.5"
+    m["fetch_truncated"] = False
+
+    # Act
+    row = evaluate(_FakeSession([]), 5.0, m, volume_24h=250_000.0,
+                   source="spread")
+
+    # Assert
+    assert row["eligible"] is False
+    assert row["fetch_truncated"] is False
 
 
 def test_an_eligible_live_market_past_kickoff_reaches_the_books():

@@ -350,6 +350,8 @@ def tradable(volume_24h: float | None,
             title, slug, category, market_type,
             market_group, series_title, event_title)
         if not identity_ok:
+            _ok, identity_reason = identity_reason_with_value(
+                identity_reason, market_group)
             return False, identity_reason
     if volume_24h is None:
         return False, "volume unknown"
@@ -711,6 +713,16 @@ def gamma_universe(session: requests.Session,
                 # exhaustion.
     else:
         meta["truncated"] = True            # stopped at max_pages, not exhaustion
+    # The scan's own condition rides on every row it returns. `meta` carries it
+    # to the snapshot's discovery block, but a ROW is what a reader holds in
+    # `market_universe.json` and `markets.json`, and at row level a capped pass
+    # used to look exactly like a thin market -- the 2026-09-29 pass that wrote
+    # `top 0` was three pages of a capped listing and read as "no liquid market
+    # exists". Stamped AFTER the loop, because a stop at `max_pages` flips the
+    # flag with the rows already collected.
+    capped = bool(meta["truncated"])
+    for row in out:
+        row["fetch_truncated"] = capped
     return out, meta
 
 
@@ -800,6 +812,10 @@ def _reject_row(source: str, reason: str, m: dict,
         "cid": m.get("condition_id"),
         "title": m.get("question", "")[:90],
         "slug": m.get("market_slug", ""),
+        # Inherited from the discovery pass: every row from a capped scan says
+        # so, so an empty or thin result is auditable as an environment
+        # condition rather than read as "no liquid market exists" (#312).
+        "fetch_truncated": bool(m.get("fetch_truncated")),
     }
     row.update(extra)
     return row
@@ -835,12 +851,20 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         m.get("category"), m.get("market_type"),
         m.get("market_group"), m.get("series_title"), m.get("event_title"))
     if not identity_ok:
+        # Name the line value that refused it. Without the value, all 89
+        # submarkets of the #312 pass died as one identical string and the
+        # screener could not tell a $281K main-adjacent line from a $200 tail
+        # line. The gate decision is unchanged -- this only annotates it.
+        _ok, identity_reason = identity_reason_with_value(
+            identity_reason,
+            m.get("market_group") or m.get("groupItemTitle"))
         return {
             "source": source, "eligible": False,
             "reject_reason": identity_reason,
             "cid": m.get("condition_id"),
             "title": m.get("question", "")[:90],
             "slug": m.get("market_slug", ""),
+            "fetch_truncated": bool(m.get("fetch_truncated")),
         }
     # THE PRE-START GATE, before the two book fetches below. A market whose
     # event has not begun prints nothing at any price, so paying for its books
@@ -985,6 +1009,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             "title": m.get("question", "")[:90],
             "slug": m.get("market_slug", ""),
             "movement_usd": movement_usd,
+            "fetch_truncated": bool(m.get("fetch_truncated")),
             **_book_stats(book_spreads, book_depths),
         }
 
@@ -1050,6 +1075,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "eligible": pays and can_trade,
         "reject_reason": why,
         "volume_24h": _vol(volume_24h),
+        "fetch_truncated": bool(m.get("fetch_truncated")),
         # Recorded on every scanned market, gated or not: the bar for
         # `select_min_movement_usd` is meant to be chosen from this column.
         "movement_usd": movement_usd,
@@ -1093,6 +1119,41 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     }
 
 
+# The identity refusals whose cause IS a venue field value, keyed by the
+# refusal's own text and mapping to the venue's field name. `market_group` is
+# this module's key for Gamma's `groupItemTitle` (see `gamma_universe`); the
+# reason names the venue field an operator would look up on the market page.
+_IDENTITY_VALUE_REASONS = {
+    "carries a submarket group label": "groupItemTitle",
+}
+
+
+def identity_reason_with_value(reason: str,
+                               value: object = "") -> tuple[bool, str]:
+    """An identity verdict with the venue value that caused it named in the text.
+
+    Returns `(ok, reason)` so a caller can use the pair as the gate verdict: an
+    empty reason is an admission and stays one whatever the row carried, and
+    any refusal reads as a refusal.
+
+    Only the refusals whose cause IS a venue field value are annotated -- the
+    submarket arm refuses on `market_group` (the venue's `groupItemTitle`, the
+    LINE value: "Spread -3.5", "Total 48.5"), and a bare
+    "carries a submarket group label" names the rule while hiding the cause.
+    A refusal that is a verdict about the market's SHAPE rather than one of its
+    fields ("not a primary Moneyline/Outright or Macro/Politics market") has no
+    offending value to name, so it is returned untouched rather than annotated
+    with an unrelated field. The annotation is parenthetical and the gate text
+    still leads, so `_cause()` keeps the same card.
+    """
+    if not reason:
+        return True, ""
+    named = str(value or "")
+    if named and reason in _IDENTITY_VALUE_REASONS:
+        return False, f'{reason} ({_IDENTITY_VALUE_REASONS[reason]} "{named}")'
+    return False, reason
+
+
 def _cause(reason: str) -> str:
     """Bucket a rejection reason by GATE, not by first word.
 
@@ -1102,6 +1163,11 @@ def _cause(reason: str) -> str:
     cannot answer the question this bucketing exists to answer.
     """
     r = reason.lower()
+    # Matched before every gate keyword below, because the value this reason is
+    # annotated with can itself read like a gate: "Spread -3.5" contains
+    # "spread". The rule is the bucket, never the value it refused (#312).
+    if "submarket group label" in r:
+        return "carries a submarket group label"
     if "volume" in r:
         return "volume"
     if "resolved" in r or "horizon" in r:
