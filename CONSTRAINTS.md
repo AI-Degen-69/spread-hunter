@@ -271,3 +271,41 @@
 - `_cause()` bucketing (`filter_markets.py:1023`) must keep collapsing to the same
   gate cards — new reason text must still bucket identically; existing bucket tests stay green.
 - No new external dependencies; no live execution.
+
+# Constraints: Issue #314 - D12 submarket admission trial (trial-only machinery)
+
+## Quality & Tests
+- Zero regressions: `tests/test_paired_depth.py`, `tests/test_unified_universe.py`,
+  `tests/test_family_probe.py`, `tests/test_filter_markets_publish_json.py`,
+  `tests/test_market_feed.py`, `tests/test_shadow_run.py`,
+  `tests/test_paired_shadow_report.py`, `tests/test_filter_loop.py` stay green.
+  Full-repo sweep stays with GitHub CI on push (merge gate).
+- Every named test is written first and fails before implementation; each added
+  assertion must fail without its change. Tests use `tmp_path` fixtures; no test
+  writes into live `data/` or `run/`. `data/orders.db` is never touched.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions,
+  or bypassing linters.
+
+## Behavior Boundaries
+- **Prohibited files (never modified):** `scoring/selector.py` (incl. shipped
+  `identity_allowed` default), `core_brain/single_buy_saver.py`, risk caps
+  (`order_risk_pct`, `naked_risk_pct`, `bankroll_ceiling_pct`) and `max_pair_cost`
+  in `core_brain/config.py`, `core_brain/market_resolution.py`,
+  `core_brain/order_registry.py` schema, `data/**` incl. `data/orders.db`.
+- **Trial isolation:** `--paired-admission` requires an isolated `--out-dir` and
+  refuses the shared runtime dir, `--dry-run`, volume/spread trials, legacy
+  rewards, and all paired-depth flags; requires a complete Gamma listing and pins
+  the volume gate to the permanent threshold. Unflagged ranker output is
+  byte-identical (no `trial_arm`/`family`/`admission_role` tags).
+- **Depth contract frozen:** depth bundle format, depth cutoff checks ($500/$250),
+  depth verdict path, and depth report fixtures are unchanged.
+- **Grouping unit is the event cluster** (`gamma-event:<id>`, slug fallback);
+  `family_key` is a descriptive tag only. No new in-progress gate: a member is
+  unavailable only if an existing gate refuses it. Mid check stays strict
+  (`0.20 < mid < 0.80`). Admission emits `reject` (not `retain_control`); single-buy
+  loss uses fill notional (`price * size`) for admission only.
+- **Analyzer is read-only and fail-closed:** reads run-owned markouts through
+  `_read_only`; never substitutes zero/raw for missing marks; `inconclusive` on
+  any limitation; no PnL uplift, no paired-variance prior in the verdict.
+- **No launch in this pipeline:** build + short rehearsal only. The 100-hour trial
+  launch is an operator decision recorded in the pre-reg doc.
