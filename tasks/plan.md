@@ -179,3 +179,19 @@ CHECKPOINT 2: handoff to #325 (decision + any new primitive it should reuse).
 Cover both grace regimes (0 and >0) in the repro and the decision matrix, not just the grace-0 case the finding was observed under.
 Evidence, verbatim from the issue: "Grace-0 immediacy compounds it: with the shipped grace default (0.0) any one-sided fill exits next pass, so staggered opposite fills never arrive unless the market balances in one rotation."
 Rejected: none. Scope expansion: none proposed.
+
+## CHECKPOINT 1 OUTCOME (2026-09-30): NETTING WINS — as venue-capped sizing
+Decision matrix evaluated against code (T1 repro + reads):
+- (A) One-shot rungs: necessary ladder lifecycle, already proven clean in the
+  #324 harness — but leaves the live carry-path trap (#206 replacement legs
+  joining an exited pair) open. Adopted as #325 design input, not the fix.
+- (B) Fresh-pair re-post: dodges the accounting instead of fixing it; fights
+  the #206 carry semantic and the ladder's one-pair design. REJECTED.
+- (C) Netting: WINS. Implemented as sizing the exit at min(fills-only naked,
+  venue-agreed heavy shares) whenever a venue view is present. This sidesteps
+  the closes-attribution wrinkle entirely (closes carry no pair_id, so
+  closes-based netting would mis-scope across pairs sharing a condition).
+  Absence still refuses; no-view dry runs unchanged; `load_pair` untouched;
+  no schema change. `_check_positions` has exactly one caller
+  (`exit_single_buy`), so the contract change is contained.
+T3 builds the cap. Lifecycle-wins path not taken.
