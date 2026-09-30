@@ -114,8 +114,8 @@ def _cfg(grace_sec: float):
     )
 
 
-def test_refill_after_exit_refuses_instead_of_overselling(registry):
-    """Exit 10, refill 10 under the same stamp: the second exit refuses."""
+def test_refill_after_exit_sells_the_netted_remainder(registry):
+    """Exit 10, refill 10 under the same stamp: the second exit sells 10."""
     _ladder_market(registry, NOW)
     venue = FakeVenue(best_ask=0.40, best_bid=0.55)
 
@@ -131,22 +131,60 @@ def test_refill_after_exit_refuses_instead_of_overselling(registry):
     second = _resting_up(registry, 10.0, 0.60, NOW + 1, "r2")
     _fill(registry, second, 10.0, 0.60, NOW + 1)
 
+    result = lp.exit_single_buy(venue, registry, PAIR,
+                                max_pair_cost=MAX_PAIR_COST, live=True,
+                                venue_positions={TOK_UP: 10.0, TOK_DN: 0.0})
+    assert result["action"] == "exited"
+    assert result["size"] == pytest.approx(10.0)
+
+    sold = sum(float(c.split(":")[2])
+               for c in venue.calls if c.startswith("sell:"))
+    assert sold == pytest.approx(20.0), "sold exactly the 20 filled, no more"
+    closes = [c for c in registry.get_all_closes()
+              if c.get("method") == "single_buy_exit"]
+    assert len(closes) == 2, "every filled share ends with a close"
+
+
+def test_genuine_divergence_with_no_prior_exits_still_refuses(registry):
+    """A short wallet with nothing exited on record is unexplained: refuse."""
+    _ladder_market(registry, NOW)
+    venue = FakeVenue(best_ask=0.40, best_bid=0.55)
+
+    first = _resting_up(registry, 10.0, 0.60, NOW, "r1")
+    _fill(registry, first, 10.0, 0.60, NOW)
     with pytest.raises(lp.PairExitRefused, match="diverge"):
         lp.exit_single_buy(venue, registry, PAIR,
                            max_pair_cost=MAX_PAIR_COST, live=True,
-                           venue_positions={TOK_UP: 10.0, TOK_DN: 0.0})
+                           venue_positions={TOK_UP: 5.0, TOK_DN: 0.0})
+    assert not any(c.startswith("sell:") for c in venue.calls)
 
+
+def test_partially_explained_divergence_still_refuses(registry):
+    """Priors explain 10 of a 15-share gap: the unexplained 5 still refuse."""
+    _ladder_market(registry, NOW)
+    venue = FakeVenue(best_ask=0.40, best_bid=0.55)
+
+    first = _resting_up(registry, 10.0, 0.60, NOW, "r1")
+    _fill(registry, first, 10.0, 0.60, NOW)
+    lp.exit_single_buy(venue, registry, PAIR,
+                       max_pair_cost=MAX_PAIR_COST, live=True,
+                       venue_positions={TOK_UP: 10.0, TOK_DN: 0.0})
+
+    second = _resting_up(registry, 10.0, 0.60, NOW + 1, "r2")
+    _fill(registry, second, 10.0, 0.60, NOW + 1)
+    # Truncated view: 5 more shares missing than the one exit accounts for.
+    with pytest.raises(lp.PairExitRefused, match="diverge"):
+        lp.exit_single_buy(venue, registry, PAIR,
+                           max_pair_cost=MAX_PAIR_COST, live=True,
+                           venue_positions={TOK_UP: 5.0, TOK_DN: 0.0})
     sells = [c for c in venue.calls if c.startswith("sell:")]
-    assert len(sells) == 1, "the guard held: exactly one sale went out"
-    closes = [c for c in registry.get_all_closes()
-              if c.get("method") == "single_buy_exit"]
-    assert len(closes) == 1, "the refilled 10 shares strand with no close"
+    assert len(sells) == 1
 
 
 @pytest.mark.parametrize("grace_sec", [0.0, 45.0])
-def test_route_pair_reaches_the_same_refusal_under_both_graces(
+def test_route_pair_exits_the_refill_under_both_graces(
         registry, grace_sec: float):
-    """Old fills route past grace in both regimes, then hit the same wall."""
+    """Old fills route past grace in both regimes, and the refill exits."""
     # Timestamps are ms throughout: fills 200 s and 100 s old at route time.
     _ladder_market(registry, NOW - 200_000)
     # Bid 0.57 avoids adverse drift so the grace path itself decides.
@@ -163,11 +201,13 @@ def test_route_pair_reaches_the_same_refusal_under_both_graces(
 
     second = _resting_up(registry, 10.0, 0.60, NOW - 100_000, "r2")
     _fill(registry, second, 10.0, 0.60, NOW - 100_000)
-    with pytest.raises(lp.PairExitRefused, match="diverge"):
-        lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
-                       MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
-                       cfg=cfg, last_ms=NOW - 100_000,
-                       now_s=NOW / 1000.0)
+    rerouted = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
+                              MAX_PAIR_COST, True,
+                              {TOK_UP: 10.0, TOK_DN: 0.0},
+                              cfg=cfg, last_ms=NOW - 100_000,
+                              now_s=NOW / 1000.0)
+    assert rerouted["action"] == "exited"
+    assert rerouted["size"] == pytest.approx(10.0)
 
 
 def test_fresh_fill_under_positive_grace_holds_instead(registry):

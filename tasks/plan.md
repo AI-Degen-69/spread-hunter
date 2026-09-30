@@ -195,3 +195,11 @@ Decision matrix evaluated against code (T1 repro + reads):
   no schema change. `_check_positions` has exactly one caller
   (`exit_single_buy`), so the contract change is contained.
 T3 builds the cap. Lifecycle-wins path not taken.
+
+## CHECKPOINT 2 OUTCOME (2026-09-30): BUILT — handoff to #325
+T3 green: refill exits the netted remainder (min fills-only naked, venue
+heavy) with no oversell; genuine and partially-explained divergence still
+refuse; route-pair coverage under both graces. Reuse for #325:
+`_prior_exit_shares` + `_unexplained_divergence` + `_check_positions(pair,
+venue, registry)` contract; `exit_single_buy` nets the post-cancel naked
+before sizing. `load_pair` untouched, no schema change.

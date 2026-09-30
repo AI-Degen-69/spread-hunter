@@ -9,8 +9,8 @@
 - [x] T3 (#324) — One-leg exit + zero-live proof + per-series reports (S, Backend/Logic)
 - [x] CHECKPOINT 2 (#324) — BTC 70/70 and ETH 60/60 shares accounted, zero live execution
 - [ ] #325 — Ladder path build (gated on #324 green) — see handoff findings above
-- [ ] T1 (#326) — Repro spike: refusal loop on synthetic store, grace-0 + grace>0 (S, Research)
-- [ ] T2 (#326) — Decision matrix + recorded verdict with evidence (S, Research)
-- [ ] CHECKPOINT 1 (#326) — netting-wins opens T3, lifecycle-wins closes on the note
-- [ ] T3 (#326) — Net prior exit closes in exit sizing, gated (S, Backend/Logic)
-- [ ] CHECKPOINT 2 (#326) — handoff to #325
+- [x] T1 (#326) — Repro spike: refusal loop on synthetic store, grace-0 + grace>0 (S, Research)
+- [x] T2 (#326) — Decision matrix + recorded verdict with evidence (S, Research)
+- [x] CHECKPOINT 1 (#326) — netting-wins opens T3, lifecycle-wins closes on the note
+- [x] T3 (#326) — Net prior exit closes in exit sizing, gated (S, Backend/Logic)
+- [x] CHECKPOINT 2 (#326) — handoff to #325
