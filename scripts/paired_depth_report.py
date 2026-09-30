@@ -682,6 +682,427 @@ def analyze_paired_depth(
     }
 
 
+ADMISSION_HORIZON_SEC = {"h0": 300.0, "h1": 3600.0, "h2": 21600.0,
+                         "h3": 900.0}
+ADMISSION_MIN_CLUSTERS = 30
+ADMISSION_PARITY_FLOOR = -0.01
+
+
+def _admission_markouts(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    return _rows(conn,
+        """SELECT m.ts, m.condition_id, m.token_id, m.fill_price, m.size,
+                  m.refs_json
+           FROM markouts m WHERE m.run_id = ?
+           ORDER BY m.ts, m.id""", (run_id,))
+
+
+def _admission_fills(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    return _rows(conn,
+        """SELECT f.trade_id, f.price, f.size, f.venue_ts, f.recorded_ts,
+                  o.condition_id, o.token_id
+           FROM fills f JOIN orders o ON o.id = f.order_uuid
+           WHERE o.run_id = ? ORDER BY f.recorded_ts, f.trade_id""",
+        (run_id,))
+
+
+def _admission_fill_notional(conn: sqlite3.Connection, run_id: str) -> float:
+    row = conn.execute(
+        """SELECT SUM(f.price * f.size) FROM fills f
+           JOIN orders o ON o.id = f.order_uuid WHERE o.run_id = ?""",
+        (run_id,),
+    ).fetchone()
+    return float(row[0] or 0.0)
+
+
+def _refs_excess(refs_json: object, horizon: str) -> float | None:
+    """Excess markout for one markout row at one horizon, or None.
+
+    Never substitutes zero or the raw number: a missing ref or peer is a
+    missing observation, and the verdict treats it as one.
+    """
+    try:
+        refs = json.loads(refs_json) if isinstance(refs_json, str) else {}
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(refs, dict):
+        return None
+    cell = refs.get(horizon)
+    if not isinstance(cell, dict):
+        return None
+    try:
+        ref = float(cell.get("ref"))
+        peer = float(cell.get("peer"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(ref) or not math.isfinite(peer):
+        return None
+    from core_brain.markout import excess_markout
+    return excess_markout(ref, peer)
+
+
+def _match_markout(markouts: list[dict], *, condition_id: str,
+                   token_id: str, price: float, size: float,
+                   fill_ts: float) -> dict | None:
+    """The markout sample for one fill: same condition, token, price, size.
+
+    Several fills of one condition share those keys, so the closest sample
+    time wins. Deterministic; no invented observations.
+    """
+    best = None
+    best_gap = None
+    for row in markouts:
+        if str(row.get("condition_id") or "") != condition_id:
+            continue
+        if str(row.get("token_id") or "") != token_id:
+            continue
+        try:
+            if float(row.get("fill_price")) != float(price):
+                continue
+            if float(row.get("size")) != float(size):
+                continue
+            gap = abs(float(row.get("ts") or 0.0) - fill_ts)
+        except (TypeError, ValueError):
+            continue
+        if best is None or gap < best_gap:
+            best, best_gap = row, gap
+    return best
+
+
+def _bootstrap_mean_ci(
+    values: list[float], replicates: int, seed: int,
+) -> tuple[float, float] | None:
+    """Percentile CI of a mean under cluster resampling."""
+    if len(values) < 1 or replicates < 1:
+        return None
+    if len(values) == 1:
+        return values[0], values[0]
+    rng = random.Random(seed)
+    count = len(values)
+    means = [
+        sum(values[rng.randrange(count)] for _ in range(count)) / count
+        for _ in range(replicates)
+    ]
+    means.sort()
+    lo = max(0, math.floor(0.025 * (replicates - 1)))
+    hi = min(replicates - 1, math.ceil(0.975 * (replicates - 1)))
+    return means[lo], means[hi]
+
+
+def analyze_paired_admission(
+    *, control_db: Path | str, treatment_db: Path | str,
+    control_run_id: str, treatment_run_id: str,
+    bootstrap_replicates: int = 20_000,
+    max_mark_age_sec: float = 600.0,
+) -> dict:
+    """Adopt / reject / inconclusive for the D12 admission trial.
+
+    Read-only: both stores open through `_read_only`. The verdict reads only
+    the four pre-registered h3 bars; every horizon is still reported for
+    inspection. No PnL uplift, no variance prior anywhere in this verdict.
+    """
+    if control_run_id == treatment_run_id:
+        raise PairedDepthReportError("control and treatment must use distinct run ids")
+    if bootstrap_replicates < 1 or max_mark_age_sec <= 0:
+        raise PairedDepthReportError("bootstrap replicates and max mark age must be positive")
+
+    control_conn = _read_only(control_db)
+    treatment_conn = _read_only(treatment_db)
+    try:
+        control = _read_arm(control_db, control_run_id)
+        treatment = _read_arm(treatment_db, treatment_run_id)
+        c_markouts = _admission_markouts(control_conn, control_run_id)
+        t_markouts = _admission_markouts(treatment_conn, treatment_run_id)
+        c_fills = _admission_fills(control_conn, control_run_id)
+        t_fills = _admission_fills(treatment_conn, treatment_run_id)
+        c_notional = _admission_fill_notional(control_conn, control_run_id)
+        t_notional = _admission_fill_notional(treatment_conn, treatment_run_id)
+    finally:
+        control_conn.close()
+        treatment_conn.close()
+
+    limitations: list[str] = []
+    for label, arm in (("control", control), ("treatment", treatment)):
+        if str(arm["run"].get("trial_axis") or "depth") != "admission":
+            limitations.append(f"{label} run is not an admission-axis run")
+        if arm["run"]["arm"] != label:
+            limitations.append(f"{label} store run is tagged as {arm['run']['arm']!r}")
+        if arm["run"]["status"] != "finished" or arm["run"]["finished_at"] is None:
+            limitations.append(f"{label} run is not marked finished")
+        if arm["missing_order_count"]:
+            limitations.append(
+                f"{label} has {arm['missing_order_count']} order(s) without paired attribution")
+        if arm["total_orders"] and not arm["total_fills"]:
+            limitations.append(f"{label} has orders but no fills; outcomes are unmeasured")
+        if any(event["kind"] in {
+            "missing_snapshot", "invalid_feed_metadata", "empty_feed",
+            "missing_market_tokens", "missing_condition_id", "missing_event_cluster",
+            "changed_market_tokens", "market_resolution_failed",
+        } for event in arm["feed_events"]):
+            limitations.append(f"{label} encountered a paired feed/market coverage gap")
+
+    crun, trun = control["run"], treatment["run"]
+    starts = [float(crun["started_at"]), float(trun["started_at"])]
+    ends = [float(crun["finished_at"]) if crun["finished_at"] is not None else float(crun["started_at"]),
+            float(trun["finished_at"]) if trun["finished_at"] is not None else float(trun["started_at"])]
+    common_start, common_end = max(starts), min(ends)
+    if common_end <= common_start:
+        limitations.append("control and treatment have no positive overlapping run window")
+    bankrolls = [float(crun["starting_bankroll_usd"]),
+                 float(trun["starting_bankroll_usd"])]
+    if max(bankrolls) - min(bankrolls) > 0.01:
+        limitations.append("starting bankrolls are not equal within one cent")
+    equal_bankroll = sum(bankrolls) / 2.0
+    if equal_bankroll <= 0:
+        limitations.append("starting bankroll is not positive")
+    for label, run in (("control", crun), ("treatment", trun)):
+        actual = (float(run["finished_at"]) - float(run["started_at"])
+                  if run["finished_at"] is not None else 0.0)
+        planned = float(run["planned_minutes"]) * 60.0
+        if actual + max_mark_age_sec < planned:
+            limitations.append(f"{label} run ended before its planned duration")
+
+    def snapshot_set(arm: dict) -> set[str]:
+        return {str(row["snapshot_id"]) for row in arm["snapshots"]}
+
+    control_snapshots = snapshot_set(control)
+    treatment_snapshots = snapshot_set(treatment)
+    snapshot_mismatch = sorted(control_snapshots ^ treatment_snapshots)
+    if snapshot_mismatch:
+        limitations.append("control and treatment did not observe the same feed snapshots")
+    if not control_snapshots and not treatment_snapshots:
+        limitations.append("no paired feed snapshot was recorded in either arm")
+
+    cmap, ccluster_issues = _condition_clusters(
+        control, start=common_start, end=common_end, start_market_values={})
+    tmap, tcluster_issues = _condition_clusters(
+        treatment, start=common_start, end=common_end, start_market_values={})
+    limitations.extend(f"control: {issue}" for issue in ccluster_issues)
+    limitations.extend(f"treatment: {issue}" for issue in tcluster_issues)
+
+    def arm_horizons(fills: list[dict], markouts: list[dict], mapping: dict[str, str],
+                     label: str) -> dict:
+        """Per-fill excess markouts joined to event clusters, per horizon."""
+        by_horizon: dict[str, dict[str, list[float]]] = {
+            h: {} for h in ADMISSION_HORIZON_SEC}
+        due_missing: dict[str, list[str]] = {h: [] for h in ADMISSION_HORIZON_SEC}
+        due_count = 0
+        not_due_count = 0
+        for fill in fills:
+            cid = str(fill.get("condition_id") or "")
+            cluster = mapping.get(cid)
+            if not cluster:
+                continue
+            fill_ts = _event_time(fill.get("venue_ts") or fill.get("recorded_ts")) or 0.0
+            try:
+                price = float(fill.get("price"))
+                size = float(fill.get("size"))
+            except (TypeError, ValueError):
+                continue
+            if size <= 0:
+                continue
+            sample = _match_markout(
+                markouts, condition_id=cid,
+                token_id=str(fill.get("token_id") or ""),
+                price=price, size=size, fill_ts=fill_ts)
+            for horizon, window in ADMISSION_HORIZON_SEC.items():
+                due = fill_ts + window <= common_end
+                if not due:
+                    if horizon == "h3":
+                        not_due_count += 1
+                    continue
+                if horizon == "h3":
+                    due_count += 1
+                value = _refs_excess(sample.get("refs_json") if sample else None,
+                                     horizon) if sample else None
+                if value is None:
+                    if horizon == "h3":
+                        due_missing["h3"].append(str(fill.get("trade_id") or cid))
+                    continue
+                by_horizon[horizon].setdefault(cluster, []).append((value, size))
+        return {"by_horizon": by_horizon, "due_missing": due_missing,
+                "due_count": due_count, "not_due_count": not_due_count}
+
+    carm = arm_horizons(c_fills, c_markouts, cmap, "control")
+    tarm = arm_horizons(t_fills, t_markouts, tmap, "treatment")
+
+    def cluster_means(per_cluster: dict[str, list[tuple[float, float]]]) -> dict[str, float]:
+        return {cluster: sum(v * s for v, s in pairs) / sum(s for _, s in pairs)
+                for cluster, pairs in per_cluster.items() if pairs}
+
+    horizons: dict[str, dict] = {}
+    seed_base = sum(map(ord, control_run_id + treatment_run_id))
+    for horizon in ADMISSION_HORIZON_SEC:
+        cmeans = cluster_means(carm["by_horizon"][horizon])
+        tmeans = cluster_means(tarm["by_horizon"][horizon])
+        horizons[horizon] = {
+            "control": {
+                "mean": (sum(cmeans.values()) / len(cmeans)) if cmeans else None,
+                "interval": _bootstrap_mean_ci(sorted(cmeans.values()),
+                                               bootstrap_replicates, seed_base),
+                "clusters": len(cmeans),
+            },
+            "treatment": {
+                "mean": (sum(tmeans.values()) / len(tmeans)) if tmeans else None,
+                "interval": _bootstrap_mean_ci(sorted(tmeans.values()),
+                                               bootstrap_replicates, seed_base + 1),
+                "clusters": len(tmeans),
+            },
+        }
+
+    h3c = cluster_means(carm["by_horizon"]["h3"])
+    h3t = cluster_means(tarm["by_horizon"]["h3"])
+    for label, means in (("control", h3c), ("treatment", h3t)):
+        if len(means) < ADMISSION_MIN_CLUSTERS:
+            limitations.append(
+                f"{label} has {len(means)} event clusters with a usable h3 mark; "
+                f"floor is {ADMISSION_MIN_CLUSTERS}")
+    for label, missing in (("control", carm["due_missing"]["h3"]),
+                           ("treatment", tarm["due_missing"]["h3"])):
+        if missing:
+            limitations.append(
+                f"{label} has {len(missing)} due fill(s) without an h3 excess markout")
+
+    # Joint union bootstrap for the treatment-minus-control h3 difference.
+    union = sorted(set(h3c) | set(h3t))
+    diff = ((sum(h3t.values()) / len(h3t)) - (sum(h3c.values()) / len(h3c))
+            if h3c and h3t else None)
+    interval = None
+    if union and h3c and h3t:
+        rng = random.Random(seed_base)
+        replicates = []
+        for _ in range(bootstrap_replicates):
+            drawn = [union[rng.randrange(len(union))] for _ in range(len(union))]
+            tc = [h3t[c] for c in drawn if c in h3t]
+            cc = [h3c[c] for c in drawn if c in h3c]
+            if tc and cc:
+                replicates.append(sum(tc) / len(tc) - sum(cc) / len(cc))
+        if replicates:
+            replicates.sort()
+            lo = max(0, math.floor(0.025 * (len(replicates) - 1)))
+            hi = min(len(replicates) - 1, math.ceil(0.975 * (len(replicates) - 1)))
+            interval = (replicates[lo], replicates[hi])
+    if diff is not None and interval is None:
+        limitations.append("paired h3 interval unavailable: no usable joint resample")
+
+    cdd, cdd_issues = _equity_curve(
+        control["equity_marks"], common_start, common_end,
+        float(crun["starting_bankroll_usd"]), max_mark_age_sec)
+    tdd, tdd_issues = _equity_curve(
+        treatment["equity_marks"], common_start, common_end,
+        float(trun["starting_bankroll_usd"]), max_mark_age_sec)
+    for label, issues in (("control", cdd_issues), ("treatment", tdd_issues)):
+        limitations.extend(f"{label} drawdown: {item}" for item in issues)
+    dd_increase = tdd - cdd if tdd is not None and cdd is not None else None
+    if dd_increase is None:
+        limitations.append("drawdown is unmeasured in one or both arms")
+
+    def exit_loss_rate(arm: dict, label: str, notional: float):
+        loss = 0.0
+        for close in arm["closes"]:
+            if not common_start <= float(close["ts"]) <= common_end:
+                continue
+            if close.get("method") in {"single_buy_exit", "naked_exit"}:
+                pnl = close.get("realized_pnl")
+                if pnl is None or not math.isfinite(float(pnl)):
+                    limitations.append(
+                        f"{label} close {close['id']} has no finite realized PnL")
+                    continue
+                loss += max(0.0, -float(pnl))
+        if notional <= 0:
+            limitations.append(f"{label} has zero fill notional")
+            return None
+        return loss / notional
+
+    cexit_rate = exit_loss_rate(control, "control", c_notional)
+    texit_rate = exit_loss_rate(treatment, "treatment", t_notional)
+
+    bars = {
+        "markout_parity": diff is not None and diff >= ADMISSION_PARITY_FLOOR,
+        "interval_above_floor": interval is not None and interval[0] > ADMISSION_PARITY_FLOOR,
+        "drawdown_bounded": dd_increase is not None and dd_increase <= 1.0,
+        "exit_loss_rate": (cexit_rate is not None and texit_rate is not None
+                           and texit_rate <= cexit_rate),
+    }
+    measured = not limitations
+    decision = "inconclusive"
+    if measured and all(bars.values()):
+        decision = "adopt"
+    elif measured:
+        decision = "reject"
+    return {
+        "format": "spread_hunter.paired-admission-report.v1",
+        "measurement_status": "measured" if measured else "inconclusive",
+        "decision": decision,
+        "trial_axis": "admission",
+        "arms": {
+            "control": {"run_id": control_run_id, "database": str(control_db),
+                        "starting_bankroll_usd": crun["starting_bankroll_usd"],
+                        "started_at": crun["started_at"],
+                        "finished_at": crun["finished_at"]},
+            "treatment": {"run_id": treatment_run_id, "database": str(treatment_db),
+                          "starting_bankroll_usd": trun["starting_bankroll_usd"],
+                          "started_at": trun["started_at"],
+                          "finished_at": trun["finished_at"]},
+        },
+        "window": {"start": common_start, "end": common_end,
+                   "max_mark_age_sec": max_mark_age_sec},
+        "coverage": {
+            "control_clusters_usable_h3": len(h3c),
+            "treatment_clusters_usable_h3": len(h3t),
+            "control_due_fills": carm["due_count"],
+            "treatment_due_fills": tarm["due_count"],
+            "control_fills_not_yet_due": carm["not_due_count"],
+            "treatment_fills_not_yet_due": tarm["not_due_count"],
+            "control_due_fills_missing_h3": carm["due_missing"]["h3"],
+            "treatment_due_fills_missing_h3": tarm["due_missing"]["h3"],
+            "control_snapshots": sorted(control_snapshots),
+            "treatment_snapshots": sorted(treatment_snapshots),
+            "unmatched_snapshots": snapshot_mismatch,
+            "snapshot_ids_match": not snapshot_mismatch,
+        },
+        "horizons": horizons,
+        "h3_difference": {
+            "treatment_minus_control": diff,
+            "paired_95pct_interval": list(interval) if interval else None,
+        },
+        "drawdown": {
+            "control_per_100_bankroll": cdd,
+            "treatment_per_100_bankroll": tdd,
+            "increase_per_100_bankroll": dd_increase,
+        },
+        "single_buy_exit_loss_rate": {
+            "control": cexit_rate, "treatment": texit_rate,
+            "control_fill_notional_usd": c_notional,
+            "treatment_fill_notional_usd": t_notional,
+        },
+        "registered_bars": bars,
+        "limitations": sorted(set(limitations)),
+        "interpretation": (
+            "An inconclusive report is not evidence for admission. A verdict "
+            "reads only the four pre-registered h3 bars; PnL uplift never "
+            "enters it, and inconclusive never justifies changing the gate."
+        ),
+    }
+
+
+def _detect_trial_axis(control_db: Path | str, treatment_db: Path | str,
+                       control_run_id: str, treatment_run_id: str) -> str:
+    """Read trial_axis from both runs; admission only on unanimous verdict."""
+    axes = set()
+    for path, run_id in ((control_db, control_run_id),
+                         (treatment_db, treatment_run_id)):
+        conn = _read_only(path)
+        try:
+            rows = _rows(conn, "SELECT trial_axis FROM shadow_paired_runs WHERE run_id = ?",
+                         (run_id,))
+        except sqlite3.Error:
+            rows = [{"trial_axis": "depth"}]
+        finally:
+            conn.close()
+        axes.add(str((rows[0].get("trial_axis") if rows else "depth") or "depth"))
+    return "admission" if axes == {"admission"} else "depth"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Read-only paired-depth shadow analyzer; does not start a run.")
@@ -696,14 +1117,31 @@ def main(argv: list[str] | None = None) -> int:
         help="independent paired-pilot SD in normalized cluster uplift units; omitted means power is unproven")
     parser.add_argument("--output", default=None,
                         help="optional JSON report path; input stores remain read-only")
+    parser.add_argument("--trial-axis", choices=("auto", "depth", "admission"),
+                        default="auto",
+                        help="which verdict to compute; auto reads trial_axis from both runs")
     args = parser.parse_args(argv)
-    report = analyze_paired_depth(
-        control_db=args.control_db, treatment_db=args.treatment_db,
-        control_run_id=args.control_run_id, treatment_run_id=args.treatment_run_id,
-        bootstrap_replicates=args.bootstrap_replicates,
-        max_mark_age_sec=args.max_mark_age_sec,
-        pilot_paired_sigma_usd_per_cluster=args.pilot_paired_sigma_usd_per_cluster,
-    )
+    axis = args.trial_axis
+    if axis == "auto":
+        axis = _detect_trial_axis(args.control_db, args.treatment_db,
+                                  args.control_run_id, args.treatment_run_id)
+    if axis == "admission":
+        report = analyze_paired_admission(
+            control_db=args.control_db, treatment_db=args.treatment_db,
+            control_run_id=args.control_run_id,
+            treatment_run_id=args.treatment_run_id,
+            bootstrap_replicates=args.bootstrap_replicates,
+            max_mark_age_sec=args.max_mark_age_sec,
+        )
+    else:
+        report = analyze_paired_depth(
+            control_db=args.control_db, treatment_db=args.treatment_db,
+            control_run_id=args.control_run_id,
+            treatment_run_id=args.treatment_run_id,
+            bootstrap_replicates=args.bootstrap_replicates,
+            max_mark_age_sec=args.max_mark_age_sec,
+            pilot_paired_sigma_usd_per_cluster=args.pilot_paired_sigma_usd_per_cluster,
+        )
     text = json.dumps(report, indent=2, sort_keys=True)
     if args.output:
         target = Path(args.output)
