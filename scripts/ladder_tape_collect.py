@@ -35,6 +35,7 @@ from core_brain.price_tape import (  # noqa: E402
     HTTP_TIMEOUT,
     TapeMarket,
     TapeStore,
+    TapeStoreError,
     _new_session,
     parse_history,
 )
@@ -85,11 +86,14 @@ def _usable_market(market: dict) -> Optional[dict]:
         prices = raw_prices
     else:
         return None
+    if not isinstance(prices, list) or len(prices) != 2:
+        return None
     try:
         up_final = float(prices[0])
-    except (ValueError, TypeError, IndexError):
+        down_final = float(prices[1])
+    except (ValueError, TypeError):
         return None
-    if up_final not in (0.0, 1.0):
+    if (up_final, down_final) not in ((0.0, 1.0), (1.0, 0.0)):
         return None
     return {"tokens": [str(tokens[0]), str(tokens[1])],
             "condition_id": str(market.get("conditionId") or ""),
@@ -127,17 +131,18 @@ def collect(*, series_slug: str, out_db: str | Path, max_markets: int,
     refuse_tape(out_db)
     session = session or _new_session()
     store = TapeStore(out_db)
-    markets = ticks = skipped = 0
+    completed = ticks = skipped = 0
     for event in _closed_events(session, series_slug, gamma_host):
-        if markets >= max_markets:
+        if completed >= max_markets:
             break
         for row in event.get("markets") or []:
-            if markets >= max_markets:
+            if completed >= max_markets:
                 break
             usable = _usable_market(row)
             if not usable or not usable["condition_id"]:
                 skipped += 1
                 continue
+            legs_ok = True
             for token_id in usable["tokens"]:
                 store.record_market(TapeMarket(
                     token_id=token_id,
@@ -154,25 +159,35 @@ def collect(*, series_slug: str, out_db: str | Path, max_markets: int,
                         timeout=HTTP_TIMEOUT,
                     )
                     response.raise_for_status()
-                    ticks += store.append_ticks(
-                        token_id, parse_history(response.json()))
-                except (requests.RequestException, ValueError) as exc:
+                    history = parse_history(response.json())
+                    if not history:
+                        raise TapeStoreError(
+                            f"No tape served for {token_id}.")
+                    ticks += store.append_ticks(token_id, history)
+                except (requests.RequestException, ValueError,
+                        TapeStoreError) as exc:
                     log.warning("tape backfill failed for %s: %s",
                                 token_id, exc)
-                    skipped += 1
-                    continue
-                store.mark_resolved(token_id, usable["up_wins"])
+                    legs_ok = False
+                else:
+                    store.mark_resolved(token_id, usable["up_wins"])
             try:
                 with sqlite3.connect(out_db) as conn:
-                    conn.execute(
+                    updated = conn.execute(
                         "UPDATE markets SET first_seen = ?"
                         " WHERE condition_id = ?",
-                        (usable["start"], usable["condition_id"]))
+                        (usable["start"], usable["condition_id"])).rowcount
             except sqlite3.Error as exc:
                 log.warning("first_seen fixup failed for %s: %s",
                             usable["condition_id"], exc)
-            markets += 1
-    return {"markets": markets, "ticks": ticks, "skipped": skipped,
+                legs_ok = False
+            else:
+                legs_ok = legs_ok and updated == 2
+            if legs_ok:
+                completed += 1
+            else:
+                skipped += 1
+    return {"markets": completed, "ticks": ticks, "skipped": skipped,
             "db": str(out_db)}
 
 

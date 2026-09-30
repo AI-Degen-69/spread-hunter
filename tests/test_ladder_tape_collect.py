@@ -62,9 +62,13 @@ def _session():
 
 def test_needs_two_tokens_start_and_clean_resolution():
     assert _usable_market(_market_row())["up_wins"] is True
+    assert _usable_market(
+        _market_row(outcomePrices=json.dumps(["0", "1"])))["up_wins"] is False
     assert _usable_market(_market_row(clobTokenIds=json.dumps(["only"]))) is None
     assert _usable_market(_market_row(slug="no-epoch-here")) is None
     assert _usable_market(_market_row(outcomePrices=json.dumps(["0.5", "0.5"]))) is None
+    assert _usable_market(_market_row(outcomePrices=json.dumps(["1"]))) is None
+    assert _usable_market(_market_row(outcomePrices=json.dumps(["1", "1"]))) is None
 
 
 # --- collection ------------------------------------------------------------------
@@ -83,6 +87,24 @@ def test_collects_both_legs_with_ticks_and_resolution(tmp_path):
     assert {r[2] for r in rows} == {OPEN}
     assert con.execute("SELECT COUNT(*) FROM ticks").fetchone()[0] == 4
     con.close()
+
+
+def test_failed_leg_does_not_consume_the_quota(tmp_path):
+    import requests
+
+    class _Flaky(_Session):
+        def get(self, url, params=None, timeout=None):
+            if not url.endswith("/events") and params["market"] == "tok-down":
+                raise requests.RequestException("venue refused")
+            return super().get(url, params, timeout)
+
+    events = [{"markets": [_market_row()]}]
+    histories = {"tok-up": [{"t": OPEN + 16, "p": 0.60}]}
+    db = tmp_path / "ladder_tape.db"
+    stats = collect(series_slug="btc-up-or-down-5m", out_db=db,
+                    max_markets=10, session=_Flaky(events, histories))
+    assert stats["markets"] == 0
+    assert stats["skipped"] == 1
 
 
 def test_production_store_is_refused(tmp_path):
