@@ -1359,3 +1359,14 @@ def test_admission_cli_parses_and_rejects_depth_combo(tmp_path):
             "--paired-admission-arm", "control",
             "--paired-depth-arm", "control",
         ])
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "--minutes", "0",
+            "--db", str(tmp_path / "combo2.db"),
+            "--run-id", "shadow-combo2",
+            "--markets-path", "runtime/trials/adm/paired_admission_markets.json",
+            "--paired-admission-arm", "control",
+            "--paired-depth-cutoff-usd", "500",
+        ])
+    assert "cutoff" in str(exc.value)

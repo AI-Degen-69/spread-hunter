@@ -756,10 +756,16 @@ def _match_markout(markouts: list[dict], *, condition_id: str,
         if str(row.get("token_id") or "") != token_id:
             continue
         try:
-            if float(row.get("fill_price")) != float(price):
-                continue
-            if float(row.get("size")) != float(size):
-                continue
+            row_price = float(row.get("fill_price"))
+            row_size = float(row.get("size"))
+        except (TypeError, ValueError):
+            continue
+        # Same store round-trips identical floats, but fills and markouts are
+        # written by different writers: compare with tolerance, never ==.
+        if not (math.isclose(row_price, price, rel_tol=1e-9, abs_tol=1e-12)
+                and math.isclose(row_size, size, rel_tol=1e-9, abs_tol=1e-12)):
+            continue
+        try:
             gap = abs(float(row.get("ts") or 0.0) - fill_ts)
         except (TypeError, ValueError):
             continue
@@ -879,8 +885,8 @@ def analyze_paired_admission(
     limitations.extend(f"control: {issue}" for issue in ccluster_issues)
     limitations.extend(f"treatment: {issue}" for issue in tcluster_issues)
 
-    def arm_horizons(fills: list[dict], markouts: list[dict], mapping: dict[str, str],
-                     label: str) -> dict:
+    def arm_horizons(fills: list[dict], markouts: list[dict],
+                     mapping: dict[str, str]) -> dict:
         """Per-fill excess markouts joined to event clusters, per horizon."""
         by_horizon: dict[str, dict[str, list[float]]] = {
             h: {} for h in ADMISSION_HORIZON_SEC}
@@ -922,8 +928,8 @@ def analyze_paired_admission(
         return {"by_horizon": by_horizon, "due_missing": due_missing,
                 "due_count": due_count, "not_due_count": not_due_count}
 
-    carm = arm_horizons(c_fills, c_markouts, cmap, "control")
-    tarm = arm_horizons(t_fills, t_markouts, tmap, "treatment")
+    carm = arm_horizons(c_fills, c_markouts, cmap)
+    tarm = arm_horizons(t_fills, t_markouts, tmap)
 
     def cluster_means(per_cluster: dict[str, list[tuple[float, float]]]) -> dict[str, float]:
         return {cluster: sum(v * s for v, s in pairs) / sum(s for _, s in pairs)
@@ -996,7 +1002,7 @@ def analyze_paired_admission(
     if dd_increase is None:
         limitations.append("drawdown is unmeasured in one or both arms")
 
-    def exit_loss_rate(arm: dict, label: str, notional: float):
+    def exit_loss_rate(arm: dict, label: str, notional: float) -> float | None:
         loss = 0.0
         for close in arm["closes"]:
             if not common_start <= float(close["ts"]) <= common_end:
@@ -1095,7 +1101,13 @@ def _detect_trial_axis(control_db: Path | str, treatment_db: Path | str,
         try:
             rows = _rows(conn, "SELECT trial_axis FROM shadow_paired_runs WHERE run_id = ?",
                          (run_id,))
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            # A store from before the axis existed has no trial_axis column:
+            # that schema signal means depth. Any other read failure is
+            # corruption, and guessing an axis would analyze it wrong.
+            if "no such column" not in str(exc).lower():
+                raise PairedDepthReportError(
+                    f"cannot determine trial axis: {exc}") from exc
             rows = [{"trial_axis": "depth"}]
         finally:
             conn.close()

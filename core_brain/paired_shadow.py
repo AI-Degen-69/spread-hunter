@@ -117,6 +117,8 @@ def ensure_paired_shadow_tables(db_path: Path | str) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_shadow_paired_equity_run_ts
                 ON shadow_paired_equity_marks (run_id, ts);
+            CREATE INDEX IF NOT EXISTS idx_shadow_paired_orders_cluster
+                ON shadow_paired_orders (run_id, event_cluster_id);
             """
         )
         conn.commit()
@@ -168,6 +170,18 @@ def record_paired_run_start(
         raise PairedShadowError("bankroll and duration must be positive")
     if trial_axis == "depth" and not (cutoff_usd is not None and cutoff_usd > 0):
         raise PairedShadowError("bankroll, duration, and cutoff must be positive")
+    with closing(get_connection(Path(db_path))) as conn:
+        if trial_axis == "admission":
+            # Old stores keep `cutoff_usd REAL NOT NULL` by design (no
+            # rebuild); an admission row would die there with a raw
+            # IntegrityError. Refuse up front, in our own error type.
+            info = conn.execute("PRAGMA table_info(shadow_paired_runs)").fetchall()
+            notnull = next((bool(r["notnull"]) for r in info
+                            if r["name"] == "cutoff_usd"), False)
+            if notnull:
+                raise PairedShadowError(
+                    "admission runs need a store created by the current build; "
+                    "this store predates nullable cutoffs")
     with closing(get_connection(Path(db_path))) as conn:
         existing = conn.execute(
             "SELECT 1 FROM shadow_paired_runs WHERE run_id = ?", (run_id,)
@@ -270,9 +284,11 @@ def _open_exposure_on_cluster(conn, *, run_id: str, event_cluster_id: str,
                                exclude_condition_id: str) -> str:
     """A held condition in the same event, or "" when the cluster is free.
 
-    Open means an attributed order with no completion yet: a NULL pair, or a
-    pair seen exactly once (the completion copy writes the same pair_id a
-    second time). The candidate's own condition never blocks itself.
+    Open means an attributed order with no completion yet: a missing pair, or
+    a pair seen exactly once (the completion copy writes the same pair_id a
+    second time). A close for the condition retires it: an exited, merged or
+    settled pair holds nothing. The candidate's own condition never blocks
+    itself.
     """
     rows = conn.execute(
         """SELECT condition_id, pair_id FROM shadow_paired_orders
@@ -283,14 +299,25 @@ def _open_exposure_on_cluster(conn, *, run_id: str, event_cluster_id: str,
     by_pair: dict[str, int] = {}
     for row in rows:
         pair = row["pair_id"]
-        if pair is None:
+        if pair is None or str(pair) == "":
             return str(row["condition_id"])
         by_pair[str(pair)] = by_pair.get(str(pair), 0) + 1
+    closed = {row["condition_id"] for row in conn.execute(
+        "SELECT DISTINCT condition_id FROM closes WHERE run_id = ?",
+        (run_id,)).fetchall()} if _table_exists(conn, "closes") else set()
     for row in rows:
         pair = row["pair_id"]
-        if pair is not None and by_pair.get(str(pair), 0) < 2:
+        if pair is None or str(pair) == "":
+            continue
+        if by_pair.get(str(pair), 0) < 2 and row["condition_id"] not in closed:
             return str(row["condition_id"])
     return ""
+
+
+def _table_exists(conn, name: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (name,)).fetchone() is not None
 
 
 def record_paired_market_selection(

@@ -542,3 +542,72 @@ def test_guard_ignores_control_arm(tmp_path):
     record_paired_market_selection(
         db, run_id="r1", arm="control", cutoff_usd=None,
         spec=_adm_spec("0xsecond", arm="control"))
+
+
+def test_guard_releases_cluster_after_close(tmp_path):
+    import sqlite3
+
+    from core_brain.order_registry import CloseRecord, OrderRegistry
+    from core_brain.paired_shadow import (
+        PairedShadowError,
+        record_paired_market_selection,
+        record_paired_order_attribution,
+        record_paired_run_start,
+    )
+
+    db = tmp_path / "guard-release.db"
+    registry = OrderRegistry(db, run_id="r1")
+    _adm_db(db).close()
+    record_paired_run_start(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        starting_bankroll_usd=100.0, started_at=1.0, planned_minutes=5.0,
+        trial_axis="admission")
+    record_paired_market_selection(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        spec=_adm_spec("0xfirst", role="fallback"))
+    record_paired_order_attribution(
+        db, run_id="r1", local_id="loc-a", condition_id="0xfirst",
+        pair_id="pA")
+    registry.log_close(CloseRecord(
+        ts=2.0, condition_id="0xfirst", method="single_buy_exit", shares=1.0,
+        cost_basis=0.5, proceeds=0.4, realized_pnl=-0.1,
+        up_price=0.5, up_cost_removed=0.5, dn_cost_removed=0.0,
+        run_id="r1",
+    ))
+    # The exited pair holds nothing: the next fallback is admitted.
+    record_paired_market_selection(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        spec=_adm_spec("0xsecond", role="fallback"))
+    with sqlite3.connect(db) as conn:
+        kinds = [row[0] for row in conn.execute(
+            "SELECT kind FROM shadow_paired_feed_events")]
+    assert "fallback_guard_skip" not in kinds
+
+
+def test_admission_run_start_refuses_old_store(tmp_path):
+    import sqlite3
+
+    from core_brain.paired_shadow import (
+        PairedShadowError,
+        record_paired_run_start,
+    )
+
+    db = tmp_path / "old-cutoff.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """CREATE TABLE shadow_paired_runs (
+                run_id TEXT PRIMARY KEY,
+                arm TEXT NOT NULL,
+                cutoff_usd REAL NOT NULL,
+                starting_bankroll_usd REAL NOT NULL,
+                started_at REAL NOT NULL,
+                planned_minutes REAL NOT NULL,
+                finished_at REAL,
+                status TEXT NOT NULL DEFAULT 'running'
+            )""")
+        conn.commit()
+    with pytest.raises(PairedShadowError, match="current build"):
+        record_paired_run_start(
+            db, run_id="r1", arm="treatment", cutoff_usd=None,
+            starting_bankroll_usd=100.0, started_at=1.0, planned_minutes=5.0,
+            trial_axis="admission")

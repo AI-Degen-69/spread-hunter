@@ -1267,6 +1267,9 @@ def main(
         raise SystemExit("--paired-admission-arm requires --markets-path")
     if a.paired_depth_arm is not None and a.paired_admission_arm is not None:
         raise SystemExit("paired depth and admission arms are mutually exclusive")
+    if (a.paired_admission_arm is not None
+            and a.paired_depth_cutoff_usd is not None):
+        raise SystemExit("paired-admission runs carry no dollar cutoff")
     if markets_fn is not None:
         resolved_markets_fn = markets_fn
     elif a.markets_path is not None:

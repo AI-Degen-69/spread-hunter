@@ -1498,12 +1498,15 @@ def build_paired_admission_bundle(
                 reason = str(gone["reject_reason"])
                 break
         treatment.append((subs[0], "fallback", reason))
+    # Top-N across events by the same score control uses, so the two arms
+    # differ only in admission, never in score order.
+    treatment.sort(key=lambda item: -float(item[0].get("return_pct_day") or 0.0))
     treatment = treatment[:top]
 
-    def arm_rows(picks: list, arm: str) -> list[dict]:
+    def arm_rows(picks: list[dict], arm: str) -> list[dict]:
         rows = []
-        for item in picks:
-            row, role, fallback_reason = item if isinstance(item, tuple) else (item, item.get("admission_role") or "", "")
+        for row in picks:
+            role = str(row.get("admission_role") or "")
             tagged = {
                 **row,
                 "trial_arm": arm,
@@ -1514,15 +1517,18 @@ def build_paired_admission_bundle(
                 "family": family_key(row.get("title"), row.get("slug"),
                                      row.get("series_title"),
                                      row.get("event_title")),
-                "admission_role": role if arm == "treatment" else row.get("admission_role") or "",
+                "admission_role": role,
             }
             if arm == "treatment" and role == "fallback":
-                tagged["fallback_reason"] = fallback_reason
+                tagged["fallback_reason"] = str(row.get("fallback_reason") or "")
             rows.append(tagged)
         return rows
 
     control_rows = arm_rows(control, "control")
-    treatment_rows = arm_rows(treatment, "treatment")
+    treatment_rows = arm_rows(
+        [{**row, "admission_role": role, "fallback_reason": reason}
+         for row, role, reason in treatment],
+        "treatment")
     return {
         "format": PAIRED_ADMISSION_BUNDLE_FORMAT,
         "snapshot_id": snapshot_id,
@@ -1553,8 +1559,8 @@ def build_paired_admission_bundle(
 def _require_complete_listing(disc_meta: dict, mode: str) -> None:
     """Refuse a paired bundle on a partial Gamma listing (environment, not bug)."""
     if disc_meta.get("truncated"):
-        print(f"PAIRED_UNIVERSE_TRUNCATED: refusing to publish a paired bundle "
-              f"on a partial Gamma listing", file=sys.stderr)
+        print("PAIRED_UNIVERSE_TRUNCATED: refusing to publish a paired bundle "
+              "on a partial Gamma listing", file=sys.stderr)
         raise SystemExit(
             f"paired-{mode} mode requires a complete Gamma universe; "
             f"the current scan was truncated")
@@ -2412,8 +2418,8 @@ def main() -> None:
     rejected = len(out) - len(eligible)
     eligible.sort(key=lambda r: -r["return_pct_day"])
     paired_bundle = None
-    paired_audit_name = "paired_depth_audit.jsonl"
-    paired_filename = "paired_markets.json"
+    paired_audit_name = ""
+    paired_filename = ""
     if args.paired_admission:
         if args.legacy_rewards:
             raise SystemExit("paired-admission mode cannot combine with --legacy-rewards")
@@ -2431,7 +2437,7 @@ def main() -> None:
             paired_bundle["control"] + paired_bundle["treatment"], "admission")
         paired_audit_name = "paired_admission_audit.jsonl"
         paired_filename = "paired_admission_markets.json"
-        picked = [r for r in paired_bundle["treatment"]]
+        picked = list(paired_bundle["treatment"])
     if args.paired_depth_control_usd is not None:
         if args.legacy_rewards:
             raise SystemExit("paired-depth mode cannot combine with --legacy-rewards")
