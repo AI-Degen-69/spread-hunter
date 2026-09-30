@@ -336,3 +336,37 @@
   Q1–Q3 (rung count, exit window, order lifetime) are answered by the probe's
   CIs, with one-leg residues scored at real resolution outcomes, never zero.
 - No new external dependencies.
+
+# Constraints: Issue #324 — Shadow rehearsal on BTC+ETH 5-min ladders (no signer)
+
+## Quality & Tests
+- Zero regressions: `tests/test_shadow_run.py`, `tests/test_shadow_exec.py`,
+  `tests/test_single_buy_saver.py`, `tests/test_ladder_probe.py`,
+  `tests/test_ladder_tape_collect.py` stay 100% green; full `python -m pytest -q`
+  stays with GitHub CI on push (merge gate).
+- New behaviour needs tests RED against untouched code and GREEN after; each added
+  assertion must fail without its change. The new harness is
+  `tests/test_ladder_shadow_rehearsal.py` (fixture rehearsal, offline).
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions,
+  or bypassing linters. Tests use `tmp_path` fixtures; no test writes into live
+  `data/` or `run/`. `data/orders.db` is never touched by the harness or a test.
+
+## Behavior Boundaries
+- **Rehearsal only, no production code.** `scripts/ladder_shadow_rehearsal.py`
+  drives `run_shadow` through the injectable seam (`markets_fn`, `decide_fn`,
+  `fetch_books`) and changes no shipped module. The screener, quoting, caps,
+  and the pairs/exit thresholds are untouched.
+- **No signer, no venue writes.** Fills come from the tape cursor, books from
+  the same cursor; the only network is the rehearsal's own public resolution
+  read (stubbed in tests). Order ids stay `shadow-`-prefixed; closes carry no
+  on-chain hash.
+- **One pair_id per market, rung lifecycle.** Every rung carries the market's
+  single `pair_id` (the `record_submit` carry semantic); filled rungs retire,
+  cancelled rungs re-quote, and a market with an exit close goes dark (no
+  re-post of exited shares under the market-wide stamp).
+- **Probe gates, rehearsal proves.** The gate (both series verdict go) is
+  checked before any rehearsal; the rehearsal reports placement + fill + exit
+  per series with conservation (filled == merged legs + exited + settled,
+  zero orphans, zero double-counts). Merge rows count pair-units; only
+  `shadow_merge_legs` counts leg shares.
+- No new external dependencies; no live execution during build.

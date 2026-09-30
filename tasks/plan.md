@@ -80,3 +80,51 @@ CHECKPOINT 2: shadow rehearsal shows rungs resting, filling, and exiting per spe
 Build the probe before the ladder, not after — the issue requires probe data before implementation, so code tasks stay gated on probe numbers.
 Evidence, verbatim from the issue: "### Open questions — to be answered by an objective probe before implementation" and owner: "Status: not started, and it should not be started without a direction from you first."
 Rejected: none. Scope expansion: none proposed.
+
+---
+# Plan — Issue #324: shadow rehearsal on BTC+ETH 5-min ladders (no signer)
+
+Branch: i324/d11-followup-shadow-rehearsal-on-btceth-5-min | Issue: #324
+Size: Standard · Type: Code · Stack: Python + pytest
+Status: BUILT 2026-09-30. Gate was GO (BTC probe `reports/ladder_probe_btc5.json`
+verdict go, shape 2 / exit_60, 200 markets; ETH probe `reports/ladder_probe_eth5.json`
+verdict go, shape 2 / exit_60, 200 markets, posted on #323). No production code changed.
+
+## What was built
+- `scripts/ladder_shadow_rehearsal.py`: parameterized harness (series tape or
+  built-in 2-market fixture) driving `run_shadow` via the injectable seam.
+  Ladder-mimic `decide_fn` posts the probe-winning shape with one `pair_id`
+  per market (the `record_submit` carry semantic, pinned by test); rung
+  lifecycle (filled retires, cancelled re-quotes, exit closes retire the
+  market); tape-cursor trades (print at/through a rung = volume at that rung)
+  and books; per-series JSON report with conservation.
+- `tests/test_ladder_shadow_rehearsal.py`: 9 tests, RED-verified (stamp removal
+  fails the placement tests), fully offline (tape driver in-process,
+  resolution sweep stubbed, `tmp_path` stores).
+
+## Rehearsal outcomes (operator-rerunnable; artifacts in C:/Temp, see report)
+- Fixture: placements under one pair_id/market, oldest-first fills, 0 orphans,
+  0 double-counts; balanced market merges, one-leg residue exits, all fills
+  accounted; zero live execution (shadow ids, production store refused).
+- BTC tape (6 markets, 12 rotations): 70 filled = 20 merged legs + 40 exited + 10 settled.
+- ETH tape (6 markets, 12 rotations): 60 filled = 50 exited + 10 settled.
+- Report fix during build: merge close rows count pair-units; conservation
+  reads leg shares from `shadow_merge_legs` (+ exits + settlements).
+
+## Handoff to #325 (findings, not code)
+1. REFILL-AFTER-EXIT (filed as follow-up): `load_pair` naked is fills-only;
+   prior `single_buy_exit` closes net only on the venue side, so re-posting
+   exited shares under the same market-wide stamp trips the oversell
+   pre-flight (`_check_positions` refuses; no oversell occurs, but the leg
+   strands). The harness avoids it by retiring exited markets. #325 must
+   decide the rung lifecycle (one-shot rungs vs re-post with a fresh pair)
+   or net prior exits in exit sizing. Failing that decision, the ladder will
+   strand refills the same way.
+2. Grace-0 immediacy: with the shipped grace default (0.0), any one-sided
+   fill exits the next pass -- a staggered opposite fill never gets to
+   arrive. The fixture balances both legs in one rotation to show the merge
+   path; operator grace (>0) would hold instead.
+3. Re-gate vs high rungs: a kept rung is re-tested at rung + opposite ask,
+   so 0.55 rungs churn against ~0.5x asks until the opposite leg is held
+   (`hedge_held` exemption). Same pair_id throughout; harmless here, worth
+   knowing for #325 telemetry.
