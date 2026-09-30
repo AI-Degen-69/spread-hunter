@@ -507,7 +507,15 @@ def decide_ladder_quotes(cfg: MakerConfig, market, up_book: dict,
         mids[side] = mid
     up_ask = up_book.get("best_ask")
     down_ask = down_book.get("best_ask")
-    per_rung = max(1, int(cfg.ladder_budget_usd / (2 * cfg.ladder_rungs)))
+    # The separate allocation is a hard gate, not a hint: an unfunded
+    # ladder (or one below a share per rung) posts nothing. `record_submit`
+    # enforces venue caps, not this budget, so a minimum-one floor here
+    # would let one-share orders through on a zero budget.
+    if cfg.ladder_budget_usd <= 0:
+        return [], "ladder unfunded"
+    per_rung = int(cfg.ladder_budget_usd / (2 * cfg.ladder_rungs))
+    if per_rung < 1:
+        return [], "ladder budget below one share per rung"
     intents: list[QuoteIntent] = []
     for side, token, _book in legs:
         hedge_ask = down_ask if side == "UP" else up_ask

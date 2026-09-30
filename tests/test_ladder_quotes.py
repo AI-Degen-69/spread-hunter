@@ -70,6 +70,16 @@ def test_blocked_top_rung_is_not_posted():
     assert ups == [0.48], "no churn: blocked rungs stay unposted"
 
 
+def test_unfunded_ladder_posts_nothing():
+    """Zero budget (or dust) is a hard gate: no one-share orders."""
+    up, down = _books()
+    for kw in ({"ladder_budget_usd": 0.0}, {"ladder_budget_usd": 1.0}):
+        cfg = MakerConfig(ladder_mode=True, **kw)
+        intents, _ = route_quotes(cfg, _market(), up, down, _inv(), 290.0,
+                                  window_frac=0.0, now=NOW)
+        assert intents == []
+
+
 def test_outside_window_posts_nothing():
     cfg = MakerConfig(ladder_mode=True, ladder_budget_usd=20.0)
     up, down = _books()
