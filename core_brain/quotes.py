@@ -501,16 +501,26 @@ def decide_ladder_quotes(cfg: MakerConfig, market, up_book: dict,
         if mid is None:
             return [], f"ladder: {side} has no two-sided book"
         mids[side] = mid
+    up_ask = up_book.get("best_ask")
+    down_ask = down_book.get("best_ask")
     per_rung = max(1, int(cfg.ladder_budget_usd / (2 * cfg.ladder_rungs)))
     intents: list[QuoteIntent] = []
     for side, token, _book in legs:
+        hedge_ask = down_ask if side == "UP" else up_ask
         for i in range(1, cfg.ladder_rungs + 1):
             price = round(0.50 - i * tick, 4)
+            # No churn: a rung the planner's completable gate would cancel
+            # is not posted. Completion buys the hedge at its ask, so a
+            # rung + hedge ask at/over the cap is a booked loss already.
+            if risk.completable_pair_block(cfg, price, hedge_ask):
+                continue
             intents.append(QuoteIntent(
                 side=side, token_id=token, price=price, size=per_rung,
                 mid=mids[side], edge_vs_mid=mids[side] - price,
                 reason=f"ladder rung {i}/{cfg.ladder_rungs}",
             ))
+    if not intents:
+        return [], "ladder: no rung completes under the cap"
     return intents, f"ladder {cfg.ladder_rungs} rungs/side"
 
 

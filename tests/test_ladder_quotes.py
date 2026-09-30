@@ -19,8 +19,8 @@ def _market(start_off=-10.0):
 
 
 def _books():
-    up = {"best_bid": 0.49, "best_ask": 0.51}
-    down = {"best_bid": 0.49, "best_ask": 0.51}
+    up = {"best_bid": 0.47, "best_ask": 0.50}
+    down = {"best_bid": 0.47, "best_ask": 0.50}
     return up, down
 
 
@@ -56,6 +56,18 @@ def test_open_window_posts_two_equal_rungs_per_side():
     assert len(sizes) == 1  # equal-sized rungs
     assert all(i.price < 0.50 for i in intents)  # resting rungs, not taking
     assert "ladder" in why
+
+
+def test_blocked_top_rung_is_not_posted():
+    """Tight books: the 0.49 rung cannot complete, only 0.48 rests."""
+    cfg = MakerConfig(ladder_mode=True, ladder_rungs=2,
+                      ladder_budget_usd=20.0)
+    up = {"best_bid": 0.49, "best_ask": 0.51}
+    down = {"best_bid": 0.49, "best_ask": 0.51}
+    intents, _ = route_quotes(cfg, _market(), up, down, _inv(), 290.0,
+                              window_frac=0.0, now=NOW)
+    ups = sorted(i.price for i in intents if i.side == "UP")
+    assert ups == [0.48], "no churn: blocked rungs stay unposted"
 
 
 def test_outside_window_posts_nothing():
