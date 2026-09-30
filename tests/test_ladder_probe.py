@@ -95,6 +95,15 @@ def test_timed_exit_uses_last_price_before_deadline_minus_slippage():
     assert res["pnl"]["exit_60"] == pytest.approx(0.40 - 0.02 - 0.44)
 
 
+def test_timed_exit_without_early_sample_is_unmeasurable():
+    m = _market(leg_a=[(OPEN + 100, 0.44)],
+                leg_b=[(OPEN + 5, 0.50), (OPEN + 10, 0.56)],
+                winner="leg_a")
+    res = simulate_market(m, rungs=RUNGS, exit_sec=(60,))
+    assert res["outcome"] == "one_leg_a"
+    assert res["pnl"]["exit_60"] is None
+
+
 def test_nothing_fills_is_nothing():
     m = _market(leg_a=[(OPEN + 5, 0.50), (OPEN + 10, 0.51)],
                 leg_b=[(OPEN + 5, 0.50), (OPEN + 10, 0.51)])

@@ -18,6 +18,7 @@ warned about.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import sqlite3
@@ -95,14 +96,17 @@ def _fills(ticks: list, rungs: tuple) -> dict:
 
 
 def _last_at_or_before(ticks: list, deadline: int) -> Optional[tuple]:
+    """Last sample at or before the deadline; None when the tape starts late.
+
+    No fallback to a later print: using a post-deadline price as an exit
+    would be lookahead, so a late-starting tape stays unmeasurable.
+    """
     seen = None
     for ts, price in ticks:
         if ts <= deadline:
             seen = (ts, price)
         else:
             break
-    if seen is None and ticks:
-        seen = ticks[0]
     return seen
 
 
@@ -275,7 +279,7 @@ def run(tape: str, out: str, slug_like: str, window_sec: int,
         conn = sqlite3.connect(f"file:{tape_path}?mode=ro", uri=True)
     except sqlite3.Error as exc:
         raise TapeError(f"Cannot open tape read-only: {exc}.") from exc
-    with conn:
+    with contextlib.closing(conn):
         markets = load_series(conn, slug_like, window_sec)
     shapes = shapes or SHAPES
     by_shape = {}
