@@ -45,6 +45,7 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Optional
 
+from core_brain.ladder import is_ladder_pair
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
 
 DATA_API_BASE = "https://data-api.polymarket.com"
@@ -1614,7 +1615,7 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     # rungs rest until `ladder_exit_sec`, then leave with the ladder_exit
     # method. Adverse drift above still exits immediately -- the timer is
     # patience, not permission to bleed.
-    is_ladder = pair["pair_id"].startswith("ladder:") \
+    is_ladder = is_ladder_pair(pair["pair_id"]) \
         and bool(getattr(cfg, "ladder_mode", False))
     exit_method = "ladder_exit" if is_ladder else "single_buy_exit"
     if is_ladder:
