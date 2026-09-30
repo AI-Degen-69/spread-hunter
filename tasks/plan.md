@@ -56,6 +56,15 @@ Depends on: T1. Verify: probe runs on a fixture tape and prints both terms of th
 
 CHECKPOINT 1: probe numbers in hand → go (build T3/T4) or no-go (stop, record why). One-line report, not a full pause in auto mode.
 
+CHECKPOINT 1 OUTCOME (2026-09-30): NO-GO for T3/T4. The probe is built, 13/13
+focused tests green, CLI proven read-only on the real store — but the store
+cannot feed it: `price_tape.db` records one token per market (183 markets, one
+token each), and none is a 5-min/15-min up/down series market. The probe
+reported `markets: 0, strategy: unmeasurable`, exactly as designed. Next data
+step before any ladder code: record both legs of the BTC/ETH 5-min and 15-min
+series (both clob token IDs per market), then rerun the probe. T3/T4 stay
+gated; nothing was built on numbers-free assumptions.
+
 ### T3 — [Backend/Logic] Ladder path behind the switch (L, gated)
 Config (`ladder_mode` off default + shapes/timers/budget), series discovery (upcoming markets, `fetch_live_market` untouched), separate ladder decision function (open-window gate, equal sizes, distinct-side counting), per-rung telemetry, `ladder_exit` close method in all naked-close sets.
 Depends on: CHECKPOINT 1 go. Verify: focused tests for config validation, discovery ordering, ladder gating.
