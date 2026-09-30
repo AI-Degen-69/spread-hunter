@@ -471,6 +471,66 @@ def _decide_quotes_from_mid(
     return out, ""
 
 
+def decide_ladder_quotes(cfg: MakerConfig, market, up_book: dict,
+                         down_book: dict, *,
+                         now: Optional[float] = None
+                         ) -> tuple[list[QuoteIntent], str]:
+    """Equal-sized rungs around 0.50 on both sides, at series OPEN only.
+
+    One rung per level per side; rung i rests at 0.50 - i*tick on its own
+    token. Per-rung size splits the separate ladder budget evenly across
+    all rung-legs (never Dynamic Caps). Outside the open window, on a
+    missing book, or with mode off, this posts nothing -- the caller routes
+    those cases to today's path untouched.
+    """
+    import time as _time
+    at = now if now is not None else _time.time()
+    if not cfg.ladder_mode:
+        return [], "ladder off"
+    if not (market.start_ts <= at
+            < market.start_ts + cfg.ladder_open_window_sec):
+        return [], "outside ladder open window"
+    tick = market.tick_size or 0.01
+    legs: list[tuple[str, str, dict]] = [
+        ("UP", market.up_token, up_book),
+        ("DOWN", market.down_token, down_book),
+    ]
+    mids: dict[str, float] = {}
+    for side, _tok, book in legs:
+        mid = mid_price(book.get("best_bid"), book.get("best_ask"))
+        if mid is None:
+            return [], f"ladder: {side} has no two-sided book"
+        mids[side] = mid
+    per_rung = max(1, int(cfg.ladder_budget_usd / (2 * cfg.ladder_rungs)))
+    intents: list[QuoteIntent] = []
+    for side, token, _book in legs:
+        for i in range(1, cfg.ladder_rungs + 1):
+            price = round(0.50 - i * tick, 4)
+            intents.append(QuoteIntent(
+                side=side, token_id=token, price=price, size=per_rung,
+                mid=mids[side], edge_vs_mid=mids[side] - price,
+                reason=f"ladder rung {i}/{cfg.ladder_rungs}",
+            ))
+    return intents, f"ladder {cfg.ladder_rungs} rungs/side"
+
+
+def route_quotes(cfg: MakerConfig, market, up_book: dict, down_book: dict,
+                 inv: Inventory, t_remaining: float,
+                 window_frac: Optional[float] = None, *,
+                 now: Optional[float] = None
+                 ) -> tuple[list[QuoteIntent], str]:
+    """The switch: ladder path when mode is on, today's path otherwise.
+
+    Mode off (or a market outside the ladder universe) delegates to
+    `decide_quotes` with identical arguments -- byte-identical output by
+    construction, pinned by the off-test.
+    """
+    if cfg.ladder_mode and market is not None:
+        return decide_ladder_quotes(cfg, market, up_book, down_book, now=now)
+    return decide_quotes(cfg, up_book, down_book, inv, t_remaining,
+                         window_frac)
+
+
 def decide_quotes(
     cfg: MakerConfig,
     up_book: dict,
