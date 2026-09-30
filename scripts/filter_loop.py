@@ -136,7 +136,12 @@ def parse_args(argv=None) -> argparse.Namespace:
                    metavar="USD",
                    help="forward a paired control depth bar; requires --out-dir "
                         "and an explicit lower --trial-depth")
+    p.add_argument("--paired-admission", action="store_true",
+                   help="forward the D12 admission-trial mode; requires "
+                        "an isolated --out-dir")
     args = p.parse_args(argv)
+    if args.paired_admission and args.out_dir is None:
+        p.error("--paired-admission requires an isolated --out-dir")
     if args.paired_depth_control_usd is not None:
         if args.out_dir is None:
             p.error("--paired-depth-control-usd requires an isolated --out-dir")
@@ -159,7 +164,8 @@ def _loop_paths(out_dir=None) -> tuple[Path, Path]:
 
 def _rank_cmd(top: int = 2, out_dir=None,
               trial_depth: float | None = None,
-              paired_depth_control_usd: float | None = None) -> list[str]:
+              paired_depth_control_usd: float | None = None,
+              paired_admission: bool = False) -> list[str]:
     """The ranker invocation, with any staged gate trials from config appended.
 
     The depth trial (U32) and the volume trial (U36) stay opt-in: when
@@ -180,6 +186,8 @@ def _rank_cmd(top: int = 2, out_dir=None,
         cmd += ["--trial-depth", str(trial_depth)]
     if paired_depth_control_usd is not None:
         cmd += ["--paired-depth-control-usd", str(paired_depth_control_usd)]
+    if paired_admission:
+        cmd += ["--paired-admission"]
     try:
         from scoring.config import load as _load_cfg
         cfg = _load_cfg()
@@ -220,7 +228,8 @@ def main(argv=None) -> None:
             r = subprocess.run(
                 _rank_cmd(top_n, out_dir=args.out_dir,
                           trial_depth=args.trial_depth,
-                          paired_depth_control_usd=args.paired_depth_control_usd),
+                          paired_depth_control_usd=args.paired_depth_control_usd,
+                          paired_admission=args.paired_admission),
                 cwd=str(ROOT), capture_output=True, text=True, timeout=600)
             out = r.stdout or ""
             err = "" if r.returncode == 0 else f"\nEXIT {r.returncode}\n{r.stderr}"
