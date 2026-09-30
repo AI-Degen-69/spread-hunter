@@ -201,6 +201,132 @@ Decision matrix evaluated against code (T1 repro + reads):
 T3 builds the cap. Lifecycle-wins path not taken.
 
 ## CHECKPOINT 2 OUTCOME (2026-09-30): BUILT — handoff to #325
+
+---
+# Plan — Issue #325: build the ladder path (gated on shadow go)
+
+Branch: i325/build-the-ladder-path-gated-on-shadow-go | Issue: #325
+Size: Large (new strategy path, 5+ files) · Type: Code · Stack: Python + pytest
+Execution order: risk-first. Gate is GO (BTC + ETH 5-min probe verdicts go,
+shape 2 / exit_60, 200 markets each; posted on #323). T1/T2 are independent
+seams and may build in either order; T3 needs both; T4 needs T3; T5 needs T4.
+No sub-issues: the issue itself tracks the build (#49 precedent: no tracker
+noise for gated work).
+
+## CodeRabbit plan intake
+No `coderabbitai` plan comment exists on #325 (zero comments) — nothing to
+adopt, nothing to verify. Code-explorer persona not deployed: all seams
+below were verified by direct reads during planning (file:line in Resolved).
+
+## Resolved from code (no operator time needed)
+- Quoting funnels through `_decide_quotes_from_mid` / `evaluate_market_quote`
+  (`core_brain/quotes.py:137,704`); the shadow loop defaults to
+  `decide_quotes` (`core_brain/quotes.py:474`, wired at
+  `core_brain/shadow_run.py:523`). A separate gated `decide_ladder_quotes`
+  keeps off-behavior byte-identical. Verifiable by the off-test.
+- Shadow entry is injectable: `run_shadow(markets_fn=...)`
+  (`core_brain/shadow_run.py:676-690`) and per-cycle `decide_fn`
+  (`core_brain/shadow_run.py:435,523`). Ladder proof tests drive the real
+  loop through these seams — no harness fork.
+- `record_submit` carries one `pair_id` per market
+  (`core_brain/shadow_exec.py:223`); `load_pair` groups by token
+  (`core_brain/single_buy_saver.py:349`), so one-leg exits need no new
+grouping — only the timer and the `ladder_exit` label.
+- Close-method sets live in `core_brain/order_registry.py:2285` and
+  `core_brain/kpi.py:723` (`SINGLE_BUY_EXIT_METHODS`); adding one value is
+  mechanical. `fetch_live_market` (`core_brain/markets.py:139`) stays
+  untouched; series discovery is a new function.
+- Config is `MakerConfig` (`core_brain/config.py:28`) with `max_pair_cost =
+  0.99` and `single_buy_grace_sec = 0.0`; ladder fields are additive with
+  validation, off by default.
+- Q1 answered by probe: 2 rungs. Q2 answered: timed exit 60s (starting
+  hypothesis confirmed). Q3 open by design: order lifetime stays
+  configurable.
+
+## Type-design lens (encapsulation / invariants, from persona read)
+- Off-identity is a type-level gate: one `ladder_mode: bool = False` field
+  guards the whole path; the single-pair path is frozen behind it, so no
+  ladder state can leak into today's quotes.
+- The separate allocation is its own budget field, never a Dynamic Caps
+  alias: per-rung sizing and the blended-residue check cannot resolve to
+  shared caps by construction.
+- One-shot rung lifecycle is the ladder-side invariant matching the #326
+  fix: a filled rung retires, an exit close retires the market — ladder legs
+  can never re-post under an exited pair, while #326 netting
+  (`_prior_exit_shares`, `_unexplained_divergence`, venue-capped sizing)
+  guards the live carry path. Both sides recorded; neither re-argued here.
+
+## Spec (SPEC.md, #325 section)
+- Goal: ladder at series OPEN (first ~30s of `start_ts`) on BTC/ETH 5+15-min
+  series; equal-sized rungs around 0.50 (shape 2); opposite fills merge at
+  < $1.00 under one `pair_id`; one-leg residue exits on the 60s timer;
+  shadow-only; off = today's single price.
+- Acceptance: (1) ≥2 submit events/side at distinct prices within 30s of open
+  in cycle telemetry; (2) fills oldest-first under one `pair_id`;
+  (3) one-leg exits inside the window, no orphans; (4) mode off = today's
+  single price, suite green; (5) screener output unchanged.
+- Out of scope: live execution, screener changes, cross-market portfolio
+  coordination, shared-cap accounting, threshold/gate changes.
+
+## Dependency graph
+- T1 (discovery) + T2 (config) → T3 (decision fn + off-test) →
+  CHECKPOINT 1 (off-identity proven) → T4 (telemetry + `ladder_exit` +
+  timed one-leg exit) → T5 (shadow wiring + 4 proof tests) → CHECKPOINT 2.
+
+## Tasks
+
+### T1 — [Backend/Logic] Series discovery for BTC/ETH 5+15-min (S)
+New function listing upcoming series markets (open-window gate inputs:
+condition, tokens, `start_ts`); `fetch_live_market` untouched. Equal-size
+rung inputs come from the probe shape (2).
+Depends on: none. Verify: focused test with a stubbed venue response —
+upcoming markets ordered by `start_ts`, non-series rows ignored.
+
+### T2 — [Backend/Logic] Ladder config: mode + shapes + timers + budget (S)
+Additive `MakerConfig` fields (`ladder_mode` off default, rung shape,
+exit timer default 60s, separate budget) + validation (shape ≥ 2,
+non-negative budget, timer > 0); no existing default changes.
+Depends on: none. Verify: focused config test — off default, invalid
+shape/budget rejected.
+
+### T3 — [Backend/Logic] Gated ladder decision function + off-test (M)
+`decide_ladder_quotes`: open-window gate, equal sizes, distinct-side
+counting, per-rung submit intents under one `pair_id` via `record_submit`;
+mode-off delegates to today's single-price path untouched.
+Depends on: T1, T2. Verify: off-test (mode off = today's single price)
+plus gate tests (outside window → no submits).
+
+CHECKPOINT 1: off-identity proven (off-test green) — the single-pair path
+is frozen behind the switch. One-line report, not a pause in auto mode.
+
+### T4 — [Backend/Logic] Per-rung telemetry + `ladder_exit` + timed exit (M)
+Per-rung submit/fill telemetry; `ladder_exit` added to every naked-close
+set (`order_registry.py`, `kpi.py`, reports); one-leg residue exits on the
+ladder timer reusing `load_pair` token grouping, sized through the #326
+netting (`_check_positions(pair, venue, registry)`); one-shot lifecycle
+(filled rung retires, exit close retires market).
+Depends on: T3. Verify: focused tests — close sets include the method;
+residue exits inside the window with no orphan.
+
+### T5 — [Backend/Logic] Shadow wiring + four proof tests (M)
+Crypto series into the real shadow loop via `markets_fn`/`decide_fn`
+seams (screener untouched); tests: placement (≥2 submits/side, distinct
+prices), fill-sim (oldest-first, one `pair_id`), one-leg exit (inside
+window, no orphan), off-test (from T3, re-run here). Each fails without
+the change, passes with it.
+Depends on: T4. Verify: the four tests + focused regression suites green.
+
+CHECKPOINT 2: shadow rehearsal shows rungs resting, filling, and exiting
+per spec. One-line report.
+
+## Improvement proposal (adopted by default)
+One-shot rungs as the ladder lifecycle: filled rungs retire and exit closes
+retire the market, so ladder legs never re-post under an exited pair_id.
+Evidence, verbatim from #326 CHECKPOINT 1: "(A) One-shot rungs: necessary
+ladder lifecycle, already proven clean in the #324 harness" and from the
+#324 plan: "filled rungs retire, exit closes retire the market". This is
+the structural side of the #326 trap; the netting primitive guards the live
+carry path. Rejected: none. Scope expansion: none proposed.
 T3 green: refill exits the netted remainder (min fills-only naked, venue
 heavy) with no oversell; genuine and partially-explained divergence still
 refuse; route-pair coverage under both graces. Reuse for #325:

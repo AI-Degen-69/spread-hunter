@@ -337,6 +337,34 @@
   CIs, with one-leg residues scored at real resolution outcomes, never zero.
 - No new external dependencies.
 
+# Constraints: Issue #325 — Build the ladder path (gated on shadow go)
+
+## Quality & Tests
+- Zero regressions: focused suites covering touched files
+  (`tests/test_shadow_exec.py`, `tests/test_single_buy_saver.py`,
+  quote/config suites) stay 100% green; full `python -m pytest -q` stays
+  with GitHub CI on push (merge gate).
+- New/changed behavior needs tests RED against untouched code and GREEN
+  after; each added assertion must fail without its change. The four proof
+  tests are placement, fill-sim, one-leg exit, and the off-test.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening
+  assertions, or bypassing linters. Tests use `tmp_path` fixtures; no test
+  writes into live `data/` or `run/`. `data/orders.db` is never touched.
+
+## Behavior Boundaries (carry #49 direction + #324/#326 findings)
+- **Separate ladder allocation.** Per-rung sizing and the blended-residue
+  check run against the ladder budget, never Dynamic Caps. No existing cap
+  default may change (`max_pair_cost`, grace, windows, route order frozen).
+- **Off means identical.** With `ladder_mode` off, quoting output is
+  byte-identical to today; `fetch_live_market`, the rollover loop, and the
+  screener are untouched — crypto series enter through the shadow seam only.
+- **One-shot rungs.** A filled rung retires; an exit close retires the
+  market. Ladder legs never re-post under an exited `pair_id` (structural
+  side of the #326 trap); the #326 netting guards the live carry path.
+- **Shadow-only.** No live execution during build; no new external deps.
+- **Gate was GO.** BTC + ETH 5-min probe verdicts go (shape 2 / exit_60);
+  order lifetime stays configurable (probe left it open).
+
 # Constraints: Issue #324 — Shadow rehearsal on BTC+ETH 5-min ladders (no signer)
 
 ## Quality & Tests
