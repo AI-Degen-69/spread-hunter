@@ -168,7 +168,7 @@ def test_one_leg_residue_exits_inside_window_with_no_orphan(rehearsed):
     filled_shares = sum(filled.values())
     assert filled_shares > 0, "the solo market must fill its one leg to test the exit"
 
-    closes = _rows(db, "SELECT * FROM closes")
+    closes = _rows(db, "SELECT * FROM closes WHERE condition_id = 'fixture-solo'")
     solo_exited = sum(float(c.get("shares") or 0.0) for c in closes
                       if c.get("method") == "single_buy_exit")
     solo_merged = sum(float(c.get("shares") or 0.0) for c in closes
@@ -241,6 +241,25 @@ def test_refuse_output_blocks_production_names_and_live_dirs(tmp_path):
     with pytest.raises(RehearsalRefused):
         refuse_output(Path("run/report.json"))
     assert refuse_output(tmp_path / "ladder_shadow.json").name == "ladder_shadow.json"
+
+
+def test_refused_out_aborts_before_any_store_byte(tmp_path, no_network,
+                                                  shipped_defaults):
+    db = tmp_path / "never_created.db"
+    with pytest.raises(RehearsalRefused):
+        run_rehearsal(series="fixture-5m", tape_markets=build_fixture_series(),
+                      db_path=db, out_path=tmp_path / "orders.db",
+                      shape="2", rotations=2)
+    assert not db.exists(), "a refused report must stop before run_shadow"
+
+
+def test_db_out_alias_is_refused(tmp_path, no_network, shipped_defaults):
+    db = tmp_path / "same.db"
+    with pytest.raises(RehearsalRefused):
+        run_rehearsal(series="fixture-5m", tape_markets=build_fixture_series(),
+                      db_path=db, out_path=db,
+                      shape="2", rotations=2)
+    assert not db.exists(), "the store must not be created, let alone truncated"
 
 
 def test_report_covers_both_series_labels(tmp_path, no_network, shipped_defaults):

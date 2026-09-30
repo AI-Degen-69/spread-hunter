@@ -325,6 +325,12 @@ def run_rehearsal(*, series: str, tape_markets: list[TapeMarket],
     from core_brain.shadow_run import run_shadow
 
     rungs = SHAPES[shape]
+    db_path = Path(db_path)
+    if out_path is not None:
+        out_path = refuse_output(out_path)
+        if db_path.resolve() == out_path.resolve():
+            raise RehearsalRefused(
+                "Refusing to use the same resolved path for db_path and out_path.")
     if cfg is None:
         from core_brain.shadow_run import shadow_cfg
         cfg = shadow_cfg()
@@ -366,7 +372,6 @@ def run_rehearsal(*, series: str, tape_markets: list[TapeMarket],
     report = build_report(series=series, shape=shape, rungs=rungs,
                           tape_markets=tape_markets, db_path=db_path)
     if out_path is not None:
-        out_path = refuse_output(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(report, indent=2))
     return report
