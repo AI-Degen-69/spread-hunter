@@ -370,3 +370,29 @@
   zero orphans, zero double-counts). Merge rows count pair-units; only
   `shadow_merge_legs` counts leg shares.
 - No new external dependencies; no live execution during build.
+
+# Constraints: Issue #326 — Refill-after-exit decision + conditional netting fix
+
+## Quality & Tests
+- Zero regressions: `tests/test_single_buy_saver.py`, `tests/test_shadow_exec.py`,
+  `tests/test_shadow_run.py`, `tests/test_auto_pairs.py` stay 100% green; full
+  `python -m pytest -q` stays with GitHub CI on push (merge gate).
+- New behaviour needs tests RED against untouched code and GREEN after; each added
+  assertion must fail without its change. The repro test documents the trap
+  before any fix exists.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions,
+  or bypassing linters. Tests use `tmp_path` fixtures; no test writes into live
+  `data/` or `run/`. `data/orders.db` is never touched.
+
+## Behavior Boundaries
+- **Decision first, code gated.** T3 builds only on a CHECKPOINT 1 netting-wins
+  verdict; a lifecycle-wins verdict closes the issue on the decision note.
+- **`load_pair` stays fills-only.** Netting lives locally in the exit-sizing
+  path; `complete_pair`, merge accounting, and reports keep their shared view.
+- **Frozen:** `max_pair_cost`, grace defaults, `pairs_exit_window_sec`, rescue
+  route order, `should_exit()`, risk caps, screener, registry schema.
+- **Fail-closed bias:** the guard (`_check_positions`) keeps refusing genuine
+  divergence; netting may only shrink the sized amount toward venue agreement,
+  never bypass the check. Attribution scoping must prove its bias (over-netting
+  strands, under-netting oversells) with a test.
+- No new external dependencies; no live execution during build.

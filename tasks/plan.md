@@ -128,3 +128,82 @@ verdict go, shape 2 / exit_60, 200 markets, posted on #323). No production code 
    so 0.55 rungs churn against ~0.5x asks until the opposite leg is held
    (`hedge_held` exemption). Same pair_id throughout; harmless here, worth
    knowing for #325 telemetry.
+
+---
+# Plan — Issue #326: refill-after-exit strands legs under a market-wide pair_id
+
+Branch: i326/d11-followup-refill-after-exit-strands-legs | Issue: #326
+Size: Standard (one architectural decision + one conditional accounting fix, 2-3 files) · Type: Research + Code · Stack: Python + pytest
+Execution order: repro-first. T3 builds only on a CHECKPOINT 1 netting-wins verdict; a lifecycle-wins verdict closes this issue on the decision note and hands the lifecycle code to #325.
+
+## CodeRabbit plan intake
+No `coderabbitai` plan comment exists on #326 (zero comments) — nothing to adopt, nothing to verify. Code-explorer persona not deployed: the trap's code paths (`load_pair`, `exit_single_buy`, `_check_positions`, `shadow_positions`, `record_submit` carry) were traced live during #324; the code is familiar, not legacy.
+
+## Resolved from code (no operator time needed)
+- The trap mechanics are verified from the #324 rehearsal: `load_pair` naked is fills-only (`get_size_matched`); prior `single_buy_exit` closes net only on the venue side; re-posting exited shares under the same stamp makes the next exit size fills-only naked against a netted venue position, and `_check_positions` refuses (correctly — no oversell, but the leg strands, every rotation the same way).
+- The trap is live-reachable today, not ladder-only: the #206 carry semantic lets replacement legs join a resting complement's pair, so a same-pair refill after an exit can happen on the live loop too. This makes netting a genuine (small) live fix, not ladder scaffolding.
+- `load_pair` must stay fills-only: `complete_pair`, merge accounting (`shadow_merge_legs`), and reports read the same view. Any netting lives locally in the exit-sizing path, never in the shared ledger view.
+
+## Type-design lens (encapsulation / invariants, applied from persona)
+- Invariant to preserve: "an exit sells at most venue-agreed shares" (today enforced by `_check_positions`). Netting must make the SIZED amount consistent with that check, not bypass it.
+- Open wrinkle for T2/T3 (not decided here): `closes` carries `condition_id` + `method`, no `pair_id`. Attributing prior exits to one pair under condition-scoping over-nets when several pairs share a condition over time (common: re-quotes mint fresh pairs). Over-netting under-sells (fail-closed direction: strands residue); under-netting over-sells (the harm). The decision must pick the scoping and prove its bias with a test.
+
+## Spec (embedded; full SPEC.md update rides with the #325 build)
+- Goal: decide one-shot rungs vs fresh-pair re-post vs netting prior exit closes in exit sizing, with quoted code evidence per option; implement code only if netting wins.
+- Acceptance: (1) a repro test shows the refusal loop on a synthetic store; (2) the decision note names the winner with evidence and records the losers' reasons; (3, gated) if netting wins, refill exits the netted remainder with no oversell and the guard still refuses genuine divergence.
+- Out of scope: the ladder decision function itself, rung lifecycle code, screener changes, threshold/gate changes (`max_pair_cost`, grace, windows, route order all frozen).
+
+## Dependency graph
+- T1 (repro) → T2 (decision) → CHECKPOINT 1 (netting-wins → T3; lifecycle-wins → close on note, #325 owns the code).
+- No sub-issues: decision work plus at most one conditional fix; tracker mirroring resumes at the #325 build per the #49 precedent.
+
+## Tasks
+
+### T1 — [Research] Repro spike: the refusal loop on a synthetic store (S)
+Same pair_id, exit, refill, exit again: assert the second exit refuses with the venue diverging by exactly the exited shares, and the leg strands while the guard holds (no oversell). Cover grace-0 and grace>0 (the issue's compounding note).
+Depends on: none. Verify: the test demonstrates the refusal (RED that documents the trap); targeted suites green.
+
+### T2 — [Research] Decision matrix + recorded verdict (S)
+Evaluate one-shot vs fresh-pair vs netting against code evidence (live carry path, closes-schema scoping limits, ladder needs from #49/#324); record winner, evidence, and losers' reasons in the decision note.
+Depends on: T1. Verify: read-through — every option has a quoted-evidence verdict.
+
+CHECKPOINT 1: decision locked. Netting-wins → T3. Lifecycle-wins → #326 closes on the note; rung lifecycle code belongs to #325.
+
+### T3 — [Backend/Logic] Net prior exit closes in exit sizing (S, gated)
+Local to the exit path (`load_pair` untouched): size the exit off naked-minus-prior-exits for the pair's scope; `_check_positions` keeps guarding the netted belief. Tests: refill exits the remainder, no oversell, genuine divergence still refused, completion/merge accounting unchanged.
+Depends on: CHECKPOINT 1 netting-wins. Verify: T1-style repro now exits netted shares; focused suites green.
+
+CHECKPOINT 2: handoff to #325 (decision + any new primitive it should reuse).
+
+## Improvement proposal (adopted by default)
+Cover both grace regimes (0 and >0) in the repro and the decision matrix, not just the grace-0 case the finding was observed under.
+Evidence, verbatim from the issue: "Grace-0 immediacy compounds it: with the shipped grace default (0.0) any one-sided fill exits next pass, so staggered opposite fills never arrive unless the market balances in one rotation."
+Rejected: none. Scope expansion: none proposed.
+
+## CHECKPOINT 1 OUTCOME (2026-09-30): NETTING WINS — as venue-capped sizing
+Decision matrix evaluated against code (T1 repro + reads):
+- (A) One-shot rungs: necessary ladder lifecycle, already proven clean in the
+  #324 harness — but leaves the live carry-path trap (#206 replacement legs
+  joining an exited pair) open. Adopted as #325 design input, not the fix.
+- (B) Fresh-pair re-post: dodges the accounting instead of fixing it; fights
+  the #206 carry semantic and the ladder's one-pair design. REJECTED.
+- (C) Netting: WINS. Implemented as condition-scoped close attribution
+  (`_prior_exit_shares` sums prior `single_buy_exit`/`naked_exit` closes on
+  the pair's condition and side -- closes carry condition_id + method +
+  side-via-price-columns, no pair_id), capped by the observed venue gap, so
+  the exit sizes at min(fills-only naked, venue-agreed heavy shares)
+  whenever a venue view is present. Over-attribution across pairs sharing a
+  condition can only shrink the sale toward the venue view, never grow one
+  past it (fail-closed direction). Absence still refuses; no-view dry runs
+  unchanged; `load_pair` untouched; no schema change. `_check_positions`
+  has exactly one caller (`exit_single_buy`), so the contract change is
+  contained.
+T3 builds the cap. Lifecycle-wins path not taken.
+
+## CHECKPOINT 2 OUTCOME (2026-09-30): BUILT — handoff to #325
+T3 green: refill exits the netted remainder (min fills-only naked, venue
+heavy) with no oversell; genuine and partially-explained divergence still
+refuse; route-pair coverage under both graces. Reuse for #325:
+`_prior_exit_shares` + `_unexplained_divergence` + `_check_positions(pair,
+venue, registry)` contract; `exit_single_buy` nets the post-cancel naked
+before sizing. `load_pair` untouched, no schema change.

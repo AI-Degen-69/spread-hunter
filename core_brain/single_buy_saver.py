@@ -401,12 +401,61 @@ def load_pair(registry: OrderRegistry, pair_id: str) -> dict:
     }
 
 
-def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]]) -> bool:
+def _prior_exit_shares(registry, condition_id: str, token_id: str) -> float:
+    """Shares this token already gave up to single-leg exits on its condition.
+
+    Netting input for the refill-after-exit trap (#326): `load_pair` sizes
+    off fills only, so a refill under the same pair_id re-counts shares an
+    earlier exit already sold. Only `single_buy_exit`/`naked_exit` closes
+    count -- merges and settlements leave through other paths and must not
+    discount an exit. Fail-closed 0.0 when the token's side is unresolvable:
+    unattributed volume neither shrinks nor grows a later sale.
+    """
+    if registry is None:
+        return 0.0
+    side = _token_side(registry, condition_id, token_id)
+    if side not in ("UP", "DOWN"):
+        return 0.0
+    total = 0.0
+    for c in registry.get_all_closes():
+        if c.get("condition_id") != condition_id:
+            continue
+        if c.get("method") not in ("single_buy_exit", "naked_exit"):
+            continue
+        sold_up = c.get("up_price") is not None
+        if (sold_up and side == "UP") or (not sold_up and side == "DOWN"):
+            try:
+                total += float(c.get("shares") or 0.0)
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
+def _unexplained_divergence(believed: float, observed: float,
+                            prior_exited: float) -> float:
+    """Divergence no recorded exit accounts for -- the only part that refuses.
+
+    Netting applies solely up to the observed gap, so stale attribution can
+    only ever shrink a sale toward the venue view, never grow one past it.
+    """
+    gap = believed - observed
+    if gap <= 0:
+        return 0.0
+    return max(0.0, gap - max(prior_exited, 0.0))
+
+
+def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]],
+                     registry=None) -> bool:
     """Refuse when the venue does not agree with the registry about holdings.
 
     Returns whether the check actually ran. `None` means the caller supplied no
     view -- a caller decision, surfaced in the result as positions_checked=False
     rather than silently passing as agreement.
+
+    A gap fully explained by prior single-leg exits on the pair's condition
+    (#326) does not refuse: the exit sizing below nets exactly that explained
+    part, so the sale still cannot exceed what the venue agrees is held. Any
+    unexplained remainder refuses exactly as before.
     """
     if venue_positions is None:
         return False
@@ -429,7 +478,15 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]]) ->
     # of a position may already have been merged. Refusing on it would block the
     # one action that closes exposure, over a discrepancy that cannot cause the
     # harm the gate exists to prevent.
-    if observed < believed - POSITION_DIVERGENCE_TOLERANCE:
+    # Attribution scans the closes/quotes tables, so it runs only when a raw
+    # gap exists to explain: with no gap the unexplained part is 0 whatever
+    # prior says, and the result would be unused.
+    gap = believed - observed
+    prior = 0.0
+    if gap > POSITION_DIVERGENCE_TOLERANCE and registry is not None:
+        prior = _prior_exit_shares(registry, pair["condition_id"], token)
+    if _unexplained_divergence(believed, observed, prior) \
+            > POSITION_DIVERGENCE_TOLERANCE:
         raise PairExitRefused(
             f"Registry and venue diverge on {token}: registry holds "
             f"{believed:.6f}, Data API reports only {observed:.6f}. Refusing to "
@@ -624,7 +681,7 @@ def exit_single_buy(
     # Before any venue write: does the venue agree we hold what we think we
     # hold? Checked first so a divergence costs nothing, rather than after a
     # cancel has already gone out.
-    positions_checked = _check_positions(pair, venue_positions)
+    positions_checked = _check_positions(pair, venue_positions, registry)
 
     # The closes table records which leg was sold by setting `up_price` OR
     # `dn_price`, so the exit must know the sold token's side before sending
@@ -704,6 +761,17 @@ def exit_single_buy(
             f"leg on its own. Re-run the exit against the pair once the "
             f"registry reflects the fill, or close {light_token} deliberately."
         )
+
+    # Refill-after-exit (#326): size off what the venue still agrees is
+    # held. Prior single-leg exits on this condition explain their share of
+    # any gap; only the explained part is netted, so the cap solely shrinks
+    # the sale toward venue agreement and can never grow one past it.
+    if venue_positions is not None and heavy_token in venue_positions:
+        prior = _prior_exit_shares(registry, after["condition_id"],
+                                   heavy_token)
+        gap = naked - float(venue_positions[heavy_token])
+        if gap > 0:
+            naked = max(naked - min(gap, max(prior, 0.0)), 0.0)
 
     if naked <= SIZE_EPS:
         return {
