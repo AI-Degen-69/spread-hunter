@@ -187,13 +187,17 @@ Decision matrix evaluated against code (T1 repro + reads):
   joining an exited pair) open. Adopted as #325 design input, not the fix.
 - (B) Fresh-pair re-post: dodges the accounting instead of fixing it; fights
   the #206 carry semantic and the ladder's one-pair design. REJECTED.
-- (C) Netting: WINS. Implemented as sizing the exit at min(fills-only naked,
-  venue-agreed heavy shares) whenever a venue view is present. This sidesteps
-  the closes-attribution wrinkle entirely (closes carry no pair_id, so
-  closes-based netting would mis-scope across pairs sharing a condition).
-  Absence still refuses; no-view dry runs unchanged; `load_pair` untouched;
-  no schema change. `_check_positions` has exactly one caller
-  (`exit_single_buy`), so the contract change is contained.
+- (C) Netting: WINS. Implemented as condition-scoped close attribution
+  (`_prior_exit_shares` sums prior `single_buy_exit`/`naked_exit` closes on
+  the pair's condition and side -- closes carry condition_id + method +
+  side-via-price-columns, no pair_id), capped by the observed venue gap, so
+  the exit sizes at min(fills-only naked, venue-agreed heavy shares)
+  whenever a venue view is present. Over-attribution across pairs sharing a
+  condition can only shrink the sale toward the venue view, never grow one
+  past it (fail-closed direction). Absence still refuses; no-view dry runs
+  unchanged; `load_pair` untouched; no schema change. `_check_positions`
+  has exactly one caller (`exit_single_buy`), so the contract change is
+  contained.
 T3 builds the cap. Lifecycle-wins path not taken.
 
 ## CHECKPOINT 2 OUTCOME (2026-09-30): BUILT — handoff to #325

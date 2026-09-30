@@ -478,8 +478,13 @@ def _check_positions(pair: dict, venue_positions: Optional[dict[str, float]],
     # of a position may already have been merged. Refusing on it would block the
     # one action that closes exposure, over a discrepancy that cannot cause the
     # harm the gate exists to prevent.
-    prior = _prior_exit_shares(registry, pair["condition_id"], token) \
-        if registry is not None else 0.0
+    # Attribution scans the closes/quotes tables, so it runs only when a raw
+    # gap exists to explain: with no gap the unexplained part is 0 whatever
+    # prior says, and the result would be unused.
+    gap = believed - observed
+    prior = 0.0
+    if gap > POSITION_DIVERGENCE_TOLERANCE and registry is not None:
+        prior = _prior_exit_shares(registry, pair["condition_id"], token)
     if _unexplained_divergence(believed, observed, prior) \
             > POSITION_DIVERGENCE_TOLERANCE:
         raise PairExitRefused(

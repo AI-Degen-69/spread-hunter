@@ -1,11 +1,16 @@
-"""Refill-after-exit trap (issue #326): repro spike, no fix yet.
+"""Refill-after-exit netting (issue #326): the fix and its guard cases.
 
 `load_pair` sizes exits off fills only; prior `single_buy_exit` closes net
 solely on the venue side. Re-posting exited shares under the SAME pair_id
-makes the next exit size fills-only naked against a netted venue position,
-so `_check_positions` refuses as a would-be oversell -- and the refilled leg
-strands, every rotation the same way. No oversell occurs: these tests pin the
-refusal (the guard working) alongside the stranding (the bug).
+used to make the next exit size fills-only naked against a netted venue
+position, so `_check_positions` refused as a would-be oversell -- and the
+refilled leg stranded, every rotation the same way.
+
+The exit now nets prior single-leg exits on the condition (capped by the
+observed venue gap), so a refill exits exactly the remainder with no
+oversell. These tests pin the fixed behavior plus the guard cases that
+still refuse: genuine and partially-explained divergence, under both grace
+regimes.
 
 The fake venue mirrors `tests/test_single_buy_saver.py` (same response
 shapes, same quote-ledger side resolution). No network in any test.
