@@ -348,6 +348,78 @@ def test_cli_rejections(tmp_path):
     assert args.paired_admission is True
 
 
+def test_resolve_trial_bar_pins_permanent_in_admission_mode():
+    from types import SimpleNamespace
+
+    import scripts.filter_markets as fm
+
+    args = SimpleNamespace(paired_admission=True, trial_depth=250.0)
+    assert fm._resolve_trial_bar(args) == fm.MIN_TOP3_DEPTH_USD
+    args = SimpleNamespace(paired_admission=False, trial_depth=250.0)
+    assert fm._resolve_trial_bar(args) == 250.0
+
+
+def test_select_picked_per_mode():
+    from types import SimpleNamespace
+
+    import scripts.filter_markets as fm
+
+    bundle = {"treatment": [{"cid": "0xt"}]}
+    eligible = [{"cid": "0xe"}]
+    adm = SimpleNamespace(paired_admission=True,
+                          paired_depth_control_usd=None, top=20)
+    assert fm._select_picked(adm, eligible, bundle) == [{"cid": "0xt"}]
+    depth = SimpleNamespace(paired_admission=False,
+                            paired_depth_control_usd=500.0, top=20)
+    assert fm._select_picked(depth, eligible, bundle) == [{"cid": "0xt"}]
+    plain = SimpleNamespace(paired_admission=False,
+                            paired_depth_control_usd=None, top=1)
+    assert fm._select_picked(plain, eligible, bundle) == [{"cid": "0xe"}]
+
+
+def test_stamp_trial_identity_tags_real_refusals():
+    import scripts.filter_markets as fm
+
+    candidate = {"condition_id": "0xthin", "event_id": "ev-7",
+                 "event_slug": "ev-7", "groupItemTitle": "Spread -3.5"}
+    rows = [{"cid": "0xthin", "eligible": False,
+             "reject_reason": "YES: top-3 bid depth $48.00 <= $500.00"}]
+    fm._stamp_trial_identity(rows, [candidate])
+    assert rows[0]["event_id"] == "ev-7"
+    assert rows[0]["market_group"] == "Spread -3.5"
+
+
+class _ThinBookSession(_GoodSession):
+    def get(self, url, params=None, timeout=None):
+        if "trades" in url:
+            return _Resp(self._trades)
+        return _Resp({
+            "bids": [{"price": "0.48", "size": "100"}],
+            "asks": [{"price": "0.52", "size": "100"}],
+        })
+
+
+def test_real_depth_refusal_names_fallback_reason():
+    import scripts.filter_markets as fm
+
+    mainline = _candidate("0xmain", event_id="ev-7", event_slug="ev-7")
+    refused = evaluate(_ThinBookSession(), 5.0, mainline, 250_000.0,
+                       admission_trial=True)
+    assert refused["eligible"] is False
+    assert "top-3 bid depth" in refused["reject_reason"]
+    fm._stamp_trial_identity(
+        [refused],
+        [{**mainline, "condition_id": "0xmain"}])
+    eligible = [_eligible("0xsub", "ev-7", "submarket", 4.0,
+                          shipped_reason="carries a submarket group label")]
+    bundle = fm.build_paired_admission_bundle(
+        eligible, refused=[refused], top=10, volume_gate_usd=125_000.0,
+        snapshot_id="s1", ranked_at=1.0)
+    (row,) = bundle["treatment"]
+    assert row["admission_role"] == "fallback"
+    assert "top-3 bid depth" in row["fallback_reason"]
+
+
 def _adm_spec(cid, arm="treatment", role="mainline", event="ev-1",
               snapshot="s1"):
     return {
@@ -489,6 +561,7 @@ def test_old_store_opens_after_additive_columns(tmp_path):
 def test_guard_skips_second_fallback_while_first_held(tmp_path):
     import sqlite3
 
+    from core_brain.order_registry import OrderRecord, OrderRegistry
     from core_brain.paired_shadow import (
         PairedShadowError,
         record_paired_market_selection,
@@ -497,6 +570,7 @@ def test_guard_skips_second_fallback_while_first_held(tmp_path):
     )
 
     db = tmp_path / "guard.db"
+    registry = OrderRegistry(db, run_id="r1")
     _adm_db(db).close()
     record_paired_run_start(
         db, run_id="r1", arm="treatment", cutoff_usd=None,
@@ -505,6 +579,11 @@ def test_guard_skips_second_fallback_while_first_held(tmp_path):
     record_paired_market_selection(
         db, run_id="r1", arm="treatment", cutoff_usd=None,
         spec=_adm_spec("0xfirst", role="fallback"))
+    registry.create_order(OrderRecord(
+        id="loc-a", order_id="shadow-loc-a", condition_id="0xfirst",
+        token_id="0xfirst-up", side="BUY", price=0.5, original_size=1.0,
+        status="open", posted_ts=1000, last_polled_ts=1000,
+        pair_id="pA", run_id="r1"))
     record_paired_order_attribution(
         db, run_id="r1", local_id="loc-a", condition_id="0xfirst",
         pair_id="pA")
@@ -547,7 +626,11 @@ def test_guard_ignores_control_arm(tmp_path):
 def test_guard_releases_cluster_after_close(tmp_path):
     import sqlite3
 
-    from core_brain.order_registry import CloseRecord, OrderRegistry
+    from core_brain.order_registry import (
+        CloseRecord,
+        OrderRecord,
+        OrderRegistry,
+    )
     from core_brain.paired_shadow import (
         PairedShadowError,
         record_paired_market_selection,
@@ -565,6 +648,11 @@ def test_guard_releases_cluster_after_close(tmp_path):
     record_paired_market_selection(
         db, run_id="r1", arm="treatment", cutoff_usd=None,
         spec=_adm_spec("0xfirst", role="fallback"))
+    registry.create_order(OrderRecord(
+        id="loc-a", order_id="shadow-loc-a", condition_id="0xfirst",
+        token_id="0xfirst-up", side="BUY", price=0.5, original_size=1.0,
+        status="open", posted_ts=1000, last_polled_ts=1000,
+        pair_id="pA", run_id="r1"))
     record_paired_order_attribution(
         db, run_id="r1", local_id="loc-a", condition_id="0xfirst",
         pair_id="pA")
@@ -582,6 +670,38 @@ def test_guard_releases_cluster_after_close(tmp_path):
         kinds = [row[0] for row in conn.execute(
             "SELECT kind FROM shadow_paired_feed_events")]
     assert "fallback_guard_skip" not in kinds
+
+
+def test_guard_ignores_cancelled_orders(tmp_path):
+    from core_brain.order_registry import OrderRecord, OrderRegistry
+    from core_brain.paired_shadow import (
+        record_paired_market_selection,
+        record_paired_order_attribution,
+        record_paired_run_start,
+    )
+
+    db = tmp_path / "guard-cancelled.db"
+    registry = OrderRegistry(db, run_id="r1")
+    _adm_db(db).close()
+    record_paired_run_start(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        starting_bankroll_usd=100.0, started_at=1.0, planned_minutes=5.0,
+        trial_axis="admission")
+    record_paired_market_selection(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        spec=_adm_spec("0xfirst", role="fallback"))
+    registry.create_order(OrderRecord(
+        id="loc-a", order_id="shadow-loc-a", condition_id="0xfirst",
+        token_id="0xfirst-up", side="BUY", price=0.5, original_size=1.0,
+        status="cancelled", posted_ts=1000, last_polled_ts=1000,
+        pair_id="pA", run_id="r1"))
+    record_paired_order_attribution(
+        db, run_id="r1", local_id="loc-a", condition_id="0xfirst",
+        pair_id="pA")
+    # Cancelled without a fill holds nothing: admitted.
+    record_paired_market_selection(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        spec=_adm_spec("0xsecond", role="fallback"))
 
 
 def test_admission_run_start_refuses_old_store(tmp_path):

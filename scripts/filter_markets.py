@@ -1454,6 +1454,48 @@ def _event_cluster_id(row: dict) -> str:
     return ""
 
 
+def _trial_identity_tags(m: dict) -> dict:
+    """Event identity for trial-mode refusal rows, from the candidate.
+
+    Real `evaluate` refusal rows carry no event fields, so the bundle builder
+    could never match a refused mainline member to its event. Stamped only in
+    admission mode (see `_stamp_trial_identity`); the default path is untouched.
+    """
+    return {
+        "event_id": m.get("event_id") or "",
+        "event_slug": m.get("event_slug") or "",
+        "market_group": m.get("market_group") or m.get("groupItemTitle") or "",
+    }
+
+
+def _stamp_trial_identity(rows: list[dict], universe: list[dict]) -> None:
+    """Fill missing trial identity on scored rows from discovery candidates."""
+    by_cid = {str(c.get("condition_id") or ""): c for c in universe}
+    for row in rows:
+        candidate = by_cid.get(str(row.get("cid") or ""))
+        if not candidate:
+            continue
+        for key, value in _trial_identity_tags(candidate).items():
+            row.setdefault(key, value)
+
+
+def _resolve_trial_bar(args) -> float:
+    """The depth bar this run gates on; admission pins the permanent bar."""
+    if args.paired_admission:
+        return MIN_TOP3_DEPTH_USD
+    return _effective_depth_bar(args.trial_depth)
+
+
+def _select_picked(args, eligible: list[dict], paired_bundle: dict | None) -> list[dict]:
+    """The published top-N: treatment arm, depth arm, or shipped ranking."""
+    if paired_bundle is not None and getattr(args, "paired_admission", False):
+        return list(paired_bundle["treatment"])
+    if getattr(args, "paired_depth_control_usd", None) is not None:
+        # Same object the depth path always published (trial tags land on it).
+        return paired_bundle["treatment"]
+    return eligible[:args.top]
+
+
 def build_paired_admission_bundle(
     eligible: list[dict], *, refused: list[dict] | None = None,
     top: int, volume_gate_usd: float,
@@ -2330,7 +2372,7 @@ def main() -> None:
     # permanent config value, but opt-in per run and never written back to
     # config; adopted markets are tagged so the trial's markouts can be
     # watched before the bar is loosened permanently.
-    trial_bar = _effective_depth_bar(args.trial_depth)
+    trial_bar = _resolve_trial_bar(args)
     trial_active = trial_bar != MIN_TOP3_DEPTH_USD
     # A paired depth comparison varies only the depth bar. It deliberately
     # pins volume to the shipped threshold even if a trial override is present
@@ -2387,6 +2429,10 @@ def main() -> None:
         universe, volume_bar=volume_bar, movement_bar=movement_bar,
         depth_bar=trial_bar, spread_bar=spread_bar,
         admission_trial=args.paired_admission)
+    if args.paired_admission:
+        # Refusal rows carry no event fields out of `evaluate`; without this
+        # stamp no fallback could name its refused mainline member.
+        _stamp_trial_identity(out, universe)
 
     # --legacy-rewards: the retired two-path scan, scored alongside the
     # unified universe so the funnel shows what retiring it cost. The reward
@@ -2437,7 +2483,6 @@ def main() -> None:
             paired_bundle["control"] + paired_bundle["treatment"], "admission")
         paired_audit_name = "paired_admission_audit.jsonl"
         paired_filename = "paired_admission_markets.json"
-        picked = list(paired_bundle["treatment"])
     if args.paired_depth_control_usd is not None:
         if args.legacy_rewards:
             raise SystemExit("paired-depth mode cannot combine with --legacy-rewards")
@@ -2470,9 +2515,9 @@ def main() -> None:
             snapshot_id=f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
             ranked_at=time.time(),
         )
-        picked = paired_bundle["treatment"]
-    else:
-        picked = eligible[:top]
+    # One chain: admission treatment, depth treatment, else shipped ranking.
+    # A second `if` here once overwrote the admission pick with eligible[:top].
+    picked = _select_picked(args, eligible, paired_bundle)
 
     # Conditions the ranker recovered from, reported rather than raised: a run
     # that published something must still say what it could not.

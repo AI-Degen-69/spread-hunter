@@ -284,34 +284,31 @@ def _open_exposure_on_cluster(conn, *, run_id: str, event_cluster_id: str,
                                exclude_condition_id: str) -> str:
     """A held condition in the same event, or "" when the cluster is free.
 
-    Open means an attributed order with no completion yet: a missing pair, or
-    a pair seen exactly once (the completion copy writes the same pair_id a
-    second time). A close for the condition retires it: an exited, merged or
-    settled pair holds nothing. The candidate's own condition never blocks
-    itself.
+    Exposure is read from the registry, not from attribution-row counts: a
+    two-leg quote writes two attribution rows before either leg fills, and a
+    cancelled order leaves its row behind, so row counts both over- and
+    under-read. Open means a resting or filled-but-unclosed order for another
+    condition of the event; any close for the condition retires it (exit,
+    merge or settlement holds nothing). The candidate's own condition never
+    blocks itself. Missing registry tables mean nothing trackable: free.
     """
-    rows = conn.execute(
-        """SELECT condition_id, pair_id FROM shadow_paired_orders
-           WHERE run_id = ? AND event_cluster_id = ?
-           AND condition_id != ?""",
-        (run_id, event_cluster_id, exclude_condition_id),
-    ).fetchall()
-    by_pair: dict[str, int] = {}
-    for row in rows:
-        pair = row["pair_id"]
-        if pair is None or str(pair) == "":
-            return str(row["condition_id"])
-        by_pair[str(pair)] = by_pair.get(str(pair), 0) + 1
-    closed = {row["condition_id"] for row in conn.execute(
-        "SELECT DISTINCT condition_id FROM closes WHERE run_id = ?",
-        (run_id,)).fetchall()} if _table_exists(conn, "closes") else set()
-    for row in rows:
-        pair = row["pair_id"]
-        if pair is None or str(pair) == "":
-            continue
-        if by_pair.get(str(pair), 0) < 2 and row["condition_id"] not in closed:
-            return str(row["condition_id"])
-    return ""
+    if not _table_exists(conn, "orders") or not _table_exists(conn, "closes"):
+        return ""
+    row = conn.execute(
+        """SELECT DISTINCT o.condition_id FROM orders o
+           WHERE o.run_id = ?
+           AND o.status IN ('open', 'partial', 'pending', 'filled')
+           AND o.condition_id != ?
+           AND o.condition_id IN (
+               SELECT condition_id FROM shadow_paired_orders
+               WHERE run_id = ? AND event_cluster_id = ?)
+           AND NOT EXISTS (
+               SELECT 1 FROM closes c
+               WHERE c.run_id = o.run_id AND c.condition_id = o.condition_id)
+           LIMIT 1""",
+        (run_id, exclude_condition_id, run_id, event_cluster_id),
+    ).fetchone()
+    return str(row["condition_id"]) if row else ""
 
 
 def _table_exists(conn, name: str) -> bool:

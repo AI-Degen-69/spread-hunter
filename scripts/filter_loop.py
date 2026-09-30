@@ -191,9 +191,11 @@ def _rank_cmd(top: int = 2, out_dir=None,
     try:
         from scoring.config import load as _load_cfg
         cfg = _load_cfg()
-        if trial_depth is None and cfg.select_min_top3_depth_usd_trial:
+        # Admission mode rejects trial bars at the ranker: forwarding a
+        # configured trial here would fail every cycle, so skip both.
+        if trial_depth is None and not paired_admission and cfg.select_min_top3_depth_usd_trial:
             cmd += ["--trial-depth", str(cfg.select_min_top3_depth_usd_trial)]
-        if (paired_depth_control_usd is None
+        if (paired_depth_control_usd is None and not paired_admission
                 and cfg.select_min_volume_24h_usd_trial):
             cmd += ["--trial-volume", str(cfg.select_min_volume_24h_usd_trial)]
     except Exception as e:
