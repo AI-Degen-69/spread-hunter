@@ -309,3 +309,30 @@
   any limitation; no PnL uplift, no paired-variance prior in the verdict.
 - **No launch in this pipeline:** build + short rehearsal only. The 100-hour trial
   launch is an operator decision recorded in the pre-reg doc.
+
+# Constraints: Issue #49 — Short-window ladder (probe-first, shadow-only)
+
+## Quality & Tests
+- Zero regressions: focused suites covering touched files (`tests/test_shadow_exec.py`,
+  `tests/test_cycle_stream.py`, quote/config suites) must stay 100% green; full
+  `python -m pytest -q` stays with GitHub CI on push (merge gate).
+- New/changed behavior needs tests RED against untouched code and GREEN after;
+  each added assertion must fail without its change. The four proof tests are
+  placement, fill-sim, one-leg exit, and the off-test.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions,
+  or bypassing linters. Tests use `tmp_path` fixtures; no test writes into live
+  `data/` or `run/`. `data/orders.db` is never touched.
+
+## Behavior Boundaries (operator direction 2026-09-30)
+- **Separate ladder allocation.** The ladder does NOT share spread-hunter
+  Dynamic Caps accounting; per-rung sizing and the blended-residue check run
+  against the ladder budget. No existing cap default may change.
+- **Shadow-only.** No live execution during build; the screener
+  (`scripts/filter_markets.py`, `runtime/markets.json` rules) is untouched —
+  the ladder reaches crypto series through the shadow seam only.
+- **Off means identical.** With `ladder_mode` off, quoting output is
+  byte-identical to today; `fetch_live_market` and the rollover loop unchanged.
+- **Probe gates build.** Ladder code tasks do not start on a probe no-go;
+  Q1–Q3 (rung count, exit window, order lifetime) are answered by the probe's
+  CIs, with one-leg residues scored at real resolution outcomes, never zero.
+- No new external dependencies.

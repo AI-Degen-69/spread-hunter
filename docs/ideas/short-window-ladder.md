@@ -138,3 +138,22 @@ Worth building **after** the replay probe returns numbers. The mechanics are
 low-risk (they reuse the pair/merge/exposure machinery this repo has already
 hardened) but the edge is unproven, and the cheapest way to find out it
 doesn't exist is offline, on paper, before any code lands on the money path.
+
+## Addendum — operator direction 2026-09-30 (issue #49, Station II)
+
+Three decisions, recorded so the build below follows them and nothing else:
+
+1. **Separate ladder allocation.** The shared-caps reasoning in Q1 above is
+   superseded: the ladder gets its own budget, sized and bounded apart from
+   the spread-hunter Dynamic Caps. Concretely the probe and any later build
+   must state three numbers for the ladder budget alone — max cost of a fully
+   filled ladder on one market, max blended-residue exposure per market, and
+   the session ceiling across concurrent series — and no existing cap default
+   changes to accommodate them.
+2. **Time-boxed exit as the hypothesis, probe decides the number.** The
+   starting posture is Q2's timer-bounded residue (no hold-to-resolution as a
+   plan), with the probe comparing timed exits against the hold baseline on
+   real tapes before anyone locks a window.
+3. **Probe next, ladder gated.** The replay probe (`scripts/ladder_probe.py`)
+   is the next build step; ladder quoting/shadow code stays gated on a probe
+   go. An "unmeasurable" probe outcome stops the strategy, not just the code.
