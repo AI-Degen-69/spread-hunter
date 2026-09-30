@@ -7,11 +7,14 @@ retires; an exit close retires the market). Drives `run_shadow` through the
 """
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Callable, Optional
 
 from core_brain.quotes import route_quotes
+
+log = logging.getLogger("ladder")
 
 LADDER_EXIT_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
 
@@ -66,10 +69,15 @@ def make_ladder_decide(cfg, markets, *, db_path=None,
             return any(c.get("condition_id") == condition_id
                        and c.get("method") in LADDER_EXIT_METHODS
                        for c in reg.get_all_closes())
-        except Exception:
+        except Exception as e:
+            log.warning("ladder lifecycle unreadable for %s: %s -- dark",
+                        condition_id[:16], e)
             return True
 
-    def filled_prices(condition_id: str) -> dict[str, set]:
+    def filled_prices(condition_id: str) -> Optional[dict[str, set]]:
+        # Fail-closed: an unreadable fills table reads as "everything
+        # filled" (post nothing), never as "nothing filled" (re-posting a
+        # deployed rung would double the exposure).
         out: dict[str, set] = {}
         reg = reader()
         if reg is None:
@@ -80,8 +88,10 @@ def make_ladder_decide(cfg, markets, *, db_path=None,
                     continue
                 out.setdefault(str(f.get("token_id")),
                                set()).add(round(float(f.get("price")), 4))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("ladder fills unreadable for %s: %s -- dark",
+                        condition_id[:16], e)
+            return None
         return out
 
     def decide(dec_cfg, up_book, down_book, inv, t_rem, wf=None):
@@ -94,6 +104,8 @@ def make_ladder_decide(cfg, markets, *, db_path=None,
         intents, why = route_quotes(dec_cfg, market, up_book, down_book,
                                     inv, t_rem, wf, now=now)
         done = filled_prices(market.condition_id)
+        if done is None:
+            return [], "ladder lifecycle unreadable"
         pid = ladder_pair_id(market.condition_id)
         out = [i for i in intents
                if round(i.price, 4) not in done.get(i.token_id, set())]

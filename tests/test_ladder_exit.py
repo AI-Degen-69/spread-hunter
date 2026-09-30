@@ -142,6 +142,20 @@ def test_old_ladder_residue_exits_on_the_ladder_timer(registry):
     assert methods == ["ladder_exit"]
 
 
+def test_adverse_ladder_leg_exits_immediately(registry):
+    """Timer is patience, not permission: a 10c drop exits the young leg."""
+    _ladder_pair(registry, NOW)
+    venue = FakeVenue(best_ask=0.40, best_bid=0.50)
+    routed = lp._route_pair(venue, registry, lp.load_pair(registry, PAIR),
+                            MAX_PAIR_COST, True, {TOK_UP: 10.0, TOK_DN: 0.0},
+                            cfg=_cfg(), last_ms=NOW,
+                            now_s=NOW / 1000.0 + 10.0)
+    assert routed["action"] == "exited"
+    assert routed["reason"] == "adverse_drift"
+    methods = [c.get("method") for c in registry.get_all_closes()]
+    assert methods == ["ladder_exit"]
+
+
 def test_young_ladder_leg_holds_past_single_grace(registry):
     """A 10s-old ladder leg holds: the 60s ladder timer governs, not grace."""
     _ladder_pair(registry, NOW)

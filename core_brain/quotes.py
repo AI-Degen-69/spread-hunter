@@ -25,6 +25,7 @@ is a legacy field; see AGENTS.md.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import time
 from typing import Any, Callable, Optional
 
 from core_brain import config, risk, unhedged_stop_loss
@@ -41,6 +42,10 @@ class QuoteIntent:
     edge_vs_mid: float   # mid - price, our theoretical capture per share
     reason: str = ""
     crossed: bool = False  # True = we crossed the spread to BUY (balance hedge)
+    # Carry stamp: when every intent shares one, `record_submit` keeps the
+    # pair instead of minting a fresh id (the #206 carry semantic the ladder
+    # relies on for one pair per market). None = no opinion, mint fresh.
+    pair_id: Optional[str] = None
 
 
 @dataclass
@@ -483,8 +488,7 @@ def decide_ladder_quotes(cfg: MakerConfig, market, up_book: dict,
     missing book, or with mode off, this posts nothing -- the caller routes
     those cases to today's path untouched.
     """
-    import time as _time
-    at = now if now is not None else _time.time()
+    at = now if now is not None else time.time()
     if not cfg.ladder_mode:
         return [], "ladder off"
     if not (market.start_ts <= at
