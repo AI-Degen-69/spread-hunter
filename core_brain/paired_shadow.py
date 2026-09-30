@@ -29,7 +29,8 @@ def ensure_paired_shadow_tables(db_path: Path | str) -> None:
             CREATE TABLE IF NOT EXISTS shadow_paired_runs (
                 run_id TEXT PRIMARY KEY,
                 arm TEXT NOT NULL CHECK (arm IN ('control', 'treatment')),
-                cutoff_usd REAL NOT NULL,
+                cutoff_usd REAL,
+                trial_axis TEXT NOT NULL DEFAULT 'depth',
                 starting_bankroll_usd REAL NOT NULL,
                 started_at REAL NOT NULL,
                 planned_minutes REAL NOT NULL,
@@ -47,11 +48,13 @@ def ensure_paired_shadow_tables(db_path: Path | str) -> None:
                 condition_id TEXT NOT NULL,
                 snapshot_id TEXT NOT NULL,
                 arm TEXT NOT NULL,
-                cutoff_usd REAL NOT NULL,
+                cutoff_usd REAL,
                 event_cluster_id TEXT NOT NULL DEFAULT '',
                 event_cluster_source TEXT NOT NULL DEFAULT 'missing',
                 event_title TEXT NOT NULL DEFAULT '',
                 market_slug TEXT NOT NULL DEFAULT '',
+                family_label TEXT NOT NULL DEFAULT '',
+                admission_role TEXT NOT NULL DEFAULT '',
                 selected_at REAL NOT NULL,
                 PRIMARY KEY (run_id, condition_id, snapshot_id)
             );
@@ -71,12 +74,14 @@ def ensure_paired_shadow_tables(db_path: Path | str) -> None:
                 condition_id TEXT NOT NULL,
                 pair_id TEXT,
                 arm TEXT NOT NULL,
-                cutoff_usd REAL NOT NULL,
+                cutoff_usd REAL,
                 snapshot_id TEXT NOT NULL,
                 event_cluster_id TEXT NOT NULL DEFAULT '',
                 event_cluster_source TEXT NOT NULL DEFAULT 'missing',
                 event_title TEXT NOT NULL DEFAULT '',
                 market_slug TEXT NOT NULL DEFAULT '',
+                family_label TEXT NOT NULL DEFAULT '',
+                admission_role TEXT NOT NULL DEFAULT '',
                 admitted_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS shadow_paired_feed_events (
@@ -115,19 +120,53 @@ def ensure_paired_shadow_tables(db_path: Path | str) -> None:
             """
         )
         conn.commit()
+        # Additive migration for stores created before the admission axis:
+        # new shadow-only columns, never a rebuild. cutoff_usd nullability is
+        # intentionally NOT migrated -- old stores keep NOT NULL and the
+        # admission axis (cutoff NULL) runs on new stores only.
+        for table, column, ddl in (
+            ("shadow_paired_runs", "trial_axis",
+             "TEXT NOT NULL DEFAULT 'depth'"),
+            ("shadow_paired_admissions", "family_label",
+             "TEXT NOT NULL DEFAULT ''"),
+            ("shadow_paired_admissions", "admission_role",
+             "TEXT NOT NULL DEFAULT ''"),
+            ("shadow_paired_orders", "family_label",
+             "TEXT NOT NULL DEFAULT ''"),
+            ("shadow_paired_orders", "admission_role",
+             "TEXT NOT NULL DEFAULT ''"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+        conn.commit()
 
 
 def record_paired_run_start(
-    db_path: Path | str, *, run_id: str, arm: str, cutoff_usd: float,
+    db_path: Path | str, *, run_id: str, arm: str,
+    cutoff_usd: float | None,
     starting_bankroll_usd: float, started_at: float, planned_minutes: float,
+    trial_axis: str = "depth",
 ) -> None:
     """Start a paired run only in an otherwise empty, dedicated shadow store."""
     if arm not in {"control", "treatment"}:
         raise PairedShadowError(f"unknown paired-depth arm {arm!r}")
-    if not all(math.isfinite(float(v)) for v in
-               (cutoff_usd, starting_bankroll_usd, started_at, planned_minutes)):
+    if trial_axis not in {"depth", "admission"}:
+        raise PairedShadowError(f"unknown trial axis {trial_axis!r}")
+    if trial_axis == "admission":
+        if cutoff_usd is not None:
+            raise PairedShadowError("admission runs carry no dollar cutoff")
+        finite = (starting_bankroll_usd, started_at, planned_minutes)
+    else:
+        finite = (cutoff_usd, starting_bankroll_usd, started_at,
+                  planned_minutes)
+    if not all(math.isfinite(float(v)) for v in finite):
         raise PairedShadowError("paired run values must be finite")
-    if starting_bankroll_usd <= 0 or planned_minutes <= 0 or cutoff_usd <= 0:
+    if starting_bankroll_usd <= 0 or planned_minutes <= 0:
+        raise PairedShadowError("bankroll and duration must be positive")
+    if trial_axis == "depth" and not (cutoff_usd is not None and cutoff_usd > 0):
         raise PairedShadowError("bankroll, duration, and cutoff must be positive")
     with closing(get_connection(Path(db_path))) as conn:
         existing = conn.execute(
@@ -145,10 +184,11 @@ def record_paired_run_start(
             )
         conn.execute(
             """INSERT INTO shadow_paired_runs
-               (run_id, arm, cutoff_usd, starting_bankroll_usd, started_at,
-                planned_minutes, status)
-               VALUES (?, ?, ?, ?, ?, ?, 'running')""",
-            (run_id, arm, float(cutoff_usd), float(starting_bankroll_usd),
+               (run_id, arm, cutoff_usd, trial_axis, starting_bankroll_usd,
+                started_at, planned_minutes, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'running')""",
+            (run_id, arm, None if cutoff_usd is None else float(cutoff_usd),
+             trial_axis, float(starting_bankroll_usd),
              float(started_at), float(planned_minutes)),
         )
         conn.execute(
@@ -178,9 +218,10 @@ def record_paired_snapshot(
 
 def record_paired_market_admission(
     db_path: Path | str, *, run_id: str, condition_id: str,
-    snapshot_id: str, arm: str, cutoff_usd: float,
+    snapshot_id: str, arm: str, cutoff_usd: float | None,
     event_cluster_id: str, event_cluster_source: str,
     event_title: str = "", market_slug: str = "",
+    family_label: str = "", admission_role: str = "",
     selected_at: float | None = None,
 ) -> None:
     if not condition_id or not snapshot_id:
@@ -190,11 +231,13 @@ def record_paired_market_admission(
             """INSERT OR IGNORE INTO shadow_paired_admissions
                (run_id, condition_id, snapshot_id, arm, cutoff_usd,
                 event_cluster_id, event_cluster_source, event_title, market_slug,
-                selected_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, condition_id, snapshot_id, arm, float(cutoff_usd),
+                family_label, admission_role, selected_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, condition_id, snapshot_id, arm,
+             None if cutoff_usd is None else float(cutoff_usd),
              event_cluster_id or "", event_cluster_source or "missing",
              event_title or "", market_slug or "",
+             family_label or "", admission_role or "",
              time.time() if selected_at is None else float(selected_at)),
         )
         conn.commit()
@@ -223,11 +266,43 @@ def _cluster_from_row(row: dict) -> tuple[str, str]:
     return "", "missing"
 
 
+def _open_exposure_on_cluster(conn, *, run_id: str, event_cluster_id: str,
+                               exclude_condition_id: str) -> str:
+    """A held condition in the same event, or "" when the cluster is free.
+
+    Open means an attributed order with no completion yet: a NULL pair, or a
+    pair seen exactly once (the completion copy writes the same pair_id a
+    second time). The candidate's own condition never blocks itself.
+    """
+    rows = conn.execute(
+        """SELECT condition_id, pair_id FROM shadow_paired_orders
+           WHERE run_id = ? AND event_cluster_id = ?
+           AND condition_id != ?""",
+        (run_id, event_cluster_id, exclude_condition_id),
+    ).fetchall()
+    by_pair: dict[str, int] = {}
+    for row in rows:
+        pair = row["pair_id"]
+        if pair is None:
+            return str(row["condition_id"])
+        by_pair[str(pair)] = by_pair.get(str(pair), 0) + 1
+    for row in rows:
+        pair = row["pair_id"]
+        if pair is not None and by_pair.get(str(pair), 0) < 2:
+            return str(row["condition_id"])
+    return ""
+
+
 def record_paired_market_selection(
-    db_path: Path | str, *, run_id: str, arm: str, cutoff_usd: float,
+    db_path: Path | str, *, run_id: str, arm: str, cutoff_usd: float | None,
     spec: dict, observed_at: float | None = None,
 ) -> None:
     """Persist selected feed metadata before resolving the market over the network."""
+    if str(spec.get("trial_axis") or "") == "admission":
+        _record_admission_selection(
+            db_path, run_id=run_id, arm=arm, spec=spec,
+            observed_at=observed_at)
+        return
     snapshot_id = str(spec.get("paired_depth_snapshot_id") or "")
     cid = str(spec.get("cid") or spec.get("condition_id") or "")
     row_arm = str(spec.get("paired_depth_arm") or "")
@@ -266,6 +341,70 @@ def record_paired_market_selection(
         arm=arm, cutoff_usd=cutoff_usd, event_cluster_id=cluster_id,
         event_cluster_source=source, event_title=str(spec.get("event_title") or ""),
         market_slug=str(spec.get("slug") or ""), selected_at=now,
+    )
+
+
+def _record_admission_selection(
+    db_path: Path | str, *, run_id: str, arm: str,
+    spec: dict, observed_at: float | None = None,
+) -> None:
+    """Admission-axis selection: no dollar cutoff, family attribution, guard.
+
+    Depth callers never reach here (their specs carry no `trial_axis`), so
+    the depth contract is untouched.
+    """
+    snapshot_id = str(spec.get("snapshot_id") or "")
+    cid = str(spec.get("cid") or spec.get("condition_id") or "")
+    row_arm = str(spec.get("trial_arm") or spec.get("arm") or "")
+    if row_arm != arm:
+        detail = f"market={cid or '?'} arm={row_arm or '?'}"
+        record_paired_feed_event(
+            db_path, run_id=run_id, kind="invalid_feed_metadata",
+            detail=detail, ts=observed_at)
+        raise PairedShadowError(f"paired feed metadata mismatch: {detail}")
+    if not snapshot_id:
+        record_paired_feed_event(
+            db_path, run_id=run_id, kind="missing_snapshot",
+            detail=f"market={cid or '?'}", ts=observed_at)
+        raise PairedShadowError(f"paired feed has no snapshot for {cid or 'market'}")
+    if not cid:
+        record_paired_feed_event(
+            db_path, run_id=run_id, kind="missing_condition_id",
+            detail="paired market row has no condition id", ts=observed_at)
+        raise PairedShadowError("paired market row has no condition id")
+    now = time.time() if observed_at is None else float(observed_at)
+    cluster_id = str(spec.get("event_cluster_id") or "")
+    source = "bundle"
+    if not cluster_id:
+        cluster_id, source = _cluster_from_row(spec)
+    if not cluster_id:
+        record_paired_feed_event(
+            db_path, run_id=run_id, kind="missing_event_cluster",
+            detail=f"market={cid}", ts=now)
+        raise PairedShadowError(
+            f"paired market {cid} has no stable Gamma event id or slug")
+    role = str(spec.get("admission_role") or "")
+    if arm == "treatment" and role == "fallback":
+        with closing(get_connection(Path(db_path))) as conn:
+            held = _open_exposure_on_cluster(
+                conn, run_id=run_id, event_cluster_id=cluster_id,
+                exclude_condition_id=cid)
+        if held:
+            detail = (f"market={cid} held={held} cluster={cluster_id}: "
+                      f"one fallback holding per event")
+            record_paired_feed_event(
+                db_path, run_id=run_id, kind="fallback_guard_skip",
+                detail=detail, ts=now)
+            raise PairedShadowError(f"admission fallback guard: {detail}")
+    record_paired_snapshot(db_path, run_id=run_id, snapshot_id=snapshot_id,
+                           observed_at=now)
+    record_paired_market_admission(
+        db_path, run_id=run_id, condition_id=cid, snapshot_id=snapshot_id,
+        arm=arm, cutoff_usd=None, event_cluster_id=cluster_id,
+        event_cluster_source=source, event_title=str(spec.get("event_title") or ""),
+        market_slug=str(spec.get("slug") or ""),
+        family_label=str(spec.get("family") or ""),
+        admission_role=role, selected_at=now,
     )
 
 
@@ -332,7 +471,8 @@ def record_paired_market_visit(
 def _latest_paired_admission(conn, *, run_id: str, condition_id: str):
     row = conn.execute(
         """SELECT arm, cutoff_usd, snapshot_id, event_cluster_id,
-                  event_cluster_source, event_title, market_slug, selected_at
+                  event_cluster_source, event_title, market_slug,
+                  family_label, admission_role, selected_at
            FROM shadow_paired_admissions
            WHERE run_id = ? AND condition_id = ?
            ORDER BY selected_at DESC, rowid DESC LIMIT 1""",
@@ -373,11 +513,12 @@ def record_paired_order_attribution(
             """INSERT INTO shadow_paired_orders
                (local_id, run_id, condition_id, pair_id, arm, cutoff_usd,
                 snapshot_id, event_cluster_id, event_cluster_source, event_title,
-                market_slug, admitted_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                market_slug, family_label, admission_role, admitted_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (local_id, run_id, condition_id, pair_id, row["arm"], row["cutoff_usd"],
              row["snapshot_id"], row["event_cluster_id"],
              row["event_cluster_source"], row["event_title"], row["market_slug"],
+             row["family_label"] or "", row["admission_role"] or "",
              row["selected_at"]),
         )
         conn.commit()
@@ -420,7 +561,8 @@ def copy_paired_order_attribution(
     with closing(get_connection(Path(db_path))) as conn:
         row = conn.execute(
             """SELECT arm, cutoff_usd, snapshot_id, event_cluster_id,
-                      event_cluster_source, event_title, market_slug, admitted_at
+                      event_cluster_source, event_title, market_slug,
+                      family_label, admission_role, admitted_at
                FROM shadow_paired_orders WHERE run_id = ? AND pair_id = ?
                ORDER BY admitted_at ASC LIMIT 1""",
             (run_id, pair_id),
@@ -433,11 +575,12 @@ def copy_paired_order_attribution(
             """INSERT OR IGNORE INTO shadow_paired_orders
                (local_id, run_id, condition_id, pair_id, arm, cutoff_usd,
                 snapshot_id, event_cluster_id, event_cluster_source, event_title,
-                market_slug, admitted_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                market_slug, family_label, admission_role, admitted_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (local_id, run_id, condition_id, pair_id, row["arm"], row["cutoff_usd"],
              row["snapshot_id"], row["event_cluster_id"],
              row["event_cluster_source"], row["event_title"], row["market_slug"],
+             row["family_label"] or "", row["admission_role"] or "",
              row["admitted_at"]),
         )
         conn.commit()

@@ -346,3 +346,199 @@ def test_cli_rejections(tmp_path):
                     "--legacy-rewards"])
     args = parse_args(["--paired-admission", "--out-dir", out])
     assert args.paired_admission is True
+
+
+def _adm_spec(cid, arm="treatment", role="mainline", event="ev-1",
+              snapshot="s1"):
+    return {
+        "cid": cid,
+        "trial_arm": arm, "arm": arm,
+        "trial_axis": "admission",
+        "snapshot_id": snapshot,
+        "event_cluster_id": f"gamma-event:{event}",
+        "family": f"fam-{event}",
+        "admission_role": role,
+        "event_id": event, "event_slug": event,
+        "event_title": f"Event {event}",
+        "slug": f"mkt-{cid}",
+    }
+
+
+def _adm_db(path):
+    import sqlite3
+
+    from core_brain.paired_shadow import ensure_paired_shadow_tables
+
+    ensure_paired_shadow_tables(path)
+    return sqlite3.connect(path)
+
+
+def test_family_label_persists_admission_to_order_to_completion(tmp_path):
+    import sqlite3
+
+    from core_brain.paired_shadow import (
+        copy_paired_order_attribution,
+        record_paired_market_selection,
+        record_paired_order_attribution,
+        record_paired_run_start,
+    )
+
+    db = tmp_path / "adm.db"
+    _adm_db(db).close()
+    record_paired_run_start(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        starting_bankroll_usd=100.0, started_at=1.0, planned_minutes=5.0,
+        trial_axis="admission")
+    record_paired_market_selection(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        spec=_adm_spec("0xadm"))
+    record_paired_order_attribution(
+        db, run_id="r1", local_id="loc-1", condition_id="0xadm",
+        pair_id="p1")
+    copy_paired_order_attribution(
+        db, run_id="r1", pair_id="p1", local_id="loc-2",
+        condition_id="0xadm")
+
+    with sqlite3.connect(db) as conn:
+        adm = conn.execute(
+            "SELECT family_label, admission_role FROM shadow_paired_admissions"
+        ).fetchone()
+        orders = conn.execute(
+            "SELECT local_id, family_label, admission_role "
+            "FROM shadow_paired_orders ORDER BY local_id").fetchall()
+    assert tuple(adm) == ("fam-ev-1", "mainline")
+    assert [tuple(r) for r in orders] == [
+        ("loc-1", "fam-ev-1", "mainline"),
+        ("loc-2", "fam-ev-1", "mainline"),
+    ]
+
+
+def test_old_store_opens_after_additive_columns(tmp_path):
+    import sqlite3
+
+    from core_brain.paired_shadow import (
+        ensure_paired_shadow_tables,
+        record_paired_market_selection,
+        record_paired_run_start,
+    )
+
+    db = tmp_path / "old.db"
+    with sqlite3.connect(db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE shadow_paired_runs (
+                run_id TEXT PRIMARY KEY,
+                arm TEXT NOT NULL,
+                cutoff_usd REAL NOT NULL,
+                starting_bankroll_usd REAL NOT NULL,
+                started_at REAL NOT NULL,
+                planned_minutes REAL NOT NULL,
+                finished_at REAL,
+                status TEXT NOT NULL DEFAULT 'running'
+            );
+            CREATE TABLE shadow_paired_admissions (
+                run_id TEXT NOT NULL,
+                condition_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                arm TEXT NOT NULL,
+                cutoff_usd REAL NOT NULL,
+                event_cluster_id TEXT NOT NULL DEFAULT '',
+                event_cluster_source TEXT NOT NULL DEFAULT 'missing',
+                event_title TEXT NOT NULL DEFAULT '',
+                market_slug TEXT NOT NULL DEFAULT '',
+                selected_at REAL NOT NULL,
+                PRIMARY KEY (run_id, condition_id, snapshot_id)
+            );
+            CREATE TABLE shadow_paired_orders (
+                local_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                condition_id TEXT NOT NULL,
+                pair_id TEXT,
+                arm TEXT NOT NULL,
+                cutoff_usd REAL NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                event_cluster_id TEXT NOT NULL DEFAULT '',
+                event_cluster_source TEXT NOT NULL DEFAULT 'missing',
+                event_title TEXT NOT NULL DEFAULT '',
+                market_slug TEXT NOT NULL DEFAULT '',
+                admitted_at REAL NOT NULL
+            );
+            """)
+        conn.commit()
+    ensure_paired_shadow_tables(db)
+
+    with sqlite3.connect(db) as conn:
+        cols = lambda t: {r[1] for r in conn.execute(
+            f"PRAGMA table_info({t})").fetchall()}
+        assert "trial_axis" in cols("shadow_paired_runs")
+        assert "family_label" in cols("shadow_paired_admissions")
+        assert "admission_role" in cols("shadow_paired_orders")
+
+    record_paired_run_start(
+        db, run_id="r1", arm="control", cutoff_usd=500.0,
+        starting_bankroll_usd=100.0, started_at=1.0, planned_minutes=5.0)
+    record_paired_market_selection(
+        db, run_id="r1", arm="control", cutoff_usd=500.0,
+        spec={"cid": "0xdepth",
+              "paired_depth_arm": "control",
+              "paired_depth_cutoff_usd": 500.0,
+              "paired_depth_snapshot_id": "s1",
+              "event_id": "ev-1"})
+
+
+def test_guard_skips_second_fallback_while_first_held(tmp_path):
+    import sqlite3
+
+    from core_brain.paired_shadow import (
+        PairedShadowError,
+        record_paired_market_selection,
+        record_paired_order_attribution,
+        record_paired_run_start,
+    )
+
+    db = tmp_path / "guard.db"
+    _adm_db(db).close()
+    record_paired_run_start(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        starting_bankroll_usd=100.0, started_at=1.0, planned_minutes=5.0,
+        trial_axis="admission")
+    record_paired_market_selection(
+        db, run_id="r1", arm="treatment", cutoff_usd=None,
+        spec=_adm_spec("0xfirst", role="fallback"))
+    record_paired_order_attribution(
+        db, run_id="r1", local_id="loc-a", condition_id="0xfirst",
+        pair_id="pA")
+
+    with pytest.raises(PairedShadowError, match="fallback guard"):
+        record_paired_market_selection(
+            db, run_id="r1", arm="treatment", cutoff_usd=None,
+            spec=_adm_spec("0xsecond", role="fallback"))
+    with sqlite3.connect(db) as conn:
+        events = conn.execute(
+            "SELECT kind, detail FROM shadow_paired_feed_events").fetchall()
+    assert any(k == "fallback_guard_skip" and "0xfirst" in d
+               for k, d in events)
+
+
+def test_guard_ignores_control_arm(tmp_path):
+    from core_brain.paired_shadow import (
+        record_paired_market_selection,
+        record_paired_order_attribution,
+        record_paired_run_start,
+    )
+
+    db = tmp_path / "guard-ctl.db"
+    _adm_db(db).close()
+    record_paired_run_start(
+        db, run_id="r1", arm="control", cutoff_usd=None,
+        starting_bankroll_usd=100.0, started_at=1.0, planned_minutes=5.0,
+        trial_axis="admission")
+    record_paired_market_selection(
+        db, run_id="r1", arm="control", cutoff_usd=None,
+        spec=_adm_spec("0xfirst", arm="control"))
+    record_paired_order_attribution(
+        db, run_id="r1", local_id="loc-a", condition_id="0xfirst",
+        pair_id="pA")
+    record_paired_market_selection(
+        db, run_id="r1", arm="control", cutoff_usd=None,
+        spec=_adm_spec("0xsecond", arm="control"))

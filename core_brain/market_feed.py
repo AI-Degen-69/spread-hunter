@@ -78,6 +78,13 @@ class GraduatedMarket:
     paired_depth_arm: str = ""
     paired_depth_cutoff_usd: float = 0.0
     paired_depth_snapshot_id: str = ""
+    trial_arm: str = ""
+    trial_axis: str = ""
+    snapshot_id: str = ""
+    event_cluster_id: str = ""
+    family: str = ""
+    admission_role: str = ""
+    fallback_reason: str = ""
     event_id: str = ""
     event_slug: str = ""
     event_title: str = ""
@@ -138,6 +145,58 @@ def _load_paired_depth_feed(
 
 
 
+def _load_paired_admission_feed(
+    target: Path, *, arm: str, max_age_sec: Optional[float],
+) -> list[GraduatedMarket]:
+    """Read one arm from an atomic paired-admission bundle.
+
+    Same envelope checks as the depth loader, minus the cutoff: admission
+    varies identity, not a dollar bar, so there is no cutoff to match. Every
+    row must carry event identity (the bundle builder refuses publication
+    without it; this re-checks at read time).
+    """
+    if arm not in {"control", "treatment"}:
+        raise MarketFeedError(f"unknown paired-admission arm {arm!r}")
+    if not target.is_file():
+        raise MarketFeedAbsentError(f"paired-admission feed missing at {target}")
+    try:
+        stat = target.stat()
+    except OSError as exc:
+        raise MarketFeedAbsentError(f"unable to stat {target}: {exc}") from exc
+    if stat.st_size == 0:
+        raise MarketFeedError(f"paired-admission feed at {target} is empty (0 bytes)")
+    if max_age_sec is not None and max_age_sec > 0:
+        age = time.time() - stat.st_mtime
+        if age > max_age_sec:
+            raise MarketFeedStaleError(
+                f"paired-admission feed at {target} is stale: age {age:.0f}s > {max_age_sec:.0f}s"
+            )
+    try:
+        bundle = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise MarketFeedError(f"failed to parse paired-admission JSON from {target}: {exc}") from exc
+    if not isinstance(bundle, dict) or bundle.get("format") != "spread_hunter.paired-admission.v1":
+        raise MarketFeedError(f"paired-admission feed at {target} has an unsupported format")
+    snapshot_id = bundle.get("snapshot_id")
+    rows = bundle.get(arm)
+    if not isinstance(snapshot_id, str) or not snapshot_id or not isinstance(rows, list):
+        raise MarketFeedError(f"paired-admission feed at {target} is missing {arm} metadata")
+    if any(
+        not isinstance(row, dict)
+        or row.get("snapshot_id") != snapshot_id
+        or (row.get("trial_arm") or row.get("arm")) != arm
+        for row in rows
+    ):
+        raise MarketFeedError(f"paired-admission feed at {target} has inconsistent {arm} rows")
+    if any(
+        not (row.get("event_cluster_id") or row.get("event_id") or row.get("event_slug"))
+        for row in rows
+    ):
+        raise MarketFeedError(f"paired-admission feed at {target} has a row with no event identity")
+    return _graduated_rows(rows, target)
+
+
+
 def _graduated_rows(data: list, target: Path) -> list[GraduatedMarket]:
     if not isinstance(data, list):
         raise MarketFeedError(
@@ -172,6 +231,13 @@ def _graduated_rows(data: list, target: Path) -> list[GraduatedMarket]:
                 paired_depth_arm=str(row.get("paired_depth_arm", "")),
                 paired_depth_cutoff_usd=float(row.get("paired_depth_cutoff_usd", 0.0)),
                 paired_depth_snapshot_id=str(row.get("paired_depth_snapshot_id", "")),
+                trial_arm=str(row.get("trial_arm", "") or row.get("arm", "")),
+                trial_axis=str(row.get("trial_axis", "")),
+                snapshot_id=str(row.get("snapshot_id", "")),
+                event_cluster_id=str(row.get("event_cluster_id", "")),
+                family=str(row.get("family", "")),
+                admission_role=str(row.get("admission_role", "")),
+                fallback_reason=str(row.get("fallback_reason", "")),
                 event_id=str(row.get("event_id", "")),
                 event_slug=str(row.get("event_slug", "")),
                 event_title=str(row.get("event_title", "")),
@@ -180,6 +246,18 @@ def _graduated_rows(data: list, target: Path) -> list[GraduatedMarket]:
         except (ValueError, TypeError) as exc:
             raise MarketFeedError(f"row {idx} ({row.get('cid')}) has malformed field: {exc}") from exc
     return out
+
+
+def _paired_bundle_format(target: Path) -> str:
+    """Peek a paired bundle's format without validating the arms."""
+    try:
+        bundle = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(bundle, dict):
+        return ""
+    fmt = bundle.get("format")
+    return fmt if isinstance(fmt, str) else ""
 
 
 def load_graduated_markets(
@@ -198,6 +276,10 @@ def load_graduated_markets(
     """
     target = Path(path) if path is not None else default_markets_path()
     if paired_arm is not None:
+        fmt = _paired_bundle_format(target)
+        if fmt == "spread_hunter.paired-admission.v1":
+            return _load_paired_admission_feed(target, arm=paired_arm,
+                                               max_age_sec=max_age_sec)
         return _load_paired_depth_feed(target, arm=paired_arm,
                                        max_age_sec=max_age_sec)
 
