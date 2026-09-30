@@ -22,7 +22,7 @@ MAX_PAIR_COST = 0.995
 TOK_UP = "tok-up"
 TOK_DN = "tok-dn"
 COND = "0xcond-ladder"
-PAIR = "ladder:0xcond-ladder"
+PAIR = "ladder-0xcond-ladder"
 NOW = 2_000_000
 
 
