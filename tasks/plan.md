@@ -299,6 +299,15 @@ plus gate tests (outside window → no submits).
 CHECKPOINT 1: off-identity proven (off-test green) — the single-pair path
 is frozen behind the switch. One-line report, not a pause in auto mode.
 
+CHECKPOINT 1 OUTCOME (2026-10-01): PROVEN — mode-off output equals
+`decide_quotes` exactly (unit off-test); plus a decide-time completable
+filter so rungs the planner would cancel are never posted (no churn).
+
+CHECKPOINT 2 OUTCOME (2026-10-01): BUILT — real-loop rehearsal holds the
+shape (2 rungs/side, one `ladder-<cond>` pair), fills oldest-first under it,
+one-leg residue exits via `ladder_exit` with no orphan, mode off posts no
+ladder stamp. Pair stamp uses a dash: a colon broke merge-tx versioning.
+
 ### T4 — [Backend/Logic] Per-rung telemetry + `ladder_exit` + timed exit (M)
 Per-rung submit/fill telemetry; `ladder_exit` added to every naked-close
 set (`order_registry.py`, `kpi.py`, reports); one-leg residue exits on the

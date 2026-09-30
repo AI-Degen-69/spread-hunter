@@ -14,10 +14,10 @@
 - [x] CHECKPOINT 1 (#326) — netting-wins opens T3, lifecycle-wins closes on the note
 - [x] T3 (#326) — Net prior exit closes in exit sizing, gated (S, Backend/Logic)
 - [x] CHECKPOINT 2 (#326) — handoff to #325
-- [ ] T1 (#325) — Series discovery for BTC/ETH 5+15-min (S, Backend/Logic)
-- [ ] T2 (#325) — Ladder config: mode + shapes + timers + budget (S, Backend/Logic)
-- [ ] T3 (#325) — Gated ladder decision function + off-test (M, Backend/Logic)
-- [ ] CHECKPOINT 1 (#325) — off-identity proven, single-pair path frozen
-- [ ] T4 (#325) — Per-rung telemetry + ladder_exit + timed exit (M, Backend/Logic)
-- [ ] T5 (#325) — Shadow wiring + four proof tests (M, Backend/Logic)
-- [ ] CHECKPOINT 2 (#325) — shadow rehearsal per spec
+- [x] T1 (#325) — Series discovery for BTC/ETH 5+15-min (S, Backend/Logic)
+- [x] T2 (#325) — Ladder config: mode + shapes + timers + budget (S, Backend/Logic)
+- [x] T3 (#325) — Gated ladder decision function + off-test (M, Backend/Logic)
+- [x] CHECKPOINT 1 (#325) — off-identity proven, single-pair path frozen
+- [x] T4 (#325) — Per-rung telemetry + ladder_exit + timed exit (M, Backend/Logic)
+- [x] T5 (#325) — Shadow wiring + four proof tests (M, Backend/Logic)
+- [x] CHECKPOINT 2 (#325) — shadow rehearsal per spec
