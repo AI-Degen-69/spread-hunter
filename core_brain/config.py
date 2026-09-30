@@ -965,6 +965,17 @@ class MakerConfig:
     # Optional sizing ceiling per quote (None for standard mode; set via .env / CLI)
     max_quote_shares: float | None = None
 
+    # --- short-window ladder (Issue #325) ----------------------------------
+    # Separate gated path quoting BTC/ETH 5+15-min series at OPEN. Off by
+    # default: with `ladder_mode` off, quoting is byte-identical to today.
+    # The ladder never shares spread-hunter Dynamic Caps accounting: per-rung
+    # sizing and the blended-residue check run against `ladder_budget_usd`.
+    ladder_mode: bool = False
+    ladder_rungs: int = 2            # probe-winning shape; ≥2 to be a ladder
+    ladder_exit_sec: float = 60.0    # timed one-leg exit (probe exit_60)
+    ladder_budget_usd: float = 0.0   # separate allocation; 0 = unfunded
+    ladder_open_window_sec: float = 30.0  # quote only this long after start
+
     # --- statistical validation gate criteria (Issue #51) -----------------
     # Effect sizes to evaluate in power table (USD per share / price units).
     # NOTE: Effect size delta and standard deviation sigma must share the same units.
@@ -1041,6 +1052,22 @@ class MakerConfig:
         return (self.net_oneway_ms + self.post_venue_accept_ms) / 1000.0
 
     sim_only: bool = True
+
+    def validate_ladder(self) -> None:
+        """Reject ladder shapes that cannot be a ladder. Fail-closed."""
+        if self.ladder_rungs < 2:
+            raise ValueError(
+                f"ladder_rungs must be >= 2, got {self.ladder_rungs}")
+        if self.ladder_exit_sec <= 0:
+            raise ValueError(
+                f"ladder_exit_sec must be > 0, got {self.ladder_exit_sec}")
+        if self.ladder_budget_usd < 0:
+            raise ValueError(
+                f"ladder_budget_usd must be >= 0, got {self.ladder_budget_usd}")
+        if self.ladder_open_window_sec <= 0:
+            raise ValueError(
+                f"ladder_open_window_sec must be > 0, "
+                f"got {self.ladder_open_window_sec}")
 
     def db_path(self) -> Path:
         return Path(os.environ.get("SPREAD_HUNTER_DB") or os.environ.get("HUNTER_DB", str(ROOT / "hunter.db")))

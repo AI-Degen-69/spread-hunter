@@ -737,7 +737,7 @@ def _paired_inventory(
             return None, f"close {row['id']} has invalid shares"
         if method in {"shadow_merge", "merge"}:
             legs = ("UP", "DOWN")
-        elif method in {"single_buy_exit", "naked_exit"}:
+        elif method in {"single_buy_exit", "naked_exit", "ladder_exit"}:
             if row["up_price"] is not None and row["dn_price"] is None:
                 legs = ("UP",)
             elif row["dn_price"] is not None and row["up_price"] is None:

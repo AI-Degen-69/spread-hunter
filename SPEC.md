@@ -24,3 +24,36 @@ This ticket builds and rehearsal-tests the machinery; it does not launch the
 - `docs/runs/2026-09-30-paired-admission-experiment.md` pre-registration doc; short rehearsal only.
 ### Out of scope
 - Launching the 100-hour trial; changing the shipped gate on any verdict (even `adopt` — adoption is a separate decision); touching `scoring/selector.py`, `single_buy_saver.py`, risk caps, `market_resolution.py`, `order_registry` schema, `data/**`.
+
+# SPEC: Issue #325 — Build the ladder path (gated on shadow go)
+
+## Goal
+Final build of #49: a separate, gated ladder path quoting BTC/ETH 5+15-min
+series at OPEN with equal-sized rungs around 0.50 (probe-winning shape 2,
+timed exit 60s), merging opposite fills under one `pair_id` per market, and
+exiting one-leg residue on a timer. Shadow-only; off means byte-identical
+quoting to today.
+
+## Acceptance criteria (from issue)
+- `ladder_mode` config off by default; series discovery leaves
+  `fetch_live_market` untouched; gated ladder decision function; per-rung
+  telemetry; `ladder_exit` close method in all naked-close sets.
+- Four proof tests fail-without/pass-with: placement (≥2 submits/side,
+  distinct prices), fill-sim (oldest-first, one `pair_id`), one-leg exit
+  (inside window, no orphan), off-test (single price, suite green).
+- Shadow rehearsal confirms spec behavior (rungs resting, filling, exiting).
+- Screener untouched; separate ladder allocation (operator direction).
+
+## Scope
+### In scope
+- `MakerConfig` ladder fields (mode, shapes, timers, separate budget) +
+  validation; series discovery fn; `decide_ladder_quotes` gated fn;
+  `ladder_exit` in `order_registry.py`, `kpi.py` (+ sets), reports;
+  shadow wiring via `decide_fn`/`markets_fn` seams; one-shot rung lifecycle
+  (filled rungs retire, exit closes retire the market); #326 netting reused
+  in exit sizing.
+### Out of scope
+- Live execution; screener changes (`scripts/filter_markets.py`,
+  `runtime/markets.json`); cross-market portfolio coordination; shared-cap
+  accounting; threshold/gate changes (`max_pair_cost`, grace defaults,
+  windows, route order frozen).

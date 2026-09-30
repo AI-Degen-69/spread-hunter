@@ -459,7 +459,7 @@ def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dic
     # later win could redeem already-exited shares (double-counted proceeds).
     for cr in close_rows:
         m = cr["method"]
-        if m not in ("single_buy_exit", "naked_exit"):
+        if m not in ("single_buy_exit", "naked_exit", "ladder_exit"):
             continue
         exited_up = cr["up_price"] is not None
         if exited_up and up_token is None:
@@ -490,7 +490,7 @@ def _held_shares_by_token(registry, condition_id: str, run_id: str) -> tuple[dic
         if m in ("merge", "shadow_merge", "shadow_settlement"):
             _drip(up_token, sh, cr["up_cost_removed"])
             _drip(down_token, sh, cr["dn_cost_removed"])
-        elif m in ("single_buy_exit", "naked_exit"):
+        elif m in ("single_buy_exit", "naked_exit", "ladder_exit"):
             if cr["up_price"] is not None:
                 _drip(up_token, sh, cr["up_cost_removed"])
             else:

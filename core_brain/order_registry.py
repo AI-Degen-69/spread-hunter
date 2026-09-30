@@ -2282,7 +2282,7 @@ def inventory_from_registry(
             sh = float(cr["shares"] or 0.0)
             up_c = cr["up_cost_removed"]
             dn_c = cr["dn_cost_removed"]
-            if method in ("single_buy_exit", "naked_exit"):
+            if method in ("single_buy_exit", "naked_exit", "ladder_exit"):
                 if cr["up_price"] is not None:
                     inv.up_shares = max(0.0, inv.up_shares - sh)
                     if up_c is not None:

@@ -720,7 +720,7 @@ MERGE_METHODS = ("merge", "shadow_merge")
 # exit the strategy chose, so they belong to no execution stage.
 NON_TRADE_CLOSE_METHODS = ("venue_sync",)
 # Methods representing single-buy liquidation or rescue exits.
-SINGLE_BUY_EXIT_METHODS = ("single_buy_exit", "naked_exit")
+SINGLE_BUY_EXIT_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
 # The stages, in the order a leg travels them.
 EXECUTION_STAGES = (
     ("quoted", "Quoted"),
@@ -1004,7 +1004,8 @@ PESSIMISTIC_CONVERSION_GAS = 0.0
 # rows whose recorded exit is the optimistic end of a taker, so the pessimistic
 # variant recosts them. Everything else (a non-shadow plain close) never
 # depended on an optimistic ask and is recosted at zero extra.
-TAKER_RESOLVED_METHODS = ("shadow_merge", "single_buy_exit", "naked_exit")
+TAKER_RESOLVED_METHODS = ("shadow_merge", "single_buy_exit", "naked_exit",
+                               "ladder_exit")
 
 
 def _pessimistic_close_return(closes_row: dict, tick: float, gas: float) -> Optional[float]:
@@ -1379,7 +1380,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
                 up_cost = max(0.0, up_cost - float(c.get("up_cost_removed") or 0.0))
                 dn_cost = max(0.0, dn_cost - float(c.get("dn_cost_removed") or 0.0))
                 continue
-            if method not in ("single_buy_exit", "naked_exit"):
+            if method not in ("single_buy_exit", "naked_exit", "ladder_exit"):
                 continue
             if c.get("up_price") is not None:
                 up_sh = max(0.0, up_sh - sh)
@@ -2055,7 +2056,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # Exit-shape counts (merges vs one-sided dumps) feed the card's details
         # line, which owns the "all exits were naked" warning.
         _merge_closes = sum(1 for c in closes if c.get("method") == "merge")
-        _single_exits = sum(1 for c in closes if c.get("method") in ("single_buy_exit", "naked_exit"))
+        _single_exits = sum(1 for c in closes if c.get("method") in ("single_buy_exit", "naked_exit", "ladder_exit"))
 
         run_profitability = {
             "run_id": active_run_id,

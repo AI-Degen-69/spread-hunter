@@ -230,7 +230,7 @@ def ladder_pair_id(series: str, condition_id: str) -> str:
     return f"ladder-{series}-{safe}"
 
 
-EXIT_STATUSES = ("single_buy_exit", "naked_exit")
+EXIT_STATUSES = ("single_buy_exit", "naked_exit", "ladder_exit")
 
 
 def ladder_decide(series: str, rungs: tuple,
@@ -267,7 +267,8 @@ def ladder_decide(series: str, rungs: tuple,
                                         []).append(str(r["status"]))
                 retired = conn.execute(
                     "SELECT 1 FROM closes WHERE condition_id = ?"
-                    " AND method IN (?, ?) LIMIT 1",
+                    f" AND method IN ({', '.join('?' * len(EXIT_STATUSES))})"
+                    " LIMIT 1",
                     (condition_id,) + EXIT_STATUSES).fetchone() is not None
         except (sqlite3.Error, OSError, ValueError) as e:
             # Fail closed and loud: an unreadable store must not read as "no

@@ -162,6 +162,42 @@ def fetch_live_market(gamma_host: str, series_slug: str) -> Optional[LiveMarket]
     return candidates[0]
 
 
+def discover_ladder_series(gamma_host: str, series_slugs: list[str], *,
+                           open_window_sec: float = 30.0,
+                           now: Optional[float] = None) -> list[LiveMarket]:
+    """Upcoming ladder series markets inside their OPEN window, oldest first.
+
+    The ladder quotes a series at OPEN (first `open_window_sec` seconds of
+    `start_ts`). One `/events` call per slug, same row parsing as
+    `fetch_live_market` (malformed rows skipped, never raised). Non-series
+    rows cannot appear -- the venue filters by `series_slug` -- but anything
+    outside the window is dropped here all the same.
+    """
+    at = now if now is not None else time.time()
+    found: list[LiveMarket] = []
+    for slug in series_slugs:
+        r = _SESSION.get(f"{gamma_host}/events",
+                         params={"series_slug": slug, "closed": "false",
+                                 "limit": 500},
+                         timeout=EVENTS_TIMEOUT)
+        r.raise_for_status()
+        events = r.json()
+        if not isinstance(events, list):
+            continue
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            inner = ev.get("markets") or []
+            if not isinstance(inner, list):
+                continue
+            for m in inner:
+                lm = _parse_market(m)
+                if lm and lm.start_ts <= at < lm.start_ts + open_window_sec:
+                    found.append(lm)
+    found.sort(key=lambda m: m.start_ts)
+    return found
+
+
 def fetch_pinned_market(condition_id: str,
                         require_rewards: bool = True) -> Optional[LiveMarket]:
     """One specific long-dated market, pinned by condition_id.

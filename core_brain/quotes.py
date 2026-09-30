@@ -25,6 +25,7 @@ is a legacy field; see AGENTS.md.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import time
 from typing import Any, Callable, Optional
 
 from core_brain import config, risk, unhedged_stop_loss
@@ -41,6 +42,10 @@ class QuoteIntent:
     edge_vs_mid: float   # mid - price, our theoretical capture per share
     reason: str = ""
     crossed: bool = False  # True = we crossed the spread to BUY (balance hedge)
+    # Carry stamp: when every intent shares one, `record_submit` keeps the
+    # pair instead of minting a fresh id (the #206 carry semantic the ladder
+    # relies on for one pair per market). None = no opinion, mint fresh.
+    pair_id: Optional[str] = None
 
 
 @dataclass
@@ -469,6 +474,83 @@ def _decide_quotes_from_mid(
             and len(out) == 1):
         return out, "; ".join(blocked)
     return out, ""
+
+
+def decide_ladder_quotes(cfg: MakerConfig, market, up_book: dict,
+                         down_book: dict, *,
+                         now: Optional[float] = None
+                         ) -> tuple[list[QuoteIntent], str]:
+    """Equal-sized rungs around 0.50 on both sides, at series OPEN only.
+
+    One rung per level per side; rung i rests at 0.50 - i*tick on its own
+    token. Per-rung size splits the separate ladder budget evenly across
+    all rung-legs (never Dynamic Caps). Outside the open window, on a
+    missing book, or with mode off, this posts nothing -- the caller routes
+    those cases to today's path untouched.
+    """
+    at = now if now is not None else time.time()
+    if not cfg.ladder_mode:
+        return [], "ladder off"
+    if not (market.start_ts <= at
+            < market.start_ts + cfg.ladder_open_window_sec):
+        return [], "outside ladder open window"
+    tick = market.tick_size or 0.01
+    legs: list[tuple[str, str, dict]] = [
+        ("UP", market.up_token, up_book),
+        ("DOWN", market.down_token, down_book),
+    ]
+    mids: dict[str, float] = {}
+    for side, _tok, book in legs:
+        mid = mid_price(book.get("best_bid"), book.get("best_ask"))
+        if mid is None:
+            return [], f"ladder: {side} has no two-sided book"
+        mids[side] = mid
+    up_ask = up_book.get("best_ask")
+    down_ask = down_book.get("best_ask")
+    # The separate allocation is a hard gate, not a hint: an unfunded
+    # ladder (or one below a share per rung) posts nothing. `record_submit`
+    # enforces venue caps, not this budget, so a minimum-one floor here
+    # would let one-share orders through on a zero budget.
+    if cfg.ladder_budget_usd <= 0:
+        return [], "ladder unfunded"
+    per_rung = int(cfg.ladder_budget_usd / (2 * cfg.ladder_rungs))
+    if per_rung < 1:
+        return [], "ladder budget below one share per rung"
+    intents: list[QuoteIntent] = []
+    for side, token, _book in legs:
+        hedge_ask = down_ask if side == "UP" else up_ask
+        for i in range(1, cfg.ladder_rungs + 1):
+            price = round(0.50 - i * tick, 4)
+            # No churn: a rung the planner's completable gate would cancel
+            # is not posted. Completion buys the hedge at its ask, so a
+            # rung + hedge ask at/over the cap is a booked loss already.
+            if risk.completable_pair_block(cfg, price, hedge_ask):
+                continue
+            intents.append(QuoteIntent(
+                side=side, token_id=token, price=price, size=per_rung,
+                mid=mids[side], edge_vs_mid=mids[side] - price,
+                reason=f"ladder rung {i}/{cfg.ladder_rungs}",
+            ))
+    if not intents:
+        return [], "ladder: no rung completes under the cap"
+    return intents, f"ladder {cfg.ladder_rungs} rungs/side"
+
+
+def route_quotes(cfg: MakerConfig, market, up_book: dict, down_book: dict,
+                 inv: Inventory, t_remaining: float,
+                 window_frac: Optional[float] = None, *,
+                 now: Optional[float] = None
+                 ) -> tuple[list[QuoteIntent], str]:
+    """The switch: ladder path when mode is on, today's path otherwise.
+
+    Mode off (or a market outside the ladder universe) delegates to
+    `decide_quotes` with identical arguments -- byte-identical output by
+    construction, pinned by the off-test.
+    """
+    if cfg.ladder_mode and market is not None:
+        return decide_ladder_quotes(cfg, market, up_book, down_book, now=now)
+    return decide_quotes(cfg, up_book, down_book, inv, t_remaining,
+                         window_frac)
 
 
 def decide_quotes(

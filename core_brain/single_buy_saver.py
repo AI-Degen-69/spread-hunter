@@ -45,6 +45,7 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Optional
 
+from core_brain.ladder import is_ladder_pair
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
 
 DATA_API_BASE = "https://data-api.polymarket.com"
@@ -420,7 +421,8 @@ def _prior_exit_shares(registry, condition_id: str, token_id: str) -> float:
     for c in registry.get_all_closes():
         if c.get("condition_id") != condition_id:
             continue
-        if c.get("method") not in ("single_buy_exit", "naked_exit"):
+        if c.get("method") not in ("single_buy_exit", "naked_exit",
+                                      "ladder_exit"):
             continue
         sold_up = c.get("up_price") is not None
         if (sold_up and side == "UP") or (not sold_up and side == "DOWN"):
@@ -571,7 +573,8 @@ def _exit_fill_size(resp, requested_size: float) -> float:
 
 def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
                        heavy_side: str, size: float, sell_price: float,
-                       reason: Optional[str] = None) -> None:
+                       reason: Optional[str] = None,
+                       method: str = "single_buy_exit") -> None:
     """Ledger a completed exit: the sold leg leaves the registry for good.
 
     Written AFTER the market order succeeds, mirroring the paper run's sweep (which
@@ -613,7 +616,7 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
     registry.log_close(CloseRecord(
         ts=time.time(),
         condition_id=pair["condition_id"],
-        method="single_buy_exit",
+        method=method,
         shares=size,
         up_price=up_price,
         dn_price=dn_price,
@@ -655,6 +658,7 @@ def exit_single_buy(
     live: bool = True,
     venue_positions: Optional[dict[str, float]] = None,
     reason: Optional[str] = None,
+    method: str = "single_buy_exit",
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
 
@@ -849,7 +853,7 @@ def exit_single_buy(
     sold = _exit_fill_size(resp, size)
     fill_price = _exit_fill_price(resp, min_price)
     _record_exit_close(registry, after, heavy_token, heavy_side, sold,
-                       fill_price, reason=reason)
+                       fill_price, reason=reason, method=method)
 
     return {
         "action": "exited",
@@ -1607,6 +1611,16 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     window_sec = float(getattr(cfg, "pairs_exit_window_sec", 900.0) if cfg else 900.0)
     raw_grace = float(getattr(cfg, "single_buy_grace_sec", 45.0) if cfg else 45.0)
     grace_sec = min(raw_grace, window_sec)
+    # Ladder pairs answer to the ladder timer, not single grace: one-shot
+    # rungs rest until `ladder_exit_sec`, then leave with the ladder_exit
+    # method. Adverse drift above still exits immediately -- the timer is
+    # patience, not permission to bleed.
+    is_ladder = is_ladder_pair(pair["pair_id"]) \
+        and bool(getattr(cfg, "ladder_mode", False))
+    exit_method = "ladder_exit" if is_ladder else "single_buy_exit"
+    if is_ladder:
+        grace_sec = min(float(getattr(cfg, "ladder_exit_sec", 60.0)),
+                        window_sec)
     max_loss_pct = float(getattr(cfg, "single_buy_max_loss_pct", 0.10) if cfg else 0.10)
     max_loss_usd = float(getattr(cfg, "single_buy_max_loss_usd", 0.045) if cfg else 0.045)
 
@@ -1622,7 +1636,7 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
     if is_adverse:
         res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
                               live=live, venue_positions=venue_positions,
-                              reason="adverse_drift")
+                              reason="adverse_drift", method=exit_method)
         if isinstance(res, dict):
             res["reason"] = "adverse_drift"
         return res
@@ -1636,11 +1650,12 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
             "current_bid": heavy_bid,
         }
 
+    timer_reason = "ladder_exit" if is_ladder else "grace_expired"
     res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
                           live=live, venue_positions=venue_positions,
-                          reason="grace_expired")
+                          reason=timer_reason, method=exit_method)
     if isinstance(res, dict):
-        res["reason"] = "grace_expired"
+        res["reason"] = timer_reason
     return res
 
 
