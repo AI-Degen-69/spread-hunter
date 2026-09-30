@@ -43,6 +43,35 @@ def test_loop_flags_default_to_none():
     assert args.out_dir is None
     assert args.trial_depth is None
     assert args.paired_depth_control_usd is None
+    assert args.paired_admission is False
+
+
+def test_paired_admission_forwarded(tmp_path):
+    cmd = filter_loop._rank_cmd(2, out_dir=tmp_path / "adm",
+                                paired_admission=True)
+    assert "--paired-admission" in cmd
+    assert cmd[cmd.index("--out-dir") + 1] == str(tmp_path / "adm")
+
+
+def test_paired_admission_loop_flag_requires_isolated_out_dir():
+    with pytest.raises(SystemExit):
+        filter_loop.parse_args(["--paired-admission"])
+
+
+def test_paired_admission_skips_configured_trial_bars(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import scoring.config as scoring_config
+
+    monkeypatch.setattr(scoring_config, "load", lambda: SimpleNamespace(
+        select_min_top3_depth_usd_trial=250.0,
+        select_min_volume_24h_usd_trial=50_000.0))
+
+    cmd = filter_loop._rank_cmd(2, out_dir=tmp_path / "adm",
+                                paired_admission=True)
+    assert "--paired-admission" in cmd
+    assert "--trial-depth" not in cmd
+    assert "--trial-volume" not in cmd
 
 
 def test_rank_cmd_without_flags_carries_no_new_options(monkeypatch):

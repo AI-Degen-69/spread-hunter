@@ -1221,3 +1221,152 @@ class TestExplicitDb:
         from core_brain.kpi import _pipeline_sourced_dbs
 
         assert Path("data/shadow.db").resolve() not in _pipeline_sourced_dbs()
+
+
+def _admission_feed(path, arm_rows):
+    import json
+
+    path.write_text(json.dumps({
+        "format": "spread_hunter.paired-admission.v1",
+        "snapshot_id": "snap-a",
+        "control": [],
+        "treatment": arm_rows,
+    }), encoding="utf-8")
+
+
+def _admission_row(cid, arm="treatment", role="mainline", event="ev-1"):
+    return {
+        "cid": cid,
+        "trial_arm": arm, "arm": arm,
+        "trial_axis": "admission",
+        "snapshot_id": "snap-a",
+        "event_cluster_id": f"gamma-event:{event}",
+        "family": "fam",
+        "admission_role": role,
+        "event_id": event, "event_slug": event,
+    }
+
+
+def test_admission_arm_reads_only_markets_path(tmp_path):
+    import sqlite3
+
+    from core_brain.shadow_run import run_shadow
+
+    feed = tmp_path / "paired_admission_markets.json"
+    _admission_feed(feed, [_admission_row("0xadm")])
+    db = tmp_path / "adm.db"
+
+    run_shadow(
+        minutes=0.01, db_path=db,
+        markets_fn=lambda max_markets=None: [],
+        markets_path=str(feed),
+        client_fn=lambda: object(),
+        fetch_books=_books,
+        paired_admission_arm="treatment",
+        starting_bankroll_usd=100.0,
+    )
+
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT arm, trial_axis, cutoff_usd FROM shadow_paired_runs"
+        ).fetchone()
+    assert row[0] == "treatment"
+    assert row[1] == "admission"
+    assert row[2] is None
+
+
+def test_admission_arm_requires_markets_path_and_bankroll(tmp_path):
+    from core_brain.shadow_run import run_shadow
+
+    feed = tmp_path / "paired_admission_markets.json"
+    _admission_feed(feed, [_admission_row("0xadm")])
+    db = tmp_path / "adm.db"
+    base = dict(minutes=0, db_path=db,
+                markets_fn=lambda max_markets=None: [],
+                client_fn=lambda: object(), fetch_books=_books)
+
+    with pytest.raises(ValueError, match="markets-path"):
+        run_shadow(**{**base, "paired_admission_arm": "treatment",
+                      "starting_bankroll_usd": 100.0})
+    with pytest.raises(ValueError, match="bankroll"):
+        run_shadow(**{**base, "paired_admission_arm": "treatment",
+                      "markets_path": str(feed)})
+    with pytest.raises(ValueError, match="bankroll"):
+        run_shadow(**{**base, "paired_admission_arm": "treatment",
+                      "markets_path": str(feed),
+                      "starting_bankroll_usd": 0.0})
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        run_shadow(**{**base, "paired_admission_arm": "treatment",
+                      "paired_depth_arm": "treatment",
+                      "markets_path": str(feed),
+                      "starting_bankroll_usd": 100.0})
+
+
+def test_admission_arm_needs_no_cutoff(tmp_path):
+    from core_brain.shadow_run import build_shadow_seam
+
+    db = tmp_path / "adm-seam.db"
+    build_shadow_seam(db_path=db, paired_admission_arm="treatment")
+
+
+def test_admission_arm_rejects_empty_mixed_or_unidentified_rows(tmp_path):
+    from core_brain.market_feed import MarketFeedError
+    from core_brain.shadow_run import run_shadow
+
+    def run(feed_rows):
+        feed = tmp_path / "paired_admission_markets.json"
+        _admission_feed(feed, feed_rows)
+        run_shadow(
+            minutes=0.01, db_path=tmp_path / "adm.db",
+            markets_fn=lambda max_markets=None: [],
+            markets_path=str(feed),
+            client_fn=lambda: object(), fetch_books=_books,
+            paired_admission_arm="treatment",
+            starting_bankroll_usd=100.0,
+        )
+
+    with pytest.raises(ValueError, match="empty"):
+        run([])
+    mixed = [_admission_row("0xa"), _admission_row("0xb")]
+    mixed[1]["snapshot_id"] = "snap-other"
+    with pytest.raises(MarketFeedError, match="inconsistent"):
+        run(mixed)
+    orphan = _admission_row("0xorphan")
+    orphan.pop("event_cluster_id")
+    orphan.pop("event_id")
+    orphan.pop("event_slug")
+    with pytest.raises(MarketFeedError, match="no event identity"):
+        run([orphan])
+
+
+def test_admission_cli_parses_and_rejects_depth_combo(tmp_path):
+    from core_brain.shadow_run import _parse_args, main
+
+    a = _parse_args([
+        "--db", "data/04_shadow_test.db",
+        "--run-id", "shadow-04",
+        "--markets-path", "runtime/trials/adm/paired_admission_markets.json",
+        "--paired-admission-arm", "control",
+    ])
+    assert a.paired_admission_arm == "control"
+
+    with pytest.raises(SystemExit):
+        main([
+            "--minutes", "0",
+            "--db", str(tmp_path / "combo.db"),
+            "--run-id", "shadow-combo",
+            "--markets-path", "runtime/trials/adm/paired_admission_markets.json",
+            "--paired-admission-arm", "control",
+            "--paired-depth-arm", "control",
+        ])
+
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "--minutes", "0",
+            "--db", str(tmp_path / "combo2.db"),
+            "--run-id", "shadow-combo2",
+            "--markets-path", "runtime/trials/adm/paired_admission_markets.json",
+            "--paired-admission-arm", "control",
+            "--paired-depth-cutoff-usd", "500",
+        ])
+    assert "cutoff" in str(exc.value)

@@ -217,3 +217,56 @@ def test_paired_feed_checks_age_and_arm_name(tmp_path):
                                paired_arm="control")
     with pytest.raises(MarketFeedError, match="unknown paired-depth arm"):
         load_graduated_markets(path=path, paired_arm="other")
+
+
+def _admission_bundle() -> dict:
+    def row(cid, arm, role):
+        return {**SAMPLE_ROW, "cid": cid,
+                "trial_arm": arm, "arm": arm,
+                "trial_axis": "admission",
+                "snapshot_id": "snap-a",
+                "event_cluster_id": "gamma-event:ev-1",
+                "family": "fam",
+                "admission_role": role,
+                "event_id": "ev-1", "event_slug": "ev-1"}
+    return {
+        "format": "spread_hunter.paired-admission.v1",
+        "snapshot_id": "snap-a",
+        "control": [row("0xadm-c", "control", "mainline")],
+        "treatment": [row("0xadm-t", "treatment", "fallback")],
+    }
+
+
+def test_admission_bundle_selects_arm(tmp_path):
+    path = tmp_path / "paired_admission_markets.json"
+    path.write_text(json.dumps(_admission_bundle()), encoding="utf-8")
+
+    control = load_graduated_markets(path=path, paired_arm="control")
+    treatment = load_graduated_markets(path=path, paired_arm="treatment")
+
+    assert [m.cid for m in control] == ["0xadm-c"]
+    assert [m.cid for m in treatment] == ["0xadm-t"]
+    assert treatment[0].admission_role == "fallback"
+    assert treatment[0].event_cluster_id == "gamma-event:ev-1"
+    assert treatment[0].snapshot_id == "snap-a"
+
+
+def test_admission_bundle_rejects_mixed_snapshot(tmp_path):
+    path = tmp_path / "paired_admission_markets.json"
+    bundle = _admission_bundle()
+    bundle["treatment"][0]["snapshot_id"] = "snap-old"
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+
+    with pytest.raises(MarketFeedError, match="inconsistent treatment"):
+        load_graduated_markets(path=path, paired_arm="treatment")
+
+
+def test_admission_bundle_rejects_wrong_arm(tmp_path):
+    path = tmp_path / "paired_admission_markets.json"
+    bundle = _admission_bundle()
+    bundle["treatment"][0]["trial_arm"] = "control"
+    bundle["treatment"][0]["arm"] = "control"
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+
+    with pytest.raises(MarketFeedError, match="inconsistent treatment"):
+        load_graduated_markets(path=path, paired_arm="treatment")

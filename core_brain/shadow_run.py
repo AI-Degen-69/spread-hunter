@@ -441,6 +441,7 @@ def build_shadow_seam(
     run_id: Optional[str] = None,
     paired_depth_arm: Optional[str] = None,
     paired_depth_cutoff_usd: Optional[float] = None,
+    paired_admission_arm: Optional[str] = None,
 ):
     """The seam a shadow run rotates over: live reads, recorded writes.
 
@@ -494,6 +495,14 @@ def build_shadow_seam(
             raise ValueError("paired-depth arm must be control or treatment")
         if paired_depth_cutoff_usd is None or paired_depth_cutoff_usd <= 0:
             raise ValueError("paired-depth run requires its positive depth cutoff")
+        from core_brain.paired_shadow import ensure_paired_shadow_tables
+        ensure_paired_shadow_tables(db_path)
+    if paired_admission_arm is not None:
+        if paired_depth_arm is not None:
+            raise ValueError("paired depth and admission arms are mutually exclusive")
+        if paired_admission_arm not in {"control", "treatment"}:
+            raise ValueError("paired-admission arm must be control or treatment")
+        # Admission varies identity, not a dollar bar: no cutoff exists.
         from core_brain.paired_shadow import ensure_paired_shadow_tables
         ensure_paired_shadow_tables(db_path)
 
@@ -569,6 +578,13 @@ def build_shadow_seam(
             "db_path": Path(db_path), "run_id": run_id,
             "arm": paired_depth_arm,
             "cutoff_usd": float(paired_depth_cutoff_usd),
+        }
+    elif paired_admission_arm is not None:
+        registry.paired_context = {
+            "db_path": Path(db_path), "run_id": run_id,
+            "arm": paired_admission_arm,
+            "cutoff_usd": None,
+            "trial_axis": "admission",
         }
 
     def shadow_submit(client, reg, market, intents, cfg_in) -> int:
@@ -673,6 +689,7 @@ def run_shadow(
     markets_path: Optional[str] = None,
     paired_depth_arm: Optional[str] = None,
     paired_depth_cutoff_usd: Optional[float] = None,
+    paired_admission_arm: Optional[str] = None,
     starting_bankroll_usd: Optional[float] = None,
     market_state_fn: Optional[Callable] = None,
 ) -> ShadowResult:
@@ -709,10 +726,16 @@ def run_shadow(
     run_id = run_id if run_id is not None else shadow_run_id()
     started_at = time.time()
 
+    if paired_depth_arm is not None and paired_admission_arm is not None:
+        raise ValueError("paired depth and admission arms are mutually exclusive")
     if paired_depth_arm is not None and (markets_path is None or not markets_path):
         raise ValueError("paired-depth run requires --markets-path")
     if paired_depth_arm is not None and starting_bankroll_usd is None:
         raise ValueError("paired-depth run requires an explicit equal starting bankroll")
+    if paired_admission_arm is not None and (markets_path is None or not markets_path):
+        raise ValueError("paired-admission run requires --markets-path")
+    if paired_admission_arm is not None and starting_bankroll_usd is None:
+        raise ValueError("paired-admission run requires an explicit equal starting bankroll")
 
     if cfg is None:
         cfg = shadow_cfg()
@@ -721,7 +744,7 @@ def run_shadow(
         # balance read (it needs only the public funder address), fall back to the
         # configured bankroll on any failure.
         maker = funder or os.environ.get("POLY_FUNDER")
-        if maker and paired_depth_arm is None:
+        if maker and paired_depth_arm is None and paired_admission_arm is None:
             try:
                 from core_brain.account import fetch_live_balance
                 live_bal = fetch_live_balance(maker)
@@ -731,6 +754,10 @@ def run_shadow(
                 log.warning("live balance read failed, using config bankroll: %s", e)
 
     if paired_depth_arm is not None:
+        if starting_bankroll_usd is None or starting_bankroll_usd <= 0:
+            raise ValueError("paired starting bankroll must be positive")
+        cfg = dc_replace(cfg, bankroll_usd=float(starting_bankroll_usd))
+    if paired_admission_arm is not None:
         if starting_bankroll_usd is None or starting_bankroll_usd <= 0:
             raise ValueError("paired starting bankroll must be positive")
         cfg = dc_replace(cfg, bankroll_usd=float(starting_bankroll_usd))
@@ -754,7 +781,7 @@ def run_shadow(
     def dynamic_markets_fn():
         current = resolved_markets_fn()
         markets_holder[0] = current
-        if paired_depth_arm is not None and not current:
+        if (paired_depth_arm is not None or paired_admission_arm is not None) and not current:
             from core_brain.paired_shadow import record_paired_feed_event
             record_paired_feed_event(
                 db_path, run_id=run_id, kind="empty_feed",
@@ -762,27 +789,35 @@ def run_shadow(
         return current
 
     paired_meta = None
-    if paired_depth_arm is not None:
+    paired_axis = "admission" if paired_admission_arm is not None else "depth"
+    paired_arm = paired_admission_arm if paired_admission_arm is not None else paired_depth_arm
+    if paired_arm is not None:
         from core_brain.market_feed import load_graduated_markets
-        initial_rows = load_graduated_markets(path=markets_path, paired_arm=paired_depth_arm)
+        initial_rows = load_graduated_markets(path=markets_path, paired_arm=paired_arm)
         if not initial_rows:
-            raise ValueError("paired-depth feed arm is empty; refusing an unmeasurable run")
-        snapshots = {gm.paired_depth_snapshot_id for gm in initial_rows}
-        cutoffs = {gm.paired_depth_cutoff_usd for gm in initial_rows}
-        if len(snapshots) != 1 or len(cutoffs) != 1:
-            raise ValueError("paired-depth initial feed must have one common snapshot and cutoff")
-        paired_meta = {"snapshot_id": next(iter(snapshots)),
-                       "cutoff_usd": next(iter(cutoffs))}
-        if paired_depth_cutoff_usd is not None and paired_meta["cutoff_usd"] != paired_depth_cutoff_usd:
-            raise ValueError("paired-depth CLI cutoff does not match the feed")
+            raise ValueError(f"paired-{paired_axis} feed arm is empty; refusing an unmeasurable run")
+        snapshots = {gm.snapshot_id if paired_axis == "admission" else gm.paired_depth_snapshot_id
+                     for gm in initial_rows}
+        if len(snapshots) != 1:
+            raise ValueError(f"paired-{paired_axis} initial feed must have one common snapshot")
+        paired_meta = {"snapshot_id": next(iter(snapshots)), "cutoff_usd": None}
+        if paired_axis == "depth":
+            cutoffs = {gm.paired_depth_cutoff_usd for gm in initial_rows}
+            if len(cutoffs) != 1:
+                raise ValueError("paired-depth initial feed must have one common snapshot and cutoff")
+            paired_meta["cutoff_usd"] = next(iter(cutoffs))
+        if paired_axis == "depth":
+            if paired_depth_cutoff_usd is not None and paired_meta["cutoff_usd"] != paired_depth_cutoff_usd:
+                raise ValueError("paired-depth CLI cutoff does not match the feed")
         if any(not (gm.event_id or gm.event_slug) for gm in initial_rows):
-            raise ValueError("paired-depth feed contains a row with no stable Gamma event id or slug")
-        expected_cutoff = 500.0 if paired_depth_arm == "control" else 250.0
-        if paired_meta["cutoff_usd"] != expected_cutoff:
-            raise ValueError(
-                f"{paired_depth_arm} feed cutoff must be ${expected_cutoff:g}, "
-                f"got ${paired_meta['cutoff_usd']:g}")
-        paired_depth_cutoff_usd = paired_meta["cutoff_usd"]
+            raise ValueError(f"paired-{paired_axis} feed contains a row with no stable Gamma event id or slug")
+        if paired_axis == "depth":
+            expected_cutoff = 500.0 if paired_depth_arm == "control" else 250.0
+            if paired_meta["cutoff_usd"] != expected_cutoff:
+                raise ValueError(
+                    f"{paired_depth_arm} feed cutoff must be ${expected_cutoff:g}, "
+                    f"got ${paired_meta['cutoff_usd']:g}")
+            paired_depth_cutoff_usd = paired_meta["cutoff_usd"]
 
     intents_sink: list = []
     seam = build_shadow_seam(
@@ -796,17 +831,25 @@ def run_shadow(
         run_id=run_id,
         paired_depth_arm=paired_depth_arm,
         paired_depth_cutoff_usd=paired_depth_cutoff_usd,
+        paired_admission_arm=paired_admission_arm,
     )
-    if paired_depth_arm is not None:
+    if paired_depth_arm is not None or paired_admission_arm is not None:
         from core_brain.paired_shadow import (
             record_paired_equity_mark, record_paired_run_start,
         )
         bankroll = float(starting_bankroll_usd)
-        record_paired_run_start(
-            db_path, run_id=run_id, arm=paired_depth_arm,
-            cutoff_usd=float(paired_depth_cutoff_usd),
-            starting_bankroll_usd=bankroll, started_at=started_at,
-            planned_minutes=minutes)
+        if paired_admission_arm is not None:
+            record_paired_run_start(
+                db_path, run_id=run_id, arm=paired_admission_arm,
+                cutoff_usd=None,
+                starting_bankroll_usd=bankroll, started_at=started_at,
+                planned_minutes=minutes, trial_axis="admission")
+        else:
+            record_paired_run_start(
+                db_path, run_id=run_id, arm=paired_depth_arm,
+                cutoff_usd=float(paired_depth_cutoff_usd),
+                starting_bankroll_usd=bankroll, started_at=started_at,
+                planned_minutes=minutes)
         # The per-run mark writer is wired only in shadow mode. Every inventory
         # read and public book read happens against this isolated store.
         seam.paired_mark_fn = lambda ts=None: record_paired_equity_mark(
@@ -1177,6 +1220,9 @@ def _parse_args(argv: Optional[list[str]] = None):
     ap.add_argument("--paired-depth-arm", choices=("control", "treatment"),
                     default=None,
                     help="read this arm from --markets-path as an atomic paired-depth bundle")
+    ap.add_argument("--paired-admission-arm", choices=("control", "treatment"),
+                    default=None,
+                    help="read this arm from --markets-path as an atomic paired-admission bundle")
     ap.add_argument("--paired-depth-cutoff-usd", type=float, default=None,
                     help="expected cutoff in this paired bundle (must match its arm metadata)")
     ap.add_argument("--paired-starting-bankroll-usd", type=float, default=100.0,
@@ -1217,17 +1263,26 @@ def main(
     from core_brain.trader_loop import _market_specs
     if a.paired_depth_arm is not None and a.markets_path is None:
         raise SystemExit("--paired-depth-arm requires --markets-path")
+    if a.paired_admission_arm is not None and a.markets_path is None:
+        raise SystemExit("--paired-admission-arm requires --markets-path")
+    if a.paired_depth_arm is not None and a.paired_admission_arm is not None:
+        raise SystemExit("paired depth and admission arms are mutually exclusive")
+    if (a.paired_admission_arm is not None
+            and a.paired_depth_cutoff_usd is not None):
+        raise SystemExit("paired-admission runs carry no dollar cutoff")
     if markets_fn is not None:
         resolved_markets_fn = markets_fn
     elif a.markets_path is not None:
         trial_feed = a.markets_path
-        if a.paired_depth_arm is None:
+        paired_arm = (a.paired_depth_arm if a.paired_depth_arm is not None
+                      else a.paired_admission_arm)
+        if paired_arm is None:
             resolved_markets_fn = (lambda cap=None: _market_specs(
                 cap if cap is not None else a.max_markets, path=trial_feed))
         else:
             resolved_markets_fn = (lambda cap=None: _market_specs(
                 cap if cap is not None else a.max_markets, path=trial_feed,
-                paired_arm=a.paired_depth_arm))
+                paired_arm=paired_arm))
     else:
         resolved_markets_fn = (lambda max_markets=None:
                                _default_markets_fn()(a.max_markets))
@@ -1251,8 +1306,11 @@ def main(
         markets_path=a.markets_path,
         paired_depth_arm=a.paired_depth_arm,
         paired_depth_cutoff_usd=a.paired_depth_cutoff_usd,
+        paired_admission_arm=a.paired_admission_arm,
         starting_bankroll_usd=(a.paired_starting_bankroll_usd
-                               if a.paired_depth_arm is not None else None),
+                               if (a.paired_depth_arm is not None
+                                   or a.paired_admission_arm is not None)
+                               else None),
     )
 
     quoted = sum(1 for r in result.results if r.status == "QUOTED")

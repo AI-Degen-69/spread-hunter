@@ -34,10 +34,12 @@ from scoring.allocate import (marginal, spread_capture_daily)   # noqa: E402
 from core_brain import rehearsal   # noqa: E402
 from scoring import config as _load_cfg_module   # noqa: E402
 from scoring.config import load as _load_cfg   # noqa: E402
+from scoring.family_admission import classify_identity   # noqa: E402
 from scoring.markets import parse_book   # noqa: E402
 from scoring.rewards import score_per_share   # noqa: E402
 from scoring.selector import (identity_allowed, maker_queue_allowed,  # noqa: E402
                               pair_books_allowed, top_depth_usd)
+from scripts.family_probe import family_key   # noqa: E402
 
 
 def _load_repo_env(root: Path | str = ROOT) -> None:
@@ -337,7 +339,8 @@ def tradable(volume_24h: float | None,
              event_title: object = "",
              min_volume_usd: float | None = None,
              state: object = None,
-             key: object = None) -> tuple[bool, str]:
+             key: object = None,
+             skip_identity: bool = False) -> tuple[bool, str]:
     """Can this market produce the two observations the run needs?
 
     A fill needs someone to trade at our price; a settled P&L needs the market
@@ -355,7 +358,10 @@ def tradable(volume_24h: float | None,
     # `evaluate`, where the venue metadata is available.
     all_meta = (title, slug, category, market_type, market_group,
                 series_title, event_title)
-    if any(_value not in (None, "") for _value in all_meta):
+    # D12 trial: `evaluate` already made the trial identity decision for this
+    # row (shipped verdict recorded, relaxable refusal continued). Re-running
+    # the shipped gate here would refuse every treatment row a second time.
+    if not skip_identity and any(_value not in (None, "") for _value in all_meta):
         identity_ok, identity_reason = identity_allowed(
             title, slug, category, market_type,
             market_group, series_title, event_title)
@@ -843,7 +849,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
              min_movement_usd: Optional[float] = None,
              max_spread: Optional[float] = None,
              max_queue_minutes: Optional[float] = None,
-             queue_minutes_fn=None) -> dict:
+             queue_minutes_fn=None,
+             admission_trial: bool = False) -> dict:
     """Income and capital for one market, from its live book.
 
     `rate` is the market's pot in $/day. In the unified universe every pot is
@@ -864,7 +871,40 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         m.get("question"), m.get("market_slug") or m.get("slug"),
         m.get("category"), m.get("market_type"),
         m.get("market_group"), m.get("series_title"), m.get("event_title"))
-    if not identity_ok:
+    # D12 ADMISSION TRIAL: record the shipped verdict, then continue past a
+    # relaxable refusal (group label / not-primary) so the treatment arm can
+    # consider the row. Blocked-keyword, resolved and unreadable rows refuse
+    # exactly as before. Off: byte-identical to the shipped path.
+    shipped_identity_reason = ""
+    admission_role = ""
+    if admission_trial:
+        verdict = classify_identity(
+            m.get("question"), m.get("market_slug") or m.get("slug"),
+            m.get("category"), m.get("market_type"),
+            m.get("market_group"), m.get("series_title"),
+            m.get("event_title"))
+        shipped_identity_reason = verdict["shipped_reason"]
+        if not verdict["shipped_ok"]:
+            if verdict["role"] == "refused":
+                _ok, identity_reason = identity_reason_with_value(
+                    identity_reason,
+                    m.get("market_group") or m.get("groupItemTitle"))
+                return {
+                    "source": source, "eligible": False,
+                    "reject_reason": identity_reason,
+                    "cid": m.get("condition_id"),
+                    "title": m.get("question", "")[:90],
+                    "slug": m.get("market_slug", ""),
+                    "fetch_truncated": bool(m.get("fetch_truncated")),
+                }
+            admission_role = verdict["role"]
+        else:
+            identity_ok = True
+            identity_reason = ""
+            admission_role = verdict["role"]
+    # A relaxed row carries its role past this gate; every later gate still
+    # applies unchanged.
+    if not identity_ok and not admission_role:
         # Name the line value that refused it. Without the value, all 89
         # submarkets of the #312 pass died as one identical string and the
         # screener could not tell a $281K main-adjacent line from a $200 tail
@@ -1067,7 +1107,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         m.get("market_group"), m.get("series_title"), m.get("event_title"),
         min_volume_usd=min_volume_usd,
         state=resolve_state(m.get("closed"), m.get("accepting_orders"),
-                            m.get("end_date_iso")))
+                            m.get("end_date_iso")),
+        skip_identity=bool(admission_trial and admission_role))
     # The movement gate has already been enforced above, before the book
     # fetches -- `flat` cannot be true here. The payout floor is a REWARD
     # rule -- the venue's minimum distribution -- and only under
@@ -1080,7 +1121,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         why = (f"income ${income:.2f}/day under payout floor"
                if source == "rewards" else "no spread income")
 
-    return {
+    row = {
         "source": source,
         "spread": round(float(m.get("_spread") or 0.0), 4) or None,
         # Below the payout floor this market pays exactly zero, however good
@@ -1131,6 +1172,12 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "yes_depth_usd": round(book_depths[0], 2),
         "no_depth_usd": round(book_depths[1], 2),
     }
+    if admission_trial:
+        # Trial-only tags. Absent when the flag is off, so the default path
+        # stays byte-identical.
+        row["shipped_identity_reason"] = shipped_identity_reason
+        row["admission_role"] = admission_role
+    return row
 
 
 # The identity refusals whose cause IS a venue field value, keyed by the
@@ -1388,6 +1435,208 @@ def build_paired_depth_bundle(
     }
 
 
+PAIRED_ADMISSION_BUNDLE_FORMAT = "spread_hunter.paired-admission.v1"
+
+
+def _event_cluster_id(row: dict) -> str:
+    """The admission unit: one market per event, never two.
+
+    Mirrors `core_brain/paired_shadow.py`: the venue event id, falling back
+    to the slug. Empty when the row carries neither -- such a row can never
+    be published in a bundle.
+    """
+    event_id = str(row.get("event_id") or "")
+    if event_id:
+        return f"gamma-event:{event_id}"
+    event_slug = str(row.get("event_slug") or "")
+    if event_slug:
+        return f"gamma-event-slug:{event_slug}"
+    return ""
+
+
+def _trial_identity_tags(m: dict) -> dict:
+    """Event identity for trial-mode refusal rows, from the candidate.
+
+    Real `evaluate` refusal rows carry no event fields, so the bundle builder
+    could never match a refused mainline member to its event. Stamped only in
+    admission mode (see `_stamp_trial_identity`); the default path is untouched.
+    """
+    return {
+        "event_id": m.get("event_id") or "",
+        "event_slug": m.get("event_slug") or "",
+        "market_group": m.get("market_group") or m.get("groupItemTitle") or "",
+    }
+
+
+def _stamp_trial_identity(rows: list[dict], universe: list[dict]) -> None:
+    """Fill missing trial identity on scored rows from discovery candidates."""
+    by_cid = {str(c.get("condition_id") or ""): c for c in universe}
+    for row in rows:
+        candidate = by_cid.get(str(row.get("cid") or ""))
+        if not candidate:
+            continue
+        for key, value in _trial_identity_tags(candidate).items():
+            row.setdefault(key, value)
+
+
+def _resolve_trial_bar(args) -> float:
+    """The depth bar this run gates on; admission pins the permanent bar."""
+    if args.paired_admission:
+        return MIN_TOP3_DEPTH_USD
+    return _effective_depth_bar(args.trial_depth)
+
+
+def _select_picked(args, eligible: list[dict], paired_bundle: dict | None) -> list[dict]:
+    """The published top-N: treatment arm, depth arm, or shipped ranking."""
+    if paired_bundle is not None and getattr(args, "paired_admission", False):
+        return list(paired_bundle["treatment"])
+    if getattr(args, "paired_depth_control_usd", None) is not None:
+        # Same object the depth path always published (trial tags land on it).
+        return paired_bundle["treatment"]
+    return eligible[:args.top]
+
+
+def build_paired_admission_bundle(
+    eligible: list[dict], *, refused: list[dict] | None = None,
+    top: int, volume_gate_usd: float,
+    snapshot_id: str, ranked_at: float,
+) -> dict:
+    """Build control + treatment feeds for the D12 admission trial.
+
+    Control is the shipped selection: eligible rows the shipped identity gate
+    would also have admitted, ordered by the ranker's common score. Treatment
+    holds at most one market per event cluster: the best eligible mainline
+    member, else the best eligible submarket member as a fallback carrying
+    the mainline member's reject reason (or "no mainline member in universe").
+    """
+    if top < 1:
+        raise ValueError("paired admission top must be at least one")
+    refused = list(refused or [])
+    ordered = sorted(eligible, key=lambda r: -float(r.get("return_pct_day") or 0.0))
+    control = [r for r in ordered if not r.get("shipped_identity_reason")][:top]
+
+    by_event: dict[str, list[dict]] = {}
+    for row in ordered:
+        cluster = _event_cluster_id(row)
+        if cluster:
+            by_event.setdefault(cluster, []).append(row)
+    treatment: list[dict] = []
+    for cluster in sorted(by_event):
+        members = by_event[cluster]
+        mainline = [r for r in members if r.get("admission_role") == "mainline"]
+        if mainline:
+            treatment.append((mainline[0], "mainline", ""))
+            continue
+        subs = [r for r in members if r.get("admission_role") == "submarket"]
+        if not subs:
+            continue
+        reason = "no mainline member in universe"
+        for gone in refused:
+            if _event_cluster_id(gone) != cluster:
+                continue
+            if str(gone.get("market_group") or ""):
+                continue
+            if gone.get("reject_reason"):
+                reason = str(gone["reject_reason"])
+                break
+        treatment.append((subs[0], "fallback", reason))
+    # Top-N across events by the same score control uses, so the two arms
+    # differ only in admission, never in score order.
+    treatment.sort(key=lambda item: -float(item[0].get("return_pct_day") or 0.0))
+    treatment = treatment[:top]
+
+    def arm_rows(picks: list[dict], arm: str) -> list[dict]:
+        rows = []
+        for row in picks:
+            role = str(row.get("admission_role") or "")
+            tagged = {
+                **row,
+                "trial_arm": arm,
+                "arm": arm,
+                "trial_axis": "admission",
+                "snapshot_id": snapshot_id,
+                "event_cluster_id": _event_cluster_id(row),
+                "family": family_key(row.get("title"), row.get("slug"),
+                                     row.get("series_title"),
+                                     row.get("event_title")),
+                "admission_role": role,
+            }
+            if arm == "treatment" and role == "fallback":
+                tagged["fallback_reason"] = str(row.get("fallback_reason") or "")
+            rows.append(tagged)
+        return rows
+
+    control_rows = arm_rows(control, "control")
+    treatment_rows = arm_rows(
+        [{**row, "admission_role": role, "fallback_reason": reason}
+         for row, role, reason in treatment],
+        "treatment")
+    return {
+        "format": PAIRED_ADMISSION_BUNDLE_FORMAT,
+        "snapshot_id": snapshot_id,
+        "ranked_at": float(ranked_at),
+        "volume_gate_usd": float(volume_gate_usd),
+        "other_gate_trials": False,
+        "counts": {
+            "control_selected": len(control_rows),
+            "treatment_selected": len(treatment_rows),
+        },
+        "control": control_rows,
+        "treatment": treatment_rows,
+        "audit": {
+            "control_selected": [
+                {"cid": r.get("cid"), "slug": r.get("slug", "")}
+                for r in control_rows
+            ],
+            "treatment_selected": [
+                {"cid": r.get("cid"), "slug": r.get("slug", ""),
+                 "admission_role": r.get("admission_role"),
+                 "fallback_reason": r.get("fallback_reason", "")}
+                for r in treatment_rows
+            ],
+        },
+    }
+
+
+def _require_complete_listing(disc_meta: dict, mode: str) -> None:
+    """Refuse a paired bundle on a partial Gamma listing (environment, not bug)."""
+    if disc_meta.get("truncated"):
+        print("PAIRED_UNIVERSE_TRUNCATED: refusing to publish a paired bundle "
+              "on a partial Gamma listing", file=sys.stderr)
+        raise SystemExit(
+            f"paired-{mode} mode requires a complete Gamma universe; "
+            f"the current scan was truncated")
+
+
+def _require_event_identity(rows: list[dict], mode: str) -> None:
+    """Refuse publication when a selected row lacks event identity."""
+    missing = [r.get("cid") or "?" for r in rows
+               if not _event_cluster_id(r)]
+    if missing:
+        raise SystemExit(
+            f"paired-{mode} mode requires stable Gamma event ids/slugs; "
+            f"missing for {len(missing)} selected market(s)")
+
+
+def _publish_paired_bundle(out_dir: Path, bundle: dict,
+                           filename: str = "paired_admission_markets.json",
+                           audit_name: str = "paired_admission_audit.jsonl") -> bool:
+    """Publish one atomic bundle file; audit only a swap arms could observe."""
+    if not _publish_json(out_dir / filename, bundle):
+        return False
+    audit_path = out_dir / audit_name
+    with audit_path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            "format": bundle["format"],
+            "snapshot_id": bundle["snapshot_id"],
+            "ranked_at": bundle["ranked_at"],
+            "volume_gate_usd": bundle["volume_gate_usd"],
+            "counts": bundle["counts"],
+            "audit": bundle["audit"],
+        }) + "\n")
+    return True
+
+
 def _effective_depth_bar(cli_trial_usd: Optional[float]) -> float:
     """The depth bar this run gates on: CLI trial > config trial > permanent.
 
@@ -1489,6 +1738,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "control feed at this top-3 bid depth bar and a "
                         "treatment feed at --trial-depth, both selected from "
                         "this rank pass; requires --out-dir and a lower trial bar")
+    p.add_argument("--paired-admission", action="store_true",
+                   help="D12 ADMISSION TRIAL: write one atomic "
+                        "paired_admission_markets.json containing a control "
+                        "feed (shipped identity) and a treatment feed (at most "
+                        "one market per event, submarket fallback), both "
+                        "selected from this rank pass; requires an isolated "
+                        "--out-dir and a complete listing")
     p.add_argument("--trial-spread", type=float, default=None, metavar="SPREAD",
                    help="WIDE-BOOK TRIAL (#145): admit books up to this spread "
                         "instead of the permanent ceiling (%.2f). Run 145 "
@@ -1543,6 +1799,19 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
             p.error("control depth must be positive and greater than the treatment depth")
         if Path(args.out_dir).resolve() == RUN.resolve():
             p.error("paired-depth mode refuses the shared runtime directory")
+    if args.paired_admission:
+        if args.out_dir is None:
+            p.error("--paired-admission requires an isolated --out-dir")
+        if args.dry_run:
+            p.error("paired-admission feeds cannot be written with --dry-run")
+        if args.trial_volume is not None or args.trial_spread is not None:
+            p.error("paired admission mode cannot be combined with volume or spread trials")
+        if args.legacy_rewards:
+            p.error("paired admission mode cannot be combined with --legacy-rewards")
+        if args.paired_depth_control_usd is not None or args.trial_depth is not None:
+            p.error("paired admission mode cannot be combined with paired-depth flags")
+        if Path(args.out_dir).resolve() == RUN.resolve():
+            p.error("paired-admission mode refuses the shared runtime directory")
     return args
 
 
@@ -1990,7 +2259,8 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                min_movement_usd: Optional[float] = None,
                max_spread: Optional[float] = None,
                max_queue_minutes: Optional[float] = None,
-               queue_minutes_fn=None) -> list[dict]:
+               queue_minutes_fn=None,
+               admission_trial: bool = False) -> list[dict]:
     """Score candidate jobs across a worker pool, one session per worker.
 
     `session_factory` is injected so a test can prove the pool never shares
@@ -2009,7 +2279,8 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                                    min_movement_usd=min_movement_usd,
                                    max_spread=max_spread,
                                    max_queue_minutes=max_queue_minutes,
-                                   queue_minutes_fn=queue_minutes_fn),
+                                   queue_minutes_fn=queue_minutes_fn,
+                                   admission_trial=admission_trial),
                 jobs):
             if r:
                 out.append(r)
@@ -2018,7 +2289,8 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
 
 def _score_universe(universe: list[dict], *, volume_bar: float,
                     movement_bar: float, depth_bar: float,
-                    spread_bar: float) -> tuple[list[dict], int]:
+                    spread_bar: float,
+                    admission_trial: bool = False) -> tuple[list[dict], int]:
     """Score the unified universe and return (scored rows, attempted count).
 
     One job per candidate: the pot is ALWAYS spread capture --
@@ -2035,7 +2307,8 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
                      min_volume_usd=volume_bar,
                      min_movement_usd=movement_bar,
                      max_spread=spread_bar,
-                     max_queue_minutes=resolve_queue_bar(_CFG))
+                     max_queue_minutes=resolve_queue_bar(_CFG),
+                     admission_trial=admission_trial)
     return out, len(jobs)
 
 
@@ -2099,12 +2372,13 @@ def main() -> None:
     # permanent config value, but opt-in per run and never written back to
     # config; adopted markets are tagged so the trial's markouts can be
     # watched before the bar is loosened permanently.
-    trial_bar = _effective_depth_bar(args.trial_depth)
+    trial_bar = _resolve_trial_bar(args)
     trial_active = trial_bar != MIN_TOP3_DEPTH_USD
     # A paired depth comparison varies only the depth bar. It deliberately
     # pins volume to the shipped threshold even if a trial override is present
     # in the process environment or config.
-    volume_bar = (MIN_VOLUME_24H if args.paired_depth_control_usd is not None
+    volume_bar = (MIN_VOLUME_24H if (args.paired_depth_control_usd is not None
+                                      or args.paired_admission)
                   else _effective_volume_bar(args.trial_volume))
     volume_trial_active = volume_bar != MIN_VOLUME_24H
     movement_bar = MIN_MOVEMENT_USD
@@ -2137,7 +2411,8 @@ def main() -> None:
         # designed. Sub-floor rows are cheap-rejected inside the scan, so
         # scoring cost is unchanged -- only pagination pays more.
         full_scan=(args.full_scan
-                   or args.paired_depth_control_usd is not None))
+                   or args.paired_depth_control_usd is not None
+                   or args.paired_admission))
     volume_str = (f"${volume_bar:,.0f}"
                   + (f" [TRIAL vs permanent ${MIN_VOLUME_24H:,.0f}]"
                      if volume_trial_active else ""))
@@ -2152,7 +2427,12 @@ def main() -> None:
 
     out, attempted = _score_universe(
         universe, volume_bar=volume_bar, movement_bar=movement_bar,
-        depth_bar=trial_bar, spread_bar=spread_bar)
+        depth_bar=trial_bar, spread_bar=spread_bar,
+        admission_trial=args.paired_admission)
+    if args.paired_admission:
+        # Refusal rows carry no event fields out of `evaluate`; without this
+        # stamp no fallback could name its refused mainline member.
+        _stamp_trial_identity(out, universe)
 
     # --legacy-rewards: the retired two-path scan, scored alongside the
     # unified universe so the funnel shows what retiring it cost. The reward
@@ -2184,6 +2464,25 @@ def main() -> None:
     rejected = len(out) - len(eligible)
     eligible.sort(key=lambda r: -r["return_pct_day"])
     paired_bundle = None
+    paired_audit_name = ""
+    paired_filename = ""
+    if args.paired_admission:
+        if args.legacy_rewards:
+            raise SystemExit("paired-admission mode cannot combine with --legacy-rewards")
+        _require_complete_listing(disc_meta, "admission")
+        refused = [r for r in out if not r["eligible"]]
+        paired_bundle = build_paired_admission_bundle(
+            eligible,
+            refused=refused,
+            top=top,
+            volume_gate_usd=volume_bar,
+            snapshot_id=f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
+            ranked_at=time.time(),
+        )
+        _require_event_identity(
+            paired_bundle["control"] + paired_bundle["treatment"], "admission")
+        paired_audit_name = "paired_admission_audit.jsonl"
+        paired_filename = "paired_admission_markets.json"
     if args.paired_depth_control_usd is not None:
         if args.legacy_rewards:
             raise SystemExit("paired-depth mode cannot combine with --legacy-rewards")
@@ -2216,9 +2515,9 @@ def main() -> None:
             snapshot_id=f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}",
             ranked_at=time.time(),
         )
-        picked = paired_bundle["treatment"]
-    else:
-        picked = eligible[:top]
+    # One chain: admission treatment, depth treatment, else shipped ranking.
+    # A second `if` here once overwrote the admission pick with eligible[:top].
+    picked = _select_picked(args, eligible, paired_bundle)
 
     # Conditions the ranker recovered from, reported rather than raised: a run
     # that published something must still say what it could not.
@@ -2276,7 +2575,17 @@ def main() -> None:
 
         try:
             _publish_json(out_dir / "markets.json", picked)
-            if paired_bundle is not None:
+            if paired_bundle is not None and args.paired_admission:
+                # Admission audit goes through the shared helper: only a swap
+                # the arms could observe is recorded, never a phantom snapshot.
+                if not _publish_paired_bundle(out_dir, paired_bundle,
+                                              paired_filename,
+                                              paired_audit_name):
+                    warnings.append(
+                        f"paired bundle for {paired_bundle['snapshot_id']} was NOT "
+                        "written (rename lost to a reader); skipped the audit "
+                        "line so it does not list an unobservable snapshot")
+            elif paired_bundle is not None:
                 # One atomic file feeds both arms, so they can never read a
                 # control list from one rank and a treatment list from another.
                 if _publish_json(out_dir / "paired_markets.json", paired_bundle):

@@ -630,3 +630,284 @@ def test_market_token_mapping_cannot_change_mid_run(tmp_path):
         kinds = [row[0] for row in conn.execute(
             "SELECT kind FROM shadow_paired_feed_events WHERE run_id='token-run'")]
     assert kinds == ["changed_market_tokens"]
+
+
+ADMISSION_START = 1_700_000_000.0
+ADMISSION_END = ADMISSION_START + 3600.0
+ADMISSION_HORIZONS = ("h0", "h1", "h2", "h3")
+
+
+def _admission_markout_refs(excess):
+    return {h: {"ref": 0.50 + excess, "peer": 0.50} for h in ADMISSION_HORIZONS}
+
+
+def _admission_arm_db(path, *, arm, run_id, n_clusters=30, excess=0.0,
+                      bankroll=100.0, finish=True, planned_minutes=60.0,
+                      drop_h3_peer=(), extra_snapshot=False,
+                      equity_dip=0.0, exit_loss=0.0):
+    from core_brain.paired_shadow import record_paired_market_selection
+
+    registry = OrderRegistry(path, run_id=run_id)
+    ensure_paired_shadow_tables(path)
+    record_paired_run_start(
+        path, run_id=run_id, arm=arm, cutoff_usd=None,
+        starting_bankroll_usd=bankroll, started_at=ADMISSION_START,
+        planned_minutes=planned_minutes, trial_axis="admission",
+    )
+    for index in range(n_clusters):
+        cid = f"{arm}-c{index}"
+        cluster = f"ev-{index}"
+        snapshot = "snap-extra" if extra_snapshot and index == 0 else "snap-a"
+        record_paired_market_selection(
+            path, run_id=run_id, arm=arm, cutoff_usd=None,
+            spec={"cid": cid, "trial_arm": arm, "arm": arm,
+                  "trial_axis": "admission", "snapshot_id": snapshot,
+                  "event_cluster_id": f"gamma-event:{cluster}",
+                  "family": f"fam-{cluster}", "admission_role": "mainline",
+                  "event_id": cluster, "event_slug": cluster,
+                  "event_title": cluster, "slug": cid},
+            observed_at=ADMISSION_START + 1)
+        order_id = f"{run_id}-order-{index}"
+        _order(registry, local_id=order_id, run_id=run_id, cid=cid,
+               token=f"{cid}-up", price=0.50, shares=1.0,
+               pair_id=f"{run_id}-pair-{index}", posted_at=ADMISSION_START + 2)
+        record_paired_order_attribution(
+            path, run_id=run_id, local_id=order_id,
+            condition_id=cid, pair_id=f"{run_id}-pair-{index}")
+        _fill(registry, local_id=order_id, run_id=run_id,
+              trade_id=f"{order_id}-fill", shares=1.0, price=0.50,
+              filled_at=ADMISSION_START + 10)
+        refs = _admission_markout_refs(excess)
+        if index in drop_h3_peer:
+            refs["h3"] = {"ref": 0.50 + excess, "peer": None}
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                """INSERT INTO markouts
+                   (ts, condition_id, token_id, fill_price, size,
+                    ref_mid, refs_json, run_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (ADMISSION_START + 10, cid, f"{cid}-up", 0.50, 1.0, 0.50,
+                 json.dumps(refs), run_id),
+            )
+            conn.commit()
+    if exit_loss > 0:
+        registry.log_close(CloseRecord(
+            ts=ADMISSION_START + 100.0, condition_id=f"{arm}-c0",
+            method="single_buy_exit", shares=1.0,
+            cost_basis=0.5, proceeds=0.5 - exit_loss,
+            realized_pnl=-exit_loss,
+            up_price=0.5, up_cost_removed=0.5, dn_cost_removed=0.0,
+            run_id=run_id,
+        ))
+    with sqlite3.connect(path) as conn:
+        for ts, equity in (
+            (ADMISSION_START, bankroll),
+            (ADMISSION_START + 1800.0, bankroll - equity_dip),
+            (ADMISSION_END, bankroll),
+        ):
+            conn.execute(
+                """INSERT INTO shadow_paired_equity_marks
+                   (run_id, ts, equity_usd, realized_pnl, unrealized_pnl,
+                    committed_open_usd, valid, missing_conditions_json)
+                   VALUES (?, ?, ?, 0.0, 0.0, 0.0, 1, '[]')""",
+                (run_id, ts, equity),
+            )
+        conn.commit()
+    if finish:
+        record_paired_run_finish(path, run_id=run_id, finished_at=ADMISSION_END)
+    return registry
+
+
+def _admission_report(control_db, treatment_db, **over):
+    from scripts.paired_depth_report import analyze_paired_admission
+
+    params = dict(control_db=control_db, treatment_db=treatment_db,
+                  control_run_id="control-run", treatment_run_id="treatment-run",
+                  bootstrap_replicates=200, max_mark_age_sec=3600)
+    params.update(over)
+    return analyze_paired_admission(**params)
+
+
+def test_admission_adopt(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run")
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "adopt"
+    assert report["measurement_status"] == "measured"
+    assert report["limitations"] == []
+
+
+def test_admission_reject_markout_parity(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run",
+                      excess=-0.05)
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "reject"
+    assert report["registered_bars"]["markout_parity"] is False
+
+
+def test_admission_reject_interval(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run")
+    with sqlite3.connect(treatment) as conn:
+        for index in range(30):
+            refs = _admission_markout_refs(0.10 if index % 2 == 0 else -0.10)
+            conn.execute(
+                "UPDATE markouts SET refs_json = ? WHERE condition_id = ?",
+                (json.dumps(refs), f"treatment-c{index}"),
+            )
+        conn.commit()
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "reject"
+    assert report["registered_bars"]["markout_parity"] is True
+    assert report["registered_bars"]["interval_above_floor"] is False
+
+
+def test_admission_reject_drawdown(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run",
+                      equity_dip=3.0)
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "reject"
+    assert report["registered_bars"]["drawdown_bounded"] is False
+
+
+def test_admission_reject_single_buy_exit(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run",
+                      exit_loss=0.20)
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "reject"
+    assert report["registered_bars"]["exit_loss_rate"] is False
+
+
+def test_admission_inconclusive_29_clusters(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run",
+                      n_clusters=29)
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run",
+                      n_clusters=29)
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "inconclusive"
+    assert any("30" in limit for limit in report["limitations"])
+
+
+def test_admission_inconclusive_missing_h3_peer(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run",
+                      drop_h3_peer=(0,))
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "inconclusive"
+    assert any("h3" in limit for limit in report["limitations"])
+
+
+def test_admission_inconclusive_unmatched_snapshots(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run",
+                      extra_snapshot=True)
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "inconclusive"
+    assert any("snapshot" in limit for limit in report["limitations"])
+
+
+def test_admission_inconclusive_unequal_bankrolls(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run",
+                      bankroll=100.0)
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run",
+                      bankroll=100.02)
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "inconclusive"
+    assert any("bankroll" in limit for limit in report["limitations"])
+
+
+def test_admission_inconclusive_aborted_run(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run",
+                      finish=False)
+
+    report = _admission_report(control, treatment)
+
+    assert report["decision"] == "inconclusive"
+    assert any("finish" in limit for limit in report["limitations"])
+
+
+def test_admission_reports_every_horizon(tmp_path):
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run")
+
+    report = _admission_report(control, treatment)
+
+    for horizon in ("h0", "h3"):
+        for arm in ("control", "treatment"):
+            cell = report["horizons"][horizon][arm]
+            assert cell["mean"] == pytest.approx(0.0)
+            assert cell["interval"][0] <= cell["mean"] <= cell["interval"][1]
+    # h1 (1h) and h2 (6h) never mature inside a 1h window with fills at +10s:
+    # reported as None, never invented.
+    for horizon in ("h1", "h2"):
+        for arm in ("control", "treatment"):
+            assert report["horizons"][horizon][arm]["mean"] is None
+
+
+def test_admission_report_is_read_only(tmp_path):
+    import hashlib
+
+    control = tmp_path / "control.db"
+    treatment = tmp_path / "treatment.db"
+    _admission_arm_db(control, arm="control", run_id="control-run")
+    _admission_arm_db(treatment, arm="treatment", run_id="treatment-run")
+
+    def fingerprint(path):
+        with sqlite3.connect(path) as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            counts = {
+                row[0]: conn.execute(
+                    f"SELECT COUNT(*) FROM {row[0]}").fetchone()[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+            }
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return version, counts, digest
+
+    before = (fingerprint(control), fingerprint(treatment))
+    _admission_report(control, treatment)
+    assert (fingerprint(control), fingerprint(treatment)) == before
