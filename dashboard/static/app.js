@@ -3033,6 +3033,7 @@ const METHOD_BADGES = {
   shadow_merge: { cls: 'go', label: 'MERGED' },
   single_buy_exit: { cls: 'standby', label: 'SINGLE EXIT' },
   naked_exit: { cls: 'standby', label: 'SINGLE EXIT' },
+  ladder_exit: { cls: 'standby', label: 'LADDER EXIT' },
   venue_sync: { cls: 'standby', label: 'VENUE SYNC' },
   shadow_settlement: { cls: 'standby', label: 'SHADOW SETTLEMENT' },
   sell: { cls: 'standby', label: 'SELL' },

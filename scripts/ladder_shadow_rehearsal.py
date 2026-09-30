@@ -230,7 +230,7 @@ def ladder_pair_id(series: str, condition_id: str) -> str:
     return f"ladder-{series}-{safe}"
 
 
-EXIT_STATUSES = ("single_buy_exit", "naked_exit")
+EXIT_STATUSES = ("single_buy_exit", "naked_exit", "ladder_exit")
 
 
 def ladder_decide(series: str, rungs: tuple,

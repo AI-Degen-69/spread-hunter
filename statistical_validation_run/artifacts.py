@@ -57,7 +57,7 @@ COST_OF_BEING_WRONG = (
 WIN_RATE_GATE = 0.50          # secondary: win_rate_ci95.lower must exceed 0.50
 ADVERSE_SELECTION_GATE = -0.005  # per share; more adverse than this is a finding
 MERGE_METHODS = ("merge", "shadow_merge")
-EXIT_METHODS = ("single_buy_exit", "naked_exit")
+EXIT_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
 
 GATE_ORDER = [
     "Primary — total PnL (inclusive)",

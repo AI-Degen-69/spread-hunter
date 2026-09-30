@@ -1290,7 +1290,8 @@ def shadow_positions(registry: OrderRegistry, db_path: Path | str) -> dict[str, 
         if cr["method"] in ("merge", "shadow_merge"):
             # Both legs leave together at a dollar a share.
             pass
-        elif cr["method"] in ("single_buy_exit", "naked_exit"):
+        elif cr["method"] in ("single_buy_exit", "naked_exit",
+                                 "ladder_exit"):
             want = "UP" if cr["up_price"] is not None else "DOWN"
             sold = [k for k in legs if side_of.get(k) == want]
             # An unlabelled leg cannot happen -- the exit path refuses to sell
