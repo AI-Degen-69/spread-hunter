@@ -51,7 +51,7 @@ Record the 2026-09-30 direction in the design note: separate ladder allocation, 
 Depends on: none. Verify: read-through of the addendum diff.
 
 ### T2 — [Research] Read-only replay probe (M)
-`scripts/` harness replays recorded BTC/ETH series tapes, simulates 2/4/6-level shapes × exit policies (timed exits + hold-to-close baseline), and reports fill-rate CIs + mean-PnL CIs. One-leg residues scored at real resolution outcomes, never zero. Answers rung count, exit window, order lifetime — or reports "unmeasurable".
+`scripts/` harness replays recorded BTC/ETH series tapes, simulates 2/4/6-level shapes × exit policies (timed exits + hold-to-close baseline), and reports fill-rate CIs + mean-PnL CIs. One-leg residues scored at real resolution outcomes, never zero. Answers rung count and exit window; order lifetime stays open — or the probe reports "unmeasurable".
 Depends on: T1. Verify: probe runs on a fixture tape and prints both terms of the verdict formula (P(pair)×edge − P(one-leg)×loss).
 
 CHECKPOINT 1: probe numbers in hand → go (build T3/T4) or no-go (stop, record why). One-line report, not a full pause in auto mode.

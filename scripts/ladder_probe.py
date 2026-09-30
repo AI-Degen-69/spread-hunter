@@ -95,15 +95,19 @@ def _fills(ticks: list, rungs: tuple) -> dict:
     return fills
 
 
-def _last_at_or_before(ticks: list, deadline: int) -> Optional[tuple]:
-    """Last sample at or before the deadline; None when the tape starts late.
+def _last_between(ticks: list, lo: int, hi: int) -> Optional[tuple]:
+    """Last sample inside [lo, hi]; None when the tape has none there.
 
-    No fallback to a later print: using a post-deadline price as an exit
-    would be lookahead, so a late-starting tape stays unmeasurable.
+    Ticks must arrive sorted by ts. The lower bound is the position's own
+    fill time: a print that precedes the acquisition can never be its exit.
     """
+    if hi < lo:
+        return None
     seen = None
     for ts, price in ticks:
-        if ts <= deadline:
+        if ts < lo:
+            continue
+        if ts <= hi:
             seen = (ts, price)
         else:
             break
@@ -112,35 +116,70 @@ def _last_at_or_before(ticks: list, deadline: int) -> Optional[tuple]:
 
 def simulate_market(market: MarketTape, rungs: tuple,
                     exit_sec: tuple = EXIT_SEC) -> dict:
-    """Replay one ladder shape on one market; pure, no I/O."""
-    fills_a = _fills(market.leg_a, rungs)
-    fills_b = _fills(market.leg_b, rungs)
-    first_a = min(fills_a.values()) if fills_a else None
-    first_b = min(fills_b.values()) if fills_b else None
+    """Replay one ladder shape on one market; pure, no I/O.
 
-    pnl: dict = {}
-    if first_a and first_b:
-        cost = first_a[1] + first_b[1]
-        pnl["pair"] = 1.0 - cost
-        return {"outcome": "pair", "pair_cost": cost, "any_fill": True,
-                "pnl": pnl}
+    Every crossed rung fills one equal-sized share. Fills match oldest-first
+    across sides into $1.00 pairs; the unmatched remainder is the residue of
+    the longer side. Each policy's PnL is the whole market economy --
+    pair value plus residue scored by that policy, 0.0 when nothing fills --
+    so shapes and exits compare on the same footing.
+    """
+    fa = sorted(_fills(market.leg_a, rungs).values())
+    fb = sorted(_fills(market.leg_b, rungs).values())
+    n_pairs = min(len(fa), len(fb))
+    matched_cost = (sum(p for _, p in fa[:n_pairs])
+                    + sum(p for _, p in fb[:n_pairs]))
+    pair_value = n_pairs * 1.0 - matched_cost
+    res_a, res_b = fa[n_pairs:], fb[n_pairs:]
 
-    if first_a and not first_b:
-        filled, side, ticks = first_a, "one_leg_a", market.leg_a
-    elif first_b and not first_a:
-        filled, side, ticks = first_b, "one_leg_b", market.leg_b
+    if not fa and not fb:
+        return {"outcome": "nothing", "n_pairs": 0, "pair_value": 0.0,
+                "pair_cost": None, "residue_n": 0, "residue_cost": 0.0,
+                "any_fill": False, "pnl": {},
+                "residue_pnl": {"hold": 0.0,
+                                **{f"exit_{s}": 0.0 for s in exit_sec}}}
+    if res_a and not res_b:
+        residue, side, ticks = res_a, "leg_a", market.leg_a
+    elif res_b and not res_a:
+        residue, side, ticks = res_b, "leg_b", market.leg_b
     else:
-        return {"outcome": "nothing", "pair_cost": None, "any_fill": False,
-                "pnl": pnl}
+        residue, side, ticks = [], "", []
+    residue_cost = sum(p for _, p in residue)
+    first_res_ts = min(ts for ts, _ in residue) if residue else None
 
-    cost = filled[1]
-    won = market.winner == ("leg_a" if side == "one_leg_a" else "leg_b")
-    pnl["hold"] = (1.0 if won else 0.0) - cost if market.winner else None
+    if not residue:
+        outcome = "pair"
+    elif n_pairs:
+        outcome = "mixed"
+    else:
+        outcome = "one_" + side
+
+    won = market.winner == side if side else False
+    residue_pnl: dict = {}
+    if not residue:
+        residue_pnl["hold"] = 0.0
+    elif not market.winner:
+        residue_pnl["hold"] = None
+    else:
+        residue_pnl["hold"] = (len(residue) * (1.0 if won else 0.0)
+                               - residue_cost)
     for sec in exit_sec:
-        seen = _last_at_or_before(ticks, market.open_ts + sec)
-        pnl[f"exit_{sec}"] = (seen[1] - SLIPPAGE_TICKS * TICK - cost
-                              if seen else None)
-    return {"outcome": side, "pair_cost": None, "any_fill": True, "pnl": pnl}
+        if not residue:
+            residue_pnl[f"exit_{sec}"] = 0.0
+            continue
+        seen = _last_between(ticks, first_res_ts, market.open_ts + sec)
+        residue_pnl[f"exit_{sec}"] = (
+            len(residue) * (seen[1] - SLIPPAGE_TICKS * TICK) - residue_cost
+            if seen else None)
+    pnl = {k: (pair_value + v if v is not None else None)
+           for k, v in residue_pnl.items()}
+    first_pair_cost = None
+    if n_pairs:
+        first_pair_cost = fa[0][1] + fb[0][1]
+    return {"outcome": outcome, "n_pairs": n_pairs, "pair_value": pair_value,
+            "pair_cost": first_pair_cost, "residue_n": len(residue),
+            "residue_cost": residue_cost, "any_fill": True, "pnl": pnl,
+            "residue_pnl": residue_pnl}
 
 
 def mean_ci90(xs: list) -> tuple:
@@ -168,28 +207,35 @@ def _prop_ci90_diff(n1: int, k1: int, n2: int, k2: int) -> tuple:
 
 
 def summarise(results: list, policy: str) -> dict:
-    """Collapse per-market simulations into rates, PnL terms, and a CI."""
-    pnls = [r["pnl"].get(policy) for r in results]
-    pairs = [r["pnl"]["pair"] for r in results if r["outcome"] == "pair"]
-    legs = [r["pnl"].get(policy) for r in results
-            if r["outcome"].startswith("one_leg")]
+    """Collapse per-market simulations into rates, PnL terms, and a CI.
+
+    Every market contributes its whole-economy PnL under the policy: pair
+    value plus residue scored by the policy, 0.0 when nothing filled. A
+    market whose residue is unmeasurable under the policy stays out of the
+    mean instead of flattering it toward zero.
+    """
+    pnls = [(0.0 if r["outcome"] == "nothing" else r["pnl"].get(policy))
+            for r in results]
+    pairs = [r["pair_value"] for r in results if r["n_pairs"]]
+    legs = [r["residue_pnl"].get(policy) for r in results
+            if r["residue_n"]]
     n = len(results)
-    mean, lo, hi = mean_ci90(pnls)
-    pair_mean = sum(pairs) / len(pairs) if pairs else None
-    measured = [x for x in legs if x is not None]
-    leg_mean = sum(measured) / len(measured) if measured else None
+    measurable = [x for x in pnls if x is not None]
+    mean, lo, hi = mean_ci90(measurable)
+    pair_mean = sum(pairs) / len(pairs) if pairs else 0.0
+    leg_vals = [x for x in legs if x is not None]
+    leg_mean = sum(leg_vals) / len(leg_vals) if leg_vals else 0.0
     return {
         "n": n,
         "n_pair": len(pairs),
         "p_pair": len(pairs) / n if n else 0.0,
-        "n_oneleg": len([r for r in results
-                         if r["outcome"].startswith("one_leg")]),
+        "n_oneleg": len([r for r in results if r["residue_n"]]),
         "mean_pnl": mean,
         "ci90_lo": lo,
         "ci90_hi": hi,
         # The verdict formula, split into its two visible terms:
-        "term_pair": (len(pairs) / n * pair_mean) if (n and pairs) else 0.0,
-        "term_residue": (len(legs) / n * leg_mean) if (n and leg_mean is not None) else 0.0,
+        "term_pair": (len(pairs) / n * pair_mean) if n else 0.0,
+        "term_residue": (len(legs) / n * leg_mean) if n else 0.0,
     }
 
 
@@ -286,8 +332,7 @@ def run(tape: str, out: str, slug_like: str, window_sec: int,
     for name, rungs in shapes.items():
         results = [simulate_market(m, rungs, exit_sec) for m in markets]
         any_fill = sum(1 for r in results if r["any_fill"])
-        policies = {"pair": summarise(results, "pair"),
-                    "hold": summarise(results, "hold")}
+        policies = {"hold": summarise(results, "hold")}
         for sec in exit_sec:
             policies[f"exit_{sec}"] = summarise(results, f"exit_{sec}")
         by_shape[name] = {"n": len(results), "any_fill": any_fill,

@@ -52,18 +52,20 @@ def _market(**over):
 
 # --- simulation ---------------------------------------------------------------
 
-def test_both_legs_crossing_makes_a_pair():
+def test_both_legs_crossing_makes_pairs_for_every_rung():
     res = simulate_market(_market(), rungs=RUNGS, exit_sec=(60,))
     assert res["outcome"] == "pair"
-    assert res["pair_cost"] == pytest.approx(0.44 + 0.43)
-    assert res["pnl"]["pair"] == pytest.approx(1.0 - 0.87)
+    assert res["n_pairs"] == 2
+    assert res["pair_value"] == pytest.approx(2.0 - (0.44 + 0.43) * 2)
+    assert res["pnl"]["hold"] == pytest.approx(res["pair_value"])
 
 
-def test_pair_uses_first_fill_per_side_oldest_first():
+def test_pairs_match_oldest_first():
     m = _market(leg_a=[(OPEN + 5, 0.50), (OPEN + 8, 0.46), (OPEN + 20, 0.40)],
                 leg_b=[(OPEN + 5, 0.50), (OPEN + 10, 0.44)])
     res = simulate_market(m, rungs=RUNGS, exit_sec=(60,))
-    assert res["pair_cost"] == pytest.approx(0.46 + 0.44)
+    assert res["n_pairs"] == 2
+    assert res["pair_value"] == pytest.approx(2.0 - (0.46 + 0.44 + 0.40 + 0.44))
 
 
 def test_one_leg_scores_resolution_value_not_zero():
@@ -72,8 +74,8 @@ def test_one_leg_scores_resolution_value_not_zero():
                 winner="leg_b")
     res = simulate_market(m, rungs=RUNGS, exit_sec=(60,))
     assert res["outcome"] == "one_leg_a"
-    # leg_a bid filled at 0.44; leg_a lost -> worth 0.0
-    assert res["pnl"]["hold"] == pytest.approx(0.0 - 0.44)
+    # two rung fills at 0.44; leg_a lost -> worth 0.0
+    assert res["pnl"]["hold"] == pytest.approx(0.0 - 0.88)
 
 
 def test_one_leg_winner_scores_full_value():
@@ -82,7 +84,7 @@ def test_one_leg_winner_scores_full_value():
                 winner="leg_a")
     res = simulate_market(m, rungs=RUNGS, exit_sec=(60,))
     assert res["outcome"] == "one_leg_a"
-    assert res["pnl"]["hold"] == pytest.approx(1.0 - 0.44)
+    assert res["pnl"]["hold"] == pytest.approx(2.0 - 0.88)
 
 
 def test_timed_exit_uses_last_price_before_deadline_minus_slippage():
@@ -92,7 +94,8 @@ def test_timed_exit_uses_last_price_before_deadline_minus_slippage():
                 winner="leg_a")
     res = simulate_market(m, rungs=RUNGS, exit_sec=(60,))
     assert res["outcome"] == "one_leg_a"
-    assert res["pnl"]["exit_60"] == pytest.approx(0.40 - 0.02 - 0.44)
+    # two shares out at the last print before the deadline, minus slippage
+    assert res["pnl"]["exit_60"] == pytest.approx(2 * (0.40 - 0.02) - 0.88)
 
 
 def test_timed_exit_without_early_sample_is_unmeasurable():
@@ -104,11 +107,34 @@ def test_timed_exit_without_early_sample_is_unmeasurable():
     assert res["pnl"]["exit_60"] is None
 
 
-def test_nothing_fills_is_nothing():
+def test_mixed_pairs_plus_residue_scores_both():
+    m = _market(leg_a=[(OPEN + 5, 0.50), (OPEN + 10, 0.44)],
+                leg_b=[(OPEN + 5, 0.50), (OPEN + 10, 0.46)],
+                winner="leg_a")
+    res = simulate_market(m, rungs=RUNGS, exit_sec=(60,))
+    assert res["outcome"] == "mixed"
+    assert res["n_pairs"] == 1
+    assert res["residue_n"] == 1
+    # pair (.44 + .46) -> 0.10; residue leg_a won -> 1.0 - 0.44
+    assert res["pnl"]["hold"] == pytest.approx(0.10 + 0.56)
+
+
+def test_timed_exit_rejects_pre_fill_prints():
+    m = _market(leg_a=[(OPEN + 5, 0.50), (OPEN + 100, 0.44)],
+                leg_b=[(OPEN + 5, 0.50), (OPEN + 10, 0.56)],
+                winner="leg_a")
+    res = simulate_market(m, rungs=RUNGS, exit_sec=(60,))
+    assert res["outcome"] == "one_leg_a"
+    assert res["pnl"]["exit_60"] is None
+
+
+def test_nothing_fills_scores_zero_not_unmeasurable():
     m = _market(leg_a=[(OPEN + 5, 0.50), (OPEN + 10, 0.51)],
                 leg_b=[(OPEN + 5, 0.50), (OPEN + 10, 0.51)])
     res = simulate_market(m, rungs=RUNGS, exit_sec=(60,))
     assert res["outcome"] == "nothing"
+    stats = summarise([res], "hold")
+    assert stats["mean_pnl"] == 0.0
 
 
 def test_unknown_winner_is_unmeasurable_on_hold():
