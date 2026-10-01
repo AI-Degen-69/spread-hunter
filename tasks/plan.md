@@ -4,6 +4,27 @@ Branch: i333/full-4hour-live-books-ladder-trial | Issue: #333
 Size: Small (one parameterized field + test + one committed write-up) · Type: Code + Research + Docs · Stack: Python + pytest
 Execution order: tag fix + test → 4h live trial (last, live network) → committed write-up. Nothing spends, nothing writes to the venue.
 
+## Session reconciliation (2026-10-01, Station II re-entry)
+
+- **T1 is landed, not pending.** PR #334 merged `c0a8a9e`/`5a9b4a2` into `main` as
+  `db08fba`; the work branch `i333/full-4hour-live-books-ladder-trial` is fully
+  merged and stale on the remote. This branch is now the only place T3 lands.
+- **T2 and T3 remain open — no code task remains for Station III to build.**
+  T2 is a ~4h wall-clock live run (paper only, no signer, spends nothing) and T3
+  is a write-up that must embed T2's numbers, so neither can be produced
+  without the run happening first.
+- **Probe baseline for T3 is recoverable and recorded here** (the probe JSON is
+  gitignored and absent on this machine, so the numbers must be transcribed
+  from [#323](https://github.com/AI-Degen-69/spread-hunter/issues/323)):
+  ETH 5-min, 200 markets, both legs, resolutions stamped — **pair rate 75%**,
+  verdict **shape 2 / exit_60 / strategy go**; hold-to-close mean −0.02 (CI
+  crosses zero) vs exit_60 mean **+0.30 (CI 0.26–0.35)**. Caveats the write-up
+  must carry: full fills assumed, 1-min tape fidelity, no depth, not
+  risk-normalized.
+- **Changed assumption:** the operator may either run T2 themselves or have it
+  launched detached in the background (paper-only, no signer, no venue writes),
+  then report back for T3.
+
 ## CodeRabbit plan intake (read once; echo ignored)
 
 - No `coderabbitai` comments on #333 (0 comments at plan time) — nothing to adopt, nothing to reject.
