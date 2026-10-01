@@ -365,6 +365,24 @@
 - **Gate was GO.** BTC + ETH 5-min probe verdicts go (shape 2 / exit_60);
   order lifetime stays configurable (probe left it open).
 
+# Constraints: Issue #323 — ETH 5-min collect + probe (verify-and-close)
+
+## Quality & Tests
+- Zero regressions: focused suites `tests/test_ladder_probe.py` and
+  `tests/test_ladder_tape_collect.py` stay 100% green as a health check;
+  full `python -m pytest -q` stays with GitHub CI on push (merge gate).
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions,
+  or bypassing linters. No test writes into live `data/` or `run/`.
+  `data/orders.db` is never touched.
+
+## Behaviour Boundaries
+- **No code change, no venue calls.** This is record verification only:
+  the collect + probe already ran (2026-09-30), the verdict is posted,
+  and the scripts are byte-unchanged since. Re-collecting tapes is out.
+- **No new external dependencies; no live execution.**
+- The stale prior-session branch (`i323/d11-followup-collect-probe-eth-5-min-series`)
+  is pruned at closeout, never merged (it predates #324/#325).
+
 # Constraints: Issue #324 — Shadow rehearsal on BTC+ETH 5-min ladders (no signer)
 
 ## Quality & Tests
