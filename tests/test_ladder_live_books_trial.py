@@ -69,7 +69,7 @@ def _trial(tmp_path, monkeypatch, *, markets, traded, rotations=4,
 def test_refuses_production_registry(tmp_path):
     with pytest.raises(LiveTrialRefused):
         refuse_db(tmp_path / "orders.db")
-    with pytest.raises(Exception):
+    with pytest.raises(LiveTrialRefused):
         run_trial(series_slugs=["s"], gamma_host="https://x.invalid",
                   db_path=tmp_path / "orders.db", out_path=None,
                   minutes=0.01, budget_usd=5.0, open_window_sec=30.0,
@@ -105,6 +105,23 @@ def test_fills_conserve_oldest_first_with_resting(tmp_path, monkeypatch):
     assert cons["overfilled_orders"] == 0
     assert cons["filled_shares"] == pytest.approx(
         cons["accounted_shares"] + cons["resting_shares"])
+
+
+def test_second_run_on_same_store_is_refused(tmp_path, monkeypatch):
+    """A rerun would read the first trial's fills/closes as its own."""
+    _trial(tmp_path, monkeypatch, markets=[_market()],
+           traded=lambda cid, seen: {})
+    with pytest.raises(LiveTrialRefused):
+        run_trial(
+            series_slugs=["btc-up-or-down-5m"],
+            gamma_host="https://x.invalid",
+            db_path=tmp_path / "live_trial.db",
+            out_path=tmp_path / "live_rerun.json",
+            minutes=0.01, budget_usd=5.0, open_window_sec=30.0,
+            max_markets=10, interval=0.01, run_id="ladder-live-rerun",
+            discover_fn=lambda *a, **k: [],
+            cfg=MakerConfig(ladder_mode=False, bankroll_usd=100.0),
+            sleep_fn=_rotations(1))
 
 
 def test_empty_window_still_writes_report(tmp_path, monkeypatch):

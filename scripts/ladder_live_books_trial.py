@@ -18,7 +18,7 @@ field-for-field diff. Exit closes on the live ladder path use
 report recounts exits over all ladder exit methods and surfaces resting
 shares (filled but not yet merged/exited/settled) explicitly.
 
-    python scripts/ladder_live_books_trial.py --db data/NN_shadow_ladder_live.db \\
+    python scripts/ladder_live_books_trial.py --db data/NN_shadow_ladder_trial.db \\
         --out reports/ladder_live_books_<stamp>.json --minutes 240
 """
 from __future__ import annotations
@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sqlite3
 import sys
 import time
 from contextlib import closing
@@ -65,6 +66,33 @@ def refuse_db(path: str | Path) -> Path:
     return p
 
 
+def _refuse_populated_db(path: str | Path) -> None:
+    """Reject a trial store that already holds rows, before discovery.
+
+    `build_report` filters orders by market but reads fills, closes and
+    merge legs globally, so a rerun on the same store would count the
+    previous trial's fills as orphans and its closes as current shares.
+    A missing file (or one without the tables yet) is a fresh store and
+    passes; `run_shadow` initializes it or raises its own guard.
+    """
+    p = Path(path)
+    if not p.exists():
+        return
+    try:
+        with closing(sqlite3.connect(f"file:{p}?mode=ro", uri=True)) as conn:
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            counts = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                      for t in ("orders", "fills", "closes") if t in tables}
+    except sqlite3.Error:
+        return
+    if any(counts.values()):
+        raise LiveTrialRefused(
+            f"Refusing populated trial store: {p.name} already holds "
+            + ", ".join(f"{t}={n}" for t, n in sorted(counts.items()) if n)
+            + ". Use a fresh --db per trial.")
+
+
 def run_trial(*, series_slugs: list[str], gamma_host: str,
               db_path, out_path: Optional[Path],
               minutes: float, budget_usd: float,
@@ -83,6 +111,7 @@ def run_trial(*, series_slugs: list[str], gamma_host: str,
     )
 
     db_path = refuse_db(db_path)
+    _refuse_populated_db(db_path)
     if out_path is not None:
         out_path = refuse_output(out_path)
         if db_path.resolve() == out_path.resolve():
@@ -208,7 +237,9 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--budget-usd", type=float, default=5.0,
                     help="paper ladder budget (5 funds 1 share/rung, shape 2)")
     ap.add_argument("--open-window-sec", type=float, default=30.0)
-    ap.add_argument("--max-markets", type=int, default=60)
+    # 48 windows x 2 series over the default 4h, plus headroom: the session
+    # never drops markets, so a lower cap would reject late windows.
+    ap.add_argument("--max-markets", type=int, default=100)
     ap.add_argument("--interval", type=float, default=5.0)
     ap.add_argument("--db", required=True,
                     help="per-run shadow store; orders.db refused")
