@@ -98,7 +98,7 @@ def run_trial(*, series_slugs: list[str], gamma_host: str,
               minutes: float, budget_usd: float,
               open_window_sec: float, max_markets: int,
               interval: float = 5.0,
-              run_id: Optional[str] = None,
+              run_id: Optional[str] = None, issue: int = 333,
               discover_fn=None, cfg=None, sleep_fn=None) -> dict:
     """One live-books trial: discover, rest rungs, report placement+fill+exit."""
     from core_brain.ladder import LADDER_EXIT_METHODS, make_ladder_decide
@@ -180,7 +180,7 @@ def run_trial(*, series_slugs: list[str], gamma_host: str,
 
     if not session:
         report = {
-            "issue": 331, "series": "+".join(series_slugs),
+            "issue": issue, "series": "+".join(series_slugs),
             "shape": "live", "rungs": [], "markets": 0,
             "pair_ids": [], "placements": {"orders": 0},
             "fills": {"n": 0, "shares": 0.0, "oldest_first": True},
@@ -191,7 +191,7 @@ def run_trial(*, series_slugs: list[str], gamma_host: str,
     else:
         report = build_report(series="+".join(series_slugs), shape="live",
                               rungs=(), tape_markets=session, db_path=db_path)
-        report["issue"] = 331
+        report["issue"] = issue
         report["source"] = "live-books"
         report["config"] = {
             "ladder_mode": True, "ladder_rungs": 2,
@@ -246,6 +246,7 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--out", required=True,
                     help="report JSON path (not under data/ or run/)")
     ap.add_argument("--run-id", default=None)
+    ap.add_argument("--issue-tag", type=int, default=333)
     a = ap.parse_args(argv)
 
     report = run_trial(series_slugs=a.series_slug, gamma_host=a.gamma_host,
@@ -253,7 +254,7 @@ def main(argv: Optional[list] = None) -> int:
                        minutes=a.minutes, budget_usd=a.budget_usd,
                        open_window_sec=a.open_window_sec,
                        max_markets=a.max_markets, interval=a.interval,
-                       run_id=a.run_id)
+                       run_id=a.run_id, issue=a.issue_tag)
     print(json.dumps({"series": report["series"], "markets": report["markets"],
                       "pair_ids": report.get("pair_ids"),
                       "placements": report["placements"],

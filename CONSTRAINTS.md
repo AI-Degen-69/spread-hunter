@@ -1,3 +1,40 @@
+# Constraints: Issue #333 — Full 4-hour live-books ladder trial (paper only, no signer)
+
+## Quality & Tests
+- Zero regressions: `tests/test_ladder_shadow_rehearsal.py`,
+  `tests/test_ladder_shadow.py`, `tests/test_ladder_quotes.py`,
+  `tests/test_ladder_config.py`, `tests/test_ladder_discovery.py`,
+  `tests/test_ladder_exit.py`, `tests/test_shadow_run.py` stay 100% green.
+  Full-repo sweep stays with GitHub CI on push (merge gate).
+- The single code change (report `issue` tag parameter) needs a test RED
+  against untouched code and GREEN after. Live network is never touched by a
+  test — books/feeds are stubbed; T2's live run is operator-hands-on, not pytest.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions,
+  or bypassing linters. Tests use `tmp_path` fixtures; no test writes into live
+  `data/` or `run/`. `data/orders.db` is never touched by a report, a test, or
+  the runner.
+
+## Behaviour Boundaries
+- **Paper only, no signer, zero venue writes.** The runner must never
+  construct a signing client; `run_shadow` builds the signer-less shadow client
+  itself. Only public reads (books, resolution state) may touch the network.
+- **Trial-only config.** `ladder_mode=True` and the funded `ladder_budget_usd`
+  live in the trial invocation, never in production `MakerConfig` defaults
+  (`ladder_mode=False`, `ladder_budget_usd=0.0` stay).
+- **Fresh `--db` per trial.** A rerun on a populated store counts the previous
+  trial's fills as orphans (guard in `run_trial` refuses populated stores).
+- **Committable artifact is `docs/runs/`, not `reports/`.** `reports/` is
+  gitignored, so the JSON stays machine-local and the probe-vs-live write-up
+  (with embedded conservation numbers) is committed under `docs/runs/`
+  following the existing dated-run convention.
+- **Untouched:** screener modules, Dynamic Caps, dashboard UI, production
+  registry (`data/orders.db` refused by name), `fetch_live_market` single-pair
+  path, probe/shadow collectors. No go-live decision and no recommendation —
+  that is a separate issue.
+- **No new external dependencies** without explicit approval.
+
+---
+
 # Constraints: Issue #331 — Live-books ladder shadow trial (paper only, no signer)
 
 ## Quality & Tests
