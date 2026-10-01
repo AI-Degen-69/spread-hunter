@@ -1,121 +1,93 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useState, useEffect, useCallback } from 'react'
+import { Header } from '@/components/Header'
+import { KpiOverview } from '@/components/KpiOverview'
+import { MarketFunnel } from '@/components/MarketFunnel'
+import { TelemetryTab } from '@/components/TelemetryTab'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import {
+  fetchSystemStatus,
+  fetchScanState,
+  fetchKpi,
+  type SystemStatus,
+  type ScanStateResponse,
+  type KpiReport,
+} from '@/lib/api'
+import { LayoutDashboard, Filter, Activity } from 'lucide-react'
 
-function App() {
-  const [count, setCount] = useState(0)
+const POLL_INTERVAL_MS = 3000
+
+export function App() {
+  const [status, setStatus] = useState<SystemStatus | null>(null)
+  const [scanState, setScanState] = useState<ScanStateResponse | null>(null)
+  const [kpi, setKpi] = useState<KpiReport | null>(null)
+  const [loading, setLoading] = useState<boolean>(true)
+
+  const loadData = useCallback(async () => {
+    try {
+      const [newStatus, newScanState, newKpi] = await Promise.all([
+        fetchSystemStatus(),
+        fetchScanState(),
+        fetchKpi(),
+      ])
+      if (newStatus) setStatus(newStatus)
+      if (newScanState) setScanState(newScanState)
+      if (newKpi) setKpi(newKpi)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadData()
+    const timer = setInterval(loadData, POLL_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [loadData])
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">
+      <Header
+        status={status}
+        scanState={scanState}
+        loading={loading}
+        onRefresh={loadData}
+      />
 
-      <div className="ticks"></div>
+      <main className="flex-1 container mx-auto px-4 py-6">
+        <Tabs defaultValue="overview" className="flex flex-col gap-6">
+          <TabsList className="grid w-full max-w-md grid-cols-3">
+            <TabsTrigger value="overview" className="flex items-center gap-2">
+              <LayoutDashboard className="size-4" />
+              <span>Overview</span>
+            </TabsTrigger>
+            <TabsTrigger value="funnel" className="flex items-center gap-2">
+              <Filter className="size-4" />
+              <span>Funnel</span>
+            </TabsTrigger>
+            <TabsTrigger value="telemetry" className="flex items-center gap-2">
+              <Activity className="size-4" />
+              <span>Telemetry</span>
+            </TabsTrigger>
+          </TabsList>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+          <TabsContent value="overview" className="flex flex-col gap-6">
+            <KpiOverview kpi={kpi} status={status} loading={loading} />
+            <MarketFunnel kpi={kpi} loading={loading} />
+          </TabsContent>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+          <TabsContent value="funnel" className="flex flex-col gap-6">
+            <MarketFunnel kpi={kpi} loading={loading} />
+          </TabsContent>
+
+          <TabsContent value="telemetry" className="flex flex-col gap-6">
+            <TelemetryTab status={status} scanState={scanState} />
+          </TabsContent>
+        </Tabs>
+      </main>
+
+      <footer className="border-t border-border py-4 text-center text-xs text-muted-foreground">
+        Spread Hunter Execution Engine & Dashboard • Built with Vite, React & shadcn/ui
+      </footer>
+    </div>
   )
 }
 
