@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sqlite3
 import sys
 import time
 from contextlib import closing
@@ -135,10 +134,8 @@ def run_trial(*, series_slugs: list[str], gamma_host: str,
             adapters[market.down_token] = adapter
         return adapter(dec_cfg, up_book, down_book, inv, t_rem, wf)
 
-    # Prime the session so an empty open window fails fast, before the loop.
-    markets_fn(cap=None)
-    # Force one fresh discovery regardless of the throttle on re-runs.
-    state["last_discover"] = 0.0
+    # Prime the session before the loop so an empty open window fails fast.
+    # The throttle starts cold, so this first call always discovers.
     markets_fn(cap=None)
 
     run_shadow(
