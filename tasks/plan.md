@@ -401,8 +401,8 @@ T2 OUTCOME (2026-10-01): CLEAN — `git log 4dbd07d..main` on both scripts +
 tests empty; focused suites 21 passed.
 
 ### T3 — [Docs] Closeout: comment, close, prune (XS)
-Closeout comment carrying the exact collect/probe CLI invocations and tape
-row counts, close #323, delete the stale prior-session branch.
+Closeout comment carrying the exact collect/probe CLI invocations and market
+count, close #323, delete the stale prior-session branch.
 Depends on: T2. Verify: issue state closed; stale branch gone.
 T3 OUTCOME (2026-10-01): CLOSED — closeout comment posted with repro CLIs,
 #323 closed. Stale branch NOT deleted: it is checked out in the sibling
@@ -411,7 +411,7 @@ would break that checkout — left for its owner; harmless (local-only,
 superseded).
 
 ## Improvement proposal (adopted by default)
-Carry the exact collect/probe CLI invocations and tape row counts into the
+Carry the exact collect/probe CLI invocations and market count into the
 closeout comment, so the posted numbers stay reproducible after the
 gitignored report is gone.
 Evidence, verbatim from the issue: "Done when a probe report for

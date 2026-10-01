@@ -381,7 +381,8 @@
   and the scripts are byte-unchanged since. Re-collecting tapes is out.
 - **No new external dependencies; no live execution.**
 - The stale prior-session branch (`i323/d11-followup-collect-probe-eth-5-min-series`)
-  is pruned at closeout, never merged (it predates #324/#325).
+  is never merged (it predates #324/#325); its prune was deferred because it
+  is checked out in a sibling worktree — recorded in `tasks/plan.md` (T3).
 
 # Constraints: Issue #324 — Shadow rehearsal on BTC+ETH 5-min ladders (no signer)
 
