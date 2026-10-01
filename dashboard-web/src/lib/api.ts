@@ -37,7 +37,7 @@ export interface ServiceInfo {
 }
 
 export interface ScanStateResponse {
-  scan_state: 'SCANNING' | 'IDLE' | 'STALLED' | string
+  scan_state: 'SCANNING' | 'IDLE' | 'STALLED'
   cadence_sec?: number | null
   stale_threshold_sec?: number | null
   seconds_since_heartbeat?: number | null
@@ -84,32 +84,24 @@ export interface KpiReport {
   }
 }
 
-export async function fetchSystemStatus(): Promise<SystemStatus | null> {
+async function fetchJson<T>(path: string): Promise<T | null> {
   try {
-    const res = await fetch('/api/system/status')
+    const res = await fetch(path)
     if (!res.ok) return null
-    return await res.json()
+    return (await res.json()) as T
   } catch {
     return null
   }
+}
+
+export async function fetchSystemStatus(): Promise<SystemStatus | null> {
+  return fetchJson<SystemStatus>('/api/system/status')
 }
 
 export async function fetchScanState(): Promise<ScanStateResponse | null> {
-  try {
-    const res = await fetch('/api/scan-state')
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
-  }
+  return fetchJson<ScanStateResponse>('/api/scan-state')
 }
 
 export async function fetchKpi(): Promise<KpiReport | null> {
-  try {
-    const res = await fetch('/api/kpi')
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
-  }
+  return fetchJson<KpiReport>('/api/kpi')
 }
