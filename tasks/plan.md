@@ -404,6 +404,11 @@ tests empty; focused suites 21 passed.
 Closeout comment carrying the exact collect/probe CLI invocations and tape
 row counts, close #323, delete the stale prior-session branch.
 Depends on: T2. Verify: issue state closed; stale branch gone.
+T3 OUTCOME (2026-10-01): CLOSED — closeout comment posted with repro CLIs,
+#323 closed. Stale branch NOT deleted: it is checked out in the sibling
+worktree (`.../AI Trading/spread-hunter`), so force-deleting from here
+would break that checkout — left for its owner; harmless (local-only,
+superseded).
 
 ## Improvement proposal (adopted by default)
 Carry the exact collect/probe CLI invocations and tape row counts into the
