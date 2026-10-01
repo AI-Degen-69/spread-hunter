@@ -48,7 +48,10 @@ from scripts.ladder_shadow_rehearsal import (  # noqa: E402
 )
 
 REFUSED_DB_NAMES = ("orders.db",)
-REDISCOVER_SEC = 60.0
+# Must stay well under the 30s open window: discovery is the only way a new
+# series enters the session, and a poll gap wider than the window skips whole
+# markets forever. Two public Gamma GETs per poll — cheap enough at 15s.
+REDISCOVER_SEC = 15.0
 
 
 class LiveTrialRefused(RuntimeError):
