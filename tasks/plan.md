@@ -21,9 +21,10 @@ Execution order: tag fix + test → 4h live trial (last, live network) → commi
   crosses zero) vs exit_60 mean **+0.30 (CI 0.26–0.35)**. Caveats the write-up
   must carry: full fills assumed, 1-min tape fidelity, no depth, not
   risk-normalized.
-- **Changed assumption:** the operator may either run T2 themselves or have it
-  launched detached in the background (paper-only, no signer, no venue writes),
-  then report back for T3.
+- **T2 trial launched detached (2026-10-02 00:48):** running in background
+  with `--minutes 240`, `--db data/NN_shadow_ladder_333.db`, `--out reports/ladder_live_books_333_run_4h.json`,
+  `--issue-tag 333`. Running as background task `task-209`. Once it completes (~04:48 local time),
+  T3 write-up can be generated and committed.
 
 ## CodeRabbit plan intake (read once; echo ignored)
 
