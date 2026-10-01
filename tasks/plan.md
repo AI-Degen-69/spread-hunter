@@ -342,3 +342,81 @@ refuse; route-pair coverage under both graces. Reuse for #325:
 `_prior_exit_shares` + `_unexplained_divergence` + `_check_positions(pair,
 venue, registry)` contract; `exit_single_buy` nets the post-cancel naked
 before sizing. `load_pair` untouched, no schema change.
+
+---
+# Plan — Issue #323: collect + probe ETH 5-min series tapes (verify-and-close)
+
+Branch: i323/eth-5-min-series-tapes-probe | Issue: #323
+Size: Small (verify-and-close; no code change) · Type: Research + Docs · Stack: Python + pytest
+Lineage: collect + probe ran 2026-09-30; verdict posted on the issue; scripts unchanged since.
+
+## Prior-session note (no operator time needed)
+A 2026-09-30 session already ran this issue's loop on branch
+`i323/d11-followup-collect-probe-eth-5-min-series` (plan 96d560d, verdict
+published 9f17139, todo all [x]) but never merged it, and it sits behind
+main (pre-#324). This plan starts from main, carries the findings forward,
+and prunes that stale branch at closeout. No Station II work is repeated.
+
+## CodeRabbit intake
+No `coderabbitai` plan comment exists on #323 — nothing to adopt, reject,
+or mark [UNVERIFIED].
+
+## Resolved from the record (no venue calls needed)
+- Posted verdict (issue comment, 2026-09-30): 200 markets, both legs,
+  shape 2, exit 60s, strategy go; pair rate 75%; hold mean -0.02 (CI
+  crosses zero); exit_60 mean +0.30 (CI 0.26-0.35); #324 unblocked.
+- The #324 plan records the same gate (ETH probe verdict go, shape 2 /
+  exit_60, 200 markets) and built the rehearsal on it; #325 merged on it.
+- Both scripts plus their tests are byte-unchanged since the verdict run
+  (`git log 4dbd07d..main` on `scripts/ladder_tape_collect.py`,
+  `scripts/ladder_probe.py`, both test files: empty), so the posted
+  numbers still describe the shipped code. ETH needed no collector change
+  (slug ends in start epoch, two CLOB tokens, clean outcomePrices).
+
+## Spec (embedded; Small task, no SPEC.md ceremony)
+- Goal: confirm the Done criteria are met (numbers posted; the probe
+  report was a gitignored local artifact already consumed by #324) and close.
+- Acceptance: (1) posted numbers match the gate #324 consumed; (2) scripts
+  unchanged since the verdict run; (3) #323 closed, stale-branch prune
+  recorded (deferred, not deleted — sibling-worktree checkout, see T3).
+- Out of scope: re-collecting tapes (venue load for numbers already
+  shipped downstream), ladder code, reopening the verdict, ETH 15-min.
+
+## Dependency graph
+- T1 (reconcile) → T2 (no-drift) → T3 (closeout). No sub-issues.
+
+## Tasks
+
+### T1 — [Research] Reconcile the posted verdict with the consumed gate (XS)
+Posted comment vs #324-plan gate vs prior-session todo marks: same shape,
+exit, strategy, market count.
+Depends on: none. Verify: read-through — all three sources agree.
+T1 OUTCOME (2026-10-01): AGREE — comment (shape 2, exit_60, go, 200 mkts)
+== #324 gate (line 90) == prior todo (all [x]).
+
+### T2 — [Research] No-drift check on the scripts (XS)
+Git-log emptiness on both scripts + tests since the verdict run, plus the
+two focused suites green as a health check.
+Depends on: T1. Verify: focused suites pass; log check recorded.
+T2 OUTCOME (2026-10-01): CLEAN — `git log 4dbd07d..main` on both scripts +
+tests empty; focused suites 21 passed.
+
+### T3 — [Docs] Closeout: comment, close, prune (XS)
+Closeout comment carrying the exact collect/probe CLI invocations and market
+count, close #323, delete the stale prior-session branch if free
+(deferred when checked out elsewhere — record, don't force).
+Depends on: T2. Verify: issue state closed; stale branch gone.
+T3 OUTCOME (2026-10-01): CLOSED — closeout comment posted with repro CLIs,
+#323 closed. Stale branch NOT deleted: it is checked out in the sibling
+worktree (`.../AI Trading/spread-hunter`), so force-deleting from here
+would break that checkout — left for its owner; harmless (local-only,
+superseded).
+
+## Improvement proposal (adopted by default)
+Carry the exact collect/probe CLI invocations and market count into the
+closeout comment, so the posted numbers stay reproducible after the
+gitignored report is gone.
+Evidence, verbatim from the issue: "Done when a probe report for
+eth-up-or-down-5m exists in reports/ and the numbers are posted on this issue."
+Rejected: re-running the 200-market collect — venue load for numbers #324
+and #325 already shipped on; changes nothing downstream.

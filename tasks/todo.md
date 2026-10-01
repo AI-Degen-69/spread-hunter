@@ -21,3 +21,9 @@
 - [x] T4 (#325) — Per-rung telemetry + ladder_exit + timed exit (M, Backend/Logic)
 - [x] T5 (#325) — Shadow wiring + four proof tests (M, Backend/Logic)
 - [x] CHECKPOINT 2 (#325) — shadow rehearsal per spec
+
+# Todo — Issue #323 (verify-and-close)
+
+- [x] T1 (#323) — Reconcile posted verdict vs #324 gate (XS, Research)
+- [x] T2 (#323) — No-drift check: scripts unchanged + focused suites green (XS, Research)
+- [x] T3 (#323) — Closeout comment, close #323 (XS, Docs); stale-branch prune deferred (sibling worktree)
