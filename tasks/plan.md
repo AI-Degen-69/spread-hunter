@@ -377,7 +377,8 @@ or mark [UNVERIFIED].
 - Goal: confirm the Done criteria are met (numbers posted; the probe
   report was a gitignored local artifact already consumed by #324) and close.
 - Acceptance: (1) posted numbers match the gate #324 consumed; (2) scripts
-  unchanged since the verdict run; (3) #323 closed, stale branch pruned.
+  unchanged since the verdict run; (3) #323 closed, stale-branch prune
+  recorded (deferred, not deleted — sibling-worktree checkout, see T3).
 - Out of scope: re-collecting tapes (venue load for numbers already
   shipped downstream), ladder code, reopening the verdict, ETH 15-min.
 
@@ -402,7 +403,8 @@ tests empty; focused suites 21 passed.
 
 ### T3 — [Docs] Closeout: comment, close, prune (XS)
 Closeout comment carrying the exact collect/probe CLI invocations and market
-count, close #323, delete the stale prior-session branch.
+count, close #323, delete the stale prior-session branch if free
+(deferred when checked out elsewhere — record, don't force).
 Depends on: T2. Verify: issue state closed; stale branch gone.
 T3 OUTCOME (2026-10-01): CLOSED — closeout comment posted with repro CLIs,
 #323 closed. Stale branch NOT deleted: it is checked out in the sibling

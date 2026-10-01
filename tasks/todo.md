@@ -26,4 +26,4 @@
 
 - [x] T1 (#323) — Reconcile posted verdict vs #324 gate (XS, Research)
 - [x] T2 (#323) — No-drift check: scripts unchanged + focused suites green (XS, Research)
-- [x] T3 (#323) — Closeout comment, close #323, prune stale branch (XS, Docs)
+- [x] T3 (#323) — Closeout comment, close #323 (XS, Docs); stale-branch prune deferred (sibling worktree)
