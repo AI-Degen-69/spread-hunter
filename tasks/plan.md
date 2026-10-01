@@ -397,6 +397,8 @@ T1 OUTCOME (2026-10-01): AGREE — comment (shape 2, exit_60, go, 200 mkts)
 Git-log emptiness on both scripts + tests since the verdict run, plus the
 two focused suites green as a health check.
 Depends on: T1. Verify: focused suites pass; log check recorded.
+T2 OUTCOME (2026-10-01): CLEAN — `git log 4dbd07d..main` on both scripts +
+tests empty; focused suites 21 passed.
 
 ### T3 — [Docs] Closeout: comment, close, prune (XS)
 Closeout comment carrying the exact collect/probe CLI invocations and tape

@@ -25,5 +25,5 @@
 # Todo — Issue #323 (verify-and-close)
 
 - [x] T1 (#323) — Reconcile posted verdict vs #324 gate (XS, Research)
-- [ ] T2 (#323) — No-drift check: scripts unchanged + focused suites green (XS, Research)
+- [x] T2 (#323) — No-drift check: scripts unchanged + focused suites green (XS, Research)
 - [ ] T3 (#323) — Closeout comment, close #323, prune stale branch (XS, Docs)
