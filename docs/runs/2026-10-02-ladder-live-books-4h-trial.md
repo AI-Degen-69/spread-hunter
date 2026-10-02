@@ -12,6 +12,7 @@ This report details the results of the ~4-hour live-books shadow trial for the l
 > The probe baseline (75% pair rate, shape 2 / exit_60, +0.30 CI 0.26–0.35) is **not comparable** to this run's placement data. Pair rate, exit_60 vs hold-to-close, PnL, and the shape-2 verdict impact are all out of reach for this run because there were no fills to evaluate.
 
 ## Placements, Cancels, and Queue Depth
+*(Note: Detailed cancellation-reason counts, complete rest-time distribution, and edge_vs_mid distribution were not recorded in the JSON artifact. The following are derived from live diagnostic spot-checks.)*
 - **Volume and Rate:** The trial placed 223 orders (114 UP, 109 DOWN) across 96 markets over ~240 minutes, which corresponds to roughly 55 orders/hour.
 - **Cancel Reasons & Rest Time:** Based on live diagnostics, orders were predominantly cancelled as `not_quoted` because the ladder is live for only 30 seconds of every 300-second market (`--open-window-sec 30`), leading to a mean rest time of approximately 17.0s per order.
 - **Queue Ahead Depth:** Placements rested behind significant queue depth (mean ~394 shares, with a max of 1332). For a fill to occur, the tape volume at the exact price would need to consume that entire queue first within the ~17s window, explaining why fills were effectively zero.
