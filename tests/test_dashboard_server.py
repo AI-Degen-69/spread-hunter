@@ -1286,6 +1286,10 @@ def test_scan_state_endpoint_reports_rationale_and_stall(client, temp_db, tmp_pa
     assert data["seconds_since_heartbeat"] is not None
     assert {"reason": "price_band", "count": 1} in data["skip_reasons"]
     assert {"reason": "edge_ok", "count": 1} in data["pass_reasons"]
+    assert "heartbeat_source" in data
+    assert "stall_reason" in data
+    assert "other_live_runs" in data
+    assert isinstance(data["other_live_runs"], list)
 
 
 # ── Expandable market rows — click to inspect individual orders ──

@@ -523,3 +523,74 @@ def test_a_refused_store_switch_shows_the_servers_reason():
     assert "!res.ok || !data.ok" in fn
     assert "data.detail" in fn
     assert "res.json().catch" in fn
+
+
+# ── the ENGINE pill says which run it judged and why it stalled (#337) ──────
+
+@requires_node
+def test_scan_pill_state_maps_finished_to_stopped_and_other_reasons_to_down():
+    scanpill = _harness("scanpill")
+    assert scanpill["stalledFinished"] == "stopped"
+    assert scanpill["stalledProcessGone"] == "down"
+    assert scanpill["stalled"] == "down"
+
+
+@requires_node
+def test_engine_reason_text_describes_all_stall_reasons():
+    reasons = _harness("enginepill")["reasons"]
+    assert "finished cleanly" in reasons["finished"]
+    assert "process gone" in reasons["process_gone"]
+    assert "heartbeat stale" in reasons["heartbeat_stale"]
+    assert "no heartbeat file" in reasons["no_heartbeat"]
+    assert "unreadable or corrupt" in reasons["heartbeat_unreadable"]
+
+
+@requires_node
+def test_engine_provenance_text_names_source_run_and_store():
+    prov = _harness("enginepill")["provenance"]
+    assert "live loop" in prov["live"]
+    assert "runtime/live_poll_heartbeat.json" in prov["live"]
+    assert "pid 9999" in prov["live"]
+    assert "run trial-01" in prov["shadow"]
+    assert "store data/trial_01.db" in prov["shadow"]
+    assert "runtime/shadow_run_trial-01.json" in prov["shadow"]
+
+
+@requires_node
+def test_engine_pill_renders_running_with_provenance():
+    rendered = _harness("enginepill")["rendered"]["shadowFresh"]
+    assert rendered["pillClass"] == "pill state-running"
+    assert "RUNNING · 3s" in rendered["stateHtml"]
+    assert "pulse-dot active" in rendered["stateHtml"]
+    assert "Quote engine heartbeat: SCANNING (3s ago)" in rendered["pillTitle"]
+    assert "Source: run trial-01 on store data/trial_01.db" in rendered["pillTitle"]
+    assert rendered["elsewhereDisplay"] == "none"
+
+
+@requires_node
+def test_engine_pill_renders_finished_as_stopped_and_hides_elsewhere_tag():
+    rendered = _harness("enginepill")["rendered"]["shadowFinished"]
+    assert rendered["pillClass"] == "pill state-stopped"
+    assert "STOPPED" in rendered["stateHtml"]
+    assert "pulse-dot" not in rendered["stateHtml"]
+    assert "STALLED — run finished cleanly" in rendered["pillTitle"]
+    assert rendered["elsewhereDisplay"] == "none"
+
+
+@requires_node
+def test_engine_pill_renders_down_and_reveals_neutral_elsewhere_tag_when_other_run_live():
+    rendered = _harness("enginepill")["rendered"]["shadowDeadOtherLive"]
+    assert rendered["pillClass"] == "pill state-down"
+    assert "DOWN" in rendered["stateHtml"]
+    assert "STALLED — process gone (pid 1234 not running)" in rendered["pillTitle"]
+    assert rendered["elsewhereDisplay"] == ""
+    assert rendered["elsewhereText"] == "1 RUN LIVE ON ANOTHER STORE"
+    assert "ladder-live (data/NN_shadow.db, runtime/shadow_run_ladder-live.json)" in rendered["elsewhereTitle"]
+    assert "its numbers are not shown on this page" in rendered["elsewhereTitle"]
+
+
+def test_the_served_page_carries_the_engine_elsewhere_tag():
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'id="scan-engine-elsewhere"' in html
+    assert 'class="engine-elsewhere-pill mono"' in html
+

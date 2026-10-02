@@ -2413,7 +2413,9 @@ th[aria-sort] .ot-sort-btn {
    and that never changes at runtime. DESIGN.md reserves every saturated hue for
    the live-state vocabulary, so this stays in the quiet gray band and separates
    itself from the neighbouring param-code-pill by a dashed border alone. */
-.svc-scope-pill {
+.svc-scope-pill,
+#scan-engine-elsewhere,
+.engine-elsewhere-pill {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   letter-spacing: 0.04em;

@@ -717,6 +717,18 @@ def _measured_cadence(cycle: Any, started_at: float, heartbeat_ts: float,
     return max(interval, elapsed / rotations)
 
 
+def _format_heartbeat_rel_path(path: Path | None) -> str | None:
+    """Format a heartbeat path relative to LIVE_ROOT when possible, else runtime/name or name."""
+    if path is None:
+        return None
+    try:
+        return path.resolve().relative_to(LIVE_ROOT.resolve()).as_posix()
+    except Exception:
+        if path.parent.name in ("runtime", "run"):
+            return f"{path.parent.name}/{path.name}"
+        return path.name
+
+
 def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dict | None:
     """The shadow rehearsal writing THIS store, or None.
 
@@ -730,12 +742,48 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     heartbeat whose `db_path` matches the store this page is reading is
     surfaced: a stopwatch for a run writing somewhere else would be
     describing numbers that are not on the screen.
+
+    Evaluates all matching candidates, preferring running runs (running=True)
+    over ended ones, then the freshest heartbeat.
     """
+    matched: list[dict] = []
     for path in _shadow_heartbeat_candidates():
         run = _read_shadow_heartbeat_file(path, active_db_path, now)
         if run is not None:
-            return run
-    return None
+            matched.append(run)
+    if not matched:
+        return None
+    matched.sort(key=lambda r: (0 if r.get("running") else 1, float(r.get("heartbeat_age_sec", 0.0))))
+    return matched[0]
+
+
+def read_other_live_shadow_runs(active_db_path: str | None, now: float | None = None) -> list[dict]:
+    """Running rehearsals writing a store OTHER than the active one.
+
+    Surfaces only identity: `run_id`, `db_path`, `heartbeat_file`. No ages,
+    cycle counts, elapsed time, or cadence from another store are returned.
+    """
+    now = time.time() if now is None else now
+    other_runs: list[dict] = []
+    seen_runs: set[str] = set()
+
+    for path in _shadow_heartbeat_candidates():
+        run = _read_shadow_heartbeat_file(path, active_db_path, now, match_db=False)
+        if run is None or not run.get("running"):
+            continue
+        run_db = run.get("db_path")
+        if _same_path(run_db, active_db_path):
+            continue
+        run_id = str(run.get("run_id") or path.stem)
+        if run_id in seen_runs:
+            continue
+        seen_runs.add(run_id)
+        other_runs.append({
+            "run_id": run.get("run_id"),
+            "db_path": run.get("db_path"),
+            "heartbeat_file": run.get("heartbeat_file"),
+        })
+    return other_runs
 
 
 def _shadow_heartbeat_candidates() -> list[Path]:
@@ -804,7 +852,9 @@ def _read_shadow_heartbeat_file(
                       SHADOW_HEARTBEAT_STALE_ROTATIONS * cadence)
     finished = bool(raw.get("finished"))
     pid = raw.get("pid")
-    started_at_proc = raw.get("started_at")
+    started_at_proc = raw.get("process_started_at")
+    if started_at_proc is None:
+        started_at_proc = raw.get("started_at")
     try:
         pid_int = int(pid)
     except (TypeError, ValueError):
@@ -813,12 +863,34 @@ def _read_shadow_heartbeat_file(
     # Only a positive integer identifies a process; anything else (0, negative,
     # bool, junk) is "unknown" and must not declare a live run dead.
     pid_alive = _is_pid_alive(pid_int, started_at_proc) if isinstance(pid, int) and not isinstance(pid, bool) and pid_int > 0 else None
-    ended = finished or (heartbeat_age > stale_after) or (pid_alive is False and heartbeat_age > 15.0)
+
+    # Reasons evaluated in strict order:
+    # 1. finished cleanly
+    # 2. process gone (15s grace)
+    # 3. heartbeat stale
+    if finished:
+        end_reason = "finished"
+    elif pid_alive is False and heartbeat_age > 15.0:
+        end_reason = "process_gone"
+    elif heartbeat_age > stale_after:
+        end_reason = "heartbeat_stale"
+    else:
+        end_reason = None
+
+    ended = end_reason is not None
+
+    resolved_db = None
+    if heartbeat_db:
+        try:
+            resolved_db = str(Path(heartbeat_db).resolve())
+        except Exception:
+            resolved_db = str(heartbeat_db)
+
     return {
         "run_id": raw.get("run_id"),
         # Which store this run writes. The switcher needs it to re-point the
         # page, and the badge needs it to tell "not this store" from "no store".
-        "db_path": str(heartbeat_db) if heartbeat_db else None,
+        "db_path": resolved_db,
         "pid": raw.get("pid"),
         "started_at": started_at,
         "minutes": raw.get("minutes"),
@@ -832,6 +904,9 @@ def _read_shadow_heartbeat_file(
         "running": not ended,
         "ended": ended,
         "finished": finished,
+        "heartbeat_file": _format_heartbeat_rel_path(path),
+        "pid_alive": pid_alive,
+        "end_reason": end_reason,
     }
 
 
@@ -2142,11 +2217,13 @@ def compute_scan_state(
     now: float,
     active_phases: set[str],
     stall_threshold: float = SCAN_STALL_THRESHOLD_SEC,
+    *,
+    ended: bool = False,
 ) -> tuple[str, Optional[float]]:
     """Classify the fleet as SCANNING, IDLE, or STALLED.
 
     STALLED  -- the engine heartbeat has not advanced within `stall_threshold`
-                (or is absent entirely): a real alarm, not an empty table.
+                (or is absent entirely, or ended): a real alarm, not an empty table.
     SCANNING -- heartbeat fresh AND some service did active-phase work
                 (scanning/filtering/quoting/settling) in the recent window.
     IDLE     -- heartbeat fresh but no active-phase work in the window.
@@ -2154,7 +2231,7 @@ def compute_scan_state(
     age = None
     if hb_ts is not None:
         age = max(0.0, now - hb_ts)
-    if hb_ts is None or (age is not None and age > stall_threshold):
+    if ended or hb_ts is None or (age is not None and age > stall_threshold):
         return "STALLED", age
     if active_phases & {"scanning", "filtering", "quoting", "settling"}:
         return "SCANNING", age
@@ -2321,9 +2398,13 @@ def get_scan_state():
 
     active_db = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     try:
-        shadow = read_shadow_run(active_db)
+        shadow = read_shadow_run(active_db, now=now)
     except Exception:
         shadow = None
+
+    stall_reason: str | None = None
+    heartbeat_source: dict[str, Any]
+    shadow_ended = False
 
     if shadow is not None:
         # A shadow rehearsal was registered for this active DB: its heartbeat is authoritative.
@@ -2335,11 +2416,47 @@ def get_scan_state():
         cadence = float(shadow.get("cadence_sec") or shadow.get("interval") or 5.0)
         stale_threshold = max(SHADOW_HEARTBEAT_MIN_STALE_S,
                               SHADOW_HEARTBEAT_STALE_ROTATIONS * cadence)
+        shadow_ended = bool(shadow.get("ended"))
+        heartbeat_source = {
+            "kind": "shadow_run",
+            "file": shadow.get("heartbeat_file"),
+            "run_id": shadow.get("run_id"),
+            "db_path": shadow.get("db_path"),
+            "pid": shadow.get("pid"),
+        }
     else:
         hb = _read_engine_heartbeat()
-        hb_ts = (hb.get("ts") or 0) / 1000.0 if hb.get("ts") else None
+        hb_path = resolve_heartbeat_path()
+        hb_file = _format_heartbeat_rel_path(hb_path)
         cadence = None
         stale_threshold = SCAN_STALL_THRESHOLD_SEC
+        if hb and hb.get("ts"):
+            hb_ts = (hb.get("ts") or 0) / 1000.0
+            heartbeat_source = {
+                "kind": "live_engine",
+                "file": hb_file,
+                "run_id": None,
+                "db_path": None,
+                "pid": hb.get("pid"),
+            }
+        else:
+            hb_ts = None
+            if hb_path.exists():
+                heartbeat_source = {
+                    "kind": "live_engine",
+                    "file": hb_file,
+                    "run_id": None,
+                    "db_path": None,
+                    "pid": None,
+                }
+            else:
+                heartbeat_source = {
+                    "kind": "none",
+                    "file": None,
+                    "run_id": None,
+                    "db_path": None,
+                    "pid": None,
+                }
 
     window = now - 60.0
     active_phases: set[str] = set()
@@ -2374,8 +2491,29 @@ def get_scan_state():
             if ts is not None and (last_scan_ts is None or ts > last_scan_ts):
                 last_scan_ts = ts
 
-    state, hb_age = compute_scan_state(last_event_ts, hb_ts, now, active_phases,
-                                        stall_threshold=stale_threshold)
+    state, hb_age = compute_scan_state(
+        last_event_ts, hb_ts, now, active_phases,
+        stall_threshold=stale_threshold,
+        ended=shadow_ended,
+    )
+
+    if state == "STALLED":
+        if shadow is not None:
+            stall_reason = shadow.get("end_reason") or "heartbeat_stale"
+        else:
+            if hb and hb.get("ts"):
+                stall_reason = "heartbeat_stale"
+            else:
+                hb_path = resolve_heartbeat_path()
+                if hb_path.exists():
+                    stall_reason = "heartbeat_unreadable"
+                else:
+                    stall_reason = "no_heartbeat"
+
+    try:
+        other_live_runs = read_other_live_shadow_runs(active_db, now=now)
+    except Exception:
+        other_live_runs = []
 
     rows = _read_cycle_intent_rows(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     skip_counts: dict[str, int] = {}
@@ -2399,6 +2537,9 @@ def get_scan_state():
             round(max(0.0, now - last_scan_ts), 1) if last_scan_ts is not None else None
         ),
         "last_scan_ts": last_scan_ts,
+        "heartbeat_source": heartbeat_source,
+        "stall_reason": stall_reason,
+        "other_live_runs": other_live_runs,
         "services": {
             svc: {"phase": phase, "last_ts": ts}
             for svc, (phase, ts) in _last_per_service(events).items()

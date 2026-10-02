@@ -160,14 +160,23 @@ const SCAN_PILL_THRESHOLDS = { degraded: 60, down: 120 };
  * and STOPPED every cycle. A live heartbeat ages through the ramp instead, and
  * a filter that really stops goes DOWN when its heartbeat does. Only a verdict
  * we do not recognise reads STOPPED. */
-function scanPillState(rawState, hbAgeSec, cadenceSec) {
-  if (rawState === 'STALLED') return 'down';
+function scanPillState(rawState, hbAgeSec, cadenceSec, stallReason) {
+  let reason = stallReason;
+  let cadence = cadenceSec;
+  if (typeof cadenceSec === 'string' && stallReason === undefined) {
+    reason = cadenceSec;
+    cadence = undefined;
+  }
+  if (rawState === 'STALLED') {
+    if (reason === 'finished') return 'stopped';
+    return 'down';
+  }
   if (rawState === 'SCANNING' || rawState === 'IDLE') {
     // Ramp off the cadence the server MEASURED for this loop when it sent
     // one. The fixed 60/120s default assumed a rotation costs seconds; a
     // rotation that really costs ~160s crossed it every single cycle, so a
     // healthy loop sat on red.
-    const c = Number(cadenceSec);
+    const c = Number(cadence);
     const th = (isFinite(c) && c > 0) ? cadenceThresholds(c) : SCAN_PILL_THRESHOLDS;
     return stateKey(true, hbAgeSec, th);
   }
@@ -5559,11 +5568,50 @@ function renderTrialReadiness(readiness) {
     + 'threshold. Readiness is not profitability — the trial measures that.';
 }
 
+function engineReasonText(reason) {
+  if (!reason) return '';
+  switch (reason) {
+    case 'finished':
+      return 'run finished cleanly';
+    case 'process_gone':
+      return 'process gone';
+    case 'heartbeat_stale':
+      return 'heartbeat stale (aged past threshold)';
+    case 'no_heartbeat':
+      return 'no heartbeat file: no shadow run for this store and runtime/live_poll_heartbeat.json not found';
+    case 'heartbeat_unreadable':
+      return 'heartbeat file unreadable or corrupt';
+    default:
+      return String(reason).replace(/_/g, ' ');
+  }
+}
+
+function engineProvenanceText(scanState) {
+  if (!scanState) return 'no heartbeat payload';
+  const src = scanState.heartbeat_source;
+  if (!src || src.kind === 'none') {
+    return 'no heartbeat file: no shadow run for this store and runtime/live_poll_heartbeat.json not found';
+  }
+  if (src.kind === 'live_engine' || src.kind === 'live') {
+    const file = src.file || 'runtime/live_poll_heartbeat.json';
+    const pidStr = src.pid ? `, pid ${src.pid}` : '';
+    return `live loop (${file}${pidStr}), not tagged with a store`;
+  }
+  if (src.kind === 'shadow_run' || src.kind === 'shadow') {
+    const runId = src.run_id ? `run ${src.run_id}` : 'shadow run';
+    const store = src.db_path ? `store ${src.db_path}` : 'active store';
+    const file = src.file ? ` (${src.file})` : '';
+    return `${runId} on ${store}${file}`;
+  }
+  return src.file || 'unknown source';
+}
+
 function renderScanStatePill(scanState) {
   const headerPill = document.getElementById('scan-state-pill');
   if (!headerPill) return;
   const stateText = document.getElementById('scan-engine-state');
   if (!stateText) return;
+  const elsewhereTag = document.getElementById('scan-engine-elsewhere');
 
   // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
   // The server's STALLED verdict stays authoritative for DOWN; a SCANNING
@@ -5574,7 +5622,7 @@ function renderScanStatePill(scanState) {
     const raw = scanState.scan_state || '--';
     const hbAge = scanState.seconds_since_heartbeat;
     const telemetryError = scanState.telemetry_error;
-    const state = telemetryError ? 'unknown' : scanPillState(raw, hbAge, scanState.cadence_sec);
+    const state = telemetryError ? 'unknown' : scanPillState(raw, hbAge, scanState.cadence_sec, scanState.stall_reason);
     headerPill.className = 'pill state-' + state;
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
@@ -5588,16 +5636,48 @@ function renderScanStatePill(scanState) {
     const rawSec = (hbAge !== null && hbAge !== undefined) ? Math.max(0, Math.round(hbAge)) : null;
     if (telemetryError) {
       headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`;
-    } else if (rawSec !== null) {
-      headerPill.title = `Quote engine heartbeat: ${rawSec}s ago (${raw.toUpperCase()}) · runtime/shadow_run_<run_id>.json or runtime/live_poll_heartbeat.json`;
     } else {
-      headerPill.title = 'Quote engine heartbeat: runtime/shadow_run_<run_id>.json or runtime/live_poll_heartbeat.json';
+      const prov = engineProvenanceText(scanState);
+      let verdict = raw.toUpperCase();
+      if (raw === 'STALLED') {
+        const rText = engineReasonText(scanState.stall_reason);
+        if (scanState.stall_reason === 'process_gone' && scanState.heartbeat_source?.pid) {
+          verdict = `STALLED — process gone (pid ${scanState.heartbeat_source.pid} not running)`;
+        } else if (scanState.stall_reason === 'heartbeat_stale' && scanState.stale_threshold_sec) {
+          verdict = `STALLED — heartbeat aged past ${Math.round(scanState.stale_threshold_sec)}s threshold`;
+        } else if (scanState.stall_reason === 'no_heartbeat') {
+          verdict = `STALLED — no heartbeat file: no shadow run for this store and runtime/live_poll_heartbeat.json not found`;
+        } else if (rText) {
+          verdict = `STALLED — ${rText}`;
+        }
+        if (rawSec !== null && scanState.stall_reason !== 'heartbeat_stale' && scanState.stall_reason !== 'no_heartbeat') {
+          verdict += `, last heartbeat ${formatHeartbeatAge(hbAge)}`;
+        }
+      } else if (rawSec !== null) {
+        verdict = `${raw.toUpperCase()} (${rawSec}s ago)`;
+      }
+      headerPill.title = `Quote engine heartbeat: ${verdict} · Source: ${prov}`;
+    }
+
+    // Elsewhere notice: show only when other_live_runs is not empty AND engine is not RUNNING on this store
+    const otherRuns = scanState.other_live_runs || [];
+    if (elsewhereTag) {
+      if (otherRuns.length > 0 && state !== 'running') {
+        elsewhereTag.style.display = '';
+        const countText = otherRuns.length === 1 ? '1 RUN LIVE ON ANOTHER STORE' : `${otherRuns.length} RUNS LIVE ON ANOTHER STORE`;
+        elsewhereTag.textContent = countText;
+        const details = otherRuns.map(r => `${r.run_id || 'unnamed'} (${r.db_path || 'unknown store'}, ${r.heartbeat_file || 'unknown file'})`).join('; ');
+        elsewhereTag.title = `${details} — its numbers are not shown on this page`;
+      } else {
+        elsewhereTag.style.display = 'none';
+      }
     }
   } else {
     // No scan-state payload: the loop's state is unknown, not stopped.
     headerPill.className = 'pill state-unknown';
     stateText.textContent = 'UNKNOWN';
     headerPill.title = 'Quote engine state unknown: no heartbeat payload';
+    if (elsewhereTag) elsewhereTag.style.display = 'none';
   }
 }
 
@@ -6165,6 +6245,7 @@ if (typeof module !== 'undefined' && module.exports) {
     get expandedMarkets() { return expandedMarkets; },
     set isStopping(v) { isStopping = v; },
     stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState,
+    engineReasonText, engineProvenanceText, renderScanStatePill,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },
     get backendStale() { return backendStale; },
