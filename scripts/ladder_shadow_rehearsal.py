@@ -358,20 +358,22 @@ def run_rehearsal(*, series: str, tape_markets: list[TapeMarket],
     import core_brain.markets as markets_mod
     real_trades = markets_mod.recent_trades
     markets_mod.recent_trades = driver.traded
+    effective_run_id = run_id or f"ladder-{series}"
     try:
         run_shadow(
             minutes=5.0, db_path=db_path,
             markets_fn=lambda cap=None: list(loop_markets),
             decide_fn=ladder_decide(series, rungs, token_side, db_path=db_path),
             fetch_books=fetch_books,
-            interval=0.01, run_id=run_id or f"ladder-{series}",
+            interval=0.01, run_id=effective_run_id,
             sleep_fn=_rotation_cap(rotations), cfg=cfg,
         )
     finally:
         markets_mod.recent_trades = real_trades
 
     report = build_report(series=series, shape=shape, rungs=rungs,
-                          tape_markets=tape_markets, db_path=db_path)
+                          tape_markets=tape_markets, db_path=db_path,
+                          run_id=effective_run_id)
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(report, indent=2))
@@ -379,7 +381,8 @@ def run_rehearsal(*, series: str, tape_markets: list[TapeMarket],
 
 
 def build_report(*, series: str, shape: str, rungs: tuple,
-                 tape_markets: list[TapeMarket], db_path) -> dict:
+                 tape_markets: list[TapeMarket], db_path,
+                 run_id: Optional[str] = None) -> dict:
     """Read the rehearsal store into the locked per-series report schema."""
     from core_brain.order_registry import get_connection
 
@@ -404,9 +407,19 @@ def build_report(*, series: str, shape: str, rungs: tuple,
             token_side = {}  # fall back to token suffix below
         rung_prices = []
         try:
-            for r in conn.execute(
+            if run_id:
+                query = (
+                    "SELECT DISTINCT price FROM quotes WHERE condition_id IN (%s) AND run_id = ? AND reason LIKE 'ladder rung%%' ORDER BY price"
+                    % ",".join("?" * len(cids))
+                )
+                params = tuple(cids) + (str(run_id),)
+            else:
+                query = (
                     "SELECT DISTINCT price FROM quotes WHERE condition_id IN (%s) AND reason LIKE 'ladder rung%%' ORDER BY price"
-                    % ",".join("?" * len(cids)), tuple(cids)).fetchall():
+                    % ",".join("?" * len(cids))
+                )
+                params = tuple(cids)
+            for r in conn.execute(query, params).fetchall():
                 if r["price"] is not None:
                     rung_prices.append(round(float(r["price"]), 4))
         except (sqlite3.Error, OSError, ValueError, KeyError, IndexError):
@@ -466,9 +479,10 @@ def build_report(*, series: str, shape: str, rungs: tuple,
     filled_shares = sum(filled_by_order.values())
     accounted = merged_leg_shares + exited_shares + settled_shares
 
+    valid_orders = [o for o in orders if (not run_id or o.get("run_id") == run_id)] if run_id else orders
     quoted_rungs = list(rungs) if rungs else (
         rung_prices if rung_prices else sorted({
-            round(float(o["price"]), 4) for o in orders if o.get("price") is not None
+            round(float(o["price"]), 4) for o in valid_orders if o.get("price") is not None
         })
     )
     return {
