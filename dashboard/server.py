@@ -1297,7 +1297,6 @@ def get_starting_capital() -> float | None:
 def start_bot() -> dict:
     """Launch background Screener and Reconcile loop."""
     import subprocess
-    import tempfile
 
     # The stack always writes the production registry, whatever this page is
     # reading. Started from a shadow view, real maker bids would rest behind a
@@ -1621,7 +1620,7 @@ def reset_database(custom_path: str | Path | None = None) -> dict:
                 pass
 
     # Initialize fresh database with all tables and schema
-    reg = OrderRegistry(target_db)
+    OrderRegistry(target_db)
 
     return {
         "ok": True,
@@ -1849,7 +1848,6 @@ def api_system_reset(request: Request):
     cancelled, and the account value at reset time becomes the starting capital.
     """
     _authorize_control(request)
-    import shutil
     from core_brain.order_manager import cancel_all, account_sweep
 
     steps = []

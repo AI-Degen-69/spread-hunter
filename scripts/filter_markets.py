@@ -21,7 +21,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -545,7 +545,6 @@ def gamma_universe(session: requests.Session,
     use CLOB field names (`condition_id`, `tokens`, `rewards`) because
     `evaluate` reads them, plus the gamma-only figures the spread pot needs.
     """
-    now = datetime.now(timezone.utc)
     out: list[dict] = []
     volume_bar = MIN_VOLUME_24H if min_volume_usd is None else min_volume_usd
     meta: dict = {
@@ -2413,9 +2412,6 @@ def main() -> None:
         full_scan=(args.full_scan
                    or args.paired_depth_control_usd is not None
                    or args.paired_admission))
-    volume_str = (f"${volume_bar:,.0f}"
-                  + (f" [TRIAL vs permanent ${MIN_VOLUME_24H:,.0f}]"
-                     if volume_trial_active else ""))
     print(f"universe: {len(universe)} tradable binaries "
           f"({disc_meta['pages_fetched']} pages, {disc_meta['rows_scanned']} rows"
           f"{', TRUNCATED' if disc_meta['truncated'] else ''})")

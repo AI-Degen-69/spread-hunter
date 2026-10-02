@@ -359,7 +359,7 @@ def run_rehearsal(*, series: str, tape_markets: list[TapeMarket],
     real_trades = markets_mod.recent_trades
     markets_mod.recent_trades = driver.traded
     try:
-        result = run_shadow(
+        run_shadow(
             minutes=5.0, db_path=db_path,
             markets_fn=lambda cap=None: list(loop_markets),
             decide_fn=ladder_decide(series, rungs, token_side, db_path=db_path),

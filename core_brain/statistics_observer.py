@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core_brain.kpi import report as kpi_report
-from core_brain.order_registry import OrderRegistry
 from core_brain.statistics_report import (DEFAULT_REPORT_DIR,
                                           write_statistics_report)
 from core_brain.statistics_store import StatisticsStore
@@ -38,8 +37,6 @@ def observe(
             if stop_file is not None and Path(stop_file).exists():
                 break
             kpi = kpi_report(watch_path, run_id=run_id)
-            registry = OrderRegistry(watch_path)
-            closes = [c for c in registry.get_all_closes() if c.get("run_id") == run_id]
             store.append_snapshot(mode, run_id, "OBSERVING", kpi, [])
             count += 1
             if max_hours is not None and time.monotonic() - started >= max_hours * 3600:

@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     from core_brain.market_resolution import (
         DEFAULT_GAMMA_HOST, sweep_market_resolutions,
     )
-    from core_brain.order_registry import OrderRegistry, get_run_id
+    from core_brain.order_registry import OrderRegistry
     from core_brain.trader_loop import _market_specs
 
     registry = OrderRegistry(db_path=db_path, run_id=args.run_id)

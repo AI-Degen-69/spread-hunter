@@ -40,7 +40,6 @@ from __future__ import annotations
 import argparse
 import math
 import sqlite3
-import statistics as st
 import time
 from dataclasses import dataclass
 from pathlib import Path
