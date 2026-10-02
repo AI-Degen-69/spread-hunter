@@ -90,6 +90,11 @@
       <button id="btn-sync" class="btn-sync" type="button" title="Reconcile orders/fills and account vs venue (read-only, fixes stale dashboard when Polymarket shows 0/0)">SYNC VENUE</button>
       <button id="btn-reset" class="btn-reset" type="button">RESET</button>
     </div>
+    <!-- The run switcher: which rehearsal is writing this store, and one click
+         to re-point the page at a live one. Populated by renderDbMode().
+         A child of <header>, NOT of .top-meta: that row is a scroll container,
+         and a dropdown anchored inside it gets clipped by its own scrollport. -->
+    <div id="db-run-switcher" class="db-run-switcher" style="display:none"></div>
   </header>
 
   <!-- ── Backend-contact watchdog (DESIGN.md): shown when the poll loop

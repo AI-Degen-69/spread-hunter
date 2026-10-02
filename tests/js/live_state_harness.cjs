@@ -247,8 +247,39 @@ function trialBannerVerdicts() {
   };
 }
 
+/* The DB badge's store verdict: is the pointed store being written at all,
+ * and if not, is something else live that the operator could switch to? */
+function dbModeVerdicts() {
+  const call = (st) => {
+    const v = app.dbModeVerdict(st);
+    return {
+      stale: v.stale,
+      activeRunId: v.activeRunId,
+      hereRunning: v.hereRunning,
+      liveElsewhere: v.liveElsewhere.map(r => r.runId),
+    };
+  };
+  const dead = { run_id: 'shadow-01', db_path: '/d/01_shadow.db', running: false, is_active_db: true, heartbeat_age_sec: 4800 };
+  const live = { run_id: 'ladder-live', db_path: '/d/NN_shadow.db', running: true, is_active_db: false, heartbeat_age_sec: 2 };
+  return {
+    // The reported case: pointed at a store whose run died, live run elsewhere.
+    deadHereLiveElsewhere: call({ db_is_production: false, shadow_runs: [dead, live] }),
+    // This store's run is alive: nothing to warn about.
+    liveHere: call({ db_is_production: false, shadow_runs: [{ ...dead, running: true, run_id: 'shadow-01' }] }),
+    // Dead here and nothing running anywhere: a genuinely dead engine.
+    deadEverywhere: call({ db_is_production: false, shadow_runs: [dead] }),
+    // No rehearsal registered (the ordinary live-stack page).
+    noRuns: call({ db_is_production: false, shadow_runs: [] }),
+    // An older backend that sends no field at all must not read as stale.
+    noField: call({ db_is_production: false }),
+    // The production registry is never "stale store".
+    production: call({ db_is_production: true, shadow_runs: [dead, live] }),
+  };
+}
+
 let out;
-if (script === 'trialbanner') out = trialBannerVerdicts();
+if (script === 'dbmode') out = dbModeVerdicts();
+else if (script === 'trialbanner') out = trialBannerVerdicts();
 else if (script === 'marketscan') out = marketScanVerdicts();
 else if (script === 'scanpill') out = scanPillVerdicts();
 else if (script === 'pills') out = pillVerdicts();
@@ -262,6 +293,7 @@ else out = {
   guardrailHud: guardrailHudVerdict(),
   marketscan: marketScanVerdicts(),
   trialbanner: trialBannerVerdicts(),
+  dbmode: dbModeVerdicts(),
 };
 
 process.stdout.write(JSON.stringify(out));

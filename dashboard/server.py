@@ -380,7 +380,7 @@ _snapshot_builders: dict[tuple, threading.Lock] = {}
 _snapshot_registry_lock = threading.Lock()
 
 
-def _cached_snapshot(key: tuple, build):
+def _cached_snapshot(key: tuple, build, ttl: float | None = None):
     """Build `key`'s snapshot at most once per TTL, however many ask for it.
 
     Every registry read in the process serialises on one lock in
@@ -402,9 +402,14 @@ def _cached_snapshot(key: tuple, build):
     carries per-request state -- the gzip middleware rewrites its headers as it
     sends -- so handing one instance to two requests corrupts both
     ("Response content longer than Content-Length").
+
+    `ttl` defaults per call rather than as an argument default: the snapshot
+    tests shorten SNAPSHOT_TTL_SEC at runtime, and binding it at import would
+    freeze the value and silently un-test every one of them.
     """
+    ttl = SNAPSHOT_TTL_SEC if ttl is None else ttl
     hit = _snapshots.get(key)
-    if hit is not None and (time.monotonic() - hit[0]) < SNAPSHOT_TTL_SEC:
+    if hit is not None and (time.monotonic() - hit[0]) < ttl:
         return hit[1]
 
     with _snapshot_registry_lock:
@@ -426,7 +431,7 @@ def _cached_snapshot(key: tuple, build):
     with builder:
         # Re-check: whoever held the builder lock has just refreshed this key.
         hit = _snapshots.get(key)
-        if hit is not None and (time.monotonic() - hit[0]) < SNAPSHOT_TTL_SEC:
+        if hit is not None and (time.monotonic() - hit[0]) < ttl:
             return hit[1]
         value = build()
         _snapshots[key] = (time.monotonic(), value)
@@ -750,10 +755,28 @@ def _shadow_heartbeat_candidates() -> list[Path]:
     return candidates
 
 
+def _same_path(a: Any, b: Any) -> bool:
+    """Whether two paths name the same file, without raising on junk input."""
+    if not a or not b:
+        return False
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return False
+
+
 def _read_shadow_heartbeat_file(
     path: Path, active_db_path: str | None, now: float | None,
+    match_db: bool = True,
 ) -> dict | None:
-    """One heartbeat file as a stopwatch payload, or None on any mismatch."""
+    """One heartbeat file as a stopwatch payload, or None on any mismatch.
+
+    `match_db` is the db-scoped rule the page runs on: a heartbeat naming
+    another store belongs to another run and must not put its stopwatch here.
+    The listing in `list_shadow_runs` passes `match_db=False` to read the same
+    files without the filter, which is how it can name a run writing a store
+    this page is not pointed at.
+    """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -762,12 +785,9 @@ def _read_shadow_heartbeat_file(
         return None
 
     heartbeat_db = raw.get("db_path")
-    if not heartbeat_db or not active_db_path:
+    if match_db and (not heartbeat_db or not active_db_path):
         return None
-    try:
-        if Path(heartbeat_db).resolve() != Path(active_db_path).resolve():
-            return None
-    except OSError:
+    if match_db and not _same_path(heartbeat_db, active_db_path):
         return None
 
     now = time.time() if now is None else now
@@ -796,6 +816,9 @@ def _read_shadow_heartbeat_file(
     ended = finished or (heartbeat_age > stale_after) or (pid_alive is False and heartbeat_age > 15.0)
     return {
         "run_id": raw.get("run_id"),
+        # Which store this run writes. The switcher needs it to re-point the
+        # page, and the badge needs it to tell "not this store" from "no store".
+        "db_path": str(heartbeat_db) if heartbeat_db else None,
         "pid": raw.get("pid"),
         "started_at": started_at,
         "minutes": raw.get("minutes"),
@@ -810,6 +833,68 @@ def _read_shadow_heartbeat_file(
         "ended": ended,
         "finished": finished,
     }
+
+
+#: How long a heartbeat file is worth reading at all.
+#:
+#: These are never cleaned up: one file per rehearsal, kept forever, and a
+#: machine that has been running trials for weeks holds well over a thousand.
+#: A run that has not written for six hours is long dead -- the `ended` verdict
+#: above lands at 120s -- so the listing skips those files on mtime and never
+#: pays to parse them.
+SHADOW_RUN_LIST_WINDOW_S = 6 * 3600.0
+
+#: How many runs the switcher offers. Enough to cover a machine with a few
+#: rehearsals in flight; the ordering puts the live ones first.
+SHADOW_RUN_LIST_LIMIT = 12
+
+
+def list_shadow_runs(active_db_path: str | None = None,
+                     now: float | None = None,
+                     limit: int = SHADOW_RUN_LIST_LIMIT) -> list[dict]:
+    """Every recent rehearsal on this machine, live ones first.
+
+    `read_shadow_run` answers "which run is writing THIS store" and drops the
+    rest. That is right for the stopwatch and wrong for the operator question
+    the page cannot otherwise answer: *is anything running at all?* A run that
+    has not written in hours cannot be, and a run on another store is named
+    here and never read into this page's numbers.
+    """
+    now = time.time() if now is None else now
+    runs: list[dict] = []
+    for path in _shadow_heartbeat_candidates():
+        try:
+            if now - path.stat().st_mtime > SHADOW_RUN_LIST_WINDOW_S:
+                continue
+        except OSError:
+            continue
+        run = _read_shadow_heartbeat_file(path, active_db_path, now, match_db=False)
+        if run is None:
+            continue
+        run["is_active_db"] = _same_path(run.get("db_path"), active_db_path)
+        run["source_file"] = path.name
+        runs.append(run)
+
+    # Live first, then freshest: the switcher exists to answer "what is running",
+    # and alphabetical file order answers it worst.
+    runs.sort(key=lambda r: (0 if r["running"] else 1, r["heartbeat_age_sec"]))
+    return runs[:limit]
+
+
+#: How stale a run listing may be. The scan stats every heartbeat file in the
+#: runtime directory, which is well over a thousand on a machine that has been
+#: running trials for weeks -- too much to repeat on the 2s status poll, and an
+#: operator reading a run list ten seconds old is not misled by it.
+SHADOW_RUN_LIST_TTL_S = 10.0
+
+
+def _recent_shadow_runs(active_db_path: str | None) -> list[dict]:
+    """`list_shadow_runs` on the shared snapshot cache, on its own longer TTL."""
+    return _cached_snapshot(
+        ("shadow-runs", active_db_path),
+        lambda: list_shadow_runs(active_db_path),
+        ttl=SHADOW_RUN_LIST_TTL_S,
+    )
 
 
 def _resolve_shadow_ring_path() -> Path | None:
@@ -1222,6 +1307,11 @@ def get_system_status() -> dict:
         # The rehearsal writing this store, when there is one. None otherwise:
         # the header shows no stopwatch rather than another run's clock.
         "shadow_run": read_shadow_run(db_identity["path"]),
+        # The OTHER rehearsals on this machine, including live ones writing a
+        # store this page is not pointed at. Named, never read into the numbers
+        # above: without them a dead run on a stale store reads as "the engine
+        # is down" while a healthy trial writes to a file nobody is watching.
+        "shadow_runs": _recent_shadow_runs(db_identity["path"]),
         "starting_capital": get_starting_capital(),
         "timestamp": time.time(),
     }
@@ -1648,6 +1738,43 @@ def api_system_stop(request: Request):
     """Stop background bot stack."""
     _authorize_control(request)
     return JSONResponse(stop_bot())
+
+
+def switch_active_db(path: str | None) -> dict:
+    """Re-point this page at another registry: the run switcher.
+
+    Which store the dashboard reads is otherwise fixed at launch by `--db` or
+    `LIVE_DB_PATH`, so an operator whose page was aimed at a store whose run
+    has since died has no way to watch the run that is actually going except
+    restarting the server. This only changes what the page reads; the stack,
+    its processes and the production registry are untouched, and the existing
+    START refusals still apply to whatever store is now active.
+    """
+    if not path:
+        return {"ok": False,
+                "message": "No database path given.",
+                "status": get_system_status()}
+    target = Path(path)
+    if not target.is_file():
+        return {
+            "ok": False,
+            "message": (
+                f"No registry at {path}. Switch to a store a run is actually "
+                f"writing, or restart the dashboard with --db {path}."
+            ),
+            "status": get_system_status(),
+        }
+    set_db_override(target)
+    return {"ok": True,
+            "message": f"Now reading {target}.",
+            "status": get_system_status()}
+
+
+@app.post("/api/system/db")
+def api_system_switch_db(request: Request, db: str | None = None):
+    """Point the page at another store (read-only; changes no machine state)."""
+    _authorize_control(request)
+    return JSONResponse(switch_active_db(db))
 
 
 @app.post("/api/system/service/start")

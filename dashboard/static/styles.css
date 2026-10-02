@@ -113,6 +113,11 @@ header {
   border-radius: 12px;
   flex-wrap: nowrap;
   gap: 12px;
+  /* Anchors #db-run-switcher, which drops below the DB badge. The switcher is
+     a child of <header> rather than of .top-meta because that row is a scroll
+     container, and an absolutely positioned dropdown inside it is clipped by
+     its own scrollport -- invisible in neither a screenshot nor a test. */
+  position: relative;
 }
 
 .brand { display: flex; align-items: center; gap: 12px; }
@@ -128,6 +133,9 @@ header {
   min-width: 0;
   gap: 6px;
   row-gap: 4px;
+  /* Anchors #db-run-switcher, which drops below the DB badge. Absolute so it
+     never joins the nowrap flex row and squeezes the pills beside it. */
+  position: relative;
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
   flex-wrap: nowrap;
@@ -352,6 +360,60 @@ header {
 }
 .pill.mode-live { background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border); }
 .pill.mode-shadow { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
+/* The store this page reads has no run writing it while another one is live.
+   Red, not amber: nothing on the page is updating, and the operator has to be
+   told that before they read the rest of the dashboard. */
+.pill.mode-stale { background: var(--red-bg); color: #f87171; border: 1px solid var(--red-border); }
+
+/* The run switcher dropdown. Anchored under the DB badge by renderDbMode();
+   the badge is the only opener, and a click anywhere else closes it. */
+.db-run-switcher {
+  position: absolute;
+  top: calc(100% - 6px);
+  left: 0;
+  z-index: 60;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  display: block;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  font-size: 11px;
+}
+.db-run-head {
+  padding: 2px 6px 8px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.db-run-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+}
+.db-run-row:hover { background: rgba(255, 255, 255, 0.04); }
+.db-run-row.current { background: rgba(255, 255, 255, 0.06); }
+.db-run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-run-state.state-running { color: var(--signal); }
+.db-run-state.state-stopped { color: var(--text-muted); }
+.db-run-current { color: var(--text-muted); font-size: 10px; letter-spacing: 0.06em; }
+.db-run-switch {
+  padding: 3px 10px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.db-run-switch:hover { border-color: var(--text-secondary); }
+.db-run-switch:disabled { opacity: 0.5; cursor: wait; }
+.db-run-empty { padding: 6px; color: var(--text-muted); }
 .pill.error { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); }
 .pill.reconnecting { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.finished { background: rgba(100,116,139,0.10); color: #94a3b8; border: 1px solid rgba(148,163,184,0.18); }
