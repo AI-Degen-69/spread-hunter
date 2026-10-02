@@ -91,7 +91,6 @@ from core_brain.runtime_paths import legacy_runtime_file  # noqa: E402
 # core_brain.settlement; the relayer/RPC submit path stays here with the CLI verbs.
 from core_brain.merge_pairs import (
     CTF_CONTRACT,
-    NEG_RISK_CTF_COLLATERAL_ADAPTER,
     merge_target,
     USDC_E_CONTRACT,
     ZERO_BYTES32,
@@ -2893,7 +2892,7 @@ def venue_sync(funder=None, db_path=None, quiet=False):
     """
     from core_brain.account import read_account, fetch_closed_positions, fetch_open_positions
     from core_brain.order_registry import (
-        OrderRegistry, CloseRecord, VENUE_SYNC_RUN_ID, get_run_id,
+        OrderRegistry, CloseRecord, VENUE_SYNC_RUN_ID,
     )
 
     who = funder or os.environ.get("POLY_FUNDER")

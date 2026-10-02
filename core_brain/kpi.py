@@ -23,7 +23,7 @@ from core_brain.order_registry import (
     OrderRegistry, DEFAULT_DB_PATH, VENUE_SYNC_RUN_ID, get_connection,
 )
 from core_brain.config import MakerConfig, load as load_cfg
-from core_brain.market_meta import UNCATEGORIZED, resolve_market_meta
+from core_brain.market_meta import UNCATEGORIZED, resolve_market_meta  # noqa: F401 -- re-exported as kpi.UNCATEGORIZED
 from core_brain.runtime_paths import resolve_runtime_file
 
 # Display-only: this module computes report numbers, never places an order.

@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Optional
 
-from core_brain.order_registry import OrderRegistry, DEFAULT_DB_PATH
+from core_brain.order_registry import OrderRegistry
 from core_brain.config import load as load_cfg
 
 log = logging.getLogger("markout")

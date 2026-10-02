@@ -14,7 +14,6 @@ import datetime
 import json
 import logging
 import os
-import pathlib
 import shutil
 import sqlite3
 import sys

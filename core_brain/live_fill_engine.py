@@ -12,7 +12,6 @@ Inventing a fill is the worst failure available to this system.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Optional
 
 from core_brain.order_registry import OrderRegistry

@@ -11,7 +11,6 @@ Captures:
 import argparse
 import json
 import os
-import sys
 import urllib.request
 from decimal import Decimal
 from pathlib import Path

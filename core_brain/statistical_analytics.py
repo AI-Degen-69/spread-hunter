@@ -27,7 +27,7 @@ from __future__ import annotations
 import math
 import random
 import statistics
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 # Merge methods, mirroring `registry_state.MERGE_CLOSE_METHODS`. A merged pair
 # is the strategy's own exit; anything else unwound some other way, and the
