@@ -32,10 +32,17 @@ def test_every_frontend_call_is_served_by_python():
 
 
 def test_frontend_control_surface_is_expected():
-    """The POST control surface is exactly the controls the menu supports."""
+    """The POST control surface is exactly the controls the menu supports.
+
+    `/api/system/db` (the run switcher) is in this list on purpose. It is a
+    POST that changes what the dashboard reads, guarded by the same control
+    token as START and STOP, so it belongs in the declared surface -- a new
+    control endpoint that nobody added here is exactly the drift this guards.
+    """
     calls = _frontend_api_calls()
     control = {c for c in calls if "/system/" in c}
     assert control == {
+        "/api/system/db",
         "/api/system/reset",
         "/api/system/service/start",
         "/api/system/service/stop",
