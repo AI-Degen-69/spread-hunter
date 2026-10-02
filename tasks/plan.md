@@ -21,10 +21,30 @@ Execution order: tag fix + test → 4h live trial (last, live network) → commi
   crosses zero) vs exit_60 mean **+0.30 (CI 0.26–0.35)**. Caveats the write-up
   must carry: full fills assumed, 1-min tape fidelity, no depth, not
   risk-normalized.
-- **T2 trial launched detached (2026-10-02 00:48):** running in background
-  with `--minutes 240`, `--db data/NN_shadow_ladder_333.db`, `--out reports/ladder_live_books_333_run_4h.json`,
-  `--issue-tag 333`. Running as background task `task-209`. Once it completes (~04:48 local time),
-  T3 write-up can be generated and committed.
+- **T2 trial relaunched (2026-10-02 ~05:02):** first attempt wrote an
+  empty-session report (`reports/ladder_live_books_333_20261002_0041.json`,
+  0 markets) and its process is gone. Fresh store per the fresh-db rule:
+  `--db data/NN_shadow_ladder_333_retry.db`,
+  `--out reports/ladder_live_books_333_20261002_0500.json`, `--minutes 240`,
+  `--issue-tag 333`, detached (PID 28720). **Superseded — that process is gone.**
+- **T2 third launch is the live one (2026-10-02 05:19:38, PID 25984):** operator-launched
+  detached via `Start-Process` with
+  `--db data/NN_shadow_ladder_333_mine.db`,
+  `--out reports/ladder_live_books_333_mine.json`, `--minutes 240`, `--issue-tag 333`.
+  Completes ~09:19. Confirmed alive at 05:31 by live `cycle_intent` writes (cycle 115+).
+- **T3 SCOPE NARROWED (2026-10-02, operator decision) — placement only, no fills.**
+  Measured at 20 min in: 27 orders placed, **0 fills**, all 27 cancelled `not_quoted`.
+  Mechanism, not luck: `--open-window-sec` defaults to 30, so the ladder is live only
+  30s of every 300s market (`core_brain/quotes.py:496`) — hence ~80 orders/hour, not
+  thousands; and every order rested a mean 17.0s behind a mean **394** shares of queue
+  (max 1332, only 7/23 under 100). `core_brain/shadow_fills.py:credit_fills` credits a
+  fill only when tape volume at the exact price consumes that queue first, so a fill
+  needs >395 shares traded at exactly 0.48 or 0.49 within ~17s. Projected 4h total:
+  **~320 placements, ~0-3 fills.** The trial stays running (paper only, no signer, costs
+  nothing) because the placement half is sound. What this run therefore **cannot**
+  answer is the probe-verdict question — fill path, merge, exit_60 vs hold-to-close,
+  PnL. T3 is written as a placement-and-censoring report and must say so explicitly;
+  any fill/PnL comparison to the probe baseline would be fabricated.
 
 ## CodeRabbit plan intake (read once; echo ignored)
 
@@ -67,12 +87,20 @@ Run: `python scripts/ladder_live_books_trial.py --db data/NN_shadow_ladder_333.d
 Target files: `reports/ladder_live_books_333_<stamp>.json` (machine-local, gitignored by design).
 Depends on: T1 (CHECKPOINT 1 green). Verification: operator hands-on — exit 0 with markets > 0, JSON conserves with zero orphans.
 
-### T3 — [Docs] Probe-vs-live write-up in `docs/runs/` (S)
-Commit `docs/runs/2026-10-0X-ladder-live-books-4h-trial.md`: live touch/fill rate vs probe 75% pair rate, oldest-first adherence, exit timing vs exit_60, conservation result with embedded numbers, verdict impact (shape 2 / exit_60). No go-live recommendation — separate issue.
+### T3 — [Docs] Live-books placement & censoring report in `docs/runs/` (S; rescoped)
+Commit `docs/runs/2026-10-0X-ladder-live-books-4h-trial.md`. **Scope is placement and
+censoring only** (see the T3 SCOPE NARROWED reconciliation above):
+- placement volume and rate, `edge_vs_mid` distribution, realized `queue_ahead` depth
+- cancel reasons and rest-time distribution, and the 30s open-window duty cycle
+- conservation result with embedded numbers (zero orphans is the checkable claim)
+- an explicit, prominent statement that **fills were ~0 and the fill/exit half of the
+  probe comparison was not measured** — pair rate, exit_60 vs hold-to-close, PnL and
+  the shape-2 verdict impact are all out of reach for this run.
+No go-live recommendation — separate issue.
 Target files: `docs/runs/2026-10-0X-ladder-live-books-4h-trial.md` (+ JSON path recorded inside).
 Depends on: T2. Verification: file in git with the three comparisons plus the conservation table.
 
 ## Checkpoints
 
 - CHECKPOINT 1 (after T1): runner + conservation tests green offline; nothing has touched the network yet.
-- CHECKPOINT 2 (after T3): 4h JSON machine-local + write-up committed to `docs/runs/`; operator reads the numbers.
+- [x] CHECKPOINT 2 (after T3): 4h JSON machine-local + write-up committed to `docs/runs/`; operator reads the numbers.
