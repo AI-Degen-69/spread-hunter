@@ -79,7 +79,7 @@ def test_placement_posts_two_rungs_per_side_under_one_pair(tmp_path,
     assert next(iter({o.pair_id for o in orders})) == ladder_pair_id(COND)
 
 
-def _prints_always(tokens, prices, size=5.0):
+def _prints_always(tokens, prices, size=105.0):
     def traded(condition_id, seen):
         return {t: {p: size for p in prices} for t in tokens}
     return traded
@@ -89,7 +89,7 @@ def test_fill_sim_fills_oldest_first_under_one_pair(tmp_path, monkeypatch):
     """Prints through every rung: all fills share the one ladder pair."""
     import core_brain.markets as markets_mod
     monkeypatch.setattr(markets_mod, "recent_trades",
-                        _prints_always([TOK_UP, TOK_DN], [0.49, 0.48]))
+                        _prints_always([TOK_UP, TOK_DN], [0.47, 0.46]))
     db = tmp_path / "ladder_fill.db"
     cfg = _cfg()
     run_shadow(minutes=5.0, db_path=db,
@@ -115,7 +115,7 @@ def test_one_leg_residue_exits_with_no_orphan(tmp_path, monkeypatch):
     """
     import core_brain.markets as markets_mod
     monkeypatch.setattr(markets_mod, "recent_trades",
-                        _prints_always([TOK_UP], [0.49, 0.48]))
+                        _prints_always([TOK_UP], [0.47, 0.46]))
     db = tmp_path / "ladder_oneleg.db"
 
     def running_books(clob_host, token_id):

@@ -480,11 +480,11 @@ def decide_ladder_quotes(cfg: MakerConfig, market, up_book: dict,
                          down_book: dict, *,
                          now: Optional[float] = None
                          ) -> tuple[list[QuoteIntent], str]:
-    """Equal-sized rungs around 0.50 on both sides, at series OPEN only.
+    """Live-book derived rungs on both sides, at series OPEN only.
 
-    One rung per level per side; rung i rests at 0.50 - i*tick on its own
-    token. Per-rung size splits the separate ladder budget evenly across
-    all rung-legs (never Dynamic Caps). Outside the open window, on a
+    One rung per level per side; rung i rests at best_bid - (i - 1)*tick
+    on its own token. Per-rung size splits the separate ladder budget evenly
+    across all rung-legs (never Dynamic Caps). Outside the open window, on a
     missing book, or with mode off, this posts nothing -- the caller routes
     those cases to today's path untouched.
     """
@@ -517,10 +517,15 @@ def decide_ladder_quotes(cfg: MakerConfig, market, up_book: dict,
     if per_rung < 1:
         return [], "ladder budget below one share per rung"
     intents: list[QuoteIntent] = []
-    for side, token, _book in legs:
+    for side, token, book in legs:
         hedge_ask = down_ask if side == "UP" else up_ask
+        best_bid = book.get("best_bid")
+        if best_bid is None:
+            continue
         for i in range(1, cfg.ladder_rungs + 1):
-            price = round(0.50 - i * tick, 4)
+            price = round(float(best_bid) - (i - 1) * tick, 4)
+            if price <= 0.0 or price >= 1.0:
+                continue
             # No churn: a rung the planner's completable gate would cancel
             # is not posted. Completion buys the hedge at its ask, so a
             # rung + hedge ask at/over the cap is a booked loss already.
