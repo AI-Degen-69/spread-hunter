@@ -421,3 +421,105 @@ def test_the_services_pill_does_not_claim_to_be_the_engine():
     assert ">ENGINE<" not in pill
     # And the tooltip says what it actually counts.
     assert "how many of the stack's services" in html
+
+
+# ── the DB badge names the store it is pointed at ─────────────────────────
+#
+# A store whose run has ended leaves every heartbeat on the page stale, which
+# reads as a dead engine. On a machine where another rehearsal is alive on a
+# different store, that reading is simply wrong, and the operator has no way to
+# get to the run that is actually going. The badge must therefore say which of
+# those two situations it is in, and offer the switch.
+
+
+@requires_node
+def test_a_dead_store_with_a_live_run_elsewhere_is_flagged_stale():
+    # The reported case: pointed at a store whose run died, while a healthy
+    # trial writes a different store file.
+    v = _harness("dbmode")["deadHereLiveElsewhere"]
+    assert v["stale"] is True
+    assert v["hereRunning"] is False
+    assert v["activeRunId"] == "shadow-01"
+    assert v["liveElsewhere"] == ["ladder-live"]
+
+
+@requires_node
+def test_a_live_store_is_not_flagged():
+    assert _harness("dbmode")["liveHere"]["stale"] is False
+
+
+@requires_node
+def test_a_dead_store_with_nothing_running_anywhere_is_not_flagged_stale():
+    # No live run to point at: the engine really is down and the ENGINE pill
+    # says so. The badge must not invent a second opinion here.
+    assert _harness("dbmode")["deadEverywhere"]["stale"] is False
+
+
+@requires_node
+def test_no_rehearsal_registered_is_not_flagged_stale():
+    # The ordinary live stack: no shadow run writes the production registry.
+    assert _harness("dbmode")["noRuns"]["stale"] is False
+
+
+@requires_node
+def test_a_backend_that_sends_no_run_list_is_not_flagged_stale():
+    # An older server sends no `shadow_runs`. Silence is unknown, not stale.
+    assert _harness("dbmode")["noField"]["stale"] is False
+
+
+@requires_node
+def test_the_production_registry_is_never_a_stale_store():
+    assert _harness("dbmode")["production"]["stale"] is False
+
+
+def test_the_served_page_carries_the_run_switcher():
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    assert 'id="db-run-switcher"' in html
+
+
+def test_the_badge_names_the_live_run_when_the_store_is_stale():
+    js = APP_JS.read_text(encoding="utf-8")
+    fn = js.split("function renderDbMode", 1)[1].split("\nfunction ", 1)[0]
+    # The operator must be told what IS running, not just that this is not.
+    assert "NO LIVE RUN" in fn
+    assert "liveElsewhere" in fn
+
+
+def test_the_run_switcher_is_not_inside_the_scrolling_pill_row():
+    # `.top-meta` is a horizontal scroll container, and CSS promotes the other
+    # axis to `auto` with it. A dropdown anchored inside it is clipped by its
+    # own scrollport: the markup, the inline display toggle and the JS all say
+    # "open" while the operator sees nothing. The switcher is a child of
+    # <header> instead, and renderDbMode() measures the badge to place it.
+    html = (_STATIC / "index.html").read_text(encoding="utf-8")
+    top_meta = html.split('class="top-meta"', 1)[1].split("</div>", 1)[0]
+    assert 'id="db-run-switcher"' not in top_meta
+    header = html.split("<header>", 1)[1].split("</header>", 1)[0]
+    assert 'id="db-run-switcher"' in header
+
+
+def test_opening_the_switcher_sets_an_explicit_visible_display():
+    # The inline `style="display:none"` in the markup outranks the class, so
+    # opening has to write `block` and not clear the inline value. The
+    # outside-click handler tests for the same exact string.
+    js = APP_JS.read_text(encoding="utf-8")
+    fn = js.split("async function renderRunSwitcher", 1)[1].split("\nasync function ", 1)[0]
+    assert "sw.style.display = 'block'" in fn
+    assert "sw.style.display = ''" not in fn
+
+
+def test_a_refused_store_switch_shows_the_servers_reason():
+    # `_authorize_control` raises HTTPException, so a refused switch is
+    # `{"detail": ...}` on a 403 -- there is no `ok` key to read and no
+    # `message` to fall back to. Reading `data.ok` alone turned "missing or
+    # stale control token" into "Could not switch stores.", and a non-JSON body
+    # threw into the catch and blamed the network instead. Both are wrong: the
+    # server said exactly why, and the operator is the one who has to act on it.
+    js = APP_JS.read_text(encoding="utf-8")
+    # Anchored on the request itself: `b.addEventListener('click'` appears
+    # several times in this file, and splitting on it picked up an unrelated
+    # tab handler -- a test that passes or fails for the wrong reason.
+    fn = js.split("/api/system/db?db=", 1)[1][:900]
+    assert "!res.ok || !data.ok" in fn
+    assert "data.detail" in fn
+    assert "res.json().catch" in fn

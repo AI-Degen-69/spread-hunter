@@ -370,6 +370,13 @@ class VenueSeam:
     fleet_state_fn: Optional[Callable] = None
     resting_order_ids_fn: Optional[Callable] = None
     emit_fn: Optional[Callable] = None
+    #: Whether an empty `markets_fn` refresh is this caller's normal state or a
+    #: signal worth a warning. Only the caller can answer it: the live stack's
+    #: filter finding nothing is a finding, while a ladder trial asking for a
+    #: 30-second open window inside a 5-minute series is empty ~90% of the time
+    #: by construction. Default stays False -- the loud reading -- because
+    #: guessing "routine" for a caller that means it would hide a dead feed.
+    markets_fn_empty_is_routine: bool = False
 
 
 def run(
@@ -463,6 +470,15 @@ def run(
                 else:
                     if fresh:
                         current_markets = list(fresh)
+                    elif seam.markets_fn_empty_is_routine:
+                        # Normal for this caller (see the seam field). Still
+                        # logged, still counted -- just not dressed as a fault,
+                        # which is what filled a four-hour trial's stderr with
+                        # one alarming line per rotation and read as a dead feed.
+                        log.info(
+                            "markets_fn returned no markets (expected for this "
+                            "feed); keeping the previous %d",
+                            len(current_markets))
                     else:
                         log.warning(
                             "markets_fn returned no markets; keeping the previous %d",

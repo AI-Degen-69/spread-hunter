@@ -970,13 +970,119 @@ function setShadowRun(status) {
   renderShadowClock();
 }
 
+/* Which store the page is pointed at, and whether anything is writing it.
+ *
+ * The badge used to name the store and stop there. When a run ends, that store
+ * goes quiet and every pill on the page turns red, which reads as "the engine
+ * is down" -- including on a machine where a healthy 4-hour trial is writing a
+ * different store file the page cannot see. The listing the backend now sends
+ * alongside the badge is what separates those two: `liveElsewhere` is the
+ * proof that the engine is fine and the operator is watching the wrong file.
+ */
+function dbModeVerdict(status) {
+  const runs = Array.isArray(status?.shadow_runs) ? status.shadow_runs : [];
+  const active = runs.find(r => r && r.is_active_db === true) || null;
+  const liveElsewhere = runs
+    .filter(r => r && r.running === true && r.is_active_db !== true)
+    .map(r => ({
+      runId: r.run_id,
+      dbPath: r.db_path,
+      file: r.source_file,
+      ageSec: r.heartbeat_age_sec,
+    }));
+  // null means "this page's store has no rehearsal registered", which is the
+  // ordinary live-stack case and must never read as stale. Only an explicitly
+  // ended run for THIS store, with a live run elsewhere to point at, is stale.
+  const hereRunning = active ? active.running === true : null;
+  const stale = status?.db_is_production !== true
+    && hereRunning === false
+    && liveElsewhere.length > 0;
+  return { stale, liveElsewhere, activeRunId: active ? active.run_id : null, hereRunning };
+}
+
+let lastStatusForRuns = null;
+
+function closeRunSwitcher() {
+  const sw = document.getElementById('db-run-switcher');
+  if (sw) sw.style.display = 'none';
+}
+
+/* Sit the dropdown under the badge that opened it. The switcher is positioned
+ * against <header>, and the badge's x moves with every pill above it (a fresh
+ * SCAN age, a longer store name), so the offset is measured rather than
+ * hard-coded. */
+function placeRunSwitcher(sw, badge) {
+  const host = (badge.closest && badge.closest('header')) || badge.parentElement;
+  if (!host || typeof badge.getBoundingClientRect !== 'function') return;
+  const b = badge.getBoundingClientRect();
+  const h = host.getBoundingClientRect();
+  const width = sw.offsetWidth || 380;
+  const left = b.left - h.left - 40;
+  sw.style.left = Math.round(Math.max(4, Math.min(left, h.width - width - 4))) + 'px';
+}
+
+async function renderRunSwitcher() {
+  const sw = document.getElementById('db-run-switcher');
+  const badge = document.getElementById('db-mode-badge');
+  if (!sw) return;
+  const runs = (lastStatusForRuns?.shadow_runs || []).filter(r => r && r.db_path);
+  if (!runs.length) {
+    sw.innerHTML = `<div class="db-run-empty">No rehearsal is registered on this machine.</div>`;
+    sw.style.display = 'block';
+    placeRunSwitcher(sw, badge);
+    return;
+  }
+  const activeRunId = dbModeVerdict(lastStatusForRuns).activeRunId;
+  const rows = runs.map(r => {
+    const isThis = activeRunId === r.run_id;
+    const state = r.running === true ? 'RUNNING' : (r.finished ? 'FINISHED' : 'ENDED');
+    const age = formatHeartbeatAge(r.heartbeat_age_sec);
+    const name = (r.db_path || '').split(/[\\/]/).pop();
+    const btn = isThis
+      ? `<span class="db-run-current">THIS PAGE</span>`
+      : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
+    return `<div class="db-run-row${isThis ? ' current' : ''}">
+        <span class="db-run-name mono">${esc(name)}</span>
+        <span class="db-run-state state-${r.running === true ? 'running' : 'stopped'}">${state}${age ? ' · ' + age : ''}</span>
+        ${btn}
+      </div>`;
+  });
+  sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + rows.join('');
+  sw.style.display = 'block';
+  placeRunSwitcher(sw, badge);
+  sw.querySelectorAll('.db-run-switch').forEach(b => {
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      b.textContent = '…';
+      try {
+        const res = await controlFetch('/api/system/db?db=' + encodeURIComponent(b.dataset.db));
+        // A refusal from `_authorize_control` is an HTTP error carrying
+        // FastAPI's `detail`, not the `ok`/`message` pair the happy path
+        // returns. Checking `data.ok` alone read that as a generic failure and
+        // threw the server's explanation ("missing or stale control token")
+        // away; a non-JSON body threw into the catch below and blamed the
+        // network instead. Surface whichever reason the server actually gave.
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert(data.message || data.detail
+            || `Could not switch stores (HTTP ${res.status}).`);
+        }
+      } catch { alert('Could not reach the dashboard to switch stores.'); }
+      closeRunSwitcher();
+      pollStatus();
+    });
+  });
+}
+
 function renderDbMode(status) {
   setShadowRun(status);
+  lastStatusForRuns = status;
   const el = document.getElementById('db-mode-badge');
   if (!el) return;
 
   const mode = status?.db_mode || null;
   lastDbIsProduction = status?.db_is_production === true;
+  const verdict = dbModeVerdict(status);
 
   if (!mode) {
     el.className = 'pill state-unknown mono';
@@ -993,10 +1099,37 @@ function renderDbMode(status) {
   } else {
     // Not a cosmetic state. Every number on the page is a rehearsal, and START
     // is refused while this shows.
-    el.className = 'pill mode-shadow mono';
-    el.textContent = `DB: ${mode} · ${path.split(/[\\/]/).pop()}`;
+    el.className = 'pill mode-shadow mono' + (verdict.stale ? ' mode-stale' : '');
+    el.textContent = `DB: ${mode} · ${path.split(/[\\/]/).pop()}`
+      + (verdict.stale ? ' · NO LIVE RUN' : '');
     el.title = `Reading ${path}, not the production registry. `
-      + `Orders, fills and PnL on this page are not live positions, and START is disabled.`;
+      + (verdict.stale
+        // The whole point: say what IS running, and where, instead of leaving
+        // a red page to be read as a dead engine.
+        ? `Nothing is writing this store, so every heartbeat on this page reads stale. `
+          + `Still running elsewhere: ${verdict.liveElsewhere
+              .map(r => `${r.runId} → ${(r.dbPath || '').split(/[\\/]/).pop()}`).join('; ')}. `
+          + `Click to switch this page to one of them.`
+        : `Orders, fills and PnL on this page are not live positions, and START is disabled.`);
+  }
+
+  // The switcher is the badge's answer to "which run is this, and can I watch
+  // a different one". Wired once; the handler reads the last status.
+  if (!el.dataset.wired) {
+    el.dataset.wired = 'true';
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => {
+      const sw = document.getElementById('db-run-switcher');
+      if (!sw) return;
+      if (sw.style.display === 'block') { closeRunSwitcher(); return; }
+      renderRunSwitcher();
+    });
+    document.addEventListener('click', (e) => {
+      const sw = document.getElementById('db-run-switcher');
+      if (!sw || sw.style.display !== 'block') return;
+      if (sw.contains(e.target) || (el.contains && el.contains(e.target))) return;
+      closeRunSwitcher();
+    });
   }
 }
 
@@ -6009,7 +6142,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
+  module.exports = { dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
