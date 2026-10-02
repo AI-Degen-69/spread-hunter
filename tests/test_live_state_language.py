@@ -506,3 +506,20 @@ def test_opening_the_switcher_sets_an_explicit_visible_display():
     fn = js.split("async function renderRunSwitcher", 1)[1].split("\nasync function ", 1)[0]
     assert "sw.style.display = 'block'" in fn
     assert "sw.style.display = ''" not in fn
+
+
+def test_a_refused_store_switch_shows_the_servers_reason():
+    # `_authorize_control` raises HTTPException, so a refused switch is
+    # `{"detail": ...}` on a 403 -- there is no `ok` key to read and no
+    # `message` to fall back to. Reading `data.ok` alone turned "missing or
+    # stale control token" into "Could not switch stores.", and a non-JSON body
+    # threw into the catch and blamed the network instead. Both are wrong: the
+    # server said exactly why, and the operator is the one who has to act on it.
+    js = APP_JS.read_text(encoding="utf-8")
+    # Anchored on the request itself: `b.addEventListener('click'` appears
+    # several times in this file, and splitting on it picked up an unrelated
+    # tab handler -- a test that passes or fails for the wrong reason.
+    fn = js.split("/api/system/db?db=", 1)[1][:900]
+    assert "!res.ok || !data.ok" in fn
+    assert "data.detail" in fn
+    assert "res.json().catch" in fn

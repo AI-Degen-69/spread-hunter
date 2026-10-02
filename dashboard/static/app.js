@@ -1056,8 +1056,17 @@ async function renderRunSwitcher() {
       b.textContent = '…';
       try {
         const res = await controlFetch('/api/system/db?db=' + encodeURIComponent(b.dataset.db));
-        const data = await res.json();
-        if (!data.ok) alert(data.message || 'Could not switch stores.');
+        // A refusal from `_authorize_control` is an HTTP error carrying
+        // FastAPI's `detail`, not the `ok`/`message` pair the happy path
+        // returns. Checking `data.ok` alone read that as a generic failure and
+        // threw the server's explanation ("missing or stale control token")
+        // away; a non-JSON body threw into the catch below and blamed the
+        // network instead. Surface whichever reason the server actually gave.
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert(data.message || data.detail
+            || `Could not switch stores (HTTP ${res.status}).`);
+        }
       } catch { alert('Could not reach the dashboard to switch stores.'); }
       closeRunSwitcher();
       pollStatus();
