@@ -94,3 +94,43 @@ def test_missing_book_posts_nothing():
                               _books()[1], _inv(), 290.0, window_frac=0.0,
                               now=NOW)
     assert intents == []
+
+
+def test_asymmetric_volatile_books_price_off_touch():
+    """Asymmetric 5m books (e.g. 0.68 / 0.28) quote at the touch, not around 0.50."""
+    cfg = MakerConfig(ladder_mode=True, ladder_rungs=2, ladder_budget_usd=20.0)
+    up = {"best_bid": 0.68, "best_ask": 0.70}
+    down = {"best_bid": 0.28, "best_ask": 0.30}
+    intents, why = route_quotes(cfg, _market(), up, down, _inv(), 290.0,
+                                window_frac=0.0, now=NOW)
+    ups = sorted(i.price for i in intents if i.side == "UP")
+    dns = sorted(i.price for i in intents if i.side == "DOWN")
+    assert ups == [0.67, 0.68], "UP rungs rest at 0.68 touch and 1 tick below (0.67)"
+    assert dns == [0.27, 0.28], "DOWN rungs rest at 0.28 touch and 1 tick below (0.27)"
+    assert "ladder 2 rungs/side" in why
+
+
+def test_uncompletable_market_posts_nothing():
+    """When both sides cannot complete under max_pair_cost, nothing is posted."""
+    cfg = MakerConfig(ladder_mode=True, ladder_rungs=2, ladder_budget_usd=20.0)
+    up = {"best_bid": 0.60, "best_ask": 0.65}
+    down = {"best_bid": 0.40, "best_ask": 0.45}
+    # UP: 0.60 + 0.45 = 1.05 >= 0.99; 0.59 + 0.45 = 1.04 >= 0.99
+    # DOWN: 0.40 + 0.65 = 1.05 >= 0.99; 0.39 + 0.65 = 1.04 >= 0.99
+    intents, why = route_quotes(cfg, _market(), up, down, _inv(), 290.0,
+                                window_frac=0.0, now=NOW)
+    assert intents == []
+    assert "no rung completes under the cap" in why
+
+
+def test_rung_prices_clamped_to_valid_range():
+    """Rung prices floor above 0.0 and never emit 0 or negative quotes."""
+    cfg = MakerConfig(ladder_mode=True, ladder_rungs=3, ladder_budget_usd=30.0)
+    up = {"best_bid": 0.01, "best_ask": 0.03}
+    down = {"best_bid": 0.95, "best_ask": 0.97}
+    intents, _ = route_quotes(cfg, _market(), up, down, _inv(), 290.0,
+                              window_frac=0.0, now=NOW)
+    # UP: 0.01 + 0.97 = 0.98 < 0.99; rung 2 (0.00) and rung 3 (-0.01) dropped
+    ups = [i.price for i in intents if i.side == "UP"]
+    assert ups == [0.01]
+

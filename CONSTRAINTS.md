@@ -1,3 +1,28 @@
+# Constraints: Issue #339 — Ladder rungs priced off live book
+
+## Quality & Tests
+- Zero regressions: `tests/test_ladder_quotes.py`, `tests/test_ladder_shadow_rehearsal.py`,
+  `tests/test_ladder_live_books_trial.py`, `tests/test_ladder_shadow.py`,
+  `tests/test_shadow_run.py` stay 100% green. Full-repo sweep stays with GitHub CI on push.
+- New behaviour requires tests RED against untouched code and GREEN after; each added
+  assertion must fail without its change.
+- Anti-cheat: strictly forbid skipping tests, deleting or weakening assertions, or
+  bypassing linters. Tests use `tmp_path` fixtures; no test writes into live `data/` or `run/`.
+  `data/orders.db` is never touched by a report, a test, or the runner.
+
+## Behaviour Boundaries
+- **Derive rungs from the live book**: Rungs are priced relative to each leg's `best_bid`
+  (`price = round(best_bid - (i - 1) * tick, 4)` for `i` in `1..cfg.ladder_rungs`), not a static 0.50.
+- **Completable pair gate**: A market whose book cannot support a rung under `max_pair_cost`
+  (via `risk.completable_pair_block(cfg, price, hedge_ask)`) posts nothing, rather than an
+  off-market quote far behind the touch.
+- **Report rungs truthfulness**: `build_report` falls back to reading distinct quoted prices from the
+  store's `orders` rows when `rungs` is empty/omitted, ensuring reports reflect real prices.
+- **Paper only, no signer, zero venue writes.** No changes to live signing or production defaults.
+- **No new external dependencies.**
+
+---
+
 # Constraints: Issue #333 — Full 4-hour live-books ladder trial (paper only, no signer)
 
 ## Quality & Tests

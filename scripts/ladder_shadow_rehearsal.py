@@ -402,6 +402,15 @@ def build_report(*, series: str, shape: str, rungs: tuple,
                 token_side.setdefault(str(r["token_id"]), str(r["side"]))
         except (sqlite3.Error, OSError, ValueError, KeyError, IndexError):
             token_side = {}  # fall back to token suffix below
+        rung_prices = []
+        try:
+            for r in conn.execute(
+                    "SELECT DISTINCT price FROM quotes WHERE condition_id IN (%s) AND reason LIKE 'ladder rung%%' ORDER BY price"
+                    % ",".join("?" * len(cids)), tuple(cids)).fetchall():
+                if r["price"] is not None:
+                    rung_prices.append(round(float(r["price"]), 4))
+        except (sqlite3.Error, OSError, ValueError, KeyError, IndexError):
+            rung_prices = []
         try:
             merge_legs = [dict(r) for r in conn.execute(
                 "SELECT * FROM shadow_merge_legs").fetchall()]
@@ -457,8 +466,13 @@ def build_report(*, series: str, shape: str, rungs: tuple,
     filled_shares = sum(filled_by_order.values())
     accounted = merged_leg_shares + exited_shares + settled_shares
 
+    quoted_rungs = list(rungs) if rungs else (
+        rung_prices if rung_prices else sorted({
+            round(float(o["price"]), 4) for o in orders if o.get("price") is not None
+        })
+    )
     return {
-        "issue": 324, "series": series, "shape": shape, "rungs": list(rungs),
+        "issue": 324, "series": series, "shape": shape, "rungs": quoted_rungs,
         "markets": len(tape_markets),
         "pair_ids": pair_ids,
         "placements": {
