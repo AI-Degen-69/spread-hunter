@@ -176,6 +176,13 @@ def run_trial(*, series_slugs: list[str], gamma_host: str,
         run_id=run_id or f"ladder-live-{int(time.time())}",
         cfg=cfg,
         sleep_fn=sleep_fn,
+        # This feed is empty ~90% of rotations BY CONSTRUCTION: it asks for
+        # markets inside a 30-second open window (open_window_sec) of a series
+        # whose markets open every 300 seconds, and it polls every 5s. So an
+        # empty refresh is the normal state here, not a dead feed -- declaring
+        # it stops a four-hour run writing one alarming stderr line per
+        # rotation that reads like an outage and buries a real one.
+        markets_fn_empty_is_routine=True,
     )
 
     if not session:

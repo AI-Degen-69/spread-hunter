@@ -442,6 +442,7 @@ def build_shadow_seam(
     paired_depth_arm: Optional[str] = None,
     paired_depth_cutoff_usd: Optional[float] = None,
     paired_admission_arm: Optional[str] = None,
+    markets_fn_empty_is_routine: bool = False,
 ):
     """The seam a shadow run rotates over: live reads, recorded writes.
 
@@ -670,6 +671,7 @@ def build_shadow_seam(
         emit_fn=_make_logging_emit(
             db_path, inventory_lookup=last_inventory_by_market.get,
             run_id=getattr(registry, "run_id", None)),
+        markets_fn_empty_is_routine=markets_fn_empty_is_routine,
     )
 
 
@@ -692,6 +694,7 @@ def run_shadow(
     paired_admission_arm: Optional[str] = None,
     starting_bankroll_usd: Optional[float] = None,
     market_state_fn: Optional[Callable] = None,
+    markets_fn_empty_is_routine: bool = False,
 ) -> ShadowResult:
     """One shadow session: rotate until `minutes` elapse, record, spend nothing.
 
@@ -832,6 +835,7 @@ def run_shadow(
         paired_depth_arm=paired_depth_arm,
         paired_depth_cutoff_usd=paired_depth_cutoff_usd,
         paired_admission_arm=paired_admission_arm,
+        markets_fn_empty_is_routine=markets_fn_empty_is_routine,
     )
     if paired_depth_arm is not None or paired_admission_arm is not None:
         from core_brain.paired_shadow import (
