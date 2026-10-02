@@ -84,13 +84,19 @@ export interface KpiReport {
   }
 }
 
+const FETCH_TIMEOUT_MS = 8000
+
 async function fetchJson<T>(path: string): Promise<T | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
-    const res = await fetch(path)
+    const res = await fetch(path, { signal: controller.signal })
     if (!res.ok) return null
     return (await res.json()) as T
   } catch {
     return null
+  } finally {
+    clearTimeout(timer)
   }
 }
 
