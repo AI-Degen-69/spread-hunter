@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ladder rungs now price off the live market</title>
+<style>
+:root{--ink:#f3efe6;--muted:#a89f8f;--bg:#12100c;--panel:#1b1813;--panel-2:#221e17;
+--line:#3a3327;--accent:#f0a830;--accent-ink:#241a05;--bad:#e2603f;--good:#6fbf8b;--shadow:0 20px 55px rgba(0,0,0,.35)}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);background:var(--bg);font:17px/1.65 "Segoe UI",Tahoma,sans-serif}
+main{max-width:1080px;margin:auto;padding:40px 20px 70px}
+h1{font-size:clamp(28px,4.5vw,44px);line-height:1.2;margin:0 0 14px}
+.lede{font-size:19px;color:var(--muted);max-width:70ch;margin:0}
+.tag{display:inline-block;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);border:1px solid var(--line);border-radius:999px;padding:.3rem .8rem;margin-bottom:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:26px;margin-top:24px;box-shadow:var(--shadow)}
+.panel h2{margin:0 0 .4rem;font-size:22px}
+.panel p.sub{margin:0 0 1rem;color:var(--muted);font-size:.95rem}
+.figure{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--panel-2)}
+.figure-label{font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:.8rem 1rem 0}
+.figure canvas{display:block;width:100%;height:auto}
+.figure-controls{display:flex;gap:1.2rem;align-items:center;padding:.9rem 1rem;border-top:1px solid var(--line);flex-wrap:wrap}
+.ctrl-btn{font-size:.8rem;padding:.45rem 1rem;border-radius:9px;border:1px solid var(--line);background:#fff;cursor:pointer;color:#111}
+.ctrl-btn.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+figure{margin:0}
+.slider-wrap{display:flex;align-items:center;gap:.6rem;font-size:.85rem;color:var(--muted)}
+.slider-wrap input{width:150px;accent-color:var(--accent)}
+.slider-wrap b{color:var(--ink);font-variant-numeric:tabular-nums;min-width:52px;display:inline-block}
+.figure-caption{font-size:.85rem;color:var(--muted);padding:.7rem 1rem .9rem;border-top:1px solid var(--line)}
+.verdict{font-size:1.05rem;margin-top:1rem;border-left:3px solid var(--accent);background:rgba(255,255,255,.04);padding:.9rem 1.1rem;border-radius:0 8px 8px 0}
+.verdict.none{border-left-color:var(--bad)}
+.nums{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px}
+.num{background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:18px}
+.num .k{font-size:2rem;font-weight:700;color:var(--accent);line-height:1.1}
+.num .t{font-size:.9rem;color:var(--muted);margin-top:6px}
+@media(max-width:760px){.nums{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <span class="tag">Ladder pricing &middot; change #343</span>
+  <h1>Our buy prices now follow the real market, not a guess</h1>
+  <p class="lede">Before, every price level in the ladder sat around 50&cent; no matter what the market was actually doing &mdash; so on a market trading at 68&cent; we were offering far below where anyone was buying. Now each level rests at the live best price and steps down one tick at a time. And if a market is too expensive to ever complete safely, we post nothing at all instead of posting a price that can only lose money.</p>
+
+  <section class="panel">
+    <h2>Drag the two prices and watch the ladder</h2>
+    <p class="sub">UP and DOWN are the two sides of the same bet. Each level is a buy offer on one side. Green = we can pair it safely under 99&cent;. Red = pairing it would lose money, so it is never posted.</p>
+    <figure class="figure">
+      <div class="figure-label">Live ladder &mdash; 4 levels per side</div>
+      <canvas id="ladder" width="960" height="440"></canvas>
+      <div class="figure-controls">
+        <div class="slider-wrap"><span>UP best bid</span><input id="upBid" type="range" min="2" max="95" value="68"><b id="upV">0.68</b></div>
+        <div class="slider-wrap"><span>DOWN best bid</span><input id="dnBid" type="range" min="2" max="95" value="28"><b id="dnV">0.28</b></div>
+        <button class="ctrl-btn" id="reset">Reset</button>
+        <button class="ctrl-btn active" id="toggle">Show: what it used to do</button>
+      </div>
+      <figcaption class="figure-caption">Watch what to look for: the top level on each side always touches the live price; the rest step down evenly; and when both sides get too expensive together, the whole ladder goes quiet.</figcaption>
+    </figure>
+    <div class="verdict" id="verdict"></div>
+  </section>
+<section class="panel">
+    <h2>What this means for you</h2>
+    <div class="nums">
+      <div class="num"><div class="k">Live</div><div class="t">Levels price off the real market, so a lopsided market gets a lopsided ladder instead of a flat one.</div></div>
+      <div class="num"><div class="k">0</div><div class="t">Quotes are placed on a market that can never complete under the 99&cent; cap. Nothing posted means nothing can be lost.</div></div>
+      <div class="num"><div class="k">Same reports</div><div class="t">The trial write-up now shows the prices we actually quoted, recovered from the recorded orders.</div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>See it in the real thing</h2>
+    <p class="sub">Nothing here spends money. Start the stack with the menu script, then open the dashboard at <b>http://127.0.0.1:8799</b> and run the 5-minute rehearsal &mdash; the report it drops in <b>reports/</b> should show quoted prices sitting at the touch of the market rather than in the middle of it.</p>
+  </section>
+</main>
+<script>
+const dpr=window.devicePixelRatio||1;
+function initCanvas(id){const c=document.getElementById(id);const x=c.getContext('2d');
+const w=c.width,h=c.height;c.width=w*dpr;c.height=h*dpr;c.style.width='100%';x.scale(dpr,dpr);
+return{ctx:x,w,h};}
+const g=initCanvas('ladder');const ctx=g.ctx,w=g.w,h=g.h;
+const GOOD='#6fbf8b', BAD='#e2603f', MUTED='#a89f8f', INK='#f3efe6';
+const TICK=0.01, RUNGS=4, CAP=0.99;
+let legacy=false;
+const upEl=document.getElementById('upBid'),dnEl=document.getElementById('dnBid');
+function levels(side,bid,hedge){
+  const out=[];
+  for(let i=0;i<RUNGS;i++){
+    const price=legacy?+(0.50-(i+1)*TICK).toFixed(4):+(bid-i*TICK).toFixed(4);
+    if(price<=0||price>=1) continue;
+    out.push({price:price,ok:(price+hedge)<=CAP});
+  }
+  return out;
+}
+function draw(){
+  const up=upEl.value/100, dn=dnEl.value/100;
+  ctx.clearRect(0,0,w,h);
+  const padL=90,padR=40,top=64,rowH=44,colW=(w-padL-padR)/2;
+  ctx.strokeStyle='rgba(240,168,48,.35)';ctx.setLineDash([5,5]);ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(padL,top-22);ctx.lineTo(w-padR,top-22);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=MUTED;ctx.font='12px "Segoe UI",sans-serif';ctx.textAlign='left';
+  ctx.fillText('a pair must cost less than 99\u00A2 to be safe',padL,top-30);
+  const sides=[['UP',up,padL,dn+0.02],['DOWN',dn,padL+colW,up+0.02]];
+  sides.forEach(function(s){
+    const name=s[0],bid=s[1],x0=s[2],hedge=s[3];
+    ctx.fillStyle=INK;ctx.font='600 15px "Segoe UI",sans-serif';ctx.textAlign='left';
+    ctx.fillText(name+'  \u2014  market bid '+bid.toFixed(2),x0,top+10);
+    const L=levels(name,bid,hedge);
+    L.forEach(function(r,i){
+      const y=top+30+i*rowH, barW=(colW-24)*Math.max(0,Math.min(1,r.price));
+      ctx.fillStyle='rgba(255,255,255,.05)';ctx.fillRect(x0,y,colW-24,rowH-10);
+      ctx.fillStyle=r.ok?'rgba(111,191,139,.28)':'rgba(226,96,63,.22)';ctx.fillRect(x0,y,barW,rowH-10);
+      ctx.strokeStyle=r.ok?GOOD:BAD;ctx.lineWidth=2;ctx.strokeRect(x0,y,barW,rowH-10);
+      ctx.fillStyle=r.ok?GOOD:BAD;ctx.font='700 13px "Segoe UI",sans-serif';
+      ctx.fillText(r.price.toFixed(2),x0+8,y+20);
+      const cost=r.price+hedge;
+      ctx.fillStyle=MUTED;ctx.font='12px "Segoe UI",sans-serif';ctx.textAlign='right';
+      ctx.fillText('pair '+cost.toFixed(2)+(r.ok?'  keep':'  skip'),x0+colW-32,y+20);
+      ctx.textAlign='left';
+    });
+    if(!L.length){ctx.fillStyle=MUTED;ctx.font='13px "Segoe UI",sans-serif';
+      ctx.fillText('no level left inside the valid range',x0,top+50);}
+  });
+  const all=levels('UP',up,dn+0.02).concat(levels('DOWN',dn,up+0.02));
+  const posted=all.filter(function(r){return r.ok;}).length;
+  const v=document.getElementById('verdict');
+  if(!posted){v.className='verdict none';
+    v.textContent='Nothing posted. On this market no level can be paired under 99\u00A2, so the engine stays quiet rather than offering a price that is a guaranteed loss.';}
+  else{v.className='verdict';
+    v.textContent=posted+' level'+(posted>1?'s':'')+' posted; the rest skipped because pairing them would cost 99\u00A2 or more.'+
+      (legacy?' This is the old behaviour: levels ignore the market and sit around 50\u00A2.':'');}
+}
+function sync(){
+  document.getElementById('upV').textContent=(upEl.value/100).toFixed(2);
+  document.getElementById('dnV').textContent=(dnEl.value/100).toFixed(2);
+  draw();
+}
+upEl.addEventListener('input',sync);dnEl.addEventListener('input',sync);
+document.getElementById('reset').addEventListener('click',function(){upEl.value=68;dnEl.value=28;sync();});
+const tg=document.getElementById('toggle');
+tg.addEventListener('click',function(){
+  legacy=!legacy;
+  tg.textContent=legacy?'Show: new behaviour':'Show: what it used to do';
+  tg.classList.toggle('active',!legacy);
+  draw();
+});
+sync();
+</script>
+</body>
+</html>
