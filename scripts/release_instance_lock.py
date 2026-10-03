@@ -20,12 +20,20 @@ EXIT_OK = 0
 EXIT_REFUSED = 2
 EXIT_ERROR = 1
 
+class LockRefusal(SystemExit):
+    """Fail-closed refusal that keeps its reason for the JSON report."""
+
+    def __init__(self, code: int, message: str):
+        super().__init__(code)
+        self.message = message
+
+
 def _refuse(msg: str) -> "NoReturn":
-    raise SystemExit(EXIT_REFUSED)
+    raise LockRefusal(EXIT_REFUSED, msg)
 
 
 def _fail(msg: str) -> "NoReturn":
-    raise SystemExit(EXIT_ERROR)
+    raise LockRefusal(EXIT_ERROR, msg)
 
 
 def _guard_production(db: Path) -> None:
@@ -76,11 +84,13 @@ def release_if_holder(
     db = Path(db_path)
     try:
         with sqlite3.connect(db) as conn:
-            conn.execute(
+            cur = conn.execute(
                 "DELETE FROM instance_lock WHERE role = ? AND holder = ?",
                 (role, row["holder"]),
             )
             conn.commit()
+            if cur.rowcount == 0:
+                return False, row
     except sqlite3.Error as exc:
         _refuse(f"Release failed: {exc}")
     return True, row
@@ -97,6 +107,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.holder_pid is None:
         try:
             row = read_lock(args.db, args.role)
+        except LockRefusal as exc:
+            print(json.dumps({"holder": None, "age_ms": None,
+                              "error": exc.message}))
+            return int(exc.code)
         except SystemExit as exc:
             code = int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
             print(json.dumps({"holder": None, "age_ms": None}))
@@ -109,10 +123,14 @@ def main(argv: list[str] | None = None) -> int:
         if row is not None and not released:
             _refuse(f"Holder {row['holder']} does not match PID "
                       f"{args.holder_pid}; refusing.")
+    except LockRefusal as exc:
+        print(json.dumps({"released": False, "holder": None,
+                          "age_ms": None, "error": exc.message}))
+        return int(exc.code)
     except SystemExit as exc:
         code = int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
         print(json.dumps({"released": False, "holder": None,
-                          "age_ms": None, "error": str(exc)}))
+                          "age_ms": None}))
         return code
     print(json.dumps({"released": released,
                       "holder": row["holder"] if row else None,

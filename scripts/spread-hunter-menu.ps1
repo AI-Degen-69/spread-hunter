@@ -1213,7 +1213,7 @@ function Resume-ShadowRun {
             return $false
         }
         Push-Location $ProjectPath
-        try { $lockRel = & python -m scripts.release_instance_lock --db $script:ShadowDbPath --role fleet --holder-pid $holderPid } finally { Pop-Location }
+        try { $null = & python -m scripts.release_instance_lock --db $script:ShadowDbPath --role fleet --holder-pid $holderPid } finally { Pop-Location }
         if ($LASTEXITCODE -ne 0) {
             Lsh-Fail "Could not release the dead fleet lock (holder $($lockRow.holder)); resume aborted - inspect the store, then retry."
             return $false

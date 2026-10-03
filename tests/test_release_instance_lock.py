@@ -98,6 +98,49 @@ def test_mismatched_holder_cli_refuses_but_library_reports(tmp_path):
     assert row is not None
 
 
+def test_lost_race_reports_not_released(tmp_path, monkeypatch):
+    import scripts.release_instance_lock as helper
+    db = tmp_path / "shadow.db"
+    _seed(db)
+    real_connect = sqlite3.connect
+
+    class _Conn:
+        def __init__(self, inner):
+            object.__setattr__(self, "_inner", inner)
+
+        def __setattr__(self, name, value):
+            setattr(self._inner, name, value)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._inner.__exit__(*args)
+
+        def execute(self, sql, params=()):
+            if sql.strip().upper().startswith("DELETE"):
+                return type("Cur", (), {"rowcount": 0})()
+            return self._inner.execute(sql, params)
+
+        def commit(self):
+            self._inner.commit()
+
+    monkeypatch.setattr(
+        helper.sqlite3, "connect",
+        lambda *a, **k: _Conn(real_connect(*a, **k)))
+    released, row = helper.release_if_holder(db, "fleet", 15548)
+    assert released is False
+    assert row is not None
+
+
+def test_cli_refusal_carries_reason(tmp_path):
+    db = tmp_path / "shadow.db"
+    _seed(db)
+    proc = _cli(db, "--role", "fleet", "--holder-pid", "99999")
+    assert proc.returncode == EXIT_REFUSED
+    assert "99999" in json.loads(proc.stdout)["error"]
+
+
 def test_missing_file_is_an_error(tmp_path):
     with pytest.raises(SystemExit) as exc:
         release_if_holder(tmp_path / "nope.db", "fleet", 15548)
