@@ -1190,6 +1190,36 @@ function Resume-ShadowRun {
         Lsh-Fail "An unrecorded rehearsal process for $($script:ShadowRunId) is still alive (PID $($strays[0].ProcessId)). Resume aborted - stop it manually (stop-shadow), then retry."
         return $false
     }
+    # The killed loop's `fleet` row survives it (#352): a loop stopped by
+    # kill never runs the lock's cleanup, and a resume inside the 5-minute
+    # stale window dies with InstanceInUse. No process is alive past this
+    # point (verified above), so release the dead holder's row; fail closed
+    # on anything unexpected.
+    Push-Location $ProjectPath
+    try { $lockShow = & python -m scripts.release_instance_lock --db $script:ShadowDbPath --role fleet } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) {
+        Lsh-Fail "Could not read the fleet lock on $($db.Name); resume aborted - inspect the store, then retry."
+        return $false
+    }
+    $lockRow = $lockShow | ConvertFrom-Json
+    if ($lockRow.holder) {
+        $holderPid = (($lockRow.holder -split ':')[0]) -as [int]
+        if ($null -eq $holderPid) {
+            Lsh-Fail "Unparseable fleet lock holder ($($lockRow.holder)); resume aborted - inspect the store, then retry."
+            return $false
+        }
+        if ($null -ne (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) {
+            Lsh-Fail "Fleet lock holder PID $holderPid is still alive; resume aborted - stop it manually (stop-shadow), then retry."
+            return $false
+        }
+        Push-Location $ProjectPath
+        try { $lockRel = & python -m scripts.release_instance_lock --db $script:ShadowDbPath --role fleet --holder-pid $holderPid } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) {
+            Lsh-Fail "Could not release the dead fleet lock (holder $($lockRow.holder)); resume aborted - inspect the store, then retry."
+            return $false
+        }
+        Lsh-Ok "Released the previous loop's fleet lock (holder $($lockRow.holder))."
+    }
     $stamp = Get-Date -Format "dd-MM_HH-mm"
     $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
     $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
