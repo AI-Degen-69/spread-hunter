@@ -190,6 +190,11 @@ def test_rewritten_feed_file_picked_up_immediately(tmp_path):
         "category": "Macro", "series_title": "", "market_group": "",
         "tags": [], "volume_24h": 1.0,
     }])
+    feed_file = tmp_path / "runtime" / "markets.json"
+    new_mtime = feed_file.stat().st_mtime + 5.0
+    import os
+    os.utime(feed_file, (new_mtime, new_mtime))
+
     meta2 = mm.resolve_market_meta(CID_CRYPTO, [], [], root=tmp_path)
     assert meta2["category"] == "Macro"
 
