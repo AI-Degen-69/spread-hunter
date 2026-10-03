@@ -16,7 +16,7 @@
 | 3 | 2 `cycle_intent` rows, both cycle 1, ~0.5 s apart | `SELECT cycle, count(*), max(ts)-min(ts) FROM cycle_intent GROUP BY cycle;` |
 | 4 | 0 rows in `fills` | `SELECT count(*) FROM fills;` |
 | 5 | Queue ahead 2,524 / 5,092 / 38,706 / 6,113 vs sizes 5–6 (multiples ≈420x–7741x) | `SELECT queue_ahead, size, queue_ahead/size FROM quotes;` |
-| 6 | Both pairs cost 0.95 combined, inside the 0.99 cap | `SELECT pair_id, ... FROM orders` (pair cost at post) vs `max_pair_cost = 0.99` |
+| 6 | Both pairs cost 0.95 combined, inside the 0.99 cap | `SELECT pair_id, ROUND(SUM(price),4), COUNT(*) FROM orders GROUP BY pair_id;` (both rows read 0.95 over 2 legs) and `SELECT DISTINCT max_pair_cost_at_post FROM orders;` (cap at post) vs `max_pair_cost = 0.99` |
 | 7 | Sibling store: 23,844 orders, 178 filled, 555 cycles (engine fills fine on long runs) | Same queries on a copy of `01_shadow_12-09_00-58.db` |
 
 ## Why zero fills is expected, not a fill-model defect

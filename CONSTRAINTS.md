@@ -23,6 +23,14 @@ Branch: i351/diagnose-zero-fill-01-shadow-rehearsal-and-improve | Issue: #351
   supplies no `queue_minutes_fn`). Documented as proposed-not-implemented, never enforced here.
 - **`data/orders.db` is never touched.** No writes to and no deletion of any `*01_shadow*` store.
   Operator verification works on scratch copies only.
+- **Approved exception (operator go-ahead 2026-10-03, Station III-B):** the
+  `identity_allowed` group-label veto in `scoring/selector.py` is narrowed to
+  fragment-shaped labels only (spread/handicap lines, game/map/round numbers,
+  over/under and totals numbers, numeric price bands). Bare country, candidate,
+  party, team, and date labels pass to the unchanged volume/depth/spread/movement/
+  horizon gates. Live-selection impact: the shared ranker admits more named main
+  lines (measured 27 → 45 on a frozen 71-market snapshot); true fragments stay refused.
+  Everything else in `scoring/` stays out of scope.
 - **Language**: never describe shadow fills as venue performance. Evidence from the absent
   stores is labeled "reported by ticket; not reproduced in this checkout".
 

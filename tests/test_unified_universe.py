@@ -876,6 +876,7 @@ def test_a_submarket_refusal_names_the_label_that_refused_it():
     "Donald Trump", "Democratic Party", "Elise Stefanik",
     "New York Knicks", "Chicago White Sox",
     "December 31, 2027", "June 30, 2027", "October 31",
+    "2027-12-31", "2026-10-03",
 ])
 def test_a_bare_name_or_date_group_label_is_not_a_submarket(label):
     # Arrange - Oct 2026: the venue groups main lines under country,
@@ -897,6 +898,7 @@ def test_a_bare_name_or_date_group_label_is_not_a_submarket(label):
     "Memphis Total Rushing Yards: O/U 150.5",
     "74,000", "<76,000", "65-89", "90-114",
     "\u2191 88,000", "\u2193 2,100", "\u2193 80,000",
+    "Over 2.5", "Under 2.5", "Over 125.5",
 ])
 def test_a_line_shaped_group_label_stays_refused(label):
     # Arrange - real fragments measured on the Oct 2026 rank. Game/Map/Round
