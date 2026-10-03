@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import datetime as _datetime
 import re
+import statistics
 from pathlib import Path
 from typing import Any
 
 from core_brain.config import MakerConfig, load as load_cfg
 from core_brain.kpi import report as kpi_report
+from core_brain.shadow_fills import queue_multiple
 from core_brain.order_registry import OrderRegistry
 from core_brain.runtime_paths import LIVE_ROOT
 from statistical_validation_run.artifacts import (
@@ -28,6 +30,67 @@ _VALID_MODES = {"shadow", "live"}
 # statistics store that spilled into the repo root, by the same mechanism: a
 # writer deciding its destination from ambient state.
 DEFAULT_REPORT_DIR = LIVE_ROOT / "reports"
+
+
+SINGLE_CYCLE_LINE = (
+    "Only one decision cycle observed; resting orders received no settlement pass "
+    "after posting, so zero fills is expected and is not evidence of a fill-model defect."
+)
+
+
+def _queue_depth_section(registry: OrderRegistry, run_id: str) -> tuple[str, dict[str, Any]]:
+    """Queue-multiple stats plus the single-cycle warning for one shadow run.
+
+    `queue_ahead` and `size` come off the quote row; when the quote carries no
+    size, fall back to the order's `original_size` joined by `local_id`
+    (`orders.id`). `cycle_intent` is filtered by run -- shadow stores are
+    per-run, but a shared store must not mix another run's cycles in.
+    Rendered unconditionally: a zero-fill run has no closes, so gating this on
+    the sample-size gate would hide exactly the signal that explains it.
+    """
+    quotes = [row for row in registry.get_all_quotes() if row.get("run_id") == run_id]
+    orders = [row for row in registry.get_all_orders() if row.get("run_id") == run_id]
+    size_by_id = {
+        str(o.get("id")): o.get("original_size")
+        for o in orders if o.get("id") is not None
+    }
+    measured: list[float] = []
+    for q in quotes:
+        size = q.get("size")
+        if size is None:
+            local = q.get("local_id")
+            size = size_by_id.get(str(local)) if local is not None else None
+        multiple = queue_multiple(q.get("queue_ahead"), size)
+        if multiple is not None:
+            measured.append(multiple)
+    try:
+        with registry._conn() as conn:
+            cycle_rows = conn.execute(
+                "SELECT DISTINCT cycle FROM cycle_intent WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        n_cycles: int | None = len(cycle_rows)
+    except Exception:
+        n_cycles = None
+    median = statistics.median(measured) if measured else None
+    maximum = max(measured) if measured else None
+    lines = [
+        "## Queue depth (shadow)",
+        "",
+        f"- **Measured quotes**: `{len(measured)}` (unmeasured: `{len(quotes) - len(measured)}`)",
+        f"- **Median queue multiple**: `{median:.1f}x`" if median is not None else "- **Median queue multiple**: `n/a`",
+        f"- **Max queue multiple**: `{maximum:.1f}x`" if maximum is not None else "- **Max queue multiple**: `n/a`",
+    ]
+    if n_cycles is not None and n_cycles < 2:
+        lines += ["", SINGLE_CYCLE_LINE]
+    stats = {
+        "measured_quotes": len(measured),
+        "unmeasured_quotes": len(quotes) - len(measured),
+        "median_queue_multiple": median,
+        "max_queue_multiple": maximum,
+        "distinct_cycles": n_cycles,
+    }
+    return "\n".join(lines) + "\n", stats
 
 
 def _disclaimer(mode: str) -> str:
@@ -105,6 +168,8 @@ def write_statistics_report(
     )
     text = text.replace("Rehearsal, not results", "rehearsal, not results")
     text = text.replace("Observational, read-only, live caveats", "observational, read-only, live caveats")
+    queue_section, queue_stats = _queue_depth_section(registry, run_id)
+    text = text.rstrip("\n") + "\n\n" + queue_section
     report_path.write_text(text, encoding="utf-8")
     return {
         "db_path": str(db),
@@ -115,4 +180,5 @@ def write_statistics_report(
         "gate_rows": gate_rows,
         "fills": len(fills),
         "quotes": len(quotes),
+        **queue_stats,
     }
