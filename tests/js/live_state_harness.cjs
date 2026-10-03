@@ -33,8 +33,8 @@ class FakeEl {
     this.tagName = tag;
     this.id = '';
     this._html = '';
+    this._text = '';
     this.className = '';
-    this.textContent = '';
     this.title = '';
     this.style = {};
     this.dataset = {};
@@ -44,6 +44,10 @@ class FakeEl {
   }
   set innerHTML(v) { this._html = String(v); }
   get innerHTML() { return this._html; }
+  // Like a real DOM node, assigning textContent replaces the children, so a
+  // later innerHTML read serializes the text (Issue #348 never-read case).
+  set textContent(v) { this._text = String(v); this._html = String(v); }
+  get textContent() { return this._text; }
   addEventListener() {}
   querySelector(sel) {
     if (sel === '.stale-age') {
@@ -320,9 +324,9 @@ function marketScanVerdicts() {
   const down = { services: { filter: { running: false } } };
   const fresh = { funnel: { snapshot_age: 120 } };
   const stale = { funnel: { snapshot_age: 4000 } };
-  const call = (st, kpi) => {
-    const v = app.marketScanState(st, kpi);
-    return { state: v.state, label: v.label };
+  const call = (st, kpi, opts) => {
+    const v = app.marketScanState(st, kpi, opts);
+    return { state: v.state, label: v.label, title: v.title };
   };
   return {
     upFresh: call(up, fresh),
@@ -331,6 +335,70 @@ function marketScanVerdicts() {
     processDead: call(down, fresh),
     noStatus: call(null, fresh),
     registryUnreadable: call({ registry_unreadable: true, services: { filter: { running: true } } }, fresh),
+    // Issue #348: a failed KPI read is not a missing snapshot file.
+    kpiFailedNoData: call(up, null, { kpiReadFailed: true }),
+    heldFresh: call(up, fresh, { kpiReadFailed: true, ageOffsetSec: 60 }),
+    heldStale: call(up, fresh, { kpiReadFailed: true, ageOffsetSec: 2000 }),
+  };
+}
+
+/* Pure held-read resolver outcomes, with a controllable clock. */
+function heldResolveVerdicts() {
+  const now = 1_000_000;
+  app.setBackendContact(true, now);
+  const cur = { a: 1 };
+  const last = { a: 2 };
+  const ser = (r) => ({ payload: r.payload, ageOffsetSec: r.ageOffsetSec, readFailed: r.readFailed });
+  const currentWins = ser(app.resolveHeldRead(cur, last, now - 2000, now, app.backendStale));
+  const held = ser(app.resolveHeldRead(null, last, now - 8000, now, app.backendStale));
+  const neverRead = ser(app.resolveHeldRead(null, null, null, now, app.backendStale));
+  // Two consecutive failures trip the watchdog: the hold must drop.
+  app.setBackendContact(false, now);
+  app.setBackendContact(false, now);
+  const staleDropsHold = ser(app.resolveHeldRead(null, last, now - 8000, now, app.backendStale));
+  return { currentWins, held, neverRead, staleDropsHold };
+}
+
+/* Issue #348: a failed scan-state read holds the last verdict and ages it. */
+function engineHoldVerdicts() {
+  const pillEl = new FakeEl('span');
+  pillEl.id = 'scan-state-pill';
+  const stateEl = new FakeEl('span');
+  stateEl.id = 'scan-engine-state';
+  const elsewhereEl = new FakeEl('span');
+  elsewhereEl.id = 'scan-engine-elsewhere';
+  elements.set('scan-state-pill', pillEl);
+  elements.set('scan-engine-state', stateEl);
+  elements.set('scan-engine-elsewhere', elsewhereEl);
+
+  const render = (scanState, opts) => {
+    app.renderScanStatePill(scanState, opts);
+    return {
+      pillClass: pillEl.className,
+      stateHtml: stateEl.innerHTML,
+      pillTitle: pillEl.title,
+    };
+  };
+
+  const fresh = {
+    scan_state: 'SCANNING',
+    seconds_since_heartbeat: 2.5,
+    heartbeat_source: {
+      kind: 'shadow',
+      run_id: 'trial-01',
+      db_path: 'data/trial_01.db',
+      file: 'runtime/shadow_run_trial-01.json',
+      pid: 1234,
+    },
+    stall_reason: null,
+    other_live_runs: [],
+  };
+
+  return {
+    fresh: render(fresh),
+    held: render(fresh, { ageOffsetSec: 8, readFailed: true }),
+    heldPastThreshold: render(fresh, { ageOffsetSec: 200, readFailed: true }),
+    neverRead: render(null),
   };
 }
 
@@ -381,6 +449,8 @@ let out;
 if (script === 'dbmode') out = dbModeVerdicts();
 else if (script === 'trialbanner') out = trialBannerVerdicts();
 else if (script === 'marketscan') out = marketScanVerdicts();
+else if (script === 'heldresolve') out = heldResolveVerdicts();
+else if (script === 'enginehold') out = engineHoldVerdicts();
 else if (script === 'scanpill') out = scanPillVerdicts();
 else if (script === 'enginepill') out = enginePillVerdicts();
 else if (script === 'pills') out = pillVerdicts();
@@ -394,6 +464,8 @@ else out = {
   enginepill: enginePillVerdicts(),
   guardrailHud: guardrailHudVerdict(),
   marketscan: marketScanVerdicts(),
+  heldresolve: heldResolveVerdicts(),
+  enginehold: engineHoldVerdicts(),
   trialbanner: trialBannerVerdicts(),
   dbmode: dbModeVerdicts(),
 };
