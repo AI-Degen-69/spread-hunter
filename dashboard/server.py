@@ -972,6 +972,15 @@ def _recent_shadow_runs(active_db_path: str | None) -> list[dict]:
     )
 
 
+def _recent_shadow_run(active_db_path: str | None) -> dict | None:
+    """`read_shadow_run` on the shared snapshot cache, on its own longer TTL."""
+    return _cached_snapshot(
+        ("shadow-run", active_db_path),
+        lambda: read_shadow_run(active_db_path),
+        ttl=SHADOW_RUN_LIST_TTL_S,
+    )
+
+
 def _resolve_shadow_ring_path() -> Path | None:
     """The cycle ring a live shadow rehearsal is writing, or None.
 
@@ -987,7 +996,7 @@ def _resolve_shadow_ring_path() -> Path | None:
     or a store this rehearsal is not the one writing.
     """
     try:
-        shadow = read_shadow_run(str(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
+        shadow = _recent_shadow_run(str(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
     except Exception:
         return None
     if not shadow or not shadow.get("running"):
@@ -1381,7 +1390,7 @@ def get_system_status() -> dict:
         "db_is_production": db_identity["is_production"],
         # The rehearsal writing this store, when there is one. None otherwise:
         # the header shows no stopwatch rather than another run's clock.
-        "shadow_run": read_shadow_run(db_identity["path"]),
+        "shadow_run": _recent_shadow_run(db_identity["path"]),
         # The OTHER rehearsals on this machine, including live ones writing a
         # store this page is not pointed at. Named, never read into the numbers
         # above: without them a dead run on a stale store reads as "the engine
@@ -2398,7 +2407,7 @@ def get_scan_state():
 
     active_db = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     try:
-        shadow = read_shadow_run(active_db, now=now)
+        shadow = _recent_shadow_run(active_db)
     except Exception:
         shadow = None
 

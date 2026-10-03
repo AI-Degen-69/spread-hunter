@@ -203,3 +203,36 @@ def test_a_refresh_that_never_starts_does_not_freeze_the_key(monkeypatch):
     builder = server._snapshot_builders[("probe",)]
     assert builder.acquire(blocking=False), "the builder lock was left held"
     builder.release()
+
+
+def test_system_status_inside_ttl_performs_no_heartbeat_scan(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE", tmp_path / "shadow.db")
+    # First call primes the cache
+    server.get_system_status()
+
+    def boom():
+        raise RuntimeError("Should not scan heartbeat files on cached status poll")
+
+    monkeypatch.setattr(server, "_shadow_heartbeat_candidates", boom)
+    # Second call within TTL must not call _shadow_heartbeat_candidates
+    status = server.get_system_status()
+    assert "shadow_run" in status
+
+
+def test_system_status_and_scan_state_share_shadow_run_cache(monkeypatch, tmp_path):
+    calls: list[str] = []
+    real_read = server.read_shadow_run
+
+    def counting_read(active_db, now=None):
+        calls.append(str(active_db))
+        return {"running": True, "run_id": "test-run", "db_path": str(active_db)}
+
+    monkeypatch.setattr(server, "read_shadow_run", counting_read)
+    monkeypatch.setattr(server, "_ACTIVE_DB_OVERRIDE", tmp_path / "shadow.db")
+
+    server.get_system_status()
+    server.get_scan_state()
+    server.get_system_status()
+
+    assert len(calls) == 1
+
