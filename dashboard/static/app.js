@@ -6195,7 +6195,7 @@ async function pollStatus() {
     const kpiHeld = resolveHeldRead(kpi, lastKpi, lastKpiAtMs, pollNowMs, backendStale);
     const statusHeld = resolveHeldRead(status, lastStatus, lastStatusAtMs, pollNowMs, backendStale);
     renderMarketScanPill(statusHeld.payload, kpiHeld.payload,
-      { kpiReadFailed: !kpi, statusReadFailed: !status, ageOffsetSec: kpiHeld.ageOffsetSec });
+      { kpiReadFailed: !kpi, ageOffsetSec: kpiHeld.ageOffsetSec });
     renderScanStatePill(engineHeld.payload,
       { ageOffsetSec: engineHeld.ageOffsetSec, readFailed: engineHeld.readFailed });
 
