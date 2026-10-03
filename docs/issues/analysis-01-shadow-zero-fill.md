@@ -1,9 +1,11 @@
 # Analysis: zero-fill `01_shadow` rehearsal (Issue #351)
 
-> Evidence status: **reported by ticket; not reproduced in this checkout.**
-> `data/01_shadow.db` and `data/01_shadow_12-09_00-58.db` are absent here, so every
-> number below is the ticket's report plus the read-only queries an operator can use
-> to confirm each one. Nothing here was measured from the missing stores.
+> Evidence status (revised 2026-10-03, Station III-B): the stores **were** measured —
+> on read-only scratch copies of the live folder (`data/01_shadow.db`: 4 orders / 0 fills /
+> 0 closes / 2 cycle-1 intents — ticket numbers verified exactly, queues
+> 2524/5092/38706/6113 at sizes 6/6/5/5). Everything below scoped to `01_shadow.db`
+> is measured fact. The sibling store (`01_shadow_12-09_00-58.db`) tells a different
+> story — see "Addendum: the 3-day stall" — and must not be cited as healthy proof.
 
 ## Evidence (ticket report)
 
@@ -63,6 +65,41 @@ It is a separate measurement and is not combined with this ticket's 4-order stor
 - **Future isolated path** (no shared-ranker touch): a ranker run with `--out-dir` and an explicit
   measurement callback → `shadow_run --markets-path` reading that output → a separate shadow DB.
   See `docs/superpowers/specs/2026-08-25-maker-queue-selection-bar.md`.
+
+## Addendum (2026-10-03): the 3-day stall on the sibling store — NOT zero-fill
+
+The operator corrected the framing: the sibling run did not end at zero. Measured on a
+scratch copy of `data/01_shadow_12-09_00-58.db`: **112 closes = 87 wins + 25 losses**
+(74 `shadow_merge`, 35 `single_buy_exit`, 3 `shadow_settlement`, ~85 markets) — then **no
+fill and no close since 2026-09-30 11:03 UTC**, i.e. a 3-day stall, while the loop itself
+is alive (`cycle_intent` cycling today, 32 distinct cycles).
+
+Flow vs stall, measured:
+
+| window | quotes | quoted mkts/day | fills/day | avg queue multiple |
+|---|---|---|---|---|
+| Sep 24–26 (flow) | ~700–1000/day | 46–54 | 11–12 | — |
+| Sep 27–30 (fade) | ~500–1850/day | 29–38 | 2–6 | ~2453x |
+| Oct 1–3 (stall) | ~580–920/day | 18–24 | **0** | ~3270x |
+
+At ~0.3% historical fill rate, 0 fills on ~2,270 stalled-window quotes has p ≈ 0.001 —
+this is a real stall, not variance. Orders still post (580 today); they just never fill.
+
+**Named root cause (two contributors, one change cluster):**
+
+1. **Universe narrowed by the Sep 27–Oct 1 change cluster.** The Sep 29 `#312`
+   market-universe-empty fixes, the Sep 30 13:49 UTC **D12 submarket-admission trial**
+   (`1c228e8`, #319), and the Oct 1 ladder trials coincide with the fade-to-stall.
+   Today's fresh `runtime/pipeline.json`: 188 spread-universe → **5 eligible / 5 picked**,
+   top rejection causes `carries a submarket group label` (88), `not primary`
+   Moneyline/Outright or Macro/Politics (27), blocked submarket keywords (12).
+2. **Survivors sit deeper.** Average queue multiple on posted quotes rose ~2453x → ~3270x,
+   so per-quote fill probability collapsed alongside the ticket count.
+
+**Deliberately not changed here:** disabling or widening the D12 admission gates would
+kill or distort an approved, pre-registered experiment (#319) — that call is the
+operator's (see the open question below), not a drive-by fix. No lifecycle, ranker, or
+fill-rule code was touched for this addendum.
 
 ## How to verify
 

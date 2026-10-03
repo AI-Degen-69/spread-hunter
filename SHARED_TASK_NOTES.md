@@ -52,3 +52,12 @@
   fill-model defect.
 - **Status:** Implemented and verified — `python -m pytest -q tests/test_shadow_fills.py
   tests/test_maker_queue_bar.py tests/test_statistics_report.py` → 48 passed (agent-run).
+
+## Issue #351 III-B — stall correction (2026-10-03)
+
+- **Correction:** the 4-order/0-fill diagnosis holds for `data/01_shadow.db` only (re-verified
+  exactly on a scratch copy). The sibling store holds 112 closes (87W/25L, ~85 markets), not zero.
+- **Stall:** no fill/close on the sibling since 2026-09-30 11:03 UTC while the loop cycles.
+  Named cause: universe narrowed by the Sep 27–Oct 1 cluster (D12 admission trial `1c228e8`
+  top contributor — pipeline picks 5/188 today) + deeper queues on survivors (2453x → 3270x).
+- **No code changed:** D12 gates left intact pending operator call (approved experiment).
