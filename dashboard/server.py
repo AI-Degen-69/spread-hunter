@@ -746,8 +746,14 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     Evaluates all matching candidates, preferring running runs (running=True)
     over ended ones, then the freshest heartbeat.
     """
+    now = time.time() if now is None else now
     matched: list[dict] = []
     for path in _shadow_heartbeat_candidates():
+        try:
+            if now - path.stat().st_mtime > SHADOW_RUN_LIST_WINDOW_S:
+                continue
+        except OSError:
+            continue
         run = _read_shadow_heartbeat_file(path, active_db_path, now)
         if run is not None:
             matched.append(run)
@@ -768,6 +774,11 @@ def read_other_live_shadow_runs(active_db_path: str | None, now: float | None = 
     seen_runs: set[str] = set()
 
     for path in _shadow_heartbeat_candidates():
+        try:
+            if now - path.stat().st_mtime > SHADOW_RUN_LIST_WINDOW_S:
+                continue
+        except OSError:
+            continue
         run = _read_shadow_heartbeat_file(path, active_db_path, now, match_db=False)
         if run is None or not run.get("running"):
             continue
@@ -977,6 +988,15 @@ def _recent_shadow_run(active_db_path: str | None) -> dict | None:
     return _cached_snapshot(
         ("shadow-run", active_db_path),
         lambda: read_shadow_run(active_db_path),
+        ttl=SHADOW_RUN_LIST_TTL_S,
+    )
+
+
+def _recent_other_live_shadow_runs(active_db_path: str | None) -> list[dict]:
+    """`read_other_live_shadow_runs` on the shared snapshot cache."""
+    return _cached_snapshot(
+        ("other-live-shadow-runs", active_db_path),
+        lambda: read_other_live_shadow_runs(active_db_path),
         ttl=SHADOW_RUN_LIST_TTL_S,
     )
 
@@ -2520,7 +2540,7 @@ def get_scan_state():
                     stall_reason = "no_heartbeat"
 
     try:
-        other_live_runs = read_other_live_shadow_runs(active_db, now=now)
+        other_live_runs = _recent_other_live_shadow_runs(active_db)
     except Exception:
         other_live_runs = []
 
