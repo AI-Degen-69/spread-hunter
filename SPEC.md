@@ -1,59 +1,34 @@
-# SPEC: Issue #314 - D12 submarket admission trial (family-grouped arms, pre-registered rule)
+# SPEC: Issue #345 — Audit and prune stale local stores (retention policy & safe cleanup)
 
 ## Goal
-Turn submarket admission from an argument into a number: a reversible two-arm
-shadow trial where control uses the shipped `identity_allowed` decision and
-treatment admits at most one market per event (mainline preferred, one eligible
-submarket fallback). A read-only analyzer returns adopt / reject / inconclusive
-from four pre-registered bars only. The shipped default path stays byte-identical.
-This ticket builds and rehearsal-tests the machinery; it does not launch the
-100-hour trial — launch is an operator decision.
+Establish an auditable, dry-run-first data retention policy and automated tool for `spread-hunter` local working stores. Classify ~7.3 GB of accumulated rehearsal databases, runtime logs, reports, and archive files into `keep` / `archive` / `delete`, protect the live production registry (`data/orders.db*`) and `data/price_tape.db*`, provide a PowerShell menu entry point, and commit an inventory under `docs/`.
 
-## Acceptance criteria (from issue)
-- One ranker pass produces both arms in one atomic bundle (`spread_hunter.paired-admission.v1`, one `snapshot_id`); unflagged `markets.json` bytes unchanged.
-- Treatment holds at most one market per event; fallback only when no mainline member is eligible, with `fallback_reason`; blocked-keyword, resolved and unreadable rows stay refused.
-- Two shadow loops each read one arm; family attribution persists admission → order → completion; a treatment-only guard keeps one fallback holding per event.
-- Analyzer verdict from the four h3 bars only; `inconclusive` on any limitation (incl. <30 clusters with usable h3, any due fill without h3 excess markout); analyzer is read-only (store hashes unchanged).
-- Pre-registration doc fixes the rule, 100-hour endpoint, no-peeking, arm setup before launch.
+## Acceptance Criteria
+- [ ] A dry-run audit classifies every candidate file into `keep` / `archive` / `delete` with the specific reason, store family, file size in bytes, and prints total reclaimable disk space.
+- [ ] Refusal guards strictly forbid touching or deleting `data/orders.db` and any `-wal`/`-shm` sibling, and refuse any store currently open or locked by a running process.
+- [ ] `data/price_tape.db*` is explicitly excluded from deletion.
+- [ ] Retention policy applies per family:
+  - Rehearsal shadow stats (`data/stats_*.db*`, `data/*_shadow*`): default 14 days, with the newest store per family always retained.
+  - `runtime/` execution dirs & logs: default 14 days.
+  - `reports/*_statistics_report*`: default 14 days.
+  - `data/archive/*`: default 14 days.
+  - Stale orphan `-wal`/`-shm` files (whose parent `.db` is missing).
+- [ ] A dry-run-by-default prune command is available via CLI (`python -m core_brain.data_retention`) and integrated into `scripts/spread-hunter-menu.ps1`.
+- [ ] Initial audit inventory is documented and committed under `docs/data_inventory.md`.
+- [ ] `docs/agents/architecture.md` is updated with the retention policy.
+- [ ] Focused tests pass: `python -m pytest -q tests/test_data_retention.py`
+- [ ] End-to-end verification: `.\scripts\spread-hunter-menu.ps1 status` remains functional and live registry is intact.
 
 ## Scope
 ### In scope
-- New `scoring/family_admission.py` (pure identity classification); trial-only `evaluate` mode + `build_paired_admission_bundle` + `--paired-admission` CLI in `scripts/filter_markets.py`; forwarding in `scripts/filter_loop.py`.
-- Format branch in `core_brain/market_feed.py`; `--paired-admission-arm` in `core_brain/shadow_run.py`; additive shadow-only columns + attribution + fallback guard in `core_brain/paired_shadow.py`.
-- Admission axis in `scripts/paired_depth_report.py` (depth path unchanged).
-- `docs/runs/2026-09-30-paired-admission-experiment.md` pre-registration doc; short rehearsal only.
+- New module `core_brain/data_retention.py` with `audit_storage()`, `prune_storage()`, `DataRetentionPolicy`, `AuditItem`, and CLI.
+- New unit test suite `tests/test_data_retention.py`.
+- Updating `scripts/spread-hunter-menu.ps1` to integrate with `core_brain.data_retention`.
+- Updating `docs/agents/architecture.md`.
+- Generating `docs/data_inventory.md`.
+
 ### Out of scope
-- Launching the 100-hour trial; changing the shipped gate on any verdict (even `adopt` — adoption is a separate decision); touching `scoring/selector.py`, `single_buy_saver.py`, risk caps, `market_resolution.py`, `order_registry` schema, `data/**`.
-
-# SPEC: Issue #325 — Build the ladder path (gated on shadow go)
-
-## Goal
-Final build of #49: a separate, gated ladder path quoting BTC/ETH 5+15-min
-series at OPEN with equal-sized rungs around 0.50 (probe-winning shape 2,
-timed exit 60s), merging opposite fills under one `pair_id` per market, and
-exiting one-leg residue on a timer. Shadow-only; off means byte-identical
-quoting to today.
-
-## Acceptance criteria (from issue)
-- `ladder_mode` config off by default; series discovery leaves
-  `fetch_live_market` untouched; gated ladder decision function; per-rung
-  telemetry; `ladder_exit` close method in all naked-close sets.
-- Four proof tests fail-without/pass-with: placement (≥2 submits/side,
-  distinct prices), fill-sim (oldest-first, one `pair_id`), one-leg exit
-  (inside window, no orphan), off-test (single price, suite green).
-- Shadow rehearsal confirms spec behavior (rungs resting, filling, exiting).
-- Screener untouched; separate ladder allocation (operator direction).
-
-## Scope
-### In scope
-- `MakerConfig` ladder fields (mode, shapes, timers, separate budget) +
-  validation; series discovery fn; `decide_ladder_quotes` gated fn;
-  `ladder_exit` in `order_registry.py`, `kpi.py` (+ sets), reports;
-  shadow wiring via `decide_fn`/`markets_fn` seams; one-shot rung lifecycle
-  (filled rungs retire, exit closes retire the market); #326 netting reused
-  in exit sizing.
-### Out of scope
-- Live execution; screener changes (`scripts/filter_markets.py`,
-  `runtime/markets.json`); cross-market portfolio coordination; shared-cap
-  accounting; threshold/gate changes (`max_pair_cost`, grace defaults,
-  windows, route order frozen).
+- Modifying, moving, or deleting `data/orders.db` (the production registry).
+- Trimming or deleting `data/price_tape.db`.
+- Deleting any git-tracked files or source code.
+- Database vacuuming / migration changes.
