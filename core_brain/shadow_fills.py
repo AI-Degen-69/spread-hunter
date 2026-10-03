@@ -11,6 +11,7 @@ failure available to this system.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -36,6 +37,33 @@ class ShadowFill:
     token_id: str
     price: float
     size: float
+
+
+def queue_multiple(
+    queue_ahead: float | None, order_size: float | None
+) -> float | None:
+    """How deep a quote sits in its queue, relative to its own size.
+
+    Returns `queue_ahead / order_size`. `None` means unmeasured: the queue is
+    missing/negative or the size is missing/not positive, so the row stays out
+    of medians and maxima instead of distorting them.
+
+    A multiple of N means the tape must trade N times the order size at the
+    order's exact price before the first fill credit -- the `credit_fills()`
+    rule below consumes the whole queue ahead before any volume reaches us.
+    """
+    if queue_ahead is None or order_size is None:
+        return None
+    try:
+        queue = float(queue_ahead)
+        size = float(order_size)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(queue) or not math.isfinite(size):
+        return None
+    if queue < 0.0 or size <= 0.0:
+        return None
+    return queue / size
 
 
 def queue_ahead_at(book: dict, price: float) -> float:

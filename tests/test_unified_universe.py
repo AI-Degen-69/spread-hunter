@@ -871,6 +871,80 @@ def test_a_submarket_refusal_names_the_label_that_refused_it():
     assert fm._cause(reason) == "carries a submarket group label"
 
 
+@pytest.mark.parametrize("label", [
+    "Brazil", "Argentina", "England", "San Marino",
+    "Donald Trump", "Democratic Party", "Elise Stefanik",
+    "New York Knicks", "Chicago White Sox",
+    "December 31, 2027", "June 30, 2027", "October 31",
+    "2027-12-31", "2026-10-03",
+])
+def test_a_bare_name_or_date_group_label_is_not_a_submarket(label):
+    # Arrange - Oct 2026: the venue groups main lines under country,
+    # candidate, team, and date labels. None of those names a fragment.
+    # Act
+    ok, reason = fm.identity_allowed(
+        "Will something happen by December?", "will-something-happen",
+        "", "", label, "", "")
+
+    # Assert - admitted; the liquidity/depth/spread gates decide downstream.
+    assert ok is True
+    assert reason == ""
+
+
+@pytest.mark.parametrize("label", [
+    "Spread -3.5", "Spread -21.5", "Belarus (-2.5)", "Burkina Faso (-5.5)",
+    "Game 1", "Map 2", "Round 3",
+    "Alabama Total Rushing Yards: O/U 125.5",
+    "Memphis Total Rushing Yards: O/U 150.5",
+    "74,000", "<76,000", "65-89", "90-114",
+    "\u2191 88,000", "\u2193 2,100", "\u2193 80,000",
+    "Over 2.5", "Under 2.5", "Over 125.5",
+])
+def test_a_line_shaped_group_label_stays_refused(label):
+    # Arrange - real fragments measured on the Oct 2026 rank. Game/Map/Round
+    # labels trip the blocked-keyword arm first (it reads the group field
+    # too); both refusals keep the market out, which is what is asserted.
+    # Act
+    ok, reason = fm.identity_allowed(
+        "Will something happen by December?", "will-something-happen",
+        "", "", label, "", "")
+
+    # Assert
+    assert ok is False
+    assert reason in ("carries a submarket group label",
+                      "blocked dynamic/submarket keyword")
+
+
+def test_a_country_labeled_candidate_reaches_the_downstream_gates():
+    # Arrange - end-to-end through evaluate: the label alone must not refuse.
+    m = _universe_candidate("0xcountry")
+    m["question"] = "Will Brazil win the World Cup?"
+    m["market_slug"] = "will-brazil-win-the-world-cup"
+    m["category"] = "Sports"
+    m["market_group"] = "Brazil"
+    trades = [{"timestamp": _time.time(), "price": 0.5, "size": 4000.0}]
+
+    # Act
+    row = evaluate(_FakeSession([], trades=trades), 5.0, m,
+                   volume_24h=250_000.0, source="spread")
+
+    # Assert
+    assert row["eligible"] is True
+
+
+def test_a_matchup_with_a_country_label_still_needs_its_series_word():
+    # Arrange - scope guard: this fix narrows only the group-label veto, not
+    # the primary rule. A head-to-head with no league word stays refused.
+    # Act
+    ok, reason = fm.identity_allowed(
+        "Croatia vs England", "croatia-vs-england", "", "", "Croatia",
+        "", "")
+
+    # Assert
+    assert ok is False
+    assert reason == "not a primary Moneyline/Outright or Macro/Politics market"
+
+
 def test_a_refusal_without_a_value_is_left_alone():
     # Arrange / Act / Assert - unknown vocabulary passes through untouched.
     ok, reason = fm.identity_reason_with_value("not a primary Moneyline", "")

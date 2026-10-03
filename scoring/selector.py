@@ -38,6 +38,29 @@ _SPORTS_SERIES_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A group label refuses only when it names the fragment: a spread/handicap
+# line, a game/map/round/set number, an over/under or totals number, or a
+# bare numeric price band. Bare country, candidate, party, team, and date
+# labels ("Brazil", "Donald Trump", "December 31, 2027") are main-line
+# event names the venue groups under -- refusing them emptied the eligible
+# universe in Oct 2026 (95 label refusals on one rank) while the fragments
+# they were meant to block stayed refused by _BLOCKED_RE anyway.
+_FRAGMENT_LABEL_RE = re.compile(
+    r"spread|handicap|\bO/U\b|\bover/under\b|"
+    r"\b(?:over|under)\s+\d+(?:\.\d+)?\b|"
+    r"\b(?:game|map|round|set|quarter|period|hole|inning)\b[\s_-]*\d|"
+    r"\btotal\b.*\d|"
+    r"^[↑↓<>]?\s*<?[\d,]+(?:\.\d+)?(?:\s*-\s*[\d,]+(?:\.\d+)?)?\)?$|"
+    r"(?<!\d)[-+]\d[\d,]*(?:\.\d+)?\s*\)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_fragment_label(label: object) -> bool:
+    """Whether a venue group label names a submarket fragment."""
+    text = str(label or "").strip()
+    return bool(text) and bool(_FRAGMENT_LABEL_RE.search(text))
+
 
 def _text(*values: object) -> str:
     return " ".join(str(v or "") for v in values).strip()
@@ -109,19 +132,21 @@ def identity_allowed(title: object = "", slug: object = "",
             return True, ""
         if not require_primary:
             # The keyword could not be found because the fields it is read
-            # from are absent, not because the market failed the test. A group
-            # label still refuses -- that field being present and populated IS
-            # evidence, and it is the one submarket signal that survives on a
-            # metadata-less spec.
-            if _text(market_group):
+            # from are absent, not because the market failed the test. A
+            # fragment-shaped group label still refuses -- that field being
+            # present and line-shaped IS evidence, and it is the one submarket
+            # signal that survives on a metadata-less spec. A bare country,
+            # name, or date label is not a fragment and answers downstream.
+            if _is_fragment_label(market_group):
                 return False, "carries a submarket group label"
             return True, ""
         return False, "not a primary Moneyline/Outright or Macro/Politics market"
     # No head-to-head shape to fragment. A blocked token already returned
-    # above; a group label means this is still someone's submarket even
-    # without one, so both are refused. Everything else is admitted and
-    # answers for itself at the liquidity/depth/spread gates.
-    if _text(market_group):
+    # above; a fragment-shaped group label means this is still someone's
+    # submarket even without one, so it is refused. A bare country, name, or
+    # date label is a main-line event name, so it is admitted and answers for
+    # itself at the liquidity/depth/spread gates.
+    if _is_fragment_label(market_group):
         return False, "carries a submarket group label"
     return True, ""
 

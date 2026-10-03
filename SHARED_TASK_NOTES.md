@@ -36,3 +36,47 @@
 - **Strength Badge:** Strong
 - **Status:** Implemented and verified.
 
+
+## Issue #351 — zero-fill 01_shadow diagnosis + queue-depth surfacing
+
+- **Area / Files:** `core_brain/shadow_fills.py`, `core_brain/statistics_report.py`,
+  `tests/test_shadow_fills.py`, `tests/test_statistics_report.py`,
+  `docs/issues/analysis-01-shadow-zero-fill.md`
+- **Problem:** A `01_shadow` rehearsal recorded 0 fills with no explanation; deep queue
+  multiples (420x–7741x) and a single decision cycle were invisible in the shadow report.
+- **Solution:** Pure `queue_multiple()` helper; queue-depth stats + single-cycle warning in the
+  shadow report (shown even when the close-count gate fails); diagnosis doc with
+  reported-not-reproduced evidence and read-only confirm queries. Queue-bar enforcement deferred
+  (shared ranker feeds live trading).
+- **Benefits:** The next zero-fill run explains itself in the report instead of reading as a
+  fill-model defect.
+- **Status:** Implemented and verified — `python -m pytest -q tests/test_shadow_fills.py
+  tests/test_maker_queue_bar.py tests/test_statistics_report.py` → 48 passed (agent-run).
+
+## Issue #351 III-B — stall correction (2026-10-03)
+
+- **Correction:** the 4-order/0-fill diagnosis holds for `data/01_shadow.db` only (re-verified
+  exactly on a scratch copy). The sibling store holds 112 closes (87W/25L, ~85 markets), not zero.
+- **Stall:** no fill/close on the sibling since 2026-09-30 11:03 UTC while the loop cycles.
+  Named cause: universe narrowed by the Sep 27–Oct 1 cluster (D12 admission trial `1c228e8`
+  top contributor — pipeline picks 5/188 today) + deeper queues on survivors (2453x → 3270x).
+- **No code changed:** D12 gates left intact pending operator call (approved experiment).
+
+## Issue #351 III-B correction — D12 misattribution fixed (2026-10-03)
+
+- D12 (`1c228e8`) is opt-in paired-admission plumbing and dormant; the 88 submarket
+  rejections come from the standing `identity_allowed` rule. No "D12 gates" exist to pause.
+- Fade aligns with Sep 29 #312 universe-empty fixes. Proposed next: run the D12
+  paired-admission experiment (control vs treatment) to measure submarket fill rate.
+
+## Issue #351 III-B fix — fragment-precision group-label veto (2026-10-03)
+
+- **Files:** `scoring/selector.py`, `tests/test_unified_universe.py`
+- **Fix:** group-label veto now fires only on fragment shapes (spread/handicap lines,
+  game-map-round numbers, O/U-totals numbers, numeric price bands). Country/candidate/
+  party/team/date labels pass to the unchanged liquidity gates.
+- **Measured:** frozen 71-market snapshot admits 27 -> 45 at identity (+67%); 227+10
+  focused tests green incl. RED-verified new tests; full probe re-run confounded by
+  Saturday-slate venue churn (control 5->6, treatment 7).
+- **Flag:** shared ranker = live selection widens too. Local commit only, needs review
+  + operator go-ahead before merge.
