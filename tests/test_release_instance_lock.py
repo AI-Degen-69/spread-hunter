@@ -120,6 +120,15 @@ def test_cli_releases_and_prints_json(tmp_path):
     assert json.loads(proc.stdout)["released"] is True
 
 
+def test_cli_show_reports_row_without_touching(tmp_path):
+    db = tmp_path / "shadow.db"
+    _seed(db)
+    proc = _cli(db, "--role", "fleet")
+    assert proc.returncode == EXIT_OK
+    assert json.loads(proc.stdout)["holder"] == "15548:70f39f42"
+    assert read_lock(db, "fleet") is not None
+
+
 def test_cli_refuses_mismatch_with_exit_two(tmp_path):
     db = tmp_path / "shadow.db"
     _seed(db)

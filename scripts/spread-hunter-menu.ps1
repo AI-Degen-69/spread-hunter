@@ -1280,6 +1280,28 @@ function Resume-ShadowRun {
             -RedirectStandardOutput (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).out.log") `
             -RedirectStandardError (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log")
     }
+    # Startup health check (#352): the loop can die seconds after launch
+    # while the script already printed success. The success line below
+    # prints only for a loop that is alive, quiet, and heartbeating on the
+    # same file the dashboard reads, so the two can never disagree again.
+    $resumeErr = Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log"
+    Start-Sleep -Seconds 12
+    $loopDead = $shadowRun.HasExited
+    $loopErr = ""
+    if (Test-Path $resumeErr) { $loopErr = Get-Content $resumeErr -Raw }
+    $beatFresh = $false
+    $runBeat = Join-Path $RunDir "shadow_run_$($script:ShadowRunId).json"
+    if (Test-Path $runBeat) {
+        try {
+            $beat = Get-Content $runBeat -Raw | ConvertFrom-Json
+            $beatAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$beat.heartbeat_ts
+            $beatFresh = (-not $beat.finished) -and ($beatAge -lt 60)
+        } catch { $beatFresh = $false }
+    }
+    if ($loopDead -or ($loopErr -match 'Traceback|InstanceInUse') -or (-not $beatFresh)) {
+        Lsh-Fail "Rehearsal loop PID $($shadowRun.Id) did not survive startup; see $resumeErr."
+        return $false
+    }
     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s))."
     $observer = Start-Process -FilePath "python" `
         -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08))) `

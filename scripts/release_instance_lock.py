@@ -93,9 +93,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", required=True, help="Resume store to operate on.")
     parser.add_argument("--role", default="fleet", help="Lock role (default: fleet).")
-    parser.add_argument("--holder-pid", required=True, type=int,
-                        help="Dead holder PID the row must belong to.")
+    parser.add_argument("--holder-pid", required=False, type=int, default=None,
+                        help="Dead holder PID the row must belong to. "
+                        "Omitted: show the row without touching it.")
     args = parser.parse_args(argv)
+    if args.holder_pid is None:
+        try:
+            row = read_lock(args.db, args.role)
+        except _REFUSAL as exc:
+            code = int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
+            print(json.dumps({"holder": None, "age_ms": None}))
+            return code
+        print(json.dumps({"holder": row["holder"] if row else None,
+                          "age_ms": row["age_ms"] if row else None}))
+        return EXIT_OK
     try:
         released, row = release_if_holder(args.db, args.role, args.holder_pid)
         if row is not None and not released:
