@@ -9,6 +9,7 @@ selection, ranking, or risk.
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 from pathlib import Path
@@ -58,18 +59,44 @@ def classify_display_category(title: Any, event_title: Any,
     return None
 
 
+class _FeedList(list):
+    """List subclass holding an index of rows by cid for O(1) lookup."""
+    _cid_map: dict[str, dict]
+
+
+@functools.lru_cache(maxsize=32)
+def _load_feed_cached(path_str: str, mtime_ns: int) -> _FeedList:
+    try:
+        path = Path(path_str)
+        if not path.exists():
+            res = _FeedList()
+            res._cid_map = {}
+            return res
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            payload = payload.get("rows") or []
+        if not isinstance(payload, list):
+            res = _FeedList()
+            res._cid_map = {}
+            return res
+        rows = [row for row in payload if isinstance(row, dict)]
+        res = _FeedList(rows)
+        res._cid_map = {_text_of(r, "cid").lower(): r for r in rows if _text_of(r, "cid")}
+        return res
+    except Exception:
+        res = _FeedList()
+        res._cid_map = {}
+        return res
+
+
 def _feed_rows(name: str, root: Path | str) -> list[dict]:
     """Rows of a runtime feed file; unreadable or misshapen reads as empty."""
     try:
         path = resolve_runtime_file(name, root=root)
         if not path.exists():
             return []
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            payload = payload.get("rows") or []
-        if not isinstance(payload, list):
-            return []
-        return [row for row in payload if isinstance(row, dict)]
+        mtime_ns = path.stat().st_mtime_ns
+        return _load_feed_cached(str(path.resolve()), mtime_ns)
     except Exception:
         return []
 
@@ -81,8 +108,12 @@ def _text_of(row: dict, key: str) -> str:
 
 
 def _find_row(rows: list[dict], cid: str) -> Optional[dict]:
+    cid_lower = cid.lower()
+    cid_map = getattr(rows, "_cid_map", None)
+    if cid_map is not None:
+        return cid_map.get(cid_lower)
     for row in rows:
-        if _text_of(row, "cid").lower() == cid.lower():
+        if _text_of(row, "cid").lower() == cid_lower:
             return row
     return None
 

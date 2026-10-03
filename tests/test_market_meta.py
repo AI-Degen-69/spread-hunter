@@ -148,3 +148,48 @@ def test_esports_checked_before_politics():
         "Senate race outcome", "", "senate-race") == "Politics"
     assert mm.classify_display_category(
         "Market A resolves up?", "", "market-a") is None
+
+
+def test_feed_reads_cached_across_many_cids(tmp_path, monkeypatch):
+    rows = [{"cid": f"0xcid_{i}", "slug": f"slug-{i}", "title": f"Title {i}",
+             "category": "Crypto", "series_title": "", "market_group": "",
+             "tags": [], "volume_24h": 1.0} for i in range(50)]
+    _write_feed(tmp_path, rows)
+
+    real_read = mm.Path.read_text
+    read_count = 0
+
+    def counting_read(self, *args, **kwargs):
+        nonlocal read_count
+        read_count += 1
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(mm.Path, "read_text", counting_read)
+
+    for i in range(50):
+        meta = mm.resolve_market_meta(f"0xcid_{i}", [], [], root=tmp_path)
+        assert meta["title"] == f"Title {i}"
+        assert meta["category"] == "Crypto"
+
+    # Exactly 1 read for markets.json, 0 for universe because all 50 matched in markets.json
+    assert read_count == 1
+
+
+def test_rewritten_feed_file_picked_up_immediately(tmp_path):
+    _write_feed(tmp_path, [{
+        "cid": CID_CRYPTO, "slug": "btc-up", "title": "Crypto 1",
+        "category": "Crypto", "series_title": "", "market_group": "",
+        "tags": [], "volume_24h": 1.0,
+    }])
+    meta1 = mm.resolve_market_meta(CID_CRYPTO, [], [], root=tmp_path)
+    assert meta1["category"] == "Crypto"
+
+    # Rewrite feed file
+    _write_feed(tmp_path, [{
+        "cid": CID_CRYPTO, "slug": "btc-up", "title": "Crypto 1",
+        "category": "Macro", "series_title": "", "market_group": "",
+        "tags": [], "volume_24h": 1.0,
+    }])
+    meta2 = mm.resolve_market_meta(CID_CRYPTO, [], [], root=tmp_path)
+    assert meta2["category"] == "Macro"
+
