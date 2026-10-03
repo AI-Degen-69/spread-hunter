@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why the rehearsal bought nothing — and what you see now</title>
+<style>
+:root { --ink:rgba(0,0,0,.82); --muted:rgba(0,0,0,.55); --bg:#FAF8F4; --panel:#fff;
+  --line:rgba(0,0,0,.10); --accent:#C2410C; --accent-light:#FFF3EA; --accent-dark:#7C2D12;
+  --good:#15803D; --bad:#B91C1C; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:18px/1.72 Georgia,"Times New Roman",serif; }
+.page { max-width:1000px; margin:auto; padding:0 24px 64px; display:flex; gap:44px; }
+.sidebar { width:210px; flex:none; position:sticky; top:24px; height:fit-content;
+  font:12px/1.6 "Segoe UI",Tahoma,sans-serif; color:var(--muted); }
+.sidebar h4 { margin:0 0 8px; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-dark); }
+.sidebar a { display:block; color:var(--muted); text-decoration:none; padding:3px 0; }
+.sidebar a:hover { color:var(--accent); }
+.content { flex:1; min-width:0; }
+header { padding:44px 0 6px; border-bottom:1px solid var(--line); margin-bottom:8px; }
+h1 { font-size:38px; line-height:1.2; margin:0 0 12px; letter-spacing:-.01em; }
+.lede { font-size:19px; color:var(--muted); margin:0; max-width:60ch; }
+h2 { font-size:25px; margin:38px 0 8px; letter-spacing:-.01em; }
+p { margin:0 0 14px; max-width:64ch; }
+.figure { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:18px 0 8px; }
+.figure-label { font:11px/1.4 "Segoe UI",Tahoma,sans-serif; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--muted); padding:14px 16px 0; }
+.figure canvas { display:block; width:100%; height:auto; }
+.figure-controls { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;
+  padding:10px 16px; border-top:1px solid var(--line); font:13px "Segoe UI",Tahoma,sans-serif; }
+.ctrl-btn { font:600 13px "Segoe UI",Tahoma,sans-serif; padding:.42rem 1rem; border-radius:7px;
+  border:1px solid var(--line); background:#fff; color:var(--ink); cursor:pointer; }
+.ctrl-btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+.ctrl-btn:hover { border-color:var(--accent); }
+.readout { margin-left:auto; color:var(--muted); font-variant-numeric:tabular-nums; }
+.figure-caption { font:13.5px/1.6 "Segoe UI",Tahoma,sans-serif; color:var(--muted); padding:10px 16px 14px; border-top:1px solid var(--line); }
+.callout { border-left:3px solid var(--accent); background:var(--accent-light);
+  padding:14px 18px; border-radius:0 8px 8px 0; margin:20px 0; }
+.callout p { margin:0; max-width:none; }
+.split2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:16px 0 6px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+.card h3 { margin:0 0 10px; font:600 13px "Segoe UI",Tahoma,sans-serif; letter-spacing:.05em; text-transform:uppercase; }
+.card ul { margin:0; padding-left:18px; font:15px/1.75 "Segoe UI",Tahoma,sans-serif; }
+.card li { margin-bottom:2px; }
+.card .no { color:var(--bad); } .card .yes { color:var(--good); }
+.bignum { display:flex; align-items:baseline; gap:12px; margin:6px 0 2px; }
+.bignum b { font:700 44px/1 "Segoe UI",Tahoma,sans-serif; color:var(--accent-dark); letter-spacing:-.02em; }
+.bignum span { font:14px "Segoe UI",Tahoma,sans-serif; color:var(--muted); }
+footer { margin-top:44px; padding-top:18px; border-top:1px solid var(--line);
+  font:13px "Segoe UI",Tahoma,sans-serif; color:var(--muted); }
+footer a { color:var(--accent-dark); }
+@media (max-width:900px) { .sidebar{display:none} .page{display:block} .split2{grid-template-columns:1fr} h1{font-size:30px} }
+@media (prefers-reduced-motion:reduce) { * { animation:none !important; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<nav class="sidebar">
+  <h4>On this page</h4>
+  <a href="#line">The line in front of your order</a>
+  <a href="#report">What the report shows now</a>
+  <a href="#filter">The filter that let too much go</a>
+  <a href="#try">Try it yourself</a>
+</nav>
+
+<main class="content">
+
+<header>
+  <h1>Why the rehearsal bought nothing — and what you see now</h1>
+  <p class="lede">For three days the rehearsal kept placing orders and never bought a single share.
+    We found the reason: every order was parked behind a line of shares already waiting at the very
+    same price. The report now shows you that line, out loud, and the market filter stops throwing
+    away the good markets.</p>
+</header>
+
+<!-- BLOCK 1 — CENTERPIECE -->
+<section id="line">
+  <h2>The line in front of your order</h2>
+  <p>An order only fills after <em>everyone already waiting at its price</em> has been served. The
+    rehearsal refuses to guess: it credits a buy only when real trades actually printed at that exact
+    price and cleared the whole line first. So if the line is enormous, "no buy" is the honest answer —
+    not a broken system, and not bad luck either.</p>
+  <p>Here is the worst case from the recorded rehearsal: a size-5 order with 38,706 shares waiting
+    ahead of it. The market must trade <strong>about 7,741 times your order size</strong> before your
+    first share is reached. Press <em>Step</em> and watch the line eat those trades.</p>
+
+  <div class="figure">
+    <div class="figure-label">The line, draining as real trades print</div>
+    <canvas id="queueCanvas" width="880" height="230" role="img"
+      aria-label="A long line of shares waiting at one price, with the operator's small order at the back, draining as trades arrive."></canvas>
+    <div class="figure-controls">
+      <button class="ctrl-btn primary" id="q-step">Step</button>
+      <button class="ctrl-btn" id="q-play">Play</button>
+      <button class="ctrl-btn" id="q-reset">Reset</button>
+      <button class="ctrl-btn" id="q-top">Healthy line</button>
+      <span class="readout" id="q-info">Step: 0 / 40 — 0 of 38,706 shares served</span>
+    </div>
+    <div class="figure-caption">Watch the dark bar shrink from the left: each bite is trade volume
+      arriving at that price. Your orange block at the far right only lights up when the line is
+      completely gone.</div>
+  </div>
+
+  <div class="callout"><p><strong>Nothing here is a fault.</strong> The rehearsal recorded 4 orders,
+    0 buys — and its line ran up to 7,741× your size. Zero buys was the correct answer to that
+    question. The old report simply never showed the line, so it looked like a mystery.</p></div>
+</section>
+
+<!-- BLOCK 2 — SUPPORT: what the report shows now -->
+<section id="report">
+  <h2>What the report shows now</h2>
+  <p>Every rehearsal report ends with a <strong>Queue depth</strong> section. It reports how many
+    quotes could be measured, the middle and worst size of the line, and — when the rehearsal only
+    got through a single decision pass — a plain sentence saying that no buys are expected. That last
+<!-- BLOCK 3 — SUPPORT: the filter -->
+<section id="filter">
+  <h2>The filter that let too much go</h2>
+  <p>Markets arrive grouped under a name — and one safety rule refused <em>any</em> market with a
+    group name, meant only to block sub-markets. So "Brazil", "Donald Trump" and
+    "December 31, 2027" — ordinary main events — were turned away before any liquidity check ever
+    ran. On one ranking that produced 95 refusals and left 5 usable markets out of 188.</p>
+  <p>The rule now refuses only labels that actually name a fragment, and lets plain names through to
+    the usual volume, depth, spread and timing checks.</p>
+  <div class="split2">
+    <div class="card">
+      <h3>Still refused — real fragments</h3>
+      <ul>
+        <li class="no">Spread -3.5</li>
+        <li class="no">Handicap +4</li>
+        <li class="no">Game 1</li>
+        <li class="no">Map 3 — Round 2</li>
+        <li class="no">Over/Under 45.5</li>
+        <li class="no">0.62 – 0.65 price band</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Now allowed — main-line names</h3>
+      <ul>
+        <li class="yes">Brazil</li>
+        <li class="yes">Donald Trump</li>
+        <li class="yes">December 31, 2027</li>
+        <li class="yes">Lakers</li>
+        <li class="yes">Republican</li>
+        <li class="yes">Alabama vs Mississippi State</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout"><p><strong>27 &rarr; 45 markets</strong> now pass on the same frozen 71-market
+    snapshot — 67% more to choose from. All 95 previously-blocked labels were re-checked one by one:
+    only date labels got through, and every true fragment is still refused.</p></div>
+</section>
+
+<section id="try">
+  <h2>Try it yourself</h2>
+  <p>Run a rehearsal from the menu and open the report it writes. Scroll to the bottom — you will
+    now find the Queue depth section with your run's own middle and worst line, plus the
+    single-pass note when the run was short. While the rehearsal runs, the market list shows the
+    newly-admitted group names instead of dropping them.</p>
+</section>
+
+<footer>
+  Change put live on 2026-10-03 — request
+  <a href="https://github.com/AI-Degen-69/spread-hunter/issues/351">#351</a>,
+  update <a href="https://github.com/AI-Degen-69/spread-hunter/pull/354">#354</a> (merged).
+<script>
+const dpr = window.devicePixelRatio || 1;
+function initCanvas(id){ const c=document.getElementById(id); const x=c.getContext('2d');
+  const w=c.width, h=c.height; c.width=w*dpr; c.height=h*dpr; c.style.width=w+'px'; c.style.height=h+'px';
+  x.scale(dpr,dpr); return {canvas:c, ctx:x, w:w, h:h}; }
+
+(function(){
+  const {ctx, w, h} = initCanvas('queueCanvas');
+  const STEPS = 40;
+  // Worst recorded line: 38,706 shares ahead of a size-5 order (~7,741x).
+  const state = { step: 0, total: 38706, best: false };
+  const info = document.getElementById('q-info');
+  const ACCENT = '#C2410C', INK = 'rgba(0,0,0,.82)', MUTED = 'rgba(0,0,0,.42)';
+  const LINE = 'rgba(0,0,0,.10)';
+
+  function fmt(n){ return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+  function roundRect(c, x, y, ww, hh, r){
+    r = Math.min(r, hh / 2, ww / 2);
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + ww, y, x + ww, y + hh, r);
+    c.arcTo(x + ww, y + hh, x, y + hh, r);
+    c.arcTo(x, y + hh, x, y, r);
+    c.arcTo(x, y, x + ww, y, r);
+    c.closePath();
+  }
+
+  function draw(){
+    const best = state.best;
+    const total = best ? 12 : state.total;
+    const per = total / STEPS;
+    const served = Math.min(total, state.step * per);
+    const left = total - served;
+    const frac = total ? left / total : 0;
+
+    ctx.clearRect(0, 0, w, h);
+    const padX = 26, trackY = 70, trackH = 46, trackW = w - padX * 2;
+
+    ctx.fillStyle = MUTED;
+    ctx.font = '13px "Segoe UI", Tahoma, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(best ? 'A healthy line: 12 shares ahead of your 5'
+                      : 'The recorded line: 38,706 shares ahead of your 5', padX, 32);
+
+    ctx.fillStyle = LINE;
+    roundRect(ctx, padX, trackY, trackW, trackH, 8); ctx.fill();
+    if (frac > 0){
+      ctx.fillStyle = 'rgba(0,0,0,.72)';
+      roundRect(ctx, padX, trackY, Math.max(6, trackW * frac), trackH, 8); ctx.fill();
+    }
+
+    const youW = 58, youX = padX + trackW - youW;
+    ctx.fillStyle = frac > 0.001 ? 'rgba(194,65,12,.20)' : ACCENT;
+    roundRect(ctx, youX, trackY, youW, trackH, 8); ctx.fill();
+    ctx.strokeStyle = ACCENT; ctx.lineWidth = 2;
+    roundRect(ctx, youX, trackY, youW, trackH, 8); ctx.stroke();
+    ctx.fillStyle = frac > 0.001 ? ACCENT : '#fff';
+    ctx.font = '600 12px "Segoe UI", Tahoma, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('your 5', youX + youW / 2, trackY + 29);
+
+    ctx.fillStyle = MUTED;
+    ctx.font = '12px "Segoe UI", Tahoma, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('0 served', padX, trackY + trackH + 20);
+    ctx.textAlign = 'right';
+    ctx.fillText(fmt(total) + ' shares in line', padX + trackW, trackY + trackH + 20);
+
+    const reached = frac <= 0.001;
+    ctx.fillStyle = reached ? '#15803D' : INK;
+    ctx.font = '600 15px "Segoe UI", Tahoma, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(reached ? 'Line cleared — your order fills.'
+                         : 'Line still in front — no buy. ' + fmt(Math.round(left)) + ' shares to go.',
+                 padX, trackY + trackH + 54);
+
+    info.textContent = 'Step: ' + state.step + ' / ' + STEPS + ' — ' + fmt(Math.round(served)) +
+      ' of ' + fmt(total) + ' shares served';
+  }
+
+  let timer = null;
+  function stop(){ if (timer){ clearInterval(timer); timer = null; }
+    document.getElementById('q-play').textContent = 'Play'; }
+  function step(){
+    if (state.step >= STEPS){ state.step = 0; }
+    state.step += 1; draw();
+  }
+
+  document.getElementById('q-step').addEventListener('click', function(){ stop(); step(); });
+  document.getElementById('q-reset').addEventListener('click', function(){
+    stop(); state.step = 0; state.best = false; draw();
+  });
+  document.getElementById('q-top').addEventListener('click', function(){
+    stop(); state.best = true; state.step = 0; draw();
+  });
+  document.getElementById('q-play').addEventListener('click', function(){
+    if (timer){ stop(); return; }
+    document.getElementById('q-play').textContent = 'Pause';
+    timer = setInterval(function(){
+      if (state.step >= STEPS){ stop(); return; }
+      step();
+    }, 130);
+  });
+
+  draw();
+})();
+</script>
+</body>
+</html>
+
+  Rehearsal only — no money was spent by anything on this page.
+</footer>
+
+</main>
+</div>
+
+
+    line is the one that would have answered the three-day silence on day one.</p>
+  <div class="bignum"><b>7,741×</b><span>worst recorded line, against a size-5 order</span></div>
+  <div class="bignum"><b>0</b><span>buys in 3 days, from ~2,270 posted quotes</span></div>
+</section>
+
+
