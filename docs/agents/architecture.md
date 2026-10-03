@@ -82,6 +82,29 @@ Ignore patterns for these directories are anchored with a leading `/`. An
 unanchored `reports/` matches a directory of that name at ANY depth, and it
 silently swallowed `docs/reports/` -- two issue showcases sat there untracked.
 
+## Data storage retention policy
+
+Local working state (`data/`, `runtime/`, `reports/`) is governed by `core_brain/data_retention.py`:
+
+| Storage family | Pattern / Path | Default policy | Protection rules |
+| --- | --- | --- | --- |
+| Production registry | `data/orders.db*` | **Retained forever** | Hard-protected; refused by `assert_not_protected_store()` |
+| Price tape | `data/price_tape.db*` | **Retained** | Excluded from automated deletion |
+| Active protected runs | `*01_shadow*` | **Retained** | Protected by `user_protected_patterns` |
+| Rehearsal statistics | `data/stats_*.db*`, `*shadow*` | 14 days | Preserves newest store per family unconditionally |
+| Runtime state | `runtime/*`, `run/*` | 14 days | Stale logs/heartbeats pruned |
+| Statistics reports | `reports/*_statistics_report*` | 14 days | Pruned beyond 14 days |
+| Archive files | `data/archive/*` | 14 days | Pruned beyond 14 days |
+| Orphan WAL/SHM | `data/*.db-wal`, `data/*.db-shm` | Immediate cleanup | Pruned when parent `.db` is missing |
+
+Audit and cleanup commands:
+```bash
+python -m core_brain.data_retention --audit                     # read-only storage audit
+python -m core_brain.data_retention --audit --output-inventory docs/data_inventory.md # update inventory
+python -m core_brain.data_retention --prune --dry-run           # simulate prune
+python -m core_brain.data_retention --prune --no-dry-run        # execute prune
+```
+
 ## Runtime state across the rename
 
 `runtime/` holds state that is **not** in git: it is on the operator's disk, written by

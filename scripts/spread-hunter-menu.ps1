@@ -2257,6 +2257,52 @@ function Clear-RuntimeState {
     Lsh-Ok "Runtime state wiped ($removed artifact(s) removed). data/orders.db untouched."
 }
 
+function Invoke-StorageAudit {
+    <# Run the read-only storage audit via core_brain.data_retention. #>
+    Push-Location $ProjectPath
+    try {
+        & python -m core_brain.data_retention --audit
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        Pop-Location
+    }
+}
+
+function Invoke-StoragePrune {
+    <# Run storage retention prune, dry-run first with confirmation. #>
+    param([switch]$Force)
+    Push-Location $ProjectPath
+    try {
+        Lsh-Step "Evaluating data retention policy (dry-run)..."
+        & python -m core_brain.data_retention --audit
+        if ($LASTEXITCODE -ne 0) {
+            Lsh-Fail "Storage audit failed; aborting prune."
+            return $false
+        }
+
+        if (-not $Force) {
+            Write-Host ""
+            $confirm = Read-Host "  Prune eligible stale stores? data/orders.db and price_tape.db are strictly preserved. [y/N]"
+            if ($confirm -notmatch '^[yY]') {
+                Lsh-Warn "Prune cancelled."
+                return $false
+            }
+        }
+
+        Lsh-Step "Executing prune of stale stores..."
+        & python -m core_brain.data_retention --prune --no-dry-run
+        if ($LASTEXITCODE -eq 0) {
+            Lsh-Ok "Storage retention prune completed."
+            return $true
+        } else {
+            Lsh-Fail "Storage retention prune encountered errors."
+            return $false
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 function Wait-ProcessGone {
     <# True when the PID is gone within the timeout. Every stop path in this
     file issues a kill whose failure is suppressed (Stop-Process
@@ -2857,6 +2903,12 @@ function Invoke-LiveAction {
             $script:Minutes = [int]$mins
             $null = Start-ShadowTrial
         }
+        "audit" {
+            Invoke-StorageAudit
+        }
+        "prune" {
+            Invoke-StoragePrune -Force:$Yes
+        }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
             Lsh-Warn "Invalid selection: $Key (choose 1-9, or q)."
@@ -2925,6 +2977,11 @@ if ($Action -ne "") {
         "stats"        = "9"
         "overnight"    = "9"
         "statistical-run" = "9"
+        "audit"        = "audit"
+        "storage-audit"= "audit"
+        "retention"    = "audit"
+        "prune"        = "prune"
+        "storage-prune"= "prune"
     }
     $key = $Action.Trim().ToLower()
     if ($actionMap.ContainsKey($key)) { $key = $actionMap[$key] }
@@ -2932,8 +2989,8 @@ if ($Action -ne "") {
     # Menu numbers work directly too: `.\scripts\spread-hunter-menu.ps1 8`
     # runs option 8 at once, no menu shown. Reject anything else here so a
     # typo fails fast instead of falling into the "invalid selection" path.
-    if (@("1","2","3","4","5","6","7","8","9","r","t","q") -notcontains $key) {
-        Write-Host "ERROR: Unknown action '$Action' (use 1-9, q, or a name like start/stop/status)" -ForegroundColor Red
+    if (@("1","2","3","4","5","6","7","8","9","r","t","audit","prune","q") -notcontains $key) {
+        Write-Host "ERROR: Unknown action '$Action' (use 1-9, q, or a name like start/stop/status/audit/prune)" -ForegroundColor Red
         exit 1
     }
 
