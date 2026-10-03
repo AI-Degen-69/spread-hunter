@@ -61,3 +61,10 @@
   Named cause: universe narrowed by the Sep 27–Oct 1 cluster (D12 admission trial `1c228e8`
   top contributor — pipeline picks 5/188 today) + deeper queues on survivors (2453x → 3270x).
 - **No code changed:** D12 gates left intact pending operator call (approved experiment).
+
+## Issue #351 III-B correction — D12 misattribution fixed (2026-10-03)
+
+- D12 (`1c228e8`) is opt-in paired-admission plumbing and dormant; the 88 submarket
+  rejections come from the standing `identity_allowed` rule. No "D12 gates" exist to pause.
+- Fade aligns with Sep 29 #312 universe-empty fixes. Proposed next: run the D12
+  paired-admission experiment (control vs treatment) to measure submarket fill rate.

@@ -85,21 +85,27 @@ Flow vs stall, measured:
 At ~0.3% historical fill rate, 0 fills on ~2,270 stalled-window quotes has p ≈ 0.001 —
 this is a real stall, not variance. Orders still post (580 today); they just never fill.
 
-**Named root cause (two contributors, one change cluster):**
+**Named root cause (two contributors, one change cluster) — corrected 2026-10-03:**
 
-1. **Universe narrowed by the Sep 27–Oct 1 change cluster.** The Sep 29 `#312`
-   market-universe-empty fixes, the Sep 30 13:49 UTC **D12 submarket-admission trial**
-   (`1c228e8`, #319), and the Oct 1 ladder trials coincide with the fade-to-stall.
+1. **Universe narrowed over Sep 27–Oct 1; the standing identity rule does the excluding.**
    Today's fresh `runtime/pipeline.json`: 188 spread-universe → **5 eligible / 5 picked**,
    top rejection causes `carries a submarket group label` (88), `not primary`
-   Moneyline/Outright or Macro/Politics (27), blocked submarket keywords (12).
+   Moneyline/Outright or Macro/Politics (27), blocked submarket keywords (12). These
+   rejections come from `identity_allowed` in `scoring/selector.py` — a long-standing rule
+   (Sep 1 run docs already show the same rejection causes), **not** from D12.
+   Correction to the first version of this addendum: D12 (`1c228e8`, #319) added *opt-in*
+   paired-admission plumbing (`paired_admission_arm`); it is dormant — no admission bundle
+   is active and the running loop consumes the plain ranker output. There are no "D12
+gates" to pause. The fade (54 → 34 quoted markets/day from Sep 27) aligns instead with
+   the Sep 29 `#312` universe-empty fixes, which tightened what the ranker admits.
 2. **Survivors sit deeper.** Average queue multiple on posted quotes rose ~2453x → ~3270x,
    so per-quote fill probability collapsed alongside the ticket count.
 
-**Deliberately not changed here:** disabling or widening the D12 admission gates would
-kill or distort an approved, pre-registered experiment (#319) — that call is the
-operator's (see the open question below), not a drive-by fix. No lifecycle, ranker, or
-fill-rule code was touched for this addendum.
+**Deliberately not changed here:** relaxing the standing submarket exclusion is a strategy
+change, not a bug fix — it needs the operator's call, not a drive-by edit. The fitting
+next step is running the D12 paired-admission experiment itself (control vs treatment
+arms): it was built exactly to measure whether admitted submarkets fill. No lifecycle,
+ranker, or fill-rule code was touched for this addendum.
 
 ## How to verify
 
