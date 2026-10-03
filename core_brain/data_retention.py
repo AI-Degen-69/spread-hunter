@@ -240,7 +240,7 @@ def audit_storage(
                     )
                     continue
 
-                # Orphan WAL / SHM
+                # SQLite WAL / SHM (orphan vs active sibling)
                 if name.endswith("-wal") or name.endswith("-shm"):
                     base_name = re.sub(r"-(wal|shm)$", "", name)
                     base_file = data_dir / base_name
@@ -255,7 +255,18 @@ def audit_storage(
                                 mtime=mtime,
                             )
                         )
-                        continue
+                    else:
+                        items.append(
+                            AuditItem(
+                                path=entry,
+                                family="sqlite_sibling",
+                                action=AuditAction.KEEP,
+                                reason=f"SQLite journal/index sibling of existing base database ({base_name})",
+                                size_bytes=size,
+                                mtime=mtime,
+                            )
+                        )
+                    continue
 
                 # Rehearsal / shadow stats
                 if _matches_shadow_family(name):
@@ -434,9 +445,18 @@ def prune_storage(
                         shutil.rmtree(item.path)
                     elif item.path.exists():
                         item.path.unlink()
+                        # Also clean up any lingering sibling -wal / -shm when deleting a base .db
+                        if item.path.suffix == ".db":
+                            for ext in ("-wal", "-shm"):
+                                sib = item.path.parent / f"{item.path.name}{ext}"
+                                if sib.exists():
+                                    try:
+                                        sib.unlink()
+                                    except OSError:
+                                        pass
                     result.deleted_count += 1
                     result.deleted_bytes += item.size_bytes
-                except Exception as exc:  # noqa: BLE001
+                except OSError as exc:
                     result.errors.append(f"Failed to delete {item.path}: {exc}")
         else:
             result.kept_count += 1
@@ -511,7 +531,6 @@ def main(argv: list[str] | None = None) -> int:
 
     policy = DataRetentionPolicy(
         retention_days=args.days,
-        user_protected_patterns=("01_shadow",),
     )
     items = audit_storage(policy=policy)
 
@@ -553,7 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             print("[DRY-RUN] Simulating prune... (no files deleted)")
             res = prune_storage(items, dry_run=True)
-            print(f"[DRY-RUN] Would delete {res.deleted_count} files ({res.deleted_mb:.2f} MB).")
+            print(f"[DRY-RUN] Would delete {res.would_delete_count} files ({res.would_delete_mb:.2f} MB).")
         else:
             print("[LIVE] Executing prune of eligible stale stores...")
             res = prune_storage(items, dry_run=False)

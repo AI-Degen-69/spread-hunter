@@ -2259,28 +2259,47 @@ function Clear-RuntimeState {
 
 function Invoke-StorageAudit {
     <# Run the read-only storage audit via core_brain.data_retention. #>
-    & python -m core_brain.data_retention --audit
+    Push-Location $ProjectPath
+    try {
+        & python -m core_brain.data_retention --audit
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        Pop-Location
+    }
 }
 
 function Invoke-StoragePrune {
     <# Run storage retention prune, dry-run first with confirmation. #>
     param([switch]$Force)
-    Lsh-Step "Evaluating data retention policy (dry-run)..."
-    & python -m core_brain.data_retention --audit
-    if (-not $Force -and $Action -eq "") {
-        Write-Host ""
-        $confirm = Read-Host "  Prune eligible stale stores? data/orders.db and price_tape.db are strictly preserved. [y/N]"
-        if ($confirm -notmatch '^[yY]') {
-            Lsh-Warn "Prune cancelled."
-            return
+    Push-Location $ProjectPath
+    try {
+        Lsh-Step "Evaluating data retention policy (dry-run)..."
+        & python -m core_brain.data_retention --audit
+        if ($LASTEXITCODE -ne 0) {
+            Lsh-Fail "Storage audit failed; aborting prune."
+            return $false
         }
-    }
-    Lsh-Step "Executing prune of stale stores..."
-    & python -m core_brain.data_retention --prune --no-dry-run
-    if ($LASTEXITCODE -eq 0) {
-        Lsh-Ok "Storage retention prune completed."
-    } else {
-        Lsh-Fail "Storage retention prune encountered errors."
+
+        if (-not $Force) {
+            Write-Host ""
+            $confirm = Read-Host "  Prune eligible stale stores? data/orders.db and price_tape.db are strictly preserved. [y/N]"
+            if ($confirm -notmatch '^[yY]') {
+                Lsh-Warn "Prune cancelled."
+                return $false
+            }
+        }
+
+        Lsh-Step "Executing prune of stale stores..."
+        & python -m core_brain.data_retention --prune --no-dry-run
+        if ($LASTEXITCODE -eq 0) {
+            Lsh-Ok "Storage retention prune completed."
+            return $true
+        } else {
+            Lsh-Fail "Storage retention prune encountered errors."
+            return $false
+        }
+    } finally {
+        Pop-Location
     }
 }
 

@@ -185,6 +185,77 @@ def test_live_prune_removes_eligible_files(tmp_path: Path):
     assert tape.exists()
 
 
+def test_non_orphan_wal_is_kept_as_sibling(tmp_path: Path):
+    """When the base .db exists, the .db-wal file is kept as sqlite_sibling."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    base_db = data_dir / "active_run.db"
+    base_db.write_text("sqlite base")
+    wal_file = data_dir / "active_run.db-wal"
+    wal_file.write_text("sqlite wal")
+
+    policy = DataRetentionPolicy(retention_days=14)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    wal_item = next((it for it in items if it.path.name == wal_file.name), None)
+    assert wal_item is not None
+    assert wal_item.action == AuditAction.KEEP
+    assert wal_item.family == "sqlite_sibling"
+
+
+def test_pruning_parent_db_also_cleans_siblings(tmp_path: Path):
+    """Deleting a stale .db also cleans up its -wal and -shm files if present."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    stale_db = data_dir / "stats_old.db"
+    stale_db.write_text("db")
+    stale_wal = data_dir / "stats_old.db-wal"
+    stale_wal.write_text("wal")
+    stale_shm = data_dir / "stats_old.db-shm"
+    stale_shm.write_text("shm")
+
+    os.utime(stale_db, (time.time() - 30 * 86400, time.time() - 30 * 86400))
+    os.utime(stale_wal, (time.time() - 30 * 86400, time.time() - 30 * 86400))
+    os.utime(stale_shm, (time.time() - 30 * 86400, time.time() - 30 * 86400))
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    result = prune_storage(items, dry_run=False)
+    assert result.deleted_count >= 1
+    assert not stale_db.exists()
+    assert not stale_wal.exists()
+    assert not stale_shm.exists()
+
+
+def test_cli_main_dry_run_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    """Test CLI main() execution for dry-run and json modes."""
+    from core_brain.data_retention import main
+
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "stats_sample.db").write_text("sample")
+
+    exit_code = main(["--audit"])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "SPREAD-HUNTER DATA STORAGE AUDIT" in captured.out
+
+    exit_code_json = main(["--json"])
+    assert exit_code_json == 0
+    captured_json = capsys.readouterr()
+    assert "stats_sample.db" in captured_json.out
+
+    exit_code_prune = main(["--prune", "--dry-run"])
+    assert exit_code_prune == 0
+    captured_prune = capsys.readouterr()
+    assert "[DRY-RUN]" in captured_prune.out
+    assert "Would delete" in captured_prune.out
+
+
 def test_inventory_markdown_generation(tmp_path: Path):
     """generate_inventory_markdown produces formatted markdown tables."""
     data_dir = tmp_path / "data"
@@ -198,3 +269,4 @@ def test_inventory_markdown_generation(tmp_path: Path):
     assert "# Data Storage Inventory & Retention Audit" in md
     assert "Reclaimable" in md
     assert "stats_test.db" in md
+
