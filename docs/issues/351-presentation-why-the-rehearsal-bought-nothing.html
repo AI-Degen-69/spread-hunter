@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Why the rehearsal bought nothing — and what you see now</title>
+<title>Why the rehearsal bought nothing &mdash; and what you see now</title>
 <style>
 :root { --ink:rgba(0,0,0,.82); --muted:rgba(0,0,0,.55); --bg:#FAF8F4; --panel:#fff;
   --line:rgba(0,0,0,.10); --accent:#C2410C; --accent-light:#FFF3EA; --accent-dark:#7C2D12;
@@ -67,20 +67,20 @@ footer a { color:var(--accent-dark); }
 <main class="content">
 
 <header>
-  <h1>Why the rehearsal bought nothing — and what you see now</h1>
+  <h1>Why the rehearsal bought nothing &mdash; and what you see now</h1>
   <p class="lede">For three days the rehearsal kept placing orders and never bought a single share.
     We found the reason: every order was parked behind a line of shares already waiting at the very
     same price. The report now shows you that line, out loud, and the market filter stops throwing
     away the good markets.</p>
 </header>
 
-<!-- BLOCK 1 — CENTERPIECE -->
+<!-- BLOCK 1 : CENTERPIECE -->
 <section id="line">
   <h2>The line in front of your order</h2>
   <p>An order only fills after <em>everyone already waiting at its price</em> has been served. The
     rehearsal refuses to guess: it credits a buy only when real trades actually printed at that exact
-    price and cleared the whole line first. So if the line is enormous, "no buy" is the honest answer —
-    not a broken system, and not bad luck either.</p>
+    price and cleared the whole line first. So if the line is enormous, "no buy" is the honest answer
+    &mdash; not a broken system, and not bad luck either.</p>
   <p>Here is the worst case from the recorded rehearsal: a size-5 order with 38,706 shares waiting
     ahead of it. The market must trade <strong>about 7,741 times your order size</strong> before your
     first share is reached. Press <em>Step</em> and watch the line eat those trades.</p>
@@ -94,7 +94,7 @@ footer a { color:var(--accent-dark); }
       <button class="ctrl-btn" id="q-play">Play</button>
       <button class="ctrl-btn" id="q-reset">Reset</button>
       <button class="ctrl-btn" id="q-top">Healthy line</button>
-      <span class="readout" id="q-info">Step: 0 / 40 — 0 of 38,706 shares served</span>
+      <span class="readout" id="q-info">Step: 0 / 40 &mdash; 0 of 38,706 shares served</span>
     </div>
     <div class="figure-caption">Watch the dark bar shrink from the left: each bite is trade volume
       arriving at that price. Your orange block at the far right only lights up when the line is
@@ -102,39 +102,43 @@ footer a { color:var(--accent-dark); }
   </div>
 
   <div class="callout"><p><strong>Nothing here is a fault.</strong> The rehearsal recorded 4 orders,
-    0 buys — and its line ran up to 7,741× your size. Zero buys was the correct answer to that
-    question. The old report simply never showed the line, so it looked like a mystery.</p></div>
+    0 buys &mdash; and its line ran up to 7,741&times; your size. Zero buys was the correct answer to
+    that question. The old report simply never showed the line, so it looked like a mystery.</p></div>
 </section>
 
-<!-- BLOCK 2 — SUPPORT: what the report shows now -->
+<!-- BLOCK 2 : SUPPORT -->
 <section id="report">
   <h2>What the report shows now</h2>
   <p>Every rehearsal report ends with a <strong>Queue depth</strong> section. It reports how many
-    quotes could be measured, the middle and worst size of the line, and — when the rehearsal only
-    got through a single decision pass — a plain sentence saying that no buys are expected. That last
-<!-- BLOCK 3 — SUPPORT: the filter -->
+    quotes could be measured, the middle and worst size of the line, and &mdash; when the rehearsal
+    only got through a single decision pass &mdash; a plain sentence saying that no buys are
+    expected. That last line is the one that would have answered the three-day silence on day one.</p>
+  <div class="bignum"><b>7,741&times;</b><span>worst recorded line, against a size-5 order</span></div>
+  <div class="bignum"><b>0</b><span>buys in 3 days, from ~2,270 posted quotes</span></div>
+</section>
+<!-- BLOCK 3 : SUPPORT -->
 <section id="filter">
   <h2>The filter that let too much go</h2>
-  <p>Markets arrive grouped under a name — and one safety rule refused <em>any</em> market with a
-    group name, meant only to block sub-markets. So "Brazil", "Donald Trump" and
-    "December 31, 2027" — ordinary main events — were turned away before any liquidity check ever
-    ran. On one ranking that produced 95 refusals and left 5 usable markets out of 188.</p>
+  <p>Markets arrive grouped under a name &mdash; and one safety rule refused <em>any</em> market with
+    a group name, meant only to block sub-markets. So "Brazil", "Donald Trump" and
+    "December 31, 2027" &mdash; ordinary main events &mdash; were turned away before any liquidity
+    check ever ran. On one ranking that produced 95 refusals and left 5 usable markets out of 188.</p>
   <p>The rule now refuses only labels that actually name a fragment, and lets plain names through to
     the usual volume, depth, spread and timing checks.</p>
   <div class="split2">
     <div class="card">
-      <h3>Still refused — real fragments</h3>
+      <h3>Still refused &mdash; real fragments</h3>
       <ul>
         <li class="no">Spread -3.5</li>
         <li class="no">Handicap +4</li>
         <li class="no">Game 1</li>
-        <li class="no">Map 3 — Round 2</li>
+        <li class="no">Map 3 &mdash; Round 2</li>
         <li class="no">Over/Under 45.5</li>
-        <li class="no">0.62 – 0.65 price band</li>
+        <li class="no">0.62 &ndash; 0.65 price band</li>
       </ul>
     </div>
     <div class="card">
-      <h3>Now allowed — main-line names</h3>
+      <h3>Now allowed &mdash; main-line names</h3>
       <ul>
         <li class="yes">Brazil</li>
         <li class="yes">Donald Trump</li>
@@ -145,23 +149,34 @@ footer a { color:var(--accent-dark); }
       </ul>
     </div>
   </div>
-  <div class="callout"><p><strong>27 &rarr; 45 markets</strong> now pass on the same frozen 71-market
-    snapshot — 67% more to choose from. All 95 previously-blocked labels were re-checked one by one:
-    only date labels got through, and every true fragment is still refused.</p></div>
+  <div class="callout"><p><strong>27 &rarr; 45 markets</strong> now pass on the same frozen
+    71-market snapshot &mdash; 67% more to choose from. All 95 previously-blocked labels were
+    re-checked one by one: only date labels got through, and every true fragment is still
+    refused.</p></div>
 </section>
 
 <section id="try">
   <h2>Try it yourself</h2>
-  <p>Run a rehearsal from the menu and open the report it writes. Scroll to the bottom — you will
-    now find the Queue depth section with your run's own middle and worst line, plus the
+  <p>Run a rehearsal from the menu and open the report it writes. Scroll to the bottom &mdash; you
+    will now find the Queue depth section with your run's own middle and worst line, plus the
     single-pass note when the run was short. While the rehearsal runs, the market list shows the
     newly-admitted group names instead of dropping them.</p>
 </section>
 
 <footer>
-  Change put live on 2026-10-03 — request
+  Change put live on 2026-10-03 &mdash; request
   <a href="https://github.com/AI-Degen-69/spread-hunter/issues/351">#351</a>,
+
   update <a href="https://github.com/AI-Degen-69/spread-hunter/pull/354">#354</a> (merged).
+  Rehearsal only &mdash; no money was spent by anything on this page.
+</footer>
+
+</main>
+</div>
+
+
+
+
 <script>
 const dpr = window.devicePixelRatio || 1;
 function initCanvas(id){ const c=document.getElementById(id); const x=c.getContext('2d');
@@ -169,7 +184,7 @@ function initCanvas(id){ const c=document.getElementById(id); const x=c.getConte
   x.scale(dpr,dpr); return {canvas:c, ctx:x, w:w, h:h}; }
 
 (function(){
-  const {ctx, w, h} = initCanvas('queueCanvas');
+  const {ctx, w} = initCanvas('queueCanvas');
   const STEPS = 40;
   // Worst recorded line: 38,706 shares ahead of a size-5 order (~7,741x).
   const state = { step: 0, total: 38706, best: false };
@@ -191,21 +206,23 @@ function initCanvas(id){ const c=document.getElementById(id); const x=c.getConte
   }
 
   function draw(){
-    const best = state.best;
-    const total = best ? 12 : state.total;
-    const per = total / STEPS;
+    const total = state.best ? 12 : state.total;
+    // The healthy line clears in a handful of steps; the recorded one never
+    // clears at a realistic pace. That contrast is the whole point.
+    const need = state.best ? 6 : STEPS;
+    const per = total / need;
     const served = Math.min(total, state.step * per);
     const left = total - served;
     const frac = total ? left / total : 0;
 
-    ctx.clearRect(0, 0, w, h);
+    ctx.clearRect(0, 0, w, 230);
     const padX = 26, trackY = 70, trackH = 46, trackW = w - padX * 2;
 
     ctx.fillStyle = MUTED;
     ctx.font = '13px "Segoe UI", Tahoma, sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(best ? 'A healthy line: 12 shares ahead of your 5'
-                      : 'The recorded line: 38,706 shares ahead of your 5', padX, 32);
+    ctx.fillText(state.best ? 'A healthy line: 12 shares ahead of your 5'
+                             : 'The recorded line: 38,706 shares ahead of your 5', padX, 32);
 
     ctx.fillStyle = LINE;
     roundRect(ctx, padX, trackY, trackW, trackH, 8); ctx.fill();
@@ -235,11 +252,11 @@ function initCanvas(id){ const c=document.getElementById(id); const x=c.getConte
     ctx.fillStyle = reached ? '#15803D' : INK;
     ctx.font = '600 15px "Segoe UI", Tahoma, sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(reached ? 'Line cleared — your order fills.'
-                         : 'Line still in front — no buy. ' + fmt(Math.round(left)) + ' shares to go.',
+    ctx.fillText(reached ? 'Line cleared - your order fills.'
+                         : 'Line still in front - no buy. ' + fmt(Math.round(left)) + ' shares to go.',
                  padX, trackY + trackH + 54);
 
-    info.textContent = 'Step: ' + state.step + ' / ' + STEPS + ' — ' + fmt(Math.round(served)) +
+    info.textContent = 'Step: ' + state.step + ' / ' + STEPS + ' - ' + fmt(Math.round(served)) +
       ' of ' + fmt(total) + ' shares served';
   }
 
@@ -272,17 +289,3 @@ function initCanvas(id){ const c=document.getElementById(id); const x=c.getConte
 </script>
 </body>
 </html>
-
-  Rehearsal only — no money was spent by anything on this page.
-</footer>
-
-</main>
-</div>
-
-
-    line is the one that would have answered the three-day silence on day one.</p>
-  <div class="bignum"><b>7,741×</b><span>worst recorded line, against a size-5 order</span></div>
-  <div class="bignum"><b>0</b><span>buys in 3 days, from ~2,270 posted quotes</span></div>
-</section>
-
-
