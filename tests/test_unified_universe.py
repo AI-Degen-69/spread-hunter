@@ -896,6 +896,7 @@ def test_a_bare_name_or_date_group_label_is_not_a_submarket(label):
     "Alabama Total Rushing Yards: O/U 125.5",
     "Memphis Total Rushing Yards: O/U 150.5",
     "74,000", "<76,000", "65-89", "90-114",
+    "\u2191 88,000", "\u2193 2,100", "\u2193 80,000",
 ])
 def test_a_line_shaped_group_label_stays_refused(label):
     # Arrange - real fragments measured on the Oct 2026 rank. Game/Map/Round

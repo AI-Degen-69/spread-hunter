@@ -8,9 +8,9 @@ from typing import Any
 
 from core_brain.config import MakerConfig, load as load_cfg
 from core_brain.kpi import report as kpi_report
-from core_brain.shadow_fills import queue_multiple
 from core_brain.order_registry import OrderRegistry
 from core_brain.runtime_paths import LIVE_ROOT
+from core_brain.shadow_fills import queue_multiple
 from statistical_validation_run.artifacts import (
     build_gate_rows,
     build_sensitivity,
@@ -71,6 +71,9 @@ def _queue_depth_section(registry: OrderRegistry, run_id: str) -> tuple[str, dic
             ).fetchall()
         n_cycles: int | None = len(cycle_rows)
     except Exception:
+        # Telemetry read, not report logic: an unreadable cycle table omits
+        # the warning rather than breaking the report (same never-raises rule
+        # as `registry_cycle_cadence_sec` in core_brain/order_registry.py).
         n_cycles = None
     median = statistics.median(measured) if measured else None
     maximum = max(measured) if measured else None

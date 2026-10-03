@@ -11,6 +11,7 @@ failure available to this system.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -57,6 +58,8 @@ def queue_multiple(
         queue = float(queue_ahead)
         size = float(order_size)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(queue) or not math.isfinite(size):
         return None
     if queue < 0.0 or size <= 0.0:
         return None

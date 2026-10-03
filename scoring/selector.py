@@ -49,7 +49,7 @@ _FRAGMENT_LABEL_RE = re.compile(
     r"spread|handicap|\bO/U\b|\bover/under\b|"
     r"\b(?:game|map|round|set|quarter|period|hole|inning)\b[\s_-]*\d|"
     r"\btotal\b.*\d|"
-    r"^<?[\d,]+(?:\.\d+)?(?:\s*-\s*[\d,]+(?:\.\d+)?)?\)?$|"
+    r"^[↑↓<>]?\s*<?[\d,]+(?:\.\d+)?(?:\s*-\s*[\d,]+(?:\.\d+)?)?\)?$|"
     r"[-+]\d[\d,]*(?:\.\d+)?\s*\)?\s*$",
     re.IGNORECASE,
 )

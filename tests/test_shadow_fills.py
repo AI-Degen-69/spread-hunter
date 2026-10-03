@@ -76,6 +76,14 @@ def test_queue_multiple_returns_none_when_unmeasured():
     assert queue_multiple(100.0, -5.0) is None
 
 
+def test_queue_multiple_returns_none_for_non_finite_inputs():
+    # Review find: NaN/inf would otherwise poison medians and maxima.
+    assert queue_multiple(float("nan"), 5.0) is None
+    assert queue_multiple(float("inf"), 5.0) is None
+    assert queue_multiple(100.0, float("nan")) is None
+    assert queue_multiple(100.0, float("inf")) is None
+
+
 def test_queue_multiple_matches_the_zero_fill_evidence_queues():
     """Issue #351: 2,524 / 5,092 / 38,706 / 6,113 shares ahead at sizes 5-6."""
     multiples = [
