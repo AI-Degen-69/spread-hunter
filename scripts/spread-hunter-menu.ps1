@@ -1190,6 +1190,36 @@ function Resume-ShadowRun {
         Lsh-Fail "An unrecorded rehearsal process for $($script:ShadowRunId) is still alive (PID $($strays[0].ProcessId)). Resume aborted - stop it manually (stop-shadow), then retry."
         return $false
     }
+    # The killed loop's `fleet` row survives it (#352): a loop stopped by
+    # kill never runs the lock's cleanup, and a resume inside the 5-minute
+    # stale window dies with InstanceInUse. No process is alive past this
+    # point (verified above), so release the dead holder's row; fail closed
+    # on anything unexpected.
+    Push-Location $ProjectPath
+    try { $lockShow = & python -m scripts.release_instance_lock --db $script:ShadowDbPath --role fleet } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) {
+        Lsh-Fail "Could not read the fleet lock on $($db.Name); resume aborted - inspect the store, then retry."
+        return $false
+    }
+    $lockRow = $lockShow | ConvertFrom-Json
+    if ($lockRow.holder) {
+        $holderPid = (($lockRow.holder -split ':')[0]) -as [int]
+        if ($null -eq $holderPid) {
+            Lsh-Fail "Unparseable fleet lock holder ($($lockRow.holder)); resume aborted - inspect the store, then retry."
+            return $false
+        }
+        if ($null -ne (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) {
+            Lsh-Fail "Fleet lock holder PID $holderPid is still alive; resume aborted - stop it manually (stop-shadow), then retry."
+            return $false
+        }
+        Push-Location $ProjectPath
+        try { $null = & python -m scripts.release_instance_lock --db $script:ShadowDbPath --role fleet --holder-pid $holderPid } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) {
+            Lsh-Fail "Could not release the dead fleet lock (holder $($lockRow.holder)); resume aborted - inspect the store, then retry."
+            return $false
+        }
+        Lsh-Ok "Released the previous loop's fleet lock (holder $($lockRow.holder))."
+    }
     $stamp = Get-Date -Format "dd-MM_HH-mm"
     $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
     $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
@@ -1241,6 +1271,11 @@ function Resume-ShadowRun {
     # shares per pair, so no double merge and no re-close of settled pairs.
     # A trial store replays its manifest feed via --markets-path.
     Lsh-Step "Starting the rehearsal loop against the existing store..."
+    $beatBefore = $null
+    $runBeatPath = Join-Path $RunDir "shadow_run_$($script:ShadowRunId).json"
+    if (Test-Path $runBeatPath) {
+        try { $beatBefore = [double](Get-Content $runBeatPath -Raw | ConvertFrom-Json).heartbeat_ts } catch { $beatBefore = $null }
+    }
     $shadowArgs = @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId)
     if ($trial) { $shadowArgs += @("--markets-path", $trial.markets_path) }
     $shadowRun = Invoke-WithRehearsalTrialEnv {
@@ -1249,6 +1284,36 @@ function Resume-ShadowRun {
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).out.log") `
             -RedirectStandardError (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log")
+    }
+    # Startup health check (#352): the loop can die seconds after launch
+    # while the script already printed success. The success line below
+    # prints only for a loop that is alive, quiet, and heartbeating on the
+    # same file the dashboard reads, so the two can never disagree again.
+    $resumeErr = Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log"
+    Start-Sleep -Seconds 12
+    $loopDead = $shadowRun.HasExited
+    $loopErr = ""
+    if (Test-Path $resumeErr) { $loopErr = Get-Content $resumeErr -Raw }
+    $beatFresh = $false
+    $beatAdvanced = $false
+    $runBeat = Join-Path $RunDir "shadow_run_$($script:ShadowRunId).json"
+    if (Test-Path $runBeat) {
+        try {
+            $beat = Get-Content $runBeat -Raw | ConvertFrom-Json
+            $beatAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$beat.heartbeat_ts
+            $beatFresh = (-not $beat.finished) -and ($beatAge -lt 60)
+            # A fresh-but-stale beat from the killed loop must not pass: the
+            # replacement has to move the stamp past its pre-launch value.
+            $beatAdvanced = ($null -eq $beatBefore) -or ([double]$beat.heartbeat_ts -gt $beatBefore)
+        } catch { $beatFresh = $false }
+    }
+    if ($loopDead -or ($loopErr -match 'Traceback|InstanceInUse') -or (-not $beatFresh) -or (-not $beatAdvanced)) {
+        Lsh-Fail "Rehearsal loop PID $($shadowRun.Id) did not survive startup; see $resumeErr."
+        # This attempt's screener and dashboard are not in any session record
+        # yet: stop them here or the next resume orphans them beside its own.
+        Stop-Process -Id $screener.Id -Force -ErrorAction SilentlyContinue
+        $null = Stop-ShadowDashboard -RunId $script:ShadowRunId
+        return $false
     }
     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s))."
     $observer = Start-Process -FilePath "python" `
