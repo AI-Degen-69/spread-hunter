@@ -33,6 +33,12 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+@pytest.fixture(autouse=True)
+def clean_snapshot_cache(monkeypatch):
+    monkeypatch.setattr(srv, "_snapshots", {}, raising=False)
+    monkeypatch.setattr(srv, "_snapshot_builders", {}, raising=False)
+
+
 @pytest.fixture
 def temp_db(tmp_path):
     db_file = tmp_path / "01_shadow.db"

@@ -746,8 +746,14 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     Evaluates all matching candidates, preferring running runs (running=True)
     over ended ones, then the freshest heartbeat.
     """
+    now = time.time() if now is None else now
     matched: list[dict] = []
     for path in _shadow_heartbeat_candidates():
+        try:
+            if now - path.stat().st_mtime > SHADOW_RUN_LIST_WINDOW_S:
+                continue
+        except OSError:
+            continue
         run = _read_shadow_heartbeat_file(path, active_db_path, now)
         if run is not None:
             matched.append(run)
@@ -768,6 +774,11 @@ def read_other_live_shadow_runs(active_db_path: str | None, now: float | None = 
     seen_runs: set[str] = set()
 
     for path in _shadow_heartbeat_candidates():
+        try:
+            if now - path.stat().st_mtime > SHADOW_RUN_LIST_WINDOW_S:
+                continue
+        except OSError:
+            continue
         run = _read_shadow_heartbeat_file(path, active_db_path, now, match_db=False)
         if run is None or not run.get("running"):
             continue
@@ -972,6 +983,24 @@ def _recent_shadow_runs(active_db_path: str | None) -> list[dict]:
     )
 
 
+def _recent_shadow_run(active_db_path: str | None) -> dict | None:
+    """`read_shadow_run` on the shared snapshot cache, on its own longer TTL."""
+    return _cached_snapshot(
+        ("shadow-run", active_db_path),
+        lambda: read_shadow_run(active_db_path),
+        ttl=SHADOW_RUN_LIST_TTL_S,
+    )
+
+
+def _recent_other_live_shadow_runs(active_db_path: str | None) -> list[dict]:
+    """`read_other_live_shadow_runs` on the shared snapshot cache."""
+    return _cached_snapshot(
+        ("other-live-shadow-runs", active_db_path),
+        lambda: read_other_live_shadow_runs(active_db_path),
+        ttl=SHADOW_RUN_LIST_TTL_S,
+    )
+
+
 def _resolve_shadow_ring_path() -> Path | None:
     """The cycle ring a live shadow rehearsal is writing, or None.
 
@@ -987,7 +1016,7 @@ def _resolve_shadow_ring_path() -> Path | None:
     or a store this rehearsal is not the one writing.
     """
     try:
-        shadow = read_shadow_run(str(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
+        shadow = _recent_shadow_run(str(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
     except Exception:
         return None
     if not shadow or not shadow.get("running"):
@@ -1381,7 +1410,7 @@ def get_system_status() -> dict:
         "db_is_production": db_identity["is_production"],
         # The rehearsal writing this store, when there is one. None otherwise:
         # the header shows no stopwatch rather than another run's clock.
-        "shadow_run": read_shadow_run(db_identity["path"]),
+        "shadow_run": _recent_shadow_run(db_identity["path"]),
         # The OTHER rehearsals on this machine, including live ones writing a
         # store this page is not pointed at. Named, never read into the numbers
         # above: without them a dead run on a stale store reads as "the engine
@@ -2398,7 +2427,7 @@ def get_scan_state():
 
     active_db = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
     try:
-        shadow = read_shadow_run(active_db, now=now)
+        shadow = _recent_shadow_run(active_db)
     except Exception:
         shadow = None
 
@@ -2511,7 +2540,7 @@ def get_scan_state():
                     stall_reason = "no_heartbeat"
 
     try:
-        other_live_runs = read_other_live_shadow_runs(active_db, now=now)
+        other_live_runs = _recent_other_live_shadow_runs(active_db)
     except Exception:
         other_live_runs = []
 
