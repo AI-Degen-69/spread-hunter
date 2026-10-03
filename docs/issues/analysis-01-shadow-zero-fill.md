@@ -101,11 +101,18 @@ gates" to pause. The fade (54 → 34 quoted markets/day from Sep 27) aligns inst
 2. **Survivors sit deeper.** Average queue multiple on posted quotes rose ~2453x → ~3270x,
    so per-quote fill probability collapsed alongside the ticket count.
 
-**Deliberately not changed here:** relaxing the standing submarket exclusion is a strategy
-change, not a bug fix — it needs the operator's call, not a drive-by edit. The fitting
-next step is running the D12 paired-admission experiment itself (control vs treatment
-arms): it was built exactly to measure whether admitted submarkets fill. No lifecycle,
-ranker, or fill-rule code was touched for this addendum.
+**Chosen fix (Station III-B, same session):** narrowed the group-label veto in
+`identity_allowed` (`scoring/selector.py`) to fragment-shaped labels only — spread /
+handicap lines, game/map/round numbers, over/under and totals numbers, bare numeric
+price bands. Bare country, candidate, party, team, and date labels now pass to the
+unchanged volume/depth/spread/movement/horizon gates. Measured on a frozen 71-market
+venue snapshot: identity admits 27 → 45 (+67%); true fragments (Spread -3.5, Game 1,
+O/U props, price bands) stay refused. The paired-admission treatment arm exists as the
+second stage if this does not restore fills. No lifecycle or fill-rule code touched.
+
+**Live-money flag:** the ranker is shared with live trading, so this widens live
+selection too. It is committed locally, unpushed, and needs Station IV review plus the
+operator's go-ahead before merge.
 
 ## How to verify
 

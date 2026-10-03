@@ -68,3 +68,15 @@
   rejections come from the standing `identity_allowed` rule. No "D12 gates" exist to pause.
 - Fade aligns with Sep 29 #312 universe-empty fixes. Proposed next: run the D12
   paired-admission experiment (control vs treatment) to measure submarket fill rate.
+
+## Issue #351 III-B fix — fragment-precision group-label veto (2026-10-03)
+
+- **Files:** `scoring/selector.py`, `tests/test_unified_universe.py`
+- **Fix:** group-label veto now fires only on fragment shapes (spread/handicap lines,
+  game-map-round numbers, O/U-totals numbers, numeric price bands). Country/candidate/
+  party/team/date labels pass to the unchanged liquidity gates.
+- **Measured:** frozen 71-market snapshot admits 27 -> 45 at identity (+67%); 227+10
+  focused tests green incl. RED-verified new tests; full probe re-run confounded by
+  Saturday-slate venue churn (control 5->6, treatment 7).
+- **Flag:** shared ranker = live selection widens too. Local commit only, needs review
+  + operator go-ahead before merge.
