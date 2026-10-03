@@ -1271,6 +1271,11 @@ function Resume-ShadowRun {
     # shares per pair, so no double merge and no re-close of settled pairs.
     # A trial store replays its manifest feed via --markets-path.
     Lsh-Step "Starting the rehearsal loop against the existing store..."
+    $beatBefore = $null
+    $runBeatPath = Join-Path $RunDir "shadow_run_$($script:ShadowRunId).json"
+    if (Test-Path $runBeatPath) {
+        try { $beatBefore = [double](Get-Content $runBeatPath -Raw | ConvertFrom-Json).heartbeat_ts } catch { $beatBefore = $null }
+    }
     $shadowArgs = @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId)
     if ($trial) { $shadowArgs += @("--markets-path", $trial.markets_path) }
     $shadowRun = Invoke-WithRehearsalTrialEnv {
@@ -1290,16 +1295,24 @@ function Resume-ShadowRun {
     $loopErr = ""
     if (Test-Path $resumeErr) { $loopErr = Get-Content $resumeErr -Raw }
     $beatFresh = $false
+    $beatAdvanced = $false
     $runBeat = Join-Path $RunDir "shadow_run_$($script:ShadowRunId).json"
     if (Test-Path $runBeat) {
         try {
             $beat = Get-Content $runBeat -Raw | ConvertFrom-Json
             $beatAge = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$beat.heartbeat_ts
             $beatFresh = (-not $beat.finished) -and ($beatAge -lt 60)
+            # A fresh-but-stale beat from the killed loop must not pass: the
+            # replacement has to move the stamp past its pre-launch value.
+            $beatAdvanced = ($null -eq $beatBefore) -or ([double]$beat.heartbeat_ts -gt $beatBefore)
         } catch { $beatFresh = $false }
     }
-    if ($loopDead -or ($loopErr -match 'Traceback|InstanceInUse') -or (-not $beatFresh)) {
+    if ($loopDead -or ($loopErr -match 'Traceback|InstanceInUse') -or (-not $beatFresh) -or (-not $beatAdvanced)) {
         Lsh-Fail "Rehearsal loop PID $($shadowRun.Id) did not survive startup; see $resumeErr."
+        # This attempt's screener and dashboard are not in any session record
+        # yet: stop them here or the next resume orphans them beside its own.
+        Stop-Process -Id $screener.Id -Force -ErrorAction SilentlyContinue
+        $null = Stop-ShadowDashboard -RunId $script:ShadowRunId
         return $false
     }
     Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s))."
