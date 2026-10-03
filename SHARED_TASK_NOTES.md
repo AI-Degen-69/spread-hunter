@@ -36,3 +36,19 @@
 - **Strength Badge:** Strong
 - **Status:** Implemented and verified.
 
+
+## Issue #351 — zero-fill 01_shadow diagnosis + queue-depth surfacing
+
+- **Area / Files:** `core_brain/shadow_fills.py`, `core_brain/statistics_report.py`,
+  `tests/test_shadow_fills.py`, `tests/test_statistics_report.py`,
+  `docs/issues/analysis-01-shadow-zero-fill.md`
+- **Problem:** A `01_shadow` rehearsal recorded 0 fills with no explanation; deep queue
+  multiples (420x–7741x) and a single decision cycle were invisible in the shadow report.
+- **Solution:** Pure `queue_multiple()` helper; queue-depth stats + single-cycle warning in the
+  shadow report (shown even when the close-count gate fails); diagnosis doc with
+  reported-not-reproduced evidence and read-only confirm queries. Queue-bar enforcement deferred
+  (shared ranker feeds live trading).
+- **Benefits:** The next zero-fill run explains itself in the report instead of reading as a
+  fill-model defect.
+- **Status:** Implemented and verified — `python -m pytest -q tests/test_shadow_fills.py
+  tests/test_maker_queue_bar.py tests/test_statistics_report.py` → 48 passed (agent-run).

@@ -1,35 +1,36 @@
-# Constraints: Issue #352 — Shadow resume vs the killed loop's instance lock
+# Constraints: Issue #351 — Diagnose zero-fill 01_shadow rehearsal and improve queue selection
 
-Branch: i352/shadow-resume-reports-success-while-the-new-loop | Issue: #352
+Branch: i351/diagnose-zero-fill-01-shadow-rehearsal-and-improve | Issue: #351
 
 ## Quality & Tests
-- **Zero regressions**: `tests/test_instance_lock.py` stays green. Full-repo suite
-  stays with GitHub CI.
-- **Every changed behaviour needs a test that fails without the change.** The new
-  Python helper ships with `tests/test_release_instance_lock.py`; the PowerShell
-  wiring is verified by an operator resume smoke (no pytest harness runs `.ps1`).
-- **Anti-cheat**: no skipped tests, no deleted assertions, no new suppressions.
-- **No new external dependencies**: standard library only (`sqlite3`, `argparse`,
-  `json`, `time`). No new config keys, no new env vars.
+- **Zero regressions**: `tests/test_shadow_fills.py`, `tests/test_maker_queue_bar.py`,
+  `tests/test_statistics_report.py` stay green. Full-repo suite stays with GitHub CI.
+- **Every changed behaviour needs a test that fails without the change.** The queue-multiple
+  helper ships with helper + evidence-value tests; the report change ships with
+  single-cycle vs multi-cycle fixture tests.
+- **Anti-cheat**: no skipped tests, no deleted assertions, no new suppressions, no linter silencing.
+- **No new external dependencies**: standard library only (`statistics`, `sqlite3` via existing
+  `OrderRegistry`). No new config keys, no new env vars.
 
 ## Behaviour Boundaries
-- **Resume path only.** `Resume-ShadowRun` in `scripts/spread-hunter-menu.ps1`
-  plus one new helper script. The lock protocol (`instance_lock`, adopt-if-stale),
-  the 300 s stale threshold, and every live-trading path are OUT OF SCOPE.
-- **Fail closed, never force.** The helper releases a `fleet` row only when its
-  holder PID is verified dead by the caller; a live holder, a mismatched holder,
-  or an unreadable table refuses. No `--force` flag, no blind delete.
-- **`data/orders.db` is never touched.** The helper refuses the production
-  registry path the same way the menu already does.
-- **Success line means alive.** "Rehearsal loop running" prints only after the
-  health check passes; otherwise a failure line prints.
+- **Shadow-only, observational.** Touch only `core_brain/shadow_fills.py` (pure helper),
+  `core_brain/statistics_report.py` (report lines), optionally `core_brain/kpi.py`
+  (`median_queue_multiple` next to `median_queue_ahead`), tests, and one new diagnosis doc
+  under `docs/issues/`. The tape-only fill rule (`credit_fills`), the queue-bar files
+  (`scoring/selector.py`, `scoring/config.py`, `scripts/filter_markets.py`), and the
+  lifecycle files (`core_brain/shadow_exec.py`, `core_brain/shadow_run.py`) are OUT OF SCOPE.
+- **Queue-bar enforcement is deferred** (shared ranker feeds live trading; normal ranking
+  supplies no `queue_minutes_fn`). Documented as proposed-not-implemented, never enforced here.
+- **`data/orders.db` is never touched.** No writes to and no deletion of any `*01_shadow*` store.
+  Operator verification works on scratch copies only.
+- **Language**: never describe shadow fills as venue performance. Evidence from the absent
+  stores is labeled "reported by ticket; not reproduced in this checkout".
 
 ## Performance Budgets
-- Resume gains at most ~20 s wall time (stop-verify + release + startup check).
-- Health check: one process probe + one small-file read, no polling loops
-  longer than 15 s total.
+- Helper is O(1) pure arithmetic; report adds one pass over run-attributed quotes plus one
+  `cycle_intent` scan — no new network, no new polling loops.
 
 ## Out of Scope (record, do not fix)
-- `instance_lock` protocol or `INSTANCE_LOCK_STALE_MS` changes.
-- Heartbeat-file retention/pruning and ring rotation policy.
-- Issue #351 (zero-fill diagnosis) — separate issue, separate branch.
+- Tape-only fill rule changes, live quoting changes.
+- `--minutes` run-duration guard (would break intended short smoke runs).
+- Issue #352 (shadow resume lock) — separate issue, separate branch.
