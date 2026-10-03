@@ -155,7 +155,7 @@ def test_scan_state_ignores_an_ended_shadow_run(client, tmp_path, monkeypatch):
     missing_hb = tmp_path / "no_such_heartbeat.json"
     monkeypatch.setattr(
         srv, "read_shadow_run",
-        lambda *a, **k: {"running": False, "heartbeat_age_sec": 900.0, "run_id": "shadow-01"},
+        lambda *a, **k: {"running": False, "ended": True, "end_reason": "heartbeat_stale", "heartbeat_age_sec": 900.0, "run_id": "shadow-01"},
     )
     set_ring_override(ring)
     set_heartbeat_override(missing_hb)
@@ -165,7 +165,197 @@ def test_scan_state_ignores_an_ended_shadow_run(client, tmp_path, monkeypatch):
         set_ring_override(None)
         set_heartbeat_override(None)
 
-    assert res.json()["scan_state"] == "STALLED"
+    data = res.json()
+    assert data["scan_state"] == "STALLED"
+    assert data["stall_reason"] == "heartbeat_stale"
+
+
+def test_scan_state_shadow_fresh_provenance(client, tmp_path, monkeypatch):
+    ring = _fresh_quoting_ring(tmp_path)
+    missing_hb = tmp_path / "no_such_heartbeat.json"
+    monkeypatch.setattr(
+        srv, "read_shadow_run",
+        lambda *a, **k: {
+            "running": True,
+            "ended": False,
+            "heartbeat_age_sec": 2.0,
+            "run_id": "shadow-01",
+            "heartbeat_file": "runtime/shadow_run_shadow-01.json",
+            "db_path": "/path/to/01_shadow.db",
+            "pid": 1234,
+        },
+    )
+    set_ring_override(ring)
+    set_heartbeat_override(missing_hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    data = res.json()
+    assert data["scan_state"] == "SCANNING"
+    assert data["stall_reason"] is None
+    src = data["heartbeat_source"]
+    assert src["kind"] == "shadow_run"
+    assert src["run_id"] == "shadow-01"
+    assert src["file"] == "runtime/shadow_run_shadow-01.json"
+    assert src["db_path"] == "/path/to/01_shadow.db"
+    assert src["pid"] == 1234
+
+
+def test_scan_state_shadow_finished_gives_stalled_and_reason(client, tmp_path, monkeypatch):
+    ring = _fresh_quoting_ring(tmp_path)
+    missing_hb = tmp_path / "no_such_heartbeat.json"
+    monkeypatch.setattr(
+        srv, "read_shadow_run",
+        lambda *a, **k: {
+            "running": False,
+            "ended": True,
+            "end_reason": "finished",
+            "heartbeat_age_sec": 2.0,
+            "run_id": "shadow-01",
+            "heartbeat_file": "runtime/shadow_run_shadow-01.json",
+        },
+    )
+    set_ring_override(ring)
+    set_heartbeat_override(missing_hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    data = res.json()
+    assert data["scan_state"] == "STALLED"
+    assert data["stall_reason"] == "finished"
+
+
+def test_scan_state_shadow_process_gone_gives_stalled_and_reason(client, tmp_path, monkeypatch):
+    ring = _fresh_quoting_ring(tmp_path)
+    missing_hb = tmp_path / "no_such_heartbeat.json"
+    monkeypatch.setattr(
+        srv, "read_shadow_run",
+        lambda *a, **k: {
+            "running": False,
+            "ended": True,
+            "end_reason": "process_gone",
+            "heartbeat_age_sec": 20.0,
+            "run_id": "shadow-01",
+            "heartbeat_file": "runtime/shadow_run_shadow-01.json",
+            "pid": 99999,
+        },
+    )
+    set_ring_override(ring)
+    set_heartbeat_override(missing_hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    data = res.json()
+    assert data["scan_state"] == "STALLED"
+    assert data["stall_reason"] == "process_gone"
+
+
+def test_scan_state_no_heartbeat_gives_stalled_and_reason(client, tmp_path, monkeypatch):
+    ring = _fresh_quoting_ring(tmp_path)
+    missing_hb = tmp_path / "no_such_heartbeat.json"
+    monkeypatch.setattr(srv, "read_shadow_run", lambda *a, **k: None)
+    set_ring_override(ring)
+    set_heartbeat_override(missing_hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    data = res.json()
+    assert data["scan_state"] == "STALLED"
+    assert data["stall_reason"] == "no_heartbeat"
+    assert data["heartbeat_source"]["kind"] == "none"
+
+
+def test_scan_state_heartbeat_unreadable_gives_stalled_and_reason(client, tmp_path, monkeypatch):
+    ring = _fresh_quoting_ring(tmp_path)
+    bad_hb = tmp_path / "malformed_heartbeat.json"
+    bad_hb.write_text("invalid json content", encoding="utf-8")
+    monkeypatch.setattr(srv, "read_shadow_run", lambda *a, **k: None)
+    set_ring_override(ring)
+    set_heartbeat_override(bad_hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    data = res.json()
+    assert data["scan_state"] == "STALLED"
+    assert data["stall_reason"] == "heartbeat_unreadable"
+
+
+def test_scan_state_live_engine_fallback_provenance(client, tmp_path, monkeypatch):
+    ring = _fresh_quoting_ring(tmp_path)
+    fresh_hb = tmp_path / "live_poll_heartbeat.json"
+    fresh_hb.write_text(
+        json.dumps([{"ts": int(time.time() * 1000), "cycle": 9, "errors": 0, "pid": 4321}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(srv, "read_shadow_run", lambda *a, **k: None)
+    set_ring_override(ring)
+    set_heartbeat_override(fresh_hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    data = res.json()
+    assert data["scan_state"] == "SCANNING"
+    src = data["heartbeat_source"]
+    assert src["kind"] == "live_engine"
+    assert src["db_path"] is None
+    assert src["pid"] == 4321
+
+
+def test_scan_state_ticket_scenario_dead_here_live_elsewhere(client, tmp_path, monkeypatch):
+    # Dead run on displayed store, live run on another store
+    ring = _fresh_quoting_ring(tmp_path)
+    missing_hb = tmp_path / "no_such_heartbeat.json"
+    monkeypatch.setattr(
+        srv, "read_shadow_run",
+        lambda *a, **k: {
+            "running": False,
+            "ended": True,
+            "end_reason": "process_gone",
+            "heartbeat_age_sec": 4800.0,
+            "run_id": "shadow-01",
+            "heartbeat_file": "runtime/shadow_run_shadow-01.json",
+        },
+    )
+    monkeypatch.setattr(
+        srv, "read_other_live_shadow_runs",
+        lambda *a, **k: [{
+            "run_id": "ladder-live",
+            "db_path": "/path/to/NN_shadow_ladder.db",
+            "heartbeat_file": "runtime/shadow_run_ladder-live.json",
+        }],
+    )
+    set_ring_override(ring)
+    set_heartbeat_override(missing_hb)
+    try:
+        res = client.get("/api/scan-state")
+    finally:
+        set_ring_override(None)
+        set_heartbeat_override(None)
+
+    data = res.json()
+    assert data["scan_state"] == "STALLED"
+    assert data["stall_reason"] == "process_gone"
+    assert data["seconds_since_heartbeat"] == pytest.approx(4800.0, abs=2.0)
+    assert len(data["other_live_runs"]) == 1
+    assert data["other_live_runs"][0]["run_id"] == "ladder-live"
 
 
 # --- ring resolution --------------------------------------------------------

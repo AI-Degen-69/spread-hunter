@@ -2426,6 +2426,20 @@ th[aria-sort] .ot-sort-btn {
   border-radius: 4px;
   border: 1px dashed var(--border-strong);
 }
+#scan-engine-elsewhere,
+.engine-elsewhere-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: transparent;
+  padding: 2px 6px;
+  margin-top: 2px;
+  margin-left: 4px;
+  display: inline-block;
+  border-radius: 4px;
+  border: 1px dashed var(--border-strong);
+}
 /* Why a trade closed. Provenance, not state: an aged-out rescue and a grace
    expiry are both finished trades, and DESIGN.md reserves every saturated hue
    for the live-state vocabulary -- so the reason sits in the quiet gray band,

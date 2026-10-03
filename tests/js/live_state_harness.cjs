@@ -208,8 +208,108 @@ function scanPillVerdicts() {
     idleAging: app.scanPillState('IDLE', 75),
     idleLongGone: app.scanPillState('IDLE', 300),
     stalled: app.scanPillState('STALLED', 3),
+    stalledFinished: app.scanPillState('STALLED', 3, null, 'finished'),
+    stalledProcessGone: app.scanPillState('STALLED', 3, null, 'process_gone'),
     unrecognised: app.scanPillState('WAT', 3),
     missing: app.scanPillState(undefined, 3),
+  };
+}
+
+function enginePillVerdicts() {
+  const pillEl = new FakeEl('span');
+  pillEl.id = 'scan-state-pill';
+  const stateEl = new FakeEl('span');
+  stateEl.id = 'scan-engine-state';
+  const elsewhereEl = new FakeEl('span');
+  elsewhereEl.id = 'scan-engine-elsewhere';
+  elements.set('scan-state-pill', pillEl);
+  elements.set('scan-engine-state', stateEl);
+  elements.set('scan-engine-elsewhere', elsewhereEl);
+
+  const render = (scanState) => {
+    app.renderScanStatePill(scanState);
+    return {
+      pillClass: pillEl.className,
+      pillTitle: pillEl.title,
+      stateHtml: stateEl.innerHTML,
+      elsewhereDisplay: elsewhereEl.style.display,
+      elsewhereText: elsewhereEl.textContent,
+      elsewhereTitle: elsewhereEl.title,
+    };
+  };
+
+  const shadowFresh = {
+    scan_state: 'SCANNING',
+    seconds_since_heartbeat: 2.5,
+    heartbeat_source: {
+      kind: 'shadow',
+      run_id: 'trial-01',
+      db_path: 'data/trial_01.db',
+      file: 'runtime/shadow_run_trial-01.json',
+      pid: 1234,
+    },
+    stall_reason: null,
+    other_live_runs: [],
+  };
+
+  const shadowFinished = {
+    scan_state: 'STALLED',
+    seconds_since_heartbeat: 120,
+    heartbeat_source: {
+      kind: 'shadow',
+      run_id: 'trial-01',
+      db_path: 'data/trial_01.db',
+      file: 'runtime/shadow_run_trial-01.json',
+      pid: 1234,
+    },
+    stall_reason: 'finished',
+    other_live_runs: [],
+  };
+
+  const shadowDeadOtherLive = {
+    scan_state: 'STALLED',
+    seconds_since_heartbeat: 4800,
+    stall_reason: 'process_gone',
+    heartbeat_source: {
+      kind: 'shadow',
+      run_id: 'trial-01',
+      db_path: 'data/trial_01.db',
+      file: 'runtime/shadow_run_trial-01.json',
+      pid: 1234,
+    },
+    other_live_runs: [
+      {
+        run_id: 'ladder-live',
+        db_path: 'data/NN_shadow.db',
+        heartbeat_file: 'runtime/shadow_run_ladder-live.json',
+      },
+    ],
+  };
+
+  return {
+    reasons: {
+      finished: app.engineReasonText('finished'),
+      process_gone: app.engineReasonText('process_gone'),
+      heartbeat_stale: app.engineReasonText('heartbeat_stale'),
+      no_heartbeat: app.engineReasonText('no_heartbeat'),
+      heartbeat_unreadable: app.engineReasonText('heartbeat_unreadable'),
+    },
+    provenance: {
+      live: app.engineProvenanceText({
+        heartbeat_source: {
+          kind: 'live',
+          file: 'runtime/live_poll_heartbeat.json',
+          pid: 9999,
+        },
+      }),
+      shadow: app.engineProvenanceText(shadowFresh),
+      none: app.engineProvenanceText({}),
+    },
+    rendered: {
+      shadowFresh: render(shadowFresh),
+      shadowFinished: render(shadowFinished),
+      shadowDeadOtherLive: render(shadowDeadOtherLive),
+    },
   };
 }
 
@@ -282,6 +382,7 @@ if (script === 'dbmode') out = dbModeVerdicts();
 else if (script === 'trialbanner') out = trialBannerVerdicts();
 else if (script === 'marketscan') out = marketScanVerdicts();
 else if (script === 'scanpill') out = scanPillVerdicts();
+else if (script === 'enginepill') out = enginePillVerdicts();
 else if (script === 'pills') out = pillVerdicts();
 else if (script === 'keys') out = keyVerdicts();
 else if (script === 'backend') out = backendSequence();
@@ -290,6 +391,7 @@ else out = {
   keys: keyVerdicts(),
   backend: backendSequence(),
   scanpill: scanPillVerdicts(),
+  enginepill: enginePillVerdicts(),
   guardrailHud: guardrailHudVerdict(),
   marketscan: marketScanVerdicts(),
   trialbanner: trialBannerVerdicts(),

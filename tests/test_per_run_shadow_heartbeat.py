@@ -123,3 +123,95 @@ def test_a_heartbeat_for_another_store_is_still_not_surfaced(tmp_path, monkeypat
     _hb(runtime, "shadow_run_shadow-03.json", tmp_path / "03_shadow_b.db", "shadow-03")
 
     assert srv.read_shadow_run(str(tmp_path / "01_shadow_a.db")) is None
+
+
+def test_read_shadow_run_includes_provenance_and_end_reason(tmp_path, monkeypatch):
+    runtime = _wire_runtime(tmp_path, monkeypatch)
+    db = tmp_path / "01_shadow.db"
+    _hb(runtime, "shadow_run_shadow-01.json", db, "shadow-01")
+    now = STARTED_AT + 62.0
+
+    run = srv.read_shadow_run(str(db), now=now)
+
+    assert run is not None
+    assert run["heartbeat_file"] == "runtime/shadow_run_shadow-01.json"
+    assert run["end_reason"] is None
+    assert run["running"] is True
+
+
+def test_read_shadow_run_prefers_running_over_stale_on_same_store(tmp_path, monkeypatch):
+    runtime = _wire_runtime(tmp_path, monkeypatch)
+    db = tmp_path / "01_shadow.db"
+    # An older ended/stale file that comes first alphabetically
+    (runtime / "shadow_run_shadow-00-stale.json").write_text(json.dumps({
+        "pid": 4242,
+        "run_id": "shadow-00-stale",
+        "started_at": STARTED_AT - 1000.0,
+        "minutes": 60.0,
+        "interval": 5.0,
+        "db_path": str(db),
+        "heartbeat_ts": STARTED_AT - 500.0,
+        "finished": True,
+    }), encoding="utf-8")
+    # A fresh running file
+    _hb(runtime, "shadow_run_shadow-01-live.json", db, "shadow-01-live")
+    now = STARTED_AT + 62.0
+
+    run = srv.read_shadow_run(str(db), now=now)
+
+    assert run is not None
+    assert run["run_id"] == "shadow-01-live"
+    assert run["running"] is True
+
+
+def test_read_other_live_shadow_runs_surfaces_only_identity(tmp_path, monkeypatch):
+    runtime = _wire_runtime(tmp_path, monkeypatch)
+    db_active = tmp_path / "01_shadow_active.db"
+    db_other = tmp_path / "02_shadow_other.db"
+
+    _hb(runtime, "shadow_run_shadow-01.json", db_active, "shadow-01")
+    _hb(runtime, "shadow_run_shadow-02.json", db_other, "shadow-02")
+    now = STARTED_AT + 62.0
+
+    others = srv.read_other_live_shadow_runs(str(db_active), now=now)
+
+    assert len(others) == 1
+    other = others[0]
+    assert other["run_id"] == "shadow-02"
+    assert other["heartbeat_file"] == "runtime/shadow_run_shadow-02.json"
+    assert other["db_path"] == str(db_other.resolve())
+    # Crucial: no cycle, cadence, age, or performance metrics from another store
+    for forbidden in ("cycle", "cadence_sec", "heartbeat_age_sec", "elapsed_sec", "interval", "minutes"):
+        assert forbidden not in other
+
+
+def test_process_started_at_tolerates_divergence_from_started_at(tmp_path, monkeypatch):
+    runtime = _wire_runtime(tmp_path, monkeypatch)
+    db = tmp_path / "01_shadow.db"
+    # process_started_at matches current process start time
+    import os
+    pid = os.getpid()
+    # Mock _is_pid_alive to verify process_started_at is checked
+    checked_proc_starts = []
+    real_is_pid_alive = srv._is_pid_alive
+    def spy_is_pid_alive(p, started):
+        checked_proc_starts.append(started)
+        return True
+
+    monkeypatch.setattr(srv, "_is_pid_alive", spy_is_pid_alive)
+    (runtime / "shadow_run_shadow-01.json").write_text(json.dumps({
+        "pid": pid,
+        "run_id": "shadow-01",
+        "started_at": STARTED_AT,
+        "process_started_at": STARTED_AT + 120.0,
+        "minutes": 60.0,
+        "interval": 5.0,
+        "db_path": str(db),
+        "heartbeat_ts": STARTED_AT + 130.0,
+        "finished": False,
+    }), encoding="utf-8")
+
+    run = srv.read_shadow_run(str(db), now=STARTED_AT + 132.0)
+    assert run is not None
+    assert checked_proc_starts == [STARTED_AT + 120.0]
+
