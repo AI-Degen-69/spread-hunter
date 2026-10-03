@@ -20,15 +20,12 @@ EXIT_OK = 0
 EXIT_REFUSED = 2
 EXIT_ERROR = 1
 
-_REFUSAL = SystemExit
-
-
 def _refuse(msg: str) -> "NoReturn":
-    raise _REFUSAL(EXIT_REFUSED)
+    raise SystemExit(EXIT_REFUSED)
 
 
 def _fail(msg: str) -> "NoReturn":
-    raise _REFUSAL(EXIT_ERROR)
+    raise SystemExit(EXIT_ERROR)
 
 
 def _guard_production(db: Path) -> None:
@@ -100,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.holder_pid is None:
         try:
             row = read_lock(args.db, args.role)
-        except _REFUSAL as exc:
+        except SystemExit as exc:
             code = int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
             print(json.dumps({"holder": None, "age_ms": None}))
             return code
@@ -112,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         if row is not None and not released:
             _refuse(f"Holder {row['holder']} does not match PID "
                       f"{args.holder_pid}; refusing.")
-    except _REFUSAL as exc:
+    except SystemExit as exc:
         code = int(exc.code) if isinstance(exc.code, int) else EXIT_ERROR
         print(json.dumps({"released": False, "holder": None,
                           "age_ms": None, "error": str(exc)}))
