@@ -7,8 +7,11 @@ run -- see `core_brain/markets.py:recent_trades`.
 """
 from __future__ import annotations
 
+import pytest
+
 from core_brain.shadow_fills import (
     ShadowFill, ShadowRestingOrder, credit_fills, queue_ahead_at,
+    queue_multiple,
 )
 
 
@@ -58,6 +61,44 @@ def test_volume_at_another_price_or_token_credits_nothing():
                                      "tok-dn": {0.47: 999.0}})
 
     assert fills == []
+
+
+def test_queue_multiple_is_queue_over_size():
+    assert queue_multiple(100.0, 5.0) == 20.0
+    assert queue_multiple(0.0, 5.0) == 0.0
+
+
+def test_queue_multiple_returns_none_when_unmeasured():
+    assert queue_multiple(None, 5.0) is None
+    assert queue_multiple(-1.0, 5.0) is None
+    assert queue_multiple(100.0, None) is None
+    assert queue_multiple(100.0, 0.0) is None
+    assert queue_multiple(100.0, -5.0) is None
+
+
+def test_queue_multiple_matches_the_zero_fill_evidence_queues():
+    """Issue #351: 2,524 / 5,092 / 38,706 / 6,113 shares ahead at sizes 5-6."""
+    multiples = [
+        queue_multiple(2524.0, 6.0),
+        queue_multiple(5092.0, 6.0),
+        queue_multiple(38706.0, 5.0),
+        queue_multiple(6113.0, 5.0),
+    ]
+    assert all(m is not None for m in multiples)
+    assert min(multiples) == pytest.approx(420.0, abs=5.0)
+    assert max(multiples) == pytest.approx(7741.0, abs=5.0)
+
+
+def test_queue_multiple_explains_why_deep_queues_never_fill():
+    """A multiple of M needs tape volume above the queue ahead, not above M x size."""
+    multiple = queue_multiple(60.0, 5.0)
+    assert multiple == pytest.approx(12.0)
+    shallow, _ = credit_fills([_order(size=5.0, queue_ahead=60.0)],
+                              {"tok-up": {0.47: 60.0}})
+    assert shallow == []
+    deep, _ = credit_fills([_order(size=5.0, queue_ahead=60.0)],
+                            {"tok-up": {0.47: 61.0}})
+    assert deep == [ShadowFill("ord-1", "tok-up", 0.47, 1.0)]
 
 
 def test_two_orders_at_one_price_share_the_volume_in_post_order():
