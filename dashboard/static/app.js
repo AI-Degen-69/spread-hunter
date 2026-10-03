@@ -68,6 +68,15 @@ let lastTrialReadiness = null;
 let lastGuardHealth = null;
 let lastGuardAlerts = null;
 
+/* ── Held-read receipt times (Issue #348) ───────────────────────────────
+ * When a poll read fails or times out, each pill keeps its last known-good
+ * payload while the backend is still reachable, ageing it through the
+ * existing ramps. These stamps record when each retained payload arrived so
+ * the hold can advance its age instead of replaying a frozen one. */
+let lastScanStateAtMs = null;
+let lastKpiAtMs = null;
+let lastStatusAtMs = null;
+
 /* ── Payload version (Issue #251) ─────────────────────────────────────
  * The static files and the Python backend are served by different processes,
  * so a page reload can outrun a backend restart: the frontend then reads
@@ -205,7 +214,24 @@ function scanIntervalSec(status) {
  * stale is amber: something is wrong, but the loop is not gone. "We cannot
  * read the process registry" is UNKNOWN, never DOWN -- inventing an outage
  * out of a missing file is the same lie in the other direction. */
-function marketScanState(status, kpi) {
+/* Pick the payload a pill renders: the current read, the held last-good
+ * payload while the backend is still reachable, or nothing. Pure: the caller
+ * passes `nowMs` so the harness controls time. The age offset advances the
+ * held reading through the existing ramps instead of replaying a frozen age. */
+function resolveHeldRead(current, last, lastAtMs, nowMs, stale) {
+  if (current !== null && current !== undefined) {
+    return { payload: current, ageOffsetSec: 0, readFailed: false };
+  }
+  if ((last !== null && last !== undefined) && !stale) {
+    const base = Number(lastAtMs);
+    const now = Number(nowMs);
+    const off = (isFinite(base) && isFinite(now) && now >= base) ? (now - base) / 1000 : 0;
+    return { payload: last, ageOffsetSec: off, readFailed: true };
+  }
+  return { payload: null, ageOffsetSec: 0, readFailed: true };
+}
+
+function marketScanState(status, kpi, opts) {
   if (!status || status.registry_unreadable) {
     return { state: 'unknown', label: 'SCAN UNKNOWN',
              title: 'Cannot read the process registry, so the state of the Market Filter is unknown.' };
@@ -215,23 +241,32 @@ function marketScanState(status, kpi) {
     return { state: 'down', label: 'SCAN DOWN',
              title: 'No Market Filter process (scripts.filter_loop) is running. Nothing is scanning markets.' };
   }
-  const age = kpi && kpi.funnel ? kpi.funnel.snapshot_age : null;
+  const kpiFailed = !!(opts && opts.kpiReadFailed);
+  const ageOff = (opts && isFinite(opts.ageOffsetSec)) ? opts.ageOffsetSec : 0;
+  let age = kpi && kpi.funnel ? kpi.funnel.snapshot_age : null;
+  if (typeof age === 'number' && ageOff) age += ageOff;
+  const heldNote = (kpiFailed && (kpi !== null && kpi !== undefined))
+    ? ' Current read did not land; showing last reading.' : '';
   if (age === null || age === undefined) {
+    if (kpiFailed) {
+      return { state: 'degraded', label: 'SCAN DEGRADED', ageSec: null,
+               title: 'The Market Filter is running, but the KPI read did not land, so the snapshot age is unknown.' };
+    }
     return { state: 'degraded', label: 'SCAN DEGRADED', ageSec: null,
              title: 'The Market Filter is running but has not written runtime/pipeline.json yet.' };
   }
   if (age > scanIntervalSec(status) * 2) {
     return { state: 'degraded', label: 'SCAN DEGRADED', ageSec: age,
-             title: 'The Market Filter is running, but its last snapshot is older than two scan cycles.' };
+             title: 'The Market Filter is running, but its last snapshot is older than two scan cycles.' + heldNote };
   }
   return { state: 'running', label: 'SCAN RUNNING', ageSec: age,
-           title: 'The Market Filter is running and its snapshot is fresh.' };
+           title: 'The Market Filter is running and its snapshot is fresh.' + heldNote };
 }
 
-function renderMarketScanPill(status, kpi) {
+function renderMarketScanPill(status, kpi, opts) {
   const el = document.getElementById('market-scan-pill');
   if (!el) return;
-  const v = marketScanState(status, kpi);
+  const v = marketScanState(status, kpi, opts);
   el.className = 'pill state-' + v.state;
   el.title = v.title;
   const dot = (v.state === 'running') ? '<span class="pulse-dot active"></span>'
@@ -568,7 +603,12 @@ function renderCachedSections() {
   // calls it unconditionally (see pollStatus) so a dead endpoint hides the
   // trackers on every tick.
   if (paintable(tab3, document.getElementById('kanban-board')) && currentKpi) {
-    renderScreener(currentKpi, lastScanState, lastStatus);
+    // Cached repaint re-resolves the ENGINE hold at paint time so its age
+    // keeps advancing instead of freezing at the last poll's value (#348).
+    const cacheNowMs = Date.now();
+    const cacheEngine = resolveHeldRead(null, lastScanState, lastScanStateAtMs, cacheNowMs, backendStale);
+    renderScreener(currentKpi, cacheEngine.payload, lastStatus,
+      { ageOffsetSec: cacheEngine.ageOffsetSec, readFailed: cacheEngine.readFailed });
     renderTrialReadiness(lastTrialReadiness);
   }
 }
@@ -5606,7 +5646,7 @@ function engineProvenanceText(scanState) {
   return src.file || 'unknown source';
 }
 
-function renderScanStatePill(scanState) {
+function renderScanStatePill(scanState, opts) {
   const headerPill = document.getElementById('scan-state-pill');
   if (!headerPill) return;
   const stateText = document.getElementById('scan-engine-state');
@@ -5618,22 +5658,29 @@ function renderScanStatePill(scanState) {
   // heartbeat ages through the ramp on the filter's ~5s cadence thresholds.
   // This element IS the pill, so it takes the state class and the inner dot
   // rather than a nested statePillHtml().
+  // Issue #348: a failed read holds the last payload (resolved by the
+  // caller) and ages it via opts.ageOffsetSec; the tooltip says the read
+  // did not land instead of pretending the verdict is fresh.
+  const ageOffsetSec = (opts && isFinite(opts.ageOffsetSec)) ? opts.ageOffsetSec : 0;
+  const readFailed = !!(opts && opts.readFailed);
   if (scanState) {
     const raw = scanState.scan_state || '--';
     const hbAge = scanState.seconds_since_heartbeat;
+    const effHbAge = (typeof hbAge === 'number' && isFinite(hbAge) && ageOffsetSec)
+      ? hbAge + ageOffsetSec : hbAge;
     const telemetryError = scanState.telemetry_error;
-    const state = telemetryError ? 'unknown' : scanPillState(raw, hbAge, scanState.cadence_sec, scanState.stall_reason);
+    const state = telemetryError ? 'unknown' : scanPillState(raw, effHbAge, scanState.cadence_sec, scanState.stall_reason);
     headerPill.className = 'pill state-' + state;
     const dot = (state === 'running') ? '<span class="pulse-dot active"></span>'
       : (state === 'degraded' || state === 'down') ? '<span class="pulse-dot"></span>'
       : '';
-    const formattedAge = formatHeartbeatAge(hbAge);
+    const formattedAge = formatHeartbeatAge(effHbAge);
     const age = (state !== 'stopped' && state !== 'unknown' && formattedAge)
       ? ' · ' + formattedAge : '';
     // Write the verdict into the inner state span only: overwriting the pill's
     // own innerHTML would erase the ENGINE label that names this measurement.
     stateText.innerHTML = dot + esc(state.toUpperCase() + age);
-    const rawSec = (hbAge !== null && hbAge !== undefined) ? Math.max(0, Math.round(hbAge)) : null;
+    const rawSec = (effHbAge !== null && effHbAge !== undefined) ? Math.max(0, Math.round(effHbAge)) : null;
     if (telemetryError) {
       headerPill.title = `Telemetry unavailable: ${telemetryError.error || 'cycle ring read failed'}`;
     } else {
@@ -5657,6 +5704,11 @@ function renderScanStatePill(scanState) {
         verdict = `${raw.toUpperCase()} (${rawSec}s ago)`;
       }
       headerPill.title = `Quote engine heartbeat: ${verdict} · Source: ${prov}`;
+      if (readFailed) {
+        headerPill.title += (ageOffsetSec > 0.5)
+          ? ` Current read did not land; showing last reading from ${fmtAge(ageOffsetSec)}.`
+          : ' Current read did not land; showing last reading.';
+      }
     }
 
     // Elsewhere notice: show only when other_live_runs is not empty AND engine is not RUNNING on this store
@@ -5676,20 +5728,24 @@ function renderScanStatePill(scanState) {
     // No scan-state payload: the loop's state is unknown, not stopped.
     headerPill.className = 'pill state-unknown';
     stateText.textContent = 'UNKNOWN';
-    headerPill.title = 'Quote engine state unknown: no heartbeat payload';
+    headerPill.title = backendStale
+      ? 'Quote engine state unknown: current read did not land and the backend contact is lost.'
+      : 'Quote engine state unknown: no heartbeat payload';
     if (elsewhereTag) elsewhereTag.style.display = 'none';
   }
 }
 
-function renderScreener(kpi, scanState, status) {
+function renderScreener(kpi, scanState, status, engineOpts) {
   const board = document.getElementById('kanban-board');
   const headerAge = document.getElementById('scan-snapshot-age');
 
-  renderScanStatePill(scanState);
+  renderScanStatePill(scanState, engineOpts);
   if (scanState && headerAge) {
     const hbAge = scanState.seconds_since_heartbeat;
-    if (hbAge !== null && hbAge !== undefined) {
-      headerAge.textContent = 'heartbeat: ' + formatHeartbeatAge(hbAge);
+    const off = (engineOpts && isFinite(engineOpts.ageOffsetSec)) ? engineOpts.ageOffsetSec : 0;
+    const effHb = (typeof hbAge === 'number' && isFinite(hbAge) && off) ? hbAge + off : hbAge;
+    if (effHb !== null && effHb !== undefined) {
+      headerAge.textContent = 'heartbeat: ' + formatHeartbeatAge(effHb);
     }
   }
 
@@ -6115,6 +6171,11 @@ async function pollStatus() {
     // dead endpoint must hide the trackers, not replay a stale READY claim.
     if (status) lastStatus = status;
     if (scanState) lastScanState = scanState;
+    // Stamp each retained payload so a later failed read can age the hold (#348).
+    const pollNowMs = Date.now();
+    if (status) lastStatusAtMs = pollNowMs;
+    if (scanState) lastScanStateAtMs = pollNowMs;
+    if (kpi) lastKpiAtMs = pollNowMs;
     lastTrialReadiness = trialReadiness;
     if (guardHealth) lastGuardHealth = guardHealth;
     if (guardAlerts) lastGuardAlerts = guardAlerts;
@@ -6126,13 +6187,17 @@ async function pollStatus() {
     // Which registry these numbers came from, before anything renders them.
     if (status) renderDbMode(status);
 
-    // Top-nav MARKET SCAN pill. Reads THIS poll's kpi, never lastKpi: a
-    // failed /api/kpi leaves `snapshot_age` frozen at whatever the last good
-    // read said, so borrowing it would keep the pill green on an age that
-    // stopped moving. No snapshot this poll is SCAN NO DATA, amber, which is
-    // the honest answer.
-    renderMarketScanPill(status, kpi);
-    renderScanStatePill(scanState);
+    // Top-nav pills. Each read resolves to the current payload, the held
+    // last-good payload while the backend is reachable, or nothing (#348).
+    // The hold carries an age offset, so a borrowed snapshot keeps moving
+    // through the existing ramps instead of freezing green on a stale age.
+    const engineHeld = resolveHeldRead(scanState, lastScanState, lastScanStateAtMs, pollNowMs, backendStale);
+    const kpiHeld = resolveHeldRead(kpi, lastKpi, lastKpiAtMs, pollNowMs, backendStale);
+    const statusHeld = resolveHeldRead(status, lastStatus, lastStatusAtMs, pollNowMs, backendStale);
+    renderMarketScanPill(statusHeld.payload, kpiHeld.payload,
+      { kpiReadFailed: !kpi, statusReadFailed: !status, ageOffsetSec: kpiHeld.ageOffsetSec });
+    renderScanStatePill(engineHeld.payload,
+      { ageOffsetSec: engineHeld.ageOffsetSec, readFailed: engineHeld.readFailed });
 
     // Service uptime rides on the status payload, so it must not wait on
     // /api/kpi: the Market Filter header still needs a stopwatch when the KPI read
@@ -6183,7 +6248,8 @@ async function pollStatus() {
 
     // Render the Market Filter kanban (Tab 3 → rail Data & Markets page)
     if (paintable(tab3, document.getElementById('kanban-board')) && currentKpi) {
-      renderScreener(currentKpi, scanState, status);
+      renderScreener(currentKpi, engineHeld.payload, statusHeld.payload,
+        { ageOffsetSec: engineHeld.ageOffsetSec, readFailed: engineHeld.readFailed });
     }
 
     // Trial readiness rides on its own endpoint, so it renders whether or not
@@ -6244,7 +6310,7 @@ if (typeof module !== 'undefined' && module.exports) {
     // sub-table that the real click path renders.
     get expandedMarkets() { return expandedMarkets; },
     set isStopping(v) { isStopping = v; },
-    stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState,
+    stateKey, statePillHtml, cadenceThresholds, scanPillState, marketScanState, resolveHeldRead,
     engineReasonText, engineProvenanceText, renderScanStatePill,
     get setBackendContact() { return setBackendContact; },
     get renderBackendContact() { return renderBackendContact; },

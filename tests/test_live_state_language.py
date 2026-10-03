@@ -326,7 +326,13 @@ def test_the_poll_loop_drives_the_top_nav_scan_pill():
     # nothing ever called it.
     js = APP_JS.read_text(encoding="utf-8")
     poll = js.split("async function pollStatus()", 1)[1].split(chr(10) + "async function ", 1)[0]
-    assert "renderMarketScanPill(status, kpi)" in poll
+    # Issue #348: the poll resolves each read (current, held, or none) before
+    # rendering, so a single failed read keeps the last verdict instead of
+    # collapsing it to UNKNOWN.
+    assert "resolveHeldRead" in poll
+    assert "statusHeld.payload" in poll
+    assert "kpiHeld.payload" in poll
+    assert "engineHeld.payload" in poll
 
 
 # ── the Market Filter header pill says whose heartbeat it is ───────────────
@@ -593,4 +599,77 @@ def test_the_served_page_carries_the_engine_elsewhere_tag():
     html = (_STATIC / "index.html").read_text(encoding="utf-8")
     assert 'id="scan-engine-elsewhere"' in html
     assert 'class="engine-elsewhere-pill mono"' in html
+
+
+# ── a failed read holds the last verdict instead of collapsing it (#348) ───
+#
+# A single slow poll used to erase a known-good verdict: renderScanStatePill
+# got null and painted gray UNKNOWN, and the MARKET SCAN pill blamed the
+# Market Filter for a KPI read that never landed. The page now holds each
+# pill's last reading while the backend is still reachable, keeps ageing it
+# through the existing ramps, and says aloud that this read did not land.
+
+@requires_node
+def test_the_resolver_prefers_the_current_read_then_the_held_one():
+    r = _harness("heldresolve")
+    assert r["currentWins"] == {"payload": {"a": 1}, "ageOffsetSec": 0, "readFailed": False}
+    assert r["held"]["payload"] == {"a": 2}
+    assert r["held"]["ageOffsetSec"] == 8
+    assert r["held"]["readFailed"] is True
+
+
+@requires_node
+def test_a_pill_that_never_read_and_a_lost_backend_hold_nothing():
+    r = _harness("heldresolve")
+    assert r["neverRead"]["payload"] is None
+    assert r["staleDropsHold"]["payload"] is None
+
+
+@requires_node
+def test_a_failed_engine_read_keeps_its_verdict_and_ages():
+    v = _harness("enginehold")
+    assert v["fresh"]["pillClass"] == "pill state-running"
+    # The held pill is not gray: it keeps the verdict and its age advances.
+    assert v["held"]["pillClass"] == "pill state-running"
+    assert "RUNNING · 11s" in v["held"]["stateHtml"]
+    assert "did not land" in v["held"]["pillTitle"]
+    assert "SCANNING" in v["held"]["pillTitle"]
+
+
+@requires_node
+def test_a_held_engine_verdict_still_ages_out_through_the_ramp():
+    v = _harness("enginehold")
+    assert v["heldPastThreshold"]["pillClass"] == "pill state-down"
+
+
+@requires_node
+def test_an_engine_that_never_read_is_unknown_not_held():
+    v = _harness("enginehold")["neverRead"]
+    assert v["pillClass"] == "pill state-unknown"
+    assert v["stateHtml"] == "UNKNOWN"
+
+
+@requires_node
+def test_a_failed_kpi_read_does_not_blame_the_snapshot_file():
+    v = _harness("marketscan")["kpiFailedNoData"]
+    assert (v["state"], v["label"]) == ("degraded", "SCAN DEGRADED")
+    assert "did not land" in v["title"]
+    assert "has not written runtime/pipeline.json" not in v["title"]
+
+
+@requires_node
+def test_an_empty_kpi_payload_still_reports_the_missing_file():
+    # A read that LANDED but carries no snapshot age is the genuinely
+    # unwritten-file case; only that case keeps the old wording.
+    v = _harness("marketscan")["upNoFile"]
+    assert (v["state"], v["label"]) == ("degraded", "SCAN DEGRADED")
+    assert "has not written runtime/pipeline.json" in v["title"]
+
+
+@requires_node
+def test_a_held_snapshot_ages_against_the_scan_interval():
+    verdicts = _harness("marketscan")
+    assert (verdicts["heldFresh"]["state"], verdicts["heldFresh"]["label"]) == ("running", "SCAN RUNNING")
+    assert "did not land" in verdicts["heldFresh"]["title"]
+    assert (verdicts["heldStale"]["state"], verdicts["heldStale"]["label"]) == ("degraded", "SCAN DEGRADED")
 

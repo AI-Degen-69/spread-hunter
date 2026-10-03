@@ -121,15 +121,19 @@ def test_the_page_reads_the_interval_instead_of_a_baked_in_600():
 # ── A failed /api/kpi does not borrow the last snapshot's age ──────────────
 
 def test_the_scan_pill_does_not_age_against_a_previous_polls_snapshot():
-    """`kpi || lastKpi` made a dead /api/kpi look like a fresh snapshot.
+    """A borrowed snapshot keeps moving instead of freezing green.
 
-    `snapshot_age` is frozen at whatever the last successful read said, so an
-    hour-long KPI outage kept the pill green on an age that stopped moving.
-    The pill has its own honest state for this: SCAN DEGRADED, amber.
+    `snapshot_age` is frozen at whatever the last successful read said, so
+    the MARKET SCAN pill resolves each read through `resolveHeldRead` and
+    adds the hold's `ageOffsetSec` before comparing against the scan
+    interval: an hour-long KPI outage ages into SCAN DEGRADED, amber, and a
+    failed read with no snapshot at all never borrows one.
     """
     js = (server._STATIC_DIR / "app.js").read_text(encoding="utf-8")
     assert "renderMarketScanPill(status, kpi || lastKpi)" not in js
-    assert "renderMarketScanPill(status, kpi)" in js
+    assert "renderMarketScanPill(status, kpi)" not in js
+    assert "resolveHeldRead" in js
+    assert "ageOffsetSec" in js.split("function marketScanState", 1)[1].split("\nfunction ", 1)[0]
 
 
 # ── Nothing falls between the replay and the follow offset ─────────────────
