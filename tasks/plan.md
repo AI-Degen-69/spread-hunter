@@ -56,21 +56,21 @@ Branch: `i360/run-the-queue-hold-rehearsal` | Issue: #360
 - **Verification**: Run targeted tests; verify frozen markets file exists and hash is computed.
 
 ### Task 2: Paired Rehearsal Execution & Telemetry Capture
-- **Task ID**: `TASK-02`
+- **Task ID**: `TASK-02` [COMPLETED]
 - **Size**: M
 - **Domain Tag**: `[Research]`
 - **Target Files**: `data/360_shadow_qhold_treatment.db`, `data/360_shadow_qhold_control.db`
 - **Helper Skill**: `research`
 - **Depends on**: `TASK-01`
 - **Description**:
-  1. Execute treatment arm: `HUNTER_REQUOTE_HOLD_QUEUE=200` with `--db data/360_shadow_qhold_treatment.db --run-id shadow-qhold-200 --markets-path <snapshot>`.
-  2. Execute control arm: `HUNTER_REQUOTE_HOLD_QUEUE=0` with `--db data/360_shadow_qhold_control.db --run-id shadow-qhold-0 --markets-path <snapshot>`.
+  1. Execute treatment arm: `HUNTER_REQUOTE_HOLD_QUEUE=200` with `--db data/360_shadow_qhold_treatment.db --run-id shadow-qhold-200 --markets-path data/scratch_markets_frozen_360.json`.
+  2. Execute control arm: `HUNTER_REQUOTE_HOLD_QUEUE=0` with `--db data/360_shadow_qhold_control.db --run-id shadow-qhold-0 --markets-path data/scratch_markets_frozen_360.json`.
   3. Monitor execution, orders, and quote counts in both databases.
   4. Ensure both processes exit cleanly without writing to production `data/orders.db`.
 - **Verification**: Query scratch DBs for quote counts, order states, and ensure zero writes to `data/orders.db`.
 
 ### Task 3: Metrics Extraction, Memo Creation & Clean Closeout
-- **Task ID**: `TASK-03`
+- **Task ID**: `TASK-03` [COMPLETED]
 - **Size**: S
 - **Domain Tag**: `[Docs]`
 - **Target Files**: `docs/runs/2026-10-04-queue-hold-200-rehearsal.md`
