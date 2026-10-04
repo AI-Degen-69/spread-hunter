@@ -1,44 +1,26 @@
-# Constraints: Issue #351 — Diagnose zero-fill 01_shadow rehearsal and improve queue selection
+# Quality Constraints: Issue #359 (Order Lifetime & Cancel-Reason Mix)
 
-Branch: i351/diagnose-zero-fill-01-shadow-rehearsal-and-improve | Issue: #351
+## Boundaries & Quality Gates
 
-## Quality & Tests
-- **Zero regressions**: `tests/test_shadow_fills.py`, `tests/test_maker_queue_bar.py`,
-  `tests/test_statistics_report.py` stay green. Full-repo suite stays with GitHub CI.
-- **Every changed behaviour needs a test that fails without the change.** The queue-multiple
-  helper ships with helper + evidence-value tests; the report change ships with
-  single-cycle vs multi-cycle fixture tests.
-- **Anti-cheat**: no skipped tests, no deleted assertions, no new suppressions, no linter silencing.
-- **No new external dependencies**: standard library only (`statistics`, `sqlite3` via existing
-  `OrderRegistry`). No new config keys, no new env vars.
+1. **Zero regressions on existing reporting & testing:**
+   - Existing single-cycle and multi-cycle tests in `tests/test_statistics_report.py` must pass untouched.
+   - Existing keys returned by `write_statistics_report` (`db_path`, `run_id`, `mode`, `report_path`, `verdict`, `gate_rows`, `fills`, `quotes`, `measured_quotes`, `unmeasured_quotes`, `median_queue_multiple`, `max_queue_multiple`, `distinct_cycles`) must remain unmodified.
+   - Existing lines in the Markdown output (including `## Queue depth (shadow)`, `SINGLE_CYCLE_LINE`, disclaimer lines) must remain intact.
+   - When `mode == "live"`, lifetime and cancel-reason keys must NOT be added to the returned dictionary or the Markdown report.
 
-## Behaviour Boundaries
-- **Shadow-only, observational.** Touch only `core_brain/shadow_fills.py` (pure helper),
-  `core_brain/statistics_report.py` (report lines), optionally `core_brain/kpi.py`
-  (`median_queue_multiple` next to `median_queue_ahead`), tests, and one new diagnosis doc
-  under `docs/issues/`. The tape-only fill rule (`credit_fills`), the queue-bar files
-  (`scoring/selector.py`, `scoring/config.py`, `scripts/filter_markets.py`), and the
-  lifecycle files (`core_brain/shadow_exec.py`, `core_brain/shadow_run.py`) are OUT OF SCOPE.
-- **Queue-bar enforcement is deferred** (shared ranker feeds live trading; normal ranking
-  supplies no `queue_minutes_fn`). Documented as proposed-not-implemented, never enforced here.
-- **`data/orders.db` is never touched.** No writes to and no deletion of any `*01_shadow*` store.
-  Operator verification works on scratch copies only.
-- **Approved exception (operator go-ahead 2026-10-03, Station III-B):** the
-  `identity_allowed` group-label veto in `scoring/selector.py` is narrowed to
-  fragment-shaped labels only (spread/handicap lines, game/map/round numbers,
-  over/under and totals numbers, numeric price bands). Bare country, candidate,
-  party, team, and date labels pass to the unchanged volume/depth/spread/movement/
-  horizon gates. Live-selection impact: the shared ranker admits more named main
-  lines (measured 27 → 45 on a frozen 71-market snapshot); true fragments stay refused.
-  Everything else in `scoring/` stays out of scope.
-- **Language**: never describe shadow fills as venue performance. Evidence from the absent
-  stores is labeled "reported by ticket; not reproduced in this checkout".
+2. **No new external dependencies:**
+   - Use Python standard library only (`statistics.median`, `math`, `re`, `pathlib`, etc.). No new packages.
 
-## Performance Budgets
-- Helper is O(1) pure arithmetic; report adds one pass over run-attributed quotes plus one
-  `cycle_intent` scan — no new network, no new polling loops.
+3. **Strict calculation & data integrity:**
+   - `lifetime_s = (last_polled_ts - posted_ts) / 1000.0`.
+   - Return `None` (invalid) if either timestamp is None/non-numeric/non-finite, or if `last_polled_ts < posted_ts`.
+   - Only terminal statuses `cancelled` and `filled` contribute to measured lifetimes.
+   - Non-terminal statuses (`open`, `pending`, `partial`, `unattributed`), and terminal orders with invalid/negative delta, are counted as `lifetime_unknown_orders` and tracked in `lifetime_unknown_by_status`. Never treat unknown lifetime as 0.
+   - Cancel reason breakdown groups only `cancelled` orders. Reasons that are `None`, empty `""`, or whitespace-only group into `(no reason recorded)`.
+   - In SQLite queries / connections: use existing connections safely; do not close or break connection contexts.
+   - Do not query production `data/orders.db` destructively. Read-only scratch copies for any manual verification.
 
-## Out of Scope (record, do not fix)
-- Tape-only fill rule changes, live quoting changes.
-- `--minutes` run-duration guard (would break intended short smoke runs).
-- Issue #352 (shadow resume lock) — separate issue, separate branch.
+4. **Anti-cheat:**
+   - No `@pytest.mark.skip` or commented-out assertions.
+   - No mock bypasses of the underlying calculation.
+   - One runnable targeted test file (`tests/test_statistics_report.py`) verifies all new keys and markdown lines.

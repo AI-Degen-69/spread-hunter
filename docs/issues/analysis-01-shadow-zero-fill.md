@@ -114,10 +114,34 @@ second stage if this does not restore fills. No lifecycle or fill-rule code touc
 selection too. It is committed locally, unpushed, and needs Station IV review plus the
 operator's go-ahead before merge.
 
+## Addendum (2026-10-04): Order lifetime & cancel-reason instrumentation (Issue #359)
+
+Following the discovery in `#358` that median order lifetime collapsed from ~300s to ~40s
+while queue depths reached ~2,575x, the shadow statistics report (`core_brain/statistics_report.py`)
+now surfaces order lifetimes and cancel reasons under `## Queue depth (shadow)`:
+
+1. **Terminal order lifetime:** Defined as `(last_polled_ts - posted_ts) / 1000.0` in seconds for
+   terminal `cancelled` and `filled` orders. The report displays median lifetime in seconds along with
+   the measured count (or `n/a` when no terminal orders exist).
+2. **Lifetime unknown bucket:** Non-terminal orders (`open`, `pending`, `partial`, `unattributed`),
+   or orders with invalid timestamp deltas, are explicitly categorized under `Lifetime unknown`
+   with a status breakdown (e.g. `open: 4`), avoiding treating unmeasured lifetimes as zero.
+   Note on timestamps: `last_polled_ts` is updated upon cancellation or fill; for resting open orders,
+   `last_polled_ts == posted_ts` is the expected state.
+3. **Cancel reasons breakdown:** Cancelled orders are grouped by `cancel_reason` (normalizing empty
+   or whitespace-only entries to `(no reason recorded)`), sorted deterministically by descending
+   count and name, reporting exact count and share percentage.
+
+This telemetry enables empirical evaluation of the queue-hold (`#360`) and dead-band (`#361`)
+rehearsal experiments.
+
 ## How to verify
 
-1. Copy `data/01_shadow.db` to a scratch path — never open or edit the original store.
-2. Open the copy read-only and confirm 4 orders, 0 fills, and 2 cycle-1 `cycle_intent` rows.
-3. Run the shadow statistics report against the copy — expect max queue multiple ≈7741x plus the single-cycle limitation line.
-4. Run the report against a sibling-store copy — expect no single-cycle limitation.
-5. Failure signs: the limitation line is missing, the multiples are blank, or `data/orders.db` was touched.
+1. Copy a shadow store to a scratch path — never open or edit `data/orders.db` directly.
+2. Generate a shadow report using `python -m core_brain.statistics_observer --mode shadow --run-id <id>`.
+3. Open `reports/<timestamp>_shadow_<run-id>_statistics_report.md`.
+4. Confirm `## Queue depth (shadow)` displays:
+   - Cancelled and filled median lifetimes (or `n/a`).
+   - `Lifetime unknown` count (with status breakdown when open orders exist).
+   - `Cancel reasons` list with counts and percentages (including `price_moved` if present).
+5. Failure signs: missing lifetime lines, unhandled status errors, or omission of `price_moved` shares.

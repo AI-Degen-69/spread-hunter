@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from core_brain.order_registry import CloseRecord, OrderRegistry, QuoteRecord
+from core_brain.order_registry import CloseRecord, OrderRecord, OrderRegistry, QuoteRecord
 from core_brain.statistics_report import SINGLE_CYCLE_LINE, write_statistics_report
 
 
@@ -150,3 +150,143 @@ def test_multi_cycle_run_omits_limitation(tmp_path: Path):
     assert "## Queue depth (shadow)" in text
     assert SINGLE_CYCLE_LINE not in text
     assert result["distinct_cycles"] == 3
+
+
+def _seed_test_order(
+    reg: OrderRegistry,
+    run_id: str,
+    order_id: str,
+    *,
+    posted_ms: int,
+    last_polled_ms: int,
+    status: str = "open",
+    cancel_reason: str | None = None,
+    size: float = 10.0,
+) -> None:
+    order = OrderRecord(
+        id=order_id,
+        condition_id="cond-1",
+        token_id="tok-1",
+        side="BUY",
+        price=0.50,
+        original_size=size,
+        status="open",
+        posted_ts=posted_ms,
+        last_polled_ts=posted_ms,
+        run_id=run_id,
+    )
+    reg.create_order(order)
+    if status != "open":
+        reg.update_order_status(
+            local_id=order_id,
+            status=status,
+            last_polled_ts=last_polled_ms,
+            cancel_reason=cancel_reason,
+        )
+
+
+def test_order_lifetime_cancelled_median_and_markdown(tmp_path: Path):
+    db = tmp_path / "registry.db"
+    reg = OrderRegistry(db)
+    run_id = "test-lifetime-run"
+
+    # Seed 3 cancelled orders with lifetimes 10s, 30s, 50s
+    _seed_test_order(reg, run_id, "ord-1", posted_ms=1_000, last_polled_ms=11_000, status="cancelled", cancel_reason="price_moved")
+    _seed_test_order(reg, run_id, "ord-2", posted_ms=1_000, last_polled_ms=31_000, status="cancelled", cancel_reason="price_moved")
+    _seed_test_order(reg, run_id, "ord-3", posted_ms=1_000, last_polled_ms=51_000, status="cancelled", cancel_reason="not_quoted")
+
+    result = write_statistics_report(db, run_id, "shadow", tmp_path / "out")
+    text = Path(result["report_path"]).read_text(encoding="utf-8")
+
+    assert result["cancelled_lifetime_count"] == 3
+    assert result["cancelled_median_lifetime_s"] == pytest.approx(30.0)
+    assert result["filled_lifetime_count"] == 0
+    assert result["filled_median_lifetime_s"] is None
+    assert result["lifetime_unknown_orders"] == 0
+
+    assert "- **Cancelled median lifetime**: `30.0s` (measured: `3`)" in text
+    assert "- **Filled median lifetime**: `n/a` (measured: `0`)" in text
+    assert "- **Lifetime unknown**: `0`" in text
+
+
+def test_order_lifetime_with_filled_and_unknown_orders(tmp_path: Path):
+    db = tmp_path / "registry.db"
+    reg = OrderRegistry(db)
+    run_id = "test-mixed-run"
+
+    # 1 cancelled (20s)
+    _seed_test_order(reg, run_id, "ord-c", posted_ms=1_000, last_polled_ms=21_000, status="cancelled", cancel_reason="price_moved")
+    # 2 filled (5s and 15s -> median 10s)
+    _seed_test_order(reg, run_id, "ord-f1", posted_ms=1_000, last_polled_ms=6_000, status="filled")
+    _seed_test_order(reg, run_id, "ord-f2", posted_ms=1_000, last_polled_ms=16_000, status="filled")
+    # 1 open order (lifetime unknown)
+    _seed_test_order(reg, run_id, "ord-open", posted_ms=1_000, last_polled_ms=1_000, status="open")
+    # 1 order belonging to a DIFFERENT run (must be completely ignored)
+    _seed_test_order(reg, "other-run", "ord-other", posted_ms=1_000, last_polled_ms=21_000, status="cancelled")
+
+    result = write_statistics_report(db, run_id, "shadow", tmp_path / "out")
+    text = Path(result["report_path"]).read_text(encoding="utf-8")
+
+    assert result["cancelled_lifetime_count"] == 1
+    assert result["cancelled_median_lifetime_s"] == pytest.approx(20.0)
+    assert result["filled_lifetime_count"] == 2
+    assert result["filled_median_lifetime_s"] == pytest.approx(10.0)
+    assert result["lifetime_unknown_orders"] == 1
+    assert result["lifetime_unknown_by_status"] == {"open": 1}
+
+    assert "- **Cancelled median lifetime**: `20.0s` (measured: `1`)" in text
+    assert "- **Filled median lifetime**: `10.0s` (measured: `2`)" in text
+    assert "- **Lifetime unknown**: `1` (open: `1`)" in text
+
+
+def test_cancel_reason_distribution_and_sorting(tmp_path: Path):
+    db = tmp_path / "registry.db"
+    reg = OrderRegistry(db)
+    run_id = "test-reasons-run"
+
+    # 3 price_moved, 1 not_quoted, 1 empty reason
+    _seed_test_order(reg, run_id, "ord-1", posted_ms=1_000, last_polled_ms=5_000, status="cancelled", cancel_reason="price_moved")
+    _seed_test_order(reg, run_id, "ord-2", posted_ms=1_000, last_polled_ms=6_000, status="cancelled", cancel_reason="price_moved")
+    _seed_test_order(reg, run_id, "ord-3", posted_ms=1_000, last_polled_ms=7_000, status="cancelled", cancel_reason="price_moved")
+    _seed_test_order(reg, run_id, "ord-4", posted_ms=1_000, last_polled_ms=8_000, status="cancelled", cancel_reason="not_quoted")
+    _seed_test_order(reg, run_id, "ord-5", posted_ms=1_000, last_polled_ms=9_000, status="cancelled", cancel_reason="  ")
+    # Also 1 filled order (must be excluded from cancel reasons)
+    _seed_test_order(reg, run_id, "ord-6", posted_ms=1_000, last_polled_ms=10_000, status="filled")
+
+    result = write_statistics_report(db, run_id, "shadow", tmp_path / "out")
+    text = Path(result["report_path"]).read_text(encoding="utf-8")
+
+    assert result["cancelled_orders"] == 5
+    reasons = result["cancel_reasons"]
+    assert len(reasons) == 3
+
+    assert reasons["price_moved"]["count"] == 3
+    assert reasons["price_moved"]["share"] == pytest.approx(0.6)
+
+    assert reasons["not_quoted"]["count"] == 1
+    assert reasons["not_quoted"]["share"] == pytest.approx(0.2)
+
+    assert reasons["(no reason recorded)"]["count"] == 1
+    assert reasons["(no reason recorded)"]["share"] == pytest.approx(0.2)
+
+    assert "- **Cancel reasons**:" in text
+    assert "- `price_moved`: `3` (60.0%)" in text
+    assert "- `not_quoted`: `1` (20.0%)" in text
+    assert "- `(no reason recorded)`: `1` (20.0%)" in text
+
+
+def test_live_report_omits_lifetime_and_cancel_keys(tmp_path: Path):
+    db = tmp_path / "registry.db"
+    reg = OrderRegistry(db)
+    run_id = "test-live-run"
+
+    _seed_test_order(reg, run_id, "ord-1", posted_ms=1_000, last_polled_ms=10_000, status="cancelled", cancel_reason="price_moved")
+
+    result = write_statistics_report(db, run_id, "live", tmp_path / "out")
+    text = Path(result["report_path"]).read_text(encoding="utf-8")
+
+    assert "cancelled_median_lifetime_s" not in result
+    assert "cancel_reasons" not in result
+    assert "## Queue depth (shadow)" not in text
+    assert "Cancelled median lifetime" not in text
+
