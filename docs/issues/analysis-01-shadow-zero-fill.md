@@ -84,6 +84,7 @@ Flow vs stall, measured:
 
 At ~0.3% historical fill rate, 0 fills on ~2,270 stalled-window quotes has p ≈ 0.001 —
 this is a real stall, not variance. Orders still post (580 today); they just never fill.
+*(Note on posting evidence: `cycle_intent.submitted` tracks per-visit quote loop placements over a rolling 200-row retention window, not cumulative daily orders; see #356 and N2 in `docs/issues/351-noticed-but-not-touching.md`.)*
 
 **Named root cause (two contributors, one change cluster) — corrected 2026-10-03:**
 
