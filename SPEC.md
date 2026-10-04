@@ -1,35 +1,42 @@
-# SPEC: Issue #360 — Run the queue-hold rehearsal (HUNTER_REQUOTE_HOLD_QUEUE on vs off)
+# SPEC: Issue #361 — Run the dead-band rehearsal (HUNTER_REQUOTE_DEAD_BAND wider vs default)
 
 ## Goal
-Conduct a controlled, signer-free shadow rehearsal evaluating the `HUNTER_REQUOTE_HOLD_QUEUE` lever (treatment at 200 shares vs control at 0 shares) against the live Polymarket order book using a frozen universe snapshot and scratch databases. Surface order lifetime, cancel-reason mix (specifically `price_moved` share), median queue multiple, and fill rates using the #359 reporting extensions. Produce an evidence-backed run memorandum in `docs/runs/` with pre-registered decision criteria, without modifying any shipped code defaults.
+Conduct a paired, signer-free shadow rehearsal evaluating the `HUNTER_REQUOTE_DEAD_BAND` lever (treatment at `0.08` vs control at `0.03`) against the live Polymarket order book using a frozen universe snapshot and isolated scratch databases. Test whether widening the dead band retains reachable orders or simply masks churn / delays cancels into stale orders. Prove via regression testing that the wider band strictly preserves the pair-cost re-gate invariant. Produce an evidence-backed trial memo in `docs/runs/` with an explicit verdict relative to #360, without modifying any shipped code defaults.
 
 ## Acceptance Criteria
-- [ ] Run two paired, signer-free shadow rehearsal arms against scratch databases:
-  - Treatment: `HUNTER_REQUOTE_HOLD_QUEUE=200`
-  - Control: `HUNTER_REQUOTE_HOLD_QUEUE=0`
-- [ ] Both arms rotate against the same candidate market universe via a frozen snapshot of `runtime/markets.json` passed to `--markets-path`.
-- [ ] Monitor both runs and record reached quote counts, distinct orders, and timestamps.
+- [ ] Regression test in `tests/test_trader_loop.py` proves:
+  - An order whose resting price + hedge ask fails the pair-cost re-gate is cancelled under both `dead_band=0.03` and `dead_band=0.08`.
+  - Under `0.03`, out-of-band price move assigns `cancel_reason = "price_moved"`.
+  - Under `0.08`, in-band price move assigns `cancel_reason = "regate_pair_cost"`.
+  - Active `hold_below_target` and `hold_queue_shares` never hold a cost-failing order.
+- [ ] Two paired, signer-free shadow rehearsal arms executed against scratch databases:
+  - Treatment: `HUNTER_REQUOTE_DEAD_BAND=0.08`
+  - Control: `HUNTER_REQUOTE_DEAD_BAND=0.03` (or default)
+- [ ] Both arms rotate against the same candidate market universe via a frozen snapshot passed to `--markets-path`.
 - [ ] Extract per-arm metrics using `core_brain.statistics_report::write_statistics_report` (and KPI):
   - Order lifetime: median seconds for terminal cancelled and filled orders (separate from open/censored).
-  - Cancel mix: counts and percentage breakdown of cancellation reasons (including `price_moved` share).
+  - Cancel mix: counts and percentage breakdown of cancellation reasons (including `price_moved` and `regate_pair_cost`).
   - Queue depth: median and max queue multiple.
-  - Fill rate: share-weighted fill rate and queue-bucket fill rates.
-- [ ] Write a dated run document `docs/runs/2026-10-04-queue-hold-200-rehearsal.md` following the repo's trial memo standard (e.g., `2026-09-30-run08-aged-out-rescue.md`) containing:
+  - Fill rate: share-weighted fill rate.
+  - Open orders: count of orders remaining `open` at shutdown.
+- [ ] Author a dated run document `docs/runs/2026-10-04-shadow-dead-band-trial.md` containing:
   - Pre-registered decision rule (Adopt / Reject / Inconclusive).
   - Side-by-side comparison table across all core metrics.
-  - Comparability audit (market counts, median queue ahead).
-  - Explicit verdict and recommendation on whether to change default `requote_hold_queue_shares`.
-- [ ] Confirm no shipped defaults in `core_brain/config.py` or business logic are altered by this PR.
-- [ ] Ensure targeted test suites pass: `python -m pytest -q tests/test_trader_loop.py tests/test_completable_pair_gate.py tests/test_statistics_report.py`.
+  - Analysis of whether price-moved cancels killed reachable orders vs market-leaving drift, and whether a single scalar dead band can capture this distinction.
+  - Pair-cost re-gate safety confirmation citing the regression test.
+  - Explicit verdict relative to #360's results.
+- [ ] Confirm no shipped defaults in `core_brain/config.py` are altered by this PR (`requote_dead_band = 0.03` remains unchanged).
+- [ ] Ensure targeted test suites pass: `python -m pytest -q tests/test_trader_loop.py tests/test_statistics_report.py`.
 
 ## Scope
 ### In scope
+- Regression tests for pair-cost re-gate in `tests/test_trader_loop.py`.
 - Paired shadow run execution using `--markets-path` and per-run scratch databases.
-- Metrics generation via `core_brain.statistics_report` and `core_brain.kpi`.
-- Run memorandum in `docs/runs/2026-10-04-queue-hold-200-rehearsal.md`.
+- Metrics generation via `core_brain.statistics_report`.
+- Trial memorandum in `docs/runs/2026-10-04-shadow-dead-band-trial.md`.
 
 ### Out of scope
-- Modifying shipped defaults in `core_brain/config.py` (e.g. `requote_hold_queue_shares = 0.0` remains unchanged).
-- Requote dead band lever changes (`HUNTER_REQUOTE_DEAD_BAND` / Issue #361).
+- Modifying shipped defaults in `core_brain/config.py` (e.g. `requote_dead_band = 0.03` remains unchanged).
 - Modifying `data/orders.db` (production database strictly read-only).
 - Placing real orders or loading private keys / credentials.
+- Modifying `plan_orders` logic, `shadow_exec.py`, or live order execution paths.
