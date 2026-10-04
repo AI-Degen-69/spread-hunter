@@ -6,11 +6,11 @@
   - [x] Implement unit tests in `tests/test_velocity_gate.py`
   - [x] Verify: `python -m pytest -q tests/test_velocity_gate.py`
 
-- [ ] **Task 2: [Backend/Logic] Opt-in Dynamic Integer-Cent Quote Offset & Pair-Cost Bounds**
-  - [ ] Add dynamic offset configuration & env overrides in `core_brain/config.py`
-  - [ ] Implement whole-cent dynamic offset calculation and `dynamic_pair_sum` refusal in `core_brain/quotes.py`
-  - [ ] Implement unit tests in `tests/test_quotes.py`
-  - [ ] Verify: `python -m pytest -q tests/test_quotes.py`
+- [x] **Task 2: [Backend/Logic] Opt-in Dynamic Integer-Cent Quote Offset & Pair-Cost Bounds**
+  - [x] Add dynamic offset configuration & env overrides in `core_brain/config.py`
+  - [x] Implement whole-cent dynamic offset calculation and `dynamic_pair_sum` refusal in `core_brain/quotes.py`
+  - [x] Implement unit tests in `tests/test_dynamic_offset.py`
+  - [x] Verify: `python -m pytest -q tests/test_dynamic_offset.py`
 
 - [ ] **Task 3: [Integration/Regression] Screener-to-Trader Feed Integration & Safety Verification**
   - [ ] Wire range fields into `core_brain/trader_loop.py`

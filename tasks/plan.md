@@ -48,7 +48,7 @@ Branch: i370/velocity-filter-dynamic-offsets | Issue: #370
   4. Write `tests/test_velocity_gate.py` covering flat tape, active tape, stale tape, and missing tape handling.
 - **Verification**: `python -m pytest -q tests/test_velocity_gate.py`
 
-### Task 2: [Backend/Logic] Opt-in Dynamic Integer-Cent Quote Offset & Tournament Variant Presets
+### Task 2: [Backend/Logic] Opt-in Dynamic Integer-Cent Quote Offset & Tournament Variant Presets [x]
 - **Size**: M
 - **Domain Tag**: `[Backend/Logic]`
 - **Helper Skill**: `test-driven-development`
