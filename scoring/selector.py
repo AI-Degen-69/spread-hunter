@@ -119,16 +119,17 @@ def identity_allowed(title: object = "", slug: object = "",
         return True, ""
     is_matchup = bool(re.search(r"\bvs\.?\s", title_slug, re.IGNORECASE))
     if is_matchup:
-        # A direct sports matchup with no group label is the venue's common
-        # shape for a main line (for example MLB). Submarkets carry a group
-        # label or a blocked token and are rejected above. Unknown
-        # category/type is rejected rather than inferred from a generic
-        # "A vs B" title -- series, finals, and other submarkets often look
-        # exactly like that, and this shape is where a keyword miss would
-        # readmit exactly what the selector exists to block.
-        if (_SPORTS_SERIES_RE.search(_text(category, market_type, series_title,
-                                           event_title, title_slug))
-                and not _text(market_group)):
+        # A direct sports matchup with no fragment group label or fragment title
+        # is the venue's common shape for a main line (for example MLB, NFL). Submarkets
+        # carry a fragment group label (Spread -3.5, O/U 46.5), a fragment title token,
+        # or a blocked token and are rejected above or here. Unknown category/type is
+        # rejected rather than inferred from a generic "A vs B" title -- series, finals,
+        # and other submarkets often look exactly like that, and this shape is where a
+        # keyword miss would readmit exactly what the selector exists to block.
+        # (Audited 2026-10-04, Issue #355: docs/issues/355-matchup-refusal-audit.md).
+        if (_SPORTS_SERIES_RE.search(_text(category, series_title, title_slug))
+                and not _is_fragment_label(market_group)
+                and not _FRAGMENT_LABEL_RE.search(title_slug)):
             return True, ""
         if not require_primary:
             # The keyword could not be found because the fields it is read

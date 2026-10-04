@@ -1,27 +1,28 @@
-# SPEC: Issue #356 — Fix cycle_intent.submitted accounting gap & telemetry visibility
+# SPEC: Issue #355 — Matchup refusal audit & selective identity relaxation
 
 ## Goal
-Identify and close the submit-accounting gap where `cycle_intent.submitted` reads 0 while orders post. Add visibility into unmatched updates and missing DB paths, preserve partial-submission counts on errors, and document the true semantics of `cycle_intent.submitted`.
+Audit the ranker's `not a primary Moneyline/Outright or Macro/Politics market` refusal bucket across a fresh market universe. Extract raw Gamma metadata for each refused matchup candidate, classify them into main lines vs submarkets based on venue evidence, and (subject to operator approval) implement an evidence-backed relaxation in `scoring/selector.py::identity_allowed` that admits proven main lines while keeping fragments and submarkets strictly refused.
 
 ## Acceptance Criteria
-- [ ] In `core_brain/cycle_stream.py::_update_cycle_intent`, warn on stderr when `db_path` does not exist or when the UPDATE matches 0 rows (`cur.rowcount == 0`), reporting `market_slug`, `cycle`, and `run_id`.
-- [ ] In `core_brain/trader_loop.py` and `core_brain/shadow_exec.py`, define and use a shared partial-count attribute (`PARTIAL_SUBMIT_PLACED_ATTR`) so that when submission encounters an error after placing legs, the placed count is preserved on the exception and read in `_visit_one` during `market_error` emission and `LiveFleetResult` return.
-- [ ] Add unit test in `tests/test_cycle_stream.py` verifying the unmatched-update warning on stderr using `capsys`.
-- [ ] Add integration test in `tests/test_run_attribution.py` testing the real shadow posting boundary and verifying that partial-submission failure records `submitted > 0` in `cycle_intent` and `market_error`.
-- [ ] Document the exact semantics in `core_brain/cycle_stream.py` (table comment and docstrings), `docs/issues/351-noticed-but-not-touching.md`, and `docs/issues/analysis-01-shadow-zero-fill.md`.
-- [ ] All targeted tests pass: `python -m pytest -q tests/test_cycle_stream.py tests/test_run_attribution.py tests/test_trader_loop.py`.
+- [ ] Implement standalone, read-only audit tool `scripts/audit_matchup_refusals.py` to extract refused matchup rows from a universe snapshot, fetch raw Gamma market and event details, normalize using existing discovery logic, and produce machine-readable forensic summaries.
+- [ ] Generate comprehensive forensic documentation in `docs/issues/355-matchup-refusal-audit.md` classifying all refused rows into main lines, submarkets (e.g. O/U totals, series/finals), or unsupported with decisive venue evidence and shape tags.
+- [ ] Determine the exact evidence-backed predicate (e.g. allowing non-fragment group labels for sports matchups, or specific field patterns) and present the classification and projected impact to the operator before editing selector logic.
+- [ ] Narrow only the matchup branch of `scoring/selector.py::identity_allowed` (lines 120–143) to admit verified main lines while keeping all submarkets refused with the exact string `"not a primary Moneyline/Outright or Macro/Politics market"`.
+- [ ] Add unit and regression tests in `tests/test_unified_universe.py` covering newly admitted shapes, still-refused shapes (O/U titles, series/best-of, fragment labels), and an end-to-end `evaluate` check.
+- [ ] Offline replay over saved audit evidence proving 0 fragment leaks (spread/handicap, game/map/round, over/under totals, numeric price bands).
+- [ ] All targeted test suites pass: `python -m pytest -q tests/test_unified_universe.py tests/test_family_admission.py`.
 
 ## Scope
 ### In scope
-- `core_brain/cycle_stream.py`: DB missing warning, 0-row update warning, schema comment and docstring clarification.
-- `core_brain/trader_loop.py`: `PARTIAL_SUBMIT_PLACED_ATTR` definition, exception attachment in `_submit_intents`, exception extraction in `_visit_one`.
-- `core_brain/shadow_exec.py`: Attach `PARTIAL_SUBMIT_PLACED_ATTR` on rollback in `record_submit`.
-- `tests/test_cycle_stream.py`: Unmatched update warning test.
-- `tests/test_run_attribution.py`: Real shadow submit boundary and partial submission test.
-- `docs/issues/351-noticed-but-not-touching.md` and `docs/issues/analysis-01-shadow-zero-fill.md`: Discrepancy explanation and resolution.
+- `scripts/audit_matchup_refusals.py`: Read-only public API audit script.
+- `docs/issues/355-matchup-refusal-audit.md`: Forensics run documentation and per-row classification table.
+- `scoring/selector.py`: Matchup branch in `identity_allowed` (lines 120–143), related docstring/comments.
+- `tests/test_unified_universe.py`: Unit tests for admitted and refused matchup shapes and evaluate flow.
+- `CONSTRAINTS.md`: Approved exception record with live-selection impact.
 
 ### Out of scope
-- Changing `CYCLE_INTENT_KEEP_ROWS` retention limit (kept at 200).
-- Modifying production `data/orders.db`.
-- Modifying order fill, lifecycle, or pricing logic.
-- Changing `live/runtime/cycle_events.jsonl` ring formatting.
+- `_BLOCKED_RE`, `_PRIMARY_RE`, `_MACRO_RE`, `_FRAGMENT_LABEL_RE`, `_is_fragment_label`.
+- Non-matchup branches and `require_primary=False` logic.
+- Downstream volume, depth, spread, movement, horizon gates.
+- Paired admission trial machinery (`scoring/family_admission.py`).
+- Any live execution, order placement, or `data/orders.db` interaction.
