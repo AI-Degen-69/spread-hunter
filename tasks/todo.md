@@ -1,5 +1,18 @@
-# Todo: Issue #361 — Dead-Band Rehearsal
+# Checklist — Issue #370
 
-- [x] Task 1: [Backend/Logic] Add Pair-Cost Re-Gate Dead-Band Invariance Tests in `tests/test_trader_loop.py`
-- [x] Task 2: [Execution/Rehearsal] Execute Paired Shadow Rehearsal (0.03 Control vs 0.08 Treatment)
-- [x] Task 3: [Research/Docs] Author Trial Memorandum in `docs/runs/2026-10-04-shadow-dead-band-trial.md`
+- [x] **Task 1: [Backend/Logic] Real-Time Trade Velocity & Volatility Gate in Market Screener**
+  - [x] Add `trade_velocity_and_range` and `velocity_reject` in `scripts/filter_markets.py`
+  - [x] Add optional `range_cents` and `velocity_measured_at` in `core_brain/market_feed.py`
+  - [x] Implement unit tests in `tests/test_velocity_gate.py`
+  - [x] Verify: `python -m pytest -q tests/test_velocity_gate.py`
+
+- [ ] **Task 2: [Backend/Logic] Opt-in Dynamic Integer-Cent Quote Offset & Pair-Cost Bounds**
+  - [ ] Add dynamic offset configuration & env overrides in `core_brain/config.py`
+  - [ ] Implement whole-cent dynamic offset calculation and `dynamic_pair_sum` refusal in `core_brain/quotes.py`
+  - [ ] Implement unit tests in `tests/test_quotes.py`
+  - [ ] Verify: `python -m pytest -q tests/test_quotes.py`
+
+- [ ] **Task 3: [Integration/Regression] Screener-to-Trader Feed Integration & Safety Verification**
+  - [ ] Wire range fields into `core_brain/trader_loop.py`
+  - [ ] Verify backward compatibility and baseline equivalence when disabled
+  - [ ] Run full targeted regression suite: `python -m pytest -q tests/test_velocity_gate.py tests/test_quotes.py tests/test_market_feed.py tests/test_trader_loop.py`
