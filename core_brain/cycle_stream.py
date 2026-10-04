@@ -51,6 +51,15 @@ KEEP_LINES = 400
 CYCLE_INTENT_KEEP_ROWS = 200
 _INTENT_RETRY_BACKOFF_SEC = 0.05
 
+# The cycle_intent table tracks quoting intents and their per-visit outcomes:
+# `intent_count` is decided intents for that visit; `submitted` and `cancelled`
+# are filled by the later submit or market_error event for the exact visit keyed
+# by (market_slug, cycle, run_id).
+# `submitted` counts order legs placed by the quote loop during that single visit
+# (assigned, not incremented). Dry-run mode and order reuse yield 0. Placements
+# outside the quote loop (rescue completion BUYs, order_manager quote/probe)
+# are excluded. The table retains only the newest CYCLE_INTENT_KEEP_ROWS (200) rows,
+# so SUM(submitted) represents a rolling window metric, not daily cumulative volume.
 _CREATE_CYCLE_INTENT = """
     CREATE TABLE IF NOT EXISTS cycle_intent (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,7 +178,11 @@ def _write_cycle_intent(
     db_path: Path | None = None,
     run_id: Optional[str] = None,
 ) -> None:
-    """Fire-and-forget INSERT into cycle_intent table, pruning older than 200 rows."""
+    """Fire-and-forget INSERT into cycle_intent table, pruning older than 200 rows.
+
+    Records the initial decide event with submitted=0 and cancelled=0. These fields
+    are later assigned by _update_cycle_intent when the visit finishes quoting.
+    """
     p = Path(db_path) if db_path else DEFAULT_DB_PATH
     if not p.parent.exists():
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -234,13 +247,18 @@ def _update_cycle_intent(
     Matching on market_slug alone would let a later decide event for the same
     market (before this submit arrives) capture this submit's outcome. cycle +
     run_id + market_slug identify the exact visit the decide event inserted.
+
+    `submitted` records orders placed by the quote loop for this visit (assigned,
+    not incremented), preserving partial placements on error. Placements outside
+    the quote loop (rescue completion BUYs, manual orders) are not reflected here.
     """
     p = Path(db_path) if db_path else DEFAULT_DB_PATH
     if not p.exists():
+        print(f"WARNING: cycle_intent update skipped, db missing: {p}", file=sys.stderr)
         return
 
     def update(conn: sqlite3.Connection) -> None:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE cycle_intent SET submitted = ?, cancelled = ?
             WHERE id = (
@@ -251,6 +269,12 @@ def _update_cycle_intent(
             """,
             (submitted, cancelled, market_slug, cycle, run_id),
         )
+        if cur.rowcount == 0:
+            print(
+                f"WARNING: cycle_intent update matched 0 rows: market_slug={market_slug} "
+                f"cycle={cycle} run_id={run_id}",
+                file=sys.stderr,
+            )
         conn.commit()
 
     try:

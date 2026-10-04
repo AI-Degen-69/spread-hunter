@@ -157,6 +157,82 @@ class TestIntentsCarryTheSessionId:
             "its run id did not match, so the visit's outcome was dropped")
         assert rows[0]["cancelled"] == 1, rows[0]
 
+    def test_shadow_session_updates_submitted_count_across_posting_boundary(
+            self, tmp_path, monkeypatch):
+        """A full shadow run across the real posting boundary writes cycle_intent and updates submitted count."""
+        from core_brain import order_registry
+        from core_brain.quotes import QuoteIntent
+        import core_brain.cycle_stream as cycle_stream
+        from core_brain.shadow_run import run_shadow
+
+        monkeypatch.setattr(cycle_stream, "DEFAULT_RING_PATH",
+                            tmp_path / "ring.jsonl")
+        monkeypatch.setattr(order_registry, "_CURRENT_RUN_ID", "run-liveone")
+
+        intent = QuoteIntent(side="UP", token_id="tok-up", price=0.48, size=2,
+                             mid=0.49, edge_vs_mid=0.01)
+        run_shadow(
+            minutes=0.0, db_path=tmp_path / "shadow.db",
+            markets_fn=lambda max_markets=None: [FakeMarket()],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([intent], ""),
+        )
+
+        rows = _rows(tmp_path / "shadow.db", "cycle_intent")
+        assert len(rows) == 1, rows
+        assert rows[0]["intent_count"] == 1
+        assert rows[0]["submitted"] == 1
+        assert rows[0]["cancelled"] == 0
+
+        orders = _rows(tmp_path / "shadow.db", "orders")
+        assert len(orders) == 1
+        assert orders[0]["status"] == "open"
+
+    def test_partial_submit_failure_preserves_submitted_count(
+            self, tmp_path, monkeypatch):
+        """When submit raises mid-execution, placed legs count is preserved on the exception and recorded."""
+        from core_brain import order_registry
+        from core_brain.quotes import QuoteIntent
+        import core_brain.cycle_stream as cycle_stream
+        from core_brain.shadow_run import run_shadow
+        import core_brain.shadow_exec as shadow_exec
+
+        monkeypatch.setattr(cycle_stream, "DEFAULT_RING_PATH",
+                            tmp_path / "ring.jsonl")
+        monkeypatch.setattr(order_registry, "_CURRENT_RUN_ID", "run-liveone")
+
+        orig_write_queue_ahead = shadow_exec.write_queue_ahead
+        call_count = [0]
+
+        def fail_on_second(db_path, run_id, local_id, queue_ahead):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise RuntimeError("simulated second leg write failure")
+            return orig_write_queue_ahead(db_path, run_id, local_id, queue_ahead)
+
+        monkeypatch.setattr(shadow_exec, "write_queue_ahead", fail_on_second)
+
+        intents = [
+            QuoteIntent(side="UP", token_id="tok-up", price=0.48, size=2, mid=0.49, edge_vs_mid=0.01),
+            QuoteIntent(side="DOWN", token_id="tok-dn", price=0.48, size=2, mid=0.49, edge_vs_mid=0.01),
+        ]
+        run_shadow(
+            minutes=0.0, db_path=tmp_path / "shadow.db",
+            markets_fn=lambda max_markets=None: [FakeMarket()],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: (intents, ""),
+        )
+
+        rows = _rows(tmp_path / "shadow.db", "cycle_intent")
+        assert len(rows) == 1, rows
+        assert rows[0]["intent_count"] == 2
+        # First leg was placed before failure; preserved on market_error event
+        assert rows[0]["submitted"] == 1
+        # Order rows exist, and created orders were rolled back / cancelled
+        orders = _rows(tmp_path / "shadow.db", "orders")
+        assert len(orders) == 2
+        assert all(o["status"] == "cancelled" for o in orders)
+
 
 class TestEffectiveConfigIsLogged:
     """One INFO line at start retires 'what did this rehearsal actually run?'."""

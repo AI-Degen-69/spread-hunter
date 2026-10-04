@@ -1,12 +1,13 @@
-# Constraints & Quality Guardrails — Issue #357
+# Constraints & Quality Guardrails — Issue #356
 
 ## Quality Boundaries
-- **Zero regressions**: All existing tests in `tests/test_unified_universe.py` and `tests/test_cycle_stream.py` must pass.
-- **Targeted scope**: Only touch `scripts/filter_markets.py` and `tests/test_unified_universe.py`.
+- **Zero regressions**: All existing tests in `tests/test_cycle_stream.py`, `tests/test_run_attribution.py`, and `tests/test_trader_loop.py` must pass.
+- **Targeted scope**: Only touch `core_brain/cycle_stream.py`, `core_brain/trader_loop.py`, `core_brain/shadow_exec.py`, `tests/test_cycle_stream.py`, `tests/test_run_attribution.py`, and documentation files in `docs/issues/`.
 - **Untouched paths**:
-  - Do NOT touch `core_brain/quotes.py`, `core_brain/config.py`, `scoring/config.py` (quote gate `min_t_remaining_sec` is out of scope).
-  - Do NOT touch `core_brain/markets.py` or `scoring/markets.py`.
-  - Do NOT modify or write to production store `data/orders.db`.
+  - Do NOT modify production `data/orders.db`.
+  - Do NOT touch `CYCLE_INTENT_KEEP_ROWS` or retention mechanism.
+  - Do NOT write test events to `live/runtime/cycle_events.jsonl`.
+  - Do NOT change exception types or signatures of public APIs.
 - **Anti-cheat**: No disabling tests, skipping assertions, or mocking out validation.
 - **Dependencies**: Zero new dependencies.
-- **Performance**: Early refusal in `evaluate()` must prevent tape and order book network requests for expired markets.
+- **Telemetry safety**: Telemetry operations remain fire-and-forget; warnings go to `sys.stderr`.

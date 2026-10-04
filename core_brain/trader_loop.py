@@ -62,6 +62,9 @@ CANCEL_PRICE_MOVED = "price_moved"        # the desired price left the tolerance
 CANCEL_REGATE_PAIR_COST = "regate_pair_cost"  # holding would break max_pair_cost
 CANCEL_MARKET_DROPPED = "market_dropped"  # the market left the active universe
 
+# Attribute attached to exceptions when submit raises after placing some legs.
+PARTIAL_SUBMIT_PLACED_ATTR = "placed"
+
 
 def plan_orders(
     open_orders: list[dict],
@@ -852,6 +855,7 @@ def _visit_one(
         if to_submit:
             submitted = seam.submit_fn(seam.client, seam.registry, market, to_submit, cfg)
     except Exception as e:
+        submitted = getattr(e, PARTIAL_SUBMIT_PLACED_ATTR, getattr(e, "placed", submitted))
         # A submit/cancel failure (venue rejection, a split couple rolled back)
         # must degrade this market to ERROR, never stop the rotation.
         emit_fn(service="decide", cycle=cycle, phase="quoting",
@@ -1061,116 +1065,123 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
     crossed = [i for i in intents if i.crossed]
 
     placed = 0
-    for batch, order_type, post_only in (
-        (passive, OrderType.GTC, True),
-        (crossed, OrderType.FOK, False),
-    ):
-        if not batch:
-            continue
-
-        local_legs = []
-        batch_args = []
-        for i in batch:
-            local_id = str(uuid.uuid4())
-            registry.create_order(OrderRecord(
-                id=local_id, order_id=None, condition_id=market.condition_id,
-                token_id=str(i.token_id), side="BUY", price=i.price,
-                original_size=i.size, status="pending",
-                posted_ts=now_ms, last_polled_ts=now_ms,
-                pair_id=pair_id, max_pair_cost_at_post=max_pair_cost,
-            ))
-            signed = client.create_order(OrderArgsV2(
-                price=i.price, size=i.size, side=BUY, token_id=i.token_id,
-                expiration=0))
-            batch_args.append(PostOrdersV2Args(order=signed, orderType=order_type))
-            local_legs.append({
-                "local_id": local_id, "token_id": str(i.token_id),
-                "price": i.price, "size": i.size, "side": i.side,
-                "mid": i.mid, "edge_vs_mid": i.edge_vs_mid, "crossed": i.crossed,
-            })
-
-        t_start = time.perf_counter()
-        resp = client.post_orders(batch_args, post_only=post_only)
-        post_latency_ms = (time.perf_counter() - t_start) * 1000.0
-        resp_list = (resp if isinstance(resp, list)
-                     else [resp] if isinstance(resp, dict) else [])
-
-        # Validate response structure and asset identity before mapping to local_legs
-        if len(resp_list) != len(local_legs):
-            # Response count mismatch: refuse to map by position
-            for leg in local_legs:
-                registry.update_order_status(
-                    leg["local_id"], status="cancelled", last_polled_ts=now_ms)
-            raise RuntimeError(
-                f"post_orders response count mismatch: sent {len(local_legs)} legs, "
-                f"got {len(resp_list)} responses; refusing to attach IDs by position")
-
-        extracted = []
-        for idx, leg in enumerate(local_legs):
-            item = resp_list[idx] if idx < len(resp_list) else None
-            if item is None:
-                extracted.append(None)
+    try:
+        for batch, order_type, post_only in (
+            (passive, OrderType.GTC, True),
+            (crossed, OrderType.FOK, False),
+        ):
+            if not batch:
                 continue
 
-            # Validate asset_id matches the token we submitted
-            resp_token = None
-            if isinstance(item, dict):
-                resp_token = item.get("asset_id") or item.get("token_id") or item.get("assetId")
-            else:
-                resp_token = (getattr(item, "asset_id", None) or
-                             getattr(item, "token_id", None) or
-                             getattr(item, "assetId", None))
+            local_legs = []
+            batch_args = []
+            for i in batch:
+                local_id = str(uuid.uuid4())
+                registry.create_order(OrderRecord(
+                    id=local_id, order_id=None, condition_id=market.condition_id,
+                    token_id=str(i.token_id), side="BUY", price=i.price,
+                    original_size=i.size, status="pending",
+                    posted_ts=now_ms, last_polled_ts=now_ms,
+                    pair_id=pair_id, max_pair_cost_at_post=max_pair_cost,
+                ))
+                signed = client.create_order(OrderArgsV2(
+                    price=i.price, size=i.size, side=BUY, token_id=i.token_id,
+                    expiration=0))
+                batch_args.append(PostOrdersV2Args(order=signed, orderType=order_type))
+                local_legs.append({
+                    "local_id": local_id, "token_id": str(i.token_id),
+                    "price": i.price, "size": i.size, "side": i.side,
+                    "mid": i.mid, "edge_vs_mid": i.edge_vs_mid, "crossed": i.crossed,
+                })
 
-            if resp_token and str(resp_token) != leg["token_id"]:
-                # Asset identity mismatch: response is for wrong token
-                for leg_inner in local_legs:
+            t_start = time.perf_counter()
+            resp = client.post_orders(batch_args, post_only=post_only)
+            post_latency_ms = (time.perf_counter() - t_start) * 1000.0
+            resp_list = (resp if isinstance(resp, list)
+                         else [resp] if isinstance(resp, dict) else [])
+
+            # Validate response structure and asset identity before mapping to local_legs
+            if len(resp_list) != len(local_legs):
+                # Response count mismatch: refuse to map by position
+                for leg in local_legs:
                     registry.update_order_status(
-                        leg_inner["local_id"], status="cancelled", last_polled_ts=now_ms)
+                        leg["local_id"], status="cancelled", last_polled_ts=now_ms)
                 raise RuntimeError(
-                    f"Asset identity mismatch at position {idx}: sent token {leg['token_id']}, "
-                    f"response carries {resp_token}; refusing to attach wrong ID")
+                    f"post_orders response count mismatch: sent {len(local_legs)} legs, "
+                    f"got {len(resp_list)} responses; refusing to attach IDs by position")
 
-            extracted.append(venue_order_id(item))
+            extracted = []
+            for idx, leg in enumerate(local_legs):
+                item = resp_list[idx] if idx < len(resp_list) else None
+                if item is None:
+                    extracted.append(None)
+                    continue
 
-        ok = sum(1 for v in extracted if v is not None)
+                # Validate asset_id matches the token we submitted
+                resp_token = None
+                if isinstance(item, dict):
+                    resp_token = item.get("asset_id") or item.get("token_id") or item.get("assetId")
+                else:
+                    resp_token = (getattr(item, "asset_id", None) or
+                                 getattr(item, "token_id", None) or
+                                 getattr(item, "assetId", None))
 
-        # PARTIAL FAILURE: a couple that split must not leave a naked survivor.
-        if ok == 0:
-            for leg in local_legs:
-                registry.update_order_status(
-                    leg["local_id"], status="cancelled", last_polled_ts=now_ms)
-            log.warning("no order ids in post response for %s; rows cancelled",
-                        market.condition_id[:12])
-            continue
+                if resp_token and str(resp_token) != leg["token_id"]:
+                    # Asset identity mismatch: response is for wrong token
+                    for leg_inner in local_legs:
+                        registry.update_order_status(
+                            leg_inner["local_id"], status="cancelled", last_polled_ts=now_ms)
+                    raise RuntimeError(
+                        f"Asset identity mismatch at position {idx}: sent token {leg['token_id']}, "
+                        f"response carries {resp_token}; refusing to attach wrong ID")
 
-        if 0 < ok < len(local_legs):
+                extracted.append(venue_order_id(item))
+
+            ok = sum(1 for v in extracted if v is not None)
+
+            # PARTIAL FAILURE: a couple that split must not leave a naked survivor.
+            if ok == 0:
+                for leg in local_legs:
+                    registry.update_order_status(
+                        leg["local_id"], status="cancelled", last_polled_ts=now_ms)
+                log.warning("no order ids in post response for %s; rows cancelled",
+                            market.condition_id[:12])
+                continue
+
+            if 0 < ok < len(local_legs):
+                for idx, leg in enumerate(local_legs):
+                    v_id = extracted[idx]
+                    if v_id is not None:
+                        try:
+                            client.cancel_order(OrderPayload(orderID=v_id))
+                        except Exception as e:
+                            log.warning("rollback cancel of %s failed: %s", v_id, e)
+                    registry.update_order_status(
+                        leg["local_id"], status="cancelled", last_polled_ts=now_ms)
+                err = RuntimeError(
+                    f"partial post for {market.condition_id[:12]}: "
+                    f"{ok}/{len(local_legs)} legs accepted; survivors cancelled")
+                setattr(err, PARTIAL_SUBMIT_PLACED_ATTR, placed)
+                raise err
+
+            # Full agreement: commit venue ids and log the quote telemetry.
             for idx, leg in enumerate(local_legs):
                 v_id = extracted[idx]
-                if v_id is not None:
-                    try:
-                        client.cancel_order(OrderPayload(orderID=v_id))
-                    except Exception as e:
-                        log.warning("rollback cancel of %s failed: %s", v_id, e)
-                registry.update_order_status(
-                    leg["local_id"], status="cancelled", last_polled_ts=now_ms)
-            raise RuntimeError(
-                f"partial post for {market.condition_id[:12]}: "
-                f"{ok}/{len(local_legs)} legs accepted; survivors cancelled")
-
-        # Full agreement: commit venue ids and log the quote telemetry.
-        for idx, leg in enumerate(local_legs):
-            v_id = extracted[idx]
-            registry.attach_venue_order_id(
-                leg["local_id"], v_id, status="open", last_polled_ts=now_ms)
-            registry.log_quote(QuoteRecord(
-                ts=time.time(), market_slug=market.market_slug,
-                condition_id=market.condition_id, token_id=leg["token_id"],
-                side=leg["side"], price=leg["price"], size=leg["size"],
-                mid=leg["mid"], edge_vs_mid=leg["edge_vs_mid"],
-                order_id=v_id, local_id=leg["local_id"], run_id=get_run_id(),
-                latency_ms=post_latency_ms,
-            ))
-            placed += 1
+                registry.attach_venue_order_id(
+                    leg["local_id"], v_id, status="open", last_polled_ts=now_ms)
+                registry.log_quote(QuoteRecord(
+                    ts=time.time(), market_slug=market.market_slug,
+                    condition_id=market.condition_id, token_id=leg["token_id"],
+                    side=leg["side"], price=leg["price"], size=leg["size"],
+                    mid=leg["mid"], edge_vs_mid=leg["edge_vs_mid"],
+                    order_id=v_id, local_id=leg["local_id"], run_id=get_run_id(),
+                    latency_ms=post_latency_ms,
+                ))
+                placed += 1
+    except Exception as exc:
+        if not hasattr(exc, PARTIAL_SUBMIT_PLACED_ATTR):
+            setattr(exc, PARTIAL_SUBMIT_PLACED_ATTR, placed)
+        raise
 
     return placed
 

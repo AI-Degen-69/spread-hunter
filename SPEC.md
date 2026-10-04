@@ -1,34 +1,27 @@
-# SPEC: Issue #345 — Audit and prune stale local stores (retention policy & safe cleanup)
+# SPEC: Issue #356 — Fix cycle_intent.submitted accounting gap & telemetry visibility
 
 ## Goal
-Establish an auditable, dry-run-first data retention policy and automated tool for `spread-hunter` local working stores. Classify ~7.3 GB of accumulated rehearsal databases, runtime logs, reports, and archive files into `keep` / `archive` / `delete`, protect the live production registry (`data/orders.db*`) and `data/price_tape.db*`, provide a PowerShell menu entry point, and commit an inventory under `docs/`.
+Identify and close the submit-accounting gap where `cycle_intent.submitted` reads 0 while orders post. Add visibility into unmatched updates and missing DB paths, preserve partial-submission counts on errors, and document the true semantics of `cycle_intent.submitted`.
 
 ## Acceptance Criteria
-- [ ] A dry-run audit classifies every candidate file into `keep` / `archive` / `delete` with the specific reason, store family, file size in bytes, and prints total reclaimable disk space.
-- [ ] Refusal guards strictly forbid touching or deleting `data/orders.db` and any `-wal`/`-shm` sibling, and refuse any store currently open or locked by a running process.
-- [ ] `data/price_tape.db*` is explicitly excluded from deletion.
-- [ ] Retention policy applies per family:
-  - Rehearsal shadow stats (`data/stats_*.db*`, `data/*_shadow*`): default 14 days, with the newest store per family always retained.
-  - `runtime/` execution dirs & logs: default 14 days.
-  - `reports/*_statistics_report*`: default 14 days.
-  - `data/archive/*`: default 14 days.
-  - Stale orphan `-wal`/`-shm` files (whose parent `.db` is missing).
-- [ ] A dry-run-by-default prune command is available via CLI (`python -m core_brain.data_retention`) and integrated into `scripts/spread-hunter-menu.ps1`.
-- [ ] Initial audit inventory is documented and committed under `docs/data_inventory.md`.
-- [ ] `docs/agents/architecture.md` is updated with the retention policy.
-- [ ] Focused tests pass: `python -m pytest -q tests/test_data_retention.py`
-- [ ] End-to-end verification: `.\scripts\spread-hunter-menu.ps1 status` remains functional and live registry is intact.
+- [ ] In `core_brain/cycle_stream.py::_update_cycle_intent`, warn on stderr when `db_path` does not exist or when the UPDATE matches 0 rows (`cur.rowcount == 0`), reporting `market_slug`, `cycle`, and `run_id`.
+- [ ] In `core_brain/trader_loop.py` and `core_brain/shadow_exec.py`, define and use a shared partial-count attribute (`PARTIAL_SUBMIT_PLACED_ATTR`) so that when submission encounters an error after placing legs, the placed count is preserved on the exception and read in `_visit_one` during `market_error` emission and `LiveFleetResult` return.
+- [ ] Add unit test in `tests/test_cycle_stream.py` verifying the unmatched-update warning on stderr using `capsys`.
+- [ ] Add integration test in `tests/test_run_attribution.py` testing the real shadow posting boundary and verifying that partial-submission failure records `submitted > 0` in `cycle_intent` and `market_error`.
+- [ ] Document the exact semantics in `core_brain/cycle_stream.py` (table comment and docstrings), `docs/issues/351-noticed-but-not-touching.md`, and `docs/issues/analysis-01-shadow-zero-fill.md`.
+- [ ] All targeted tests pass: `python -m pytest -q tests/test_cycle_stream.py tests/test_run_attribution.py tests/test_trader_loop.py`.
 
 ## Scope
 ### In scope
-- New module `core_brain/data_retention.py` with `audit_storage()`, `prune_storage()`, `DataRetentionPolicy`, `AuditItem`, and CLI.
-- New unit test suite `tests/test_data_retention.py`.
-- Updating `scripts/spread-hunter-menu.ps1` to integrate with `core_brain.data_retention`.
-- Updating `docs/agents/architecture.md`.
-- Generating `docs/data_inventory.md`.
+- `core_brain/cycle_stream.py`: DB missing warning, 0-row update warning, schema comment and docstring clarification.
+- `core_brain/trader_loop.py`: `PARTIAL_SUBMIT_PLACED_ATTR` definition, exception attachment in `_submit_intents`, exception extraction in `_visit_one`.
+- `core_brain/shadow_exec.py`: Attach `PARTIAL_SUBMIT_PLACED_ATTR` on rollback in `record_submit`.
+- `tests/test_cycle_stream.py`: Unmatched update warning test.
+- `tests/test_run_attribution.py`: Real shadow submit boundary and partial submission test.
+- `docs/issues/351-noticed-but-not-touching.md` and `docs/issues/analysis-01-shadow-zero-fill.md`: Discrepancy explanation and resolution.
 
 ### Out of scope
-- Modifying, moving, or deleting `data/orders.db` (the production registry).
-- Trimming or deleting `data/price_tape.db`.
-- Deleting any git-tracked files or source code.
-- Database vacuuming / migration changes.
+- Changing `CYCLE_INTENT_KEEP_ROWS` retention limit (kept at 200).
+- Modifying production `data/orders.db`.
+- Modifying order fill, lifecycle, or pricing logic.
+- Changing `live/runtime/cycle_events.jsonl` ring formatting.

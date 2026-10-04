@@ -36,6 +36,7 @@ from core_brain.order_registry import (
 from core_brain.shadow_fills import (
     ShadowFill, ShadowRestingOrder, credit_fills, queue_ahead_at,
 )
+from core_brain.trader_loop import PARTIAL_SUBMIT_PLACED_ATTR
 
 _log = logging.getLogger(__name__)
 
@@ -340,13 +341,14 @@ def record_submit(
                 local_id=local_id,
             ))
             placed += 1
-    except Exception:
+    except Exception as exc:
         # Any exception mid-loop: cancel all created orders and re-raise.
         for local_id in created_local_ids:
             try:
                 registry.update_order_status(local_id, status="cancelled", last_polled_ts=now_ms)
             except (KeyError, sqlite3.Error) as e:
                 _log.exception(f"Failed to cancel order {local_id}: {e}")
+        setattr(exc, PARTIAL_SUBMIT_PLACED_ATTR, placed)
         raise
 
     return placed
