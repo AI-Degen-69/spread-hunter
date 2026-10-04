@@ -35,7 +35,7 @@ Before executing the rehearsal, the decision framework was locked:
 
 ## 3. Side-by-Side Results
 
-Metrics extracted via `core_brain.statistics_report::write_statistics_report` and `core_brain.kpi::report`:
+Metrics extracted via `core_brain.statistics_report::write_statistics_report` and live telemetry:
 
 | Metric | Treatment (`dead_band=0.08`) | Control (`dead_band=0.03`) | Delta / Notes |
 |---|---|---|---|
