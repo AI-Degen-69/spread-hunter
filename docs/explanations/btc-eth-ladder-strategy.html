@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>אסטרטגיית ה-Ladder על BTC/ETH — איך הבוט עובד</title>
+<style>
+:root{--bg:#0b1020;--card:#141b33;--card2:#1a2342;--line:#2a3763;--txt:#eef1ff;--mut:#a8b3d9;--acc:#7dd3a8;--warn:#ffd479;--bad:#ff9d9d;--blue:#7fb3ff}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 80% -10%,#1c2a5e 0%,var(--bg) 55%);color:var(--txt);font-family:"Segoe UI",Arial,sans-serif;line-height:1.7}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 18px 70px}
+.hero{background:linear-gradient(135deg,#1a2342,#101736);border:1px solid var(--line);border-radius:18px;padding:26px 24px}
+.kicker{display:inline-block;background:#0e1530;border:1px solid var(--line);color:var(--blue);border-radius:99px;padding:4px 14px;font-size:13px}
+h1{margin:.2em 0;font-size:29px}.lede{color:var(--mut);font-size:16.5px;max-width:72ch}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.card{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);border-radius:16px;padding:18px}
+.card h2{margin:0 0 8px;font-size:19px}.mut{color:var(--mut)}.small{font-size:13.5px}
+.pill{display:inline-block;border-radius:99px;padding:2px 12px;font-size:13px;border:1px solid var(--line);background:#0e1530;margin:2px}
+.pill.g{color:var(--acc);border-color:#2f6b4d}.pill.y{color:var(--warn);border-color:#7a6420}.pill.b{color:var(--blue)}
+table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:right}
+th{background:#0e1530;color:var(--blue)}
+code{background:#0b1230;border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-family:Consolas,monospace;font-size:13px;direction:ltr;display:inline-block}
+.callout{border-radius:12px;padding:12px 14px;margin:10px 0;font-size:14.5px}
+.ok{background:rgba(125,211,168,.1);border:1px solid #2f6b4d}
+.warn{background:rgba(255,212,121,.1);border:1px solid #7a6420}
+.bad{background:rgba(255,157,157,.1);border:1px solid #7a3030}
+.num{font-variant-numeric:tabular-nums;direction:ltr;display:inline-block}
+footer{color:var(--mut);font-size:13px;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="hero">
+<span class="kicker">spread-hunter · short-window ladder · BTC/ETH 5-min</span>
+<h1>איך האסטרטגיה עם BTC ו-ETH עובדת?</h1>
+<p class="lede">אותו עיקרון של הספרד-האנטר — <b>לקנות סט שלם (UP + DOWN) בפחות מ-$1.00 ולמזג בחזרה ל-$1.00</b> — אבל על סדרות הקריפטו הקצרות (כל 5 דקות נפתח שוק חדש), עם <b>סולם של כמה מחירי bid בכל צד</b> במקום מחיר אחד. יותר רמות = יותר סיכוי לתפוס שני צדדים כזוג מושלם, באותה משמעת עלות.</p>
+<div><span class="pill g">profit per pair = 1.00 − (UP + DOWN)</span>
+<span class="pill b">merge = ה-exit</span>
+<span class="pill y">one-leg residue = הסיכון היחיד</span></div>
+</div>
+<div class="grid">
+<div class="card"><h2>1 · על מה סוחרים?</h2>
+<p class="mut small">שווקי <code>btc-up-or-down-5m</code> ו-<code>eth-up-or-down-5m</code>: כל חלון של 300 שניות שואל "למעלה או למטה בעוד 5 דקות?". כל צד הוא טוקן שנסלק ב-$1.00 או $0.00. זוג UP+DOWN תמיד שווה $1.00 — קנייה משולבת מתחת ל-$1.00 היא ארביטרז' מובנה.</p>
+<div class="callout warn"><b>למה דווקא הם?</b> ההשערה: בשניות הראשונות הספרדים הכי רחבים והספרים הכי דקים — מחיר יחיד מפספס, סולם תופס. זה <b>לא</b> ה-universe החי (פילטר 30 יום). הסולם רץ בנתיב צדדי דרך <code>markets_fn</code>.</div>
+</div>
+<div class="card"><h2>2 · למה סולם?</h2>
+<p class="mut small">בקריפטו הקצר המחיר זז מהר והתור עמוק — מחיר אחד = סיכוי אחד. הסולם שם 2–6 רמות סביב 0.50, כולן תחת <code>pair_id</code> אחד:</p>
+<table><tr><th>shape</th><th>רגליים</th><th>סטטוס</th></tr>
+<tr><td><span class="num">2</span></td><td><span class="num">0.45 / 0.55</span></td><td>הזוכה ב-probe</td></tr>
+<tr><td><span class="num">4</span></td><td><span class="num">0.45/0.48/0.52/0.55</span></td><td>יותר כיסוי, יותר שאריות</td></tr>
+<tr><td><span class="num">6</span></td><td><span class="num">0.42…0.58</span></td><td>נפסל — שאריות אוכלות רווח</td></tr></table>
+</div>
+<div class="card"><h2>3 · ציר זמן</h2>
+<p class="small mut">שניות <span class="num">0–30</span>: הבוט מניח את הסולם (<code>--open-window-sec 30</code>). אחר כך ההזמנות מבוטלות כ-<code>not_quoted</code> — זמן מנוחה חציוני ~17 שניות. צד אחד התמלא והשני לא? נכנס <b>ladder_exit אחרי 60 שניות</b> (<span class="num">exit_60</span>): מוכרים את השארית במקום להחזיק עד הסליקה.</p>
+<p class="small mut">ה-probe הראה: החזקה מפסידה (ממוצע <span class="num">−0.02</span>), exit_60 מממן את עצמו (ממוצע <span class="num">+0.30</span>, CI <span class="num">0.26–0.35</span>).</p>
+<p class="small mut"><b>הלולאה:</b> גילוי כל 15s ← הנחת סולם ← רגל שמולאה פורשת ← זוג מתמזג ל-$1.00 · שארית יוצאת ב-exit.</p>
+</div>
+<div class="card"><h2>4 · איך נראה הסולם בספר?</h2>
+<p class="small mut">דוגמת shape-2: bids שלנו ב-<span class="num">0.45</span> וב-<span class="num">0.55</span> בשני הצדדים (UP ו-DOWN). כל fill בכל רמה מצטרף לאותו pair. עלות זוג = ממוצע UP + ממוצע DOWN. למשל <span class="num">0.47 + 0.49 = 0.96 ← רווח 0.04$</span> במיזוג. מעל $1.00 = הפסד נעול — לכן <code>max_pair_cost = 0.99</code> הוא תנאי הרווח עצמו.</p>
+<div class="callout ok"><b>משמעת:</b> רגל שמולאה פורשת; שוק שנסגר ב-exit פורש כולו; הדו"ח בודק conservation + zero-orphans.</div>
+</div>
+<div class="card"><h2>5 · מה הבוט מריץ בפועל?</h2>
+<p class="small mut"><b>תמיד בלי signer:</b> <code>scripts/ladder_live_books_trial.py --minutes 240</code> מריץ <code>run_shadow</code> עם לקוח צללים (<code>live_execution: false</code>), ספרים חיים ציבוריים, fills מטייפ ציבורי. מסרב לגעת ב-<code>data/orders.db</code>. תקציב נפרד מה-Dynamic Caps: <code>--budget-usd 5</code>.</p>
+<p class="small mut"><b>הליבה:</b> <code>ladder.py :: make_ladder_decide</code> עוטף את <code>route_quotes</code> — מזהה שוק לפי token, מסנן רגליים שמולאו, חותם הכל ב-<code>pair_id</code> אחד. <code>ladder_probe.py</code> הוא ה-replay האופליין על טייפים מוקלטים (כלל "נגע = מילוי מלא", שארית נמדדת מול המנצח האמיתי, לעולם לא אפס).</p>
+</div>
+<div class="card"><h2>6 · מה נמדד?</h2>
+<table><tr><th>מדידה</th><th>probe</th><th>live 4h (#333)</th></tr>
+<tr><td>רגליים</td><td><span class="num">0.45/0.55</span></td><td><span class="num">0.48/0.49</span> (קבוע!)</td></tr>
+<tr><td>זוגות</td><td><span class="num">69%</span> BTC · <span class="num">75%</span> ETH</td><td><span class="num">0</span> — 15c מאחורי ה-touch</td></tr>
+<tr><td>PnL/שוק</td><td><span class="num">0.337 · 0.305</span></td><td><span class="num">0.0</span></td></tr></table>
+<div class="callout bad"><b>באג #339 (תוקן ב-#343):</b> הרגליים נגזרו מ-<code>0.50 − i·tick</code> בלי לקרוא את הספר — 274 הזמנות, 0 fills. התיקון: רגליים מה-book החי. <b>הרצה חוזרת עוד לא קרתה.</b></div>
+<div class="callout warn"><b>אזהרת מודל:</b> חוק ה-"נגע = קיבלתי" לא קיים בווניו — אין מודל תור. <span class="num">69–75%</span> אינם baseline ל-fill-rate. הנוסחה הקובעת: <span class="num">E = P(pair)·(1−cost) − P(leg)·E(loss)</span>.</div>
+</div>
+</div>
+<footer>מקורות: short-window-ladder.md · strategy.md · ladder.py · ladder_probe.py · ladder_live_books_trial.py · #323/#333/#339 · נבנה 2026-10-03</footer>
+</div>
+</body>
+</html>
