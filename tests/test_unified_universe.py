@@ -23,7 +23,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import scripts.filter_markets as fm
-from scripts.filter_markets import evaluate, gamma_universe, resolve_state
+from scripts.filter_markets import (evaluate, expired_at_intake,
+                                    gamma_universe, resolve_state)
 
 
 class _Resp:
@@ -1020,3 +1021,77 @@ def test_an_eligible_live_market_past_kickoff_reaches_the_books():
     # Assert
     assert row["eligible"] is True
     assert row["reject_reason"] == ""
+
+
+# --- intake expiry gate (#357) ------------------------------------------------
+
+
+def test_expired_at_intake_refuses_past_end_date_for_non_sports():
+    now = "2026-10-04T12:00:00Z"
+    past = "2026-10-03T20:00:00Z"  # 16 hours ago
+    expired, reason = expired_at_intake(past, start_iso=None, category="Crypto", now_iso=now)
+    assert expired is True
+    assert reason == "horizon passed (expired 16.0h ago)"
+    assert fm._cause(reason) == "horizon"
+
+
+def test_expired_at_intake_admits_future_or_missing_end_date():
+    now = "2026-10-04T12:00:00Z"
+    future = "2026-10-05T12:00:00Z"
+    # Future
+    expired, reason = expired_at_intake(future, category="Crypto", now_iso=now)
+    assert expired is False
+    assert reason == ""
+    # Missing / None
+    expired, reason = expired_at_intake(None, category="Crypto", now_iso=now)
+    assert expired is False
+    assert reason == ""
+    # Malformed
+    expired, reason = expired_at_intake("not-a-date", category="Crypto", now_iso=now)
+    assert expired is False
+    assert reason == ""
+
+
+def test_expired_at_intake_preserves_sports_kickoff_exception():
+    now = "2026-10-04T12:00:00Z"
+    past = "2026-10-04T10:00:00Z"  # 2 hours ago
+    # Category Sports without start_iso
+    expired, reason = expired_at_intake(past, start_iso=None, category="Sports", now_iso=now)
+    assert expired is False
+    assert reason == ""
+    # start_iso present
+    expired, reason = expired_at_intake(past, start_iso="2026-10-04T10:00:00Z", category="Other", now_iso=now)
+    assert expired is False
+    assert reason == ""
+
+
+class _ExplodingSessionForExpired:
+    """A book or tape fetch means the early expiry gate ran too late (#357)."""
+    def get(self, url, params=None, timeout=None):
+        raise AssertionError(f"evaluate fetched URL ({url}) for an expired market")
+
+
+def test_evaluate_refuses_expired_market_before_fetching_tape_or_books():
+    now_dt = datetime.now(timezone.utc)
+    past_iso = (now_dt - timedelta(hours=16)).isoformat()
+    m = _universe_candidate("0xexpired")
+    m["end_date_iso"] = past_iso
+    m["category"] = "Crypto"
+
+    row = evaluate(_ExplodingSessionForExpired(), 5.0, m, volume_24h=250_000.0, source="spread")
+
+    assert row["eligible"] is False
+    assert "horizon passed" in row["reject_reason"]
+    assert "expired" in row["reject_reason"]
+    assert fm._cause(row["reject_reason"]) == "horizon"
+
+
+def test_evaluate_missing_end_date_falls_through_to_tradable():
+    m = _universe_candidate("0xnoend")
+    m["end_date_iso"] = None
+
+    row = evaluate(_FakeSession([], trades=_TRADES), 5.0, m, volume_24h=250_000.0, source="spread")
+
+    assert row["eligible"] is False
+    assert row["reject_reason"] == "horizon unknown"
+    assert fm._cause(row["reject_reason"]) == "horizon"

@@ -257,6 +257,34 @@ def pre_start(start_iso: Optional[str],
     return True, f"pre-start: event has not started (starts in {when})"
 
 
+def expired_at_intake(end_iso: Optional[str],
+                      start_iso: Optional[str] = None,
+                      category: object = None,
+                      now_iso: Optional[str] = None) -> tuple[bool, str]:
+    """Has this market already passed its end date without being an in-play sports kickoff?
+
+    A non-sports market whose end date is in the past has already resolved or lapsed,
+    so spending cycle time, tape reads, and book reads on it is wasted venue work (#357).
+
+    In-play sports markets are exempt: on Polymarket, `endDate` is often kickoff,
+    not the final whistle (see lines 392-396), so an open sports market past kickoff
+    continues to trade live and is governed by the quote-time gate.
+
+    Unknown or missing end date is NOT treated as expired: it falls through to
+    downstream resolution and horizon gates.
+    """
+    days = days_to_resolve(end_iso, now_iso=now_iso)
+    if days is None or days >= 0:
+        return False, ""
+    cat_str = str(category or "").strip().lower()
+    if start_iso is not None or cat_str == "sports":
+        return False, ""
+    elapsed_seconds = abs(days * 86400.0)
+    hours = elapsed_seconds / 3600.0
+    when = f"{hours:.1f}h" if hours < 24.0 else f"{hours / 24.0:.1f}d"
+    return True, f"horizon passed (expired {when} ago)"
+
+
 def traded_notional(session: requests.Session, condition_id: str,
                     window_sec: float = MOVEMENT_WINDOW_SEC,
                     now_ts: Optional[float] = None,
@@ -925,6 +953,14 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     not_started, start_reason = pre_start(market_start_iso(m))
     if not_started:
         return _reject_row(source, start_reason, m, volume_24h)
+    # THE EXPIRY GATE, before the queue, tape, and book fetches below. A market
+    # whose end date has passed and which carries no sports kickoff signal has
+    # already resolved or lapsed, so scoring it is wasted venue work (#357).
+    is_expired, expired_reason = expired_at_intake(
+        m.get("end_date_iso"), market_start_iso(m),
+        category=m.get("category") or m.get("venue_category"))
+    if is_expired:
+        return _reject_row(source, expired_reason, m, volume_24h)
     # THE MAKER-QUEUE BAR, before the two book fetches below rather than
     # after them. A market whose queue at our own price never clears cannot be
     # quoted at all, so paying for its books to score it is wasted venue work.
