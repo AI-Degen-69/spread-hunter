@@ -12,7 +12,7 @@
   - [x] Implement unit tests in `tests/test_dynamic_offset.py`
   - [x] Verify: `python -m pytest -q tests/test_dynamic_offset.py`
 
-- [ ] **Task 3: [Integration/Regression] Screener-to-Trader Feed Integration & Safety Verification**
-  - [ ] Wire range fields into `core_brain/trader_loop.py`
-  - [ ] Verify backward compatibility and baseline equivalence when disabled
-  - [ ] Run full targeted regression suite: `python -m pytest -q tests/test_velocity_gate.py tests/test_quotes.py tests/test_market_feed.py tests/test_trader_loop.py`
+- [x] **Task 3: [Integration/Regression] Screener-to-Trader Feed Integration & Safety Verification**
+  - [x] Wire range fields into `core_brain/trader_loop.py`
+  - [x] Verify backward compatibility and baseline equivalence when disabled
+  - [x] Run full targeted regression suite: `python -m pytest -q tests/test_velocity_gate.py tests/test_dynamic_offset.py tests/test_market_feed.py tests/test_trader_loop.py`

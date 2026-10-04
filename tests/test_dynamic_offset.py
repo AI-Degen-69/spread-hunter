@@ -186,3 +186,19 @@ def test_load_config_with_preset_and_env_overrides():
     with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": "unknown_arm"}):
         with pytest.raises(ValueError, match="HUNTER_TOURNAMENT_PRESET"):
             load()
+
+
+def test_market_cfg_wires_range_telemetry():
+    from core_brain.trader_loop import _market_cfg
+
+    base = MakerConfig()
+    spec = {
+        "cid": "0xabc",
+        "title": "Test Market",
+        "range_cents": 5.5,
+        "velocity_measured_at": 1_788_000_123.0,
+    }
+    cfg = _market_cfg(base, spec)
+    assert cfg.range_cents == 5.5
+    assert cfg.velocity_measured_at == 1_788_000_123.0
+

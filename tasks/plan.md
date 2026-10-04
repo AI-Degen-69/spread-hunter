@@ -72,7 +72,7 @@ Branch: i370/velocity-filter-dynamic-offsets | Issue: #370
   3. Write `tests/test_quotes.py` testing integer-cent offsets, clamping, preset application, fallback on stale data, and pair-cost re-gate safety.
 - **Verification**: `python -m pytest -q tests/test_quotes.py`
 
-### Task 3: [Integration/Regression] Screener-to-Trader Feed Integration & Safety Verification
+### Task 3: [Integration/Regression] Screener-to-Trader Feed Integration & Safety Verification [x]
 - **Size**: S
 - **Domain Tag**: `[Backend/Logic]`
 - **Helper Skill**: `test-driven-development`

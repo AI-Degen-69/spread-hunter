@@ -331,6 +331,12 @@ def _market_cfg(base, spec: Any):
     is FUNDED, not how it is quoted, and is deliberately not read here.
     """
     if not isinstance(spec, dict):
+        if hasattr(spec, "range_cents") or hasattr(spec, "velocity_measured_at"):
+            return replace(
+                base,
+                range_cents=getattr(spec, "range_cents", None),
+                velocity_measured_at=getattr(spec, "velocity_measured_at", None),
+            )
         return base
     return replace(
         base,
@@ -344,6 +350,16 @@ def _market_cfg(base, spec: Any):
         min_t_remaining_sec=0.0,
         market_title=str(spec.get("title", "")),
         market_daily_rate=float(spec.get("daily", 0.0)),
+        range_cents=(
+            float(spec["range_cents"])
+            if spec.get("range_cents") is not None
+            else getattr(base, "range_cents", None)
+        ),
+        velocity_measured_at=(
+            float(spec["velocity_measured_at"])
+            if spec.get("velocity_measured_at") is not None
+            else getattr(base, "velocity_measured_at", None)
+        ),
     )
 
 
