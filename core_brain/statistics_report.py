@@ -60,6 +60,28 @@ def _queue_multiple(queue_ahead: float | None, order_size: float | None) -> floa
     return queue / size
 
 
+def _order_lifetime_s(posted_ts: Any, last_polled_ts: Any) -> float | None:
+    """Order lifetime in seconds, owned by this report module.
+
+    Computed as (last_polled_ts - posted_ts) / 1000.0 from integer epoch ms.
+    Returns None if either timestamp is missing, non-numeric, non-finite,
+    or if last_polled_ts < posted_ts.
+    """
+    if posted_ts is None or last_polled_ts is None:
+        return None
+    try:
+        p_ts = float(posted_ts)
+        lp_ts = float(last_polled_ts)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(p_ts) or not math.isfinite(lp_ts):
+        return None
+    delta = lp_ts - p_ts
+    if delta < 0.0:
+        return None
+    return delta / 1000.0
+
+
 SINGLE_CYCLE_LINE = (
     "Only one decision cycle observed; resting orders received no settlement pass "
     "after posting, so zero fills is expected and is not evidence of a fill-model defect."
@@ -67,7 +89,7 @@ SINGLE_CYCLE_LINE = (
 
 
 def _queue_depth_section(registry: OrderRegistry, run_id: str) -> tuple[str, dict[str, Any]]:
-    """Queue-multiple stats plus the single-cycle warning for one shadow run.
+    """Queue-multiple stats, order lifetime, and cancel mix for one shadow run.
 
     `queue_ahead` and `size` come off the quote row; when the quote carries no
     size, fall back to the order's `original_size` joined by `local_id`
@@ -105,21 +127,94 @@ def _queue_depth_section(registry: OrderRegistry, run_id: str) -> tuple[str, dic
         n_cycles = None
     median = statistics.median(measured) if measured else None
     maximum = max(measured) if measured else None
+
+    # Order lifetime & cancel-reasons breakdown
+    cancelled_lifetimes: list[float] = []
+    filled_lifetimes: list[float] = []
+    lifetime_unknown_orders = 0
+    lifetime_unknown_by_status: dict[str, int] = {}
+    cancelled_orders = 0
+    raw_cancel_counts: dict[str, int] = {}
+
+    for o in orders:
+        status = str(o.get("status") or "unknown")
+        posted_ts = o.get("posted_ts")
+        last_polled_ts = o.get("last_polled_ts")
+        lt = _order_lifetime_s(posted_ts, last_polled_ts)
+
+        if status == "cancelled":
+            cancelled_orders += 1
+            if lt is not None:
+                cancelled_lifetimes.append(lt)
+            else:
+                lifetime_unknown_orders += 1
+                lifetime_unknown_by_status[status] = lifetime_unknown_by_status.get(status, 0) + 1
+            reason_raw = o.get("cancel_reason")
+            reason = str(reason_raw).strip() if reason_raw is not None else ""
+            if not reason:
+                reason = "(no reason recorded)"
+            raw_cancel_counts[reason] = raw_cancel_counts.get(reason, 0) + 1
+        elif status == "filled":
+            if lt is not None:
+                filled_lifetimes.append(lt)
+            else:
+                lifetime_unknown_orders += 1
+                lifetime_unknown_by_status[status] = lifetime_unknown_by_status.get(status, 0) + 1
+        else:
+            lifetime_unknown_orders += 1
+            lifetime_unknown_by_status[status] = lifetime_unknown_by_status.get(status, 0) + 1
+
+    cancelled_median_lt = statistics.median(cancelled_lifetimes) if cancelled_lifetimes else None
+    filled_median_lt = statistics.median(filled_lifetimes) if filled_lifetimes else None
+
+    cancel_reasons: dict[str, dict[str, Any]] = {}
+    if cancelled_orders > 0:
+        sorted_reasons = sorted(raw_cancel_counts.items(), key=lambda x: (-x[1], x[0]))
+        for r_name, r_cnt in sorted_reasons:
+            cancel_reasons[r_name] = {
+                "count": r_cnt,
+                "share": r_cnt / cancelled_orders,
+            }
+
     lines = [
         "## Queue depth (shadow)",
         "",
         f"- **Measured quotes**: `{len(measured)}` (unmeasured: `{len(quotes) - len(measured)}`)",
         f"- **Median queue multiple**: `{median:.1f}x`" if median is not None else "- **Median queue multiple**: `n/a`",
         f"- **Max queue multiple**: `{maximum:.1f}x`" if maximum is not None else "- **Max queue multiple**: `n/a`",
+        f"- **Cancelled median lifetime**: `{cancelled_median_lt:.1f}s` (measured: `{len(cancelled_lifetimes)}`)" if cancelled_median_lt is not None else f"- **Cancelled median lifetime**: `n/a` (measured: `{len(cancelled_lifetimes)}`)",
+        f"- **Filled median lifetime**: `{filled_median_lt:.1f}s` (measured: `{len(filled_lifetimes)}`)" if filled_median_lt is not None else f"- **Filled median lifetime**: `n/a` (measured: `{len(filled_lifetimes)}`)",
     ]
+
+    if lifetime_unknown_orders > 0:
+        status_breakdown = ", ".join(f"{k}: `{v}`" for k, v in sorted(lifetime_unknown_by_status.items()))
+        lines.append(f"- **Lifetime unknown**: `{lifetime_unknown_orders}` ({status_breakdown})")
+    else:
+        lines.append("- **Lifetime unknown**: `0`")
+
+    if cancel_reasons:
+        lines.append("- **Cancel reasons**:")
+        for r_name, r_info in cancel_reasons.items():
+            pct = r_info["share"] * 100.0
+            lines.append(f"  - `{r_name}`: `{r_info['count']}` ({pct:.1f}%)")
+
     if n_cycles == 1:
         lines += ["", SINGLE_CYCLE_LINE]
+
     stats = {
         "measured_quotes": len(measured),
         "unmeasured_quotes": len(quotes) - len(measured),
         "median_queue_multiple": median,
         "max_queue_multiple": maximum,
         "distinct_cycles": n_cycles,
+        "cancelled_lifetime_count": len(cancelled_lifetimes),
+        "cancelled_median_lifetime_s": cancelled_median_lt,
+        "filled_lifetime_count": len(filled_lifetimes),
+        "filled_median_lifetime_s": filled_median_lt,
+        "lifetime_unknown_orders": lifetime_unknown_orders,
+        "lifetime_unknown_by_status": lifetime_unknown_by_status,
+        "cancelled_orders": cancelled_orders,
+        "cancel_reasons": cancel_reasons,
     }
     return "\n".join(lines) + "\n", stats
 
