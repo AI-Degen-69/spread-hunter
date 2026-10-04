@@ -221,6 +221,8 @@ def test_order_lifetime_with_filled_and_unknown_orders(tmp_path: Path):
     _seed_test_order(reg, run_id, "ord-f2", posted_ms=1_000, last_polled_ms=16_000, status="filled")
     # 1 open order (lifetime unknown)
     _seed_test_order(reg, run_id, "ord-open", posted_ms=1_000, last_polled_ms=1_000, status="open")
+    # 1 cancelled order with an invalid (decreasing) lifetime
+    _seed_test_order(reg, run_id, "ord-c-invalid", posted_ms=1_000, last_polled_ms=500, status="cancelled")
     # 1 order belonging to a DIFFERENT run (must be completely ignored)
     _seed_test_order(reg, "other-run", "ord-other", posted_ms=1_000, last_polled_ms=21_000, status="cancelled")
 
@@ -231,12 +233,12 @@ def test_order_lifetime_with_filled_and_unknown_orders(tmp_path: Path):
     assert result["cancelled_median_lifetime_s"] == pytest.approx(20.0)
     assert result["filled_lifetime_count"] == 2
     assert result["filled_median_lifetime_s"] == pytest.approx(10.0)
-    assert result["lifetime_unknown_orders"] == 1
-    assert result["lifetime_unknown_by_status"] == {"open": 1}
+    assert result["lifetime_unknown_orders"] == 2
+    assert result["lifetime_unknown_by_status"] == {"cancelled": 1, "open": 1}
 
     assert "- **Cancelled median lifetime**: `20.0s` (measured: `1`)" in text
     assert "- **Filled median lifetime**: `10.0s` (measured: `2`)" in text
-    assert "- **Lifetime unknown**: `1` (open: `1`)" in text
+    assert "- **Lifetime unknown**: `2` (cancelled: `1`, open: `1`)" in text
 
 
 def test_cancel_reason_distribution_and_sorting(tmp_path: Path):
@@ -287,6 +289,12 @@ def test_live_report_omits_lifetime_and_cancel_keys(tmp_path: Path):
 
     assert "cancelled_median_lifetime_s" not in result
     assert "cancel_reasons" not in result
+    assert "cancelled_lifetime_count" not in result
+    assert "filled_lifetime_count" not in result
+    assert "filled_median_lifetime_s" not in result
+    assert "lifetime_unknown_orders" not in result
+    assert "lifetime_unknown_by_status" not in result
+    assert "cancelled_orders" not in result
     assert "## Queue depth (shadow)" not in text
     assert "Cancelled median lifetime" not in text
 

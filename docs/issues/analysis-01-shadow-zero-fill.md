@@ -138,7 +138,7 @@ rehearsal experiments.
 ## How to verify
 
 1. Copy a shadow store to a scratch path — never open or edit `data/orders.db` directly.
-2. Generate a shadow report using `python -m core_brain.statistics_observer --mode shadow --run-id <id>`.
+2. Generate a shadow report using `python -m core_brain.statistics_observer --mode shadow --watch <scratch-path> --run-id <id>`.
 3. Open `reports/<timestamp>_shadow_<run-id>_statistics_report.md`.
 4. Confirm `## Queue depth (shadow)` displays:
    - Cancelled and filled median lifetimes (or `n/a`).
