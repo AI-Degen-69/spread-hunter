@@ -52,7 +52,7 @@ Branch: i370/velocity-filter-dynamic-offsets | Issue: #370
 - **Size**: M
 - **Domain Tag**: `[Backend/Logic]`
 - **Helper Skill**: `test-driven-development`
-- **Target Files**: `core_brain/config.py`, `core_brain/quotes.py`, `tests/test_quotes.py`
+- **Target Files**: `core_brain/config.py`, `core_brain/quotes.py`, `tests/test_dynamic_offset.py`
 - **Depends on**: Task 1
 - **Description**:
   1. In `core_brain/config.py`, add dynamic offset parameters and multi-variant preset registry:
@@ -60,7 +60,7 @@ Branch: i370/velocity-filter-dynamic-offsets | Issue: #370
      - `dynamic_offset_multiplier: float = 0.5`
      - `dynamic_offset_min_cents: int = 1`
      - `dynamic_offset_max_cents: int = 4`
-     - `dynamic_offset_max_age_sec: float = 1800.0`
+     - `dynamic_offset_max_age_sec: float = 900.0`
      - `measured_range_cents: Optional[float] = None`
      - `measured_range_at: Optional[float] = None`
      - Preset bundle: `TOURNAMENT_PRESETS` with `aggressive` (mult 0.25), `balanced` (mult 0.50), `conservative` (mult 0.75), and `control` (static baseline).
@@ -69,8 +69,8 @@ Branch: i370/velocity-filter-dynamic-offsets | Issue: #370
      - Compute dynamic base offset: `clamp(round(multiplier * range_cents), min_cents, max_cents) / 100.0`.
      - Round to whole integer cents without fractional half-cents.
      - Enforce `price_UP + price_DOWN < 1.00`. If dynamic offset results in `>= 1.00`, refuse intents with reason `dynamic_pair_sum`.
-  3. Write `tests/test_quotes.py` testing integer-cent offsets, clamping, preset application, fallback on stale data, and pair-cost re-gate safety.
-- **Verification**: `python -m pytest -q tests/test_quotes.py`
+  3. Write `tests/test_dynamic_offset.py` testing integer-cent offsets, clamping, preset application, fallback on stale data, and pair-cost re-gate safety.
+- **Verification**: `python -m pytest -q tests/test_dynamic_offset.py`
 
 ### Task 3: [Integration/Regression] Screener-to-Trader Feed Integration & Safety Verification [x]
 - **Size**: S
@@ -82,4 +82,5 @@ Branch: i370/velocity-filter-dynamic-offsets | Issue: #370
   1. Ensure `core_brain/trader_loop.py` copies `range_cents` and `velocity_measured_at` from `spec` into `MakerConfig`.
   2. Verify that when `HUNTER_DYNAMIC_OFFSET=0` (default), quoting produces identical output to static baseline.
   3. Verify regression test suites pass cleanly across touched modules.
-- **Verification**: `python -m pytest -q tests/test_velocity_gate.py tests/test_quotes.py tests/test_market_feed.py tests/test_trader_loop.py`
+- **Verification**: `python -m pytest -q tests/test_velocity_gate.py tests/test_dynamic_offset.py tests/test_market_feed.py tests/test_trader_loop.py`
+

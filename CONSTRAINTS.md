@@ -3,7 +3,7 @@
 Branch: `i370/velocity-filter-dynamic-offsets` | Issue: #370
 
 ## Quality & Tests
-- **Zero regressions**: Targeted suites `tests/test_velocity_gate.py`, `tests/test_quotes.py`, `tests/test_market_feed.py`, and `tests/test_trader_loop.py` must pass cleanly.
+- **Zero regressions**: Targeted suites `tests/test_velocity_gate.py`, `tests/test_dynamic_offset.py`, `tests/test_market_feed.py`, and `tests/test_trader_loop.py` must pass cleanly.
 - **Anti-cheat**: No skipped tests, no deleted assertions, no suppressions or linter silencing.
 - **No new external dependencies**: Use Python standard library and existing project dependencies only.
 
