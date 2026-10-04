@@ -237,10 +237,11 @@ def _update_cycle_intent(
     """
     p = Path(db_path) if db_path else DEFAULT_DB_PATH
     if not p.exists():
+        print(f"WARNING: cycle_intent update skipped, db missing: {p}", file=sys.stderr)
         return
 
     def update(conn: sqlite3.Connection) -> None:
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE cycle_intent SET submitted = ?, cancelled = ?
             WHERE id = (
@@ -251,6 +252,12 @@ def _update_cycle_intent(
             """,
             (submitted, cancelled, market_slug, cycle, run_id),
         )
+        if cur.rowcount == 0:
+            print(
+                f"WARNING: cycle_intent update matched 0 rows: market_slug={market_slug} "
+                f"cycle={cycle} run_id={run_id}",
+                file=sys.stderr,
+            )
         conn.commit()
 
     try:

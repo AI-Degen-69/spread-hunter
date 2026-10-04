@@ -242,6 +242,48 @@ class TestCycleIntent:
         rows = _query_intent(db, "SELECT submitted, cancelled FROM cycle_intent")
         assert rows[0] == (1, 0)
 
+    def test_cycle_intent_unmatched_update_warns(self, tmp_path, capsys):
+        """Updating a non-existent visit row emits a stderr warning and changes nothing."""
+        from core_brain.cycle_stream import _update_cycle_intent
+        db = tmp_path / "live.db"
+        ring = tmp_path / "events.jsonl"
+        emit(1, "quoting", "decide", market_slug="existing-slug",
+             extra={"intent_count": 1}, ring_path=ring, db_path=db, run_id="run-1")
+        capsys.readouterr()  # clear any prior output
+
+        _update_cycle_intent(
+            market_slug="unmatched-slug",
+            cycle=1,
+            run_id="run-1",
+            submitted=1,
+            cancelled=0,
+            db_path=db,
+        )
+        captured = capsys.readouterr()
+        assert "WARNING: cycle_intent update matched 0 rows:" in captured.err
+        assert "market_slug=unmatched-slug" in captured.err
+        assert "cycle=1" in captured.err
+        assert "run_id=run-1" in captured.err
+
+        rows = _query_intent(db, "SELECT market_slug, submitted FROM cycle_intent")
+        assert len(rows) == 1
+        assert rows[0] == ("existing-slug", 0)
+
+    def test_cycle_intent_missing_db_warns(self, tmp_path, capsys):
+        """Updating against a non-existent db emits a stderr warning and returns."""
+        from core_brain.cycle_stream import _update_cycle_intent
+        missing_db = tmp_path / "does_not_exist.db"
+        _update_cycle_intent(
+            market_slug="slug",
+            cycle=1,
+            run_id="run-1",
+            submitted=1,
+            db_path=missing_db,
+        )
+        captured = capsys.readouterr()
+        assert "WARNING: cycle_intent update skipped, db missing:" in captured.err
+        assert str(missing_db) in captured.err
+
     def test_one_connection_serves_many_intent_writes(self, tmp_path, monkeypatch):
         """Connecting costs ~3ms, and emit() runs once per market visit.
 
