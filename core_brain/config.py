@@ -664,10 +664,16 @@ class MakerConfig:
     # The Owner's allocation rule, 2026-08-19:
     #     couple = max(bankroll * couple_risk_frac, min_couple_usd)
     #     leg    = couple / 2
-    # At a $31.17 wallet and at $100 both give $6.00 a couple, $3.00 a leg --
-    # the floor binds until bankroll passes $600.
+    # At a $31.17 wallet and at $100 both give $10.00 a couple, $5.00 a leg --
+    # the floor binds until bankroll passes $1000.
     couple_risk_frac: float = 0.01
-    min_couple_usd: float = 6.0
+    min_couple_usd: float = 10.0
+
+    # A $5.00 leg buys about 10 shares against a 5-share venue floor, so the
+    # soft price-risk taper can express itself (down to ~0.5x) before the order
+    # disappears. Raised 2026-10-03 from $6.00 ($3.00/leg, ~6 shares, no
+    # headroom): pilot size was living one share above the floor and every
+    # taper or symmetric clamp killed the whole couple.
 
     # A $3.00 leg buys about 6 shares against a 5-share venue floor, so ANY
     # attenuation of that size lands under the floor and the order disappears.
