@@ -1046,8 +1046,11 @@ def test_expired_at_intake_admits_future_or_missing_end_date():
     expired, reason = expired_at_intake(None, category="Crypto", now_iso=now)
     assert expired is False
     assert reason == ""
-    # Malformed
+    # Malformed / non-string
     expired, reason = expired_at_intake("not-a-date", category="Crypto", now_iso=now)
+    assert expired is False
+    assert reason == ""
+    expired, reason = expired_at_intake(12345, category="Crypto", now_iso=now)
     assert expired is False
     assert reason == ""
 
@@ -1067,7 +1070,12 @@ def test_expired_at_intake_preserves_sports_kickoff_exception():
 
 class _ExplodingSessionForExpired:
     """A book or tape fetch means the early expiry gate ran too late (#357)."""
+
+    def __init__(self):
+        self.calls = []
+
     def get(self, url, params=None, timeout=None):
+        self.calls.append((url, params))
         raise AssertionError(f"evaluate fetched URL ({url}) for an expired market")
 
 
@@ -1078,8 +1086,10 @@ def test_evaluate_refuses_expired_market_before_fetching_tape_or_books():
     m["end_date_iso"] = past_iso
     m["category"] = "Crypto"
 
-    row = evaluate(_ExplodingSessionForExpired(), 5.0, m, volume_24h=250_000.0, source="spread")
+    session = _ExplodingSessionForExpired()
+    row = evaluate(session, 5.0, m, volume_24h=250_000.0, source="spread")
 
+    assert session.calls == []
     assert row["eligible"] is False
     assert "horizon passed" in row["reject_reason"]
     assert "expired" in row["reject_reason"]

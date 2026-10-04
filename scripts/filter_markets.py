@@ -176,7 +176,7 @@ def days_to_resolve(end_iso: Optional[str],
     `now_iso` exists so the horizon arithmetic is testable without freezing
     the clock. Negative means the end date has already passed.
     """
-    if not end_iso:
+    if not isinstance(end_iso, str) or not end_iso:
         return None
     try:
         end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
