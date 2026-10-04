@@ -946,6 +946,58 @@ def test_a_matchup_with_a_country_label_still_needs_its_series_word():
     assert reason == "not a primary Moneyline/Outright or Macro/Politics market"
 
 
+@pytest.mark.parametrize("title,slug,series,group", [
+    ("Alabama vs Mississippi State", "alabama-vs-mississippi-state", "College Football", "Alabama"),
+    ("Alabama vs Mississippi State", "alabama-vs-mississippi-state", "College Football", "Mississippi State"),
+    ("Croatia vs England", "croatia-vs-england", "FIFA World Cup", "Croatia"),
+    ("Lakers vs Celtics", "lakers-vs-celtics", "NBA 2026", "Lakers"),
+])
+def test_a_sports_matchup_with_a_bare_name_group_is_admitted(title, slug, series, group):
+    # Arrange / Act - sports league confirmed and non-fragment group label (team/country)
+    ok, reason = fm.identity_allowed(
+        title, slug, "Sports", "", group, series, "")
+
+    # Assert - admitted to downstream liquidity gates
+    assert ok is True
+    assert reason == ""
+
+
+@pytest.mark.parametrize("title,slug,series,group", [
+    ("Colts vs. Commanders: O/U 46.5", "nfl-ind-was-2026-10-04-total-46pt5", "NFL 2026", "O/U 46.5"),
+    ("Patriots vs. Bills: O/U 50.5", "nfl-ne-buf-2026-10-04-total-50pt5", "NFL 2026", "O/U 50.5"),
+    ("Netherlands vs. Serbia: O/U 3.5", "unl-nld-ser-2026-10-04-total-3pt5", "Soccer", "O/U 3.5"),
+    ("Packers vs. Buccaneers", "nfl-gb-tb-2026-10-04", "NFL 2026", "Spread -3.5"),
+    ("Cardinals vs. Giants", "nfl-ari-nyg-2026-10-04", "NFL 2026", "Spread -2.5"),
+    ("Chiefs vs. Raiders: Total 48.5", "nfl-kc-lv-2026-10-04-total-48pt5", "NFL 2026", ""),
+])
+def test_a_matchup_with_a_fragment_title_or_group_stays_refused(title, slug, series, group):
+    # Arrange / Act - audited shapes from docs/issues/355-matchup-refusal-audit.md
+    ok, reason = fm.identity_allowed(
+        title, slug, "Sports", "", group, series, "")
+
+    # Assert - stays refused with exact refusal string
+    assert ok is False
+    assert reason == "not a primary Moneyline/Outright or Macro/Politics market"
+
+
+def test_a_sports_matchup_with_bare_team_group_reaches_downstream_gates():
+    # Arrange - end-to-end through evaluate
+    m = _universe_candidate("0xmatchup_cfb")
+    m["question"] = "Alabama vs Mississippi State"
+    m["market_slug"] = "alabama-vs-mississippi-state"
+    m["category"] = "Sports"
+    m["series_title"] = "College Football"
+    m["market_group"] = "Alabama"
+    trades = [{"timestamp": _time.time(), "price": 0.5, "size": 4000.0}]
+
+    # Act
+    row = evaluate(_FakeSession([], trades=trades), 5.0, m,
+                   volume_24h=250_000.0, source="spread")
+
+    # Assert
+    assert row["eligible"] is True
+
+
 def test_a_refusal_without_a_value_is_left_alone():
     # Arrange / Act / Assert - unknown vocabulary passes through untouched.
     ok, reason = fm.identity_reason_with_value("not a primary Moneyline", "")
