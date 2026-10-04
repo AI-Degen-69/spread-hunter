@@ -78,7 +78,7 @@ Branch: `i360/run-the-queue-hold-rehearsal` | Issue: #360
 - **Depends on**: `TASK-02`
 - **Description**:
   1. Generate statistics reports for both arms using `write_statistics_report` and `core_brain.kpi`.
-  2. Extract side-by-side metrics: quote counts, distinct orders, median queue multiple, cancelled median lifetime, filled median lifetime, lifetime unknown count, cancel-reason mix (`price_moved` share), and fill rates.
+  2. Extract side-by-side metrics: quote counts, distinct orders, median queue ahead in shares, median queue multiple, cancelled median lifetime, filled median lifetime, lifetime unknown count, cancel-reason mix (`price_moved` share), and fill rates.
   3. Write `docs/runs/2026-10-04-queue-hold-200-rehearsal.md` matching the standard structure from `docs/runs/2026-09-30-run08-aged-out-rescue.md`.
   4. Evaluate results against pre-registered rules and formulate explicit verdict (adopt / reject / inconclusive).
   5. Verify no changes were made to `core_brain/config.py` defaults.

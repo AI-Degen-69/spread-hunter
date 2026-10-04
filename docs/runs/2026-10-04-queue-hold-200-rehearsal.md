@@ -51,6 +51,7 @@ Metrics extracted via `core_brain.statistics_report::write_statistics_report` an
 | **Filled median lifetime** | `n/a` (0 measured) | `n/a` (0 measured) | No fills triggered |
 | **Lifetime unknown (open)** | **10** (open: 10) | **10** (open: 10) | 100% resting orders preserved |
 | **Cancel reasons breakdown** | None | None | 0 cancellations |
+| **Median queue ahead (shares)** | **15,541.0 sh** | **15,541.0 sh** | Orderbook depth in shares |
 | **Median queue multiple** | **2,375.4x** | **2,375.4x** | Orderbook depth ahead |
 | **Max queue multiple** | **7,688.8x** | **7,688.8x** | Worst depth observed |
 | **Harness verdict** | `INCONCLUSIVE` (closes 0 < 60) | `INCONCLUSIVE` (closes 0 < 60) | Sample underpowered |
