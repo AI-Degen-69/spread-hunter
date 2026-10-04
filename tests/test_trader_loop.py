@@ -312,6 +312,60 @@ class TestPlanOrders:
                                    cfg=cfg, hedge_asks={})
         assert to_cancel == []
 
+    def test_dead_band_preserves_pair_cost_regate_and_distinguishes_reasons(self):
+        # Issue #361 regression test:
+        # Resting bid at 0.60, desired intent walks down to 0.55 (drift = 0.05).
+        # Opposite ask is 0.42. 0.60 + 0.42 = 1.02 >= max_completable_pair_cost (1.00).
+        # Both widths MUST cancel the order because completing costs $1.02.
+        # Under dead_band=0.03 (out of band), reason is CANCEL_PRICE_MOVED.
+        # Under dead_band=0.08 (in band), reason is CANCEL_REGATE_PAIR_COST.
+        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        open_orders = [_open(price=0.60, oid="o1")]
+        intents = [_intent(price=0.55)]
+        hedge_asks = {"tok-up": 0.42}
+
+        # 1. Narrow dead band (0.03): out of band
+        reasons_narrow = {}
+        to_cancel_narrow, to_submit_narrow = plan_orders(
+            open_orders, intents, dead_band=0.03, cfg=cfg,
+            hedge_asks=hedge_asks, reasons=reasons_narrow,
+        )
+        assert [o["order_id"] for o in to_cancel_narrow] == ["o1"]
+        assert reasons_narrow["o1"] == "price_moved"
+        assert [i.price for i in to_submit_narrow] == [0.55]
+
+        # 2. Wide dead band (0.08): in band, but fails pair-cost re-gate
+        reasons_wide = {}
+        to_cancel_wide, to_submit_wide = plan_orders(
+            open_orders, intents, dead_band=0.08, cfg=cfg,
+            hedge_asks=hedge_asks, reasons=reasons_wide,
+        )
+        assert [o["order_id"] for o in to_cancel_wide] == ["o1"]
+        assert reasons_wide["o1"] == "regate_pair_cost"
+        assert [i.price for i in to_submit_wide] == [0.55]
+
+    def test_wider_dead_band_with_hold_levers_never_overrides_pair_cost_gate(self):
+        # Even with hold_below_target and hold_queue_shares active, an order
+        # that fails the pair-cost re-gate must never be held under dead_band=0.08.
+        cfg = MakerConfig(max_completable_pair_cost=1.00)
+        open_orders = [_open(price=0.60, oid="o1")]
+        intents = [_intent(price=0.55)]
+        hedge_asks = {"tok-up": 0.42}
+        reasons = {}
+
+        to_cancel, to_submit = plan_orders(
+            open_orders, intents, dead_band=0.08, cfg=cfg,
+            hedge_asks=hedge_asks,
+            queue_ahead={"o1": 5.0},
+            hold_queue_shares=200.0,
+            hold_below_target=0.06,
+            reasons=reasons,
+        )
+        assert [o["order_id"] for o in to_cancel] == ["o1"]
+        assert reasons["o1"] == "regate_pair_cost"
+        assert [i.price for i in to_submit] == [0.55]
+
+
 
 class FakeMarket:
     def __init__(self, cid="0xabc"):
