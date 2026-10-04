@@ -136,7 +136,8 @@ def audit_universe(
             with open(raw_responses_path, encoding="utf-8") as rf:
                 raw_data = json.load(rf)
             print(f"Loaded {len(raw_data)} cached raw responses from {raw_responses_path.name}")
-        except Exception:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            print(f"Warning: Could not load {raw_responses_path.name}: {exc}; treating the cache as empty.")
             raw_data = {}
 
     audited_rows = []
@@ -155,7 +156,10 @@ def audit_universe(
             time.sleep(0.05)
             # Fetch market
             resp = session.get(GAMMA_MARKETS, params={"condition_ids": cid}, timeout=20)
-            res_json = resp.json() if resp.status_code == 200 else []
+            if resp.status_code != 200:
+                audited_rows.append({"cid": cid, "fetch_error": resp.status_code})
+                continue
+            res_json = resp.json()
             m_raw = res_json[0] if (isinstance(res_json, list) and res_json) else {}
 
             event_raw = _first_event(m_raw) if m_raw else {}
@@ -178,8 +182,7 @@ def audit_universe(
         title = _str(m_raw.get("question")) or r.get("title") or ""
         slug = _str(m_raw.get("slug")) or r.get("slug") or ""
         category = (_str(m_raw.get("category"))
-                    or _str(event_raw.get("category"))
-                    or _str(event_raw.get("categorySlug")))
+                    or _str(m_raw.get("categorySlug")))
         market_type = m_raw.get("marketType") or m_raw.get("type") or ""
         market_group = m_raw.get("groupItemTitle") or ""
         series_title = _first_series_title(event_raw)

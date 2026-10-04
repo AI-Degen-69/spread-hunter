@@ -127,8 +127,7 @@ def identity_allowed(title: object = "", slug: object = "",
         # and other submarkets often look exactly like that, and this shape is where a
         # keyword miss would readmit exactly what the selector exists to block.
         # (Audited 2026-10-04, Issue #355: docs/issues/355-matchup-refusal-audit.md).
-        if (_SPORTS_SERIES_RE.search(_text(category, market_type, series_title,
-                                           event_title, title_slug))
+        if (_SPORTS_SERIES_RE.search(_text(category, series_title, title_slug))
                 and not _is_fragment_label(market_group)
                 and not _FRAGMENT_LABEL_RE.search(title_slug)):
             return True, ""
@@ -139,7 +138,7 @@ def identity_allowed(title: object = "", slug: object = "",
             # present and line-shaped IS evidence, and it is the one submarket
             # signal that survives on a metadata-less spec. A bare country,
             # name, or date label is not a fragment and answers downstream.
-            if _is_fragment_label(market_group) or _FRAGMENT_LABEL_RE.search(title_slug):
+            if _is_fragment_label(market_group):
                 return False, "carries a submarket group label"
             return True, ""
         return False, "not a primary Moneyline/Outright or Macro/Politics market"
