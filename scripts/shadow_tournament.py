@@ -24,6 +24,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from core_brain.config import TOURNAMENT_PRESETS
 from core_brain.shadow_guard import assert_not_production_registry
 from core_brain.shadow_run import (
@@ -364,7 +368,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         markets_path=args.markets_path,
         stamp=args.stamp,
         base_dir=args.base_dir,
-        check_ports=not args.no_port_check,
+        check_ports=(args.dashboards and not args.no_port_check) if not args.dry_run else False,
     )
 
     if args.dry_run:
