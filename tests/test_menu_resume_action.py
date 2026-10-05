@@ -277,9 +277,23 @@ def test_r_branch_supports_prudent_preset():
     assert "[switch]$Prudent" in src
 
 
-def test_resume_rehearsal_env_passes_tournament_preset():
-    """Invoke-WithRehearsalTrialEnv sets HUNTER_TOURNAMENT_PRESET when preset is specified."""
+def test_r_branch_validates_preset_before_stopping_session():
+    """An invalid -Preset is rejected early before touching any session or store."""
+    branch = _branch_source("r")
+    assert "$validPresets" in branch
+    assert "Unknown preset" in branch
+    assert branch.find("Unknown preset") < branch.find("Resume-ShadowRun")
+
+
+def test_resume_rehearsal_env_passes_and_cleans_tournament_preset():
+    """Invoke-WithRehearsalTrialEnv injects HUNTER_TOURNAMENT_PRESET and cleans up in finally."""
     src = _menu_source()
-    assert "HUNTER_TOURNAMENT_PRESET" in src
-    assert "$script:ShadowPreset" in src
+    helper = src.split("function Invoke-WithRehearsalTrialEnv {", 1)[1].split("\nfunction ", 1)[0]
+    # Injects before execution
+    assert 'Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset' in helper
+    # Execution wrapped in try
+    assert 'try { & $Action }' in helper
+    # Cleanup happens unconditionally in finally
+    assert 'finally {' in helper
+    assert 'Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue' in helper
 

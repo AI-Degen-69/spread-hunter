@@ -832,12 +832,15 @@ function Start-ShadowDashboard {
     $logs = Get-ShadowDashLogs $runId
     Lsh-Step "Launching shadow dashboard (python -m dashboard.server --db $ShadowDbPath --port $port)..."
     if ($script:ShadowPreset) { Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset }
-    $dash = Start-Process -FilePath "python" `
-        -ArgumentList (Format-ProcessArgs @("-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$port")) `
-        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $logs.out `
-        -RedirectStandardError  $logs.err
-    if ($script:ShadowPreset) { Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue }
+    try {
+        $dash = Start-Process -FilePath "python" `
+            -ArgumentList (Format-ProcessArgs @("-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$port")) `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $logs.out `
+            -RedirectStandardError  $logs.err
+    } finally {
+        if ($script:ShadowPreset) { Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue }
+    }
     Save-ShadowDashInstance -DashProcess $dash -RunId $runId -Port $port
     $deadline = (Get-Date).AddSeconds(45)
     while ((Get-Date) -lt $deadline) {
@@ -1237,7 +1240,7 @@ function Resume-ShadowRun {
 
     Lsh-Ok "Resuming $($script:ShadowRunId) from $($db.Name) for $mins minute(s) - no data was wiped."
     if ($script:ShadowPreset) {
-        Lsh-Step "Applied preset: $($script:ShadowPreset) (dynamic offset 2¢–4¢, 0.60x)."
+        Lsh-Step "Applied tournament preset: $($script:ShadowPreset)."
     }
     if (-not (Start-ShadowDashboard)) { return $false }
 
@@ -1376,7 +1379,6 @@ function Resume-ShadowRun {
         report_path = (Join-Path $ProjectPath "reports")
         resumed = $true
         preset = $script:ShadowPreset
-        Preset = $script:ShadowPreset
         screener = [ordered]@{ pid = $screener.Id; started_ticks = $screener.StartTime.ToUniversalTime().Ticks }
         loop = [ordered]@{ pid = $shadowRun.Id; started_ticks = $shadowRun.StartTime.ToUniversalTime().Ticks }
         observer = [ordered]@{ pid = $observer.Id; started_ticks = $observer.StartTime.ToUniversalTime().Ticks }
@@ -2901,8 +2903,17 @@ function Invoke-LiveAction {
             # Interactive with no -ResumeDb lists what is on disk and asks.
             # Non-interactive with no -ResumeDb keeps the pinned 01 default.
             $resumeDbList = @()
-            if ($Preset) { $script:ShadowPreset = $Preset }
-            elseif ($Prudent) { $script:ShadowPreset = "prudent" }
+            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent')
+            if ($Preset) {
+                $cleanPreset = $Preset.Trim().ToLower()
+                if ($cleanPreset -notin $validPresets) {
+                    Lsh-Fail "Unknown preset: '$Preset'. Supported presets: $($validPresets -join ', ')."
+                    return
+                }
+                $script:ShadowPreset = $cleanPreset
+            } elseif ($Prudent) {
+                $script:ShadowPreset = "prudent"
+            }
             if ($ResumeDb -eq "all") {
                 $resumeDbList = @(Get-ShadowResumeStores | ForEach-Object { $_.Path })
                 if ($resumeDbList.Count -eq 0) {
