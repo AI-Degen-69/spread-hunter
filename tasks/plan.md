@@ -90,7 +90,7 @@ Branch: i371/multi-arm-tournament-ui-port-isolation | Issue: #371
      - Add `runswitcher` test harness mode to verify label formatting for tournament and non-tournament runs.
 - **Verification**: `python -m pytest -q tests/test_live_state_language.py`
 
-### Task 4: [Backend/Logic] Multi-Arm Tournament Launcher Orchestrator [ ]
+### Task 4: [Backend/Logic] Multi-Arm Tournament Launcher Orchestrator [x]
 - **Size**: M
 - **Domain Tag**: `[Backend/Logic]`
 - **Helper Skill**: `test-driven-development`

@@ -118,3 +118,119 @@ def test_write_shadow_heartbeat_omits_dash_port_when_none(tmp_path: Path):
     assert written is not None
     data = json.loads(hb_file.read_text(encoding="utf-8"))
     assert "dash_port" not in data
+
+
+def test_build_tournament_plan_defaults(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    assert plan.issue == 371
+    assert plan.stamp == "20261005-032000"
+    assert len(plan.arms) == 4
+    # Default order: control, conservative, balanced, aggressive
+    arm_names = [a.name for a in plan.arms]
+    assert "control" in arm_names
+    assert "conservative" in arm_names
+    assert "balanced" in arm_names
+    assert "aggressive" in arm_names
+
+    # Check first arm details
+    first = plan.arms[0]
+    assert first.index == 1
+    assert first.dash_port == 8801
+    assert first.db_path.name.startswith("371_tournament_01_")
+    assert first.run_id.startswith("shadow-371-t01-")
+    assert "--db" in first.shadow_argv
+    assert str(first.db_path) in first.shadow_argv
+    assert "--run-id" in first.shadow_argv
+    assert first.run_id in first.shadow_argv
+
+
+def test_build_tournament_plan_rejects_invalid_arm_name():
+    from scripts.shadow_tournament import build_tournament_plan
+
+    invalid_arms = [{"name": "Bad_Arm_Name!"}]
+    with pytest.raises(ValueError, match="Invalid arm name"):
+        build_tournament_plan(issue=371, arms=invalid_arms, check_ports=False)
+
+
+def test_build_tournament_plan_rejects_duplicate_arm_names():
+    from scripts.shadow_tournament import build_tournament_plan
+
+    dup_arms = [
+        {"name": "arm-alpha"},
+        {"name": "arm-alpha"},
+    ]
+    with pytest.raises(ValueError, match="Duplicate arm name"):
+        build_tournament_plan(issue=371, arms=dup_arms, check_ports=False)
+
+
+def test_build_tournament_plan_rejects_non_hunter_env():
+    from scripts.shadow_tournament import build_tournament_plan
+
+    bad_env_arms = [
+        {"name": "arm-one", "env": {"NOT_HUNTER": "123"}},
+    ]
+    with pytest.raises(ValueError, match="only HUNTER_.*overrides are permitted"):
+        build_tournament_plan(issue=371, arms=bad_env_arms, check_ports=False)
+
+
+def test_build_tournament_plan_rejects_live_port_8799():
+    from scripts.shadow_tournament import build_tournament_plan
+
+    with pytest.raises(ValueError, match="8799"):
+        build_tournament_plan(issue=371, base_port=8799, check_ports=False)
+
+
+def test_build_tournament_plan_rejects_existing_db(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    existing_db = tmp_path / "371_tournament_01_arm-one_20261005-032000.db"
+    existing_db.write_text("existing content", encoding="utf-8")
+
+    arms = [{"name": "arm-one"}]
+    with pytest.raises(ValueError, match="already exists"):
+        build_tournament_plan(
+            issue=371,
+            arms=arms,
+            base_dir=tmp_path,
+            stamp="20261005-032000",
+            check_ports=False,
+        )
+
+
+def test_build_tournament_plan_rejects_occupied_port(monkeypatch):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    def fake_is_port_available(port, host="127.0.0.1"):
+        return False
+
+    monkeypatch.setattr("scripts.shadow_tournament.is_port_available", fake_is_port_available)
+
+    with pytest.raises(ValueError, match="in use or unavailable"):
+        build_tournament_plan(issue=371, base_port=8801, check_ports=True)
+
+
+def test_dry_run_cli_output(capsys, tmp_path: Path):
+    from scripts.shadow_tournament import main
+
+    rc = main([
+        "--dry-run",
+        "--issue", "371",
+        "--base-dir", str(tmp_path),
+        "--stamp", "20261005-032000",
+        "--no-port-check",
+    ])
+    assert rc == 0
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["issue"] == 371
+    assert data["stamp"] == "20261005-032000"
+    assert len(data["arms"]) == 4
+
