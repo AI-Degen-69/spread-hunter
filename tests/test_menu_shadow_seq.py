@@ -53,7 +53,7 @@ def _get_next_shadow_seq_source() -> str:
     return match.group(0)
 
 
-def _next_seq(tmp_path: Path, db_names: list[str]) -> dict:
+def _next_seq(tmp_path: Path, db_names: list[str], tag: str = "") -> dict:
     """Seed `tmp_path/data` with `db_names`, then report what the function returns."""
     data_dir = tmp_path / "data"
     data_dir.mkdir(exist_ok=True)
@@ -63,12 +63,13 @@ def _next_seq(tmp_path: Path, db_names: list[str]) -> dict:
     # The lifted body reads the module-scope $ProjectPath the menu script sets
     # at load time; standing it up here is what points the scan at tmp_path.
     project_path = str(tmp_path).replace("'", "''")
+    tag_arg = f" -Tag '{tag}'" if tag else ""
     script = "\n".join([
         "$ErrorActionPreference = 'Stop'",
         _get_next_shadow_seq_source(),
         f"$ProjectPath = '{project_path}'",
         "try {",
-        "  $v = Get-NextShadowSeq",
+        f"  $v = Get-NextShadowSeq{tag_arg}",
         "  $out = @{ threw = $false; value = [string]$v; message = $null }",
         "} catch {",
         "  $out = @{ threw = $true; value = $null; message = $_.Exception.Message }",
@@ -107,3 +108,17 @@ def test_db_without_the_shadow_prefix_is_not_a_run_db(tmp_path):
 
     assert result["threw"] is False, result["message"]
     assert result["value"] == "01"
+
+
+def test_prudent_sequence_starts_at_one_when_no_prudent_db_exists(tmp_path):
+    result = _next_seq(tmp_path, ["01_shadow_04-09_09-08.db", "02_shadow_04-09_10-00.db"], tag="prudent")
+
+    assert result["threw"] is False, result["message"]
+    assert result["value"] == "01"
+
+
+def test_prudent_sequence_increments_following_existing_prudent_db(tmp_path):
+    result = _next_seq(tmp_path, ["01_shadow_prudent_05-10_12-00.db"], tag="prudent")
+
+    assert result["threw"] is False, result["message"]
+    assert result["value"] == "02"

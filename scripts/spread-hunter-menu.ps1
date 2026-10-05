@@ -150,6 +150,9 @@ function Get-ShadowDashPort {
     if ($RunId -match '^shadow-(0[1-9]|[1-9][0-9])$') {
         return 8800 + [int]$Matches[1]
     }
+    if ($RunId -match '^shadow-(0[1-9]|[1-9][0-9])-prudent$') {
+        return 8850 + [int]$Matches[1]
+    }
     if ($RunId -eq "shadow-resume") {
         return 8900
     }
@@ -450,8 +453,16 @@ function Get-NextShadowSeq {
     that already use the NN_shadow_ prefix, so a new run never collides with a
     previous one. Because a clean reset wipes those files, the count restarts at
     01 each fresh session and counts up run by run. #>
-    $seqs = @(Get-ChildItem (Join-Path $ProjectPath "data") -File -Filter "*.db" -ErrorAction SilentlyContinue |
-        ForEach-Object { if ($_.BaseName -match '^(\d{1,2})_shadow_') { [int]$Matches[1] } })
+    param([string]$Tag = "")
+    $dataDir = Join-Path $ProjectPath "data"
+    $seqs = @()
+    if ($Tag -eq "prudent") {
+        $seqs = @(Get-ChildItem $dataDir -File -Filter "*.db" -ErrorAction SilentlyContinue |
+            ForEach-Object { if ($_.BaseName -match '^(\d{1,2})_shadow_prudent') { [int]$Matches[1] } })
+    } else {
+        $seqs = @(Get-ChildItem $dataDir -File -Filter "*.db" -ErrorAction SilentlyContinue |
+            ForEach-Object { if ($_.BaseName -match '^(\d{1,2})_shadow_' -and $_.BaseName -notmatch '^(\d{1,2})_shadow_prudent') { [int]$Matches[1] } })
+    }
     $next = 1
     if ($seqs.Count -gt 0) { $next = [int](@($seqs | Measure-Object -Maximum).Maximum) + 1 }
     if ($next -gt 99) { $next = 1 }   # stay within the 00-99 run-id range
@@ -1081,14 +1092,20 @@ function Get-ShadowResumeStores {
         ForEach-Object {
             $file = $_
             $null = $file.BaseName -match '^(\d{1,2})_shadow_'
-            $runId = "shadow-" + ([int]$Matches[1]).ToString("D2")
+            $seq = [int]$Matches[1]
+            $runId = if ($file.BaseName -match '^(\d{1,2})_shadow_prudent') {
+                "shadow-" + $seq.ToString("D2") + "-prudent"
+            } else {
+                "shadow-" + $seq.ToString("D2")
+            }
             if ((-not $byRun.ContainsKey($runId)) -or ($file.LastWriteTime -gt $byRun[$runId].File.LastWriteTime)) {
-                $byRun[$runId] = @{ File = $file; Seq = [int]$Matches[1] }
+                $sortSeq = if ($runId -like "*-prudent") { 100 + $seq } else { $seq }
+                $byRun[$runId] = @{ File = $file; Seq = $sortSeq; RunId = $runId }
             }
         }
     foreach ($entry in ($byRun.GetEnumerator() | Sort-Object { $_.Value.Seq })) {
         [pscustomobject]@{
-            RunId = $entry.Key
+            RunId = $entry.Value.RunId
             Name  = $entry.Value.File.Name
             Path  = $entry.Value.File.FullName
         }
@@ -1116,7 +1133,13 @@ function Resume-ShadowRun {
         $script:ShadowDbPath = $db.FullName
         # Seq prefix is the run id: NN_shadow_... -> shadow-NN.
         if ($db.BaseName -match '^(\d{1,2})_shadow_') {
-            $script:ShadowRunId = "shadow-" + ([int]$Matches[1]).ToString("D2")
+            $seq = [int]$Matches[1]
+            if ($db.BaseName -match '^(\d{1,2})_shadow_prudent') {
+                $script:ShadowRunId = "shadow-" + $seq.ToString("D2") + "-prudent"
+                if (-not $script:ShadowPreset) { $script:ShadowPreset = "prudent" }
+            } else {
+                $script:ShadowRunId = "shadow-" + $seq.ToString("D2")
+            }
         } else {
             $script:ShadowRunId = "shadow-resume"
         }
@@ -1158,6 +1181,13 @@ function Resume-ShadowRun {
     $manifestPath = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".trial.json")
     if (Test-Path $manifestPath) {
         try { $trial = Get-Content $manifestPath -Raw | ConvertFrom-Json } catch { $trial = $null }
+    }
+    $presetManifestPath = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".preset.json")
+    if (Test-Path $presetManifestPath -and -not $script:ShadowPreset) {
+        try {
+            $pData = Get-Content $presetManifestPath -Raw | ConvertFrom-Json
+            if ($pData.preset) { $script:ShadowPreset = $pData.preset }
+        } catch {}
     }
 
     # Stop THIS rehearsal if already running so two loops never write one
@@ -1533,6 +1563,133 @@ function Start-ShadowTrial {
     if ($Watch) {
         Lsh-Step "Watching the trial loop live (Ctrl-C ends the watcher; session self-stops after $mins min)."
         Get-Content (Join-Path $RunDir "shadow_trial-$runId.err.log") -Wait -ErrorAction SilentlyContinue
+    }
+    return $true
+}
+
+function Start-NewShadowRun {
+    <# Start a fresh shadow rehearsal on a brand new database without wiping
+       existing stores in data/. Allows running standard baseline (shadow-01,
+       shadow-02...) alongside prudent hybrid runs (shadow-01-prudent,
+       shadow-02-prudent...). Sibling sessions keep running untouched. #>
+    $stamp = Get-Date -Format "dd-MM_HH-mm"
+    $isPrudent = ($script:ShadowPreset -eq "prudent")
+    $tag = if ($isPrudent) { "prudent" } else { "" }
+    $dbSeq = Get-NextShadowSeq -Tag $tag
+    if ($isPrudent) {
+        $script:ShadowRunId = "shadow-${dbSeq}-prudent"
+        $script:ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_prudent_${stamp}.db"
+    } else {
+        $script:ShadowRunId = "shadow-$dbSeq"
+        $script:ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_${stamp}.db"
+    }
+    $runId = $script:ShadowRunId
+    $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$runId.db"
+    $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
+    $presetManifest = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".preset.json")
+
+    Lsh-Ok "Starting fresh shadow run $runId on $(Split-Path $script:ShadowDbPath -Leaf) ($mins min) - no stores wiped."
+    if ($script:ShadowPreset) {
+        Lsh-Step "Applied tournament preset: $($script:ShadowPreset)."
+    }
+
+    # Stop previous instance with the SAME run id if any was running
+    $null = Stop-ShadowSession -RunId $runId
+    $null = Stop-ShadowRun -RunId $runId
+    $null = Stop-ShadowDashboard -RunId $runId
+
+    if (-not (Start-ShadowDashboard)) { return $false }
+
+    Lsh-Step "Running the market screener to fill the universe feed..."
+    $feed = Join-Path $ProjectPath "runtime/markets.json"
+    if (-not (Test-Path $feed) -or ((Get-Item $feed).LastWriteTime -lt (Get-Date).AddMinutes(-10))) {
+        Push-Location $ProjectPath
+        try { & python -m scripts.filter_markets } finally { Pop-Location }
+    }
+    $screener = Start-Process -FilePath "python" `
+        -ArgumentList "-m", "scripts.filter_loop" `
+        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $RunDir "screener-$runId.out.log") `
+        -RedirectStandardError (Join-Path $RunDir "screener-$runId.err.log")
+    Register-StackService -Key "filter" -Process $screener
+    Lsh-Ok "Market screener loop running (PID $($screener.Id))."
+
+    Lsh-Step "Starting the rehearsal loop (python -m core_brain.shadow_run --minutes $mins --db $script:ShadowDbPath --run-id $runId)..."
+    $shadowRun = Invoke-WithRehearsalTrialEnv {
+        Start-Process -FilePath "python" `
+            -ArgumentList (Format-ProcessArgs @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $runId)) `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $RunDir "shadow_run-$runId.out.log") `
+            -RedirectStandardError (Join-Path $RunDir "shadow_run-$runId.err.log")
+    }
+    Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s)) - dashboard updates live from $(Split-Path $script:ShadowDbPath -Leaf)."
+
+    $observer = Start-Process -FilePath "python" `
+        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $runId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08))) `
+        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $RunDir "statistics_observer-$runId.out.log") `
+        -RedirectStandardError (Join-Path $RunDir "statistics_observer-$runId.err.log")
+    Lsh-Ok "Statistics observer running (PID $($observer.Id), db=$(Split-Path $script:StatsDbPath -Leaf))."
+
+    $ring = Join-Path $RunDir ("shadow-{0}.jsonl" -f ($runId -replace "^shadow-", ""))
+    $deadline = (Get-Date).AddSeconds(30)
+    $guardrail = $null
+    while ($null -eq $guardrail -and (Get-Date) -lt $deadline) {
+        if (Test-Path $ring) {
+            $guardrail = Start-Process -FilePath "python" `
+                -ArgumentList (Format-ProcessArgs @("-m", "scripts.global_stop_loss", "--db", $script:ShadowDbPath, "--ring", $ring)) `
+                -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput (Join-Path $RunDir "guardrail-$runId.out.log") `
+                -RedirectStandardError (Join-Path $RunDir "guardrail-$runId.err.log")
+            Lsh-Ok "Stop-loss watcher engaged (PID $($guardrail.Id)) on $ring."
+            break
+        }
+        Start-Sleep -Milliseconds 500
+        if ($shadowRun.HasExited) { break }
+    }
+    if ($null -eq $guardrail) {
+        Lsh-Warn "Could not resolve the rehearsal ring; stop-loss watcher not engaged."
+    }
+
+    if ($script:ShadowPreset) {
+        [ordered]@{ preset = $script:ShadowPreset } | ConvertTo-Json | Set-Content -Path $presetManifest -Encoding UTF8
+    }
+
+    $session = [ordered]@{
+        started = (Get-Date).ToString("o")
+        started_ticks = (Get-Date).ToUniversalTime().Ticks
+        run_id = $runId
+        ShadowRunId = $runId
+        shadow_db = $script:ShadowDbPath
+        ShadowDbPath = $script:ShadowDbPath
+        stats_db = $script:StatsDbPath
+        StatsDbPath = $script:StatsDbPath
+        preset = $script:ShadowPreset
+        report_path = (Join-Path $ProjectPath "reports")
+        screener = [ordered]@{ pid = $screener.Id; started_ticks = $screener.StartTime.ToUniversalTime().Ticks }
+        loop = [ordered]@{ pid = $shadowRun.Id; started_ticks = $shadowRun.StartTime.ToUniversalTime().Ticks }
+        observer = [ordered]@{ pid = $observer.Id; started_ticks = $observer.StartTime.ToUniversalTime().Ticks }
+        watcher = if ($guardrail) { [ordered]@{ pid = $guardrail.Id; started_ticks = $guardrail.StartTime.ToUniversalTime().Ticks } } else { $null }
+        ring = $ring
+    }
+    $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile -RunId $runId) -Encoding UTF8
+
+    $killSec = [int]($mins * 60)
+    $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
+    if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
+    $killCmd = "Start-Sleep -Seconds $killSec"
+    foreach ($t in $timerTargets) {
+        $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+    }
+    Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-Command", $killCmd -WindowStyle Hidden
+
+    Start-Sleep -Seconds 3
+    $openedUrl = Open-ShadowDashboard -RunId $runId
+    Lsh-Ok "Opened $openedUrl in default browser (shadow db=$($script:ShadowDbPath))."
+    if ($Watch -and $mins -gt 0) {
+        Write-Host ""
+        Lsh-Step "Watching the rehearsal loop live (Ctrl-C ends the watcher; session self-stops after $mins min or via stop-shadow)."
+        Get-Content (Join-Path $RunDir "shadow_run-$runId.err.log") -Wait -ErrorAction SilentlyContinue
     }
     return $true
 }
@@ -2806,7 +2963,7 @@ function Show-MenuGrid {
             @{ K = "3"; Icon = "◉"; IconColor = "Warning"; V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts live DB & opens browser" }
         ) }
         @{ Header = "🥷 SHADOW - rehearsal, spends nothing"; Items = @(
-            @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Bot + Dashboard";     D = "Stops, wipes data & starts fresh rehearsal (loop + stop loss); prompts minutes" }
+            @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Shadow Run";          D = "Start new shadow rehearsal (standard or prudent); prompts profile + minutes (no wipe)" }
             @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
             @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts shadow DB & opens browser" }
             @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all / Prudent, dashboard(s) reattached" }
@@ -2856,15 +3013,34 @@ function Invoke-LiveAction {
         }
         "4" {
             $mins = $Minutes
-            if ($Action -eq "") {
-                $resp = Read-Host "  Minutes for this shadow run (default 5)?"
-                if ($resp -and $resp -match '^\s*[0-9]+(?:\.[0-9]+)?\s*$') { $mins = [double]$resp }
-                $confirm = Read-Host "  Preflight: stop everything, wipe data, then run a $mins-minute shadow rehearsal? data/orders.db is kept. [y/N]"
-                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Shadow start cancelled."; return }
+            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent')
+            if ($Preset) {
+                $cleanPreset = $Preset.Trim().ToLower()
+                if ($cleanPreset -notin $validPresets) {
+                    Lsh-Fail "Unknown preset: '$Preset'. Supported presets: $($validPresets -join ', ')."
+                    return
+                }
+                $script:ShadowPreset = $cleanPreset
+            } elseif ($Prudent -or ($Action -eq "shadow-prudent") -or ($Action -eq "prudent")) {
+                $script:ShadowPreset = "prudent"
             }
-            if (-not $mins -or $mins -le 0) { $mins = 5.0 }
+            if ($Action -eq "") {
+                if (-not $script:ShadowPreset) {
+                    Write-Host "  Start new shadow rehearsal (no data wiped):" -ForegroundColor (Get-ProfileColor -Name Info)
+                    Write-Host "    [1] Standard Baseline (control) -> 01_shadow, 02_shadow..."
+                    Write-Host "    [2] Prudent Hybrid (2¢-4¢ dynamic offset, 0.60x) -> 01_shadow_prudent, 02_shadow_prudent..."
+                    $pChoice = Read-Host "  Profile choice? [1/2, default 1]"
+                    if ($pChoice -match '^[2pP]') {
+                        $script:ShadowPreset = "prudent"
+                    }
+                }
+                $presetLabel = if ($script:ShadowPreset -eq "prudent") { "Prudent Hybrid" } else { "Standard Baseline" }
+                $resp = Read-Host ("  Minutes for this {0} shadow run (default 1440 / 24h, or 5 for quick check)?" -f $presetLabel)
+                if ($resp -and $resp -match '^\s*[0-9]+(?:\.[0-9]+)?\s*$') { $mins = [double]$resp }
+            }
+            if (-not $mins -or $mins -le 0) { $mins = 1440.0 }
             $script:Minutes = [int]$mins
-            $null = Reset-Environment -Mode "shadow"
+            $null = Start-NewShadowRun
         }
         "9" {
             $hrs = if ($Hours -gt 0) { $Hours } else { 12.0 }
@@ -2940,8 +3116,9 @@ function Invoke-LiveAction {
                 $promptLimit = if ($stores.Count -gt 1) { "1-$($stores.Count)/A/P" } else { "1/A/P" }
                 $choice = Read-Host ("  Resume which run? [{0}, C to cancel]" -f $promptLimit)
                 if ($choice -match '^[pP]') {
+                    $prudentPick = $stores | Where-Object { $_.RunId -like "*-prudent" } | Select-Object -First 1
                     $s01 = $stores | Where-Object { $_.RunId -eq "shadow-01" } | Select-Object -First 1
-                    $picked = if ($s01) { $s01 } else { $stores[0] }
+                    $picked = if ($prudentPick) { $prudentPick } elseif ($s01) { $s01 } else { $stores[0] }
                     $confirm = Read-Host ("  Resume {0} from {1} with Prudent Hybrid dynamic offset (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
                     if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
                     $script:ShadowPreset = "prudent"
@@ -2954,6 +3131,7 @@ function Invoke-LiveAction {
                     $picked = $stores[[int]$Matches[1] - 1]
                     $confirm = Read-Host ("  Resume {0} from {1} (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
                     if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                    if ($picked.RunId -like "*-prudent") { $script:ShadowPreset = "prudent" }
                     $resumeDbList = @($picked.Path)
                 } else {
                     Lsh-Warn "Resume cancelled."
@@ -3056,6 +3234,8 @@ if ($Action -ne "") {
         "shadow"       = "4"
         "shadow-start" = "4"
         "shadow-run"   = "4"
+        "shadow-prudent" = "4"
+        "prudent"      = "4"
         "stop-shadow"  = "5"
         "shadow-stop"  = "5"
         "shadow-host"  = "6"

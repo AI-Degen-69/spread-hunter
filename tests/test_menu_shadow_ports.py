@@ -78,6 +78,12 @@ def test_numbered_instances_derive_their_port(tmp_path):
     assert _invoke("shadow-99", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8899"
 
 
+def test_prudent_instances_derive_their_port(tmp_path):
+    assert _invoke("shadow-01-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8851"
+    assert _invoke("shadow-02-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8852"
+    assert _invoke("shadow-49-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8899"
+
+
 def test_unnumbered_resume_id_gets_its_own_port_off_the_live_one(tmp_path):
     result = _invoke("shadow-resume", "Get-ShadowDashPort $RunId", tmp_path)
 
