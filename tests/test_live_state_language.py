@@ -673,3 +673,11 @@ def test_a_held_snapshot_ages_against_the_scan_interval():
     assert "did not land" in verdicts["heldFresh"]["title"]
     assert (verdicts["heldStale"]["state"], verdicts["heldStale"]["label"]) == ("degraded", "SCAN DEGRADED")
 
+
+@requires_node
+def test_run_switcher_label_formatting():
+    res = _harness("runswitcher")
+    assert res["tournamentWithPort"] == "#01 aggressive:8801 (pid 4242)"
+    assert res["tournamentNoPort"] == "#02 conservative (pid 4243)"
+    assert res["standardShadow"] == "01_shadow_touchpair.db"
+

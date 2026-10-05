@@ -1,42 +1,28 @@
-# SPEC: Issue #361 — Run the dead-band rehearsal (HUNTER_REQUOTE_DEAD_BAND wider vs default)
+# SPEC: Issue #371 — Multi-arm tournament UI: port isolation, indexed scratch stores, and dashboard run switcher
 
 ## Goal
-Conduct a paired, signer-free shadow rehearsal evaluating the `HUNTER_REQUOTE_DEAD_BAND` lever (treatment at `0.08` vs control at `0.03`) against the live Polymarket order book using a frozen universe snapshot and isolated scratch databases. Test whether widening the dead band retains reachable orders or simply masks churn / delays cancels into stale orders. Prove via regression testing that the wider band strictly preserves the pair-cost re-gate invariant. Produce an evidence-backed trial memo in `docs/runs/` with an explicit verdict relative to #360, without modifying any shipped code defaults.
+Provide multi-arm tournament visualization and execution orchestration where each test arm runs independently with its own designated port, isolated scratch database, unique indexing scheme, and seamless switching directly in the dashboard UI.
 
 ## Acceptance Criteria
-- [ ] Regression test in `tests/test_trader_loop.py` proves:
-  - An order whose resting price + hedge ask fails the pair-cost re-gate is cancelled under both `dead_band=0.03` and `dead_band=0.08`.
-  - Under `0.03`, out-of-band price move assigns `cancel_reason = "price_moved"`.
-  - Under `0.08`, in-band price move assigns `cancel_reason = "regate_pair_cost"`.
-  - Active `hold_below_target` and `hold_queue_shares` never hold a cost-failing order.
-- [ ] Two paired, signer-free shadow rehearsal arms executed against scratch databases:
-  - Treatment: `HUNTER_REQUOTE_DEAD_BAND=0.08`
-  - Control: `HUNTER_REQUOTE_DEAD_BAND=0.03` (or default)
-- [ ] Both arms rotate against the same candidate market universe via a frozen snapshot passed to `--markets-path`.
-- [ ] Extract per-arm metrics using `core_brain.statistics_report::write_statistics_report` (and KPI):
-  - Order lifetime: median seconds for terminal cancelled and filled orders (separate from open/censored).
-  - Cancel mix: counts and percentage breakdown of cancellation reasons (including `price_moved` and `regate_pair_cost`).
-  - Queue depth: median and max queue multiple.
-  - Fill rate: share-weighted fill rate.
-  - Open orders: count of orders remaining `open` at shutdown.
-- [ ] Author a dated run document `docs/runs/2026-10-04-shadow-dead-band-trial.md` containing:
-  - Pre-registered decision rule (Adopt / Reject / Inconclusive).
-  - Side-by-side comparison table across all core metrics.
-  - Analysis of whether price-moved cancels killed reachable orders vs market-leaving drift, and whether a single scalar dead band can capture this distinction.
-  - Pair-cost re-gate safety confirmation citing the regression test.
-  - Explicit verdict relative to #360's results.
-- [ ] Confirm no shipped defaults in `core_brain/config.py` are altered by this PR (`requote_dead_band = 0.03` remains unchanged).
-- [ ] Ensure targeted test suites pass: `python -m pytest -q tests/test_trader_loop.py tests/test_statistics_report.py`.
+- [ ] Tournament runner launches independent arms with distinct scratch databases named by issue, arm index, and arm name (`data/<issue>_tournament_<idx>_<arm>_<stamp>.db`) and run IDs (`shadow-<issue>-t<idx>-<arm>-<stamp>`).
+- [ ] Each trial arm executes in isolation without lock collisions, port conflicts, or shared state interference.
+- [ ] Dashboard discovers tournament runs and displays unique arm index, port/pid, and status (`RUNNING` / `FINISHED`) in the run switcher UI.
+- [ ] Dedicated dashboard port links (`:<port>`) rendered in the run switcher when separate dashboard instances are running.
+- [ ] Switching active database via `/api/system/db` successfully switches active telemetry without server restart and invalidates cached snapshots from the previous database.
+- [ ] Finished/ended shadow runs retain their per-run ring telemetry when switched to, instead of falling back to unrelated live event rings.
+- [ ] The dashboard server accurately reports its bound port in status telemetry (`services.dash.port`).
+- [ ] Comprehensive unit and integration test suites pass cleanly: `python -m pytest -q tests/test_live_dash.py tests/test_shadow_tournament.py tests/test_live_state_language.py`.
 
 ## Scope
 ### In scope
-- Regression tests for pair-cost re-gate in `tests/test_trader_loop.py`.
-- Paired shadow run execution using `--markets-path` and per-run scratch databases.
-- Metrics generation via `core_brain.statistics_report`.
-- Trial memorandum in `docs/runs/2026-10-04-shadow-dead-band-trial.md`.
+- Tournament DB and run ID naming and parsing functions.
+- Adding `--dash-port` metadata argument to `core_brain/shadow_run.py`.
+- Enhancing `dashboard/server.py` with tournament metadata extraction, index-based sorting, per-run ring retention for finished runs, and accurate port reporting.
+- Frontend run switcher improvements in `dashboard/static/app.js`: `runSwitcherLabel`, dedicated port links, and cached snapshot invalidation on store switch.
+- Adding `scripts/shadow_tournament.py` launcher supporting dry-run planning, port probing, isolated env pass-through, and graceful child process cleanup.
+- Test coverage across `tests/test_live_dash.py`, `tests/test_shadow_tournament.py`, and `tests/test_live_state_language.py`.
 
 ### Out of scope
-- Modifying shipped defaults in `core_brain/config.py` (e.g. `requote_dead_band = 0.03` remains unchanged).
-- Modifying `data/orders.db` (production database strictly read-only).
-- Placing real orders or loading private keys / credentials.
-- Modifying `plan_orders` logic, `shadow_exec.py`, or live order execution paths.
+- Modifying production `data/orders.db` (strictly scratch database stores only).
+- Placing real venue orders (shadow / paper execution only).
+- Overriding core order management safety checks or touching live port 8799 for testing.
