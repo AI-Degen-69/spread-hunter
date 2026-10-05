@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @dataclass(frozen=True)
 class MakerConfig:
+    """Every tunable the strategy reads, with per-field environment overrides."""
+
     series_slug: str = "btc-up-or-down-5m"
 
     # --- virtual account --------------------------------------------------

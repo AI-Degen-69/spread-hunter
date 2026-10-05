@@ -1985,7 +1985,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--min-range-cents", type=float, default=None, metavar="CENTS",
                    help="minimum recent price range in cents required by the velocity/range gate (default: %.2fc)" % MIN_RANGE_CENTS)
     p.add_argument("--velocity-gate", dest="velocity_gate", action="store_true", default=None,
-                   help="enforce velocity and flat-range filtering (enabled by default)")
+                   help=("enforce velocity and flat-range filtering (default: %s)" %
+                         ("enabled" if VELOCITY_GATE_ENABLED else "disabled")))
     p.add_argument("--no-velocity-gate", dest="velocity_gate", action="store_false",
                    help="disable velocity and flat-range filtering")
     args = p.parse_args(argv)

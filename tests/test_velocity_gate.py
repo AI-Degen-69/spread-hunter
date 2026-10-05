@@ -70,6 +70,7 @@ def test_tape_movement_and_range_handles_flat_tape():
 
 
 def test_tape_movement_and_range_normalizes_outcome_prices():
+    """Complementary outcome prices share one frame, so a flat tape reads flat."""
     # YES trade at 0.35 and NO trade at 0.65 are economically identical in price (both imply 0.35 YES / 0.65 NO)
     session = _TapeSession([
         {"timestamp": NOW - 60, "price": 0.35, "size": 100.0, "outcome": "Yes", "outcomeIndex": 0},
