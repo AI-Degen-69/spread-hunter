@@ -12,7 +12,7 @@
 #   .\scripts\spread-hunter-menu.ps1 statistical-run [-Hours N] # overnight shadow statistics + dashboard
 #   .\scripts\spread-hunter-menu.ps1 stop-shadow   # 5 · SHADOW: stop loop, watcher and viewer
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
-#   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] [-ResumeDb <path|all>] # R · SHADOW: resume shadow run(s) in place (no wipe) & reattach dashboard(s) — interactive picks 01 / 02 / all
+#   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] [-ResumeDb <path|all>] [-Preset <name>] [-Prudent] # R · SHADOW: resume shadow run(s) in place (no wipe) & reattach dashboard(s) — interactive picks 01 / 02 / all / Prudent
 #   .\scripts\spread-hunter-menu.ps1 shadow-trial [-Minutes N] [-TrialDepth USD] # T · SHADOW: start a depth-bar trial rehearsal on its own feed (no wipe, siblings keep running)
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
@@ -36,7 +36,9 @@ param(
     [double]$Hours = 0,
     [switch]$Watch,
     [string]$ResumeDb = "",
-    [double]$TrialDepth = 250
+    [double]$TrialDepth = 250,
+    [string]$Preset = "",
+    [switch]$Prudent
 )
 
 $ErrorActionPreference = "Stop"
@@ -98,7 +100,8 @@ function Format-ProcessArgs {
 # --trial-spread flag, not this menu, and the dashboard tolerates it via
 # config.load(for_display=True).)
 $script:RehearsalTrialEnv = @{}
-foreach ($k in @('HUNTER_PAIR_COST_CAP')) {
+$script:ShadowPreset = if ($Preset) { $Preset } elseif ($Prudent) { "prudent" } else { "" }
+foreach ($k in @('HUNTER_PAIR_COST_CAP', 'HUNTER_TOURNAMENT_PRESET')) {
     $v = [Environment]::GetEnvironmentVariable($k)
     if ($null -ne $v -and $v -ne '') {
         $script:RehearsalTrialEnv[$k] = $v
@@ -115,10 +118,16 @@ function Invoke-WithRehearsalTrialEnv {
     foreach ($k in $script:RehearsalTrialEnv.Keys) {
         Set-Item "Env:$k" $script:RehearsalTrialEnv[$k]
     }
+    if ($script:ShadowPreset) {
+        Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset
+    }
     try { & $Action }
     finally {
         foreach ($k in $script:RehearsalTrialEnv.Keys) {
             Remove-Item "Env:$k" -ErrorAction SilentlyContinue
+        }
+        if ($script:ShadowPreset) {
+            Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue
         }
     }
 }
@@ -822,11 +831,16 @@ function Start-ShadowDashboard {
     }
     $logs = Get-ShadowDashLogs $runId
     Lsh-Step "Launching shadow dashboard (python -m dashboard.server --db $ShadowDbPath --port $port)..."
-    $dash = Start-Process -FilePath "python" `
-        -ArgumentList (Format-ProcessArgs @("-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$port")) `
-        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $logs.out `
-        -RedirectStandardError  $logs.err
+    if ($script:ShadowPreset) { Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset }
+    try {
+        $dash = Start-Process -FilePath "python" `
+            -ArgumentList (Format-ProcessArgs @("-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$port")) `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $logs.out `
+            -RedirectStandardError  $logs.err
+    } finally {
+        if ($script:ShadowPreset) { Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue }
+    }
     Save-ShadowDashInstance -DashProcess $dash -RunId $runId -Port $port
     $deadline = (Get-Date).AddSeconds(45)
     while ((Get-Date) -lt $deadline) {
@@ -1225,6 +1239,9 @@ function Resume-ShadowRun {
     $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
 
     Lsh-Ok "Resuming $($script:ShadowRunId) from $($db.Name) for $mins minute(s) - no data was wiped."
+    if ($script:ShadowPreset) {
+        Lsh-Step "Applied tournament preset: $($script:ShadowPreset)."
+    }
     if (-not (Start-ShadowDashboard)) { return $false }
 
     # Universe feed first, exactly as a fresh rehearsal does. A trial store
@@ -1361,6 +1378,7 @@ function Resume-ShadowRun {
         StatsDbPath = $script:StatsDbPath
         report_path = (Join-Path $ProjectPath "reports")
         resumed = $true
+        preset = $script:ShadowPreset
         screener = [ordered]@{ pid = $screener.Id; started_ticks = $screener.StartTime.ToUniversalTime().Ticks }
         loop = [ordered]@{ pid = $shadowRun.Id; started_ticks = $shadowRun.StartTime.ToUniversalTime().Ticks }
         observer = [ordered]@{ pid = $observer.Id; started_ticks = $observer.StartTime.ToUniversalTime().Ticks }
@@ -2791,7 +2809,7 @@ function Show-MenuGrid {
             @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Bot + Dashboard";     D = "Stops, wipes data & starts fresh rehearsal (loop + stop loss); prompts minutes" }
             @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
             @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts shadow DB & opens browser" }
-            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all, dashboard(s) reattached" }
+            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all / Prudent, dashboard(s) reattached" }
             @{ K = "t"; Icon = "◈"; IconColor = "Info";    V = "Start Depth-Bar Trial";  D = "Start a trial rehearsal on its own feed (no wipe, siblings keep running); prompts depth" }
         ) }
         @{ Header = "MAINTENANCE & STATUS"; Items = @(
@@ -2885,6 +2903,17 @@ function Invoke-LiveAction {
             # Interactive with no -ResumeDb lists what is on disk and asks.
             # Non-interactive with no -ResumeDb keeps the pinned 01 default.
             $resumeDbList = @()
+            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent')
+            if ($Preset) {
+                $cleanPreset = $Preset.Trim().ToLower()
+                if ($cleanPreset -notin $validPresets) {
+                    Lsh-Fail "Unknown preset: '$Preset'. Supported presets: $($validPresets -join ', ')."
+                    return
+                }
+                $script:ShadowPreset = $cleanPreset
+            } elseif ($Prudent) {
+                $script:ShadowPreset = "prudent"
+            }
             if ($ResumeDb -eq "all") {
                 $resumeDbList = @(Get-ShadowResumeStores | ForEach-Object { $_.Path })
                 if ($resumeDbList.Count -eq 0) {
@@ -2901,30 +2930,34 @@ function Invoke-LiveAction {
                 if ($stores.Count -eq 0) {
                     Lsh-Fail "No resumable shadow stores found in data/ (expected NN_shadow_*.db)."
                     return
-                } elseif ($stores.Count -eq 1) {
-                    $confirm = Read-Host ("  Resume {0} from {1} (no data wiped)? [y/N]" -f $stores[0].RunId, $stores[0].Name)
+                }
+                Write-Host "  Available shadow runs to resume:" -ForegroundColor (Get-ProfileColor -Name Info)
+                for ($i = 0; $i -lt $stores.Count; $i++) {
+                    Write-Host ("    [{0}] {1} ({2})" -f ($i + 1), $stores[$i].RunId, $stores[$i].Name)
+                }
+                Write-Host "    [A] All runs"
+                Write-Host "    [P] Prudent Hybrid run on shadow-01 (2¢-4¢ dynamic offset, 0.60x)"
+                $promptLimit = if ($stores.Count -gt 1) { "1-$($stores.Count)/A/P" } else { "1/A/P" }
+                $choice = Read-Host ("  Resume which run? [{0}, C to cancel]" -f $promptLimit)
+                if ($choice -match '^[pP]') {
+                    $s01 = $stores | Where-Object { $_.RunId -eq "shadow-01" } | Select-Object -First 1
+                    $picked = if ($s01) { $s01 } else { $stores[0] }
+                    $confirm = Read-Host ("  Resume {0} from {1} with Prudent Hybrid dynamic offset (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
                     if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
-                    $resumeDbList = @($stores[0].Path)
+                    $script:ShadowPreset = "prudent"
+                    $resumeDbList = @($picked.Path)
+                } elseif ($choice -match '^[aA]') {
+                    $confirm = Read-Host ("  Resume all {0} runs (no data wiped)? [y/N]" -f $stores.Count)
+                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                    $resumeDbList = @($stores | ForEach-Object { $_.Path })
+                } elseif ($choice -match '^\s*(\d+)\s*$' -and [int]$Matches[1] -ge 1 -and [int]$Matches[1] -le $stores.Count) {
+                    $picked = $stores[[int]$Matches[1] - 1]
+                    $confirm = Read-Host ("  Resume {0} from {1} (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
+                    if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
+                    $resumeDbList = @($picked.Path)
                 } else {
-                    Write-Host "  Available shadow runs to resume:" -ForegroundColor (Get-ProfileColor -Name Info)
-                    for ($i = 0; $i -lt $stores.Count; $i++) {
-                        Write-Host ("    [{0}] {1} ({2})" -f ($i + 1), $stores[$i].RunId, $stores[$i].Name)
-                    }
-                    Write-Host "    [A] All runs"
-                    $choice = Read-Host ("  Resume which run? [1-{0}/A, C to cancel]" -f $stores.Count)
-                    if ($choice -match '^[aA]') {
-                        $confirm = Read-Host ("  Resume all {0} runs (no data wiped)? [y/N]" -f $stores.Count)
-                        if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
-                        $resumeDbList = @($stores | ForEach-Object { $_.Path })
-                    } elseif ($choice -match '^\s*(\d+)\s*$' -and [int]$Matches[1] -ge 1 -and [int]$Matches[1] -le $stores.Count) {
-                        $picked = $stores[[int]$Matches[1] - 1]
-                        $confirm = Read-Host ("  Resume {0} from {1} (no data wiped)? [y/N]" -f $picked.RunId, $picked.Name)
-                        if ($confirm -notmatch '^[yY]') { Lsh-Warn "Resume cancelled."; return }
-                        $resumeDbList = @($picked.Path)
-                    } else {
-                        Lsh-Warn "Resume cancelled."
-                        return
-                    }
+                    Lsh-Warn "Resume cancelled."
+                    return
                 }
             }
             $resumeDbBefore = $ResumeDb
@@ -2950,6 +2983,7 @@ function Invoke-LiveAction {
             }
             $script:ResumeDb = $resumeDbBefore
             $script:Watch = $watchBefore
+            $script:ShadowPreset = ""
             if ($failedResumes.Count -gt 0) {
                 $failedNames = @($failedResumes | ForEach-Object { if ($_ -eq "") { "(pinned default)" } else { Split-Path -Leaf $_ } })
                 Lsh-Fail ("Resume incomplete: {0} store(s) failed: {1}." -f $failedResumes.Count, ($failedNames -join ", "))

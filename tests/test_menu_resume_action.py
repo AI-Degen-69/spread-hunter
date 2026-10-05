@@ -264,3 +264,36 @@ def test_dashboard_startup_bind_timeout_and_orphan_cleanup():
         assert ".AddSeconds(45)" in body, "bind timeout must be at least 45s for large shadow DBs"
         assert "taskkill /T /F /PID" in body, "timed-out dashboard must be terminated to prevent orphans"
 
+
+def test_r_branch_supports_prudent_preset():
+    """Menu option R offers [P] Prudent Hybrid preset and wires it to shadow-01."""
+    branch = _branch_source("r")
+    assert "[P] Prudent Hybrid" in branch
+    assert "$script:ShadowPreset" in branch
+    assert '"prudent"' in branch
+
+    src = _menu_source()
+    assert "[string]$Preset" in src
+    assert "[switch]$Prudent" in src
+
+
+def test_r_branch_validates_preset_before_stopping_session():
+    """An invalid -Preset is rejected early before touching any session or store."""
+    branch = _branch_source("r")
+    assert "$validPresets" in branch
+    assert "Unknown preset" in branch
+    assert branch.find("Unknown preset") < branch.find("Resume-ShadowRun")
+
+
+def test_resume_rehearsal_env_passes_and_cleans_tournament_preset():
+    """Invoke-WithRehearsalTrialEnv injects HUNTER_TOURNAMENT_PRESET and cleans up in finally."""
+    src = _menu_source()
+    helper = src.split("function Invoke-WithRehearsalTrialEnv {", 1)[1].split("\nfunction ", 1)[0]
+    # Injects before execution
+    assert 'Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset' in helper
+    # Execution wrapped in try
+    assert 'try { & $Action }' in helper
+    # Cleanup happens unconditionally in finally
+    assert 'finally {' in helper
+    assert 'Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue' in helper
+

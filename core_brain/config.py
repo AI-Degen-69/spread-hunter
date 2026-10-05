@@ -1130,6 +1130,13 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 2,
         "description": "Tight queue priority capturing fast fills (1¢–2¢)",
     },
+    "prudent": {
+        "dynamic_offset_enabled": True,
+        "dynamic_offset_multiplier": 0.60,
+        "dynamic_offset_min_cents": 2,
+        "dynamic_offset_max_cents": 4,
+        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x)",
+    },
 }
 
 
