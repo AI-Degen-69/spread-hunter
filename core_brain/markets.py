@@ -10,6 +10,8 @@ from typing import Optional
 
 import requests
 
+from core_brain.market_resolution import extract_uma_resolution_status
+
 log = logging.getLogger("markets")
 
 # (connect, read). `fetch_pinned_market` is called from inside the fleet's
@@ -93,23 +95,8 @@ def _parse_market_row(market: dict) -> Optional[LiveMarket]:
     if not condition_id:
         return None
 
-    uma_status = str(market.get("umaResolutionStatus") or market.get("uma_resolution_status") or "").strip().lower()
-    if uma_status in ("proposed", "disputed", "resolved"):
+    if extract_uma_resolution_status(market):
         return None
-    uma_statuses = market.get("umaResolutionStatuses") or market.get("uma_resolution_statuses")
-    if uma_statuses:
-        raw_list = []
-        if isinstance(uma_statuses, (list, tuple)):
-            raw_list = uma_statuses
-        elif isinstance(uma_statuses, str) and uma_statuses.strip():
-            try:
-                parsed = json.loads(uma_statuses)
-                raw_list = parsed if isinstance(parsed, (list, tuple)) else [parsed]
-            except Exception:
-                raw_list = [uma_statuses]
-        for item in raw_list:
-            if str(item or "").strip().lower() in ("proposed", "disputed", "resolved"):
-                return None
 
     # eventStartTime is the actual trading-window open (UTC :00/:05/:10 boundary).
     # startDate is when the market was *listed*, often hours earlier.

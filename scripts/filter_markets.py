@@ -32,6 +32,10 @@ sys.path.insert(0, str(ROOT))
 
 from scoring.allocate import (marginal, spread_capture_daily)   # noqa: E402
 from core_brain import rehearsal   # noqa: E402
+from core_brain.market_resolution import (  # noqa: E402
+    extract_uma_resolution_status,
+    parse_uma_resolution_status,
+)
 from scoring import config as _load_cfg_module   # noqa: E402
 from scoring.config import load as _load_cfg   # noqa: E402
 from scoring.family_admission import classify_identity   # noqa: E402
@@ -161,24 +165,9 @@ def resolve_state(closed: object = None,
     auditable. Both stay in the `_cause()` horizon bucket.
     """
     end = str(end_iso) if end_iso else None
-    uma_s = str(uma_status or "").strip().lower()
-    if uma_s in ("proposed", "disputed", "resolved"):
-        return True, f"resolved: uma resolution {uma_s}", end
-
-    if uma_statuses is not None:
-        raw_list = []
-        if isinstance(uma_statuses, (list, tuple)):
-            raw_list = uma_statuses
-        elif isinstance(uma_statuses, str) and uma_statuses.strip():
-            try:
-                parsed = json.loads(uma_statuses)
-                raw_list = parsed if isinstance(parsed, (list, tuple)) else [parsed]
-            except Exception:
-                raw_list = [uma_statuses]
-        for item in raw_list:
-            item_s = str(item or "").strip().lower()
-            if item_s in ("proposed", "disputed", "resolved"):
-                return True, f"resolved: uma resolution {item_s}", end
+    uma_matched = parse_uma_resolution_status(status=uma_status, statuses=uma_statuses)
+    if uma_matched:
+        return True, f"resolved: uma resolution {uma_matched}", end
 
     if not isinstance(closed, bool) or not isinstance(accepting_orders, bool):
         return True, "resolved: resolution state unreadable", end
@@ -759,24 +748,10 @@ def gamma_universe(session: requests.Session,
             if not m.get("acceptingOrders"):
                 _cheap_reject("not accepting orders", m)
                 continue
-            uma_status = str(m.get("umaResolutionStatus") or "").strip().lower()
-            if uma_status in ("proposed", "disputed", "resolved"):
-                _cheap_reject(f"uma resolution {uma_status}", m)
+            uma_matched = extract_uma_resolution_status(m)
+            if uma_matched:
+                _cheap_reject(f"uma resolution {uma_matched}", m)
                 continue
-            uma_statuses = m.get("umaResolutionStatuses")
-            if uma_statuses:
-                raw_list = []
-                if isinstance(uma_statuses, (list, tuple)):
-                    raw_list = uma_statuses
-                elif isinstance(uma_statuses, str) and uma_statuses.strip():
-                    try:
-                        parsed = json.loads(uma_statuses)
-                        raw_list = parsed if isinstance(parsed, (list, tuple)) else [parsed]
-                    except Exception:
-                        raw_list = [uma_statuses]
-                if any(str(item or "").strip().lower() in ("proposed", "disputed", "resolved") for item in raw_list):
-                    _cheap_reject("uma resolution", m)
-                    continue
             try:
                 toks = json.loads(m.get("clobTokenIds") or "[]")
             except (TypeError, ValueError):
@@ -1095,24 +1070,12 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         return _reject_row(source, expired_reason, m, volume_24h)
 
     # THE UMA RESOLUTION GATE: outcome already proposed/disputed/resolved (#378)
-    uma_stat = m.get("uma_resolution_status") or m.get("umaResolutionStatus")
-    uma_stats = m.get("uma_resolution_statuses") or m.get("umaResolutionStatuses")
-    uma_s = str(uma_stat or "").strip().lower()
-    if uma_s in ("proposed", "disputed", "resolved"):
-        return _reject_row(source, f"resolved: uma resolution {uma_s}", m, volume_24h)
-    if uma_stats:
-        raw_list = []
-        if isinstance(uma_stats, (list, tuple)):
-            raw_list = uma_stats
-        elif isinstance(uma_stats, str) and uma_stats.strip():
-            try:
-                parsed = json.loads(uma_stats)
-                raw_list = parsed if isinstance(parsed, (list, tuple)) else [parsed]
-            except Exception:
-                raw_list = [uma_stats]
-        for item in raw_list:
-            if str(item or "").strip().lower() in ("proposed", "disputed", "resolved"):
-                return _reject_row(source, f"resolved: uma resolution {item}", m, volume_24h)
+    uma_matched = parse_uma_resolution_status(
+        status=m.get("uma_resolution_status") or m.get("umaResolutionStatus"),
+        statuses=m.get("uma_resolution_statuses") or m.get("umaResolutionStatuses"),
+    )
+    if uma_matched:
+        return _reject_row(source, f"resolved: uma resolution {uma_matched}", m, volume_24h)
     # THE MAKER-QUEUE BAR, before the two book fetches below rather than
     # after them. A market whose queue at our own price never clears cannot be
     # quoted at all, so paying for its books to score it is wasted venue work.
@@ -2005,6 +1968,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "unified scan; this flag exists only to measure that "
                         "claim against the live funnel before the code comes "
                         "out.")
+    p.add_argument("--min-trades", type=int, default=None, metavar="N",
+                   help="minimum trades in 30m required by the velocity gate (default: unconstrained unless set)")
+    p.add_argument("--max-last-trade-sec", type=float, default=None, metavar="SEC",
+                   help="maximum seconds since last trade required by the velocity gate (default: unconstrained unless set)")
     p.add_argument("--min-range-cents", type=float, default=0.50, metavar="CENTS",
                    help="minimum recent price range in cents required by the velocity/range gate (default: 0.50c)")
     p.add_argument("--velocity-gate", dest="velocity_gate", action="store_true", default=True,
@@ -2672,6 +2639,8 @@ def main() -> None:
         universe, volume_bar=volume_bar, movement_bar=movement_bar,
         depth_bar=trial_bar, spread_bar=spread_bar,
         admission_trial=args.paired_admission,
+        min_trades=args.min_trades,
+        max_last_trade_sec=args.max_last_trade_sec,
         min_range_cents=args.min_range_cents,
         velocity_gate_enabled=args.velocity_gate)
     if args.paired_admission:
