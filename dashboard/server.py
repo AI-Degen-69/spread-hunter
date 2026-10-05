@@ -60,9 +60,38 @@ from core_brain.runtime_paths import (  # noqa: E402
 
 REPO_ROOT = LIVE_ROOT
 DEFAULT_PORT = 8799
+
+
+def resolve_port(explicit: int | None = None) -> int:
+    """Which port to bind: the flag, then `PORT`, then the operator's default.
+
+    8799 is a real address, not a placeholder: the operator's live stack serves
+    the control surface there, START button and all. Anything else that wants to
+    run this app -- a preview harness, a second copy for research -- has to be
+    able to take another port without being handed a flag, or it collides with
+    the live one.
+
+    A `PORT` that is not a usable port raises rather than falling through to the
+    default, because falling through would land the process on 8799 beside the
+    live stack, which is the one outcome this exists to prevent.
+    """
+    if explicit is not None:
+        return explicit
+    raw = os.environ.get("PORT")
+    if raw is None:
+        return DEFAULT_PORT
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"PORT={raw!r} is not a port number") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError(f"PORT={raw!r} is outside 1-65535")
+    return port
+
+
 # The port actually bound. main() overwrites it when --port is given; the status
 # payload must report where the page really is, not where it usually is.
-_ACTIVE_PORT = DEFAULT_PORT
+_ACTIVE_PORT = resolve_port(None)
 POLL_INTERVAL_MS = 2000
 
 CYCLE_RING_NAME = "cycle_events.jsonl"
@@ -890,12 +919,16 @@ def _read_shadow_heartbeat_file(
 
     ended = end_reason is not None
 
+    from core_brain.shadow_run import parse_tournament_db_path
+
     resolved_db = None
     if heartbeat_db:
         try:
             resolved_db = str(Path(heartbeat_db).resolve())
         except Exception:
             resolved_db = str(heartbeat_db)
+
+    tournament = parse_tournament_db_path(resolved_db or heartbeat_db)
 
     return {
         "run_id": raw.get("run_id"),
@@ -918,6 +951,8 @@ def _read_shadow_heartbeat_file(
         "heartbeat_file": _format_heartbeat_rel_path(path),
         "pid_alive": pid_alive,
         "end_reason": end_reason,
+        "dash_port": raw.get("dash_port"),
+        "tournament": tournament,
     }
 
 
@@ -962,8 +997,25 @@ def list_shadow_runs(active_db_path: str | None = None,
         runs.append(run)
 
     # Live first, then freshest: the switcher exists to answer "what is running",
-    # and alphabetical file order answers it worst.
-    runs.sort(key=lambda r: (0 if r["running"] else 1, r["heartbeat_age_sec"]))
+    # and alphabetical file order answers it worst. Within each group (running vs ended),
+    # tournament arms sharing the same (issue, stamp) cluster stay grouped together
+    # ordered by arm index.
+    cluster_ages: dict[tuple, float] = {}
+    for r in runs:
+        t = r.get("tournament")
+        if t and "issue" in t and "stamp" in t:
+            key = (t["issue"], t["stamp"])
+            cluster_ages[key] = min(cluster_ages.get(key, float("inf")), r["heartbeat_age_sec"])
+
+    def _sort_key(r: dict):
+        is_running = 0 if r.get("running") else 1
+        t = r.get("tournament")
+        if t and "issue" in t and "stamp" in t:
+            c_age = cluster_ages.get((t["issue"], t["stamp"]), r["heartbeat_age_sec"])
+            return (is_running, c_age, t["issue"], t["stamp"], t.get("index", 0))
+        return (is_running, r.get("heartbeat_age_sec", 0.0), 0, "", 0)
+
+    runs.sort(key=_sort_key)
     return runs[:limit]
 
 
@@ -1002,13 +1054,13 @@ def _recent_other_live_shadow_runs(active_db_path: str | None) -> list[dict]:
 
 
 def _resolve_shadow_ring_path() -> Path | None:
-    """The cycle ring a live shadow rehearsal is writing, or None.
+    """The cycle ring a shadow rehearsal wrote, or None.
 
     A shadow run sends its per-cycle events to `runtime/shadow-<run_id>.jsonl`
     (`core_brain.shadow_run._run_ring_name`), not to the live `cycle_events.jsonl`
     the screener appends to. When the page is pointed at a shadow store and
-    `shadow_run.json` reports a rehearsal for THAT store still running, the ring
-    readers (`/api/scan-state`, `/api/cycle-stream`, `/api/pairs-activity`)
+    `shadow_run.json` reports a rehearsal for THAT store (RUNNING, FINISHED, or ENDED),
+    the ring readers (`/api/scan-state`, `/api/cycle-stream`, `/api/pairs-activity`)
     should follow the rehearsal's ring -- otherwise they read a live ring that
     the rehearsal never touches and the panels look dead.
 
@@ -1019,7 +1071,7 @@ def _resolve_shadow_ring_path() -> Path | None:
         shadow = _recent_shadow_run(str(resolve_db_path(_ACTIVE_DB_OVERRIDE)))
     except Exception:
         return None
-    if not shadow or not shadow.get("running"):
+    if not shadow:
         return None
     run_id = shadow.get("run_id")
     if not run_id:
@@ -2966,33 +3018,6 @@ def index():
 
 
 
-def resolve_port(explicit: int | None) -> int:
-    """Which port to bind: the flag, then `PORT`, then the operator's default.
-
-    8799 is a real address, not a placeholder: the operator's live stack serves
-    the control surface there, START button and all. Anything else that wants to
-    run this app -- a preview harness, a second copy for research -- has to be
-    able to take another port without being handed a flag, or it collides with
-    the live one.
-
-    A `PORT` that is not a usable port raises rather than falling through to the
-    default, because falling through would land the process on 8799 beside the
-    live stack, which is the one outcome this exists to prevent.
-    """
-    if explicit is not None:
-        return explicit
-    raw = os.environ.get("PORT")
-    if raw is None:
-        return DEFAULT_PORT
-    try:
-        port = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"PORT={raw!r} is not a port number") from exc
-    if not 1 <= port <= 65535:
-        raise ValueError(f"PORT={raw!r} is outside 1-65535")
-    return port
-
-
 def main():
     import uvicorn
 
@@ -3013,6 +3038,7 @@ def main():
 
     global _ACTIVE_PORT
     _ACTIVE_PORT = port
+    os.environ["PORT"] = str(port)
 
     print(f"Starting Live Execution Dashboard on http://{args.host}:{port}")
     # Best-effort initial snapshot so the dashboard opens with fresh live balance
@@ -3020,7 +3046,8 @@ def main():
         _capture_starting_capital()
     except Exception:
         pass
-    uvicorn.run("dashboard.server:app", host=args.host, port=port,
+    app_target = "dashboard.server:app" if args.reload else app
+    uvicorn.run(app_target, host=args.host, port=port,
                 reload=args.reload,
                 # Watch only the dashboard's own code. Without this, a reload
                 # watcher rooted at the project restarts the monitor when

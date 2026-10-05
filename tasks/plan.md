@@ -51,7 +51,7 @@ Branch: i371/multi-arm-tournament-ui-port-isolation | Issue: #371
   3. Create `tests/test_shadow_tournament.py` with unit tests for naming helpers, regex validation, run ID length limits, and heartbeat `dash_port` writing.
 - **Verification**: `python -m pytest -q tests/test_shadow_tournament.py`
 
-### Task 2: [Backend/Logic] Dashboard Server Tournament Run Listing, Port Reporting & Ring Resolution [ ]
+### Task 2: [Backend/Logic] Dashboard Server Tournament Run Listing, Port Reporting & Ring Resolution [x]
 - **Size**: M
 - **Domain Tag**: `[Backend/Logic]`
 - **Helper Skill**: `test-driven-development`
