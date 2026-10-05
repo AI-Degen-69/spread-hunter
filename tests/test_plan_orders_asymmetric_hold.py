@@ -122,6 +122,17 @@ class TestAsymmetricRequoteHold:
             hold_below_target=0.05)
         assert to_cancel == []
 
+    def test_held_hedge_leg_enables_hold_without_taker_hedge_ask(self):
+        # When we already hold inventory on the opposite leg (tok in hedge_held),
+        # completion is not needed and the hold gate is armed even without hedge_asks.
+        to_cancel, to_submit = plan_orders(
+            [_open(price=0.60)], [_intent(price=0.56)],
+            dead_band=0.03, cfg=_cfg(), hedge_asks=None, hedge_held={"tok-up"},
+            hold_below_target=0.05)
+        assert to_cancel == []
+        assert to_submit == []
+
+
 
 class TestConfigWiring:
     def test_the_cap_ships_enabled(self):

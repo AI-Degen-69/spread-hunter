@@ -228,8 +228,9 @@ def plan_orders(
             to_cancel.append(o)
             continue
 
+        is_hedge_held = tok in (hedge_held or ())
         regate_armed = (cfg is not None and hedge_asks is not None
-                        and tok not in (hedge_held or ()))
+                        and not is_hedge_held)
         regate_blocks = regate_armed and risk.completable_pair_block(
             cfg, float(o["price"]), hedge_asks.get(tok))
 
@@ -242,10 +243,12 @@ def plan_orders(
             # `risk.completable_pair_block` -- it declines to judge rather than
             # refusing. For the ordinary keep that is right, but the hold must
             # not read "declined to judge" as "passed": that is precisely the
-            # unmeasured bet it stands down from. The hold needs a real ask.
+            # unmeasured bet it stands down from. The hold needs a real ask,
+            # unless we already hold the hedge leg in inventory.
             hedge_ask = hedge_asks.get(tok) if hedge_asks else None
-            hold_gate_armed = (regate_armed and hedge_ask is not None
-                               and float(hedge_ask) > 0)
+            hold_gate_armed = is_hedge_held or (
+                regate_armed and hedge_ask is not None and float(hedge_ask) > 0
+            )
             if hold_gate_armed and not regate_blocks and (
                     _near_front(o) or _market_arriving(o, targets)):
                 kept.setdefault(tok, []).append(o)
