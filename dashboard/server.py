@@ -400,9 +400,22 @@ def set_db_override(path: Path | str | None) -> None:
 
 
 # How long a built snapshot is served to every caller before it is rebuilt.
-# The page polls on a 2s timer, so this is short enough that nothing on screen
-# lags a cycle behind and long enough that a second reader costs nothing.
-SNAPSHOT_TTL_SEC: float = 1.5
+# The page polls on a 2s timer, so 2.5s avoids re-triggering background builds
+# on every single cycle of a single tab.
+SNAPSHOT_TTL_SEC: float = 2.5
+SNAPSHOT_ENDED_SHADOW_TTL_SEC: float = 60.0
+
+
+def _snapshot_ttl_for_key(key: tuple) -> float:
+    """Return appropriate snapshot TTL: static/ended shadow stores cache longer."""
+    if len(key) >= 2 and isinstance(key[1], str):
+        try:
+            shadow = read_shadow_run(key[1])
+            if shadow and shadow.get("ended"):
+                return SNAPSHOT_ENDED_SHADOW_TTL_SEC
+        except Exception:
+            pass
+    return SNAPSHOT_TTL_SEC
 
 _snapshots: dict[tuple, tuple[float, Any]] = {}
 _snapshot_builders: dict[tuple, threading.Lock] = {}
@@ -434,9 +447,11 @@ def _cached_snapshot(key: tuple, build, ttl: float | None = None):
 
     `ttl` defaults per call rather than as an argument default: the snapshot
     tests shorten SNAPSHOT_TTL_SEC at runtime, and binding it at import would
-    freeze the value and silently un-test every one of them.
+    freeze the value and silently un-test every one of them. The default is
+    resolved per key, so an ended shadow store caches far longer than a live
+    one while an explicit `ttl` still wins for the tests that pass one.
     """
-    ttl = SNAPSHOT_TTL_SEC if ttl is None else ttl
+    ttl = _snapshot_ttl_for_key(key) if ttl is None else ttl
     hit = _snapshots.get(key)
     if hit is not None and (time.monotonic() - hit[0]) < ttl:
         return hit[1]
@@ -563,7 +578,24 @@ def _trim_cancelled_orders(state: dict) -> dict:
         def pair_recency(pair: dict) -> int:
             return max((_order_recency(o) for o in (pair.get("orders") or [])), default=0)
 
-        trimmed["pairs"] = live_pairs + _newest_per_market(dead_pairs, pair_recency)
+        kept_dead = _newest_per_market(dead_pairs, pair_recency)
+        # Dead pairs are only ever read by orderGroupMarket for metadata fallback,
+        # never for order manipulation. Stripping raw nested order and token arrays
+        # eliminates 10MB+ of redundant JSON on large run stores.
+        lean_dead = []
+        for p in kept_dead:
+            lean_dead.append({
+                "pair_id": p.get("pair_id"),
+                "condition_id": p.get("condition_id"),
+                "market": p.get("market"),
+                "orders": [],
+                "tokens": [],
+                "max_pair_cost_at_post": p.get("max_pair_cost_at_post"),
+                "combined_price": p.get("combined_price"),
+                "combined_price_is_paid": p.get("combined_price_is_paid"),
+                "hedge_state": p.get("hedge_state"),
+            })
+        trimmed["pairs"] = live_pairs + lean_dead
         trimmed["cancelled_pairs_total"] = sum(len(v) for v in dead_pairs.values())
 
     trimmed["cancelled_orders_per_market_cap"] = CANCELLED_ORDERS_PER_MARKET
@@ -2229,6 +2261,37 @@ def _read_only_error_response(exc: Exception) -> JSONResponse:
     return JSONResponse(_read_only_error_payload(exc), status_code=500)
 
 
+MAX_QUOTES_PER_MARKET_KPI: int = 10
+
+
+def _trim_kpi_quotes(kpi: Any, max_quotes_per_market: int = MAX_QUOTES_PER_MARKET_KPI) -> Any:
+    """Trim historical quotes per market in by_market to avoid multi-megabyte payloads.
+
+    The frontend only reads recent quotes per leg to determine current quotes,
+    mids, and token-to-leg mappings. Unbounded historical quote logs can reach 10MB+
+    and stall browsers.
+    """
+    if not isinstance(kpi, dict):
+        return kpi
+    by_mkt = kpi.get("by_market")
+    if not isinstance(by_mkt, dict):
+        return kpi
+    trimmed = dict(kpi)
+    new_by_mkt = {}
+    for cid, m in by_mkt.items():
+        if isinstance(m, dict):
+            quotes = m.get("quotes")
+            if isinstance(quotes, list) and len(quotes) > max_quotes_per_market:
+                m_copy = dict(m)
+                sorted_q = sorted(quotes, key=lambda q: float(q.get("ts") or 0.0), reverse=True)
+                m_copy["quotes"] = sorted_q[:max_quotes_per_market]
+                new_by_mkt[cid] = m_copy
+                continue
+        new_by_mkt[cid] = m
+    trimmed["by_market"] = new_by_mkt
+    return trimmed
+
+
 @app.get("/api/kpi")
 def get_kpi(run_id: str | None = None):
     """Return live KPI report mirroring strategy/kpi.py with Level 1/2/3 diagnostics."""
@@ -2237,7 +2300,8 @@ def get_kpi(run_id: str | None = None):
 
     def build() -> tuple[Any, int]:
         try:
-            return generate_kpi_report(db_path=db_path, run_id=run_id), 200
+            raw = generate_kpi_report(db_path=db_path, run_id=run_id)
+            return _trim_kpi_quotes(raw), 200
         except Exception as e:
             return _read_only_error_payload(e), 500
 
