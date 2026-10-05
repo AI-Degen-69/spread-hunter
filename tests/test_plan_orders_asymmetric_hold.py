@@ -122,6 +122,29 @@ class TestAsymmetricRequoteHold:
             hold_below_target=0.05)
         assert to_cancel == []
 
+    def test_held_hedge_leg_enables_hold_without_taker_hedge_ask(self):
+        # When we already hold inventory on the opposite leg (tok in hedge_held),
+        # completion is not needed and the hold gate is armed even without hedge_asks.
+        to_cancel, to_submit = plan_orders(
+            [_open(price=0.60)], [_intent(price=0.56)],
+            dead_band=0.03, cfg=_cfg(), hedge_asks=None, hedge_held={"tok-up": 0.35},
+            hold_below_target=0.05)
+        assert to_cancel == []
+        assert to_submit == []
+
+    def test_held_hedge_leg_regates_when_pair_exceeds_max_pair_cost(self):
+        # Resting bid 0.60 + held opposite leg at 0.43 = 1.03 >= max_pair_cost (0.99).
+        # It must not hold a losing pair.
+        to_cancel, to_submit = plan_orders(
+            [_open(price=0.60)], [_intent(price=0.56)],
+            dead_band=0.03, cfg=MakerConfig(max_pair_cost=0.99),
+            hedge_asks=None, hedge_held={"tok-up": 0.43},
+            hold_below_target=0.05)
+        assert [o["order_id"] for o in to_cancel] == ["o1"]
+        assert [i.price for i in to_submit] == [0.56]
+
+
+
 
 class TestConfigWiring:
     def test_the_cap_ships_enabled(self):

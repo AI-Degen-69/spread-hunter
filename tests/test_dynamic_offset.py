@@ -141,11 +141,21 @@ def test_tournament_presets_registry_contents():
     assert aggressive["dynamic_offset_min_cents"] == 2
     assert aggressive["dynamic_offset_max_cents"] == 3
 
+    balanced = TOURNAMENT_PRESETS["balanced"]
+    assert balanced["dynamic_offset_enabled"]
+    assert balanced["dynamic_offset_multiplier"] == 0.50
+    assert balanced["dynamic_offset_min_cents"] == 2
+    assert balanced["dynamic_offset_max_cents"] == 4
+    assert balanced["requote_hold_queue_shares"] == 500.0
+    assert balanced["requote_hold_below_target"] == 0.08
+
     prudent = TOURNAMENT_PRESETS["prudent"]
     assert prudent["dynamic_offset_enabled"]
     assert prudent["dynamic_offset_multiplier"] == 0.60
     assert prudent["dynamic_offset_min_cents"] == 2
     assert prudent["dynamic_offset_max_cents"] == 4
+    assert prudent["requote_hold_queue_shares"] == 500.0
+    assert prudent["requote_hold_below_target"] == 0.08
 
 
 def test_apply_tournament_preset():
@@ -155,21 +165,37 @@ def test_apply_tournament_preset():
     assert agg.dynamic_offset_multiplier == 0.25
     assert agg.dynamic_offset_min_cents == 2
     assert agg.dynamic_offset_max_cents == 3
+    assert agg.requote_hold_queue_shares == 500.0
+    assert agg.requote_hold_below_target == 0.08
+
+    bal = apply_tournament_preset(base, "balanced")
+    assert bal.dynamic_offset_enabled is True
+    assert bal.dynamic_offset_multiplier == 0.50
+    assert bal.dynamic_offset_min_cents == 2
+    assert bal.dynamic_offset_max_cents == 4
+    assert bal.requote_hold_queue_shares == 500.0
+    assert bal.requote_hold_below_target == 0.08
 
     cons = apply_tournament_preset(base, "conservative")
     assert cons.dynamic_offset_enabled is True
     assert cons.dynamic_offset_multiplier == 0.75
     assert cons.dynamic_offset_min_cents == 2
     assert cons.dynamic_offset_max_cents == 5
+    assert cons.requote_hold_queue_shares == 500.0
+    assert cons.requote_hold_below_target == 0.08
 
     pru = apply_tournament_preset(base, "prudent")
     assert pru.dynamic_offset_enabled is True
     assert pru.dynamic_offset_multiplier == 0.60
     assert pru.dynamic_offset_min_cents == 2
     assert pru.dynamic_offset_max_cents == 4
+    assert pru.requote_hold_queue_shares == 500.0
+    assert pru.requote_hold_below_target == 0.08
 
     ctrl = apply_tournament_preset(agg, "control")
     assert ctrl.dynamic_offset_enabled is False
+    assert ctrl.requote_hold_queue_shares == 500.0
+    assert ctrl.requote_hold_below_target == 0.08
 
     with pytest.raises(ValueError, match="Unknown tournament preset"):
         apply_tournament_preset(base, "yolo")

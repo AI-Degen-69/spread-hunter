@@ -1124,7 +1124,7 @@ class TestReGateRespectsHeldInventory:
         )
         _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
 
-        assert seen["hedge_held"] == {"tok-up"}
+        assert seen["hedge_held"] == {"tok-up": 0.43}
 
     def test_visit_one_holds_nothing_back_when_the_inventory_is_flat(self):
         seen = {}
@@ -1151,7 +1151,7 @@ class TestReGateRespectsHeldInventory:
         )
         _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False, plan_fn=spy)
 
-        assert seen["hedge_held"] == set()
+        assert seen["hedge_held"] == {}
 
     def test_paired_depth_metadata_is_emitted_for_ranker_attribution(self):
         from core_brain.config import MakerConfig
