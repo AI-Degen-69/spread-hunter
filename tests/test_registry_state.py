@@ -414,3 +414,53 @@ def test_pair_market_category_matches_kpi_for_same_feed(temp_db, tmp_path,
 
     assert state["pairs"][0]["market"]["category"] == "Dota 2"
     assert state["pairs"][0]["market"]["category"] == kpi_meta["category"]
+
+
+def test_summarize_state_resolves_market_identity_once_per_condition(
+        temp_db, tmp_path, monkeypatch):
+    """Two pairs on one market must not resolve that market's identity twice.
+
+    _market_identity re-reads the runtime feed for every call, so on a run store
+    with many pairs per market the uncached form dominated /api/state build time.
+    """
+    import json as _json
+
+    from core_brain import registry_state as rs_mod
+
+    run_dir = tmp_path / "runtime"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "markets.json").write_text(_json.dumps([{
+        "cid": "cond-1", "slug": "dota-match", "title": "Dota match",
+        "category": "", "series_title": "Dota 2", "market_group": "",
+        "tags": [], "volume_24h": 42000.0,
+    }]), encoding="utf-8")
+    monkeypatch.setattr(rs_mod, "REPO_ROOT", tmp_path)
+
+    calls: list[str] = []
+    real_identity = rs_mod._market_identity
+
+    def counting_identity(condition_id, closes_by_cid):
+        calls.append(condition_id)
+        return real_identity(condition_id, closes_by_cid)
+
+    monkeypatch.setattr(rs_mod, "_market_identity", counting_identity)
+
+    now_ms = int(time.time() * 1000)
+    rows = []
+    for i in range(3):
+        rows.append(f"('uuid-{i}-up', 'clob-{i}-up', 'cond-1', 'tok-{i}-up', 'BUY', 0.54, 10.0, 'open', {now_ms}, {now_ms}, 'pair-{i}', 0.98)")
+        rows.append(f"('uuid-{i}-dn', 'clob-{i}-dn', 'cond-1', 'tok-{i}-dn', 'BUY', 0.43, 10.0, 'open', {now_ms}, {now_ms}, 'pair-{i}', 0.98)")
+    con = sqlite3.connect(str(temp_db))
+    con.execute(f"""
+        INSERT INTO orders (id, order_id, condition_id, token_id, side, price,
+                            original_size, status, posted_ts, last_polled_ts,
+                            pair_id, max_pair_cost_at_post)
+        VALUES {', '.join(rows)}
+    """)
+    con.commit()
+    con.close()
+
+    state = summarize_state(temp_db)
+
+    assert len(state["pairs"]) == 3
+    assert calls == ["cond-1"], f"identity resolved {len(calls)}x, expected once"
