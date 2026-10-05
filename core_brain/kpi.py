@@ -973,7 +973,10 @@ def _is_pipeline_shadow_db(db_path: Path | str) -> bool:
     path = Path(db_path).resolve()
     name = path.name
     return path.suffix == ".db" and (
-        name.startswith("shadow_") or "_shadow_" in name or "_shadow-" in name
+        name.startswith("shadow_")
+        or "_shadow_" in name
+        or "_shadow-" in name
+        or "_tournament_" in name
     )
 
 

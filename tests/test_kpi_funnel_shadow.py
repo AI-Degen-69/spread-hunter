@@ -23,6 +23,12 @@ def test_recognizes_legacy_shadow_db_names():
     assert _is_pipeline_shadow_db("data/30-08_00-45_shadow-01.db")
 
 
+def test_recognizes_tournament_shadow_db():
+    # Multi-arm tournament run databases (issue-based naming).
+    assert _is_pipeline_shadow_db("data/371_tournament_04_aggressive_20261005-043814.db")
+    assert _is_pipeline_shadow_db("data/371_tournament_01_control_20261005-043814.db")
+
+
 def test_rejects_live_and_non_shadow_dbs():
     # The live registry and unrelated/test dbs must NOT be treated as shadow.
     assert not _is_pipeline_shadow_db("data/orders.db")
