@@ -98,6 +98,61 @@ def shadow_heartbeat_path(root=None, run_id: str = "") -> Path:
     return runtime_file(SHADOW_HEARTBEAT_NAME, root=root)
 
 
+TOURNAMENT_DB_PATTERN = re.compile(
+    r"^(?:.*[\\/])?(?P<issue>\d+)_tournament_(?P<index>\d+)_(?P<arm>[a-z0-9-]+)_(?P<stamp>\d{8}-\d{6})\.db$"
+)
+
+
+def parse_tournament_db_path(path: str | Path | None) -> dict | None:
+    """Parse a tournament scratch DB filename into its constituent parts.
+
+    Returns {'issue': int, 'index': int, 'arm': str, 'stamp': str} if matched,
+    otherwise None. Specifically rejects non-tournament names and NN_shadow_*.db.
+    """
+    if not path:
+        return None
+    raw = str(path).strip()
+    m = TOURNAMENT_DB_PATTERN.match(raw)
+    if not m:
+        return None
+    try:
+        return {
+            "issue": int(m.group("issue")),
+            "index": int(m.group("index")),
+            "arm": m.group("arm"),
+            "stamp": m.group("stamp"),
+        }
+    except (ValueError, TypeError):
+        return None
+
+
+def build_tournament_db_path(
+    issue: int | str,
+    index: int,
+    arm: str,
+    stamp: str,
+    base_dir: str | Path = "data",
+) -> Path:
+    """Generate canonical tournament DB path data/<issue>_tournament_<idx>_<arm>_<stamp>.db."""
+    clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
+    idx_str = f"{int(index):02d}"
+    filename = f"{issue}_tournament_{idx_str}_{clean_arm}_{stamp}.db"
+    return Path(base_dir) / filename
+
+
+def build_tournament_run_id(
+    issue: int | str,
+    index: int,
+    arm: str,
+    stamp: str,
+) -> str:
+    """Build unique run id: shadow-<issue>-t<idx>-<arm>-<stamp> (<= 64 chars, valid tokens)."""
+    clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
+    idx_str = f"{int(index):02d}"
+    token = f"shadow-{issue}-t{idx_str}-{clean_arm}-{stamp}"
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", token).strip("-.")[:64]
+
+
 def _process_start_time(pid: int) -> float | None:
     """Return an OS process creation time for PID-reuse-safe supervision."""
     try:
@@ -156,6 +211,7 @@ def write_shadow_heartbeat(
     started_at: float,
     finished: bool = False,
     cycle: int = 0,
+    dash_port: Optional[int] = None,
     path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Publish (or refresh) the rehearsal's heartbeat file.
@@ -182,6 +238,8 @@ def write_shadow_heartbeat(
         "cycle": int(cycle),
         "finished": bool(finished),
     }
+    if dash_port is not None:
+        payload["dash_port"] = int(dash_port)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
@@ -695,6 +753,7 @@ def run_shadow(
     starting_bankroll_usd: Optional[float] = None,
     market_state_fn: Optional[Callable] = None,
     markets_fn_empty_is_routine: bool = False,
+    dash_port: Optional[int] = None,
 ) -> ShadowResult:
     """One shadow session: rotate until `minutes` elapse, record, spend nothing.
 
@@ -1033,7 +1092,8 @@ def run_shadow(
     resolved_sleep_fn = sleep_fn if sleep_fn is not None else make_deadline_sleep(deadline_ts)
 
     heartbeat_kwargs = dict(db_path=db_path, run_id=run_id, minutes=minutes,
-                            interval=interval, started_at=started_at)
+                            interval=interval, started_at=started_at,
+                            dash_port=dash_port)
     write_shadow_heartbeat(**heartbeat_kwargs, cycle=0)
 
     rotations = 0
@@ -1234,6 +1294,8 @@ def _parse_args(argv: Optional[list[str]] = None):
     ap.add_argument("--funder", default=None,
                     help="funder address for the live balance read "
                          "(default: POLY_FUNDER)")
+    ap.add_argument("--dash-port", type=int, default=None,
+                    help="metadata port of the dashboard monitoring this shadow run")
     return ap.parse_args(argv)
 
 
@@ -1259,6 +1321,9 @@ def main(
     )
 
     a = _parse_args(argv)
+
+    if a.dash_port is not None and not (1 <= a.dash_port <= 65535):
+        raise SystemExit("--dash-port must be between 1 and 65535")
 
     db = Path(a.db)
     # Feed precedence: an injected markets_fn wins, then --markets-path, then
@@ -1315,6 +1380,7 @@ def main(
                                if (a.paired_depth_arm is not None
                                    or a.paired_admission_arm is not None)
                                else None),
+        dash_port=a.dash_port,
     )
 
     quoted = sum(1 for r in result.results if r.status == "QUOTED")
