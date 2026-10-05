@@ -303,6 +303,24 @@ def parse_candidate(row: Any) -> Optional[Candidate]:
     if not condition_id:
         return None
 
+    uma_status = str(row.get("umaResolutionStatus") or row.get("uma_resolution_status") or "").strip().lower()
+    if uma_status in ("proposed", "disputed", "resolved"):
+        return None
+    uma_statuses = row.get("umaResolutionStatuses") or row.get("uma_resolution_statuses")
+    if uma_statuses:
+        raw_list = []
+        if isinstance(uma_statuses, (list, tuple)):
+            raw_list = uma_statuses
+        elif isinstance(uma_statuses, str) and uma_statuses.strip():
+            try:
+                parsed = json.loads(uma_statuses)
+                raw_list = parsed if isinstance(parsed, (list, tuple)) else [parsed]
+            except Exception:
+                raw_list = [uma_statuses]
+        for item in raw_list:
+            if str(item or "").strip().lower() in ("proposed", "disputed", "resolved"):
+                return None
+
     raw_tokens = row.get("clobTokenIds")
     tokens: Sequence[Any]
     if isinstance(raw_tokens, str):

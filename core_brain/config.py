@@ -1096,7 +1096,7 @@ class MakerConfig:
     # dynamic_offset_min_cents and dynamic_offset_max_cents.
     dynamic_offset_enabled: bool = False
     dynamic_offset_multiplier: float = 0.50
-    dynamic_offset_min_cents: int = 1
+    dynamic_offset_min_cents: int = 2
     dynamic_offset_max_cents: int = 4
     dynamic_offset_max_age_sec: float = 900.0   # 15 minutes max age of range telemetry
     range_cents: float | None = None
@@ -1119,16 +1119,16 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
     "balanced": {
         "dynamic_offset_enabled": True,
         "dynamic_offset_multiplier": 0.50,
-        "dynamic_offset_min_cents": 1,
+        "dynamic_offset_min_cents": 2,
         "dynamic_offset_max_cents": 4,
-        "description": "Proportional volatility tracking (1¢–4¢)",
+        "description": "Proportional volatility tracking (2¢–4¢)",
     },
     "aggressive": {
         "dynamic_offset_enabled": True,
         "dynamic_offset_multiplier": 0.25,
-        "dynamic_offset_min_cents": 1,
-        "dynamic_offset_max_cents": 2,
-        "description": "Tight queue priority capturing fast fills (1¢–2¢)",
+        "dynamic_offset_min_cents": 2,
+        "dynamic_offset_max_cents": 3,
+        "description": "Tight queue priority capturing fast fills (2¢–3¢)",
     },
     "prudent": {
         "dynamic_offset_enabled": True,

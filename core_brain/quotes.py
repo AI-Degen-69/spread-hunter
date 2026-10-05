@@ -139,12 +139,43 @@ def dynamic_offset_for(
     raw_cents = mult * float(range_cents)
     int_cents = int(round(raw_cents))
 
-    min_cents = getattr(cfg, "dynamic_offset_min_cents", 1)
+    min_cents = getattr(cfg, "dynamic_offset_min_cents", 2)
     max_cents = getattr(cfg, "dynamic_offset_max_cents", 4)
     clamped_cents = max(min_cents, min(max_cents, int_cents))
 
     dynamic_base = round(clamped_cents / 100.0, 4)
     return dynamic_base, f"dynamic_{clamped_cents}c"
+
+
+def rolling_range(price_history: list[float] | tuple[float, ...]) -> float:
+    """Extract the rolling range (recent_high - recent_low) from a price history window."""
+    if not price_history:
+        return 0.0
+    return round(float(max(price_history) - min(price_history)), 4)
+
+
+def calculate_limit_order_price(
+    current_price: float,
+    price_history: list[float] | tuple[float, ...],
+    range_fraction: float = 0.4,
+    min_floor: float = 0.02,
+    tick_size: float = 0.01,
+) -> float:
+    """Calculate dynamic limit order price below current market price.
+
+    Uses recent rolling price range scaled by range_fraction, clamped to at least min_floor
+    to protect against adverse selection in calm markets. Enforces tick_size minimum floor.
+    """
+    if not price_history:
+        final_offset = min_floor
+    else:
+        local_range = rolling_range(price_history)
+        dynamic_offset = local_range * range_fraction
+        final_offset = max(dynamic_offset, min_floor)
+
+    target_order_price = current_price - final_offset
+    return round(max(target_order_price, tick_size), 2)
+
 
 
 def quote_resting_price(
