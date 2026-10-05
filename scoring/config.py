@@ -471,6 +471,8 @@ class MakerConfig:
     # a failed HTTP call must not empty the universe on one bad minute.
     select_movement_window_sec: float = 1800.0
     select_min_movement_usd: float = 500.0
+    select_velocity_gate_enabled: bool = True
+    select_min_range_cents: float = 2.0
     select_max_book_spread: float = 0.06
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
@@ -936,6 +938,17 @@ def load() -> MakerConfig:
             window = None
         if window is not None and math.isfinite(window) and window > 0:
             kw["select_movement_window_sec"] = window
+    vgate = os.environ.get("HUNTER_VELOCITY_GATE") or ""
+    if vgate.strip():
+        kw["select_velocity_gate_enabled"] = vgate.strip().lower() not in ("0", "false", "off", "no")
+    rcents = os.environ.get("HUNTER_MIN_RANGE_CENTS") or ""
+    if rcents.strip():
+        try:
+            rc = float(rcents)
+            if math.isfinite(rc) and rc >= 0:
+                kw["select_min_range_cents"] = rc
+        except ValueError:
+            pass
     vtri = os.environ.get("HUNTER_VOLUME_TRIAL_USD") or ""
     if vtri.strip():
         kw["select_min_volume_24h_usd_trial"] = float(vtri)

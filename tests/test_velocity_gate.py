@@ -69,6 +69,21 @@ def test_tape_movement_and_range_handles_flat_tape():
     assert stats["range_cents"] == 0.0
 
 
+def test_tape_movement_and_range_normalizes_outcome_prices():
+    # YES trade at 0.35 and NO trade at 0.65 are economically identical in price (both imply 0.35 YES / 0.65 NO)
+    session = _TapeSession([
+        {"timestamp": NOW - 60, "price": 0.35, "size": 100.0, "outcome": "Yes", "outcomeIndex": 0},
+        {"timestamp": NOW - 120, "price": 0.65, "size": 50.0, "outcome": "No", "outcomeIndex": 1},
+    ])
+
+    stats = tape_movement_and_range(session, "0xmarket", window_sec=WINDOW, now_ts=NOW)
+
+    assert stats["trade_count"] == 2
+    # Un-normalized range would be (0.65 - 0.35) = 30.0c.
+    # Normalized range must be 0.00c!
+    assert stats["range_cents"] == 0.0
+
+
 def test_tape_movement_and_range_handles_unreachable_tape():
     session = _TapeSession([], boom=True)
     stats = tape_movement_and_range(session, "0xmarket", window_sec=WINDOW, now_ts=NOW)

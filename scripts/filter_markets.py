@@ -105,6 +105,8 @@ MOVEMENT_WINDOW_SEC = _CFG.select_movement_window_sec
 MIN_MOVEMENT_USD = _CFG.select_min_movement_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
 MAX_BOOK_SPREAD = _CFG.select_max_book_spread
+MIN_RANGE_CENTS = getattr(_CFG, "select_min_range_cents", 2.0)
+VELOCITY_GATE_ENABLED = getattr(_CFG, "select_velocity_gate_enabled", True)
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
 ORDERING_FALLBACK_PAGES = 5
@@ -367,7 +369,15 @@ def tape_movement_and_range(
             continue
         trade_count += 1
         total += price * size
-        prices_in_window.append(price)
+        # Normalize outcome price: if trade is on outcome 1 (e.g. "No"/"Down"), invert (1.0 - price)
+        # so all prices in the window share the same reference outcome frame (#378, #370).
+        outcome_idx = t.get("outcomeIndex")
+        outcome_str = str(t.get("outcome") or "").strip().lower()
+        if outcome_idx == 1 or outcome_str in ("no", "down"):
+            norm_price = 1.0 - price
+        else:
+            norm_price = price
+        prices_in_window.append(norm_price)
 
     last_trade_sec_ago = max(0.0, now - latest_ts) if latest_ts is not None else None
     range_cents = (
@@ -1972,9 +1982,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="minimum trades in 30m required by the velocity gate (default: unconstrained unless set)")
     p.add_argument("--max-last-trade-sec", type=float, default=None, metavar="SEC",
                    help="maximum seconds since last trade required by the velocity gate (default: unconstrained unless set)")
-    p.add_argument("--min-range-cents", type=float, default=0.50, metavar="CENTS",
-                   help="minimum recent price range in cents required by the velocity/range gate (default: 0.50c)")
-    p.add_argument("--velocity-gate", dest="velocity_gate", action="store_true", default=True,
+    p.add_argument("--min-range-cents", type=float, default=None, metavar="CENTS",
+                   help="minimum recent price range in cents required by the velocity/range gate (default: %.2fc)" % MIN_RANGE_CENTS)
+    p.add_argument("--velocity-gate", dest="velocity_gate", action="store_true", default=None,
                    help="enforce velocity and flat-range filtering (enabled by default)")
     p.add_argument("--no-velocity-gate", dest="velocity_gate", action="store_false",
                    help="disable velocity and flat-range filtering")
@@ -2506,8 +2516,8 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
     carrying `clobRewards` is scored on the same terms, its reward config
     feeding only the score-window width.
     """
-    v_enabled = True if velocity_gate_enabled is None else bool(velocity_gate_enabled)
-    r_cents = 0.50 if min_range_cents is None else min_range_cents
+    v_enabled = VELOCITY_GATE_ENABLED if velocity_gate_enabled is None else bool(velocity_gate_enabled)
+    r_cents = MIN_RANGE_CENTS if min_range_cents is None else min_range_cents
     jobs = [(spread_capture_daily(m["_volume_24h"], m["_spread"],
                                   _CFG.spread_capture_frac),
              m, m["_volume_24h"], "spread")
