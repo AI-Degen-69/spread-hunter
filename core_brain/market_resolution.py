@@ -87,6 +87,55 @@ UNREACHABLE_RETRY_SEC = 60.0
 # markets in one run.
 _unreachable_backoff: dict[str, float] = {}
 
+RECOGNIZED_UMA_RESOLVED_STATUSES = frozenset({"proposed", "disputed", "resolved"})
+
+
+def parse_uma_resolution_status(
+    status: Any = None,
+    statuses: Any = None,
+) -> Optional[str]:
+    """Extract and normalize a recognized UMA resolution status, if present.
+
+    Recognizes 'proposed', 'disputed', and 'resolved'.
+    Handles string values, lists/tuples, and JSON-encoded string lists.
+    Catches only ValueError, TypeError, and RecursionError during JSON parsing.
+    Returns the normalized status string (e.g. 'proposed') or None.
+    """
+    if status is not None:
+        norm = str(status).strip().lower()
+        if norm in RECOGNIZED_UMA_RESOLVED_STATUSES:
+            return norm
+
+    if statuses is not None:
+        raw_list: list[Any] = []
+        if isinstance(statuses, (list, tuple)):
+            raw_list = list(statuses)
+        elif isinstance(statuses, str) and statuses.strip():
+            try:
+                parsed = json.loads(statuses)
+                raw_list = list(parsed) if isinstance(parsed, (list, tuple)) else [parsed]
+            except (ValueError, TypeError, RecursionError):
+                raw_list = [statuses]
+        for item in raw_list:
+            norm = str(item or "").strip().lower()
+            if norm in RECOGNIZED_UMA_RESOLVED_STATUSES:
+                return norm
+
+    return None
+
+
+def extract_uma_resolution_status(
+    row_or_status: Any = None,
+    statuses: Any = None,
+) -> Optional[str]:
+    """Extract UMA resolution status from a row dictionary or direct parameters."""
+    if isinstance(row_or_status, dict):
+        status = row_or_status.get("umaResolutionStatus") or row_or_status.get("uma_resolution_status")
+        statuses = row_or_status.get("umaResolutionStatuses") or row_or_status.get("uma_resolution_statuses")
+        return parse_uma_resolution_status(status=status, statuses=statuses)
+    return parse_uma_resolution_status(status=row_or_status, statuses=statuses)
+
+
 
 @dataclass(frozen=True)
 class MarketEndState:
@@ -190,7 +239,10 @@ def parse_end_state(row: dict, now_ts: Optional[float] = None) -> Optional[Marke
             end_passed = None
             end_epoch = None
 
-    resolved = bool((closed is True) or (end_passed is True))
+    uma_status = extract_uma_resolution_status(row)
+    uma_resolved = uma_status is not None
+
+    resolved = bool((closed is True) or (end_passed is True) or uma_resolved)
 
     # Winner: Polymarket ships outcomes=["Up","Down"] (or question-dependent
     # labels) and outcomePrices=["1","0"] at settlement. The token id lives

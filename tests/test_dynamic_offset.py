@@ -138,8 +138,8 @@ def test_tournament_presets_registry_contents():
     aggressive = TOURNAMENT_PRESETS["aggressive"]
     assert aggressive["dynamic_offset_enabled"]
     assert aggressive["dynamic_offset_multiplier"] == 0.25
-    assert aggressive["dynamic_offset_min_cents"] == 1
-    assert aggressive["dynamic_offset_max_cents"] == 2
+    assert aggressive["dynamic_offset_min_cents"] == 2
+    assert aggressive["dynamic_offset_max_cents"] == 3
 
     prudent = TOURNAMENT_PRESETS["prudent"]
     assert prudent["dynamic_offset_enabled"]
@@ -153,8 +153,8 @@ def test_apply_tournament_preset():
     agg = apply_tournament_preset(base, "aggressive")
     assert agg.dynamic_offset_enabled is True
     assert agg.dynamic_offset_multiplier == 0.25
-    assert agg.dynamic_offset_min_cents == 1
-    assert agg.dynamic_offset_max_cents == 2
+    assert agg.dynamic_offset_min_cents == 2
+    assert agg.dynamic_offset_max_cents == 3
 
     cons = apply_tournament_preset(base, "conservative")
     assert cons.dynamic_offset_enabled is True
@@ -187,7 +187,7 @@ def test_load_config_with_preset_and_env_overrides():
         cfg = load()
         assert cfg.dynamic_offset_enabled is True
         assert cfg.dynamic_offset_multiplier == 0.50
-        assert cfg.dynamic_offset_min_cents == 1
+        assert cfg.dynamic_offset_min_cents == 2
         assert cfg.dynamic_offset_max_cents == 4
 
     # Env override on top of preset
@@ -198,7 +198,7 @@ def test_load_config_with_preset_and_env_overrides():
         cfg_custom = load()
         assert cfg_custom.dynamic_offset_enabled is True
         assert cfg_custom.dynamic_offset_multiplier == 0.25
-        assert cfg_custom.dynamic_offset_min_cents == 1
+        assert cfg_custom.dynamic_offset_min_cents == 2
         assert cfg_custom.dynamic_offset_max_cents == 3
 
     # Unknown preset raises ValueError

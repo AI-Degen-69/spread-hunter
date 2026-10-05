@@ -10,6 +10,8 @@ from typing import Optional
 
 import requests
 
+from core_brain.market_resolution import extract_uma_resolution_status
+
 log = logging.getLogger("markets")
 
 # (connect, read). `fetch_pinned_market` is called from inside the fleet's
@@ -91,6 +93,9 @@ def _parse_market_row(market: dict) -> Optional[LiveMarket]:
 
     condition_id = market.get("conditionId")
     if not condition_id:
+        return None
+
+    if extract_uma_resolution_status(market):
         return None
 
     # eventStartTime is the actual trading-window open (UTC :00/:05/:10 boundary).

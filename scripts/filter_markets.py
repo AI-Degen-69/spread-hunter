@@ -32,6 +32,10 @@ sys.path.insert(0, str(ROOT))
 
 from scoring.allocate import (marginal, spread_capture_daily)   # noqa: E402
 from core_brain import rehearsal   # noqa: E402
+from core_brain.market_resolution import (  # noqa: E402
+    extract_uma_resolution_status,
+    parse_uma_resolution_status,
+)
 from scoring import config as _load_cfg_module   # noqa: E402
 from scoring.config import load as _load_cfg   # noqa: E402
 from scoring.family_admission import classify_identity   # noqa: E402
@@ -144,13 +148,16 @@ def q_min(a: float, b: float) -> float:
 
 def resolve_state(closed: object = None,
                   accepting_orders: object = None,
-                  end_iso: object = None) -> tuple[bool, str, str | None]:
-    """Resolved, live, or unreadable â€” started is not resolved (#312).
+                  end_iso: object = None,
+                  uma_status: object = None,
+                  uma_statuses: object = None) -> tuple[bool, str, str | None]:
+    """Resolved, live, or unreadable — started is not resolved (#312, #378).
 
     Returns (resolved, reason, end_iso carried along for the reason string).
     Fail closed: anything unreadable reads resolved, never live. Unreadable
     includes a signal that is not a boolean -- an absent field, and a venue
     string like `"false"`, which a truthiness test reads as its opposite.
+    UMA proposed/disputed/resolved states are flagged as resolved.
 
     The reason names the signal that actually refused the market: a closed
     market and a market the venue stopped taking orders on are different
@@ -158,6 +165,10 @@ def resolve_state(closed: object = None,
     auditable. Both stay in the `_cause()` horizon bucket.
     """
     end = str(end_iso) if end_iso else None
+    uma_matched = parse_uma_resolution_status(status=uma_status, statuses=uma_statuses)
+    if uma_matched:
+        return True, f"resolved: uma resolution {uma_matched}", end
+
     if not isinstance(closed, bool) or not isinstance(accepting_orders, bool):
         return True, "resolved: resolution state unreadable", end
     dated = f"endDate {end or 'unknown'}"
@@ -737,6 +748,10 @@ def gamma_universe(session: requests.Session,
             if not m.get("acceptingOrders"):
                 _cheap_reject("not accepting orders", m)
                 continue
+            uma_matched = extract_uma_resolution_status(m)
+            if uma_matched:
+                _cheap_reject(f"uma resolution {uma_matched}", m)
+                continue
             try:
                 toks = json.loads(m.get("clobTokenIds") or "[]")
             except (TypeError, ValueError):
@@ -804,6 +819,8 @@ def gamma_universe(session: requests.Session,
                 # active order acceptance.
                 "closed": m.get("closed"),
                 "accepting_orders": m.get("acceptingOrders"),
+                "uma_resolution_status": m.get("umaResolutionStatus"),
+                "uma_resolution_statuses": m.get("umaResolutionStatuses"),
             })
         # Sorted by volume, so the first market under the floor ends the
         # useful part of the listing -- when the sort holds. Verified
@@ -1051,6 +1068,14 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         category=m.get("category") or m.get("venue_category"))
     if is_expired:
         return _reject_row(source, expired_reason, m, volume_24h)
+
+    # THE UMA RESOLUTION GATE: outcome already proposed/disputed/resolved (#378)
+    uma_matched = parse_uma_resolution_status(
+        status=m.get("uma_resolution_status") or m.get("umaResolutionStatus"),
+        statuses=m.get("uma_resolution_statuses") or m.get("umaResolutionStatuses"),
+    )
+    if uma_matched:
+        return _reject_row(source, f"resolved: uma resolution {uma_matched}", m, volume_24h)
     # THE MAKER-QUEUE BAR, before the two book fetches below rather than
     # after them. A market whose queue at our own price never clears cannot be
     # quoted at all, so paying for its books to score it is wasted venue work.
@@ -1256,7 +1281,9 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         m.get("market_group"), m.get("series_title"), m.get("event_title"),
         min_volume_usd=min_volume_usd,
         state=resolve_state(m.get("closed"), m.get("accepting_orders"),
-                            m.get("end_date_iso")),
+                            m.get("end_date_iso"),
+                            uma_status=m.get("uma_resolution_status") or m.get("umaResolutionStatus"),
+                            uma_statuses=m.get("uma_resolution_statuses") or m.get("umaResolutionStatuses")),
         skip_identity=bool(admission_trial and admission_role))
     # The movement gate has already been enforced above, before the book
     # fetches -- `flat` cannot be true here. The payout floor is a REWARD
@@ -1394,6 +1421,12 @@ def _cause(reason: str) -> str:
         return "pre-start"
     if "no movement" in r:
         return "no movement"
+    if "flat range" in r:
+        return "flat range"
+    if "low velocity" in r:
+        return "low velocity"
+    if "stale tape" in r:
+        return "stale tape"
     # The decided-mid reason embeds the measured price, so raw text would make
     # one dashboard card per price level. The gate is the bucket, side kept.
     if "decided mid" in r:
@@ -1935,6 +1968,16 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         "unified scan; this flag exists only to measure that "
                         "claim against the live funnel before the code comes "
                         "out.")
+    p.add_argument("--min-trades", type=int, default=None, metavar="N",
+                   help="minimum trades in 30m required by the velocity gate (default: unconstrained unless set)")
+    p.add_argument("--max-last-trade-sec", type=float, default=None, metavar="SEC",
+                   help="maximum seconds since last trade required by the velocity gate (default: unconstrained unless set)")
+    p.add_argument("--min-range-cents", type=float, default=0.50, metavar="CENTS",
+                   help="minimum recent price range in cents required by the velocity/range gate (default: 0.50c)")
+    p.add_argument("--velocity-gate", dest="velocity_gate", action="store_true", default=True,
+                   help="enforce velocity and flat-range filtering (enabled by default)")
+    p.add_argument("--no-velocity-gate", dest="velocity_gate", action="store_false",
+                   help="disable velocity and flat-range filtering")
     args = p.parse_args(argv)
     if args.paired_depth_control_usd is not None:
         if args.out_dir is None:
@@ -2412,7 +2455,11 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                max_spread: Optional[float] = None,
                max_queue_minutes: Optional[float] = None,
                queue_minutes_fn=None,
-               admission_trial: bool = False) -> list[dict]:
+               admission_trial: bool = False,
+               min_trades: Optional[int] = None,
+               max_last_trade_sec: Optional[float] = None,
+               min_range_cents: Optional[float] = None,
+               velocity_gate_enabled: Optional[bool] = None) -> list[dict]:
     """Score candidate jobs across a worker pool, one session per worker.
 
     `session_factory` is injected so a test can prove the pool never shares
@@ -2432,7 +2479,11 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
                                    max_spread=max_spread,
                                    max_queue_minutes=max_queue_minutes,
                                    queue_minutes_fn=queue_minutes_fn,
-                                   admission_trial=admission_trial),
+                                   admission_trial=admission_trial,
+                                   min_trades=min_trades,
+                                   max_last_trade_sec=max_last_trade_sec,
+                                   min_range_cents=min_range_cents,
+                                   velocity_gate_enabled=velocity_gate_enabled),
                 jobs):
             if r:
                 out.append(r)
@@ -2442,7 +2493,11 @@ def score_pool(jobs: list[tuple[float, dict, Optional[float], str]],
 def _score_universe(universe: list[dict], *, volume_bar: float,
                     movement_bar: float, depth_bar: float,
                     spread_bar: float,
-                    admission_trial: bool = False) -> tuple[list[dict], int]:
+                    admission_trial: bool = False,
+                    min_trades: Optional[int] = None,
+                    max_last_trade_sec: Optional[float] = None,
+                    min_range_cents: Optional[float] = None,
+                    velocity_gate_enabled: Optional[bool] = None) -> tuple[list[dict], int]:
     """Score the unified universe and return (scored rows, attempted count).
 
     One job per candidate: the pot is ALWAYS spread capture --
@@ -2451,6 +2506,8 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
     carrying `clobRewards` is scored on the same terms, its reward config
     feeding only the score-window width.
     """
+    v_enabled = True if velocity_gate_enabled is None else bool(velocity_gate_enabled)
+    r_cents = 0.50 if min_range_cents is None else min_range_cents
     jobs = [(spread_capture_daily(m["_volume_24h"], m["_spread"],
                                   _CFG.spread_capture_frac),
              m, m["_volume_24h"], "spread")
@@ -2460,7 +2517,11 @@ def _score_universe(universe: list[dict], *, volume_bar: float,
                      min_movement_usd=movement_bar,
                      max_spread=spread_bar,
                      max_queue_minutes=resolve_queue_bar(_CFG),
-                     admission_trial=admission_trial)
+                     admission_trial=admission_trial,
+                     min_trades=min_trades,
+                     max_last_trade_sec=max_last_trade_sec,
+                     min_range_cents=r_cents,
+                     velocity_gate_enabled=v_enabled)
     return out, len(jobs)
 
 
@@ -2577,7 +2638,11 @@ def main() -> None:
     out, attempted = _score_universe(
         universe, volume_bar=volume_bar, movement_bar=movement_bar,
         depth_bar=trial_bar, spread_bar=spread_bar,
-        admission_trial=args.paired_admission)
+        admission_trial=args.paired_admission,
+        min_trades=args.min_trades,
+        max_last_trade_sec=args.max_last_trade_sec,
+        min_range_cents=args.min_range_cents,
+        velocity_gate_enabled=args.velocity_gate)
     if args.paired_admission:
         # Refusal rows carry no event fields out of `evaluate`; without this
         # stamp no fallback could name its refused mainline member.

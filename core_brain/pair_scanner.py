@@ -84,6 +84,7 @@ from typing import Any, Iterable, Optional, Sequence
 import requests
 
 from core_brain.config import load as load_cfg
+from core_brain.market_resolution import extract_uma_resolution_status
 
 log = logging.getLogger("pair_scanner")
 
@@ -301,6 +302,9 @@ def parse_candidate(row: Any) -> Optional[Candidate]:
 
     condition_id = str(row.get("conditionId") or "")
     if not condition_id:
+        return None
+
+    if extract_uma_resolution_status(row):
         return None
 
     raw_tokens = row.get("clobTokenIds")

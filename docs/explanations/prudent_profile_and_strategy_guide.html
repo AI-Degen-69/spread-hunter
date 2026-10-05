@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spread Hunter — מדריך אסטרטגיה, פרופיל PRUDENT ותרשימי זרימה מלאים</title>
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-card: #182234;
+            --bg-card-hover: #1e2c44;
+            --border: #27354d;
+            --border-highlight: #3b82f6;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --text-dim: #6b7280;
+            --cyan: #06b6d4;
+            --emerald: #10b981;
+            --amber: #f59e0b;
+            --rose: #f43f5e;
+            --indigo: #6366f1;
+            --purple: #a855f7;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Heebo', sans-serif;
+            --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            padding: 0 0 80px 0;
+        }
+
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* HEADER */
+        header {
+            background: linear-gradient(180deg, rgba(17, 24, 39, 0.95) 0%, rgba(10, 14, 23, 0.95) 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 40px 0 30px;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            backdrop-filter: blur(12px);
+        }
+
+        .header-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(6, 182, 212, 0.12);
+            color: var(--cyan);
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border: 1px solid rgba(6, 182, 212, 0.3);
+            margin-bottom: 12px;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #ffffff 30%, #93c5fd 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            max-width: 800px;
+        }
+
+        /* NAVIGATION TABS */
+        .nav-tabs {
+            display: flex;
+            gap: 8px;
+            margin-top: 24px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+            overflow-x: auto;
+        }
+
+        .nav-tab {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            padding: 8px 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 600;
+            font-size: 0.95rem;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            text-decoration: none;
+        }
+
+        .nav-tab:hover, .nav-tab.active {
+            background: var(--bg-card);
+            color: var(--cyan);
+            border-color: var(--border);
+        }
+
+        .nav-tab.active {
+            border-bottom: 2px solid var(--cyan);
+            background: rgba(6, 182, 212, 0.08);
+        }
+
+        /* SECTION STYLING */
+        section {
+            margin-top: 50px;
+        }
+
+        .section-header {
+            margin-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .section-header h2 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .section-header h2::before {
+            content: "";
+            display: inline-block;
+            width: 4px;
+            height: 24px;
+            background: var(--cyan);
+            border-radius: 2px;
+        }
+
+        /* GRID & CARDS */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+        }
+
+        .grid-4 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .card:hover {
+            border-color: var(--border-highlight);
+        }
+
+        .card-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #ffffff;
+        }
+
+        /* CODE & HIGHLIGHTS */
+        code, .code-snippet {
+            font-family: var(--font-mono);
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 6px;
+            padding: 2px 6px;
+            color: #38bdf8;
+            font-size: 0.9em;
+            direction: ltr;
+            display: inline-block;
+        }
+
+        pre {
+            background: #0d121d;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            overflow-x: auto;
+            direction: ltr;
+            font-family: var(--font-mono);
+            color: #e2e8f0;
+            font-size: 0.88rem;
+            line-height: 1.5;
+            margin: 12px 0;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+        .badge-cyan { background: rgba(6, 182, 212, 0.15); color: var(--cyan); border: 1px solid rgba(6, 182, 212, 0.3); }
+        .badge-green { background: rgba(16, 185, 129, 0.15); color: var(--emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-amber { background: rgba(245, 158, 11, 0.15); color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-rose { background: rgba(244, 63, 94, 0.15); color: var(--rose); border: 1px solid rgba(244, 63, 94, 0.3); }
+        .badge-purple { background: rgba(168, 85, 247, 0.15); color: var(--purple); border: 1px solid rgba(168, 85, 247, 0.3); }
+
+        /* TABLE */
+        .table-wrap {
+            overflow-x: auto;
+            margin: 16px 0;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: right;
+            font-size: 0.92rem;
+        }
+
+        th {
+            background: #141d2d;
+            padding: 12px 16px;
+            font-weight: 700;
+            color: #94a3b8;
+            border-bottom: 1px solid var(--border);
+        }
+
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr.active-row {
+            background: rgba(6, 182, 212, 0.08);
+            border-left: 3px solid var(--cyan);
+        }
+
+        /* FLOWCHART ENGINE (SVG & CSS Cards) */
+        .flow-container {
+            background: #0d131f;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        .flow-step-box {
+            background: #151e2e;
+            border: 1px solid #28374d;
+            border-radius: 10px;
+            padding: 18px;
+            margin-bottom: 24px;
+            position: relative;
+            transition: all 0.2s ease;
+        }
+
+        .flow-step-box:hover {
+            border-color: var(--cyan);
+            box-shadow: 0 0 15px rgba(6, 182, 212, 0.15);
+        }
+
+        .flow-step-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .flow-step-num {
+            width: 28px;
+            height: 28px;
+            background: var(--cyan);
+            color: #000;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 0.85rem;
+            margin-left: 10px;
+        }
+
+        .flow-arrow-down {
+            text-align: center;
+            color: var(--cyan);
+            font-size: 1.5rem;
+            margin: -12px 0 12px;
+        }
+
+        .branch-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-top: 14px;
+        }
+
+        .branch-card {
+            background: #111827;
+            border-radius: 8px;
+            padding: 16px;
+            border-top: 3px solid #64748b;
+        }
+
+        .branch-success { border-color: var(--emerald); }
+        .branch-warning { border-color: var(--amber); }
+        .branch-danger { border-color: var(--rose); }
+        .branch-info { border-color: var(--cyan); }
+
+        .callout {
+            background: rgba(15, 23, 42, 0.8);
+            border-right: 4px solid var(--cyan);
+            border-radius: 0 8px 8px 0;
+            padding: 16px;
+            margin: 16px 0;
+        }
+
+        .callout-amber {
+            border-right-color: var(--amber);
+            background: rgba(245, 158, 11, 0.08);
+        }
+
+        .callout-emerald {
+            border-right-color: var(--emerald);
+            background: rgba(16, 185, 129, 0.08);
+        }
+
+        .callout-rose {
+            border-right-color: var(--rose);
+            background: rgba(244, 63, 94, 0.08);
+        }
+
+        /* INTERACTIVE SIMULATOR */
+        .calc-box {
+            background: #111827;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .slider-group {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin: 12px 0;
+        }
+
+        .slider-group label {
+            width: 180px;
+            font-weight: 600;
+            color: #94a3b8;
+        }
+
+        .slider-group input[type="range"] {
+            flex: 1;
+            accent-color: var(--cyan);
+        }
+
+        .slider-val {
+            width: 60px;
+            font-family: var(--font-mono);
+            font-weight: bold;
+            color: var(--cyan);
+            text-align: left;
+        }
+
+        .calc-result {
+            background: #162032;
+            border-radius: 8px;
+            padding: 14px;
+            margin-top: 14px;
+            display: flex;
+            justify-content: space-around;
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+
+        .result-item span {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .result-item strong {
+            font-size: 1.25rem;
+            color: #fff;
+            font-family: var(--font-mono);
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="container">
+        <div class="header-badge">
+            <span>●</span> מדריך אסטרטגיה וארכיטקטורה · גרסה מבצעית Live & Shadow
+        </div>
+        <h1>פרופיל PRUDENT ומנוע המסחר של Spread Hunter</h1>
+        <p class="subtitle">
+            הסבר מעמיק ומלא על התנהגות הבוט, הלוגיקה המתמטית של ה-Offset הדינמי, מנגנוני ניהול הסיכונים, ותרשימי זרימה מפורטים מאיסוף השוק ועד ליישוב סופי.
+        </p>
+
+        <nav class="nav-tabs">
+            <a href="#core-strategy" class="nav-tab active">אסטרטגיית הליבה</a>
+            <a href="#prudent-profile" class="nav-tab">פרופיל PRUDENT והשוואות</a>
+            <a href="#screener-flow" class="nav-tab">תרשים 1: סריקה ואישור שוק</a>
+            <a href="#order-lifecycle" class="nav-tab">תרשים 2: מחזור חיי הוראה</a>
+            <a href="#risk-architecture" class="nav-tab">ארכיטקטורת סיכון והגנות</a>
+            <a href="#interactive-calc" class="nav-tab">מחשבון דינמי חי</a>
+        </nav>
+    </div>
+</header>
+
+<main class="container">
+
+    <!-- SECTION 1: CORE STRATEGY -->
+    <section id="core-strategy">
+        <div class="section-header">
+            <h2>1. אסטרטגיית הליבה — מה הבוט עושה בפועל?</h2>
+            <span class="badge badge-cyan">Spread Capture via CTF Merging</span>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-title">
+                    <span>💎</span> מתמטיקת הרווח המובטח (The $1.00 Peg)
+                </div>
+                <p>
+                    פלטפורמת Polymarket פועלת על שווקים בינאריים המבוססים על חוזה ה-CTF (Conditional Tokens Framework).
+                    בכל שוק בינארי מתקיים השוויון המתמטי הקשיח:
+                </p>
+                <pre>1 UP Share + 1 DOWN Share ≡ 1.00 USDC</pre>
+                <p>
+                    הבוט אינו מהמר כיווני ואינו מנסה לחזות האם ביטקוין יעלה או ירד. במקום זאת, הוא פועל כעושה שוק פסיבי (Pure Maker) במטרה לרכוש יחידת UP ויחידת DOWN בעלות משותפת הנמוכה מ-<strong>$1.00</strong>:
+                </p>
+                <pre>Profit per Pair = $1.00 - (Avg_UP_Price + Avg_DOWN_Price)</pre>
+                <p style="margin-top: 10px; color: var(--text-muted);">
+                    ברגע ששני החוזים נרכשים (לדוגמה UP ב-$0.48 ו-DOWN ב-$0.48, עלות כוללת $0.96), הבוט מפעיל את פונקציית <code>mergePositions</code> בחוזה ה-CTF ברשת Polygon, ומקבל במקומם בדיוק <strong>$1.00 USDC</strong> נקי וללא סיכון!
+                </p>
+            </div>
+
+            <div class="card">
+                <div class="card-title">
+                    <span>⚠️</span> שני תרחישי הכשל שהמערכת נבנתה למנוע
+                </div>
+                <div class="callout callout-rose" style="margin-top: 0;">
+                    <strong style="color: var(--rose);">כשל 1: הרכבת צמד מעל $1.00 (Over $1.00 Pair)</strong>
+                    <p style="font-size: 0.9rem; margin-top: 4px;">
+                        אם רכשנו UP ב-0.52 ו-DOWN ב-0.49, שילמנו $1.01 עבור נכס ששווה $1.00. זהו הפסד מובטח ומיידי. שער הסיכון <code>max_pair_cost = 0.99</code> חוסם כל הצבה או שמירת הוראה שעלולה לעבור סף זה.
+                    </p>
+                </div>
+
+                <div class="callout callout-amber" style="margin-top: 12px;">
+                    <strong style="color: var(--amber);">כשל 2: קנייה חד-צדדית ללא גידור (Single Buy / Naked Exposure)</strong>
+                    <p style="font-size: 0.9rem; margin-top: 4px;">
+                        אם הוראת ה-UP התמלאה אך ה-DOWN לא התמלאה, הבוט מחזיק בפוזיציה כיוונית חשופה! אם ביטקוין יתרסק, חוזה ה-UP יכול לצנוח ל-$0.00. כל מנגנוני ה-Skew, ה-Single Buy Saver וה-Emergency Stop Loss נועדו לסגור רגל זו מיידית.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- SECTION 2: PRUDENT PROFILE -->
+    <section id="prudent-profile">
+        <div class="section-header">
+            <h2>2. פרופיל ה-PRUDENT (Prudent Hybrid) לעומת שאר הפרופילים</h2>
+            <span class="badge badge-purple">Tournament Preset Configuration</span>
+        </div>
+
+        <div class="card" style="margin-bottom: 24px;">
+            <div class="card-title">
+                <span>🛡️</span> מהו פרופיל Prudent ולמה הוא פותח?
+            </div>
+            <p>
+                בשווקים תנודתיים (כמו חוזי 5 דקות של ביטקוין), מרחק הציטוט מהאמצע (Mid-Price) חייב להגיב לקצב השינוי בשוק (Velocity & Volatility Range).
+                פרופיל ה-<strong>Prudent Hybrid</strong> תוכנן כפתרון המיטבי המשלב בין רצפת הביטחון של הפרופיל השמרני (Conservative) לבין תקרת הביצועים והתגמולים של הפרופיל המאוזן (Balanced):
+            </p>
+            <div class="grid-3" style="margin-top: 16px;">
+                <div style="background: rgba(0,0,0,0.3); padding: 14px; border-radius: 8px; border: 1px solid var(--border);">
+                    <div style="color: var(--cyan); font-weight: 700; margin-bottom: 4px;">1. רצפת ביטחון (Floor): 2¢</div>
+                    <p style="font-size: 0.88rem; color: var(--text-muted);">
+                        הבוט <strong>לעולם אינו מצטט במרחק של 1¢ מהאמצע</strong> (בניגוד ל-Balanced ו-Aggressive). הוא שומר על מרווח של לפחות 2¢ כדי לא להידרס (Adverse Selection) על ידי סוחרים בעלי מידע מהיר.
+                    </p>
+                </div>
+                <div style="background: rgba(0,0,0,0.3); padding: 14px; border-radius: 8px; border: 1px solid var(--border);">
+                    <div style="color: var(--emerald); font-weight: 700; margin-bottom: 4px;">2. תקרת תגמולים (Ceiling): 4¢</div>
+                    <p style="font-size: 0.88rem; color: var(--text-muted);">
+                        הבוט מוגבל למרחק מקסימלי של 4¢ מהאמצע. זה מבטיח שההוראות יישארו בתוך חלון ה-<strong>Reward Window (4.5¢)</strong> של Polymarket המזכה ב-Liquidity Rewards.
+                    </p>
+                </div>
+                <div style="background: rgba(0,0,0,0.3); padding: 14px; border-radius: 8px; border: 1px solid var(--border);">
+                    <div style="color: var(--purple); font-weight: 700; margin-bottom: 4px;">3. מקדם תנודתיות: 0.60x</div>
+                    <p style="font-size: 0.88rem; color: var(--text-muted);">
+                        המרווח הדינמי מחושב כ-<code>0.60 × Range_Cents</code> (עוצמת התנודה ב-15 הדקות האחרונות). זהו שקלול מתמטי מושלם בין 0.50x ב-Balanced ל-0.75x ב-Conservative.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>שם הפרופיל</th>
+                        <th>אופסט דינמי מופעל?</th>
+                        <th>מקדם תנודתיות (Multiplier)</th>
+                        <th>מרווח מינימלי</th>
+                        <th>מרווח מקסימלי</th>
+                        <th>אופי ההתנהגות בשוק</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Control (Baseline)</strong></td>
+                        <td><span class="badge badge-amber">לא (קבוע)</span></td>
+                        <td>-</td>
+                        <td>2.0¢</td>
+                        <td>2.0¢</td>
+                        <td>ציטוט קבוע ב-2.0¢ תמיד, אינו מתחשב כלל בתנודתיות השוק.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Conservative</strong></td>
+                        <td><span class="badge badge-green">כן</span></td>
+                        <td>0.75x</td>
+                        <td>2.0¢</td>
+                        <td>5.0¢</td>
+                        <td>הגנתי מאוד; בשווקים תנודתיים מתרחק עד 5¢ (מחוץ לחלון התגמולים).</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Balanced</strong></td>
+                        <td><span class="badge badge-green">כן</span></td>
+                        <td>0.50x</td>
+                        <td>1.0¢</td>
+                        <td>4.0¢</td>
+                        <td>מאוזן אך נוטה לעמוד ב-1¢ בשוק שקט, דבר שמגדיל חשיפה ל-Toxic Flow.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Aggressive</strong></td>
+                        <td><span class="badge badge-green">כן</span></td>
+                        <td>0.25x</td>
+                        <td>1.0¢</td>
+                        <td>2.0¢</td>
+                        <td>עומד קרוב ביותר ל-Mid (1¢–2¢) לתפיסת ביצועים מהירה בעלות סיכון גבוה.</td>
+                    </tr>
+                    <tr class="active-row">
+                        <td><strong>⭐ Prudent (Hybrid)</strong></td>
+                        <td><span class="badge badge-green">כן</span></td>
+                        <td><strong>0.60x</strong></td>
+                        <td><strong>2.0¢</strong></td>
+                        <td><strong>4.0¢</strong></td>
+                        <td><strong>רצפת ביטחון של 2¢, תקרת תגמולים של 4¢, ומעקב תנודתיות אופטימלי של 60%.</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card" style="margin-top: 20px;">
+            <div class="card-title">
+                <span>🧮</span> נוסחת החישוב של ה-Dynamic Offset בקוד (<code>quotes.py</code>)
+            </div>
+            <pre>
+# קוד מתוך core_brain/quotes.py -> dynamic_offset_for()
+mult = 0.60
+raw_cents = mult * float(range_cents)           # לדוגמה: 0.60 * 3.8¢ = 2.28¢
+int_cents = int(round(raw_cents))               # עיגול למספר שלם: 2¢
+clamped_cents = max(2, min(4, int_cents))       # תחימה לטווח: [2¢ .. 4¢]
+dynamic_base = round(clamped_cents / 100.0, 4)  # תוצאה: 0.0200$
+            </pre>
+            <p style="font-size: 0.9rem; color: var(--text-muted);">
+                * במידה ונתוני התנודתיות (Range Telemetry) אינם קיימים או שהם ישנים מ-15 דקות (<code>dynamic_offset_max_age_sec = 900.0</code>), הבוט מבצע Fallback אוטומטי ובטוח ל-Static 2¢.
+            </p>
+        </div>
+    </section>
+
+    <!-- SECTION 3: SCREENER FLOWCHART -->
+    <section id="screener-flow">
+        <div class="section-header">
+            <h2>3. תרשים זרימה 1: סריקת השוק (Market Screening) עד לאישור שוק</h2>
+            <span class="badge badge-green">From Gamma API to Approved Market</span>
+        </div>
+
+        <div class="flow-container">
+            <!-- STEP 1 -->
+            <div class="flow-step-box">
+                <div class="flow-step-header">
+                    <div style="display: flex; align-items: center;">
+                        <span class="flow-step-num">1</span>
+                        <strong style="font-size: 1.1rem; color: #fff;">שליפת רשימת אירועים (Gamma API Events Ingestion)</strong>
+                    </div>
+                    <span class="badge badge-cyan">GET /events?series_slug=btc-5-min</span>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.92rem;">
+                    סורק השוק (<code>markets.py</code> / <code>pair_scanner.py</code>) פונה ל-Gamma API של Polymarket ושולף את כל השווקים הפעילים.
+                </p>
+                <div class="branch-grid">
+                    <div class="branch-card branch-info">
+                        <strong>בדיקת חלון מסחר (Trading Window):</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            מתקיים התנאי: <code>start_ts &lt;= now &lt; end_ts</code>. שווקים שטרם נפתחו או שכבר הסתיימו נזרקים מיד.
+                        </div>
+                    </div>
+                    <div class="branch-card branch-info">
+                        <strong>אימות שוק בינארי תקין (Binary 2-Token Check):</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            השוק חייב להכיל בדיוק שני טוקנים (UP ו-DOWN). שווקי Multi-Outcome אינם נתמכים באסטרטגיה זו.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flow-arrow-down">▼</div>
+
+            <!-- STEP 2 -->
+            <div class="flow-step-box">
+                <div class="flow-step-header">
+                    <div style="display: flex; align-items: center;">
+                        <span class="flow-step-num">2</span>
+                        <strong style="font-size: 1.1rem; color: #fff;">סינון נתוני נזילות ונפח (Volume & Data Sanitization)</strong>
+                    </div>
+                    <span class="badge badge-amber">Parse & Volume Filter</span>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.92rem;">
+                    הגנה ברמת הגבול (Boundary Guard) מפני נתונים פגומים מה-API:
+                </p>
+                <div class="branch-grid">
+                    <div class="branch-card branch-danger">
+                        <strong style="color: var(--rose);">NaN & Infinity Rejection:</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            ערכי <code>NaN</code> או <code>Infinity</code> נפסלים מיד ב-<code>_parse_volume</code>. הם אינם מומרים ל-0.0 כדי לא לעוות את הניקוד.
+                        </div>
+                    </div>
+                    <div class="branch-card branch-warning">
+                        <strong style="color: var(--amber);">רף נפח מינימלי:</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            השוק חייב להציג פעילות ממשית: <code>volume_24h &gt;= min_volume_24h</code>. שווקים "מתים" נפסלים.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flow-arrow-down">▼</div>
+
+            <!-- STEP 3 -->
+            <div class="flow-step-box">
+                <div class="flow-step-header">
+                    <div style="display: flex; align-items: center;">
+                        <span class="flow-step-num">3</span>
+                        <strong style="font-size: 1.1rem; color: #fff;">בדיקות בריאות ספר הפקודות (CLOB Book Health Gates)</strong>
+                    </div>
+                    <span class="badge badge-rose">risk.book_health()</span>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.92rem;">
+                    שליפת ה-Orderbook של שני הצדדים דרך ה-CLOB API והעברתם בסדרת שערים קשיחים (Hard Gates):
+                </p>
+                <div class="branch-grid">
+                    <div class="branch-card branch-danger">
+                        <strong style="color: var(--rose);">Decided Price Gate:</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            <code>mid &lt;= 0.02</code> או <code>mid &gt;= 0.98</code>? <br>
+                            <strong>נפסל!</strong> השוק כבר הוכרע, אין רווח מרווח וכל ביצוע חד-צדדי יוביל להפסד של 100%.
+                        </div>
+                    </div>
+                    <div class="branch-card branch-danger">
+                        <strong style="color: var(--rose);">Max Book Spread Gate:</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            <code>spread &gt; 0.06</code> (6¢)? <br>
+                            <strong>נפסל!</strong> הספר רחב מדי ("book too wide"). עמידה בספר כזה תחשוף אותנו להזמנות ללא יכולת גידור נגדי.
+                        </div>
+                    </div>
+                    <div class="branch-card branch-danger">
+                        <strong style="color: var(--rose);">Min Book Depth Gate:</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            <code>depth &lt; 200 shares</code>? <br>
+                            <strong>נפסל!</strong> עומק דל מדי. אם נרצה לצאת ב-Exit, לא תהיה מספיק נזילות בספר לקלוט את המכירה.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flow-arrow-down">▼</div>
+
+            <!-- STEP 4 -->
+            <div class="flow-step-box">
+                <div class="flow-step-header">
+                    <div style="display: flex; align-items: center;">
+                        <span class="flow-step-num">4</span>
+                        <strong style="font-size: 1.1rem; color: #fff;">אימות שלמות המראה ועלות הצמד (Mirror Invariant & Completable Pair)</strong>
+                    </div>
+                    <span class="badge badge-purple">Safety Invariant & Arbitrage Gate</span>
+                </div>
+                <div class="branch-grid">
+                    <div class="branch-card branch-warning">
+                        <strong style="color: var(--purple);">Dislocation / Mirror Check:</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            בדיקה ש-<code>ask_UP == 1 - bid_DOWN</code>. אם יש שבר במראה מעל 0.5¢ – הספר בבורסה אינו עקבי ואין לסחור בו.
+                        </div>
+                    </div>
+                    <div class="branch-card branch-warning">
+                        <strong style="color: var(--purple);">Completable Pair Gate:</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            חישוב <code>bid_UP + ask_DOWN &lt; 0.99</code>. בדיקה מקדימה: האם אם ה-UP יתמלא ב-Bid, נוכל לחצות את ה-Ask של ה-DOWN ברווח מובטח?
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flow-arrow-down">▼</div>
+
+            <!-- STEP 5 -->
+            <div class="flow-step-box" style="border-color: var(--emerald); background: rgba(16, 185, 129, 0.08);">
+                <div class="flow-step-header">
+                    <div style="display: flex; align-items: center;">
+                        <span class="flow-step-num" style="background: var(--emerald);">5</span>
+                        <strong style="font-size: 1.1rem; color: #fff;">דירוג ואישור שוק למסחר (Market Approved & Ranked)</strong>
+                    </div>
+                    <span class="badge badge-green">Approved Market for Trading</span>
+                </div>
+                <p style="color: #cbd5e1; font-size: 0.92rem;">
+                    השוק עבר בהצלחה את כל השערים! מחושב עבורו ציון עשיית השוק:
+                </p>
+                <pre>spread_capture_score = edge_per_pair × (volume_24h / max(queue_ahead_usd, 1))</pre>
+                <p style="color: var(--emerald); font-weight: 600; font-size: 0.92rem; margin-top: 6px;">
+                    ✔ השוק מוכנס לתור המסחר הפעיל של ה-Trader Loop ונבחר לציטוט פקודות!
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- SECTION 4: ORDER LIFECYCLE FLOWCHART -->
+    <section id="order-lifecycle">
+        <div class="section-header">
+            <h2>4. תרשים זרימה 2: מחזור חיי הוראה — מההצבה ועד לסיום</h2>
+            <span class="badge badge-cyan">End-to-End Execution & Decision Branches</span>
+        </div>
+
+        <div class="flow-container">
+            <!-- PHASE 1 -->
+            <div class="flow-step-box">
+                <div class="flow-step-header">
+                    <div style="display: flex; align-items: center;">
+                        <span class="flow-step-num">1</span>
+                        <strong style="font-size: 1.1rem; color: #fff;">תכנון הציטוט והגודל (Quote Planning & Quadratic Sizing)</strong>
+                    </div>
+                    <span class="badge badge-cyan">plan_orders()</span>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.92rem;">
+                    עבור השוק המאושר, המנוע מחשב את מחירי ה-Bid לשני הצדדים ואת הגודל המותר:
+                </p>
+                <div class="branch-grid">
+                    <div class="branch-card branch-info">
+                        <strong>חישוב מחיר היעד:</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            <code>Price = Mid - Dynamic_Offset(0.60x, 2¢..4¢) - Skew - BandRisk</code>.<br>
+                            המחיר נתחם ל-Tick Grid של הבורסה ולעולם אינו חוצה את ה-Ask.
+                        </div>
+                    </div>
+                    <div class="branch-card branch-info">
+                        <strong>חישוב גודל (Quadratic Taper):</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            <code>Size = Base_Size × (1 - Risk_Utilization)²</code>.<br>
+                            ככל שהחשיפה מתקרבת ל-<code>naked_risk_pct (6%)</code>, גודל ההוראה דועך ריבועית לאפס!
+                        </div>
+                    </div>
+                    <div class="branch-card branch-info">
+                        <strong>בדיקת סובלנות תור (Queue Hold & Deadband):</strong>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
+                            אם קיימת כבר הוראה בספר בסטיית <code>dead_band</code> ובעמדת תור טובה (Queue Ahead קטן) — ההוראה נשמרת ולא מבוטלת!
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flow-arrow-down">▼</div>
+
+            <!-- PHASE 2 -->
+            <div class="flow-step-box">
+                <div class="flow-step-header">
+                    <div style="display: flex; align-items: center;">
+                        <span class="flow-step-num">2</span>
+                        <strong style="font-size: 1.1rem; color: #fff;">הצבת פקודות פסיביות בספר (Passive Maker Order Placement)</strong>
+                    </div>
+                    <span class="badge badge-cyan">CLOB REST/API Submission</span>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.92rem;">
+                    הבוט משגר שתי הוראות Limit Buy פסיביות: <strong>UP Bid</strong> ו-<strong>DOWN Bid</strong>.
+                    ההוראות יושבות בספר הפקודות וממתינות למילוי תוך צבירת נקודות Liquidity Rewards.
+                </p>
+            </div>
+
+            <div class="flow-arrow-down">▼</div>
+
+            <!-- BRANCHING -->
+            <div style="background: rgba(0,0,0,0.4); padding: 16px; border-radius: 8px; margin-bottom: 24px; border: 1px solid var(--border);">
+                <strong style="color: #fff; font-size: 1.05rem;">נתיבי ההחלטה האפשריים מרגע ההצבה:</strong>
+            </div>
+
+            <!-- 4 BRANCH CARDS -->
+            <div class="grid-2">
+                <!-- BRANCH A -->
+                <div class="branch-card branch-success" style="padding: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong style="color: var(--emerald); font-size: 1.1rem;">נתיב א': שתי הרגליים מתמלאות (Perfect Pair Fill)</strong>
+                        <span class="badge badge-green">Target Scenario</span>
+                    </div>
+                    <p style="font-size: 0.88rem; color: var(--text-muted); margin-top: 8px;">
+                        שני הצדדים (UP ו-DOWN) נפגשו עם פקודות שוק והתמלאו במלואם.
+                    </p>
+                    <ul style="font-size: 0.88rem; margin: 10px 20px 0 0; color: #e2e8f0;">
+                        <li>בדיקת התאמה תקופתית (<code>reconcile_orders</code>) מזהה שיתרת ה-UP שווה ליתרת ה-DOWN.</li>
+                        <li>המנוע מפעיל באופן מיידי את <code>merge_pairs</code>.</li>
+                        <li>נחתמת טרנזקציית <code>mergePositions</code> אל חוזה ה-CTF (או NegRisk Adapter).</li>
+                        <li>החוזים נשרפים, ומוחזר לחשבון בדיוק <strong>$1.00 USDC</strong> לכל צמד!</li>
+                        <li><strong>תוצאה:</strong> רווח נקי של $0.02–$0.04 לצמד, אפס סיכון, והחזרת ההון לסבב הבא.</li>
+                    </ul>
+                </div>
+
+                <!-- BRANCH B -->
+                <div class="branch-card branch-info" style="padding: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong style="color: var(--cyan); font-size: 1.1rem;">נתיב ב': השוק זז ללא ביצוע (Price Movement / Re-Gate)</strong>
+                        <span class="badge badge-cyan">Hysteresis & Re-quote</span>
+                    </div>
+                    <p style="font-size: 0.88rem; color: var(--text-muted); margin-top: 8px;">
+                        ההוראות ישבו בספר, אך מחיר השוק (Mid) זז בצורה משמעותית.
+                    </p>
+                    <ul style="font-size: 0.88rem; margin: 10px 20px 0 0; color: #e2e8f0;">
+                        <li>אם המחיר זז מעבר ל-<code>dead_band</code>: ההוראה כבר לא אופטימלית.</li>
+                        <li>בדיקת <code>completable_pair_block</code>: האם השארת ההוראה מסכנת אותנו בעלות צמד &gt; 0.99?</li>
+                        <li>אם כן — ביטול מהיר עם סיבת <code>CANCEL_REGATE_PAIR_COST</code> או <code>CANCEL_PRICE_MOVED</code>.</li>
+                        <li>חישוב מחדש של מחיר ה-Prudent העדכני.</li>
+                        <li>הצבת הוראות חדשות בספר.</li>
+                    </ul>
+                </div>
+
+                <!-- BRANCH C -->
+                <div class="branch-card branch-warning" style="padding: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong style="color: var(--amber); font-size: 1.1rem;">נתיב ג': רגל אחת בלבד התמלאה (Single Buy / Naked Exposure)</strong>
+                        <span class="badge badge-amber">Active Hedging Loop</span>
+                    </div>
+                    <p style="font-size: 0.88rem; color: var(--text-muted); margin-top: 8px;">
+                        רק צד אחד התמלא (למשל UP). נוצר חוסר איזון מסוכן (Imbalance).
+                    </p>
+                    <ul style="font-size: 0.88rem; margin: 10px 20px 0 0; color: #e2e8f0;">
+                        <li><strong>הפעלת Skew מיידית:</strong> מחיר הרגל הקלה (DOWN) מתקרב ל-Mid כדי למשוך ביצוע מהיר! הרגל הכבדה מוקפאת.</li>
+                        <li>אם הרגל הנגדית מתמלאת — מיזוג מיידי (מעבר לנתיב א').</li>
+                        <li><strong>אם הרגל הנגדית מתרחקת:</strong> מופעל מנגנון <code>emergency_hedge_frac = 0.8</code>: אם חוסר האיזון מגיע ל-80% מתקרת הסיכון, הבוט מקבל אישור לחצות את הספר (Taker Buy) כדי להשלים את הצמד בכל מחיר תחת $1.00!</li>
+                    </ul>
+                </div>
+
+                <!-- BRANCH D -->
+                <div class="branch-card branch-danger" style="padding: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong style="color: var(--rose); font-size: 1.1rem;">נתיב ד': קטיעת הפסד חירום (Emergency Stop-Loss / Naked Exit)</strong>
+                        <span class="badge badge-rose">Capital Preservation</span>
+                    </div>
+                    <p style="font-size: 0.88rem; color: var(--text-muted); margin-top: 8px;">
+                        השוק קרס או רץ בחדות נגדנו, ולא ניתן לגדר בפחות מ-$1.00.
+                    </p>
+                    <ul style="font-size: 0.88rem; margin: 10px 20px 0 0; color: #e2e8f0;">
+                        <li>מנגנון <code>single_buy_saver.py</code> נכנס לפעולה.</li>
+                        <li><strong>שלב 1:</strong> ביטול כל ההוראות הפתוחות בשני הצדדים (ביטול לפני כל פעולה).</li>
+                        <li><strong>שלב 2:</strong> קריאה ישירה של יתרות הבורסה לוודא שלא היה Race Condition של מילוי בדקה האחרונה.</li>
+                        <li><strong>שלב 3:</strong> מכירת הרגל החשופה במחיר שוק (Market Sell) עם הגנת החלקה קשיחה <code>MAX_SELL_SLIPPAGE = 0.02</code>.</li>
+                        <li><strong>תוצאה:</strong> קטיעת ההפסד בגובה 2¢–3¢ במקום ספיגת מחיקה טוטאלית של כל הקרן!</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- SECTION 5: RISK ARCHITECTURE -->
+    <section id="risk-architecture">
+        <div class="section-header">
+            <h2>5. ארכיטקטורת הסיכון וההגנות (Dynamic Caps & Safety Guards)</h2>
+            <span class="badge badge-rose">Defense in Depth</span>
+        </div>
+
+        <div class="grid-3">
+            <div class="card">
+                <div class="card-title">
+                    <span>🛡️</span> תקרות סיכון דינמיות (Dynamic Caps)
+                </div>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">
+                    מוגדרות ב-<code>core_brain/config.py</code> ומתעדכנות בזמן אמת לפי שווי החשבון הכולל (Account Value):
+                </p>
+                <div style="margin-top: 10px; font-size: 0.88rem;">
+                    <div>• <strong>order_risk_pct = 25%</strong> — גודל פקודה בודדת מוגבל לרבע מההון (25$ בחשבון של 100$).</div>
+                    <div style="margin-top: 6px;">• <strong>naked_risk_pct = 6%</strong> — מקסימום חשיפה חד-צדדית מותרת ($6.00). מעבר לזה — חסימה מלאה.</div>
+                    <div style="margin-top: 6px;">• <strong>bankroll_ceiling_pct = 90%</strong> — הבוט תמיד משאיר לפחות 10% יתרה חופשית.</div>
+                    <div style="margin-top: 6px;">• <strong>max_pair_cost = 0.99</strong> — שום צמד לא יירכש ביותר מ-99¢.</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">
+                    <span>📉</span> מכונת מצבי Markout (Unhedged Stop-Loss)
+                </div>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">
+                    המערכת מודדת את ה-Markout (האם השוק זז נגדנו 5 דקות או 15 דקות אחרי המילוי):
+                </p>
+                <div style="margin-top: 10px; font-size: 0.88rem;">
+                    <div>• <span class="badge badge-green">NORMAL</span> — פעילות שגרתית מלאה.</div>
+                    <div style="margin-top: 6px;">• <span class="badge badge-amber">WIDENED</span> — הפסד קל מזוהה: הציטוטים מורחקים כדי למנוע זרימה רעילה.</div>
+                    <div style="margin-top: 6px;">• <span class="badge badge-rose">EXITED / HALTED</span> — הפסד מצטבר קטסטרופלי: השוק או הצי כולו מוקפאים מיד.</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">
+                    <span>🛑</span> הגנות Rehearsal ו-Shadow Guard
+                </div>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">
+                    בדיקות שלמות מבניות ברמת התהליך והזיכרון:
+                </p>
+                <div style="margin-top: 10px; font-size: 0.88rem;">
+                    <div>• <strong>Shadow Run Isolation:</strong> בריצות Shadow לא נשלחות הוראות לבורסה, אין signer פעיל והכסף בטוח.</div>
+                    <div style="margin-top: 6px;">• <strong>Port Isolation:</strong> ריצות Prudent רצות בפורטים 8851–8899 ללא כל התנגשות עם ריצות Standard ב-8801.</div>
+                    <div style="margin-top: 6px;">• <strong>Production DB Lock:</strong> מסד <code>data/orders.db</code> נעול לקריאה בלבד ללא הרשאות דריסה.</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- SECTION 6: INTERACTIVE SIMULATOR -->
+    <section id="interactive-calc">
+        <div class="section-header">
+            <h2>6. סימולטור אינטראקטיבי: כיצד Prudent מחשב את המרווח בזמן אמת</h2>
+            <span class="badge badge-cyan">Interactive Live Calculator</span>
+        </div>
+
+        <div class="card">
+            <p style="color: var(--text-muted);">
+                הזז את המחוונים כדי לראות כיצד פרופיל ה-Prudent Hybrid מחשב את מרווח הביטחון (Dynamic Offset), את מחיר הציטוט בספר, ואת הרווח הפוטנציאלי לצמד בהשוואה לשאר הפרופילים:
+            </p>
+
+            <div class="calc-box">
+                <div class="slider-group">
+                    <label>מחיר אמצע (Mid Price):</label>
+                    <input type="range" id="sim-mid" min="0.10" max="0.90" step="0.01" value="0.50">
+                    <span class="slider-val" id="val-mid">$0.50</span>
+                </div>
+
+                <div class="slider-group">
+                    <label>תנודתיות 15 דק' (Range ¢):</label>
+                    <input type="range" id="sim-range" min="0.5" max="10.0" step="0.1" value="3.5">
+                    <span class="slider-val" id="val-range">3.5¢</span>
+                </div>
+
+                <div class="calc-result">
+                    <div class="result-item">
+                        <span>מכפלת תנודתיות (0.60x)</span>
+                        <strong id="res-raw">2.10¢</strong>
+                    </div>
+                    <div class="result-item">
+                        <span>אופסט Prudent בפועל (Clamped 2¢..4¢)</span>
+                        <strong id="res-offset" style="color: var(--cyan);">2.0¢ (0.02$)</strong>
+                    </div>
+                    <div class="result-item">
+                        <span>מחיר קנייה מוצע (Quote Bid)</span>
+                        <strong id="res-bid" style="color: var(--emerald);">$0.48</strong>
+                    </div>
+                    <div class="result-item">
+                        <span>רווח פוטנציאלי לצמד (עלות 2x)</span>
+                        <strong id="res-profit" style="color: var(--purple);">4.0¢ (+4.17%)</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div id="sim-analysis" style="margin-top: 14px; font-size: 0.9rem; color: #94a3b8; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 6px;">
+                <!-- Filled dynamically -->
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<script>
+    function updateCalc() {
+        const mid = parseFloat(document.getElementById('sim-mid').value);
+        const range = parseFloat(document.getElementById('sim-range').value);
+
+        document.getElementById('val-mid').innerText = '$' + mid.toFixed(2);
+        document.getElementById('val-range').innerText = range.toFixed(1) + '¢';
+
+        // Prudent calculation: 0.60x multiplier, clamped 2 to 4
+        const rawCents = 0.60 * range;
+        const intCents = Math.round(rawCents);
+        const clampedCents = Math.max(2, Math.min(4, intCents));
+        const offsetDollars = clampedCents / 100.0;
+
+        const bid = Math.round((mid - offsetDollars) * 100) / 100;
+        const pairCost = bid * 2;
+        const profitCents = (1.00 - pairCost) * 100;
+        const roi = (profitCents / (pairCost * 100)) * 100;
+
+        document.getElementById('res-raw').innerText = rawCents.toFixed(2) + '¢';
+        document.getElementById('res-offset').innerText = clampedCents.toFixed(1) + '¢ ($' + offsetDollars.toFixed(4) + ')';
+        document.getElementById('res-bid').innerText = '$' + bid.toFixed(2);
+        document.getElementById('res-profit').innerText = profitCents.toFixed(1) + '¢ (+' + roi.toFixed(1) + '%)';
+
+        // Analysis text
+        let analysis = `<strong>ניתוח מצב:</strong> `;
+        if (range <= 2.5) {
+            analysis += `השוק רגוע מאוד. פרופיל Prudent בולם את הציטוט ברצפת <strong>2.0¢</strong> (מונע כניסה מסוכנת ל-1¢).`;
+        } else if (range >= 6.7) {
+            analysis += `השוק סוער מאוד! תקרת ה-<strong>4.0¢</strong> של Prudent מונעת בריחה מחוץ לחלון התגמולים (4.5¢), ושומרת על זכאות ל-Liquidity Rewards.`;
+        } else {
+            analysis += `טווח עבודה מושלם: האופסט עוקב באופן יחסי (0.60x) אחרי תנודות השוק ומספק שילוב אידיאלי של הגנה ורווחיות.`;
+        }
+        document.getElementById('sim-analysis').innerHTML = analysis;
+    }
+
+    document.getElementById('sim-mid').addEventListener('input', updateCalc);
+    document.getElementById('sim-range').addEventListener('input', updateCalc);
+    updateCalc();
+</script>
+
+</body>
+</html>
