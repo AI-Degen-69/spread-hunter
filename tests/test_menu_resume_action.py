@@ -264,3 +264,22 @@ def test_dashboard_startup_bind_timeout_and_orphan_cleanup():
         assert ".AddSeconds(45)" in body, "bind timeout must be at least 45s for large shadow DBs"
         assert "taskkill /T /F /PID" in body, "timed-out dashboard must be terminated to prevent orphans"
 
+
+def test_r_branch_supports_prudent_preset():
+    """Menu option R offers [P] Prudent Hybrid preset and wires it to shadow-01."""
+    branch = _branch_source("r")
+    assert "[P] Prudent Hybrid" in branch
+    assert "$script:ShadowPreset" in branch
+    assert '"prudent"' in branch
+
+    src = _menu_source()
+    assert "[string]$Preset" in src
+    assert "[switch]$Prudent" in src
+
+
+def test_resume_rehearsal_env_passes_tournament_preset():
+    """Invoke-WithRehearsalTrialEnv sets HUNTER_TOURNAMENT_PRESET when preset is specified."""
+    src = _menu_source()
+    assert "HUNTER_TOURNAMENT_PRESET" in src
+    assert "$script:ShadowPreset" in src
+

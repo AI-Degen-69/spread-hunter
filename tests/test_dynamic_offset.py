@@ -128,7 +128,7 @@ def test_decide_quotes_refuses_when_dynamic_pair_sum_exceeds_dollar():
 
 
 def test_tournament_presets_registry_contents():
-    expected_presets = {"control", "conservative", "balanced", "aggressive"}
+    expected_presets = {"control", "conservative", "balanced", "aggressive", "prudent"}
     assert set(TOURNAMENT_PRESETS.keys()) == expected_presets
 
     control = TOURNAMENT_PRESETS["control"]
@@ -140,6 +140,12 @@ def test_tournament_presets_registry_contents():
     assert aggressive["dynamic_offset_multiplier"] == 0.25
     assert aggressive["dynamic_offset_min_cents"] == 1
     assert aggressive["dynamic_offset_max_cents"] == 2
+
+    prudent = TOURNAMENT_PRESETS["prudent"]
+    assert prudent["dynamic_offset_enabled"]
+    assert prudent["dynamic_offset_multiplier"] == 0.60
+    assert prudent["dynamic_offset_min_cents"] == 2
+    assert prudent["dynamic_offset_max_cents"] == 4
 
 
 def test_apply_tournament_preset():
@@ -156,6 +162,12 @@ def test_apply_tournament_preset():
     assert cons.dynamic_offset_min_cents == 2
     assert cons.dynamic_offset_max_cents == 5
 
+    pru = apply_tournament_preset(base, "prudent")
+    assert pru.dynamic_offset_enabled is True
+    assert pru.dynamic_offset_multiplier == 0.60
+    assert pru.dynamic_offset_min_cents == 2
+    assert pru.dynamic_offset_max_cents == 4
+
     ctrl = apply_tournament_preset(agg, "control")
     assert ctrl.dynamic_offset_enabled is False
 
@@ -164,6 +176,13 @@ def test_apply_tournament_preset():
 
 
 def test_load_config_with_preset_and_env_overrides():
+    with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": "prudent"}):
+        cfg = load()
+        assert cfg.dynamic_offset_enabled is True
+        assert cfg.dynamic_offset_multiplier == 0.60
+        assert cfg.dynamic_offset_min_cents == 2
+        assert cfg.dynamic_offset_max_cents == 4
+
     with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": "balanced"}):
         cfg = load()
         assert cfg.dynamic_offset_enabled is True
