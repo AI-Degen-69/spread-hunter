@@ -445,8 +445,29 @@ function dbModeVerdicts() {
   };
 }
 
+function runSwitcherVerdicts() {
+  return {
+    tournamentWithPort: app.runSwitcherLabel({
+      tournament: { issue: 371, index: 1, arm: 'aggressive', stamp: '20261005-031500' },
+      dash_port: 8801,
+      pid: 4242,
+      db_path: 'data/371_tournament_01_aggressive_20261005-031500.db',
+    }),
+    tournamentNoPort: app.runSwitcherLabel({
+      tournament: { issue: 371, index: 2, arm: 'conservative', stamp: '20261005-031500' },
+      pid: 4243,
+      db_path: 'data/371_tournament_02_conservative_20261005-031500.db',
+    }),
+    standardShadow: app.runSwitcherLabel({
+      db_path: 'data/01_shadow_touchpair.db',
+      pid: 1111,
+    }),
+  };
+}
+
 let out;
 if (script === 'dbmode') out = dbModeVerdicts();
+else if (script === 'runswitcher') out = runSwitcherVerdicts();
 else if (script === 'trialbanner') out = trialBannerVerdicts();
 else if (script === 'marketscan') out = marketScanVerdicts();
 else if (script === 'heldresolve') out = heldResolveVerdicts();
@@ -468,6 +489,7 @@ else out = {
   enginehold: engineHoldVerdicts(),
   trialbanner: trialBannerVerdicts(),
   dbmode: dbModeVerdicts(),
+  runswitcher: runSwitcherVerdicts(),
 };
 
 process.stdout.write(JSON.stringify(out));

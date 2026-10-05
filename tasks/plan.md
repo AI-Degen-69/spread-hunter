@@ -70,7 +70,7 @@ Branch: i371/multi-arm-tournament-ui-port-isolation | Issue: #371
      - Accurate port reporting in `services.dash.port`.
 - **Verification**: `python -m pytest -q tests/test_live_dash.py tests/test_dashboard_run_switcher.py tests/test_scan_state_shadow.py`
 
-### Task 3: [Design/UI] Run Switcher Labeling, Dedicated Port Links, and Snapshot Invalidation [ ]
+### Task 3: [Design/UI] Run Switcher Labeling, Dedicated Port Links, and Snapshot Invalidation [x]
 - **Size**: S
 - **Domain Tag**: `[Design/UI]`
 - **Helper Skill**: `frontend-ui-engineering`

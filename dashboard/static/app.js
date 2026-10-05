@@ -1070,6 +1070,18 @@ function placeRunSwitcher(sw, badge) {
   sw.style.left = Math.round(Math.max(4, Math.min(left, h.width - width - 4))) + 'px';
 }
 
+function runSwitcherLabel(run) {
+  if (!run) return '';
+  const t = run.tournament;
+  if (t && t.arm) {
+    const idxStr = String(t.index ?? 1).padStart(2, '0');
+    const portPart = run.dash_port ? `:${run.dash_port}` : '';
+    const pidPart = run.pid ? ` (pid ${run.pid})` : '';
+    return `#${idxStr} ${t.arm}${portPart}${pidPart}`;
+  }
+  return (run.db_path || '').split(/[\\/]/).pop() || '';
+}
+
 async function renderRunSwitcher() {
   const sw = document.getElementById('db-run-switcher');
   const badge = document.getElementById('db-mode-badge');
@@ -1086,12 +1098,15 @@ async function renderRunSwitcher() {
     const isThis = activeRunId === r.run_id;
     const state = r.running === true ? 'RUNNING' : (r.finished ? 'FINISHED' : 'ENDED');
     const age = formatHeartbeatAge(r.heartbeat_age_sec);
-    const name = (r.db_path || '').split(/[\\/]/).pop();
+    const label = runSwitcherLabel(r);
+    const portLink = r.dash_port
+      ? `<a href="http://${window.location.hostname}:${r.dash_port}" target="_blank" rel="noopener" class="db-run-port-link" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-left:6px;" title="Open dedicated dashboard for this arm on port ${r.dash_port}">:${r.dash_port} ↗</a>`
+      : '';
     const btn = isThis
       ? `<span class="db-run-current">THIS PAGE</span>`
       : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
     return `<div class="db-run-row${isThis ? ' current' : ''}">
-        <span class="db-run-name mono">${esc(name)}</span>
+        <span class="db-run-name mono">${esc(label)}</span>${portLink}
         <span class="db-run-state state-${r.running === true ? 'running' : 'stopped'}">${state}${age ? ' · ' + age : ''}</span>
         ${btn}
       </div>`;
@@ -1115,6 +1130,20 @@ async function renderRunSwitcher() {
         if (!res.ok || !data.ok) {
           alert(data.message || data.detail
             || `Could not switch stores (HTTP ${res.status}).`);
+        } else {
+          // Clear retained last-good poll snapshots so previous store's telemetry
+          // doesn't linger before pollStatus() retrieves the newly selected store.
+          lastState = null;
+          lastKpi = null;
+          lastStatus = null;
+          lastScanState = null;
+          lastTrialReadiness = null;
+          lastGuardHealth = null;
+          lastGuardAlerts = null;
+          lastStatusForRuns = null;
+          lastScanStateAtMs = null;
+          lastKpiAtMs = null;
+          lastStatusAtMs = null;
         }
       } catch { alert('Could not reach the dashboard to switch stores.'); }
       closeRunSwitcher();
@@ -6288,7 +6317,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
