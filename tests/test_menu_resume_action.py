@@ -297,3 +297,30 @@ def test_resume_rehearsal_env_passes_and_cleans_tournament_preset():
     assert 'finally {' in helper
     assert 'Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue' in helper
 
+
+def test_resume_stores_distinguishes_standard_and_prudent_runs():
+    """Get-ShadowResumeStores discovers both shadow-NN and shadow-NN-prudent runs."""
+    src = _menu_source()
+    helper = _resume_stores_helper_source()
+    assert '_shadow_prudent' in helper
+    assert '"-prudent"' in helper
+
+
+def test_resume_shadow_run_derives_prudent_run_id_and_preset():
+    """Resume-ShadowRun maps NN_shadow_prudent to shadow-NN-prudent and prudent preset."""
+    body = _resume_function_source()
+    assert '_shadow_prudent' in body
+    assert '"-prudent"' in body
+    assert '$script:ShadowPreset = "prudent"' in body
+
+
+def test_option_4_invokes_start_new_shadow_run():
+    """Option 4 starts a fresh shadow run with preset support and without wiping stores."""
+    src = _menu_source()
+    assert "function Start-NewShadowRun" in src
+    branch = _branch_source("4")
+    assert "Start-NewShadowRun" in branch
+    assert "Clear-RuntimeState" not in branch
+    assert "Reset-Environment" not in branch
+
+
