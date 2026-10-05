@@ -1090,6 +1090,60 @@ class MakerConfig:
     market_url: str = ""
     market_daily_rate: float = 0.0
 
+    # DYNAMIC OFFSET & VOLATILITY TELEMETRY (#370)
+    # Opt-in dynamic offset scaled by measured tape volatility/range in cents.
+    # Offsets round strictly to integer cents (0.01 tick) clamped between
+    # dynamic_offset_min_cents and dynamic_offset_max_cents.
+    dynamic_offset_enabled: bool = False
+    dynamic_offset_multiplier: float = 0.50
+    dynamic_offset_min_cents: int = 1
+    dynamic_offset_max_cents: int = 4
+    dynamic_offset_max_age_sec: float = 900.0   # 15 minutes max age of range telemetry
+    range_cents: float | None = None
+    velocity_measured_at: float | None = None
+
+
+TOURNAMENT_PRESETS: dict[str, dict] = {
+    "control": {
+        "dynamic_offset_enabled": False,
+        "reward_offset": 0.020,
+        "description": "Static 2¢ offset baseline control arm",
+    },
+    "conservative": {
+        "dynamic_offset_enabled": True,
+        "dynamic_offset_multiplier": 0.75,
+        "dynamic_offset_min_cents": 2,
+        "dynamic_offset_max_cents": 5,
+        "description": "Wider safety buffer in volatile swings (2¢–5¢)",
+    },
+    "balanced": {
+        "dynamic_offset_enabled": True,
+        "dynamic_offset_multiplier": 0.50,
+        "dynamic_offset_min_cents": 1,
+        "dynamic_offset_max_cents": 4,
+        "description": "Proportional volatility tracking (1¢–4¢)",
+    },
+    "aggressive": {
+        "dynamic_offset_enabled": True,
+        "dynamic_offset_multiplier": 0.25,
+        "dynamic_offset_min_cents": 1,
+        "dynamic_offset_max_cents": 2,
+        "description": "Tight queue priority capturing fast fills (1¢–2¢)",
+    },
+}
+
+
+def apply_tournament_preset(config: MakerConfig, preset_name: str) -> MakerConfig:
+    """Return a new MakerConfig instance with the specified tournament preset applied."""
+    if preset_name not in TOURNAMENT_PRESETS:
+        raise ValueError(
+            f"Unknown tournament preset {preset_name!r}. "
+            f"Available presets: {list(TOURNAMENT_PRESETS.keys())}"
+        )
+    from dataclasses import replace
+    preset = {k: v for k, v in TOURNAMENT_PRESETS[preset_name].items() if k != "description"}
+    return replace(config, **preset)
+
 
 def _bounded_float(name: str, raw: str, lo: float, hi: float) -> float:
     """One env override, parsed and bounded, or a ValueError naming the variable.
@@ -1220,6 +1274,14 @@ def load(*, for_display: bool = False) -> MakerConfig:
     argument, so the refusal that protects the money path is untouched.
     """
     kw: dict = {}
+    preset_name = (os.environ.get("HUNTER_TOURNAMENT_PRESET") or "").strip().lower()
+    if preset_name:
+        if preset_name not in TOURNAMENT_PRESETS:
+            raise ValueError(
+                f"HUNTER_TOURNAMENT_PRESET={preset_name!r} is unknown. "
+                f"Valid presets: {list(TOURNAMENT_PRESETS.keys())}"
+            )
+        kw.update({k: v for k, v in TOURNAMENT_PRESETS[preset_name].items() if k != "description"})
     cid = os.environ.get("HUNTER_MARKET", "").strip()
     if cid:
         kw["pinned_condition_id"] = cid
@@ -1441,6 +1503,28 @@ def load(*, for_display: bool = False) -> MakerConfig:
                 f"HUNTER_STAT_GATE_TARGET_CLOSES must be a positive integer, got: {stc!r}"
             ) from exc
         kw["stat_gate_target_closes"] = val
+
+    # DYNAMIC OFFSET (#370)
+    dyn = os.environ.get("HUNTER_DYNAMIC_OFFSET") or ""
+    if dyn.strip():
+        kw["dynamic_offset_enabled"] = dyn.strip().lower() in ("1", "true", "yes", "on")
+    dyn_mult = os.environ.get("HUNTER_DYNAMIC_OFFSET_MULT") or ""
+    if dyn_mult.strip():
+        kw["dynamic_offset_multiplier"] = _bounded_float(
+            "HUNTER_DYNAMIC_OFFSET_MULT", dyn_mult, 0.0, 5.0)
+    dyn_min = os.environ.get("HUNTER_DYNAMIC_OFFSET_MIN_CENTS") or ""
+    if dyn_min.strip():
+        kw["dynamic_offset_min_cents"] = int(_bounded_float(
+            "HUNTER_DYNAMIC_OFFSET_MIN_CENTS", dyn_min, 1.0, 10.0))
+    dyn_max = os.environ.get("HUNTER_DYNAMIC_OFFSET_MAX_CENTS") or ""
+    if dyn_max.strip():
+        kw["dynamic_offset_max_cents"] = int(_bounded_float(
+            "HUNTER_DYNAMIC_OFFSET_MAX_CENTS", dyn_max, 1.0, 20.0))
+    dyn_age = os.environ.get("HUNTER_DYNAMIC_OFFSET_MAX_AGE") or ""
+    if dyn_age.strip():
+        kw["dynamic_offset_max_age_sec"] = _bounded_float(
+            "HUNTER_DYNAMIC_OFFSET_MAX_AGE", dyn_age, 0.0, 86400.0)
+
     return MakerConfig(**kw)
 
 # hook probe

@@ -110,16 +110,54 @@ def reward_score(cfg: MakerConfig, spread_from_mid: float, size: float) -> float
     return ((v - spread_from_mid) / v) ** 2 * size
 
 
+def dynamic_offset_for(
+    cfg: MakerConfig,
+    now: Optional[float] = None,
+) -> tuple[float, str]:
+    """Calculate the integer-cent dynamic offset from range telemetry (#370).
+
+    Returns (offset_in_price_units, reason_tag).
+    When disabled or telemetry is stale/missing, returns (cfg.reward_offset, "static").
+    When active, returns (clamped_cents / 100.0, f"dynamic_{clamped_cents}c").
+    """
+    if not getattr(cfg, "dynamic_offset_enabled", False):
+        return cfg.reward_offset, "static"
+
+    range_cents = getattr(cfg, "range_cents", None)
+    if range_cents is None:
+        return cfg.reward_offset, "static_missing_range"
+
+    measured_at = getattr(cfg, "velocity_measured_at", None)
+    if measured_at is not None:
+        t_now = now if now is not None else time.time()
+        age = t_now - float(measured_at)
+        max_age = getattr(cfg, "dynamic_offset_max_age_sec", 900.0)
+        if age > max_age:
+            return cfg.reward_offset, "static_stale_range"
+
+    mult = getattr(cfg, "dynamic_offset_multiplier", 0.50)
+    raw_cents = mult * float(range_cents)
+    int_cents = int(round(raw_cents))
+
+    min_cents = getattr(cfg, "dynamic_offset_min_cents", 1)
+    max_cents = getattr(cfg, "dynamic_offset_max_cents", 4)
+    clamped_cents = max(min_cents, min(max_cents, int_cents))
+
+    dynamic_base = round(clamped_cents / 100.0, 4)
+    return dynamic_base, f"dynamic_{clamped_cents}c"
+
+
 def quote_resting_price(
-    cfg: MakerConfig, inv: Inventory, side: str, book: dict
+    cfg: MakerConfig, inv: Inventory, side: str, book: dict, *, now: Optional[float] = None
 ) -> tuple[float | None, float | None, risk.BandRisk | None, float]:
     """Calculate the resting price, provisional price, band risk, and truncation factor for a side."""
     bb, ba = book.get("best_bid"), book.get("best_ask")
     mid = mid_price(bb, ba)
     if mid is None:
         return None, None, None, 1.0
+    base_offset, _ = dynamic_offset_for(cfg, now=now)
     base = unhedged_stop_loss.offset_for(getattr(cfg, "gate_state", unhedged_stop_loss.NORMAL),
-                           cfg.reward_offset, cfg.widen_offset)
+                           base_offset, cfg.widen_offset)
     provisional = round(mid - base, 4)
     skew = risk.skew_offset(cfg, inv, side)
     band = risk.band_risk_factor(cfg, provisional)
@@ -232,6 +270,11 @@ def _decide_quotes_from_mid(
     calc_pair_price = None
     if p_up_calc is not None and p_dn_calc is not None and p_up_calc > 0 and p_dn_calc > 0:
         calc_pair_price = round(p_up_calc + p_dn_calc, 4)
+
+    if (getattr(cfg, "dynamic_offset_enabled", False)
+            and calc_pair_price is not None
+            and calc_pair_price >= 1.00):
+        return [], f"dynamic_pair_sum: combined pair price {calc_pair_price:.4f} >= 1.00"
 
     out: list[QuoteIntent] = []
     blocked: list[str] = []
@@ -456,12 +499,14 @@ def _decide_quotes_from_mid(
                     f"{side}: price risk at {price:.3f} cut {ladder}sh to "
                     f"under the {cfg.min_quote_shares}sh reward minimum")
             continue
+        _, dyn_tag = dynamic_offset_for(side_cfg)
+        dyn_note = f"; {dyn_tag}" if dyn_tag.startswith("dynamic_") else ""
         out.append(QuoteIntent(
             side=side, token_id=book.get("token_id"), price=price, size=size,
             mid=mid, edge_vs_mid=mid - price,
             reason=(f"reward quote {100*s:.1f}c under mid {mid:.3f}, "
                     f"score {reward_score(cfg, s, size):.0f}{waived}"
-                    f"{endgame_note}"),
+                    f"{endgame_note}{dyn_note}"),
         ))
 
     if not out:

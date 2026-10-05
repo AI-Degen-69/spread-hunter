@@ -1,85 +1,86 @@
-Branch: i361/dead-band-rehearsal | Issue: #361
+Branch: i370/velocity-filter-dynamic-offsets | Issue: #370
 
-# Implementation Plan — Issue #361: Dead-Band Rehearsal Evaluation
+# Implementation Plan — Issue #370: Trade Velocity Filter & Dynamic Whole-Cent Quote Offsets
 
 ## Intake & Context Analysis
 - **CodeRabbit Plan Intake**:
   - Adopted:
-    - Regression test in `tests/test_trader_loop.py` asserting pair-cost re-gate behavior across narrow (`0.03`) and wide (`0.08`) dead bands, checking cancel reason `price_moved` vs `regate_pair_cost`.
-    - Signer-free concurrent shadow rehearsal across control (`0.03`) and treatment (`0.08`) using frozen universe snapshot and isolated scratch DBs.
-    - Trial memo structure in `docs/runs/` comparing order lifetimes, cancel reasons, queue multiples, open order counts, and explicit verdict relative to #360.
-  - Rejected:
-    - CodeRabbit Task 1.2 proposed extending `statistics_report.py` / `cancel_report.py` if #359 was missing. #359 is already merged and landed (`bc36b64`), so report CLI / model re-engineering is unnecessary.
-    - Over-engineered book tape recording pipeline that touches untested file paths.
-  - [UNVERIFIED]:
-    - Live market volatility during the trial window: whether sufficient >3c price movements occur to generate non-zero cancels (to be resolved empirically during execution).
+    - Phase 1: Real-time velocity & volatility range gate in `scripts/filter_markets.py` with stubbed tape test cases in `tests/test_velocity_gate.py`.
+    - Phase 2: Dynamic whole-cent quote offset in `core_brain/quotes.py` and `core_brain/config.py` with pair-cost enforcement (`dynamic_pair_sum`) and test cases in `tests/test_quotes.py`.
+    - Propagation of `range_cents` and `velocity_measured_at` through `core_brain/market_feed.py::GraduatedMarket` into `trader_loop._market_specs`.
+  - Added based on Operator Directive:
+    - Defined bundle of tournament variant presets (`aggressive`, `balanced`, `conservative`, `control`) in `core_brain/config.py` to allow running multiple parameter sets in parallel tournaments.
+    - Whole-cent rounding without fractional half-cents (explicitly requested by operator for clean order placement on 0.01 tick grid).
+  - Deferred to #371:
+    - Multi-arm tournament supervisor process manager and multi-port UI dashboard switcher.
 
-- **Open Questions Resolution (from codebase & history)**:
-  1. *How wide should the band be?* Codebase default is `0.03` (`core_brain/config.py:846`). As analyzed in CodeRabbit and issue history, `0.08` provides a meaningful delta above the `0.05` `hold_below_target` while remaining below the 36c p90 "market leaving" threshold.
-  2. *Is a dead-band change safe given the pair-cost re-gate?* Yes, verified from `core_brain/trader_loop.py:233-261`: `regate_blocks` cancels the order regardless of whether the price move was within or outside the dead-band tolerance. A regression test will permanently lock this behavior.
-  3. *Does widening the band simply convert cancels into stale open orders?* Evaluated by tracking orders remaining in `status='open'` (censored age) alongside terminal cancellations in the report.
-  4. *What was the result of #360?* #360 concluded as **INCONCLUSIVE (Underpowered)** because in a 4.1-minute window, market prices fluctuated by < 3c resulting in 0 cancels and 0 fills in both arms. The default `requote_hold_queue_shares = 0.0` was kept unchanged.
-
-## Improvement Proposal
-- **Proposal (Simplification / Edge-Case Hardening — Adopted)**:
-  Evidence: `core_brain/trader_loop.py:231-262` and `docs/runs/2026-10-04-queue-hold-200-rehearsal.md:61-68`.
-  In calm markets, price moves rarely exceed 3c over a short duration, leading to 0 cancels and inconclusive results. The plan establishes strict pre-registered decision criteria: if the rehearsal encounters calm market conditions resulting in <1,600 quotes and 0 cancels, the trial must be declared **INCONCLUSIVE** and the default `requote_dead_band = 0.03` must remain strictly unchanged. Additionally, the regression test explicitly asserts that even if `hold_below_target` and `hold_queue_shares` are active, a pair exceeding `max_completable_pair_cost` is immediately rejected.
+- **Resolved Open Questions (from Operator & Codebase)**:
+  1. *Lookback window & velocity threshold:* Default 30-minute window, minimum 8 trades, last trade within 5 minutes (300s), and non-zero price range.
+  2. *Rounding policy for dynamic offsets:* Round to whole integer cents (0.01 tick) clamped between 1¢ and 4¢ (`dynamic_offset_min_cents`, `dynamic_offset_max_cents`) to prevent fractional cent clutter.
+  3. *Pair-cost safety gate:* The dynamic offset must strictly preserve `price_UP + price_DOWN < 1.00`. If dynamic offset pricing would cause combined pair cost >= 1.00, refuse both intents with reason `dynamic_pair_sum`.
+  4. *Multi-variant bundle:* Built-in preset profiles (`aggressive`, `balanced`, `conservative`, `control`) ready for tournament arms.
 
 ## Dependency Graph
-- Task 1 (Pair-Cost Re-Gate Regression Tests)
-  └──> Task 2 (Execute Paired Shadow Rehearsal Arms)
-        └──> Task 3 (Author Trial Memorandum & Final Verification)
+- Task 1: Trade Velocity & Volatility Gate in Market Screener
+  └──> Task 2: Opt-in Dynamic Integer-Cent Quote Offset & Tournament Variant Presets
+        └──> Task 3: Feed Integration & Regression Verification
 
 ---
 
 ## Tasks
 
-### Task 1: [Backend/Logic] Add Pair-Cost Re-Gate Dead-Band Invariance Tests
+### Task 1: [Backend/Logic] Real-Time Trade Velocity & Volatility Gate in Market Screener [x]
 - **Size**: S
 - **Domain Tag**: `[Backend/Logic]`
 - **Helper Skill**: `test-driven-development`
-- **Target Files**: `tests/test_trader_loop.py`
+- **Target Files**: `scripts/filter_markets.py`, `core_brain/market_feed.py`, `tests/test_velocity_gate.py`
 - **Depends on**: None
-- **Description**: Add unit tests in `TestPlanOrders` verifying that:
-  1. When resting price + hedge ask fails `max_completable_pair_cost`, the order is cancelled under both `dead_band=0.03` and `dead_band=0.08`.
-  2. Under `dead_band=0.03`, an out-of-band price move assigns `cancel_reason = "price_moved"`.
-  3. Under `dead_band=0.08`, an in-band price move assigns `cancel_reason = "regate_pair_cost"`.
-  4. Cost failure prevents holding even when `hold_below_target` and `hold_queue_shares` are active.
-- **Verification**: `python -m pytest -q tests/test_trader_loop.py -k test_dead_band`
+- **Description**:
+  1. Add `trade_velocity_and_range()` in `scripts/filter_markets.py` to evaluate trades within the lookback window:
+     - Count total trades in window.
+     - Verify last trade age <= max allowed age.
+     - Measure high-low price range in cents: `(max_price - min_price) * 100.0`.
+  2. Implement `velocity_reject(trade_count, min_trades, last_trade_sec, max_last_sec, range_cents) -> tuple[bool, str]`:
+     - Reject if trade count < min_trades (e.g. < 8 trades).
+     - Reject if last trade is too stale (e.g. > 300s).
+     - Reject if price range is flat (0.0 cents).
+  3. Add optional `range_cents` and `velocity_measured_at` to `GraduatedMarket` in `core_brain/market_feed.py`.
+  4. Write `tests/test_velocity_gate.py` covering flat tape, active tape, stale tape, and missing tape handling.
+- **Verification**: `python -m pytest -q tests/test_velocity_gate.py`
 
-### Task 2: [Execution/Rehearsal] Execute Paired Shadow Rehearsal (0.03 Control vs 0.08 Treatment)
+### Task 2: [Backend/Logic] Opt-in Dynamic Integer-Cent Quote Offset & Tournament Variant Presets [x]
 - **Size**: M
-- **Domain Tag**: `[Execution/Rehearsal]`
-- **Helper Skill**: `incremental-implementation`
-- **Target Files**: `data/361_shadow_control.db`, `data/361_shadow_wide08.db`, `data/scratch_markets_frozen_361.json`
+- **Domain Tag**: `[Backend/Logic]`
+- **Helper Skill**: `test-driven-development`
+- **Target Files**: `core_brain/config.py`, `core_brain/quotes.py`, `tests/test_dynamic_offset.py`
 - **Depends on**: Task 1
 - **Description**:
-  1. Capture a frozen candidate market universe snapshot `data/scratch_markets_frozen_361.json`.
-  2. Execute paired concurrent shadow runs using `core_brain.shadow_run` without signers:
-     - Control: `HUNTER_REQUOTE_DEAD_BAND=0.03` with DB `data/361_shadow_control.db` and run ID `shadow-control-361`.
-     - Treatment: `HUNTER_REQUOTE_DEAD_BAND=0.08` with DB `data/361_shadow_wide08.db` and run ID `shadow-wide08-361`.
-  3. Ensure `data/orders.db` is strictly untouched.
-  4. Generate statistics reports via `core_brain.statistics_report::write_statistics_report`.
-- **Verification**: Verify both scratch databases and generated markdown reports in `reports/`.
+  1. In `core_brain/config.py`, add dynamic offset parameters and multi-variant preset registry:
+     - `dynamic_offset_enabled: bool = False`
+     - `dynamic_offset_multiplier: float = 0.5`
+     - `dynamic_offset_min_cents: int = 1`
+     - `dynamic_offset_max_cents: int = 4`
+     - `dynamic_offset_max_age_sec: float = 900.0`
+     - `measured_range_cents: Optional[float] = None`
+     - `measured_range_at: Optional[float] = None`
+     - Preset bundle: `TOURNAMENT_PRESETS` with `aggressive` (mult 0.25), `balanced` (mult 0.50), `conservative` (mult 0.75), and `control` (static baseline).
+     - Bounded environment variable overrides: `HUNTER_DYNAMIC_OFFSET`, `HUNTER_DYNAMIC_OFFSET_MULT`, etc.
+  2. In `core_brain/quotes.py`:
+     - Compute dynamic base offset: `clamp(round(multiplier * range_cents), min_cents, max_cents) / 100.0`.
+     - Round to whole integer cents without fractional half-cents.
+     - Enforce `price_UP + price_DOWN < 1.00`. If dynamic offset results in `>= 1.00`, refuse intents with reason `dynamic_pair_sum`.
+  3. Write `tests/test_dynamic_offset.py` testing integer-cent offsets, clamping, preset application, fallback on stale data, and pair-cost re-gate safety.
+- **Verification**: `python -m pytest -q tests/test_dynamic_offset.py`
 
-### Task 3: [Research/Docs] Author Trial Memorandum in `docs/runs/`
-- **Size**: M
-- **Domain Tag**: `[Research/Docs]`
-- **Helper Skill**: `documentation-and-adrs`
-- **Target Files**: `docs/runs/2026-10-04-shadow-dead-band-trial.md`
+### Task 3: [Integration/Regression] Screener-to-Trader Feed Integration & Safety Verification [x]
+- **Size**: S
+- **Domain Tag**: `[Backend/Logic]`
+- **Helper Skill**: `test-driven-development`
+- **Target Files**: `core_brain/trader_loop.py`, `tests/test_market_feed.py`, `tests/test_trader_loop.py`
 - **Depends on**: Task 2
 - **Description**:
-  1. Record run parameters, execution windows, and side-by-side metrics: quote counts, distinct orders, cancellations, cancel-reason mix, order lifetime (terminal vs open), queue multiples, and fill rates.
-  2. Evaluate whether price-moved cancels killed reachable orders or were market-leaving, and whether a single scalar dead band can capture this distinction.
-  3. Document the pair-cost re-gate safety check citing Task 1's regression test.
-  4. Provide an explicit verdict (Adopt, Reject, or Inconclusive) and state the relationship to #360's inconclusive queue-hold findings.
-  5. State clearly that shipped defaults in `core_brain/config.py` remain unchanged.
-- **Verification**: Verify markdown structure and run targeted test suite:
-  `python -m pytest -q tests/test_trader_loop.py tests/test_statistics_report.py`
+  1. Ensure `core_brain/trader_loop.py` copies `range_cents` and `velocity_measured_at` from `spec` into `MakerConfig`.
+  2. Verify that when `HUNTER_DYNAMIC_OFFSET=0` (default), quoting produces identical output to static baseline.
+  3. Verify regression test suites pass cleanly across touched modules.
+- **Verification**: `python -m pytest -q tests/test_velocity_gate.py tests/test_dynamic_offset.py tests/test_market_feed.py tests/test_trader_loop.py`
 
----
-
-## Checkpoints
-- Checkpoint 1 (after Task 1): Regression tests pass, proving cost-gate invariance across dead-band widths.
-- Checkpoint 2 (after Task 2): Both shadow arms complete cleanly with isolated telemetry reports.
-- Checkpoint 3 (after Task 3): Full trial memo authored with evidence-backed verdict; all targeted suites green.

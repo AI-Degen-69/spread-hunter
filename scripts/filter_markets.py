@@ -285,31 +285,52 @@ def expired_at_intake(end_iso: Optional[str],
     return True, f"horizon passed (expired {when} ago)"
 
 
-def traded_notional(session: requests.Session, condition_id: str,
-                    window_sec: float = MOVEMENT_WINDOW_SEC,
-                    now_ts: Optional[float] = None,
-                    limit: int = 500) -> Optional[float]:
-    """Dollars that changed hands on this market inside the window.
+def tape_movement_and_range(
+    session: requests.Session,
+    condition_id: str,
+    window_sec: float = MOVEMENT_WINDOW_SEC,
+    now_ts: Optional[float] = None,
+    limit: int = 500,
+) -> dict:
+    """Read recent tape: traded notional, trade count, last trade latency, and price range.
 
-    None means UNMEASURED -- the tape read failed, or the venue answered with
-    a shape this cannot read. Unknown is never treated as flat: a gate that
-    fires on a failed HTTP call would empty the universe on one bad minute.
-
-    `now_ts` is the test seam, matching `days_to_resolve` and `pre_start`.
+    `movement_usd` is None when unmeasured (failed HTTP / malformed JSON).
+    Unmeasured tape stays fail-open so venue network hiccups never empty the universe.
     """
     if not condition_id:
-        return None
+        return {
+            "movement_usd": None,
+            "trade_count": 0,
+            "last_trade_sec_ago": None,
+            "range_cents": None,
+            "measured_at": None,
+        }
     try:
         rows = session.get(TRADES_API,
                            params={"market": condition_id, "limit": limit},
                            timeout=12).json()
     except Exception:
-        return None
+        return {
+            "movement_usd": None,
+            "trade_count": 0,
+            "last_trade_sec_ago": None,
+            "range_cents": None,
+            "measured_at": None,
+        }
     if not isinstance(rows, list):
-        return None
+        return {
+            "movement_usd": None,
+            "trade_count": 0,
+            "last_trade_sec_ago": None,
+            "range_cents": None,
+            "measured_at": None,
+        }
     now = time.time() if now_ts is None else now_ts
     cutoff = now - max(0.0, window_sec)
     total = 0.0
+    trade_count = 0
+    latest_ts = None
+    prices_in_window = []
     for t in rows:
         if not isinstance(t, dict):
             continue
@@ -326,13 +347,78 @@ def traded_notional(session: requests.Session, condition_id: str,
             continue
         if price < 0 or size < 0:
             continue
+        if latest_ts is None or ts > latest_ts:
+            latest_ts = ts
         # A row we cannot place in time cannot be counted toward a windowed
         # figure. Skipping it under-counts, which is the safe direction for a
         # gate that refuses on "too little".
         if ts < cutoff:
             continue
+        trade_count += 1
         total += price * size
-    return round(total, 2)
+        prices_in_window.append(price)
+
+    last_trade_sec_ago = max(0.0, now - latest_ts) if latest_ts is not None else None
+    range_cents = (
+        round((max(prices_in_window) - min(prices_in_window)) * 100.0, 2)
+        if prices_in_window
+        else 0.0
+    )
+    return {
+        "movement_usd": round(total, 2),
+        "trade_count": trade_count,
+        "last_trade_sec_ago": last_trade_sec_ago,
+        "range_cents": range_cents,
+        "measured_at": now,
+    }
+
+
+def traded_notional(session: requests.Session, condition_id: str,
+                    window_sec: float = MOVEMENT_WINDOW_SEC,
+                    now_ts: Optional[float] = None,
+                    limit: int = 500) -> Optional[float]:
+    """Dollars that changed hands on this market inside the window.
+
+    None means UNMEASURED -- the tape read failed, or the venue answered with
+    a shape this cannot read. Unknown is never treated as flat: a gate that
+    fires on a failed HTTP call would empty the universe on one bad minute.
+
+    `now_ts` is the test seam, matching `days_to_resolve` and `pre_start`.
+    """
+    stats = tape_movement_and_range(
+        session, condition_id, window_sec=window_sec, now_ts=now_ts, limit=limit
+    )
+    return stats["movement_usd"]
+
+
+def velocity_gate_reject(
+    tape_stats: dict,
+    min_trades: int = 0,
+    max_last_trade_sec: Optional[float] = None,
+    min_range_cents: float = 0.0,
+    window_sec: float = MOVEMENT_WINDOW_SEC,
+    enabled: bool = False,
+) -> tuple[bool, str]:
+    """Reject candidate if trade velocity is low, tape is stale, or price range is flat (#370)."""
+    if not enabled:
+        return False, ""
+    if tape_stats.get("movement_usd") is None:
+        # Unmeasured tape fail-open (matches movement gate convention)
+        return False, ""
+    trade_count = tape_stats.get("trade_count", 0)
+    minutes = int(round(window_sec / 60.0))
+    if min_trades > 0 and trade_count < min_trades:
+        return True, f"low velocity: {trade_count} trades in last {minutes}m < {min_trades}"
+    last_trade_sec_ago = tape_stats.get("last_trade_sec_ago")
+    if max_last_trade_sec is not None and max_last_trade_sec > 0:
+        if last_trade_sec_ago is None or last_trade_sec_ago > max_last_trade_sec:
+            ago_str = f"{last_trade_sec_ago:.0f}s" if last_trade_sec_ago is not None else "unknown"
+            return True, f"stale tape: last trade {ago_str} ago > {max_last_trade_sec:.0f}s"
+    range_cents = tape_stats.get("range_cents", 0.0)
+    if min_range_cents > 0 and (range_cents is None or range_cents < min_range_cents):
+        r_str = f"{range_cents:.2f}c" if range_cents is not None else "0.00c"
+        return True, f"flat range: price range {r_str} in last {minutes}m < {min_range_cents:.2f}c"
+    return False, ""
 
 
 def movement_reject(movement_usd: Optional[float],
@@ -877,7 +963,11 @@ def evaluate(session: requests.Session, rate: float, m: dict,
              max_spread: Optional[float] = None,
              max_queue_minutes: Optional[float] = None,
              queue_minutes_fn=None,
-             admission_trial: bool = False) -> dict:
+             admission_trial: bool = False,
+             min_trades: Optional[int] = None,
+             max_last_trade_sec: Optional[float] = None,
+             min_range_cents: Optional[float] = None,
+             velocity_gate_enabled: Optional[bool] = None) -> dict:
     """Income and capital for one market, from its live book.
 
     `rate` is the market's pot in $/day. In the unified universe every pot is
@@ -990,15 +1080,39 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # bad minute at the venue.
     movement_bar = (MIN_MOVEMENT_USD if min_movement_usd is None
                     else min_movement_usd)
-    movement_usd = traded_notional(
+    tape_stats = tape_movement_and_range(
         session, m.get("condition_id"), window_sec=MOVEMENT_WINDOW_SEC)
+    movement_usd = tape_stats.get("movement_usd")
+    range_cents = tape_stats.get("range_cents")
+    vel_measured_at = tape_stats.get("measured_at")
+    trade_count = tape_stats.get("trade_count", 0)
+
     flat, flat_reason = movement_reject(
         movement_usd, min_movement_usd=movement_bar,
         window_sec=MOVEMENT_WINDOW_SEC)
     if flat:
         return _reject_row(source, flat_reason, m, volume_24h,
                            movement_usd=movement_usd,
-                           movement_window_sec=MOVEMENT_WINDOW_SEC)
+                           movement_window_sec=MOVEMENT_WINDOW_SEC,
+                           range_cents=range_cents,
+                           velocity_measured_at=vel_measured_at,
+                           trade_count=trade_count)
+
+    vel_rejected, vel_reason = velocity_gate_reject(
+        tape_stats,
+        min_trades=min_trades if min_trades is not None else 0,
+        max_last_trade_sec=max_last_trade_sec,
+        min_range_cents=min_range_cents if min_range_cents is not None else 0.0,
+        window_sec=MOVEMENT_WINDOW_SEC,
+        enabled=bool(velocity_gate_enabled),
+    )
+    if vel_rejected:
+        return _reject_row(source, vel_reason, m, volume_24h,
+                           movement_usd=movement_usd,
+                           movement_window_sec=MOVEMENT_WINDOW_SEC,
+                           range_cents=range_cents,
+                           velocity_measured_at=vel_measured_at,
+                           trade_count=trade_count)
 
     q1 = q2 = 0.0
     capital_per_share = 0.0
@@ -1170,6 +1284,9 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         # `select_min_movement_usd` is meant to be chosen from this column.
         "movement_usd": movement_usd,
         "movement_window_sec": MOVEMENT_WINDOW_SEC,
+        "range_cents": range_cents,
+        "velocity_measured_at": vel_measured_at,
+        "trade_count": trade_count,
         "days_to_resolve": round(days, 2) if days is not None else None,
         "cid": m["condition_id"],
         "title": m.get("question", "")[:90],

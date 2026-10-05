@@ -88,6 +88,8 @@ class GraduatedMarket:
     event_id: str = ""
     event_slug: str = ""
     event_title: str = ""
+    range_cents: Optional[float] = None
+    velocity_measured_at: Optional[float] = None
 
 
 def _load_paired_depth_feed(
@@ -241,6 +243,16 @@ def _graduated_rows(data: list, target: Path) -> list[GraduatedMarket]:
                 event_id=str(row.get("event_id", "")),
                 event_slug=str(row.get("event_slug", "")),
                 event_title=str(row.get("event_title", "")),
+                range_cents=(
+                    float(row["range_cents"])
+                    if row.get("range_cents") is not None
+                    else None
+                ),
+                velocity_measured_at=(
+                    float(row["velocity_measured_at"])
+                    if row.get("velocity_measured_at") is not None
+                    else None
+                ),
             )
             out.append(gm)
         except (ValueError, TypeError) as exc:
