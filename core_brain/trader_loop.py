@@ -229,10 +229,18 @@ def plan_orders(
             continue
 
         is_hedge_held = tok in (hedge_held or ())
-        regate_armed = (cfg is not None and hedge_asks is not None
-                        and not is_hedge_held)
-        regate_blocks = regate_armed and risk.completable_pair_block(
-            cfg, float(o["price"]), hedge_asks.get(tok))
+        held_cost = hedge_held.get(tok) if isinstance(hedge_held, dict) else None
+        held_cost_val = float(held_cost) if (held_cost is not None and float(held_cost) > 0) else None
+
+        if is_hedge_held and held_cost_val is not None and cfg is not None:
+            max_pair_cap = float(getattr(cfg, "max_pair_cost", 0.99))
+            regate_blocks = bool(max_pair_cap > 0 and round(float(o["price"]) + held_cost_val, 4) >= max_pair_cap)
+            regate_armed = True
+        else:
+            regate_armed = (cfg is not None and hedge_asks is not None
+                            and not is_hedge_held)
+            regate_blocks = bool(regate_armed and risk.completable_pair_block(
+                cfg, float(o["price"]), hedge_asks.get(tok)))
 
         if not any(abs(i.price - o["price"]) <= tolerance for i in targets):
             # The price moved out of tolerance. This is the ONLY cancel the
@@ -244,9 +252,9 @@ def plan_orders(
             # refusing. For the ordinary keep that is right, but the hold must
             # not read "declined to judge" as "passed": that is precisely the
             # unmeasured bet it stands down from. The hold needs a real ask,
-            # unless we already hold the hedge leg in inventory.
+            # unless we already hold the hedge leg in inventory and it passes max_pair_cost.
             hedge_ask = hedge_asks.get(tok) if hedge_asks else None
-            hold_gate_armed = is_hedge_held or (
+            hold_gate_armed = (is_hedge_held and not regate_blocks) or (
                 regate_armed and hedge_ask is not None and float(hedge_ask) > 0
             )
             if hold_gate_armed and not regate_blocks and (
@@ -802,11 +810,11 @@ def _visit_one(
         # This mirrors the `inv.avg(other) > 0` skip in
         # `quotes._decide_quotes_from_mid` -- the two gates must agree, or the
         # planner cancels every cycle what the decider was happy to post.
-        hedge_held = set()
+        hedge_held: dict[str, float] = {}
         if ev.inventory.avg("DOWN") > 0:
-            hedge_held.add(up_tok)
+            hedge_held[up_tok] = ev.inventory.avg("DOWN")
         if ev.inventory.avg("UP") > 0:
-            hedge_held.add(dn_tok)
+            hedge_held[dn_tok] = ev.inventory.avg("UP")
         # Why each cancel happened, and where the order stood in its queue when
         # it did. Both travel to the registry with the status change: a cancel
         # with no recorded reason cannot be told from churn afterwards.

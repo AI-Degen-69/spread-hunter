@@ -141,6 +141,14 @@ def test_tournament_presets_registry_contents():
     assert aggressive["dynamic_offset_min_cents"] == 2
     assert aggressive["dynamic_offset_max_cents"] == 3
 
+    balanced = TOURNAMENT_PRESETS["balanced"]
+    assert balanced["dynamic_offset_enabled"]
+    assert balanced["dynamic_offset_multiplier"] == 0.50
+    assert balanced["dynamic_offset_min_cents"] == 2
+    assert balanced["dynamic_offset_max_cents"] == 4
+    assert balanced["requote_hold_queue_shares"] == 500.0
+    assert balanced["requote_hold_below_target"] == 0.08
+
     prudent = TOURNAMENT_PRESETS["prudent"]
     assert prudent["dynamic_offset_enabled"]
     assert prudent["dynamic_offset_multiplier"] == 0.60
@@ -159,6 +167,14 @@ def test_apply_tournament_preset():
     assert agg.dynamic_offset_max_cents == 3
     assert agg.requote_hold_queue_shares == 500.0
     assert agg.requote_hold_below_target == 0.08
+
+    bal = apply_tournament_preset(base, "balanced")
+    assert bal.dynamic_offset_enabled is True
+    assert bal.dynamic_offset_multiplier == 0.50
+    assert bal.dynamic_offset_min_cents == 2
+    assert bal.dynamic_offset_max_cents == 4
+    assert bal.requote_hold_queue_shares == 500.0
+    assert bal.requote_hold_below_target == 0.08
 
     cons = apply_tournament_preset(base, "conservative")
     assert cons.dynamic_offset_enabled is True
