@@ -33,9 +33,9 @@ def _observer_data_dirs() -> list[str]:
 
 def test_every_observer_launch_writes_into_the_data_directory():
     dirs = _observer_data_dirs()
-    # All four menu paths -- fresh shadow, resume, statistical validation,
-    # depth-bar trial (#291).
-    assert len(dirs) == 4, f"expected 4 observer launches, found {len(dirs)}"
+    # All five menu paths -- clean shadow, fresh shadow (Start-NewShadowRun),
+    # resume, statistical validation, depth-bar trial (#291).
+    assert len(dirs) == 5, f"expected 5 observer launches, found {len(dirs)}"
     for d in dirs:
         assert d == '(Join-Path $ProjectPath "data")', (
             f"observer writes its store to {d}, not data/")
