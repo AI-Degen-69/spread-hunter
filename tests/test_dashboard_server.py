@@ -2046,6 +2046,40 @@ def test_trim_kpi_quotes_caps_historical_quotes():
     assert [q["ts"] for q in quotes] == [49, 48, 47, 46, 45]
 
 
+def test_trim_kpi_quotes_keeps_newest_quote_of_each_leg():
+    """A leg whose newest quote is older than the cap must survive the trim.
+
+    latestLegQuotes() rebuilds the UP/DN mapping from whatever the trim leaves, so
+    capping purely by timestamp starves a quiet leg and the page reports it as
+    unquoted while the store still holds the quote.
+    """
+    from dashboard.server import _trim_kpi_quotes
+    quotes = [{"ts": 100 + i, "price": 0.5, "side": "UP"} for i in range(12)]
+    quotes.append({"ts": 5, "price": 0.4, "side": "DOWN"})
+    sample_kpi = {"by_market": {"0x123": {"quotes": quotes, "quotes_count": len(quotes)}}}
+
+    trimmed = _trim_kpi_quotes(sample_kpi, max_quotes_per_market=10)
+    kept = trimmed["by_market"]["0x123"]["quotes"]
+
+    assert len(kept) == 10
+    sides = {q["side"] for q in kept}
+    assert sides == {"UP", "DOWN"}, "both legs must survive the cap"
+    # The newest DOWN quote is the one retained, not an older one.
+    down = [q for q in kept if q["side"] == "DOWN"]
+    assert [q["ts"] for q in down] == [5]
+    # Slots left over still go to the newest quotes overall.
+    up_ts = sorted((q["ts"] for q in kept if q["side"] == "UP"), reverse=True)
+    assert up_ts == list(range(111, 102, -1))
+
+
+def test_snapshot_ttl_for_key_falls_back_when_heartbeat_unreadable(monkeypatch):
+    """An unreadable heartbeat logs and falls back; it must not raise on the hot path."""
+    import dashboard.server as ds
+    monkeypatch.setattr(ds, "read_shadow_run",
+                        lambda *a, **k: (_ for _ in ()).throw(ValueError("bad json")))
+    assert ds._snapshot_ttl_for_key(("state", "data/01_shadow.db")) == ds.SNAPSHOT_TTL_SEC
+
+
 def test_trim_cancelled_orders_strips_bloat_from_dead_pairs():
     from dashboard.server import _trim_cancelled_orders
     state = {

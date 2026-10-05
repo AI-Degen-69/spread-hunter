@@ -407,14 +407,21 @@ SNAPSHOT_ENDED_SHADOW_TTL_SEC: float = 60.0
 
 
 def _snapshot_ttl_for_key(key: tuple) -> float:
-    """Return appropriate snapshot TTL: static/ended shadow stores cache longer."""
+    """Return appropriate snapshot TTL: static/ended shadow stores cache longer.
+
+    A heartbeat that cannot be read must not be fatal here -- the caller is on the
+    hot path for every snapshot build -- but silently dropping to the live TTL is
+    exactly what made a large ended store rebuild on every poll, so the fallback is
+    logged rather than swallowed.
+    """
     if len(key) >= 2 and isinstance(key[1], str):
         try:
             shadow = read_shadow_run(key[1])
-            if shadow and shadow.get("ended"):
-                return SNAPSHOT_ENDED_SHADOW_TTL_SEC
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            logger.warning("shadow heartbeat unreadable for %s: %s", key[1], exc)
+            shadow = None
+        if shadow and shadow.get("ended"):
+            return SNAPSHOT_ENDED_SHADOW_TTL_SEC
     return SNAPSHOT_TTL_SEC
 
 _snapshots: dict[tuple, tuple[float, Any]] = {}
@@ -2264,12 +2271,27 @@ def _read_only_error_response(exc: Exception) -> JSONResponse:
 MAX_QUOTES_PER_MARKET_KPI: int = 10
 
 
+def _kpi_quote_leg(q: dict) -> str | None:
+    """The leg a KPI quote belongs to, matching the page's normalizeLeg()."""
+    v = str(q.get("side") or "").strip().upper()
+    if v == "UP":
+        return "UP"
+    if v in ("DN", "DOWN"):
+        return "DN"
+    return None
+
+
 def _trim_kpi_quotes(kpi: Any, max_quotes_per_market: int = MAX_QUOTES_PER_MARKET_KPI) -> Any:
     """Trim historical quotes per market in by_market to avoid multi-megabyte payloads.
 
     The frontend only reads recent quotes per leg to determine current quotes,
     mids, and token-to-leg mappings. Unbounded historical quote logs can reach 10MB+
     and stall browsers.
+
+    The newest quote of each leg is kept even when it is older than the cap, because
+    latestLegQuotes() rebuilds the UP/DN mapping from whatever survives: dropping a
+    leg's newest quote would report that leg as unquoted while the store still holds
+    it. The remaining slots go to the newest quotes overall.
     """
     if not isinstance(kpi, dict):
         return kpi
@@ -2283,8 +2305,26 @@ def _trim_kpi_quotes(kpi: Any, max_quotes_per_market: int = MAX_QUOTES_PER_MARKE
             quotes = m.get("quotes")
             if isinstance(quotes, list) and len(quotes) > max_quotes_per_market:
                 m_copy = dict(m)
-                sorted_q = sorted(quotes, key=lambda q: float(q.get("ts") or 0.0), reverse=True)
-                m_copy["quotes"] = sorted_q[:max_quotes_per_market]
+                newest_first = sorted(quotes, key=lambda q: float(q.get("ts") or 0.0),
+                                      reverse=True)
+                kept: list[dict] = []
+                seen_legs: set[str] = set()
+                # Pass 1: one newest quote per leg, so neither leg can be starved.
+                for q in newest_first:
+                    leg = _kpi_quote_leg(q)
+                    if leg is not None and leg not in seen_legs:
+                        seen_legs.add(leg)
+                        kept.append(q)
+                # Pass 2: fill whatever is left by timestamp.
+                if len(kept) < max_quotes_per_market:
+                    chosen = {id(q) for q in kept}
+                    for q in newest_first:
+                        if len(kept) >= max_quotes_per_market:
+                            break
+                        if id(q) not in chosen:
+                            kept.append(q)
+                            chosen.add(id(q))
+                m_copy["quotes"] = kept[:max_quotes_per_market]
                 new_by_mkt[cid] = m_copy
                 continue
         new_by_mkt[cid] = m
