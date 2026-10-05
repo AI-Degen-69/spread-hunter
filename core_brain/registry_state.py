@@ -317,6 +317,7 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
         pairs_map[pid]["orders"].append(o)
 
     pairs_list = []
+    market_identity_cache: dict[str, dict] = {}
     for pdata in pairs_map.values():
         legs = pdata["orders"]
         _open_by_token: dict[str, float] = {}
@@ -424,7 +425,10 @@ def summarize_state(db_path: Path | str, now: float | None = None) -> dict[str, 
 
         pdata["hedge_state"] = hedge_state
         pdata["naked_info"] = naked_info
-        pdata["market"] = _market_identity(pdata.get("condition_id"), closes_by_cid)
+        cid = pdata.get("condition_id")
+        if cid not in market_identity_cache:
+            market_identity_cache[cid] = _market_identity(cid, closes_by_cid)
+        pdata["market"] = market_identity_cache[cid]
         pairs_list.append(pdata)
 
     has_naked = any(p["hedge_state"] == "NAKED" for p in pairs_list)
