@@ -46,7 +46,7 @@ The tolerance/out-of-band branch and the hold predicates stop firing for
 wanted tokens (code left in place, bypassed). In-band re-gate still cancels
 on pair-cost failure. not_quoted precedence untouched. Docstring lines only.
 
-### [ ] T3 — Decision record
+### [x] T3 — Decision record
 Target: docs/issues/384-place-and-wait.md. Why chase-mid was wrong (live
 fills, UP+DOWN≈1.00), the rule, what still cancels, limits, follow-up issue
 for cancel conditions. No config value change.
