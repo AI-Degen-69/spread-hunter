@@ -23,6 +23,7 @@ import time
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -50,6 +51,9 @@ class LiveFleetResult:
     submitted: int = 0
     cancelled: int = 0
     error: str = ""
+    #: True when this visit held resting orders through a transient refusal
+    #: (#390). `run` reads it to maintain the per-market grace counter.
+    held: bool = False
 
 
 # Why an order was cancelled. Recorded on the row so a cancel that defended the
@@ -65,6 +69,38 @@ CANCEL_MARKET_DROPPED = "market_dropped"  # the market left the active universe
 PARTIAL_SUBMIT_PLACED_ATTR = "placed"
 
 
+class VisitOutcome(Enum):
+    """What one market visit decided, beyond the intents list.
+
+    Empty intents currently mean two different things -- the market was
+    visited but `decide` refused (transient book flicker: hold), or the
+    market is gone/settled (cancel now). The enum names which one so
+    `plan_orders` never has to guess from `intents == []`.
+    """
+    QUOTED = "quoted"                    # intents present (or no opinion)
+    REFUSED_TRANSIENT = "refused_hold"   # visited, refused: hold resting
+    REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: cancel
+
+
+# Substrings of `decide`'s `why` that refuse for good rather than flicker.
+# Everything else (wide book, completable cap, reward window, mid band, ...)
+# is transient: the book moved, not the market. Matched case-insensitively.
+TERMINAL_REFUSAL_MARKERS = (
+    "decided market",          # mid outside [0.20, 0.80]: the book is settled
+    "t_remaining",             # countdown elapsed: the window is over
+    "market exited",           # toxicity exit: we left on purpose
+    "unfunded by the allocator",  # zero allocation: nothing may rest
+)
+
+
+def _classify_refusal(why: str) -> VisitOutcome:
+    """Terminal or transient, from `decide`'s refusal reason (pure)."""
+    lowered = (why or "").lower()
+    if any(m in lowered for m in TERMINAL_REFUSAL_MARKERS):
+        return VisitOutcome.REFUSED_TERMINAL
+    return VisitOutcome.REFUSED_TRANSIENT
+
+
 def plan_orders(
     open_orders: list[dict],
     intents: list[QuoteIntent],
@@ -78,6 +114,7 @@ def plan_orders(
     queue_ahead: Optional[dict] = None,
     hold_queue_shares: float = 0.0,
     hold_below_target: float = 0.0,
+    visit_outcome: Optional[VisitOutcome] = None,
 ) -> tuple[list[dict], list[QuoteIntent]]:
     """Split open orders + desired intents into (cancel, submit).
 
@@ -234,6 +271,12 @@ def plan_orders(
         tok = o["token_id"]
         targets = wanted.get(tok)
         if not targets:
+            if visit_outcome is VisitOutcome.REFUSED_TRANSIENT:
+                # HOLD-ON-REFUSAL (#390): the market was visited but decide
+                # refused this cycle (book flicker, not abandonment). The
+                # resting order stays: no cancel, and with no intents there
+                # is nothing to submit either.
+                continue
             _record(o, CANCEL_NOT_QUOTED)
             to_cancel.append(o)
             continue
@@ -761,6 +804,13 @@ def _visit_one(
         # with no recorded reason cannot be told from churn afterwards.
         cancel_reasons: dict[str, str] = {}
         queue_ahead = _queue_ahead_for(seam, open_orders)
+        # HOLD-ON-REFUSAL (#390): an empty intent list from a visited market
+        # is a refusal, not a disappearance. Transient reasons hold resting
+        # orders; terminal ones (settled, expired, exited, unfunded) cancel.
+        # `None` (legacy callers) keeps the old cancel-on-empty semantics.
+        visit_outcome = (
+            _classify_refusal(why) if not intents else VisitOutcome.QUOTED
+        )
         to_cancel, to_submit = (plan_fn or plan_orders)(
             open_orders, intents,
             dead_band=float(getattr(cfg, "requote_dead_band", 0.0)),
@@ -768,6 +818,7 @@ def _visit_one(
             reasons=cancel_reasons, queue_ahead=queue_ahead,
             hold_queue_shares=float(getattr(cfg, "requote_hold_queue_shares", 0.0)),
             hold_below_target=float(getattr(cfg, "requote_hold_below_target", 0.0)),
+            visit_outcome=visit_outcome,
         )
     except Exception as e:
         emit_fn(service="decide", cycle=cycle, phase="quoting",
@@ -839,11 +890,18 @@ def _visit_one(
             market_slug=title,
             extra={"submitted": submitted, "cancelled": cancelled})
 
+    held = (
+        visit_outcome is VisitOutcome.REFUSED_TRANSIENT
+        and not to_cancel and not to_submit and bool(open_orders)
+    )
     if submitted > 0:
         orders_desc = ", ".join(f"{i.side} {i.size}sh @ ${i.price:.3f}" for i in to_submit)
         log.info("[QUOTING] %s | Posted %d orders: %s", title, submitted, orders_desc)
     elif cancelled > 0:
         log.info("[REQUOTE] %s | Cancelled %d stale order(s)", title, cancelled)
+    elif held:
+        log.info("[HOLDING] %s | %d quote(s) held through transient refusal: %s",
+                 title, len(open_orders), why)
     elif open_orders:
         log.info("[RESTING] %s | %d quote(s) resting at target spread", title, len(open_orders))
     elif why:
@@ -852,7 +910,7 @@ def _visit_one(
     return LiveFleetResult(
         status="QUOTED" if intents else "DECLINED",
         condition_id=cid, title=title, why=why, intents=list(intents),
-        submitted=submitted, cancelled=cancelled)
+        submitted=submitted, cancelled=cancelled, held=held)
 
 
 # --- production wiring ------------------------------------------------------
