@@ -18,7 +18,7 @@ landed at the back of a new level, where the same thing happened again.
 
 Every resting pair passed the pair-cost gate before placement, so drift alone
 is never a reason to re-check a resting order (the pair-cost re-gate below
-still applies). A resting order whose
+still applies — retired by #387). A resting order whose
 token still has an intent this cycle is KEPT at its own price. Point. No
 tolerance check, no dead band, no drift comparison. The intent is suppressed
 via `held_tokens`, so no duplicate is posted beside the kept order.
@@ -26,9 +26,8 @@ via `held_tokens`, so no duplicate is posted beside the kept order.
 ## What still cancels (exactly as before)
 
 - No intent for the token this cycle (`not_quoted`) — nothing to hold for.
-- The pair-cost re-gate fails (`regate_pair_cost`) — holding would carry a
-  completable pair over `max_pair_cost`, and queue position is not worth a
-  booked loss.
+- The pair-cost re-gate fails (`regate_pair_cost`) — retired by #387; the
+  gate no longer fires on resting orders.
 
 The dead band, queue hold, and direction hold stop firing. Their code and config
 values (`dead_band`, `hold_queue_shares`, `hold_below_target`) are left in place

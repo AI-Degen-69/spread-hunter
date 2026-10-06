@@ -110,7 +110,7 @@ def plan_orders(
         book move. Answering it still cost the whole queue position, so the
         band trades a slightly stale price for time in the queue.
 
-    THE RE-GATE. A kept order rests at its OWN price, up to `dead_band` away
+    RETIRED BY #387 -- THE RE-GATE (historical behavior; not active). A kept
     from the price `risk.hard_block` approved. Left unchecked, the band is a
     hole through that gate: a 3c-stale bid in a moving market can carry a
     completable cost 3c worse than anything the gate ever allowed. So a kept
@@ -138,7 +138,7 @@ def plan_orders(
     by order id with one of the CANCEL_* constants. It exists because a cancel
     with no recorded reason cannot be tuned -- see #131.
 
-    THE QUEUE HOLD. `queue_ahead` maps order id -> shares resting ahead of that
+    RETIRED BY #387 -- THE QUEUE HOLD (historical behavior; not active).
     order at its own price, and `hold_queue_shares` is the front-of-queue
     threshold. An order that is inside the threshold is KEPT through a price
     move it would otherwise be re-quoted for, because under price-time priority
@@ -158,7 +158,7 @@ def plan_orders(
     reasons above are recorded either way, and choosing the threshold is what
     that record is for.
 
-    THE DIRECTION HOLD. For a resting BUY the two ways a target can leave the
+    RETIRED BY #387 -- THE DIRECTION HOLD (historical behavior; not active).
     band are not the same event, and re-quoting on both of them cancels the
     order at the only moment it was ever going to fill:
 

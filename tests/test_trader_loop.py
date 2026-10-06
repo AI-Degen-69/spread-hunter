@@ -188,6 +188,22 @@ class TestPlanOrders:
         fresh_pid = pids.pop()
         assert fresh_pid.startswith("pair-")
 
+    def test_fresh_submit_beside_a_held_leg_carries_no_stale_pair_id(self):
+        # The planner stamps nothing: UP rests (held, its pair_id untouched);
+        # DOWN is fresh and submits with no pair_id for the submit path.
+        open_orders = [
+            {"token_id": "tok-up", "price": 0.73, "order_id": "o-up",
+             "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
+        ]
+        intents = [
+            _intent(side="UP", token="tok-up", price=0.71),
+            _intent(side="DOWN", token="tok-dn", price=0.25),
+        ]
+        to_cancel, to_submit = plan_orders(open_orders, intents)
+        assert to_cancel == []
+        assert [i.token_id for i in to_submit] == ["tok-dn"]
+        assert to_submit[0].pair_id is None
+
     def test_wanted_legs_hold_despite_queue_and_gate_pressure(self):
         # #387: both legs wanted, live asks failing the retired pair-cost
         # gate, queue hold armed -- everything that used to cancel now holds.
