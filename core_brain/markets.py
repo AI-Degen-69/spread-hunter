@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
@@ -42,9 +42,35 @@ class LiveMarket:
     end_ts: float    # unix seconds, market closes
     tick_size: float
     neg_risk: bool
+    game_start_ts: Optional[float] = None  # venue kickoff, None when unstated
 
     def t_remaining(self, now: Optional[float] = None) -> float:
         return self.end_ts - (now if now is not None else time.time())
+
+
+# How long after kickoff an in-play market stays quotable. Sports/esports
+# `endDate` is kickoff, not the final whistle (see #312, #386), so the plain
+# countdown goes negative the moment the match starts. Six hours covers a BO5
+# or a football match with extra time; the operator can retune it.
+IN_PLAY_WINDOW_SEC = 6 * 3600.0
+
+
+def quote_t_remaining(market: Any, now: Optional[float] = None) -> float:
+    """Seconds left to quote this market, kickoff-aware.
+
+    A market whose kickoff has passed counts down to kickoff plus
+    `IN_PLAY_WINDOW_SEC` instead of the kickoff-valued `end_ts`. A real later
+    end date always wins, and anything without a past kickoff keeps the plain
+    countdown -- pre-start and genuinely expired markets stay refused.
+    `market` needs only a `t_remaining()` method; the kickoff field is read
+    defensively so older stand-ins keep working.
+    """
+    at = now if now is not None else time.time()
+    real = market.t_remaining() if now is None else market.t_remaining(now)
+    kickoff = getattr(market, "game_start_ts", None)
+    if kickoff is None or float(kickoff) > at:
+        return real
+    return max(real, float(kickoff) + IN_PLAY_WINDOW_SEC - at)
 
 
 # Slugs come from the venue API and are later embedded in dashboard HTML
@@ -250,6 +276,10 @@ def fetch_pinned_market(condition_id: str,
         # than refusing to load it. Every 5-min timing rule is disabled by an
         # effectively-infinite t_remaining anyway.
         end_ts = time.time() + 365 * 86400
+    # Kickoff when the venue states one (sports/esports `game_start_time`).
+    # Missing or mangled reads as None: the quote clock falls back to the
+    # plain countdown exactly as before.
+    game_start_ts = _iso_to_unix(m.get("game_start_time") or "")
     return LiveMarket(
         condition_id=condition_id,
         market_slug=_sanitize_slug(m.get("market_slug") or condition_id[:10]),
@@ -259,6 +289,7 @@ def fetch_pinned_market(condition_id: str,
         end_ts=end_ts,
         tick_size=float(m.get("minimum_tick_size") or 0.01),
         neg_risk=bool(m.get("neg_risk", False)),
+        game_start_ts=game_start_ts,
     )
 
 

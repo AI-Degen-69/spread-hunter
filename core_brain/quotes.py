@@ -29,6 +29,7 @@ import time
 from typing import Any, Callable, Optional
 
 from core_brain import config, risk, unhedged_stop_loss
+from core_brain.markets import quote_t_remaining
 from core_brain.config import MakerConfig
 
 
@@ -894,11 +895,13 @@ def evaluate_market_quote(
         raise MarketQuoteError(f"book fetch error: {e}") from e
     inv = inventory_for(market)
     # Real countdown, not the old 1e9 placeholder that skipped every timing
-    # rule on this path. `window_frac` stays None: both production callers
+    # rule on this path. Kickoff-aware: an in-play market whose venue endDate
+    # is kickoff counts down from kickoff plus the in-play window (#386).
+    # `window_frac` stays None: both production callers
     # serve pinned markets whose `start_ts` is the load time, not a window
     # open -- computing a fraction off that would invent a window origin.
     intents, why = decide(cfg, up_book, down_book, inv,
-                          market.t_remaining(), None)
+                          quote_t_remaining(market), None)
     return MarketEval(
         cid=cid, market=market, up_book=up_book, down_book=down_book,
         inventory=inv, intents=intents, why=why,
