@@ -1360,9 +1360,12 @@ class TestClassifyRefusal:
     @pytest.mark.parametrize("why", [
         "UP: mid 0.950 outside [0.20,0.80] -- decided market; "
         "DOWN: mid 0.050 outside [0.20,0.80] -- decided market",
+        "UP: hedge token DOWN not tradeable (settled book 0.999/0.001) "
+        "-- a fill here could not be closed",
         "t_remaining 0s < 0s",
         "market exited: fills still lost money after widening",
         "unfunded by the allocator -- quoting nothing",
+        "hit 25 fills for this market",
     ])
     def test_terminal_markers_cancel(self, why):
         assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
@@ -1498,3 +1501,34 @@ class TestRefusedHold:
         assert len(decides) == GRACE
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-up", "o-dn"]]
+
+    def test_quote_resets_refusal_streak(self):
+        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+        calls = {"submitted": [], "cancelled": []}
+        decides = []
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            decides.append(1)
+            if len(decides) == 2:
+                return [_intent(),
+                        _intent(side="DOWN", token="tok-dn", price=0.40)], ""
+            return [], self.TRANSIENT_WHY
+
+        seam = self._seam(decide, calls)
+        sleeps = []
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            if len(sleeps) >= GRACE + 1:
+                raise KeyboardInterrupt
+
+        run(
+            seam, interval=0.0, once=False, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=sleep_fn,
+        )
+        # Refuse, quote, refuse, refuse: only two CONSECUTIVE refusals, so the
+        # grace never expires even though three refusals happened in total.
+        assert len(decides) == GRACE + 1
+        assert calls["submitted"] == []
+        assert calls["cancelled"] == []

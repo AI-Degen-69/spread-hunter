@@ -93,9 +93,11 @@ REFUSED_HOLD_GRACE_CYCLES = 3
 # is transient: the book moved, not the market. Matched case-insensitively.
 TERMINAL_REFUSAL_MARKERS = (
     "decided market",          # mid outside [0.20, 0.80]: the book is settled
+    "settled book",            # risk.book_health: a quote at an end, no spread
     "t_remaining",             # countdown elapsed: the window is over
     "market exited",           # toxicity exit: we left on purpose
     "unfunded by the allocator",  # zero allocation: nothing may rest
+    "fills for this market",   # per-market fill cap reached: no more quotes
 )
 
 
