@@ -264,7 +264,6 @@ def plan_orders(
             continue
         kept.setdefault(tok, []).append(o)
         held_tokens.add(tok)
-        continue
 
     # Which pair each submitted intent should JOIN, keyed by token.
     #
