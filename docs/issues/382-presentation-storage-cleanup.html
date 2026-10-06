@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>המנקה עכשיו מחפש במקום הנכון — עדכון #382</title>
+<style>
+:root { --ink:#eaf1f6; --muted:#9aabb8; --bg:#0b1117; --panel:#121c25; --panel-2:#172530;
+--line:#29404d; --accent:#55d6c2; --accent-ink:#06281f; --warn:#e8b34b; --bad:#e26d6d; --good:#6fdc8c;
+--shadow:0 20px 55px rgba(0,0,0,.28); }
+* { box-sizing:border-box }
+body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.7 "Segoe UI",Tahoma,Arial,sans-serif }
+main { max-width:1020px; margin:auto; padding:40px 20px 70px }
+.hero h1 { font-size:clamp(1.7rem,4.5vw,2.6rem); line-height:1.25; margin:.2em 0 }
+.hero p.lede { font-size:1.1rem; color:var(--muted); max-width:62ch }
+.kicker { display:inline-block; font-size:.75rem; letter-spacing:.08em; color:var(--accent-ink);
+background:var(--accent); border-radius:999px; padding:.25rem .9rem; font-weight:700 }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:26px; margin-top:24px; box-shadow:var(--shadow) }
+.panel h2 { margin-top:0; font-size:1.25rem }
+.figure { border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--panel-2) }
+.figure-label { font-size:.7rem; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); padding:.8rem 1rem 0 }
+.figure-controls { display:flex; gap:.5rem; align-items:center; padding:.8rem 1rem; border-bottom:1px solid var(--line); flex-wrap:wrap }
+.ctrl-btn { font:inherit; font-size:.85rem; padding:.45rem 1.1rem; border-radius:10px; border:1px solid var(--line);
+background:transparent; color:var(--ink); cursor:pointer }
+.ctrl-btn.active { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700 }
+.stage { padding:1.2rem 1rem 1.4rem; min-height:340px }
+.beam { display:block; margin:0 auto 4px }
+.rows { list-style:none; margin:14px 0 0; padding:0; display:grid; gap:8px }
+.rows li { background:rgba(255,255,255,.045); border:1px solid var(--line); border-radius:10px;
+padding:.55rem .9rem; font-size:.92rem; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap }
+.rows li .age { color:var(--muted); font-size:.8rem }
+.tag { font-size:.72rem; border-radius:999px; padding:.1rem .7rem; white-space:nowrap }
+.tag.del { background:rgba(226,109,109,.15); color:var(--bad); border:1px solid var(--bad) }
+.tag.keep { background:rgba(111,220,140,.12); color:var(--good); border:1px solid var(--good) }
+.tag.prot { background:rgba(232,179,75,.13); color:var(--warn); border:1px solid var(--warn) }
+.verdict { margin-top:14px; border-radius:12px; padding:.8rem 1rem; font-weight:700; font-size:1.02rem }
+.verdict.bad { background:rgba(226,109,109,.1); border:1px solid var(--bad); color:var(--bad) }
+.verdict.good { background:rgba(111,220,140,.1); border:1px solid var(--good); color:var(--good) }
+.figure-caption { font-size:.82rem; color:var(--muted); padding:.7rem 1rem .9rem; border-top:1px solid var(--line) }
+.vault { display:grid; gap:10px; margin-top:4px }
+@media(min-width:700px){ .vault { grid-template-columns:repeat(3,1fr) } }
+.safe { border:1px solid var(--line); border-radius:12px; padding:14px; background:rgba(255,255,255,.03); text-align:center }
+.safe .name { font-weight:700; direction:ltr; display:inline-block }
+.safe .why { font-size:.8rem; color:var(--muted); margin:.3rem 0 .7rem }
+.try-btn { font:inherit; font-size:.8rem; padding:.4rem 1rem; border-radius:8px; cursor:pointer;
+border:1px solid var(--warn); background:transparent; color:var(--warn) }
+.refuse { display:none; margin-top:.6rem; font-weight:700; color:var(--bad); font-size:.9rem }
+.numbers { display:grid; gap:10px; margin-top:4px; text-align:center }
+@media(min-width:700px){ .numbers { grid-template-columns:repeat(4,1fr) } }
+.num { border:1px solid var(--line); border-radius:12px; padding:14px 8px; background:rgba(255,255,255,.03) }
+.num b { display:block; font-size:1.7rem; color:var(--accent) }
+.num span { font-size:.8rem; color:var(--muted) }
+.note { color:var(--muted); font-size:.85rem; margin-top:14px }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important } }
+.rows li, .verdict, .refuse { transition:opacity .25s ease }
+</style>
+</head>
+<body>
+<main>
+  <div class="hero">
+    <span class="kicker">עדכון #382 · הבעיה #365 נפתרה</span>
+    <h1>המנקה עכשיו מחפש במקום הנכון</h1>
+    <p class="lede">לפני: עוזר הניקוי הסתכל בתיקייה שממנה הפעלת אותו — ולפעמים מצא כלום.
+    הוא גם לא פתח תת־תיקיות. עכשיו: הוא תמיד מסתכל על הפרויקט, נכנס לכל תת־תיקייה,
+    ועדיין אסור לו לגעת בספר ההזמנות האמיתי.</p>
+  </div>
+
+  <section class="panel" aria-label="הדגמה">
+    <h2>לחצו ורואים איפה הוא מחפש</h2>
+    <div class="figure">
+      <div class="figure-label">איפה עומדים כשלוחצים על הניקוי</div>
+      <div class="figure-controls" role="tablist">
+        <button class="ctrl-btn active" id="tabRoot" role="tab" aria-selected="true">מתיקיית הפרויקט</button>
+        <button class="ctrl-btn" id="tabElse" role="tab" aria-selected="false">מתיקייה אחרת</button>
+      </div>
+      <div class="stage">
+        <svg class="beam" width="220" height="86" viewBox="0 0 220 86" aria-hidden="true">
+          <circle id="lampRoot" cx="110" cy="12" r="7" fill="#55d6c2"/>
+          <polygon id="coneRoot" points="110,18 40,80 180,80" fill="#55d6c2" opacity=".28"/>
+          <circle id="lampElse" cx="110" cy="12" r="7" fill="#e26d6d" style="display:none"/>
+          <polygon id="coneElse" points="110,18 150,80 205,80" fill="#e26d6d" opacity=".28" style="display:none"/>
+          <rect x="20" y="66" width="70" height="16" rx="3" fill="none" stroke="#9aabb8"/>
+          <text x="55" y="78" font-size="9" fill="#9aabb8" text-anchor="middle">הפרויקט</text>
+          <rect x="140" y="66" width="70" height="16" rx="3" fill="none" stroke="#9aabb8"/>
+          <text x="175" y="78" font-size="9" fill="#9aabb8" text-anchor="middle">תיקייה אחרת</text>
+        </svg>
+        <ul class="rows" id="rowsRoot">
+          <li><span style="direction:ltr">data/stats_12-09_shadow-01.db</span><span class="age">ישן · <span class="tag del">לניקוי</span></span></li>
+          <li><span style="direction:ltr">runtime/run145/stale_run.db</span><span class="age">כל קובץ בפנים נספר לבד · <span class="tag del">לניקוי</span></span></li>
+          <li><span style="direction:ltr">data/orders.db</span><span class="age"><span class="tag prot">מוגן — אסור לגעת</span></span></li>
+          <li><span style="direction:ltr">data/price_tape.db</span><span class="age"><span class="tag keep">נשמר תמיד</span></span></li>
+        </ul>
+        <ul class="rows" id="rowsElse" style="display:none">
+          <li><span>לפני התיקון: הוא סרק את התיקייה הזרה ומצא בה 0 קבצים של הפרויקט</span><span class="tag del">פספס הכל</span></li>
+          <li><span>וגם: runtime/run145 נספרה כשורה אחת — מה שבפנים לא נראה</span><span class="tag del">נשאר זבל</span></li>
+        </ul>
+        <div class="verdict good" id="verdictRoot">רואה 300 קבצים · 1.12 ג״ב · 0 ממתינים לניקוי כרגע</div>
+        <div class="verdict bad" id="verdictElse" style="display:none">לפני: 0 קבצים, 0 נמצאו — הדוח שיקר. עכשיו: זהה לתמונה מהפרויקט.</div>
+      </div>
+      <div class="figure-caption">המספרים מהסריקה האחרונה האמיתית. שתי הלשוניות מראות את אותה תמונה היום — זה כל התיקון.</div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="כספת">
+    <h2>שלושה דברים שהוא לעולם לא מוחק — נסו בעצמכם</h2>
+    <div class="figure" style="border:none;background:none">
+      <div class="vault">
+        <div class="safe">
+          <span class="name">data/orders.db</span>
+          <div class="why">ספר ההזמנות האמיתי — מחיקה כאן היא הפסד מובטח</div>
+          <button class="try-btn" data-safe="orders">נסו למחוק</button>
+          <div class="refuse" id="ref-orders">נחסם — הקובץ המוגן לא נמחק</div>
+        </div>
+        <div class="safe">
+          <span class="name">data/price_tape.db</span>
+          <div class="why">קלטת המחירים למחקר — מחוץ לתחום הניקוי</div>
+          <button class="try-btn" data-safe="tape">נסו למחוק</button>
+          <div class="refuse" id="ref-tape">נחסם — הקובץ מחוץ לתחום, נשמר</div>
+        </div>
+        <div class="safe">
+          <span class="name">orders.db בתת־תיקייה</span>
+          <div class="why">גם קובץ מוגן שמתחבא עמוק בפנים — כולל בתוך תיקייה שלמה</div>
+          <button class="try-btn" data-safe="nested">נסו למחוק</button>
+          <div class="refuse" id="ref-nested">נחסם — נמצא עמוק בפנים, העץ נשמר</div>
+        </div>
+      </div>
+    </div>
+    <p class="note">המחיקה האמיתית תמיד מתחילה בהדמיה יבשה ובשאלת אישור — שום דבר לא נמחק בלי שתאשרו.</p>
+  </section>
+
+  <section class="panel" aria-label="מספרים">
+    <h2>הסריקה האחרונה, במספרים אמיתיים</h2>
+    <div class="numbers">
+      <div class="num"><b>300</b><span>קבצים נסרקו</span></div>
+      <div class="num"><b>1.12 GB</b><span>נפח כולל</span></div>
+      <div class="num"><b>0</b><span>ממתינים לניקוי</span></div>
+      <div class="num"><b>2</b><span>קבצים מוגנים תמיד</span></div>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  var tabRoot = document.getElementById('tabRoot');
+  var tabElse = document.getElementById('tabElse');
+  function show(which) {
+    var root = which === 'root';
+    document.getElementById('rowsRoot').style.display = root ? '' : 'none';
+    document.getElementById('rowsElse').style.display = root ? 'none' : '';
+    document.getElementById('verdictRoot').style.display = root ? '' : 'none';
+    document.getElementById('verdictElse').style.display = root ? 'none' : '';
+    document.getElementById('lampRoot').style.display = root ? '' : 'none';
+    document.getElementById('coneRoot').style.display = root ? '' : 'none';
+    document.getElementById('lampElse').style.display = root ? 'none' : '';
+    document.getElementById('coneElse').style.display = root ? 'none' : '';
+    tabRoot.classList.toggle('active', root);
+    tabElse.classList.toggle('active', !root);
+    tabRoot.setAttribute('aria-selected', root ? 'true' : 'false');
+    tabElse.setAttribute('aria-selected', root ? 'false' : 'true');
+  }
+  tabRoot.addEventListener('click', function () { show('root'); });
+  tabElse.addEventListener('click', function () { show('else'); });
+  var btns = document.querySelectorAll('.try-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function () {
+      var el = document.getElementById('ref-' + this.getAttribute('data-safe'));
+      el.style.display = 'block';
+      el.style.opacity = '0';
+      window.requestAnimationFrame(function () { el.style.opacity = '1'; });
+    });
+  }
+})();
+</script>
+</body>
+</html>
