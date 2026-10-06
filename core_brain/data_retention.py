@@ -27,6 +27,7 @@ import urllib.parse
 from typing import Sequence
 
 from core_brain.order_registry import DEFAULT_DB_PATH as PROD_DB_PATH
+from core_brain.runtime_paths import LIVE_ROOT
 
 
 class DataRetentionSafetyViolation(BaseException):
@@ -176,7 +177,7 @@ def audit_storage(
 ) -> list[AuditItem]:
     """Scan and audit storage items against the retention policy."""
     if base_dir is None:
-        base_dir = Path.cwd()
+        base_dir = LIVE_ROOT
     if policy is None:
         policy = DataRetentionPolicy()
     if now is None:
@@ -518,7 +519,12 @@ def generate_inventory_markdown(audit_items: Sequence[AuditItem], policy: DataRe
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for data retention audit and prune."""
-    parser = argparse.ArgumentParser(description="Audit and prune stale spread-hunter local data stores.")
+    parser = argparse.ArgumentParser(
+        description="Audit and prune stale spread-hunter local data stores.",
+        epilog="The audit is always anchored at the repository root. "
+        "When launching from another directory (e.g. scripts/), set "
+        "PYTHONPATH to the repository root so the package imports resolve.",
+    )
     parser.add_argument("--audit", action="store_true", default=True, help="Run read-only storage audit (default)")
     parser.add_argument("--prune", action="store_true", help="Execute cleanup of eligible files")
     parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True, help="Simulate prune without deleting (default)")

@@ -232,8 +232,12 @@ def test_pruning_parent_db_also_cleans_siblings(tmp_path: Path):
 
 def test_cli_main_dry_run_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     """Test CLI main() execution for dry-run and json modes."""
+    import json
+
     from core_brain.data_retention import main
 
+    # The CLI is anchored at the repo root: a foreign cwd must not leak
+    # into the audit (T1, #365) — the sandbox below must stay invisible.
     monkeypatch.chdir(tmp_path)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -243,11 +247,14 @@ def test_cli_main_dry_run_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert exit_code == 0
     captured = capsys.readouterr()
     assert "SPREAD-HUNTER DATA STORAGE AUDIT" in captured.out
+    assert "stats_sample.db" not in captured.out
 
     exit_code_json = main(["--json"])
     assert exit_code_json == 0
     captured_json = capsys.readouterr()
-    assert "stats_sample.db" in captured_json.out
+    parsed = json.loads(captured_json.out)
+    assert isinstance(parsed, list)
+    assert all("stats_sample.db" != row["name"] for row in parsed)
 
     exit_code_prune = main(["--prune", "--dry-run"])
     assert exit_code_prune == 0
@@ -269,4 +276,33 @@ def test_inventory_markdown_generation(tmp_path: Path):
     assert "# Data Storage Inventory & Retention Audit" in md
     assert "Reclaimable" in md
     assert "stats_test.db" in md
+
+
+def test_audit_defaults_to_repo_root_not_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """`audit_storage()` with no base_dir must audit the repo root (T1, #365)."""
+    from core_brain.runtime_paths import LIVE_ROOT
+
+    monkeypatch.chdir(tmp_path)
+    items = audit_storage()
+
+    assert len(items) > 0
+    assert all(str(LIVE_ROOT) in str(it.path) for it in items)
+
+
+def test_cli_audit_identical_from_foreign_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """CLI audit from an unrelated cwd must match the repo-root audit (T1, #365)."""
+    from core_brain.data_retention import main
+
+    exit_root = main(["--audit"])
+    assert exit_root == 0
+    out_root = capsys.readouterr().out
+
+    monkeypatch.chdir(tmp_path)
+    exit_foreign = main(["--audit"])
+    assert exit_foreign == 0
+    out_foreign = capsys.readouterr().out
+
+    assert out_root == out_foreign
 
