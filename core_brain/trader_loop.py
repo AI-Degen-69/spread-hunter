@@ -82,6 +82,12 @@ class VisitOutcome(Enum):
     REFUSED_TERMINAL = "refused_cancel"  # visited, refused for good: cancel
 
 
+# Consecutive visited-but-refused cycles a market's resting orders survive
+# before the hold expires and they cancel via `not_quoted` (#390). A market
+# that never comes back is dead, not flickering. Named, not magic.
+REFUSED_HOLD_GRACE_CYCLES = 3
+
+
 # Substrings of `decide`'s `why` that refuse for good rather than flicker.
 # Everything else (wide book, completable cap, reward window, mid band, ...)
 # is transient: the book moved, not the market. Matched case-insensitively.
@@ -441,6 +447,10 @@ def run(
     last_cycle: list[LiveFleetResult] = []
     current_markets = list(markets or [])
     cycle = 0
+    # Consecutive refused-hold cycles per market (#390). A quoted cycle, a
+    # terminal cancel, or an error resets the count; a restart resets it too
+    # (safe direction: a fresh loop holds, never wipes).
+    refused_streaks: dict[str, int] = {}
     registry = seam.registry
     # Whole-loop ownership: one fleet loop per database. A second fleet gets
     # InstanceInUse naming the holder; the poll loop's own "poll" slot is
@@ -500,10 +510,16 @@ def run(
 
             cycle_results: list[LiveFleetResult] = []
             for spec in list(current_markets or []):
-                cycle_results.append(_visit_one(
+                cid = _cid(spec)
+                res = _visit_one(
                     seam=seam, spec=spec, live=live, cycle=cycle,
                     emit_fn=emit_fn,
-                ))
+                    refused_streak=refused_streaks.get(cid, 0),
+                )
+                refused_streaks[cid] = (
+                    refused_streaks.get(cid, 0) + 1 if res.held else 0
+                )
+                cycle_results.append(res)
 
             # An empty universe is not evidence that every market was dropped: it is
             # the state before the first successful refresh, or after one that
@@ -698,8 +714,15 @@ def _visit_one(
     cycle: int = 0,
     emit_fn: Optional[Callable] = None,
     plan_fn: Optional[Callable] = None,
+    refused_streak: int = 0,
 ) -> LiveFleetResult:
-    """One poll of one market: fetch -> decide -> plan -> submit/cancel."""
+    """One poll of one market: fetch -> decide -> plan -> submit/cancel.
+
+    `refused_streak` is this market's consecutive refused-hold count coming
+    into the cycle (owned by `run`). When the streak reaches
+    `REFUSED_HOLD_GRACE_CYCLES`, a transient refusal expires into a cancel:
+    a market that never comes back is dead, not flickering (#390).
+    """
     cid = _cid(spec)
     if emit_fn is None:
         emit_fn = lambda *a, **k: None
@@ -811,6 +834,11 @@ def _visit_one(
         visit_outcome = (
             _classify_refusal(why) if not intents else VisitOutcome.QUOTED
         )
+        if (visit_outcome is VisitOutcome.REFUSED_TRANSIENT
+                and refused_streak + 1 >= REFUSED_HOLD_GRACE_CYCLES):
+            # GRACE EXPIRED (#390): held through enough refused cycles with
+            # no quotable one between. Cancel via the terminal path below.
+            visit_outcome = VisitOutcome.REFUSED_TERMINAL
         to_cancel, to_submit = (plan_fn or plan_orders)(
             open_orders, intents,
             dead_band=float(getattr(cfg, "requote_dead_band", 0.0)),
