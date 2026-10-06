@@ -58,23 +58,23 @@ class TestAsymmetricRequoteHold:
         assert to_submit == []
 
     def test_a_bid_is_cancelled_when_the_target_rises(self):
-        # The asymmetry itself. Same 4c move, opposite sign: the book walked
-        # away and 0.60 is now stranded under the market.
+        # Place-and-wait (#384): an upward drift no longer cancels a wanted
+        # token either. The order is held at its own price.
         to_cancel, to_submit = plan_orders(
             [_open(price=0.60)], [_intent(price=0.64)],
             dead_band=0.03, cfg=_cfg(), hedge_asks={"tok-up": 0.30},
             hold_below_target=0.05)
-        assert [o["order_id"] for o in to_cancel] == ["o1"]
-        assert [i.price for i in to_submit] == [0.64]
+        assert to_cancel == []
+        assert to_submit == []
 
     def test_a_bid_is_cancelled_when_the_target_falls_past_the_cap(self):
-        # A 12c drop is the market leaving. Holding a bid that far above the
-        # book buys an adverse fill, not a queue position.
+        # Place-and-wait (#384): even a 12c drop holds a wanted token. The
+        # cap no longer releases it.
         to_cancel, _ = plan_orders(
             [_open(price=0.60)], [_intent(price=0.48)],
             dead_band=0.03, cfg=_cfg(), hedge_asks={"tok-up": 0.35},
             hold_below_target=0.05)
-        assert [o["order_id"] for o in to_cancel] == ["o1"]
+        assert to_cancel == []
 
     def test_the_pair_cost_regate_still_cancels_a_held_bid(self):
         # Direction never overrides the money gate: 0.60 + a 0.42 hedge ask is
@@ -87,30 +87,32 @@ class TestAsymmetricRequoteHold:
         assert [o["order_id"] for o in to_cancel] == ["o1"]
 
     def test_the_hold_needs_a_real_hedge_ask(self):
-        # `completable_pair_block` reads a missing ask as NO OPINION, and the
-        # hold must not read that as "passed" -- with nothing checking the
-        # economics of the stale price, holding is an unmeasured bet.
+        # Place-and-wait (#384): a missing hedge ask means the re-gate
+        # declines to judge, and a wanted token is held either way.
         to_cancel, _ = plan_orders(
             [_open(price=0.60)], [_intent(price=0.56)],
             dead_band=0.03, cfg=_cfg(), hedge_asks={"tok-up": None},
             hold_below_target=0.05)
-        assert [o["order_id"] for o in to_cancel] == ["o1"]
+        assert to_cancel == []
 
     def test_the_hold_is_off_when_the_cap_is_zero(self):
-        # Callers that never pass the cap keep the symmetric rule exactly.
+        # Place-and-wait (#384): the cap being absent no longer changes
+        # anything -- drift never cancels a wanted token.
         to_cancel, _ = plan_orders(
             [_open(price=0.60)], [_intent(price=0.56)],
             dead_band=0.03, cfg=_cfg(), hedge_asks={"tok-up": 0.35})
-        assert [o["order_id"] for o in to_cancel] == ["o1"]
+        assert to_cancel == []
 
     def test_a_cancelled_downward_move_still_records_its_reason(self):
-        # A cancel with no recorded reason cannot be told from churn later.
+        # Place-and-wait (#384): drift alone no longer cancels, so this path
+        # is exercised through the pair-cost re-gate: 0.60 against a 0.42
+        # hedge ask completes at 1.02 and cancels with regate_pair_cost.
         reasons: dict = {}
         plan_orders(
-            [_open(price=0.60)], [_intent(price=0.48)],
-            dead_band=0.03, cfg=_cfg(), hedge_asks={"tok-up": 0.35},
+            [_open(price=0.60)], [_intent(price=0.57)],
+            dead_band=0.01, cfg=_cfg(), hedge_asks={"tok-up": 0.52},
             hold_below_target=0.05, reasons=reasons)
-        assert reasons == {"o1": CANCEL_PRICE_MOVED}
+        assert reasons == {"o1": "regate_pair_cost"}
 
     def test_the_queue_hold_and_the_direction_hold_are_independent(self):
         # An order deep in the queue is still held on a downward move: the

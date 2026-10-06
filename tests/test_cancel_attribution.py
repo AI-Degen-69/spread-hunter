@@ -44,17 +44,21 @@ def _intent(token: str, price: float) -> QuoteIntent:
 # --- attribution ------------------------------------------------------------
 
 def test_a_price_move_is_recorded_as_such():
-    # Arrange — the desired price walked outside the band.
-    orders = [_order("o1", UP, 0.50)]
+    # Arrange — place-and-wait (#384): drift alone holds, so the price-moved
+    # reason is exercised through the pair-cost re-gate: the order's own price
+    # against the hedge ask completes over max_completable_pair_cost.
+    orders = [_order("o1", UP, 0.60)]
     reasons: dict = {}
 
     # Act
-    to_cancel, _ = plan_orders(orders, [_intent(UP, 0.40)], dead_band=0.03,
-                               reasons=reasons)
+    to_cancel, _ = plan_orders(
+        orders, [_intent(UP, 0.57)], dead_band=0.01,
+        cfg=MakerConfig(max_completable_pair_cost=1.00),
+        hedge_asks={UP: 0.52}, reasons=reasons)
 
     # Assert
     assert to_cancel == orders
-    assert reasons == {"o1": CANCEL_PRICE_MOVED}
+    assert reasons == {"o1": CANCEL_REGATE_PAIR_COST}
 
 
 def test_a_token_we_no_longer_quote_is_recorded_separately():
@@ -104,12 +108,13 @@ def test_an_order_that_is_kept_records_no_reason():
 
 def test_the_reasons_map_is_optional():
     # Arrange / Act — every existing caller passes nothing and must keep working.
+    # Place-and-wait (#384): a wanted token is held, so nothing submits either.
     to_cancel, to_submit = plan_orders([_order("o1", UP, 0.50)],
                                        [_intent(UP, 0.40)])
 
     # Assert
-    assert len(to_cancel) == 1
-    assert len(to_submit) == 1
+    assert to_cancel == []
+    assert to_submit == []
 
 
 # --- the hold ---------------------------------------------------------------
@@ -132,7 +137,8 @@ def test_a_near_front_order_survives_a_price_move():
 
 
 def test_an_order_deep_in_the_queue_is_still_re_quoted():
-    # Arrange — 12,930 shares ahead: holding a stale price buys nothing.
+    # Arrange — 12,930 shares ahead. Place-and-wait (#384): a wanted token is
+    # held at its own price regardless of queue depth.
     cfg = MakerConfig()
     orders = [_order("o1", UP, 0.50)]
     reasons: dict = {}
@@ -144,8 +150,8 @@ def test_an_order_deep_in_the_queue_is_still_re_quoted():
         queue_ahead={"o1": 12930.0}, hold_queue_shares=200.0)
 
     # Assert
-    assert to_cancel == orders
-    assert reasons == {"o1": CANCEL_PRICE_MOVED}
+    assert to_cancel == []
+    assert reasons == {}
 
 
 def test_the_hold_never_overrides_the_pair_cost_gate():
@@ -166,8 +172,8 @@ def test_the_hold_never_overrides_the_pair_cost_gate():
 
 
 def test_the_hold_stands_down_when_nothing_is_checking_the_economics():
-    # Arrange — no cfg/hedge_asks means the re-gate is not armed, so holding a
-    # stale price would be an unmeasured bet.
+    # Arrange — no cfg/hedge_asks. Place-and-wait (#384): a wanted token is
+    # held; the re-gate simply declines to judge with no cfg.
     orders = [_order("o1", UP, 0.50)]
     reasons: dict = {}
 
@@ -177,12 +183,13 @@ def test_the_hold_stands_down_when_nothing_is_checking_the_economics():
         queue_ahead={"o1": 1.0}, hold_queue_shares=200.0)
 
     # Assert
-    assert to_cancel == orders
-    assert reasons == {"o1": CANCEL_PRICE_MOVED}
+    assert to_cancel == []
+    assert reasons == {}
 
 
 def test_an_unmeasured_queue_is_never_held():
-    # Arrange — no entry for this order. An unknown position is not a good one.
+    # Arrange — no entry for this order. Place-and-wait (#384): a wanted
+    # token is held even when the queue was never measured.
     cfg = MakerConfig()
     orders = [_order("o1", UP, 0.50)]
 
@@ -192,12 +199,12 @@ def test_an_unmeasured_queue_is_never_held():
         hedge_asks={UP: 0.40}, queue_ahead={}, hold_queue_shares=200.0)
 
     # Assert
-    assert to_cancel == orders
+    assert to_cancel == []
 
 
 def test_the_hold_is_off_by_default():
-    # Arrange — the shipped config disables it, so behaviour is unchanged until
-    # someone chooses a threshold from the recorded evidence.
+    # Arrange — place-and-wait (#384): a wanted token is held regardless of
+    # the shipped hold setting; the threshold no longer gates drift.
     cfg = MakerConfig()
     orders = [_order("o1", UP, 0.50)]
 
@@ -209,7 +216,7 @@ def test_the_hold_is_off_by_default():
 
     # Assert
     assert cfg.requote_hold_queue_shares == 0.0
-    assert to_cancel == orders
+    assert to_cancel == []
 
 
 def test_a_token_we_no_longer_quote_is_never_held():
@@ -507,11 +514,8 @@ def test_the_report_states_the_hold_setting_it_actually_read(monkeypatch):
 
 
 def test_the_hold_stands_down_when_there_is_no_hedge_ask_to_check_against():
-    """A hedge ask of None is NO OPINION to `completable_pair_block`.
-
-    It declines to judge rather than refusing, which is right for an ordinary
-    keep. The hold must not read "declined to judge" as "passed" -- that is the
-    unmeasured bet it exists to stand down from.
+    """Place-and-wait (#384): a missing hedge ask means the re-gate declines
+    to judge, and a wanted token is held.
     """
     # Arrange — front of the queue, re-gate nominally armed, but the book has
     # no ask on the other leg.
@@ -526,12 +530,13 @@ def test_the_hold_stands_down_when_there_is_no_hedge_ask_to_check_against():
         queue_ahead={"o1": 1.0}, hold_queue_shares=200.0)
 
     # Assert
-    assert to_cancel == orders
-    assert reasons == {"o1": CANCEL_PRICE_MOVED}
+    assert to_cancel == []
+    assert reasons == {}
 
 
 def test_the_hold_stands_down_on_a_zero_hedge_ask():
-    # Arrange — 0 is the same "no opinion" case as None.
+    # Arrange — 0 is the same "no opinion" case as None. Place-and-wait
+    # (#384): a wanted token is held.
     cfg = MakerConfig()
     orders = [_order("o1", UP, 0.50)]
 
@@ -541,4 +546,4 @@ def test_the_hold_stands_down_on_a_zero_hedge_ask():
         hedge_asks={UP: 0.0}, queue_ahead={"o1": 1.0}, hold_queue_shares=200.0)
 
     # Assert
-    assert to_cancel == orders
+    assert to_cancel == []
