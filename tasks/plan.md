@@ -64,7 +64,7 @@ Helper skill: test-driven-development. Depends on: T1.
 Verify: `pytest -q tests/test_pre_start_gate.py tests/test_market_quote.py`.
 Checkpoint: unit clock proven (T1+T2).
 
-### [ ] T3 — Full-path proof: FURIA times through fetch-to-decision [Backend/Logic] (S)
+### [x] T3 — Full-path proof: FURIA times through fetch-to-decision [Backend/Logic] (S)
 Target: tests/test_trader_loop.py (new test): stubbed venue returning the
 FURIA payload (endDate midnight, game_start_time 15:40Z) + books with depth,
 run `evaluate_market_quote` at NOW with a recording decide: assert decide
