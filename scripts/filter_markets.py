@@ -466,6 +466,84 @@ def movement_reject(movement_usd: Optional[float],
                   f"{minutes}m under ${bar:,.0f} (flat)")
 
 
+# RANKING: LIVE-FIRST (#392). Named bars, not magic. A live competitive market
+# outranks a flat long-dated one at equal return; rows without the signal rank
+# exactly as today. The decided-mid band and every gate are untouched -- this
+# only reorders survivors.
+RANK_LIVE_MIN_MOVEMENT_USD = 5000.0  # hot tape: shares really change hands
+RANK_LIVE_MIN_TRADES = 50            # ...across many prints, not one whale
+RANK_LIVE_MAX_DAYS = 2.0             # ...on an event resolving soon
+RANK_LIVE_BOOST = 1.5                # multiplicative, applied once
+RANK_FLAT_MAX_RANGE_CENTS = 2.0  # at/below the velocity gate's own flat bar
+RANK_FLAT_MIN_DAYS = 7.0         # ...on a far-off event: tape without motion
+RANK_FLAT_PENALTY = 0.5          # multiplicative, applied once
+
+
+def _event_started(row: dict, now_ts: float) -> bool:
+    """Has this row's event begun? Unknown or unparseable reads as NOT started.
+
+    Deliberately stricter than the pre-start gate (where unknown reads as
+    already trading): the gate must not refuse on a missing field, but the
+    boost must not fire on one either -- most flat long-dated markets state
+    no start time at all.
+    """
+    start_iso = market_start_iso(row)
+    if not start_iso:
+        return False
+    try:
+        start = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    return start.timestamp() <= now_ts
+
+
+def rank_score(row: dict, *, now: float | None = None) -> float:
+    """Ranking score for one eligible row: return, boosted when live.
+
+    Pure of venue calls -- every input is already measured on the row.
+    Missing fields fail safe to today's behavior (bare return_pct_day).
+    """
+    base = float(row.get("return_pct_day") or 0.0)
+    now_ts = time.time() if now is None else float(now)
+    movement = row.get("movement_usd")
+    trades = row.get("trade_count")
+    days = row.get("days_to_resolve")
+    if (movement is None or trades is None or days is None
+            or float(movement) < RANK_LIVE_MIN_MOVEMENT_USD
+            or int(trades) < RANK_LIVE_MIN_TRADES
+            or float(days) > RANK_LIVE_MAX_DAYS
+            or not _event_started(row, now_ts)):
+        return _flat_penalty(row, base)
+    return base * RANK_LIVE_BOOST
+
+
+def _flat_penalty(row: dict, base: float) -> float:
+    """Halve a flat-mid long-dated row; unmeasured rows pass through.
+
+    Window tape without price motion on a far-off event is the Senate shape:
+    tradable on paper, unfillable in practice. Either field unmeasured reads
+    as not-flat -- a data gap must never sink a market on its own.
+    """
+    ran = row.get("range_cents")
+    days = row.get("days_to_resolve")
+    if (ran is None or days is None
+            or float(ran) > RANK_FLAT_MAX_RANGE_CENTS
+            or float(days) < RANK_FLAT_MIN_DAYS):
+        return base
+    return base * RANK_FLAT_PENALTY
+
+
+def sort_eligible(rows: list[dict]) -> list[dict]:
+    """Shipped ranking order: highest rank_score first.
+
+    Its own function so the production wiring is directly testable -- an
+    inline key in `main` could be reverted without any test noticing.
+    """
+    return sorted(rows, key=lambda r: -rank_score(r))
+
+
 def tradable(volume_24h: float | None,
              days: float | None,
              title: object = "", slug: object = "",
@@ -2687,7 +2765,7 @@ def main() -> None:
     # eleven cents -- and under the payout floor it is zero.
     eligible = [r for r in out if r["eligible"]]
     rejected = len(out) - len(eligible)
-    eligible.sort(key=lambda r: -r["return_pct_day"])
+    eligible = sort_eligible(eligible)
     paired_bundle = None
     paired_audit_name = ""
     paired_filename = ""

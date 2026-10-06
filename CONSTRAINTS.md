@@ -1,21 +1,26 @@
-# CONSTRAINTS.md — Issue #390 (hold resting orders through transient no-intent cycles)
+# CONSTRAINTS.md — Issue #392 (prefer live competitive markets in selection)
 
 ## Zero regressions
-- `tests/test_trader_loop.py` and `tests/test_shadow_run.py` must pass after every change
-  (focused suites only; the full `pytest -q` suite is the GitHub CI merge gate, not a local loop).
+- Focused suites named per task (`tests/test_rank_score.py`,
+  `tests/test_filter_markets_publish_json.py`, `tests/test_velocity_gate.py`,
+  `tests/test_movement_gate.py`, `tests/test_pre_start_gate.py`) must pass after
+  every change (focused suites only; the full `pytest -q` suite is the GitHub CI
+  merge gate, not a local loop).
 - New behavior needs tests that fail without the change (RED first, then GREEN).
-- Token-rotation cancel and dropped-market cancel are pinned by tests and must keep working.
+- Rows without the new signal must rank exactly as today (byte-identical order).
 
 ## Anti-cheat
 - No skipping, disabling, or weakening existing tests or assertions.
 - No linter suppression, no `type: ignore`, no silent `except: pass` in new code.
-- No threshold edits to make red green (grace constant set by design, not tuned to pass).
+- No threshold edits to make red green (gates, bars, and bands stay as configured).
 
 ## Boundaries
-- No new dependencies. No config value changes.
+- No new dependencies. No `config.py` changes (named constants in
+  `scripts/filter_markets.py`).
 - `data/orders.db` is production: read-only, never rewritten.
-- `core_brain/quotes.py` decision logic untouched (the classifier only reads `why` strings).
-- `_cancel_dropped_markets` untouched (dropped-market path is out of scope to change).
-- No new `LiveFleetResult.status` values and no new `CANCEL_*` reasons (dashboard compat;
-  grace expiry reuses `not_quoted`).
-- Placement gates, post-fill management, and live runs are out of scope.
+- `core_brain/` untouched — the quoting band must stay aligned with selection.
+- Paired-depth/admission trial paths untouched (shipped ranking only).
+- No new venue calls in the rank path (measured fields only).
+- Maker-queue gating belongs to #393 and is out of scope.
+- Selection gates (movement, velocity, depth, spread, pre-start, decided-mid)
+  keep refusing exactly as today; only the ranking order changes.
