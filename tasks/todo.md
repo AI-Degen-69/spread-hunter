@@ -1,6 +1,6 @@
-# Checklist — Issue #390 hold resting orders through transient no-intent cycles
+# Checklist — Issue #392 prefer live competitive markets in selection
 
-- [x] T1 — RED refused-hold / terminal-cancel / grace-expiry tests
-- [x] T2 — GREEN refusal classifier + hold wiring
-- [x] T3 — GREEN grace counter + expiry
-- [x] T4 — shadow proof: hold across refused cycle, cancel past grace
+- [ ] T1 — RED live-outranks-flat ranking tests
+- [ ] T2 — GREEN rank_score + shipped-ranking wiring
+- [ ] T3 — GREEN flat-mid long-dated penalty
+- [ ] T4 — end-to-end Senate-like vs live-like ranking proof
