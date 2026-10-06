@@ -156,6 +156,11 @@ def test_quote_clock_keeps_real_later_end():
     assert quote_t_remaining(market, now=_FURIA_NOW) == 7 * 86400.0
 
 
+def test_quote_clock_garbage_kickoff_falls_back():
+    market = _furia_market(kickoff="not-a-time")
+    assert quote_t_remaining(market, now=_FURIA_NOW) == -59681.0
+
+
 def test_quote_clock_stand_in_without_kickoff_field():
     class _Bare:
         def t_remaining(self):

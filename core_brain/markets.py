@@ -66,11 +66,17 @@ def quote_t_remaining(market: Any, now: Optional[float] = None) -> float:
     defensively so older stand-ins keep working.
     """
     at = now if now is not None else time.time()
-    real = market.t_remaining() if now is None else market.t_remaining(now)
-    kickoff = getattr(market, "game_start_ts", None)
-    if kickoff is None or float(kickoff) > at:
+    try:
+        real = market.t_remaining() if now is None else market.t_remaining(now)
+    except TypeError:
+        real = market.t_remaining()
+    try:
+        kickoff = float(getattr(market, "game_start_ts", None))
+    except (TypeError, ValueError):
         return real
-    return max(real, float(kickoff) + IN_PLAY_WINDOW_SEC - at)
+    if kickoff > at:
+        return real
+    return max(real, kickoff + IN_PLAY_WINDOW_SEC - at)
 
 
 # Slugs come from the venue API and are later embedded in dashboard HTML
