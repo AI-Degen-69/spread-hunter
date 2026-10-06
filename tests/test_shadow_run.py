@@ -1407,9 +1407,81 @@ def test_admission_cli_parses_and_rejects_depth_combo(tmp_path):
         main([
             "--minutes", "0",
             "--db", str(tmp_path / "combo2.db"),
-            "--run-id", "shadow-combo2",
+            "--run-id", "shadow-combo",
             "--markets-path", "runtime/trials/adm/paired_admission_markets.json",
             "--paired-admission-arm", "control",
             "--paired-depth-cutoff-usd", "500",
         ])
     assert "cutoff" in str(exc.value)
+
+
+class TestRefusedHoldShadow:
+    """#390 end to end: a refused cycle holds, a dead market cancels."""
+
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
+                     "DOWN: 8.0c from mid > 4.5c reward window")
+
+    def _held_pair(self):
+        return [QuoteIntent(side="UP", token_id="tok-up", price=0.60, size=5,
+                            mid=0.61, edge_vs_mid=0.01),
+                QuoteIntent(side="DOWN", token_id="tok-dn", price=0.40, size=5,
+                            mid=0.41, edge_vs_mid=0.01)]
+
+    def _seam(self, decide, calls):
+        def open_orders_fn(m):
+            return [{"token_id": "tok-up", "price": 0.60, "order_id": "o-up",
+                     "side": "BUY", "status": "open"},
+                    {"token_id": "tok-dn", "price": 0.40, "order_id": "o-dn",
+                     "side": "BUY", "status": "open"}]
+
+        def submit_fn(client, registry, market, intents, cfg):
+            calls["submitted"].append([i.token_id for i in intents])
+            return len(intents)
+
+        def cancel_fn(client, registry, orders):
+            calls["cancelled"].append([o["order_id"] for o in orders])
+            return len(orders)
+
+        return _seam(decide=decide, submit_fn=submit_fn, cancel_fn=cancel_fn,
+                     open_orders_fn=open_orders_fn,
+                     reconcile_fn=lambda *a, **k: None,
+                     sweep_fn=lambda: None)
+
+    def _run_cycles(self, seam, n):
+        sleeps = []
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            if len(sleeps) >= n:
+                raise KeyboardInterrupt
+
+        return run(seam, interval=0.0, once=False, live=True,
+                   markets=[FakeMarket("0xabc")], sleep_fn=sleep_fn)
+
+    def test_refuse_then_quote_holds_without_churn(self, caplog):
+        import logging
+        caplog.set_level(logging.INFO)
+        calls = {"submitted": [], "cancelled": []}
+        ncalls = []
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            ncalls.append(1)
+            if len(ncalls) == 1:
+                return [], self.TRANSIENT_WHY
+            return list(self._held_pair()), ""
+
+        results = self._run_cycles(self._seam(decide, calls), 2)
+        assert [r.status for r in results] == ["QUOTED"]
+        assert calls["cancelled"] == []
+        assert calls["submitted"] == []
+        assert "[HOLDING]" in caplog.text
+
+    def test_dead_market_cancels_past_grace(self):
+        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+        calls = {"submitted": [], "cancelled": []}
+        seam = self._seam(
+            lambda cfg, up, dn, inv, t_rem, wf: ([], self.TRANSIENT_WHY),
+            calls)
+        self._run_cycles(seam, GRACE)
+        assert calls["submitted"] == []
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
