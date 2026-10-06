@@ -69,7 +69,7 @@ no cancel, no submit — instead of wiping them with `not_quoted` and re-posting
 ## Tasks
 Dependency graph: T1 (tests) <- T2 (classifier + hold wiring) <- T3 (grace + expiry) <- T4 (shadow proof).
 
-### [ ] T1 — RED tests: refused-hold, terminal-cancel, grace-expiry [Backend/Logic] (M)
+### [x] T1 — RED tests: refused-hold, terminal-cancel, grace-expiry [Backend/Logic] (M)
 Target: tests/test_trader_loop.py (new section).
 - Refused-visited holds: `decide` returns `([], "<transient why>")` with open orders →
   `run(once)` yields DECLINED, cancel_fn and submit_fn never called.
@@ -84,7 +84,7 @@ Verify: new tests fail on current code (hold cases cancel today), then
 `pytest -q tests/test_trader_loop.py` green after T2/T3.
 Checkpoint: contract proven by tests (T1+T2).
 
-### [ ] T2 — GREEN: refusal classifier + hold wiring [Backend/Logic] (M)
+### [x] T2 — GREEN: refusal classifier + hold wiring [Backend/Logic] (M)
 Target: core_brain/trader_loop.py (`_classify_refusal`, `VisitOutcome`, `plan_orders`
 outcome param with legacy default, `_visit_one` outcome threading; `quotes.py` untouched).
 Transient hold returns no-cancel/no-submit; terminal routes to the existing `not_quoted`
@@ -94,14 +94,14 @@ Verify: `pytest -q tests/test_trader_loop.py` (T1 hold/terminal/rotation tests g
 grace-expiry test still red until T3).
 Checkpoint: hold proven, expiry pending (T2).
 
-### [ ] T3 — GREEN: grace counter + expiry [Backend/Logic] (S)
+### [x] T3 — GREEN: grace counter + expiry [Backend/Logic] (S)
 Target: core_brain/trader_loop.py (`run()` owns per-cid refused-cycle counts,
 `REFUSED_HOLD_GRACE_CYCLES` named constant; reset on quoted/submit; restart resets).
 Expiry cancels via the existing `not_quoted` path — no new cancel machinery.
 Helper skill: test-driven-development. Depends on: T2.
 Verify: `pytest -q tests/test_trader_loop.py` fully green incl. grace-expiry test.
 
-### [ ] T4 — Shadow proof: hold across a refused cycle, cancel past grace [Backend/Logic] (S)
+### [x] T4 — Shadow proof: hold across a refused cycle, cancel past grace [Backend/Logic] (S)
 Target: tests/test_shadow_run.py (new test): two-cycle rehearsal (refuse with transient
 why, then quote) holds resting across the refused cycle without cancel/submit; a second
 variant refused past grace cancels. No prod code (verification only unless it exposes
