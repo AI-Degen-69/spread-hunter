@@ -82,7 +82,17 @@ def plan_orders(
 ) -> tuple[list[dict], list[QuoteIntent]]:
     """Split open orders + desired intents into (cancel, submit).
 
-    An order resting within the keep tolerance of the desired price is kept.
+    PLACE-AND-WAIT (#384). Every resting pair passed the pair-cost gate before
+    placement, so every resting order is profitable by definition -- no
+    re-check needed. A resting order whose token still has an intent this
+    cycle is KEPT at its own price: no tolerance check, no dead band, no
+    drift comparison. The intent is suppressed via held_tokens (no duplicate
+    posted). Only two things still cancel: no intent for the token
+    (not_quoted), or the in-band re-gate failing pair cost
+    (regate_pair_cost). The dead band, queue hold, and direction hold stop
+    firing -- left in code untouched for the follow-up cancel-conditions
+    issue to disposition.
+
     Orders on tokens we no longer quote are cancelled. An intent with no kept
     order near its price is submitted.
 
@@ -242,35 +252,19 @@ def plan_orders(
             regate_blocks = bool(regate_armed and risk.completable_pair_block(
                 cfg, float(o["price"]), hedge_asks.get(tok)))
 
-        if not any(abs(i.price - o["price"]) <= tolerance for i in targets):
-            # The price moved out of tolerance. This is the ONLY cancel the
-            # queue hold may override, and only with the re-gate armed and
-            # passing: something has to be checking the economics of the stale
-            # price we would be keeping.
-            # A hedge ask of None or 0 is NO OPINION to
-            # `risk.completable_pair_block` -- it declines to judge rather than
-            # refusing. For the ordinary keep that is right, but the hold must
-            # not read "declined to judge" as "passed": that is precisely the
-            # unmeasured bet it stands down from. The hold needs a real ask,
-            # unless we already hold the hedge leg in inventory and it passes max_pair_cost.
-            hedge_ask = hedge_asks.get(tok) if hedge_asks else None
-            hold_gate_armed = (is_hedge_held and not regate_blocks) or (
-                regate_armed and hedge_ask is not None and float(hedge_ask) > 0
-            )
-            if hold_gate_armed and not regate_blocks and (
-                    _near_front(o) or _market_arriving(o, targets)):
-                kept.setdefault(tok, []).append(o)
-                held_tokens.add(tok)
-                continue
-            _record(o, CANCEL_PRICE_MOVED)
-            to_cancel.append(o)
-            continue
-
+        # PLACE-AND-WAIT (#384): the token is still wanted this cycle, so the
+        # resting order is KEPT at its own price regardless of drift -- no
+        # tolerance check, no dead band, no queue / direction hold. Only the
+        # pair-cost re-gate below may cancel it. The tolerance, the hold
+        # predicates, and the branches they fed are bypassed but left in place
+        # for the follow-up cancel-conditions issue to disposition.
         if regate_blocks:
             _record(o, CANCEL_REGATE_PAIR_COST)
             to_cancel.append(o)
             continue
         kept.setdefault(tok, []).append(o)
+        held_tokens.add(tok)
+        continue
 
     # Which pair each submitted intent should JOIN, keyed by token.
     #

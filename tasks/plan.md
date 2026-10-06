@@ -39,7 +39,7 @@ Expect: no cancel, no submit on either token. Second case: single resting
 leg 0.70, intent drifted to 0.60 → still held, no cancel, no submit. Verify
 FAIL first (today both cancel with price_moved).
 
-### [ ] T2 — GREEN: hold-when-wanted in plan_orders
+### [x] T2 — GREEN: hold-when-wanted in plan_orders
 Target: trader_loop.py per-order loop. After the not_quoted check: if the
 token has targets this cycle → keep at own price + held_tokens, skip submit.
 The tolerance/out-of-band branch and the hold predicates stop firing for
