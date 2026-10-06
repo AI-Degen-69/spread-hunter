@@ -1,82 +1,125 @@
-# Plan — Issue #386: quote in-play esports markets whose venue endDate is kickoff
+# Plan — Issue #390: hold resting orders through transient no-intent cycles
 
-Branch: i386/quote-in-play-esports-markets | Issue: #386
-Size: Standard — 2 prod files + tests, one design decision (in-play window length).
-Type: [Backend/Logic]. Stack: Python, pytest. No SPEC.md ceremony (spec embedded below);
-no root SPEC.md exists in this repo (prior spec lives in docs/archive/).
+Branch: i390/hold-resting-orders-through-transient-no-intent-cy | Issue: #390
+Size: Standard — 1–2 prod files + tests, one design decision (refusal taxonomy + grace rule shape).
+Type: [Backend/Logic] + [Debug]. Stack: Python 3.12, pytest. Spec embedded below;
+no root SPEC.md exists in this repo (prior spec lives in docs/archive/; same precedent as #386).
 
 ## Spec (embedded)
-Goal: an in-play sports/esports market whose venue `endDate` is kickoff must be
-quotable at quote time instead of skipped on a negative countdown.
-- Carry venue `game_start_time` onto the fleet market as optional `game_start_ts`
-  (None when missing/unparseable; `end_ts` parsing unchanged).
-- New pure helper `quote_t_remaining(market, now=None)`: no kickoff → old countdown;
-  kickoff in future → old countdown (pre-start stays refused); kickoff passed →
-  `max(old countdown, game_start_ts + IN_PLAY_WINDOW_SEC - now)`; never shortens a
-  real later end date; after the window it goes negative and quoting stops.
-- `IN_PLAY_WINDOW_SEC = 6 * 3600` (covers BO3/BO5 + football; operator-tunable later).
-- Only `evaluate_market_quote` uses the helper; `decide_quotes`, gates, config,
-  selection, submission, and all other `t_remaining`/`end_ts` consumers unchanged.
-- Out of scope: placement/selection gates, post-fill management, orders.db, live runs.
+Goal: a placed pair is judged once, at placement. A cycle where `decide` runs but
+refuses intents (wide book, pair-cost boundary, mid band) must HOLD resting orders —
+no cancel, no submit — instead of wiping them with `not_quoted` and re-posting next cycle.
+- `_visit_one` distinguishes visited-but-refused (`decide` ran, returned `[]` intents)
+  from dropped-from-rotation (market absent from `current_markets` — the existing
+  `_cancel_dropped_markets` path, unchanged, still cancels via `market_dropped`).
+- Visited-but-refused with a TRANSIENT reason → hold: no cancel, no submit, result
+  stays DECLINED with the refusal `why`, plus a `[HOLDING]` log line.
+- Visited-but-refused with a TERMINAL reason → cancel now (current behavior): the
+  settled/decided book must not be held. Terminal set (resolved from code, see below):
+  decided market (`mid outside [0.20,0.80]`), `t_remaining` elapsed, `market exited`,
+  unfunded/zero-allocation. Everything else is transient-with-grace.
+- Grace/timeout: per-market consecutive-refused-cycle counter (in-memory in `run()`,
+  keyed by condition id). Past `REFUSED_HOLD_GRACE_CYCLES` refused cycles the hold
+  expires and the orders cancel via `not_quoted`. Counter resets on any quoted cycle
+  or submit; a process restart resets counters (safe direction: holds, never wipes).
+- Out of scope: placement gates themselves (`quotes.py` decision logic unchanged —
+  the classifier only READS `why` strings), post-fill management, `orders.db`, live runs.
 
 ## CodeRabbit plan intake (3-line note)
-- Adopted: kickoff carried as optional field; helper used only in the quote evaluator;
-  6h constant (not a config field); FURIA fixed-time test vectors; must-not-change list.
-- Rejected: overwriting `end_ts` in `fetch_pinned_market` (would corrupt other clock
-  consumers); `days_to_resolve` as the clock (same kickoff-valued source, negative here);
-  no-deadline option (no hard stop if the venue keeps accepting orders).
-- [UNVERIFIED] at intake, since resolved from code: `_iso_to_unix` exists and handles
-  `Z` (markets.py:125); `LiveMarket` constructions all use keywords (safe to append a
-  defaulted field); `scoring/markets.py` owns a separate `LiveMarket` (untouched);
-  `_Resp`/`_venue_returns` stub pattern exists (test_negrisk_merge_routing.py:93,106).
+- Adopted: nothing — the issue carries 0 comments, so there is no CodeRabbit plan.
+- Rejected: nothing (no plan to reject).
+- [UNVERIFIED]: nothing — every cited path/symbol below was read live in this session.
 
-## Open question (resolved from code)
-- Which clock? `game_start_time` + fixed window (CodeRabbit Choice 1). `days_to_resolve`
-  is out (same kickoff-valued `endDate`, negative for these markets). Window length 6h
-  is a default the operator can retune — flagged in the report, not blocking.
+## Open questions (resolved from code — none asked of the operator)
+- No `needs-answers` label and no Open-questions section. The one real question —
+  which refusals are transient vs terminal — resolves from `quotes.py`: the decided-market
+  block documents the cancel-on-empty-intents contract for settled books, while the
+  wide-book / completable-cap / reward-window blocks describe flicker, not abandonment.
+- `code-explorer` persona skipped (not needed): the blast radius is two fully-read
+  files (`trader_loop.py` `plan_orders`/`_visit_one`/`run`, `quotes.py` refusal strings).
+- `type-design-analyzer` persona (present on disk) applied to the contract below:
+  enum over bool (empty intents currently means two things — visited-refused and
+  dropped — and a bool cannot name the terminal case); grace counter owned by `run()`,
+  not the `VenueSeam` (the seam is venue ports, not loop memory); threshold as a named
+  constant. Illegal states unrepresentable: hold-vs-cancel is an explicit outcome, never
+  inferred from `intents == []` inside `plan_orders`.
 
-## Improvement proposal (adopted, simplification)
-- CodeRabbit split verification into its own phase; folded as per-task verification
-  instead (3 tasks, not 4+). Evidence: the tasks' checks are the same test files the
-  phase named. No scope change.
+## Interface contracts (locked before logic)
+- New `VisitOutcome` enum in `core_brain/trader_loop.py`: `QUOTED` / `REFUSED_TRANSIENT` /
+  `REFUSED_TERMINAL`. `DROPPED` stays where it is (`_cancel_dropped_markets`, untouched).
+- Pure helper `_classify_refusal(why: str)` maps decide's `why` to terminal/transient;
+  unit-testable in isolation.
+- `plan_orders` gains an explicit outcome parameter whose DEFAULT preserves legacy
+  semantics (empty intents → `not_quoted` cancel), so all existing positional callers
+  and tests keep compiling and passing unchanged.
+- `_visit_one` computes the outcome via the classifier and threads the grace count in;
+  `run()` owns the per-cid counter dict and updates it from cycle results.
+- Status vocabulary UNCHANGED (dashboard compat): held cycles return DECLINED with
+  `cancelled=0, submitted=0`. No new `LiveFleetResult.status`, no new `CANCEL_*` reason
+  for the hold path (nothing is cancelled); grace expiry reuses `CANCEL_NOT_QUOTED`.
+
+## Improvement proposal (adopted, edge-case hardening)
+- Classify refusals into transient vs terminal instead of blanket-holding every
+  empty-intent cycle — otherwise a settled market's resting orders would be held
+  through grace instead of cancelled now. Evidence (verbatim, `core_brain/quotes.py`):
+  "When both sides block here, plan_orders() sees empty intents and cancels all OPEN
+  orders for this market — the safe path for a settled book (Polymarket also cancels
+  at settlement, but we don't wait for it)."
 
 ## Tasks
+Dependency graph: T1 (tests) <- T2 (classifier + hold wiring) <- T3 (grace + expiry) <- T4 (shadow proof).
 
-### [x] T1 — RED tests: kickoff-aware quote clock [Backend/Logic] (S)
-Target: tests/test_pre_start_gate.py (new "quote-time kickoff clock" section).
-Fixed vectors END=2026-10-06T00:00:00Z, KICKOFF=2026-10-06T15:40:00Z,
-NOW=2026-10-06T16:34:41Z (old countdown exactly -59681s): in-play extends
-positive; pre-start (kickoff NOW+58m) stays -59681; no-kickoff stays -59681;
-stale (kickoff NOW-window-60s) negative; real later end (NOW+7d, kickoff 30m
-ago) returns 7d; stand-in without the field returns its own value.
+### [ ] T1 — RED tests: refused-hold, terminal-cancel, grace-expiry [Backend/Logic] (M)
+Target: tests/test_trader_loop.py (new section).
+- Refused-visited holds: `decide` returns `([], "<transient why>")` with open orders →
+  `run(once)` yields DECLINED, cancel_fn and submit_fn never called.
+- Terminal cancels now: `decide` returns `([], "UP: mid 0.950 outside [0.20,0.80] -- decided market; ...")`
+  with open orders → cancel_fn called (existing `not_quoted` behavior pinned).
+- Token rotation still cancels: one-leg intent for a new token + open order on an old
+  token → old order cancelled (pins the `_replacement_seam` behavior, no regression).
+- Grace expiry: N consecutive refused cycles → hold × (N-1), cancel on Nth (threshold
+  via the named constant, not a literal).
 Helper skill: test-driven-development. Depends on: none.
-Verify: fail first (helper missing), then `pytest -q tests/test_pre_start_gate.py`.
+Verify: new tests fail on current code (hold cases cancel today), then
+`pytest -q tests/test_trader_loop.py` green after T2/T3.
+Checkpoint: contract proven by tests (T1+T2).
 
-### [x] T2 — GREEN: carry kickoff + switch the quote clock [Backend/Logic] (M)
-Target: core_brain/markets.py (`game_start_ts` field last w/ default None;
-parse `game_start_time` in `fetch_pinned_market` via `_iso_to_unix`, None on
-missing/garbage; `IN_PLAY_WINDOW_SEC`; `quote_t_remaining` per spec, using
-getattr for stand-ins and never shortening a later end), core_brain/quotes.py
-(one line in `evaluate_market_quote`), tests/test_pre_start_gate.py (fetch
-test with stubbed `_SESSION.get` per `_Resp` pattern: game_start_ts parsed,
-end_ts unchanged).
-Helper skill: test-driven-development. Depends on: T1.
-Verify: `pytest -q tests/test_pre_start_gate.py tests/test_market_quote.py`.
-Checkpoint: unit clock proven (T1+T2).
+### [ ] T2 — GREEN: refusal classifier + hold wiring [Backend/Logic] (M)
+Target: core_brain/trader_loop.py (`_classify_refusal`, `VisitOutcome`, `plan_orders`
+outcome param with legacy default, `_visit_one` outcome threading; `quotes.py` untouched).
+Transient hold returns no-cancel/no-submit; terminal routes to the existing `not_quoted`
+path byte-for-byte. `[HOLDING]` log line on held cycles.
+Helper skills: test-driven-development, debugging-and-error-recovery. Depends on: T1.
+Verify: `pytest -q tests/test_trader_loop.py` (T1 hold/terminal/rotation tests green;
+grace-expiry test still red until T3).
+Checkpoint: hold proven, expiry pending (T2).
 
-### [x] T3 — Full-path proof: FURIA times through fetch-to-decision [Backend/Logic] (S)
-Target: tests/test_trader_loop.py (new test): stubbed venue returning the
-FURIA payload (endDate midnight, game_start_time 15:40Z) + books with depth,
-run `evaluate_market_quote` at NOW with a recording decide: assert decide
-received t_remaining > 0 (not -59681) and intents flow; plus a stale-window
-variant asserting refusal. No prod code (verification only unless it exposes a
-wiring miss).
+### [ ] T3 — GREEN: grace counter + expiry [Backend/Logic] (S)
+Target: core_brain/trader_loop.py (`run()` owns per-cid refused-cycle counts,
+`REFUSED_HOLD_GRACE_CYCLES` named constant; reset on quoted/submit; restart resets).
+Expiry cancels via the existing `not_quoted` path — no new cancel machinery.
 Helper skill: test-driven-development. Depends on: T2.
-Verify: `pytest -q tests/test_trader_loop.py tests/test_market_quote.py
-tests/test_completable_pair_gate.py`.
-Checkpoint: end-to-end quote path proven.
+Verify: `pytest -q tests/test_trader_loop.py` fully green incl. grace-expiry test.
+
+### [ ] T4 — Shadow proof: hold across a refused cycle, cancel past grace [Backend/Logic] (S)
+Target: tests/test_shadow_run.py (new test): two-cycle rehearsal (refuse with transient
+why, then quote) holds resting across the refused cycle without cancel/submit; a second
+variant refused past grace cancels. No prod code (verification only unless it exposes
+a wiring miss).
+Helper skill: test-driven-development. Depends on: T3.
+Verify: `pytest -q tests/test_trader_loop.py tests/test_shadow_run.py`.
+Checkpoint: end-to-end behavior proven.
 
 ## Guardrails
-- Suites test_pre_start_gate + test_market_quote + test_trader_loop +
-  test_completable_pair_gate green, no skipped assertions.
-- No new deps, no config values, no selection/ranking, no orders.db, no live runs.
+- Focused suites `tests/test_trader_loop.py` + `tests/test_shadow_run.py` green after
+  every change; new behavior has tests that fail without it (RED first).
+- No new dependencies, no config-value changes, `data/orders.db` read-only, no live runs.
+- `quotes.py` decision logic and `_cancel_dropped_markets` untouched.
+- No sub-issue ceremony (3–4 coupled tasks on one branch; same precedent as #386).
+
+## Notes (session memory — do not lose)
+- Prior `tasks/plan.md` header was Issue #386 (different issue/branch); this file now
+  plans #390. Nothing from #386 carries over.
+- Auto-picked #390: it is the only open issue; labels `["ready-for-agent"]`, no
+  `quick-fix` label → Step 0C divert not evaluated, straight to planning.
+- Claimed via `gh issue edit 390 --add-assignee "@me"` (PowerShell needs the quotes).
