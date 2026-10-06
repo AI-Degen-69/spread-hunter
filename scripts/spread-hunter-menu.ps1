@@ -601,11 +601,23 @@ function Start-Dashboard {
         return $false
     }
     Lsh-Step "Launching dashboard (python -m dashboard.server --port $LivePort)..."
-    $dash = Start-Process -FilePath "python" `
-        -ArgumentList "-m", "dashboard.server", "--port", "$LivePort" `
-        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $OutLog `
-        -RedirectStandardError  $ErrLog
+    # A stray PORT in this shell (e.g. PORT=0) is inherited by the child and
+    # crashes dashboard/server.py at import: resolve_port(None) runs before
+    # --port is parsed, and a non-port PORT raises instead of falling back
+    # (falling back to :8799 beside the live stack is the outcome the guard
+    # exists to prevent). Drop it for the spawn, then restore it.
+    $savedPort = $null
+    $hadPort = Test-Path Env:PORT
+    if ($hadPort) { $savedPort = $env:PORT; Remove-Item Env:PORT }
+    try {
+        $dash = Start-Process -FilePath "python" `
+            -ArgumentList "-m", "dashboard.server", "--port", "$LivePort" `
+            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $OutLog `
+            -RedirectStandardError  $ErrLog
+    } finally {
+        if ($hadPort) { $env:PORT = $savedPort }
+    }
     Save-DashInstance -DashProcess $dash
 
     $deadline = (Get-Date).AddSeconds(45)
@@ -847,6 +859,12 @@ function Start-ShadowDashboard {
     $logs = Get-ShadowDashLogs $runId
     Lsh-Step "Launching shadow dashboard (python -m dashboard.server --db $ShadowDbPath --port $port)..."
     if ($script:ShadowPreset) { Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset }
+    # Same stray-PORT guard as Start-Dashboard: a PORT=0 in this shell is
+    # inherited by the child and crashes dashboard/server.py at import,
+    # before --port is parsed. Drop it for the spawn, then restore it.
+    $savedPort = $null
+    $hadPort = Test-Path Env:PORT
+    if ($hadPort) { $savedPort = $env:PORT; Remove-Item Env:PORT }
     try {
         $dash = Start-Process -FilePath "python" `
             -ArgumentList (Format-ProcessArgs @("-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$port")) `
@@ -855,6 +873,7 @@ function Start-ShadowDashboard {
             -RedirectStandardError  $logs.err
     } finally {
         if ($script:ShadowPreset) { Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue }
+        if ($hadPort) { $env:PORT = $savedPort }
     }
     Save-ShadowDashInstance -DashProcess $dash -RunId $runId -Port $port
     $deadline = (Get-Date).AddSeconds(45)
