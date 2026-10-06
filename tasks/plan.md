@@ -66,7 +66,7 @@ flat-mid long-dated ones whose tape passes but whose mids never move.
 ## Tasks
 Dependency graph: T1 (tests) <- T2 (rank_score + wiring) <- T3 (flat penalty) <- T4 (end-to-end proof).
 
-### [ ] T1 — RED ranking tests: live outranks flat [Backend/Logic] (S)
+### [x] T1 — RED ranking tests: live outranks flat [Backend/Logic] (S)
 Target: tests/test_rank_score.py (new, following test_velocity_gate.py style:
 fixed NOW, plain dict rows, no venue).
 - `rank_score` orders live-like (started, short horizon, hot tape) above
@@ -78,7 +78,7 @@ Verify: fail first (helper missing: ImportError), then
 `pytest -q tests/test_rank_score.py` after T2.
 Checkpoint: contract proven by tests (T1+T2).
 
-### [ ] T2 — GREEN: rank_score + shipped-ranking wiring [Backend/Logic] (M)
+### [x] T2 — GREEN: rank_score + shipped-ranking wiring [Backend/Logic] (M)
 Target: scripts/filter_markets.py (new pure `rank_score` + `market started`
 derivation via `market_start_iso`; repoint the :2690 sort key; paired/admission
 sorts untouched), tests/test_rank_score.py (fill GREEN bodies).
@@ -89,7 +89,7 @@ Depends on: T1.
 Verify: `pytest -q tests/test_rank_score.py tests/test_filter_markets_publish_json.py`.
 Checkpoint: ranking proven, penalty pending (T2).
 
-### [ ] T3 — GREEN: flat-mid long-dated penalty [Backend/Logic] (S)
+### [x] T3 — GREEN: flat-mid long-dated penalty [Backend/Logic] (S)
 Target: scripts/filter_markets.py (penalty arm inside `rank_score`),
 tests/test_rank_score.py (low range_cents + long days_to_resolve sinks below an
 equal-return live row; unmeasured range/horizon → no penalty, fail-open).
@@ -97,7 +97,7 @@ Helper skill: test-driven-development. Depends on: T2.
 Verify: `pytest -q tests/test_rank_score.py tests/test_velocity_gate.py
 tests/test_movement_gate.py tests/test_pre_start_gate.py`.
 
-### [ ] T4 — End-to-end: Senate-like vs live-like ranking [Backend/Logic] (S)
+### [x] T4 — End-to-end: Senate-like vs live-like ranking [Backend/Logic] (S)
 Target: tests/test_rank_score.py (new test): fixture rows shaped like the
 2026-10-06 universe (Senate-like: 28d horizon, 3.0c range, mid return; live-like:
 started, hours-long horizon, hot tape) through the shipped sort → live row
