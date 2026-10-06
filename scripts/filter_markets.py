@@ -474,6 +474,9 @@ RANK_LIVE_MIN_MOVEMENT_USD = 5000.0  # hot tape: shares really change hands
 RANK_LIVE_MIN_TRADES = 50            # ...across many prints, not one whale
 RANK_LIVE_MAX_DAYS = 2.0             # ...on an event resolving soon
 RANK_LIVE_BOOST = 1.5                # multiplicative, applied once
+RANK_FLAT_MAX_RANGE_CENTS = 2.0  # at/below the velocity gate's own flat bar
+RANK_FLAT_MIN_DAYS = 7.0         # ...on a far-off event: tape without motion
+RANK_FLAT_PENALTY = 0.5          # multiplicative, applied once
 
 
 def _event_started(row: dict, now_ts: float) -> bool:
@@ -512,8 +515,24 @@ def rank_score(row: dict, *, now: float | None = None) -> float:
             or int(trades) < RANK_LIVE_MIN_TRADES
             or float(days) > RANK_LIVE_MAX_DAYS
             or not _event_started(row, now_ts)):
-        return base
+        return _flat_penalty(row, base)
     return base * RANK_LIVE_BOOST
+
+
+def _flat_penalty(row: dict, base: float) -> float:
+    """Halve a flat-mid long-dated row; unmeasured rows pass through.
+
+    Window tape without price motion on a far-off event is the Senate shape:
+    tradable on paper, unfillable in practice. Either field unmeasured reads
+    as not-flat -- a data gap must never sink a market on its own.
+    """
+    ran = row.get("range_cents")
+    days = row.get("days_to_resolve")
+    if (ran is None or days is None
+            or float(ran) > RANK_FLAT_MAX_RANGE_CENTS
+            or float(days) < RANK_FLAT_MIN_DAYS):
+        return base
+    return base * RANK_FLAT_PENALTY
 
 
 def tradable(volume_24h: float | None,

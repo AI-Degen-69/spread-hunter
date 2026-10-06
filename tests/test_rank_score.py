@@ -49,4 +49,15 @@ def test_missing_fields_rank_as_today():
 
 def test_unstarted_event_gets_no_live_boost():
     row = _live(gameStartTime=_iso(NOW + 7200.0))
-    assert rank_score(row, now=NOW) <= rank_score(_flat(), now=NOW)
+    assert rank_score(row, now=NOW) == 0.9
+
+
+def test_flat_long_dated_scores_below_bare_return():
+    assert rank_score(_flat(), now=NOW) < 0.9
+
+
+def test_unmeasured_range_or_horizon_escapes_penalty():
+    assert rank_score({"return_pct_day": 0.9, "range_cents": 0.5},
+                      now=NOW) == 0.9
+    assert rank_score({"return_pct_day": 0.9, "days_to_resolve": 28.0},
+                      now=NOW) == 0.9
