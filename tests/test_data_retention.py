@@ -360,7 +360,6 @@ def test_nested_protected_registry_stays_protected(tmp_path: Path):
 
 def test_prune_refuses_forged_price_tape_delete(tmp_path: Path):
     """A forged DELETE item for price_tape.db must raise, file preserved (T3, #365)."""
-    import time as _time
 
     tape = tmp_path / "price_tape.db"
     tape.write_text("tape")
@@ -370,7 +369,7 @@ def test_prune_refuses_forged_price_tape_delete(tmp_path: Path):
         action=AuditAction.DELETE,
         reason="forged",
         size_bytes=tape.stat().st_size,
-        mtime=_time.time(),
+        mtime=time.time(),
     )
     with pytest.raises(DataRetentionSafetyViolation):
         prune_storage([forged], dry_run=False)
@@ -378,9 +377,6 @@ def test_prune_refuses_forged_price_tape_delete(tmp_path: Path):
 
 
 def test_prune_refuses_dir_with_protected_descendant(tmp_path: Path):
-    """A forged dir DELETE hiding a registry file must raise, tree kept (T3, #365)."""
-    import time as _time
-
     run_dir = tmp_path / "runtime" / "run145"
     run_dir.mkdir(parents=True)
     registry = run_dir / "orders.db"
@@ -391,10 +387,37 @@ def test_prune_refuses_dir_with_protected_descendant(tmp_path: Path):
         action=AuditAction.DELETE,
         reason="forged",
         size_bytes=registry.stat().st_size,
-        mtime=_time.time(),
+        mtime=time.time(),
     )
     with pytest.raises(DataRetentionSafetyViolation):
         prune_storage([forged], dry_run=False)
     assert registry.exists()
     assert run_dir.exists()
+
+
+def test_runtime_walk_does_not_follow_dir_symlinks(tmp_path: Path):
+    """A symlinked dir under runtime/ is kept, never descended (review fix, #365)."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escape = outside / "stale_escape.db"
+    escape.write_text("escape")
+    old_time = time.time() - (30 * 86400)
+    os.utime(escape, (old_time, old_time))
+
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    link = runtime_dir / "run999link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation needs privileges on this platform")
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    names = [it.path.name for it in items]
+    assert "stale_escape.db" not in names
+    link_items = [it for it in items if it.path == link]
+    assert len(link_items) == 1
+    assert link_items[0].action == AuditAction.KEEP
 

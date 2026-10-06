@@ -24,7 +24,7 @@ import shutil
 import sys
 import time
 import urllib.parse
-from typing import Sequence
+from typing import Iterator, Sequence
 
 from core_brain.order_registry import DEFAULT_DB_PATH as PROD_DB_PATH
 from core_brain.runtime_paths import LIVE_ROOT
@@ -346,7 +346,7 @@ def audit_storage(
     excluded_lower = [f.lower() for f in policy.excluded_filenames]
     for rdir, family_label in [(runtime_dir, "runtime_state"), (legacy_run_dir, "legacy_run")]:
         if rdir.exists() and rdir.is_dir():
-            for entry in sorted(rdir.rglob("*")):
+            for entry in _iter_audit_leaves(rdir):
                 if entry.is_symlink():
                     items.append(
                         AuditItem(
@@ -358,8 +358,6 @@ def audit_storage(
                             mtime=now,
                         )
                     )
-                    continue
-                if entry.is_dir():
                     continue
                 if not entry.is_file():
                     continue
@@ -463,6 +461,29 @@ def audit_storage(
     return sorted(items, key=lambda x: (x.family, x.path.name))
 
 
+def _iter_audit_leaves(root: Path) -> Iterator[Path]:
+    """Yield every entry under root without following symlinks.
+
+    `Path.rglob()` descends into directory symlinks on some Python versions,
+    which would let the audit classify — and the prune delete — files outside
+    the audited tree. This manual walk never descends through a link:
+    symlinked entries are yielded as leaves (callers KEEP them) and only real
+    directories are descended into. Unreadable directories are skipped.
+    """
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            children = sorted(current.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                yield child
+            else:
+                stack.append(child)
+
+
 def _refuse_protected_prune_target(path: Path, policy: DataRetentionPolicy) -> None:
     """Raise DataRetentionSafetyViolation if a prune target is protected.
 
@@ -484,7 +505,7 @@ def _refuse_protected_prune_target(path: Path, policy: DataRetentionPolicy) -> N
     except OSError:
         is_dir = False
     if is_dir:
-        for descendant in Path(path).rglob("*"):
+        for descendant in _iter_audit_leaves(Path(path)):
             if descendant.is_symlink():
                 continue
             if not descendant.is_file():
