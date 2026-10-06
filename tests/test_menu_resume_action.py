@@ -337,7 +337,30 @@ def test_menu_duration_contract_keeps_default_finite_and_accepts_unlimited():
     assert "if ($RequestedMinutes -eq 0) { return 1440.0 }" in helper
     assert "default 1440 / 24h; -1 explicitly runs until stopped" in src
     assert "-1 until stopped" in src
-    assert "(?:-1|[0-9]+)" in src
+    assert r"(?:-1|[0-9]+(?:\.[0-9]+)?)" in src
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None,
+                    reason="no PowerShell 7 host on this machine")
+def test_menu_prompt_keeps_decimal_minutes_short():
+    """Regression: "1.2" at the duration prompt must not become a 24h run."""
+    script = chr(10).join([
+        "$ErrorActionPreference = 'Stop'",
+        "$out = @()",
+        "foreach ($resp in @('1.2', 'abc', '-1', '', '5')) {",
+        "  $mins = 0",
+        r"  if ($resp -and $resp -match '^\s*(?:-1|[0-9]+(?:\.[0-9]+)?)\s*$') { $mins = [double]$resp }",
+        "  if ($mins -eq 0) { $mins = 1440 }",
+        "  $out += [int]$mins",
+        "}",
+        "ConvertTo-Json -InputObject @($out) -Compress",
+    ])
+    result = subprocess.run(
+        [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, check=True, encoding="utf-8",
+    )
+
+    assert json.loads(result.stdout) == [1, 1440, -1, 1440, 5]
 
 
 @pytest.mark.skipif(shutil.which("pwsh") is None,

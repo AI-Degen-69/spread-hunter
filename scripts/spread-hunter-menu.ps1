@@ -1,4 +1,4 @@
-# SPREAD HUNTER - CONTROL CENTER
+﻿# SPREAD HUNTER - CONTROL CENTER
 # Standalone menu for the spread hunter execution engine
 # (C:\Users\Tiger\Agents\Projects\spread-hunter).
 #
@@ -3058,7 +3058,7 @@ function Invoke-LiveAction {
                 }
                 $presetLabel = if ($script:ShadowPreset -eq "prudent") { "Prudent Hybrid" } else { "Standard Baseline" }
                 $resp = Read-Host ("  Minutes for this {0} shadow run (default 1440 / 24h, 5 for quick check, -1 until stopped)?" -f $presetLabel)
-                if ($resp -and $resp -match '^\s*(?:-1|[0-9]+)\s*$') { $mins = [int]$resp }
+                if ($resp -and $resp -match '^\s*(?:-1|[0-9]+(?:\.[0-9]+)?)\s*$') { $mins = [double]$resp }
             }
             if ($mins -eq 0) { $mins = 1440 }
             $script:Minutes = [int]$mins
