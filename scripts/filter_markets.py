@@ -535,6 +535,15 @@ def _flat_penalty(row: dict, base: float) -> float:
     return base * RANK_FLAT_PENALTY
 
 
+def sort_eligible(rows: list[dict]) -> list[dict]:
+    """Shipped ranking order: highest rank_score first.
+
+    Its own function so the production wiring is directly testable -- an
+    inline key in `main` could be reverted without any test noticing.
+    """
+    return sorted(rows, key=lambda r: -rank_score(r))
+
+
 def tradable(volume_24h: float | None,
              days: float | None,
              title: object = "", slug: object = "",
@@ -2756,7 +2765,7 @@ def main() -> None:
     # eleven cents -- and under the payout floor it is zero.
     eligible = [r for r in out if r["eligible"]]
     rejected = len(out) - len(eligible)
-    eligible.sort(key=lambda r: -rank_score(r))
+    eligible = sort_eligible(eligible)
     paired_bundle = None
     paired_audit_name = ""
     paired_filename = ""

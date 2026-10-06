@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from scripts.filter_markets import rank_score
+from scripts.filter_markets import rank_score, sort_eligible
 
 NOW = 1_788_000_000.0  # fixed clock, mirrors test_velocity_gate.py
 
@@ -41,6 +41,13 @@ def _flat(**over):
 
 def test_live_outranks_flat_at_equal_return():
     assert rank_score(_live(), now=NOW) > rank_score(_flat(), now=NOW)
+
+
+def test_boost_comes_from_the_start_time_alone():
+    # Identical rows differing only in gameStartTime: the boost, not the
+    # flat-row penalty, decides this ordering.
+    assert rank_score(_live(), now=NOW) > rank_score(
+        _live(gameStartTime=None), now=NOW)
 
 
 def test_missing_fields_rank_as_today():
@@ -81,7 +88,6 @@ def test_live_row_ranks_first_on_universe_shaped_fixture():
             "trade_count": 200, "range_cents": 8.0,
             "days_to_resolve": 0.2,
             "gameStartTime": _iso(NOW - 3600.0)}
-    # The shipped ranking key (scripts/filter_markets.py): highest score wins.
-    ranked = sorted([senate_tx, senate_ks, live],
-                    key=lambda r: -rank_score(r, now=NOW))
+    # The shipped ranking (sort_eligible): highest score wins.
+    ranked = sort_eligible([senate_tx, senate_ks, live])
     assert ranked[0] is live
