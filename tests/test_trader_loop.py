@@ -1291,3 +1291,61 @@ class TestMarketSpecsPath:
 
         assert _market_specs() == []
         assert seen["path"] is None
+
+
+class TestFuriaQuoteClock:
+    """#386 full path: FURIA venue times through fetch to decision."""
+
+    END = 1791244800.0      # 2026-10-06T00:00:00Z
+    KICKOFF = 1791301200.0  # 2026-10-06T15:40:00Z
+
+    def _books(self):
+        up = {"token_id": "tok-up", "best_bid": 0.59, "best_ask": 0.61,
+              "bids": {0.59: 5000.0}, "asks": {0.61: 5000.0}}
+        down = {"token_id": "tok-dn", "best_bid": 0.39, "best_ask": 0.41,
+                "bids": {0.39: 5000.0}, "asks": {0.41: 5000.0}}
+        return up, down
+
+    def test_decide_receives_a_positive_countdown_not_minus_59681(self):
+        # Same shape as the FURIA market (venue endDate is kickoff, match in
+        # progress), with times relative to now so the test never expires:
+        # kickoff an hour ago must read positive, never the old -59681s.
+        import time
+        from core_brain.markets import LiveMarket
+        from core_brain.quotes import evaluate_market_quote
+        kickoff = time.time() - 3600.0
+        market = LiveMarket(
+            condition_id="0xfuria", market_slug="cs2-furia-aur1-2026-10-06",
+            up_token="tok-up", down_token="tok-dn",
+            start_ts=kickoff - 7200.0, end_ts=kickoff,
+            tick_size=0.01, neg_risk=False, game_start_ts=kickoff)
+        assert market.t_remaining() < 0  # the old clock says expired
+        up, down = self._books()
+        seen = {}
+
+        def decide(cfg, up_book, dn_book, inv, t_rem, wf):
+            seen["t_rem"] = t_rem
+            return ([_intent(side="UP", token="tok-up", price=0.59),
+                     _intent(side="DOWN", token="tok-dn", price=0.39)], "")
+
+        ev = evaluate_market_quote(
+            market.condition_id, MakerConfig(), "https://clob.polymarket.com",
+            fetch_market=lambda cid: market,
+            fetch_books=lambda host, tok: up if tok == "tok-up" else down,
+            inventory_for=lambda m: Inventory(),
+            decide=decide,
+        )
+        assert seen["t_rem"] > 0
+        assert seen["t_rem"] <= 6 * 3600.0
+        assert len(ev.intents) == 2
+        assert ev.why == ""
+
+    def test_stale_window_still_refuses(self):
+        from core_brain.markets import LiveMarket, quote_t_remaining
+        market = LiveMarket(
+            condition_id="0xfuria", market_slug="cs2-furia-aur1-2026-10-06",
+            up_token="tok-up", down_token="tok-dn",
+            start_ts=self.END - 3600.0, end_ts=self.END,
+            tick_size=0.01, neg_risk=False, game_start_ts=self.KICKOFF)
+        # A day after kickoff the window is spent: negative again.
+        assert quote_t_remaining(market, now=self.KICKOFF + 86400.0) < 0
