@@ -83,8 +83,8 @@ def plan_orders(
     """Split open orders + desired intents into (cancel, submit).
 
     PLACE-AND-WAIT (#384). Every resting pair passed the pair-cost gate before
-    placement, so every resting order is profitable by definition -- no
-    re-check needed. A resting order whose token still has an intent this
+    placement, so drift alone is never a reason to re-check a resting order.
+    (The pair-cost re-gate below still applies.) A resting order whose token still has an intent this
     cycle is KEPT at its own price: no tolerance check, no dead band, no
     drift comparison. The intent is suppressed via held_tokens (no duplicate
     posted). Only two things still cancel: no intent for the token

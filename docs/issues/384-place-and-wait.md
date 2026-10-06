@@ -12,8 +12,9 @@ landed at the back of a new level, where the same thing happened again.
 
 ## The rule
 
-Every resting pair passed the pair-cost gate before placement, so every resting
-order is profitable by definition — no re-check needed. A resting order whose
+Every resting pair passed the pair-cost gate before placement, so drift alone
+is never a reason to re-check a resting order (the pair-cost re-gate below
+still applies). A resting order whose
 token still has an intent this cycle is KEPT at its own price. Point. No
 tolerance check, no dead band, no drift comparison. The intent is suppressed
 via `held_tokens`, so no duplicate is posted beside the kept order.
