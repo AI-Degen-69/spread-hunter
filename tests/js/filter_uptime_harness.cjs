@@ -65,4 +65,8 @@ const readings = payloads.map((status) => {
   app.setFilterUptime(status);
   return stubElement('scan-filter-uptime').textContent;
 });
-process.stdout.write(JSON.stringify({ readings }));
+const shadowTitles = payloads.filter((status) => status.shadow_run).map((status) => {
+  app.setShadowRun(status);
+  return stubElement('shadow-run-clock').title;
+});
+process.stdout.write(JSON.stringify({ readings, shadow_titles: shadowTitles }));

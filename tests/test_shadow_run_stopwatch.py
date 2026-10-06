@@ -9,6 +9,8 @@ surfaces it -- but only for the store the page is actually reading.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,7 @@ def _test_cfg():
     return MakerConfig()
 
 _STATIC = Path(__file__).resolve().parent.parent / "dashboard" / "static"
+_CLOCK_HARNESS = Path(__file__).resolve().parent / "js" / "filter_uptime_harness.cjs"
 
 
 def _heartbeat(tmp_path, monkeypatch, **overrides):
@@ -203,3 +206,22 @@ def test_run_shadow_publishes_and_refreshes_its_heartbeat(tmp_path, monkeypatch)
     assert writes[1]["heartbeat_ts"] > writes[0]["heartbeat_ts"]
     assert writes[0]["finished"] is False
     assert final["finished"] is True
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed on this host")
+def test_dashboard_labels_unlimited_shadow_runs_without_a_time_box():
+    payloads = [{"shadow_run": {
+        "running": True,
+        "run_id": "shadow-unlimited",
+        "minutes": -1,
+        "elapsed_sec": 3600,
+    }}]
+
+    result = subprocess.run(
+        [shutil.which("node"), str(_CLOCK_HARNESS), json.dumps(payloads)],
+        capture_output=True, text=True, check=True, encoding="utf-8",
+    )
+
+    assert json.loads(result.stdout)["shadow_titles"] == [
+        "Shadow rehearsal shadow-unlimited running, no time box (runs until stopped)"
+    ]

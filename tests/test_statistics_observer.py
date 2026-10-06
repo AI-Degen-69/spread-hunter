@@ -56,3 +56,15 @@ def test_observer_stops_on_stop_file(tmp_path: Path, monkeypatch):
     assert midrun.count < 10
     assert calls == 1
     assert len(midrun_finalized) == 1
+
+
+
+def test_observer_negative_max_hours_runs_until_tick_limit(tmp_path: Path, monkeypatch):
+    db = _seed_db(tmp_path)
+    monkeypatch.setattr(
+        "core_brain.statistics_observer.write_statistics_report", lambda *a, **k: None)
+
+    out = observe(db, "run-a", "shadow", tmp_path / "unlimited-data",
+                  ticks=2, interval=0, max_hours=-1)
+
+    assert out.count == 2

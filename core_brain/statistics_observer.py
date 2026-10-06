@@ -39,7 +39,7 @@ def observe(
             kpi = kpi_report(watch_path, run_id=run_id)
             store.append_snapshot(mode, run_id, "OBSERVING", kpi, [])
             count += 1
-            if max_hours is not None and time.monotonic() - started >= max_hours * 3600:
+            if max_hours is not None and max_hours >= 0 and time.monotonic() - started >= max_hours * 3600:
                 break
             if interval:
                 time.sleep(interval)
@@ -54,7 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--watch", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--interval", type=float, default=5.0)
-    parser.add_argument("--max-hours", type=float, default=24.0)
+    parser.add_argument("--max-hours", type=float, default=24.0,
+                        help="observe at most this many hours (default: 24; negative runs until stopped)")
     parser.add_argument("--stop-file", type=str, default=None)
     parser.add_argument("--data-dir", type=str, default="data")
     args = parser.parse_args(argv)
