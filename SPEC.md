@@ -1,28 +1,44 @@
-# SPEC: Issue #371 — Multi-arm tournament UI: port isolation, indexed scratch stores, and dashboard run switcher
+# SPEC: Issue #365 — Prune stale local stores and close the two audit gaps
 
 ## Goal
-Provide multi-arm tournament visualization and execution orchestration where each test arm runs independently with its own designated port, isolated scratch database, unique indexing scheme, and seamless switching directly in the dashboard UI.
+Run the existing storage-retention tooling against the live `data/`, `runtime/`
+and `reports/` folders to reclaim stale rehearsal databases, runtime state and
+generated reports, and close the two gaps that let stale files survive the audit
+(cwd-dependent scan root, top-level-only runtime sweep) — without touching the
+production registry.
 
 ## Acceptance Criteria
-- [ ] Tournament runner launches independent arms with distinct scratch databases named by issue, arm index, and arm name (`data/<issue>_tournament_<idx>_<arm>_<stamp>.db`) and run IDs (`shadow-<issue>-t<idx>-<arm>-<stamp>`).
-- [ ] Each trial arm executes in isolation without lock collisions, port conflicts, or shared state interference.
-- [ ] Dashboard discovers tournament runs and displays unique arm index, port/pid, and status (`RUNNING` / `FINISHED`) in the run switcher UI.
-- [ ] Dedicated dashboard port links (`:<port>`) rendered in the run switcher when separate dashboard instances are running.
-- [ ] Switching active database via `/api/system/db` successfully switches active telemetry without server restart and invalidates cached snapshots from the previous database.
-- [ ] Finished/ended shadow runs retain their per-run ring telemetry when switched to, instead of falling back to unrelated live event rings.
-- [ ] The dashboard server accurately reports its bound port in status telemetry (`services.dash.port`).
-- [ ] Comprehensive unit and integration test suites pass cleanly: `python -m pytest -q tests/test_live_dash.py tests/test_shadow_tournament.py tests/test_live_state_language.py`.
+- [ ] `audit_storage()` resolves its base directory from the repository root
+      constant (`LIVE_ROOT`), not `Path.cwd()`; running the CLI from `scripts/`
+      and from the repo root produce the same audit (modulo documented
+      `PYTHONPATH` launch note).
+- [ ] The runtime sweep classifies files inside nested per-run folders
+      (`runtime/runNNN/...` and legacy `run/` equivalents) per-leaf with each
+      leaf's own mtime; a stale nested database is reported reclaimable;
+      directories themselves are never deletion targets.
+- [ ] `data/orders.db` (+ `-wal`/`-shm`) and `data/price_tape.db` remain
+      non-deletable; `assert_not_protected_store()` still raises for them, and
+      nested-runtime scanning plus `prune_storage()` deletion-time refusals
+      cannot bypass that protection (including via forged items, `rmtree`
+      descendants, or WAL/SHM siblings).
+- [ ] New tests in `tests/test_data_retention.py` cover cwd-independence and
+      nested runtime scanning; each fails before its change and passes after.
+- [ ] A dry-run prune on the operator tree is reviewed, then executed by the
+      operator (`--no-dry-run` is operator-gated, never agent-run), and
+      `docs/data_inventory.md` is regenerated from the resulting audit.
+- [ ] `python -m pytest -q tests/test_data_retention.py` passes.
 
 ## Scope
 ### In scope
-- Tournament DB and run ID naming and parsing functions.
-- Adding `--dash-port` metadata argument to `core_brain/shadow_run.py`.
-- Enhancing `dashboard/server.py` with tournament metadata extraction, index-based sorting, per-run ring retention for finished runs, and accurate port reporting.
-- Frontend run switcher improvements in `dashboard/static/app.js`: `runSwitcherLabel`, dedicated port links, and cached snapshot invalidation on store switch.
-- Adding `scripts/shadow_tournament.py` launcher supporting dry-run planning, port probing, isolated env pass-through, and graceful child process cleanup.
-- Test coverage across `tests/test_live_dash.py`, `tests/test_shadow_tournament.py`, and `tests/test_live_state_language.py`.
-
+- Anchoring the audit at the repository root via existing `LIVE_ROOT`.
+- Recursive per-leaf runtime/`run/` sweep with the same protection precedence
+  as `data/` files; symlink directories not followed.
+- Deletion-time refusal hardening in `prune_storage()`.
+- Focused regression tests + inventory regeneration.
 ### Out of scope
-- Modifying production `data/orders.db` (strictly scratch database stores only).
-- Placing real venue orders (shadow / paper execution only).
-- Overriding core order management safety checks or touching live port 8799 for testing.
+- Deleting/editing anything in `data/` except through `prune_storage()` policy.
+- Quoting, sizing, or strategy code changes.
+- Scheduled/automatic prune job (follow-up issue instead).
+- Git history rewriting or `git gc`.
+- New retention action set (`ARCHIVE` stays unused by the CLI), count-based
+  rules, or retention-window changes (14-day default kept).

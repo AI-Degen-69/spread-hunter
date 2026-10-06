@@ -24,9 +24,10 @@ import shutil
 import sys
 import time
 import urllib.parse
-from typing import Sequence
+from typing import Iterator, Sequence
 
 from core_brain.order_registry import DEFAULT_DB_PATH as PROD_DB_PATH
+from core_brain.runtime_paths import LIVE_ROOT
 
 
 class DataRetentionSafetyViolation(BaseException):
@@ -176,7 +177,7 @@ def audit_storage(
 ) -> list[AuditItem]:
     """Scan and audit storage items against the retention policy."""
     if base_dir is None:
-        base_dir = Path.cwd()
+        base_dir = LIVE_ROOT
     if policy is None:
         policy = DataRetentionPolicy()
     if now is None:
@@ -338,43 +339,81 @@ def audit_storage(
                         )
                     )
 
-    # 2. Audit runtime/ and legacy run/
+    # 2. Audit runtime/ and legacy run/ — recursive per-leaf walk so nested
+    # per-run folders (runtime/runNNN/...) are classified with each leaf's
+    # own mtime. Directories are never deletion targets (empty dirs are
+    # left in place); directory symlinks are not descended into.
+    excluded_lower = [f.lower() for f in policy.excluded_filenames]
     for rdir, family_label in [(runtime_dir, "runtime_state"), (legacy_run_dir, "legacy_run")]:
         if rdir.exists() and rdir.is_dir():
-            for entry in rdir.iterdir():
-                stat = entry.stat()
-                age_days = max(0.0, (now - stat.st_mtime) / 86400.0)
-                if entry.is_file():
+            for entry in _iter_audit_leaves(rdir):
+                if entry.is_symlink():
                     items.append(
                         AuditItem(
                             path=entry,
                             family=family_label,
-                            action=AuditAction.KEEP if age_days <= policy.retention_days else AuditAction.DELETE,
-                            reason=(
-                                f"Runtime file within {policy.retention_days}d ({age_days:.1f}d old)"
-                                if age_days <= policy.retention_days
-                                else f"Runtime file exceeds {policy.retention_days}d ({age_days:.1f}d old)"
-                            ),
+                            action=AuditAction.KEEP,
+                            reason="Symbolic link (not followed)",
+                            size_bytes=0,
+                            mtime=now,
+                        )
+                    )
+                    continue
+                if not entry.is_file():
+                    continue
+                stat = entry.stat()
+                age_days = max(0.0, (now - stat.st_mtime) / 86400.0)
+                name = entry.name
+                if is_protected_registry_path(entry):
+                    items.append(
+                        AuditItem(
+                            path=entry,
+                            family="production_registry",
+                            action=AuditAction.PROTECTED,
+                            reason="Production registry (strictly protected)",
                             size_bytes=stat.st_size,
                             mtime=stat.st_mtime,
                         )
                     )
-                elif entry.is_dir():
-                    total_size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                    continue
+                if name.lower() in excluded_lower:
                     items.append(
                         AuditItem(
                             path=entry,
                             family=family_label,
-                            action=AuditAction.KEEP if age_days <= policy.retention_days else AuditAction.DELETE,
-                            reason=(
-                                f"Runtime dir within {policy.retention_days}d ({age_days:.1f}d old)"
-                                if age_days <= policy.retention_days
-                                else f"Runtime dir exceeds {policy.retention_days}d ({age_days:.1f}d old)"
-                            ),
-                            size_bytes=total_size,
+                            action=AuditAction.KEEP,
+                            reason="Price tape store (excluded from cleanup)",
+                            size_bytes=stat.st_size,
                             mtime=stat.st_mtime,
                         )
                     )
+                    continue
+                if any(re.search(pat, name, re.IGNORECASE) for pat in policy.user_protected_patterns):
+                    items.append(
+                        AuditItem(
+                            path=entry,
+                            family="user_protected",
+                            action=AuditAction.KEEP,
+                            reason=f"User protected pattern match ({name})",
+                            size_bytes=stat.st_size,
+                            mtime=stat.st_mtime,
+                        )
+                    )
+                    continue
+                items.append(
+                    AuditItem(
+                        path=entry,
+                        family=family_label,
+                        action=AuditAction.KEEP if age_days <= policy.retention_days else AuditAction.DELETE,
+                        reason=(
+                            f"Runtime file within {policy.retention_days}d ({age_days:.1f}d old)"
+                            if age_days <= policy.retention_days
+                            else f"Runtime file exceeds {policy.retention_days}d ({age_days:.1f}d old)"
+                        ),
+                        size_bytes=stat.st_size,
+                        mtime=stat.st_mtime,
+                    )
+                )
 
     # 3. Audit reports/
     if reports_dir.exists() and reports_dir.is_dir():
@@ -422,6 +461,63 @@ def audit_storage(
     return sorted(items, key=lambda x: (x.family, x.path.name))
 
 
+def _iter_audit_leaves(root: Path) -> Iterator[Path]:
+    """Yield every entry under root without following symlinks.
+
+    `Path.rglob()` descends into directory symlinks on some Python versions,
+    which would let the audit classify — and the prune delete — files outside
+    the audited tree. This manual walk never descends through a link:
+    symlinked entries are yielded as leaves (callers KEEP them) and only real
+    directories are descended into. Unreadable directories are skipped.
+    """
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            children = sorted(current.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.is_symlink() or not child.is_dir():
+                yield child
+            else:
+                stack.append(child)
+
+
+def _refuse_protected_prune_target(path: Path, policy: DataRetentionPolicy) -> None:
+    """Raise DataRetentionSafetyViolation if a prune target is protected.
+
+    Deletion-time refusal at the destructive boundary: covers the production
+    registry (and its -wal/-shm siblings), the policy's excluded filenames
+    (e.g. price_tape.db), and every descendant when the target is a
+    directory about to go through `shutil.rmtree()` — so neither the scan
+    nor a forged audit item can remove a protected store.
+    """
+    assert_not_protected_store(path)
+    excluded_lower = [f.lower() for f in policy.excluded_filenames]
+    if Path(path).name.lower() in excluded_lower:
+        raise DataRetentionSafetyViolation(
+            f"Target {path!r} is excluded from cleanup "
+            f"({policy.excluded_filenames}). Deletion is strictly forbidden."
+        )
+    try:
+        is_dir = Path(path).is_dir() and not Path(path).is_symlink()
+    except OSError:
+        is_dir = False
+    if is_dir:
+        for descendant in _iter_audit_leaves(Path(path)):
+            if descendant.is_symlink():
+                continue
+            if not descendant.is_file():
+                continue
+            assert_not_protected_store(descendant)
+            if descendant.name.lower() in excluded_lower:
+                raise DataRetentionSafetyViolation(
+                    f"Target {descendant!r} inside {path!r} is excluded from cleanup "
+                    f"({policy.excluded_filenames}). Deletion is strictly forbidden."
+                )
+
+
 def prune_storage(
     audit_items: Sequence[AuditItem],
     dry_run: bool = True,
@@ -429,11 +525,12 @@ def prune_storage(
 ) -> PruneResult:
     """Safely delete files marked with AuditAction.DELETE."""
     result = PruneResult(dry_run=dry_run)
+    policy = DataRetentionPolicy()
 
     for item in audit_items:
         if item.action == AuditAction.DELETE:
-            # Triple check production registry guard
-            assert_not_protected_store(item.path)
+            # Deletion-time refusal: registry, excluded names, rmtree descendants.
+            _refuse_protected_prune_target(item.path, policy)
 
             if dry_run:
                 # In dry run, we record what would be deleted without touching disk
@@ -450,6 +547,8 @@ def prune_storage(
                             for ext in ("-wal", "-shm"):
                                 sib = item.path.parent / f"{item.path.name}{ext}"
                                 if sib.exists():
+                                    # Never sweep a protected/excluded sibling along with its base.
+                                    _refuse_protected_prune_target(sib, policy)
                                     try:
                                         sib.unlink()
                                     except OSError:
@@ -518,7 +617,12 @@ def generate_inventory_markdown(audit_items: Sequence[AuditItem], policy: DataRe
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for data retention audit and prune."""
-    parser = argparse.ArgumentParser(description="Audit and prune stale spread-hunter local data stores.")
+    parser = argparse.ArgumentParser(
+        description="Audit and prune stale spread-hunter local data stores.",
+        epilog="The audit is always anchored at the repository root. "
+        "When launching from another directory (e.g. scripts/), set "
+        "PYTHONPATH to the repository root so the package imports resolve.",
+    )
     parser.add_argument("--audit", action="store_true", default=True, help="Run read-only storage audit (default)")
     parser.add_argument("--prune", action="store_true", help="Execute cleanup of eligible files")
     parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True, help="Simulate prune without deleting (default)")

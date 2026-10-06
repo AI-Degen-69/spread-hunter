@@ -232,8 +232,12 @@ def test_pruning_parent_db_also_cleans_siblings(tmp_path: Path):
 
 def test_cli_main_dry_run_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     """Test CLI main() execution for dry-run and json modes."""
+    import json
+
     from core_brain.data_retention import main
 
+    # The CLI is anchored at the repo root: a foreign cwd must not leak
+    # into the audit (T1, #365) — the sandbox below must stay invisible.
     monkeypatch.chdir(tmp_path)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -243,11 +247,14 @@ def test_cli_main_dry_run_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert exit_code == 0
     captured = capsys.readouterr()
     assert "SPREAD-HUNTER DATA STORAGE AUDIT" in captured.out
+    assert "stats_sample.db" not in captured.out
 
     exit_code_json = main(["--json"])
     assert exit_code_json == 0
     captured_json = capsys.readouterr()
-    assert "stats_sample.db" in captured_json.out
+    parsed = json.loads(captured_json.out)
+    assert isinstance(parsed, list)
+    assert all("stats_sample.db" != row["name"] for row in parsed)
 
     exit_code_prune = main(["--prune", "--dry-run"])
     assert exit_code_prune == 0
@@ -269,4 +276,148 @@ def test_inventory_markdown_generation(tmp_path: Path):
     assert "# Data Storage Inventory & Retention Audit" in md
     assert "Reclaimable" in md
     assert "stats_test.db" in md
+
+
+def test_audit_defaults_to_repo_root_not_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """`audit_storage()` with no base_dir must audit the repo root (T1, #365)."""
+    from core_brain.runtime_paths import LIVE_ROOT
+
+    monkeypatch.chdir(tmp_path)
+    items = audit_storage()
+
+    assert len(items) > 0
+    assert all(str(LIVE_ROOT) in str(it.path) for it in items)
+
+
+def test_cli_audit_identical_from_foreign_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """CLI audit from an unrelated cwd must match the repo-root audit (T1, #365)."""
+    from core_brain.data_retention import main
+
+    exit_root = main(["--audit"])
+    assert exit_root == 0
+    out_root = capsys.readouterr().out
+
+    monkeypatch.chdir(tmp_path)
+    exit_foreign = main(["--audit"])
+    assert exit_foreign == 0
+    out_foreign = capsys.readouterr().out
+
+    assert out_root == out_foreign
+
+
+def _make_stale(path: Path, days: float = 30.0) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("stale rehearsal data")
+    old_time = time.time() - (days * 86400)
+    os.utime(path, (old_time, old_time))
+    return path
+
+
+def test_nested_runtime_leaf_classified_per_leaf(tmp_path: Path):
+    """Stale files inside runtime/runNNN/ must be reported reclaimable (T2, #365)."""
+    stale = _make_stale(tmp_path / "runtime" / "run145" / "stale_rehearsal.db")
+    fresh = tmp_path / "runtime" / "run145" / "fresh_rehearsal.db"
+    fresh.parent.mkdir(parents=True, exist_ok=True)
+    fresh.write_text("fresh")
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    stale_item = next(it for it in items if it.path == stale)
+    assert stale_item.action == AuditAction.DELETE
+    fresh_item = next(it for it in items if it.path == fresh)
+    assert fresh_item.action == AuditAction.KEEP
+
+
+def test_nested_runtime_dir_never_delete_target(tmp_path: Path):
+    """Directories themselves must never be deletion targets (T2, #365)."""
+    _make_stale(tmp_path / "runtime" / "run145" / "stale_rehearsal.db")
+    # Age the per-run directory itself: the old aggregate sweep keyed the
+    # verdict off the directory mtime.
+    run_dir = tmp_path / "runtime" / "run145"
+    old_time = time.time() - (30 * 86400)
+    os.utime(run_dir, (old_time, old_time))
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    dir_deletes = [it for it in items if it.action == AuditAction.DELETE and it.path.is_dir()]
+    assert dir_deletes == []
+
+
+def test_nested_protected_registry_stays_protected(tmp_path: Path):
+    """An orders.db nested under runtime/ must stay protected (T2, #365)."""
+    nested_registry = _make_stale(tmp_path / "runtime" / "run145" / "orders.db")
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    match = next(it for it in items if it.path == nested_registry)
+    assert match.action == AuditAction.PROTECTED
+
+
+def test_prune_refuses_forged_price_tape_delete(tmp_path: Path):
+    """A forged DELETE item for price_tape.db must raise, file preserved (T3, #365)."""
+
+    tape = tmp_path / "price_tape.db"
+    tape.write_text("tape")
+    forged = AuditItem(
+        path=tape,
+        family="price_tape",
+        action=AuditAction.DELETE,
+        reason="forged",
+        size_bytes=tape.stat().st_size,
+        mtime=time.time(),
+    )
+    with pytest.raises(DataRetentionSafetyViolation):
+        prune_storage([forged], dry_run=False)
+    assert tape.exists()
+
+
+def test_prune_refuses_dir_with_protected_descendant(tmp_path: Path):
+    run_dir = tmp_path / "runtime" / "run145"
+    run_dir.mkdir(parents=True)
+    registry = run_dir / "orders.db"
+    registry.write_text("registry")
+    forged = AuditItem(
+        path=run_dir,
+        family="runtime_state",
+        action=AuditAction.DELETE,
+        reason="forged",
+        size_bytes=registry.stat().st_size,
+        mtime=time.time(),
+    )
+    with pytest.raises(DataRetentionSafetyViolation):
+        prune_storage([forged], dry_run=False)
+    assert registry.exists()
+    assert run_dir.exists()
+
+
+def test_runtime_walk_does_not_follow_dir_symlinks(tmp_path: Path):
+    """A symlinked dir under runtime/ is kept, never descended (review fix, #365)."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escape = outside / "stale_escape.db"
+    escape.write_text("escape")
+    old_time = time.time() - (30 * 86400)
+    os.utime(escape, (old_time, old_time))
+
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    link = runtime_dir / "run999link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation needs privileges on this platform")
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    names = [it.path.name for it in items]
+    assert "stale_escape.db" not in names
+    link_items = [it for it in items if it.path == link]
+    assert len(link_items) == 1
+    assert link_items[0].action == AuditAction.KEEP
 
