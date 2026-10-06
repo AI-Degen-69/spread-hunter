@@ -48,6 +48,7 @@ spread-hunter/
     *.log                 Every process log the menu redirects
   reports/                Generated statistics reports (gitignored)
   docs/issues/            Issue showcases: <id>-presentation-<slug>.html
+  docs/archive/           Superseded human-written docs (readable, not active contract)
   tests/                  Full hermetic unit & integration test suite
 ```
 
@@ -81,6 +82,18 @@ Two rules keep it that way:
 Ignore patterns for these directories are anchored with a leading `/`. An
 unanchored `reports/` matches a directory of that name at ANY depth, and it
 silently swallowed `docs/reports/` -- two issue showcases sat there untracked.
+
+## Cleanup decisions (#366)
+
+| File | Decision | Destination / rationale |
+| --- | --- | --- |
+| `docs/297-`, `304-`, `310-`, `343-presentation-*.html` | Moved | `docs/issues/`, per the showcase contract above |
+| `project/` | Deleted | Empty leftover directory; sole tracked file was its own `.gitignore`, nothing imports from it |
+| `SHARED_TASK_NOTES.md` | Deleted | Backlog of already-implemented iterations, referenced nowhere |
+| `SPEC.md`, `CONSTRAINTS.md` | Archived | `docs/archive/`, history preserved; three historical showcases name them as text labels |
+| `metadata.json` | Kept at root | Host-owned: no repo reference found, so deleting could break tooling outside this repo |
+
+Enforced by `tests/test_docs_layout.py` (showcase placement + `project/` absence).
 
 ## Data storage retention policy
 
