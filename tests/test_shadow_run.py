@@ -1091,7 +1091,17 @@ class TestSecondRotation:
                 "asks": {0.52: 500.0}, "best_bid": 0.46, "best_ask": 0.52,
                 "malformed": 0}
 
-    def _run_cycles(self, tmp_path, monkeypatch, *, cycles, prices, tape):
+    @staticmethod
+    def _wide_ask_book(_clob_host, token_id):
+        # Same shape as the canonical book, but the DOWN ask is 0.60: any
+        # resting UP price plus 0.60 fails the pair-cost re-gate (cap 1.00),
+        # so rotation here supersedes through the re-gate.
+        return {"token_id": token_id, "bids": {0.54: 500.0},
+                "asks": {0.60: 500.0}, "best_bid": 0.54, "best_ask": 0.60,
+                "malformed": 0}
+
+    def _run_cycles(self, tmp_path, monkeypatch, *, cycles, prices, tape,
+                    books=None):
         """Rotate one market `cycles` times, quoting `prices[i]` on cycle i."""
         import core_brain.markets as markets_mod
         from core_brain.shadow_run import _Deadline, run_shadow
@@ -1128,7 +1138,7 @@ class TestSecondRotation:
             markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
             client_fn=lambda: object(),
             decide_fn=decide_fn,
-            fetch_books=self._canonical_book,
+            fetch_books=books or self._canonical_book,
             interval=0.0,
         )
         return result, seen_cycles["n"], decided["n"]
@@ -1155,15 +1165,16 @@ class TestSecondRotation:
         """An order the loop decided to replace must not keep collecting
         simulated fills at a price the live loop would have cancelled.
 
-        The price steps here are 4c apart, OUTSIDE `requote_dead_band` (3c):
-        a step inside the band is now deliberately KEPT -- that is the dead
-        band working, not a supersession bug -- so this test's replacement
-        scenario needs moves big enough to actually trigger a re-quote.
+        Place-and-wait (#384) holds drift alone, so this rotation supersedes
+        through the pair-cost re-gate instead: the book's DOWN ask is 0.60,
+        and every resting UP price plus 0.60 fails the 1.00 cap. The 4c steps
+        still move the quote each cycle; the gate does the cancelling.
         """
         from core_brain.order_registry import OrderRegistry
 
         self._run_cycles(tmp_path, monkeypatch, cycles=3,
-                         prices=[0.47, 0.52, 0.57], tape=lambda n: {})
+                         prices=[0.47, 0.52, 0.57], tape=lambda n: {},
+                         books=self._wide_ask_book)
 
         reg = OrderRegistry(db_path=tmp_path / "shadow.db")
         rows = [o for o in reg.get_all_orders() if o["token_id"] == "tok-up"]
