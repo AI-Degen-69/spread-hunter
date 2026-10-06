@@ -122,26 +122,17 @@ class TestPlanOrders:
         assert to_cancel == []
         assert to_submit == []
 
-    def test_requoted_leg_carries_the_resting_complement_pair_id(self):
-        # Root cause of #206: re-quoting one leg of a market whose complement
-        # still rests used to mint a brand-new pair_id, splitting one economic
-        # pair into two one-legged pairs (seen live: 0.71 + 0.23 on Sweden
-        # landing in pair-9028... and pair-3dab...). plan_orders knows which
-        # resting order a submitted intent replaces, so it tags the intent
-        # with that order's pair_id for _submit_intents to carry forward.
-        # Place-and-wait (#384): drift alone no longer cancels, so this path
-        # is exercised through the pair-cost re-gate: the UP leg's own price
-        # fails the gate against the DOWN ask and is cancelled + resubmitted
-        # into the surviving complement's pair.
+    def test_held_pair_keeps_both_legs_and_needs_no_resubmit(self):
+        # #387: a wanted pair is held at its own prices even when the live
+        # hedge asks would fail the old pair-cost re-gate (0.73 + 0.30,
+        # 0.23 + 0.23 against the retired gate). No cancel, no submit, the
+        # pair_id never leaves the resting orders.
         open_orders = [
             {"token_id": "tok-up", "price": 0.73, "order_id": "o-up",
              "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
             {"token_id": "tok-dn", "price": 0.23, "order_id": "o-dn",
              "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
         ]
-        # Both legs are quoted this cycle (the normal decide flow); the DOWN
-        # leg still sits at its desired price and is KEPT, the UP leg's own
-        # price fails the pair-cost gate and is cancelled + resubmitted.
         intents = [
             _intent(side="UP", token="tok-up", price=0.71),
             _intent(side="DOWN", token="tok-dn", price=0.23),
@@ -151,14 +142,12 @@ class TestPlanOrders:
         to_cancel, to_submit = plan_orders(
             open_orders, intents, cfg=cfg,
             hedge_asks={"tok-up": 0.30, "tok-dn": 0.23})
-        assert [o["order_id"] for o in to_cancel] == ["o-up"]
-        assert len(to_submit) == 1
-        assert to_submit[0].token_id == "tok-up"
-        assert to_submit[0].pair_id == "pair-aaa111"
+        assert to_cancel == []
+        assert to_submit == []
 
-    def test_requote_with_no_resting_complement_carries_no_pair_id(self):
-        # A market with nothing else resting starts a fresh pair. The UP leg
-        # own price fails the pair-cost re-gate (#384: drift alone holds).
+    def test_single_held_leg_stays_without_submit(self):
+        # One resting leg whose token is still quoted: held at its own price,
+        # no duplicate posted beside it.
         open_orders = [
             {"token_id": "tok-up", "price": 0.73, "order_id": "o-up",
              "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
@@ -169,34 +158,17 @@ class TestPlanOrders:
             open_orders, intents,
             cfg=MakerConfig(max_completable_pair_cost=1.00),
             hedge_asks={"tok-up": 0.30})
-        assert len(to_submit) == 1
-        assert to_submit[0].pair_id is None
+        assert to_cancel == []
+        assert to_submit == []
 
-    def test_fully_requoted_pair_gets_one_fresh_pair_id_not_the_old_one(self):
-        # Both legs re-priced in the same cycle: nothing of the old pair
-        # survives this cycle's cancels, so the replacement legs must NOT
-        # resurrect the old id (a stale id could later collide with fills
-        # attributed to the cancelled legs). They land together under one NEW
-        # shared id, minted by the submit path.
-        # Both legs fail the pair-cost re-gate in the same cycle (#384: drift
-        # alone holds).
-        open_orders = [
-            {"token_id": "tok-up", "price": 0.73, "order_id": "o-up",
-             "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
-            {"token_id": "tok-dn", "price": 0.23, "order_id": "o-dn",
-             "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
-        ]
+    def test_two_fresh_intents_share_one_fresh_pair_id(self):
+        # The submit path still mints one shared pair id for two fresh legs
+        # posted together (no stale id to collide with).
         intents = [
             _intent(side="UP", token="tok-up", price=0.71),
             _intent(side="DOWN", token="tok-dn", price=0.25),
         ]
-        to_cancel, to_submit = plan_orders(
-            open_orders, intents,
-            cfg=MakerConfig(max_completable_pair_cost=1.00),
-            hedge_asks={"tok-up": 0.30, "tok-dn": 0.80})
-        assert len(to_cancel) == 2
-        assert len(to_submit) == 2
-        assert all(i.pair_id is None for i in to_submit)
+        assert all(i.pair_id is None for i in intents)
 
         from unittest.mock import MagicMock
         from core_brain.trader_loop import _submit_intents
@@ -206,20 +178,19 @@ class TestPlanOrders:
         venue.create_order.return_value = {"signed": True}
         venue.post_orders.return_value = [{"orderID": "0x1"}, {"orderID": "0x2"}]
         registry = MagicMock()
+        from core_brain.config import MakerConfig
 
-        _submit_intents(venue, registry, FakeMarket("0xmkt"), to_submit, MakerConfig())
+        _submit_intents(venue, registry, FakeMarket("0xmkt"), intents, MakerConfig())
         created = [call.args[0] for call in registry.create_order.call_args_list]
         assert len(created) == 2
         pids = {o.pair_id for o in created}
         assert len(pids) == 1
         fresh_pid = pids.pop()
-        assert fresh_pid != "pair-aaa111"
         assert fresh_pid.startswith("pair-")
 
-    def test_carried_pair_id_survives_the_queue_hold(self):
-        # The DOWN leg fails the pair-cost re-gate while the UP leg passes
-        # (#384: both wanted, so drift alone holds both). The replacement
-        # intent for the cancelled DOWN leg must join the resting UP leg.
+    def test_wanted_legs_hold_despite_queue_and_gate_pressure(self):
+        # #387: both legs wanted, live asks failing the retired pair-cost
+        # gate, queue hold armed -- everything that used to cancel now holds.
         open_orders = [
             {"token_id": "tok-up", "price": 0.73, "order_id": "o-up",
              "side": "BUY", "status": "open", "pair_id": "pair-aaa111"},
@@ -236,10 +207,8 @@ class TestPlanOrders:
             hedge_asks={"tok-up": 0.20, "tok-dn": 0.80},
             queue_ahead={"o-up": 10.0},
             hold_queue_shares=50.0)
-        assert [o["order_id"] for o in to_cancel] == ["o-dn"]
-        assert len(to_submit) == 1
-        assert to_submit[0].token_id == "tok-dn"
-        assert to_submit[0].pair_id == "pair-aaa111"
+        assert to_cancel == []
+        assert to_submit == []
 
     def test_the_queue_hold_keeps_a_near_front_order_through_a_price_move(self):
         # #304: the hold is the whole point of the issue, so it gets its own
@@ -284,18 +253,19 @@ class TestPlanOrders:
             hold_queue_shares=200.0)
         assert to_cancel == []
 
-    def test_the_queue_hold_never_overrides_the_pair_cost_re_gate(self):
-        # Queue position is not worth a booked loss. The order is at the front
-        # of the queue and still goes, because completing it costs $1.02.
+    def test_front_of_queue_order_holds_despite_failing_gate(self):
+        # #387: queue position AND a failing pair-cost gate -- the wanted
+        # order is still held. Cost is judged at placement, never after.
         open_orders = [_open(price=0.73, oid="o-up")]
         intents = [_intent(price=0.60)]
-        to_cancel, _ = plan_orders(
+        to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.01,
             cfg=MakerConfig(max_completable_pair_cost=1.00),
             hedge_asks={"tok-up": 0.42},
             queue_ahead={"o-up": 5.0},
             hold_queue_shares=200.0)
-        assert [o["order_id"] for o in to_cancel] == ["o-up"]
+        assert to_cancel == []
+        assert to_submit == []
 
     def test_the_larger_of_dead_band_and_price_eps_wins(self):
         # Place-and-wait (#384): either tolerance holds a wanted token; drift
@@ -306,18 +276,18 @@ class TestPlanOrders:
                                    price_eps=0.001, dead_band=0.03)
         assert to_cancel == []
 
-    def test_a_kept_order_is_cancelled_when_its_own_price_fails_the_gate(self):
-        # The order rests at 0.60. The desired price is 0.58, within the band,
-        # so the band would keep it -- but completing at the DOWN ask of 0.42
-        # costs 1.02, which is exactly the hole the band would otherwise open.
+    def test_own_price_failing_the_retired_gate_still_holds(self):
+        # #387: the order rests at 0.60 and completing at the DOWN ask of
+        # 0.42 would cost 1.02 -- held anyway. The gate judges placements,
+        # not resting orders.
         cfg = MakerConfig(max_completable_pair_cost=1.00)
         open_orders = [_open(price=0.60)]
         intents = [_intent(price=0.58)]
         to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.03, cfg=cfg,
             hedge_asks={"tok-up": 0.42})
-        assert to_cancel == open_orders
-        assert [i.price for i in to_submit] == [0.58]
+        assert to_cancel == []
+        assert to_submit == []
 
     def test_a_kept_order_that_still_completes_under_the_cap_is_left_alone(self):
         cfg = MakerConfig(max_completable_pair_cost=1.00)
@@ -337,40 +307,40 @@ class TestPlanOrders:
                                    cfg=cfg, hedge_asks={})
         assert to_cancel == []
 
-    def test_dead_band_preserves_pair_cost_regate_and_distinguishes_reasons(self):
-        # Issue #361 regression test, under place-and-wait (#384):
+    def test_dead_band_widths_hold_despite_failing_gate(self):
+        # Issue #361 scenario, under no-re-check (#387):
         # Resting bid at 0.60, desired intent walks down to 0.55 (drift = 0.05).
-        # Opposite ask is 0.42. 0.60 + 0.42 = 1.02 >= max_completable_pair_cost (1.00).
-        # Both widths MUST cancel the order because completing costs $1.02,
-        # and both report CANCEL_REGATE_PAIR_COST -- drift alone never cancels.
+        # Opposite ask is 0.42 (0.60 + 0.42 = 1.02 >= the retired cap).
+        # Both dead-band widths hold the order and record no reason --
+        # cost is judged at placement, never after.
         cfg = MakerConfig(max_completable_pair_cost=1.00)
         open_orders = [_open(price=0.60, oid="o1")]
         intents = [_intent(price=0.55)]
         hedge_asks = {"tok-up": 0.42}
 
-        # 1. Narrow dead band (0.03): out of band
+        # 1. Narrow dead band (0.03): out of band -- held anyway.
         reasons_narrow = {}
         to_cancel_narrow, to_submit_narrow = plan_orders(
             open_orders, intents, dead_band=0.03, cfg=cfg,
             hedge_asks=hedge_asks, reasons=reasons_narrow,
         )
-        assert [o["order_id"] for o in to_cancel_narrow] == ["o1"]
-        assert reasons_narrow["o1"] == "regate_pair_cost"
-        assert [i.price for i in to_submit_narrow] == [0.55]
+        assert to_cancel_narrow == []
+        assert reasons_narrow == {}
+        assert to_submit_narrow == []
 
-        # 2. Wide dead band (0.08): in band, but fails pair-cost re-gate
+        # 2. Wide dead band (0.08): in band -- held anyway.
         reasons_wide = {}
         to_cancel_wide, to_submit_wide = plan_orders(
             open_orders, intents, dead_band=0.08, cfg=cfg,
             hedge_asks=hedge_asks, reasons=reasons_wide,
         )
-        assert [o["order_id"] for o in to_cancel_wide] == ["o1"]
-        assert reasons_wide["o1"] == "regate_pair_cost"
-        assert [i.price for i in to_submit_wide] == [0.55]
+        assert to_cancel_wide == []
+        assert reasons_wide == {}
+        assert to_submit_wide == []
 
-    def test_wider_dead_band_with_hold_levers_never_overrides_pair_cost_gate(self):
-        # Even with hold_below_target and hold_queue_shares active, an order
-        # that fails the pair-cost re-gate must never be held under dead_band=0.08.
+    def test_hold_levers_and_failing_gate_hold_together(self):
+        # #387: hold_below_target and hold_queue_shares active, pair-cost
+        # gate failing -- the wanted order is held, no reason recorded.
         cfg = MakerConfig(max_completable_pair_cost=1.00)
         open_orders = [_open(price=0.60, oid="o1")]
         intents = [_intent(price=0.55)]
@@ -385,9 +355,9 @@ class TestPlanOrders:
             hold_below_target=0.06,
             reasons=reasons,
         )
-        assert [o["order_id"] for o in to_cancel] == ["o1"]
-        assert reasons["o1"] == "regate_pair_cost"
-        assert [i.price for i in to_submit] == [0.55]
+        assert to_cancel == []
+        assert reasons == {}
+        assert to_submit == []
 
     def test_place_and_wait_holds_a_profitable_resting_pair_through_drift(self):
         # Issue #384: every resting pair passed the pair-cost gate before
@@ -897,11 +867,12 @@ class TestRunLoop:
         call_log = []
 
         def decide(cfg, up, dn, inv, t_rem, wf):
-            # Propose new price for UP leg (triggering replace)
+            # The old token is no longer quoted (triggering a not_quoted
+            # cancel); the new token's intent submits right after.
             return [_intent(side="UP", token="tok-up", price=0.62)], ""
 
         def open_orders_fn(m):
-            return [{"token_id": "tok-up", "price": 0.58, "order_id": "o-old", "id": "local-old", "side": "BUY", "status": "open"}]
+            return [{"token_id": "tok-old", "price": 0.58, "order_id": "o-old", "id": "local-old", "side": "BUY", "status": "open"}]
 
         def cancel_fn(client, registry, orders):
             call_log.append("cancel")
@@ -937,7 +908,7 @@ class TestRunLoop:
             return [_intent(side="UP", token="tok-up", price=0.62)], ""
 
         def open_orders_fn(m):
-            return [{"token_id": "tok-up", "price": 0.58, "order_id": "o-old", "id": "local-old", "side": "BUY", "status": "open"}]
+            return [{"token_id": "tok-old", "price": 0.58, "order_id": "o-old", "id": "local-old", "side": "BUY", "status": "open"}]
 
         def cancel_fn(client, registry, orders):
             call_log.append("cancel")
@@ -968,12 +939,12 @@ class TestRunLoop:
         assert "submit" not in call_log
 
     def _replacement_seam(self, call_log, cancel_fn, resting_order_ids_fn=None):
-        """A seam whose market wants a new UP price while an old quote rests."""
+        """A seam whose old token drops out of quote while a new one is wanted."""
         def decide(cfg, up, dn, inv, t_rem, wf):
             return [_intent(side="UP", token="tok-up", price=0.62)], ""
 
         def open_orders_fn(m):
-            return [{"token_id": "tok-up", "price": 0.58, "order_id": "o-old",
+            return [{"token_id": "tok-old", "price": 0.58, "order_id": "o-old",
                      "id": "local-old", "side": "BUY", "status": "open"}]
 
         def submit_fn(client, registry, market, intents, cfg):
@@ -1135,17 +1106,19 @@ class TestReGateRespectsHeldInventory:
         assert to_cancel == []
         assert to_submit == []
 
-    def test_the_re_gate_still_fires_on_a_token_whose_hedge_is_not_held(self):
-        # The guard against over-correcting: only the held token stands down.
+    def test_no_recheck_fires_on_a_token_whose_hedge_is_not_held(self):
+        # #387: the re-gate is retired, so even the token WITHOUT a held
+        # hedge is kept. Both legs hold at their own prices.
         cfg = MakerConfig(max_completable_pair_cost=1.00)
         open_orders = [_open("tok-up", 0.54, "o1"), _open("tok-dn", 0.40, "o2")]
         intents = [_intent(side="UP", token="tok-up", price=0.54),
                    _intent(side="DOWN", token="tok-dn", price=0.40)]
-        to_cancel, _ = plan_orders(
+        to_cancel, to_submit = plan_orders(
             open_orders, intents, dead_band=0.03, cfg=cfg,
             hedge_asks={"tok-up": 0.50, "tok-dn": 0.62},
             hedge_held={"tok-up"})
-        assert [o["order_id"] for o in to_cancel] == ["o2"]
+        assert to_cancel == []
+        assert to_submit == []
 
     def test_visit_one_derives_held_hedges_from_the_inventory(self):
         seen = {}

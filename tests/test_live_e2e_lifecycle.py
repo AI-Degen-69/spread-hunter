@@ -186,19 +186,14 @@ def test_partial_fill_sets_partial_not_filled(registry, venue):
     assert registry.get_order(down.id).status == "open"
 
 
-def test_requoted_leg_joins_the_resting_complement_pair(registry, venue):
-    # #206 end to end, exercised through the pair-cost re-gate: place-and-wait
-    # (#384) holds drift alone, so the UP leg's own price failing the gate
-    # cancels it and tags the replacement with the resting pair's id, and
-    # _submit_intents carries that id forward instead of minting a new one.
-    # Before the fix this minted fresh, leaving the market with two
-    # one-legged pairs -- exactly the detachment seen live on Sweden.
+def test_drifted_pair_rests_untouched_end_to_end(registry, venue):
+    # #387 end to end: both legs wanted after a drift, so nothing is
+    # cancelled and nothing is submitted -- the pair rests as one unit.
     cfg = load()
     intents, _ = _decide(cfg)
     _submit_intents(venue, registry, Market(), intents, cfg)
     original_pair = next(o.pair_id for o in registry.get_active_orders())
 
-    # The UP leg's own price fails the pair-cost gate; the DOWN leg passes.
     resting = registry.get_active_orders()
     up = next(o for o in resting if o.token_id == "tok-up")
     down = next(o for o in resting if o.token_id == "tok-dn")
@@ -221,17 +216,9 @@ def test_requoted_leg_joins_the_resting_complement_pair(registry, venue):
     to_cancel, to_submit = plan_orders(
         open_orders, drifted,
         cfg=cfg, hedge_asks={"tok-up": 0.60, "tok-dn": down.price})
-    assert [o["order_id"] for o in to_cancel] == [up.order_id]
-    assert len(to_submit) == 1
-    assert all(i.pair_id == original_pair for i in to_submit)
-
-    # Registry says the old leg is cancelled; the replacement joins the pair.
-    registry.update_order_status(up.id, "cancelled", last_polled_ts=up.last_polled_ts)
-    placed = _submit_intents(venue, registry, Market(), to_submit, cfg)
-    assert placed == 1
+    assert to_cancel == []
+    assert to_submit == []
 
     legs = registry.get_active_orders()
-    assert len(legs) == 2  # one two-legged pair, not two one-legged pairs
+    assert len(legs) == 2
     assert {o.pair_id for o in legs} == {original_pair}
-    assert {o.token_id for o in legs} == {"tok-up", "tok-dn"}
-    assert next(o for o in legs if o.token_id == "tok-dn").id == down.id

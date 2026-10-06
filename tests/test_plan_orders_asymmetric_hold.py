@@ -76,15 +76,15 @@ class TestAsymmetricRequoteHold:
             hold_below_target=0.05)
         assert to_cancel == []
 
-    def test_the_pair_cost_regate_still_cancels_a_held_bid(self):
-        # Direction never overrides the money gate: 0.60 + a 0.42 hedge ask is
-        # a 1.02 completable pair, which is a booked loss however good the
-        # queue position is.
-        to_cancel, _ = plan_orders(
+    def test_failing_gate_holds_a_held_bid(self):
+        # #387: 0.60 + a 0.42 hedge ask is a 1.02 completable pair -- held
+        # anyway. Cost is judged at placement, never after.
+        to_cancel, to_submit = plan_orders(
             [_open(price=0.60)], [_intent(price=0.57)],
             dead_band=0.01, cfg=_cfg(), hedge_asks={"tok-up": 0.42},
             hold_below_target=0.05)
-        assert [o["order_id"] for o in to_cancel] == ["o1"]
+        assert to_cancel == []
+        assert to_submit == []
 
     def test_the_hold_needs_a_real_hedge_ask(self):
         # Place-and-wait (#384): a missing hedge ask means the re-gate
@@ -103,16 +103,17 @@ class TestAsymmetricRequoteHold:
             dead_band=0.03, cfg=_cfg(), hedge_asks={"tok-up": 0.35})
         assert to_cancel == []
 
-    def test_a_cancelled_downward_move_still_records_its_reason(self):
-        # Place-and-wait (#384): drift alone no longer cancels, so this path
-        # is exercised through the pair-cost re-gate: 0.60 against a 0.42
-        # hedge ask completes at 1.02 and cancels with regate_pair_cost.
+    def test_a_held_downward_move_records_no_reason(self):
+        # #387: a wanted token is held and records nothing -- the only
+        # recorded cancel left is a token with no intent at all.
         reasons: dict = {}
-        plan_orders(
+        to_cancel, to_submit = plan_orders(
             [_open(price=0.60)], [_intent(price=0.57)],
             dead_band=0.01, cfg=_cfg(), hedge_asks={"tok-up": 0.52},
             hold_below_target=0.05, reasons=reasons)
-        assert reasons == {"o1": "regate_pair_cost"}
+        assert to_cancel == []
+        assert reasons == {}
+        assert to_submit == []
 
     def test_the_queue_hold_and_the_direction_hold_are_independent(self):
         # An order deep in the queue is still held on a downward move: the
@@ -134,16 +135,16 @@ class TestAsymmetricRequoteHold:
         assert to_cancel == []
         assert to_submit == []
 
-    def test_held_hedge_leg_regates_when_pair_exceeds_max_pair_cost(self):
-        # Resting bid 0.60 + held opposite leg at 0.43 = 1.03 >= max_pair_cost (0.99).
-        # It must not hold a losing pair.
+    def test_held_hedge_leg_holds_when_pair_exceeds_max_pair_cost(self):
+        # #387: resting bid 0.60 + held opposite leg at 0.43 = 1.03 --
+        # held anyway. Cost is judged at placement, never after.
         to_cancel, to_submit = plan_orders(
             [_open(price=0.60)], [_intent(price=0.56)],
             dead_band=0.03, cfg=MakerConfig(max_pair_cost=0.99),
             hedge_asks=None, hedge_held={"tok-up": 0.43},
             hold_below_target=0.05)
-        assert [o["order_id"] for o in to_cancel] == ["o1"]
-        assert [i.price for i in to_submit] == [0.56]
+        assert to_cancel == []
+        assert to_submit == []
 
 
 

@@ -1,5 +1,9 @@
 # Place-and-wait (Issue #384) — decision record
 
+> Superseded by #387 (2026-10-06): resting orders are no longer re-checked
+> against the pair-cost gate at all — not even the re-gate below fires. Only
+> `not_quoted` still cancels. This file stays as the history of #384.
+
 Operator decision 2026-10-06. No config value changed.
 
 ## Why chase-mid was wrong

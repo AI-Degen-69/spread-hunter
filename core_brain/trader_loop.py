@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from core_brain.quotes import Inventory, QuoteIntent, evaluate_market_quote
-from core_brain import risk
 from core_brain.cycle_stream import emit as _emit_cycle_event
 from core_brain.order_registry import InstanceInUse, OrderRegistry
 
@@ -82,16 +81,17 @@ def plan_orders(
 ) -> tuple[list[dict], list[QuoteIntent]]:
     """Split open orders + desired intents into (cancel, submit).
 
-    PLACE-AND-WAIT (#384). Every resting pair passed the pair-cost gate before
-    placement, so drift alone is never a reason to re-check a resting order.
-    (The pair-cost re-gate below still applies.) A resting order whose token still has an intent this
-    cycle is KEPT at its own price: no tolerance check, no dead band, no
-    drift comparison. The intent is suppressed via held_tokens (no duplicate
-    posted). Only two things still cancel: no intent for the token
-    (not_quoted), or the in-band re-gate failing pair cost
-    (regate_pair_cost). The dead band, queue hold, and direction hold stop
-    firing -- left in code untouched for the follow-up cancel-conditions
-    issue to disposition.
+    HOLD-AND-WAIT (#384, #387). Every resting pair passed the pair-cost gate
+    before placement, so drift alone is never a reason to re-check a resting
+    order -- and neither is the live book: a resting price plus a moving hedge
+    ask is not the pair's economics (rest price + rest price is), and
+    re-testing it cancels profitable pairs on book flicker. A resting order
+    whose token still has an intent this cycle is KEPT at its own price,
+    period. The intent is suppressed via held_tokens (no duplicate posted).
+    The only thing that still cancels is no intent for the token
+    (not_quoted). The dead band, queue hold, direction hold, and pair-cost
+    re-gate stop firing -- left in code untouched for the follow-up
+    cancel-conditions issue to disposition.
 
     Orders on tokens we no longer quote are cancelled. An intent with no kept
     order near its price is submitted.
@@ -238,58 +238,12 @@ def plan_orders(
             to_cancel.append(o)
             continue
 
-        is_hedge_held = tok in (hedge_held or ())
-        held_cost = hedge_held.get(tok) if isinstance(hedge_held, dict) else None
-        held_cost_val = float(held_cost) if (held_cost is not None and float(held_cost) > 0) else None
-
-        if is_hedge_held and held_cost_val is not None and cfg is not None:
-            max_pair_cap = float(getattr(cfg, "max_pair_cost", 0.99))
-            regate_blocks = bool(max_pair_cap > 0 and round(float(o["price"]) + held_cost_val, 4) >= max_pair_cap)
-            regate_armed = True
-        else:
-            regate_armed = (cfg is not None and hedge_asks is not None
-                            and not is_hedge_held)
-            regate_blocks = bool(regate_armed and risk.completable_pair_block(
-                cfg, float(o["price"]), hedge_asks.get(tok)))
-
-        # PLACE-AND-WAIT (#384): the token is still wanted this cycle, so the
-        # resting order is KEPT at its own price regardless of drift -- no
-        # tolerance check, no dead band, no queue / direction hold. Only the
-        # pair-cost re-gate below may cancel it. The tolerance, the hold
-        # predicates, and the branches they fed are bypassed but left in place
-        # for the follow-up cancel-conditions issue to disposition.
-        if regate_blocks:
-            _record(o, CANCEL_REGATE_PAIR_COST)
-            to_cancel.append(o)
-            continue
+        # NO RE-CHECK (#387): a placed order was judged once, at placement
+        # (rest price + rest price). Re-testing it against the live hedge ask
+        # cancels profitable pairs on book flicker, so nothing here re-checks
+        # cost. Only a token with no intent this cycle is cancelled.
         kept.setdefault(tok, []).append(o)
         held_tokens.add(tok)
-
-    # Which pair each submitted intent should JOIN, keyed by token.
-    #
-    # A replacement for a leg that was just cancelled must not look like a new
-    # unrelated position. When this cycle cancels an order whose pair still
-    # has a SURVIVING resting member (the complementary leg resting untouched
-    # on the other token), the replacement joins that pair: the two legs are
-    # one economic position (0.71 UP + 0.23 DOWN is a $0.94 pair regardless of
-    # what the registry's bookkeeping says), and a fresh pair id here is
-    # exactly how a market ends up with two one-legged pairs -- the detachment
-    # confirmed live on three conditions in the shadow store (see #206).
-    #
-    # The mapping only carries ids of pairs with a surviving member, so a pair
-    # whose legs were ALL cancelled this cycle cannot leak its id onto the
-    # replacement: those legs re-post together under one NEW shared id.
-    cancelled_tokens = {o["token_id"] for o in to_cancel}
-    surviving_tokens_by_pair: dict[str, set] = {}
-    for o in open_orders:
-        pid = o.get("pair_id")
-        if pid and o["token_id"] not in cancelled_tokens:
-            surviving_tokens_by_pair.setdefault(pid, set()).add(o["token_id"])
-    carry_pair_by_token: dict[str, str] = {}
-    for o in to_cancel:
-        pid = o.get("pair_id")
-        if pid and surviving_tokens_by_pair.get(pid):
-            carry_pair_by_token[o["token_id"]] = pid
 
     to_submit: list[QuoteIntent] = []
     for i in intents:
@@ -300,12 +254,6 @@ def plan_orders(
         sits = kept.get(i.token_id, [])
         if not any(abs(o["price"] - i.price) <= tolerance for o in sits):
             to_submit.append(i)
-
-    # Stamp the carry AFTER collection so the intents are the caller's own
-    # objects annotated in one place. A token not in the map keeps whatever it
-    # had (None for a fresh intent): no complement resting, no lineage to join.
-    for i in to_submit:
-        i.pair_id = carry_pair_by_token.get(i.token_id, getattr(i, "pair_id", None))
 
     return to_cancel, to_submit
 
