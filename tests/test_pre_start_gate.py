@@ -11,6 +11,11 @@ from __future__ import annotations
 import pytest
 
 from scripts.filter_markets import _cause, evaluate, market_start_iso, pre_start
+from core_brain.markets import (
+    IN_PLAY_WINDOW_SEC,
+    LiveMarket,
+    quote_t_remaining,
+)
 
 NOW = "2026-08-31T12:00:00Z"
 
@@ -101,3 +106,94 @@ def test_the_pre_start_reason_buckets_as_one_gate():
 
     # Act / Assert
     assert {_cause(r) for r in reasons} == {"pre-start"}
+
+
+# --- quote-time kickoff clock (#386) ----------------------------------------
+# The venue endDate of a sports/esports market is kickoff, so the quote-time
+# countdown goes negative the moment the match starts. Fixed vectors from the
+# live FURIA vs Aurora market, 2026-10-06.
+
+_FURIA_END = 1791244800.0      # 2026-10-06T00:00:00Z
+_FURIA_KICKOFF = 1791301200.0  # 2026-10-06T15:40:00Z
+_FURIA_NOW = 1791304481.0      # 2026-10-06T16:34:41Z, old countdown -59681s
+
+
+def _furia_market(end_ts=_FURIA_END, kickoff=_FURIA_KICKOFF):
+    return LiveMarket(
+        condition_id="0xfuria", market_slug="cs2-furia-aur1-2026-10-06",
+        up_token="U", down_token="D", start_ts=_FURIA_END - 3600.0,
+        end_ts=end_ts, tick_size=0.01, neg_risk=False,
+        game_start_ts=kickoff)
+
+
+def test_quote_clock_in_play_furia_extends_past_kickoff_end_date():
+    market = _furia_market()
+    assert market.t_remaining(_FURIA_NOW) == -59681.0
+    got = quote_t_remaining(market, now=_FURIA_NOW)
+    assert got == _FURIA_KICKOFF + IN_PLAY_WINDOW_SEC - _FURIA_NOW
+    assert got > 0
+
+
+def test_quote_clock_pre_start_stays_negative():
+    market = _furia_market(kickoff=_FURIA_NOW + 58 * 60.0)
+    assert quote_t_remaining(market, now=_FURIA_NOW) == -59681.0
+
+
+def test_quote_clock_genuine_expiry_without_kickoff_stays_negative():
+    market = _furia_market(kickoff=None)
+    assert quote_t_remaining(market, now=_FURIA_NOW) == -59681.0
+
+
+def test_quote_clock_stale_match_after_window_is_negative():
+    market = _furia_market(
+        kickoff=_FURIA_NOW - IN_PLAY_WINDOW_SEC - 60.0)
+    assert quote_t_remaining(market, now=_FURIA_NOW) < 0
+
+
+def test_quote_clock_keeps_real_later_end():
+    market = _furia_market(end_ts=_FURIA_NOW + 7 * 86400.0,
+                           kickoff=_FURIA_NOW - 1800.0)
+    assert quote_t_remaining(market, now=_FURIA_NOW) == 7 * 86400.0
+
+
+def test_quote_clock_garbage_kickoff_falls_back():
+    market = _furia_market(kickoff="not-a-time")
+    assert quote_t_remaining(market, now=_FURIA_NOW) == -59681.0
+
+
+def test_quote_clock_stand_in_without_kickoff_field():
+    class _Bare:
+        def t_remaining(self):
+            return 3600.0
+
+    assert quote_t_remaining(_Bare()) == 3600.0
+
+
+def test_fetch_pinned_market_reads_game_start_time(monkeypatch):
+    from core_brain import markets as markets_mod
+
+    payload = {
+        "rewards": {"rates": []},
+        "closed": False,
+        "accepting_orders": True,
+        "tokens": [{"token_id": "U"}, {"token_id": "D"}],
+        "end_date_iso": "2026-10-06T00:00:00Z",
+        "game_start_time": "2026-10-06T15:40:00Z",
+        "market_slug": "cs2-furia-aur1-2026-10-06",
+        "minimum_tick_size": 0.01,
+        "neg_risk": False,
+    }
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(markets_mod._SESSION, "get",
+                        lambda *a, **k: _Resp())
+    market = markets_mod.fetch_pinned_market("0xfuria",
+                                             require_rewards=False)
+    assert market.game_start_ts == _FURIA_KICKOFF
+    assert market.end_ts == _FURIA_END
