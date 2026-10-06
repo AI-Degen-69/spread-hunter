@@ -25,6 +25,8 @@ import pytest
 from core_brain.trader_loop import (
     LiveFleetResult,
     VenueSeam,
+    VisitOutcome,
+    _classify_refusal,
     _visit_one,
     plan_orders,
     run,
@@ -1349,6 +1351,30 @@ class TestFuriaQuoteClock:
             tick_size=0.01, neg_risk=False, game_start_ts=self.KICKOFF)
         # A day after kickoff the window is spent: negative again.
         assert quote_t_remaining(market, now=self.KICKOFF + 86400.0) < 0
+
+
+class TestClassifyRefusal:
+    """#390: the refusal classifier pins every terminal marker, so a reworded
+    `quotes.py` reason cannot silently flip a settled market to hold."""
+
+    @pytest.mark.parametrize("why", [
+        "UP: mid 0.950 outside [0.20,0.80] -- decided market; "
+        "DOWN: mid 0.050 outside [0.20,0.80] -- decided market",
+        "t_remaining 0s < 0s",
+        "market exited: fills still lost money after widening",
+        "unfunded by the allocator -- quoting nothing",
+    ])
+    def test_terminal_markers_cancel(self, why):
+        assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
+
+    @pytest.mark.parametrize("why", [
+        "UP: 8.0c from mid > 4.5c reward window; "
+        "DOWN: 8.0c from mid > 4.5c reward window",
+        "no side quotable",
+        "",
+    ])
+    def test_flicker_reasons_hold(self, why):
+        assert _classify_refusal(why) is VisitOutcome.REFUSED_TRANSIENT
 
 
 class TestRefusedHold:
