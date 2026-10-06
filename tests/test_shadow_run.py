@@ -1091,17 +1091,7 @@ class TestSecondRotation:
                 "asks": {0.52: 500.0}, "best_bid": 0.46, "best_ask": 0.52,
                 "malformed": 0}
 
-    @staticmethod
-    def _wide_ask_book(_clob_host, token_id):
-        # Same shape as the canonical book, but the DOWN ask is 0.60: any
-        # resting UP price plus 0.60 fails the pair-cost re-gate (cap 1.00),
-        # so rotation here supersedes through the re-gate.
-        return {"token_id": token_id, "bids": {0.54: 500.0},
-                "asks": {0.60: 500.0}, "best_bid": 0.54, "best_ask": 0.60,
-                "malformed": 0}
-
-    def _run_cycles(self, tmp_path, monkeypatch, *, cycles, prices, tape,
-                    books=None):
+    def _run_cycles(self, tmp_path, monkeypatch, *, cycles, prices, tape):
         """Rotate one market `cycles` times, quoting `prices[i]` on cycle i."""
         import core_brain.markets as markets_mod
         from core_brain.shadow_run import _Deadline, run_shadow
@@ -1138,7 +1128,7 @@ class TestSecondRotation:
             markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
             client_fn=lambda: object(),
             decide_fn=decide_fn,
-            fetch_books=books or self._canonical_book,
+            fetch_books=self._canonical_book,
             interval=0.0,
         )
         return result, seen_cycles["n"], decided["n"]
@@ -1161,28 +1151,23 @@ class TestSecondRotation:
         assert errors == [], f"re-quote errored: {[r.error for r in errors]}"
         assert [r.status for r in result.results] == ["QUOTED"]
 
-    def test_the_superseded_order_stops_resting(self, tmp_path, monkeypatch):
-        """An order the loop decided to replace must not keep collecting
-        simulated fills at a price the live loop would have cancelled.
+    def test_rotation_holds_the_resting_order(self, tmp_path, monkeypatch):
+        """A rotation that only moves the quote price must not churn the book.
 
-        Place-and-wait (#384) holds drift alone, so this rotation supersedes
-        through the pair-cost re-gate instead: the book's DOWN ask is 0.60,
-        and every resting UP price plus 0.60 fails the 1.00 cap. The 4c steps
-        still move the quote each cycle; the gate does the cancelling.
+        #387: no drift check, no pair-cost re-check after placement. Cycle 1
+        rests at 0.47; cycles 2 and 3 want 0.52 and 0.57, and the 0.47 order
+        stays open -- the replacement prices are suppressed, never posted.
         """
         from core_brain.order_registry import OrderRegistry
 
         self._run_cycles(tmp_path, monkeypatch, cycles=3,
-                         prices=[0.47, 0.52, 0.57], tape=lambda n: {},
-                         books=self._wide_ask_book)
+                         prices=[0.47, 0.52, 0.57], tape=lambda n: {})
 
         reg = OrderRegistry(db_path=tmp_path / "shadow.db")
         rows = [o for o in reg.get_all_orders() if o["token_id"] == "tok-up"]
         by_price = {round(float(o["price"]), 2): o["status"] for o in rows}
 
-        assert by_price[0.47] == "cancelled"
-        assert by_price[0.52] == "cancelled"
-        assert by_price[0.57] == "open"
+        assert by_price == {0.47: "open"}
         assert [o for o in reg.get_active_orders()
                 if o.token_id == "tok-up" and o.status in ("open", "partial")
                 ] != [], "nothing rests at the current price"

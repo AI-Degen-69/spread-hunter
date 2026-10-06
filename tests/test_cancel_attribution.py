@@ -43,22 +43,22 @@ def _intent(token: str, price: float) -> QuoteIntent:
 
 # --- attribution ------------------------------------------------------------
 
-def test_a_price_move_is_recorded_as_such():
-    # Arrange — place-and-wait (#384): drift alone holds, so the price-moved
-    # reason is exercised through the pair-cost re-gate: the order's own price
-    # against the hedge ask completes over max_completable_pair_cost.
+def test_a_drifted_order_is_held_and_records_nothing():
+    # #387: drift alone holds; the retired pair-cost re-gate (0.60 + 0.52)
+    # no longer fires either. A wanted token records no reason.
     orders = [_order("o1", UP, 0.60)]
     reasons: dict = {}
 
     # Act
-    to_cancel, _ = plan_orders(
+    to_cancel, to_submit = plan_orders(
         orders, [_intent(UP, 0.57)], dead_band=0.01,
         cfg=MakerConfig(max_completable_pair_cost=1.00),
         hedge_asks={UP: 0.52}, reasons=reasons)
 
     # Assert
-    assert to_cancel == orders
-    assert reasons == {"o1": CANCEL_REGATE_PAIR_COST}
+    assert to_cancel == []
+    assert to_submit == []
+    assert reasons == {}
 
 
 def test_a_token_we_no_longer_quote_is_recorded_separately():
@@ -76,21 +76,22 @@ def test_a_token_we_no_longer_quote_is_recorded_separately():
     assert reasons == {"o1": CANCEL_NOT_QUOTED}
 
 
-def test_a_regate_cancel_is_recorded_as_the_gate_it_was():
-    # Arrange — the price is fine, but holding this bid against the other
-    # leg's ask would assemble a pair over max_pair_cost.
+def test_a_failing_gate_on_a_wanted_token_records_nothing():
+    # #387: the retired re-gate (0.60 + 0.60 = 1.20) does not fire on a
+    # wanted token. Held, no reason.
     cfg = MakerConfig()
     orders = [_order("o1", UP, 0.60)]
     reasons: dict = {}
 
-    # Act — hedge ask makes the completable pair 0.60 + 0.60 = 1.20.
-    to_cancel, _ = plan_orders(
+    # Act
+    to_cancel, to_submit = plan_orders(
         orders, [_intent(UP, 0.60)], cfg=cfg,
         hedge_asks={UP: 0.60}, reasons=reasons)
 
     # Assert
-    assert to_cancel == orders
-    assert reasons == {"o1": CANCEL_REGATE_PAIR_COST}
+    assert to_cancel == []
+    assert to_submit == []
+    assert reasons == {}
 
 
 def test_an_order_that_is_kept_records_no_reason():
@@ -154,9 +155,9 @@ def test_an_order_deep_in_the_queue_is_still_re_quoted():
     assert reasons == {}
 
 
-def test_the_hold_never_overrides_the_pair_cost_gate():
-    # Arrange — front of the queue, but holding would carry the pair over the
-    # cap. Queue position is not worth a booked loss.
+def test_nothing_overrides_the_hold_not_even_the_gate():
+    # #387: front of the queue with a failing pair-cost gate -- held.
+    # Cost is judged at placement, never after.
     cfg = MakerConfig()
     orders = [_order("o1", UP, 0.60)]
     reasons: dict = {}
@@ -168,7 +169,8 @@ def test_the_hold_never_overrides_the_pair_cost_gate():
         queue_ahead={"o1": 1.0}, hold_queue_shares=200.0)
 
     # Assert
-    assert to_cancel == orders
+    assert to_cancel == []
+    assert reasons == {}
 
 
 def test_the_hold_stands_down_when_nothing_is_checking_the_economics():
