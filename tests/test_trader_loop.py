@@ -25,6 +25,8 @@ import pytest
 from core_brain.trader_loop import (
     LiveFleetResult,
     VenueSeam,
+    VisitOutcome,
+    _classify_refusal,
     _visit_one,
     plan_orders,
     run,
@@ -1349,3 +1351,184 @@ class TestFuriaQuoteClock:
             tick_size=0.01, neg_risk=False, game_start_ts=self.KICKOFF)
         # A day after kickoff the window is spent: negative again.
         assert quote_t_remaining(market, now=self.KICKOFF + 86400.0) < 0
+
+
+class TestClassifyRefusal:
+    """#390: the refusal classifier pins every terminal marker, so a reworded
+    `quotes.py` reason cannot silently flip a settled market to hold."""
+
+    @pytest.mark.parametrize("why", [
+        "UP: mid 0.950 outside [0.20,0.80] -- decided market; "
+        "DOWN: mid 0.050 outside [0.20,0.80] -- decided market",
+        "UP: hedge token DOWN not tradeable (settled book 0.999/0.001) "
+        "-- a fill here could not be closed",
+        "t_remaining 0s < 0s",
+        "market exited: fills still lost money after widening",
+        "unfunded by the allocator -- quoting nothing",
+        "hit 25 fills for this market",
+    ])
+    def test_terminal_markers_cancel(self, why):
+        assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
+
+    @pytest.mark.parametrize("why", [
+        "UP: 8.0c from mid > 4.5c reward window; "
+        "DOWN: 8.0c from mid > 4.5c reward window",
+        "no side quotable",
+        "",
+    ])
+    def test_flicker_reasons_hold(self, why):
+        assert _classify_refusal(why) is VisitOutcome.REFUSED_TRANSIENT
+
+
+class TestRefusedHold:
+    """#390: a visited-but-refused market holds resting orders; only a dropped
+    market, a terminal refusal, or an expired grace cancels."""
+
+    TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
+                     "DOWN: 8.0c from mid > 4.5c reward window")
+    TERMINAL_WHY = ("UP: mid 0.950 outside [0.20,0.80] -- decided market; "
+                    "DOWN: mid 0.050 outside [0.20,0.80] -- decided market")
+
+    def _seam(self, decide, calls):
+        def open_orders_fn(m):
+            return [_open(token="tok-up", price=0.60, oid="o-up"),
+                    _open(token="tok-dn", price=0.40, oid="o-dn")]
+
+        def submit_fn(client, registry, market, intents, cfg):
+            calls["submitted"].append([i.token_id for i in intents])
+            return len(intents)
+
+        def cancel_fn(client, registry, orders):
+            calls["cancelled"].append([o["order_id"] for o in orders])
+            return len(orders)
+
+        return VenueSeam(
+            client=object(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda h, t: {"token_id": t, "best_bid": 0.59,
+                                       "best_ask": 0.61,
+                                       "bids": {0.59: 100}, "asks": {0.61: 100}},
+            decide=decide,
+            submit_fn=submit_fn,
+            cancel_fn=cancel_fn,
+            open_orders_fn=open_orders_fn,
+            reconcile_fn=lambda *a: None,
+            sweep_fn=lambda: None,
+        )
+
+    def test_refused_visited_holds_resting_orders(self):
+        calls = {"submitted": [], "cancelled": []}
+        seam = self._seam(
+            lambda cfg, up, dn, inv, t_rem, wf: ([], self.TRANSIENT_WHY), calls)
+        results = run(
+            seam, interval=0.0, once=True, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=lambda s: None,
+        )
+        assert results[0].status == "DECLINED"
+        assert calls["cancelled"] == []
+        assert calls["submitted"] == []
+
+    def test_terminal_refusal_cancels_now(self):
+        calls = {"submitted": [], "cancelled": []}
+        seam = self._seam(
+            lambda cfg, up, dn, inv, t_rem, wf: ([], self.TERMINAL_WHY), calls)
+        results = run(
+            seam, interval=0.0, once=True, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=lambda s: None,
+        )
+        assert results[0].status == "DECLINED"
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
+        assert calls["submitted"] == []
+
+    def test_token_rotation_still_cancels_old_token(self):
+        calls = {"submitted": [], "cancelled": []}
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            return [_intent(side="UP", token="tok-new", price=0.62)], ""
+
+        def open_orders_fn(m):
+            return [_open(token="tok-old", price=0.58, oid="o-old")]
+
+        seam = VenueSeam(
+            client=object(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda h, t: {"token_id": t, "best_bid": 0.59,
+                                       "best_ask": 0.61,
+                                       "bids": {0.59: 100}, "asks": {0.61: 100}},
+            decide=decide,
+            submit_fn=lambda c, r, m, i, cfg: calls["submitted"].append(
+                [t.token_id for t in i]) or len(i),
+            cancel_fn=lambda c, r, o: calls["cancelled"].append(
+                [x["order_id"] for x in o]) or len(o),
+            open_orders_fn=open_orders_fn,
+            reconcile_fn=lambda *a: None,
+            sweep_fn=lambda: None,
+        )
+        results = run(
+            seam, interval=0.0, once=True, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=lambda s: None,
+        )
+        assert results[0].status == "QUOTED"
+        assert calls["cancelled"] == [["o-old"]]
+        assert calls["submitted"] == [["tok-new"]]
+
+    def test_grace_expiry_cancels_after_n_refused_cycles(self):
+        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+        assert GRACE >= 2
+        calls = {"submitted": [], "cancelled": []}
+        decides = []
+        sleeps = []
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            decides.append(1)
+            return [], self.TRANSIENT_WHY
+
+        seam = self._seam(decide, calls)
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            if len(sleeps) >= GRACE:
+                raise KeyboardInterrupt
+
+        run(
+            seam, interval=0.0, once=False, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=sleep_fn,
+        )
+        assert len(decides) == GRACE
+        assert calls["submitted"] == []
+        assert calls["cancelled"] == [["o-up", "o-dn"]]
+
+    def test_quote_resets_refusal_streak(self):
+        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+        calls = {"submitted": [], "cancelled": []}
+        decides = []
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            decides.append(1)
+            if len(decides) == 2:
+                return [_intent(),
+                        _intent(side="DOWN", token="tok-dn", price=0.40)], ""
+            return [], self.TRANSIENT_WHY
+
+        seam = self._seam(decide, calls)
+        sleeps = []
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            if len(sleeps) >= GRACE + 1:
+                raise KeyboardInterrupt
+
+        run(
+            seam, interval=0.0, once=False, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=sleep_fn,
+        )
+        # Refuse, quote, refuse, refuse: only two CONSECUTIVE refusals, so the
+        # grace never expires even though three refusals happened in total.
+        assert len(decides) == GRACE + 1
+        assert calls["submitted"] == []
+        assert calls["cancelled"] == []
