@@ -1,14 +1,30 @@
-# Constraints & Quality Guardrails — Issue #371
+# Constraints & Quality Guardrails — Issue #365
 
-Branch: `i371/multi-arm-tournament-ui-port-isolation` | Issue: #371
+Branch: `i365/prune-stale-local-stores-in-data-runtime-and-repor` | Issue: #365
 
 ## Quality & Tests
-- **Zero regressions**: Targeted suites `tests/test_live_dash.py`, `tests/test_shadow_tournament.py`, `tests/test_dashboard_run_switcher.py`, `tests/test_scan_state_shadow.py`, `tests/test_per_run_shadow_ring.py`, and `tests/test_live_state_language.py` must pass cleanly.
-- **Anti-cheat**: No skipped tests, no deleted assertions, no suppressions or linter silencing.
-- **No new external dependencies**: Use Python standard library, existing FastAPI/starlette stack, and existing vanilla JS only.
+- **Zero regressions**: `python -m pytest -q tests/test_data_retention.py` must
+  pass cleanly before and after every task.
+- **New behavior requires tests**: cwd-independence and nested-runtime tests
+  must each fail without their change (RED) and pass with it (GREEN).
+- **Anti-cheat**: No skipped tests, no deleted assertions, no suppressions or
+  linter silencing.
+- **No new external dependencies**: Python standard library only; reuse
+  `core_brain/runtime_paths.LIVE_ROOT`.
 
-## Safety & Invariants
-- **No production DB write**: `data/orders.db` must never be touched, modified, or targeted by the tournament launcher or shadow processes.
-- **Port isolation**: Tournament launcher must probe and verify that assigned ports (8801+) are free before spawning dashboard servers; live default port 8799 must never be hijacked.
-- **State isolation**: Each arm runs in its own process with its own designated SQLite scratch file and per-run ring/heartbeat artifacts.
-- **Fail-safe fallback**: Non-tournament runs continue to display and switch by their base file names without breaking changes.
+## Safety & Invariants (must survive any change)
+- **Production registry is untouchable**: `data/orders.db` plus `-wal`/`-shm`
+  is strictly refused by `assert_not_protected_store()` and can never be
+  deleted — including via nested-scan paths, forged audit items, `rmtree`
+  descendants, or sibling cleanup.
+- **`data/price_tape.db` excluded** from deletion; `01_shadow`-style names stay
+  user-protected at classification level.
+- **Dry-run is the default**: real deletion requires explicit opt-in; the real
+  `--no-dry-run` prune on the operator tree is operator-gated — the agent runs
+  dry-run + audit only, never live deletion on the working tree.
+- **Never open `data/orders.db` for writing**; test fixtures use `tmp_path`
+  only.
+
+## Performance
+- Audit must complete in seconds on the live tree (single recursive walk, no
+  double counting from aggregate dir items).
