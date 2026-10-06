@@ -466,6 +466,56 @@ def movement_reject(movement_usd: Optional[float],
                   f"{minutes}m under ${bar:,.0f} (flat)")
 
 
+# RANKING: LIVE-FIRST (#392). Named bars, not magic. A live competitive market
+# outranks a flat long-dated one at equal return; rows without the signal rank
+# exactly as today. The decided-mid band and every gate are untouched -- this
+# only reorders survivors.
+RANK_LIVE_MIN_MOVEMENT_USD = 5000.0  # hot tape: shares really change hands
+RANK_LIVE_MIN_TRADES = 50            # ...across many prints, not one whale
+RANK_LIVE_MAX_DAYS = 2.0             # ...on an event resolving soon
+RANK_LIVE_BOOST = 1.5                # multiplicative, applied once
+
+
+def _event_started(row: dict, now_ts: float) -> bool:
+    """Has this row's event begun? Unknown or unparseable reads as NOT started.
+
+    Deliberately stricter than the pre-start gate (where unknown reads as
+    already trading): the gate must not refuse on a missing field, but the
+    boost must not fire on one either -- most flat long-dated markets state
+    no start time at all.
+    """
+    start_iso = market_start_iso(row)
+    if not start_iso:
+        return False
+    try:
+        start = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    return start.timestamp() <= now_ts
+
+
+def rank_score(row: dict, *, now: float | None = None) -> float:
+    """Ranking score for one eligible row: return, boosted when live.
+
+    Pure of venue calls -- every input is already measured on the row.
+    Missing fields fail safe to today's behavior (bare return_pct_day).
+    """
+    base = float(row.get("return_pct_day") or 0.0)
+    now_ts = time.time() if now is None else float(now)
+    movement = row.get("movement_usd")
+    trades = row.get("trade_count")
+    days = row.get("days_to_resolve")
+    if (movement is None or trades is None or days is None
+            or float(movement) < RANK_LIVE_MIN_MOVEMENT_USD
+            or int(trades) < RANK_LIVE_MIN_TRADES
+            or float(days) > RANK_LIVE_MAX_DAYS
+            or not _event_started(row, now_ts)):
+        return base
+    return base * RANK_LIVE_BOOST
+
+
 def tradable(volume_24h: float | None,
              days: float | None,
              title: object = "", slug: object = "",
@@ -2687,7 +2737,7 @@ def main() -> None:
     # eleven cents -- and under the payout floor it is zero.
     eligible = [r for r in out if r["eligible"]]
     rejected = len(out) - len(eligible)
-    eligible.sort(key=lambda r: -r["return_pct_day"])
+    eligible.sort(key=lambda r: -rank_score(r))
     paired_bundle = None
     paired_audit_name = ""
     paired_filename = ""
