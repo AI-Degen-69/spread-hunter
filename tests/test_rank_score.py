@@ -61,3 +61,22 @@ def test_unmeasured_range_or_horizon_escapes_penalty():
                       now=NOW) == 0.9
     assert rank_score({"return_pct_day": 0.9, "days_to_resolve": 28.0},
                       now=NOW) == 0.9
+
+
+def test_live_row_ranks_first_on_universe_shaped_fixture():
+    # Shaped like the 2026-10-06 rank: Senate-like rows carry window tape
+    # but flat mids and far horizons; the live-like row is in play now.
+    senate_tx = {"return_pct_day": 1.0, "movement_usd": 19279.0,
+                 "trade_count": 150, "range_cents": 1.0,
+                 "days_to_resolve": 28.3}
+    senate_ks = {"return_pct_day": 1.0, "movement_usd": 2783.0,
+                 "trade_count": 24, "range_cents": 1.0,
+                 "days_to_resolve": 28.3}
+    live = {"return_pct_day": 0.9, "movement_usd": 35000.0,
+            "trade_count": 200, "range_cents": 8.0,
+            "days_to_resolve": 0.2,
+            "gameStartTime": _iso(NOW - 3600.0)}
+    # The shipped ranking key (scripts/filter_markets.py): highest score wins.
+    ranked = sorted([senate_tx, senate_ks, live],
+                    key=lambda r: -rank_score(r, now=NOW))
+    assert ranked[0] is live
