@@ -306,3 +306,54 @@ def test_cli_audit_identical_from_foreign_cwd(
 
     assert out_root == out_foreign
 
+
+def _make_stale(path: Path, days: float = 30.0) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("stale rehearsal data")
+    old_time = time.time() - (days * 86400)
+    os.utime(path, (old_time, old_time))
+    return path
+
+
+def test_nested_runtime_leaf_classified_per_leaf(tmp_path: Path):
+    """Stale files inside runtime/runNNN/ must be reported reclaimable (T2, #365)."""
+    stale = _make_stale(tmp_path / "runtime" / "run145" / "stale_rehearsal.db")
+    fresh = tmp_path / "runtime" / "run145" / "fresh_rehearsal.db"
+    fresh.parent.mkdir(parents=True, exist_ok=True)
+    fresh.write_text("fresh")
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    stale_item = next(it for it in items if it.path == stale)
+    assert stale_item.action == AuditAction.DELETE
+    fresh_item = next(it for it in items if it.path == fresh)
+    assert fresh_item.action == AuditAction.KEEP
+
+
+def test_nested_runtime_dir_never_delete_target(tmp_path: Path):
+    """Directories themselves must never be deletion targets (T2, #365)."""
+    _make_stale(tmp_path / "runtime" / "run145" / "stale_rehearsal.db")
+    # Age the per-run directory itself: the old aggregate sweep keyed the
+    # verdict off the directory mtime.
+    run_dir = tmp_path / "runtime" / "run145"
+    old_time = time.time() - (30 * 86400)
+    os.utime(run_dir, (old_time, old_time))
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    dir_deletes = [it for it in items if it.action == AuditAction.DELETE and it.path.is_dir()]
+    assert dir_deletes == []
+
+
+def test_nested_protected_registry_stays_protected(tmp_path: Path):
+    """An orders.db nested under runtime/ must stay protected (T2, #365)."""
+    nested_registry = _make_stale(tmp_path / "runtime" / "run145" / "orders.db")
+
+    policy = DataRetentionPolicy(retention_days=14, preserve_newest_per_family=False)
+    items = audit_storage(base_dir=tmp_path, policy=policy)
+
+    match = next(it for it in items if it.path == nested_registry)
+    assert match.action == AuditAction.PROTECTED
+

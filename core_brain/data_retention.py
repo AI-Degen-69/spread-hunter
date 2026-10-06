@@ -339,43 +339,83 @@ def audit_storage(
                         )
                     )
 
-    # 2. Audit runtime/ and legacy run/
+    # 2. Audit runtime/ and legacy run/ — recursive per-leaf walk so nested
+    # per-run folders (runtime/runNNN/...) are classified with each leaf's
+    # own mtime. Directories are never deletion targets (empty dirs are
+    # left in place); directory symlinks are not descended into.
+    excluded_lower = [f.lower() for f in policy.excluded_filenames]
     for rdir, family_label in [(runtime_dir, "runtime_state"), (legacy_run_dir, "legacy_run")]:
         if rdir.exists() and rdir.is_dir():
-            for entry in rdir.iterdir():
-                stat = entry.stat()
-                age_days = max(0.0, (now - stat.st_mtime) / 86400.0)
-                if entry.is_file():
+            for entry in sorted(rdir.rglob("*")):
+                if entry.is_symlink():
                     items.append(
                         AuditItem(
                             path=entry,
                             family=family_label,
-                            action=AuditAction.KEEP if age_days <= policy.retention_days else AuditAction.DELETE,
-                            reason=(
-                                f"Runtime file within {policy.retention_days}d ({age_days:.1f}d old)"
-                                if age_days <= policy.retention_days
-                                else f"Runtime file exceeds {policy.retention_days}d ({age_days:.1f}d old)"
-                            ),
+                            action=AuditAction.KEEP,
+                            reason="Symbolic link (not followed)",
+                            size_bytes=0,
+                            mtime=now,
+                        )
+                    )
+                    continue
+                if entry.is_dir():
+                    continue
+                if not entry.is_file():
+                    continue
+                stat = entry.stat()
+                age_days = max(0.0, (now - stat.st_mtime) / 86400.0)
+                name = entry.name
+                if is_protected_registry_path(entry):
+                    items.append(
+                        AuditItem(
+                            path=entry,
+                            family="production_registry",
+                            action=AuditAction.PROTECTED,
+                            reason="Production registry (strictly protected)",
                             size_bytes=stat.st_size,
                             mtime=stat.st_mtime,
                         )
                     )
-                elif entry.is_dir():
-                    total_size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                    continue
+                if name.lower() in excluded_lower:
                     items.append(
                         AuditItem(
                             path=entry,
                             family=family_label,
-                            action=AuditAction.KEEP if age_days <= policy.retention_days else AuditAction.DELETE,
-                            reason=(
-                                f"Runtime dir within {policy.retention_days}d ({age_days:.1f}d old)"
-                                if age_days <= policy.retention_days
-                                else f"Runtime dir exceeds {policy.retention_days}d ({age_days:.1f}d old)"
-                            ),
-                            size_bytes=total_size,
+                            action=AuditAction.KEEP,
+                            reason="Price tape store (excluded from cleanup)",
+                            size_bytes=stat.st_size,
                             mtime=stat.st_mtime,
                         )
                     )
+                    continue
+                if any(re.search(pat, name, re.IGNORECASE) for pat in policy.user_protected_patterns):
+                    items.append(
+                        AuditItem(
+                            path=entry,
+                            family="user_protected",
+                            action=AuditAction.KEEP,
+                            reason=f"User protected pattern match ({name})",
+                            size_bytes=stat.st_size,
+                            mtime=stat.st_mtime,
+                        )
+                    )
+                    continue
+                items.append(
+                    AuditItem(
+                        path=entry,
+                        family=family_label,
+                        action=AuditAction.KEEP if age_days <= policy.retention_days else AuditAction.DELETE,
+                        reason=(
+                            f"Runtime file within {policy.retention_days}d ({age_days:.1f}d old)"
+                            if age_days <= policy.retention_days
+                            else f"Runtime file exceeds {policy.retention_days}d ({age_days:.1f}d old)"
+                        ),
+                        size_bytes=stat.st_size,
+                        mtime=stat.st_mtime,
+                    )
+                )
 
     # 3. Audit reports/
     if reports_dir.exists() and reports_dir.is_dir():

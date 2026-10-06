@@ -106,7 +106,7 @@ No scope expansion; folded into T1.
   green after.
 - **Checkpoint:** after T1 — audit is cwd-independent, existing suite green.
 
-### T2 — Recursive per-leaf nested runtime scan [Backend/Logic] (size M)
+### T2 — Recursive per-leaf nested runtime scan [Backend/Logic] (size M) [x]
 - **Target files:** `core_brain/data_retention.py` (runtime/`run/` sweep),
   `tests/test_data_retention.py`.
 - **Build:** replace aggregate directory items with per-leaf file items
