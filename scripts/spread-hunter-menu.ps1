@@ -38,7 +38,11 @@ param(
     [string]$ResumeDb = "",
     [double]$TrialDepth = 250,
     [string]$Preset = "",
-    [switch]$Prudent
+    [switch]$Prudent,
+    # Collect stray words (e.g. `audit and`) so the menu can answer with its
+    # own guidance instead of a raw parameter-binding error.
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ExtraArgs = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -1190,7 +1194,7 @@ function Resume-ShadowRun {
         try { $trial = Get-Content $manifestPath -Raw | ConvertFrom-Json } catch { $trial = $null }
     }
     $presetManifestPath = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".preset.json")
-    if (Test-Path $presetManifestPath -and -not $script:ShadowPreset) {
+    if ((Test-Path $presetManifestPath) -and (-not $script:ShadowPreset)) {
         try {
             $pData = Get-Content $presetManifestPath -Raw | ConvertFrom-Json
             if ($pData.preset) { $script:ShadowPreset = $pData.preset }
@@ -3284,6 +3288,10 @@ if ($Action -ne "") {
         "retention"    = "audit"
         "prune"        = "prune"
         "storage-prune"= "prune"
+    }
+    if ($ExtraArgs.Count -gt 0) {
+        Write-Host ("ERROR: Too many words: '{0} {1}'. Run one action at a time (e.g. .\scripts\spread-hunter-menu.ps1 audit) — '-and' is not a menu word; call the menu twice to run two actions." -f $Action, ($ExtraArgs -join ' ')) -ForegroundColor Red
+        exit 1
     }
     $key = $Action.Trim().ToLower()
     if ($actionMap.ContainsKey($key)) { $key = $actionMap[$key] }
