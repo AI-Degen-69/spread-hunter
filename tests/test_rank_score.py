@@ -52,6 +52,11 @@ def test_unstarted_event_gets_no_live_boost():
     assert rank_score(row, now=NOW) == 0.9
 
 
+def test_garbage_start_time_gets_no_live_boost():
+    row = _live(gameStartTime="not-a-time")
+    assert rank_score(row, now=NOW) == 0.9
+
+
 def test_flat_long_dated_scores_below_bare_return():
     assert rank_score(_flat(), now=NOW) < 0.9
 
