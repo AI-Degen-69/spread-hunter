@@ -463,6 +463,40 @@ def audit_storage(
     return sorted(items, key=lambda x: (x.family, x.path.name))
 
 
+def _refuse_protected_prune_target(path: Path, policy: DataRetentionPolicy) -> None:
+    """Raise DataRetentionSafetyViolation if a prune target is protected.
+
+    Deletion-time refusal at the destructive boundary: covers the production
+    registry (and its -wal/-shm siblings), the policy's excluded filenames
+    (e.g. price_tape.db), and every descendant when the target is a
+    directory about to go through `shutil.rmtree()` — so neither the scan
+    nor a forged audit item can remove a protected store.
+    """
+    assert_not_protected_store(path)
+    excluded_lower = [f.lower() for f in policy.excluded_filenames]
+    if Path(path).name.lower() in excluded_lower:
+        raise DataRetentionSafetyViolation(
+            f"Target {path!r} is excluded from cleanup "
+            f"({policy.excluded_filenames}). Deletion is strictly forbidden."
+        )
+    try:
+        is_dir = Path(path).is_dir() and not Path(path).is_symlink()
+    except OSError:
+        is_dir = False
+    if is_dir:
+        for descendant in Path(path).rglob("*"):
+            if descendant.is_symlink():
+                continue
+            if not descendant.is_file():
+                continue
+            assert_not_protected_store(descendant)
+            if descendant.name.lower() in excluded_lower:
+                raise DataRetentionSafetyViolation(
+                    f"Target {descendant!r} inside {path!r} is excluded from cleanup "
+                    f"({policy.excluded_filenames}). Deletion is strictly forbidden."
+                )
+
+
 def prune_storage(
     audit_items: Sequence[AuditItem],
     dry_run: bool = True,
@@ -470,11 +504,12 @@ def prune_storage(
 ) -> PruneResult:
     """Safely delete files marked with AuditAction.DELETE."""
     result = PruneResult(dry_run=dry_run)
+    policy = DataRetentionPolicy()
 
     for item in audit_items:
         if item.action == AuditAction.DELETE:
-            # Triple check production registry guard
-            assert_not_protected_store(item.path)
+            # Deletion-time refusal: registry, excluded names, rmtree descendants.
+            _refuse_protected_prune_target(item.path, policy)
 
             if dry_run:
                 # In dry run, we record what would be deleted without touching disk
@@ -491,6 +526,8 @@ def prune_storage(
                             for ext in ("-wal", "-shm"):
                                 sib = item.path.parent / f"{item.path.name}{ext}"
                                 if sib.exists():
+                                    # Never sweep a protected/excluded sibling along with its base.
+                                    _refuse_protected_prune_target(sib, policy)
                                     try:
                                         sib.unlink()
                                     except OSError:

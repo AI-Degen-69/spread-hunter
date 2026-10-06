@@ -357,3 +357,44 @@ def test_nested_protected_registry_stays_protected(tmp_path: Path):
     match = next(it for it in items if it.path == nested_registry)
     assert match.action == AuditAction.PROTECTED
 
+
+def test_prune_refuses_forged_price_tape_delete(tmp_path: Path):
+    """A forged DELETE item for price_tape.db must raise, file preserved (T3, #365)."""
+    import time as _time
+
+    tape = tmp_path / "price_tape.db"
+    tape.write_text("tape")
+    forged = AuditItem(
+        path=tape,
+        family="price_tape",
+        action=AuditAction.DELETE,
+        reason="forged",
+        size_bytes=tape.stat().st_size,
+        mtime=_time.time(),
+    )
+    with pytest.raises(DataRetentionSafetyViolation):
+        prune_storage([forged], dry_run=False)
+    assert tape.exists()
+
+
+def test_prune_refuses_dir_with_protected_descendant(tmp_path: Path):
+    """A forged dir DELETE hiding a registry file must raise, tree kept (T3, #365)."""
+    import time as _time
+
+    run_dir = tmp_path / "runtime" / "run145"
+    run_dir.mkdir(parents=True)
+    registry = run_dir / "orders.db"
+    registry.write_text("registry")
+    forged = AuditItem(
+        path=run_dir,
+        family="runtime_state",
+        action=AuditAction.DELETE,
+        reason="forged",
+        size_bytes=registry.stat().st_size,
+        mtime=_time.time(),
+    )
+    with pytest.raises(DataRetentionSafetyViolation):
+        prune_storage([forged], dry_run=False)
+    assert registry.exists()
+    assert run_dir.exists()
+

@@ -121,7 +121,7 @@ No scope expansion; folded into T1.
   itself never DELETE, (e) foreign-run exclusion unaffected; each fails
   before; full `tests/test_data_retention.py` green after.
 
-### T3 — Harden prune refusals + regenerate inventory [Safety/Docs] (size S)
+### T3 — Harden prune refusals + regenerate inventory [Safety/Docs] (size S) [x]
 - **Target files:** `core_brain/data_retention.py` (`prune_storage()`),
   `docs/data_inventory.md` (regen output only).
 - **Build:** deletion-time refusals in `prune_storage()` for price-tape
