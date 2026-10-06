@@ -757,7 +757,8 @@ def run_shadow(
 ) -> ShadowResult:
     """One shadow session: rotate until `minutes` elapse, record, spend nothing.
 
-    The guard runs before anything is constructed, so even a wrong `db_path`
+    Negative minutes means run until stopped; zero still means one immediate-
+    deadline rotation. The guard runs before anything is constructed, so even a wrong `db_path`
     fails before a table exists. Config loads through the same
     `core_brain.config.load()` the live loop uses -- same gates, same caps --
     with the live bankroll read attempted and config bankroll kept on failure,
@@ -1089,7 +1090,12 @@ def run_shadow(
     seam.sweep_fn = shadow_sweep
 
     deadline_ts = started_at + max(0.0, minutes * 60.0)
-    resolved_sleep_fn = sleep_fn if sleep_fn is not None else make_deadline_sleep(deadline_ts)
+    if sleep_fn is not None:
+        resolved_sleep_fn = sleep_fn
+    elif minutes < 0:
+        resolved_sleep_fn = time.sleep
+    else:
+        resolved_sleep_fn = make_deadline_sleep(deadline_ts)
 
     heartbeat_kwargs = dict(db_path=db_path, run_id=run_id, minutes=minutes,
                             interval=interval, started_at=started_at,
@@ -1265,7 +1271,7 @@ def _parse_args(argv: Optional[list[str]] = None):
         description="SHADOW fleet: the full loop against the live book, "
                     "spending nothing. No signer is loaded.")
     ap.add_argument("--minutes", type=float, default=5.0,
-                    help="time box in minutes (default: 5.0)")
+                    help="time box in minutes (default: 5.0; negative runs until stopped)")
     ap.add_argument("--interval", type=float, default=5.0,
                     help="rotation cadence in seconds (default: 5.0)")
     ap.add_argument("--db", required=True,

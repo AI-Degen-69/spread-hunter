@@ -1001,7 +1001,7 @@ function renderShadowClock() {
   const elapsed = fmtStopwatch(shadowRunAnchor.elapsedSec + drift);
   el.textContent = shadowRunAnchor.running ? '· ' + elapsed : '· ' + elapsed + ' ended';
   el.title = shadowRunAnchor.running
-    ? `Shadow rehearsal ${shadowRunAnchor.runId || ''} running, time box ${shadowRunAnchor.minutes ?? '--'} min`
+    ? `Shadow rehearsal ${shadowRunAnchor.runId || ''} running, ${shadowRunAnchor.minutes < 0 ? 'no time box (runs until stopped)' : `time box ${shadowRunAnchor.minutes ?? '--'} min`}`
     : 'This shadow rehearsal is no longer running.';
 }
 

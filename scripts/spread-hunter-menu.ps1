@@ -1,4 +1,4 @@
-# SPREAD HUNTER - CONTROL CENTER
+﻿# SPREAD HUNTER - CONTROL CENTER
 # Standalone menu for the spread hunter execution engine
 # (C:\Users\Tiger\Agents\Projects\spread-hunter).
 #
@@ -8,7 +8,7 @@
 #   .\scripts\spread-hunter-menu.ps1 start -Yes    # 1 · LIVE: preflight-stop + wipe, fresh bot + dashboard (real bids)
 #   .\scripts\spread-hunter-menu.ps1 stop          # 2 · LIVE: stop bot + dashboard
 #   .\scripts\spread-hunter-menu.ps1 host          # 3 · LIVE: release :8799 from the other menu-owned dashboard (no wipe), host live & open
-#   .\scripts\spread-hunter-menu.ps1 shadow-run [-Minutes N] [-Watch] # 4 · SHADOW: preflight + wipe, full rehearsal (loop + stop loss); -Watch streams the loop log live
+#   .\scripts\spread-hunter-menu.ps1 shadow-run [-Minutes N] [-Watch] # 4 · SHADOW: preflight + wipe, full rehearsal; -Minutes -1 runs until stopped
 #   .\scripts\spread-hunter-menu.ps1 statistical-run [-Hours N] # overnight shadow statistics + dashboard
 #   .\scripts\spread-hunter-menu.ps1 stop-shadow   # 5 · SHADOW: stop loop, watcher and viewer
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
@@ -1111,6 +1111,13 @@ function Get-ShadowResumeStores {
         }
     }
 }
+function Resolve-ShadowMinutes {
+    param([int]$RequestedMinutes)
+    if ($RequestedMinutes -lt 0) { return -1.0 }
+    if ($RequestedMinutes -eq 0) { return 1440.0 }
+    return [double]$RequestedMinutes
+}
+
 function Resume-ShadowRun {
     <# Resume the PINNED shadow rehearsal in place: reopen
     data/01_shadow_12-09_00-58.db under its original shadow-01 run id, restart
@@ -1120,7 +1127,7 @@ function Resume-ShadowRun {
     overrides the store for one launch (run id derived from its seq prefix).
     Use this to continue the pinned run toward the 60-close sample target
     (menu option R / `shadow-resume`). -Minutes bounds the resumed session
-    (default 1440 / 24h). #>
+    (default 1440 / 24h; -1 explicitly runs until stopped). #>
     # Select and validate the resume target FIRST: a missing store must abort
     # with the current rehearsal and dashboard still running, not after they
     # have been stopped. Only then is anything torn down.
@@ -1266,9 +1273,10 @@ function Resume-ShadowRun {
     }
     $stamp = Get-Date -Format "dd-MM_HH-mm"
     $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
-    $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
+    $mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes
 
-    Lsh-Ok "Resuming $($script:ShadowRunId) from $($db.Name) for $mins minute(s) - no data was wiped."
+    $durationLabel = if ($mins -lt 0) { "until stopped" } else { "for $mins minute(s)" }
+    Lsh-Ok "Resuming $($script:ShadowRunId) from $($db.Name) $durationLabel - no data was wiped."
     if ($script:ShadowPreset) {
         Lsh-Step "Applied tournament preset: $($script:ShadowPreset)."
     }
@@ -1312,7 +1320,7 @@ function Resume-ShadowRun {
     }
     # Timebox the screener like the fresh-run path does: filter_loop has no
     # duration limit of its own, so without a timer it outlives the session.
-    $killSec = [int]($mins * 60)
+    $killSec = if ($mins -gt 0) { [int]($mins * 60) } else { 0 }
 
     # The loop: same run id, same store - the merge pass reads already-merged
     # shares per pair, so no double merge and no re-close of settled pairs.
@@ -1362,9 +1370,10 @@ function Resume-ShadowRun {
         $null = Stop-ShadowDashboard -RunId $script:ShadowRunId
         return $false
     }
-    Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s))."
+    Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $(if ($mins -gt 0) { "$mins minute(s)" } else { "until stopped" }))."
+    $observerHours = if ($mins -gt 0) { ($mins / 60) + 0.08 } else { -1 }
     $observer = Start-Process -FilePath "python" `
-        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08))) `
+        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", $observerHours)) `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "resume_observer-$($script:ShadowRunId).out.log") `
         -RedirectStandardError (Join-Path $RunDir "resume_observer-$($script:ShadowRunId).err.log")
@@ -1387,15 +1396,17 @@ function Resume-ShadowRun {
     # of their own (screener + watcher), same pattern as the fresh-run path:
     # kill only when the PID still carries the recorded start time, so a
     # recycled PID within the window is never force-stopped.
-    $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
-    if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
-    $killCmd = "Start-Sleep -Seconds $killSec"
-    foreach ($t in $timerTargets) {
-        $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+    if ($killSec -gt 0) {
+        $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
+        if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
+        $killCmd = "Start-Sleep -Seconds $killSec"
+        foreach ($t in $timerTargets) {
+            $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+        }
+        Start-Process -FilePath "powershell" `
+            -ArgumentList "-NoProfile", "-Command", $killCmd `
+            -WindowStyle Hidden
     }
-    Start-Process -FilePath "powershell" `
-        -ArgumentList "-NoProfile", "-Command", $killCmd `
-        -WindowStyle Hidden
 
     $session = [ordered]@{
         started = (Get-Date).ToString("o")
@@ -1431,7 +1442,7 @@ function Resume-ShadowRun {
     Lsh-Step "Stop it early" 
     Write-Host "  .\scripts\spread-hunter-menu.ps1 stop-shadow" -ForegroundColor (Get-ProfileColor -Name Info)
     if ($Watch) {
-        Lsh-Step "Watching the resumed loop live (Ctrl-C ends the watcher; session self-stops after $mins min)."
+        Lsh-Step "Watching the resumed loop live (Ctrl-C ends the watcher; $(if ($mins -gt 0) { "session self-stops after $mins min" } else { "session runs until stop-shadow" }))."
         Get-Content (Join-Path $RunDir "shadow_resume-$($script:ShadowRunId).err.log") -Wait -ErrorAction SilentlyContinue
     }
     return $true
@@ -1444,9 +1455,10 @@ function Start-ShadowTrial {
     keep running on the shared feed. The feed choice persists in
     data/<store>.trial.json (absolute paths) so Menu R replays it; the trial
     screener is recorded in the per-run session file only, never as the
-    global "filter" entry. -TrialDepth defaults to 250, -Minutes to 1440. #>
+    global "filter" entry. -TrialDepth defaults to 250, -Minutes to 1440;
+    -1 explicitly runs until stopped. #>
     $depth = if ($TrialDepth -gt 0) { [double]$TrialDepth } else { 250.0 }
-    $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
+    $mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes
     $stamp = Get-Date -Format "dd-MM_HH-mm"
     $dbSeq = Get-NextShadowSeq
     $script:ShadowRunId = "shadow-$dbSeq"
@@ -1457,7 +1469,8 @@ function Start-ShadowTrial {
     $feedPath = Join-Path $trialDir "markets.json"
     $manifestPath = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".trial.json")
 
-    Lsh-Ok "Starting depth-bar trial $runId (bar `$$depth, $mins minute(s)) - nothing stopped, nothing wiped."
+    $durationLabel = if ($mins -lt 0) { "until stopped" } else { "for $mins minute(s)" }
+    Lsh-Ok "Starting depth-bar trial $runId (bar `$$depth, $durationLabel) - nothing stopped, nothing wiped."
     if (-not (Start-ShadowDashboard)) { return $false }
 
     Lsh-Step "Seeding the trial universe feed..."
@@ -1485,9 +1498,10 @@ function Start-ShadowTrial {
             -RedirectStandardOutput (Join-Path $RunDir "shadow_trial-$runId.out.log") `
             -RedirectStandardError (Join-Path $RunDir "shadow_trial-$runId.err.log")
     }
-    Lsh-Ok "Trial loop running (PID $($shadowRun.Id), $mins minute(s))."
+    Lsh-Ok "Trial loop running (PID $($shadowRun.Id), $(if ($mins -gt 0) { "$mins minute(s)" } else { "until stopped" }))."
+    $observerHours = if ($mins -gt 0) { ($mins / 60) + 0.08 } else { -1 }
     $observer = Start-Process -FilePath "python" `
-        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $runId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08))) `
+        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $runId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", $observerHours)) `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "trial_observer-$runId.out.log") `
         -RedirectStandardError (Join-Path $RunDir "trial_observer-$runId.err.log")
@@ -1516,16 +1530,18 @@ function Start-ShadowTrial {
     } else {
         Lsh-Warn "Could not resolve the rehearsal ring; stop-loss watcher not engaged."
     }
-    $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
-    if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
-    $killSec = [int]($mins * 60)
-    $killCmd = "Start-Sleep -Seconds $killSec"
-    foreach ($t in $timerTargets) {
-        $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+    if ($mins -gt 0) {
+        $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
+        if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
+        $killSec = [int]($mins * 60)
+        $killCmd = "Start-Sleep -Seconds $killSec"
+        foreach ($t in $timerTargets) {
+            $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+        }
+        Start-Process -FilePath "powershell" `
+            -ArgumentList "-NoProfile", "-Command", $killCmd `
+            -WindowStyle Hidden
     }
-    Start-Process -FilePath "powershell" `
-        -ArgumentList "-NoProfile", "-Command", $killCmd `
-        -WindowStyle Hidden
 
     [ordered]@{
         trial_depth_usd = $depth
@@ -1561,7 +1577,7 @@ function Start-ShadowTrial {
     $openedUrl = Open-ShadowDashboard
     Lsh-Ok "Opened $openedUrl in default browser (trial db=$($script:ShadowDbPath))."
     if ($Watch) {
-        Lsh-Step "Watching the trial loop live (Ctrl-C ends the watcher; session self-stops after $mins min)."
+        Lsh-Step "Watching the trial loop live (Ctrl-C ends the watcher; $(if ($mins -gt 0) { "session self-stops after $mins min" } else { "session runs until stop-shadow" }))."
         Get-Content (Join-Path $RunDir "shadow_trial-$runId.err.log") -Wait -ErrorAction SilentlyContinue
     }
     return $true
@@ -1585,10 +1601,10 @@ function Start-NewShadowRun {
     }
     $runId = $script:ShadowRunId
     $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$runId.db"
-    $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
+    $mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes
     $presetManifest = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".preset.json")
 
-    Lsh-Ok "Starting fresh shadow run $runId on $(Split-Path $script:ShadowDbPath -Leaf) ($mins min) - no stores wiped."
+    Lsh-Ok "Starting fresh shadow run $runId on $(Split-Path $script:ShadowDbPath -Leaf) ($(if ($mins -gt 0) { "$mins min" } else { "until stopped" })) - no stores wiped."
     if ($script:ShadowPreset) {
         Lsh-Step "Applied tournament preset: $($script:ShadowPreset)."
     }
@@ -1622,10 +1638,11 @@ function Start-NewShadowRun {
             -RedirectStandardOutput (Join-Path $RunDir "shadow_run-$runId.out.log") `
             -RedirectStandardError (Join-Path $RunDir "shadow_run-$runId.err.log")
     }
-    Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $mins minute(s)) - dashboard updates live from $(Split-Path $script:ShadowDbPath -Leaf)."
+    Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $(if ($mins -gt 0) { "$mins minute(s)" } else { "until stopped" })) - dashboard updates live from $(Split-Path $script:ShadowDbPath -Leaf)."
 
+    $observerHours = if ($mins -gt 0) { ($mins / 60) + 0.08 } else { -1 }
     $observer = Start-Process -FilePath "python" `
-        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $runId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($mins / 60) + 0.08))) `
+        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $runId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", $observerHours)) `
         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "statistics_observer-$runId.out.log") `
         -RedirectStandardError (Join-Path $RunDir "statistics_observer-$runId.err.log")
@@ -1674,21 +1691,23 @@ function Start-NewShadowRun {
     }
     $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile -RunId $runId) -Encoding UTF8
 
-    $killSec = [int]($mins * 60)
-    $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
-    if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
-    $killCmd = "Start-Sleep -Seconds $killSec"
-    foreach ($t in $timerTargets) {
-        $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+    if ($mins -gt 0) {
+        $killSec = [int]($mins * 60)
+        $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
+        if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
+        $killCmd = "Start-Sleep -Seconds $killSec"
+        foreach ($t in $timerTargets) {
+            $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+        }
+        Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-Command", $killCmd -WindowStyle Hidden
     }
-    Start-Process -FilePath "powershell" -ArgumentList "-NoProfile", "-Command", $killCmd -WindowStyle Hidden
 
     Start-Sleep -Seconds 3
     $openedUrl = Open-ShadowDashboard -RunId $runId
     Lsh-Ok "Opened $openedUrl in default browser (shadow db=$($script:ShadowDbPath))."
-    if ($Watch -and $mins -gt 0) {
+    if ($Watch) {
         Write-Host ""
-        Lsh-Step "Watching the rehearsal loop live (Ctrl-C ends the watcher; session self-stops after $mins min or via stop-shadow)."
+        Lsh-Step "Watching the rehearsal loop live (Ctrl-C ends the watcher; $(if ($mins -gt 0) { "session self-stops after $mins min" } else { "session runs until stop-shadow" }))."
         Get-Content (Join-Path $RunDir "shadow_run-$runId.err.log") -Wait -ErrorAction SilentlyContinue
     }
     return $true
@@ -2721,7 +2740,8 @@ function Reset-Environment {
             $ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_${stamp}.db"
             $StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_${ShadowRunId}.db"
             if (Start-ShadowDashboard) {
-                if ($Minutes -gt 0) {
+                $shadowMinutes = Resolve-ShadowMinutes -RequestedMinutes $Minutes
+                if ($shadowMinutes -ne 0) {
                     # Ordered rehearsal boot (no signer is ever loaded, so it
                     # spends nothing):
                     #  1. MARKET SCREENER fills the universe feed first, so the
@@ -2753,21 +2773,22 @@ function Reset-Environment {
                     Lsh-Ok "Market screener loop running (PID $($screener.Id))."
                     # The rehearsal loop (the executor) - started now that the
                     # universe exists.
-                    Lsh-Step "Starting the rehearsal loop (python -m core_brain.shadow_run --minutes $Minutes --db $ShadowDbPath)..."
+                    Lsh-Step "Starting the rehearsal loop (python -m core_brain.shadow_run --minutes $shadowMinutes --db $ShadowDbPath)..."
                     # shadow_run is the ONLY child that declares itself a
                     # rehearsal, so it is the only one that may see
                     # HUNTER_PAIR_COST_CAP. Re-inject it here; the wrapper
                     # strips it again before the observer launches.
                     $shadowRun = Invoke-WithRehearsalTrialEnv {
                         Start-Process -FilePath "python" `
-                            -ArgumentList (Format-ProcessArgs @("-m", "core_brain.shadow_run", "--minutes", "$Minutes", "--db", $ShadowDbPath, "--run-id", $ShadowRunId)) `
+                            -ArgumentList (Format-ProcessArgs @("-m", "core_brain.shadow_run", "--minutes", "$shadowMinutes", "--db", $ShadowDbPath, "--run-id", $ShadowRunId)) `
                             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                             -RedirectStandardOutput (Join-Path $RunDir "shadow_run-$ShadowRunId.out.log") `
                             -RedirectStandardError (Join-Path $RunDir "shadow_run-$ShadowRunId.err.log")
                     }
-                    Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $Minutes minute(s)) - dashboard updates live from $ShadowDbPath."
+                    Lsh-Ok "Rehearsal loop running (PID $($shadowRun.Id), $(if ($shadowMinutes -gt 0) { "$shadowMinutes minute(s)" } else { "until stopped" })) - dashboard updates live from $ShadowDbPath."
+                    $observerHours = if ($shadowMinutes -gt 0) { ($shadowMinutes / 60) + 0.08 } else { -1 }
                     $observer = Start-Process -FilePath "python" `
-                        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $ShadowDbPath, "--run-id", $ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", (($Minutes / 60) + 0.08))) `
+                        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $ShadowDbPath, "--run-id", $ShadowRunId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", $observerHours)) `
                         -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
                         -RedirectStandardOutput (Join-Path $RunDir "statistics_observer-$ShadowRunId.out.log") `
                         -RedirectStandardError (Join-Path $RunDir "statistics_observer-$ShadowRunId.err.log")
@@ -2816,18 +2837,19 @@ function Reset-Environment {
                         ring = $ring
                     }
                     $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile -RunId $ShadowRunId) -Encoding UTF8
-                    $killSec = [int]($Minutes * 60)
-                    $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
-                    if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
-                    $killCmd = "Start-Sleep -Seconds $killSec"
-                    foreach ($t in $timerTargets) {
-                        # Kill only when the PID still carries the recorded start time, so a
-                        # recycled PID within the window is never force-stopped.
-                        $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+                    if ($shadowMinutes -gt 0) {
+                        $killSec = [int]($shadowMinutes * 60)
+                        $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
+                        if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
+                        $killCmd = "Start-Sleep -Seconds $killSec"
+                        foreach ($t in $timerTargets) {
+                            # Kill only when the PID still carries the recorded start time.
+                            $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
+                        }
+                        Start-Process -FilePath "powershell" `
+                            -ArgumentList "-NoProfile", "-Command", $killCmd `
+                            -WindowStyle Hidden
                     }
-                    Start-Process -FilePath "powershell" `
-                        -ArgumentList "-NoProfile", "-Command", $killCmd `
-                        -WindowStyle Hidden
                     Lsh-Ok "Shadow session running: screener + loop + stop-loss watcher. Stop Bot + Dashboard (5 / stop-shadow) ends it early."
                 }
                 # Open the browser only after every worker is up and the screener
@@ -2836,14 +2858,14 @@ function Reset-Environment {
                 Start-Sleep -Seconds 3
                 $openedUrl = Open-ShadowDashboard
                 Lsh-Ok "Opened $openedUrl in default browser (shadow db=$ShadowDbPath)."
-                if ($Watch -and $Minutes -gt 0) {
+                if ($Watch -and $shadowMinutes -ne 0) {
                     # -Watch: stream the rehearsal loop's stderr to THIS console
                     # instead of backgrounding it silently. The loop logs its
                     # [QUOTING] lines to its per-instance log. Ctrl-C ends
-                    # the watcher; the session still self-stops after $Minutes
-                    # min (detached timer) or via option 5 / stop-shadow.
+                    # the watcher; a timeboxed session self-stops after $shadowMinutes
+                    # min or via option 5 / stop-shadow.
                     Write-Host ""
-                    Lsh-Step "Watching the rehearsal loop live (Ctrl-C ends the watcher; session self-stops after $Minutes min or via stop-shadow)."
+                    Lsh-Step "Watching the rehearsal loop live (Ctrl-C ends the watcher; $(if ($shadowMinutes -gt 0) { "session self-stops after $shadowMinutes min" } else { "session runs until stop-shadow" }))."
                     Get-Content (Join-Path $RunDir "shadow_run-$ShadowRunId.err.log") -Wait -ErrorAction SilentlyContinue
                 }
             } else {
@@ -3035,10 +3057,10 @@ function Invoke-LiveAction {
                     }
                 }
                 $presetLabel = if ($script:ShadowPreset -eq "prudent") { "Prudent Hybrid" } else { "Standard Baseline" }
-                $resp = Read-Host ("  Minutes for this {0} shadow run (default 1440 / 24h, or 5 for quick check)?" -f $presetLabel)
-                if ($resp -and $resp -match '^\s*[0-9]+(?:\.[0-9]+)?\s*$') { $mins = [double]$resp }
+                $resp = Read-Host ("  Minutes for this {0} shadow run (default 1440 / 24h, 5 for quick check, -1 until stopped)?" -f $presetLabel)
+                if ($resp -and $resp -match '^\s*(?:-1|[0-9]+(?:\.[0-9]+)?)\s*$') { $mins = [double]$resp }
             }
-            if (-not $mins -or $mins -le 0) { $mins = 1440.0 }
+            if ($mins -eq 0) { $mins = 1440 }
             $script:Minutes = [int]$mins
             $null = Start-NewShadowRun
         }
@@ -3170,11 +3192,12 @@ function Invoke-LiveAction {
         "t" {
             # Depth-bar trial: a new rehearsal on its own feed. Nothing is
             # stopped or wiped; sibling sessions keep running untouched.
-            $mins = if ($Minutes -gt 0) { [double]$Minutes } else { 1440.0 }
+            $mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes
             if ($Action -eq "") {
                 $resp = Read-Host "  Trial depth bar in USD (default 250)?"
                 if ($resp -and $resp -match '^\s*[0-9]+(?:\.[0-9]+)?\s*$') { $script:TrialDepth = [double]$resp }
-                $confirm = Read-Host "  Start a $mins-minute depth-bar trial rehearsal (no wipe, siblings keep running)? [y/N]"
+                $trialDuration = if ($mins -gt 0) { "$mins-minute" } else { "unlimited" }
+                $confirm = Read-Host "  Start an $trialDuration depth-bar trial rehearsal (no wipe, siblings keep running)? [y/N]"
                 if ($confirm -notmatch '^[yY]') { Lsh-Warn "Shadow trial cancelled."; return }
             }
             $script:Minutes = [int]$mins

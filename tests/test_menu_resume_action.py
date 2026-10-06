@@ -14,8 +14,13 @@ runner.
 """
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 MENU = Path(__file__).resolve().parents[1] / "scripts" / "spread-hunter-menu.ps1"
 
@@ -146,9 +151,11 @@ def test_resume_timeboxes_screener_and_watcher():
 
 
 def test_resume_default_duration_is_24_hours():
-    """Resume defaults to 1440 minutes (24h) so it can run continuously overnight."""
+    """Resume keeps the 24h default through the shared duration resolver."""
+    src = _menu_source()
     body = _resume_function_source()
-    assert "1440.0" in body
+    assert "$mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes" in body
+    assert "if ($RequestedMinutes -eq 0) { return 1440.0 }" in src
 
 
 def test_resume_registers_the_screener_in_the_process_file():
@@ -300,7 +307,6 @@ def test_resume_rehearsal_env_passes_and_cleans_tournament_preset():
 
 def test_resume_stores_distinguishes_standard_and_prudent_runs():
     """Get-ShadowResumeStores discovers both shadow-NN and shadow-NN-prudent runs."""
-    src = _menu_source()
     helper = _resume_stores_helper_source()
     assert '_shadow_prudent' in helper
     assert '"-prudent"' in helper
@@ -324,3 +330,68 @@ def test_option_4_invokes_start_new_shadow_run():
     assert "Reset-Environment" not in branch
 
 
+def test_menu_duration_contract_keeps_default_finite_and_accepts_unlimited():
+    src = _menu_source()
+    helper = src.split("function Resolve-ShadowMinutes {", 1)[1].split(chr(10) + "}", 1)[0]
+    assert "if ($RequestedMinutes -lt 0) { return -1.0 }" in helper
+    assert "if ($RequestedMinutes -eq 0) { return 1440.0 }" in helper
+    assert "default 1440 / 24h; -1 explicitly runs until stopped" in src
+    assert "-1 until stopped" in src
+    assert r"(?:-1|[0-9]+(?:\.[0-9]+)?)" in src
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None,
+                    reason="no PowerShell 7 host on this machine")
+def test_menu_prompt_keeps_decimal_minutes_short():
+    """Regression: "1.2" at the duration prompt must not become a 24h run."""
+    script = chr(10).join([
+        "$ErrorActionPreference = 'Stop'",
+        "$out = @()",
+        "foreach ($resp in @('1.2', 'abc', '-1', '', '5')) {",
+        "  $mins = 0",
+        r"  if ($resp -and $resp -match '^\s*(?:-1|[0-9]+(?:\.[0-9]+)?)\s*$') { $mins = [double]$resp }",
+        "  if ($mins -eq 0) { $mins = 1440 }",
+        "  $out += [int]$mins",
+        "}",
+        "ConvertTo-Json -InputObject @($out) -Compress",
+    ])
+    result = subprocess.run(
+        [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, check=True, encoding="utf-8",
+    )
+
+    assert json.loads(result.stdout) == [1, 1440, -1, 1440, 5]
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None,
+                    reason="no PowerShell 7 host on this machine")
+def test_menu_duration_helper_keeps_zero_finite_and_negative_unlimited():
+    src = _menu_source()
+    body = src.split("function Resolve-ShadowMinutes {", 1)[1].split(chr(10) + "}", 1)[0]
+    script = chr(10).join([
+        "$ErrorActionPreference = 'Stop'",
+        "function Resolve-ShadowMinutes {" + body + "}",
+        "$minutes = @(-1, 0, 17) | ForEach-Object { Resolve-ShadowMinutes -RequestedMinutes $_ }",
+        "ConvertTo-Json -InputObject @($minutes) -Compress",
+    ])
+    result = subprocess.run(
+        [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, check=True, encoding="utf-8",
+    )
+
+    assert json.loads(result.stdout) == [-1, 1440, 17]
+
+
+def test_every_shadow_launcher_disables_timeouts_only_for_unlimited_runs():
+    src = _menu_source()
+    for name in ("Resume-ShadowRun", "Start-ShadowTrial", "Start-NewShadowRun"):
+        body = src.split(f"function {name} {{", 1)[1].split(chr(10) + "function ", 1)[0]
+        assert "$mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes" in body
+        assert "else { -1 }" in body, f"{name} must leave its observer uncapped"
+        assert "if ($killSec -gt 0)" in body or "if ($mins -gt 0)" in body, f"{name} must omit timer for unlimited run"
+
+    reset = src.split("function Reset-Environment {", 1)[1].split(chr(10) + "function ", 1)[0]
+    assert "$shadowMinutes = Resolve-ShadowMinutes -RequestedMinutes $Minutes" in reset
+    assert "if ($shadowMinutes -ne 0)" in reset
+    assert "if ($shadowMinutes -gt 0)" in reset
+    assert "else { -1 }" in reset

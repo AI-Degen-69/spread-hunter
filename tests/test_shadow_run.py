@@ -1023,6 +1023,53 @@ class TestPositionInTheLog:
         assert "down=" not in caplog.text
 
 
+class TestUnlimitedSession:
+    """Negative minutes mean run until stopped; zero remains one rotation."""
+
+    @staticmethod
+    def _capture_sleep_fn(tmp_path, monkeypatch, minutes):
+        from core_brain import shadow_run as sr
+        from core_brain import trader_loop
+
+        target = tmp_path / "runtime" / "shadow_run.json"
+        monkeypatch.setattr(sr, "shadow_heartbeat_path",
+                            lambda root=None, run_id="": target)
+        sleeps = []
+        monkeypatch.setattr(sr.time, "sleep", lambda seconds: sleeps.append(seconds))
+        captured = {}
+
+        def fake_loop_run(seam, **kwargs):
+            captured["sleep_fn"] = kwargs["sleep_fn"]
+            return []
+
+        monkeypatch.setattr(trader_loop, "run", fake_loop_run)
+        monkeypatch.setattr(sr, "build_shadow_seam",
+                            lambda **kw: type("Seam", (), {})())
+        sr.run_shadow(
+            minutes=minutes, db_path=tmp_path / "shadow.db",
+            markets_fn=lambda: [], client_fn=lambda: object(),
+            decide_fn=lambda *args, **kwargs: [],
+            fetch_books=lambda *args, **kwargs: {}, cfg=_load_cfg(),
+            run_id="shadow-unlimited", sleep_fn=None,
+        )
+        return captured["sleep_fn"], sleeps
+
+    def test_negative_minutes_install_no_deadline(self, tmp_path, monkeypatch):
+        sleep_fn, sleeps = self._capture_sleep_fn(tmp_path, monkeypatch, -1.0)
+
+        sleep_fn(3600.0)
+
+        assert sleeps == [3600.0]
+
+    def test_zero_minutes_still_expires_immediately(self, tmp_path, monkeypatch):
+        from core_brain.shadow_run import _Deadline
+
+        sleep_fn, _ = self._capture_sleep_fn(tmp_path, monkeypatch, 0.0)
+
+        with pytest.raises(_Deadline):
+            sleep_fn(3600.0)
+
+
 class TestSecondRotation:
     """Three cycles of the real loop over one market, with the price moving.
 

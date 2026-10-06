@@ -36,7 +36,7 @@ loop against the live book and is pre-approved, unlike every other loop command.
 is structural, not procedural: it builds its venue client with **no private key and no API
 credentials**, wrapped in a deny-by-default proxy (`core_brain/shadow_guard.py`), so there
 is nothing loaded with which a write could be signed. It requires an explicit per-run
-store path; `data/orders.db` is refused outright. It stops itself on a wall-clock time box.
+store path; `data/orders.db` is refused outright. It normally stops itself on a wall-clock time box; explicitly passing a negative `--minutes` runs until stopped. This does not load signing credentials or permit real orders.
 
 Two cautions:
 
