@@ -693,6 +693,68 @@ class TestProgressLog:
         con.close()
         assert rows == [(7, "dota-2026", 2)]
 
+    def test_a_discard_logs_cycle_market_status_reason_and_count(
+            self, tmp_path, caplog):
+        """A UMA-flagged visit names itself in one readable line (#408)."""
+        import logging
+
+        emit = self._emit(tmp_path)
+        with caplog.at_level(logging.INFO, logger="shadow_run"):
+            emit(7, "quoting", "discard", market_slug="cs2-tu-xdm",
+                 reason="uma_resolution_proposed",
+                 extra={"condition_id": "0xuma", "uma_status": "proposed",
+                        "cancelled": 2, "failed": 0})
+
+        line = caplog.text
+        assert "cycle=7" in line
+        assert "cs2-tu-xdm" in line
+        assert "proposed" in line
+        assert "uma_resolution_proposed" in line
+        assert "cancelled=2" in line
+
+
+class TestUmaGateShadowBuilder:
+    """Both UMA ports are set on the shadow seam (#408)."""
+
+    def test_builder_wires_both_ports_with_record_cancel_intact(
+            self, tmp_path):
+        from core_brain.order_registry import init_db, OrderRegistry
+        from core_brain.shadow_run import build_shadow_seam
+
+        db = tmp_path / "shadow.db"
+        init_db(db)
+        registry = OrderRegistry(db_path=db, run_id="shadow-test")
+
+        def fake_uma(cid):
+            from core_brain.market_resolution import UmaResolutionStatus
+            return UmaResolutionStatus(condition_id=cid)
+
+        seen = []
+
+        def fake_record(record):
+            seen.append(record)
+
+        seam = build_shadow_seam(
+            db_path=db, registry=registry,
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=_books,
+            fetch_uma_status=fake_uma,
+            record_market_event=fake_record,
+        )
+        assert seam.fetch_uma_status is fake_uma
+        assert seam.record_market_event is not None
+        # record_cancel stays the cancel adapter: marking still rests rows.
+        assert callable(seam.cancel_fn)
+        # Absent port = skip the write: a default-built seam still wires the
+        # record adapter without a caller-supplied sink.
+        seam2 = build_shadow_seam(
+            db_path=db, registry=registry,
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=_books,
+        )
+        assert seam2.fetch_uma_status is None
+        assert callable(seam2.record_market_event)
+
 
 class TestMain:
     """The command line: `python -m core_brain.shadow_run --minutes N`."""

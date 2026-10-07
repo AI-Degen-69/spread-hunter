@@ -468,6 +468,22 @@ def _make_logging_emit(
         _emit_cycle_event(cycle, phase, action, db_path=db_path,
                           run_id=run_id, **kw)
 
+        if phase == "quoting" and action == "discard":
+            extra = kw.get("extra") or {}
+            reason = (kw.get("reason") or "").strip()
+            status_value = extra.get("uma_status") or "?"
+            try:
+                cancelled = int(extra.get("cancelled", 0) or 0)
+            except (TypeError, ValueError):
+                cancelled = "?"
+            log.info(
+                "cycle=%s %s UMA_DISCARD status=%s reason=%s cancelled=%s",
+                cycle,
+                kw.get("market_slug") or extra.get("condition_id") or "?",
+                status_value, reason, cancelled,
+            )
+            return
+
         if phase != "quoting" or action != "decide":
             return
 
@@ -513,6 +529,8 @@ def build_shadow_seam(
     fetch_books: Optional[Callable] = None,
     traded_fn: Optional[Callable[[str, set], dict]] = None,
     flow_fn: Optional[Callable[[str, float], Any]] = None,
+    fetch_uma_status: Optional[Callable[[str], Any]] = None,
+    record_market_event: Optional[Callable[[Any], None]] = None,
     cfg=None,
     registry=None,
     run_id: Optional[str] = None,
@@ -757,6 +775,27 @@ def build_shadow_seam(
     def noop_sweep() -> None:
         return None
 
+    # UMA re-check gate (#408): same cached-reader shape as live when the
+    # caller wires it; absent ports = old behavior (the visit check skips
+    # itself). record_cancel stays the cancel adapter. record_market_event
+    # calls log_market_event() on the shadow registry (BLOCKED, reason +
+    # status in details); absent = skip the write. This seam will NOT choose
+    # the live reader for itself -- same as flow_fn: a caller that
+    # substituted its other sources must not be handed a live Gamma read by
+    # surprise. `run_shadow` passes both straight through; the entrypoint
+    # (`main`) is what wires the real one.
+    def shadow_record_market_event(record) -> None:
+        if record_market_event is not None:
+            record_market_event(record)
+            return
+        try:
+            log_fn = getattr(registry, "log_market_event", None)
+            if callable(log_fn):
+                log_fn(record)
+        except Exception as e:
+            log.warning("shadow uma market_events write failed: %s: %s",
+                        type(e).__name__, e)
+
     return VenueSeam(
         client=client,
         registry=registry,
@@ -776,6 +815,8 @@ def build_shadow_seam(
             run_id=getattr(registry, "run_id", None)),
         markets_fn_empty_is_routine=markets_fn_empty_is_routine,
         flow_fn=flow_fn,
+        fetch_uma_status=fetch_uma_status,
+        record_market_event=shadow_record_market_event,
     )
 
 
@@ -788,6 +829,8 @@ def run_shadow(
     decide_fn: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
     flow_fn: Optional[Callable[[str, float], Any]] = None,
+    fetch_uma_status: Optional[Callable[[str], Any]] = None,
+    record_market_event: Optional[Callable[[Any], None]] = None,
     interval: float = 5.0,
     funder: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -951,6 +994,8 @@ def run_shadow(
         fetch_market=_lookup_fetch_market(lambda: markets_holder[0]),
         fetch_books=fetch_books,
         flow_fn=flow_fn,
+        fetch_uma_status=fetch_uma_status,
+        record_market_event=record_market_event,
         cfg=cfg,
         run_id=run_id,
         paired_depth_arm=paired_depth_arm,
@@ -1338,6 +1383,24 @@ def _default_flow_fn() -> Callable[[str, float], Any]:
     return flow
 
 
+def _default_uma_status_fn() -> Callable[[str], Any]:
+    """The UMA re-check gate's Gamma reader: public endpoint, no key (#408).
+
+    Same safety class as `_default_flow_fn` above: Gamma needs no key and no
+    API credentials, and this read does not travel through the CLOB client
+    the deny-by-default proxy guards. Lazy per visit through the 30s TTL
+    cache, flagged pinned, unreachable uncached -- and unreachable fails
+    OPEN, warning and continuing the visit rather than cancelling.
+
+    The same cached-reader shape `trader_loop.main` wires on the live seam:
+    the loop that is rehearsed has to be the loop that ships.
+    """
+    from core_brain.trader_loop import make_uma_status_reader
+    return make_uma_status_reader(
+        gamma_host=os.environ.get(
+            "GAMMA_HOST", "https://gamma-api.polymarket.com"))
+
+
 def _default_fetch_market() -> Callable[[str], Any]:
     """The live loop's real market resolver (network)."""
     from core_brain.trader_loop import _fetch_market
@@ -1418,6 +1481,7 @@ def main(
     decide_fn: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
     flow_fn: Optional[Callable[[str, float], Any]] = None,
+    fetch_uma_status: Optional[Callable[[str], Any]] = None,
 ) -> int:
     """The shadow entrypoint: argparse, banner, time box, clean exit code."""
     # Declared before anything reads config. This process builds a
@@ -1495,6 +1559,11 @@ def main(
         # endpoint only, never the CLOB client the proxy guards, and the gate
         # calls it lazily: a market with a clear front pays nothing.
         flow_fn=flow_fn or _default_flow_fn(),
+        # The UMA re-check gate's Gamma reader, wired here with the other
+        # live sources -- this is the rehearsal an operator launches, so it
+        # is the one that must actually exercise the gate. Public Gamma only,
+        # no signer, lazy per visit through the 30s TTL cache.
+        fetch_uma_status=fetch_uma_status or _default_uma_status_fn(),
         interval=a.interval,
         funder=a.funder,
         run_id=a.run_id,
