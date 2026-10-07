@@ -115,6 +115,47 @@ esports are two-way. Each outcome is its own binary Yes/No market, so each is
 still a mergeable pair, but "one live match" is not "one tradeable market":
 live main-line **markets** outnumber live **events**.
 
+## How the ranker consumes it
+
+The live set is **merged into the universe**, not paginated for. In
+`scripts/filter_markets.py`:
+
+- `live_event_markets()` fetches the live set and normalises each main line into
+the same row shape `gamma_universe` emits, stamped `_live_event`.
+- `merge_live_event_markets()` folds those rows into the scanned universe,
+keyed on `condition_id`. A market the scan also found is **replaced in place**
+by the live row, because the live row is the one carrying the stamp.
+- `evaluate()` lets a `_live_event` row **skip both clock gates** (pre-start and
+in-play). Both refuse on `gameStartTime`, and a market the venue declares live
+is exactly the case where that clock is wrong.
+- `tradable()` gates it on `select_min_volume_24h_usd_live` ($10,000) instead of
+the permanent floor.
+
+Everything downstream is unchanged: movement, depth, spread, horizon and the
+mid gate all still apply, so a live market buys passage through the two clock
+gates and the volume floor -- never through the funnel.
+
+`_live_event` is also carried onto the scored row as `live_event`, with
+`_sport`, `event_period`, `event_score` and the `volume_bar_usd` it was gated
+on, so `market_universe.json` and the dashboard show which picks are live.
+
+### The clock still refuses
+
+A market the clock says is in play, which the venue does **not** declare live,
+is still refused -- `in-play: event started 20m ago`. That gate was added
+because a started match reaches the depth arm and gets refused for liquidity
+when its real defect is the clock (the 2026-10-06 CS2 market's
+`NO: top-3 bid depth $44.56`). Nothing about the venue's live set changes that:
+the declaration is an extra admission path, not a replacement gate.
+
+### What the page-walking was for, and why it is gone
+
+An earlier attempt widened the volume-sorted scan to keep walking past the
+floor while it kept finding started matches. Measured against the live set, that
+admitted rows `evaluate` refused on the clock and paid pagination for them. It
+is removed: the endpoint answers the question directly, above and below any
+floor.
+
 ## What this endpoint does NOT do
 
 - **It does not list pre-kickoff markets.** It is the live set only. The
