@@ -610,7 +610,15 @@ def test_a_live_event_with_a_future_kickoff_is_kept_with_a_clock_note(
         monkeypatch, capsys):
     # Arrange: the tennis anomaly -- flagged live, match in progress, kickoff
     # hours ahead. The flag and the clock disagree; the probe reports that and
-    # does NOT resolve it by dropping the market.
+    # does NOT resolve it by dropping the market. The clock is frozen: the
+    # recorded 11:00 UTC kickoff only reads "future" against a now before it,
+    # and wall-clock time must not decide this test.
+    class _FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 6, 23, 53, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(probe, "datetime", _FrozenClock)
     # Act
     _report(monkeypatch, [_TENNIS_EVENT])
 

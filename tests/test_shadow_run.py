@@ -1726,3 +1726,146 @@ class TestQueueGateInRehearsal:
 
         assert rc == 0
         assert "queue gate: reported=1 measured=1 unmeasurable=0" in caplog.text
+
+
+class _FakeTapeResponse:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._rows
+
+
+class TestTapeMissReplay:
+    """#401: prints at the level drain the queue or fill the paper order.
+
+    Replays the incident shape through the REAL `_default_traded_fn` -- only
+    `markets._SESSION.get` is stubbed, keyed by request params: taker-view
+    SELL volume split across two pages (invisible to the old single-page
+    reader) plus a maker-view-only resting-bid fill.
+    """
+
+    COND = "0xcond401"
+
+    @staticmethod
+    def _row(side, price, size, tx, ts=1791368500):
+        return {"transactionHash": tx, "asset": "tok-dn", "timestamp": ts,
+                "price": price, "size": size, "side": side}
+
+    @staticmethod
+    def _books(_clob_host, token_id):
+        return {"token_id": token_id, "bids": {0.26: 744.0}, "asks": {},
+                "best_bid": 0.26, "best_ask": None, "malformed": 0}
+
+    def _serve(self, monkeypatch, holder):
+        from core_brain import markets
+
+        def _get(url, params=None, **kw):
+            params = dict(params or {})
+            lim = int(params.get("limit", 500)) or 500
+            idx = int(params.get("offset", 0)) // lim
+            if params.get("takerOnly", "default") is False:
+                return _FakeTapeResponse(holder["maker"].get(idx, []))
+            return _FakeTapeResponse(holder["taker"].get(idx, []))
+
+        monkeypatch.setattr(markets._SESSION, "get", _get, raising=False)
+
+    def _submit_down9(self, db):
+        from core_brain.order_registry import OrderRegistry, init_db
+        from core_brain.shadow_exec import ensure_shadow_tables, record_submit
+
+        init_db(db)
+        reg = OrderRegistry(db_path=db)
+        ensure_shadow_tables(db)
+        record_submit(object(), reg, FakeMarket(self.COND),
+                      [QuoteIntent(side="DOWN", token_id="tok-dn", price=0.26,
+                                   size=9, mid=0.5, edge_vs_mid=0.0)],
+                      _load_cfg(), db_path=db, book_fn=self._books)
+        return reg
+
+    def _settle(self, reg, db, seen):
+        from core_brain.shadow_exec import settle_market
+        from core_brain.shadow_run import _default_traded_fn
+
+        return settle_market(reg, FakeMarket(self.COND), db_path=db,
+                             traded_fn=_default_traded_fn(), seen=seen,
+                             book_fn=self._books)
+
+    def _mark_traded(self, db):
+        import sqlite3
+
+        con = sqlite3.connect(db)
+        row = con.execute(
+            "SELECT traded FROM queue_marks WHERE token_id = 'tok-dn'"
+            " AND price = 0.26 ORDER BY id DESC LIMIT 1").fetchone()
+        con.close()
+        return row[0] if row else None
+
+    def test_prints_across_two_pages_drain_the_queue_and_cap_the_fill(
+            self, tmp_path, monkeypatch):
+        from core_brain.shadow_exec import read_queue_ahead
+
+        db = tmp_path / "shadow.db"
+        holder = {"taker": {0: [self._row("SELL", 0.25, 10.0, "0xprime")]},
+                  "maker": {0: []}}
+        self._serve(monkeypatch, holder)
+        seen: set = set()
+
+        # Phase 1: prime the tape while no orders rest -- history is marked
+        # seen and credits nothing.
+        from core_brain.order_registry import OrderRegistry, init_db
+        from core_brain.shadow_exec import ensure_shadow_tables
+        init_db(db)
+        reg = OrderRegistry(db_path=db)
+        ensure_shadow_tables(db)
+        assert self._settle(reg, db, seen) == []
+
+        # Phase 2: DOWN 9 @ 0.26 rests behind a 744 queue.
+        reg = self._submit_down9(db)
+        (order_id,) = [o["id"] for o in reg.get_all_orders()
+                       if o["token_id"] == "tok-dn"]
+        assert read_queue_ahead(db, reg._run_id(), order_id) == 744.0
+
+        # Phase 3: incident-shaped tape -- page 0 full with no 0.26 SELLs,
+        # page 1 carries 900 SELLs, maker walk carries a 300 resting fill.
+        filler = [self._row("SELL", 0.25, 1.0, f"0xfill{i}")
+                  for i in range(498)]
+        holder["taker"] = {
+            0: filler + [self._row("BUY", 0.26, 50.0, "0xmint1"),
+                         self._row("BUY", 0.26, 60.0, "0xmint2")],
+            1: [self._row("SELL", 0.26, 400.0, "0xsellA"),
+                self._row("SELL", 0.26, 500.0, "0xsellB")],
+        }
+        holder["maker"] = {0: [self._row("BUY", 0.26, 300.0, "0xmaker")]}
+
+        fills = self._settle(reg, db, seen)
+
+        # Assert -- 1200 at the level: 744 queue drains, fill caps at 9.
+        assert [(f.local_id, f.size) for f in fills] == [(order_id, 9.0)]
+        assert _filled_by_token(reg, self.COND) == {"tok-dn": 9.0}
+        assert self._mark_traded(db) == 1200.0
+        assert read_queue_ahead(db, reg._run_id(), order_id) == 0.0
+
+        # Phase 4: repeat poll on the same tape adds no drain and no fill.
+        assert self._settle(reg, db, seen) == []
+        assert _filled_by_token(reg, self.COND) == {"tok-dn": 9.0}
+
+    def test_sells_at_025_leave_the_026_level_untouched(
+            self, tmp_path, monkeypatch):
+        from core_brain.shadow_exec import read_queue_ahead
+
+        db = tmp_path / "shadow.db"
+        holder = {"taker": {0: [self._row("SELL", 0.25, 1000.0, "0xaway")]},
+                  "maker": {0: []}}
+        self._serve(monkeypatch, holder)
+
+        reg = self._submit_down9(db)
+        (order_id,) = [o["id"] for o in reg.get_all_orders()
+                       if o["token_id"] == "tok-dn"]
+
+        assert self._settle(reg, db, set()) == []
+        assert read_queue_ahead(db, reg._run_id(), order_id) == 744.0
+        assert self._mark_traded(db) == 0.0
