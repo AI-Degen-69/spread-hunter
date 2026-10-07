@@ -86,7 +86,7 @@ Frozen: `quotes.py` refusal strings, `orders.cancel_reason` values,
 
 ## Tasks
 
-### T1 [ ] — Shared lifecycle facts + truthful resolution reads [Backend/Logic] (M)
+### T1 [x] — Shared lifecycle facts + truthful resolution reads [Backend/Logic] (M)
 - Target files: `core_brain/market_lifecycle.py` (new), `core_brain/trader_loop.py`
   (classifier delegation, delete markers), `core_brain/market_resolution.py`
   (`parse_end_state` open-row rule, `record_failed` action,

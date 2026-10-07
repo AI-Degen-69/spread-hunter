@@ -58,6 +58,16 @@ def test_parse_end_date_in_future_is_not_resolved():
     assert s.end_date_passed is False
 
 
+def test_parse_elapsed_end_date_with_explicitly_open_row_stays_unresolved():
+    # A live series whose venue end date is kickoff: elapsed date alone must
+    # not resolve while the venue reports open + accepting.
+    row = {"condition_id": "0xC", "closed": False, "acceptingOrders": True,
+           "endDate": "1970-01-01T00:00:00Z"}
+    s = parse_end_state(row, now_ts=1_000_000_000)
+    assert s.end_date_passed is True
+    assert s.resolved is False
+
+
 def test_parse_winner_from_outcome_prices():
     row = {
         "condition_id": "0xC", "closed": True,
@@ -333,8 +343,44 @@ def test_sweep_records_resolved_and_cancels_open_rows(registry):
     assert rows[0]["condition_id"] == cid.lower()
     # The resting order was cancelled.
     active = [o for o in reg.get_active_orders()
-             if o.status in ("open", "pending", "partial")]
+              if o.status in ("open", "pending", "partial")]
     assert active == []
+
+
+def test_resolved_condition_ids_returns_lowercase_set(registry):
+    from core_brain.market_lifecycle import resolved_condition_ids
+    from core_brain.order_registry import ResolutionRecord
+    reg, _db = registry
+    reg.log_resolution(ResolutionRecord(
+        condition_id="0xMIXED", winning_token="Up", resolved_ts=2.0,
+        run_id=reg._run_id(),
+    ))
+    assert resolved_condition_ids(reg) == {"0xmixed"}
+
+
+def test_sweep_reports_record_failed_when_insert_fails(registry):
+    import sqlite3
+    reg, db = registry
+    cid = "0xBROKEN"
+    _make_order(reg, cid, status="open")
+    _make_quote(reg, cid)
+
+    def fetch(gamma_host, cid_in):
+        return MarketEndState(condition_id=cid_in, closed=True, resolved=True)
+
+    real_log = reg.log_resolution
+
+    def boom(record):
+        raise sqlite3.Error("disk gone")
+
+    reg.log_resolution = boom
+    try:
+        results = sweep_market_resolutions(
+            reg, db, markets=[], fetch_state=fetch, now_fn=lambda: 2.0)
+    finally:
+        reg.log_resolution = real_log
+    assert results[0].action == "record_failed"
+    assert reg.get_all_resolutions() == []
 
 
 def test_sweep_skips_markets_still_open_on_venue(registry):

@@ -1532,3 +1532,46 @@ class TestRefusedHold:
         assert len(decides) == GRACE + 1
         assert calls["submitted"] == []
         assert calls["cancelled"] == []
+
+
+class TestLifecycleStops:
+    """One enumerated stop list (#402 T1): every refusal maps to one code."""
+
+    CASES = [
+        ("UP: mid 0.850 outside [0.20,0.80] -- decided market",
+         "decided_by_price"),
+        ("settled book: quote at an end, no spread", "settled_book"),
+        ("t_remaining elapsed: window over", "countdown_expired"),
+        ("market exited: toxicity", "market_exited"),
+        ("unfunded by the allocator", "unfunded"),
+        ("fills for this market cap reached", "fill_cap_reached"),
+    ]
+
+    @pytest.mark.parametrize("why,code", CASES)
+    def test_refusal_maps_to_single_stop(self, why, code):
+        from core_brain.market_lifecycle import LifecycleStop, classify_refusal
+        stop = classify_refusal(why)
+        assert isinstance(stop, LifecycleStop)
+        assert stop.code == code
+        assert stop.ends_lifecycle is False
+
+    def test_unknown_refusal_is_transient(self):
+        from core_brain.market_lifecycle import classify_refusal
+        assert classify_refusal("book a bit wide, try later") is None
+
+    def test_matching_is_case_insensitive(self):
+        from core_brain.market_lifecycle import LifecycleStop, classify_refusal
+        assert classify_refusal("DECIDED MARKET") is LifecycleStop.DECIDED_BY_PRICE
+
+    def test_only_resolved_and_dropped_end_lifecycle(self):
+        from core_brain.market_lifecycle import LifecycleStop
+        ending = {s for s in LifecycleStop if s.ends_lifecycle}
+        assert ending == {LifecycleStop.RESOLVED, LifecycleStop.MARKET_DROPPED}
+        assert LifecycleStop.HOLD_EXPIRED.code == "hold_expired"
+        assert LifecycleStop.HOLD_EXPIRED.ends_lifecycle is False
+
+    def test_trader_classifier_delegates_without_changing_outcomes(self):
+        # Parity with the old TERMINAL_REFUSAL_MARKERS table.
+        for why, _code in self.CASES:
+            assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
+        assert _classify_refusal("wide book, retry") is VisitOutcome.REFUSED_TRANSIENT

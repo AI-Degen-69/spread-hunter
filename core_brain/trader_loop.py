@@ -33,6 +33,7 @@ if TYPE_CHECKING:  # annotation only -- markets is imported lazily at the call s
 
 from core_brain.quotes import Inventory, QuoteIntent, evaluate_market_quote
 from core_brain.cycle_stream import emit as _emit_cycle_event
+from core_brain.market_lifecycle import LifecycleStop, classify_refusal
 from core_brain.order_registry import InstanceInUse, OrderRegistry
 
 log = logging.getLogger("main_spread_hunter_loop")
@@ -71,7 +72,7 @@ class LiveFleetResult:
 CANCEL_NOT_QUOTED = "not_quoted"          # we no longer quote this token at all
 CANCEL_PRICE_MOVED = "price_moved"        # the desired price left the tolerance
 CANCEL_REGATE_PAIR_COST = "regate_pair_cost"  # holding would break max_pair_cost
-CANCEL_MARKET_DROPPED = "market_dropped"  # the market left the active universe
+CANCEL_MARKET_DROPPED = LifecycleStop.MARKET_DROPPED.code  # market left universe
 
 # Attribute attached to exceptions when submit raises after placing some legs.
 PARTIAL_SUBMIT_PLACED_ATTR = "placed"
@@ -96,23 +97,15 @@ class VisitOutcome(Enum):
 REFUSED_HOLD_GRACE_CYCLES = 3
 
 
-# Substrings of `decide`'s `why` that refuse for good rather than flicker.
-# Everything else (wide book, completable cap, reward window, mid band, ...)
-# is transient: the book moved, not the market. Matched case-insensitively.
-TERMINAL_REFUSAL_MARKERS = (
-    "decided market",          # mid outside [0.20, 0.80]: the book is settled
-    "settled book",            # risk.book_health: a quote at an end, no spread
-    "t_remaining",             # countdown elapsed: the window is over
-    "market exited",           # toxicity exit: we left on purpose
-    "unfunded by the allocator",  # zero allocation: nothing may rest
-    "fills for this market",   # per-market fill cap reached: no more quotes
-)
-
-
 def _classify_refusal(why: str) -> VisitOutcome:
-    """Terminal or transient, from `decide`'s refusal reason (pure)."""
-    lowered = (why or "").lower()
-    if any(m in lowered for m in TERMINAL_REFUSAL_MARKERS):
+    """Terminal or transient, from `decide`'s refusal reason (pure).
+
+    Delegates to the single enumerated list in `market_lifecycle`: a named
+    stop refuses for good, everything else (wide book, completable cap,
+    reward window, mid band, ...) is transient -- the book moved, not the
+    market. Matched case-insensitively.
+    """
+    if classify_refusal(why) is not None:
         return VisitOutcome.REFUSED_TERMINAL
     return VisitOutcome.REFUSED_TRANSIENT
 

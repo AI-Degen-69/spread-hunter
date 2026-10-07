@@ -66,6 +66,8 @@ from typing import Any, Callable, Optional
 
 import urllib.request
 
+from core_brain.market_lifecycle import resolved_condition_ids
+
 # Public read endpoint (no signer, no key). Same host the ranker and the
 # shadow book source already talk to; the shadow sweep already performs a
 # public book read every rotation, so this adds no new network surface.
@@ -178,7 +180,7 @@ class SweepResult:
     """One market's outcome in a sweep pass."""
 
     condition_id: str
-    action: str  # resolved_recorded | already_resolved | still_open | skipped_active | unreachable | partial_stranded
+    action: str  # resolved_recorded | record_failed | already_resolved | still_open | skipped_active | unreachable | partial_stranded
     winning_token: Optional[str] = None
     winning_token_id: Optional[str] = None
     cancelled_rows: int = 0
@@ -242,7 +244,12 @@ def parse_end_state(row: dict, now_ts: Optional[float] = None) -> Optional[Marke
     uma_status = extract_uma_resolution_status(row)
     uma_resolved = uma_status is not None
 
-    resolved = bool((closed is True) or (end_passed is True) or uma_resolved)
+    # An elapsed end date is weak evidence: a live series whose venue end
+    # date is kickoff reports closed=False + acceptingOrders=True with a past
+    # date. Only count it when the row does NOT explicitly say open (#402).
+    explicitly_open = (closed is False) and (accepting_orders is True)
+    end_resolves = bool(end_passed is True) and not explicitly_open
+    resolved = bool((closed is True) or end_resolves or uma_resolved)
 
     # Winner: Polymarket ships outcomes=["Up","Down"] (or question-dependent
     # labels) and outcomePrices=["1","0"] at settlement. The token id lives
@@ -673,15 +680,7 @@ def _touched_cids(registry) -> set[str]:
 
 
 def _already_resolved_cids(registry) -> set[str]:
-    out: set[str] = set()
-    try:
-        for r in registry.get_all_resolutions():
-            cid = r.get("condition_id") if isinstance(r, dict) else None
-            if cid:
-                out.add(str(cid).lower())
-    except Exception:
-        pass
-    return out
+    return resolved_condition_ids(registry)
 
 
 def sweep_market_resolutions(
@@ -834,7 +833,9 @@ def sweep_market_resolutions(
             except Exception:
                 pass
 
-        # Finally wire the dead code: record the terminal marker.
+        # Finally wire the dead code: record the terminal marker. A failed
+        # write must report the truth, never "resolved_recorded" (#402).
+        record_ok = True
         try:
             registry.log_resolution(ResolutionRecord(
                 condition_id=cid,
@@ -844,7 +845,7 @@ def sweep_market_resolutions(
                 winning_token_id=state.winning_token_id,
             ))
         except Exception:
-            pass
+            record_ok = False
 
         # Shadow-only settlement PnL: redeem held shares at the winning side's
         # $1.00. Live callers leave book_settlement=False; live redemption
@@ -852,7 +853,9 @@ def sweep_market_resolutions(
         settled_shares, settled_pnl = _settle(state)
 
         action = "resolved_recorded"
-        if partial_rows:
+        if not record_ok:
+            action = "record_failed"
+        elif partial_rows:
             action = "partial_stranded"
         results.append(SweepResult(
             condition_id=cid, action=action,

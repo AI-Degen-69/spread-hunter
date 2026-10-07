@@ -1,6 +1,6 @@
 # Todo — #402 (branch i402/improve-full-lifecycle-quoting-read-market-state)
 
-- [ ] T1 — Shared lifecycle facts + truthful resolution reads (RED-first)
+- [x] T1 — Shared lifecycle facts + truthful resolution reads (RED-first)
 - [ ] T2 — Series-state reading + band exemption (RED-first)
 - [ ] C1 — Review: live series quotable, refusals named
 - [ ] T3 — Trader respects true state, names every stop (RED-first)
