@@ -190,3 +190,158 @@ def test_core_brain_markets_accepts_clean_uma():
     parsed = _parse_market_row(m)
     assert parsed is not None
     assert parsed.condition_id == "0x123"
+
+
+# --- #408: Gamma UMA reader + caller-owned cache ---------------------------
+
+
+class _FakeResp:
+    def __init__(self, payload_bytes: bytes):
+        self._payload = payload_bytes
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _fake_urlopen(rows_or_payload, *, calls: list, raise_exc=None):
+    import json as _json
+
+    def _open(req, timeout=None):
+        calls.append((str(req.full_url), timeout))
+        if raise_exc is not None:
+            raise raise_exc
+        if isinstance(rows_or_payload, bytes):
+            raw = rows_or_payload
+        else:
+            raw = _json.dumps(rows_or_payload).encode("utf-8")
+        return _FakeResp(raw)
+
+    return _open
+
+
+def _row(cid="0xabc", **kw):
+    row = {"conditionId": cid, "umaResolutionStatus": "", "umaResolutionStatuses": []}
+    row.update(kw)
+    return row
+
+
+def test_fetch_uma_clean_row():
+    from core_brain.market_resolution import fetch_uma_resolution_status
+
+    calls: list = []
+    st = fetch_uma_resolution_status(
+        "https://gamma.test", "0xabc",
+        urlopen=_fake_urlopen([_row("0xabc")], calls=calls),
+    )
+    assert st.clean and not st.flagged and not st.unreachable
+    assert "condition_ids=0xabc" in calls[0][0]
+    assert calls[0][1] == 5.0
+
+
+def test_fetch_uma_flagged_matrix():
+    import pytest as _pytest
+
+    from core_brain.market_resolution import fetch_uma_resolution_status
+
+    for raw, want in [("proposed", "proposed"), ("disputed", "disputed"),
+                      ("resolved", "resolved"), ("  PROPOSED  ", "proposed")]:
+        st = fetch_uma_resolution_status(
+            "https://gamma.test", "0xabc",
+            urlopen=_fake_urlopen([_row("0xabc", umaResolutionStatus=raw)], calls=[]),
+        )
+        assert st.flagged and st.status == want, raw
+    st = fetch_uma_resolution_status(
+        "https://gamma.test", "0xabc",
+        urlopen=_fake_urlopen(
+            [_row("0xabc", umaResolutionStatus="", umaResolutionStatuses='["disputed"]')],
+            calls=[]),
+    )
+    assert st.flagged and st.status == "disputed"
+
+
+def test_fetch_uma_mismatched_cid_is_unreachable():
+    from core_brain.market_resolution import fetch_uma_resolution_status
+
+    st = fetch_uma_resolution_status(
+        "https://gamma.test", "0xabc",
+        urlopen=_fake_urlopen([_row("0xOTHER", umaResolutionStatus="proposed")], calls=[]),
+    )
+    assert st.unreachable and not st.flagged and not st.clean
+
+
+def test_fetch_uma_empty_listing_is_unreachable():
+    from core_brain.market_resolution import fetch_uma_resolution_status
+
+    st = fetch_uma_resolution_status(
+        "https://gamma.test", "0xabc", urlopen=_fake_urlopen([], calls=[]))
+    assert st.unreachable
+
+
+def test_fetch_uma_network_error_and_malformed_envelope_are_unreachable():
+    from core_brain.market_resolution import fetch_uma_resolution_status
+
+    st = fetch_uma_resolution_status(
+        "https://gamma.test", "0xabc",
+        urlopen=_fake_urlopen([], calls=[], raise_exc=OSError("down")))
+    assert st.unreachable
+    st = fetch_uma_resolution_status(
+        "https://gamma.test", "0xabc",
+        urlopen=_fake_urlopen(b"not-json{{{", calls=[]))
+    assert st.unreachable
+    st = fetch_uma_resolution_status(
+        "https://gamma.test", "0xabc",
+        urlopen=_fake_urlopen({"unexpected": "shape"}, calls=[]))
+    assert st.unreachable
+    st = fetch_uma_resolution_status("https://gamma.test", "   ")
+    assert st.unreachable
+
+
+def test_uma_cache_clean_reuse_ttl_expiry_flagged_pinned_unreachable_uncached():
+    from core_brain.market_resolution import (
+        UmaResolutionStatus, UmaResolutionStatusCache,
+    )
+
+    reads: list = []
+
+    def fetch(cid):
+        reads.append(cid)
+        return fetch._next.pop(0)
+
+    cache = UmaResolutionStatusCache(ttl_sec=30.0)
+    fetch._next = [UmaResolutionStatus(condition_id="0xabc")]
+    assert cache.status_for("0xabc", fetch, now_s=1000.0).clean
+    assert cache.status_for("0xabc", fetch, now_s=1010.0).clean
+    assert reads == ["0xabc"]
+    fetch._next = [UmaResolutionStatus(condition_id="0xabc")]
+    assert cache.status_for("0xabc", fetch, now_s=1031.0).clean
+    assert reads == ["0xabc", "0xabc"]
+
+    cache2 = UmaResolutionStatusCache(ttl_sec=30.0)
+    fetch2_calls: list = []
+
+    def fetch2(cid):
+        fetch2_calls.append(cid)
+        return UmaResolutionStatus(condition_id=cid, status="proposed")
+
+    first = cache2.status_for("0xabc", fetch2, now_s=1000.0)
+    assert first.flagged
+    again = cache2.status_for("0xabc", fetch2, now_s=9999.0)
+    assert again.flagged and again.status == "proposed"
+    assert fetch2_calls == ["0xabc"]
+
+    cache3 = UmaResolutionStatusCache(ttl_sec=30.0)
+    fetch3_calls: list = []
+
+    def fetch3(cid):
+        fetch3_calls.append(cid)
+        return UmaResolutionStatus(condition_id=cid, unreachable=True)
+
+    assert cache3.status_for("0xabc", fetch3, now_s=1000.0).unreachable
+    assert cache3.status_for("0xabc", fetch3, now_s=1001.0).unreachable
+    assert fetch3_calls == ["0xabc", "0xabc"]
