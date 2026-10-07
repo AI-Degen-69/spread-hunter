@@ -191,6 +191,29 @@ It rehearses everything: the same `MakerConfig`, the same `MAX_ORDER_USD` /
 store, and the wall clock differ. Point the shadow dashboard at the same per-run
 store path and it updates live while the rehearsal runs.
 
+**Every rehearsal records the code it is holding.** The banner names it
+(`code=80d03f1+dirty`) and the heartbeat carries it, so the dashboard's shadow
+stopwatch reads `· 01:44 · code 80d03f1+dirty` beside the run. When
+`core_brain/` or `scoring/` changes on disk after a run started, the same stamp
+reads `(older than this tree)`: that run's numbers describe code that is no
+longer here, so comparing them against a fresh run compares two strategies.
+Three rehearsals sat side by side on 2026-10-07, two of them still deciding with
+the previous morning's ranker and no queue gate -- all three identical on the
+page until the stamp existed. The check is the file clock, not the commit: a run
+started from a dirty tree whose edits are then committed unchanged is holding
+exactly what is on disk and stays current. Restart the rehearsal to clear a
+stale stamp (`shadow-resume` reopens its store in place).
+
+The queue-clear gate (#393) is among them, and this is the surface where its
+threshold can be picked from real numbers: the runner wires the same public tape
+reader the live seam uses, a market whose front is deep enough reports its reason
+on the `[QUEUE]` line, and the run ends with
+`SHADOW RUN queue gate: reported=N measured=N unmeasurable=N` — `unmeasurable`
+meaning the tape could not be read, never that a queue was clear. A caller that
+builds its own seam without a flow port gets the gate **inert** and is told so at
+startup; `scripts/ladder_shadow_rehearsal.py`, which replays a recorded tape, is
+deliberately one of those.
+
 ## The wiring rule that prevents contradictions
 
 The menu launches the Trader with `--no-reconcile --no-sweep` because **the poll

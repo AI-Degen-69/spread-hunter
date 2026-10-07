@@ -69,4 +69,12 @@ const shadowTitles = payloads.filter((status) => status.shadow_run).map((status)
   app.setShadowRun(status);
   return stubElement('shadow-run-clock').title;
 });
-process.stdout.write(JSON.stringify({ readings, shadow_titles: shadowTitles }));
+// The pill's own text carries the code stamp, so a test can assert what an
+// operator reads without parsing the title.
+const shadowTexts = payloads.filter((status) => status.shadow_run).map((status) => {
+  app.setShadowRun(status);
+  return stubElement('shadow-run-clock').textContent;
+});
+process.stdout.write(JSON.stringify({
+  readings, shadow_titles: shadowTitles, shadow_texts: shadowTexts,
+}));

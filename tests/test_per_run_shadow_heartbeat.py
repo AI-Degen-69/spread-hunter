@@ -180,8 +180,12 @@ def test_read_other_live_shadow_runs_surfaces_only_identity(tmp_path, monkeypatc
     assert other["run_id"] == "shadow-02"
     assert other["heartbeat_file"] == "runtime/shadow_run_shadow-02.json"
     assert other["db_path"] == str(db_other.resolve())
-    # Crucial: no cycle, cadence, age, or performance metrics from another store
-    for forbidden in ("cycle", "cadence_sec", "heartbeat_age_sec", "elapsed_sec", "interval", "minutes"):
+    # Crucial: no cycle, cadence, age, or performance metrics from another
+    # store, and no code stamp either: a run writing a DIFFERENT store is named,
+    # not graded, so neither a revision nor a staleness verdict about it lands
+    # on a page reading someone else's numbers.
+    for forbidden in ("cycle", "cadence_sec", "heartbeat_age_sec", "elapsed_sec",
+                      "interval", "minutes", "code_revision", "code_stale"):
         assert forbidden not in other
 
 

@@ -51,6 +51,7 @@ if str(LIVE_ROOT) not in sys.path:
 # cannot find reads as STOPPED, and START would then launch a second live
 # Trader beside the running one. resolve_runtime_file falls back to the old
 # path while only the old file exists. See core_brain/runtime_paths.py.
+from core_brain import code_revision  # noqa: E402
 from core_brain.runtime_paths import (  # noqa: E402
     legacy_runtime_file,
     resolve_runtime_file,
@@ -828,7 +829,18 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     if not matched:
         return None
     matched.sort(key=lambda r: (0 if r.get("running") else 1, float(r.get("heartbeat_age_sec", 0.0))))
-    return matched[0]
+    winner = matched[0]
+    # Does this run still hold the code on disk? The verdict is what makes a
+    # rehearsal that outlived its code visible: on 2026-10-07 two of three runs
+    # were deciding with the previous morning's ranker and no queue gate, and
+    # the page could not say so. Read the tree clock ONCE for the whole call --
+    # it is a walk over core_brain/ and scoring/, and `read_shadow_run` is also
+    # reached outside the 10s status cache. The winning payload carries
+    # `code_revision`, `process_started_at` and `started_at`, which is exactly
+    # the evidence `code_predates_tree` reads, so no second lookup is needed.
+    winner["code_stale"] = code_revision.code_predates_tree(
+        winner, clock=code_revision.decision_code_mtime())
+    return winner
 
 
 def read_other_live_shadow_runs(active_db_path: str | None, now: float | None = None) -> list[dict]:
@@ -992,6 +1004,15 @@ def _read_shadow_heartbeat_file(
         "end_reason": end_reason,
         "dash_port": raw.get("dash_port"),
         "tournament": tournament,
+        # The code this process loaded, as it recorded it at start (None for a
+        # heartbeat written before the field existed). Passed through raw here:
+        # the staleness verdict is computed once in `read_shadow_run` against a
+        # single tree clock, not per heartbeat file.
+        "code_revision": raw.get("code_revision") if isinstance(
+            raw.get("code_revision"), dict) else None,
+        # When this process started, which is what bounds the code of a
+        # heartbeat that carries no recorded revision.
+        "process_started_at": raw.get("process_started_at"),
     }
 
 
