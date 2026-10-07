@@ -1024,14 +1024,16 @@ def _admit_placements(
 
 def make_uma_status_reader(
     gamma_host: str = "https://gamma-api.polymarket.com",
-    ttl_sec: float = 30.0,
+    ttl_sec: Optional[float] = None,
     now_fn: Optional[Callable[[], float]] = None,
 ) -> Callable[[str], Any]:
     """One cached UMA reader per run for the live seam (#408)."""
     from core_brain.market_resolution import (
+        UMA_RESOLUTION_STATUS_TTL_SEC,
         UmaResolutionStatusCache, fetch_uma_resolution_status,
     )
-    cache = UmaResolutionStatusCache(ttl_sec=ttl_sec)
+    cache = UmaResolutionStatusCache(
+        ttl_sec=UMA_RESOLUTION_STATUS_TTL_SEC if ttl_sec is None else ttl_sec)
     clock = now_fn or time.time
 
     def fetch_uma_status(condition_id: str):
@@ -1089,6 +1091,17 @@ def _check_uma_resolution_before_fetch(
         return None
     status_value = str(getattr(uma, "status", None) or "").strip().lower()
     if not getattr(uma, "flagged", False) or not status_value:
+        return None
+    # Re-validate against the allow-list: the real reader only emits
+    # recognized statuses, but a custom port returning flagged + bogus must
+    # not cancel with a mislabeled reason. Unknown = unreadable = fail open.
+    if status_value not in UMA_RESOLUTION_STATUS_REASONS:
+        log.warning("quoting/uma_check_unreachable %s: unrecognized uma "
+                    "status %r; continuing visit", cid[:16], status_value)
+        emit_fn(service="decide", cycle=cycle, phase="quoting",
+                action="uma_check_unreachable", market_slug=title or cid[:16],
+                reason=f"unrecognized uma status {status_value!r}; continuing visit",
+                extra={"condition_id": cid})
         return None
     reason = _uma_reason_for(status_value)
     # Reuse the existing resting-order lookup shape, not a third one: the

@@ -471,18 +471,25 @@ def _make_logging_emit(
         if phase == "quoting" and action == "discard":
             extra = kw.get("extra") or {}
             reason = (kw.get("reason") or "").strip()
-            status_value = extra.get("uma_status") or "?"
-            try:
-                cancelled = int(extra.get("cancelled", 0) or 0)
-            except (TypeError, ValueError):
-                cancelled = "?"
-            log.info(
-                "cycle=%s %s UMA_DISCARD status=%s reason=%s cancelled=%s",
-                cycle,
-                kw.get("market_slug") or extra.get("condition_id") or "?",
-                status_value, reason, cancelled,
-            )
-            return
+            # Only UMA-gate discards carry uma_status / uma_resolution_*
+            # reasons; a future non-UMA discard falls through to the decide
+            # telemetry below instead of being mislabeled.
+            if extra.get("uma_status") is None and not reason.startswith(
+                    "uma_resolution_"):
+                pass
+            else:
+                status_value = extra.get("uma_status") or "?"
+                try:
+                    cancelled = int(extra.get("cancelled", 0) or 0)
+                except (TypeError, ValueError):
+                    cancelled = "?"
+                log.info(
+                    "cycle=%s %s UMA_DISCARD status=%s reason=%s cancelled=%s",
+                    cycle,
+                    kw.get("market_slug") or extra.get("condition_id") or "?",
+                    status_value, reason, cancelled,
+                )
+                return
 
         if phase != "quoting" or action != "decide":
             return

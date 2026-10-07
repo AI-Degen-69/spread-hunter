@@ -2112,3 +2112,66 @@ class TestUmaResolutionGateVisit:
         assert res.status == "CANCELLED"
         assert "retry next visit" in res.error
         assert discards[0][1]["extra"]["failed"] == 2
+
+    def test_raise_warns_without_cancelling_and_fetch_still_runs(self):
+        """A raising UMA port fails open: warn, then continue the visit."""
+        from core_brain.trader_loop import _visit_one
+
+        registry = self._registry_with_resting()
+        events, discards, warns = [], [], []
+        seam = self._seam({"0xuma": "raise"}, registry, events, discards)
+        fetched = []
+        seam.fetch_market = lambda cid: fetched.append(cid) or FakeMarket(cid)
+        seam.decide = lambda *a, **k: ([], "declined")
+
+        def emit_fn(service, cycle, phase, action, **kw):
+            warns.append(action)
+            if action == "discard":
+                discards.append((action, kw))
+
+        seam.emit_fn = emit_fn
+        res = _visit_one(seam, {"cid": "0xuma"}, cycle=3, live=True)
+        assert res.status != "CANCELLED"
+        assert "uma_check_unreachable" in warns
+        assert fetched == ["0xuma"]
+        assert discards == [] and events == []
+
+    def test_disputed_and_resolved_map_to_their_named_reasons(self):
+        from core_brain.trader_loop import _visit_one
+
+        for status_value, reason in (
+                ("disputed", "uma_resolution_disputed"),
+                ("resolved", "uma_resolution_resolved")):
+            registry = self._registry_with_resting()
+            events, discards = [], []
+            seam = self._seam({"0xuma": status_value}, registry,
+                              events, discards)
+            res = _visit_one(seam, {"cid": "0xuma"}, cycle=3, live=True)
+            assert res.status == "CANCELLED"
+            assert res.why == reason
+            assert discards[0][1]["reason"] == reason
+            assert discards[0][1]["extra"]["uma_status"] == status_value
+            assert events[0].reason_code == reason
+
+    def test_unknown_flagged_status_fails_open_without_cancelling(self):
+        from core_brain.market_resolution import UmaResolutionStatus
+        from core_brain.trader_loop import _visit_one
+
+        registry = self._registry_with_resting()
+        events, discards, warns = [], [], []
+        seam = self._seam({"0xuma": "clean"}, registry, events, discards)
+        seam.fetch_uma_status = lambda cid: UmaResolutionStatus(
+            condition_id=cid, status="bogus")
+        seam.fetch_market = lambda cid: FakeMarket(cid)
+        seam.decide = lambda *a, **k: ([], "declined")
+
+        def emit_fn(service, cycle, phase, action, **kw):
+            warns.append(action)
+            if action == "discard":
+                discards.append((action, kw))
+
+        seam.emit_fn = emit_fn
+        res = _visit_one(seam, {"cid": "0xuma"}, cycle=3, live=True)
+        assert res.status != "CANCELLED"
+        assert "uma_check_unreachable" in warns
+        assert discards == [] and events == []
