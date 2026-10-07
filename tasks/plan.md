@@ -224,6 +224,22 @@ Checkpoint: feature complete and observable.
   regression, and `dashboard/server.py` is not in the diff.
 - Noticed-but-not-touching candidates (3, all `open`) recorded in
   `docs/issues/393-noticed-but-not-touching.md`.
+- Station V review round: CodeRabbit posted 2 findings (review `COMPLETED`, check
+  `pass — Review completed`).
+  - **ACCEPTED 1** — `recent_sell_flow` read a missing/non-positive `timestamp` as
+    epoch 0, which then became `oldest`, so `oldest <= cutoff` reported a
+    page-bounded count as a COMPLETE window (a floor read as a measurement, which
+    is what refuses placements once the gate is enforced). Fixed with a positive-stamp
+    guard, 5 tests, RED first.
+  - **REJECTED 1** — "cancel the held opposite leg when the gate refuses its new
+    counterpart". `plan_orders` is hold-only by design (#384/#387, measured churn:
+    205/205 consecutive re-quotes lost queue position on shadow-01/02), EVERY other
+    refusal reason in `_visit_one` (price band, book health, completable pair,
+    funding) leaves a held leg resting, and under the shipped record-only default
+    nothing is refused at all — so the proposed cancel would fire every cycle in
+    enforcing mode and cancel the leg already in front of the queue. The naked-leg
+    risk it names is already owned by `completable_pair_block` at placement and
+    `single_buy_saver` at fill.
 
 ## Notes (session memory — do not lose)
 

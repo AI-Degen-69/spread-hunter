@@ -159,6 +159,27 @@ class TestRecentSellFlow:
         assert flow.status == "complete"
         assert len(session.calls) == 1
 
+    def test_a_row_with_no_stamp_cannot_mark_the_window_covered(self):
+        # Station V / CodeRabbit: `float(t.get("timestamp") or 0.0)` turned a row
+        # with no stamp into epoch 0, which then became `oldest` -- so a full
+        # page that never reached the window start was reported as COMPLETE.
+        # The reading is a floor, and reading a floor as a measurement is what
+        # refuses placements under HUNTER_QUEUE_CLEAR_GATE=1.
+        page = [{"price": 0.47, "size": 10.0, "side": "SELL", "asset": "tok"},
+                _trade(NOW - 30, 0.47, 10.0, tx="0xone")]
+        flow = _flow(_TapeSession([page]), page_size=2, max_pages=1)
+        assert flow.status == "truncated"
+        assert flow.by_token == {"tok": {0.47: 10.0}}
+
+    @pytest.mark.parametrize("stamp", [None, 0, -5, ""])
+    def test_a_non_positive_or_missing_stamp_never_defines_the_edge(self, stamp):
+        page = [{"timestamp": stamp, "price": 0.47, "size": 10.0,
+                 "side": "SELL", "asset": "tok"},
+                _trade(NOW - 30, 0.47, 10.0, tx="0xone")]
+        flow = _flow(_TapeSession([page]), page_size=2, max_pages=1)
+        assert flow.status == "truncated"
+        assert flow.by_token == {"tok": {0.47: 10.0}}
+
     def test_quiet_window_is_complete_and_empty(self):
         flow = _flow(_TapeSession([[]]))
         assert flow.status == "complete"

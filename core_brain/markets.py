@@ -544,10 +544,19 @@ def recent_sell_flow(condition_id: str, window_sec: float, *,
             if not isinstance(t, dict):
                 continue
             try:
-                ts = float(t.get("timestamp") or 0.0)
+                raw_ts = t.get("timestamp")
+                if raw_ts is None:
+                    continue
+                ts = float(raw_ts)
             except (TypeError, ValueError):
                 continue
-            if not math.isfinite(ts):
+            # A stamp that is missing, non-finite or non-positive is garbage, and
+            # it must not define the window edge: `or 0.0` turned such a row into
+            # epoch 0, which then became `oldest`, so the completeness check read
+            # "oldest <= window start" and called a page-bounded count a whole
+            # window. A floor read as a measurement is what refuses placements
+            # once the gate is enforced.
+            if not math.isfinite(ts) or ts <= 0:
                 continue
             if oldest is None or ts < oldest:
                 oldest = ts
