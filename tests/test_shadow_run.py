@@ -756,6 +756,76 @@ class TestUmaGateShadowBuilder:
         assert callable(seam2.record_market_event)
 
 
+class TestUmaFlipRehearsal:
+    """Clean admit, Gamma flips to proposed, next visit cancels both rows (#408)."""
+
+    def test_flip_to_proposed_cancels_both_rows_writes_blocked_places_nothing(
+            self, tmp_path, caplog):
+        import logging
+        import sqlite3
+
+        from core_brain.market_resolution import UmaResolutionStatus
+        from core_brain.order_registry import init_db, OrderRegistry
+        from core_brain.quotes import QuoteIntent
+        from core_brain.shadow_run import build_shadow_seam
+        from core_brain.trader_loop import _visit_one
+
+        db = tmp_path / "shadow.db"
+        init_db(db)
+        registry = OrderRegistry(db_path=db, run_id="shadow-flip")
+        mode = {"uma": "clean"}
+
+        def fake_uma(cid):
+            if mode["uma"] == "proposed":
+                return UmaResolutionStatus(condition_id=cid, status="proposed")
+            return UmaResolutionStatus(condition_id=cid)
+
+        seam = build_shadow_seam(
+            db_path=db, registry=registry, cfg=_load_cfg(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=_books,
+            fetch_uma_status=fake_uma,
+        )
+        assert seam.fetch_uma_status is fake_uma
+
+        pair = [QuoteIntent(side="UP", token_id="tok-up", price=0.47, size=5,
+                            mid=0.5, edge_vs_mid=0.0),
+                QuoteIntent(side="DOWN", token_id="tok-dn", price=0.47,
+                            size=5, mid=0.5, edge_vs_mid=0.0)]
+        seam.decide = lambda cfg, up, dn, inv, t_rem, wf: (list(pair), "")
+        res1 = _visit_one(seam, {"cid": "0xflip"}, cycle=1, live=True)
+        assert res1.status in ("QUOTED", "DECLINED", "DRY_RUN") or res1.submitted >= 0
+        resting = [o for o in registry.get_active_orders()
+                   if o.condition_id == "0xflip" and o.status == "open"]
+        assert len(resting) == 2, "both legs must rest before the flip"
+
+        # Flip the fake Gamma reader; the feed refresh returns [] — the
+        # empty-feed path keeps the previous universe, so the market is
+        # still visited and the UMA gate fires regardless of feed state.
+        mode["uma"] = "proposed"
+        submitted = []
+        orig_submit = seam.submit_fn
+        seam.submit_fn = lambda *a, **k: submitted.append(1) or 0
+        with caplog.at_level(logging.INFO, logger="shadow_run"):
+            res2 = _visit_one(seam, {"cid": "0xflip"}, cycle=2, live=True)
+        assert res2.status == "CANCELLED"
+        assert res2.why == "uma_resolution_proposed"
+        assert submitted == [], "zero new orders placed on the flagged visit"
+        still = [o for o in registry.get_active_orders()
+                 if o.condition_id == "0xflip" and o.status in ("open", "partial")]
+        assert still == []
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute(
+                "SELECT kind, reason_code, reason FROM market_events "
+                "WHERE condition_id = '0xflip'").fetchall()
+        blocked = [r for r in rows if r[0] == "BLOCKED"
+                   and r[1] == "uma_resolution_proposed"]
+        assert len(blocked) == 1
+        assert "proposed" in (blocked[0][2] or "")
+        assert "UMA_DISCARD" in caplog.text
+        assert "uma_resolution_proposed" in caplog.text
+
+
 class TestMain:
     """The command line: `python -m core_brain.shadow_run --minutes N`."""
 
