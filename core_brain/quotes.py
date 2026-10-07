@@ -618,7 +618,7 @@ def _decide_lifecycle_escalation(
         maximum_bid = max_profitable_hedge_bid(
             override.held_average_price,
             cfg.max_pair_cost,
-            cfg.tick_size,
+            cfg.price_tick,
         )
     except ValueError as exc:
         return [], f"lifecycle maximum profitable bid unavailable: {exc}"

@@ -409,6 +409,20 @@ def test_lifecycle_escalation_bypasses_only_spread_distance_and_keeps_pair_id():
     assert intents[0].pair_id == "pair-lifecycle"
 
 
+def test_lifecycle_escalation_uses_the_venue_price_tick():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(price=0.505)
+    override = replace(override, held_average_price=0.485)
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert why == ""
+    assert len(intents) == 1
+    assert intents[0].price == pytest.approx(0.505)
+
+
 def test_lifecycle_override_rejects_pair_cost_above_ninety_nine_cents():
     cfg, up, down, inventory, override = _lifecycle_quote_case(price=0.511)
 
