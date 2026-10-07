@@ -75,6 +75,17 @@ CANCEL_NOT_QUOTED = "not_quoted"          # we no longer quote this token at all
 CANCEL_PRICE_MOVED = "price_moved"        # the desired price left the tolerance
 CANCEL_REGATE_PAIR_COST = "regate_pair_cost"  # holding would break max_pair_cost
 CANCEL_MARKET_DROPPED = LifecycleStop.MARKET_DROPPED.code  # market left universe
+# Why a quote was cancelled for UMA resolution state (#408). Entries for
+# #402's single discard list: per-status reasons naming the UMA status that
+# flagged the market.
+CANCEL_UMA_RESOLUTION_PROPOSED = "uma_resolution_proposed"
+CANCEL_UMA_RESOLUTION_DISPUTED = "uma_resolution_disputed"
+CANCEL_UMA_RESOLUTION_RESOLVED = "uma_resolution_resolved"
+UMA_RESOLUTION_STATUS_REASONS = {
+    "proposed": CANCEL_UMA_RESOLUTION_PROPOSED,
+    "disputed": CANCEL_UMA_RESOLUTION_DISPUTED,
+    "resolved": CANCEL_UMA_RESOLUTION_RESOLVED,
+}
 
 # Attribute attached to exceptions when submit raises after placing some legs.
 PARTIAL_SUBMIT_PLACED_ATTR = "placed"
@@ -507,6 +518,15 @@ class VenueSeam:
     #: price, so a clear front never pays for a tape read, and every caller that
     #: leaves it unset (including the shadow seam) behaves exactly as before.
     flow_fn: Optional[Callable[[str, float], "SellFlow"]] = None
+    #: UMA resolution reader for the re-check gate (#408):
+    #: `(condition_id) -> UmaResolutionStatus` (clean / flagged / unreachable).
+    #: Optional and lazy -- called once per visit before `fetch_market`, and
+    #: every caller that leaves it unset behaves exactly as before.
+    fetch_uma_status: Optional[Callable[[str], Any]] = None
+    #: Telemetry sink for the UMA gate (#408): `record_market_event(record)`
+    #: writes one `market_events` row per flagged visit. Absent = skip the
+    #: write; the cancel and discard still happen.
+    record_market_event: Optional[Callable[[Any], None]] = None
 
 
 def run(
@@ -1002,6 +1022,161 @@ def _admit_placements(
     return list(to_submit), ""
 
 
+def make_uma_status_reader(
+    gamma_host: str = "https://gamma-api.polymarket.com",
+    ttl_sec: Optional[float] = None,
+    now_fn: Optional[Callable[[], float]] = None,
+) -> Callable[[str], Any]:
+    """One cached UMA reader per run for the live seam (#408)."""
+    from core_brain.market_resolution import (
+        UMA_RESOLUTION_STATUS_TTL_SEC,
+        UmaResolutionStatusCache, fetch_uma_resolution_status,
+    )
+    cache = UmaResolutionStatusCache(
+        ttl_sec=UMA_RESOLUTION_STATUS_TTL_SEC if ttl_sec is None else ttl_sec)
+    clock = now_fn or time.time
+
+    def fetch_uma_status(condition_id: str):
+        return cache.status_for(
+            condition_id,
+            lambda cid: fetch_uma_resolution_status(gamma_host, cid),
+            now_s=clock(),
+        )
+
+    return fetch_uma_status
+
+
+def _uma_reason_for(status_value: str) -> str:
+    """The cancel reason for a flagged UMA status (#408)."""
+    return UMA_RESOLUTION_STATUS_REASONS.get(
+        str(status_value or "").strip().lower(),
+        CANCEL_UMA_RESOLUTION_PROPOSED,
+    )
+
+
+def _check_uma_resolution_before_fetch(
+    seam: VenueSeam,
+    cid: str,
+    title: str = "",
+    cycle: int = 0,
+    emit_fn: Optional[Callable] = None,
+) -> Optional[LiveFleetResult]:
+    """Cancel resting quotes on a UMA-flagged market, before `fetch_market` (#408)."""
+    if getattr(seam, "fetch_uma_status", None) is None:
+        return None
+    fetch_uma = seam.fetch_uma_status
+    if not callable(fetch_uma):
+        return None
+    if not cid:
+        return None
+    if emit_fn is None:
+        emit_fn = lambda *a, **k: None
+    try:
+        uma = fetch_uma(cid)
+    except Exception as e:
+        log.warning("quoting/uma_check_unreachable %s: %s: %s",
+                    cid[:16], type(e).__name__, e)
+        emit_fn(service="decide", cycle=cycle, phase="quoting",
+                action="uma_check_unreachable", market_slug=title or cid[:16],
+                reason=f"{type(e).__name__}: {e}",
+                extra={"condition_id": cid})
+        return None
+    if uma is None or getattr(uma, "unreachable", False):
+        log.warning("quoting/uma_check_unreachable %s: gamma read failed; "
+                    "continuing visit", cid[:16])
+        emit_fn(service="decide", cycle=cycle, phase="quoting",
+                action="uma_check_unreachable", market_slug=title or cid[:16],
+                reason="gamma read failed; continuing visit",
+                extra={"condition_id": cid})
+        return None
+    status_value = str(getattr(uma, "status", None) or "").strip().lower()
+    if not getattr(uma, "flagged", False) or not status_value:
+        return None
+    # Re-validate against the allow-list: the real reader only emits
+    # recognized statuses, but a custom port returning flagged + bogus must
+    # not cancel with a mislabeled reason. Unknown = unreadable = fail open.
+    if status_value not in UMA_RESOLUTION_STATUS_REASONS:
+        log.warning("quoting/uma_check_unreachable %s: unrecognized uma "
+                    "status %r; continuing visit", cid[:16], status_value)
+        emit_fn(service="decide", cycle=cycle, phase="quoting",
+                action="uma_check_unreachable", market_slug=title or cid[:16],
+                reason=f"unrecognized uma status {status_value!r}; continuing visit",
+                extra={"condition_id": cid})
+        return None
+    reason = _uma_reason_for(status_value)
+    # Reuse the existing resting-order lookup shape, not a third one: the
+    # dropped-market cleanup reads `registry.get_active_orders()` and maps
+    # rows to cancel dicts. Same read here (no invented lookup), except
+    # open+partial (the plan's open_orders_fn shape) instead of open-only.
+    resting: list[dict] = []
+    try:
+        active = list(seam.registry.get_active_orders())
+    except Exception as e:
+        log.warning("uma gate registry read failed for %s: %s: %s",
+                    cid[:16], type(e).__name__, e)
+        active = []
+    for o in active:
+        o_cid = getattr(o, "condition_id", None)
+        if o_cid is None and isinstance(o, dict):
+            o_cid = o.get("condition_id")
+        if str(o_cid or "") != cid:
+            continue
+        st = getattr(o, "status", None)
+        if st is None and isinstance(o, dict):
+            st = o.get("status", "open")
+        if str(st) not in ("open", "partial"):
+            continue
+        if isinstance(o, dict):
+            row = dict(o)
+            row["cancel_reason"] = reason
+            resting.append(row)
+        else:
+            resting.append({
+                "id": getattr(o, "id", None),
+                "order_id": getattr(o, "order_id", None) or getattr(o, "id", None),
+                "token_id": getattr(o, "token_id", None),
+                "price": getattr(o, "price", None),
+                "side": getattr(o, "side", None),
+                "status": str(st),
+                "cancel_reason": reason,
+            })
+    cancelled = 0
+    failed = 0
+    if resting:
+        try:
+            cancelled = int(seam.cancel_fn(seam.client, seam.registry, resting) or 0)
+        except Exception as e:
+            log.warning("uma gate cancel failed for %s: %s: %s",
+                        cid[:16], type(e).__name__, e)
+            cancelled = 0
+        failed = max(0, len(resting) - cancelled)
+    log.info("[UMA_GATE] %s | status=%s reason=%s cancelled=%d failed=%d",
+             title or cid[:16], status_value, reason, cancelled, failed)
+    emit_fn(service="decide", cycle=cycle, phase="quoting",
+            action="discard", market_slug=title or cid[:16], reason=reason,
+            extra={"condition_id": cid, "uma_status": status_value,
+                   "cancelled": cancelled, "failed": failed})
+    record_fn = getattr(seam, "record_market_event", None)
+    if record_fn is not None and callable(record_fn):
+        try:
+            from core_brain.order_registry import MarketEventRecord
+            record_fn(MarketEventRecord(
+                ts=time.time(), condition_id=cid,
+                market_slug=title or None, kind="BLOCKED",
+                reason=(f"uma {status_value}: {reason} "
+                        f"(cancelled={cancelled} failed={failed})"),
+                reason_code=reason,
+            ))
+        except Exception as e:
+            log.warning("uma gate market_events write failed for %s: %s: %s",
+                        cid[:16], type(e).__name__, e)
+    return LiveFleetResult(
+        status="CANCELLED", condition_id=cid, title=title, why=reason,
+        cancelled=cancelled,
+        error=(f"{failed} cancel(s) failed; retry next visit" if failed else ""),
+    )
+
+
 def _visit_one(
     seam: VenueSeam,
     spec,
@@ -1023,7 +1198,7 @@ def _visit_one(
     """
     cid = _cid(spec)
     if emit_fn is None:
-        emit_fn = lambda *a, **k: None
+        emit_fn = getattr(seam, "emit_fn", None) or (lambda *a, **k: None)
     feed_metadata = spec if isinstance(spec, dict) else {}
     paired_context = getattr(seam.registry, "paired_context", None)
     paired_enabled = isinstance(paired_context, dict)
@@ -1052,6 +1227,13 @@ def _visit_one(
             return LiveFleetResult(
                 status="ERROR", condition_id=cid,
                 error=f"paired attribution: {exc}")
+    # UMA re-check gate (#408): runs BEFORE fetch_market so a CLOB outage
+    # on a flipped market cannot skip the cancel. Title is unknown until
+    # the fetch, so the gate logs cid[:16] when title is empty.
+    uma_gate = _check_uma_resolution_before_fetch(
+        seam, cid, title=cid[:16], cycle=cycle, emit_fn=emit_fn)
+    if uma_gate is not None:
+        return uma_gate
     try:
         market = seam.fetch_market(cid)
     except Exception as e:
@@ -1926,6 +2108,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         # empty tape, and an unmeasurable reading is reported rather than
         # refused -- a rehearsal of this gate would show nothing either way.
         flow_fn=lambda cid, window: recent_sell_flow(cid, window),
+        # The UMA re-check gate (#408): one cached reader per run, beside the
+        # live cancel adapter above; the visit check runs before fetch_market.
+        fetch_uma_status=make_uma_status_reader(
+            os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")),
+        record_market_event=registry.log_market_event,
     )
     # Resolution detection runs off the critical path on a slow background
     # thread (won't block a 5s rotation). Disabled for --once smoke runs.

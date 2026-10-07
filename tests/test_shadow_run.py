@@ -693,6 +693,176 @@ class TestProgressLog:
         con.close()
         assert rows == [(7, "dota-2026", 2)]
 
+    def test_a_discard_logs_cycle_market_status_reason_and_count(
+            self, tmp_path, caplog):
+        """A UMA-flagged visit names itself in one readable line (#408)."""
+        import logging
+
+        emit = self._emit(tmp_path)
+        with caplog.at_level(logging.INFO, logger="shadow_run"):
+            emit(7, "quoting", "discard", market_slug="cs2-tu-xdm",
+                 reason="uma_resolution_proposed",
+                 extra={"condition_id": "0xuma", "uma_status": "proposed",
+                        "cancelled": 2, "failed": 0})
+
+        line = caplog.text
+        assert "cycle=7" in line
+        assert "cs2-tu-xdm" in line
+        assert "proposed" in line
+        assert "uma_resolution_proposed" in line
+        assert "cancelled=2" in line
+
+
+class TestUmaGateShadowBuilder:
+    """Both UMA ports are set on the shadow seam (#408)."""
+
+    def test_builder_wires_both_ports_with_record_cancel_intact(
+            self, tmp_path):
+        from core_brain.order_registry import init_db, OrderRegistry
+        from core_brain.shadow_run import build_shadow_seam
+
+        db = tmp_path / "shadow.db"
+        init_db(db)
+        registry = OrderRegistry(db_path=db, run_id="shadow-test")
+
+        def fake_uma(cid):
+            from core_brain.market_resolution import UmaResolutionStatus
+            return UmaResolutionStatus(condition_id=cid)
+
+        seen = []
+
+        def fake_record(record):
+            seen.append(record)
+
+        seam = build_shadow_seam(
+            db_path=db, registry=registry,
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=_books,
+            fetch_uma_status=fake_uma,
+            record_market_event=fake_record,
+        )
+        assert seam.fetch_uma_status is fake_uma
+        assert seam.record_market_event is not None
+        # record_cancel stays the cancel adapter: marking still rests rows.
+        assert callable(seam.cancel_fn)
+        # Absent port = skip the write: a default-built seam still wires the
+        # record adapter without a caller-supplied sink.
+        seam2 = build_shadow_seam(
+            db_path=db, registry=registry,
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=_books,
+        )
+        assert seam2.fetch_uma_status is None
+        assert callable(seam2.record_market_event)
+
+    def test_run_shadow_entrypoint_passes_through_uma_reader_to_market_visit(
+            self, tmp_path):
+        from core_brain.market_resolution import UmaResolutionStatus
+        from core_brain.shadow_run import ShadowResult, run_shadow
+
+        db = tmp_path / "shadow.db"
+        visited_cids = []
+
+        def fake_uma(cid):
+            visited_cids.append(cid)
+            return UmaResolutionStatus(condition_id=cid)
+
+        spec = {
+            "cid": "0xuma_entry",
+            "question": "Will CS2 match end?",
+            "tokens": [{"token_id": "tok-up", "outcome": "Yes"},
+                       {"token_id": "tok-dn", "outcome": "No"}],
+            "rewards": {"rates": []},
+            "accepting_orders": True,
+            "closed": False,
+        }
+
+        def one_shot_sleep(_s):
+            raise KeyboardInterrupt
+
+        res = run_shadow(
+            db_path=db,
+            minutes=0,
+            interval=0.1,
+            markets_fn=lambda **kw: [spec],
+            fetch_books=_books,
+            fetch_uma_status=fake_uma,
+            sleep_fn=one_shot_sleep,
+        )
+        assert "0xuma_entry" in visited_cids
+        assert isinstance(res, ShadowResult)
+
+
+
+class TestUmaFlipRehearsal:
+    """Clean admit, Gamma flips to proposed, next visit cancels both rows (#408)."""
+
+    def test_flip_to_proposed_cancels_both_rows_writes_blocked_places_nothing(
+            self, tmp_path, caplog):
+        import logging
+        import sqlite3
+
+        from core_brain.market_resolution import UmaResolutionStatus
+        from core_brain.order_registry import init_db, OrderRegistry
+        from core_brain.quotes import QuoteIntent
+        from core_brain.shadow_run import build_shadow_seam
+        from core_brain.trader_loop import _visit_one
+
+        db = tmp_path / "shadow.db"
+        init_db(db)
+        registry = OrderRegistry(db_path=db, run_id="shadow-flip")
+        mode = {"uma": "clean"}
+
+        def fake_uma(cid):
+            if mode["uma"] == "proposed":
+                return UmaResolutionStatus(condition_id=cid, status="proposed")
+            return UmaResolutionStatus(condition_id=cid)
+
+        seam = build_shadow_seam(
+            db_path=db, registry=registry, cfg=_load_cfg(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=_books,
+            fetch_uma_status=fake_uma,
+        )
+        assert seam.fetch_uma_status is fake_uma
+
+        pair = [QuoteIntent(side="UP", token_id="tok-up", price=0.47, size=5,
+                            mid=0.5, edge_vs_mid=0.0),
+                QuoteIntent(side="DOWN", token_id="tok-dn", price=0.47,
+                            size=5, mid=0.5, edge_vs_mid=0.0)]
+        seam.decide = lambda cfg, up, dn, inv, t_rem, wf: (list(pair), "")
+        res1 = _visit_one(seam, {"cid": "0xflip"}, cycle=1, live=True)
+        assert res1.status in ("QUOTED", "DECLINED", "DRY_RUN") or res1.submitted >= 0
+        resting = [o for o in registry.get_active_orders()
+                   if o.condition_id == "0xflip" and o.status == "open"]
+        assert len(resting) == 2, "both legs must rest before the flip"
+
+        # Flip the fake Gamma reader; the feed refresh returns [] — the
+        # empty-feed path keeps the previous universe, so the market is
+        # still visited and the UMA gate fires regardless of feed state.
+        mode["uma"] = "proposed"
+        submitted = []
+        orig_submit = seam.submit_fn
+        seam.submit_fn = lambda *a, **k: submitted.append(1) or 0
+        with caplog.at_level(logging.INFO, logger="shadow_run"):
+            res2 = _visit_one(seam, {"cid": "0xflip"}, cycle=2, live=True)
+        assert res2.status == "CANCELLED"
+        assert res2.why == "uma_resolution_proposed"
+        assert submitted == [], "zero new orders placed on the flagged visit"
+        still = [o for o in registry.get_active_orders()
+                 if o.condition_id == "0xflip" and o.status in ("open", "partial")]
+        assert still == []
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute(
+                "SELECT kind, reason_code, reason FROM market_events "
+                "WHERE condition_id = '0xflip'").fetchall()
+        blocked = [r for r in rows if r[0] == "BLOCKED"
+                   and r[1] == "uma_resolution_proposed"]
+        assert len(blocked) == 1
+        assert "proposed" in (blocked[0][2] or "")
+        assert "UMA_DISCARD" in caplog.text
+        assert "uma_resolution_proposed" in caplog.text
+
 
 class TestMain:
     """The command line: `python -m core_brain.shadow_run --minutes N`."""

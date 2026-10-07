@@ -94,6 +94,135 @@ _unreachable_backoff: dict[str, float] = {}
 
 RECOGNIZED_UMA_RESOLVED_STATUSES = frozenset({"proposed", "disputed", "resolved"})
 
+# How long a clean UMA resolution read is reused (#408). One Gamma read per
+# condition per TTL; flagged results are pinned (no re-read), unreachable
+# results are never cached. Beside the 60s sweep backoff above.
+UMA_RESOLUTION_STATUS_TTL_SEC = 30.0
+
+
+@dataclass(frozen=True)
+class UmaResolutionStatus:
+    """Three-way UMA resolution reading for one condition id (#408).
+
+    * clean — Gamma returned a row for this cid with no recognized
+      `proposed`/`disputed`/`resolved` status.
+    * flagged — `status` names the normalized `proposed`/`disputed`/`resolved`
+      value; the caller cancels resting quotes.
+    * unreachable — the read failed, the listing was empty, no row matched
+      the requested cid, or the envelope was malformed. Fail OPEN: the
+      caller warns, continues the visit unchanged, and caches nothing.
+    """
+
+    condition_id: str
+    status: Optional[str] = None
+    unreachable: bool = False
+
+    @property
+    def flagged(self) -> bool:
+        return not self.unreachable and self.status is not None
+
+    @property
+    def clean(self) -> bool:
+        return not self.unreachable and self.status is None
+
+
+def fetch_uma_resolution_status(
+    gamma_host: str,
+    condition_id: str,
+    *,
+    timeout: float = 5.0,
+    urlopen: Callable[..., Any] = urllib.request.urlopen,
+) -> UmaResolutionStatus:
+    """Public Gamma read for one market's UMA resolution status (#408).
+
+    `GET {gamma_host}/markets?condition_ids={cid}` is read-only, no key.
+    Same query (`condition_ids={cid}`), User-Agent, and envelope handling
+    as `fetch_open_market_state`, but the row MUST match the requested
+    condition id: a first-row blind read is banned here (today's
+    `fetch_open_market_state:414` shape). A mismatched row is absent
+    (unreachable), never clean.
+
+    The matched row passes through `extract_uma_resolution_status`:
+    `proposed`/`disputed`/`resolved` = flagged, nothing recognized = clean.
+    Network, decode, malformed-envelope, empty-listing, and mismatch cases
+    all return `unreachable` — unreadable, never "clean" and never "flagged".
+    """
+    cid = (condition_id or "").strip()
+    if not cid:
+        return UmaResolutionStatus(condition_id=condition_id, unreachable=True)
+    url = f"{gamma_host.rstrip('/')}/markets?condition_ids={cid}"
+    headers = {"User-Agent": "spread-hunter/0.1 (uma resolution gate)"}
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return UmaResolutionStatus(condition_id=condition_id, unreachable=True)
+    rows = None
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = payload.get("data") or payload.get("markets")
+    if not isinstance(rows, list) or not rows:
+        return UmaResolutionStatus(condition_id=condition_id, unreachable=True)
+    wanted = cid.lower()
+    match: Optional[dict] = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_cid = str(row.get("condition_id") or row.get("conditionId") or "")
+        if row_cid and row_cid.strip().lower() == wanted:
+            match = row
+            break
+    if match is None:
+        return UmaResolutionStatus(condition_id=condition_id, unreachable=True)
+    try:
+        status = extract_uma_resolution_status(match)
+    except Exception:
+        return UmaResolutionStatus(condition_id=condition_id, unreachable=True)
+    if status is not None:
+        norm = str(status).strip().lower()
+        if norm not in RECOGNIZED_UMA_RESOLVED_STATUSES:
+            return UmaResolutionStatus(condition_id=condition_id, unreachable=True)
+        return UmaResolutionStatus(condition_id=condition_id, status=norm)
+    return UmaResolutionStatus(condition_id=condition_id)
+
+
+class UmaResolutionStatusCache:
+    """One Gamma UMA read per condition per TTL, caller-owned (#408).
+
+    Model: `AgedOutMarketStateCache` — whoever owns the clock owns the
+    entries, so a cache cannot outlive the run it was built for. Clean
+    results are reused for `ttl_sec`; flagged results are pinned (no
+    expiry) so later visits keep cancelling without a new read;
+    unreachable results are never cached so the next visit retries.
+    """
+
+    def __init__(self, ttl_sec: float = UMA_RESOLUTION_STATUS_TTL_SEC) -> None:
+        self._ttl_sec = max(0.0, float(ttl_sec))
+        self._entries: dict[str, tuple[float, UmaResolutionStatus]] = {}
+
+    def status_for(
+        self,
+        condition_id: str,
+        fetch: Callable[[str], UmaResolutionStatus],
+        *,
+        now_s: float,
+    ) -> UmaResolutionStatus:
+        """The UMA status for `condition_id`, reading at most once per TTL."""
+        hit = self._entries.get(condition_id)
+        if hit is not None:
+            fetched_at, cached = hit
+            if cached.flagged:
+                return cached
+            if cached.clean and (now_s - fetched_at) < self._ttl_sec:
+                return cached
+        state = fetch(condition_id)
+        if state is None or getattr(state, "unreachable", True):
+            return state
+        self._entries[condition_id] = (now_s, state)
+        return state
+
 
 def parse_uma_resolution_status(
     status: Any = None,

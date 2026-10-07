@@ -1,11 +1,8 @@
-# Todo — #402 (branch i402/improve-full-lifecycle-quoting-read-market-state)
+# Todo — #408 (branch i408/re-check-uma-resolution-state-for-markets-alread)
 
-- [x] T1 — Shared lifecycle facts + truthful resolution reads (RED-first)
-- [x] T2 — Series-state reading + band exemption (RED-first)
-- [ ] C1 — Review: live series quotable, refusals named
-- [x] T3 — Trader respects true state, names every stop (RED-first)
-- [x] C1 — Review: live series quotable, refusals named
-- [x] T4 — Poll path + secondary readers quiet on dead books (RED-first)
-- [x] C2 — Review: dead books silent everywhere
-- [ ] C2 — Review: dead books silent everywhere
-- [x] T5 — Full-cycle shadow rehearsal; 9 focused suites green
+- [x] T1 — Gamma UMA reader + caller-owned cache (RED-first)
+- [x] C1 — Review: reader proven offline, no network in tests
+- [x] T2 — Visit check + reasons + live builder (RED-first)
+- [x] C2 — Review: flagged visit cancels named, clean visit identical
+- [x] T3 — Shadow builder + readable discard line
+- [x] T4 — Shadow flip rehearsal; 3 focused suites green
