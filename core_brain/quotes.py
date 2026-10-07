@@ -25,13 +25,20 @@ is a legacy field; see AGENTS.md.
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, replace
+import math
 import time
+from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Any, Callable, Optional
 
 from core_brain import config, risk, unhedged_stop_loss
 from core_brain.markets import SeriesState, live_series_with_games_remaining, quote_t_remaining
 from core_brain.config import MakerConfig
+from core_brain.single_leg_lifecycle import (
+    LegState,
+    LifecycleQuoteOverride,
+    max_profitable_hedge_bid,
+)
 
 
 @dataclass
@@ -217,6 +224,7 @@ def _decide_quotes_from_mid(
     inv: Inventory,
     t_remaining: float,
     series_state: Optional[SeriesState] = None,
+    lifecycle_override: LifecycleQuoteOverride | None = None,
 ) -> tuple[list[QuoteIntent], str]:
     """Rest both legs under MID. The production path.
 
@@ -298,6 +306,11 @@ def _decide_quotes_from_mid(
     # of offers against a $2,000 committed cap before a share was bought.
     if cfg.quote_shares <= 0:
         return [], "unfunded by the allocator -- quoting nothing"
+
+    if lifecycle_override is not None:
+        return _decide_lifecycle_escalation(
+            cfg, up_book, down_book, inv, lifecycle_override, series_state,
+        )
 
     p_up_calc, _, _, _ = quote_resting_price(cfg, inv, "UP", up_book)
     p_dn_calc, _, _, _ = quote_resting_price(cfg, inv, "DOWN", down_book)
@@ -561,6 +574,128 @@ def _decide_quotes_from_mid(
     return out, ""
 
 
+def _decide_lifecycle_escalation(
+    cfg: MakerConfig,
+    up_book: dict,
+    down_book: dict,
+    inv: Inventory,
+    override: LifecycleQuoteOverride,
+    series_state: Optional[SeriesState],
+) -> tuple[list[QuoteIntent], str]:
+    """Validate and size one pair-scoped escalation without ordinary repricing."""
+    if override.state is not LegState.ESCALATED_HEDGE:
+        return [], "lifecycle quote override is not an escalated hedge"
+    if not isinstance(override.pair_id, str) or not override.pair_id.strip():
+        return [], "lifecycle escalation requires a pair ID"
+    if not isinstance(override.token_id, str) or not override.token_id:
+        return [], "lifecycle escalation requires a token ID"
+    if (not isinstance(override.price, (int, float))
+            or isinstance(override.price, bool)
+            or not math.isfinite(override.price)
+            or not 0 < override.price < 1):
+        return [], "lifecycle escalation price must be finite and between zero and one"
+    if (not isinstance(override.held_average_price, (int, float))
+            or isinstance(override.held_average_price, bool)
+            or not math.isfinite(override.held_average_price)
+            or not 0 < override.held_average_price < 1):
+        return [], "lifecycle held-leg average must be finite and between zero and one"
+    if (not isinstance(override.size, int) or isinstance(override.size, bool)
+            or override.size <= 0):
+        return [], "lifecycle escalation size must be a positive integer"
+
+    if (not math.isfinite(cfg.max_pair_cost)
+            or cfg.max_pair_cost <= 0):
+        return [], "lifecycle pair cap must be finite and positive"
+    cap = min(Decimal("0.99"), Decimal(str(cfg.max_pair_cost)))
+    pair_cost = (
+        Decimal(str(override.held_average_price))
+        + Decimal(str(override.price))
+    )
+    if pair_cost > cap:
+        return [], (
+            f"lifecycle pair cost ${pair_cost:.4f} exceeds ${cap:.3f} cap")
+    try:
+        maximum_bid = max_profitable_hedge_bid(
+            override.held_average_price,
+            cfg.max_pair_cost,
+            cfg.tick_size,
+        )
+    except ValueError as exc:
+        return [], f"lifecycle maximum profitable bid unavailable: {exc}"
+    if Decimal(str(override.price)) != Decimal(str(maximum_bid)):
+        return [], (
+            f"lifecycle bid ${override.price:.4f} does not match the "
+            f"maximum profitable bid ${maximum_bid:.4f}")
+
+    matches = [
+        (side, book, hedge_book)
+        for side, book, hedge_book in (
+            ("UP", up_book, down_book),
+            ("DOWN", down_book, up_book),
+        )
+        if book.get("token_id") == override.token_id
+    ]
+    if len(matches) != 1:
+        return [], "lifecycle escalation token is missing or ambiguous"
+    side, own_book, hedge_book = matches[0]
+    heavy = risk.naked_side(inv)
+    if heavy is None or side == heavy:
+        return [], "lifecycle escalation must reduce the existing imbalance"
+
+    mid = mid_price(own_book.get("best_bid"), own_book.get("best_ask"))
+    if mid is None:
+        return [], f"{side}: no two-sided book"
+    if (mid <= 0.20 or mid >= 0.80) and not live_series_with_games_remaining(
+            series_state):
+        return [], f"{side}: mid {mid:.3f} outside [0.20,0.80] -- decided market"
+
+    blocked = risk.hard_block(
+        cfg,
+        inv,
+        side,
+        override.price,
+        own_book,
+        hedge_book,
+        allow_pair_cost_equal=True,
+        lifecycle_escalation=True,
+        pair_cost_average=override.held_average_price,
+    )
+    if blocked:
+        return [], f"{side}: {blocked}"
+
+    excess = abs(inv.up_shares - inv.down_shares)
+    residual_size = int(excess)
+    ladder = risk.size_for(
+        cfg,
+        inv,
+        side,
+        override.price,
+        pair_price=override.held_average_price + override.price,
+    )
+    band = risk.band_risk_factor(cfg, override.price)
+    size_factor = (
+        1.0
+        if getattr(cfg, "strict_paired_inventory", True)
+        else band.size_mult
+    )
+    size = int(min(override.size, ladder, residual_size) * size_factor)
+    if size < cfg.min_quote_shares:
+        return [], (
+            f"lifecycle escalation size {size} below venue minimum "
+            f"{cfg.min_quote_shares}")
+
+    return [QuoteIntent(
+        side=side,
+        token_id=override.token_id,
+        price=override.price,
+        size=size,
+        mid=mid,
+        edge_vs_mid=mid - override.price,
+        reason="lifecycle escalated hedge",
+        pair_id=override.pair_id,
+    )], ""
+
+
 def decide_ladder_quotes(cfg: MakerConfig, market, up_book: dict,
                          down_book: dict, *,
                          now: Optional[float] = None
@@ -652,6 +787,8 @@ def decide_quotes(
     t_remaining: float,
     window_frac: Optional[float] = None,
     series_state: Optional[SeriesState] = None,
+    *,
+    lifecycle_override: LifecycleQuoteOverride | None = None,
 ) -> tuple[list[QuoteIntent], str]:
     """Return the bids we want resting right now, plus a reason if we want none.
 
@@ -664,8 +801,11 @@ def decide_quotes(
     """
     if cfg.objective in ("spread_capture", "rewards"):
         intents, why = _decide_quotes_from_mid(cfg, up_book, down_book, inv,
-                                               t_remaining, series_state)
+                                               t_remaining, series_state,
+                                               lifecycle_override)
         return _require_two_sided(cfg, inv, intents, why)
+    if lifecycle_override is not None:
+        return [], "lifecycle escalation requires the from-mid quote objective"
 
     if t_remaining < cfg.min_t_remaining_sec:
         return [], f"t_remaining {t_remaining:.0f}s < {cfg.min_t_remaining_sec:.0f}s"

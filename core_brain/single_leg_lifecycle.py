@@ -57,6 +57,8 @@ class LifecycleQuoteOverride:
     token_id: str
     price: float
     size: int
+    state: LegState
+    held_average_price: float
 
 
 @dataclass(frozen=True)
