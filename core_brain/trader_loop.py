@@ -793,6 +793,10 @@ def _admit_placements(
     try:
         flow = flow_fn(cid, window_sec)
     except Exception as e:
+        # Fail open, but never quietly: the reason travels with the placement,
+        # and a broken port says so on the loop's own log as well.
+        log.warning("queue gate tape read failed for %s: %s: %s",
+                    cid[:16], type(e).__name__, e)
         return list(to_submit), (
             f"queue gate skipped: tape read failed ({type(e).__name__}: {e})")
 

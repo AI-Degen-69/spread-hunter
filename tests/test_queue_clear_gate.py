@@ -19,6 +19,7 @@ No network and no signer: `now` and `session` are injected.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 from unittest import mock
@@ -123,6 +124,16 @@ class TestRecentSellFlow:
 
     def test_non_list_payload_is_unavailable(self):
         flow = _flow(_TapeSession([{"error": "nope"}]))
+        assert flow.status == "unavailable"
+        assert flow.by_token == {}
+
+    @pytest.mark.parametrize("payload", [{}, None, 0, "nope"])
+    def test_a_falsy_non_list_payload_is_not_an_empty_window(self, payload):
+        # Station IV review: `r.json() or []` read `null` and `{}` as an empty
+        # tape, i.e. a COMPLETE window with no sells at any price -- the one
+        # reading that refuses a placement -- on a response that carried no
+        # measurement at all. The ranker's tape reader refuses the same shapes.
+        flow = _flow(_TapeSession([payload]))
         assert flow.status == "unavailable"
         assert flow.by_token == {}
 
@@ -420,6 +431,18 @@ class TestAdmitPlacements:
             _gate_cfg(enforce_queue_clear_gate=True))
         assert admitted == [up]
         assert "failed" in why
+
+    def test_a_flow_read_that_raises_also_warns_on_the_loop_log(self, caplog):
+        # Station IV review: a broken port must not fail open SILENTLY. The
+        # reason travels with the placement, and the loop's log says so too.
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        with caplog.at_level(logging.WARNING,
+                             logger="main_spread_hunter_loop"):
+            _admit_placements([up], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN,
+                              _CountingFlow(boom=True),
+                              _gate_cfg(enforce_queue_clear_gate=True))
+        assert "queue gate tape read failed" in caplog.text
+        assert "OSError" in caplog.text
 
     def test_a_missing_port_leaves_every_caller_as_it_was(self):
         # The shadow seam and every existing test build a seam with no flow port.

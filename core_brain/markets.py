@@ -525,11 +525,16 @@ def recent_sell_flow(condition_id: str, window_sec: float, *,
                          params={"market": condition_id, "limit": page_size,
                                  "offset": page_index * page_size},
                          timeout=TAPE_TIMEOUT)
-            rows = r.json() or []
+            rows = r.json()
         except Exception as e:
             log.debug("flow tape fetch failed: %s", e)
             return SellFlow("unavailable", window, {})
         if not isinstance(rows, list):
+            # NOT an empty window. A falsy non-list payload (`null`, `{}`) read as
+            # `[]` would claim a COMPLETE window with no sells at any price -- the
+            # one reading that refuses a placement -- on a response that carried
+            # no measurement at all. The ranker's tape reader refuses the same
+            # shapes; so does this one.
             log.debug("flow tape response is not a list (got %s)",
                       type(rows).__name__)
             return SellFlow("unavailable", window, {})
