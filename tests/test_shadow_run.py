@@ -1485,3 +1485,244 @@ class TestRefusedHoldShadow:
         self._run_cycles(seam, GRACE)
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-up", "o-dn"]]
+
+
+class TestQueueGateInRehearsal:
+    """The queue-clear gate (#393) inside the rehearsal.
+
+    The gate was inert in the only place it can be watched without spending
+    money: `build_shadow_seam` left `VenueSeam.flow_fn` unset, so every
+    rehearsal decided each market as if nothing rested ahead of the bid, and the
+    numbers the record-only default exists to gather were produced nowhere but
+    unit tests.
+
+    The port is now wired by the entrypoint (`main`, with the module's other
+    live reads), injectable through `run_shadow(flow_fn=...)`, left inert -- and
+    NAMED as inert -- for a caller that substituted its own sources, lazy at the
+    gate, and fail-open when the tape cannot be read. Each is pinned here.
+    """
+
+    #: 100 shares rest at 0.47 in `_books`; 5 shares traded through there in the
+    #: 30m window is 100 / (5/30) = 600 minutes to clear, against the 60-minute
+    #: bar. Every number comes from fixtures this file already uses.
+    DEEP_FRONT_WHY = "600 min to clear"
+
+    @staticmethod
+    def _flow(status="complete", shares=5.0):
+        """A flow port that records its calls, so laziness is observable."""
+        calls: list = []
+
+        def flow_fn(condition_id, window_sec):
+            from core_brain.markets import SellFlow
+
+            calls.append((condition_id, window_sec))
+            return SellFlow(status=status, window_sec=window_sec,
+                            by_token={"tok-up": {0.47: shares}})
+
+        flow_fn.calls = calls  # type: ignore[attr-defined]
+        return flow_fn
+
+    @staticmethod
+    def _deep_front_decide(cfg, up, dn, inv, t_rem, wf):
+        """One new passive UP bid at 0.47 -- 100 shares rest in front of it."""
+        return ([QuoteIntent(side="UP", token_id="tok-up", price=0.47, size=20,
+                             mid=0.475, edge_vs_mid=0.005)], "")
+
+    @staticmethod
+    def _markets(n=1):
+        return lambda max_markets=None: [FakeMarket(f"0x{i}") for i in range(n)]
+
+    def test_the_entrypoint_wires_the_live_flow_reader(self, tmp_path,
+                                                       monkeypatch, caplog):
+        """The rehearsal an operator launches measures the real tape.
+
+        `main` is where this module wires its live reads (`fetch_books` too),
+        so it is where the gate's reader belongs. Pinned against the module the
+        reader actually lives in, so a rename cannot leave the gate inert on the
+        one surface it is meant to run on -- and pinned against the inert
+        warning, because "wired the port" and "warned that it did not" are the
+        two readings an operator must never have to guess between.
+        """
+        import logging
+
+        import core_brain.markets as markets
+        from core_brain.shadow_run import main, shadow_cfg
+
+        seen: list = []
+
+        def fake_reader(condition_id, window_sec):
+            from core_brain.markets import SellFlow
+
+            seen.append((condition_id, window_sec))
+            return SellFlow("complete", window_sec, {})
+
+        monkeypatch.setattr(markets, "recent_sell_flow", fake_reader)
+
+        with caplog.at_level(logging.WARNING, logger="shadow_run"):
+            rc = main(
+                ["--minutes", "0", "--db", str(tmp_path / "shadow.db")],
+                markets_fn=self._markets(), client_fn=lambda: object(),
+                decide_fn=self._deep_front_decide, fetch_books=_books,
+            )
+
+        assert rc == 0
+        assert seen == [("0x0", float(shadow_cfg().queue_flow_window_sec))]
+        assert "queue-clear gate inert" not in caplog.text
+
+    def test_a_seam_without_a_flow_port_names_the_inert_gate(self, tmp_path,
+                                                             caplog):
+        """A caller that substitutes its own sources gets no live read by
+        surprise -- and must be told the gate stayed inert.
+
+        `scripts/ladder_shadow_rehearsal.py` replays a recorded tape for books
+        and fills and rotates at `--interval 0.01`; defaulting the live reader
+        at the seam would put public requests per market per rotation into a
+        recorded experiment and measure today's tape against a previous
+        session's book. Silent inertness is the failure this pins shut.
+        """
+        import logging
+
+        from core_brain.shadow_run import build_shadow_seam
+
+        with caplog.at_level(logging.WARNING, logger="shadow_run"):
+            seam = build_shadow_seam(db_path=tmp_path / "shadow.db",
+                                     client_fn=lambda: object())
+
+        assert seam.flow_fn is None
+        assert "queue-clear gate inert" in caplog.text
+
+    def test_an_injected_flow_port_is_what_the_loop_calls(self, tmp_path,
+                                                          monkeypatch):
+        """The injection seam a test or a trial run needs: no live read."""
+        import core_brain.markets as markets
+        from core_brain.shadow_run import run_shadow, shadow_cfg
+
+        def forbidden(*_a, **_k):
+            raise AssertionError("the live reader ran despite an injected port")
+
+        monkeypatch.setattr(markets, "recent_sell_flow", forbidden)
+        flow = self._flow()
+
+        result = run_shadow(
+            minutes=0.0, db_path=tmp_path / "shadow.db",
+            markets_fn=self._markets(), client_fn=lambda: object(),
+            decide_fn=self._deep_front_decide, fetch_books=_books,
+            flow_fn=flow,
+        )
+
+        assert flow.calls == [("0x0", float(shadow_cfg().queue_flow_window_sec))]
+        assert "record-only" in result.results[0].queue_why
+
+    def test_a_rehearsal_measures_the_queue_and_records_the_reason(
+            self, tmp_path, caplog):
+        """The shipped record-only default, exercised by a real rehearsal.
+
+        The point of shipping record-only is the numbers it gathers; those
+        numbers were produced only in unit tests, never by the rehearsal the
+        threshold is supposed to be picked from.
+        """
+        import logging
+
+        from core_brain.shadow_run import run_shadow, shadow_cfg
+
+        flow = self._flow()
+        window = float(shadow_cfg().queue_flow_window_sec)
+
+        with caplog.at_level(logging.INFO, logger="main_spread_hunter_loop"):
+            result = run_shadow(
+                minutes=0.0, db_path=tmp_path / "shadow.db",
+                markets_fn=self._markets(), client_fn=lambda: object(),
+                decide_fn=self._deep_front_decide, fetch_books=_books,
+                flow_fn=flow,
+            )
+
+        (visit,) = result.results
+        assert flow.calls == [("0x0", window)]
+        assert self.DEEP_FRONT_WHY in visit.queue_why
+        assert "record-only" in visit.queue_why
+        # Record-only: the rehearsal still placed it, having recorded why not.
+        assert [i.side for i in result.intents] == ["UP"]
+        assert "[QUEUE]" in caplog.text
+
+    def test_enforcing_in_a_rehearsal_drops_the_placement(self, tmp_path):
+        """A rehearsal rehearses what we ship -- including the refusal."""
+        from dataclasses import replace
+
+        from core_brain.shadow_run import run_shadow, shadow_cfg
+
+        cfg = replace(shadow_cfg(), enforce_queue_clear_gate=True)
+
+        result = run_shadow(
+            minutes=0.0, db_path=tmp_path / "shadow.db",
+            markets_fn=self._markets(), client_fn=lambda: object(),
+            decide_fn=self._deep_front_decide, fetch_books=_books, cfg=cfg,
+            flow_fn=self._flow(),
+        )
+
+        (visit,) = result.results
+        assert self.DEEP_FRONT_WHY in visit.queue_why
+        assert "record-only" not in visit.queue_why
+        assert result.intents == []
+
+    def test_a_clear_front_costs_the_rehearsal_no_tape_read(self, tmp_path):
+        """Lazy by design: nobody pays a round-trip for a number that cannot
+        change the answer."""
+        from core_brain.shadow_run import run_shadow
+
+        def clear_front(cfg, up, dn, inv, t_rem, wf):
+            # 0.45 while the whole bid side rests at 0.47: nothing ahead of us.
+            return ([QuoteIntent(side="UP", token_id="tok-up", price=0.45,
+                                 size=20, mid=0.475, edge_vs_mid=0.005)], "")
+
+        flow = self._flow()
+
+        run_shadow(
+            minutes=0.0, db_path=tmp_path / "shadow.db",
+            markets_fn=self._markets(), client_fn=lambda: object(),
+            decide_fn=clear_front, fetch_books=_books, flow_fn=flow,
+        )
+
+        assert flow.calls == []
+
+    def test_an_unmeasurable_tape_keeps_the_rehearsal_running(self, tmp_path):
+        """A rehearsal holding no tape measured nothing, so it must place as
+        before and name the skip -- never refuse on a floor, and never refuse
+        on a read that never happened.
+        """
+        from core_brain.shadow_run import run_shadow
+
+        flow = self._flow(status="unavailable", shares=0.0)
+
+        result = run_shadow(
+            minutes=0.0, db_path=tmp_path / "shadow.db",
+            markets_fn=self._markets(), client_fn=lambda: object(),
+            decide_fn=self._deep_front_decide, fetch_books=_books,
+            flow_fn=flow,
+        )
+
+        (visit,) = result.results
+        assert "unavailable" in visit.queue_why
+        assert "nothing was refused" in visit.queue_why
+        assert [i.side for i in result.intents] == ["UP"]
+
+    def test_the_summary_names_what_the_gate_reported(self, tmp_path, caplog):
+        """The run's own report line: measured, or nothing measurable.
+
+        A session that measured its markets and reported the queue must not
+        read the same as one that never got a tape. Driven through `main`, so
+        the line is pinned on the command an operator actually runs.
+        """
+        import logging
+
+        from core_brain.shadow_run import main
+
+        with caplog.at_level(logging.WARNING, logger="shadow_run"):
+            rc = main(
+                ["--minutes", "0", "--db", str(tmp_path / "shadow.db")],
+                markets_fn=self._markets(), client_fn=lambda: object(),
+                decide_fn=self._deep_front_decide, fetch_books=_books,
+                flow_fn=self._flow(),
+            )
+
+        assert rc == 0
+        assert "queue gate: reported=1 measured=1 unmeasurable=0" in caplog.text

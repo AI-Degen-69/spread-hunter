@@ -22,6 +22,22 @@ Also fixed vocabulary: **single buy** (not naked leg, one-sided, or unhedged),
 **pair cost**, **merge** as the exit, **graduated** for the markets listed in
 `runtime/markets.json`.
 
+## Code revision
+
+A rehearsal outlives the code it started with. One word for which code it holds, and
+one for the verdict when the tree has moved on:
+
+| Term | Means | Does not mean |
+| --- | --- | --- |
+| **code revision** | The code a running process loaded, recorded once at start: short commit, `+dirty` when the working tree was modified, and the mtime of the newest decision file under `core_brain/` or `scoring/`. | The code on disk now |
+| **older than this tree** | That revision predates the decision code on disk now, so the run's numbers describe code that is no longer here. | A run that has stopped, or one whose numbers are wrong |
+| **unknown** | No revision was recorded (a heartbeat from before the stamp, or a checkout with no git). | Current — an unknown is never reported as stale, and never as clean |
+
+Write it as `code 80d03f1+dirty`, `code 1f2e3d4 (older than this tree)`, or `code
+unknown`. Dashboard copy stays sentence case with a full stop. Code that does not
+decide a quote -- `dashboard/`, `scripts/` -- is outside the clock on purpose, so
+editing the page does not mark every running rehearsal stale.
+
 ## Order lifecycle
 
 Three stages, named the same way in code, tests and dashboard copy. Each name means

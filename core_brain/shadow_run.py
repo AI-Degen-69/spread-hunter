@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from core_brain import rehearsal
+from core_brain.code_revision import read_code_revision, revision_label
 from core_brain.order_registry import get_connection
 
 log = logging.getLogger("shadow_run")
@@ -212,6 +213,7 @@ def write_shadow_heartbeat(
     finished: bool = False,
     cycle: int = 0,
     dash_port: Optional[int] = None,
+    code_revision: Optional[dict] = None,
     path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Publish (or refresh) the rehearsal's heartbeat file.
@@ -219,6 +221,14 @@ def write_shadow_heartbeat(
     Best-effort by design: a rehearsal must never die because the dashboard's
     convenience file could not be written, so every failure degrades to a debug
     line and None.
+
+    `code_revision` is the code this process loaded, read ONCE at start and
+    passed in unchanged on every write. The dashboard reads it to tell a run
+    holding today's tree from one still deciding with yesterday's -- the
+    comparison a person used to have to make by lining process start times up
+    against `git log` (`core_brain/code_revision.py`). It is passed rather than
+    re-read here for that reason: a mid-run edit must not rewrite what a running
+    rehearsal claims to have loaded.
     """
     target = Path(path) if path is not None else shadow_heartbeat_path(run_id=run_id)
     payload = {
@@ -240,6 +250,8 @@ def write_shadow_heartbeat(
     }
     if dash_port is not None:
         payload["dash_port"] = int(dash_port)
+    if code_revision is not None:
+        payload["code_revision"] = dict(code_revision)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
@@ -494,6 +506,7 @@ def build_shadow_seam(
     fetch_market: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
     traded_fn: Optional[Callable[[str, set], dict]] = None,
+    flow_fn: Optional[Callable[[str, float], Any]] = None,
     cfg=None,
     registry=None,
     run_id: Optional[str] = None,
@@ -515,6 +528,22 @@ def build_shadow_seam(
       modelled queue position) through `shadow_exec.record_submit`; cancel
       marks the named rows `cancelled` and returns how many it handled, which
       in a rehearsal is always all of them.
+
+    One port this seam will NOT choose for a caller: `flow_fn`, the queue-clear
+    gate's tape reader (#393). It stays `None` -- the gate inert, exactly as
+    `VenueSeam` documents -- unless a caller wires the live reader
+    (`_default_flow_fn`). That is deliberately not the `traded_fn` treatment, and
+    the reason is whose read it is: a caller that substituted its other sources
+    must not be handed a live one by surprise.
+    `scripts/ladder_shadow_rehearsal.py` replays a RECORDED tape for both books
+    and fills, states that its only network is the resolution read, and rotates
+    at `--interval 0.01` -- defaulting this to the live tape would put public
+    reads per market per rotation into a recorded experiment and measure today's
+    tape against a previous session's book.
+
+    Left unset, that inertness is NAMED rather than silent (see the warning
+    below) -- a rehearsal that cannot exercise the gate must not look like one
+    that did and found nothing.
 
     `reconcile_fn` is a no-op on purpose -- it reconciles against venue
     positions a shadow run does not have. Callers must report it as
@@ -596,6 +625,16 @@ def build_shadow_seam(
     # position, and a hard-coded default there would have that one read talk to
     # a different venue than everything else when CLOB_HOST is set.
     clob_host = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
+
+    if flow_fn is None:
+        # Named, not silent. `python -m core_brain.shadow_run` wires the live
+        # reader in `main()`, so this fires for a caller that built its own
+        # seam -- a recorded-tape trial, a unit test -- where the gate is inert.
+        # A rehearsal that cannot measure a queue and one that measured every
+        # queue and refused nothing must not read the same afterwards.
+        log.warning(
+            "queue-clear gate inert in this rehearsal: no flow port wired, so "
+            "no market's queue is measured. Pass flow_fn to measure it.")
 
     resolved_traded_fn = traded_fn or _default_traded_fn()
     seen_by_market: dict[str, set] = {}
@@ -730,6 +769,7 @@ def build_shadow_seam(
             db_path, inventory_lookup=last_inventory_by_market.get,
             run_id=getattr(registry, "run_id", None)),
         markets_fn_empty_is_routine=markets_fn_empty_is_routine,
+        flow_fn=flow_fn,
     )
 
 
@@ -741,6 +781,7 @@ def run_shadow(
     client_fn: Optional[Callable[[], Any]] = None,
     decide_fn: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
+    flow_fn: Optional[Callable[[str, float], Any]] = None,
     interval: float = 5.0,
     funder: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -754,6 +795,7 @@ def run_shadow(
     market_state_fn: Optional[Callable] = None,
     markets_fn_empty_is_routine: bool = False,
     dash_port: Optional[int] = None,
+    code_revision: Optional[dict] = None,
 ) -> ShadowResult:
     """One shadow session: rotate until `minutes` elapse, record, spend nothing.
 
@@ -763,6 +805,18 @@ def run_shadow(
     `core_brain.config.load()` the live loop uses -- same gates, same caps --
     with the live bankroll read attempted and config bankroll kept on failure,
     exactly as `trader_loop.main` does.
+
+    `fetch_books` and `flow_fn` are the two LIVE reads the seam will not choose
+    for itself: `run_shadow` passes both straight through, and the entrypoint is
+    what wires the real ones (`main`). A caller that supplies neither gets the
+    degraded behaviour each port already names -- empty books, no queue
+    measurement -- rather than a live read it did not ask for.
+
+    `code_revision` travels the same way as `flow_fn`: the entrypoint reads it
+    once (`core_brain.code_revision.read_code_revision`) and this passes it into
+    every heartbeat write. A caller that supplies none publishes a heartbeat
+    without it, and a reader then falls back to the process start time -- still
+    enough to see that the run predates a later edit, just without the label.
     """
     from dataclasses import replace as dc_replace
 
@@ -890,6 +944,7 @@ def run_shadow(
         decide_fn=decide_fn,
         fetch_market=_lookup_fetch_market(lambda: markets_holder[0]),
         fetch_books=fetch_books,
+        flow_fn=flow_fn,
         cfg=cfg,
         run_id=run_id,
         paired_depth_arm=paired_depth_arm,
@@ -1099,7 +1154,7 @@ def run_shadow(
 
     heartbeat_kwargs = dict(db_path=db_path, run_id=run_id, minutes=minutes,
                             interval=interval, started_at=started_at,
-                            dash_port=dash_port)
+                            dash_port=dash_port, code_revision=code_revision)
     write_shadow_heartbeat(**heartbeat_kwargs, cycle=0)
 
     rotations = 0
@@ -1233,6 +1288,34 @@ def _default_traded_fn() -> Callable[[str, set], dict]:
     return traded
 
 
+def _default_flow_fn() -> Callable[[str, float], Any]:
+    """The queue-clear gate's tape reader: taker SELL flow, public endpoint.
+
+    Same safety class as `_default_traded_fn` above, and for the same reason:
+    the trades endpoint needs no key and no API credentials, and this read does
+    not travel through the CLOB client the deny-by-default proxy guards -- so a
+    rehearsal that measures a queue spends nothing and loads nothing it could
+    sign with.
+
+    Lazy at the gate: `trader_loop._admit_placements` calls this only for a new
+    PASSIVE placement that has shares resting ahead of it at its own price, so
+    a rehearsal over a clear book pays no round-trip at all. An unreachable
+    tape is not a rehearsal failure -- `markets.recent_sell_flow` returns
+    `unavailable` and the gate fails OPEN, naming the skip instead of refusing
+    a placement on a read that never happened.
+
+    The same reader `trader_loop.main` wires on the live seam, for the same
+    reason a rehearsal exists at all: the loop that is rehearsed has to be the
+    loop that ships. If those two ever name different readers, the rehearsal is
+    measuring a gate nobody runs.
+    """
+    def flow(condition_id: str, window_sec: float):
+        from core_brain.markets import recent_sell_flow
+        return recent_sell_flow(condition_id, window_sec)
+
+    return flow
+
+
 def _default_fetch_market() -> Callable[[str], Any]:
     """The live loop's real market resolver (network)."""
     from core_brain.trader_loop import _fetch_market
@@ -1312,6 +1395,7 @@ def main(
     client_fn: Optional[Callable[[], Any]] = None,
     decide_fn: Optional[Callable] = None,
     fetch_books: Optional[Callable] = None,
+    flow_fn: Optional[Callable[[str, float], Any]] = None,
 ) -> int:
     """The shadow entrypoint: argparse, banner, time box, clean exit code."""
     # Declared before anything reads config. This process builds a
@@ -1327,6 +1411,13 @@ def main(
     )
 
     a = _parse_args(argv)
+
+    # The code THIS process is holding, read once. It goes on the banner and
+    # into every heartbeat write, so a run that has outlived its code says so
+    # instead of looking like the three identical rehearsals on 2026-10-07 --
+    # two of them deciding with the previous morning's ranker, none of them
+    # saying a word about it.
+    code_revision_record = read_code_revision()
 
     if a.dash_port is not None and not (1 <= a.dash_port <= 65535):
         raise SystemExit("--dash-port must be between 1 and 65535")
@@ -1363,10 +1454,11 @@ def main(
                                _default_markets_fn()(a.max_markets))
     log.warning(
         "SHADOW RUN starting: mode=shadow minutes=%s interval=%ss store=%s "
-        "max_markets=%s markets_path=%s -- NO SIGNER LOADED: this process cannot place, cancel "
+        "max_markets=%s markets_path=%s code=%s -- NO SIGNER LOADED: this process cannot place, cancel "
         "or merge anything. Numbers below are rehearsal, not results.",
         a.minutes, a.interval, db, a.max_markets,
-        a.markets_path if a.markets_path is not None else "default")
+        a.markets_path if a.markets_path is not None else "default",
+        revision_label(code_revision_record))
 
     result = run_shadow(
         minutes=a.minutes,
@@ -1375,6 +1467,12 @@ def main(
         client_fn=client_fn,
         decide_fn=decide_fn,
         fetch_books=fetch_books or _default_fetch_books(),
+        # The queue-clear gate's tape reader, wired here with the other live
+        # sources -- this is the rehearsal an operator launches, so it is the
+        # one that must actually exercise the gate. It reads the public trades
+        # endpoint only, never the CLOB client the proxy guards, and the gate
+        # calls it lazily: a market with a clear front pays nothing.
+        flow_fn=flow_fn or _default_flow_fn(),
         interval=a.interval,
         funder=a.funder,
         run_id=a.run_id,
@@ -1387,6 +1485,7 @@ def main(
                                    or a.paired_admission_arm is not None)
                                else None),
         dash_port=a.dash_port,
+        code_revision=code_revision_record,
     )
 
     quoted = sum(1 for r in result.results if r.status == "QUOTED")
@@ -1394,9 +1493,22 @@ def main(
     errors = sum(1 for r in result.results if r.status == "ERROR")
     log.warning(
         "SHADOW RUN finished: rotations_returned=%d quoted=%d declined=%d "
-        "errors=%d intents_recorded=%d skipped=%s",
+        "errors=%d intents_recorded=%d skipped=%s code=%s",
         len(result.results), quoted, declined, errors,
-        len(result.intents), ",".join(result.skipped_stages))
+        len(result.intents), ",".join(result.skipped_stages),
+        revision_label(code_revision_record))
+
+    # The queue-clear gate (#393) reports on the run's own line, not only in the
+    # per-rotation log: this is the rehearsal that the bar gets picked from, and
+    # "measured" and "could not be measured" are the two readings that must not
+    # be confused. A skip means the tape was unreachable or page-bounded, so the
+    # run learned nothing about that market's queue -- not that it was clear.
+    reported = [r for r in result.results if getattr(r, "queue_why", "")]
+    unmeasurable = [r for r in reported
+                    if str(r.queue_why).startswith("queue gate skipped:")]
+    log.warning(
+        "SHADOW RUN queue gate: reported=%d measured=%d unmeasurable=%d",
+        len(reported), len(reported) - len(unmeasurable), len(unmeasurable))
     return 0 if result.results else 1
 
 
