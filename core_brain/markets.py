@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 import requests
 
@@ -466,6 +467,127 @@ def recent_trades(condition_id: str, seen: set, limit: int = 500,
             continue
         out.setdefault(tok, {})[p] = out.setdefault(tok, {}).get(p, 0.0) + size
     return out
+
+
+class SellFlow(NamedTuple):
+    """Taker SELL shares that reached a price, with an honest reading status.
+
+    `status` is the point of the type. `complete` means the walk reached the
+    edge of the window, so the numbers are the whole window; `truncated` means
+    it ran out of pages first, so they are a FLOOR; `unavailable` means the tape
+    could not be read at all. A gate that treated a floor as a measurement would
+    refuse placements on evidence it never gathered.
+    """
+    status: str                       # "complete" | "truncated" | "unavailable"
+    window_sec: float
+    by_token: dict[str, dict[float, float]]   # token -> {price(4dp): SELL shares}
+
+
+# Pages per flow read. One page of the tape covers minutes on a busy token and
+# this reader only ever needs the last `window_sec`, so a short walk is enough --
+# bounded, because this runs inside the fleet's rotation for every gated market.
+FLOW_PAGE_SIZE = 500
+FLOW_MAX_PAGES = 3
+
+
+def recent_sell_flow(condition_id: str, window_sec: float, *,
+                     now: Optional[float] = None, session=None,
+                     page_size: int = FLOW_PAGE_SIZE,
+                     max_pages: int = FLOW_MAX_PAGES) -> SellFlow:
+    """Taker SELL shares per token and price inside a bounded window of the tape.
+
+    The question this answers is narrow on purpose: could a seller have REACHED a
+    resting bid at this price? A SELL print at or below our price proves somebody
+    sold through our level; a BUY print lifts an ask and leaves our bid where it
+    was (`recent_trades` makes the same distinction for the same reason).
+
+    Rows are dropped rather than repaired when they are unreadable -- a missing
+    side, a non-finite or non-positive size, a stamp outside the window. A stamp
+    later than `now + 60` is dropped, never converted: a millisecond epoch lands
+    a million years in the future, and reading one as seconds would turn an
+    unreadable clock into a wall of fabricated flow.
+
+    Never raises outward: a request failure or a payload that is not a list
+    returns `unavailable` with an empty map, and the caller fails OPEN on it.
+    """
+    sess = _SESSION if session is None else session
+    window = float(window_sec)
+    ts_now = time.time() if now is None else float(now)
+    cutoff = ts_now - window
+    newest = ts_now + 60.0
+    by_token: dict[str, dict[float, float]] = {}
+    seen: set = set()
+    pages = max(1, int(max_pages))
+
+    for page_index in range(pages):
+        try:
+            r = sess.get(TRADES_API,
+                         params={"market": condition_id, "limit": page_size,
+                                 "offset": page_index * page_size},
+                         timeout=TAPE_TIMEOUT)
+            rows = r.json()
+        except Exception as e:
+            log.debug("flow tape fetch failed: %s", e)
+            return SellFlow("unavailable", window, {})
+        if not isinstance(rows, list):
+            # NOT an empty window. A falsy non-list payload (`null`, `{}`) read as
+            # `[]` would claim a COMPLETE window with no sells at any price -- the
+            # one reading that refuses a placement -- on a response that carried
+            # no measurement at all. The ranker's tape reader refuses the same
+            # shapes; so does this one.
+            log.debug("flow tape response is not a list (got %s)",
+                      type(rows).__name__)
+            return SellFlow("unavailable", window, {})
+
+        oldest: Optional[float] = None
+        for t in rows:
+            if not isinstance(t, dict):
+                continue
+            try:
+                raw_ts = t.get("timestamp")
+                if raw_ts is None:
+                    continue
+                ts = float(raw_ts)
+            except (TypeError, ValueError):
+                continue
+            # A stamp that is missing, non-finite or non-positive is garbage, and
+            # it must not define the window edge: `or 0.0` turned such a row into
+            # epoch 0, which then became `oldest`, so the completeness check read
+            # "oldest <= window start" and called a page-bounded count a whole
+            # window. A floor read as a measurement is what refuses placements
+            # once the gate is enforced.
+            if not math.isfinite(ts) or ts <= 0:
+                continue
+            if oldest is None or ts < oldest:
+                oldest = ts
+            if ts <= cutoff or ts > newest:
+                continue
+            side = t.get("side")
+            if side is None or str(side).strip().upper() != "SELL":
+                continue
+            key = (str(t.get("transactionHash") or ""), str(t.get("asset")),
+                   t.get("timestamp"), t.get("price"), t.get("size"))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                p = round(float(t.get("price") or 0), 4)
+                size = float(t.get("size") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(p) or not math.isfinite(size) or size <= 0:
+                continue
+            level = by_token.setdefault(str(t.get("asset")), {})
+            level[p] = level.get(p, 0.0) + size
+
+        # A short page is the end of the tape, and a page whose oldest row is
+        # already at or behind the window start has covered the whole window.
+        # Either way the reading is complete; anything else means the page limit
+        # bounded it and the numbers are a floor.
+        if len(rows) < page_size or (oldest is not None and oldest <= cutoff):
+            return SellFlow("complete", window, by_token)
+
+    return SellFlow("truncated", window, by_token)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,10 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:  # annotation only -- markets is imported lazily at the call site
+    from core_brain.markets import SellFlow
 
 from core_brain.quotes import Inventory, QuoteIntent, evaluate_market_quote
 from core_brain.cycle_stream import emit as _emit_cycle_event
@@ -54,6 +57,11 @@ class LiveFleetResult:
     #: True when this visit held resting orders through a transient refusal
     #: (#390). `run` reads it to maintain the per-market grace counter.
     held: bool = False
+    #: The queue-clear gate's reading for this visit's new placements (#393):
+    #: the named reason when the queue ahead is too deep or too quiet to clear,
+    #: empty when it clears or when nothing was measured. Record-only at ship, so
+    #: a non-empty value usually means "reported, not refused".
+    queue_why: str = ""
 
 
 # Why an order was cancelled. Recorded on the row so a cancel that defended the
@@ -399,6 +407,12 @@ class VenueSeam:
     #: by construction. Default stays False -- the loud reading -- because
     #: guessing "routine" for a caller that means it would hide a dead feed.
     markets_fn_empty_is_routine: bool = False
+    #: Reachable-flow reader for the queue-clear gate (#393):
+    #: `(condition_id, window_sec) -> SellFlow`. Optional and lazy -- it is only
+    #: called when a new passive placement has shares ahead of it at its own
+    #: price, so a clear front never pays for a tape read, and every caller that
+    #: leaves it unset (including the shadow seam) behaves exactly as before.
+    flow_fn: Optional[Callable[[str, float], "SellFlow"]] = None
 
 
 def run(
@@ -709,6 +723,119 @@ def _still_resting(seam: VenueSeam, to_cancel: list[dict]) -> list[str]:
     return [i for i in ids if i and i in resting]
 
 
+def _admit_placements(
+    to_submit: list[QuoteIntent],
+    market: Any,
+    up_book: dict,
+    down_book: dict,
+    flow_fn: Optional[Callable[[str, float], Any]],
+    cfg: Any,
+) -> tuple[list[QuoteIntent], str]:
+    """Which of this cycle's NEW placements may go out, and the queue reason.
+
+    THE QUEUE-CLEAR GATE (#393). Every gate upstream judges a new bid's PRICE;
+    this one asks whether it can ever FILL. Shares ahead are the book depth at
+    the bid's own price; reachable flow is taker SELL volume on that token at or
+    below it inside the configured window. Past the bar, the bid is not worth
+    resting -- observed live 2026-10-06, 7-share orders behind $85k/$26k
+    queue-ahead against $19,279/30m of tape.
+
+    Three deliberate limits:
+
+    * CROSSED LEGS ARE NOT GATED. A fill-or-kill hedge never joins a queue, so
+      the depth in front of it says nothing about it.
+    * THE MEASUREMENT IS LAZY. The tape is read only when some new passive
+      placement actually has shares ahead of it. A read per market visit costs a
+      venue round-trip, and `markets` records what one unreachable endpoint does
+      to a rotation -- there is no reason to pay for a number that cannot change
+      the answer.
+    * AN UNMEASURABLE TAPE FAILS OPEN. `unavailable` (the read failed) or
+      `truncated` (the page limit bounded it, so the numbers are a floor) keeps
+      today's behaviour and names the skip. Only a complete window refuses, and
+      it refuses as a measurement: nothing traded at our price in the window is
+      an infinite wait, not missing data.
+
+    A COUPLE IS NEVER SPLIT. When any new passive placement is refused, every
+    one of them is dropped with it. A fresh couple carries no `pair_id` at this
+    point -- `_submit_intents` mints the pair -- so nothing here could tell the
+    two legs apart, and one resting leg with no partner is the Unpaired alert
+    state rather than the pair this strategy rests.
+
+    Returns `(admitted, why)`. `why` is empty when nothing was refused or
+    reported; under the shipped record-only default (`enforce_queue_clear_gate`
+    False) it carries the reason and `admitted` is unchanged.
+    """
+    from core_brain import risk
+
+    if not to_submit or flow_fn is None:
+        return list(to_submit), ""
+    passive = [i for i in to_submit if not i.crossed]
+    if not passive:
+        return list(to_submit), ""
+
+    # The token -> book mapping, not the side: `plan_orders` and the decider
+    # both work in tokens, and scoring the wrong book is the one way this can be
+    # wrong while everything else still passes.
+    books = {
+        str(getattr(market, "up_token", "")): up_book,
+        str(getattr(market, "down_token", "")): down_book,
+    }
+    ahead: list[tuple[QuoteIntent, float]] = []
+    for i in passive:
+        book = books.get(str(i.token_id)) or {}
+        bids = book.get("bids") or {}
+        ahead.append((i, float(bids.get(round(float(i.price), 4), 0.0))))
+    if not any(q > 0 for _, q in ahead):
+        return list(to_submit), ""
+
+    cid = str(getattr(market, "condition_id", "") or "")
+    window_sec = float(getattr(cfg, "queue_flow_window_sec", 0.0) or 0.0)
+    try:
+        flow = flow_fn(cid, window_sec)
+    except Exception as e:
+        # Fail open, but never quietly: the reason travels with the placement,
+        # and a broken port says so on the loop's own log as well.
+        log.warning("queue gate tape read failed for %s: %s: %s",
+                    cid[:16], type(e).__name__, e)
+        return list(to_submit), (
+            f"queue gate skipped: tape read failed ({type(e).__name__}: {e})")
+
+    status = str(getattr(flow, "status", "unavailable"))
+    if status != "complete":
+        return list(to_submit), (
+            f"queue gate skipped: reachable flow {status}; "
+            f"nothing was refused")
+
+    levels_by_token = getattr(flow, "by_token", None) or {}
+    window_min = float(getattr(flow, "window_sec", 0.0) or 0.0) / 60.0
+    reasons: list[str] = []
+    refused: list[str] = []
+    for i, queue_shares in ahead:
+        levels = levels_by_token.get(str(i.token_id)) or {}
+        limit = round(float(i.price), 4) + 1e-9
+        reachable = sum(float(sh) for p, sh in levels.items()
+                        if float(p) <= limit)
+        allowed, why = risk.queue_clear_block(
+            cfg, str(i.side), float(i.price), queue_shares, reachable,
+            window_min)
+        if not why:
+            continue
+        reasons.append(why)
+        if not allowed:
+            refused.append(why)
+
+    if refused:
+        why = refused[0]
+        if len(refused) < len(passive):
+            why = f"{why} ({len(passive)} new placement(s) dropped with it)"
+        return [i for i in to_submit if i.crossed], why
+    if reasons:
+        # Record-only (`enforce_queue_clear_gate` False): the bar is on the
+        # record, nothing is dropped. This is what the threshold gets picked from.
+        return list(to_submit), reasons[0]
+    return list(to_submit), ""
+
+
 def _visit_one(
     seam: VenueSeam,
     spec,
@@ -791,6 +918,9 @@ def _visit_one(
                 status="ERROR", condition_id=cid, title=title,
                 error=f"paired attribution: {exc}")
     cfg = _market_cfg(seam.base_cfg, spec)
+    # Set inside the try below on every path that reaches the placement code;
+    # the ERROR returns before it are the only callers that never read it.
+    queue_why = ""
     try:
         ev = evaluate_market_quote(
             cid, cfg, seam.clob_host,
@@ -850,6 +980,12 @@ def _visit_one(
             hold_below_target=float(getattr(cfg, "requote_hold_below_target", 0.0)),
             visit_outcome=visit_outcome,
         )
+        # THE QUEUE-CLEAR GATE (#393), on NEW placements only and after the
+        # planner, so held orders, the refusal-grace counter and every recorded
+        # cancel reason stay exactly as they were. Record-only at ship: it
+        # normally reports and changes nothing.
+        to_submit, queue_why = _admit_placements(
+            to_submit, market, ev.up_book, ev.down_book, seam.flow_fn, cfg)
     except Exception as e:
         emit_fn(service="decide", cycle=cycle, phase="quoting",
                 action="market_error", market_slug=title,
@@ -858,6 +994,8 @@ def _visit_one(
                                error=f"{type(e).__name__}: {e}")
 
     event_extra = {"intent_count": len(intents), "condition_id": cid}
+    if queue_why:
+        event_extra["queue_why"] = queue_why
     if feed_metadata.get("paired_depth_arm"):
         event_extra.update({
             "paired_depth_arm": feed_metadata["paired_depth_arm"],
@@ -877,9 +1015,16 @@ def _visit_one(
             log.info("[DRY RUN SKIPPED] %s | %s", title, why)
         else:
             log.info("[DRY RUN IDLE] %s | No quote action needed", title)
+        if queue_why:
+            # The dry run is where this gate is watched before it is enforced:
+            # how many new placements would go out, and why the rest were
+            # measured as unfillable.
+            log.info("[DRY RUN QUEUE] %s | admitted %d new placement(s) -- %s",
+                     title, len(to_submit), queue_why)
         return LiveFleetResult(
             status="DRY_RUN" if intents else "DECLINED",
-            condition_id=cid, title=title, why=why, intents=list(intents))
+            condition_id=cid, title=title, why=why, intents=list(intents),
+            queue_why=queue_why)
 
     submitted = cancelled = 0
     try:
@@ -916,14 +1061,18 @@ def _visit_one(
             intents=list(intents), submitted=submitted, cancelled=cancelled,
             error=f"submit/cancel: {type(e).__name__}: {e}")
 
+    submit_extra = {"submitted": submitted, "cancelled": cancelled}
+    if queue_why:
+        submit_extra["queue_why"] = queue_why
     emit_fn(service="decide", cycle=cycle, phase="quoting", action="submit",
-            market_slug=title,
-            extra={"submitted": submitted, "cancelled": cancelled})
+            market_slug=title, extra=submit_extra)
 
     held = (
         visit_outcome is VisitOutcome.REFUSED_TRANSIENT
         and not to_cancel and not to_submit and bool(open_orders)
     )
+    if queue_why:
+        log.info("[QUEUE] %s | %s", title, queue_why)
     if submitted > 0:
         orders_desc = ", ".join(f"{i.side} {i.size}sh @ ${i.price:.3f}" for i in to_submit)
         log.info("[QUOTING] %s | Posted %d orders: %s", title, submitted, orders_desc)
@@ -940,7 +1089,8 @@ def _visit_one(
     return LiveFleetResult(
         status="QUOTED" if intents else "DECLINED",
         condition_id=cid, title=title, why=why, intents=list(intents),
-        submitted=submitted, cancelled=cancelled, held=held)
+        submitted=submitted, cancelled=cancelled, held=held,
+        queue_why=queue_why)
 
 
 # --- production wiring ------------------------------------------------------
@@ -1469,7 +1619,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     load_dotenv()
 
     from core_brain.config import load
-    from core_brain.markets import full_book
+    from core_brain.markets import full_book, recent_sell_flow
     from core_brain.order_registry import DEFAULT_DB_PATH, OrderRegistry
     from core_brain.order_registry import reconcile_orders
     from core_brain.quotes import decide_quotes
@@ -1567,6 +1717,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         fleet_state_fn=lambda r: _fleet_state(r, cfg),
         resting_order_ids_fn=_venue_resting_order_ids,
         emit_fn=partial(_emit_cycle_event, db_path=db_path),
+        # The live fleet measures reachable tape flow for the queue-clear gate.
+        # The shadow seam deliberately does NOT wire this: its client is a
+        # deny-by-default proxy, so a blocked tape read would come back as an
+        # empty tape, and an unmeasurable reading is reported rather than
+        # refused -- a rehearsal of this gate would show nothing either way.
+        flow_fn=lambda cid, window: recent_sell_flow(cid, window),
     )
     # Resolution detection runs off the critical path on a slow background
     # thread (won't block a 5s rotation). Disabled for --once smoke runs.

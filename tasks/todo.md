@@ -1,6 +1,5 @@
-# Checklist — Issue #392 prefer live competitive markets in selection
+# Checklist — Issue #393 refuse quotes resting behind an unfillable queue
 
-- [x] T1 — RED live-outranks-flat ranking tests
-- [x] T2 — GREEN rank_score + shipped-ranking wiring
-- [x] T3 — GREEN flat-mid long-dated penalty
-- [x] T4 — end-to-end Senate-like vs live-like ranking proof
+- [x] T1 — RED reader + gate tests, offline (fake session, no network)
+- [x] T2 — GREEN `SellFlow` + `recent_sell_flow`, the 3 settings, `risk.queue_clear_block`
+- [x] T3 — GREEN `_admit_placements` in the visit, optional seam port, live wiring, reason surfaced

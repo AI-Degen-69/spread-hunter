@@ -1,127 +1,262 @@
-# Plan — Issue #392: prefer live competitive markets over flat long-dated ones
+# Plan — Issue #393: refuse quotes resting behind an unfillable queue
 
-Branch: i392/improve-prefer-live-competitive-markets-over-flat- | Issue: #392
-Size: Standard — scripts/filter_markets.py ranking + tests, one design decision
-(rank-score shape from already-measured fields).
-Type: [Backend/Logic]. Stack: Python 3.12, pytest. Spec embedded below;
-no root SPEC.md exists in this repo (prior spec lives in docs/archive/; same
-precedent as #386/#390).
+Branch: i393/refuse-quotes-resting-behind-an-unfillable-queue | Issue: #393
+Size: Standard — 4 source files (`config.py`, `risk.py`, `markets.py`, `trader_loop.py`)
++ one new focused test file; one design decision (the bar's default mode, answered by
+the operator: record-only first).
+Type: [Backend/Logic]. Stack: Python 3.12, pytest. Spec embedded below; no root
+SPEC.md exists in this repo (precedent #386/#390/#392).
 
 ## Spec (embedded)
-Goal: the ranker graduates live competitive markets with real turnover instead of
-flat-mid long-dated ones whose tape passes but whose mids never move.
-- New pure `rank_score(row) -> float` in `scripts/filter_markets.py` replaces the
-  bare `-return_pct_day` key at the shipped ranking (`eligible.sort`, :2690).
-- Inputs restricted to already-measured row fields: `return_pct_day`,
-  `movement_usd`, `trade_count`, `range_cents`, `days_to_resolve`, plus
-  started-ness derived from the existing `market_start_iso` + now. No new venue
-  calls in the rank path.
-- Live boost: started + short horizon + hot tape outranks flat tape at equal
-  return. Flat-mid long-dated penalty: low `range_cents` + long `days_to_resolve`
-  is deprioritized even when window tape passes the movement bar.
-- Missing/unmeasured fields fail safe: no boost, no penalty, never a crash
-  (`.get` with defaults) — an unreadable row ranks exactly as today.
-- Unchanged: the [0.20, 0.80] decided-mid band, depth/spread gates, movement and
-  velocity gates, pre-start/expiry gates. A CS match at mid 0.82 stays rejected.
-- Out of scope: `core_brain/quotes.py`, `core_brain/trader_loop.py`, the maker
-  queue bar (#393 owns it), paired/admission trial sorts, live runs, orders.db.
+
+Goal: a new resting bid is only worth placing if the queue ahead of it can plausibly
+clear. Measure it; do not guess it.
+
+- **Measured, not guessed.** Queue ahead = current book depth AT the new bid's own price
+  (`book["bids"].get(round(price, 4), 0.0)` — the same read `live_fill_engine.py:98` and
+  `shadow_fills.queue_ahead_at` use). Reachable flow = taker **SELL** prints on that token
+  at or below that price inside a bounded window of the public tape.
+- **Minutes to clear** = `queue_ahead / (reachable_shares / window_minutes)`. Refuse past a
+  named bar; a non-zero queue with zero reachable flow is infinite minutes (never clears).
+- **Record-only at ship** (operator decision, this session): the reason is reported on
+  every gated placement and on the cycle feed, and nothing is dropped, until
+  `HUNTER_QUEUE_CLEAR_GATE=1`. The enforcing path is the same code with `enforce=True`.
+- **One built rule, not a second copy of it.** The measurement and the bar semantics
+  already exist and are tested: `scoring.selector.queue_minutes_at` and
+  `scoring.selector.maker_queue_allowed` (reason: `maker queue: N min to clear at our
+  price >= M min bar`). `core_brain/risk.py` gains an adapter, never a duplicate rule.
+- **Scope: new resting placements only**, inside `_visit_one`, after `plan_orders`.
+  Crossed (FOK) intents never rest and pass through. Held orders, `intents`, `why`,
+  `visit_outcome`, the refusal-grace counter and `cancel_queue_ahead` recording are
+  untouched.
+- **A couple never splits.** If any new passive placement in a visit is refused, every new
+  passive placement in that visit is dropped with it. Fresh intents all carry
+  `pair_id=None` at this point — the fresh id is minted inside `_submit_intents`
+  (`trader_loop.py:1106`) — so a `pair_id`-keyed rule cannot keep a fresh couple together,
+  and one resting leg with no partner is the `Unpaired` alert state in the glossary.
+- **Fail open on an unmeasurable tape.** `unavailable` (request failed / payload not a
+  list) or `truncated` (page limit reached before the window start) keeps today's
+  behaviour and says in the reason that the gate was skipped. A *complete* window with no
+  reachable sells is a real measurement and refuses.
+- **Unchanged:** `core_brain/quotes.py` and `decide_quotes`, `scripts/filter_markets.py`
+  and its inert `queue_bar_reject`, the shadow seam, the command-line `quote`/probe paths,
+  `data/orders.db`.
+- Out of scope: selection/ranking, placement pricing, post-fill management, live runs,
+  wiring the shadow rehearsal's flow port.
 
 ## CodeRabbit plan intake (3-line note)
-- Adopted: nothing — at planning time the issue carries only the Related note
-  and the posted `@coderabbitai plan` prompt; no plan comment has arrived.
-- Rejected: nothing (no plan to reject).
-- [UNVERIFIED]: nothing — every cited path/symbol was read live in this session.
 
-## Open questions (both resolved from code — none asked of the operator)
-- Q1 (wider in-play band vs fixed band + scoring boost) → keep the band fixed.
-  The selection band (filter_markets.py:1199-1202) mirrors the quoting refusal
-  (`mid outside [0.20,0.80] -- decided market` in quotes.py): widening selection
-  alone would graduate markets the quoter refuses every cycle. Boost ranking
-  instead; the band question is a quoting-strategy change and out of scope.
-- Q2 (mid-flatness penalty) → yes, via measured fields. Mid history is not
-  available without new fetches (the tape endpoint yields trades only), but
-  `range_cents` + `days_to_resolve` already on the row express "flat and far".
-  No operator question remains.
+- **Adopted:** gate in `_visit_one` (its Design Choice 1 option 3), exact-price depth +
+  at-or-through SELL flow, bounded window with a reported status, fail-open on an
+  unmeasurable window, settings in `MakerConfig`, tests injected with `now`/`session`.
+- **Rejected / corrected:** (1) a new pure rule with the marker `unfillable queue` — the
+  same rule already ships as `maker_queue_allowed`/`queue_minutes_at`, and a second name
+  for one concept plus `>` vs the repo's `>=` convention is drift, so risk.py adapts the
+  existing pair instead (see Improvement); (2) strict `>` at the bar — the repo's caps are
+  "a ceiling reached, not approached" (`maker_queue_allowed` docstring); (3) the
+  `pair_id`-keyed couple rule — fresh intents carry `pair_id=None` until `_submit_intents`
+  mints one, so it cannot protect a fresh couple; a visit-level block does; (4) evaluating
+  the gate on the *live* run only and leaving the shadow seam unwired — accepted for now,
+  recorded in Notes as a follow-up rather than smuggled into this change.
+- **[UNVERIFIED]:** none. Every path, symbol, line number and default cited above was read
+  in the live checkout in this session. The one number it could not verify is the 60-minute
+  bar itself, which is a starting point, not a measurement (`max_queue_clear_minutes`).
+
+## Open question (resolved — one operator answer)
+
+The issue asks what the refuse bar is (relative vs absolute). Resolved from code: relative
+— `queue_minutes_at` and `maker_queue_allowed` are that bar, already measured at our own
+price, already used by the ranker.
+
+Left genuinely open and asked (money lever, no code answer): whether the new gate ships
+enforcing or record-only. The repo's own precedent for this exact rule ships record-only
+(`maker_queue_allowed(enforce=False)`: "enforcing on day one refuses every market and takes
+the bot silent"). **Operator answered: record-only first.** So
+`enforce_queue_clear_gate: bool = False` at ship, flipping to enforcing with
+`HUNTER_QUEUE_CLEAR_GATE=1`. The named reason is produced either way; only the drop is
+gated by the switch.
 
 ## Interface contracts (locked before logic)
-- `rank_score(row: dict, *, now: float | None = None) -> float`, pure, in
-  `scripts/filter_markets.py` near the velocity/movement helpers. `now=None`
-  means wall-clock (tests pass fixed times, per test_velocity_gate.py precedent).
-- Shipped ranking becomes `key=lambda r: -rank_score(r)` at :2690. Paired-depth
-  (:1540+) and paired-admission (:1710/:1740) sorts stay on `return_pct_day`.
-- Started-ness reuses the existing `market_start_iso`; unparseable/missing start
-  reads as not-started (no boost, matching the pre-start gate's caution).
-- No signature changes to `evaluate()`; no new CLI flags; no `config.py` change
-  (named constants in filter_markets.py, following the MIN_* pattern minus the
-  _CFG read — trial-conditional knobs can come later).
-- `type-design-analyzer` skipped: no new types or domain model (one float score,
-  one pure function). `code-explorer` skipped: the path is already traced by
-  hand (evaluate gate order 985-1314 + ranking key :2690).
 
-## Improvement proposal
-- Skipped: no evidence-backed improvement beyond the issue exists. The one
-  adjacent idea (the inert maker-queue bar in evaluate) belongs to #393 and is
-  explicitly out of scope here.
+```python
+# core_brain/markets.py — next to recent_trades; same _SESSION, TRADES_API, TAPE_TIMEOUT
+class SellFlow(NamedTuple):
+    status: str                       # "complete" | "truncated" | "unavailable"
+    window_sec: float
+    by_token: dict[str, dict[float, float]]   # token -> {price(4dp): taker SELL shares}
+
+def recent_sell_flow(condition_id: str, window_sec: float, *, now: float | None = None,
+                     session=None, page_size: int = 500, max_pages: int = 3) -> SellFlow: ...
+```
+`_SESSION.get(TRADES_API, params={"market": cid, "limit": page_size, "offset": n*page_size},
+timeout=TAPE_TIMEOUT)`. Rows kept only when: side trims/case-folds to `SELL`, price and size
+finite, size > 0, `now - window_sec < timestamp <= now + 60`; de-duplicated by
+`(transactionHash, asset, timestamp, price, size)`. `unavailable` on exception or a non-list
+payload; `complete` on a short page or when a page's oldest row reaches the window start;
+`truncated` when `max_pages` is reached first. Millisecond stamps are dropped, not converted.
+
+```python
+# core_brain/config.py — MakerConfig, beside the queue-hold settings
+enforce_queue_clear_gate: bool = False   # record-only at ship; HUNTER_QUEUE_CLEAR_GATE
+max_queue_clear_minutes: float = 60.0    # HUNTER_MAX_QUEUE_CLEAR_MIN, _bounded_float 0.1..1440
+queue_flow_window_sec: float = 1800.0    # the 30m tape the issue cites; no env var
+```
+`HUNTER_QUEUE_CLEAR_GATE` follows `HUNTER_ENDGAME_GATE` exactly (`0`/`false`/`off`,
+case-insensitive, = off). Bad `HUNTER_MAX_QUEUE_CLEAR_MIN` raises at `load()`, never clamps.
+
+```python
+# core_brain/risk.py — adapter over the existing measured rule (never a copy of it)
+def queue_clear_block(cfg, side: str, price: float, queue_shares: float,
+                      reachable_shares: float, window_min: float) -> tuple[bool, str]: ...
+```
+Returns `(allowed, why)`; `why` is empty when the queue clears, and otherwise is the shared
+`maker queue: ...` reason with the leg appended (`(UP @ 0.4700)`) so the string stands alone
+in the cycle feed. `max_queue_clear_minutes <= 0` disables, as everywhere else.
+
+```python
+# core_brain/trader_loop.py
+VenueSeam.flow_fn: Optional[Callable[[str, float], SellFlow]] = None   # optional port
+LiveFleetResult.queue_why: str = ""          # appended; empty when clear/unmeasured
+def _admit_placements(to_submit, market, up_book, down_book, flow_fn, cfg
+                      ) -> tuple[list[QuoteIntent], str]: ...
+```
+The port is called **lazily**, only after some passive intent is found to have
+`queue_ahead > 0`, and at most once per visit.
+
+## Improvement (one, evidence-backed)
+
+**Reuse the existing measured rule instead of writing a second one.** CodeRabbit's plan
+introduces `risk.queue_clear_block` as a new pure rule with the marker `unfillable queue`
+while stating, verbatim, "Minutes-to-clear = `queue_shares / (reachable_shares /
+window_minutes)`. This is the same arithmetic as `scoring.selector.queue_minutes_at`." The
+repo already ships that arithmetic and its bar (switchable via `max_queue_minutes <= 0`,
+inf when nothing traded at our price, record-only vs enforcing) with tests in
+`tests/test_maker_queue_bar.py`. Classification: **simplification → adopt-by-default**, so
+`queue_clear_block` is a ~15-line adapter with a lazy `from scoring.selector import ...`
+(verbatim precedent: `core_brain/shadow_exec.py:460-461`). One vocabulary ("maker queue"),
+one arithmetic, one place to fix it. Rejected alternatives recorded under Notes.
 
 ## Tasks
-Dependency graph: T1 (tests) <- T2 (rank_score + wiring) <- T3 (flat penalty) <- T4 (end-to-end proof).
 
-### [x] T1 — RED ranking tests: live outranks flat [Backend/Logic] (S)
-Target: tests/test_rank_score.py (new, following test_velocity_gate.py style:
-fixed NOW, plain dict rows, no venue).
-- `rank_score` orders live-like (started, short horizon, hot tape) above
-  flat-like (long horizon, low range) at equal `return_pct_day`.
-- Missing fields (`{}` row) score exactly `return_pct_day` (today's behavior).
-- Unstarted event gets no live boost.
+Dependency graph: T1 ← T2 ← T3. Risk first: the reader's honesty (status) is the one
+piece that can silently mislead, so it is built and proven offline before the loop touches
+it.
+
+### [x] T1 — RED: reader + gate tests, offline [Backend/Logic] (S)
+Target: `tests/test_queue_clear_gate.py` (new). Fake session modelled on `_TapeSession`
+(`tests/test_velocity_gate.py:16`) counting calls and returning canned pages; fake cfg
+helper modelled on `_gate_cfg` (`tests/test_completable_pair_gate.py:70`); fixed `NOW`; no
+network, no signer, no `data/orders.db`.
+- Reader: counts only SELL rows inside the window; drops BUY rows, out-of-window rows,
+  future rows and millisecond stamps; de-duplicates repeats; skips `nan`/zero/missing-side
+  rows; `OSError` → `unavailable` + empty map; non-list payload → `unavailable`; quiet
+  window (`[]`) → `complete` + empty map; full pages older than the window start →
+  `truncated` with the session called `max_pages` times.
+- Rule (record-only by default): deep queue + thin flow reports `would refuse` and
+  **allows**; the same cfg with `enforce_queue_clear_gate=True` refuses; zero queue allows
+  even with zero flow; non-zero queue with zero flow refuses as "never clears"; exactly at
+  the bar refuses (`>=`, the repo's convention); `max_queue_clear_minutes=0` disables;
+  env overrides `load()` (`HUNTER_QUEUE_CLEAR_GATE=off`, `HUNTER_MAX_QUEUE_CLEAR_MIN=15`);
+  `abc`/`nan`/`inf`/`-1`/`0` raise at load.
 Helper skill: test-driven-development. Depends on: none.
-Verify: fail first (helper missing: ImportError), then
-`pytest -q tests/test_rank_score.py` after T2.
-Checkpoint: contract proven by tests (T1+T2).
+Verify: RED first (ImportError/AttributeError), then the T2 suites.
+Checkpoint: the measurement's contract is pinned by tests.
 
-### [x] T2 — GREEN: rank_score + shipped-ranking wiring [Backend/Logic] (M)
-Target: scripts/filter_markets.py (new pure `rank_score` + `market started`
-derivation via `market_start_iso`; repoint the :2690 sort key; paired/admission
-sorts untouched), tests/test_rank_score.py (fill GREEN bodies).
-Live = started AND short horizon AND hot tape (thresholds as named constants);
-everything else ranks as today, byte-identical order on old rows.
-Helper skills: test-driven-development, incremental-implementation.
-Depends on: T1.
-Verify: `pytest -q tests/test_rank_score.py tests/test_filter_markets_publish_json.py`.
-Checkpoint: ranking proven, penalty pending (T2).
+### [x] T2 — GREEN: reader, settings, adapter [Backend/Logic] (M)
+Target: `core_brain/markets.py` (`SellFlow`, `recent_sell_flow`), `core_brain/config.py`
+(3 fields + 2 env mappings), `core_brain/risk.py` (`queue_clear_block`),
+`tests/test_queue_clear_gate.py` (fill GREEN).
+Helper skills: test-driven-development, incremental-implementation. Depends on: T1.
+Verify: `python -m pytest -q tests/test_queue_clear_gate.py tests/test_maker_queue_bar.py`
+Checkpoint: measurement + rule proven; loop still untouched.
 
-### [x] T3 — GREEN: flat-mid long-dated penalty [Backend/Logic] (S)
-Target: scripts/filter_markets.py (penalty arm inside `rank_score`),
-tests/test_rank_score.py (low range_cents + long days_to_resolve sinks below an
-equal-return live row; unmeasured range/horizon → no penalty, fail-open).
-Helper skill: test-driven-development. Depends on: T2.
-Verify: `pytest -q tests/test_rank_score.py tests/test_velocity_gate.py
-tests/test_movement_gate.py tests/test_pre_start_gate.py`.
-
-### [x] T4 — End-to-end: Senate-like vs live-like ranking [Backend/Logic] (S)
-Target: tests/test_rank_score.py (new test): fixture rows shaped like the
-2026-10-06 universe (Senate-like: 28d horizon, 3.0c range, mid return; live-like:
-started, hours-long horizon, hot tape) through the shipped sort → live row
-ranks first. No prod code (verification only unless it exposes a wiring miss).
-Helper skill: test-driven-development. Depends on: T3.
-Verify: `pytest -q tests/test_rank_score.py tests/test_filter_markets_publish_json.py
-tests/test_velocity_gate.py tests/test_movement_gate.py`.
-Checkpoint: selection proven.
+### [x] T3 — GREEN: admission in the visit, port, live wiring [Backend/Logic] (M)
+Target: `core_brain/trader_loop.py` (`VenueSeam.flow_fn`, `LiveFleetResult.queue_why`,
+`_admit_placements`, the `_visit_one` call site and its dry-run/log/event reporting, the
+`main()` wiring `flow_fn=lambda cid, win: recent_sell_flow(cid, win)`),
+`tests/test_queue_clear_gate.py` (visit-level tests through `_visit_one`, following
+`tests/test_trader_loop.py`'s fake seam).
+- Calls the port only when a passive intent has `queue_ahead > 0` (asserted by a counting
+  fake: zero-queue visit never calls it).
+- Crossed intents pass through; a refused visit drops every new passive intent in it.
+- Reason travels: `queue_why` on the result, `queue_why` in the `decide`/`submit` event
+  `extra`, and the dry-run log names admitted vs planned.
+- Unmeasurable (`unavailable`/`truncated`) allows and says so.
+Helper skills: test-driven-development, incremental-implementation. Depends on: T2.
+Verify: `python -m pytest -q tests/test_queue_clear_gate.py tests/test_trader_loop.py
+tests/test_market_quote.py tests/test_shadow_run.py tests/test_plan_orders_asymmetric_hold.py`
+Checkpoint: feature complete and observable.
 
 ## Guardrails
-- Focused suites only (named per task); the full `pytest -q` suite is the GitHub
-  CI merge gate, not a local loop. New behavior has tests that fail without it.
-- No new dependencies, no `config.py` changes, `data/orders.db` read-only.
-- `core_brain/` untouched (quoting band stays aligned with selection band).
-- Paired-depth/admission trial paths untouched (shipped ranking only).
-- No sub-issue ceremony (4 coupled tasks on one branch; precedent #386/#390).
+
+- Focused suites only (named per task); full `pytest -q` is the GitHub CI merge gate.
+- New behaviour has tests that fail without it (RED first), and no existing test is
+  weakened, skipped or deleted to make anything green.
+- No new dependencies. `data/orders.db` read-only. No live commands run from this station.
+- `core_brain/quotes.py`, `scripts/filter_markets.py`, `scoring/` and the shadow run are
+  not modified; `tests/test_shadow_run.py` must stay green as the proof of that.
+- No `type: ignore`, no silent `except: pass`; the reader keeps its existing
+  never-raise-outward contract by returning `unavailable`.
+
+## Build log (Station III — actuals, not the plan)
+
+- T1+T2 landed as ONE commit on purpose: the RED tests and the code that turns them
+  green, so no commit on this branch carries a red suite.
+- T2 verified with the focused set: `tests/test_queue_clear_gate.py`,
+  `tests/test_maker_queue_bar.py`, `tests/test_completable_pair_gate.py`,
+  `tests/test_endgame_gate.py` → 136 passed (38 of them new).
+- Bar ceiling BUILT as `0.1..1440` (a day), not CodeRabbit's `0.1..10000`: it mirrors
+  `HUNTER_ENDGAME_HORIZON_MIN`'s ceiling, and past a day the "queue" is the market's whole
+  remaining life. Contract line above updated; `0` is refused at load (it is the rule's own
+  disable value, so setting it by name would read as an enforced limit).
+- The reader reuses `markets._SESSION` / `TRADES_API` / `TAPE_TIMEOUT` and pages with the
+  same `offset` parameter `markout._default_trades_fn` uses, bounded at 3 pages.
+- T3 verified with `tests/test_queue_clear_gate.py`, `tests/test_trader_loop.py`,
+  `tests/test_market_quote.py`, `tests/test_shadow_run.py`,
+  `tests/test_plan_orders_asymmetric_hold.py` → 199 passed; plus a wider net over the loop's
+  neighbours (trader_loop_state, empty_markets_routine, instance_lock, menu_status_rows,
+  live_state_language, analytics_surface_mount, dashboard_server, markout_chart) → 287 passed.
+- `tests/test_shadow_run.py::TestBoundaryGuard` caught a docstring in `risk.py` that named a
+  shadow module: live modules must not reference the shadow model. Wording fixed, guard left
+  exactly as it was.
+- `tests/test_dynamic_risk_caps.py` fails in THIS SHELL only, because `PORT=0` is exported and
+  `dashboard/server.py:88` refuses it at import; with `PORT` unset the file is 14/14. Not a
+  regression, and `dashboard/server.py` is not in the diff.
+- Noticed-but-not-touching candidates (3, all `open`) recorded in
+  `docs/issues/393-noticed-but-not-touching.md`.
+- Station V review round: CodeRabbit posted 2 findings (review `COMPLETED`, check
+  `pass — Review completed`).
+  - **ACCEPTED 1** — `recent_sell_flow` read a missing/non-positive `timestamp` as
+    epoch 0, which then became `oldest`, so `oldest <= cutoff` reported a
+    page-bounded count as a COMPLETE window (a floor read as a measurement, which
+    is what refuses placements once the gate is enforced). Fixed with a positive-stamp
+    guard, 5 tests, RED first.
+  - **REJECTED 1** — "cancel the held opposite leg when the gate refuses its new
+    counterpart". `plan_orders` is hold-only by design (#384/#387, measured churn:
+    205/205 consecutive re-quotes lost queue position on shadow-01/02), EVERY other
+    refusal reason in `_visit_one` (price band, book health, completable pair,
+    funding) leaves a held leg resting, and under the shipped record-only default
+    nothing is refused at all — so the proposed cancel would fire every cycle in
+    enforcing mode and cancel the leg already in front of the queue. The naked-leg
+    risk it names is already owned by `completable_pair_block` at placement and
+    `single_buy_saver` at fill.
 
 ## Notes (session memory — do not lose)
-- Prior `tasks/plan.md` header was Issue #390 (merged); this file now plans #392.
-- Labels at intake: `ready-for-agent` + `needs-answers`; both Open questions were
-  resolved from code above, so no operator round-trip was needed.
-- Evidence anchors (2026-10-06 23:54 rank): Texas $19,279/30m + Kansas
-  $2,783/30m graduated; CS Falcons-NAVI ($35,314/30m, mid 0.82) and Antofagasta
-  tennis ($74,703/$46,155 tape) rejected by band/depth. Census: 58 no-movement,
-  4 flat-range rejects — the tape gates work; ranking is the gap.
-- #393 (queue-aware quoting) is independent; `queue_bar_reject` in evaluate is
-  noted and not touched.
+
+- Prior `tasks/plan.md` was Issue #392 (closed); this file now plans #393. Convention kept.
+- Labels at intake: `ready-for-agent` + `needs-answers`. No `quick-fix` label, so no
+  quick-fix lane was offered (Step 0C outcome 1). The one unanswerable-from-code question
+  was asked and answered: **record-only first**.
+- Operator-visible surface: the Trader dry run (`python -m core_brain.trader_loop --no-live
+  --once`) and the dashboard's cycle feed (`runtime/cycle_events.jsonl` over SSE,
+  `dashboard/server.py:2922`). The shadow run does NOT show this gate — its seam leaves
+  `flow_fn` unset by design (its socket guard would turn a blocked tape read into an empty
+  tape, which the honest reading is "unmeasurable"). Recorded as follow-up, not scope.
+- Residual cost, accepted honestly: a gated market re-measures the tape once per rotation
+  (~1/s per market) while its queue is deep. Rejected mitigation for now: a TTL cache on
+  the flow read — more moving parts than the measurement it saves. Measure the reasons
+  first (that is what record-only is for), then decide.
+- `>=` at the bar means an exactly-60-minute queue is refused. That is `maker_queue_allowed`'s
+  documented reading, not a new decision here.
+- Evidence anchors (2026-10-06): 7-share orders behind $85k/$26k queue-ahead on Texas
+  Senate, $3k/$6k on Kansas, against $19,279/$2,783 per 30m of window tape.
