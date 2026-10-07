@@ -615,6 +615,80 @@ def test_resolved_tokens_are_never_requested(tmp_path):
     assert "tok-live" in requested
 
 
+def test_resolved_tokens_skipped_when_caller_passes_no_set(tmp_path):
+    """#402 review: with no explicit set the guard reads the store itself, so
+    reconcile/CLI callers that never heard of `resolved_cids` still stay off
+    dead books."""
+    from core_brain.order_registry import OrderRegistry, ResolutionRecord
+    from core_brain.stray_guard import run_stray_guard
+
+    reg = OrderRegistry(db_path=tmp_path / "orders.db")
+    dead, live = "0xdead2", "0xlive2"
+    reg.create_order(make_order("o-dead2", dead, "tok-dead2", 0.45,
+                                order_id="v-dead2"))
+    reg.create_order(make_order("o-live2", live, "tok-live2", 0.45,
+                                order_id="v-live2"))
+    reg.log_resolution(ResolutionRecord(
+        condition_id=dead, winning_token="Up", resolved_ts=time.time(),
+        run_id="review-test", winning_token_id="tok-dead2"))
+
+    requested: list[str] = []
+
+    class _Client:
+        def get_order_book(self, token_id):
+            requested.append(token_id)
+            return {"bids": [], "asks": []}
+
+        def get_order(self, order_id):
+            return {"id": order_id, "status": "open", "size_matched": 0.0}
+
+        def cancel_order(self, payload_or_id):
+            return {"success": True, "canceled": []}
+
+        def create_and_post_market_order(self, payload):
+            return {"status": "matched", "takingAmount": "0.0", "size": "0.0"}
+
+    run_stray_guard(_Client(), reg, live=False)
+
+    assert "tok-dead2" not in requested
+    assert "tok-live2" in requested
+
+
+def test_failing_book_backs_off_without_an_explicit_tracker(tmp_path):
+    """#402 review: the backoff must be live on the real reconcile path, which
+    passes no tracker -- a failing token is requested once, not every pass."""
+    from core_brain.order_registry import OrderRegistry
+    from core_brain.stray_guard import run_stray_guard
+
+    reg = OrderRegistry(db_path=tmp_path / "orders.db")
+    reg.create_order(make_order("o-dead3", "0xdead3", "tok-dead3", 0.45,
+                                order_id="v-dead3"))
+
+    requested: list[str] = []
+
+    class _Client:
+        def get_order_book(self, token_id):
+            requested.append(token_id)
+            raise RuntimeError("404 no book")
+
+        def get_order(self, order_id):
+            return {"id": order_id, "status": "open", "size_matched": 0.0}
+
+        def cancel_order(self, payload_or_id):
+            return {"success": True, "canceled": []}
+
+        def create_and_post_market_order(self, payload):
+            return {"status": "matched", "takingAmount": "0.0", "size": "0.0"}
+
+    client = _Client()
+    run_stray_guard(client, reg, live=False)
+    run_stray_guard(client, reg, live=False)
+
+    assert requested == ["tok-dead3"], (
+        "the second pass must be gated by the default per-registry backoff")
+    assert reg.get_all_resolutions() == []
+
+
 def test_dead_book_backoff_blocks_then_permits_retry():
     """#402 T4: per-token backoff, driven by a fake clock."""
     from core_brain.market_lifecycle import DeadBookBackoff

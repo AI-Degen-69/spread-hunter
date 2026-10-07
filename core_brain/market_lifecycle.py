@@ -6,8 +6,11 @@ stop codes, the refusal classifier, and the persisted-resolution lookup.
 """
 from __future__ import annotations
 
+import logging
 import time
 from enum import Enum
+
+log = logging.getLogger("market_lifecycle")
 
 
 class LifecycleStop(Enum):
@@ -61,8 +64,12 @@ def resolved_condition_ids(registry) -> set[str]:
             cid = r.get("condition_id") if isinstance(r, dict) else None
             if cid:
                 out.add(str(cid).lower())
-    except Exception:
-        pass
+    except Exception as exc:
+        # Fail closed (no ids => guards stay off books) but never silently:
+        # a degraded store must be visible, or the operator would not know
+        # the protection had stopped reading.
+        log.warning("resolutions read failed; resolved guards degrade closed "
+                    "until it recovers: %s: %s", type(exc).__name__, exc)
     return out
 
 

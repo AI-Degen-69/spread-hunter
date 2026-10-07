@@ -358,6 +358,23 @@ def test_resolved_condition_ids_returns_lowercase_set(registry):
     assert resolved_condition_ids(reg) == {"0xmixed"}
 
 
+def test_resolved_lookup_failure_is_logged_not_swallowed(caplog):
+    """#402 review: a store that cannot answer must be visible -- the guards
+    downstream fail closed, but in silence the operator would never know the
+    protection had degraded."""
+    import logging
+    from core_brain.market_lifecycle import resolved_condition_ids
+
+    class _Boom:
+        def get_all_resolutions(self):
+            raise RuntimeError("resolutions table gone")
+
+    with caplog.at_level(logging.WARNING, logger="market_lifecycle"):
+        assert resolved_condition_ids(_Boom()) == set()
+
+    assert "resolutions table gone" in caplog.text
+
+
 def test_sweep_reports_record_failed_when_insert_fails(registry):
     import sqlite3
     reg, db = registry

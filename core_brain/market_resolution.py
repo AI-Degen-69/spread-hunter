@@ -60,6 +60,7 @@ FINISHED heuristic fires.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -67,6 +68,8 @@ from typing import Any, Callable, Optional
 import urllib.request
 
 from core_brain.market_lifecycle import resolved_condition_ids
+
+log = logging.getLogger("market_resolution")
 
 # Public read endpoint (no signer, no key). Same host the ranker and the
 # shadow book source already talk to; the shadow sweep already performs a
@@ -706,8 +709,9 @@ def _record_resolved_event(registry, cid: str, state: MarketEndState,
             reason_code="resolved",
             run_id=run_id,
         ))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("resolved event row not written for %s: %s: %s",
+                  cid[:12], type(exc).__name__, exc)
 
 
 def sweep_market_resolutions(

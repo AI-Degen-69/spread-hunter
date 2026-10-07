@@ -135,6 +135,35 @@ def test_fleet_adapter_slot_shapes():
     assert ev.why == "declined"
 
 
+def test_series_state_not_passed_to_ports_that_lack_the_keyword():
+    """#402 review: a decide port that predates `series_state` (the ladder
+    adapter and trial seams) must be called exactly as before even when the
+    market carries a live-series state -- a TypeError here would kill the
+    visit on precisely the series markets the exemption exists for."""
+    from core_brain.markets import SeriesState
+
+    seen = {}
+    m = _Market()
+    m.series_state = SeriesState(scope="series", best_of=3, wins_a=1,
+                                 wins_b=0, games_remaining=1, venue_live=True,
+                                 evidence_ts=1_000_000.0)
+
+    def legacy_decide(cfg, up, dn, inv, t_rem, wf=None):
+        seen["called"] = True
+        return [], "declined"
+
+    ev = evaluate_market_quote(
+        "0xabc", _cfg(), "clob.example",
+        fetch_market=lambda cid: m,
+        fetch_books=lambda host, token: {"best_bid": 0.5, "best_ask": 0.6},
+        inventory_for=lambda market: Inventory(),
+        decide=legacy_decide,
+    )
+
+    assert seen["called"] is True
+    assert ev.why == "declined"
+
+
 # ---------------------------------------------------------------------------
 # Error detection -- typed, so each caller formats its own presentation
 # ---------------------------------------------------------------------------

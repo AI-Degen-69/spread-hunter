@@ -24,6 +24,7 @@ is a legacy field; see AGENTS.md.
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, replace
 import time
 from typing import Any, Callable, Optional
@@ -876,6 +877,23 @@ class MarketEval:
     why: str
 
 
+def _decide_takes_series_state(fn: Callable[..., tuple]) -> bool:
+    """True when the decide port can receive the #402 `series_state` keyword.
+
+    `decide_quotes` declares it; the ladder adapter and the trial seams
+    predate it, so their ports are called without the argument. An
+    uninspectable callable fails closed to the legacy call shape.
+    """
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "series_state" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in params.values())
+
+
 def evaluate_market_quote(
     cid: str,
     cfg: MakerConfig,
@@ -913,15 +931,17 @@ def evaluate_market_quote(
     # open -- computing a fraction off that would invent a window origin.
     # `series_state` travels on the market object the Trader attached after
     # `fetch_market` (#402). Custom `decide` ports predate the keyword, so it
-    # is passed only when set -- a None state calls exactly as before.
+    # is passed only when set AND the port can take it -- a None state calls
+    # exactly as before, and a legacy port (the ladder adapter, trial seams)
+    # is never handed a keyword its signature does not declare.
     series_state = getattr(market, "series_state", None)
-    if series_state is None:
-        intents, why = decide(cfg, up_book, down_book, inv,
-                              quote_t_remaining(market), None)
-    else:
+    if series_state is not None and _decide_takes_series_state(decide):
         intents, why = decide(cfg, up_book, down_book, inv,
                               quote_t_remaining(market), None,
                               series_state=series_state)
+    else:
+        intents, why = decide(cfg, up_book, down_book, inv,
+                              quote_t_remaining(market), None)
     return MarketEval(
         cid=cid, market=market, up_book=up_book, down_book=down_book,
         inventory=inv, intents=intents, why=why,
