@@ -65,6 +65,10 @@ class LifecycleQuoteOverride:
 class LifecycleQuoteContext:
     override: LifecycleQuoteOverride | None = None
     refusal_reason: str | None = None
+    preserve_order_ids: frozenset[str] = frozenset()
+    replace_order_ids: frozenset[str] = frozenset()
+    cancel_order_ids: frozenset[str] = frozenset()
+    lifecycle_pair_id: str | None = None
 
 
 def max_profitable_hedge_bid(

@@ -36,6 +36,7 @@ from core_brain.markets import SeriesState, live_series_with_games_remaining, qu
 from core_brain.config import MakerConfig
 from core_brain.single_leg_lifecycle import (
     LegState,
+    LifecycleQuoteContext,
     LifecycleQuoteOverride,
     max_profitable_hedge_bid,
 )
@@ -1015,6 +1016,27 @@ class MarketEval:
     inventory: Inventory
     intents: list
     why: str
+    lifecycle_context: LifecycleQuoteContext | None = None
+
+
+def _decide_takes_keyword(fn: Callable[..., tuple], keyword: str) -> bool:
+    """True when a decide port declares a keyword or accepts arbitrary keywords."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if keyword in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in params.values())
+
+
+def _decide_declares_keyword(fn: Callable[..., tuple], keyword: str) -> bool:
+    """True only when the decision port explicitly declares the keyword."""
+    try:
+        return keyword in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _decide_takes_series_state(fn: Callable[..., tuple]) -> bool:
@@ -1024,14 +1046,7 @@ def _decide_takes_series_state(fn: Callable[..., tuple]) -> bool:
     predate it, so their ports are called without the argument. An
     uninspectable callable fails closed to the legacy call shape.
     """
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return False
-    if "series_state" in params:
-        return True
-    return any(p.kind is inspect.Parameter.VAR_KEYWORD
-               for p in params.values())
+    return _decide_takes_keyword(fn, "series_state")
 
 
 def evaluate_market_quote(
@@ -1043,6 +1058,9 @@ def evaluate_market_quote(
     fetch_books: Callable[[str, str], dict],
     inventory_for: Callable[[Any], Inventory],
     decide: Callable[..., tuple] = decide_quotes,
+    lifecycle_context_for: (
+        Callable[[Any, dict, dict, Inventory], LifecycleQuoteContext] | None
+    ) = None,
 ) -> MarketEval:
     """One market through the quoting pipeline: fetch -> books -> inventory -> decide.
 
@@ -1063,6 +1081,27 @@ def evaluate_market_quote(
     except Exception as e:
         raise MarketQuoteError(f"book fetch error: {e}") from e
     inv = inventory_for(market)
+    lifecycle_context = (
+        lifecycle_context_for(market, up_book, down_book, inv)
+        if lifecycle_context_for is not None
+        else None
+    )
+    if lifecycle_context is not None and lifecycle_context.refusal_reason:
+        return MarketEval(
+            cid=cid, market=market, up_book=up_book, down_book=down_book,
+            inventory=inv, intents=[],
+            why=lifecycle_context.refusal_reason,
+            lifecycle_context=lifecycle_context,
+        )
+    lifecycle_override = (
+        lifecycle_context.override
+        if lifecycle_context is not None
+        else None
+    )
+    if lifecycle_override is not None and not _decide_declares_keyword(
+            decide, "lifecycle_override"):
+        raise MarketQuoteError(
+            "custom decision port cannot accept lifecycle override")
     # Real countdown, not the old 1e9 placeholder that skipped every timing
     # rule on this path. Kickoff-aware: an in-play market whose venue endDate
     # is kickoff counts down from kickoff plus the in-play window (#386).
@@ -1075,14 +1114,17 @@ def evaluate_market_quote(
     # exactly as before, and a legacy port (the ladder adapter, trial seams)
     # is never handed a keyword its signature does not declare.
     series_state = getattr(market, "series_state", None)
+    decision_kwargs = {}
     if series_state is not None and _decide_takes_series_state(decide):
-        intents, why = decide(cfg, up_book, down_book, inv,
-                              quote_t_remaining(market), None,
-                              series_state=series_state)
-    else:
-        intents, why = decide(cfg, up_book, down_book, inv,
-                              quote_t_remaining(market), None)
+        decision_kwargs["series_state"] = series_state
+    if lifecycle_override is not None:
+        decision_kwargs["lifecycle_override"] = lifecycle_override
+    intents, why = decide(
+        cfg, up_book, down_book, inv, quote_t_remaining(market), None,
+        **decision_kwargs,
+    )
     return MarketEval(
         cid=cid, market=market, up_book=up_book, down_book=down_book,
         inventory=inv, intents=intents, why=why,
+        lifecycle_context=lifecycle_context,
     )

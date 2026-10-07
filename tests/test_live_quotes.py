@@ -4,10 +4,18 @@ import sqlite3
 import pytest
 from core_brain.config import MakerConfig
 from core_brain.order_registry import OrderRecord, OrderRegistry, FillRecord, inventory_from_registry
-from core_brain.quotes import Inventory, QuoteIntent, decide_quotes, mid_price
+from core_brain.quotes import (
+    Inventory,
+    MarketQuoteError,
+    QuoteIntent,
+    decide_quotes,
+    evaluate_market_quote,
+    mid_price,
+)
 from core_brain import risk, unhedged_stop_loss
 from core_brain.single_leg_lifecycle import (
     LegState,
+    LifecycleQuoteContext,
     LifecycleQuoteOverride,
 )
 
@@ -578,3 +586,127 @@ def test_lifecycle_escalation_size_is_capped_to_remaining_naked_inventory():
     assert why == ""
     assert len(intents) == 1
     assert intents[0].size <= inventory.up_shares - inventory.down_shares
+
+
+def test_quote_evaluation_supplies_lifecycle_context_after_its_single_book_fetch():
+    class Market:
+        condition_id = "condition"
+        up_token = "token-up"
+        down_token = "token-down"
+
+        def t_remaining(self):
+            return 3600.0
+
+    calls = []
+    market = Market()
+    up = {"token_id": "token-up", "best_bid": 0.39, "best_ask": 0.41}
+    down = {"token_id": "token-down", "best_bid": 0.59, "best_ask": 0.61}
+    inventory = Inventory(up_shares=10.0, up_cost=4.8)
+    override = LifecycleQuoteOverride(
+        pair_id="pair-lifecycle",
+        token_id="token-down",
+        price=0.51,
+        size=10,
+        state=LegState.ESCALATED_HEDGE,
+        held_average_price=0.48,
+    )
+    context = LifecycleQuoteContext(override=override)
+
+    def fetch_books(host, token):
+        calls.append(f"book:{token}")
+        return up if token == "token-up" else down
+
+    def inventory_for(_market):
+        calls.append("inventory")
+        return inventory
+
+    def context_for(got_market, got_up, got_down, got_inventory):
+        assert got_market is market
+        assert got_up is up and got_down is down
+        assert got_inventory is inventory
+        calls.append("lifecycle")
+        return context
+
+    def decide(cfg, up_book, down_book, inv, remaining, window,
+               *, lifecycle_override=None):
+        calls.append("decide")
+        assert lifecycle_override is override
+        return [], ""
+
+    result = evaluate_market_quote(
+        "condition",
+        MakerConfig(),
+        "https://clob.polymarket.com",
+        fetch_market=lambda cid: market,
+        fetch_books=fetch_books,
+        inventory_for=inventory_for,
+        decide=decide,
+        lifecycle_context_for=context_for,
+    )
+
+    assert calls == [
+        "book:token-up", "book:token-down", "inventory", "lifecycle", "decide",
+    ]
+    assert result.lifecycle_context is context
+
+
+def test_lifecycle_refusal_skips_quote_decision_and_returns_no_intents():
+    class Market:
+        condition_id = "condition"
+        up_token = "token-up"
+        down_token = "token-down"
+
+        def t_remaining(self):
+            return 3600.0
+
+    called = []
+    result = evaluate_market_quote(
+        "condition",
+        MakerConfig(),
+        "https://clob.polymarket.com",
+        fetch_market=lambda cid: Market(),
+        fetch_books=lambda host, token: {"token_id": token},
+        inventory_for=lambda market: Inventory(),
+        decide=lambda *args, **kwargs: called.append("decide") or ([], ""),
+        lifecycle_context_for=lambda *args: LifecycleQuoteContext(
+            refusal_reason="lifecycle hard stop for pair pair-1"),
+    )
+
+    assert result.intents == []
+    assert result.why == "lifecycle hard stop for pair pair-1"
+    assert called == []
+
+
+def test_custom_decision_port_cannot_silently_drop_lifecycle_override():
+    class Market:
+        condition_id = "condition"
+        up_token = "token-up"
+        down_token = "token-down"
+
+        def t_remaining(self):
+            return 3600.0
+
+    override = LifecycleQuoteOverride(
+        pair_id="pair-lifecycle",
+        token_id="token-down",
+        price=0.51,
+        size=10,
+        state=LegState.ESCALATED_HEDGE,
+        held_average_price=0.48,
+    )
+
+    def custom_decide(cfg, up, down, inv, remaining, window, **kwargs):
+        return [], ""
+
+    with pytest.raises(MarketQuoteError, match="cannot accept lifecycle override"):
+        evaluate_market_quote(
+            "condition",
+            MakerConfig(),
+            "https://clob.polymarket.com",
+            fetch_market=lambda cid: Market(),
+            fetch_books=lambda host, token: {"token_id": token},
+            inventory_for=lambda market: Inventory(),
+            decide=custom_decide,
+            lifecycle_context_for=lambda *args: LifecycleQuoteContext(
+                override=override),
+        )
