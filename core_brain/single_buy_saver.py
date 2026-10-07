@@ -662,6 +662,8 @@ def exit_single_buy(
     venue_positions: Optional[dict[str, float]] = None,
     reason: Optional[str] = None,
     method: str = "single_buy_exit",
+    *,
+    force: bool = False,
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
 
@@ -669,6 +671,9 @@ def exit_single_buy(
     persisted on the close so later forensics need not reconstruct it. Purely
     instrumentation: it changes no trigger, threshold, or route decision, and
     callers without one (stray-guard) keep working unchanged.
+
+    `force` skips only the economic preference to complete a profitable pair;
+    all cancellation, venue-position, size, depth, and slippage safeguards remain.
 
     `action` in the returned dict is one of:
       balanced       -- nothing single, nothing to do
@@ -707,10 +712,10 @@ def exit_single_buy(
 
     light_token = pair["light"]["token_id"]
     light_ask = None
-    if light_token:
+    if not force and light_token:
         light_ask = best_ask(client.get_order_book(light_token))
 
-    if not should_exit(pair["fill_cost"], light_ask, max_pair_cost):
+    if not force and not should_exit(pair["fill_cost"], light_ask, max_pair_cost):
         return {
             "action": "hold",
             "pair_id": pair_id,

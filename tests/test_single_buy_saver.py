@@ -1338,3 +1338,100 @@ def test_exit_close_carries_reason_only_after_a_successful_sale(
     # The close is written after the sale by construction; assert the sell
     # happened at all so the ordering claim has teeth.
     assert any(c.startswith("sell:") for c in client.calls)
+
+
+# ---------------------------------------------------------------------------
+# Unified lifecycle hard-stop execution
+# ---------------------------------------------------------------------------
+
+def test_force_exit_sells_after_cancel_despite_a_profitable_completion_ask(
+    registry: OrderRegistry,
+):
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.38, best_bid=0.55)
+
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop",
+    )
+
+    assert result["action"] == "exited"
+    cancel_i = next(i for i, call in enumerate(client.calls)
+                    if call.startswith("cancel:"))
+    sell_i = next(i for i, call in enumerate(client.calls)
+                  if call.startswith("sell:"))
+    assert cancel_i < sell_i
+    closes = [close for close in registry.get_all_closes()
+              if close["method"] == "single_buy_exit"]
+    assert len(closes) == 1
+    assert closes[0]["reason"] == "hard_stop"
+
+
+def test_force_exit_does_not_sell_when_cancel_fails(registry: OrderRegistry):
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.38, cancel_ok=False)
+
+    with pytest.raises(lp.PairExitRefused, match="cancel"):
+        lp.exit_single_buy(
+            client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+            live=True, force=True, reason="hard_stop",
+        )
+
+    assert not any(call.startswith("sell:") for call in client.calls)
+
+
+def test_force_exit_routes_to_merge_when_the_pair_fills_during_cancel(
+    registry: OrderRegistry,
+):
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+
+    class RacingClient(FakeClient):
+        def cancel_order(self, payload):
+            result = super().cancel_order(payload)
+            self.venue_matched["venue-light"] = 10.0
+            return result
+
+    client = RacingClient(best_ask=0.38)
+    result = lp.exit_single_buy(
+        client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+        live=True, force=True, reason="hard_stop",
+    )
+
+    assert result["action"] == "route_to_merge"
+    assert not any(call.startswith("sell:") for call in client.calls)
+
+
+def test_force_exit_does_not_sell_on_registry_venue_position_divergence(
+    registry: OrderRegistry,
+):
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.38)
+
+    with pytest.raises(lp.PairExitRefused, match="diverge"):
+        lp.exit_single_buy(
+            client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+            live=True, venue_positions={TOK_UP: 3.0},
+            force=True, reason="hard_stop",
+        )
+
+    assert not any(call.startswith("cancel:") for call in client.calls)
+    assert not any(call.startswith("sell:") for call in client.calls)
+
+
+def test_force_exit_does_not_sell_below_the_venue_minimum_depth(
+    registry: OrderRegistry,
+):
+    pair_id = _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(
+        best_ask=0.38,
+        best_bid=0.55,
+        bid_levels=[{"price": "0.55", "size": "0.5"}],
+    )
+
+    with pytest.raises(lp.PairExitRefused, match="below the venue minimum"):
+        lp.exit_single_buy(
+            client, registry, pair_id, max_pair_cost=MAX_PAIR_COST,
+            live=True, force=True, reason="hard_stop",
+        )
+
+    assert not any(call.startswith("sell:") for call in client.calls)
