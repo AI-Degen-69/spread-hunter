@@ -155,7 +155,7 @@ Frozen: `quotes.py` refusal strings, `orders.cancel_reason` values,
   (markout `full_book` patched to a counter).
 - Depends on: T1. Checkpoint C2 after T4 review.
 
-### T5 [ ] — Full-cycle shadow rehearsal on one market [Backend/Logic] (M)
+### T5 [x] — Full-cycle shadow rehearsal on one market [Backend/Logic] (M)
 - Target files: `tests/test_shadow_run.py` (new rehearsal), minimal
   inventory/attribution fix ONLY if re-quote after merge is blocked (no cap,
   gate, or live-merge change).

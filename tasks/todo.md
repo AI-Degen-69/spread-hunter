@@ -8,4 +8,4 @@
 - [x] T4 — Poll path + secondary readers quiet on dead books (RED-first)
 - [x] C2 — Review: dead books silent everywhere
 - [ ] C2 — Review: dead books silent everywhere
-- [ ] T5 — Full-cycle shadow rehearsal; 9 focused suites green
+- [x] T5 — Full-cycle shadow rehearsal; 9 focused suites green
