@@ -1,51 +1,39 @@
-# CONSTRAINTS — #408 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #411 (locked by Station II, enforced through Station V)
 
-Supersedes the #402 constraints (done work).
+Supersedes the previous issue plan constraints; this issue is the money path and the pair-cost guardrail has to be explicit.
 
 ## Zero regressions
 
-- These suites must pass after every change touching their modules:
-  `tests/test_uma_resolution_gate.py`, `tests/test_trader_loop.py`,
-  `tests/test_shadow_run.py`.
-  (`test_uma_resolution_gate.py` proves the reader; the other two prove the
-  visit sequence and the rehearsal.)
+- Focused suites that must pass for the touched behavior:
+  `tests/test_plan_orders_asymmetric_hold.py`,
+  `tests/test_ladder_quotes.py`,
+  `tests/test_completable_pair_gate.py`,
+  `tests/test_trader_loop.py`,
+  `tests/test_live_quotes.py`.
 - Full-repo sweep stays with CI on push; locally run only the focused suites.
-- Every new behavior needs a test that FAILS without the change (RED first,
-  per `test-driven-development`). Gamma reads in tests use an injected
-  `urlopen` fake — no test touches the network.
+- Every behavior change needs a test that fails without the change (RED first, per `test-driven-development`).
 
 ## Money-lever freeze
 
-- Unchanged: dynamic caps (`derive_dynamic_caps`), `max_pair_cost`, band
-  values, countdown, pair-cost gate, `hard_block`, completable-pair gate,
-  enforce flags, selection-time UMA gate (#377), live merge (manual).
-- `plan_orders`, ladder routing, registry pair merging, `single_buy_saver`,
-  settlement, inventory, fills, closes, merges — untouched.
-- Existing cancel-reason values unchanged; only ADD the three
-  `uma_resolution_*` reasons.
+- The hard pair ceiling is always on: the rounded pair cost must refuse any value above `$0.99`, regardless of config.
+- Configured caps can only tighten the rule; they may never loosen it.
+- Existing `hard_block` / `completable_pair_block` logic stays active; do not replace the risk gate with a single duplicate path.
+- No live orders are opened or completed in this station; all verification is through tests, replay, or dry-run code paths.
 
 ## Stores are evidence, not scratch
 
 - `data/orders.db` is the production registry: read it, never rewrite it.
-- No schema migration: `market_events` + `log_market_event` already exist —
-  reuse them (event type `BLOCKED`, reason code + UMA status in details).
-- Do NOT run opening commands (`quote`, `complete`, Trader loop, dashboard
-  START) to verify — propose them, operator runs them. Shadow rehearsals in
-  tests use temp DBs only.
+- No schema migration, no database rewriting, no order-registry change for this issue.
+- The fix belongs in the quoting / planner gate layer, not in the registry or the execution path.
 
 ## Anti-cheat
 
-- No skipping/disabling tests, no deleting assertions, no linter suppression.
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
 - No new external dependencies without explicit operator approval.
-- A Gamma outage alone never cancels a quote (fail open); an unparseable row
-  is unreadable, never "clean" and never "flagged".
-- The new reader must match the requested condition id; first-row blind
-  reads (today's `fetch_open_market_state:414` shape) are banned here.
+- A pair over the cap is never treated as an acceptable “close enough” result.
+- The helper must apply consistently in from-mid, ladder, and legacy quote generation.
 
 ## Performance
 
-- At most one Gamma UMA read per condition per 30s TTL; flagged results
-  pinned (no re-read); unreachable results never cached.
-- ~5s timeout on the Gamma read so a slow response cannot stall a cycle.
-- Clean markets pay one cached read per TTL and otherwise behave exactly as
-  today (no extra fetch, no extra cancel, no extra log line).
+- No quote churn: the asymmetry must hold a downward-moving BUY within `requote_hold_below_target` while still ensuring the pair cannot exceed the cap.
+- The logic must remain narrow: one hard helper, same risk gate semantics, and no extra per-cycle book fetches or network reads.
