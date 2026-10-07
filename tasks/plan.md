@@ -136,17 +136,20 @@ Frozen: `quotes.py` refusal strings, `orders.cancel_reason` values,
 - Depends on: T1. Checkpoint C1 after T2+T3 review.
 
 ### T4 [x] — Poll path + secondary readers go quiet on dead books [Backend/Logic] (M)
-- Target files: `core_brain/order_manager.py` (per-cycle resolved set, owns
-  backoff tracker), `core_brain/single_buy_saver.py` (skip resolved in
+- Target files: `core_brain/order_manager.py` (per-cycle resolved set),
+  `core_brain/single_buy_saver.py` (skip resolved in
   discovery + rescue before any fetch; log once `resolved`; no
   buy/sell/cancel, inventory preserved), `core_brain/stray_guard.py` (omit
   resolved tokens), `core_brain/markout.py` (terminal-first: persisted
   resolution before books; 1.0/0.0 winner, pending w/o books if unknown;
   cache key → (condition, token)), `core_brain/paired_shadow.py` (skip
   resolved reads).
-- Build: backoff tracker lives in `order_manager` (per proposal); post-failure
-  `fetch_market_end_state` at most once per window; 404 never resolves;
-  rescue verdict order + closed/accepting checks preserved.
+- Build: backoff tracker (`DeadBookBackoff`, defined in
+  `market_lifecycle.py`) kept per-registry by `stray_guard` and default-on
+  for every caller (the live poll's reconcile sweep, the stray CLI, the
+  dashboard); post-failure `fetch_market_end_state` at most once per
+  window; 404 never resolves; rescue verdict order + closed/accepting
+  checks preserved.
 - Verify: `tests/test_aged_out_rescue.py` — resolved partial inventory (fresh
   + aged fills): zero book/buy/sell/cancel, inventory preserved; fail-then-
   succeed book read retries via backoff with no invented resolution;
