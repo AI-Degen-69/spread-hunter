@@ -67,6 +67,13 @@ Tick flooring ensures the actual pair cost cannot exceed the ceiling. If the com
 limit is non-positive or otherwise invalid, the controller refuses escalation and emits
 an explicit error; it does not invent a price.
 
+The escalated intent may bypass only the ordinary `max_spread_from_mid` distance gate;
+otherwise that gate could prevent the requested capped hedge after a material move.
+Book-health, price-band, sizing, naked-risk, bankroll, venue order, and pair-cost checks
+remain active. The pair-cost gate may allow equality at `$0.99` only for this explicitly
+identified escalated intent; it still refuses every price above the cap and all non-
+lifecycle quotes retain the existing strict boundary.
+
 The hard-stop check has priority over completion and escalation. It enters `HARD_STOP`
 when the observed best bid is `<= 0.15`. The state is terminal for that position. A
 balanced position enters `PAIR_LOCKED` only when its combined average cost is `<= 0.99`
@@ -138,6 +145,8 @@ Add deterministic tests for:
 - escalation at and above `2 * base_offset`, no escalation below it, and sticky behavior
   through recovery/restart;
 - exact cap calculation and conservative venue-tick flooring;
+- escalated intents bypass only spread-distance while other book, price-band, pair-cost,
+  and dollar-risk gates remain enforced;
 - hard stop taking priority over a profitable completion, cancellation preceding sale,
   venue reread catching a racing completion, and all existing position/size/slippage
   refusals;
