@@ -208,7 +208,7 @@ def test_run_shadow_publishes_and_refreshes_its_heartbeat(tmp_path, monkeypatch)
     assert final["finished"] is True
 
 
-# ── The code stamp (#403) ───────────────────────────────────────────────────
+# ── The code stamp (#399) ───────────────────────────────────────────────────
 #
 # A rehearsal outlives the code it started with, and it used to say nothing
 # about it. Three runs sat side by side on 2026-10-07, two of them deciding with
