@@ -23,8 +23,8 @@ paths do not express one progressive policy for a single position.
 - Give the hard stop precedence over completion and ordinary quoting.
 - Preserve venue/registry agreement, cancel-race checks, sizing, slippage bounds, and the
   market-settlement fallback.
-- Make the current stage survive process restarts and be shared by the Trader and the
-  order-manager poll path.
+- Make the current stage survive process restarts and be shared by the Trader, the
+  order-manager poll path, and the shadow rehearsal.
 
 ## Non-goals
 
@@ -90,12 +90,15 @@ Add a dedicated lifecycle controller as the single policy owner:
    target maker intent or replace the opposite intent with the escalation limit.
 2. `order_manager poll` calls the same controller after reconcile. It detects hard stops
    and settlement fallback conditions and dispatches only the resulting close action.
-3. `single_buy_saver.py` remains the low-level executor for completion and exit operations:
+3. `shadow_run` calls the same controller and decision logic through its existing
+   simulated client and per-run registry. It must not construct a signing client or issue
+   venue writes; rehearsal actions remain confined to the shadow store.
+4. `single_buy_saver.py` remains the low-level executor for completion and exit operations:
    cancel working orders, verify venue fills and positions, enforce sell depth/size and
    slippage limits, then persist closes. Its conflicting automatic in-window
    completion/drift/grace routing is retired. The settlement fallback remains an explicit
    lifecycle action.
-4. `unhedged_stop_loss.py` continues to manage per-market markout posture; it is not a
+5. `unhedged_stop_loss.py` continues to manage per-market markout posture; it is not a
    second single-leg lifecycle controller.
 
 During `PATIENT_WAIT`, the automated pass must not issue the old immediate taker
@@ -139,7 +142,8 @@ Add deterministic tests for:
   venue reread catching a racing completion, and all existing position/size/slippage
   refusals;
 - additive registry-state persistence using temporary databases;
-- both Trader and poll paths using the same controller decision.
+- Trader, poll, and shadow paths using the same controller decision, with shadow writes
+  confined to the per-run store.
 
 Run the focused lifecycle, single-buy-saver, dual-stop-loss, trader-loop, and registry
 tests. Do not run the full suite locally at review/PR stations. No live order-placement
