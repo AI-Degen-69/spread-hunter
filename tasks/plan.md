@@ -98,7 +98,7 @@ keeps its signature (pagination internal); exact-price 4dp matching kept.
   (`ladder_shadow_rehearsal.py` et al.) re-checked against the contract.
 - Sub-issue: #405 (T3), blocked by #404.
 
-### T4 — End-to-end replay + nearby suites [Code] (M)
+### T4 [x] — End-to-end replay + nearby suites [Code] (M)
 - Target files: `tests/test_shadow_run.py` (extend).
 - Build: through the REAL `_default_traded_fn`, stub only
   `markets._SESSION.get` keyed by request params; reuse `FakeMarket`,

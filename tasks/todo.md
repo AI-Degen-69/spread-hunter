@@ -3,4 +3,4 @@
 - [x] T1 — Diagnose read-only; run note names reader + drop point
 - [x] T2 — Reader unit tests written RED-first (fail on current code)
 - [x] T3 — Fix `recent_trades` (side in key + bounded pagination); T2 green
-- [ ] T4 — E2E replay in test_shadow_run.py; 6 focused suites green
+- [x] T4 — E2E replay in test_shadow_run.py; 6 focused suites green
