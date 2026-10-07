@@ -1969,3 +1969,146 @@ class TestSuspectsAndSeriesAttach:
             sleep_fn=lambda s: None)
         assert seen["series"] is not None
         assert seen["series"].scope == "series"
+
+
+class TestUmaResolutionGateVisit:
+    """Flagged visit cancels with the named reason; clean is byte-identical (#408)."""
+
+    def _seam(self, uma_by_cid, registry, events, discards):
+        from unittest.mock import MagicMock
+
+        from core_brain.market_resolution import UmaResolutionStatus
+
+        def fetch_uma_status(cid):
+            v = uma_by_cid.get(cid, "clean")
+            if v == "raise":
+                raise RuntimeError("gamma down")
+            if v == "unreachable":
+                return UmaResolutionStatus(condition_id=cid, unreachable=True)
+            if v == "clean":
+                return UmaResolutionStatus(condition_id=cid)
+            return UmaResolutionStatus(condition_id=cid, status=v)
+
+        def fake_fetch_market(cid):
+            raise AssertionError("fetch_market must not run on a flagged visit")
+
+        def fake_cancel(client, reg, orders):
+            return len(orders)
+
+        def record_market_event(record):
+            events.append(record)
+
+        def emit_fn(service, cycle, phase, action, **kw):
+            if action == "discard":
+                discards.append((action, kw))
+
+        seam = VenueSeam(
+            client=object(),
+            registry=registry,
+            base_cfg=MakerConfig(),
+            fetch_market=fake_fetch_market,
+            fetch_books=lambda h, t: {"token_id": t, "bids": {}, "asks": {}},
+            decide=lambda *a, **k: ([_intent()], ""),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=fake_cancel,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+            fetch_uma_status=fetch_uma_status,
+            record_market_event=record_market_event,
+            emit_fn=emit_fn,
+        )
+        return seam
+
+    def _registry_with_resting(self, cid="0xuma"):
+        from unittest.mock import MagicMock
+
+        registry = MagicMock()
+        o1 = MagicMock(condition_id=cid, status="open", token_id="tok-up",
+                        price=0.55, order_id="v1", id="r1", side="BUY")
+        o2 = MagicMock(condition_id=cid, status="partial", token_id="tok-dn",
+                        price=0.45, order_id="v2", id="r2", side="BUY")
+        registry.get_active_orders.return_value = [o1, o2]
+        return registry
+
+    def test_flagged_visit_cancels_open_and_partial_skips_decide_submit(self):
+        from core_brain.trader_loop import _visit_one
+
+        registry = self._registry_with_resting()
+        events, discards, submitted = [], [], []
+        seam = self._seam({"0xuma": "proposed"}, registry, events, discards)
+        seam.submit_fn = lambda *a, **k: submitted.append(1) or 0
+        res = _visit_one(seam, {"cid": "0xuma"}, cycle=7, live=True)
+        assert res.status == "CANCELLED"
+        assert res.why == "uma_resolution_proposed"
+        assert res.cancelled == 2
+        assert submitted == []
+        assert len(discards) == 1
+        assert discards[0][1]["reason"] == "uma_resolution_proposed"
+        assert discards[0][1]["extra"]["uma_status"] == "proposed"
+        assert len(events) == 1
+        assert events[0].kind == "BLOCKED"
+        assert events[0].reason_code == "uma_resolution_proposed"
+
+    def test_clean_repeat_run_byte_identical_to_run_without_port(self):
+        from core_brain.trader_loop import _visit_one
+
+        def run_once(seam):
+            return _visit_one(seam, {"cid": "0xuma"}, cycle=3, live=True)
+
+        registry = self._registry_with_resting()
+        events_a, discards_a = [], []
+        seam_a = self._seam({"0xuma": "clean"}, registry, events_a, discards_a)
+        seam_a.fetch_market = lambda cid: FakeMarket(cid)
+        seam_a.decide = lambda *a, **k: ([], "declined")
+        seam_a.submit_fn = lambda *a, **k: 0
+        res_a = run_once(seam_a)
+
+        registry_b = self._registry_with_resting()
+        seam_b = VenueSeam(
+            client=object(), registry=registry_b,
+            base_cfg=MakerConfig(),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda h, t: {"token_id": t, "bids": {}, "asks": {}},
+            decide=lambda *a, **k: ([], "declined"),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+        )
+        res_b = run_once(seam_b)
+        assert (res_a.status, res_a.why, res_a.submitted, res_a.cancelled) == \
+               (res_b.status, res_b.why, res_b.submitted, res_b.cancelled)
+        assert events_a == [] and discards_a == []
+
+    def test_unreachable_warns_without_cancelling(self):
+        from core_brain.trader_loop import _visit_one
+
+        registry = self._registry_with_resting()
+        events, discards = [], []
+        warns = []
+        seam = self._seam({"0xuma": "unreachable"}, registry, events, discards)
+
+        def emit_fn(service, cycle, phase, action, **kw):
+            warns.append(action)
+            if action == "discard":
+                discards.append((action, kw))
+
+        seam.emit_fn = emit_fn
+        seam.fetch_market = lambda cid: FakeMarket(cid)
+        seam.decide = lambda *a, **k: ([], "declined")
+        res = _visit_one(seam, {"cid": "0xuma"}, cycle=3, live=True)
+        assert res.status != "CANCELLED"
+        assert "uma_check_unreachable" in warns
+        assert discards == [] and events == []
+
+    def test_failed_cancels_reported_and_retried(self):
+        from core_brain.trader_loop import _visit_one
+
+        registry = self._registry_with_resting()
+        events, discards = [], []
+        seam = self._seam({"0xuma": "proposed"}, registry, events, discards)
+        seam.cancel_fn = lambda *a, **k: 0
+        res = _visit_one(seam, {"cid": "0xuma"}, cycle=3, live=True)
+        assert res.status == "CANCELLED"
+        assert "retry next visit" in res.error
+        assert discards[0][1]["extra"]["failed"] == 2
