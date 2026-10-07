@@ -6,6 +6,7 @@ stop codes, the refusal classifier, and the persisted-resolution lookup.
 """
 from __future__ import annotations
 
+import time
 from enum import Enum
 
 
@@ -63,3 +64,41 @@ def resolved_condition_ids(registry) -> set[str]:
     except Exception:
         pass
     return out
+
+
+class DeadBookBackoff:
+    """Per-token backoff for failing book reads (#402).
+
+    A token whose book read fails is not re-read until its wait elapses;
+    waits grow per consecutive failure up to a cap and clear on success.
+    This bounds 404 spam against a dying book without ever resolving
+    anything: a 404 is an availability failure, and only a confirmed venue
+    end state may write a resolution (`market_resolution` owns that). The
+    class holds no registry handle by construction, so no failure here can
+    invent a settlement.
+    """
+
+    def __init__(self, base_sec: float = 5.0, cap_sec: float = 300.0,
+                 factor: float = 2.0, now_fn=None):
+        self._base = max(0.0, float(base_sec))
+        self._cap = max(self._base, float(cap_sec))
+        self._factor = max(1.0, float(factor))
+        self._now = now_fn or time.time
+        self._state: dict[str, tuple[int, float]] = {}
+
+    def allow(self, token: str) -> bool:
+        """True when a book read for this token may go out now."""
+        fails, not_before = self._state.get(str(token), (0, 0.0))
+        return self._now() >= not_before
+
+    def note_success(self, token: str) -> None:
+        """A read answered: the token is live again, waits restart."""
+        self._state.pop(str(token), None)
+
+    def note_failure(self, token: str) -> None:
+        """A read failed: push the next allowed read further out, capped."""
+        key = str(token)
+        fails, _ = self._state.get(key, (0, 0.0))
+        fails += 1
+        wait = min(self._base * (self._factor ** (fails - 1)), self._cap)
+        self._state[key] = (fails, self._now() + wait)

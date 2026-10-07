@@ -2326,11 +2326,16 @@ def poll(
                 # Closing actions only -- pre-approved. Failures are isolated per pair
                 # inside auto_manage_pairs; a pass-level failure must never stop the
                 # loop either.
+                # Resolved conditions are read once per cycle (#402): every
+                # consumer below skips them before any book request.
+                from core_brain.market_lifecycle import resolved_condition_ids
+                cycle_resolved = resolved_condition_ids(registry)
                 try:
                     from core_brain.config import load as _load_cfg
                     from core_brain.single_buy_saver import auto_manage_pairs
                     for pr in auto_manage_pairs(
                         client, registry, _load_cfg(), funder=funder,
+                        resolved_cids=cycle_resolved,
                     ):
                         action = pr.get("action", "?")
                         # Quiet decisions (hold/balanced/dry-run would_*) stay out of
@@ -2369,6 +2374,7 @@ def poll(
                     for pr in rescue_aged_out_legs(
                         client, registry, _load_cfg2(), funder=funder,
                         state_cache=aged_out_state_cache,
+                        resolved_cids=cycle_resolved,
                     ):
                         action = pr.get("action", "?")
                         # The waiting verdicts repeat every cycle until the

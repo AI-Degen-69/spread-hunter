@@ -135,7 +135,7 @@ Frozen: `quotes.py` refusal strings, `orders.cancel_reason` values,
   an unrelated market quotes; `lifecycle_stop` rows correct per code.
 - Depends on: T1. Checkpoint C1 after T2+T3 review.
 
-### T4 [ ] — Poll path + secondary readers go quiet on dead books [Backend/Logic] (M)
+### T4 [x] — Poll path + secondary readers go quiet on dead books [Backend/Logic] (M)
 - Target files: `core_brain/order_manager.py` (per-cycle resolved set, owns
   backoff tracker), `core_brain/single_buy_saver.py` (skip resolved in
   discovery + rescue before any fetch; log once `resolved`; no

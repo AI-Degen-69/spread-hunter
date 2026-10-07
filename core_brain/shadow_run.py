@@ -1004,7 +1004,11 @@ def run_shadow(
             ShadowExecutionClient, record_shadow_merges, shadow_positions,
         )
         from core_brain.single_buy_saver import auto_manage_pairs
+        from core_brain.market_lifecycle import resolved_condition_ids
 
+        # Resolved conditions skip every consumer below, before any book
+        # request -- the same durable guard the live poll loop reads (#402).
+        cycle_resolved = resolved_condition_ids(seam.registry)
         exec_client = ShadowExecutionClient(
             seam.registry, db_path, book_fn=seam.fetch_books,
             clob_host=seam.clob_host,
@@ -1016,6 +1020,7 @@ def run_shadow(
             for pr in auto_manage_pairs(
                 exec_client, seam.registry, cfg,
                 venue_positions=shadow_positions(seam.registry, db_path),
+                resolved_cids=cycle_resolved,
             ):
                 action = pr.get("action", "?")
                 pair_id = pr.get("pair_id") or "?"
@@ -1050,6 +1055,7 @@ def run_shadow(
                 venue_positions=shadow_positions(seam.registry, db_path),
                 market_state_fn=state_fn,
                 state_cache=getattr(shadow_sweep, "_state_cache", None),
+                resolved_cids=cycle_resolved,
             ):
                 action = pr.get("action", "?")
                 pair_id = pr.get("pair_id") or "?"

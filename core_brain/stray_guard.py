@@ -364,6 +364,8 @@ def run_stray_guard(
     now: Optional[float] = None,
     venue_positions: Optional[dict[str, float]] = None,
     remediate_positions: bool = True,
+    resolved_cids: Optional[set[str]] = None,
+    book_tracker: Any = None,
 ) -> dict[str, Any]:
     """Unified Stray-Order Guard execution pass.
 
@@ -374,6 +376,12 @@ def run_stray_guard(
     5. Adopts complementary detached legs into shared pairs (idempotent).
     6. Cancels hopeless resting orders with no prospect of profitable completion.
     7. Remediates remaining unhedged stray positions via single-buy exit.
+
+    `resolved_cids` (#402): tokens on resolved conditions are omitted from
+    book requests -- and resolved orders never reach classification books.
+    `book_tracker` (#402): a per-token backoff (`DeadBookBackoff`) gating
+    book reads; failures are noted so the next pass waits, successes clear.
+    Neither invents a resolution: the tracker holds no registry handle.
     """
     if cfg is None:
         try:
@@ -417,20 +425,38 @@ def run_stray_guard(
 
     books: dict[str, dict] = {}
     needed_tokens: set[str] = set()
+    resolved = {str(c).lower() for c in (resolved_cids or ()) if c}
+    token_conditions: dict[str, str] = {}
     for o in candidate_orders:
         if o.token_id:
             needed_tokens.add(o.token_id)
-    for (t1, t2) in market_tokens.values():
+            token_conditions.setdefault(o.token_id, o.condition_id or "")
+    for (cond, (t1, t2)) in market_tokens.items():
         needed_tokens.add(t1)
         needed_tokens.add(t2)
+        token_conditions.setdefault(t1, cond or "")
+        token_conditions.setdefault(t2, cond or "")
+    # Resolved conditions contribute no book reads: drop their tokens before
+    # any venue request, preserving rescue verdict order and the closed /
+    # accepting-orders checks downstream (which read no books here).
+    needed_tokens = {
+        t for t in needed_tokens
+        if str(token_conditions.get(t, "")).lower() not in resolved
+    }
 
     if hasattr(client, "get_order_book"):
         for tok in needed_tokens:
+            if book_tracker is not None and not book_tracker.allow(tok):
+                continue
             try:
                 bk = client.get_order_book(tok)
                 if bk:
                     books[tok] = bk
+                if book_tracker is not None:
+                    book_tracker.note_success(tok)
             except Exception as exc:
+                if book_tracker is not None:
+                    book_tracker.note_failure(tok)
                 log.debug("Failed to get order book for %s: %s", tok, exc)
 
     classification = classify_market_orders(
