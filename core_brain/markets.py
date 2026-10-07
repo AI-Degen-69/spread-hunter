@@ -411,8 +411,21 @@ def recent_trades(condition_id: str, seen: set, limit: int = 500,
 
     De-duplicated by trade identity rather than by timestamp window: the API
     stamps trades to the second while we poll faster than that, so a time-based
-    cursor would double-count or skip. `seen` is per-market and is dropped when
-    the window rolls.
+    cursor would double-count or skip. The identity key carries the normalized
+    side, so a BUY-labelled row (mint leg) can never suppress the matching
+    SELL row -- rows the filter rejects still take their own keys, which is
+    what lets the page walk below recognise a fully-read page.
+
+    Two walks per call. Walk 1 pages the taker view (`limit` rows, `offset`
+    pages, at most TRADE_MAX_PAGES) and counts `taker_side` rows exactly as
+    before. Walk 2 pages the full view (`takerOnly=False`) and counts only
+    BUY rows whose trade never appeared in walk 1: those are resting bids the
+    tape filled from the maker side, e.g. the DOWN leg of a mint whose taker
+    row prints UP. Maker SELL rows stay uncounted -- a lifted ask is not queue
+    drain, and under-counting is the conservative direction for a fill model.
+    Rows carry no role field, so walk 2 identifies maker rows by subtracting
+    walk 1's identities. Either walk stops early on a short page, a page with
+    nothing new, or the page bound; a failed walk 2 keeps walk 1's result.
 
     Row-level garbage is skipped, never raised: the parse sits OUTSIDE the
     fetch try, and before this a single unparseable price crashed out of the
@@ -435,38 +448,89 @@ def recent_trades(condition_id: str, seen: set, limit: int = 500,
     """
     out: dict[str, dict[float, float]] = {}
     wanted = None if taker_side is None else str(taker_side).strip().upper()
+    taker_ids: set = set()  # side-blind identities from walk 1, this call
     try:
-        r = _SESSION.get(TRADES_API,
-                         params={"market": condition_id, "limit": limit},
-                         timeout=TAPE_TIMEOUT)
-        r.raise_for_status()
-        rows = r.json() or []
+        _walk_tape(condition_id, seen, taker_ids, out, wanted, limit,
+                   taker_only=None)
     except Exception as e:
         log.debug("tape fetch failed: %s", e)
-        return out                      # no tape -> caller falls back to books
-    if not isinstance(rows, list):
-        log.debug("tape response is not a list (got %s)", type(rows).__name__)
-        return out
-    for t in rows:
-        if not isinstance(t, dict):
-            continue
-        key = (str(t.get("transactionHash") or ""), str(t.get("asset")),
-               t.get("timestamp"), t.get("price"), t.get("size"))
-        if key in seen:
-            continue
-        seen.add(key)
-        if wanted is not None:
-            side = t.get("side")
-            if side is None or str(side).strip().upper() != wanted:
-                continue
-        tok = str(t.get("asset"))
-        try:
-            p = round(float(t.get("price") or 0), 4)
-            size = float(t.get("size") or 0)
-        except (TypeError, ValueError):
-            continue
-        out.setdefault(tok, {})[p] = out.setdefault(tok, {}).get(p, 0.0) + size
+        return {}                       # no tape -> caller falls back to books
+    try:
+        _walk_tape(condition_id, seen, taker_ids, out, wanted, limit,
+                   taker_only=False)
+    except Exception as e:
+        log.debug("maker tape fetch failed: %s", e)
     return out
+
+
+# Pages per settlement read. Walk 1 preserves the old single-page shape on a
+# quiet market (short first page stops immediately); the bound only matters on
+# a busy tape, where one page used to go blind past 500 rows. Offsets stay
+# inside the endpoint's documented 10,000 cap.
+TRADE_MAX_PAGES = 4
+TRADE_MAX_OFFSET = 10000
+
+
+def _row_side(t: dict):
+    side = t.get("side")
+    return None if side is None else str(side).strip().upper()
+
+
+def _walk_tape(condition_id: str, seen: set, taker_ids: set, out: dict,
+               wanted, limit: int, taker_only) -> None:
+    """One paginated pass over the tape, accumulating into `out`.
+
+    `taker_only=None` is the taker-view baseline walk: every row takes a
+    side-aware key in `seen`, its side-blind identity joins `taker_ids`, and
+    only `wanted`-side rows count. `taker_only=False` is the maker walk: only
+    BUY rows (or every row when `wanted` is None) whose identity walk 1 never
+    carried count -- resting-bid fills the baseline view cannot see.
+    """
+    maker_walk = taker_only is not None
+    for page in range(TRADE_MAX_PAGES):
+        offset = page * int(limit)
+        if offset >= TRADE_MAX_OFFSET:
+            break
+        params = {"market": condition_id, "limit": limit, "offset": offset}
+        if maker_walk:
+            params["takerOnly"] = False
+        r = _SESSION.get(TRADES_API, params=params, timeout=TAPE_TIMEOUT)
+        r.raise_for_status()
+        rows = r.json() or []
+        if not isinstance(rows, list):
+            log.debug("tape response is not a list (got %s)",
+                      type(rows).__name__)
+            return
+        fresh = False
+        for t in rows:
+            if not isinstance(t, dict):
+                continue
+            side = _row_side(t)
+            blind = (str(t.get("transactionHash") or ""), str(t.get("asset")),
+                     t.get("timestamp"), t.get("price"), t.get("size"))
+            key = blind + (side,)
+            if key in seen:
+                continue
+            seen.add(key)
+            fresh = True
+            if not maker_walk:
+                taker_ids.add(blind)
+                if wanted is not None and side != wanted:
+                    continue
+            else:
+                if blind in taker_ids:
+                    continue
+                if wanted is not None and side != "BUY":
+                    continue
+            tok = str(t.get("asset"))
+            try:
+                p = round(float(t.get("price") or 0), 4)
+                size = float(t.get("size") or 0)
+            except (TypeError, ValueError):
+                continue
+            out.setdefault(tok, {})[p] = out.setdefault(tok, {}).get(p, 0.0) + size
+        if len(rows) < int(limit) or not fresh:
+            break
 
 
 class SellFlow(NamedTuple):

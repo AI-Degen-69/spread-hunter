@@ -120,10 +120,11 @@ def test_the_book_tape_recorder_still_reads_the_whole_tape():
 
 @pytest.fixture
 def paged_tape(monkeypatch):
-    """Serve rows by (offset, takerOnly) and record every request.
+    """Serve rows by page index and record every request.
 
     Walk 1 (settlement baseline) sends no takerOnly key; walk 2 (maker
-    fills) sends takerOnly=False. Plain-offset keys answer walk 1.
+    fills) sends takerOnly=False. Page index = offset // limit, so tests
+    drive multi-page walks with small limits and single-row pages.
     """
     calls = []
 
@@ -131,9 +132,10 @@ def paged_tape(monkeypatch):
         def _get(url, params=None, **kw):
             params = dict(params or {})
             calls.append(params)
-            off = int(params.get("offset", 0))
+            lim = int(params.get("limit", 500)) or 500
+            idx = int(params.get("offset", 0)) // lim
             to = params.get("takerOnly", "default")
-            return _FakeResponse(pages.get((off, to), pages.get(off, [])))
+            return _FakeResponse(pages.get((idx, to), pages.get(idx, [])))
 
         monkeypatch.setattr(markets._SESSION, "get", _get, raising=False)
 
@@ -172,15 +174,16 @@ def test_second_page_is_read_when_first_page_has_no_overlap(paged_tape):
     seen = set()
     markets.recent_trades("0xcond", seen)  # primes seen, key format agnostic
     paged_tape({0: [_trade("SELL", 0.26, 5.0, "0xp0")],
-                500: [_trade("SELL", 0.26, 7.0, "0xp1")]})
+                1: [_trade("SELL", 0.26, 7.0, "0xp1")]})
     paged_tape.calls.clear()
 
-    # Act
-    out = markets.recent_trades("0xcond", seen)
+    # Act (limit=1: single-row pages read as full, so the walk continues).
+    out = markets.recent_trades("0xcond", seen, limit=1)
 
-    # Assert -- both pages count, second page was requested.
+    # Assert -- both pages count, the walk ends on the empty third page.
     assert out == {"tok": {0.26: 12.0}}
-    assert [p.get("offset", 0) for p in paged_tape.calls] == [0, 500]
+    walk1 = [p.get("offset", 0) for p in paged_tape.calls if "takerOnly" not in p]
+    assert walk1 == [0, 1, 2]
 
 
 def test_pagination_stops_at_first_all_seen_page(paged_tape):
@@ -190,29 +193,31 @@ def test_pagination_stops_at_first_all_seen_page(paged_tape):
     seen = set()
     markets.recent_trades("0xcond", seen)  # primes seen with old's key
     paged_tape({0: [_trade("SELL", 0.26, 5.0, "0xnew"), dict(old)],
-                500: [dict(old)],
-                1000: [_trade("SELL", 0.26, 9.0, "0xfar")]})
+                1: [dict(old)],
+                2: [_trade("SELL", 0.26, 9.0, "0xfar")]})
     paged_tape.calls.clear()
 
-    # Act
-    out = markets.recent_trades("0xcond", seen)
+    # Act (limit=2: page 1 is short AND all seen, so the walk stops).
+    out = markets.recent_trades("0xcond", seen, limit=2)
 
     # Assert -- page 2 never requested; the all-seen page adds nothing.
-    assert [p.get("offset", 0) for p in paged_tape.calls] == [0, 500]
+    walk1 = [p.get("offset", 0) for p in paged_tape.calls if "takerOnly" not in p]
+    assert walk1 == [0, 2]
     assert out == {"tok": {0.26: 5.0}}
 
 
 def test_pagination_respects_the_page_bound(paged_tape):
     # Arrange -- ten fresh pages; the reader must stop at its bound.
     bound = getattr(markets, "TRADE_MAX_PAGES", 4)
-    pages = {i * 500: [_trade("SELL", 0.26, 1.0, f"0xpg{i}")] for i in range(10)}
+    pages = {i: [_trade("SELL", 0.26, 1.0, f"0xpg{i}")] for i in range(10)}
     paged_tape(pages)
 
-    # Act
-    out = markets.recent_trades("0xcond", set())
+    # Act (limit=1: every stub page reads as full, only the bound stops).
+    out = markets.recent_trades("0xcond", set(), limit=1)
 
     # Assert
-    assert [p.get("offset", 0) for p in paged_tape.calls] == [i * 500 for i in range(bound)]
+    walk1 = [p.get("offset", 0) for p in paged_tape.calls if "takerOnly" not in p]
+    assert walk1 == list(range(bound))
     assert out == {"tok": {0.26: float(bound)}}
 
 

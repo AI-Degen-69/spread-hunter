@@ -82,7 +82,7 @@ keeps its signature (pagination internal); exact-price 4dp matching kept.
   One-line progress report, no approval pause.
 - Sub-issue: #404 (T2), blocked by #403.
 
-### T3 — Fix `recent_trades` [Code] (S)
+### T3 [x] — Fix `recent_trades` [Code] (S)
 - Target files: `core_brain/markets.py` only (`recent_trades`).
 - Build: normalized `side` in the identity key; rejected rows keep their own
   `seen` keys; `taker_side=None` path preserved; docstring updated (new key;
