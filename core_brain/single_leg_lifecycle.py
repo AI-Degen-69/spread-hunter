@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_FLOOR
 from enum import Enum
+import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core_brain.order_registry import OrderRegistry
 
 SIZE_EPS = 1e-6
 
@@ -243,6 +249,73 @@ def transition(
         reason="held leg has not crossed the escalation threshold",
         **details,
     )
+
+
+def evaluate(
+    position: SingleLegPosition,
+    registry: OrderRegistry,
+    *,
+    max_pair_cost: float,
+    settlement_due: bool = False,
+    tick_size: float = 0.01,
+) -> LifecycleDecision:
+    """Load sticky state, decide for one pair, and persist state changes."""
+    previous_record = registry.get_lifecycle_state(position.pair_id)
+    previous_state = None
+    if previous_record is not None:
+        if previous_record.condition_id != position.condition_id:
+            raise ValueError(
+                f"lifecycle pair {position.pair_id!r} belongs to condition "
+                f"{previous_record.condition_id!r}, not {position.condition_id!r}"
+            )
+        previous_state = LegState(previous_record.state)
+
+    decision = transition(
+        position,
+        previous_state,
+        max_pair_cost=max_pair_cost,
+        settlement_due=settlement_due,
+        tick_size=tick_size,
+    )
+    if decision.action == "refused" or decision.state is previous_state:
+        return decision
+
+    from core_brain.order_registry import LifecycleStateRecord
+
+    evidence = {
+        "previous_state": previous_state.value if previous_state else None,
+        "state": decision.state.value,
+        "action": decision.action,
+        "held_token_id": decision.held_token_id,
+        "held_average_price": decision.held_average_price,
+        "held_best_bid": (
+            position.up_best_bid
+            if decision.held_token_id == position.up_token_id
+            else position.down_best_bid
+        ),
+        "naked_size": decision.naked_size,
+        "opposite_token_id": decision.opposite_token_id,
+        "opposite_limit_price": decision.opposite_limit_price,
+        "up_size": position.up_size,
+        "down_size": position.down_size,
+        "up_average_price": position.up_avg_price,
+        "down_average_price": position.down_avg_price,
+        "base_offset": position.base_offset,
+        "reason": decision.reason,
+    }
+    registry.save_lifecycle_state(
+        LifecycleStateRecord(
+            pair_id=position.pair_id,
+            condition_id=position.condition_id,
+            state=decision.state.value,
+            reason=decision.reason,
+            updated_ts_ms=int(time.time() * 1000),
+            evidence_json=json.dumps(
+                evidence, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ),
+        )
+    )
+    return decision
 
 
 def _refused(

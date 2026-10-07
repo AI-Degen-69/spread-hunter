@@ -1,8 +1,10 @@
 import pytest
 
+from core_brain.order_registry import OrderRegistry
 from core_brain.single_leg_lifecycle import (
     LegState,
     SingleLegPosition,
+    evaluate,
     max_profitable_hedge_bid,
     transition,
 )
@@ -220,3 +222,47 @@ def test_settlement_due_uses_fallback_without_overriding_hard_stop():
 
     assert decision.state is LegState.PATIENT_WAIT
     assert decision.action == "settlement_fallback"
+
+
+def test_evaluate_persists_sticky_escalation_and_does_not_duplicate_transition(
+    tmp_path,
+):
+    db_path = tmp_path / "lifecycle.db"
+    position = _position(
+        up_size=2.0, down_size=0.0, up_avg=0.48,
+        up_bid=0.40, base_offset=0.04,
+    )
+    registry = OrderRegistry(db_path=db_path)
+
+    first = evaluate(position, registry, max_pair_cost=0.99)
+    first_record = registry.get_lifecycle_state("pair-1")
+
+    assert first.state is LegState.ESCALATED_HEDGE
+    assert first_record is not None
+    assert first_record.state == LegState.ESCALATED_HEDGE.value
+
+    reopened = OrderRegistry(db_path=db_path)
+    recovered_position = _position(
+        up_size=2.0, down_size=0.0, up_avg=0.48,
+        up_bid=0.47, base_offset=0.04,
+    )
+    second = evaluate(recovered_position, reopened, max_pair_cost=0.99)
+
+    assert second.state is LegState.ESCALATED_HEDGE
+    assert reopened.get_lifecycle_state("pair-1") == first_record
+
+
+def test_evaluate_propagates_lifecycle_state_write_errors():
+    class BrokenRegistry:
+        def get_lifecycle_state(self, pair_id):
+            return None
+
+        def save_lifecycle_state(self, record):
+            raise OSError("state store unavailable")
+
+    with pytest.raises(OSError, match="state store unavailable"):
+        evaluate(
+            _position(up_size=2.0, down_size=0.0, up_avg=0.48, up_bid=0.47),
+            BrokenRegistry(),
+            max_pair_cost=0.99,
+        )

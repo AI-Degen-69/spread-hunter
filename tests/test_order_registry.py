@@ -27,6 +27,7 @@ from core_brain.order_registry import (
     OrderRegistry,
     OrderRecord,
     FillRecord,
+    LifecycleStateRecord,
     get_connection,
     init_db,
     DEFAULT_ORPHAN_MATCH_WINDOW_MS,
@@ -1184,3 +1185,112 @@ def test_poll_once_does_not_spawn_the_watcher(monkeypatch, temp_db):
     live_exec.poll(interval=0.01, once=True, db_path=temp_db,
                    client=MockClobClient())
     assert calls == []
+
+
+def test_lifecycle_state_round_trips_and_upserts_after_restart(registry, temp_db):
+    record = LifecycleStateRecord(
+        pair_id="pair-1",
+        condition_id="condition-1",
+        state="ESCALATED_HEDGE",
+        reason="drawdown_threshold",
+        updated_ts_ms=1_000,
+        evidence_json='{"held_bid":0.40}',
+    )
+    registry.save_lifecycle_state(record)
+    reopened = OrderRegistry(db_path=temp_db)
+
+    assert reopened.get_lifecycle_state("pair-1") == record
+
+    updated = LifecycleStateRecord(
+        pair_id="pair-1",
+        condition_id="condition-1",
+        state="HARD_STOP",
+        reason="hard_stop_bid",
+        updated_ts_ms=2_000,
+        evidence_json='{"held_bid":0.15}',
+    )
+    reopened.save_lifecycle_state(updated)
+    assert reopened.get_lifecycle_state("pair-1") == updated
+
+    conn = sqlite3.connect(temp_db)
+    try:
+        row_count = conn.execute(
+            "SELECT COUNT(*) FROM single_leg_lifecycle WHERE pair_id = 'pair-1'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert row_count == 1
+
+
+def test_lifecycle_schema_adds_to_old_database_without_changing_orders_or_fills(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "old-format.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE orders (
+            id TEXT PRIMARY KEY,
+            order_id TEXT,
+            condition_id TEXT NOT NULL,
+            token_id TEXT NOT NULL,
+            side TEXT NOT NULL,
+            price REAL NOT NULL,
+            original_size REAL NOT NULL,
+            status TEXT NOT NULL,
+            posted_ts INTEGER NOT NULL,
+            last_polled_ts INTEGER NOT NULL,
+            pair_id TEXT,
+            max_pair_cost_at_post REAL,
+            run_id TEXT
+        );
+        CREATE TABLE fills (
+            trade_id TEXT PRIMARY KEY,
+            order_uuid TEXT NOT NULL,
+            size REAL NOT NULL,
+            price REAL NOT NULL,
+            venue_ts INTEGER,
+            run_id TEXT
+        );
+        INSERT INTO orders VALUES (
+            'order-1', 'venue-1', 'condition-1', 'token-up', 'BUY',
+            0.48, 2.0, 'filled', 10, 20, 'pair-1', 0.99, 'run-1'
+        );
+        INSERT INTO fills VALUES (
+            'trade-1', 'order-1', 2.0, 0.48, 15, 'run-1'
+        );
+        """
+    )
+    conn.commit()
+    orders_before = conn.execute(
+        "SELECT id, order_id, condition_id, token_id, side, price, original_size, "
+        "status, posted_ts, last_polled_ts, pair_id, max_pair_cost_at_post, run_id "
+        "FROM orders"
+    ).fetchall()
+    fills_before = conn.execute(
+        "SELECT trade_id, order_uuid, size, price, venue_ts, run_id FROM fills"
+    ).fetchall()
+    conn.close()
+
+    OrderRegistry(db_path=db_path)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        orders_after = conn.execute(
+            "SELECT id, order_id, condition_id, token_id, side, price, original_size, "
+            "status, posted_ts, last_polled_ts, pair_id, max_pair_cost_at_post, run_id "
+            "FROM orders"
+        ).fetchall()
+        fills_after = conn.execute(
+            "SELECT trade_id, order_uuid, size, price, venue_ts, run_id FROM fills"
+        ).fetchall()
+        lifecycle_table = conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'single_leg_lifecycle'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert orders_after == orders_before
+    assert fills_after == fills_before
+    assert lifecycle_table == ("single_leg_lifecycle",)
