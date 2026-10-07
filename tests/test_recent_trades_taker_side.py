@@ -40,8 +40,8 @@ def tape(monkeypatch):
     return _serve
 
 
-def _trade(side, price, size, tx):
-    return {"transactionHash": tx, "asset": "tok", "timestamp": 1789000000,
+def _trade(side, price, size, tx, ts=1789000000, asset="tok"):
+    return {"transactionHash": tx, "asset": asset, "timestamp": ts,
             "price": price, "size": size, "side": side}
 
 
@@ -111,3 +111,155 @@ def test_the_book_tape_recorder_still_reads_the_whole_tape():
 
     src = inspect.getsource(book_tape_recorder.main)
     assert "taker_side=None" in src
+
+
+# --- #401: the 0.26 DOWN miss. Taker-view prints arrive BUY-labelled
+# (mint flow) and the single page overflows on busy markets, so the reader
+# must page the tape and read maker-perspective fills too.
+
+
+@pytest.fixture
+def paged_tape(monkeypatch):
+    """Serve rows by (offset, takerOnly) and record every request.
+
+    Walk 1 (settlement baseline) sends no takerOnly key; walk 2 (maker
+    fills) sends takerOnly=False. Plain-offset keys answer walk 1.
+    """
+    calls = []
+
+    def _serve(pages):
+        def _get(url, params=None, **kw):
+            params = dict(params or {})
+            calls.append(params)
+            off = int(params.get("offset", 0))
+            to = params.get("takerOnly", "default")
+            return _FakeResponse(pages.get((off, to), pages.get(off, [])))
+
+        monkeypatch.setattr(markets._SESSION, "get", _get, raising=False)
+
+    _serve.calls = calls
+    return _serve
+
+
+def test_buy_row_does_not_suppress_matching_sell(paged_tape):
+    # Arrange -- same trade identity, BUY row first (mint leg), SELL after.
+    paged_tape({0: [_trade("BUY", 0.26, 9.0, "0xmint"),
+                    _trade("SELL", 0.26, 9.0, "0xmint")]})
+
+    # Act
+    out = markets.recent_trades("0xcond", set())
+
+    # Assert -- the SELL still counts.
+    assert out == {"tok": {0.26: 9.0}}
+
+
+def test_missing_side_row_does_not_suppress_repaired_sell(paged_tape):
+    # Arrange -- unreadable side first, repaired SELL with same identity.
+    broken = _trade("SELL", 0.26, 9.0, "0xfix")
+    broken.pop("side")
+    paged_tape({0: [broken, _trade("SELL", 0.26, 9.0, "0xfix")]})
+
+    # Act
+    out = markets.recent_trades("0xcond", set())
+
+    # Assert
+    assert out == {"tok": {0.26: 9.0}}
+
+
+def test_second_page_is_read_when_first_page_has_no_overlap(paged_tape):
+    # Arrange -- seen holds an unrelated trade; both pages are fresh.
+    paged_tape({0: [_trade("SELL", 0.26, 1.0, "0xelsewhere")]})
+    seen = set()
+    markets.recent_trades("0xcond", seen)  # primes seen, key format agnostic
+    paged_tape({0: [_trade("SELL", 0.26, 5.0, "0xp0")],
+                500: [_trade("SELL", 0.26, 7.0, "0xp1")]})
+    paged_tape.calls.clear()
+
+    # Act
+    out = markets.recent_trades("0xcond", seen)
+
+    # Assert -- both pages count, second page was requested.
+    assert out == {"tok": {0.26: 12.0}}
+    assert [p.get("offset", 0) for p in paged_tape.calls] == [0, 500]
+
+
+def test_pagination_stops_at_first_all_seen_page(paged_tape):
+    # Arrange -- page 0 mixes fresh with seen, page 1 is all seen.
+    old = _trade("SELL", 0.26, 3.0, "0xold")
+    paged_tape({0: [old]})
+    seen = set()
+    markets.recent_trades("0xcond", seen)  # primes seen with old's key
+    paged_tape({0: [_trade("SELL", 0.26, 5.0, "0xnew"), dict(old)],
+                500: [dict(old)],
+                1000: [_trade("SELL", 0.26, 9.0, "0xfar")]})
+    paged_tape.calls.clear()
+
+    # Act
+    out = markets.recent_trades("0xcond", seen)
+
+    # Assert -- page 2 never requested; the all-seen page adds nothing.
+    assert [p.get("offset", 0) for p in paged_tape.calls] == [0, 500]
+    assert out == {"tok": {0.26: 5.0}}
+
+
+def test_pagination_respects_the_page_bound(paged_tape):
+    # Arrange -- ten fresh pages; the reader must stop at its bound.
+    bound = getattr(markets, "TRADE_MAX_PAGES", 4)
+    pages = {i * 500: [_trade("SELL", 0.26, 1.0, f"0xpg{i}")] for i in range(10)}
+    paged_tape(pages)
+
+    # Act
+    out = markets.recent_trades("0xcond", set())
+
+    # Assert
+    assert [p.get("offset", 0) for p in paged_tape.calls] == [i * 500 for i in range(bound)]
+    assert out == {"tok": {0.26: float(bound)}}
+
+
+def test_repeat_poll_with_same_seen_returns_zero(paged_tape):
+    # Arrange
+    paged_tape({0: [_trade("SELL", 0.26, 9.0, "0xonce")]})
+    seen = set()
+    assert markets.recent_trades("0xcond", seen) == {"tok": {0.26: 9.0}}
+
+    # Act -- same tape, same seen: nothing new.
+    assert markets.recent_trades("0xcond", seen) == {}
+
+
+def test_maker_buy_absent_from_taker_view_counts(paged_tape):
+    # Arrange -- taker walk shows a BUY (skipped); maker walk shows a
+    # resting-bid fill at our price that the taker walk never carried.
+    maker_fill = _trade("BUY", 0.26, 30.0, "0xmaker")
+    paged_tape({0: [_trade("BUY", 0.26, 1140.0, "0xtaker")],
+                (0, False): [maker_fill]})
+
+    # Act
+    out = markets.recent_trades("0xcond", set())
+
+    # Assert
+    assert out == {"tok": {0.26: 30.0}}
+    assert any(p.get("takerOnly") is False for p in paged_tape.calls)
+
+
+def test_maker_sell_absent_from_taker_view_does_not_count(paged_tape):
+    # Arrange -- a maker ask-lift is not queue drain; under-counting stays
+    # the conservative direction.
+    paged_tape({0: [], (0, False): [_trade("SELL", 0.26, 55.0, "0xask")]})
+
+    # Act
+    out = markets.recent_trades("0xcond", set())
+
+    # Assert
+    assert out == {}
+
+
+def test_taker_sell_present_in_both_views_counts_once(paged_tape):
+    # Arrange -- same SELL print in both walks must not double-count.
+    row = _trade("SELL", 0.26, 7.0, "0xboth")
+    paged_tape({0: [row], (0, False): [dict(row)]})
+
+    # Act
+    out = markets.recent_trades("0xcond", set())
+
+    # Assert
+    assert out == {"tok": {0.26: 7.0}}

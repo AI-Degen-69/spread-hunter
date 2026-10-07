@@ -67,7 +67,7 @@ keeps its signature (pagination internal); exact-price 4dp matching kept.
   writes under `data/`; no rehearsal/trading command run.
 - Sub-issue: #403 (T1), no blockers.
 
-### T2 — Reader unit tests, RED first [Debug/Code] (S)
+### T2 [x] — Reader unit tests, RED first [Debug/Code] (S)
 - Target files: `tests/test_recent_trades_taker_side.py` (extend
   `_FakeResponse` + `_SESSION.get` stub to answer by `offset`/`takerOnly`).
 - Build: BUY/SELL identity collision (only SELL counts); missing-side row
