@@ -135,7 +135,10 @@ def paged_tape(monkeypatch):
             lim = int(params.get("limit", 500)) or 500
             idx = int(params.get("offset", 0)) // lim
             to = params.get("takerOnly", "default")
-            return _FakeResponse(pages.get((idx, to), pages.get(idx, [])))
+            rows = pages.get((idx, to), pages.get(idx, []))
+            if isinstance(rows, Exception):
+                raise rows
+            return _FakeResponse(rows)
 
         monkeypatch.setattr(markets._SESSION, "get", _get, raising=False)
 
@@ -268,3 +271,59 @@ def test_taker_sell_present_in_both_views_counts_once(paged_tape):
 
     # Assert
     assert out == {"tok": {0.26: 7.0}}
+
+
+def test_failed_page_marks_nothing_and_recovers_next_poll(paged_tape):
+    # Arrange -- page 1 fails: this poll credits nothing and marks nothing,
+    # so the next healthy poll counts every row exactly once.
+    import requests
+
+    boom = requests.RequestException("tape down")
+    paged_tape({0: [_trade("SELL", 0.26, 5.0, "0xp0")], 1: boom})
+    seen = set()
+
+    # Act
+    assert markets.recent_trades("0xcond", seen, limit=1) == {}
+    assert seen == set()
+    paged_tape({0: [_trade("SELL", 0.26, 5.0, "0xp0")],
+                1: [_trade("SELL", 0.26, 7.0, "0xp1")]})
+
+    # Assert
+    assert markets.recent_trades("0xcond", seen, limit=1) == {"tok": {0.26: 12.0}}
+
+
+def test_walk2_request_error_keeps_walk1_volume(paged_tape):
+    # Arrange -- the maker walk fails like a network error: taker volume stays.
+    import requests
+
+    paged_tape({0: [_trade("SELL", 0.26, 7.0, "0xt")],
+                (0, False): requests.RequestException("maker down")})
+
+    # Act
+    out = markets.recent_trades("0xcond", set())
+
+    # Assert
+    assert out == {"tok": {0.26: 7.0}}
+
+
+def test_walk2_implementation_error_propagates(paged_tape):
+    # Arrange -- a bug is loud, never a silent partial attribution.
+    paged_tape({0: [_trade("SELL", 0.26, 7.0, "0xt")],
+                (0, False): RuntimeError("bug")})
+
+    # Act / Assert
+    with pytest.raises(RuntimeError):
+        markets.recent_trades("0xcond", set())
+
+
+def test_taker_buy_mode_never_opens_the_maker_walk(paged_tape):
+    # Arrange -- a taker-BUY request must read taker BUYs, not maker fills.
+    paged_tape({0: [_trade("BUY", 0.26, 93.0, "0xtaker")],
+                (0, False): [_trade("BUY", 0.26, 30.0, "0xmaker")]})
+
+    # Act
+    out = markets.recent_trades("0xcond", set(), taker_side="BUY")
+
+    # Assert
+    assert out == {"tok": {0.26: 93.0}}
+    assert not any(p.get("takerOnly") is False for p in paged_tape.calls)
