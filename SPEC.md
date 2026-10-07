@@ -1,79 +1,84 @@
-# SPEC — #402: Full lifecycle quoting: read market state right, quote-fill-merge loop until resolved or discarded
+# SPEC — #408: Re-check UMA resolution state for markets already quoting
 
-Scope note: this file covers issue #402 only
-(branch `i402/improve-full-lifecycle-quoting-read-market-state`).
-It supersedes the #401 spec (merged work). Deleted or superseded when the
+Scope note: this file covers issue #408 only
+(branch `i408/re-check-uma-resolution-state-for-markets-alread`).
+It supersedes the #402 spec (done work). Deleted or superseded when the
 next Standard/Large issue writes its own.
 
 ## Problem (operator words)
 
-A live BO3 series gets treated as decided, dead books get polled forever, and
-a paper tape misses fills that really happen. (Tape miss itself is #401,
-separate issue.)
+A market flips to `umaResolutionStatus=proposed` in the middle of a run and
+keeps quoting — the per-cycle re-fetch reads the CLOB endpoint, which carries
+no UMA field at all. The resting quotes sit on a market that is resolving.
 
-Motivating episode, 2026-10-07, lol-fly-sr-2026-10-07 (BO3, FlyQuest vs
-Shopify Rebellion): the rehearsal pulled the pair as not_quoted once DOWN mid
-left the [0.20, 0.80] band, calling the market decided — while the series
-still had two games to play. Poll spams 404 (no orderbook) every ~2.6s, most
-likely against a resolved tennis market still tracked as partial.
+Motivating episode, 2026-10-07, shadow run `shadow-01-prudent`
+(`data/01_shadow_prudent_07-10_16-48.db`), market `cs2-tu-xdm-2026-10-07`:
+quoted both legs at 16:49, venue flipped to proposed between 16:49 and 16:59,
+rerank correctly dropped it at 16:59 — yet at 17:04 the session was still
+`decide` + `submit` on it, quotes resting, `cancelled=0`.
 
 ## Goals
 
-1. A BO3 series with games remaining and a live book is quoted, even when one
-   side's mid leaves the [0.20, 0.80] band.
-2. A resolved market's books are never requested again — by the Trader, the
-   poll loop, or any secondary reader.
-3. The loop ends ONLY on truly resolved or a named discard reason from one
-   enumerated list; every stop names its reason in the log and the store.
-4. A rehearsal exercises the full cycle on one eligible market: quote, paper
-   fill, merge, re-quote.
+1. A market with resting quotes whose Gamma UMA status becomes
+   proposed/disputed/resolved has those quotes cancelled within one poll
+   cycle, with the discard reason named in the log and `market_events`.
+2. The re-check uses the public Gamma read (CLOB carries no UMA field) and
+   adds no signer/API-key dependency to the loop.
+3. A market whose status stays clean is untouched by the new check (no extra
+   cancellation, no behavior change on the happy path).
 
 ## Acceptance criteria (from the issue)
 
-- [ ] A BO3 series with games remaining and a live book is quoted; a resolved
-      market's books are never requested (no 404 spam in a full rehearsal log).
-- [ ] A rehearsal exercises the full cycle on an eligible market: quote, paper
-      fill, merge, re-quote.
-- [ ] The loop stops only on resolved or a discard reason from the single
-      enumerated list; every stop names its reason in the log and the store.
-- [ ] Targeted suites pass: tests/test_trader_loop.py tests/test_shadow_run.py.
+- [ ] A market with resting quotes whose Gamma UMA status becomes
+      proposed/disputed/resolved has those quotes cancelled within one poll
+      cycle, with the discard reason named in the log and `market_events`.
+- [ ] The re-check uses the public Gamma read (CLOB carries no UMA field)
+      and adds no signer/API-key dependency to the loop.
+- [ ] A market whose status stays clean is untouched by the new check (no
+      extra cancellation, no behavior change on the happy path).
+- [ ] Targeted suites pass: tests/test_uma_resolution_gate.py
+      tests/test_trader_loop.py tests/test_shadow_run.py.
 
 ## Established facts (verified from code, not assumed)
 
-- Band refusal: `core_brain/quotes.py:328-329` refuses mid outside
-  [0.20, 0.80] as "decided market" with no series awareness.
-- Refusal classification: `TERMINAL_REFUSAL_MARKERS` + `_classify_refusal` at
-  `core_brain/trader_loop.py:102-117`; hold grace `REFUSED_HOLD_GRACE_CYCLES = 3`
-  (`:96`); `MarketEventRecord` already carries `reason_code`
-  (`order_registry.py:706-716`) via `log_market_event` (`:1328`).
-- Resolution reading: `parse_end_state` (`market_resolution.py:191`),
-  `fetch_market_end_state` (`:305`), `sweep_market_resolutions` (`:687`,
-  candidate set = markets that left the universe only; never resolves on a
-  failed read, `:719-721`). UMA parsing exists (`:133-134`).
-- No `core_brain/market_lifecycle.py` exists yet — the shared module is new.
-- All 11 regression homes exist under `tests/` (loop, shadow, resolution,
-  aged-out rescue, markout maturity, live-event discovery, in-play gate,
-  live e2e lifecycle, dynamic risk caps, completable pair gate, uma gate).
-- Follow-up linkage: #408 (mid-run UMA flip) explicitly joins this issue's
-  discard list — the enum must be extensible, #408 is NOT built here.
+- UMA parsing exists: `parse_uma_resolution_status` /
+  `extract_uma_resolution_status` (`market_resolution.py:98-141`).
+- The existing open-state reader takes the FIRST row without checking its
+  condition id (`market_resolution.py:414`: `parse_end_state(rows[0], ...)`).
+  The new reader must not repeat this: a mismatched row is absent, not clean.
+- Visit order today: `_visit_one` calls `seam.fetch_market(cid)` FIRST and
+  returns ERROR on fetch failure before any cancellation
+  (`trader_loop.py:1055-1069`). The UMA check goes before that fetch.
+- Cancel-reason constants live beside each other
+  (`trader_loop.py:74-77`: `CANCEL_NOT_QUOTED`, `CANCEL_PRICE_MOVED`,
+  `CANCEL_REGATE_PAIR_COST`, `CANCEL_MARKET_DROPPED`).
+- Optional seam ports are the established pattern: `flow_fn` is unset-safe
+  (`trader_loop.py:504-509`); the shadow builder already wires `flow_fn` and
+  `record_cancel` (`shadow_run.py:760-779`).
+- `cycle_stream.emit` takes a free-form action string (`cycle_stream.py:364`);
+  no event-kind filter to extend. Only `_make_logging_emit`
+  (`shadow_run.py:410`) needs the readable discard line.
+- Cache model exists: `AgedOutMarketStateCache`, 30s TTL, injectable clock,
+  unreachable never cached (`single_buy_saver.py:1366-1423`).
+- `log_market_event` / `reason_code` exist on the registry (per #402 spec;
+  build re-confirms exact fields against `order_manager.py` BLOCKED usage).
 
 ## Edge cases
 
-- Elapsed `endDate` on a row explicitly reporting `closed is False` +
-  `acceptingOrders is True` stays unresolved (live series whose end date is
-  kickoff); elapsed date with unknown `closed` still resolves.
-- HTTP 404 on a book read is an availability failure, never a resolution —
-  back off the token, confirm via the market-state endpoint, record only on
-  confirmed end state.
-- Unknown/unparseable/stale series evidence fails closed: the band applies as
-  today.
-- Late authenticated fills still record (`live_fill_engine.py` untouched).
+- Gamma unreadable/malformed/mismatched: fail OPEN — warn, continue the
+  visit unchanged, retry next visit, cache nothing. A Gamma outage must never
+  mass-cancel the book.
+- Flagged result: terminal — pin it (no expiry) so later visits keep
+  cancelling without a new read; cancel failures are reported and retried.
+- `pending` rows are in flight: leave them; the next visit catches them as
+  `open`.
+- Empty-feed refresh keeps the previous universe (the 17:04 episode): the
+  UMA check runs per visited market regardless of feed state.
 
 ## Out of scope
 
-- Retuning 20-80 band values, settled-book 0.02/0.98 guard, execution band
-  0.10-0.90, countdown, pair-cost, hard_block, completable-pair gate,
-  dynamic caps, enforce flags (#377 gate untouched).
-- #401 tape-miss fix (separate issue), `data/orders.db` surgery, any live
-  position, automatic live merge (shadow rehearsal proves the cycle).
-- #408 mid-run UMA re-validation (follow-up; consumes this issue's enum).
+- Selection-time gate (#377), `_parse_market_row`, `fetch_pinned_market`,
+  dropped-market cleanup, resolution sweep, #401 tape code.
+- Any price/size/spread knob, enforce flags, money levers (frozen in
+  CONSTRAINTS.md).
+- Feed-absence cancellation beyond this case, any live position, `data/orders.db`.
