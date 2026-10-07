@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>כששוק נוגע בהזמנה — בודקים אם זה עוד שווה</title>
+  <style>
+    :root {
+      --bg: #f5f7f4;
+      --panel: #ffffff;
+      --ink: #12211d;
+      --muted: #4f5f59;
+      --line: #d6ddd9;
+      --accent: #0d8f6d;
+      --accent-soft: #dff6ee;
+      --warn: #d77d2a;
+      --warn-soft: #fff0db;
+      --bad: #bb4a4a;
+      --bad-soft: #fde8e8;
+      --shadow: rgba(18, 33, 29, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      line-height: 1.7;
+    }
+
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 32px 18px 72px;
+    }
+
+    .kicker {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      border: 1px solid rgba(13, 143, 109, 0.2);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 16px 0 10px;
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      line-height: 1.15;
+    }
+
+    .lede {
+      margin: 0 0 26px;
+      color: var(--muted);
+      font-size: 1.08rem;
+      max-width: 58em;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 10px 24px var(--shadow);
+      padding: 22px 20px;
+      margin: 24px 0;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 1.2rem;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .rail {
+      background: #f9faf8;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px 16px 14px;
+    }
+
+    .bar {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .step {
+      border-radius: 12px;
+      padding: 12px 10px 10px;
+      text-align: center;
+      border: 1px solid var(--line);
+      background: #fff;
+      min-height: 110px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .step strong {
+      display: block;
+      font-size: 1.15rem;
+      margin-bottom: 4px;
+    }
+
+    .step.good { background: var(--accent-soft); border-color: rgba(13, 143, 109, 0.3); }
+    .step.warn { background: var(--warn-soft); border-color: rgba(215, 125, 42, 0.25); }
+    .step.bad { background: var(--bad-soft); border-color: rgba(187, 74, 74, 0.2); }
+
+    .metricbox {
+      display: grid;
+      gap: 12px;
+    }
+
+    .metric {
+      padding: 18px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: #f8faf8;
+    }
+
+    .metric .num {
+      display: block;
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1.1;
+      margin-bottom: 4px;
+    }
+
+    .metric small {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-top: 20px;
+    }
+
+    .box {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px 16px;
+      background: #fafcfb;
+    }
+
+    .box.before {
+      border-color: rgba(187, 74, 74, 0.2);
+      background: linear-gradient(180deg, rgba(253, 232, 232, 0.9), rgba(255,255,255,0.9));
+    }
+
+    .box.after {
+      border-color: rgba(13, 143, 109, 0.25);
+      background: linear-gradient(180deg, rgba(223, 246, 238, 0.9), rgba(255,255,255,0.9));
+    }
+
+    ul {
+      margin: 8px 0 0;
+      padding-inline-start: 20px;
+      color: var(--muted);
+    }
+
+    .cta {
+      margin-top: 22px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .footer {
+      margin-top: 22px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 760px) {
+      .hero, .compare {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="kicker">עדכון שהופץ</div>
+    <h1>כשהשוק נוגע בהזמנה — עכשיו בודקים אם זה עדיין שווה</h1>
+    <p class="lede">
+      לפני: הזמנה שעמדה בתור הייתה עלולה להימחק מוקדם מדי או להישאר במחיר שגורם להפסד.
+      עכשיו: המערכת בודקת אם המחיר כבר הגיע קרוב מדי לראש התור, ואם הזוג הנוצר יעלה על 99 סנט — היא מחסלת את ההזמנה לפני שהכסף נעשה רע.
+    </p>
+
+    <div class="panel">
+      <h2>המצב עכשיו</h2>
+      <div class="hero">
+        <div class="rail">
+          <div class="bar">
+            <div class="step good">
+              <strong>שומר</strong>
+              <span>מחיר נוגע כלפי מטה, אבל עדיין בתוך החלון המותר</span>
+            </div>
+            <div class="step warn">
+              <strong>שוקל</strong>
+              <span>הזזת המחיר עוברת את סף השמירה</span>
+            </div>
+            <div class="step bad">
+              <strong>חוסם</strong>
+              <span>הזוג עולה מעל 0.99 וממילא לא יכנס</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="metricbox">
+          <div class="metric">
+            <span class="num">0.99</span>
+            <small>תקרת העלות הקבועה של כל זוג</small>
+          </div>
+          <div class="metric">
+            <span class="num">מושלם</span>
+            <small>לשמור על תור, בלי לאפשר הפסד גלוי</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>לפני ואחרי</h2>
+      <div class="compare">
+        <div class="box before">
+          <strong>לפני</strong>
+          <ul>
+            <li>הזמנה יכולה להימחק כשהשוק רק נוגע בה</li>
+            <li>הדחיפה כלפי מעלה הייתה נראית “תקינה” גם כשהזוג כבר עלה מעל 99 סנט</li>
+            <li>המערכת הייתה מסוגלת להחליף את ההזמנה בלי לשאול אם הרווח עדיין קיים</li>
+          </ul>
+        </div>
+
+        <div class="box after">
+          <strong>עכשיו</strong>
+          <ul>
+            <li>הזמנה נשמרת כשהמחיר יורד רק בתוך החלון המוגדר</li>
+            <li>אם להחליף את ההזמנה היה מביא לזוג מעל 99 סנט, היא נבלמת מיד</li>
+            <li>החוק מחייב: שומר על הזוג בלי לייצר הפסד מבטיח</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>מה זה נותן ללקוח</h2>
+      <p class="lede" style="margin-bottom: 0;">
+        התוצאה היא פשוטה: פחות התזזות מיותרות, פחות רגל אחת שנגמרת בלי השנייה, ופחות הזדמנויות להפסיד בגלל זוג שעלה על המחיר הנכון.
+        המערכת מחזיקה על חבל כמה שצריך, ועדיין לא מאפשרת להעמיד שדה שמבקש להרוויח על הפסד.
+      </p>
+      <div class="cta">במילים פשוטות: היא משמרת את התור כשזה עדיין נבון, ומפסיקה את ההזמנה כשזה כבר לא שווה.</div>
+    </div>
+
+    <div class="footer">
+      פרזנטציה זו מתמקדת בדבר שהשפיע על האדם שמפעיל את המערכת: היכולת להימנע מהזזה מיותרת של הזמנה ולהימנע מהדבר הכי יקר של כל אסטרטגיית spread — זוג שכלל לא צריך להיות מורכב.
+    </div>
+  </div>
+</body>
+</html>
