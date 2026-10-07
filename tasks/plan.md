@@ -45,7 +45,7 @@ keeps its signature (pagination internal); exact-price 4dp matching kept.
 
 ## Tasks
 
-### T1 — Diagnose with read-only evidence [Debug] (S)
+### T1 [x] — Diagnose with read-only evidence [Debug] (S)
 - Target files: `data/06_shadow_prudent_07-10_13-20.db` (read-only),
   `scripts/` (new diagnostic, only if kept — see below),
   `docs/runs/` (new note).
