@@ -32,7 +32,9 @@ sys.path.insert(0, str(ROOT))
 
 from scoring.allocate import (marginal, spread_capture_daily)   # noqa: E402
 from core_brain import rehearsal   # noqa: E402
-from core_brain.markets import IN_PLAY_WINDOW_SEC   # noqa: E402
+from core_brain.markets import IN_PLAY_WINDOW_SEC  # noqa: E402
+from core_brain.markets import (  # noqa: E402
+    live_series_with_games_remaining, parse_series_state)
 from core_brain.market_resolution import (  # noqa: E402
     extract_uma_resolution_status,
     parse_uma_resolution_status,
@@ -1238,6 +1240,13 @@ def _live_event_row(ev: dict, m: dict, sport: object) -> dict:
         "_sport": _str(sport),
         "_event_period": ev.get("period"),
         "_event_score": ev.get("score"),
+        # Series evidence for the live-series mid-gate exemption (#402): the
+        # venue type selects series vs single-game, the booleans are the
+        # venue's own live/ended flags, and the stamp bounds the evidence age.
+        "sports_market_type": _str(m.get("sportsMarketType")),
+        "_event_live": bool(ev.get("live")),
+        "_event_ended": bool(ev.get("ended")),
+        "_series_ts": time.time(),
     }
 
 
@@ -1642,11 +1651,25 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         # Outside [0.20, 0.80] the book is one-sided in practice and the
         # position is mostly a bet on a near-settled outcome.
         # Tightened 2026-08-28 from [0.05, 0.95] per operator directive:
-        # 5c left no room to work â€” a finished market at 100%/0.1% was still
+        # 5c left no room to work — a finished market at 100%/0.1% was still
         # quotable until the settled-book arm caught it. 20c keeps a real
         # spread to capture and prevents a decided leg from ever entering the
         # graduated universe.
-        if not 0.20 < mid < 0.80:
+        #
+        # LIVE-SERIES EXEMPTION (#402): a best-of series with games remaining
+        # is quotable outside the band -- without this, the feed drops the
+        # series and the Trader cancels it as market_dropped. Same predicate
+        # as the quoter's, read off the row's series evidence.
+        if not 0.20 < mid < 0.80 and not live_series_with_games_remaining(
+                parse_series_state(
+                    sports_market_type=m.get("sports_market_type"),
+                    score=m.get("_event_score"),
+                    period=m.get("_event_period"),
+                    question=m.get("question"),
+                    live=bool(m.get("_event_live")),
+                    ended=bool(m.get("_event_ended")),
+                    evidence_ts=m.get("_series_ts")),
+                time.time()):
             return _reject_row(
                 source,
                 f"{side}: decided mid {mid:.2f} outside [0.20, 0.80]",
@@ -1789,6 +1812,12 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "event_title": m.get("event_title") or "",
         "event_id": m.get("event_id") or "",
         "event_slug": m.get("event_slug") or "",
+        # Series evidence, threaded to the Trader via the feed (#402). Empty
+        # on scanned rows: the exemption predicate fails closed without them.
+        "sports_market_type": m.get("sports_market_type") or "",
+        "event_live": bool(m.get("_event_live")),
+        "event_ended": bool(m.get("_event_ended")),
+        "series_ts": m.get("_series_ts"),
         # THE REWARD POT, and zero is the honest figure for a market that pays
         # none. `fleet.reallocate` keys the spread path off `daily <= 0` and
         # recomputes the pot from `volume_24h` and `spread`, so the capture

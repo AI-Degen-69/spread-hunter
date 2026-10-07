@@ -1,6 +1,11 @@
-# Todo — #401 (branch i401/fix-shadow-tape-recorded-zero-sellers-at-a-level)
+# Todo — #402 (branch i402/improve-full-lifecycle-quoting-read-market-state)
 
-- [x] T1 — Diagnose read-only; run note names reader + drop point
-- [x] T2 — Reader unit tests written RED-first (fail on current code)
-- [x] T3 — Fix `recent_trades` (side in key + bounded pagination); T2 green
-- [x] T4 — E2E replay in test_shadow_run.py; 6 focused suites green
+- [x] T1 — Shared lifecycle facts + truthful resolution reads (RED-first)
+- [x] T2 — Series-state reading + band exemption (RED-first)
+- [ ] C1 — Review: live series quotable, refusals named
+- [x] T3 — Trader respects true state, names every stop (RED-first)
+- [x] C1 — Review: live series quotable, refusals named
+- [x] T4 — Poll path + secondary readers quiet on dead books (RED-first)
+- [x] C2 — Review: dead books silent everywhere
+- [ ] C2 — Review: dead books silent everywhere
+- [x] T5 — Full-cycle shadow rehearsal; 9 focused suites green

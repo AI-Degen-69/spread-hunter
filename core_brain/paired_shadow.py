@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from core_brain.order_registry import get_connection
+from core_brain.market_lifecycle import resolved_condition_ids
 
 
 class PairedShadowError(RuntimeError):
@@ -805,6 +806,9 @@ def record_paired_equity_mark(
     total_unrealized = 0.0
     total_committed = 0.0
     market_marks: list[tuple[str, str, float, float, int, str]] = []
+    # Resolved conditions are never book-read (#402): their value is booked
+    # at settlement, not liquidation, so no book here could price them.
+    resolved = resolved_condition_ids(registry)
     for row in admissions:
         cid = str(row["condition_id"])
         cluster_id = str(row["event_cluster_id"] or "")
@@ -838,6 +842,14 @@ def record_paired_equity_mark(
                 (down_token, inventory["down_shares"]))
         proceeds = 0.0
         position_missing = ""
+        if cid.lower() in resolved:
+            # No book read: the market is over and its liquidation value is
+            # not on a book. The settlement path owns the value; this mark
+            # says so plainly instead of fabricating a total loss.
+            market_marks.append((cid, cluster_id, 0.0, 0.0, 0,
+                                 "resolved; valued at settlement, not on book"))
+            missing.append(cid)
+            continue
         for token, shares in held:
             if shares <= 1e-8:
                 continue

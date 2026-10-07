@@ -1,65 +1,79 @@
-# SPEC — #401: Shadow tape recorded zero sellers at a level that filled live
+# SPEC — #402: Full lifecycle quoting: read market state right, quote-fill-merge loop until resolved or discarded
 
-Scope note: this file covers issue #401 only
-(branch `i401/fix-shadow-tape-recorded-zero-sellers-at-a-level`).
-It is deleted or superseded when the next Standard/Large issue writes its own.
+Scope note: this file covers issue #402 only
+(branch `i402/improve-full-lifecycle-quoting-read-market-state`).
+It supersedes the #401 spec (merged work). Deleted or superseded when the
+next Standard/Large issue writes its own.
 
 ## Problem (operator words)
 
-A live DOWN buy filled at 0.26 on lol-fly-sr-2026-10-07 (10 shares on-chain),
-while the shadow rehearsal watching the same market recorded `traded=0.0` at
-that level on every 10s check and paper-filled nothing. The tape reader missed
-real seller flow.
+A live BO3 series gets treated as decided, dead books get polled forever, and
+a paper tape misses fills that really happen. (Tape miss itself is #401,
+separate issue.)
 
-Condition: `0x46e98430142d1aabb6806a196aac8e412f7225acf68aafed7f3d742662b9800c`.
-Paper order DOWN 9 @ 0.26 (`pair-45eed98903c9`, run `shadow-06-prudent`) sat
-behind a 744 queue, then was pulled as not_quoted when the market decided.
+Motivating episode, 2026-10-07, lol-fly-sr-2026-10-07 (BO3, FlyQuest vs
+Shopify Rebellion): the rehearsal pulled the pair as not_quoted once DOWN mid
+left the [0.20, 0.80] band, calling the market decided — while the series
+still had two games to play. Poll spams 404 (no orderbook) every ~2.6s, most
+likely against a resolved tennis market still tracked as partial.
 
 ## Goals
 
-1. Name the reader that dropped the prints and the exact filter that dropped them.
-2. Fix that reader so prints at a resting level drain the queue / paper-fill.
-3. Regression test replays prints-at-level and proves queue drain or paper fill,
-   with no double-count on repeat polls.
+1. A BO3 series with games remaining and a live book is quoted, even when one
+   side's mid leaves the [0.20, 0.80] band.
+2. A resolved market's books are never requested again — by the Trader, the
+   poll loop, or any secondary reader.
+3. The loop ends ONLY on truly resolved or a named discard reason from one
+   enumerated list; every stop names its reason in the log and the store.
+4. A rehearsal exercises the full cycle on one eligible market: quote, paper
+   fill, merge, re-quote.
 
 ## Acceptance criteria (from the issue)
 
-- [ ] The miss is explained: which reader dropped the prints and why.
-- [ ] A regression test replays prints-at-level and asserts the paper fill
-      (or the queue drain) registers them.
-- [ ] `python -m pytest -q tests/test_shadow_run.py` passes.
+- [ ] A BO3 series with games remaining and a live book is quoted; a resolved
+      market's books are never requested (no 404 spam in a full rehearsal log).
+- [ ] A rehearsal exercises the full cycle on an eligible market: quote, paper
+      fill, merge, re-quote.
+- [ ] The loop stops only on resolved or a discard reason from the single
+      enumerated list; every stop names its reason in the log and the store.
+- [ ] Targeted suites pass: tests/test_trader_loop.py tests/test_shadow_run.py.
 
 ## Established facts (verified from code, not assumed)
 
-- Settlement (fills + `queue_marks.traded`) comes from
-  `core_brain/markets.py:recent_trades` via `shadow_run._default_traded_fn`,
-  through `shadow_exec.settle_market` → `shadow_fills.credit_fills`.
-- `recent_sell_flow` serves the placement admission gate only; not involved.
-- Two proven defects in `recent_trades`, whatever caused this incident:
-  (a) single 500-row page, no `offset` pagination
-  (`core_brain/markets.py:439-441`);
-  (b) dedup key `(transactionHash, asset, timestamp, price, size)` omits side
-  and is added to `seen` before the side check, so a BUY/missing-side row can
-  suppress the matching SELL (`core_brain/markets.py:453-461`).
-- The incident store `data/06_shadow_prudent_07-10_13-20.db` IS in this
-  checkout (the CodeRabbit plan assumed it was absent).
+- Band refusal: `core_brain/quotes.py:328-329` refuses mid outside
+  [0.20, 0.80] as "decided market" with no series awareness.
+- Refusal classification: `TERMINAL_REFUSAL_MARKERS` + `_classify_refusal` at
+  `core_brain/trader_loop.py:102-117`; hold grace `REFUSED_HOLD_GRACE_CYCLES = 3`
+  (`:96`); `MarketEventRecord` already carries `reason_code`
+  (`order_registry.py:706-716`) via `log_market_event` (`:1328`).
+- Resolution reading: `parse_end_state` (`market_resolution.py:191`),
+  `fetch_market_end_state` (`:305`), `sweep_market_resolutions` (`:687`,
+  candidate set = markets that left the universe only; never resolves on a
+  failed read, `:719-721`). UMA parsing exists (`:133-134`).
+- No `core_brain/market_lifecycle.py` exists yet — the shared module is new.
+- All 11 regression homes exist under `tests/` (loop, shadow, resolution,
+  aged-out rescue, markout maturity, live-event discovery, in-play gate,
+  live e2e lifecycle, dynamic risk caps, completable pair gate, uma gate).
+- Follow-up linkage: #408 (mid-run UMA flip) explicitly joins this issue's
+  discard list — the enum must be extensible, #408 is NOT built here.
 
 ## Edge cases
 
-- Sweep: one taker SELL crosses several bid levels; the public row may carry a
-  single price, so no volume lands on exactly 0.26.
-- Complementary mint: taker UP BUY ~0.74 matched our DOWN bid; the tape row is
-  UP/BUY and the reader rejects it on side and token.
-- Busy market: >500 rows between 10s polls overflow the single page.
-- Missing/unreadable side field: currently skipped (conservative — keep).
-- Maker-row semantics of `takerOnly=false`: UNCONFIRMED — attribution change
-  ships only if Phase-1 evidence confirms it.
+- Elapsed `endDate` on a row explicitly reporting `closed is False` +
+  `acceptingOrders is True` stays unresolved (live series whose end date is
+  kickoff); elapsed date with unknown `closed` still resolves.
+- HTTP 404 on a book read is an availability failure, never a resolution —
+  back off the token, confirm via the market-state endpoint, record only on
+  confirmed end state.
+- Unknown/unparseable/stale series evidence fails closed: the band applies as
+  today.
+- Late authenticated fills still record (`live_fill_engine.py` untouched).
 
 ## Out of scope
 
-- Live quoting, sizing, registry divergence (operator reconciles via poll).
-- `data/orders.db` writes; live order placement.
-- Known follow-ups, recorded not built: `seen` persistence across restarts,
-  posting-time cutoff, failure-vs-empty-tape distinction.
-- `recent_sell_flow`, `enforce_queue_clear_gate`, clear-time bar, pairing and
-  merge behaviour, `queue_why` strings.
+- Retuning 20-80 band values, settled-book 0.02/0.98 guard, execution band
+  0.10-0.90, countdown, pair-cost, hard_block, completable-pair gate,
+  dynamic caps, enforce flags (#377 gate untouched).
+- #401 tape-miss fix (separate issue), `data/orders.db` surgery, any live
+  position, automatic live merge (shadow rehearsal proves the cycle).
+- #408 mid-run UMA re-validation (follow-up; consumes this issue's enum).

@@ -254,3 +254,28 @@ def test_one_bad_pair_does_not_stop_others(registry):
     actions = {r["pair_id"]: r["action"] for r in results}
     assert actions.get("pair-good") == "completed"
     assert actions.get("pair-bad") == "error"
+
+
+def test_resolved_pairs_are_skipped_before_any_venue_read(registry):
+    """#402 T4: a resolved condition is never completed, exited, or read."""
+    from core_brain.order_registry import ResolutionRecord
+    _one_sided_pair(registry, fill_price=0.60)
+    registry.log_resolution(ResolutionRecord(
+        condition_id=COND, winning_token="Up", resolved_ts=NOW_S,
+        run_id="t4-test", winning_token_id=TOK_UP))
+    client = FakeClient()
+    out = auto_manage_pairs(client, registry, _cfg(), now=NOW_S,
+                            resolved_cids={COND})
+    assert out == []
+    assert client.calls == []
+    # The naked leg is preserved untouched for the settlement path.
+    resting = [o for o in registry.get_active_orders() if o.status == "open"]
+    assert len(resting) == 1
+
+
+def test_unresolved_pairs_still_read_the_venue(registry):
+    """Control: without a resolution the same pair costs venue reads."""
+    _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient()
+    auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
+    assert any(c.startswith("book:") for c in client.calls)

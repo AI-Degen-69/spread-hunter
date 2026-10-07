@@ -33,6 +33,9 @@ if TYPE_CHECKING:  # annotation only -- markets is imported lazily at the call s
 
 from core_brain.quotes import Inventory, QuoteIntent, evaluate_market_quote
 from core_brain.cycle_stream import emit as _emit_cycle_event
+from core_brain.market_lifecycle import (
+    LifecycleStop, classify_refusal, resolved_condition_ids,
+)
 from core_brain.order_registry import InstanceInUse, OrderRegistry
 
 log = logging.getLogger("main_spread_hunter_loop")
@@ -71,7 +74,7 @@ class LiveFleetResult:
 CANCEL_NOT_QUOTED = "not_quoted"          # we no longer quote this token at all
 CANCEL_PRICE_MOVED = "price_moved"        # the desired price left the tolerance
 CANCEL_REGATE_PAIR_COST = "regate_pair_cost"  # holding would break max_pair_cost
-CANCEL_MARKET_DROPPED = "market_dropped"  # the market left the active universe
+CANCEL_MARKET_DROPPED = LifecycleStop.MARKET_DROPPED.code  # market left universe
 
 # Attribute attached to exceptions when submit raises after placing some legs.
 PARTIAL_SUBMIT_PLACED_ATTR = "placed"
@@ -96,25 +99,116 @@ class VisitOutcome(Enum):
 REFUSED_HOLD_GRACE_CYCLES = 3
 
 
-# Substrings of `decide`'s `why` that refuse for good rather than flicker.
-# Everything else (wide book, completable cap, reward window, mid band, ...)
-# is transient: the book moved, not the market. Matched case-insensitively.
-TERMINAL_REFUSAL_MARKERS = (
-    "decided market",          # mid outside [0.20, 0.80]: the book is settled
-    "settled book",            # risk.book_health: a quote at an end, no spread
-    "t_remaining",             # countdown elapsed: the window is over
-    "market exited",           # toxicity exit: we left on purpose
-    "unfunded by the allocator",  # zero allocation: nothing may rest
-    "fills for this market",   # per-market fill cap reached: no more quotes
-)
-
-
 def _classify_refusal(why: str) -> VisitOutcome:
-    """Terminal or transient, from `decide`'s refusal reason (pure)."""
-    lowered = (why or "").lower()
-    if any(m in lowered for m in TERMINAL_REFUSAL_MARKERS):
+    """Terminal or transient, from `decide`'s refusal reason (pure).
+
+    Delegates to the single enumerated list in `market_lifecycle`: a named
+    stop refuses for good, everything else (wide book, completable cap,
+    reward window, mid band, ...) is transient -- the book moved, not the
+    market. Matched case-insensitively.
+    """
+    if classify_refusal(why) is not None:
         return VisitOutcome.REFUSED_TERMINAL
     return VisitOutcome.REFUSED_TRANSIENT
+
+
+def _visit_stop(why: str, grace_expired: bool) -> Optional[LifecycleStop]:
+    """Name the lifecycle stop for a refused visit (pure).
+
+    A transient refusal that outlasted the hold grace expires into
+    HOLD_EXPIRED -- today that path cancels without a named reason (#402).
+    """
+    if grace_expired:
+        return LifecycleStop.HOLD_EXPIRED
+    return classify_refusal(why or "")
+
+
+def _attach_series_state(market: Any, spec: Any) -> Any:
+    """Attach the feed row's series evidence to a fetched market (#402).
+
+    The CLOB read carries no series fields; the ranker's row does. Attached
+    ONLY when the evidence proves a live series with games remaining -- every
+    other market keeps no state, so custom `decide` ports (which predate the
+    `series_state` keyword) are called exactly as before. A frozen dataclass
+    market (LiveMarket) is rebuilt; any other shape is stamped in place.
+    Unparseable evidence attaches nothing and fails closed downstream --
+    never raises.
+    """
+    from core_brain.markets import live_series_with_games_remaining, parse_series_state
+    get = (lambda k: spec.get(k)) if isinstance(spec, dict) else (
+        lambda k: getattr(spec, k, None))
+    try:
+        state = parse_series_state(
+            sports_market_type=get("sports_market_type"),
+            score=get("event_score"),
+            period=get("event_period"),
+            question=get("question") or get("title"),
+            live=bool(get("event_live")),
+            ended=bool(get("event_ended")),
+            evidence_ts=get("series_ts"),
+        )
+    except Exception:
+        return market
+    if not live_series_with_games_remaining(state):
+        return market
+    try:
+        return replace(market, series_state=state)
+    except Exception:
+        pass
+    try:
+        market.series_state = state
+    except Exception:
+        pass
+    return market
+
+
+def _note_lifecycle_stop(
+    seam: VenueSeam,
+    cid: str,
+    title: str,
+    stop: Optional[LifecycleStop],
+    text: str,
+    memory: Optional[dict],
+    cycle: int = 0,
+    emit_fn: Optional[Callable] = None,
+) -> bool:
+    """Log + store one lifecycle stop, on change only (#402).
+
+    `memory` maps condition id -> last stop code for this loop; a repeated
+    code writes nothing, and a quote in between (which clears the entry)
+    re-arms the row. Returns True when a row was emitted.
+    """
+    if stop is None:
+        return False
+    if memory is None:
+        memory = {}
+    if memory.get(cid) == stop.code:
+        return False
+    memory[cid] = stop.code
+    log.info("[LIFECYCLE_STOP] %s | %s | %s", title or cid[:16],
+             stop.code, text or "")
+    if emit_fn is None:
+        emit_fn = lambda *a, **k: None
+    emit_fn(service="decide", cycle=cycle, phase="quoting",
+            action="lifecycle_stop", market_slug=title,
+            reason=f"{stop.code}: {text or ''}",
+            extra={"condition_id": cid})
+    try:
+        from core_brain.order_registry import MarketEventRecord
+        log_fn = getattr(seam.registry, "log_market_event", None)
+        if callable(log_fn):
+            log_fn(MarketEventRecord(
+                ts=time.time(),
+                condition_id=cid,
+                market_slug=title or None,
+                kind="lifecycle_stop",
+                reason=text or "",
+                reason_code=stop.code,
+            ))
+    except Exception as e:
+        log.warning("lifecycle_stop store failed: %s: %s",
+                    type(e).__name__, e)
+    return True
 
 
 def plan_orders(
@@ -424,6 +518,8 @@ def run(
     markets: Optional[list] = None,
     markets_fn: Optional[Callable[[], list]] = None,
     sleep_fn: Optional[Callable] = None,
+    suspects_box: Optional[dict] = None,
+    shutdown_box: Optional[dict] = None,
 ) -> list[LiveFleetResult]:
     """Rotate over `markets`: reconcile, then decide+submit per market, then sweep.
 
@@ -467,7 +563,18 @@ def run(
     # terminal cancel, or an error resets the count; a restart resets it too
     # (safe direction: a fresh loop holds, never wipes).
     refused_streaks: dict[str, int] = {}
+    # Last lifecycle-stop code per market for on-change-only rows (#402). A
+    # quote clears the entry, so the next stop is news again.
+    stop_memory: dict[str, str] = {}
+    shutdown_reason = "once" if once else "stopped"
     registry = seam.registry
+
+    def _finish_shutdown() -> None:
+        if suspects_box is not None and "cids" not in suspects_box:
+            suspects_box["cids"] = frozenset()
+        if shutdown_box is not None:
+            shutdown_box["reason"] = shutdown_reason
+        log.info("fleet loop shutdown: %s", shutdown_reason)
     # Whole-loop ownership: one fleet loop per database. A second fleet gets
     # InstanceInUse naming the holder; the poll loop's own "poll" slot is
     # untouched so the designed pair keeps working. Fakes/MagicMock/None skip
@@ -493,6 +600,8 @@ def run(
             try:
                 seam.reconcile_fn(seam.client, seam.registry, seam.maker_address)
             except KeyboardInterrupt:
+                shutdown_reason = "interrupt"
+                _finish_shutdown()
                 raise
             except Exception as e:
                 log.warning("reconcile failed: %s: %s", type(e).__name__, e)
@@ -525,17 +634,43 @@ def run(
                             len(current_markets))
 
             cycle_results: list[LiveFleetResult] = []
+            rotation_suspects: set[str] = set()
+            # Resolved markets are never visited again (#402): one durable
+            # read per rotation, before any market-data or book fetch. The
+            # guard reads the in-memory universe, so a stale feed retaining
+            # the market, a reappearing feed, and a restart all stay quiet.
+            resolved = resolved_condition_ids(registry)
             for spec in list(current_markets or []):
                 cid = _cid(spec)
+                if cid and cid.lower() in resolved:
+                    title = (spec.get("title", "")
+                             if isinstance(spec, dict) else "")
+                    _note_lifecycle_stop(
+                        seam, cid, title, LifecycleStop.RESOLVED,
+                        "market resolved; books are never polled again",
+                        stop_memory, cycle, emit_fn)
+                    cycle_results.append(LiveFleetResult(
+                        status="SKIPPED", condition_id=cid,
+                        why="resolved_market_skipped"))
+                    continue
                 res = _visit_one(
                     seam=seam, spec=spec, live=live, cycle=cycle,
                     emit_fn=emit_fn,
                     refused_streak=refused_streaks.get(cid, 0),
+                    stop_memory=stop_memory,
                 )
+                if res.status == "ERROR" and "book fetch error" in (res.error or ""):
+                    rotation_suspects.add(cid)
+                elif classify_refusal(res.why or "") in (
+                        LifecycleStop.SETTLED_BOOK,
+                        LifecycleStop.COUNTDOWN_EXPIRED):
+                    rotation_suspects.add(cid)
                 refused_streaks[cid] = (
                     refused_streaks.get(cid, 0) + 1 if res.held else 0
                 )
                 cycle_results.append(res)
+            if suspects_box is not None:
+                suspects_box["cids"] = frozenset(rotation_suspects)
 
             # An empty universe is not evidence that every market was dropped: it is
             # the state before the first successful refresh, or after one that
@@ -545,6 +680,7 @@ def run(
                 cycle_results.extend(_cancel_dropped_markets(
                     seam=seam, current_markets=current_markets, cycle=cycle,
                     emit_fn=emit_fn,
+                    resolved_cids=resolved, stop_memory=stop_memory,
                 ))
 
             last_cycle = cycle_results
@@ -554,6 +690,8 @@ def run(
             try:
                 seam.sweep_fn()
             except KeyboardInterrupt:
+                shutdown_reason = "interrupt"
+                _finish_shutdown()
                 raise
             except Exception as e:
                 log.warning("sweep failed: %s: %s", type(e).__name__, e)
@@ -565,15 +703,24 @@ def run(
                     "fleet", holder, int(time.time() * 1000)):
                 log.error("instance slot adopted by another loop; stopping "
                           "before further writes")
+                shutdown_reason = "lock_lost"
                 break
 
             if once:
+                shutdown_reason = "once"
                 break
             try:
                 sleep_fn(max(0.0, interval))
-            except KeyboardInterrupt:
+            except KeyboardInterrupt as e:
+                # The shadow deadline sleep subclasses KeyboardInterrupt to
+                # end a time-boxed rehearsal. Matched by class NAME so this
+                # module never imports the shadow runner.
+                shutdown_reason = ("deadline"
+                                   if type(e).__name__ == "_Deadline"
+                                   else "interrupt")
                 break
 
+    _finish_shutdown()
     return once_results if once else last_cycle
 
 
@@ -582,6 +729,8 @@ def _cancel_dropped_markets(
     current_markets: list,
     cycle: int = 0,
     emit_fn: Optional[Callable] = None,
+    resolved_cids: Optional[set] = None,
+    stop_memory: Optional[dict] = None,
 ) -> list[LiveFleetResult]:
     """Cancel resting quotes on markets that left the active universe.
 
@@ -622,8 +771,14 @@ def _cancel_dropped_markets(
             error=f"dropped_cleanup_registry: {type(e).__name__}: {e}")]
 
     current_cids = {_cid(s) for s in (current_markets or [])}
+    # A resolved market still in the universe works exactly like a dropped
+    # one, except the recorded reason: its books are never polled again, so
+    # resting quotes on it are exited here (#402).
+    resolved_lc = {str(c).lower() for c in (resolved_cids or ()) if c}
     dropped = [o for o in active_orders
-               if o.condition_id and o.condition_id not in current_cids]
+               if o.condition_id
+               and (o.condition_id not in current_cids
+                    or o.condition_id.lower() in resolved_lc)]
 
     # Verify if dropped orders are actually resting at the venue
     venue_resting: Optional[set[str]] = None
@@ -655,6 +810,9 @@ def _cancel_dropped_markets(
     open_cids = sorted({o.condition_id for o in dropped
                         if getattr(o, "status", "") == "open"})
     for dropped_cid in open_cids:
+        is_resolved = dropped_cid.lower() in resolved_lc
+        reason = (LifecycleStop.RESOLVED.code if is_resolved
+                  else CANCEL_MARKET_DROPPED)
         dropped_orders = [
             {
                 "token_id": o.token_id,
@@ -663,15 +821,23 @@ def _cancel_dropped_markets(
                 "id": o.id,
                 "side": o.side,
                 "status": o.status,
-                # Not churn and not a gate: the market left the universe, and
-                # a cancel with no recorded reason reads as either.
-                "cancel_reason": CANCEL_MARKET_DROPPED,
+                # Not churn and not a gate: the market left the universe (or
+                # resolved while still listed), and a cancel with no recorded
+                # reason reads as either.
+                "cancel_reason": reason,
             }
             for o in dropped
             if o.condition_id == dropped_cid and getattr(o, "status", "") == "open"
         ]
         try:
             cancelled = seam.cancel_fn(seam.client, seam.registry, dropped_orders)
+            _note_lifecycle_stop(
+                seam, dropped_cid, "",
+                LifecycleStop.RESOLVED if is_resolved
+                else LifecycleStop.MARKET_DROPPED,
+                ("market resolved; resting quotes exited"
+                 if is_resolved else "market left the active universe"),
+                stop_memory, cycle, emit_fn)
             out.append(LiveFleetResult(
                 status="CANCELLED", condition_id=dropped_cid,
                 why="dropped_market_cancelled", cancelled=cancelled,
@@ -844,6 +1010,7 @@ def _visit_one(
     emit_fn: Optional[Callable] = None,
     plan_fn: Optional[Callable] = None,
     refused_streak: int = 0,
+    stop_memory: Optional[dict] = None,
 ) -> LiveFleetResult:
     """One poll of one market: fetch -> decide -> plan -> submit/cancel.
 
@@ -851,6 +1018,8 @@ def _visit_one(
     into the cycle (owned by `run`). When the streak reaches
     `REFUSED_HOLD_GRACE_CYCLES`, a transient refusal expires into a cancel:
     a market that never comes back is dead, not flickering (#390).
+    `stop_memory` is the loop's condition-id -> last-stop-code map for
+    on-change-only `lifecycle_stop` rows; None behaves as an empty map.
     """
     cid = _cid(spec)
     if emit_fn is None:
@@ -898,6 +1067,11 @@ def _visit_one(
                 reason=f"{type(e).__name__}: {e}")
         return LiveFleetResult(status="ERROR", condition_id=cid,
                                error=f"{type(e).__name__}: {e}")
+
+    # Series evidence rides the feed row, not the CLOB read: attach it now so
+    # `decide` (via `evaluate_market_quote`) can exempt a live series with
+    # games left from the mid band (#402).
+    market = _attach_series_state(market, spec)
 
     title = getattr(market, "market_slug", "") or cid[:16]
     if paired_enabled:
@@ -966,11 +1140,22 @@ def _visit_one(
         visit_outcome = (
             _classify_refusal(why) if not intents else VisitOutcome.QUOTED
         )
-        if (visit_outcome is VisitOutcome.REFUSED_TRANSIENT
-                and refused_streak + 1 >= REFUSED_HOLD_GRACE_CYCLES):
+        grace_expired = (
+            visit_outcome is VisitOutcome.REFUSED_TRANSIENT
+            and refused_streak + 1 >= REFUSED_HOLD_GRACE_CYCLES
+        )
+        if grace_expired:
             # GRACE EXPIRED (#390): held through enough refused cycles with
             # no quotable one between. Cancel via the terminal path below.
             visit_outcome = VisitOutcome.REFUSED_TERMINAL
+        if intents:
+            # A quote in between re-arms stop rows: the next stop is news.
+            if stop_memory is not None:
+                stop_memory.pop(cid, None)
+        else:
+            _note_lifecycle_stop(
+                seam, cid, title, _visit_stop(why, grace_expired),
+                why, stop_memory, cycle, emit_fn)
         to_cancel, to_submit = (plan_fn or plan_orders)(
             open_orders, intents,
             dead_band=float(getattr(cfg, "requote_dead_band", 0.0)),
@@ -1145,6 +1330,15 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
             "daily": gm.daily,
             "title": gm.title,
             "slug": gm.slug,
+            # Series evidence for the live-series exemption (#402). Absent
+            # on old feeds: the parser fails closed without it.
+            "sports_market_type": getattr(gm, "sports_market_type", ""),
+            "event_score": getattr(gm, "event_score", None),
+            "event_period": getattr(gm, "event_period", None),
+            "question": getattr(gm, "question", None) or gm.title,
+            "event_live": getattr(gm, "event_live", False),
+            "event_ended": getattr(gm, "event_ended", False),
+            "series_ts": getattr(gm, "series_ts", None),
         }
         if paired_arm is not None:
             spec.update({
@@ -1560,6 +1754,7 @@ def start_resolution_sweeper(
     db_path: Path,
     interval: float = 600.0,
     markets_fn: Optional[Callable] = None,
+    suspects_fn: Optional[Callable[[], Any]] = None,
 ) -> Any:
     """Run the market-resolution sweep on a slow background cadence.
 
@@ -1574,6 +1769,10 @@ def start_resolution_sweeper(
     it does NOT cancel resting orders (the venue-authoritative
     `_cancel_dropped_markets` owns that), and it never books settlement PnL
     in live (redemption is on-chain).
+
+    `suspects_fn` (#402) reads the rotation's suspect set -- markets whose
+    visit ended on a book-fetch error, a settled book, or an elapsed
+    countdown -- so the sweep confirms even markets the stale feed retains.
     """
     import threading
 
@@ -1585,10 +1784,14 @@ def start_resolution_sweeper(
         while True:
             try:
                 universe = markets_fn() if markets_fn is not None else []
+                try:
+                    extra = set(suspects_fn() or ()) if suspects_fn else set()
+                except Exception:
+                    extra = set()
                 for r in sweep_market_resolutions(
                     registry, db_path, markets=universe,
                     gamma_host=host, book_settlement=False,
-                    cancel_resting=False,
+                    cancel_resting=False, extra_candidates=extra,
                 ):
                     if r.action in ("resolved_recorded", "partial_stranded"):
                         log.info("resolved %s (%s): %s winner=%s",
@@ -1726,10 +1929,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     # Resolution detection runs off the critical path on a slow background
     # thread (won't block a 5s rotation). Disabled for --once smoke runs.
+    # The suspect box is filled by `run` every rotation; the thread reads it
+    # through the closure, replacing (never mutating) the set, so no lock is
+    # needed between the loop and the reader.
+    suspects_box: dict = {}
     if not a.once:
         start_resolution_sweeper(
             registry, db_path, interval=a.resolution_interval,
             markets_fn=lambda: _market_specs(a.max_markets, registry=registry),
+            suspects_fn=lambda: suspects_box.get("cids", frozenset()),
         )
         log.info("resolution sweeper started (every %ss, background)",
                  a.resolution_interval)
@@ -1739,6 +1947,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             seam,
             interval=a.interval, once=a.once, live=a.live, markets=specs,
             markets_fn=lambda: _market_specs(a.max_markets, registry=registry),
+            suspects_box=suspects_box,
         )
     except InstanceInUse as exc:
         print(f"fleet refused: {exc}", file=sys.stderr)

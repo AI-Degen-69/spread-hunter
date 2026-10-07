@@ -20,6 +20,7 @@ from typing import Optional
 
 from core_brain.order_registry import OrderRegistry
 from core_brain.config import load as load_cfg
+from core_brain.market_lifecycle import resolved_condition_ids
 
 log = logging.getLogger("markout")
 
@@ -270,7 +271,10 @@ def sample_pending_markouts(
     updated_count = 0
     mids_cache: dict[str, dict[str, float]] = {}
     closed_book_mids: dict[str, Optional[float]] = {}
-    settled_mids: dict[str, Optional[float]] = {}
+    settled_mids: dict[tuple[str, str], Optional[float]] = {}
+    # Terminal first (#402): resolved conditions are valued from the
+    # persisted settlement before any book attempt. One read per pass.
+    resolved = resolved_condition_ids(registry)
 
     for row in pending:
         cid = row.get("condition_id")
@@ -285,81 +289,95 @@ def sample_pending_markouts(
         if cid is None or h_idx is None or m_id is None:
             continue
 
-        # Fetch market mid if not cached
-        if cid not in mids_cache:
-            try:
-                m = fetch_pinned_market(cid, require_rewards=False)
-                if m:
-                    up_book = full_book(clob_host, m.up_token)
-                    dn_book = full_book(clob_host, m.down_token)
-                    bb_up, ba_up = up_book.get("best_bid"), up_book.get("best_ask")
-                    bb_dn, ba_dn = dn_book.get("best_bid"), dn_book.get("best_ask")
-                    # A legitimate price of 0.0 is falsy; test for absence.
-                    mid_up = (
-                        (bb_up + ba_up) / 2.0
-                        if (bb_up is not None and ba_up is not None)
-                        else None
-                    )
-                    mid_dn = (
-                        (bb_dn + ba_dn) / 2.0
-                        if (bb_dn is not None and ba_dn is not None)
-                        else None
-                    )
-                    mids_cache[cid] = {
-                        "UP": mid_up,
-                        "DOWN": mid_dn,
-                        "_up_token": m.up_token,
-                        "_down_token": m.down_token,
-                    }
-            except Exception:
-                mids_cache[cid] = {}
-
-        mids = mids_cache.get(cid, {})
-        leg = _resolve_leg(row_token, mids, side)
-        mid = mids.get(leg) if leg else None
-
-        if mid is None and row_token:
-            # The pinned-market fetch refused (closed / unfunded /
-            # unreachable) and left nothing to resolve a leg from. The fill's
-            # own token is still known, and the book endpoint is public and
-            # answers for closed markets -- read that token's book directly.
-            # Keyed by TOKEN, not condition_id: both legs of one closed market
-            # land here as separate rows with separate tokens, and a
-            # cid-keyed entry built from the first row's token would resolve
-            # nothing for the second -- the row would stay stranded exactly
-            # as before the fallback existed. None is cached too: a book that
-            # will not answer is retried never, not every pass.
-            token_key = str(row_token)
-            if token_key not in closed_book_mids:
+        mid: Optional[float] = None
+        if row_token and str(cid).lower() in resolved:
+            # The market is over: 1.0 on the winning token, 0.0 on the
+            # losing one, with no book request at all. An unknown winner
+            # leaves the horizon pending, also with no book request.
+            term_key = (str(cid), str(row_token))
+            if term_key not in settled_mids:
+                settled_mids[term_key] = _settlement_mid(
+                    registry, str(cid), str(row_token))
+            mid = settled_mids[term_key]
+            if mid is None:
+                continue
+        else:
+            # Fetch market mid if not cached
+            if cid not in mids_cache:
                 try:
-                    b = full_book(clob_host, token_key)
-                    bb, ba = b.get("best_bid"), b.get("best_ask")
-                    closed_book_mids[token_key] = (
-                        (bb + ba) / 2.0
-                        if (bb is not None and ba is not None)
-                        else None
-                    )
+                    m = fetch_pinned_market(cid, require_rewards=False)
+                    if m:
+                        up_book = full_book(clob_host, m.up_token)
+                        dn_book = full_book(clob_host, m.down_token)
+                        bb_up, ba_up = up_book.get("best_bid"), up_book.get("best_ask")
+                        bb_dn, ba_dn = dn_book.get("best_bid"), dn_book.get("best_ask")
+                        # A legitimate price of 0.0 is falsy; test for absence.
+                        mid_up = (
+                            (bb_up + ba_up) / 2.0
+                            if (bb_up is not None and ba_up is not None)
+                            else None
+                        )
+                        mid_dn = (
+                            (bb_dn + ba_dn) / 2.0
+                            if (bb_dn is not None and ba_dn is not None)
+                            else None
+                        )
+                        mids_cache[cid] = {
+                            "UP": mid_up,
+                            "DOWN": mid_dn,
+                            "_up_token": m.up_token,
+                            "_down_token": m.down_token,
+                        }
                 except Exception:
-                    closed_book_mids[token_key] = None
-            mid = closed_book_mids[token_key]
+                    mids_cache[cid] = {}
 
-        if mid is None and row_token and row.get("condition_id"):
-            # Last link in the chain: the market RESOLVED and the venue has
-            # purged its book (the /book endpoint 404s for it -- confirmed on
-            # the shadow-01 store, where every closed token 404s). The store's
-            # own `resolutions` table holds the winner per condition, and a
-            # resolved market's terminal price is not an estimate: 1.0 on the
-            # winning token, 0.0 on the losing one. Sampling a horizon from
-            # settlement is the truest mid a purged market can offer -- the
-            # drift it produces is the outcome, not noise around it. Cached
-            # per condition (the resolution is market-wide, not per token);
-            # None cached too, so a market with no recorded resolution is not
-            # re-read every pass.
-            cid_key = str(row["condition_id"])
-            if cid_key not in settled_mids:
-                settled_mids[cid_key] = _settlement_mid(
-                    registry, str(row["condition_id"]), str(row_token))
-            mid = settled_mids[cid_key]
+            mids = mids_cache.get(cid, {})
+            leg = _resolve_leg(row_token, mids, side)
+            mid = mids.get(leg) if leg else None
+
+            if mid is None and row_token:
+                # The pinned-market fetch refused (closed / unfunded /
+                # unreachable) and left nothing to resolve a leg from. The fill's
+                # own token is still known, and the book endpoint is public and
+                # answers for closed markets -- read that token's book directly.
+                # Keyed by TOKEN, not condition_id: both legs of one closed market
+                # land here as separate rows with separate tokens, and a
+                # cid-keyed entry built from the first row's token would resolve
+                # nothing for the second -- the row would stay stranded exactly
+                # as before the fallback existed. None is cached too: a book that
+                # will not answer is retried never, not every pass.
+                token_key = str(row_token)
+                if token_key not in closed_book_mids:
+                    try:
+                        b = full_book(clob_host, token_key)
+                        bb, ba = b.get("best_bid"), b.get("best_ask")
+                        closed_book_mids[token_key] = (
+                            (bb + ba) / 2.0
+                            if (bb is not None and ba is not None)
+                            else None
+                        )
+                    except Exception:
+                        closed_book_mids[token_key] = None
+                mid = closed_book_mids[token_key]
+
+            if mid is None and row_token and row.get("condition_id"):
+                # Last link in the chain: the market RESOLVED and the venue has
+                # purged its book (the /book endpoint 404s for it -- confirmed on
+                # the shadow-01 store, where every closed token 404s). The store's
+                # own `resolutions` table holds the winner per condition, and a
+                # resolved market's terminal price is not an estimate: 1.0 on the
+                # winning token, 0.0 on the losing one. Sampling a horizon from
+                # settlement is the truest mid a purged market can offer -- the
+                # drift it produces is the outcome, not noise around it. Cached
+                # per (condition, token): the resolution is market-wide but the
+                # price is per leg, and a cid-keyed entry built from the first
+                # row's token would misprice the second. None cached too, so a
+                # market with no recorded resolution is not re-read every pass.
+                last_key = (str(row["condition_id"]), str(row_token))
+                if last_key not in settled_mids:
+                    settled_mids[last_key] = _settlement_mid(
+                        registry, str(row["condition_id"]), str(row_token))
+                mid = settled_mids[last_key]
 
         # The windowed reference and the peer baseline, when the tape can be
         # read. Best-effort by design: a tape that will not answer leaves these

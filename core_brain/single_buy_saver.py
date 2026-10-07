@@ -39,6 +39,7 @@ the same fail-closed shape `merge` uses.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
@@ -47,6 +48,8 @@ from typing import Optional
 
 from core_brain.ladder import is_ladder_pair
 from core_brain.order_registry import CloseRecord, OrderRegistry, SIZE_EPS
+
+log = logging.getLogger("single_buy_saver")
 
 DATA_API_BASE = "https://data-api.polymarket.com"
 
@@ -1193,6 +1196,7 @@ def auto_manage_pairs(
     now: Optional[float] = None,
     venue_positions: Optional[dict[str, float]] = None,
     funder: Optional[str] = None,
+    resolved_cids: Optional[set[str]] = None,
 ) -> list[dict]:
     """U35 in the live loop: convert each in-window one-sided fill.
 
@@ -1208,6 +1212,10 @@ def auto_manage_pairs(
     failures are isolated and reported: one pair's refusal never stops the
     cycle. An unreadable Data API positions endpoint fails the pass closed --
     the leg stays naked one more tick and the read is retried next cycle.
+
+    `resolved_cids` (#402): pairs on resolved conditions are skipped before
+    any state fetch or book request -- no buy, no sell, no cancel, inventory
+    untouched. Skips are one summary line per pass, not one row per pair.
     """
     if not getattr(cfg, "enable_pairs_rule", True):
         return []
@@ -1215,6 +1223,7 @@ def auto_manage_pairs(
     now_s = now if now is not None else time.time()
     window_ms = int(getattr(cfg, "pairs_exit_window_sec", 900.0) * 1000)
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
+    resolved = {str(c).lower() for c in (resolved_cids or ()) if c}
 
     # Same pre-flight the manual exit uses: selling a size the venue does not
     # agree we hold is an oversell. `None` means the caller supplied no view;
@@ -1233,8 +1242,12 @@ def auto_manage_pairs(
     last_fill_ms, pair_cids = _last_fill_ms_by_pair(registry)
 
     out: list[dict] = []
+    skipped_resolved = 0
     for pid, last_ms in last_fill_ms.items():
         cid = pair_cids.get(pid)
+        if cid and str(cid).lower() in resolved:
+            skipped_resolved += 1
+            continue
         if cid and last_ms <= latest_close_ms.get(cid, 0):
             continue
         # U35 window: act only while the fill is fresh enough that the measured
@@ -1254,6 +1267,10 @@ def auto_manage_pairs(
         except Exception as e:
             out.append({"pair_id": pid, "action": "error",
                         "error": f"{type(e).__name__}: {e}"})
+    if skipped_resolved:
+        log.info("pairs pass: %d pair(s) on resolved markets skipped "
+                 "(reason=resolved; no buy, sell, or cancel)",
+                 skipped_resolved)
     return out
 
 
@@ -1428,6 +1445,7 @@ def rescue_aged_out_legs(
     market_state_fn=None,
     state_cache: Optional[AgedOutMarketStateCache] = None,
     gamma_host: Optional[str] = None,
+    resolved_cids: Optional[set[str]] = None,
 ) -> list[dict]:
     """Close a naked leg the rescue window deliberately does not reach (#311).
 
@@ -1451,6 +1469,10 @@ def rescue_aged_out_legs(
     Market state comes through `state_cache`: one read per condition per TTL,
     shared across cycles when the caller owns the cache. A caller with no cache
     still gets one read per condition per pass, never one per naked pair.
+
+    `resolved_cids` (#402): legs on resolved conditions are skipped before any
+    state fetch or book request -- no buy, no sell, no cancel, inventory
+    untouched, no settlement invented. Skips are one summary line per pass.
     """
     if not getattr(cfg, "enable_aged_out_rescue", True):
         return []
@@ -1484,10 +1506,15 @@ def rescue_aged_out_legs(
 
     latest_close_ms = _latest_close_ms_by_condition(registry)
     last_fill_ms, pair_cids = _last_fill_ms_by_pair(registry)
+    resolved = {str(c).lower() for c in (resolved_cids or ()) if c}
 
     out: list[dict] = []
+    skipped_resolved = 0
     for pid, fill_ms in last_fill_ms.items():
         cid = pair_cids.get(pid)
+        if cid and str(cid).lower() in resolved:
+            skipped_resolved += 1
+            continue
         if cid and fill_ms <= latest_close_ms.get(cid, 0):
             continue
         # Undated fills never reach here (`_last_fill_ms_by_pair` drops them),
@@ -1535,6 +1562,10 @@ def rescue_aged_out_legs(
             out.append({"pair_id": pid, "condition_id": cid,
                         "action": "error",
                         "error": f"{type(e).__name__}: {e}"})
+    if skipped_resolved:
+        log.info("aged-out pass: %d pair(s) on resolved markets skipped "
+                 "(reason=resolved; inventory preserved)",
+                 skipped_resolved)
     return out
 
 

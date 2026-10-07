@@ -857,3 +857,39 @@ def test_a_balanced_pair_is_not_aged_out(registry):
     # Act / Assert
     assert rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S,
                                 market_state_fn=_states(_open_state())) == []
+
+
+def test_a_resolved_condition_is_never_touched(registry):
+    """#402 T4: no book, buy, sell, or cancel on a resolved market -- the
+    naked leg is preserved for the settlement path, not rescued."""
+    from core_brain.order_registry import ResolutionRecord
+    _naked_pair(registry, fill_price=0.60)
+    registry.log_resolution(ResolutionRecord(
+        condition_id=COND, winning_token="Up", resolved_ts=NOW_S,
+        run_id="t4-test", winning_token_id=TOK_UP))
+    client = FakeClient()
+
+    # Act
+    results = rescue_aged_out_legs(
+        client, registry, _cfg(), now=NOW_S,
+        market_state_fn=_states(_open_state()), resolved_cids={COND})
+
+    # Assert
+    assert results == []
+    assert client.calls == []
+    assert registry.get_all_closes() == []
+    resting = [o for o in registry.get_active_orders() if o.status == "open"]
+    assert len(resting) == 1
+
+
+def test_an_unresolved_leg_still_reaches_the_venue(registry):
+    """Control: the same leg without a resolution costs venue reads."""
+    _naked_pair(registry, fill_price=0.60)
+    client = FakeClient()
+
+    # Act
+    rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S,
+                         market_state_fn=_states(_open_state()))
+
+    # Assert
+    assert client.calls != []

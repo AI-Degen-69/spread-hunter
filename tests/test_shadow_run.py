@@ -1869,3 +1869,203 @@ class TestTapeMissReplay:
         assert self._settle(reg, db, set()) == []
         assert read_queue_ahead(db, reg._run_id(), order_id) == 744.0
         assert self._mark_traded(db) == 0.0
+
+
+class TestFullCycleRehearsal:
+    """#402 T5: one market quoted, paper-filled, merged, and re-quoted."""
+
+    COND = "0xfullcycle"
+
+    @staticmethod
+    def _books(_clob_host, token_id):
+        return {"token_id": token_id, "best_bid": 0.47, "best_ask": 0.49,
+                "bids": {0.47: 500.0}, "asks": {0.49: 500.0},
+                "malformed": 0}
+
+    def _serve(self, monkeypatch, holder):
+        from core_brain import markets
+
+        def _get(url, params=None, **kw):
+            params = dict(params or {})
+            lim = int(params.get("limit", 500)) or 500
+            idx = int(params.get("offset", 0)) // lim
+            if params.get("takerOnly", "default") is False:
+                return _FakeTapeResponse(holder["maker"].get(idx, []))
+            return _FakeTapeResponse(holder["taker"].get(idx, []))
+
+        monkeypatch.setattr(markets._SESSION, "get", _get, raising=False)
+
+    def test_quote_fill_merge_requote(self, tmp_path, monkeypatch):
+        import time
+        from core_brain.order_registry import OrderRegistry
+        from core_brain.shadow_run import run_shadow
+
+        db = tmp_path / "shadow.db"
+        holder = {"taker": {0: []}, "maker": {0: []}}
+        self._serve(monkeypatch, holder)
+        rotations = [0]
+        quoted: dict = {}
+
+        def tape_row(token, price):
+            return {"transactionHash": f"0xfill-{token}", "asset": token,
+                    "timestamp": int(time.time()), "price": price,
+                    "size": 100000.0, "side": "SELL"}
+
+        def sleep_fn(seconds):
+            rotations[0] += 1
+            if rotations[0] == 1:
+                # Rotation 1 quoted into an empty tape. Arm SELLs at the
+                # exact resting prices and sizes the run chose.
+                reg = OrderRegistry(db_path=db)
+                for o in reg.get_all_orders():
+                    quoted[o["token_id"]] = (o["price"], o["original_size"])
+                assert len(quoted) == 2, f"rotation 1 must quote both legs: {quoted}"
+                holder["taker"] = {
+                    0: [tape_row(tok, px) for tok, (px, _sz) in quoted.items()]}
+            if rotations[0] >= 4:
+                raise KeyboardInterrupt
+
+        result = run_shadow(
+            minutes=5.0, db_path=db,
+            markets_fn=lambda max_markets=None: [FakeMarket(self.COND)],
+            client_fn=lambda: object(),
+            fetch_books=self._books,
+            sleep_fn=sleep_fn,
+        )
+        assert rotations[0] == 4
+
+        reg = OrderRegistry(db_path=db)
+        # Paper fills landed on both legs, straight off the fills ledger --
+        # the full quoted size on each side.
+        assert _filled_by_token(reg, self.COND) == {
+            "tok-up": pytest.approx(quoted["tok-up"][1]),
+            "tok-dn": pytest.approx(quoted["tok-dn"][1])}
+        # One shadow_merge close removed both legs from inventory.
+        merges = [c for c in reg.get_all_closes()
+                  if c["method"] == "shadow_merge"]
+        assert len(merges) == 1
+        first_pair = merges[0]["tx_hash"]
+        assert merges[0]["shares"] == pytest.approx(quoted["tok-up"][1])
+        # A later rotation placed fresh orders for the same condition id:
+        # exactly one resting pair, a different pair id, no duplicates.
+        resting = [o for o in reg.get_all_orders() if o["status"] == "open"]
+        assert len(resting) == 2
+        assert {o["pair_id"] for o in resting} != {first_pair}
+        assert len({o["pair_id"] for o in resting}) == 1
+        assert len({(o["token_id"], o["price"]) for o in resting}) == 2
+        # The run quoted for real -- intents were decided, not stubbed.
+        assert result.intents, "the rehearsal must decide real intents"
+        by_pair: dict[str, float] = {}
+        for qi in result.intents:
+            by_pair[qi.condition_id] = by_pair.get(qi.condition_id, 0.0) + 1
+        assert by_pair.get(self.COND, 0) >= 2
+
+
+class TestResolvedStaysQuietAcrossConsumers:
+    """#402 T5: after a mid-run resolution, no consumer reads dead books."""
+
+    DEAD = "0xdeadcyc"
+    LIVE = "0xlivecyc"
+
+    class _Mkt:
+        def __init__(self, cid):
+            self.condition_id = cid
+            self.up_token = f"tok-up-{cid}"
+            self.down_token = f"tok-dn-{cid}"
+            self.market_slug = f"fake-{cid}"
+            self.tick_size = 0.01
+            self.neg_risk = False
+
+        def t_remaining(self, now=None):
+            return 14400.0
+
+    def test_no_book_reads_for_resolved_tokens_after_recording(
+            self, tmp_path, monkeypatch):
+        import time
+        from core_brain import markets as markets_mod
+        from core_brain.order_registry import OrderRegistry, ResolutionRecord
+        from core_brain.shadow_run import run_shadow
+
+        db = tmp_path / "shadow.db"
+        holder = {"taker": {0: []}, "maker": {0: []}}
+
+        def _get(url, params=None, **kw):
+            params = dict(params or {})
+            lim = int(params.get("limit", 500)) or 500
+            idx = int(params.get("offset", 0)) // lim
+            if params.get("takerOnly", "default") is False:
+                return _FakeTapeResponse(holder["maker"].get(idx, []))
+            return _FakeTapeResponse(holder["taker"].get(idx, []))
+
+        monkeypatch.setattr(markets_mod._SESSION, "get", _get, raising=False)
+
+        book_calls: list[tuple[int, str]] = []
+        rotations = [0]
+
+        def books(host, token):
+            book_calls.append((rotations[0], token))
+            return {"token_id": token, "best_bid": 0.47, "best_ask": 0.49,
+                    "bids": {0.47: 500.0}, "asks": {0.49: 500.0},
+                    "malformed": 0}
+
+        direct_reads: list[str] = []
+
+        def forbidden_book(host, token):
+            direct_reads.append(token)
+            raise AssertionError(f"zero-book rule broken for {token}")
+
+        monkeypatch.setattr(markets_mod, "full_book", forbidden_book)
+        monkeypatch.setattr(
+            markets_mod, "fetch_pinned_market",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("terminal-first must not fetch")))
+
+        armed = [False]
+
+        def sleep_fn(seconds):
+            rotations[0] += 1
+            if rotations[0] == 1:
+                reg = OrderRegistry(db_path=db)
+                rows = [{"transactionHash": f"0xfill-{o['token_id']}",
+                         "asset": o["token_id"],
+                         "timestamp": int(time.time()), "price": o["price"],
+                         "size": 100000.0, "side": "SELL"}
+                        for o in reg.get_all_orders()
+                        if o["condition_id"] == self.DEAD]
+                assert len(rows) == 2, "dead market must quote both legs first"
+                holder["taker"] = {0: rows}
+            if rotations[0] == 2 and not armed[0]:
+                armed[0] = True
+                reg = OrderRegistry(db_path=db)
+                reg.log_resolution(ResolutionRecord(
+                    condition_id=self.DEAD, winning_token="Up",
+                    resolved_ts=time.time(), run_id="t5-test",
+                    winning_token_id=f"tok-up-{self.DEAD}"))
+            if rotations[0] >= 4:
+                raise KeyboardInterrupt
+
+        run_shadow(
+            minutes=5.0, db_path=db,
+            markets_fn=lambda max_markets=None: [
+                self._Mkt(self.DEAD), self._Mkt(self.LIVE)],
+            client_fn=lambda: object(),
+            fetch_books=books,
+            sleep_fn=sleep_fn,
+        )
+        assert rotations[0] == 4
+
+        dead_toks = {f"tok-up-{self.DEAD}", f"tok-dn-{self.DEAD}"}
+        live_toks = {f"tok-up-{self.LIVE}", f"tok-dn-{self.LIVE}"}
+        # Dead tokens were read while live (rotations 0-1) and never after.
+        assert any(r <= 1 and t in dead_toks for r, t in book_calls)
+        assert not any(r >= 2 and t in dead_toks for r, t in book_calls)
+        # The unrelated live market kept quoting on every rotation.
+        live_rots = {r for r, t in book_calls if t in live_toks}
+        assert live_rots == {0, 1, 2, 3}
+        # No consumer reached past the seam for a direct read.
+        assert direct_reads == []
+
+        reg = OrderRegistry(db_path=db)
+        assert len([r for r in reg.get_all_market_events()
+                    if r["kind"] == "lifecycle_stop"
+                    and r["reason_code"] == "resolved"]) >= 1

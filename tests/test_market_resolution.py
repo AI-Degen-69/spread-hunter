@@ -58,6 +58,16 @@ def test_parse_end_date_in_future_is_not_resolved():
     assert s.end_date_passed is False
 
 
+def test_parse_elapsed_end_date_with_explicitly_open_row_stays_unresolved():
+    # A live series whose venue end date is kickoff: elapsed date alone must
+    # not resolve while the venue reports open + accepting.
+    row = {"condition_id": "0xC", "closed": False, "acceptingOrders": True,
+           "endDate": "1970-01-01T00:00:00Z"}
+    s = parse_end_state(row, now_ts=1_000_000_000)
+    assert s.end_date_passed is True
+    assert s.resolved is False
+
+
 def test_parse_winner_from_outcome_prices():
     row = {
         "condition_id": "0xC", "closed": True,
@@ -333,8 +343,61 @@ def test_sweep_records_resolved_and_cancels_open_rows(registry):
     assert rows[0]["condition_id"] == cid.lower()
     # The resting order was cancelled.
     active = [o for o in reg.get_active_orders()
-             if o.status in ("open", "pending", "partial")]
+              if o.status in ("open", "pending", "partial")]
     assert active == []
+
+
+def test_resolved_condition_ids_returns_lowercase_set(registry):
+    from core_brain.market_lifecycle import resolved_condition_ids
+    from core_brain.order_registry import ResolutionRecord
+    reg, _db = registry
+    reg.log_resolution(ResolutionRecord(
+        condition_id="0xMIXED", winning_token="Up", resolved_ts=2.0,
+        run_id=reg._run_id(),
+    ))
+    assert resolved_condition_ids(reg) == {"0xmixed"}
+
+
+def test_resolved_lookup_failure_is_logged_not_swallowed(caplog):
+    """#402 review: a store that cannot answer must be visible -- the guards
+    downstream fail closed, but in silence the operator would never know the
+    protection had degraded."""
+    import logging
+    from core_brain.market_lifecycle import resolved_condition_ids
+
+    class _Boom:
+        def get_all_resolutions(self):
+            raise RuntimeError("resolutions table gone")
+
+    with caplog.at_level(logging.WARNING, logger="market_lifecycle"):
+        assert resolved_condition_ids(_Boom()) == set()
+
+    assert "resolutions table gone" in caplog.text
+
+
+def test_sweep_reports_record_failed_when_insert_fails(registry):
+    import sqlite3
+    reg, db = registry
+    cid = "0xBROKEN"
+    _make_order(reg, cid, status="open")
+    _make_quote(reg, cid)
+
+    def fetch(gamma_host, cid_in):
+        return MarketEndState(condition_id=cid_in, closed=True, resolved=True)
+
+    real_log = reg.log_resolution
+
+    def boom(record):
+        raise sqlite3.Error("disk gone")
+
+    reg.log_resolution = boom
+    try:
+        results = sweep_market_resolutions(
+            reg, db, markets=[], fetch_state=fetch, now_fn=lambda: 2.0)
+    finally:
+        reg.log_resolution = real_log
+    assert results[0].action == "record_failed"
+    assert reg.get_all_resolutions() == []
 
 
 def test_sweep_skips_markets_still_open_on_venue(registry):
@@ -649,3 +712,48 @@ def test_sweep_live_does_not_book_or_cancel(registry):
     assert len(reg.get_all_resolutions()) == 1
     assert reg.get_all_closes() == []
     assert any(o["status"] == "open" for o in reg.get_all_orders())
+
+
+def test_sweep_checks_extra_suspects_still_in_universe(registry):
+    """A suspect the stale feed retains is confirmed, not skipped."""
+    reg, db = registry
+    cid = "0xSUSPECT"
+    _make_order(reg, cid, status="open")
+    _make_quote(reg, cid)
+
+    def fetch(gamma_host, cid_in):
+        if cid_in == cid.lower():
+            return MarketEndState(condition_id=cid_in, closed=True,
+                                  resolved=True)
+        return MarketEndState(condition_id=cid_in, closed=False,
+                              end_date_passed=False, resolved=False)
+
+    results = sweep_market_resolutions(
+        reg, db, markets=[{"cid": "0xlive"}, {"cid": cid}],
+        fetch_state=fetch, now_fn=lambda: 2.0,
+        extra_candidates={cid})
+    by_cid = {r.condition_id: r for r in results}
+    assert by_cid[cid.lower()].action == "resolved_recorded"
+    # Recording the resolution writes the `resolved` event row.
+    resolved_rows = [r for r in reg.get_all_market_events()
+                     if r["kind"] == "resolved"
+                     and r["reason_code"] == "resolved"]
+    assert len(resolved_rows) == 1
+
+
+def test_extra_suspect_still_open_names_universe_membership(registry):
+    reg, db = registry
+    cid = "0xSUSPECTOPEN"
+    _make_order(reg, cid, status="open")
+    _make_quote(reg, cid)
+
+    def fetch(gamma_host, cid_in):
+        return MarketEndState(condition_id=cid_in, closed=False,
+                              end_date_passed=False, resolved=False)
+
+    results = sweep_market_resolutions(
+        reg, db, markets=[{"cid": cid}],
+        fetch_state=fetch, now_fn=lambda: 2.0,
+        extra_candidates={cid.lower()})
+    assert results[0].action == "still_open"
+    assert "universe" in results[0].reason

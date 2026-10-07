@@ -235,3 +235,70 @@ def test_a_row_without_tape_stays_contaminated(registry, monkeypatch):
     assert row["ref_mid_source"] == "contaminated"
     from statistical_validation_run.run import count_matured_markouts
     assert count_matured_markouts(registry.db_path) == 0
+
+
+def _seed_resolution(registry, winning_token_id, winning_token="Up"):
+    con = sqlite3.connect(str(registry.db_path))
+    con.execute(
+        "INSERT INTO resolutions (condition_id, winning_token, winning_token_id,"
+        " resolved_ts, run_id) VALUES ('0xmarket', ?, ?, ?, 'shadow-test')",
+        (winning_token, winning_token_id, T0 - 100.0),
+    )
+    con.commit()
+    con.close()
+
+
+@pytest.mark.parametrize("first", ["tok-up", "tok-dn"])
+def test_winner_and_loser_mature_without_any_book_read(registry, monkeypatch,
+                                                       first):
+    """#402 T4, terminal-first: settlement serves both legs with zero venue
+    reads, in either row order (the cache key is condition + token)."""
+    import core_brain.markets as markets_mod
+    second = "tok-dn" if first == "tok-up" else "tok-up"
+    up_id = _seed_markout(registry, T0 - 4000, token=first)
+    dn_id = _seed_markout(registry, T0 - 4000, token=second)
+    _seed_resolution(registry, "tok-up")
+
+    venue_reads: list[str] = []
+
+    def counting_book(host, token):
+        venue_reads.append(f"book:{token}")
+        raise Exception("404 purged")
+
+    def forbidden_fetch(condition_id, require_rewards=False):
+        raise AssertionError("terminal-first must not fetch the market")
+
+    monkeypatch.setattr(markets_mod, "full_book", counting_book)
+    monkeypatch.setattr(markets_mod, "fetch_pinned_market", forbidden_fetch)
+
+    sample_pending_markouts(
+        registry, now_sec=T0, trades_fn=lambda token, cid=None: [])
+
+    rows = {first: _row(registry, up_id), second: _row(registry, dn_id)}
+    assert rows["tok-up"]["mid_h0"] == pytest.approx(1.0)
+    assert rows["tok-dn"]["mid_h0"] == pytest.approx(0.0)
+    assert venue_reads == []
+
+
+def test_unknown_winner_stays_pending_without_book_reads(registry, monkeypatch):
+    """#402 T4: a resolution with no known winner leaves the horizon pending
+    and buys no book request."""
+    import core_brain.markets as markets_mod
+    markout_id = _seed_markout(registry, T0 - 4000, token="tok-up")
+    _seed_resolution(registry, None, winning_token=None)
+
+    venue_reads: list[str] = []
+
+    def counting_book(host, token):
+        venue_reads.append(f"book:{token}")
+        raise Exception("404 purged")
+
+    monkeypatch.setattr(markets_mod, "full_book", counting_book)
+    monkeypatch.setattr(
+        markets_mod, "fetch_pinned_market", lambda *a, **k: None)
+
+    sample_pending_markouts(
+        registry, now_sec=T0, trades_fn=lambda token, cid=None: [])
+
+    assert _row(registry, markout_id)["mid_h0"] is None
+    assert venue_reads == []
