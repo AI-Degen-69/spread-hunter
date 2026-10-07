@@ -118,7 +118,7 @@ Frozen: `quotes.py` refusal strings, `orders.cancel_reason` values,
   refused, near-endpoint refused `settled_book`.
 - Depends on: none (parallel with T1).
 
-### T3 [ ] — Trader respects true state, names every stop [Backend/Logic] (L)
+### T3 [x] — Trader respects true state, names every stop [Backend/Logic] (L)
 - Target files: `core_brain/trader_loop.py` (resolved guard in `_market_specs`
   + `_visit_one` before any fetch, series attach after `fetch_market`, suspect
   tracking, `lifecycle_stop` on-change-only, shutdown reasons),

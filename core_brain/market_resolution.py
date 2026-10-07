@@ -683,6 +683,33 @@ def _already_resolved_cids(registry) -> set[str]:
     return resolved_condition_ids(registry)
 
 
+def _record_resolved_event(registry, cid: str, state: MarketEndState,
+                           now: float, run_id: str) -> None:
+    """One `resolved` row when a resolution is recorded (#402).
+
+    Best-effort telemetry: a store that cannot take the row must not fail
+    the sweep. Kept separate from the `lifecycle_stop` rows the quoting
+    loop writes -- this names the recording, those name the quoting stop.
+    """
+    try:
+        from core_brain.order_registry import MarketEventRecord
+        log_fn = getattr(registry, "log_market_event", None)
+        if not callable(log_fn):
+            return
+        log_fn(MarketEventRecord(
+            ts=now,
+            condition_id=cid,
+            kind="resolved",
+            reason=(f"venue closed" if state.closed else "endDate passed")
+                   + (f" winner={state.winner_token}"
+                      if state.winner_token else ""),
+            reason_code="resolved",
+            run_id=run_id,
+        ))
+    except Exception:
+        pass
+
+
 def sweep_market_resolutions(
     registry,
     db_path,
@@ -694,6 +721,7 @@ def sweep_market_resolutions(
     fetch_state: Optional[Callable[[str, str], MarketEndState]] = None,
     book_settlement: bool = False,
     cancel_resting: bool = True,
+    extra_candidates: Optional[set[str]] = None,
 ) -> list[SweepResult]:
     """One resolution sweep: confirm externally-ended markets, record them.
 
@@ -715,6 +743,12 @@ def sweep_market_resolutions(
     owns cancellation there (via the venue), and a registry-only cancel could
     desync the row from a live order.
 
+    ``extra_candidates`` (#402): suspect cids the Trader names each rotation
+    (book-fetch error, settled book, elapsed countdown) that the stale feed
+    RETAINS in the universe, so the dropped-only set would never check them.
+    Confirmed through the same venue read and backoff; a failed read or an
+    open market records nothing.
+
     Degrade, do not stop: any failure (network, registry error) skips that
     cid this rotation and retries next rotation. A market is NEVER marked
     resolved on a failed read.
@@ -728,6 +762,7 @@ def sweep_market_resolutions(
     universe = _current_universe_cids(markets)
     touched = _touched_cids(registry)
     already = _already_resolved_cids(registry)
+    extra = {str(c).lower() for c in (extra_candidates or ()) if c}
 
     results: list[SweepResult] = []
     now = now_fn()
@@ -757,7 +792,7 @@ def sweep_market_resolutions(
             return float(booked["shares"]), float(booked["realized_pnl"])
         return 0.0, 0.0
 
-    for cid in sorted(touched - universe):
+    for cid in sorted((touched - universe) | extra):
         # Already recorded: only possible remaining work is settlement, which
         # runs independently of when the resolution row was written (a re-run
         # or a later rotation may be the first time the winning token is
@@ -802,9 +837,12 @@ def sweep_market_resolutions(
         if state.resolved:
             _unreachable_backoff.pop(cid, None)
         if not state.resolved:
+            in_universe = cid in universe
             results.append(SweepResult(
                 condition_id=cid, action="still_open",
-                reason="dropped from feed but venue still open; do not mark"))
+                reason=("in universe but venue still open; keep watching"
+                        if in_universe else
+                        "dropped from feed but venue still open; do not mark")))
             continue
 
         # Confirmed ended. Cancel resting rows as a safety net (shadow only;
@@ -846,6 +884,8 @@ def sweep_market_resolutions(
             ))
         except Exception:
             record_ok = False
+        if record_ok:
+            _record_resolved_event(registry, cid, state, now, r_id)
 
         # Shadow-only settlement PnL: redeem held shares at the winning side's
         # $1.00. Live callers leave book_settlement=False; live redemption

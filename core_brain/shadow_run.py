@@ -214,6 +214,7 @@ def write_shadow_heartbeat(
     cycle: int = 0,
     dash_port: Optional[int] = None,
     code_revision: Optional[dict] = None,
+    shutdown_reason: str = "",
     path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Publish (or refresh) the rehearsal's heartbeat file.
@@ -248,6 +249,11 @@ def write_shadow_heartbeat(
         "cycle": int(cycle),
         "finished": bool(finished),
     }
+    # Why the run ended: once / deadline / interrupt / lock_lost (#402).
+    # Set on the finished write only; a crash leaves the field absent, which
+    # keeps "crashed" distinguishable from "ended".
+    if shutdown_reason:
+        payload["shutdown_reason"] = str(shutdown_reason)
     if dash_port is not None:
         payload["dash_port"] = int(dash_port)
     if code_revision is not None:
@@ -1115,9 +1121,11 @@ def run_shadow(
         # Shadow models the wallet, so settlement PnL belongs here: a
         # validation run must book the redemption, not leave it as unrealised
         # CAPEX. Live loops never set this -- on-chain redemption is theirs.
+        # Suspect markets the stale feed retains are confirmed too (#402).
         for r in sweep_market_resolutions(
             seam.registry, db_path, markets=markets_holder[0],
             gamma_host=host, run_id=run_id, book_settlement=True,
+            extra_candidates=set(shadow_suspects.get("cids", frozenset())),
         ):
             if r.action in ("resolved_recorded", "partial_stranded"):
                 settle = f" settled {r.settled_shares:g}sh pnl=${r.settled_pnl:.2f}" \
@@ -1133,6 +1141,11 @@ def run_shadow(
                 log.debug("resolve read failed %s: %s", r.condition_id[:12], r.reason)
 
     shadow_sweep._resolve_fn = resolve_markets_fn  # type: ignore[attr-defined]
+    # Suspect markets named by the Trader's visits, read by the sweep above
+    # (#402). Replaced (never mutated) every rotation, so the sweep's read
+    # needs no lock.
+    shadow_suspects: dict = {}  # type: ignore[assignment]
+    shutdown_box: dict = {}
     # The aged-out pass (#311) reads each leg's market state through this seam.
     # Left None it uses the public gamma read -- an injected fn keeps a test or
     # a rehearsal off the network, the same shape as `_resolve_fn` above.
@@ -1174,11 +1187,14 @@ def run_shadow(
         markets=markets,
         markets_fn=dynamic_markets_fn,
         sleep_fn=beating_sleep,
+        suspects_box=shadow_suspects,
+        shutdown_box=shutdown_box,
     )
     # Only a clean end is marked finished. A crash leaves the heartbeat
     # unrefreshed, which the reader calls ended once it goes stale -- so the
     # two endings stay distinguishable.
-    write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations, finished=True)
+    write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations, finished=True,
+                           shutdown_reason=str(shutdown_box.get("reason", "")))
     if paired_depth_arm is not None:
         # Snapshot-level coverage must be audited before the run is marked
         # finished: a max-market visit cap, a market lookup failure, or an

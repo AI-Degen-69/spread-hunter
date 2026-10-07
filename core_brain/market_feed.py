@@ -90,6 +90,15 @@ class GraduatedMarket:
     event_title: str = ""
     range_cents: Optional[float] = None
     velocity_measured_at: Optional[float] = None
+    # Series evidence for the live-series mid-gate exemption (#402). Carried
+    # from the ranker's eligible row; absent on scanned rows and old feeds.
+    sports_market_type: str = ""
+    event_score: str = ""
+    event_period: str = ""
+    question: str = ""
+    event_live: bool = False
+    event_ended: bool = False
+    series_ts: Optional[float] = None
 
 
 def _load_paired_depth_feed(
@@ -199,6 +208,19 @@ def _load_paired_admission_feed(
 
 
 
+def _safe_series_ts(raw) -> Optional[float]:
+    """Feed-row series stamp as unix seconds, None when missing/mangled.
+
+    A mangled stamp must fail the exemption closed, never the feed load.
+    """
+    if raw is None:
+        return None
+    try:
+        return float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _graduated_rows(data: list, target: Path) -> list[GraduatedMarket]:
     if not isinstance(data, list):
         raise MarketFeedError(
@@ -253,6 +275,13 @@ def _graduated_rows(data: list, target: Path) -> list[GraduatedMarket]:
                     if row.get("velocity_measured_at") is not None
                     else None
                 ),
+                sports_market_type=str(row.get("sports_market_type") or ""),
+                event_score=str(row.get("event_score") or ""),
+                event_period=str(row.get("event_period") or ""),
+                question=str(row.get("question") or row.get("title") or ""),
+                event_live=bool(row.get("event_live")),
+                event_ended=bool(row.get("event_ended")),
+                series_ts=_safe_series_ts(row.get("series_ts")),
             )
             out.append(gm)
         except (ValueError, TypeError) as exc:

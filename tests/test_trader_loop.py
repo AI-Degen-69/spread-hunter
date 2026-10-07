@@ -1246,7 +1246,10 @@ class TestMarketSpecsPath:
 
         assert [s["cid"] for s in specs] == ["0xtrial0", "0xtrial1"]
         assert set(specs[0]) == {"cid", "min_size", "shares", "max_spread",
-                                 "tick", "daily", "title", "slug"}
+                                 "tick", "daily", "title", "slug",
+                                 "sports_market_type", "event_score",
+                                 "event_period", "question", "event_live",
+                                 "event_ended", "series_ts"}
 
     def test_max_markets_still_caps_a_pathed_feed(self, tmp_path):
         from core_brain.trader_loop import _market_specs
@@ -1428,7 +1431,6 @@ class TestFuriaQuoteClock:
 class TestClassifyRefusal:
     """#390: the refusal classifier pins every terminal marker, so a reworded
     `quotes.py` reason cannot silently flip a settled market to hold."""
-
     @pytest.mark.parametrize("why", [
         "UP: mid 0.950 outside [0.20,0.80] -- decided market; "
         "DOWN: mid 0.050 outside [0.20,0.80] -- decided market",
@@ -1647,3 +1649,323 @@ class TestLifecycleStops:
         for why, _code in self.CASES:
             assert _classify_refusal(why) is VisitOutcome.REFUSED_TERMINAL
         assert _classify_refusal("wide book, retry") is VisitOutcome.REFUSED_TRANSIENT
+
+
+class _TokMarket:
+    """A market whose book tokens are unique per condition id."""
+
+    def __init__(self, cid):
+        self.condition_id = cid
+        self.up_token = f"tok-up-{cid}"
+        self.down_token = f"tok-dn-{cid}"
+        self.market_slug = f"fake-{cid}"
+        self.tick_size = 0.01
+        self.neg_risk = False
+
+    def t_remaining(self, now=None):
+        return 14400.0
+
+
+def _t3_registry(tmp_path, name="t3.db"):
+    from core_brain.order_registry import OrderRegistry, init_db
+    db = tmp_path / name
+    init_db(db)
+    return OrderRegistry(db_path=db, run_id="t3-test"), db
+
+
+def _t3_seam(reg, books_calls, decide, calls):
+    def fetch_books(host, token):
+        books_calls[token] = books_calls.get(token, 0) + 1
+        return {"token_id": token, "best_bid": 0.59, "best_ask": 0.61,
+                "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+    def submit_fn(client, registry, market, intents, cfg):
+        calls["submitted"].append(
+            (market.condition_id, [i.token_id for i in intents]))
+        return len(intents)
+
+    def cancel_fn(client, registry, orders):
+        calls["cancelled"].append([o["order_id"] for o in orders])
+        return len(orders)
+
+    return VenueSeam(
+        client=object(),
+        registry=reg,
+        base_cfg=MakerConfig(),
+        fetch_market=lambda cid: _TokMarket(cid),
+        fetch_books=fetch_books,
+        decide=decide,
+        submit_fn=submit_fn,
+        cancel_fn=cancel_fn,
+        open_orders_fn=lambda m: [],
+        reconcile_fn=lambda *a: None,
+        sweep_fn=lambda: None,
+    )
+
+
+def _t3_spec(cid):
+    return {"cid": cid, "min_size": 5, "shares": 120, "max_spread": 4.5,
+            "tick": 0.01, "daily": 0.0, "title": f"t-{cid}", "slug": cid}
+
+
+def _quoting_decide(cfg, up, dn, inv, t_rem, wf, series_state=None):
+    toks = [up["token_id"], dn["token_id"]]
+    return ([_intent(side="UP", token=toks[0], price=0.59),
+             _intent(side="DOWN", token=toks[1], price=0.41)], "")
+
+
+def _stop_rows(reg, code=None):
+    rows = [r for r in reg.get_all_market_events()
+            if r["kind"] == "lifecycle_stop"]
+    if code is not None:
+        rows = [r for r in rows if r["reason_code"] == code]
+    return rows
+
+
+class TestResolvedGuard:
+    """#402 T3: a resolved market is never fetched, never polled, ever again."""
+
+    DEAD = "0xdead"
+    LIVE = "0xlive"
+
+    def _resolve(self, reg, cid):
+        from core_brain.order_registry import ResolutionRecord
+        reg.log_resolution(ResolutionRecord(
+            condition_id=cid, winning_token="Up", resolved_ts=2.0,
+            run_id=reg._run_id(),
+        ))
+
+    def test_resolved_market_is_never_fetched_or_polled(self, tmp_path):
+        reg, _db = _t3_registry(tmp_path)
+        self._resolve(reg, self.DEAD)
+        books_calls, calls = {}, {"submitted": [], "cancelled": []}
+        seam = _t3_seam(reg, books_calls, _quoting_decide, calls)
+        run(seam, interval=0.0, once=True, live=True,
+            markets=[_t3_spec(self.DEAD), _t3_spec(self.LIVE)],
+            sleep_fn=lambda s: None)
+        assert f"tok-up-{self.DEAD}" not in books_calls
+        assert f"tok-dn-{self.DEAD}" not in books_calls
+        # The unrelated live market keeps quoting on both its tokens.
+        assert books_calls.get(f"tok-up-{self.LIVE}", 0) >= 1
+        assert books_calls.get(f"tok-dn-{self.LIVE}", 0) >= 1
+        assert any(c == self.LIVE for c, _t in calls["submitted"])
+        assert not any(c == self.DEAD for c, _t in calls["submitted"])
+
+    def test_guard_survives_empty_refresh_reappearance_and_restart(self, tmp_path):
+        reg, db = _t3_registry(tmp_path)
+        self._resolve(reg, self.DEAD)
+        books_calls, calls = {}, {"submitted": [], "cancelled": []}
+        seam = _t3_seam(reg, books_calls, _quoting_decide, calls)
+        feeds = [
+            [_t3_spec(self.DEAD), _t3_spec(self.LIVE)],
+            [],                      # empty refresh: universe retained
+            [_t3_spec(self.DEAD)],    # reappearance without the live one
+        ]
+        idx = [0]
+
+        def markets_fn():
+            return feeds[min(idx[0], len(feeds) - 1)]
+
+        def sleep_fn(s):
+            idx[0] += 1
+            if idx[0] >= len(feeds):
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=feeds[0], markets_fn=markets_fn, sleep_fn=sleep_fn)
+        assert idx[0] == len(feeds)
+        assert f"tok-up-{self.DEAD}" not in books_calls
+
+        # Restart against the same store: the guard is durable, not memory.
+        reg2, _ = _t3_registry(tmp_path, name="t3.db")
+        books2, calls2 = {}, {"submitted": [], "cancelled": []}
+        seam2 = _t3_seam(reg2, books2, _quoting_decide, calls2)
+        run(seam2, interval=0.0, once=True, live=True,
+            markets=[_t3_spec(self.DEAD), _t3_spec(self.LIVE)],
+            sleep_fn=lambda s: None)
+        assert f"tok-up-{self.DEAD}" not in books2
+        assert f"tok-dn-{self.DEAD}" not in books2
+
+    def test_resolved_skip_writes_exactly_one_stop_row(self, tmp_path):
+        reg, _db = _t3_registry(tmp_path)
+        self._resolve(reg, self.DEAD)
+        books_calls, calls = {}, {"submitted": [], "cancelled": []}
+        seam = _t3_seam(reg, books_calls, _quoting_decide, calls)
+        idx = [0]
+
+        def sleep_fn(s):
+            idx[0] += 1
+            if idx[0] >= 3:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[_t3_spec(self.DEAD)], sleep_fn=sleep_fn)
+        assert idx[0] == 3
+        rows = _stop_rows(reg, "resolved")
+        assert len(rows) == 1
+
+
+class TestLifecycleStopRows:
+    """#402 T3: every stop names its reason in the log and the store, once."""
+
+    def _seam(self, tmp_path, decide):
+        reg, _db = _t3_registry(tmp_path)
+        books_calls, calls = {}, {"submitted": [], "cancelled": []}
+        seam = _t3_seam(reg, books_calls, decide, calls)
+        seam.open_orders_fn = lambda m: [
+            {"token_id": "tok-x", "price": 0.60, "order_id": "o-x",
+             "id": "o-x", "side": "BUY", "status": "open"}]
+        return reg, seam, calls
+
+    def test_terminal_refusal_writes_one_row(self, tmp_path):
+        why = ("UP: mid 0.950 outside [0.20,0.80] -- decided market; "
+               "DOWN: mid 0.050 outside [0.20,0.80] -- decided market")
+        reg, seam, _calls = self._seam(
+            tmp_path, lambda *a: ([], why))
+        idx = [0]
+
+        def sleep_fn(s):
+            idx[0] += 1
+            if idx[0] >= 2:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[_t3_spec("0xabc")], sleep_fn=sleep_fn)
+        assert len(_stop_rows(reg, "decided_by_price")) == 1
+
+    def test_hold_expired_names_the_reason(self, tmp_path):
+        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+        why = "UP: 8.0c from mid > 4.5c reward window"
+        reg, seam, calls = self._seam(
+            tmp_path, lambda *a: ([], why))
+        idx = [0]
+
+        def sleep_fn(s):
+            idx[0] += 1
+            if idx[0] >= GRACE:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[_t3_spec("0xabc")], sleep_fn=sleep_fn)
+        assert calls["cancelled"], "grace expiry must cancel resting orders"
+        assert len(_stop_rows(reg, "hold_expired")) == 1
+
+    def test_quote_between_stops_rearms_the_row(self, tmp_path):
+        why = ("UP: mid 0.950 outside [0.20,0.80] -- decided market")
+        seq = [[], "quote", []]
+        calls = {"n": 0}
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            step = seq[min(calls["n"], len(seq) - 1)]
+            calls["n"] += 1
+            if step == "quote":
+                return _quoting_decide(cfg, up, dn, inv, t_rem, wf)
+            return [], why
+
+        reg, seam, _c = self._seam(tmp_path, decide)
+        idx = [0]
+
+        def sleep_fn(s):
+            idx[0] += 1
+            if idx[0] >= 3:
+                raise KeyboardInterrupt
+
+        run(seam, interval=0.0, once=False, live=True,
+            markets=[_t3_spec("0xabc")], sleep_fn=sleep_fn)
+        assert len(_stop_rows(reg, "decided_by_price")) == 2
+
+    def test_market_dropped_names_the_reason(self, tmp_path):
+        import uuid
+        from core_brain.order_registry import OrderRecord
+        reg, _db = _t3_registry(tmp_path)
+        now_ms = 1_000_000
+        reg.create_order(OrderRecord(
+            id=str(uuid.uuid4()), condition_id="0xgone", token_id="tok-x",
+            side="BUY", price=0.47, original_size=20, status="open",
+            posted_ts=now_ms, last_polled_ts=now_ms,
+            pair_id=None, run_id=reg._run_id(),
+        ))
+        books_calls, calls = {}, {"submitted": [], "cancelled": []}
+        seam = _t3_seam(reg, books_calls, _quoting_decide, calls)
+        run(seam, interval=0.0, once=True, live=True,
+            markets=[_t3_spec("0xelsewhere")], sleep_fn=lambda s: None)
+        assert calls["cancelled"], "dropped open orders must be cancelled"
+        assert len(_stop_rows(reg, "market_dropped")) == 1
+
+    def test_shutdown_reason_is_logged(self, tmp_path, caplog):
+        import logging
+        reg, seam, _c = self._seam(tmp_path, _quoting_decide)
+        with caplog.at_level(logging.INFO):
+            run(seam, interval=0.0, once=True, live=True,
+                markets=[_t3_spec("0xabc")], sleep_fn=lambda s: None)
+        assert "fleet loop shutdown: once" in caplog.text
+
+
+class TestSuspectsAndSeriesAttach:
+    """#402 T3: suspect visits feed the sweeper; specs carry series state."""
+
+    def test_settled_and_countdown_visits_become_suspects(self, tmp_path):
+        reg, _db = _t3_registry(tmp_path)
+        books_calls, calls = {}, {"submitted": [], "cancelled": []}
+        seq = iter([
+            ([], "UP: hedge token DOWN not tradeable (settled book 0.999)"),
+            ([], "t_remaining 0s < 0s"),
+        ])
+
+        def decide(*a):
+            return next(seq, ([], "wide book"))
+
+        seam = _t3_seam(reg, books_calls, decide, calls)
+        box: dict = {}
+        run(seam, interval=0.0, once=True, live=True,
+            markets=[_t3_spec("0xone"), _t3_spec("0xtwo")],
+            sleep_fn=lambda s: None, suspects_box=box)
+        assert box.get("cids") == frozenset({"0xone", "0xtwo"})
+
+    def test_book_fetch_error_becomes_a_suspect(self, tmp_path):
+        reg, _db = _t3_registry(tmp_path)
+        calls = {"submitted": [], "cancelled": []}
+        seam = VenueSeam(
+            client=object(), registry=reg, base_cfg=MakerConfig(),
+            fetch_market=lambda cid: _TokMarket(cid),
+            fetch_books=lambda h, t: (_ for _ in ()).throw(
+                RuntimeError("book gone")),
+            decide=_quoting_decide,
+            submit_fn=lambda c, r, m, i, cfg: 0,
+            cancel_fn=lambda c, r, o: 0,
+            open_orders_fn=lambda m: [],
+            reconcile_fn=lambda *a: None,
+            sweep_fn=lambda: None,
+        )
+        box: dict = {}
+        run(seam, interval=0.0, once=True, live=True,
+            markets=[_t3_spec("0xbad")], sleep_fn=lambda s: None,
+            suspects_box=box)
+        assert box.get("cids") == frozenset({"0xbad"})
+
+    def test_spec_series_evidence_reaches_the_market(self, tmp_path):
+        import time
+        reg, _db = _t3_registry(tmp_path)
+        seen: dict = {}
+
+        def submit_fn(client, registry, market, intents, cfg):
+            seen["series"] = getattr(market, "series_state", None)
+            return 0
+
+        books_calls, calls = {}, {"submitted": [], "cancelled": []}
+        seam = _t3_seam(reg, books_calls, _quoting_decide, calls)
+        seam.submit_fn = submit_fn
+        spec = _t3_spec("0xflysr")
+        spec.update({
+            "sports_market_type": "moneyline",
+            "event_score": "9-4|1-1|Bo3",
+            "event_period": "2/3",
+            "question": "FlyQuest vs Shopify Rebellion",
+            "event_live": True,
+            "event_ended": False,
+            "series_ts": time.time(),
+        })
+        run(seam, interval=0.0, once=True, live=True, markets=[spec],
+            sleep_fn=lambda s: None)
+        assert seen["series"] is not None
+        assert seen["series"].scope == "series"

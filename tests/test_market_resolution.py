@@ -695,3 +695,48 @@ def test_sweep_live_does_not_book_or_cancel(registry):
     assert len(reg.get_all_resolutions()) == 1
     assert reg.get_all_closes() == []
     assert any(o["status"] == "open" for o in reg.get_all_orders())
+
+
+def test_sweep_checks_extra_suspects_still_in_universe(registry):
+    """A suspect the stale feed retains is confirmed, not skipped."""
+    reg, db = registry
+    cid = "0xSUSPECT"
+    _make_order(reg, cid, status="open")
+    _make_quote(reg, cid)
+
+    def fetch(gamma_host, cid_in):
+        if cid_in == cid.lower():
+            return MarketEndState(condition_id=cid_in, closed=True,
+                                  resolved=True)
+        return MarketEndState(condition_id=cid_in, closed=False,
+                              end_date_passed=False, resolved=False)
+
+    results = sweep_market_resolutions(
+        reg, db, markets=[{"cid": "0xlive"}, {"cid": cid}],
+        fetch_state=fetch, now_fn=lambda: 2.0,
+        extra_candidates={cid})
+    by_cid = {r.condition_id: r for r in results}
+    assert by_cid[cid.lower()].action == "resolved_recorded"
+    # Recording the resolution writes the `resolved` event row.
+    resolved_rows = [r for r in reg.get_all_market_events()
+                     if r["kind"] == "resolved"
+                     and r["reason_code"] == "resolved"]
+    assert len(resolved_rows) == 1
+
+
+def test_extra_suspect_still_open_names_universe_membership(registry):
+    reg, db = registry
+    cid = "0xSUSPECTOPEN"
+    _make_order(reg, cid, status="open")
+    _make_quote(reg, cid)
+
+    def fetch(gamma_host, cid_in):
+        return MarketEndState(condition_id=cid_in, closed=False,
+                              end_date_passed=False, resolved=False)
+
+    results = sweep_market_resolutions(
+        reg, db, markets=[{"cid": cid}],
+        fetch_state=fetch, now_fn=lambda: 2.0,
+        extra_candidates={cid.lower()})
+    assert results[0].action == "still_open"
+    assert "universe" in results[0].reason

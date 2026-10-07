@@ -1812,6 +1812,12 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "event_title": m.get("event_title") or "",
         "event_id": m.get("event_id") or "",
         "event_slug": m.get("event_slug") or "",
+        # Series evidence, threaded to the Trader via the feed (#402). Empty
+        # on scanned rows: the exemption predicate fails closed without them.
+        "sports_market_type": m.get("sports_market_type") or "",
+        "event_live": bool(m.get("_event_live")),
+        "event_ended": bool(m.get("_event_ended")),
+        "series_ts": m.get("_series_ts"),
         # THE REWARD POT, and zero is the honest figure for a market that pays
         # none. `fleet.reallocate` keys the spread path off `daily <= 0` and
         # recomputes the pot from `volume_24h` and `spread`, so the capture
