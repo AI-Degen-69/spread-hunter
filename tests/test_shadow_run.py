@@ -755,6 +755,44 @@ class TestUmaGateShadowBuilder:
         assert seam2.fetch_uma_status is None
         assert callable(seam2.record_market_event)
 
+    def test_run_shadow_entrypoint_passes_through_uma_reader_to_market_visit(
+            self, tmp_path):
+        from core_brain.market_resolution import UmaResolutionStatus
+        from core_brain.shadow_run import ShadowResult, run_shadow
+
+        db = tmp_path / "shadow.db"
+        visited_cids = []
+
+        def fake_uma(cid):
+            visited_cids.append(cid)
+            return UmaResolutionStatus(condition_id=cid)
+
+        spec = {
+            "cid": "0xuma_entry",
+            "question": "Will CS2 match end?",
+            "tokens": [{"token_id": "tok-up", "outcome": "Yes"},
+                       {"token_id": "tok-dn", "outcome": "No"}],
+            "rewards": {"rates": []},
+            "accepting_orders": True,
+            "closed": False,
+        }
+
+        def one_shot_sleep(_s):
+            raise KeyboardInterrupt
+
+        res = run_shadow(
+            db_path=db,
+            minutes=0,
+            interval=0.1,
+            markets_fn=lambda **kw: [spec],
+            fetch_books=_books,
+            fetch_uma_status=fake_uma,
+            sleep_fn=one_shot_sleep,
+        )
+        assert "0xuma_entry" in visited_cids
+        assert isinstance(res, ShadowResult)
+
+
 
 class TestUmaFlipRehearsal:
     """Clean admit, Gamma flips to proposed, next visit cancels both rows (#408)."""

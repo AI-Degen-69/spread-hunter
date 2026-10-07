@@ -799,7 +799,7 @@ def build_shadow_seam(
             log_fn = getattr(registry, "log_market_event", None)
             if callable(log_fn):
                 log_fn(record)
-        except Exception as e:
+        except (sqlite3.Error, OSError) as e:
             log.warning("shadow uma market_events write failed: %s: %s",
                         type(e).__name__, e)
 
