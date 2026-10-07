@@ -43,7 +43,8 @@ Pagination is unnecessary — the live set is small by construction.
 ## Selecting the main line
 
 **`sportsMarketType == "moneyline"` is the match winner.** Exactly one market
-per event carries it.
+per event carries it for the **two-way** sports; a soccer event carries **three**
+(Home, Draw, Away -- see below).
 
 `sportsMarketType == "child_moneyline"` is the **per-game** submarket
 (`groupItemTitle: "Game 3 Winner"`), and it is *not* the match winner.

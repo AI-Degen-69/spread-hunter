@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from scripts import live_events_probe as probe
 
 # --- recorded venue rows ----------------------------------------------------
@@ -441,19 +443,90 @@ def test_the_fetch_asks_the_venue_for_live_not_closed_events():
     assert params.get("closed") == "false"
 
 
-def test_a_non_list_payload_is_not_iterated_as_events():
-    # Arrange: the endpoint has served a dict wrapper before.
-    session = _FakeSession({"data": []})
+def test_a_full_page_is_followed_to_the_next_one():
+    # Arrange: a full page means the live set was cut off, not exhausted.
+    class _Paged:
+        def __init__(self):
+            self.offsets: list[int] = []
 
+        def get(self, url, **kwargs):
+            offset = kwargs["params"].get("offset") or 0
+            self.offsets.append(offset)
+            # Page 1 is full, page 2 is short -- so the walk stops there.
+            n = probe.LIVE_EVENT_PAGE if offset == 0 else 1
+            return _FakeResponse([_NHL_EVENT] * n)
+
+    session = _Paged()
+
+    # Act
+    events = probe.live_events(session)
+
+    # Assert: advanced by what the ENDPOINT returned, and stopped on a short
+    # page rather than reporting a truncated set as a complete one.
+    assert session.offsets == [0, probe.LIVE_EVENT_PAGE]
+    assert len(events) == probe.LIVE_EVENT_PAGE + 1
+
+
+def test_a_short_first_page_stops_after_one_request():
+    # Arrange: the usual case -- the live set fits in one page.
+    session = _FakeSession([_NHL_EVENT])
+
+    # Act
+    events = probe.live_events(session)
+
+    # Assert: one request, not a speculative second.
+    assert len(session.calls) == 1
+    assert len(events) == 1
+
+
+def test_a_wrapped_payload_yields_its_events():
+    # Arrange: the endpoint has served a `{"data": [...]}` wrapper. Reporting
+    # those events as "no live main line" is the one outcome a probe must not
+    # produce.
+    session = _FakeSession({"data": [_ESTRAL_EVENT]})
+
+    # Act
+    events = probe.live_events(session)
+
+    # Assert
+    assert [e["slug"] for e in events] == [_ESTRAL_EVENT["slug"]]
+
+
+def test_a_wrapper_round_an_empty_list_is_an_empty_live_set():
+    # Arrange: the venue answered and nothing is live. That is NOT an error.
     # Act / Assert
-    assert probe.live_events(session) == []
+    assert probe.live_events(_FakeSession({"data": []})) == []
+
+
+def test_a_payload_that_is_not_events_is_an_error_not_an_empty_set():
+    # Arrange: the venue answered, but not with events.
+    # Act / Assert: reading this as "nothing is live" would print a quiet
+    # night over a response the probe never understood.
+    with pytest.raises(ValueError):
+        probe.live_events(_FakeSession({"error": "rate limited"}))
+
+
+def test_an_unreadable_live_set_is_reported_and_exits_non_zero(
+        monkeypatch, capsys):
+    # Arrange
+    monkeypatch.setattr(probe.requests, "Session",
+                        lambda: _FakeSession({"error": "rate limited"}))
+
+    # Act
+    rc = probe.main([])
+
+    # Assert
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "unreadable" in out
 
 
 def test_a_transport_error_is_reported_not_raised(monkeypatch, capsys):
-    # Arrange
+    # Arrange: a real transport failure is a `requests` error, which is the
+    # only class this fetch catches.
     class _Boom:
         def get(self, *a, **k):
-            raise RuntimeError("connection reset")
+            raise probe.requests.ConnectionError("connection reset")
 
     monkeypatch.setattr(probe.requests, "Session", lambda: _Boom())
 
@@ -463,6 +536,100 @@ def test_a_transport_error_is_reported_not_raised(monkeypatch, capsys):
     # Assert: the probe reports and exits non-zero rather than crashing.
     assert rc == 1
     assert "unreachable" in capsys.readouterr().out
+
+
+def test_an_unexpected_error_is_not_relabelled_as_a_venue_outage(monkeypatch):
+    # Arrange: a bug in this file must not read as "the venue is down".
+    class _Buggy:
+        def get(self, *a, **k):
+            raise TypeError("a bug, not an outage")
+
+    monkeypatch.setattr(probe.requests, "Session", lambda: _Buggy())
+
+    # Act / Assert
+    with pytest.raises(TypeError):
+        probe.main([])
+
+
+# --- the printed verdict -----------------------------------------------------
+# The verdict is what a reader acts on, so it is asserted rather than left to
+# the eye. Each case pins one arm of the KEEP/DROP decision.
+
+
+def _report(monkeypatch, events) -> None:
+    """Run the probe against a fixed live set, for its printed verdicts."""
+    monkeypatch.setattr(probe.requests, "Session",
+                        lambda: _FakeSession(events))
+    assert probe.main([]) == 0
+
+
+def test_a_decided_live_match_is_dropped(monkeypatch, capsys):
+    # Arrange: in play but 15-5 up in the series -- over as a contest.
+    # Act
+    _report(monkeypatch, [_CPD_FUE_EVENT])
+
+    # Assert
+    out = capsys.readouterr().out
+    assert "DROP decided" in out
+    assert "lol-cpd-fue" in out
+
+
+def test_a_live_market_with_no_two_sided_book_is_dropped(monkeypatch, capsys):
+    # Arrange: bid absent, ask present -- a wall of submarkets.
+    event = {**_ESTRAL_EVENT, "markets": [
+        {**_ESTRAL_EVENT["markets"][0], "bestBid": None}]}
+
+    # Act
+    _report(monkeypatch, [event])
+
+    # Assert
+    assert "DROP no two-sided book" in capsys.readouterr().out
+
+
+def test_a_wide_book_is_dropped_with_its_measured_spread(monkeypatch, capsys):
+    # Arrange: both sides quoted, but too far apart to pair.
+    event = {**_ESTRAL_EVENT, "markets": [
+        {**_ESTRAL_EVENT["markets"][0], "bestBid": 0.40, "bestAsk": 0.50}]}
+
+    # Act
+    _report(monkeypatch, [event])
+
+    # Assert
+    assert "DROP spread 0.100" in capsys.readouterr().out
+
+
+def test_a_healthy_live_main_line_is_kept(monkeypatch, capsys):
+    # Arrange / Act
+    _report(monkeypatch, [_ESTRAL_EVENT])
+
+    # Assert
+    assert "KEEP" in capsys.readouterr().out
+
+
+def test_a_live_event_with_a_future_kickoff_is_kept_with_a_clock_note(
+        monkeypatch, capsys):
+    # Arrange: the tennis anomaly -- flagged live, match in progress, kickoff
+    # hours ahead. The flag and the clock disagree; the probe reports that and
+    # does NOT resolve it by dropping the market.
+    # Act
+    _report(monkeypatch, [_TENNIS_EVENT])
+
+    # Assert
+    out = capsys.readouterr().out
+    assert "KEEP" in out, "the clock must not decide tradeability"
+    assert "DROP" not in out
+    assert "CLOCK DISAGREES" in out
+
+
+def test_the_clock_disagreement_never_appears_as_a_drop_reason(
+        monkeypatch, capsys):
+    # Arrange: same market, so the note rides beside a KEEP verdict.
+    # Act
+    _report(monkeypatch, [_TENNIS_EVENT])
+
+    # Assert: a `DROP ... clock ...` line would decide the question the note
+    # exists to leave open.
+    assert "DROP clock" not in capsys.readouterr().out
 
 
 def test_the_sport_flag_restricts_the_report(monkeypatch, capsys):

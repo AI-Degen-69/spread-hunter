@@ -19,9 +19,10 @@ returns every live event with the fields that matter:
 match winner and is present on every genuine match event; `child_moneyline` is
 the per-game "Game N Winner" submarket on an LoL event, and `totals` /
 `spreads` / `map_handicap` and the sport-specific types are all submarkets.
-Exactly one `moneyline` market exists per event for the two-way sports, so the
-main line is found without relying on title parsing -- every market on the
-event carries a `groupItemTitle`, so an absent-label test would find nothing.
+Exactly one `moneyline` market exists per event for the two-way sports (soccer
+is 3-way), so the main line is found without relying on title parsing -- every
+market on the event carries a `groupItemTitle`, so an absent-label test would
+find nothing.
 
 Two things this probe learned the hard way, both encoded below:
 
@@ -53,7 +54,9 @@ the 19 live moneyline events on 2026-10-06, four tennis matches were flagged
 live with `gameStartTime` 10-15 hours ahead, with scores showing a match
 already in progress. The venue's per-event start time is not reliable for
 multi-day tournaments, so the probe reports the clock alongside the flag
-rather than picking a winner between them.
+rather than picking a winner between them -- and the disagreement is printed as
+a note BESIDE the KEEP/DROP verdict, never as a DROP reason, because filing it
+as one would decide the very question the note exists to leave open.
 
 Run:  python scripts/live_events_probe.py
       python scripts/live_events_probe.py --sport nhl --sport mlb
@@ -81,6 +84,13 @@ FINISHED_PRICE = 0.95
 # both sides quoted inside this spread.
 MAX_SPREAD = 0.06
 
+# The live set is small -- 35 to 70 events measured across one evening -- but it
+# is not bounded by ONE request. The venue caps a page and ignores a larger
+# `limit` (measured on /markets: limit=100, 250 and 500 all return 100), so a
+# single call would report a truncated set as a complete one.
+LIVE_EVENT_PAGE = 100
+LIVE_EVENT_MAX_PAGES = 20
+
 
 def _prices(m: dict) -> list[float]:
     try:
@@ -99,13 +109,51 @@ def _spread(m: dict) -> float | None:
         return None
 
 
+def _event_list(payload: object) -> list[dict] | None:
+    """The events in a raw or wrapped payload. None means "not events at all".
+
+    The endpoint has served a `{"data": [...]}` wrapper before, so the wrapper
+    is unwrapped. A payload that is neither a list nor a wrapper round a list
+    is an UNREADABLE response, not an empty live set -- returning [] for it
+    would print "no live main line right now" over a response the probe never
+    understood, which is the one outcome a probe must not produce.
+    """
+    if isinstance(payload, dict) and "data" in payload:
+        payload = payload["data"]
+    if not isinstance(payload, list):
+        return None
+    return [e for e in payload if isinstance(e, dict)]
+
+
 def live_events(session: requests.Session) -> list[dict]:
-    """Every live, not-closed event the venue reports."""
-    r = session.get(EVENTS, params={"live": "true", "closed": "false",
-                                    "limit": 200}, timeout=30)
-    r.raise_for_status()
-    rows = r.json()
-    return rows if isinstance(rows, list) else []
+    """Every live, not-closed event the venue reports, page by page.
+
+    Advances by what the endpoint ACTUALLY returned, not by the requested
+    limit, and stops on a short page -- the same pagination contract the
+    ranker's own scan documents for `/markets`, which serves a flat array and
+    supports `offset` only.
+
+    Raises on a transport failure so the caller can tell "the venue is
+    unreachable" from "nothing is live": an empty list means the venue
+    answered and had no live events.
+    """
+    out: list[dict] = []
+    offset = 0
+    for _ in range(LIVE_EVENT_MAX_PAGES):
+        r = session.get(EVENTS, params={"live": "true", "closed": "false",
+                                        "limit": LIVE_EVENT_PAGE,
+                                        "offset": offset}, timeout=30)
+        r.raise_for_status()
+        page = _event_list(r.json())
+        if page is None:
+            raise ValueError("the payload is not a list of events")
+        if not page:
+            break
+        out.extend(page)
+        offset += len(page)
+        if len(page) < LIVE_EVENT_PAGE:
+            break
+    return out
 
 
 def elapsed_hours(game_start_time: object, now: datetime) -> float | None:
@@ -192,8 +240,15 @@ def main(argv: list[str] | None = None) -> int:
     session = requests.Session()
     try:
         events = live_events(session)
-    except Exception as e:                                   # noqa: BLE001
+    except requests.RequestException as e:
+        # Only the fetch's own failures read as "unreachable". A broader catch
+        # would relabel a bug in this file as a venue outage and hide it.
         print(f"venue unreachable: {type(e).__name__}: {e}")
+        return 1
+    except ValueError as e:
+        # The venue answered, but not with events. Reported as that, so an
+        # unreadable response can never be mistaken for a quiet live set.
+        print(f"live set unreadable: {e}")
         return 1
 
     print(f"live & not-closed events: {len(events)}")
@@ -215,6 +270,12 @@ def main(argv: list[str] | None = None) -> int:
         vol = float(m.get("volume24hr") or 0)
         elapsed = elapsed_hours(row["game_start_time"], now)
 
+        # A verdict is about whether the pair is TRADEABLE. The clock is a
+        # separate observation: the venue's `live` flag and its kickoff time
+        # disagree, and this probe reports that rather than resolving it. Filing
+        # the disagreement as a DROP reason would decide the very question it
+        # exists to leave open, and would hide a live match behind a clock the
+        # venue has already overruled.
         reasons = []
         if not prices:
             reasons.append("no prices")
@@ -226,12 +287,6 @@ def main(argv: list[str] | None = None) -> int:
             reasons.append(f"spread {spread:.3f}")
         if not row["live"] or row["ended"]:
             reasons.append("not live")
-        if elapsed is not None and elapsed <= 0:
-            # The live flag and the clock disagree. Reported, not resolved:
-            # the venue's own liveness flag is the stronger signal, but a
-            # reader tuning the in-play window has to see this to know why a
-            # live match looked "not started" to a clock-based gate.
-            reasons.append(f"clock {elapsed:.1f}h (not started)")
 
         ways_n = counts[str(row["event_slug"])]
         verdict = "DROP " + ", ".join(reasons) if reasons else "KEEP"
@@ -243,6 +298,14 @@ def main(argv: list[str] | None = None) -> int:
               f"bid/ask={m.get('bestBid')}/{m.get('bestAsk')} "
               f"spread={shown} score={row['score']} "
               f"clock={row['game_start_time']!s}")
+        if elapsed is not None and elapsed <= 0:
+            # Reported alongside the verdict, never as one. A clock-based
+            # in-play gate reads this market as "not started" while it is being
+            # played, which is the whole reason the ranker takes liveness from
+            # the venue's flag instead.
+            print(f"    CLOCK DISAGREES: kickoff is {abs(elapsed):.1f}h in the "
+                  f"future, but the venue flags this live -- a clock-based "
+                  f"gate would refuse it as not started")
     return 0
 
 
