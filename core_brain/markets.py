@@ -33,6 +33,152 @@ for _scheme in ("https://", "http://"):
         pool_connections=8, pool_maxsize=8, max_retries=0))
 
 
+# How fresh series evidence must be for the live-series exemption (#402). The
+# feed stamps each live row when it is built; older than this, the score may
+# describe a finished game and the band applies as usual (fail closed).
+SERIES_EVIDENCE_MAX_AGE_SEC = 300.0
+
+
+@dataclass(frozen=True)
+class SeriesState:
+    """What the venue says about a series market's progress.
+
+    ``scope`` is "series" (a best-of match whose moneyline is the match
+    winner), "single" (a per-game line), or "unknown" (anything the parser
+    cannot prove). Only "series" can ever pass the live-series predicate;
+    unknown fails closed. ``games_remaining`` is None when the score gives no
+    series count to work from.
+    """
+    scope: str
+    best_of: Optional[int] = None
+    wins_a: Optional[int] = None
+    wins_b: Optional[int] = None
+    games_remaining: Optional[int] = None
+    venue_live: bool = False
+    venue_ended: bool = False
+    evidence_ts: Optional[float] = None
+
+
+_BO_SUFFIX_RE = re.compile(r"\b[Bb][Oo]\s?(\d{1,2})\b")
+_BEST_OF_TEXT_RE = re.compile(r"best\s+of\s+(\d{1,2})", re.IGNORECASE)
+_PERIOD_GAMES_RE = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{1,2})\s*$")
+_GAMES_SCORE_RE = re.compile(r"^\s*(\d{1,3})\s*-\s*(\d{1,3})\s*$")
+
+
+def _parse_games_score(text: str) -> Optional[tuple[int, int]]:
+    m = _GAMES_SCORE_RE.match(text or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1)), int(m.group(2))
+    except ValueError:
+        return None
+
+
+def parse_series_state(
+    *,
+    sports_market_type: Optional[str] = None,
+    score: Optional[str] = None,
+    period: Optional[str] = None,
+    question: Optional[str] = None,
+    live: bool = False,
+    ended: bool = False,
+    evidence_ts: Optional[float] = None,
+) -> SeriesState:
+    """Pure: venue series evidence -> SeriesState, never raises.
+
+    Score shape (docs/polymarket-live-events-endpoint.md): the running game
+    score, the series games, and the best-of suffix, e.g. "8-1|2-0|Bo5".
+    `moneyline` + best-of > 1 is a series; `child_moneyline` is a single
+    game; anything else is unknown. Best-of falls back to the "k/N" period
+    form ("3/5" -> best of 5) and then to "(BO3)" / "best of 3" in the
+    question. A lone "A-B" score counts as the series games only when a
+    best-of is known from elsewhere -- without that context it is as likely
+    a game score (NHL "2-0") and stays unknown.
+    """
+    mtype = str(sports_market_type or "").strip().lower()
+    best_of: Optional[int] = None
+    wins: Optional[tuple[int, int]] = None
+
+    parts = [p.strip() for p in str(score or "").split("|")]
+    bo_part = next((p for p in reversed(parts)
+                    if _BO_SUFFIX_RE.search(p)), None)
+    if bo_part:
+        try:
+            best_of = int(_BO_SUFFIX_RE.search(bo_part).group(1))  # type: ignore[union-attr]
+        except (ValueError, AttributeError):
+            best_of = None
+        if len(parts) >= 3:
+            wins = _parse_games_score(parts[-2])
+    if best_of is None:
+        pm = _PERIOD_GAMES_RE.match(str(period or ""))
+        if pm:
+            try:
+                best_of = int(pm.group(2))
+            except ValueError:
+                best_of = None
+    if best_of is None:
+        q = str(question or "")
+        qm = _BO_SUFFIX_RE.search(q) or _BEST_OF_TEXT_RE.search(q)
+        if qm:
+            try:
+                best_of = int(qm.group(1))
+            except ValueError:
+                best_of = None
+    if wins is None and best_of is not None and len(parts) == 1:
+        wins = _parse_games_score(parts[0])
+
+    if mtype == "child_moneyline":
+        scope = "single"
+    elif mtype == "moneyline" and best_of is not None and best_of > 1:
+        scope = "series"
+    else:
+        scope = "unknown"
+
+    games_remaining: Optional[int] = None
+    if scope == "series" and wins is not None and best_of:
+        games_remaining = max(0, best_of - (wins[0] + wins[1]))
+
+    return SeriesState(
+        scope=scope,
+        best_of=best_of,
+        wins_a=wins[0] if wins else None,
+        wins_b=wins[1] if wins else None,
+        games_remaining=games_remaining,
+        venue_live=bool(live),
+        venue_ended=bool(ended),
+        evidence_ts=evidence_ts,
+    )
+
+
+def live_series_with_games_remaining(
+    state: Optional[SeriesState],
+    now_ts: Optional[float] = None,
+    max_age_sec: float = SERIES_EVIDENCE_MAX_AGE_SEC,
+) -> bool:
+    """True only when venue evidence proves a live series has games left.
+
+    Fails closed: unknown scope, missing or clinched score, an ended venue
+    flag, or stale/absent evidence all read False and the band applies as
+    it does today.
+    """
+    if state is None or state.scope != "series":
+        return False
+    if not state.venue_live or state.venue_ended:
+        return False
+    if state.games_remaining is None or state.games_remaining <= 0:
+        return False
+    if state.best_of and state.wins_a is not None and state.wins_b is not None:
+        needed = state.best_of // 2 + 1
+        if max(state.wins_a, state.wins_b) >= needed:
+            return False
+    if state.evidence_ts is None:
+        return False
+    at = now_ts if now_ts is not None else time.time()
+    age = at - float(state.evidence_ts)
+    return 0 <= age <= max_age_sec
+
+
 @dataclass(frozen=True)
 class LiveMarket:
     condition_id: str
@@ -44,6 +190,9 @@ class LiveMarket:
     tick_size: float
     neg_risk: bool
     game_start_ts: Optional[float] = None  # venue kickoff, None when unstated
+    # Feed-row series evidence, attached by the Trader after `fetch_market`
+    # (#402). None on every other path: the band applies as before.
+    series_state: Optional[SeriesState] = None
 
     def t_remaining(self, now: Optional[float] = None) -> float:
         return self.end_ts - (now if now is not None else time.time())

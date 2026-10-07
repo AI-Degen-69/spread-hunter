@@ -471,3 +471,141 @@ def test_the_stats_name_the_sports_that_were_live(sport, expected):
 
     # Assert
     assert (sport in stats["live_sports"]) is expected
+
+
+# --- series state (#402 T2) --------------------------------------------------
+# A live LoL BO3: FlyQuest vs Shopify Rebellion, one game played. Recorded
+# shape per docs/polymarket-live-events-endpoint.md: score carries the running
+# game score, the series games, and the best-of suffix.
+_BO3_EVENT = {
+    "id": "7005", "slug": "lol-fly-sr-2026-10-07",
+    "title": "FlyQuest vs Shopify Rebellion",
+    "live": True, "ended": False, "period": "2/3", "score": "9-4|1-1|Bo3",
+    "sport": {"id": 39, "sport": "lol", "name": "League of Legends"},
+    "tags": [{"label": "Esports"}, {"label": "League of Legends"}],
+    "series": [{"id": "10400", "slug": "lol-2026", "title": "League of Legends"}],
+    "markets": [
+        {"conditionId": "0xflysr", "slug": "lol-fly-sr-2026-10-07",
+         "question": "FlyQuest vs Shopify Rebellion",
+         "sportsMarketType": "moneyline", "groupItemTitle": "Match Winner",
+         "clobTokenIds": '["101", "202"]',
+         "outcomePrices": '["0.15", "0.85"]', "bestBid": 0.14,
+         "bestAsk": 0.16, "spread": 0.02, "volume24hr": 63664.9,
+         "gameStartTime": "2026-10-07 15:00:00+00",
+         "endDate": "2026-10-07T15:00:00Z",
+         "enableOrderBook": True, "acceptingOrders": True, "closed": False,
+         "orderMinSize": 5, "orderPriceMinTickSize": 0.01,
+         "rewardsMaxSpread": 4.5, "rewardsMinSize": 50},
+    ],
+}
+
+_NOW = 1_790_000_000.0
+
+
+def _series(**kw):
+    from core_brain.markets import parse_series_state
+    base = {"sports_market_type": "moneyline", "score": None, "period": None,
+            "question": "", "live": True, "ended": False,
+            "evidence_ts": _NOW}
+    base.update(kw)
+    return parse_series_state(**base)
+
+
+def _quotable(state, now=_NOW):
+    from core_brain.markets import live_series_with_games_remaining
+    return live_series_with_games_remaining(state, now)
+
+
+class TestSeriesState:
+    def test_bo5_with_games_left_is_quotable(self):
+        s = _series(score="8-1|2-0|Bo5", period="3/5")
+        assert s.scope == "series"
+        assert s.best_of == 5
+        assert s.games_remaining == 3
+        assert _quotable(s) is True
+
+    def test_bo3_with_one_game_left_is_quotable(self):
+        s = _series(score="9-4|1-1|Bo3", period="2/3")
+        assert s.scope == "series"
+        assert s.games_remaining == 1
+        assert _quotable(s) is True
+
+    def test_clinched_series_is_not_quotable(self):
+        assert _quotable(_series(score="15-5|2-0|Bo3")) is False
+
+    def test_nhl_single_game_fails_closed(self):
+        s = _series(score="2-0", period="End P1")
+        assert s.scope == "unknown"
+        assert _quotable(s) is False
+
+    def test_tennis_fails_closed(self):
+        s = _series(score="6-3, 6-7(2-7), 0-3", period="S3")
+        assert s.scope == "unknown"
+        assert _quotable(s) is False
+
+    def test_finished_cs2_is_not_quotable(self):
+        s = _series(score="2-1", period="3/3", live=False, ended=True)
+        assert _quotable(s) is False
+
+    def test_stale_evidence_fails_closed(self):
+        from core_brain.markets import SERIES_EVIDENCE_MAX_AGE_SEC
+        s = _series(score="9-4|1-1|Bo3", period="2/3")
+        assert _quotable(s, now=_NOW + SERIES_EVIDENCE_MAX_AGE_SEC + 1) is False
+
+    def test_child_moneyline_is_a_single_game(self):
+        s = _series(sports_market_type="child_moneyline",
+                    score="9-4|1-1|Bo3", period="2/3")
+        assert s.scope == "single"
+        assert _quotable(s) is False
+
+    def test_question_names_the_best_of_when_score_does_not(self):
+        s = _series(score="1-0",
+                    question="Team Falcons vs Natus Vincere (BO3) - Map Winner")
+        assert s.scope == "series"
+        assert s.best_of == 3
+        assert _quotable(s) is True
+
+
+def test_a_live_series_row_carries_its_series_evidence():
+    rows, _ = fm.live_event_markets(_FakeSession([_BO3_EVENT]))
+    row = rows[0]
+    assert row["sports_market_type"] == "moneyline"
+    assert row["_event_live"] is True
+    assert row["_event_ended"] is False
+    assert row["_series_ts"] > 0
+
+
+def test_the_rank_keeps_a_live_series_past_the_mid_gate(monkeypatch):
+    # Arrange: books with UP mid 0.85 / DOWN mid 0.15 -- outside [0.20, 0.80]
+    # on both sides. A series row must sail past the mid gate; the same books
+    # on a single-game row must refuse as decided.
+    import time
+    rows, _ = fm.live_event_markets(_FakeSession([_BO3_EVENT]))
+    series_row = dict(rows[0], _series_ts=time.time())
+    nhl_rows, _ = fm.live_event_markets(_FakeSession([_NHL_EVENT]))
+    single_row = dict(nhl_rows[0], _series_ts=time.time())
+
+    monkeypatch.setattr(
+        fm, "tape_movement_and_range",
+        lambda *a, **k: {"movement_usd": 1_000_000.0, "range_cents": 5.0,
+                         "measured_at": "t", "trade_count": 100})
+
+    def books(url, params=None, timeout=None):
+        mid = 0.85 if params["token_id"] == "101" else 0.15
+        return _FakeResponse({
+            "bids": [{"price": f"{mid - 0.01:.2f}", "size": "5000"}],
+            "asks": [{"price": f"{mid + 0.01:.2f}", "size": "5000"}]})
+
+    class _BookSession(_FakeSession):
+        def get(self, url, **kwargs):
+            if "clob.polymarket.com/book" in str(url):
+                return books(url, **kwargs)
+            raise AssertionError(f"unexpected venue call {url}")
+
+    out = fm.evaluate(_BookSession([]), 1.0, series_row,
+                      volume_24h=63_664.0, source="spread")
+    assert "decided mid" not in (out.get("reject_reason") or "")
+
+    out = fm.evaluate(_BookSession([]), 1.0, single_row,
+                      volume_24h=63_664.0, source="spread")
+    assert "decided mid" in (out.get("reject_reason") or "")

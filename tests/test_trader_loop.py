@@ -1352,6 +1352,78 @@ class TestFuriaQuoteClock:
         # A day after kickoff the window is spent: negative again.
         assert quote_t_remaining(market, now=self.KICKOFF + 86400.0) < 0
 
+    # --- live BO3 series (#402 T2) -------------------------------------------
+    def _bo3_market(self, series_state):
+        from core_brain.markets import LiveMarket
+        import time
+        kickoff = time.time() - 3600.0
+        return LiveMarket(
+            condition_id="0xflysr", market_slug="lol-fly-sr-2026-10-07",
+            up_token="tok-up", down_token="tok-dn",
+            start_ts=kickoff - 7200.0, end_ts=kickoff,
+            tick_size=0.01, neg_risk=False, game_start_ts=kickoff,
+            series_state=series_state)
+
+    def _outside_band_books(self):
+        up = {"token_id": "tok-up", "best_bid": 0.13, "best_ask": 0.15,
+              "bids": {0.13: 5000.0}, "asks": {0.15: 5000.0}}
+        down = {"token_id": "tok-dn", "best_bid": 0.83, "best_ask": 0.85,
+                "bids": {0.83: 5000.0}, "asks": {0.85: 5000.0}}
+        return up, down
+
+    def _decide(self, series_state):
+        import time
+        from core_brain.quotes import decide_quotes
+        market = self._bo3_market(series_state)
+        up, down = self._outside_band_books()
+        return decide_quotes(
+            MakerConfig(), up, down, Inventory(), 600.0,
+            series_state=getattr(market, "series_state", None))
+
+    def _live_bo3(self):
+        import time
+        from core_brain.markets import parse_series_state
+        return parse_series_state(
+            sports_market_type="moneyline", score="9-4|1-1|Bo3",
+            period="2/3", question="FlyQuest vs Shopify Rebellion",
+            live=True, ended=False, evidence_ts=time.time())
+
+    def test_live_bo3_with_games_left_quotes_outside_the_band(self):
+        intents, why = self._decide(self._live_bo3())
+        assert len(intents) == 2, why
+        assert why == ""
+
+    def test_single_game_with_same_mid_is_still_refused(self):
+        intents, why = self._decide(None)
+        assert intents == []
+        assert "decided market" in why
+
+    def test_stale_series_score_is_still_refused(self):
+        import time
+        from core_brain.markets import (SERIES_EVIDENCE_MAX_AGE_SEC,
+                                        parse_series_state)
+        stale = parse_series_state(
+            sports_market_type="moneyline", score="9-4|1-1|Bo3",
+            period="2/3", question="FlyQuest vs Shopify Rebellion",
+            live=True, ended=False,
+            evidence_ts=time.time() - SERIES_EVIDENCE_MAX_AGE_SEC - 1)
+        intents, why = self._decide(stale)
+        assert intents == []
+        assert "decided market" in why
+
+    def test_settled_book_still_refuses_a_live_series(self):
+        from core_brain.quotes import decide_quotes
+        market = self._bo3_market(self._live_bo3())
+        up = {"token_id": "tok-up", "best_bid": 0.989, "best_ask": 0.999,
+              "bids": {0.989: 5000.0}, "asks": {0.999: 5000.0}}
+        down = {"token_id": "tok-dn", "best_bid": 0.001, "best_ask": 0.011,
+                "bids": {0.001: 5000.0}, "asks": {0.011: 5000.0}}
+        intents, why = decide_quotes(
+            MakerConfig(), up, down, Inventory(), 600.0,
+            series_state=market.series_state)
+        assert intents == []
+        assert "settled book" in why
+
 
 class TestClassifyRefusal:
     """#390: the refusal classifier pins every terminal marker, so a reworded

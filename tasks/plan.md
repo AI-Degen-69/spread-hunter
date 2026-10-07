@@ -102,7 +102,7 @@ Frozen: `quotes.py` refusal strings, `orders.cancel_reason` values,
   open row stays unresolved, unknown-`closed` elapsed date still resolves.
 - Depends on: none.
 
-### T2 [ ] — Series-state reading + band exemption [Backend/Logic] (M)
+### T2 [x] — Series-state reading + band exemption [Backend/Logic] (M)
 - Target files: `core_brain/markets.py` (parser + `LiveMarket` optional field),
   `core_brain/quotes.py` (`:321-329` exemption only), `scripts/filter_markets.py`
   (keep `sportsMarketType` in row builder, same predicate at ranking gate).

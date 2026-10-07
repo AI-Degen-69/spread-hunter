@@ -29,7 +29,7 @@ import time
 from typing import Any, Callable, Optional
 
 from core_brain import config, risk, unhedged_stop_loss
-from core_brain.markets import quote_t_remaining
+from core_brain.markets import SeriesState, live_series_with_games_remaining, quote_t_remaining
 from core_brain.config import MakerConfig
 
 
@@ -215,6 +215,7 @@ def _decide_quotes_from_mid(
     down_book: dict,
     inv: Inventory,
     t_remaining: float,
+    series_state: Optional[SeriesState] = None,
 ) -> tuple[list[QuoteIntent], str]:
     """Rest both legs under MID. The production path.
 
@@ -325,7 +326,13 @@ def _decide_quotes_from_mid(
         # plan_orders() sees empty intents and cancels all OPEN orders for
         # this market — the safe path for a settled book (Polymarket also
         # cancels at settlement, but we don't wait for it).
-        if mid <= 0.20 or mid >= 0.80:
+        #
+        # LIVE-SERIES EXEMPTION (#402): a best-of series with games remaining
+        # routinely sits outside the band mid-series (game 2 of a BO3 at 0.85
+        # is a live market, not a settled one). The exemption is venue
+        # evidence only -- unknown, stale, or clinched state keeps the band.
+        series_exempt = live_series_with_games_remaining(series_state)
+        if (mid <= 0.20 or mid >= 0.80) and not series_exempt:
             blocked.append(f"{side}: mid {mid:.3f} outside [0.20,0.80] -- decided market")
             continue
 
@@ -632,7 +639,8 @@ def route_quotes(cfg: MakerConfig, market, up_book: dict, down_book: dict,
     if cfg.ladder_mode and market is not None:
         return decide_ladder_quotes(cfg, market, up_book, down_book, now=now)
     return decide_quotes(cfg, up_book, down_book, inv, t_remaining,
-                         window_frac)
+                         window_frac,
+                         series_state=getattr(market, "series_state", None))
 
 
 def decide_quotes(
@@ -642,6 +650,7 @@ def decide_quotes(
     inv: Inventory,
     t_remaining: float,
     window_frac: Optional[float] = None,
+    series_state: Optional[SeriesState] = None,
 ) -> tuple[list[QuoteIntent], str]:
     """Return the bids we want resting right now, plus a reason if we want none.
 
@@ -649,10 +658,12 @@ def decide_quotes(
     `window_frac` is how far into the trading window we are, 0..1. None means
     the caller could not work it out, in which case the timing rule is SKIPPED
     rather than guessed -- a missing clock must not silently gate every quote.
+    `series_state` is the feed row's series evidence (None on every path that
+    has none): only a proven live series with games left skips the mid band.
     """
     if cfg.objective in ("spread_capture", "rewards"):
         intents, why = _decide_quotes_from_mid(cfg, up_book, down_book, inv,
-                                               t_remaining)
+                                               t_remaining, series_state)
         return _require_two_sided(cfg, inv, intents, why)
 
     if t_remaining < cfg.min_t_remaining_sec:
@@ -900,8 +911,17 @@ def evaluate_market_quote(
     # `window_frac` stays None: both production callers
     # serve pinned markets whose `start_ts` is the load time, not a window
     # open -- computing a fraction off that would invent a window origin.
-    intents, why = decide(cfg, up_book, down_book, inv,
-                          quote_t_remaining(market), None)
+    # `series_state` travels on the market object the Trader attached after
+    # `fetch_market` (#402). Custom `decide` ports predate the keyword, so it
+    # is passed only when set -- a None state calls exactly as before.
+    series_state = getattr(market, "series_state", None)
+    if series_state is None:
+        intents, why = decide(cfg, up_book, down_book, inv,
+                              quote_t_remaining(market), None)
+    else:
+        intents, why = decide(cfg, up_book, down_book, inv,
+                              quote_t_remaining(market), None,
+                              series_state=series_state)
     return MarketEval(
         cid=cid, market=market, up_book=up_book, down_book=down_book,
         inventory=inv, intents=intents, why=why,
