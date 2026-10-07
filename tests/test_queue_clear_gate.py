@@ -27,7 +27,9 @@ import pytest
 
 from core_brain import risk
 from core_brain.config import MakerConfig, load
-from core_brain.markets import recent_sell_flow
+from core_brain.markets import SellFlow, recent_sell_flow
+from core_brain.quotes import QuoteIntent
+from core_brain.trader_loop import VenueSeam, _admit_placements, _visit_one
 
 NOW = 1_788_000_000.0
 WINDOW = 1800.0  # the 30m tape the issue cites
@@ -243,6 +245,264 @@ class TestQueueClearBlock:
             "UP", 0.47, 85000.0, 0.0, 30.0)
         assert allowed is False
         assert why
+
+
+def _sell_flow(by_token, status="complete", window=WINDOW):
+    return SellFlow(status=status, window_sec=window, by_token=by_token)
+
+
+class _FakeMarket:
+    """The attributes `_visit_one` and `quote_t_remaining` read."""
+
+    def __init__(self, cid="0xabc"):
+        self.condition_id = cid
+        self.up_token = "tok-up"
+        self.down_token = "tok-dn"
+        self.market_slug = "fake-market"
+        self.tick_size = 0.01
+        self.neg_risk = False
+
+    def t_remaining(self, now=None):
+        return 14400.0
+
+
+def _intent(side="UP", token="tok-up", price=0.47, size=5, crossed=False):
+    return QuoteIntent(side=side, token_id=token, price=price, size=size,
+                       mid=price + 0.01, edge_vs_mid=0.01, crossed=crossed)
+
+
+#: 85,000 shares ahead at UP's own price -- the live 2026-10-06 shape.
+_DEEP_UP = {"token_id": "tok-up", "best_bid": 0.46, "best_ask": 0.50,
+            "bids": {0.47: 85000.0}, "asks": {0.50: 5000.0}}
+#: Nothing ahead of our 0.45 bid at all: the queue clears whatever the tape says.
+_CLEAR_DOWN = {"token_id": "tok-dn", "best_bid": 0.44, "best_ask": 0.48,
+               "bids": {}, "asks": {0.48: 5000.0}}
+#: A real but shallow front: 100 shares ahead against flow that reaches it.
+_SHALLOW_UP = {"token_id": "tok-up", "best_bid": 0.46, "best_ask": 0.50,
+               "bids": {0.47: 100.0}, "asks": {0.50: 5000.0}}
+
+
+class _CountingFlow:
+    """A flow port that records how many times it was asked, and what for."""
+
+    def __init__(self, flow=None, boom=False):
+        self.flow = flow
+        self.boom = boom
+        self.calls: list[tuple] = []
+
+    def __call__(self, condition_id, window_sec):
+        self.calls.append((condition_id, window_sec))
+        if self.boom:
+            raise OSError("tape unreachable")
+        return self.flow
+
+
+class TestAdmitPlacements:
+    def test_nothing_planned_is_a_no_op_that_reads_nothing(self):
+        port = _CountingFlow(_sell_flow({}))
+        admitted, why = _admit_placements([], _FakeMarket(), _DEEP_UP,
+                                          _CLEAR_DOWN, port, _gate_cfg())
+        assert admitted == []
+        assert why == ""
+        assert port.calls == []
+
+    def test_a_clear_front_never_reads_the_tape(self):
+        # Nothing ahead of us at our own price: no measurement to pay for.
+        port = _CountingFlow(_sell_flow({}))
+        intent = _intent(price=0.47)
+        admitted, why = _admit_placements(
+            [intent], _FakeMarket(),
+            {"token_id": "tok-up", "bids": {}, "asks": {}}, _CLEAR_DOWN,
+            port, _gate_cfg())
+        assert admitted == [intent]
+        assert why == ""
+        assert port.calls == []
+
+    def test_a_crossed_intent_never_rests_and_is_never_gated(self):
+        # Fill-or-kill legs do not join the queue, so a deep front is irrelevant
+        # -- and must not cost a tape read either.
+        port = _CountingFlow(_sell_flow({}))
+        crossed = _intent(crossed=True)
+        admitted, why = _admit_placements([crossed], _FakeMarket(), _DEEP_UP,
+                                          _CLEAR_DOWN, port, _gate_cfg())
+        assert admitted == [crossed]
+        assert why == ""
+        assert port.calls == []
+
+    def test_record_only_reports_the_reason_and_keeps_both_legs(self):
+        port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        down = _intent(side="DOWN", token="tok-dn", price=0.45)
+        admitted, why = _admit_placements([up, down], _FakeMarket(), _DEEP_UP,
+                                          _CLEAR_DOWN, port, _gate_cfg())
+        assert admitted == [up, down]
+        assert "would refuse" in why
+        assert "maker queue" in why
+        assert port.calls == [("0xabc", WINDOW)]
+
+    def test_enforcing_drops_the_whole_couple_never_one_leg(self):
+        # A fresh couple carries no pair_id until `_submit_intents` mints one, so
+        # the only way to keep the legs together is to drop them together. One
+        # resting leg with no partner is the Unpaired alert state.
+        port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        down = _intent(side="DOWN", token="tok-dn", price=0.45)
+        admitted, why = _admit_placements(
+            [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
+            _gate_cfg(enforce_queue_clear_gate=True))
+        assert admitted == []
+        assert "maker queue" in why
+        assert "2 new placement(s) dropped with it" in why
+
+    def test_an_existing_pair_id_is_dropped_with_its_blocked_leg(self):
+        # A carried pair_id (a ladder rung replacing one leg of a live pair) gets
+        # no exemption: the batch goes with it either way.
+        port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        down = _intent(side="DOWN", token="tok-dn", price=0.45)
+        up.pair_id = down.pair_id = "pair-live"
+        admitted, why = _admit_placements(
+            [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
+            _gate_cfg(enforce_queue_clear_gate=True))
+        assert admitted == []
+        assert why
+
+    def test_a_crossed_leg_still_goes_out_beside_a_blocked_couple(self):
+        # The crossed leg is a balance hedge completing from inventory; it does
+        # not rest, so the queue has nothing to say about it.
+        port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        down = _intent(side="DOWN", token="tok-dn", price=0.45)
+        crossed = _intent(side="UP", token="tok-up", price=0.50, crossed=True)
+        admitted, why = _admit_placements(
+            [up, down, crossed], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
+            _gate_cfg(enforce_queue_clear_gate=True))
+        assert admitted == [crossed]
+        assert why
+
+    def test_reachable_flow_counts_at_or_below_our_price_only(self):
+        # A seller at 0.46 reached our 0.47 bid; a print at 0.48 lifted somebody
+        # else's ask and left our bid exactly where it was.
+        boundary = _intent(price=0.48)
+        book = {"token_id": "tok-up", "bids": {0.48: 5900.0}, "asks": {}}
+        allowed_by = _CountingFlow(_sell_flow({"tok-up": {0.48: 1000.0, 0.47: 1000.0}}))
+        admitted, why = _admit_placements(
+            [boundary], _FakeMarket(), book, _CLEAR_DOWN, allowed_by,
+            _gate_cfg(enforce_queue_clear_gate=True))
+        # 2000 shares reachable -> 5900 / (2000/30) = 88.5 min > 60: blocked.
+        assert admitted == []
+        assert "maker queue" in why
+
+        ignored = _CountingFlow(_sell_flow({"tok-up": {0.49: 1_000_000.0}}))
+        admitted, why = _admit_placements(
+            [boundary], _FakeMarket(), book, _CLEAR_DOWN, ignored,
+            _gate_cfg(enforce_queue_clear_gate=True))
+        # Nothing reached our price at all: the queue never clears.
+        assert admitted == []
+        assert "never clears" in why
+
+    def test_an_unmeasurable_tape_fails_open_and_says_so(self):
+        for status in ("unavailable", "truncated"):
+            up = _intent(side="UP", token="tok-up", price=0.47)
+            down = _intent(side="DOWN", token="tok-dn", price=0.45)
+            admitted, why = _admit_placements(
+                [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN,
+                _CountingFlow(_sell_flow({}, status=status)),
+                _gate_cfg(enforce_queue_clear_gate=True))
+            assert admitted == [up, down]
+            assert status in why
+
+    def test_a_flow_read_that_raises_fails_open(self):
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        admitted, why = _admit_placements(
+            [up], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN,
+            _CountingFlow(boom=True),
+            _gate_cfg(enforce_queue_clear_gate=True))
+        assert admitted == [up]
+        assert "failed" in why
+
+    def test_a_missing_port_leaves_every_caller_as_it_was(self):
+        # The shadow seam and every existing test build a seam with no flow port.
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        admitted, why = _admit_placements(
+            [up], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, None,
+            _gate_cfg(enforce_queue_clear_gate=True))
+        assert admitted == [up]
+        assert why == ""
+
+
+class TestGateInVisitOne:
+    def _seam(self, cfg, decide, submitted, flow_port, open_orders=(),
+              up_book=_DEEP_UP):
+        books = {"tok-up": up_book, "tok-dn": _CLEAR_DOWN}
+        return VenueSeam(
+            base_cfg=cfg,
+            client=object(),
+            registry=None,
+            fetch_market=lambda cid: _FakeMarket(),
+            fetch_books=lambda host, tok: books[tok],
+            decide=decide,
+            submit_fn=lambda c, r, m, intents, c2: (
+                submitted.append(list(intents)) or len(intents)),
+            cancel_fn=lambda *a, **k: 0,
+            open_orders_fn=lambda m: list(open_orders),
+            flow_fn=flow_port,
+        )
+
+    @staticmethod
+    def _two_legs(*a, **k):
+        return ([_intent(side="UP", token="tok-up", price=0.47),
+                 _intent(side="DOWN", token="tok-dn", price=0.45)], "")
+
+    def test_the_dry_run_reports_the_reason_and_still_shows_the_plan(self):
+        submitted = []
+        seam = self._seam(_gate_cfg(), self._two_legs, submitted,
+                          _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}})))
+        result = _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=False)
+        assert submitted == []                       # dry run touches nothing
+        assert "would refuse" in result.queue_why
+        assert len(result.intents) == 2              # record-only: the plan stands
+        assert result.status == "DRY_RUN"
+
+    def test_enforcing_leaves_nothing_resting_for_that_market(self):
+        submitted = []
+        seam = self._seam(_gate_cfg(enforce_queue_clear_gate=True),
+                          self._two_legs, submitted,
+                          _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}})))
+        result = _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True)
+        assert submitted == []
+        assert "maker queue" in result.queue_why
+        assert result.submitted == 0
+
+    def test_a_clear_queue_places_both_legs_exactly_as_before(self):
+        # 100 shares ahead against 3,000 shares of reachable flow in 30m is one
+        # minute of queue: nothing to refuse.
+        submitted = []
+        port = _CountingFlow(_sell_flow({"tok-up": {0.47: 3000.0}}))
+        seam = self._seam(_gate_cfg(enforce_queue_clear_gate=True),
+                          self._two_legs, submitted, port, up_book=_SHALLOW_UP)
+        result = _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True)
+        assert len(submitted[0]) == 2
+        assert result.queue_why == ""
+        assert result.submitted == 2
+
+    def test_a_seam_without_the_port_is_untouched(self):
+        # Today's wiring, and the shadow seam, set no flow port: a deep queue
+        # must change nothing for them.
+        submitted = []
+        seam = self._seam(_gate_cfg(enforce_queue_clear_gate=True),
+                          self._two_legs, submitted, None)
+        result = _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True)
+        assert len(submitted[0]) == 2
+        assert result.queue_why == ""
+
+    def test_a_measured_window_is_the_configured_one(self):
+        submitted = []
+        port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
+        seam = self._seam(_gate_cfg(queue_flow_window_sec=600.0),
+                          self._two_legs, submitted, port)
+        _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True)
+        assert port.calls == [("0xabc", 600.0)]
 
 
 class TestQueueGateSettings:

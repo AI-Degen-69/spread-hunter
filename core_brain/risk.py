@@ -379,9 +379,8 @@ def queue_clear_block(cfg, side: str, price: float, queue_shares: float,
     (`scoring.selector.queue_minutes_at` + `maker_queue_allowed`), including the
     two cases that are easy to get wrong: no trade at our price is `inf` (never
     clears) rather than missing data, and `enforce=False` is record-only. Two
-    copies of one rule drift, so this adapts that pair -- imported inside the
-    call, the same way `shadow_exec` does, to keep the module import graph as it
-    is.
+    copies of one rule drift, so this adapts that pair, imported inside the call
+    so the module import graph is exactly what it was before this gate existed.
 
     Returns `(allowed, why)`. `why` is EMPTY when the queue clears and otherwise
     carries the shared `maker queue: ...` reason with the leg appended, so the

@@ -170,7 +170,7 @@ Helper skills: test-driven-development, incremental-implementation. Depends on: 
 Verify: `python -m pytest -q tests/test_queue_clear_gate.py tests/test_maker_queue_bar.py`
 Checkpoint: measurement + rule proven; loop still untouched.
 
-### [ ] T3 — GREEN: admission in the visit, port, live wiring [Backend/Logic] (M)
+### [x] T3 — GREEN: admission in the visit, port, live wiring [Backend/Logic] (M)
 Target: `core_brain/trader_loop.py` (`VenueSeam.flow_fn`, `LiveFleetResult.queue_why`,
 `_admit_placements`, the `_visit_one` call site and its dry-run/log/event reporting, the
 `main()` wiring `flow_fn=lambda cid, win: recent_sell_flow(cid, win)`),
@@ -211,6 +211,19 @@ Checkpoint: feature complete and observable.
   disable value, so setting it by name would read as an enforced limit).
 - The reader reuses `markets._SESSION` / `TRADES_API` / `TAPE_TIMEOUT` and pages with the
   same `offset` parameter `markout._default_trades_fn` uses, bounded at 3 pages.
+- T3 verified with `tests/test_queue_clear_gate.py`, `tests/test_trader_loop.py`,
+  `tests/test_market_quote.py`, `tests/test_shadow_run.py`,
+  `tests/test_plan_orders_asymmetric_hold.py` → 199 passed; plus a wider net over the loop's
+  neighbours (trader_loop_state, empty_markets_routine, instance_lock, menu_status_rows,
+  live_state_language, analytics_surface_mount, dashboard_server, markout_chart) → 287 passed.
+- `tests/test_shadow_run.py::TestBoundaryGuard` caught a docstring in `risk.py` that named a
+  shadow module: live modules must not reference the shadow model. Wording fixed, guard left
+  exactly as it was.
+- `tests/test_dynamic_risk_caps.py` fails in THIS SHELL only, because `PORT=0` is exported and
+  `dashboard/server.py:88` refuses it at import; with `PORT` unset the file is 14/14. Not a
+  regression, and `dashboard/server.py` is not in the diff.
+- Noticed-but-not-touching candidates (3, all `open`) recorded in
+  `docs/issues/393-noticed-but-not-touching.md`.
 
 ## Notes (session memory — do not lose)
 
