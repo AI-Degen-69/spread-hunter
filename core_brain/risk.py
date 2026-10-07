@@ -361,6 +361,54 @@ def completable_pair_block(cfg, price: float,
     return None
 
 
+def queue_clear_block(cfg, side: str, price: float, queue_shares: float,
+                      reachable_shares: float,
+                      window_min: float) -> tuple[bool, str]:
+    """Why a new bid at `price` should not rest, from the queue ahead of it.
+
+    The question is "can this ever fill", not "what is the fill probability":
+    `queue_shares` is the book depth resting AT our price right now, and
+    `reachable_shares` is taker SELL volume on that token at or below our price
+    inside `window_min`. Minutes to clear = ahead / (reachable / minutes) -- the
+    wait before a seller could even reach us. Cancels ahead of us are not
+    modelled, so it is an UPPER BOUND on the wait, which is the honest direction
+    for a gate whose answer is "do not bother".
+
+    This is deliberately NOT a second copy of the rule. The ranker's maker-queue
+    bar has measured exactly this since 2026-08-25
+    (`scoring.selector.queue_minutes_at` + `maker_queue_allowed`), including the
+    two cases that are easy to get wrong: no trade at our price is `inf` (never
+    clears) rather than missing data, and `enforce=False` is record-only. Two
+    copies of one rule drift, so this adapts that pair -- imported inside the
+    call, the same way `shadow_exec` does, to keep the module import graph as it
+    is.
+
+    Returns `(allowed, why)`. `why` is EMPTY when the queue clears and otherwise
+    carries the shared `maker queue: ...` reason with the leg appended, so the
+    string stands on its own in a log line or a cycle event.
+    `max_queue_clear_minutes` of 0 disables the rule, and a zero queue is allowed
+    before any division -- an empty level needs no time to clear, whatever the
+    tape says.
+    """
+    from scoring.selector import maker_queue_allowed, queue_minutes_at
+
+    bar = float(getattr(cfg, "max_queue_clear_minutes", 0.0) or 0.0)
+    if bar <= 0:
+        return True, ""
+    ahead = float(queue_shares)
+    if ahead <= 0:
+        return True, ""
+    minutes = queue_minutes_at(
+        ahead, float(reachable_shares), float(window_min))
+    allowed, why = maker_queue_allowed(
+        minutes, bar,
+        enforce=bool(getattr(cfg, "enforce_queue_clear_gate", False)),
+    )
+    if not why:
+        return True, ""
+    return allowed, f"{why} ({side} @ {float(price):.4f})"
+
+
 def hard_block(cfg, inv, side: str, price: float,
                own_book: dict, hedge_book: dict) -> Optional[str]:
     """Why a NEW bid on `side` must not rest, or None if it may.

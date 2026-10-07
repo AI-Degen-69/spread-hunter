@@ -932,6 +932,27 @@ class MakerConfig:
     requote_hold_below_target: float = 0.05
     poll_interval_sec: float = 1.0
 
+    # THE QUEUE-CLEAR GATE (#393). Every gate above judges the PRICE of a new
+    # bid; this one judges whether it can ever FILL. A bid behind a queue that
+    # cannot clear rests, earns nothing and ties up its pair -- observed live
+    # 2026-10-06, 7-share orders behind $85k/$26k queue-ahead on the Texas
+    # Senate market against $19,279/30m of tape. Queue ahead is the current book
+    # depth AT the new bid's own price; reachable flow is taker SELL prints on
+    # that token at or below it inside `queue_flow_window_sec` (30m, the window
+    # the issue cites). Minutes to clear = ahead / (reachable / window minutes),
+    # refused past `max_queue_clear_minutes`. Deliberately NOT
+    # `cancel_queue_ahead`: that records the queue an EXISTING order held at
+    # cancel time, and live code never writes it for a new bid.
+    #
+    # Ships RECORD-ONLY (`enforce` False), the same way the ranker's maker-queue
+    # bar shipped: at the measured depths enforcing on day one can refuse
+    # everything and take the bot silent, and a reason on the record is what the
+    # threshold gets picked from. `HUNTER_QUEUE_CLEAR_GATE=1` enforces for ONE
+    # run without moving the shipped default.
+    enforce_queue_clear_gate: bool = False
+    max_queue_clear_minutes: float = 60.0
+    queue_flow_window_sec: float = 1800.0
+
     # Only quote while the window is open enough to resolve sensibly.
     min_t_remaining_sec: float = 15.0
 
@@ -1443,6 +1464,21 @@ def load(*, for_display: bool = False) -> MakerConfig:
         # forever, which is not a setting.
         kw["requote_hold_queue_shares"] = _bounded_float(
             "HUNTER_REQUOTE_HOLD_QUEUE", rhq, 0.0, 2_000_000.0)
+    qcg = os.environ.get("HUNTER_QUEUE_CLEAR_GATE") or ""
+    if qcg.strip():
+        # Enforce the queue-clear gate for ONE run (#393). Same false spellings
+        # as HUNTER_ENDGAME_GATE, so "off" means off in both places.
+        kw["enforce_queue_clear_gate"] = qcg.strip().lower() not in (
+            "0", "false", "off")
+    qcm = os.environ.get("HUNTER_MAX_QUEUE_CLEAR_MIN") or ""
+    if qcm.strip():
+        # Minutes-to-clear bar, as a positive number. 0 is NOT the disable value
+        # here: a zero bar is what turns the rule off inside the rule itself, so
+        # setting it by name would read as an enforced limit while doing nothing.
+        # The ceiling is a day -- past that the "queue" is the market's whole
+        # remaining life, and a bar nobody can be behind is not a bar.
+        kw["max_queue_clear_minutes"] = _bounded_float(
+            "HUNTER_MAX_QUEUE_CLEAR_MIN", qcm, 0.1, 1440.0)
     rwo = os.environ.get("HUNTER_REWARD_OFFSET") or ""
     if rwo.strip():
         # How far below mid to rest, for ONE run, without moving the shipped
