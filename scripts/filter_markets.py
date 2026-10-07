@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT))
 
 from scoring.allocate import (marginal, spread_capture_daily)   # noqa: E402
 from core_brain import rehearsal   # noqa: E402
+from core_brain.markets import IN_PLAY_WINDOW_SEC   # noqa: E402
 from core_brain.market_resolution import (  # noqa: E402
     extract_uma_resolution_status,
     parse_uma_resolution_status,
@@ -101,6 +102,10 @@ _CFG = _load_cfg()
 MIN_VOLUME_24H = _CFG.select_min_volume_24h_usd
 MAX_DAYS_TO_RESOLVE = _CFG.select_max_days_to_resolve
 MIN_TOP3_DEPTH_USD = _CFG.select_min_top3_depth_usd
+# THE LIVE VOLUME BAR (operator directive 2026-10-06). A market whose event is
+# under way gates on this instead of the permanent floor -- see the field's
+# comment in scoring/config.py for the measurement behind the number.
+MIN_VOLUME_24H_LIVE = getattr(_CFG, "select_min_volume_24h_usd_live", 10_000.0)
 MOVEMENT_WINDOW_SEC = _CFG.select_movement_window_sec
 MIN_MOVEMENT_USD = _CFG.select_min_movement_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
@@ -109,6 +114,12 @@ MIN_RANGE_CENTS = getattr(_CFG, "select_min_range_cents", 2.0)
 VELOCITY_GATE_ENABLED = getattr(_CFG, "select_velocity_gate_enabled", True)
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
+# The live set. `live=true` is a genuine server-side filter; `closed=false` is
+# required, because `live=true` alone also returns long-finished events.
+LIVE_EVENTS = "https://gamma-api.polymarket.com/events"
+# The main line in every sport. `child_moneyline` is the per-game esports
+# submarket and is NOT the match winner.
+LIVE_EVENT_MAIN_LINE = "moneyline"
 ORDERING_FALLBACK_PAGES = 5
 
 
@@ -233,6 +244,33 @@ def market_start_iso(m: dict) -> Optional[str]:
     return None
 
 
+def live_volume_bar(live_event: bool = False) -> Optional[float]:
+    """The volume bar a venue-declared live market gates on, else None.
+
+    LIVENESS HERE IS THE VENUE'S DECLARATION (`GET /events?live=true`), not the
+    clock (operator decision 2026-10-07). The clock was tried first and cannot
+    carry the weight: the venue's own `gameStartTime` disagrees with its own
+    `live` flag for multi-day events -- four live tennis matches measured
+    2026-10-06 carried a kickoff 10-15 hours in the FUTURE while their scores
+    showed a match already in progress -- so a clock-based test reads a match
+    in play as "not started".
+
+    Operator directive 2026-10-06, which this serves: "set a lower bar for the
+    volume on live ongoing games, since it's not a 24h market so naturally it
+    will have less volume". A live event has not had the whole day to trade, so
+    the permanent floor understates it -- but the live bar is LOWER, not
+    absent: a live market with no tape at all is still refused.
+
+    Measured on the live set 2026-10-06: 25 live main lines, $403 to $1.10M,
+    median $82,095. $10,000 admits 13 and drops only the thin tail.
+
+    A clock-based in-play market gets NO live bar here. It is refused outright
+    by `evaluate`, so a bar nothing can reach would be dead code -- and dead
+    code that looks like a shipped directive is worse than none.
+    """
+    return MIN_VOLUME_24H_LIVE if live_event else None
+
+
 def pre_start(start_iso: Optional[str],
               now_iso: Optional[str] = None) -> tuple[bool, str]:
     """Has this market's event not started yet?
@@ -268,6 +306,66 @@ def pre_start(start_iso: Optional[str],
     hours = seconds / 3600.0
     when = f"{hours:.1f}h" if hours >= 1.0 else f"{seconds / 60.0:.0f}m"
     return True, f"pre-start: event has not started (starts in {when})"
+
+
+def in_play(start_iso: Optional[str],
+            now_iso: Optional[str] = None) -> tuple[bool, str]:
+    """Is this market's event already under way?
+
+    The mirror image of `pre_start`, and the reason it exists: a started match
+    passes the pre-start gate, passes the [0.20, 0.80] mid gate while the line
+    is still a coin flip, and then reaches the depth arm -- where its book is a
+    live-in-play book, thin between rounds and collapsing toward 100c/0c as the
+    result firms up. That is how the 2026-10-06 CS2 market (Falcons vs Natus
+    Vincere) was refused as `NO: top-3 bid depth $44.56` instead of being
+    refused for what it actually was: a match already in progress. The depth
+    arm reads a transient book and reports a liquidity verdict about a market
+    whose problem is its clock.
+
+    Timing, not vocabulary: `identity_allowed`'s live arm only matches a
+    literal "live"/"in-play" token in the title or slug, and a started match's
+    title rarely carries one -- the CS2 title was "... (BO3) - ESL Pro League
+    Group Stage", so it was admitted as a plain matchup. The venue's
+    `gameStartTime` is the signal that cannot be worded around.
+
+    The window is `IN_PLAY_WINDOW_SEC` past kickoff -- the same window
+    `core_brain.markets.quote_t_remaining` uses to keep an already-admitted
+    market quotable -- so the two cannot disagree about when an event is live.
+    The ranker and the fleet answer different questions here, deliberately:
+    the ranker REFUSES TO ADMIT an in-play market (the book it would read is
+    not the book it will quote into), while a market admitted pre-kickoff keeps
+    quoting through its own match. After the window the event is presumed
+    finished and this gate stands down, leaving the market to the expiry and
+    horizon gates that already own it.
+
+    Unknown is NOT in-play: most markets state no start time at all, and
+    refusing every one of them would empty the universe on a missing field --
+    the same contract `pre_start` carries.
+
+    `now_iso` is the test seam, matching `pre_start` and `days_to_resolve`.
+    """
+    if not start_iso:
+        return False, ""
+    try:
+        start = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False, ""
+    now = (datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+           if now_iso else datetime.now(timezone.utc))
+    # Venue times are UTC by convention; the same aware/naive care
+    # `days_to_resolve` takes, for the same reason.
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    elapsed = (now - start).total_seconds()
+    if elapsed <= 0:
+        return False, ""
+    if elapsed >= IN_PLAY_WINDOW_SEC:
+        return False, ""
+    when = (f"{elapsed / 3600.0:.1f}h" if elapsed >= 3600.0
+            else f"{elapsed / 60.0:.0f}m")
+    return True, f"in-play: event started {when} ago"
 
 
 def expired_at_intake(end_iso: Optional[str],
@@ -553,7 +651,8 @@ def tradable(volume_24h: float | None,
              min_volume_usd: float | None = None,
              state: object = None,
              key: object = None,
-             skip_identity: bool = False) -> tuple[bool, str]:
+             skip_identity: bool = False,
+             live_event: bool = False) -> tuple[bool, str]:
     """Can this market produce the two observations the run needs?
 
     A fill needs someone to trade at our price; a settled P&L needs the market
@@ -585,8 +684,16 @@ def tradable(volume_24h: float | None,
     if volume_24h is None:
         return False, "volume unknown"
     volume_bar = MIN_VOLUME_24H if min_volume_usd is None else min_volume_usd
-    if volume_24h < volume_bar:
-        return False, f"24h volume ${volume_24h:,.0f} < ${volume_bar:,.0f}"
+    # THE LIVE BAR, for a market the venue declares under way. `live_event` is
+    # the `_live_event` stamp `live_event_markets` puts on every row it fetched
+    # from `/events?live=true`; nothing else sets it, so a market the scan found
+    # by pagination keeps the permanent floor exactly as before. The bar is
+    # LOWER, not absent -- a live market still has to clear it, and it still has
+    # to survive the movement, depth and spread gates downstream, so "live"
+    # buys passage through ONE gate and never through the funnel.
+    effective_bar = live_volume_bar(live_event) or volume_bar
+    if volume_24h < effective_bar:
+        return False, f"24h volume ${volume_24h:,.0f} < ${effective_bar:,.0f}"
     if days is None:
         return False, "horizon unknown"
     if state is None:
@@ -757,6 +864,12 @@ def gamma_universe(session: requests.Session,
     are COUNTED and SAMPLED in the metadata rather than scored. Returned rows
     use CLOB field names (`condition_id`, `tokens`, `rewards`) because
     `evaluate` reads them, plus the gamma-only figures the spread pot needs.
+
+    IN-PLAY MARKETS ARE NOT THIS FUNCTION'S JOB. An earlier attempt widened the
+    scan to walk the sub-floor tail looking for started matches; that admitted
+    rows the funnel then refused on the clock, and it paid pagination for them.
+    The venue answers the question directly instead -- see
+    `live_event_markets`, whose rows `main` merges into this universe.
     """
     out: list[dict] = []
     volume_bar = MIN_VOLUME_24H if min_volume_usd is None else min_volume_usd
@@ -948,7 +1061,9 @@ def gamma_universe(session: requests.Session,
                 # ONE boundary page past the floor: the volume near-miss tail
                 # is fetched and counted so the gate can be tuned from
                 # evidence, then the scan stops. `full_scan` keeps going to
-                # exhaustion.
+                # exhaustion. An in-play market below the floor is not reached
+                # this way and is not meant to be -- `live_event_markets`
+                # fetches the live set directly, above and below any floor.
     else:
         meta["truncated"] = True            # stopped at max_pages, not exhaustion
     # The scan's own condition rides on every row it returns. `meta` carries it
@@ -964,6 +1079,207 @@ def gamma_universe(session: requests.Session,
     return out, meta
 
 
+def live_event_markets(session: requests.Session,
+                       limit: int = 200) -> tuple[list[dict], dict]:
+    """Main-line markets on the events the venue declares live, normalised.
+
+    Discovery for in-play markets, FETCHED rather than hunted. The rank's
+    volume-sorted scan stops one boundary page past the volume floor, and
+    in-play sub-floor rows are not a cluster near that floor -- measured
+    2026-10-06 across ten pages they run 8-16 per page on EVERY page from 1 to
+    9+, mixed with long-dated and dead markets, so no bounded page budget
+    reliably reaches a named match (one run had the live `lol-est-kbm` on page
+    3, the next had it moved). `GET /events?live=true&closed=false` returns the
+    live set directly; `closed=false` is required, because `live=true` alone
+    also returns long-finished events.
+
+    `sportsMarketType == "moneyline"` selects the match winner, and it is the
+    selector that keeps a sport's submarkets OUT. Unlike esports, real sports
+    expose each submarket group as its OWN top-level event: a live MLB game
+    arrives as `mlb-lad-atl-...-first-five-winner` and `...-inning-1-winner`
+    through `...-inning-9-winner` beside the real game, and a live soccer match
+    as `-halftime-result`, `-second-half-result`, `-exact-score`,
+    `-first-to-score` and `-more-markets`. Every one of those carries the same
+    `live` flag, sport, period and score as the real game, so selecting on the
+    sport or the slug prefix admits them -- and NOT ONE of them carries a
+    `moneyline` (verified across the whole live set 2026-10-06), which is why
+    the type is the only safe selector here.
+
+    Rows come back in the same shape `gamma_universe` emits, so nothing
+    downstream needs a special case, and carry `_live_event=True` -- the stamp
+    that admits them past the clock gates in `evaluate` and picks the live
+    volume bar in `tradable`.
+
+    Never raises. A rank must not fail because the live set was unreadable; the
+    failure is reported in the stats so a run that could not read it is visible
+    as that rather than as a thin live market.
+    """
+    stats: dict = {"live_events": 0, "live_main_lines": 0, "live_sports": [],
+                   "live_below_bar": 0, "live_error": None}
+    try:
+        r = session.get(LIVE_EVENTS, params={"live": "true",
+                                             "closed": "false",
+                                             "limit": limit}, timeout=30)
+        r.raise_for_status()
+        events = r.json()
+    except Exception as e:                                   # noqa: BLE001
+        stats["live_error"] = f"{type(e).__name__}: {e}"
+        return [], stats
+    if isinstance(events, dict):
+        # The endpoint has served a dict wrapper before; a dict is not a list
+        # of events and must not be iterated as one.
+        events = events.get("data")
+    if not isinstance(events, list):
+        stats["live_error"] = "venue returned a non-list payload"
+        return [], stats
+
+    rows: list[dict] = []
+    sports: set[str] = set()
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        # The server-side `live=true` filter is re-checked on every event. A
+        # caller that widens the fetch -- or a venue that stops honouring the
+        # filter -- would otherwise let a finished match through, and a
+        # finished match is exactly the shape that reads as a tradeable book
+        # while being pure settlement. Both flags must agree.
+        if not ev.get("live") or ev.get("ended"):
+            continue
+        stats["live_events"] += 1
+        sport = (ev.get("sport") or {}).get("sport")
+        for m in ev.get("markets") or []:
+            if not isinstance(m, dict):
+                continue
+            if (m.get("sportsMarketType") or "") != LIVE_EVENT_MAIN_LINE:
+                continue
+            row = _live_event_row(ev, m, sport)
+            if not row["condition_id"] or len(row["tokens"]) != 2:
+                # Not an identifiable binary market: nothing downstream can
+                # quote it, and a half-built row is what reads as a market
+                # with a missing field rather than as an unreadable one.
+                continue
+            if row["_volume_24h"] < MIN_VOLUME_24H_LIVE:
+                # THE LIVE BAR IS ALSO A DISCOVERY BAR, the same cost control
+                # the scan applies to sub-floor rows. `tradable` would refuse
+                # this market anyway, and emitting it first would buy a tape
+                # read and two book fetches for a refusal the bar already
+                # implies. Counted rather than silently dropped, so the bar
+                # stays tunable from evidence.
+                stats["live_below_bar"] += 1
+                continue
+            rows.append(row)
+            if row["_sport"]:
+                sports.add(row["_sport"])
+    stats["live_main_lines"] = len(rows)
+    stats["live_sports"] = sorted(sports)
+    return rows, stats
+
+
+def _live_event_row(ev: dict, m: dict, sport: object) -> dict:
+    """One live main line, normalised to the universe row shape.
+
+    The identity fields are derived from the PARENT EVENT, because the nested
+    market carries none of them: `/events` serves each market without a
+    `category` or an `events` key of its own, so a row built from the market
+    alone is refused by the identity gate as "not a primary
+    Moneyline/Outright" no matter how good the market is. `series_title` comes
+    from the event's series, which is the field the identity gate reads for the
+    matchup shape -- "NHL 2026", "MLB", "League of Legends" -- and it is what
+    decides whether a live main line is admitted at all.
+
+    `category` is deliberately left BLANK rather than filled from the event.
+    The identity gate reads that field, and event-level enrichment must never
+    land in it: a venue category string on a market that has none would admit
+    or reject markets on a field the venue never set (the same trap the scan's
+    row builder documents).
+    """
+    try:
+        toks = json.loads(m.get("clobTokenIds") or "[]")
+    except (TypeError, ValueError):
+        toks = []
+    if not isinstance(toks, list):
+        toks = []
+    return {
+        "condition_id": m.get("conditionId"),
+        "question": _str(m.get("question")) or _str(ev.get("title")),
+        "market_slug": _str(m.get("slug")) or _str(ev.get("slug")),
+        "category": "",
+        # Display only, never read by a gate: the league name is the useful
+        # label for a live row and the venue's category field is empty here.
+        "venue_category": _str((ev.get("sport") or {}).get("name")),
+        "tags": _tag_labels(ev.get("tags")),
+        "market_type": _str(m.get("marketType")) or _str(m.get("type")),
+        "market_group": _str(m.get("groupItemTitle")),
+        "series_title": _first_series_title(ev),
+        "event_title": _str(ev.get("title")),
+        "event_id": _str(ev.get("id")),
+        "event_slug": _str(ev.get("slug")),
+        "tokens": [{"token_id": str(t)} for t in toks],
+        "rewards": {"max_spread": float(m.get("rewardsMaxSpread") or 3.5),
+                    "min_size": float(m.get("rewardsMinSize") or 50)},
+        "minimum_tick_size": float(m.get("orderPriceMinTickSize") or 0.01),
+        "end_date_iso": m.get("endDate"),
+        # On sports markets `endDate` is kickoff, not the final whistle, so the
+        # start time is what `expired_at_intake` needs to keep a live market
+        # from being refused as already lapsed.
+        "_start_iso": m.get("gameStartTime") or ev.get("startTime"),
+        "_order_min": float(m.get("orderMinSize") or 5),
+        "_volume_24h": float(m.get("volume24hr") or 0.0),
+        "_spread": float(m.get("spread") or 0.0),
+        "closed": m.get("closed"),
+        "accepting_orders": m.get("acceptingOrders"),
+        "uma_resolution_status": m.get("umaResolutionStatus"),
+        "uma_resolution_statuses": m.get("umaResolutionStatuses"),
+        # THE ADMISSION FLAG. Read by `evaluate` to skip the two clock gates and
+        # by `tradable` to pick the live volume bar.
+        "_live_event": True,
+        # Evidence for the funnel and the dashboard, so a reader can see WHY
+        # this row is live rather than taking the flag on faith.
+        "_sport": _str(sport),
+        "_event_period": ev.get("period"),
+        "_event_score": ev.get("score"),
+    }
+
+
+def merge_live_event_markets(universe: list[dict],
+                             session: requests.Session,
+                             limit: int = 200) -> tuple[list[dict], dict]:
+    """Append the venue's live main lines to a scanned universe, deduplicated.
+
+    A live market above the volume floor is ALSO in the paginated scan, so the
+    merge is keyed on `condition_id` and the LIVE ROW WINS: it carries the
+    event context the scan's copy cannot (period, score, sport) and the
+    `_live_event` stamp that admits it past the clock gates. Keying it the
+    other way would drop the stamp on exactly the markets it exists for, and
+    not deduplicating would score one market twice and double-count it in the
+    funnel.
+    """
+    live_rows, stats = live_event_markets(session, limit=limit)
+    scanned = {r.get("condition_id") for r in universe}
+    # A market the scan already found is REPLACED IN PLACE, not skipped: the
+    # live row is the one carrying the stamp, and keeping the scan's copy would
+    # strip `_live_event` from exactly the markets it exists for. Replacing
+    # rather than appending also keeps the universe the same length, so the
+    # market is not scored twice and the funnel does not count its book twice.
+    live_by_cid = {r.get("condition_id"): r for r in live_rows}
+    replaced = sum(1 for cid in live_by_cid if cid in scanned)
+    merged = [live_by_cid.get(r.get("condition_id"), r) for r in universe]
+    fresh: list[dict] = []
+    seen: set = set()
+    for r in live_rows:
+        cid = r.get("condition_id")
+        if cid in scanned or cid in seen:
+            continue
+        seen.add(cid)
+        fresh.append(r)
+    stats["live_rows_merged"] = len(fresh)
+    stats["live_rows_already_scanned"] = replaced
+    merged.extend(fresh)
+    # The scan stamps its own rows; the live rows are appended after it, and a
+    # row without the flag reads as "this listing was not cut off" downstream.
+    for row in merged:
+        row.setdefault("fetch_truncated", False)
+    return merged, stats
 
 
 # The old two-path discovery (`gamma_spread_universe`, rewards-only
@@ -1034,6 +1350,28 @@ def _book_stats(book_spreads: dict, book_depths: dict) -> dict:
     return out
 
 
+def _live_evidence(m: dict) -> dict:
+    """The live-set provenance of a row, for the funnel and the dashboard.
+
+    Empty for anything the scan found. An in-play market's row has to say it
+    came from the venue's live set, and which match it is -- otherwise a rank
+    quoting a match in progress is indistinguishable from one quoting a
+    pre-kickoff line, and the operator cannot see which is which from the
+    artifacts. `volume_bar_usd` names the bar the row was actually gated on,
+    because a reader comparing `volume_24h` against the permanent floor would
+    otherwise read a correct live admission as an unexplained one.
+    """
+    if not m.get("_live_event"):
+        return {}
+    return {
+        "live_event": True,
+        "_sport": m.get("_sport") or "",
+        "event_period": m.get("_event_period"),
+        "event_score": m.get("_event_score"),
+        "volume_bar_usd": MIN_VOLUME_24H_LIVE,
+    }
+
+
 def _reject_row(source: str, reason: str, m: dict,
                 volume_24h: Optional[float] = None,
                 **extra) -> dict:
@@ -1055,6 +1393,10 @@ def _reject_row(source: str, reason: str, m: dict,
         # condition rather than read as "no liquid market exists" (#312).
         "fetch_truncated": bool(m.get("fetch_truncated")),
     }
+    # Recorded on REJECTION rows too, not only the eligible ones: a live market
+    # that failed a later gate is auditable as a LIVE market that failed,
+    # rather than as an ordinary one that happened to be refused.
+    row.update(_live_evidence(m))
     row.update(extra)
     return row
 
@@ -1072,7 +1414,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
              min_trades: Optional[int] = None,
              max_last_trade_sec: Optional[float] = None,
              min_range_cents: Optional[float] = None,
-             velocity_gate_enabled: Optional[bool] = None) -> dict:
+             velocity_gate_enabled: Optional[bool] = None,
+             now_iso: Optional[str] = None) -> dict:
     """Income and capital for one market, from its live book.
 
     `rate` is the market's pot in $/day. In the unified universe every pot is
@@ -1081,8 +1424,11 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     only for `--legacy-rewards`, which restores the old reward pot and its
     $1.50 floor for one comparison period.)
 
-    GATE ORDER, cheapest first: identity, pre-start, queue, score-window
-    shape -- then the TAPE (one request) -- then the books (two requests).
+    GATE ORDER, cheapest first: identity, pre-start, in-play, queue,
+    score-window shape -- then the TAPE (one request) -- then the books (two
+    requests). A market the venue declares live (`_live_event`) skips the two
+    clock gates and goes straight to the queue bar, which is the fleet's own
+    real verdict on whether its book is worth quoting into.
     A market whose tape is dead cannot fill a resting order at any price, so
     its books are never fetched. Book-stage failures return rejection ROWS
     rather than None: a market the funnel discovered must stay accounted for
@@ -1145,15 +1491,41 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # THE PRE-START GATE, before the two book fetches below. A market whose
     # event has not begun prints nothing at any price, so paying for its books
     # buys a reading of a book that cannot move.
-    not_started, start_reason = pre_start(market_start_iso(m))
-    if not_started:
-        return _reject_row(source, start_reason, m, volume_24h)
+    #
+    # A VENUE-DECLARED LIVE MARKET SKIPS BOTH TIMING GATES (operator decision
+    # 2026-10-07). It arrived from `/events?live=true`, so the venue has
+    # already said it is under way -- and its clock cannot be consulted for
+    # that, because the venue's `gameStartTime` contradicts its own `live` flag
+    # on multi-day events. Both gates below REFUSE ON THE CLOCK, and a market
+    # the venue declares live is precisely the case where the clock is the
+    # thing that is wrong: four live tennis matches on 2026-10-06 stated a
+    # kickoff 10-15h ahead with a score showing a match in progress, so a
+    # clock-first reading would refuse a game that is being played right now as
+    # "has not started". Every other gate below still applies unchanged.
+    start_iso = market_start_iso(m)
+    declared_live = bool(m.get("_live_event"))
+    if not declared_live:
+        not_started, start_reason = pre_start(start_iso, now_iso=now_iso)
+        if not_started:
+            return _reject_row(source, start_reason, m, volume_24h)
+        # THE IN-PLAY GATE, immediately after pre-start and before every fetch
+        # below. `pre_start` refuses the match that has not begun; this refuses
+        # the one already under way BY THE CLOCK. Without it a live match
+        # reaches the depth arm, whose book reading is a transient in-play
+        # book, and is refused for liquidity when its real defect is the clock
+        # -- the 2026-10-06 CS2 market's `NO: top-3 bid depth $44.56`. Timing
+        # is read from the venue's `gameStartTime`, not from a "live" token in
+        # the title, so a title that never says the word cannot walk past it.
+        under_way, in_play_reason = in_play(start_iso, now_iso=now_iso)
+        if under_way:
+            return _reject_row(source, in_play_reason, m, volume_24h)
     # THE EXPIRY GATE, before the queue, tape, and book fetches below. A market
     # whose end date has passed and which carries no sports kickoff signal has
     # already resolved or lapsed, so scoring it is wasted venue work (#357).
     is_expired, expired_reason = expired_at_intake(
-        m.get("end_date_iso"), market_start_iso(m),
-        category=m.get("category") or m.get("venue_category"))
+        m.get("end_date_iso"), start_iso,
+        category=m.get("category") or m.get("venue_category"),
+        now_iso=now_iso)
     if is_expired:
         return _reject_row(source, expired_reason, m, volume_24h)
 
@@ -1372,7 +1744,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                             m.get("end_date_iso"),
                             uma_status=m.get("uma_resolution_status") or m.get("umaResolutionStatus"),
                             uma_statuses=m.get("uma_resolution_statuses") or m.get("umaResolutionStatuses")),
-        skip_identity=bool(admission_trial and admission_role))
+        skip_identity=bool(admission_trial and admission_role),
+        live_event=declared_live)
     # The movement gate has already been enforced above, before the book
     # fetches -- `flat` cannot be true here. The payout floor is a REWARD
     # rule -- the venue's minimum distribution -- and only under
@@ -1439,6 +1812,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "yes_depth_usd": round(book_depths[0], 2),
         "no_depth_usd": round(book_depths[1], 2),
     }
+    # THE LIVE EVIDENCE, carried onto the funnel row (empty for scanned rows).
+    row.update(_live_evidence(m))
     if admission_trial:
         # Trial-only tags. Absent when the flag is off, so the default path
         # stays byte-identical.
@@ -1507,6 +1882,11 @@ def _cause(reason: str) -> str:
     # market. The gate is the bucket.
     if "pre-start" in r:
         return "pre-start"
+    # Matched before the "horizon" arm below, which would otherwise swallow it.
+    # The reason embeds how long the event has been running, so the gate is the
+    # bucket, not the duration.
+    if "in-play" in r:
+        return "in-play"
     if "no movement" in r:
         return "no movement"
     if "flat range" in r:
@@ -2718,6 +3098,23 @@ def main() -> None:
     print(f"universe: {len(universe)} tradable binaries "
           f"({disc_meta['pages_fetched']} pages, {disc_meta['rows_scanned']} rows"
           f"{', TRUNCATED' if disc_meta['truncated'] else ''})")
+    # THE LIVE SET, MERGED IN. The scan above cannot reliably reach an in-play
+    # market -- sub-floor live rows are spread across every page of the
+    # volume-sorted listing -- so the venue is asked directly and its main
+    # lines are appended to the universe, deduplicated against the scan.
+    universe, live_meta = merge_live_event_markets(universe, s)
+    disc_meta["live"] = live_meta
+    if live_meta["live_error"]:
+        # Never fatal: a rank that could not read the live set still ranks the
+        # scanned universe, and says so rather than looking like a night with
+        # no live game.
+        print(f"  live events: UNAVAILABLE ({live_meta['live_error']})")
+    else:
+        print(f"  live events: {live_meta['live_main_lines']} main lines over "
+              f"${MIN_VOLUME_24H_LIVE:,.0f} on {live_meta['live_events']} live "
+              f"events ({live_meta['live_rows_merged']} new, "
+              f"{live_meta['live_rows_already_scanned']} already scanned, "
+              f"{live_meta['live_below_bar']} below the live bar)")
     if disc_meta["cheap_rejects"]:
         summary = ", ".join(f"{k}={v}"
                             for k, v in sorted(disc_meta["cheap_rejects"].items(),
@@ -2948,6 +3345,10 @@ def main() -> None:
                       + (f" [TRIAL vs permanent ${MIN_VOLUME_24H:,.0f}]"
                          if volume_trial_active else ""))
     gates = (f"gates: primary/main-line only, blocked submarkets/live; "
+             f"clock-in-play refused (started within "
+             f"{IN_PLAY_WINDOW_SEC / 3600.0:.0f}h; timing, not title keyword) "
+             f"UNLESS the venue declares it live -- /events?live=true rows are "
+             f"admitted on 24h volume >= ${MIN_VOLUME_24H_LIVE:,.0f} instead; "
              f"24h volume >= {volume_bar_str}, "
              f"YES+NO top-3 bid depth >= {depth_bar_str} each, "
              f"spread <= {spread_bar:.2f}"

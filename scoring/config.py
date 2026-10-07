@@ -454,6 +454,29 @@ class MakerConfig:
     # $200k-volume market with a $750-depth book is admissible. Overridable
     # from HUNTER_VOLUME_TRIAL_USD; the ranker's own `--trial-volume` flag wins.
     select_min_volume_24h_usd_trial: float | None = None
+    # THE LIVE VOLUME BAR (operator directive 2026-10-06). A market whose event
+    # is under way has not had the market's full day to trade, so 24h volume
+    # systematically understates it: the match winner of a live LoL game listed
+    # hours ago and cannot be judged against a bar meant for markets that have
+    # been open all day. Live markets gate on THIS bar instead, which is 1/5 of
+    # the loosened floor and 1/12.5 of the permanent one.
+    #
+    # LIVENESS IS THE VENUE'S DECLARATION, not the clock (operator decision
+    # 2026-10-07): the bar applies to markets discovered through
+    # `GET /events?live=true`, because the venue's own `gameStartTime` disagrees
+    # with its own `live` flag on multi-day events -- four live tennis matches
+    # measured 2026-10-06 stated a kickoff 10-15h in the FUTURE. The clock is
+    # therefore only ever used to REFUSE an in-play market, never to grant this
+    # bar; a clock-based live market is refused outright, so a bar it could not
+    # reach would be dead code.
+    #
+    # Measured on the live set 2026-10-06: 25 live main lines, volumes $403 to
+    # $1.10M, median $82,095. A $10,000 bar admits 13 of them and drops only the
+    # genuinely thin tail (a `bra2` second-half line at $403). The movement gate
+    # is unchanged and still the real proof -- a live market must measure
+    # `select_min_movement_usd` of tape in the window before it is scored, so
+    # this bar admits an event that is actively trading, never a quiet one.
+    select_min_volume_24h_usd_live: float = 10_000.0
     # THE MOVEMENT GATE (#74). 24h volume says a market traded SOMETIME; it
     # says nothing about whether anything is happening now. A shadow run sat
     # 4.3 hours on a market with 1,777 shares ahead at 0.23 and zero traded --
