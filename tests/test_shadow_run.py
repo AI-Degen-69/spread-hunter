@@ -1597,7 +1597,7 @@ class TestRefusedHoldShadow:
                 QuoteIntent(side="DOWN", token_id="tok-dn", price=0.40, size=5,
                             mid=0.41, edge_vs_mid=0.01)]
 
-    def _seam(self, decide, calls):
+    def _seam(self, decide, calls, **overrides):
         def open_orders_fn(m):
             return [{"token_id": "tok-up", "price": 0.60, "order_id": "o-up",
                      "side": "BUY", "status": "open"},
@@ -1615,7 +1615,7 @@ class TestRefusedHoldShadow:
         return _seam(decide=decide, submit_fn=submit_fn, cancel_fn=cancel_fn,
                      open_orders_fn=open_orders_fn,
                      reconcile_fn=lambda *a, **k: None,
-                     sweep_fn=lambda: None)
+                     sweep_fn=lambda: None, **overrides)
 
     def _run_cycles(self, seam, n):
         sleeps = []
@@ -1649,9 +1649,14 @@ class TestRefusedHoldShadow:
     def test_dead_market_cancels_past_grace(self):
         from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
         calls = {"submitted": [], "cancelled": []}
+
+        def out_of_band_books(clob_host, token):
+            return {"token_id": token, "best_bid": 0.66, "best_ask": 0.68,
+                    "bids": {0.66: 100}, "asks": {0.68: 100}}
+
         seam = self._seam(
             lambda cfg, up, dn, inv, t_rem, wf: ([], self.TRANSIENT_WHY),
-            calls)
+            calls, fetch_books=out_of_band_books)
         self._run_cycles(seam, GRACE)
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-up", "o-dn"]]
