@@ -31,7 +31,7 @@ log = logging.getLogger("live_marks")
 
 MARK_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
-SOURCE_ENV_VAR = "HUNTER_LIVE_MARKS_SOURCE"
+SOURCE_ENV_VAR = "HUNTER_MARKS_SOURCE"
 SOURCE_VENUE = "venue"
 SOURCE_OFF = "off"
 SOURCE_SIM = "sim"

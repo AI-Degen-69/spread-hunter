@@ -114,14 +114,14 @@ def test_wanted_set_comes_from_held_unfinished_markets_only():
 
 
 def test_source_switch_parses_venue_off_sim(monkeypatch):
-    monkeypatch.delenv("HUNTER_LIVE_MARKS_SOURCE", raising=False)
+    monkeypatch.delenv("HUNTER_MARKS_SOURCE", raising=False)
     assert live_marks_source() == "venue"
-    monkeypatch.setenv("HUNTER_LIVE_MARKS_SOURCE", "sim")
+    monkeypatch.setenv("HUNTER_MARKS_SOURCE", "sim")
     assert live_marks_source() == "sim"
-    monkeypatch.setenv("HUNTER_LIVE_MARKS_SOURCE", "off")
+    monkeypatch.setenv("HUNTER_MARKS_SOURCE", "off")
     assert live_marks_source() == "off"
-    monkeypatch.setenv("HUNTER_LIVE_MARKS_SOURCE", "nope")
-    with pytest.raises(ValueError, match="HUNTER_LIVE_MARKS_SOURCE"):
+    monkeypatch.setenv("HUNTER_MARKS_SOURCE", "nope")
+    with pytest.raises(ValueError, match="HUNTER_MARKS_SOURCE"):
         live_marks_source()
 
 
