@@ -1,4 +1,75 @@
-# Plan — #419: trader_loop: hold a resting order and never requote when mid <= price + 0.02
+# Plan — #422: shadow_run: every rehearsal starts at a fixed bankroll
+
+Branch: i422/shadowrun-every-rehearsal-starts-at-a-fixed-bankro | Issue: #422
+
+- Tier: **Standard** — 3 files (`shadow_run.py` + tests + one docs page), internal module change, one architectural decision (one bankroll resolution + one flag).
+- Task type: **Code** — bankroll resolution + CLI flag + regression tests (docs touch is wording-only).
+- Stack: Python, pytest; no external dependency.
+- CodeRabbit plan: **adopted as scaffolding, merged into 4 tasks** — all 4 design choices adopted (config default as single source; one flag with old name as alias; ordinary flag→env→config vs paired flag→100 precedence; statistical harness left alone). Verified from code (nothing left `[UNVERIFIED]`): live read at `shadow_run.py:916-927` with `cfg=None` + `shadow_cfg()` intact; paired pin at `929-936` with `<= 0` check; `_parse_args` at `1402` with `--paired-starting-bankroll-usd` default 100.0 (line 1431) and `--funder` balance-read help (1433-1435); `main` forwards bankroll for paired arms only (1539-1542); `run_shadow(starting_bankroll_usd=None)` at line 850; `bankroll_usd = 100.0` at `config.py:41` with env overrides at 1521-1528; `derive_dynamic_caps` at `config.py:1627`; funder doc at `first-run.md:187` and signer/store/clock line at 190-191; out-of-scope files exist and behave as claimed (`statistical_validation_run/run.py:364-368` own live read, `scripts/shadow_tournament.py:315` subprocess launch, `tests/test_shadow_run_run_id.py` CLI-test style). Rejected: the 5-task split (merged into 4 per Rule 4); nothing else material.
+- Open questions resolved from code (no operator question): the ticket's dollar figures were lost in rendering — `$100` is confirmed by the paired default (100.0), `config.py:41` (100.0), and the plan's own cap math ($25 order cap = 25% of $100). The `funder` param must stay (statistical harness passes it at `run.py:411`) but goes unused for bankroll.
+- Improvement proposal (adopted, simplification): the paired-without-flag default reads the `MakerConfig` field default instead of re-hard-coding 100.0. Evidence: the issue says "`core_brain/config.py:41` stays the default source of truth" while `_parse_args` line 1431 hard-codes `default=100.0` — a second copy of the number that can drift; `main` forwards `MakerConfig`'s field default for paired arms with no flag. Folded into T2.
+- Type-design analyzer: skipped with reason — no non-trivial domain model (one optional float param, one argparse alias; nothing to encapsulate).
+- Sub-issues: skipped per repo precedent (Standard #419 shipped without them; the plan file is the tracker).
+- Safety: do not open or rewrite `data/orders.db`; tests use temporary DBs. No live quoting, Trader loop, manual completion, or dashboard START.
+
+## Locked behavior (see SPEC.md; summary)
+
+- Ordinary run, `cfg=None`: `shadow_cfg()` → `config.load()` decides the bankroll (flag → env → $100); the `fetch_live_balance` read is gone.
+- `starting_bankroll_usd` given: `math.isfinite` + `> 0`, else `ValueError` containing "bankroll"; pin via `dc_replace(cfg, bankroll_usd=...)`.
+- CLI: `--starting-bankroll-usd` with `--paired-starting-bankroll-usd` as alias on the same dest, default `None`; `main` forwards the flag if set, the `MakerConfig` field default for paired arms without it, else `None`.
+- One startup `log.info` states the starting bankroll and its source (explicit override, environment, or config).
+
+## Interface contracts (frozen)
+
+- `run_shadow(..., starting_bankroll_usd: Optional[float] = None, ...)` — signature unchanged; `None` keeps config/env behavior, a value pins after validation. `funder` stays keyword-compatible, unused for bankroll.
+- CLI: `--starting-bankroll-usd USD` / alias `--paired-starting-bankroll-usd USD`; `--funder ADDR` help reworded to compatibility ("kept for compatibility, does not set the shadow bankroll").
+- `derive_dynamic_caps`, `trader_loop._fleet_state`, `record_paired_run_start` / `record_paired_equity_mark` inputs: unchanged.
+
+## Dependency graph
+
+- T1 → T2 → T3; T4 depends on T2 (docs describe T1/T2 behavior)
+
+## Tasks
+
+### T1 [x] — RED+GREEN: one fixed bankroll path in `run_shadow` [Backend/Logic] (M)
+
+- Target files: `core_brain/shadow_run.py`
+- Build: inside `if cfg is None:`, keep `cfg = shadow_cfg()`; delete the `maker = funder or POLY_FUNDER` lookup, the `fetch_live_balance` call + warning log, and the import if unused elsewhere. Replace the paired-only pin (lines 929-936) with one resolution step for all runs: value given → `math.isfinite` + `> 0` else `ValueError("... bankroll ...")`, pin with `dc_replace`; not given → leave `cfg.bankroll_usd` untouched. Keep early paired checks (902-911) and paired consumption (1013-1034) byte-identical. Add one startup `log.info` with bankroll + source (explicit/env/config).
+- Helper skill: `test-driven-development`.
+- Depends on: nothing.
+- Verify: `python -m pytest -q tests/test_shadow_run.py` — new T3 tests fail before, all green after.
+
+**Checkpoint:** ordinary rehearsals ignore the wallet; explicit and env overrides still pin.
+
+### T2 [x] — GREEN: unify the CLI flag, keep the old name working [Backend/Logic] (S)
+
+- Target files: `core_brain/shadow_run.py`
+- Build: in `_parse_args`, define `--starting-bankroll-usd` with `--paired-starting-bankroll-usd` as a second option string on the same dest, default `None`; help text names the config bankroll ($100) / `SPREAD_HUNTER_BANKROLL` default and the $100 paired default. In `main`: flag set → forward for any run; not set + paired arm → forward the `MakerConfig` field default for `bankroll_usd` (no hard-coded copy); not set + ordinary → forward `None`. Reword `--funder` help to compatibility wording (no "live balance read").
+- Helper skill: `incremental-implementation`.
+- Depends on: T1.
+- Verify: `python -m pytest -q tests/test_shadow_run.py tests/test_shadow_run_run_id.py` — CLI/forwarding tests green, old paired commands still parse.
+
+### T3 [x] — GREEN: focused tests that fail if the live read returns [Backend/Logic] (M)
+
+- Target files: `tests/test_shadow_run.py` (CLI-forwarding test may live in `tests/test_shadow_run_run_id.py` style)
+- Build: reuse the `fake_loop_run` monkeypatch pattern to capture the `cfg` the loop receives. Fixed-bankroll: ordinary run, `cfg=None`, `funder="0xabc"`, `fetch_live_balance` monkeypatched to return 5000 and record/fail on call → `bankroll_usd == 100.0`, `derive_dynamic_caps(cfg)["max_order_usd"] == 25.0`, balance fn never called. Override: `starting_bankroll_usd=250.0` → 250.0. Env: `SPREAD_HUNTER_BANKROLL=50` → 50. Invalid: NaN/inf → `ValueError` matching "bankroll". CLI: both flag names parse to the same value; ordinary w/o flag forwards `None`; paired w/o flag forwards 100.0. Leave existing paired tests (incl. `test_admission_arm_requires_markets_path_and_bankroll`) untouched.
+- Helper skill: `test-driven-development`.
+- Depends on: T2.
+- Verify: `python -m pytest -q tests/test_shadow_run.py tests/test_shadow_run_run_id.py` — all green.
+
+**Checkpoint:** the full bankroll matrix (fixed / override / env / invalid / CLI) is pinned by tests.
+
+### T4 [x] — Operator docs match the new behavior [Docs] (S)
+
+- Target files: `docs/agents/first-run.md`
+- Build: at lines ~173-192: change shadow `--funder` from "balance-read funder" to compatibility wording; add "Shadow runs always start at the config bankroll ($100). Override with `--starting-bankroll-usd` or `SPREAD_HUNTER_BANKROLL`."; qualify the "only the signer, the store, and the wall clock differ" line (bankroll is now fixed, not from the wallet). Leave Trader/`balance --funder` lines (126, 162) and `docs/runs/2026-09-28-paired-depth-pilot.md` untouched.
+- Helper skill: `documentation-and-adrs`.
+- Depends on: T2.
+- Verify: read the three spots back (record line, funder line, pilot file untouched); no pytest needed.
+
+---
+
+# Plan — #419: trader_loop: hold a resting order and never requote when mid <= price + 0.02 (DONE, history)
 
 Branch: i419/trader-loop-hold-a-resting-order-and-never-requote | Issue: #419
 

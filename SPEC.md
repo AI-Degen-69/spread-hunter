@@ -1,50 +1,58 @@
-# SPEC — #419: Hold a resting order when the mid drops onto it
+# SPEC — #422: Every shadow rehearsal starts at a fixed $100 bankroll
 
-Scope note: this file covers issue #419 only
-(branch `i419/trader-loop-hold-a-resting-order-and-never-requote`).
-It supersedes the #408 spec (done work). Deleted or superseded when the
+Scope note: this file covers issue #422 only
+(branch `i422/shadowrun-every-rehearsal-starts-at-a-fixed-bankro`).
+It supersedes the #419 spec (done work). Deleted or superseded when the
 next Standard/Large issue writes its own.
 
 ## Problem (operator words)
 
-The bot cancels or re-quotes a resting order when the market moves down
-toward the bid. Every cancel + re-submit sends the order to the back of the
-queue at a new level — on shadow run run-2809a7161de1 that happened 205/205
-re-quotes. When the mid drops toward our bid, the order should sit at its
-own price and wait for the fill.
+The same rehearsal command rehearses at a different bankroll one day to the
+next. An ordinary shadow run reads the LIVE wallet balance through the funder
+address and only falls back to the config bankroll when that read fails — so
+every risk cap (order 25%, naked 6%, ceiling 90%) silently moves with the
+wallet, and two runs can never be compared.
 
 ## Goals
 
-1. A resting order is never cancelled or requoted while
-   `current_mid <= order.price + 0.02` — it holds and waits for the fill.
-2. Safety cancels keep working: terminal refusals, hard stop,
-   `lifecycle_cancel`, and the explicit cancel set still cancel in band.
-3. Missing or crossed books change nothing (today's behavior).
+1. Every shadow rehearsal starts from a fixed $100 bankroll by default —
+   `bankroll_usd = 100.0` in `core_brain/config.py:41` stays the source of truth.
+2. An explicit override (`--starting-bankroll-usd` or `SPREAD_HUNTER_BANKROLL`)
+   still sets a different bankroll for experiments.
+3. Paired arms use the same mechanism, not a second copy of it
+   (unify, don't fork; old `--paired-starting-bankroll-usd` keeps working).
 
 ## Acceptance criteria (from the issue)
 
-- [ ] A resting order is never cancelled or requoted when
-      `current_mid <= order.price + 0.02`
-- [ ] Existing hold-and-wait (#384/#387) and no-intent-cancel behaviour
-      unchanged — verified by the untouched existing tests plus the moved
-      grace fixture below
-- [ ] `python -m pytest -q tests/test_trader_loop.py
-      tests/test_plan_orders_asymmetric_hold.py` passes (plus the new
-      focused file for the changed module)
+- [x] A shadow run with a live balance far from $100 still rehearses caps
+      computed from $100 (order cap $25, naked $6, ceiling $90)
+- [x] An explicit override flag still sets a different bankroll when passed
+- [x] Focused shadow-run tests pass unchanged in meaning
+      (update only pins that assumed the live read)
 
 ## Edge cases
 
-- Equality (`mid == price + 0.02`) holds — float sums like `0.48 + 0.02`
-  are not exact, so the compare carries `price_eps`.
-- Token with no book (rotated away) still cancels — nothing to hold for.
-- Crossed book (bid >= ask) or one-sided book: guard stands down.
-- Order in both the replace and cancel sets: cancel wins.
-- A held token gets no duplicate submit — neither ordinary nor
-  lifecycle-pair intents.
+- Precedence, ordinary run: explicit flag → env (`SPREAD_HUNTER_BANKROLL` /
+  `HUNTER_BANKROLL` via `config.load()`) → config default $100.
+- Precedence, paired run: explicit flag → $100 default (today's preregistered
+  behavior; paired arms ignore the env, unchanged).
+- `starting_bankroll_usd` of NaN or infinity raises `ValueError` matching
+  "bankroll" (`math.isfinite` check; today's `<= 0` misses them).
+- `funder` keyword stays for compatibility (`statistical_validation_run/run.py`
+  passes it) but no longer sets the shadow bankroll.
+- Callers that pass `cfg` keep using that `cfg` as-is (ladder scripts,
+  statistical validation).
+- A reused shadow store with old account marks can still move the sizing base
+  after startup — out of scope, runs already require a fresh store.
 
 ## Explicit out of scope
 
-- Fill crediting (`shadow_fills.py` — that was #417).
-- Pricing mode (`objective="spread_capture"` stays pinned).
-- `config.py`, `quotes.py`, `live_fill_engine.py`, `markets.py`.
-- Retuning the 0.02 band or the retired 0.03 dead band.
+- Live trading and the cap math itself (`derive_dynamic_caps`,
+  `trader_loop._fleet_state`: untouched).
+- `core_brain/config.py` bankroll default, env parsing, and bounds: untouched.
+- `statistical_validation_run/run.py` (reads its own live balance at
+  `run.py:364-368`, passes its own `cfg`): separate ticket, untouched.
+- `scripts/shadow_tournament.py` (launches the CLI as a subprocess):
+  no edit needed; old paired flag name keeps working as an alias.
+- `docs/runs/2026-09-28-paired-depth-pilot.md`: its
+  `--paired-starting-bankroll-usd 100` commands keep working, untouched.
