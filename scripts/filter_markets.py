@@ -90,16 +90,8 @@ RUN = ROOT / "runtime"
 OFFSET = 0.020          # where we intend to quote, in price units
 C = 3.0                 # venue's one-sided penalty
 
-# Polymarket: "The minimum reward payout is $1; amounts below this will not be
-# paid." A market projecting under a dollar a day does not pay a fraction of a
-# dollar, it pays nothing -- so a sub-floor market is not a small position, it
-# is capital committed for zero income. Measured 2026-07-30, 16 of 20 fleet
-# markets were in exactly that state.
-MIN_PAYOUT = 1.0
-FLOOR_MULTIPLE = 1.5    # headroom: projections are noisy and rivals arrive
-
 # TRADABILITY AND HORIZON (U6). Sourced from config so the ranker and the
-# fleet cannot drift, exactly as the payout floor is.
+# fleet cannot drift, exactly as the payout floor was.
 _CFG = _load_cfg()
 MIN_VOLUME_24H = _CFG.select_min_volume_24h_usd
 MAX_DAYS_TO_RESOLVE = _CFG.select_max_days_to_resolve
@@ -1770,16 +1762,12 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         skip_identity=bool(admission_trial and admission_role),
         live_event=declared_live)
     # The movement gate has already been enforced above, before the book
-    # fetches -- `flat` cannot be true here. The payout floor is a REWARD
-    # rule -- the venue's minimum distribution -- and only under
-    # `--legacy-rewards`: a spread market is paid by whoever lifts the offer,
-    # in the amount of the spread, so there is no distribution to be under.
-    # Holding it to the floor would reject exactly the liquid markets the
-    # unified universe exists to admit.
-    pays = income >= MIN_PAYOUT * FLOOR_MULTIPLE if source == "rewards" else income > 0
+    # fetches -- `flat` cannot be true here. The income gate requires
+    # positive income for both sources: spread markets earn on the spread,
+    # and legacy reward candidates earn on daily maker rewards.
+    pays = income > 0
     if not why and not pays:
-        why = (f"income ${income:.2f}/day under payout floor"
-               if source == "rewards" else "no spread income")
+        why = ("no reward income" if source == "rewards" else "no spread income")
 
     row = {
         "source": source,
@@ -2458,7 +2446,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--legacy-rewards", action="store_true",
                    help="run the retired two-path scan once for comparison: "
                         "/sampling-markets reward candidates, scored against "
-                        "their venue emission with the $1.50 payout floor, "
+                        "their venue emission with income > $0/day, "
                         "alongside the unified universe. The reward path pays "
                         "nothing on the markets that actually trade (they "
                         "publish clobRewards: 0) and is deleted from the "
@@ -2815,12 +2803,9 @@ def _write_pipeline_snapshot(cands, spread_cands, out, eligible, picked,
                         else MAX_BOOK_SPREAD),
         "trial_spread": trial_spread,
         "horizon_gate_days": MAX_DAYS_TO_RESOLVE,
-        # The payout floor is a REWARD rule, and `evaluate` applies it as one:
-        # a spread market is paid by whoever lifts the offer and passes on any
-        # income at all. Exported per source so the dashboard cannot state one
-        # universal bar and call a passing spread market a failure.
-        # `reward_*` is inclusive (>=); `spread_*` is exclusive (>).
-        "reward_min_income_usd_day": MIN_PAYOUT * FLOOR_MULTIPLE,
+        # Both sources require positive income (income > 0.0). Exported per
+        # source so the snapshot schema is preserved without asymmetry.
+        "reward_min_income_usd_day": 0.0,
         "spread_min_income_usd_day": 0.0,
         "max_pair_cost": getattr(_CFG, "max_pair_cost", 0.995),
         "counts": {
@@ -3385,8 +3370,7 @@ def main() -> None:
              f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
              f"movement >= ${movement_bar:,.0f}/"
              f"{int(round(MOVEMENT_WINDOW_SEC / 60.0))}m, "
-             f"income > 0 (spread; >= ${MIN_PAYOUT * FLOOR_MULTIPLE:.2f}/day "
-             f"legacy-rewards only)\n")
+             f"income > $0/day\n")
     print(gates)
     if trial_active:
         print(f"DEPTH-GATE TRIAL: gating on ${trial_bar:,.0f} instead of "
