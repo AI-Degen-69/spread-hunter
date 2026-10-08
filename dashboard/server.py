@@ -143,6 +143,18 @@ def stop_live_marks():
         worker.stop()
 
 
+def sync_live_marks() -> bool:
+    """Push a drifted wanted set to the venue socket (no-op unless running)."""
+    worker = _LIVE_MARKS_WORKER
+    if worker is None:
+        return False
+    try:
+        return bool(worker.sync_subscription())
+    except Exception:
+        logger.debug("live-marks resubscribe skipped", exc_info=True)
+        return False
+
+
 def _mark_frame(seq, snapshot, reset, marks):
     """One `event: mark` SSE frame for the live-marks contract (#427)."""
     return ("event: mark\ndata: "
@@ -2431,7 +2443,8 @@ def get_kpi(run_id: str | None = None):
         # is the only input. Best-effort; a mark failure must never fail KPI.
         try:
             from core_brain.live_marks import update_wanted_from_kpi
-            update_wanted_from_kpi(_live_marks_cache(), payload)
+            if update_wanted_from_kpi(_live_marks_cache(), payload):
+                sync_live_marks()
         except Exception:
             logger.debug("live-marks wanted update skipped", exc_info=True)
     return JSONResponse(payload, status_code=status)

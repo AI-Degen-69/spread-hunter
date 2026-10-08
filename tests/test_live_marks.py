@@ -123,3 +123,57 @@ def test_source_switch_parses_venue_off_sim(monkeypatch):
     monkeypatch.setenv("HUNTER_LIVE_MARKS_SOURCE", "nope")
     with pytest.raises(ValueError, match="HUNTER_LIVE_MARKS_SOURCE"):
         live_marks_source()
+
+
+def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
+    """The socket subscribes on every (re)connect and follows the wanted set.
+
+    Offline: a stub WebSocketApp records what would leave the socket.
+    Without the on-open subscribe the venue path connects but never hears
+    a frame; without the sync a newly opened leg waits for the next blip.
+    """
+    import json
+    import time
+
+    import core_brain.live_marks as lm
+
+    sent = []
+    holder = {}
+
+    class FakeApp:
+        def __init__(self, url, on_open=None, on_message=None, on_close=None):
+            assert url == lm.MARK_WS_URL
+            self.on_open = on_open
+            holder["app"] = self
+
+        def run_forever(self, **kwargs):
+            self.on_open(self)
+            while not worker._stop.is_set():
+                time.sleep(0.01)
+
+        def send(self, msg):
+            sent.append(json.loads(msg))
+
+    monkeypatch.setitem(__import__("sys").modules, "websocket",
+                        type("WS", (), {"WebSocketApp": FakeApp}))
+
+    cache = lm.LiveMarkCache()
+    cache.update_wanted({"tok-a"})
+    worker = lm.LiveMarkWorker(cache, source=lm.SOURCE_VENUE)
+    worker.start()
+    try:
+        deadline = time.time() + 5.0
+        while not sent and time.time() < deadline:
+            time.sleep(0.01)
+        assert [m["assets_ids"] for m in sent] == [["tok-a"]]
+        assert sent[0]["type"] == "market"
+        # Same set again: no duplicate subscribe.
+        assert worker.sync_subscription() is False
+        assert len(sent) == 1
+        # Holdings drift: the open socket gets the new set, no reconnect.
+        cache.update_wanted({"tok-a", "tok-b"})
+        assert worker.sync_subscription() is True
+        assert sent[-1]["assets_ids"] == ["tok-a", "tok-b"]
+    finally:
+        worker.stop()
+    assert not worker.running

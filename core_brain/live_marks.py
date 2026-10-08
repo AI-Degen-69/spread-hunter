@@ -297,6 +297,8 @@ class LiveMarkWorker:
         self._time = time_fn
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._app = None
+        self._sent_ids: frozenset | None = None
 
     def start(self) -> None:
         if self._thread is not None:
@@ -338,23 +340,27 @@ class LiveMarkWorker:
 
         backoff = RECONNECT_MIN_SEC
         while not self._stop.is_set():
+            app = None
             try:
                 app = websocket.WebSocketApp(
                     MARK_WS_URL,
+                    on_open=lambda ws: self._send_subscribe(ws),
                     on_message=lambda ws, msg: self._on_frame(msg),
                     on_close=lambda ws, *a: None,
                 )
+                self._app = app
                 app.run_forever(ping_interval=30, ping_timeout=10)
             except Exception as e:
                 log.warning("live-marks venue feed failed: %s: %s",
                             type(e).__name__, e)
+            finally:
+                if self._app is app:
+                    self._app = None
             if self._stop.is_set():
                 break
             self._cache.disconnect()
             self._stop.wait(backoff)
             backoff = min(backoff * 2.0, RECONNECT_MAX_SEC)
-            if not self._stop.is_set():
-                self._resubscribe(app)
 
     def _on_frame(self, message: str) -> None:
         try:
@@ -362,8 +368,26 @@ class LiveMarkWorker:
         except (ValueError, TypeError):
             pass
 
-    def _resubscribe(self, app) -> None:
+    def _send_subscribe(self, app) -> bool:
+        """Send the current wanted set; True when it left the socket."""
         try:
             app.send(self._cache.subscribe_payload())
         except Exception:
-            pass
+            return False
+        self._sent_ids = frozenset(self._cache.wanted())
+        return True
+
+    def sync_subscription(self) -> bool:
+        """Push a drifted wanted set over the open socket; True when sent.
+
+        Thread-safe nudge for the serving path: holdings change on KPI
+        polls while the socket stays up, so without this a newly opened
+        leg would wait for the next venue blip before its marks arrive.
+        A no-op unless the worker is connected and the set actually moved.
+        """
+        app = self._app
+        if app is None:
+            return False
+        if self._sent_ids is not None and set(self._sent_ids) == self._cache.wanted():
+            return False
+        return self._send_subscribe(app)
