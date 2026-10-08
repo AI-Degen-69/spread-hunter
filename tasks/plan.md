@@ -29,7 +29,7 @@ Branch: i417/shadow-fills-clear-queue-and-fill-order-on-a-sell | Issue: #417
 
 ## Tasks
 
-### T1 [ ] — RED: trade-through tests that fail on current code [Backend/Logic] (S)
+### T1 [x] — RED: trade-through tests that fail on current code [Backend/Logic] (S)
 
 - Target files: `tests/test_shadow_fills.py`
 - Build: replace `test_volume_at_another_price_or_token_credits_nothing` (its `{"tok-up": {0.46: 999.0}}` tape becomes a fill under the new rule, so it must split) with two no-fill tests — other-token tape `{"tok-dn": {0.46: 999.0, 0.47: 999.0}}` and above-price tape `{"tok-up": {0.48: 999.0}}`. Add: main case (`queue_ahead=500`, tape `{"tok-up": {0.46: 1.0}}` → one `ShadowFill("ord-1", "tok-up", 0.47, 100.0)`, queue `0.0`); remainder-only (`filled=30` → fill `70.0`); already-full (`filled=100` → no fill, queue `0.0`); evidence-not-consumed (two orders at 0.47 → two fills of `100.0`); only-higher-orders-fill (`ord-2` at 0.45 keeps queue `10.0`); zero-volume (`{0.46: 0.0, 0.47: 100.0}` → exact-price fill `40.0`); rounding boundary (`0.46999` → no fill, queue `35.0`); non-finite bucket (`{0.46: inf}` → no trade-through fill). Use only the `_order(**kw)` helper and plain-dict tape; leave exact-price/queue/size-cap/oldest-first tests untouched.
