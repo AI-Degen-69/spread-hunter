@@ -2023,8 +2023,11 @@ class TestTapeMissReplay:
         assert self._settle(reg, db, seen) == []
         assert _filled_by_token(reg, self.COND) == {"tok-dn": 9.0}
 
-    def test_sells_at_025_leave_the_026_level_untouched(
+    def test_sells_at_025_sweep_the_026_level(
             self, tmp_path, monkeypatch):
+        """#417: a sell print below our resting price is a sweep that clears
+        the level -- the 0.26 order fills in full instead of sitting behind
+        its queue."""
         from core_brain.shadow_exec import read_queue_ahead
 
         db = tmp_path / "shadow.db"
@@ -2036,8 +2039,10 @@ class TestTapeMissReplay:
         (order_id,) = [o["id"] for o in reg.get_all_orders()
                        if o["token_id"] == "tok-dn"]
 
-        assert self._settle(reg, db, set()) == []
-        assert read_queue_ahead(db, reg._run_id(), order_id) == 744.0
+        fills = self._settle(reg, db, set())
+        assert [(f.local_id, f.size) for f in fills] == [(order_id, 9.0)]
+        assert _filled_by_token(reg, self.COND) == {"tok-dn": 9.0}
+        assert read_queue_ahead(db, reg._run_id(), order_id) == 0.0
         assert self._mark_traded(db) == 0.0
 
 
