@@ -79,7 +79,7 @@ Branch: i413/tune-live-activity-gates-protect-hedge | Issue: #413
 - Depends on: T1, T2, T3, T5.
 - Verify: `python -m pytest -q tests/test_auto_pairs.py tests/test_dual_stop_loss.py tests/test_aged_out_rescue.py tests/test_shadow_run.py tests/test_shadow_exec.py`; shadow actions must stay in the explicit shadow DB and use no signing client.
 
-### T7 [ ] — Document safeguards and finish focused verification [Docs + Backend/Logic] (M)
+### T7 [x] — Document safeguards and finish focused verification [Docs + Backend/Logic] (M)
 
 - Target files: `docs/agents/architecture.md`, `docs/agents/safety.md`, `docs/agents/strategy.md`, all focused tests listed in the detailed plan
 - Build: document state ownership, thresholds, sticky escalation, exact-cap exception, hard-stop safeguards, settlement-only completion, and hands-on shadow verification.
