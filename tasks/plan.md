@@ -47,7 +47,7 @@ Branch: i417/shadow-fills-clear-queue-and-fill-order-on-a-sell | Issue: #417
 
 **Checkpoint:** trade-through fills credit at own price with queue zeroed; exact-price behavior untouched. Demonstrate with the T3 operator call.
 
-### T3 [ ] — Regression: caller suite + hands-on operator check [Backend/Logic] (XS)
+### T3 [x] — Regression: caller suite + hands-on operator check [Backend/Logic] (XS)
 
 - Target files: none (verification only).
 - Build: run `python -m pytest -q tests/test_shadow_exec.py` unchanged (its tapes use own-price levels only — verified in Station II — so it must pass as-is). Hands-on check: `python -c` importing `credit_fills` + `ShadowRestingOrder`, one order (`price=0.47, size=100, filled=0, queue_ahead=500`), tape `{"tok-up": {0.46: 1.0}}` → expect one fill at 0.47 size 100.0, queue 0.0.
