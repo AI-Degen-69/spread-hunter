@@ -55,8 +55,9 @@ def _render(view: str, kpi: dict | None = None, state: dict | None = None,
 
 
 def _cids(rendered: dict) -> list[str]:
-    """The market order the rows render in."""
-    return re.findall(r'data-cid="([^"]+)"', rendered["html"])
+    """The market order the rows render in (`<tr>` tags only: #427 puts a
+    `data-cid` address on the live value cells too, which are not rows)."""
+    return re.findall(r'<tr[^>]*data-cid="([^"]+)"', rendered["html"])
 
 
 def _pairs(rendered: dict) -> list[str]:

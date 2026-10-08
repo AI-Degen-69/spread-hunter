@@ -958,6 +958,16 @@ function connectSSE() {
     }
   };
 
+  // #427 live marks ride this same connection as named events; the ticker
+  // path above is untouched.
+  if (typeof sseSource.addEventListener === 'function') {
+    sseSource.addEventListener('mark', (e) => {
+      let payload = null;
+      try { payload = JSON.parse(e.data); } catch { payload = null; }
+      if (applyLiveMarks(payload, Date.now())) scheduleLiveMarksPaint();
+    });
+  }
+
   sseSource.onerror = () => {
     sseReconnect.style.display = 'block';
     // Auto-reconnect after 3s
@@ -1173,6 +1183,7 @@ async function renderRunSwitcher() {
           // doesn't linger before pollStatus() retrieves the newly selected store.
           lastState = null;
           lastKpi = null;
+          clearLiveMarks();
           lastStatus = null;
           lastScanState = null;
           lastTrialReadiness = null;
@@ -4293,6 +4304,156 @@ function latestLegMids(market) {
   };
 }
 
+/* Live marks (#427): the server's read-only venue feed, delivered as named
+ * `mark` frames on this same SSE connection. token_id -> {bid, ask, mid,
+ * tsMs, seq}. A mark older than LIVE_MARK_MAX_AGE_MS reads as missing, so a
+ * stalled feed degrades to quote mids instead of freezing a price on screen.
+ * Finished markets never reach the positions table, so they need no marks. */
+const LIVE_MARK_MAX_AGE_MS = 30000;
+const liveMarks = new Map();
+let liveMarksRafQueued = false;
+
+function liveMarkMid(tokenId, nowMs) {
+  if (tokenId === null || tokenId === undefined) return null;
+  const e = liveMarks.get(String(tokenId));
+  if (!e) return null;
+  const now = (nowMs === undefined) ? Date.now() : Number(nowMs);
+  if (!Number.isFinite(e.mid) || e.mid < 0 || e.mid > 1) return null;
+  if (!Number.isFinite(now) || !Number.isFinite(e.tsMs)
+      || now - e.tsMs > LIVE_MARK_MAX_AGE_MS) return null;
+  return e.mid;
+}
+
+/* Fold one `event: mark` payload into the map. A reset clears first; a
+ * snapshot replaces the whole visible set (tokens it omits are gone); a
+ * delta merges newer-wins by per-mark seq. Rows outside 0-1, without a
+ * usable timestamp, or without a token are dropped. Returns true when
+ * anything visible changed, so the stream paints only on change. */
+function applyLiveMarks(payload, nowMs) {
+  if (!payload || typeof payload !== 'object') return false;
+  const list = Array.isArray(payload.marks) ? payload.marks : null;
+  if (list === null) return false;
+  let changed = false;
+  if (payload.reset === true && liveMarks.size) {
+    liveMarks.clear();
+    changed = true;
+  }
+  const keep = (payload.snapshot === true) ? new Map() : null;
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue;
+    const tok = (row.token_id === null || row.token_id === undefined)
+      ? null : String(row.token_id);
+    if (tok === null || tok === '') continue;
+    const mid = Number(row.mid);
+    if (!Number.isFinite(mid) || mid < 0 || mid > 1) continue;
+    const tsMs = toMs(row.ts);
+    if (tsMs === null) continue;
+    const seq = Number(row.seq);
+    const prev = liveMarks.get(tok);
+    if (prev && Number.isFinite(seq) && Number.isFinite(prev.seq)
+        && seq < prev.seq) continue; // newer wins
+    const entry = {
+      bid: Number(row.bid), ask: Number(row.ask), mid, tsMs,
+      seq: Number.isFinite(seq) ? seq : null,
+    };
+    (keep || liveMarks).set(tok, entry);
+    changed = true;
+  }
+  if (keep) {
+    let same = (keep.size === liveMarks.size);
+    if (same) {
+      for (const [k, v] of keep) {
+        if (liveMarks.get(k)?.mid !== v.mid) { same = false; break; }
+      }
+    }
+    liveMarks.clear();
+    for (const [k, v] of keep) liveMarks.set(k, v);
+    changed = changed || !same;
+  }
+  return changed;
+}
+
+function clearLiveMarks() {
+  // Store switch: the next store's tokens are different ones, so no mark
+  // from this store may survive it. Dropping the queued paint flag too --
+  // the queued pass finds no store data and no-ops.
+  liveMarks.clear();
+  liveMarksRafQueued = false;
+}
+
+/* Quote mids with live marks overlaid: each quoted token's leg reads the
+ * live mid when one is fresh, the quote mid otherwise. Returns the mids plus
+ * whether any leg is live (the cell affordance) and the youngest mark age.
+ * `positionMarkValue` keeps its signature -- this is the `mids` it takes. */
+function liveLegMids(market, nowMs) {
+  const mids = latestLegMids(market);
+  const now = (nowMs === undefined) ? Date.now() : Number(nowMs);
+  let live = false;
+  let ageMs = null;
+  for (const q of (market && market.quotes) || []) {
+    if (!q || q.token_id === null || q.token_id === undefined) continue;
+    const leg = normalizeLeg(q.side);
+    if (leg === null) continue;
+    const mid = liveMarkMid(q.token_id, now);
+    if (mid === null) continue;
+    mids[leg.toLowerCase()] = mid;
+    live = true;
+    const age = now - liveMarks.get(String(q.token_id)).tsMs;
+    if (ageMs === null || age < ageMs) ageMs = age;
+  }
+  return { mids, live, ageMs };
+}
+
+/* One rAF-merged pass per burst of mark frames: visible positions cells are
+ * rewritten in place, never a table rebuild. Gated by paintable() so a
+ * hidden tab pays nothing; a value-sorted table re-renders once instead,
+ * because in-place writes would silently unsort it. */
+function scheduleLiveMarksPaint() {
+  if (liveMarksRafQueued) return;
+  liveMarksRafQueued = true;
+  deferPaint(() => {
+    liveMarksRafQueued = false;
+    paintLiveMarks();
+  });
+}
+
+function paintLiveMarks() {
+  if (typeof document === 'undefined' || !lastKpi) return;
+  if (currentOrdersTradesView !== 'positions') return;
+  const body = (typeof document.getElementById === 'function')
+    ? document.getElementById('orders-trades-body') : null;
+  if (!body || !paintable(tab1, body)) return;
+  const sort = (typeof otActiveSort === 'function') ? otActiveSort('positions') : null;
+  if (sort && (sort.col === 6 || sort.col === 7)) {
+    renderOrdersTrades(lastKpi, lastState);
+    return;
+  }
+  // The node harness stubs the DOM without element queries: no cells found
+  // is a no-op there, the same way unfocused headers are.
+  if (typeof body.querySelectorAll !== 'function') return;
+  const now = Date.now();
+  for (const [cid, m] of heldMarketEntries(lastKpi, false)) {
+    const overlay = liveLegMids(m, now);
+    if (!overlay.live) continue;
+    const mark = positionMarkValue(m, overlay.mids);
+    const cost = Number(m.total_cost) || 0;
+    const unrealized = mark === null ? null : mark - cost;
+    const age = (overlay.ageMs !== null) ? `Live mark, ${(overlay.ageMs / 1000).toFixed(1)}s old` : 'Live mark';
+    for (const el of body.querySelectorAll('td[data-cell="value"]')) {
+      if (el.getAttribute && el.getAttribute('data-cid') !== cid) continue;
+      el.textContent = mark === null ? '--' : fmtUSD(mark);
+      if (el.classList) el.classList.add('live');
+      el.title = age;
+    }
+    for (const el of body.querySelectorAll('td[data-cell="unrealized"]')) {
+      if (el.getAttribute && el.getAttribute('data-cid') !== cid) continue;
+      el.innerHTML = signedUSD(unrealized);
+      if (el.classList) el.classList.add('live');
+      el.title = age;
+    }
+  }
+}
+
 /* Orders name their token, quotes name the leg. Joining the two is the only
  * way to say UP or DOWN on an order row. */
 function tokenLegMap(kpi) {
@@ -4966,8 +5127,10 @@ function positionsRows(kpi, state, sort) {
   // order the operator is actually looking at. Reading a pre-sort index left
   // adjacent pairs sharing a band after any sort.
   const rows = entries.map(([cid, m]) => {
-    const mids = latestLegMids(m);
-    const mark = positionMarkValue(m, mids);
+    // Live marks overlay the quote mids, so a poll render already shows the
+    // newest price: the rAF pass only rewrites cells between polls.
+    const overlay = liveLegMids(m);
+    const mark = positionMarkValue(m, overlay.mids);
     const cost = Number(m.total_cost) || 0;
     const held = heldLegs(m);
     return {
@@ -4975,6 +5138,8 @@ function positionsRows(kpi, state, sort) {
       mark,
       unrealized: mark === null ? null : mark - cost,
       ts: latestFillTs(m),
+      live: overlay.live,
+      liveAgeMs: overlay.ageMs,
     };
   }).filter(r => r.held.length);
 
@@ -4996,7 +5161,7 @@ function positionsRows(kpi, state, sort) {
     }
   }) : rows;
 
-  return sorted.map(({ cid, m, held, mark, unrealized, ts }, marketIndex) => {
+  return sorted.map(({ cid, m, held, mark, unrealized, ts, live, liveAgeMs }, marketIndex) => {
     const cost = Number(m.total_cost) || 0;
     const up = Number(m.up_sh) || 0;
     const dn = Number(m.dn_sh) || 0;
@@ -5020,9 +5185,15 @@ function positionsRows(kpi, state, sort) {
       const pairCells = legIndex === 0
         ? `<td class="ot-market" rowspan="${span}">${marketCell(m, cid, { categoryCaption: true })}${pairTags}</td>`
         : '';
+      // Live cells carry their address (data-cid + data-cell) so the rAF
+      // pass can rewrite them without a table rebuild; the `live` class and
+      // the age tooltip are the only affordance, per existing tokens (T4).
+      const liveCls = live ? ' live' : '';
+      const liveTitle = (live && liveAgeMs !== null)
+        ? ` title="Live mark, ${(liveAgeMs / 1000).toFixed(1)}s old"` : '';
       const pairNumbers = legIndex === 0
-        ? `<td class="mono ot-pair-value" rowspan="${span}">${mark === null ? '--' : fmtUSD(mark)}</td>
-      <td class="mono ot-pair-value" rowspan="${span}">${signedUSD(unrealized)}</td>
+        ? `<td class="mono ot-pair-value${liveCls}" rowspan="${span}" data-cid="${esc(cid)}" data-cell="value"${liveTitle}>${mark === null ? '--' : fmtUSD(mark)}</td>
+      <td class="mono ot-pair-value${liveCls}" rowspan="${span}" data-cid="${esc(cid)}" data-cell="unrealized"${liveTitle}>${signedUSD(unrealized)}</td>
       <td class="mono ot-pair-value" rowspan="${span}">${signedUSD(m.realized_pnl)}</td>`
         : '';
       return `<tr class="${rowClass.join(' ')}" data-cid="${esc(cid)}" data-leg="${esc(entry.leg)}">
@@ -6368,6 +6539,8 @@ if (typeof module !== 'undefined' && module.exports) {
     hedgeStateOf, legResolverForMarket, orderStatusTitle, ORDER_STATUS_TITLES,
     heldMarketEntries, heldLegs, isFinishedMarket, latestLegMids, latestLegQuotes,
     positionMarkValue, settledMarkValue, winningLeg,
+    liveMarks, LIVE_MARK_MAX_AGE_MS, liveMarkMid, applyLiveMarks, clearLiveMarks,
+    liveLegMids, paintLiveMarks, scheduleLiveMarksPaint,
     isQuotedMarket, isRestingOrder, tokenLegMap, legForOrder, marketStatusPill,
     normalizeLeg, groupOrdersByPair, restingPairCost, restingPairLegs,
     fmtTimestamp, toMs, latestQuoteTs, latestFillTs, closeTsOf, fmtRelAgo, timestampCell,

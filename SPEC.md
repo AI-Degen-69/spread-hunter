@@ -1,3 +1,31 @@
+# SPEC — #427: Open positions show live market value and unrealized P&L
+
+Scope note: this file covers issue #427 only
+(branch `i427/realtime-position-value-updates`).
+It supersedes the #422 spec (done work). Deleted or superseded when the
+next Standard/Large issue writes its own.
+
+## Problem (operator words)
+
+Dashboard open positions show stale cost basis and shares instead of current
+market value and unrealized P&L — values only refresh on the 2-second poll
+while prices move sub-second.
+
+## Goals
+
+1. Open positions show current market value and unrealized P&L updating in
+   real-time as prices move (sub-second during active markets).
+2. Delivery reuses the existing `/api/cycle-stream` SSE connection as named
+   `mark` events — no new endpoint, ticker unchanged, no table rebuilds.
+3. A `sim` source lets the operator watch it live with zero trading actions.
+
+## Non-goals
+
+Historical/closed data, order management, account-level metrics, chart-wide
+rework. Matched pairs stay at $1; finished markets stay excluded.
+
+---
+
 # SPEC — #422: Every shadow rehearsal starts at a fixed $100 bankroll
 
 Scope note: this file covers issue #422 only

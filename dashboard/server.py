@@ -99,6 +99,67 @@ CYCLE_RING_NAME = "cycle_events.jsonl"
 SSE_REPLAY_LINES = 50
 SSE_POLL_SEC = 0.5
 SSE_KEEPALIVE_SEC = 15.0
+
+# #427: server-owned live marks. One read-only venue feed (or sim walk, or
+# off) serves every browser over the existing cycle stream as `event: mark`
+# frames. The cache is module-global so the generator and the KPI route share
+# it; the worker thread starts only in the CLI path, never at import and
+# never inside a request or a generator.
+_LIVE_MARKS_CACHE = None
+_LIVE_MARKS_WORKER = None
+
+
+def _live_marks_cache():
+    """The shared mark cache, created lazily. No network, no thread."""
+    global _LIVE_MARKS_CACHE
+    if _LIVE_MARKS_CACHE is None:
+        from core_brain.live_marks import LiveMarkCache
+        _LIVE_MARKS_CACHE = LiveMarkCache()
+    return _LIVE_MARKS_CACHE
+
+
+def start_live_marks(source=None):
+    """Start the single feed worker (CLI startup path only). Idempotent."""
+    global _LIVE_MARKS_WORKER
+    if _LIVE_MARKS_WORKER is not None:
+        return _LIVE_MARKS_WORKER
+    from core_brain.live_marks import (
+        LiveMarkWorker,
+        live_marks_source,
+    )
+    src = source or live_marks_source()
+    if src == "off":
+        return None
+    _LIVE_MARKS_WORKER = LiveMarkWorker(_live_marks_cache(), source=src)
+    _LIVE_MARKS_WORKER.start()
+    return _LIVE_MARKS_WORKER
+
+
+def stop_live_marks():
+    """Stop the feed worker (tests, shutdown). The cache keeps its data."""
+    global _LIVE_MARKS_WORKER
+    worker, _LIVE_MARKS_WORKER = _LIVE_MARKS_WORKER, None
+    if worker is not None:
+        worker.stop()
+
+
+def sync_live_marks() -> bool:
+    """Push a drifted wanted set to the venue socket (no-op unless running)."""
+    worker = _LIVE_MARKS_WORKER
+    if worker is None:
+        return False
+    try:
+        return bool(worker.sync_subscription())
+    except Exception:
+        logger.debug("live-marks resubscribe skipped", exc_info=True)
+        return False
+
+
+def _mark_frame(seq, snapshot, reset, marks):
+    """One `event: mark` SSE frame for the live-marks contract (#427)."""
+    return ("event: mark\ndata: "
+            + json.dumps({"seq": seq, "snapshot": snapshot,
+                          "reset": reset, "marks": marks}) + "\n\n")
 # How long a shutdown waits for open connections before dropping them.
 SHUTDOWN_GRACE_SEC = 5
 SCAN_STALL_THRESHOLD_SEC = 90.0
@@ -2376,6 +2437,16 @@ def get_kpi(run_id: str | None = None):
             return _read_only_error_payload(e), 500
 
     payload, status = _cached_snapshot(("kpi", str(db_path), run_id), build)
+    if status == 200 and isinstance(payload, dict):
+        # Feed the live-marks wanted set from the payload already served:
+        # no rebuild, no feed read, no order-book pulls -- the served dict
+        # is the only input. Best-effort; a mark failure must never fail KPI.
+        try:
+            from core_brain.live_marks import update_wanted_from_kpi
+            if update_wanted_from_kpi(_live_marks_cache(), payload):
+                sync_live_marks()
+        except Exception:
+            logger.debug("live-marks wanted update skipped", exc_info=True)
     return JSONResponse(payload, status_code=status)
 
 
@@ -2808,6 +2879,7 @@ def _cycle_stream_sse(
     ring_path: Path,
     tail: int = SSE_REPLAY_LINES,
     poll_sec: float = SSE_POLL_SEC,
+    live_marks=None,
 ) -> Generator[str, None, None]:
     """Yield SSE frames for the cycle-telemetry ring: replay tail, then follow appends.
 
@@ -2816,8 +2888,25 @@ def _cycle_stream_sse(
     Windows) rather than size alone, so a replacement larger than the current
     read offset is still seen. On rotation we emit an ``event: rotate`` frame
     and re-sync from the new file's start.
+
+    After the ring replay each connection gets one ``event: mark`` snapshot
+    frame from the shared live-marks cache (#427), then deltas as the feed
+    moves and a reset frame after every venue disconnect. ``live_marks`` is
+    an injectable cache (tests); ``None`` uses the module singleton. No
+    venue work happens here -- the worker thread feeds the cache, the
+    generator only reads it.
     """
     last_keepalive = time.time()
+    marks_cache = live_marks if live_marks is not None else _live_marks_cache()
+
+    def _wait(sec: float) -> None:
+        # Condition-wait so a mark wakes the stream early; a timeout so the
+        # ring poll and the keepalive still tick with no feed. Falls back to
+        # a plain sleep for foreign cache doubles without a wait method.
+        try:
+            marks_cache.wait(timeout=sec)
+        except (AttributeError, TypeError):
+            time.sleep(sec)
 
     def _frame(line: str) -> str:
         return f"data: {line.strip()}\n\n"
@@ -2837,10 +2926,19 @@ def _cycle_stream_sse(
         except OSError:
             pass
 
+    try:
+        seq, marks = marks_cache.snapshot()
+        last_reset = marks_cache.reset_generation
+    except AttributeError:
+        seq, marks = 0, []
+        last_reset = 0
+    yield _mark_frame(seq, True, False, marks)
+    last_seq = seq
+
     while True:
         try:
             if not ring_path.exists():
-                time.sleep(poll_sec)
+                _wait(poll_sec)
                 continue
             st = ring_path.stat()
             key = _ring_file_key(st)
@@ -2856,12 +2954,31 @@ def _cycle_stream_sse(
                         if line.strip():
                             yield _frame(line)
                     offset = fh.tell()
+            try:
+                seq, marks = marks_cache.snapshot()
+                gen = marks_cache.reset_generation
+            except AttributeError:
+                seq, marks, gen = last_seq, [], last_reset
+            if gen != last_reset:
+                last_reset = gen
+                last_seq = seq
+                yield _mark_frame(seq, False, True, marks)
+            elif seq != last_seq:
+                # Delta carries only marks that moved since this stream's
+                # seq; removals ride the 30s browser max-age instead of a
+                # tombstone here, the same bound poll renders already use.
+                try:
+                    delta = marks_cache.marks_since(last_seq)
+                except AttributeError:
+                    delta = marks
+                last_seq = seq
+                yield _mark_frame(seq, False, False, delta)
             if time.time() - last_keepalive >= SSE_KEEPALIVE_SEC:
                 yield ": keepalive\n\n"
                 last_keepalive = time.time()
-            time.sleep(poll_sec)
+            _wait(poll_sec)
         except OSError:
-            time.sleep(poll_sec)
+            _wait(poll_sec)
 
 
 PAIRS_ACTION_PREFIX = "pairs_"
@@ -3180,6 +3297,13 @@ def main():
         _capture_starting_capital()
     except Exception:
         pass
+    # Server-owned live-marks feed next to it: read-only venue WS (or sim),
+    # one thread for all browsers. Best-effort; the stream degrades to ring
+    # telemetry alone when the feed is off or fails to start.
+    try:
+        start_live_marks()
+    except Exception:
+        logger.debug("live-marks feed did not start", exc_info=True)
     app_target = "dashboard.server:app" if args.reload else app
     uvicorn.run(app_target, host=args.host, port=port,
                 reload=args.reload,

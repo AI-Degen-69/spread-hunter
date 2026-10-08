@@ -179,10 +179,71 @@ Branch: i398/unify-or-justify-the-two-maker-queue-bars | Issue: #398
 - Depends on: T1 (wording follows the record).
 - Verify: each bar's comment names the other; `git diff` shows comments only.
 
-### T3 [ ] — Independence pin in the existing suites [Docs] (S)
+### T3 [x] — Independence pin in the existing suites [Docs] (S)
 
 - Target files: `tests/test_queue_clear_gate.py` (or `tests/test_maker_queue_bar.py`).
 - Build: one test asserting the bars are independently configured and both ship record-only — fails if a future consolidation couples them silently.
 - Helper skill: `documentation-and-adrs`.
 - Depends on: T1.
-- Verify: `python -m pytest -q tests/test_maker_queue_bar.py tests/test_queue_clear_gate.py` — all green.
+- Verify: `python -m pytest -q tests/test_maker_queue_bar.py tests/test_queue_clear_gate.py` — all green (98 passed; merged as PR #428).
+
+---
+
+# Plan — #427: Real-time position value updates for open positions
+
+Branch: i427/realtime-position-value-updates | Issue: #427
+
+- Tier: **Standard** — 3 touched files + 1 new module + tests + JS harness; one architectural decision (server-owned read-only venue WS).
+- Task type: **Code + Design/UI** — live-price pipeline plus positions-surface finesse.
+- Stack: Python (FastAPI dashboard, pytest) + vanilla JS + SSE; no new dependency (`websocket-client>=1.7` already required).
+- CodeRabbit plan: adopted as scaffolding, merged into 5 tasks. Rejected nothing material; seams re-verified live. Nothing left `[UNVERIFIED]`.
+- shadcn MCP: unavailable (only agent-skills + coderabbit doc servers); dashboard is vanilla JS, not React — design finesse via existing tokens.
+- Improvement proposal (adopted): `positionMarkValue(m, mids)` already takes optional mids (`app.js:4363`) — no signature change, just pass live mids.
+- Safety: read-only venue WS (no credentials, no order client); no START/quote/complete; `data/orders.db` never rewritten; all new tests offline.
+
+## Locked behavior (concise spec)
+
+- New `core_brain/live_marks.py`: per-`token_id` {bid, ask, mid, ts, seq} + global seq + `threading.Condition`; mid rule mirrors `_cycle_mids` (both sides, finite, 0–1, bid < ask, else drop); disconnect clears + raises reset; backoff ~1s→30s with full resubscribe; wanted-set from served `/api/kpi` payloads (held, unfinished, positive shares), 2-minute expiry, 1-second settle; `sim` random-walk source, `off` keeps cache empty (`HUNTER_MARKS_SOURCE`: `venue`/`off`/`sim`).
+- Stream: `event: mark` frames `{seq, snapshot, reset, marks[]}` on `/api/cycle-stream` after ring replay; condition-wait (timeout = poll interval) replaces fixed sleep; per-connection last-seq; ticker/rotate/keepalives untouched; no venue work in the generator.
+- Browser: `liveMarks` map (finite, 0–1, newer-wins, 30s max age); positions helper over `latestLegQuotes()`; poll renders keep live values; rAF-merged writes gated by `paintable()`; `data-cid` + `data-cell` attrs, `live` class + age tooltip; value-sort reorder via one `renderOrdersTrades()`; switch clears marks + cancels callbacks; pairs stay $1; finished markets excluded.
+- Out of scope: historical/closed data, order management, account metrics, chart-wide rework.
+
+### T1 [x] — `core_brain/live_marks.py` + `tests/test_live_marks.py` [Backend/Logic] (M)
+
+- Target files: `core_brain/live_marks.py` (new), `tests/test_live_marks.py` (new).
+- Build: thread-safe cache, `_cycle_mids`-rule validation, wanted-set + expiry, disconnect reset + backoff, `sim`/`off`/`venue` sources. TDD: tests first (~80%+ on touched code).
+- Helper skill: `test-driven-development`.
+- Depends on: nothing.
+- Verify: `python -m pytest -q tests/test_live_marks.py` — new tests fail before, all green after.
+
+### T2 [x] — `dashboard/server.py` wiring + stream mark frames [Backend/Logic] (S)
+
+- Target files: `dashboard/server.py`, `tests/test_dashboard_server.py`.
+- Build: KPI payload → wanted set (no `full_book`, no rebuilds); worker start/stop in CLI path next to `_capture_starting_capital` (never at import); snapshot/delta/reset frames; condition-wait.
+- Helper skill: `test-driven-development`.
+- Depends on: T1.
+- Verify: `python -m pytest -q tests/test_dashboard_server.py tests/test_dashboard_poll_budgets.py` — all green.
+
+**Checkpoint:** server path provable via tests.
+
+### T3 [x] — `dashboard/static/app.js` + harness tests [Design/UI] (M)
+
+- Target files: `dashboard/static/app.js`, `tests/js/live_marks_harness.cjs` (new), `tests/test_positions_live_marks.py` (new).
+- Build: `mark` listener in `connectSSE()` (ticker untouched), `liveMarks` map, positions helper passing live mids into `positionMarkValue()`, cell attrs, rAF-merged writes, sort fallback, switch-reset clearing.
+- Helper skill: `frontend-ui-engineering`.
+- Depends on: T2.
+- Verify: `python -m pytest -q tests/test_positions_live_marks.py` — all green.
+
+### T4 [x] — Positions-surface finesse [Design/UI] (S)
+
+- Target files: `dashboard/static/app.js`, `dashboard/static/styles.css`.
+- Build: live affordance polish within existing tokens (live class, tooltip, no layout churn). No chart rework.
+- Helper skill: `frontend-ui-engineering`.
+- Depends on: T3.
+- Verify: hands-on — dashboard in `sim` mode, cells tick sub-second, layout still.
+
+### T5 [x] — How-to-verify block [Docs] (XS)
+
+- Target files: PR body (hands-on steps, sim mode, failure signs, no trading actions).
+- Depends on: T1–T4.
+- Verify: read the block — an operator can follow it without pytest.

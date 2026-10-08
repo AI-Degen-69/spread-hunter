@@ -1,8 +1,14 @@
-# Todo — #398 (active) + #422 (done, history) + #419 (done, history)
+# Todo — #427 (active) + #398 (done, history) + #422 (done, history)
+
+- [x] #427 T1 — `core_brain/live_marks.py` + `tests/test_live_marks.py`
+- [x] #427 T2 — `dashboard/server.py` wiring + stream mark frames
+- [x] #427 T3 — `dashboard/static/app.js` + harness tests
+- [x] #427 T4 — Positions-surface finesse
+- [x] #427 T5 — How-to-verify block
 
 - [x] #398 T1 — Decision record `docs/issues/398-maker-queue-bars.md`
 - [x] #398 T2 — Bidirectional cross-ref comments in both configs
-- [ ] #398 T3 — Independence pin in the existing suites
+- [x] #398 T3 — Independence pin in the existing suites (merged PR #428)
 
 - [x] T1 — RED+GREEN: one fixed bankroll path in `run_shadow`
 - [x] T2 — GREEN: unify the CLI flag, keep the old name working

@@ -2124,3 +2124,109 @@ def test_snapshot_ttl_for_key_respects_ended_shadow_run(monkeypatch):
 
 
 
+
+
+# --- #427 live marks on /api/cycle-stream (offline; injected caches only) ---
+
+def _parse_mark(frame):
+    """Parse one `event: mark` frame, asserting the contract shape."""
+    assert frame.startswith("event: mark"), frame[:60]
+    payload = json.loads(frame.split("data:", 1)[1].strip())
+    assert set(payload) == {"seq", "snapshot", "reset", "marks"}
+    return payload
+
+
+def test_cycle_stream_emits_mark_snapshot_after_ring_replay(tmp_path):
+    """Ring lines come first, then one snapshot frame with the cache's marks."""
+    from core_brain.live_marks import LiveMarkCache
+    import dashboard.server as ds
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text(json.dumps({"action": "tick"}) + "\n", encoding="utf-8")
+    cache = LiveMarkCache()
+    cache.update_wanted({"tok-u"})
+    cache.apply_message({"asset_id": "tok-u", "bids": [{"price": 0.47, "size": 5}],
+                                   "asks": [{"price": 0.50, "size": 5}]})
+    gen = ds._cycle_stream_sse(ring, tail=50, poll_sec=0.01, live_marks=cache)
+    try:
+        first = next(gen)
+        assert '"action": "tick"' in first  # replay untouched, still first
+        snap = _parse_mark(next(gen))  # snapshot follows the replay inline
+    finally:
+        gen.close()
+    assert snap["snapshot"] is True and snap["reset"] is False
+    assert [m["token_id"] for m in snap["marks"]] == ["tok-u"]
+    assert snap["marks"][0]["mid"] == pytest.approx(0.485)
+
+
+def test_cycle_stream_emits_delta_then_reset(tmp_path):
+    """A moved mid yields a delta frame; a disconnect yields a reset frame."""
+    from core_brain.live_marks import LiveMarkCache
+    import dashboard.server as ds
+    ring = tmp_path / "cycle_events.jsonl"
+    ring.write_text("", encoding="utf-8")
+    cache = LiveMarkCache()
+    cache.update_wanted({"tok-u", "tok-v"})
+    cache.apply_message({"asset_id": "tok-v", "bids": [{"price": 0.40, "size": 5}],
+                                   "asks": [{"price": 0.45, "size": 5}]})
+    gen = ds._cycle_stream_sse(ring, tail=50, poll_sec=0.01, live_marks=cache)
+    try:
+        snap = _parse_mark(next(gen))  # replay is empty, snapshot is first
+        assert [m["token_id"] for m in snap["marks"]] == ["tok-v"]
+        # Mutate the cache from here, then pull: the generator is
+        # synchronous, so the next frame already carries the change.
+        cache.apply_message({"asset_id": "tok-u", "bids": [{"price": 0.47, "size": 5}],
+                                       "asks": [{"price": 0.50, "size": 5}]})
+        delta = _parse_mark(next(gen))
+        assert delta["snapshot"] is False and delta["reset"] is False
+        assert delta["seq"] > snap["seq"]
+        # Only the moved mark travels; the untouched leg stays out.
+        assert [m["token_id"] for m in delta["marks"]] == ["tok-u"]
+        assert delta["marks"][0]["mid"] == pytest.approx(0.485)
+        cache.disconnect()
+        reset = _parse_mark(next(gen))
+    finally:
+        gen.close()
+    assert reset["reset"] is True and reset["marks"] == []
+
+
+def test_get_kpi_feeds_wanted_set_without_rebuilds(temp_db, monkeypatch):
+    """Serving /api/kpi refreshes the wanted set from the served payload only."""
+    import dashboard.server as ds
+    seen = {}
+
+    import core_brain.live_marks as lm
+    real = lm.update_wanted_from_kpi
+
+    def spy(cache, payload, now=None):
+        seen["keys"] = list((payload or {}).keys())
+        return real(cache, payload, now=now)
+
+    monkeypatch.setattr(lm, "update_wanted_from_kpi", spy)
+    set_db_override(temp_db)
+    try:
+        resp = TestClient(app).get("/api/kpi")
+    finally:
+        set_db_override(None)
+    assert resp.status_code == 200
+    assert "by_market" in seen.get("keys", [])
+
+
+def test_wanted_path_has_no_full_book_reference():
+    """Feed-budget freeze pin: the server never pulls books for marks."""
+    src = Path(__file__).resolve().parent.parent / "dashboard" / "server.py"
+    assert "full_book" not in src.read_text(encoding="utf-8")
+
+
+def test_start_stop_live_marks_lifecycle():
+    """`off` starts nothing; `sim` starts one worker that stops on demand."""
+    import dashboard.server as ds
+    ds.stop_live_marks()
+    assert ds.start_live_marks(source="off") is None
+    assert ds._LIVE_MARKS_WORKER is None
+    worker = ds.start_live_marks(source="sim")
+    try:
+        assert worker is not None and worker.running
+        assert ds.start_live_marks(source="sim") is worker  # idempotent
+    finally:
+        ds.stop_live_marks()
+    assert ds._LIVE_MARKS_WORKER is None
