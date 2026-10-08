@@ -912,6 +912,7 @@ def run_shadow(
     if paired_admission_arm is not None and starting_bankroll_usd is None:
         raise ValueError("paired-admission run requires an explicit equal starting bankroll")
 
+    cfg_supplied = cfg is not None
     if cfg is None:
         cfg = shadow_cfg()
         # Every rehearsal starts from the same fixed bankroll: the config
@@ -926,6 +927,11 @@ def run_shadow(
                 f"got: {starting_bankroll_usd}")
         cfg = dc_replace(cfg, bankroll_usd=float(starting_bankroll_usd))
         bankroll_source = "explicit override"
+    elif cfg_supplied:
+        # A caller that built its own cfg never went through `config.load()`,
+        # so the bankroll environment did not set this value. Reporting
+        # "environment" would misstate the one thing this line exists to say.
+        bankroll_source = "caller-supplied config"
     elif (os.environ.get("SPREAD_HUNTER_BANKROLL") or "").strip() or \
             (os.environ.get("HUNTER_BANKROLL") or "").strip():
         bankroll_source = "environment"
