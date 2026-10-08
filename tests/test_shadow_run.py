@@ -2316,6 +2316,26 @@ class TestFixedStartingBankroll:
         assert caps["max_naked_usd"] == 6.0
         assert caps["max_total_usd"] == 90.0
 
+    def test_a_caller_supplied_config_reports_its_own_source(
+            self, tmp_path, monkeypatch, caplog):
+        """`statistical_validation_run` and the ladder scripts build their own
+        cfg and pass it in. That cfg never went through `config.load()`, so an
+        exported bankroll environment is not what set the value and must not be
+        reported as the source."""
+        import logging
+        from dataclasses import replace as dc_replace
+
+        from core_brain.config import load
+
+        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
+        supplied = dc_replace(load(), bankroll_usd=333.0)
+
+        with caplog.at_level(logging.INFO, logger="shadow_run"):
+            cfg = self._capture_cfg(tmp_path, monkeypatch, cfg=supplied)
+
+        assert cfg.bankroll_usd == 333.0
+        assert "starting bankroll $333.00 (caller-supplied config)" in caplog.text
+
     def test_an_explicit_override_still_sets_a_different_bankroll(
             self, tmp_path, monkeypatch):
         cfg = self._capture_cfg(tmp_path, monkeypatch,
