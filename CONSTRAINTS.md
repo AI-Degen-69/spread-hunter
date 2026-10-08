@@ -1,3 +1,42 @@
+# CONSTRAINTS — #427 (locked by Station II, enforced through Station V)
+
+Governs the `i427` branch only; #398 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass: `tests/test_live_marks.py` (new),
+  `tests/test_dashboard_server.py`, `tests/test_positions_live_marks.py` (new),
+  `tests/test_dashboard_poll_budgets.py`.
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only
+  the focused suites.
+- Every new test must fail without the change (RED first). Browser harness
+  tests run via the repo's existing node harness pattern.
+
+## Feed-budget freeze
+
+- Wanted-set path adds no `full_book()` calls, no KPI rebuilds, no feed reads
+  — `tests/test_dashboard_poll_budgets.py` is the contract.
+- No venue work at import time or in stream generators; worker starts only in
+  the CLI startup path. Tests and `TestClient` sessions stay offline.
+- No `decide_quotes`, pricing, routing, registry, or pair-merging changes.
+- `core_brain/kpi.py`, `core_brain/registry_state.py`: untouched (cost basis
+  already flows through `by_market`).
+
+## Stores are evidence, not scratch
+
+- `data/orders.db` is the production registry: read it, never rewrite it.
+- No schema migration; tests use temporary DBs.
+- No live orders; no `quote`, `complete`, Trader loop, dashboard START, merge,
+  or other trading action — including during hands-on `sim` verification.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit operator approval
+  (`websocket-client` is already required).
+
+---
+
 # CONSTRAINTS — #398 (locked by Station II, enforced through Station V)
 
 Governs the `i398` branch only; #422 constraints below stay as history.
