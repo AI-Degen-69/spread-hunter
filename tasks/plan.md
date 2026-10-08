@@ -71,7 +71,7 @@ Branch: i413/tune-live-activity-gates-protect-hedge | Issue: #413
 - Depends on: T1, T2, T4.
 - Verify: `python -m pytest -q tests/test_trader_loop.py tests/test_live_quotes.py`; cover patient keep, exact escalation replace, hard-stop no-buy, pair-ID attribution, unchanged-state quietness, and ambiguous simultaneous pair handling.
 
-### T6 [ ] — Unify poll and shadow rescue routing [Backend/Logic] (L)
+### T6 [x] — Unify poll and shadow rescue routing [Backend/Logic] (L)
 
 - Target files: `core_brain/single_leg_lifecycle.py`, `core_brain/single_buy_saver.py`, `core_brain/order_manager.py`, `core_brain/shadow_run.py`, `tests/test_auto_pairs.py`, `tests/test_dual_stop_loss.py`, `tests/test_aged_out_rescue.py`, `tests/test_shadow_run.py`, `tests/test_shadow_exec.py`
 - Build: add one shared post-reconcile `manage_single_leg_positions` service for all active one-sided pairs, hard stops, and settlement fallback. Retire automatic in-window completion/drift/grace decisions; retain `auto_manage_pairs` and `rescue_aged_out_legs` as delegating compatibility adapters. Wire both poll and shadow through the same service and one pass per cycle.

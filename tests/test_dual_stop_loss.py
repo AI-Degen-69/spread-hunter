@@ -106,7 +106,7 @@ class FakeClient:
 
 
 def test_fresh_fill_within_grace_period_holds_maker_bid(registry):
-    """Fill at 0.60, 10s into 45s grace, price steady (bid 0.58). Holds maker quote."""
+    """A stable single leg waits for its resting hedge without a taker buy."""
     _one_sided_pair(registry, fill_price=0.60)
     # now is 10s after fill
     now_s = (FILL_TS_MS / 1000.0) + 10.0
@@ -114,12 +114,13 @@ def test_fresh_fill_within_grace_period_holds_maker_bid(registry):
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
     
     assert len(results) == 1
-    assert results[0]["action"] == "holding_grace"
+    assert results[0]["action"] == "patient_wait"
     assert not any(c.startswith("sell:") for c in client.calls)
+    assert not any(c.startswith("buy:") for c in client.calls)
 
 
-def test_adverse_drift_triggers_immediate_exit_within_grace(registry):
-    """Fill at 0.60, only 5s into grace, but bid collapsed to 0.52 (> 0.045 drop). Exits immediately."""
+def test_adverse_drift_escalates_the_resting_hedge(registry):
+    """A falling held-leg bid escalates the opposite maker quote, not a sell."""
     _one_sided_pair(registry, fill_price=0.60)
     now_s = (FILL_TS_MS / 1000.0) + 5.0
     # best_bid collapsed from 0.60 to 0.52 (loss of 0.08 > 0.045 max loss)
@@ -127,77 +128,69 @@ def test_adverse_drift_triggers_immediate_exit_within_grace(registry):
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
 
     assert len(results) == 1
-    assert results[0]["action"] == "exited"
-    assert results[0]["reason"] == "adverse_drift"
-    assert any(c.startswith("sell:") for c in client.calls)
+    assert results[0]["action"] == "escalated_wait"
+    assert results[0]["lifecycle_state"] == "ESCALATED_HEDGE"
+    assert not any(c.startswith(("buy:", "sell:")) for c in client.calls)
 
 
-def test_drift_exit_close_persists_route_reason(registry):
-    """The drift exit's CLOSE carries `adverse_drift`, written after the sale."""
+def test_escalated_hedge_state_persists_without_an_exit(registry):
+    """The lifecycle records escalation while leaving the held leg untouched."""
     _one_sided_pair(registry, fill_price=0.60)
     now_s = (FILL_TS_MS / 1000.0) + 5.0
     client = FakeClient(best_ask=0.45, best_bid=0.52)
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
-    assert results[0]["action"] == "exited"
-
-    closes = [c for c in registry.get_all_closes() if c["method"] == "single_buy_exit"]
-    assert len(closes) == 1
-    assert closes[0]["reason"] == "adverse_drift"
+    assert results[0]["action"] == "escalated_wait"
+    assert registry.get_lifecycle_state("pair-sl").state == "ESCALATED_HEDGE"
+    assert registry.get_all_closes() == []
 
 
-def test_grace_period_expiry_triggers_exit(registry):
-    """Fill at 0.60, 50s into 45s grace. Bid is still 0.58, but grace expired. Exits to close naked leg."""
+def test_grace_expiry_does_not_force_a_single_leg_exit(registry):
+    """Elapsed time alone no longer exits a held leg."""
     _one_sided_pair(registry, fill_price=0.60)
     now_s = (FILL_TS_MS / 1000.0) + 50.0
     client = FakeClient(best_ask=0.42, best_bid=0.58)
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
 
     assert len(results) == 1
-    assert results[0]["action"] == "exited"
-    assert results[0]["reason"] == "grace_expired"
-    assert any(c.startswith("sell:") for c in client.calls)
+    assert results[0]["action"] == "patient_wait"
+    assert not any(c.startswith(("buy:", "sell:")) for c in client.calls)
 
 
-def test_grace_expiry_exit_close_persists_route_reason(registry):
-    """The grace-expiry exit's CLOSE carries `grace_expired`, written after the sale."""
+def test_grace_expiry_does_not_write_a_close(registry):
+    """Waiting past the old grace period leaves no close record."""
     _one_sided_pair(registry, fill_price=0.60)
     now_s = (FILL_TS_MS / 1000.0) + 50.0
     client = FakeClient(best_ask=0.42, best_bid=0.58)
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
-    assert results[0]["action"] == "exited"
-
-    closes = [c for c in registry.get_all_closes() if c["method"] == "single_buy_exit"]
-    assert len(closes) == 1
-    assert closes[0]["reason"] == "grace_expired"
+    assert results[0]["action"] == "patient_wait"
+    assert registry.get_all_closes() == []
 
 
-def test_profitable_ask_within_grace_completes_pair(registry):
-    """Fill at 0.60, 15s into grace. Opposing ask is 0.38 (0.60 + 0.38 = 0.98 < 0.995). Completes immediately."""
+def test_profitable_opposite_ask_does_not_trigger_taker_completion(registry):
+    """A profitable crossing still waits for an organic maker fill."""
     _one_sided_pair(registry, fill_price=0.60)
     now_s = (FILL_TS_MS / 1000.0) + 15.0
     client = FakeClient(best_ask=0.38, best_bid=0.58)
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
     
     assert len(results) == 1
-    assert results[0]["action"] == "completed"
-    assert any(c.startswith("buy:") for c in client.calls)
+    assert results[0]["action"] == "patient_wait"
+    assert not any(c.startswith(("buy:", "sell:")) for c in client.calls)
 
 
-def test_route_order_unchanged_reason_is_instrumentation_only(registry):
-    """Reason persistence must not reorder completion -> drift -> hold -> expiry."""
-    # Completion still wins when the cap allows it, and its close has no reason.
+def test_patient_wait_takes_precedence_over_a_profitable_ask(registry):
+    """The lifecycle no longer chooses between completion, drift, and grace."""
     _one_sided_pair(registry, fill_price=0.60, pair_id="pair-complete")
     now_s = (FILL_TS_MS / 1000.0) + 15.0
     client = FakeClient(best_ask=0.38, best_bid=0.58)
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
-    assert results[0]["action"] == "completed"
-    mergeish = [c for c in registry.get_all_closes()
-                if c["condition_id"] == COND and c["method"] != "single_buy_exit"]
-    assert all(c["reason"] is None for c in mergeish)
+    assert results[0]["action"] == "patient_wait"
+    assert registry.get_all_closes() == []
+    assert not any(c.startswith("buy:") for c in client.calls)
 
 
-def test_completion_refusal_falls_through_to_grace(registry):
-    """If taker completion exceeds max order cap (refused), it falls through to holding grace."""
+def test_oversized_completable_leg_still_waits_without_attempting_a_buy(registry):
+    """The old immediate-completion path no longer attempts oversized orders."""
     # 100 shares at 0.38 = $38.00 > $25 cap
     _one_sided_pair(registry, filled_size=100.0, fill_price=0.60)
     now_s = (FILL_TS_MS / 1000.0) + 15.0
@@ -207,6 +200,5 @@ def test_completion_refusal_falls_through_to_grace(registry):
     results = auto_manage_pairs(client, registry, cfg, now=now_s)
     
     assert len(results) == 1
-    assert results[0]["action"] == "holding_grace"
-    assert not any(c.startswith("sell:") for c in client.calls)
-
+    assert results[0]["action"] == "patient_wait"
+    assert not any(c.startswith(("buy:", "sell:")) for c in client.calls)

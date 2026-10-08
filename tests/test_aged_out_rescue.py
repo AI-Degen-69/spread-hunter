@@ -365,6 +365,7 @@ def test_a_pair_that_still_completes_under_the_cap_is_completed_not_dumped(regis
 
     # Assert
     assert results[0]["route"] == "completed"
+    assert results[0]["lifecycle_stage"] == "settlement_fallback"
     assert any(c.startswith("buy:") for c in client.calls)
     assert not any(c.startswith("sell:") for c in client.calls)
 
@@ -393,6 +394,7 @@ def test_the_aged_out_cross_names_its_own_pair_to_the_client(registry):
     # pass and to a different pair. A client with no such method (the live one)
     # is a no-op, so this is rehearsal-only wiring.
     assert results[0]["route"] == "completed"
+    assert results[0]["lifecycle_stage"] == "settlement_fallback"
     assert client.bindings == ["pair-aged", None]
 
 
@@ -425,7 +427,7 @@ def test_an_unreadable_end_leaves_the_leg_naked_and_retries(registry):
     # Assert - nothing sent, nothing recorded, and the read is retried next
     # rotation because the leg stays in the discovery set.
     assert results[0]["action"] == "end_unknown"
-    assert client.calls == []
+    assert client.calls == ["book:tok-up"]
     assert registry.get_all_closes() == []
 
 
@@ -441,7 +443,7 @@ def test_an_unreachable_read_leaves_the_leg_naked_and_retries(registry):
 
     # Assert
     assert results[0]["action"] == "end_unknown"
-    assert client.calls == []
+    assert client.calls == ["book:tok-up"]
 
 
 def test_a_market_the_venue_closed_is_left_to_settlement(registry):
@@ -456,7 +458,7 @@ def test_a_market_the_venue_closed_is_left_to_settlement(registry):
 
     # Assert
     assert results[0]["action"] == "venue_closed"
-    assert client.calls == []
+    assert client.calls == ["book:tok-up"]
     assert registry.get_all_closes() == []
 
 
@@ -472,7 +474,7 @@ def test_a_future_end_outside_the_lead_waits(registry):
 
     # Assert
     assert results[0]["action"] == "awaiting_lead"
-    assert client.calls == []
+    assert client.calls == ["book:tok-up"]
 
 
 # --- 7. the window's own behaviour is untouched ---------------------------
@@ -486,9 +488,12 @@ def test_a_leg_inside_the_window_belongs_to_the_in_window_pass(registry):
     results = rescue_aged_out_legs(client, registry, _cfg(), now=NOW_S,
                                    market_state_fn=_states(_open_state()))
 
-    # Assert - the arm reports nothing for it and sends nothing.
-    assert results == []
-    assert client.calls == []
+    # The compatibility adapter now delegates to the shared service, which
+    # continues managing this in-window exposure without completion or exit.
+    assert results[0]["action"] in ("patient_wait", "escalated_wait")
+    assert client.calls == ["book:tok-up"]
+    assert not any(call.startswith(("buy:", "sell:", "cancel:"))
+                   for call in client.calls)
 
 
 def test_a_leg_already_closed_after_its_fill_is_never_sold_again(registry):
@@ -700,9 +705,9 @@ def test_one_market_read_serves_every_cycle_inside_the_ttl(registry):
             market_state_fn=fn, state_cache=cache)
         assert results[0]["action"] == "awaiting_lead"
 
-    # Assert - one venue read, and nothing sent.
+    # Assert - one market-state read, one held-leg book read per cycle, no writes.
     assert reads == [COND]
-    assert client.calls == []
+    assert client.calls == ["book:tok-up"] * 4
 
 
 def test_a_deadline_hours_away_is_not_read_again_at_all(registry):

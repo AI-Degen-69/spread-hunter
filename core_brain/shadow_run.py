@@ -1042,67 +1042,24 @@ def run_shadow(
     seam.fleet_state_fn = lambda r: _fleet_state(r, cfg)
 
     def shadow_sweep() -> None:
-        """The Order Manager's U35 pass, rehearsed. Closing actions only.
-
-        Runs `auto_manage_pairs` against the shadow store instead of the
-        venue: `ShadowExecutionClient` supplies the four calls that module
-        makes, and `shadow_positions` stands in for the Data API read so an
-        unreachable funder never fails the pass closed. Uses `seam.fetch_books`
-        -- the same book source the rest of this seam decides against -- so a
-        session (or test) that injects `fetch_books` drives this pass too,
-        rather than always hitting the live default underneath it.
-        """
+        """Run the production lifecycle policy against the isolated shadow store."""
         from core_brain.shadow_exec import (
             ShadowExecutionClient, record_shadow_merges, shadow_positions,
         )
-        from core_brain.single_buy_saver import auto_manage_pairs
+        from core_brain.single_buy_saver import (
+            SINGLE_LEG_QUIET_ACTIONS, manage_single_leg_positions,
+        )
         from core_brain.market_lifecycle import resolved_condition_ids
 
-        # Resolved conditions skip every consumer below, before any book
-        # request -- the same durable guard the live poll loop reads (#402).
+        # Resolved conditions are skipped before books or simulated orders.
         cycle_resolved = resolved_condition_ids(seam.registry)
         exec_client = ShadowExecutionClient(
             seam.registry, db_path, book_fn=seam.fetch_books,
             clob_host=seam.clob_host,
-            # The pass and the shim must agree on the window, or a completion
-            # the pass made for a fresh naked pair gets booked to a stale one
-            # the pass never touched (see `_naked_pair_for_token`).
             window_sec=getattr(cfg, "pairs_exit_window_sec", 900.0))
+        state_fn = getattr(shadow_sweep, "_market_state_fn", None)
         try:
-            for pr in auto_manage_pairs(
-                exec_client, seam.registry, cfg,
-                venue_positions=shadow_positions(seam.registry, db_path),
-                resolved_cids=cycle_resolved,
-            ):
-                action = pr.get("action", "?")
-                pair_id = pr.get("pair_id") or "?"
-                if action == "error":
-                    # WARNING, not INFO, and with the reason attached: a pass
-                    # that errors on every pair still looks like activity at
-                    # INFO with the reason dropped -- exactly the kind of
-                    # rehearsal that reads as working when it is not.
-                    log.warning("pairs %s error: %s", pair_id, pr.get("error"))
-                elif action not in ("hold", "balanced"):
-                    log.info("pairs %s %s", pair_id, action)
-            for pair_id in record_shadow_merges(seam.registry, db_path):
-                log.info("merged %s at $1.00 a share", pair_id)
-        except (sqlite3.Error, OSError, ValueError) as e:
-            log.warning("shadow pairs pass failed: %s", e)
-
-        # Aged-out pass (#311): the U35 window above is a discovery filter, so a
-        # one-sided fill older than it was invisible to every arm and sat into
-        # settlement. This arm closes those legs against the market's own end,
-        # and its read is the injectable seam `_market_state_fn` (the same shape
-        # as `_resolve_fn` below) so a rehearsal or a test never hits the network.
-        # It runs BEFORE the resolution sweep on purpose: a market that sweep
-        # resolves must not be sold the same rotation.
-        try:
-            from core_brain.single_buy_saver import (
-                AGED_OUT_QUIET_ACTIONS, rescue_aged_out_legs,
-            )
-
-            state_fn = getattr(shadow_sweep, "_market_state_fn", None)
-            for pr in rescue_aged_out_legs(
+            for pr in manage_single_leg_positions(
                 exec_client, seam.registry, cfg,
                 venue_positions=shadow_positions(seam.registry, db_path),
                 market_state_fn=state_fn,
@@ -1112,13 +1069,14 @@ def run_shadow(
                 action = pr.get("action", "?")
                 pair_id = pr.get("pair_id") or "?"
                 if action == "error":
-                    log.warning("aged-out %s error: %s", pair_id,
+                    log.warning("lifecycle %s error: %s", pair_id,
                                 pr.get("error"))
-                elif action not in AGED_OUT_QUIET_ACTIONS:
-                    log.info("aged-out %s %s -- %s", pair_id, action,
-                             pr.get("reason", ""))
+                elif action not in SINGLE_LEG_QUIET_ACTIONS:
+                    log.info("lifecycle %s %s", pair_id, action)
+            for pair_id in record_shadow_merges(seam.registry, db_path):
+                log.info("merged %s at $1.00 a share", pair_id)
         except (sqlite3.Error, OSError, ValueError) as e:
-            log.warning("shadow aged-out pass failed: %s", e)
+            log.warning("shadow lifecycle pass failed: %s", e)
 
         # Mature any adverse-selection horizon that has come due. Placed after
         # the pairs pass and before the resolution read so a fill booked this

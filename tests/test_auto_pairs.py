@@ -15,7 +15,10 @@ from core_brain.order_registry import (
     OrderRegistry, OrderRecord, FillRecord, CloseRecord, QuoteRecord,
 )
 from core_brain import single_buy_saver as lp
-from core_brain.single_buy_saver import auto_manage_pairs
+from core_brain.market_resolution import MarketEndState
+from core_brain.single_buy_saver import (
+    auto_manage_pairs, manage_single_leg_positions,
+)
 
 
 MAX_PAIR_COST = 0.995
@@ -147,11 +150,15 @@ def test_no_fills_returns_empty(registry):
     assert auto_manage_pairs(FakeClient(), registry, _cfg(), now=NOW_S) == []
 
 
-def test_out_of_window_is_left_alone(registry):
+def test_out_of_window_remains_under_lifecycle_management(registry):
     _one_sided_pair(registry, fill_price=0.60, venue_ts=1_000_000)
-    # now = 3000s -> fill age 2000s > 900s window: left alone.
-    assert auto_manage_pairs(FakeClient(), registry, _cfg(),
-                             now=3_000.0) == []
+    client = FakeClient(best_bid=0.58)
+    results = auto_manage_pairs(
+        client, registry, _cfg(enable_aged_out_rescue=False), now=3_000.0,
+    )
+    assert results[0]["action"] == "patient_wait"
+    assert not any(call.startswith(("buy:", "sell:", "cancel:"))
+                   for call in client.calls)
 
 
 def test_closed_condition_is_skipped(registry):
@@ -176,42 +183,45 @@ def test_balanced_pair_is_skipped(registry):
 
 
 # ---------------------------------------------------------------------------
-# Routing: complete under the cap, exit at/over it
+# Ordinary single-leg exposure waits for its maker hedge
 # ---------------------------------------------------------------------------
 
-def test_in_window_under_cap_completes(registry):
-    _one_sided_pair(registry, fill_price=0.50)  # 0.50 fill + 0.40 ask = 0.90
+def test_in_window_under_cap_waits_instead_of_taker_completing(registry):
+    _one_sided_pair(registry, fill_price=0.50)
     client = FakeClient(best_ask=0.40)
     results = auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
     assert len(results) == 1
-    assert results[0]["action"] == "completed"
+    assert results[0]["action"] == "patient_wait"
     assert results[0]["pair_id"] == "pair-1"
-    assert any(c.startswith("buy:") for c in client.calls)
+    assert not any(c.startswith(("buy:", "sell:", "cancel:"))
+                   for c in client.calls)
 
 
-def test_at_cap_exits(registry):
-    # 0.60 fill + 0.395 ask == 0.995 == cap: the exit owns the case.
+def test_at_cap_does_not_trigger_an_automatic_exit(registry):
     _one_sided_pair(registry, fill_price=0.60)
     client = FakeClient(best_ask=0.395)
     results = auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
     assert len(results) == 1
-    assert results[0]["action"] == "exited"
-    assert any(c.startswith("sell:") for c in client.calls)
+    assert results[0]["action"] == "escalated_wait"
+    assert not any(c.startswith(("buy:", "sell:", "cancel:"))
+                   for c in client.calls)
 
 
-def test_no_ask_exits(registry):
+def test_no_ask_still_waits_for_lifecycle_action(registry):
     _one_sided_pair(registry, fill_price=0.60)
     client = FakeClient(best_ask=None)
     results = auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
     assert len(results) == 1
-    assert results[0]["action"] == "exited"
+    assert results[0]["action"] == "escalated_wait"
+    assert not any(c.startswith(("buy:", "sell:", "cancel:"))
+                   for c in client.calls)
 
 
 def test_dry_run_sends_nothing(registry):
     _one_sided_pair(registry, fill_price=0.50)
     client = FakeClient(best_ask=0.40)
     results = auto_manage_pairs(client, registry, _cfg(), live=False, now=NOW_S)
-    assert results[0]["action"] == "would_complete"
+    assert results[0]["action"] == "patient_wait"
     assert not any(c.startswith(("buy:", "sell:", "cancel:")) for c in client.calls)
 
 
@@ -252,7 +262,7 @@ def test_one_bad_pair_does_not_stop_others(registry):
     client = FakeClient(best_ask=0.40)
     results = auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
     actions = {r["pair_id"]: r["action"] for r in results}
-    assert actions.get("pair-good") == "completed"
+    assert actions.get("pair-good") == "patient_wait"
     assert actions.get("pair-bad") == "error"
 
 
@@ -279,3 +289,87 @@ def test_unresolved_pairs_still_read_the_venue(registry):
     client = FakeClient()
     auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
     assert any(c.startswith("book:") for c in client.calls)
+
+
+def test_shared_manager_waits_for_organic_fill_without_completing(registry):
+    _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, best_bid=0.58)
+
+    results = manage_single_leg_positions(
+        client, registry, _cfg(), now=NOW_S,
+    )
+
+    assert results[0]["action"] == "patient_wait"
+    assert registry.get_lifecycle_state("pair-1").state == "PATIENT_WAIT"
+    assert not any(call.startswith(("buy:", "sell:", "cancel:"))
+                   for call in client.calls)
+
+
+def test_shared_manager_accepts_a_pair_row_with_only_its_filled_token(registry):
+    pair_id = "pair-one-token"
+    order = OrderRecord(
+        id=str(uuid.uuid4()), order_id="venue-up-only",
+        condition_id=COND, token_id=TOK_UP, side="BUY", price=0.60,
+        original_size=5.0, status="filled", posted_ts=FILL_TS_MS,
+        last_polled_ts=FILL_TS_MS, pair_id=pair_id,
+        max_pair_cost_at_post=MAX_PAIR_COST,
+    )
+    registry.create_order(order)
+    registry.record_fill(FillRecord(
+        trade_id="trade-up-only", order_uuid=order.id, size=5.0,
+        price=0.60, venue_ts=FILL_TS_MS,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=NOW_S, condition_id=COND, token_id=TOK_UP, side="UP",
+        price=0.60, size=5.0,
+    ))
+    registry.log_quote(QuoteRecord(
+        ts=NOW_S, condition_id=COND, token_id=TOK_DN, side="DOWN",
+        price=0.38, size=5.0,
+    ))
+    client = FakeClient(best_bid=0.58)
+
+    results = manage_single_leg_positions(
+        client, registry, _cfg(), now=NOW_S,
+    )
+
+    assert results[0]["action"] == "patient_wait"
+    assert registry.get_lifecycle_state(pair_id).state == "PATIENT_WAIT"
+    assert not any(call.startswith(("buy:", "sell:", "cancel:"))
+                   for call in client.calls)
+
+
+def test_shared_manager_hard_stop_sells_before_profitable_completion(registry):
+    _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.30, best_bid=0.15)
+
+    results = manage_single_leg_positions(
+        client, registry, _cfg(), now=NOW_S,
+        venue_positions={TOK_UP: 10.0},
+    )
+
+    assert results[0]["action"] == "exited"
+    assert registry.get_lifecycle_state("pair-1").state == "HARD_STOP"
+    assert any(call.startswith("sell:") for call in client.calls)
+    assert not any(call.startswith("buy:") for call in client.calls)
+
+
+def test_shared_manager_completes_only_when_settlement_fallback_is_due(registry):
+    _one_sided_pair(registry, fill_price=0.60)
+    client = FakeClient(best_ask=0.30)
+    now_s = NOW_S + 2_000.0
+    market_state = MarketEndState(
+        condition_id=COND, closed=False, end_ts=now_s + 600.0,
+        end_date_iso=None, end_date_passed=False, accepting_orders=True,
+    )
+
+    results = manage_single_leg_positions(
+        client, registry, _cfg(), now=now_s,
+        market_state_fn=lambda condition_id: market_state,
+    )
+
+    assert results[0]["route"] == "completed"
+    assert results[0]["action"] == "aged_out_rescue"
+    assert results[0]["lifecycle_stage"] == "settlement_fallback"
+    assert any(call.startswith("buy:") for call in client.calls)
+    assert not any(call.startswith("sell:") for call in client.calls)

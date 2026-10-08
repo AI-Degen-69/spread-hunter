@@ -396,21 +396,8 @@ class TestPairsSweep:
                 "asks": {0.51: 500.0}, "best_bid": 0.50, "best_ask": 0.51,
                 "malformed": 0}
 
-    def test_a_naked_pair_is_completed_by_the_sweep(self, tmp_path):
-        """A single-buy pair seeded before the run is completed by the pairs
-        pass `shadow_sweep` runs each rotation -- not by the quoting loop,
-        which this run starves of intents (empty market list, so nothing is
-        visited) to isolate the sweep as the only thing that could act.
-
-        The completion is read off the fills ledger, not off the inventory.
-        `shadow_sweep` merges every balanced pair in the same rotation that
-        completes it, and a merge takes the shares back out of inventory --
-        which is the point of a merge. This test previously asserted
-        `up_shares == down_shares == 20` AFTER that merge, which passed only
-        because the merge was invisible to `inventory_from_registry`; it
-        pinned the defect. What a completion actually means is that both legs
-        bought 20 shares, and that is what is asserted now.
-        """
+    def test_a_naked_pair_waits_for_its_resting_hedge(self, tmp_path):
+        """The shadow sweep records PATIENT_WAIT without taker completion."""
         from core_brain.order_registry import OrderRegistry, inventory_from_registry
         from core_brain.shadow_run import run_shadow
 
@@ -424,18 +411,22 @@ class TestPairsSweep:
             fetch_books=self._canonical_book,
         )
 
-        assert _filled_by_token(OrderRegistry(db_path=db), "0xabc") == {
-            "tok-up": pytest.approx(20.0), "tok-dn": pytest.approx(20.0)}
+        registry = OrderRegistry(db_path=db)
+        assert _filled_by_token(registry, "0xabc") == {
+            "tok-up": pytest.approx(20.0)}
+        pair_ids = {order["pair_id"] for order in registry.get_all_orders()}
+        assert len(pair_ids) == 1
+        state = registry.get_lifecycle_state(pair_ids.pop())
+        assert state is not None
+        assert state.state == "PATIENT_WAIT"
 
-        # And the pair it completed was merged, so the position is flat again.
         inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
-        assert inv.up_shares == pytest.approx(0.0)
+        assert inv.up_shares == pytest.approx(20.0)
         assert inv.down_shares == pytest.approx(0.0)
 
-    def test_the_sweep_logs_the_completion(self, tmp_path, caplog):
-        """`shadow_sweep` logs every non-hold/balanced outcome, mirroring the
-        production U35 pass so an operator watching the run sees it act.
-        """
+    def test_the_sweep_does_not_log_an_ordinary_wait_as_a_completion(
+            self, tmp_path, caplog):
+        """A patient wait is quiet and cannot be mistaken for a completed pair."""
         import logging
 
         from core_brain.shadow_run import run_shadow
@@ -451,9 +442,9 @@ class TestPairsSweep:
                 fetch_books=self._canonical_book,
             )
 
-        assert any("completed" in r.message for r in caplog.records)
+        assert not any("completed" in r.message for r in caplog.records)
 
-    def test_one_fetch_books_serves_both_quoting_and_the_pairs_sweep(
+    def test_one_fetch_books_serves_quoting_and_the_lifecycle_sweep(
             self, tmp_path):
         """The regression pin for the get_order_book book-shape bug.
 
@@ -461,8 +452,8 @@ class TestPairsSweep:
         drives BOTH consumers in a SINGLE run: `queue_ahead_at`, which reads
         the canonical price-keyed dict as the quoting path rests a fresh
         order, and `single_buy_saver._book_levels`, which reads a list of
-        levels, as the sweep completes a naked pair on the same tokens off
-        the same book source. The other two tests in this class isolate the
+        levels, as the lifecycle sweep observes a naked pair from the same
+        book source. The other two tests in this class isolate the
         sweep with an empty market list -- rigorous for what they check, but
         that isolation is also what would hide a shape conflict between the
         two consumers, which is exactly what broke before this fix (see
@@ -496,13 +487,17 @@ class TestPairsSweep:
 
         # ShadowExecutionClient.get_order_book adapted the same canonical
         # dict into levels single_buy_saver._book_levels can read: the
-        # pre-seeded naked pair on condition 0xabc was completed. Read from
-        # the fills ledger -- the same rotation merges the pair it completes,
-        # which is exactly what takes the shares back out of inventory.
+        # lifecycle sweep observed the pre-seeded naked pair on 0xabc without
+        # crossing the book.
         assert _filled_by_token(reg, "0xabc") == {
-            "tok-up": pytest.approx(20.0), "tok-dn": pytest.approx(20.0)}
+            "tok-up": pytest.approx(20.0)}
+        pair_ids = {o["pair_id"] for o in reg.get_all_orders()
+                    if o["condition_id"] == "0xabc"}
+        assert len(pair_ids) == 1
+        assert reg.get_lifecycle_state(pair_ids.pop()).state == "PATIENT_WAIT"
         inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
-        assert inv.up_shares == pytest.approx(0.0)
+        assert inv.up_shares == pytest.approx(20.0)
+        assert inv.down_shares == pytest.approx(0.0)
 
 
 class TestSettleWiring:
@@ -1345,15 +1340,14 @@ class TestSecondRotation:
     def test_inventory_reflects_what_settled_before_the_requote(
             self, tmp_path, monkeypatch):
         """The tape credits 5 shares against the order resting at 0.47 on the
-        second cycle, and the rest of the loop acts on exactly those shares.
+        second cycle, and the lifecycle waits on exactly those shares.
 
         Full chain across the rotation: the fill is credited to the order that
         was resting when it happened (not to the replacement), the position it
-        leaves is a naked one-sided leg, and the pairs pass rescues it in the
-        same rotation -- so the inventory the next decision reads is flat, and
-        the close accounts for the same 5 shares that settled. Reading only
-        `up_shares` here would pass on a store where nothing was credited at
-        all, which is why the fill is asserted from the ledger too.
+        leaves is a naked one-sided leg, and the lifecycle records patient
+        wait without completing or selling it. Reading only `up_shares` here
+        would pass on a store where nothing was credited at all, which is why
+        the fill is asserted from the ledger too.
         """
         from core_brain.order_registry import OrderRegistry, inventory_from_registry
 
@@ -1372,10 +1366,11 @@ class TestSecondRotation:
                           if o["id"] == fills[0]["order_uuid"])
         assert round(float(filled_row["price"]), 2) == 0.47
 
-        closes = reg.get_all_closes()
-        assert [c["shares"] for c in closes] == [pytest.approx(5.0)]
+        assert reg.get_all_closes() == []
+        assert reg.get_lifecycle_state(filled_row["pair_id"]).state == "PATIENT_WAIT"
         inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
-        assert inv.up_shares == pytest.approx(0.0)
+        assert inv.up_shares == pytest.approx(5.0)
+        assert inv.down_shares == pytest.approx(0.0)
 
 
 class TestPairsWindowWiring:

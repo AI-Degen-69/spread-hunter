@@ -2166,11 +2166,9 @@ def poll(
             last_cycle_failed = False
 
             # One market-state read per condition per TTL, carried across
-            # cycles (#311). The aged-out pass below runs on EVERY tick and its
-            # read is synchronous, so without this a leg waiting for its lead
-            # would spend thousands of Gamma calls an hour -- and delay the
-            # second heartbeat and the next cycle doing it -- for a deadline
-            # that moves in hours.
+            # cycles (#311). The lifecycle checks aged-out positions each tick;
+            # without this cache a waiting leg would spend thousands of Gamma
+            # calls an hour for a deadline that moves in hours.
             from core_brain.single_buy_saver import AgedOutMarketStateCache
             aged_out_state_cache = AgedOutMarketStateCache()
 
@@ -2321,67 +2319,25 @@ def poll(
                             break
                         continue
 
-                # U35 auto pass: convert in-window one-sided fills (complete under the
-                # cap, exit at/over it). Runs after reconcile so the registry is fresh.
-                # Closing actions only -- pre-approved. Failures are isolated per pair
-                # inside auto_manage_pairs; a pass-level failure must never stop the
-                # loop either.
-                # Resolved conditions are read once per cycle (#402): every
-                # consumer below skips them before any book request.
+                # Manage each current one-sided pair once, after reconcile. The
+                # lifecycle waits for its maker hedge, hard-stops dangerous bids,
+                # and permits completion only at the settlement fallback.
                 from core_brain.market_lifecycle import resolved_condition_ids
                 cycle_resolved = resolved_condition_ids(registry)
                 try:
                     from core_brain.config import load as _load_cfg
-                    from core_brain.single_buy_saver import auto_manage_pairs
-                    for pr in auto_manage_pairs(
-                        client, registry, _load_cfg(), funder=funder,
-                        resolved_cids=cycle_resolved,
-                    ):
-                        action = pr.get("action", "?")
-                        # Quiet decisions (hold/balanced/dry-run would_*) stay out of
-                        # the console but still reach the cycle ring so the dashboard
-                        # can count them per cycle.
-                        if action not in ("hold", "balanced",
-                                          "would_exit", "would_complete"):
-                            line = f"[POLL {now_iso}] pairs {pr.get('pair_id') or '?':<10s} {action}"
-                            if action == "error":
-                                line += f" ({pr.get('error', '')})"
-                                print(line, file=sys.stderr)
-                            else:
-                                print(line)
-                            _log_event(line)
-                        _emit_cycle_event(
-                            service="query", cycle=cycle, phase="settling",
-                            action="pairs_" + action,
-                            extra={"pair_id": pr.get("pair_id")},
-                        )
-                except Exception as exc:
-                    err_msg = f"[POLL {now_iso}] pairs pass failed: {exc}"
-                    print(err_msg, file=sys.stderr)
-                    _log_event(err_msg)
-
-                # Aged-out pass (#311): the U35 window above is a discovery
-                # filter, so a one-sided fill older than it used to be invisible
-                # to every arm and was held into settlement with no risk ceiling.
-                # This pass closes those legs against the market's own end time.
-                # Closing actions only, and fail-closed inside: an unreadable
-                # market end leaves the leg naked and retries next cycle.
-                try:
-                    from core_brain.config import load as _load_cfg2
                     from core_brain.single_buy_saver import (
-                        AGED_OUT_QUIET_ACTIONS, rescue_aged_out_legs,
+                        SINGLE_LEG_QUIET_ACTIONS,
+                        manage_single_leg_positions,
                     )
-                    for pr in rescue_aged_out_legs(
-                        client, registry, _load_cfg2(), funder=funder,
+                    for pr in manage_single_leg_positions(
+                        client, registry, _load_cfg(), funder=funder,
                         state_cache=aged_out_state_cache,
                         resolved_cids=cycle_resolved,
                     ):
                         action = pr.get("action", "?")
-                        # The waiting verdicts repeat every cycle until the
-                        # market end moves; they stay out of the console and
-                        # still reach the cycle ring below.
-                        if action not in AGED_OUT_QUIET_ACTIONS:
-                            line = (f"[POLL {now_iso}] aged-out "
+                        if action not in SINGLE_LEG_QUIET_ACTIONS:
+                            line = (f"[POLL {now_iso}] lifecycle "
                                     f"{pr.get('pair_id') or '?':<10s} {action}")
                             if action == "error":
                                 line += f" ({pr.get('error', '')})"
@@ -2391,11 +2347,11 @@ def poll(
                             _log_event(line)
                         _emit_cycle_event(
                             service="query", cycle=cycle, phase="settling",
-                            action="aged_out_" + action,
+                            action="lifecycle_" + action,
                             extra={"pair_id": pr.get("pair_id")},
                         )
                 except Exception as exc:
-                    err_msg = f"[POLL {now_iso}] aged-out pass failed: {exc}"
+                    err_msg = f"[POLL {now_iso}] lifecycle pass failed: {exc}"
                     print(err_msg, file=sys.stderr)
                     _log_event(err_msg)
 
@@ -3544,6 +3500,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
