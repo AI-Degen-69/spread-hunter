@@ -438,6 +438,12 @@ def plan_orders(
     for o in open_orders:
         tok = o["token_id"]
         key = str(o.get("id") or o.get("order_id") or "")
+        if key in replace_ids and key not in cancel_ids and _mid_holds(o):
+            # MID HOLD (#419): the book is walking down onto this hedge.
+            # Keep it at its own price; the held token suppresses the
+            # replacement submit below, so no second order rests beside it.
+            held_tokens.add(tok)
+            continue
         if key in replace_ids or key in cancel_ids:
             _record(
                 o,
@@ -483,7 +489,8 @@ def plan_orders(
     to_submit: list[QuoteIntent] = []
     for i in intents:
         if lifecycle_pair_id is not None and i.pair_id == lifecycle_pair_id:
-            to_submit.append(i)
+            if i.token_id not in held_tokens:
+                to_submit.append(i)
             continue
         if i.token_id in held_tokens:
             # We chose to keep the resting order on this token. Posting the new

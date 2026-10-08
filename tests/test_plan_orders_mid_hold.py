@@ -126,3 +126,63 @@ class TestMidHoldBand:
             cfg=_cfg(), token_mids={"tok-up": 0.46, "tok-dn": 0.51})
         assert to_cancel == []
         assert to_submit == []
+
+def _down_hedge(price=0.48, oid="o-dn-hedge"):
+    return {"token_id": "tok-dn", "price": price, "order_id": oid,
+            "side": "BUY", "status": "open"}
+
+
+def _pair_intent(price=0.51, pair_id="pair-1"):
+    i = _intent(side="DOWN", token="tok-dn", price=price)
+    i.pair_id = pair_id
+    return i
+
+
+class TestMidHoldLifecycleReplace:
+    def test_in_band_replace_holds_without_cancel_or_submit(self):
+        to_cancel, to_submit = plan_orders(
+            [_down_hedge()], [_pair_intent()],
+            cfg=_cfg(), replace_order_ids={"o-dn-hedge"},
+            lifecycle_pair_id="pair-1",
+            token_mids={"tok-dn": 0.49})
+        assert to_cancel == []
+        assert to_submit == []
+
+    def test_out_of_band_replace_proceeds(self):
+        to_cancel, to_submit = plan_orders(
+            [_down_hedge()], [_pair_intent()],
+            cfg=_cfg(), replace_order_ids={"o-dn-hedge"},
+            lifecycle_pair_id="pair-1",
+            token_mids={"tok-dn": 0.51})
+        assert [o["order_id"] for o in to_cancel] == ["o-dn-hedge"]
+        assert [i.price for i in to_submit] == [0.51]
+
+    def test_missing_midpoint_replaces_as_today(self):
+        to_cancel, to_submit = plan_orders(
+            [_down_hedge()], [_pair_intent()],
+            cfg=_cfg(), replace_order_ids={"o-dn-hedge"},
+            lifecycle_pair_id="pair-1", token_mids=None)
+        assert [o["order_id"] for o in to_cancel] == ["o-dn-hedge"]
+        assert [i.price for i in to_submit] == [0.51]
+
+    def test_cancel_wins_over_replace_in_band(self):
+        reasons = {}
+        to_cancel, _ = plan_orders(
+            [_down_hedge()], [_pair_intent()],
+            cfg=_cfg(), reasons=reasons,
+            replace_order_ids={"o-dn-hedge"},
+            cancel_order_ids={"o-dn-hedge"},
+            lifecycle_pair_id="pair-1",
+            token_mids={"tok-dn": 0.49})
+        assert [o["order_id"] for o in to_cancel] == ["o-dn-hedge"]
+        assert reasons.get("o-dn-hedge") == "lifecycle_replace"
+
+    def test_lifecycle_cancel_fires_in_band(self):
+        reasons = {}
+        to_cancel, _ = plan_orders(
+            [_open(), _down_open()], [],
+            cfg=_cfg(), reasons=reasons,
+            cancel_order_ids={"o-up"},
+            token_mids={"tok-up": 0.46, "tok-dn": 0.51})
+        assert [o["order_id"] for o in to_cancel] == ["o-up"]
+        assert reasons.get("o-up") == "lifecycle_cancel"

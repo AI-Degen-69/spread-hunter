@@ -42,7 +42,7 @@ Branch: i419/trader-loop-hold-a-resting-order-and-never-requote | Issue: #419
 
 **Checkpoint:** in-band missing-intent orders hold instead of cancelling; terminal and out-of-band behavior untouched.
 
-### T2 [ ] — GREEN: hold in-band lifecycle replacements, no duplicate submits [Backend/Logic] (M)
+### T2 [x] — GREEN: hold in-band lifecycle replacements, no duplicate submits [Backend/Logic] (M)
 
 - Target files: `core_brain/trader_loop.py`, `tests/test_plan_orders_mid_hold.py`
 - Build: an order in `replace_order_ids` but not `cancel_order_ids` that is in band is held (no `lifecycle_replace`, token joins `held_tokens`); `lifecycle_cancel`, explicit preservation, wanted-token holds, and cancel-wins-over-preserve stay exactly. Both submit branches skip guard-held tokens — the ordinary branch via the existing `held_tokens` check, the lifecycle-pair branch with the same one-line skip. Extend the test file (DOWN hedge at 0.48, lifecycle-pair DOWN intent at 0.51): in-band mid 0.49 → no cancel, no DOWN submit; out-of-band 0.51 → `lifecycle_replace` cancel + 0.51 intent submitted; missing mid → replacement as today; replace+cancel in band → cancelled; `lifecycle_cancel` on UP at 0.48 with mid 0.46 → cancelled `lifecycle_cancel`.
