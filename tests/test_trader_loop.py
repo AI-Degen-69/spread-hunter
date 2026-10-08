@@ -2520,3 +2520,56 @@ class TestSingleLegLifecycleVisit:
         assert registry.get_lifecycle_state("pair-locked").state == "PAIR_LOCKED"
         assert calls == [{}]
         assert all(intent.pair_id is None for intent in captured["submit"])
+
+    def test_the_placement_gate_receives_the_registry_lifecycle_state(
+        self, tmp_path, monkeypatch
+    ):
+        """#416 — the hedge bypass only exists if the state survives the trip
+        from the quote context to the gate. Nothing else covers that seam: the
+        gate's own tests hand `lifecycle_state` in as an argument, so dropping
+        or renaming the thread in `_visit_one` would leave every one of them
+        green while the escalated hedge silently lost its protection.
+        """
+        from core_brain import trader_loop
+        from core_brain.quotes import decide_quotes
+
+        seen = []
+        real = trader_loop._admit_placements
+
+        def spy(to_submit, market, up_book, down_book, flow_fn, cfg,
+                lifecycle_state=None):
+            seen.append((lifecycle_state,
+                         [intent.pair_id for intent in to_submit]))
+            return real(to_submit, market, up_book, down_book, flow_fn, cfg,
+                        lifecycle_state=lifecycle_state)
+
+        monkeypatch.setattr(trader_loop, "_admit_placements", spy)
+
+        escalated, _registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-escalate", {"up_filled": 100.0})],
+            up_bid=0.43,
+            decide=decide_quotes,
+        )
+        _visit_one(escalated, {"cid": "0xabc"}, live=False,
+                   emit_fn=lambda **event: None)
+
+        # The escalated hedge reaches the gate carrying its registry state.
+        assert seen == [("ESCALATED_HEDGE", ["pair-escalate"])]
+
+        # A dual-resting market reaches the same gate with no state at all, so
+        # nothing outside the two protected states can buy a bypass here.
+        dual_dir = tmp_path / "dual"
+        dual_dir.mkdir()
+        seen.clear()
+        dual, _registry, _ = _lifecycle_visit_seam(
+            dual_dir,
+            [("pair-dual", {})],
+            decide=lambda *args, **kwargs: (
+                [_intent(side="DOWN", token="tok-dn", price=0.50)], ""),
+        )
+        _visit_one(dual, {"cid": "0xabc"}, live=False,
+                   emit_fn=lambda **event: None)
+
+        assert seen, "the placement gate must be consulted on every visit"
+        assert {state for state, _ in seen} == {None}
