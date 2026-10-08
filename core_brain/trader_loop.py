@@ -1260,6 +1260,27 @@ def _lifecycle_quote_context(
         )
         return LifecycleQuoteContext(refusal_reason=reason)
 
+    def preserve_refusal_context(
+        reason: str, pair_ids: list[str],
+    ) -> LifecycleQuoteContext:
+        """Refuse WITHOUT cancelling the resting hedge: preserve pair orders."""
+        emit_fn(
+            service="decide", cycle=cycle, phase="quoting",
+            action="single_leg_refusal", market_slug=title, reason=reason,
+            extra={"condition_id": str(market.condition_id),
+                   "pair_ids": pair_ids},
+        )
+        preserved = set(preserve_order_ids)
+        for pair_id in pair_ids:
+            for order in pair_orders.get(pair_id, []):
+                order_id = str(order.get("id") or order.get("order_id") or "")
+                if order_id:
+                    preserved.add(order_id)
+        return LifecycleQuoteContext(
+            refusal_reason=reason,
+            preserve_order_ids=frozenset(preserved),
+        )
+
     for pair_id, active_pair_orders in pair_orders.items():
         sizes = {"UP": 0.0, "DOWN": 0.0}
         notionals = {"UP": 0.0, "DOWN": 0.0}
@@ -1371,19 +1392,36 @@ def _lifecycle_quote_context(
                     replace_order_ids.add(order_id)
                 cancel_order_ids.add(order_id)
 
-    refusals = [
-        (pair_id, decision)
+    hard_stops = [
+        (pair_id, _position, decision)
         for pair_id, _position, decision in decisions
-        if decision.action == "hard_stop" or decision.action == "refused"
+        if decision.action == "hard_stop"
     ]
-    if refusals:
+    if hard_stops:
         reason = "; ".join(
-            f"lifecycle {decision.action.replace('_', ' ')} for pair "
-            f"{pair_id}: {decision.reason}"
-            for pair_id, decision in refusals
+            f"lifecycle hard stop for pair {pair_id}: {decision.reason}"
+            for pair_id, _position, decision in hard_stops
         )
         return refusal_context(
-            reason, [pair_id for pair_id, _ in refusals])
+            reason, [pair_id for pair_id, _position, _ in hard_stops])
+
+    refused_escalations = [
+        (pair_id, _position, decision)
+        for pair_id, _position, decision in decisions
+        if decision.action == "refused"
+    ]
+    if refused_escalations:
+        # A refused escalation must not strand the pair by cancelling its
+        # resting hedge: hold every working order and suppress a fresh quote,
+        # retrying next cycle. Only the poll's hard-stop exit may cancel.
+        reason = "; ".join(
+            f"lifecycle refused for pair {pair_id}: {decision.reason}"
+            for pair_id, _position, decision in refused_escalations
+        )
+        return preserve_refusal_context(
+            reason,
+            [pair_id for pair_id, _position, _decision in refused_escalations],
+        )
 
     escalations = [
         (pair_id, position, decision)
@@ -1407,7 +1445,7 @@ def _lifecycle_quote_context(
                 or not math.isfinite(decision.opposite_limit_price)
                 or decision.naked_size <= 0
                 or not math.isfinite(decision.naked_size)):
-            return refusal_context(
+            return preserve_refusal_context(
                 f"lifecycle escalation for pair {pair_id} has invalid price "
                 "or residual size",
                 [pair_id],
@@ -1422,7 +1460,10 @@ def _lifecycle_quote_context(
         )
         size = min(int(decision.naked_size), size_cap)
         if size < cfg.min_quote_shares:
-            return refusal_context(
+            # Keep the resting hedge instead of cancelling it; a transient
+            # size refusal is not a reason to strand the pair ahead of the
+            # hard-stop or settlement path (see single_leg_refusal).
+            return preserve_refusal_context(
                 f"lifecycle escalation size {size} below venue minimum "
                 f"{cfg.min_quote_shares}",
                 [pair_id],
@@ -1609,9 +1650,20 @@ def _visit_one(
             ev.lifecycle_context is not None
             and ev.lifecycle_context.refusal_reason
         )
+        lifecycle_holds = bool(
+            ev.lifecycle_context is not None
+            and ev.lifecycle_context.preserve_order_ids
+        )
+        # A refused ESCALATION preserves its resting orders (resting hedge):
+        # classify it like an ordinary refusal so transient reasons hold and
+        # only genuinely terminal reasons (plus hard-stop's own cancellations,
+        # which are explicit in the lifecycle context) cancel. A lifecycle
+        # refusal with no preserve intent (hard stop, or a refusal that the
+        # planner itself must convert) stays terminal -- it is the poll that
+        # executes the hard stop after re-reading venue state.
         visit_outcome = (
             VisitOutcome.REFUSED_TERMINAL
-            if lifecycle_refused
+            if lifecycle_refused and not lifecycle_holds
             else _classify_refusal(why) if not intents
             else VisitOutcome.QUOTED
         )

@@ -2433,9 +2433,37 @@ class TestSingleLegLifecycleVisit:
             "pair-stop-up", "pair-stop-down",
         }
 
-    def test_ambiguous_simultaneous_escalations_refuse_pair_attribution(
-        self, tmp_path
-    ):
+
+    def test_refused_escalation_preserves_the_resting_hedge(self, tmp_path):
+        from core_brain.quotes import decide_quotes
+
+        # A held average near the cap leaves no positive tick-aligned hedge
+        # bid, so the lifecycle refuses the escalation. It must NOT cancel the
+        # resting hedge order -- that would strand a single unmatched buy.
+        seam, _registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-refused", {
+                "up_filled": 100.0, "up_price": 0.99,
+            })],
+            up_bid=0.43,
+            decide=decide_quotes,
+        )
+        captured = {}
+
+        result = _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=_capture_lifecycle_plan(captured),
+        )
+
+        assert "refused" in result.why
+        # Both resting orders are preserved; nothing is cancelled or submitted.
+        assert {"pair-refused-up", "pair-refused-down"} <= set(
+            captured["preserve_order_ids"])
+        assert captured["cancel"] == []
+        assert captured["submit"] == []
         seam, _registry, _ = _lifecycle_visit_seam(
             tmp_path,
             [

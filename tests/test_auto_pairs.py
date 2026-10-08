@@ -300,7 +300,9 @@ def test_shared_manager_waits_for_organic_fill_without_completing(registry):
     )
 
     assert results[0]["action"] == "patient_wait"
-    assert registry.get_lifecycle_state("pair-1").state == "PATIENT_WAIT"
+    # Ownership: PATIENT_WAIT is the Trader's to persist, not the poll's.
+    # The poll reports the wait but writes no lifecycle row for it.
+    assert registry.get_lifecycle_state("pair-1") is None
     assert not any(call.startswith(("buy:", "sell:", "cancel:"))
                    for call in client.calls)
 
@@ -334,13 +336,46 @@ def test_shared_manager_accepts_a_pair_row_with_only_its_filled_token(registry):
     )
 
     assert results[0]["action"] == "patient_wait"
-    assert registry.get_lifecycle_state(pair_id).state == "PATIENT_WAIT"
+    # PATIENT_WAIT is Trader-owned; the poll reports but does not persist it.
+    assert registry.get_lifecycle_state(pair_id) is None
     assert not any(call.startswith(("buy:", "sell:", "cancel:"))
                    for call in client.calls)
 
 
-def test_shared_manager_hard_stop_sells_before_profitable_completion(registry):
+
+def test_poll_preserves_a_trader_persisted_escalation_row(registry):
+    """Ownership: the poll must never overwrite a Trader-owned escalation row.
+
+    The Trader persists ESCALATED_HEDGE using its per-market offset; the poll
+    computes with a different (coarser) offset. If the poll re-persisted the
+    row it could downgrade or overwrite the Trader's decision. It reports the
+    action but writes nothing for a decision it does not own.
+    """
+    from core_brain.order_registry import LifecycleStateRecord
+    from core_brain.single_leg_lifecycle import LegState
+
     _one_sided_pair(registry, fill_price=0.60)
+    registry.save_lifecycle_state(LifecycleStateRecord(
+        pair_id="pair-1", condition_id=COND,
+        state=LegState.ESCALATED_HEDGE.value,
+        reason="trader escalated", updated_ts_ms=int(NOW_S * 1000),
+        evidence_json="{}",
+    ))
+    client = FakeClient(best_ask=0.30, best_bid=0.50)
+
+    results = manage_single_leg_positions(
+        client, registry, _cfg(), now=NOW_S,
+    )
+
+    assert results[0]["action"] == "escalated_wait"
+    # The Trader-owned row is untouched by the poll pass.
+    assert registry.get_lifecycle_state("pair-1").state == "ESCALATED_HEDGE"
+    assert not any(call.startswith(("buy:", "sell:", "cancel:"))
+                   for call in client.calls)
+
+    # Second phase reuses the same pair rows with a collapsed bid to
+    # exercise the poll-owned hard-stop path -- no re-seeding, the
+    # venue order_ids are UNIQUE per registry.
     client = FakeClient(best_ask=0.30, best_bid=0.15)
 
     results = manage_single_leg_positions(

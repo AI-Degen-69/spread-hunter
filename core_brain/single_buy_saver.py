@@ -1401,7 +1401,7 @@ def manage_single_leg_positions(
 
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
-        SingleLegPosition, evaluate,
+        LegState, SingleLegPosition, evaluate, persist_decision, transition,
     )
 
     now_s = now if now is not None else time.time()
@@ -1522,10 +1522,33 @@ def manage_single_leg_positions(
                 down_best_bid=down_bid,
                 base_offset=base_offset,
             )
-            decision = evaluate(
-                position, registry, max_pair_cost=max_pair_cost,
-                tick_size=tick_size,
+            # The poll loop owns only the hard-stop and settlement-fallback
+            # decisions. Escalation is the Trader's to own: computing it here
+            # with `transition` (pure) never persists a Trader-owned state, so
+            # the two processes cannot overwrite each other's row or disagree
+            # about the threshold via a different base offset.
+            previous_record = registry.get_lifecycle_state(pair_id)
+            if (previous_record is not None
+                    and previous_record.condition_id != position.condition_id):
+                raise PairExitRefused(
+                    f"pair_id={pair_id!r} lifecycle state belongs to condition "
+                    f"{previous_record.condition_id!r}, not "
+                    f"{position.condition_id!r}"
+                )
+            previous_state = (
+                LegState(previous_record.state)
+                if previous_record is not None else None
             )
+            decision = transition(
+                position, previous_state, max_pair_cost=max_pair_cost,
+                settlement_due=False, tick_size=tick_size,
+            )
+            if decision.action == "hard_stop":
+                # The poll's hard stop is its own to persist: it survives
+                # restart and is observable, and only the poll executes it.
+                persist_decision(
+                    registry, position, decision, previous_state,
+                )
             if decision.action == "hard_stop":
                 result = exit_single_buy(
                     client, registry, pair_id, max_pair_cost,

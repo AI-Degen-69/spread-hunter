@@ -257,35 +257,18 @@ def transition(
     )
 
 
-def evaluate(
-    position: SingleLegPosition,
+def persist_decision(
     registry: OrderRegistry,
-    *,
-    max_pair_cost: float,
-    settlement_due: bool = False,
-    tick_size: float = 0.01,
-) -> LifecycleDecision:
-    """Load sticky state, decide for one pair, and persist state changes."""
-    previous_record = registry.get_lifecycle_state(position.pair_id)
-    previous_state = None
-    if previous_record is not None:
-        if previous_record.condition_id != position.condition_id:
-            raise ValueError(
-                f"lifecycle pair {position.pair_id!r} belongs to condition "
-                f"{previous_record.condition_id!r}, not {position.condition_id!r}"
-            )
-        previous_state = LegState(previous_record.state)
+    position: SingleLegPosition,
+    decision: LifecycleDecision,
+    previous_state: LegState | None = None,
+) -> None:
+    """Persist one lifecycle decision, building the evidence snapshot.
 
-    decision = transition(
-        position,
-        previous_state,
-        max_pair_cost=max_pair_cost,
-        settlement_due=settlement_due,
-        tick_size=tick_size,
-    )
-    if decision.action == "refused" or decision.state is previous_state:
-        return decision
-
+    Callers that own a decision (the Trader for every change, the poll
+    loop only for hard-stop and settlement-fallback) write it here so state
+    survives restarts and is observable.
+    """
     from core_brain.order_registry import LifecycleStateRecord
 
     evidence = {
@@ -321,6 +304,38 @@ def evaluate(
             ),
         )
     )
+
+
+def evaluate(
+    position: SingleLegPosition,
+    registry: OrderRegistry,
+    *,
+    max_pair_cost: float,
+    settlement_due: bool = False,
+    tick_size: float = 0.01,
+) -> LifecycleDecision:
+    """Load sticky state, decide for one pair, and persist state changes."""
+    previous_record = registry.get_lifecycle_state(position.pair_id)
+    previous_state = None
+    if previous_record is not None:
+        if previous_record.condition_id != position.condition_id:
+            raise ValueError(
+                f"lifecycle pair {position.pair_id!r} belongs to condition "
+                f"{previous_record.condition_id!r}, not {position.condition_id!r}"
+            )
+        previous_state = LegState(previous_record.state)
+
+    decision = transition(
+        position,
+        previous_state,
+        max_pair_cost=max_pair_cost,
+        settlement_due=settlement_due,
+        tick_size=tick_size,
+    )
+    if decision.action == "refused" or decision.state is previous_state:
+        return decision
+
+    persist_decision(registry, position, decision, previous_state)
     return decision
 
 
