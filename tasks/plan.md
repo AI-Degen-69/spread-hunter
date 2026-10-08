@@ -42,7 +42,7 @@ Branch: i416/widen-activity-gate-tolerances-scope-gates | Issue: #416
 - Depends on: T1.
 - Verify: `python -m pytest -q tests/test_queue_clear_gate.py tests/test_cancel_attribution.py tests/test_trader_loop.py`; dual-resting refusal unchanged, crossed legs still ungated, bypass reads the tape zero times.
 
-### T3 [ ] — Regression tests for normal-swing tolerance and active-hedge bypass [Backend/Logic] (S)
+### T3 [x] — Regression tests for normal-swing tolerance and active-hedge bypass [Backend/Logic] (S)
 
 - Target files: `tests/test_velocity_gate.py`, `tests/test_movement_gate.py`, `tests/test_queue_clear_gate.py`, `tests/test_cancel_attribution.py`
 - Build: normal-swing fixtures (5c–8c, modest notional) pass both gates; escalated-bypass cases (enforced gate + `ESCALATED_HEDGE`/`HARD_STOP` → admitted, reason names the state, tape unread); edge cases (unmeasured fail-open, dual-resting still gated, resolved still exits, protected-skip row contents).
