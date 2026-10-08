@@ -1,27 +1,30 @@
-# Plan — #417: shadow_fills: clear queue and fill order on a sell print below the resting bid
+# Plan — #419: trader_loop: hold a resting order and never requote when mid <= price + 0.02
 
-Branch: i417/shadow-fills-clear-queue-and-fill-order-on-a-sell | Issue: #417
+Branch: i419/trader-loop-hold-a-resting-order-and-never-requote | Issue: #419
 
-- Tier: **Small** — one function (`credit_fills`) in one file plus its test file; straightforward once the code is read.
-- Task type: **Code** — fill-model rule + regression tests.
+- Tier: **Standard** — planner + visit wiring + docs paragraph, one architectural decision (guard placement at the cancel decision, not in pricing).
+- Task type: **Code** — cancel-path guard + visit feed + regression tests.
 - Stack: Python, pytest; no external dependency.
-- CodeRabbit plan: **adopted as scaffolding, merged down** — its 3 phases (RED tests, GREEN impl, regression + operator check) become T1–T3 below; its 4 design choices adopted (full-sweep default, no side check, rounded-level compare, evidence not consumed); its `[UNVERIFIED]` on the `math` import resolved from code (`shadow_fills.py:14` already imports it — no import needed); its line pointers spot-checked (`shadow_exec.py:632` call site, `markets.py:551 recent_trades`, telemetry comment `shadow_exec.py:585` — all verified verbatim). Rejected: nothing material — only merged its task splits into fewer atomic tasks per Rule 4.
-- Open question resolved from code (issue's sweep-vs-cross question): `traded` is aggregated per token per price with no ordering or size (`credit_fills` lines 102–106 sum into `remaining_volume`), so per the issue's stated default, any sell print strictly below the resting bid counts as a full level-clearing sweep filling the entire remainder. No operator question needed.
-- Improvement proposal (adopted, edge-case hardening): require the lower bucket to hold **finite** volume greater than 0 (`math.isfinite`), so NaN/inf tape can never count as sweep evidence. Evidence: `tests/test_shadow_fills.py` lines 79–84 — `assert queue_multiple(float("nan"), 5.0) is None` — the repo already treats non-finite tape as unmeasured, and the plan's own rationale says the guard "rejects empty or broken buckets".
+- CodeRabbit plan: **adopted as scaffolding, merged into 3 tasks** — all 4 design choices adopted (guard at cancel decision; price-driven routes only; named module constant; today's behavior on missing/crossed books); task phases merged per Rule 4. Verified from code (nothing left `[UNVERIFIED]`): `plan_orders` at `trader_loop.py:237` with `price_eps` and `held_tokens` already present; grace expiry shares `REFUSED_TERMINAL` (`trader_loop.py:1759-1762`), so a distinct member is required; `quotes.mid_price` (`quotes.py:103`) takes bid/ask with no crossed-check, so the caller skips crossed books; books carry `token_id`/`best_bid`/`best_ask` (`trader_loop.py:1709-1713`); test spies forward `**kwargs` (`test_trader_loop.py:1073,2301`); `requote_dead_band = 0.03` (`config.py:875`) with retired meaning — the new constant is justified; every cited test name exists. Rejected: nothing material.
+- Open questions resolved from code (no operator question): the residual requote/cancel originates in exactly two places — the `not_quoted` branch (`trader_loop.py:432`, the only remaining canceller after #387's NO RE-CHECK holds every wanted token) and `lifecycle_replace` (`trader_loop.py:413-419`). The 0.02 is a named constant per the issue default (`MID_HOLD_BAND`), since `requote_dead_band` is 0.03 with a retired meaning.
+- Improvement proposal (adopted, simplification): guard-held tokens join the EXISTING `held_tokens` set instead of a second set. Evidence: `trader_loop.py:402-408` — "A held order rests at a price outside the tolerance by definition, so the submit loop below would not recognise it as covering this cycle's intent and would post a second order beside it" — the identical hazard, and the existing skip at lines 448-451 then covers the ordinary branch for free; only the lifecycle-pair branch (lines 445-447, which bypasses the check) needs the same one-line skip.
+- Type-design analyzer: skipped with reason — no non-trivial domain model (one optional dict param defaulting to `None`, one enum member; nothing to encapsulate).
+- Sub-issues: skipped per repo precedent (Standard #416 shipped without them; the plan file is the tracker).
 - Safety: do not open or rewrite `data/orders.db`; tests use temporary DBs. No live quoting, Trader loop, manual completion, or dashboard START.
 
-## Locked behavior (spec, embedded — Small tier, no SPEC.md)
+## Locked behavior (see SPEC.md; summary)
 
-- A sell tape print strictly below the resting bid (`trade.price < resting_bid`, compared at rounded 4-decimal levels) clears that order's `queue_ahead` to 0 and credits its full remaining size at the order's own price.
-- Exact-price fills and the consume-queue-first rule are unchanged.
-- Prints above our price, other tokens' prints, zero-volume buckets, and non-finite buckets credit nothing new.
+- Hold iff the token's mid exists, the book is two-sided and uncrossed, and `mid <= order.price + 0.02` (equality included via `price_eps`).
+- Guarded routes: `not_quoted` cancels, grace expiry, `lifecycle_replace`.
+- Unguarded routes: named terminal refusals, hard stop, `lifecycle_cancel`, explicit cancel set, cancel-wins-over-replace.
+- One fill-side invariant preserved: a held token is never submitted twice.
 
 ## Interface contracts (frozen)
 
-- `credit_fills(orders, traded) -> (fills, queues)` signature unchanged.
-- `ShadowFill` for a trade-through fill carries the order's own price and `o.remaining`, never the print price.
-- `traded` shape unchanged: `token -> price -> volume`.
-- One fill per order per call (caller derives `filled`/`partial` status from `order.filled + f.size`).
+- `plan_orders(..., token_mids: Optional[dict] = None)` — keyword-only, `None` keeps today's behavior exactly; existing callers and test spies (`**kwargs`) need no change.
+- New `VisitOutcome` member for grace expiry (today it arrives as `REFUSED_TERMINAL`, indistinguishable from a named terminal refusal).
+- `token_mids`: token -> mid, built in `_visit_one` from `ev.up_book`/`ev.down_book` via `quotes.mid_price`; token omitted when its id is missing, either side is missing, or bid >= ask.
+- Guard-held tokens join `held_tokens`; both submit branches skip them.
 
 ## Dependency graph
 
@@ -29,28 +32,28 @@ Branch: i417/shadow-fills-clear-queue-and-fill-order-on-a-sell | Issue: #417
 
 ## Tasks
 
-### T1 [x] — RED: trade-through tests that fail on current code [Backend/Logic] (S)
+### T1 [x] — RED+GREEN: mid-hold band on the missing-intent branch [Backend/Logic] (M)
 
-- Target files: `tests/test_shadow_fills.py`
-- Build: replace `test_volume_at_another_price_or_token_credits_nothing` (its `{"tok-up": {0.46: 999.0}}` tape becomes a fill under the new rule, so it must split) with two no-fill tests — other-token tape `{"tok-dn": {0.46: 999.0, 0.47: 999.0}}` and above-price tape `{"tok-up": {0.48: 999.0}}`. Add: main case (`queue_ahead=500`, tape `{"tok-up": {0.46: 1.0}}` → one `ShadowFill("ord-1", "tok-up", 0.47, 100.0)`, queue `0.0`); remainder-only (`filled=30` → fill `70.0`); already-full (`filled=100` → no fill, queue `0.0`); evidence-not-consumed (two orders at 0.47 → two fills of `100.0`); only-higher-orders-fill (`ord-2` at 0.45 keeps queue `10.0`); zero-volume (`{0.46: 0.0, 0.47: 100.0}` → exact-price fill `40.0`); rounding boundary (`0.46999` → no fill, queue `35.0`); non-finite bucket (`{0.46: inf}` → no trade-through fill). Use only the `_order(**kw)` helper and plain-dict tape; leave exact-price/queue/size-cap/oldest-first tests untouched.
+- Target files: `core_brain/trader_loop.py`, `tests/test_plan_orders_mid_hold.py` (new)
+- Build: add `MID_HOLD_BAND = 0.02` with a one-line rule comment; add keyword-only `token_mids=None` to `plan_orders`; add a helper holding iff the token has a mid and `mid <= price + MID_HOLD_BAND + price_eps`. In the no-intent branch keep this order: transient-refusal hold → terminal-refusal cancel (incl. hard stop) → in-band hold (no `CANCEL_NOT_QUOTED`, token joins `held_tokens`) → `not_quoted` cancel. Add the distinct grace-expiry `VisitOutcome` member at the `_visit_one` assignment (`trader_loop.py:1759-1762`) and thread it so grace expiry holds in band while terminal refusals cancel. New test file in the style of `test_plan_orders_asymmetric_hold.py` (UP order at 0.48): equality mid 0.50 holds (empty cancels, no UP submit, no UP `not_quoted`); in-band 0.46 holds; out-of-band 0.501 cancels `not_quoted`; missing mid cancels; `token_mids=None` cancels; terminal refusal at 0.50 cancels; grace expiry at 0.50 holds with nothing submitted; drifted intent (UP intent at 0.40, mid 0.46) neither cancels nor submits.
 - Helper skill: `test-driven-development`.
 - Depends on: nothing.
-- Verify: `python -m pytest -q tests/test_shadow_fills.py` — the new trade-through tests FAIL, the no-fill/boundary tests pass.
+- Verify: `python -m pytest -q tests/test_plan_orders_mid_hold.py tests/test_plan_orders_asymmetric_hold.py` — new tests fail before, all green after.
 
-### T2 [x] — GREEN: trade-through check inside `credit_fills` + docstrings [Backend/Logic] (S)
+**Checkpoint:** in-band missing-intent orders hold instead of cancelling; terminal and out-of-band behavior untouched.
 
-- Target files: `core_brain/shadow_fills.py`
-- Build: keep the normalized `remaining_volume` map; per order, before the exact-price step, check for a same-token rounded price strictly below the order's rounded price with finite volume > 0. On hit: set `queues[o.local_id] = 0.0`, emit one `ShadowFill` at own price for `o.remaining` if > 0, skip the exact-price step, do not reduce the lower bucket. On miss: current flow exactly. Update the module docstring (one trade-through sentence, keep the rehearsal-only + venue-confirmation statements) and the `credit_fills` docstring (both cases: exact-price queue-first, lower-price full remainder at own price). Touch nothing in `shadow_exec.py`, `markets.py`, or `live_fill_engine.py`.
+### T2 [x] — GREEN: hold in-band lifecycle replacements, no duplicate submits [Backend/Logic] (M)
+
+- Target files: `core_brain/trader_loop.py`, `tests/test_plan_orders_mid_hold.py`
+- Build: an order in `replace_order_ids` but not `cancel_order_ids` that is in band is held (no `lifecycle_replace`, token joins `held_tokens`); `lifecycle_cancel`, explicit preservation, wanted-token holds, and cancel-wins-over-preserve stay exactly. Both submit branches skip guard-held tokens — the ordinary branch via the existing `held_tokens` check, the lifecycle-pair branch with the same one-line skip. Extend the test file (DOWN hedge at 0.48, lifecycle-pair DOWN intent at 0.51): in-band mid 0.49 → no cancel, no DOWN submit; out-of-band 0.51 → `lifecycle_replace` cancel + 0.51 intent submitted; missing mid → replacement as today; replace+cancel in band → cancelled; `lifecycle_cancel` on UP at 0.48 with mid 0.46 → cancelled `lifecycle_cancel`.
 - Helper skill: `incremental-implementation`.
 - Depends on: T1.
-- Verify: `python -m pytest -q tests/test_shadow_fills.py` — all green.
+- Verify: `python -m pytest -q tests/test_plan_orders_mid_hold.py tests/test_plan_orders_asymmetric_hold.py` — all green.
 
-**Checkpoint:** trade-through fills credit at own price with queue zeroed; exact-price behavior untouched. Demonstrate with the T3 operator call.
+### T3 [x] — Wire real mids from `_visit_one`, protect visit contracts, document [Backend/Logic] (M)
 
-### T3 [x] — Regression: caller suite + hands-on operator check [Backend/Logic] (XS)
-
-- Target files: none (verification only).
-- Build: run `python -m pytest -q tests/test_shadow_exec.py` unchanged (its tapes use own-price levels only — verified in Station II — so it must pass as-is). Hands-on check: `python -c` importing `credit_fills` + `ShadowRestingOrder`, one order (`price=0.47, size=100, filled=0, queue_ahead=500`), tape `{"tok-up": {0.46: 1.0}}` → expect one fill at 0.47 size 100.0, queue 0.0.
-- Helper skill: none (verification).
+- Target files: `core_brain/trader_loop.py`, `tests/test_trader_loop.py`, `docs/agents/strategy.md`
+- Build: in `_visit_one`, build `token_mids` from this cycle's UP/DOWN books keyed by `token_id` via `quotes.mid_price`; omit on missing id, missing side, or bid >= ask. Pass it on every `(plan_fn or plan_orders)(...)` call (spies forward `**kwargs`, no wrapper changes). A rotated-away token has no book and still cancels. Move the shared `TestRefusedHold` books to 0.66/0.68 (out of band for the 0.60 UP order) so the grace-expiry test keeps asserting cancel; add a separate in-band grace test (0.59/0.61 books, transient refusal × GRACE cycles → held, nothing submitted). Add visit tests: in-band (UP 0.48, book 0.45/0.47, DOWN-only intent → no UP cancel) and crossed book (0.50/0.48 → `not_quoted` cancel). Re-check: terminal-refusal, token-rotation, quote-resets-streak, patient-wait (UP remainder via cancel set), escalation (DOWN mid 0.51 outside the 0.48 band → replace proceeds), escalation-preserve, hard-stop, refused-escalation — assertions unchanged. Append one paragraph to `docs/agents/strategy.md` (inclusive rule, covered routes, still-cancelling routes, missing/crossed fallback) without rewriting the dead-band text. Confirm zero changes in `shadow_fills.py`, `config.py`, `quotes.py`, `_market_cfg`.
+- Helper skill: `incremental-implementation`.
 - Depends on: T2.
-- Verify: both focused suites green; operator call prints the expected fill.
+- Verify: `python -m pytest -q tests/test_trader_loop.py tests/test_plan_orders_asymmetric_hold.py tests/test_plan_orders_mid_hold.py` — all green.

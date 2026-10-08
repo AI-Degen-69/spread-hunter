@@ -1,38 +1,41 @@
-# CONSTRAINTS — #417 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #419 (locked by Station II, enforced through Station V)
 
 Supersedes the previous issue plan constraints for this branch only.
 
 ## Zero regressions
 
 - Focused suites that must pass for the touched behavior:
-  `tests/test_shadow_fills.py`,
-  `tests/test_shadow_exec.py`.
+  `tests/test_plan_orders_mid_hold.py` (new),
+  `tests/test_plan_orders_asymmetric_hold.py`,
+  `tests/test_trader_loop.py`.
 - Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
 - Every behavior change needs a test that fails without the change (RED first, per `test-driven-development`).
+- The shared `TestRefusedHold` books move only as far as the plan says
+  (0.66/0.68) with every existing assertion in that class still holding;
+  a separate in-band grace test proves the new hold.
 
-## Fill-model semantics freeze
+## Cancel-path freeze
 
-- Exact-price queue-first rule unchanged: tape at the order's own rounded price
-  consumes `queue_ahead` first, then fills `min(volume, remaining)`, oldest-first
-  sharing at the same level.
-- Trade-through fills at the order's OWN price, never at the print price.
-- At most one fill per order per `credit_fills` call — the caller
-  (`shadow_exec.py:settle_market`) derives status from `order.filled + f.size`.
-- Lower-bucket evidence is not consumed: one print can fill several orders above it.
-- `live_fill_engine.py` untouched — live, a fill exists only when the venue says so.
-- `markets.py:recent_trades` and the `traded` shape (`token -> price -> volume`) unchanged.
-- Telemetry comment at `shadow_exec.py:585` unchanged.
+- Terminal refusals (named stops, hard stop), `lifecycle_cancel`, explicit
+  `cancel_order_ids`, and the cancel-wins-over-replace rule: unchanged,
+  in band or out.
+- `token_mids=None` (and any caller that never passes it) keeps today's
+  behavior exactly — the guard is additive only.
+- Missing midpoint, one-sided book, crossed book: guard stands down.
+- No duplicate submits for held tokens on either submit branch.
+- `shadow_fills.py`, `config.py`, `quotes.py`, `live_fill_engine.py`,
+  `markets.py`, `_market_cfg`: untouched.
 
 ## Stores are evidence, not scratch
 
 - `data/orders.db` is the production registry: read it, never rewrite it.
 - No schema migration, no database rewriting; tests use temporary DBs.
-- No live orders are opened or completed; no `quote`, `complete`, Trader loop,
-  or dashboard START. The only order-loop validation is a direct `python -c`
-  call that spends nothing.
+- No live orders are opened or completed; no `quote`, `complete`, Trader
+  loop, or dashboard START. Visit tests run `_visit_one` with stubs.
 
 ## Anti-cheat
 
 - No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
 - No new external dependencies without explicit operator approval.
-- No new helper modules; `math` is already imported in `shadow_fills.py`.
+- One named module constant (`MID_HOLD_BAND = 0.02`); no new config
+  field, no new helper module.

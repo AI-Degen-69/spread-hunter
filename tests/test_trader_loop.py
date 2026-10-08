@@ -1463,7 +1463,7 @@ class TestRefusedHold:
     TERMINAL_WHY = ("UP: mid 0.950 outside [0.20,0.80] -- decided market; "
                     "DOWN: mid 0.050 outside [0.20,0.80] -- decided market")
 
-    def _seam(self, decide, calls):
+    def _seam(self, decide, calls, books=None):
         def open_orders_fn(m):
             return [_open(token="tok-up", price=0.60, oid="o-up"),
                     _open(token="tok-dn", price=0.40, oid="o-dn")]
@@ -1476,12 +1476,19 @@ class TestRefusedHold:
             calls["cancelled"].append([o["order_id"] for o in orders])
             return len(orders)
 
+        if books is None:
+            books = {"best_bid": 0.59, "best_ask": 0.61,
+                     "bids": {0.59: 100}, "asks": {0.61: 100}}
+
+        def fetch_books(host, token):
+            book = {"token_id": token}
+            book.update(books)
+            return book
+
         return VenueSeam(
             client=object(),
             fetch_market=lambda cid: FakeMarket(cid),
-            fetch_books=lambda h, t: {"token_id": t, "best_bid": 0.59,
-                                       "best_ask": 0.61,
-                                       "bids": {0.59: 100}, "asks": {0.61: 100}},
+            fetch_books=fetch_books,
             decide=decide,
             submit_fn=submit_fn,
             cancel_fn=cancel_fn,
@@ -1560,7 +1567,11 @@ class TestRefusedHold:
             decides.append(1)
             return [], self.TRANSIENT_WHY
 
-        seam = self._seam(decide, calls)
+        # Books above the mid-hold band (mid 0.67 vs UP 0.60): grace expiry
+        # cancels here as it always did.
+        seam = self._seam(decide, calls, books={
+            "best_bid": 0.66, "best_ask": 0.68,
+            "bids": {0.66: 100}, "asks": {0.68: 100}})
 
         def sleep_fn(s):
             sleeps.append(s)
@@ -1575,6 +1586,35 @@ class TestRefusedHold:
         assert len(decides) == GRACE
         assert calls["submitted"] == []
         assert calls["cancelled"] == [["o-up", "o-dn"]]
+
+    def test_grace_expiry_holds_when_the_mid_is_in_band(self):
+        from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
+        calls = {"submitted": [], "cancelled": []}
+        decides = []
+        sleeps = []
+
+        def decide(cfg, up, dn, inv, t_rem, wf):
+            decides.append(1)
+            return [], self.TRANSIENT_WHY
+
+        # Default books (mid 0.60) sit inside the UP order's band
+        # (0.60 <= 0.60 + 0.02): the expired grace holds the UP leg while
+        # the out-of-band DOWN leg still cancels.
+        seam = self._seam(decide, calls)
+
+        def sleep_fn(s):
+            sleeps.append(s)
+            if len(sleeps) >= GRACE:
+                raise KeyboardInterrupt
+
+        run(
+            seam, interval=0.0, once=False, live=True,
+            markets=[FakeMarket("0xabc")],
+            sleep_fn=sleep_fn,
+        )
+        assert len(decides) == GRACE
+        assert calls["submitted"] == []
+        assert calls["cancelled"] == [["o-dn"]]
 
     def test_quote_resets_refusal_streak(self):
         from core_brain.trader_loop import REFUSED_HOLD_GRACE_CYCLES as GRACE
@@ -1606,6 +1646,101 @@ class TestRefusedHold:
         assert len(decides) == GRACE + 1
         assert calls["submitted"] == []
         assert calls["cancelled"] == []
+
+
+class TestMidHoldVisit:
+    """#419 end to end: `_visit_one` feeds live mids into the hold band."""
+
+    @staticmethod
+    def _seam(books, decide, orders):
+        return VenueSeam(
+            client=object(),
+            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            fetch_market=lambda cid: FakeMarket(cid),
+            fetch_books=lambda host, token: books[token],
+            decide=decide,
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            open_orders_fn=lambda market: list(orders),
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+        )
+
+    @staticmethod
+    def _books(up_bid, up_ask):
+        return {
+            "tok-up": {"token_id": "tok-up", "best_bid": up_bid,
+                       "best_ask": up_ask, "bids": {}, "asks": {}},
+            "tok-dn": {"token_id": "tok-dn", "best_bid": 0.50,
+                       "best_ask": 0.52, "bids": {}, "asks": {}},
+        }
+
+    def _visit(self, books, decide, orders):
+        from core_brain.trader_loop import _visit_one, plan_orders
+
+        captured = {}
+
+        def plan_fn(open_orders, intents, price_eps=1e-9, **kwargs):
+            result = plan_orders(open_orders, intents, price_eps, **kwargs)
+            captured["cancel"] = result[0]
+            captured["submit"] = result[1]
+            return result
+
+        _visit_one(self._seam(books, decide, orders), {"cid": "0xabc"},
+                   live=False, cycle=1, emit_fn=lambda **event: None,
+                   plan_fn=plan_fn)
+        return captured
+
+    def test_in_band_visit_holds_the_up_order(self):
+        captured = self._visit(
+            self._books(0.45, 0.47),
+            lambda *a, **k: ([_intent(side="DOWN", token="tok-dn",
+                                       price=0.52)], ""),
+            [_open(token="tok-up", price=0.48, oid="o-up"),
+             _open(token="tok-dn", price=0.52, oid="o-dn")])
+        assert captured["cancel"] == []
+
+    def test_crossed_book_cancels_as_today(self):
+        captured = self._visit(
+            self._books(0.50, 0.48),
+            lambda *a, **k: ([_intent(side="DOWN", token="tok-dn",
+                                       price=0.52)], ""),
+            [_open(token="tok-up", price=0.48, oid="o-up"),
+             _open(token="tok-dn", price=0.52, oid="o-dn")])
+        assert [o["order_id"] for o in captured["cancel"]] == ["o-up"]
+
+
+class TestCycleMids:
+    """#419: the mid feed leaves out every token without a tradable book."""
+
+    @staticmethod
+    def _mids(up, dn):
+        from core_brain.trader_loop import _cycle_mids
+        return _cycle_mids(up, dn)
+
+    @staticmethod
+    def _book(token, bid, ask):
+        return {"token_id": token, "best_bid": bid, "best_ask": ask}
+
+    def test_two_sided_books_give_both_mids(self):
+        mids = self._mids(self._book("tok-up", 0.45, 0.47),
+                          self._book("tok-dn", 0.50, 0.52))
+        assert mids["tok-up"] == pytest.approx(0.46)
+        assert mids["tok-dn"] == pytest.approx(0.51)
+
+    def test_crossed_book_leaves_the_token_out(self):
+        mids = self._mids(self._book("tok-up", 0.50, 0.48),
+                          self._book("tok-dn", 0.50, 0.52))
+        assert mids == {"tok-dn": 0.51}
+
+    def test_one_sided_or_missing_book_leaves_the_token_out(self):
+        mids = self._mids(self._book("tok-up", 0.45, None), {})
+        assert mids == {}
+
+    def test_non_numeric_book_leaves_the_token_out(self):
+        mids = self._mids(self._book("tok-up", "bad", 0.47),
+                          self._book("tok-dn", 0.50, 0.52))
+        assert mids == {"tok-dn": 0.51}
 
 
 class TestLifecycleStops:
