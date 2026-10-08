@@ -112,6 +112,18 @@ def test_lower_print_fills_only_orders_above_it():
     assert queues["ord-2"] == 10.0
 
 
+def test_sweep_evidence_survives_regardless_of_order_sequence():
+    """Evidence is snapshotted: an order resting at the print price must not
+    consume the proof a higher order needs, whichever comes first."""
+    orders = [_order(local_id="ord-lo", price=0.46),
+              _order(local_id="ord-hi", price=0.47, queue_ahead=200.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46: 1.0}})
+
+    assert fills == [ShadowFill("ord-lo", "tok-up", 0.46, 1.0),
+                     ShadowFill("ord-hi", "tok-up", 0.47, 100.0)]
+    assert queues["ord-hi"] == 0.0
+
+
 def test_zero_volume_below_our_price_is_not_a_sweep():
     orders = [_order(queue_ahead=60.0)]
     fills, queues = credit_fills(orders, {"tok-up": {0.46: 0.0, 0.47: 100.0}})
