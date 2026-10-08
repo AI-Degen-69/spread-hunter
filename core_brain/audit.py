@@ -152,7 +152,7 @@ def audit_three_way(
             ).fetchall()
             orders = [registry._row_to_order(r) for r in rows]
 
-    m = fetch_pinned_market(condition_id, require_rewards=False)
+    m = fetch_pinned_market(condition_id)
     if m is None:
         raise ValueError(f"Could not fetch market metadata for condition_id {condition_id}")
 

@@ -446,14 +446,9 @@ def quote(condition_id: str, price: float, size: float, live: bool,
     # four hundredths of a percent. The income is buying UP+DOWN below $1.00 and
     # merging, which is what "spread hunter" names.
     #
-    # This path used to demand rewards, a default left over from the rebate-
-    # farming phase. `sweep.py:507` -- the fleet, the thing that actually trades
-    # -- passes require_rewards=False and has since spread capture landed, so the
-    # CLI was refusing every market the fleet quotes: all eight currently in
-    # runtime/markets.json are source=spread with daily=0.00. The guard is gone here
-    # for the same reason it is off there. Whether a market is worth funding is
-    # the allocator's call, made from runtime/markets.json, not this function's.
-    m = fetch_pinned_market(condition_id, require_rewards=False)
+    # Whether a market is worth funding is the allocator's call, made from
+    # runtime/markets.json, not this function's.
+    m = fetch_pinned_market(condition_id)
     if m is None:
         raise SystemExit(
             f"no tradeable market at condition_id {condition_id[:12]}... -- it "
@@ -3120,7 +3115,7 @@ def _evaluate_single_market_quote(
     try:
         ev = evaluate_market_quote(
             cid, cfg, clob_host,
-            fetch_market=lambda c: fetch_pinned_market(c, require_rewards=False),
+            fetch_market=lambda c: fetch_pinned_market(c),
             fetch_books=full_book,
             inventory_for=lambda m: inventory_from_registry(
                 m.condition_id, m.up_token, m.down_token, db_path=reg_db),
