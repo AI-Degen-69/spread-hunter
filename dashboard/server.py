@@ -2964,8 +2964,15 @@ def _cycle_stream_sse(
                 last_seq = seq
                 yield _mark_frame(seq, False, True, marks)
             elif seq != last_seq:
+                # Delta carries only marks that moved since this stream's
+                # seq; removals ride the 30s browser max-age instead of a
+                # tombstone here, the same bound poll renders already use.
+                try:
+                    delta = marks_cache.marks_since(last_seq)
+                except AttributeError:
+                    delta = marks
                 last_seq = seq
-                yield _mark_frame(seq, False, False, marks)
+                yield _mark_frame(seq, False, False, delta)
             if time.time() - last_keepalive >= SSE_KEEPALIVE_SEC:
                 yield ": keepalive\n\n"
                 last_keepalive = time.time()

@@ -106,8 +106,7 @@ class LiveMarkCache:
             before = set(self._wanted)
             for tok in token_ids:
                 self._wanted[str(tok)] = at
-            changed = set(self._wanted) != before
-            return changed
+            return set(self._wanted) != before
 
     def expire_wanted(self, now: float | None = None,
                       ttl: float = WANTED_TTL_SEC) -> bool:
@@ -236,6 +235,29 @@ class LiveMarkCache:
         with self._lock:
             return self._seq, [dict(m) for m in self._marks.values()]
 
+    def marks_since(self, seq) -> list[dict]:
+        """Marks changed after `seq`, for delta frames (unparseable → all)."""
+        try:
+            since = int(seq)
+        except (TypeError, ValueError):
+            since = -1
+        with self._lock:
+            out = []
+            for m in self._marks.values():
+                try:
+                    changed = int(m.get("seq")) > since
+                except (TypeError, ValueError):
+                    changed = True
+                if changed:
+                    out.append(dict(m))
+            return out
+
+    def sim_current(self, token_id: str) -> float:
+        """Locked read of one sim mid (or its seed); the sim loop's accessor."""
+        with self._lock:
+            seed = self._seed_mids.get(str(token_id), 0.5)
+            return self._marks.get(str(token_id), {}).get("mid", seed)
+
     def wait(self, timeout: float) -> None:
         """Sleep until a mark changes or the timeout passes (stream pacing)."""
         with self._cond:
@@ -327,8 +349,7 @@ class LiveMarkWorker:
         """Random-walk the seeds several times a second; no network."""
         while not self._stop.is_set():
             for tok in self._cache.wanted():
-                seed = self._cache._seed_mids.get(tok, 0.5)
-                cur = self._cache._marks.get(tok, {}).get("mid", seed)
+                cur = self._cache.sim_current(tok)
                 step = random.uniform(-SIM_STEP, SIM_STEP)
                 nxt = min(0.99, max(0.01, round(cur + step, 4)))
                 self._cache.apply_sim_tick(tok, nxt)
@@ -365,8 +386,8 @@ class LiveMarkWorker:
     def _on_frame(self, message: str) -> None:
         try:
             self._cache.apply_message(json.loads(message))
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            log.debug("live-marks frame skipped: %s", e)
 
     def _send_subscribe(self, app) -> bool:
         """Send the current wanted set; True when it left the socket."""

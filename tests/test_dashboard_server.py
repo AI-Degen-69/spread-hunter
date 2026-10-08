@@ -2165,11 +2165,13 @@ def test_cycle_stream_emits_delta_then_reset(tmp_path):
     ring = tmp_path / "cycle_events.jsonl"
     ring.write_text("", encoding="utf-8")
     cache = LiveMarkCache()
-    cache.update_wanted({"tok-u"})
+    cache.update_wanted({"tok-u", "tok-v"})
+    cache.apply_message({"asset_id": "tok-v", "bids": [{"price": 0.40, "size": 5}],
+                                   "asks": [{"price": 0.45, "size": 5}]})
     gen = ds._cycle_stream_sse(ring, tail=50, poll_sec=0.01, live_marks=cache)
     try:
         snap = _parse_mark(next(gen))  # replay is empty, snapshot is first
-        assert snap["marks"] == []
+        assert [m["token_id"] for m in snap["marks"]] == ["tok-v"]
         # Mutate the cache from here, then pull: the generator is
         # synchronous, so the next frame already carries the change.
         cache.apply_message({"asset_id": "tok-u", "bids": [{"price": 0.47, "size": 5}],
@@ -2177,6 +2179,8 @@ def test_cycle_stream_emits_delta_then_reset(tmp_path):
         delta = _parse_mark(next(gen))
         assert delta["snapshot"] is False and delta["reset"] is False
         assert delta["seq"] > snap["seq"]
+        # Only the moved mark travels; the untouched leg stays out.
+        assert [m["token_id"] for m in delta["marks"]] == ["tok-u"]
         assert delta["marks"][0]["mid"] == pytest.approx(0.485)
         cache.disconnect()
         reset = _parse_mark(next(gen))

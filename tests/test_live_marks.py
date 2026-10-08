@@ -177,3 +177,14 @@ def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
     finally:
         worker.stop()
     assert not worker.running
+
+
+def test_marks_since_returns_only_moved_marks():
+    cache = LiveMarkCache()
+    cache.update_wanted({"tok-u", "tok-v"})
+    cache.apply_message(_book("tok-u", [_lvl(0.47)], [_lvl(0.50)]))
+    cache.apply_message(_book("tok-v", [_lvl(0.40)], [_lvl(0.45)]))
+    seq, _ = cache.snapshot()
+    assert cache.marks_since(seq) == []
+    assert [m["token_id"] for m in cache.marks_since(seq - 1)] == ["tok-v"]
+    assert len(cache.marks_since("bogus")) == 2
