@@ -69,6 +69,11 @@ class LifecycleQuoteContext:
     replace_order_ids: frozenset[str] = frozenset()
     cancel_order_ids: frozenset[str] = frozenset()
     lifecycle_pair_id: str | None = None
+    # Registry lifecycle state driving this context (#416: ESCALATED_HEDGE /
+    # HARD_STOP), so placement gating can verify protection against the
+    # registry state rather than an inferred flag. None on the dual-resting
+    # path, which keeps full gate behavior.
+    lifecycle_state: str | None = None
 
 
 def max_profitable_hedge_bid(

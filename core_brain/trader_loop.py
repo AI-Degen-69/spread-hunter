@@ -861,9 +861,67 @@ def _cancel_dropped_markets(
             status="WARNED", condition_id=cid,
             why="dropped_market_partial_retained"))
 
+    # THE HEDGE SHIELD (#416). A market that left the universe while holding
+    # a lifecycle-protected leg (ESCALATED_HEDGE / HARD_STOP, read from the
+    # registry, never inferred) keeps its resting hedge: cancelling the
+    # protection strands the filled leg as the single buy nobody decided to
+    # take. Resolved markets still exit first -- protection never overrides
+    # resolution -- and an unreadable registry fails PROTECTED, never
+    # cancelled: cancelling a possibly-escalated hedge is the irreversible
+    # harm, while a resting order is re-evaluated next cycle. Every skip
+    # surfaces as a WARNED row, never a log line only.
+    protected_cids: dict[str, str] = {}
+    if seam.registry is not None and callable(
+            getattr(seam.registry, "get_lifecycle_state", None)):
+        shield_pairs: dict[str, str] = {}
+        for o in dropped:
+            pid = getattr(o, "pair_id", None)
+            if pid and getattr(o, "status", "") == "open":
+                shield_pairs.setdefault(str(pid), o.condition_id)
+        for pid, pcid in shield_pairs.items():
+            if pcid.lower() in resolved_lc:
+                continue
+            try:
+                rec = seam.registry.get_lifecycle_state(pid)
+            except Exception as e:
+                log.warning("dropped-market shield could not read lifecycle "
+                            "state for pair %s: %s: %s",
+                            pid, type(e).__name__, e)
+                emit_fn(service="decide", cycle=cycle, phase="quoting",
+                        action="dropped_hedge_protected", market_slug="",
+                        reason="dropped_market_hedge_protect_read_failed: "
+                        f"{type(e).__name__}: {e}",
+                        extra={"condition_id": pcid, "pair_id": pid})
+                out.append(LiveFleetResult(
+                    status="WARNED", condition_id=pcid,
+                    why="dropped_market_hedge_protect_read_failed",
+                    error=f"dropped_market_hedge_protect: {type(e).__name__}: {e}"))
+                protected_cids[pcid] = "unknown"
+                continue
+            if rec is not None and rec.state in _HEDGE_PROTECTED_STATES:
+                protected_cids[pcid] = rec.state
+
     open_cids = sorted({o.condition_id for o in dropped
                         if getattr(o, "status", "") == "open"})
     for dropped_cid in open_cids:
+        if (dropped_cid in protected_cids
+                and dropped_cid.lower() not in resolved_lc):
+            state = protected_cids[dropped_cid]
+            n = sum(1 for o in dropped
+                    if o.condition_id == dropped_cid
+                    and getattr(o, "status", "") == "open")
+            log.warning("dropped market %s holds a %s hedge leg: "
+                        "%d open order(s) left resting",
+                        dropped_cid, state, n)
+            emit_fn(service="decide", cycle=cycle, phase="quoting",
+                    action="dropped_hedge_protected", market_slug="",
+                    reason="dropped_market_hedge_protected",
+                    extra={"condition_id": dropped_cid,
+                           "lifecycle_state": state, "open_orders": n})
+            out.append(LiveFleetResult(
+                status="WARNED", condition_id=dropped_cid,
+                why="dropped_market_hedge_protected"))
+            continue
         is_resolved = dropped_cid.lower() in resolved_lc
         reason = (LifecycleStop.RESOLVED.code if is_resolved
                   else CANCEL_MARKET_DROPPED)
@@ -943,6 +1001,13 @@ def _still_resting(seam: VenueSeam, to_cancel: list[dict]) -> list[str]:
     return [i for i in ids if i and i in resting]
 
 
+# Lifecycle states whose hedge execution path outranks placement gating
+# (#416). Read from the registry lifecycle state via the quote context --
+# never an inferred flag -- and only these two: every other state keeps
+# full gate behavior.
+_HEDGE_PROTECTED_STATES = frozenset({"ESCALATED_HEDGE", "HARD_STOP"})
+
+
 def _admit_placements(
     to_submit: list[QuoteIntent],
     market: Any,
@@ -950,6 +1015,7 @@ def _admit_placements(
     down_book: dict,
     flow_fn: Optional[Callable[[str, float], Any]],
     cfg: Any,
+    lifecycle_state: str | None = None,
 ) -> tuple[list[QuoteIntent], str]:
     """Which of this cycle's NEW placements may go out, and the queue reason.
 
@@ -992,6 +1058,18 @@ def _admit_placements(
     passive = [i for i in to_submit if not i.crossed]
     if not passive:
         return list(to_submit), ""
+    if lifecycle_state in _HEDGE_PROTECTED_STATES:
+        # THE HEDGE BYPASS (#416). A market holding an unhedged leg in an
+        # escalated or hard-stop lifecycle state keeps its execution path:
+        # refusing its hedge placement would strand the filled leg as the
+        # single buy nobody decided to take. Dual-resting markets never
+        # arrive here with a protected state, so their gating is unchanged.
+        # The tape is not read -- a measurement that cannot change the
+        # answer is a wasted venue round-trip -- and the bypass travels on
+        # the record, never silently.
+        return list(to_submit), (
+            f"queue gate bypassed: lifecycle {lifecycle_state} hedge "
+            f"protection; {len(passive)} placement(s) admitted")
 
     # The token -> book mapping, not the side: `plan_orders` and the decider
     # both work in tokens, and scoring the wrong book is the one way this can be
@@ -1251,17 +1329,20 @@ def _lifecycle_quote_context(
     cancel_order_ids: set[str] = set()
     escalated_order_already_resting = False
 
-    def refusal_context(reason: str, pair_ids: list[str]) -> LifecycleQuoteContext:
+    def refusal_context(reason: str, pair_ids: list[str],
+                        state: str | None = None) -> LifecycleQuoteContext:
         emit_fn(
             service="decide", cycle=cycle, phase="quoting",
             action="single_leg_refusal", market_slug=title, reason=reason,
             extra={"condition_id": str(market.condition_id),
                    "pair_ids": pair_ids},
         )
-        return LifecycleQuoteContext(refusal_reason=reason)
+        return LifecycleQuoteContext(refusal_reason=reason,
+                                     lifecycle_state=state)
 
     def preserve_refusal_context(
         reason: str, pair_ids: list[str],
+        state: str | None = None,
     ) -> LifecycleQuoteContext:
         """Refuse WITHOUT cancelling the resting hedge: preserve pair orders."""
         emit_fn(
@@ -1279,6 +1360,7 @@ def _lifecycle_quote_context(
         return LifecycleQuoteContext(
             refusal_reason=reason,
             preserve_order_ids=frozenset(preserved),
+            lifecycle_state=state,
         )
 
     for pair_id, active_pair_orders in pair_orders.items():
@@ -1403,7 +1485,8 @@ def _lifecycle_quote_context(
             for pair_id, _position, decision in hard_stops
         )
         return refusal_context(
-            reason, [pair_id for pair_id, _position, _ in hard_stops])
+            reason, [pair_id for pair_id, _position, _ in hard_stops],
+            state=hard_stops[0][2].state.value)
 
     refused_escalations = [
         (pair_id, _position, decision)
@@ -1421,6 +1504,7 @@ def _lifecycle_quote_context(
         return preserve_refusal_context(
             reason,
             [pair_id for pair_id, _position, _decision in refused_escalations],
+            state=refused_escalations[0][2].state.value,
         )
 
     escalations = [
@@ -1483,6 +1567,7 @@ def _lifecycle_quote_context(
             lifecycle_pair_id=(
                 None if escalated_order_already_resting else pair_id
             ),
+            lifecycle_state=decision.state.value,
         )
 
     return LifecycleQuoteContext(
@@ -1718,8 +1803,13 @@ def _visit_one(
         # planner, so held orders, the refusal-grace counter and every recorded
         # cancel reason stay exactly as they were. Record-only at ship: it
         # normally reports and changes nothing.
+        lifecycle_state = (
+            getattr(lifecycle_context, "lifecycle_state", None)
+            if lifecycle_context is not None else None
+        )
         to_submit, queue_why = _admit_placements(
-            to_submit, market, ev.up_book, ev.down_book, seam.flow_fn, cfg)
+            to_submit, market, ev.up_book, ev.down_book, seam.flow_fn, cfg,
+            lifecycle_state=lifecycle_state)
     except Exception as e:
         emit_fn(service="decide", cycle=cycle, phase="quoting",
                 action="market_error", market_slug=title,
