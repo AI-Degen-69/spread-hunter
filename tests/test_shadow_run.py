@@ -2293,6 +2293,9 @@ class TestFixedStartingBankroll:
             self, tmp_path, monkeypatch):
         """The acceptance criterion: a wallet far from $100 must not move the
         caps the rehearsal computes."""
+        # `conftest` scrubs only `HUNTER_*`; `SPREAD_HUNTER_BANKROLL` is the
+        # first name `config.load()` reads, so clear it to assert the default.
+        monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
         from core_brain import account
         from core_brain.config import derive_dynamic_caps
 
@@ -2334,6 +2337,11 @@ class TestFixedStartingBankroll:
     def test_a_non_finite_or_non_positive_bankroll_is_refused(
             self, tmp_path, monkeypatch, bad):
         from core_brain.shadow_run import run_shadow
+
+        # The refusal under test is this function's own; an externally set
+        # bankroll env would raise a different (capitalised) message first.
+        monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
+        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
 
         with pytest.raises(ValueError, match="bankroll"):
             run_shadow(

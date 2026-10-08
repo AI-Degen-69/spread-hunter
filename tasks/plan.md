@@ -59,6 +59,21 @@ Branch: i422/shadowrun-every-rehearsal-starts-at-a-fixed-bankro | Issue: #422
 
 **Checkpoint:** the full bankroll matrix (fixed / override / env / invalid / CLI) is pinned by tests.
 
+**Review round (PR #423) — one finding accepted, one rejected.**
+- ACCEPT: the default-bankroll test assumed `$100` without clearing
+  `SPREAD_HUNTER_BANKROLL`; `tests/conftest.py` scrubs only `HUNTER_*`, so an
+  operator's exported value could flunk the assertion. Both the default test and
+  the invalid-value test now `delenv` it (verified green with the var exported).
+- REJECT: re-derive `allocation_budget` / `max_committed_usd` on the explicit
+  pin (and thread `bankroll_override` through `config.load`). `config.py` is
+  frozen by SPEC.md, and `max_committed_usd` is a live quoting gate
+  (`quotes.py:455-461`) whose default (1000.0) is inert at a $100 bankroll --
+  re-deriving it to 100 would make the cap active and silently change the
+  preregistered paired arms and the recorded 2026-09-28 pilot baseline. The
+  issue's three caps (order/naked/ceiling) all come from `bankroll_usd`. The
+  stale-derived-field inconsistency is real, so it belongs in a follow-up issue
+  rather than this ticket.
+
 ### T4 [x] — Operator docs match the new behavior [Docs] (S)
 
 - Target files: `docs/agents/first-run.md`
