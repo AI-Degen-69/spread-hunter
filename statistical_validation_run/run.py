@@ -13,7 +13,6 @@ import dataclasses
 import datetime
 import json
 import logging
-import os
 import shutil
 import sqlite3
 import sys
@@ -361,15 +360,10 @@ def main(
         else Path(f"reports/stat_{ts_str}_{run_id}")
     )
 
-    maker = a.funder or os.environ.get("POLY_FUNDER")
-    if maker:
-        try:
-            from core_brain.account import fetch_live_balance
-            live_bal = fetch_live_balance(maker)
-            if live_bal is not None and live_bal > 0:
-                cfg = dc_replace(cfg, bankroll_usd=live_bal)
-        except Exception as e:  # noqa: BLE001 - degrade, do not stop
-            log.warning("live balance read failed, using config bankroll: %s", e)
+    # The rehearsal bankroll is the config value (#422), never the live wallet.
+    # This harness writes to a shadow store, so a venue read here would size the
+    # run from real capital and contradict the fixed starting bankroll every
+    # other rehearsal uses. `a.funder` stays accepted for compatibility.
 
     snapshot_stat_validation_env(artifact_dir, cfg, root=root)
 

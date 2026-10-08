@@ -193,6 +193,14 @@ never read, so every risk cap (order 25%, naked 6%, ceiling 90%) is the same at
 the start of every rehearsal and two runs can be compared. Paired arms keep
 their preregistered $100 unless the flag is passed.
 
+The menu's `shadow-run` and `resume` actions state `--starting-bankroll-usd 100`
+on the launched command, so an exported `SPREAD_HUNTER_BANKROLL` cannot change
+what that session rehearsed under. Nothing on a shadow path reads your
+Polymarket account either: the shadow dashboard and the statistical harness never
+run `account-sweep`, they do not fetch your balance, and no live account mark is
+written into the rehearsal's store. Only the live dashboard's own page snapshots
+account equity.
+
 It rehearses everything: the same `MakerConfig`, the same `MAX_ORDER_USD` /
 `MAX_TOTAL_USD`, the same gates, the same `decide_quotes`. Only the signer, the
 store, and the wall clock differ — the bankroll is fixed, not read from the

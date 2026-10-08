@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>כל ריצת ניסוי מתחילה מאותו סכום · עדכון #422</title>
+<style>
+  :root{
+    --ink: rgba(15,23,42,.92);
+    --muted: rgba(15,23,42,.56);
+    --bg: #f7f9fc;
+    --panel: #ffffff;
+    --line: rgba(15,23,42,.10);
+    --accent: #2563EB;
+    --accent-soft: #EFF6FF;
+    --accent-dark: #1E40AF;
+    --warn: #C2410C;
+    --warn-soft: #FFF7ED;
+    --shadow: 0 16px 40px rgba(15,23,42,.08);
+  }
+  *{ box-sizing:border-box }
+  body{
+    margin:0; color:var(--ink); background:var(--bg);
+    font:17px/1.7 "Segoe UI", Tahoma, sans-serif;
+  }
+  main{ max-width:1080px; margin:auto; padding:44px 22px 80px }
+  h1{ font-size:clamp(1.5rem,3.4vw,2.3rem); line-height:1.35; margin:0 0 14px }
+  .lede{ font-size:1.06rem; color:var(--muted); margin:0; max-width:62ch }
+  .kicker{
+    display:inline-block; font-size:.72rem; letter-spacing:.08em; font-weight:700;
+    color:var(--accent-dark); background:var(--accent-soft);
+    border:1px solid rgba(37,99,235,.22); border-radius:999px; padding:.25rem .7rem;
+  }
+  .panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:18px;
+    padding:26px; margin-top:26px; box-shadow:var(--shadow);
+  }
+  .figure{ border:1px solid var(--line); border-radius:16px; overflow:hidden; background:var(--panel); }
+  .figure-label{
+    font-size:.72rem; letter-spacing:.06em; color:var(--muted);
+    padding:.85rem 1.1rem 0;
+  }
+  .figure-controls{
+    display:flex; gap:1.1rem; align-items:center; flex-wrap:wrap;
+    padding:.9rem 1.1rem; border-top:1px solid var(--line);
+  }
+  .figure-controls label{ font-size:.9rem; font-weight:600; min-width:8.5rem }
+  input[type=range]{ direction:ltr; width:min(260px,52vw); accent-color:var(--accent); cursor:pointer }
+  .val{
+    font-variant-numeric:tabular-nums; font-weight:700; color:var(--accent-dark);
+    background:var(--accent-soft); border-radius:8px; padding:.15rem .5rem; min-width:5.2rem;
+    display:inline-block; text-align:center;
+  }
+  .figure-caption{
+    font-size:.85rem; color:var(--muted); padding:.75rem 1.1rem .95rem;
+    border-top:1px solid var(--line);
+  }
+  .compare{ display:grid; grid-template-columns:1fr 1fr; gap:18px; padding:22px 1.1rem 24px }
+  @media(max-width:760px){ .compare{ grid-template-columns:1fr } }
+  .side{ border:1px solid var(--line); border-radius:14px; padding:18px }
+  .side.before{ background:var(--warn-soft); border-color:rgba(194,65,12,.18) }
+  .side.now{ background:var(--accent-soft); border-color:rgba(37,99,235,.20) }
+  .side h2{ margin:0 0 4px; font-size:1rem }
+  .side .tag{ font-size:.75rem; color:var(--muted); margin:0 0 14px; display:block }
+  .metric{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:.5rem 0 }
+  .metric + .metric{ border-top:1px dashed var(--line) }
+  .metric span{ font-size:.9rem; color:var(--muted) }
+  .num{ font-size:1.5rem; font-weight:800; font-variant-numeric:tabular-nums }
+  .before .num{ color:var(--warn) }
+  .now .num{ color:var(--accent-dark) }
+  .callout{
+    border-inline-start:3px solid var(--accent); background:var(--accent-soft);
+    padding:1rem 1.2rem; border-radius:0 10px 10px 0; margin:1.3rem 0 0;
+  }
+  .summary{ font-size:1.08rem; margin:0 }
+  .steps{ margin:.6rem 0 0; padding-inline-start:1.2rem }
+  .steps li{ margin:.45rem 0 }
+  code{
+    font-family:ui-monospace,Consolas,monospace; font-size:.86em;
+    background:rgba(15,23,42,.06); border-radius:6px; padding:.1rem .4rem; direction:ltr; display:inline-block;
+  }
+  .links{ font-size:.92rem; color:var(--muted); margin:0 }
+  .links a{ color:var(--accent-dark); text-decoration:none; border-bottom:1px solid rgba(37,99,235,.35) }
+  footer{ margin-top:22px; font-size:.85rem; color:var(--muted) }
+  @media(prefers-reduced-motion:reduce){ *{ transition:none !important; animation:none !important } }
+</style>
+</head>
+<body>
+<main>
+
+  <span class="kicker">עדכון #422</span>
+  <h1>כל ריצת ניסוי מתחילה עכשיו מאותו סכום — בלי קשר למה שיש בארנק</h1>
+  <p class="lede">
+    קודם כל ריצת ניסוי הסתכלה על הארנק האמיתי וקבעה לפיו כמה מותר להמר.
+    כלומר: אותו ניסוי בדיוק, ביום אחר, התחיל מסכום אחר — ואי אפשר היה להשוות ביניהם.
+    עכשיו כל ריצה מתחילה מ־100 דולר קבועים, ואם רוצים ניסוי אחר פשוט בוחרים סכום אחר בכוונה.
+  </p>
+
+  <div class="figure" style="margin-top:26px">
+    <div class="figure-label">גררו את הסליידרים וראו מה קורה לתקרות</div>
+    <div class="figure-controls">
+      <label for="wallet">מה שיש בארנק</label>
+      <input id="wallet" type="range" min="50" max="5000" step="50" value="1500" aria-label="יתרת הארנק">
+      <span class="val" id="wallet-v">$1,500</span>
+    </div>
+    <div class="figure-controls">
+      <label for="fixed">סכום פתיחה לניסוי</label>
+      <input id="fixed" type="range" min="100" max="1000" step="50" value="100" aria-label="סכום פתיחה לניסוי">
+      <span class="val" id="fixed-v">$100</span>
+    </div>
+
+    <div class="compare">
+      <section class="side before">
+        <h2>לפני</h2>
+        <span class="tag">התקרות זזות עם הארנק</span>
+        <div class="metric"><span>מקסימום להזמנה אחת</span><b class="num" id="b-order">$375.00</b></div>
+        <div class="metric"><span>מקסימום להימור לא מכוסה</span><b class="num" id="b-naked">$90.00</b></div>
+        <div class="metric"><span>תקרת סה״כ</span><b class="num" id="b-total">$1,350.00</b></div>
+      </section>
+      <section class="side now">
+        <h2>עכשיו</h2>
+        <span class="tag">התקרות קבועות לסכום שבחרתם</span>
+        <div class="metric"><span>מקסימום להזמנה אחת</span><b class="num" id="a-order">$25.00</b></div>
+        <div class="metric"><span>מקסימום להימור לא מכוסה</span><b class="num" id="a-naked">$6.00</b></div>
+        <div class="metric"><span>תקרת סה״כ</span><b class="num" id="a-total">$90.00</b></div>
+      </section>
+    </div>
+    <div class="figure-caption">
+      הזיזו את הסליידר העליון: המספרים ב״לפני״ קופצים בהתאם לארנק. המספרים ב״עכשיו״ נשארים
+      במקום — עד שתזיזו את הסליידר התחתון, כלומר תבחרו במפורש סכום פתיחה אחר.
+    </div>
+  </div>
+
+  <div class="callout">
+    <p class="summary">
+      למה זה חשוב: שלוש התקרות (25% להזמנה, 6% להימור לא מכוסה, 90% תקרה) מחושבות מהסכום
+      שאתה מתחיל ממנו. אם נקודת הפתיחה זזה, הכול זז איתה.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin:0 0 .4rem; font-size:1.05rem">כך זה נראה בפועל</h2>
+    <p style="margin:0; color:var(--muted)">
+      אין מסך חדש בדשבורד לעדכון הזה — מה שרואים זו שורת הפתיחה של הריצה בטרמינל.
+      ריצת ניסוי לא מוציאה כסף ואינה טוענת חותם, אז זה בטוח להרצה.
+    </p>
+    <ol class="steps">
+      <li>פתחו טרמינל בשורש הפרויקט והריצו ריצת ניסוי של דקה.</li>
+      <li>בשורה הראשונה תראו <code>starting bankroll $100.00 (config)</code> — סכום פתיחה קבוע, לא מהארנק.</li>
+      <li>הריצו שוב עם <code>--starting-bankroll-usd 250</code> ותראו <code>$250.00 (explicit override)</code>.</li>
+    </ol>
+    <p class="links" style="margin-top:1rem">
+      הבקשה: <a href="https://github.com/AI-Degen-69/spread-hunter/issues/422">#422</a> ·
+      העדכון: <a href="https://github.com/AI-Degen-69/spread-hunter/pull/423">#423</a> (מוזג) ·
+      שני תיקוני המשך מוזגו אחריו.
+    </p>
+  </div>
+
+  <footer>עדכון #422 — נקודת פתיחה אחידה לכל ריצת ניסוי.</footer>
+</main>
+
+<script>
+(function () {
+  var wallet = document.getElementById('wallet');
+  var fixed  = document.getElementById('fixed');
+
+  var SHARE = { order: 0.25, naked: 0.06, total: 0.90 };
+
+  function money(v) {
+    var s = v.toFixed(2);
+    var parts = s.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return '$' + parts.join('.');
+  }
+
+  function round2(v) { return Math.round(v * 100) / 100; }
+
+  function render() {
+    var w = parseFloat(wallet.value);
+    var f = parseFloat(fixed.value);
+
+    document.getElementById('wallet-v').textContent = money(w);
+    document.getElementById('fixed-v').textContent = money(f);
+
+    document.getElementById('b-order').textContent = money(round2(w * SHARE.order));
+    document.getElementById('b-naked').textContent = money(round2(w * SHARE.naked));
+    document.getElementById('b-total').textContent = money(round2(w * SHARE.total));
+
+    document.getElementById('a-order').textContent = money(round2(f * SHARE.order));
+    document.getElementById('a-naked').textContent = money(round2(f * SHARE.naked));
+    document.getElementById('a-total').textContent = money(round2(f * SHARE.total));
+  }
+
+  wallet.addEventListener('input', render);
+  fixed.addEventListener('input', render);
+  render();
+})();
+</script>
+</body>
+</html>
