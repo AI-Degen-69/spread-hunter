@@ -160,12 +160,18 @@ def test_sub_cent_drift_is_still_refused_at_the_widened_bar():
 
 
 def test_evaluate_admits_a_normal_swing_at_production_bars():
-    # End to end with the production velocity bars (enabled, 1.0c): a 6c
-    # swing on real notional is admitted, not gated as flat.
+    # End to end with the production velocity bars, read from the module
+    # rather than a literal: a tape swinging 1.5c on real notional is admitted
+    # at the shipped 1.0c bar. The band matters -- a 1.5c range sits ABOVE the
+    # shipped bar and BELOW the former 2.0c one, so this test fails if the
+    # default ever climbs back to 2.0c, which a 6c tape would have hidden.
     import time as _time
+
+    from scripts import filter_markets as fm
+
     t_now = _time.time()
     session = _TapeSession(
-        [_trade(t_now - 60 - 60 * i, 0.52 + 0.01 * (i % 7), 50.0)
+        [_trade(t_now - 60 - 60 * i, 0.52 + 0.0025 * (i % 7), 50.0)
          for i in range(10)]
     )
     m = {
@@ -178,7 +184,8 @@ def test_evaluate_admits_a_normal_swing_at_production_bars():
     }
     row = evaluate(
         session, rate=10.0, m=m, source="spread",
-        min_trades=0, max_last_trade_sec=None, min_range_cents=1.0,
+        min_trades=0, max_last_trade_sec=None,
+        min_range_cents=fm.MIN_RANGE_CENTS,
         velocity_gate_enabled=True,
     )
     assert "flat range" not in row.get("reject_reason", "")
