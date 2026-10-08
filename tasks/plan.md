@@ -143,3 +143,46 @@ Branch: i419/trader-loop-hold-a-resting-order-and-never-requote | Issue: #419
 - Helper skill: `incremental-implementation`.
 - Depends on: T2.
 - Verify: `python -m pytest -q tests/test_trader_loop.py tests/test_plan_orders_asymmetric_hold.py tests/test_plan_orders_mid_hold.py` — all green.
+
+---
+
+# Plan — #398: Unify or justify the two maker-queue bars
+
+Branch: i398/unify-or-justify-the-two-maker-queue-bars | Issue: #398
+
+- Tier: **Small** — one docs record + comment cross-refs in 2 config files + pins in 2 existing test files; no behavior change.
+- Task type: **Docs** — decision record + inline cross-refs (test pins assert existing behavior).
+- Stack: Python, pytest; no new dependency.
+- CodeRabbit plan: adopted as scaffolding, merged into 3 tasks (keep-two-bars default, per-layer record, bidirectional cross-refs). Rejected the "ready consolidation branch" as default scope — money lever, operator opt-in only.
+- Open questions resolved from code: keep separate (ranker bar inert via `resolve_queue_bar → None`; gate live-but-record-only); consolidation stays an operator decision.
+- Improvement proposal (adopted): bidirectional cross-refs with exact names + defaults + moments (gate comment already names the ranker bar; ranker comment never names the gate back).
+- Safety: do not open or rewrite `data/orders.db`; tests use temporary DBs. No live quoting, Trader loop, or dashboard START.
+
+## Locked behavior (concise spec)
+
+- Decision: **two bars stay**, one shared vocabulary. Ranker: `select_max_queue_minutes = 15.0`, `enforce_max_queue_minutes = False`, selection time, inert while unenforced. Gate: `max_queue_clear_minutes = 60.0`, `enforce_queue_clear_gate = False`, `queue_flow_window_sec = 1800.0`, placement time on the actual bid. Shared arithmetic: `queue_minutes_at` + `maker_queue_allowed` (`max ≤ 0` disables).
+- Out of scope: retuning either value, `decide_quotes`/pricing, shadow seam, other ranker thresholds, flipping either `enforce_*` flag.
+
+### T1 [ ] — Decision record `docs/issues/398-maker-queue-bars.md` [Docs] (S)
+
+- Target files: `docs/issues/398-maker-queue-bars.md` (new, in the `384-place-and-wait.md` shape).
+- Build: per layer the setting name, default, measurement moment, and the reason the two moments keep different bars; shared arithmetic; no retune, no enforce flip, consolidation deferred to operator.
+- Helper skill: `documentation-and-adrs`.
+- Depends on: nothing.
+- Verify: read the record — each layer lists setting, default, moment, keep-separate reason.
+
+### T2 [ ] — Bidirectional cross-ref comments in both configs [Docs] (S)
+
+- Target files: `scoring/config.py` (ranker bar), `core_brain/config.py` (gate).
+- Build: ranker comment names the gate (setting, default, moment); gate comment names the ranker bar back. No value changes.
+- Helper skill: `documentation-and-adrs`.
+- Depends on: T1 (wording follows the record).
+- Verify: each bar's comment names the other; `git diff` shows comments only.
+
+### T3 [ ] — Independence pin in the existing suites [Docs] (S)
+
+- Target files: `tests/test_queue_clear_gate.py` (or `tests/test_maker_queue_bar.py`).
+- Build: one test asserting the bars are independently configured and both ship record-only — fails if a future consolidation couples them silently.
+- Helper skill: `documentation-and-adrs`.
+- Depends on: T1.
+- Verify: `python -m pytest -q tests/test_maker_queue_bar.py tests/test_queue_clear_gate.py` — all green.
