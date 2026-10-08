@@ -490,7 +490,7 @@ def test_the_universe_file_records_rejections_and_discovery(tmp_path,
     monkeypatch.setattr(fm, "RUN", tmp_path)
     rows = [
         {"eligible": False,
-         "reject_reason": "no movement: $0 traded in last 30m under $500 "
+         "reject_reason": "no movement: $0 traded in last 30m under $200 "
                           "(flat)",
          "cid": "0xr", "title": "Rejected", "slug": "rej",
          "movement_usd": 0.0, "volume_24h": 300000.0, "source": "spread"},

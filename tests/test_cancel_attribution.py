@@ -429,6 +429,82 @@ def test_a_market_leaving_the_universe_is_its_own_reason():
     assert handed[0]["cancel_reason"] == CANCEL_MARKET_DROPPED
 
 
+def test_a_dropped_market_holding_an_escalated_hedge_keeps_it_resting():
+    """#416 — cancelling the protection strands the filled leg as the single
+    buy nobody decided to take. The shield reads the registry lifecycle
+    state, skips the `open` cancels, and says so in a WARNED row.
+    """
+    from types import SimpleNamespace
+
+    from core_brain.trader_loop import _cancel_dropped_markets
+
+    resting = SimpleNamespace(
+        id="o1", order_id="v1", condition_id="0xgone", token_id=UP,
+        price=0.50, side="BUY", status="open", pair_id="pair-1")
+    handed: list = []
+    emitted: list = []
+
+    def _cancel_fn(_client, _registry, orders):
+        handed.extend(orders)
+        return len(orders)
+
+    def _lifecycle_state(pair_id):
+        assert pair_id == "pair-1"
+        return SimpleNamespace(pair_id="pair-1", condition_id="0xgone",
+                               state="ESCALATED_HEDGE")
+
+    seam = SimpleNamespace(
+        client=object(),
+        registry=SimpleNamespace(
+            get_active_orders=lambda: [resting],
+            get_lifecycle_state=_lifecycle_state),
+        cancel_fn=_cancel_fn,
+        resting_order_ids_fn=None,
+        db_path=None,
+    )
+
+    out = _cancel_dropped_markets(
+        seam, current_markets=[],
+        emit_fn=lambda *a, **k: emitted.append(k))
+
+    assert handed == []
+    assert [r.status for r in out] == ["WARNED"]
+    assert out[0].why == "dropped_market_hedge_protected"
+    assert any(e.get("reason") == "dropped_market_hedge_protected"
+               for e in emitted)
+
+
+def test_a_dropped_market_without_lifecycle_protection_still_cancels():
+    """#416 — the shield is scoped: a DUAL_RESTING pair keeps the shipped
+    dropped-market cleanup exactly as before.
+    """
+    from types import SimpleNamespace
+
+    from core_brain.trader_loop import CANCEL_MARKET_DROPPED, _cancel_dropped_markets
+
+    resting = SimpleNamespace(
+        id="o1", order_id="v1", condition_id="0xgone", token_id=UP,
+        price=0.50, side="BUY", status="open", pair_id="pair-1")
+    handed: list = []
+
+    seam = SimpleNamespace(
+        client=object(),
+        registry=SimpleNamespace(
+            get_active_orders=lambda: [resting],
+            get_lifecycle_state=lambda _pid: SimpleNamespace(
+                pair_id="pair-1", condition_id="0xgone",
+                state="DUAL_RESTING")),
+        cancel_fn=lambda _c, _r, orders: handed.extend(orders) or len(orders),
+        resting_order_ids_fn=None,
+        db_path=None,
+    )
+
+    _cancel_dropped_markets(seam, current_markets=[])
+
+    assert [o["id"] for o in handed] == ["o1"]
+    assert handed[0]["cancel_reason"] == CANCEL_MARKET_DROPPED
+
+
 def test_a_held_order_does_not_get_a_replacement_posted_beside_it():
     """A held order rests OUTSIDE the tolerance by definition.
 

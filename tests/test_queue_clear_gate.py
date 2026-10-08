@@ -465,6 +465,50 @@ class TestAdmitPlacements:
         assert "queue gate tape read failed" in caplog.text
         assert "OSError" in caplog.text
 
+    def test_an_escalated_hedge_bypasses_the_enforced_gate_without_a_tape_read(self):
+        # #416 — refusing the hedge placement would strand the filled leg as
+        # the single buy nobody decided to take. The bypass is verified
+        # against the registry lifecycle state, never an inferred flag, and
+        # the tape is not read: a measurement that cannot change the answer
+        # is a wasted venue round-trip.
+        port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        down = _intent(side="DOWN", token="tok-dn", price=0.45)
+        admitted, why = _admit_placements(
+            [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
+            _gate_cfg(enforce_queue_clear_gate=True),
+            lifecycle_state="ESCALATED_HEDGE")
+        assert admitted == [up, down]
+        assert "bypassed" in why
+        assert "ESCALATED_HEDGE" in why
+        assert port.calls == []
+
+    def test_a_hard_stop_hedge_bypasses_the_enforced_gate(self):
+        port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
+        up = _intent(side="UP", token="tok-up", price=0.47)
+        admitted, why = _admit_placements(
+            [up], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
+            _gate_cfg(enforce_queue_clear_gate=True),
+            lifecycle_state="HARD_STOP")
+        assert admitted == [up]
+        assert "bypassed" in why
+        assert "HARD_STOP" in why
+        assert port.calls == []
+
+    def test_dual_resting_and_patient_states_get_no_bypass(self):
+        # #416 — the bypass is scoped to the active-hedge states only.
+        # Dual-resting (None) and PATIENT_WAIT keep full gate behavior.
+        for state in (None, "DUAL_RESTING", "PATIENT_WAIT", "PAIR_LOCKED"):
+            port = _CountingFlow(_sell_flow({"tok-up": {0.47: 2000.0}}))
+            up = _intent(side="UP", token="tok-up", price=0.47)
+            down = _intent(side="DOWN", token="tok-dn", price=0.45)
+            admitted, why = _admit_placements(
+                [up, down], _FakeMarket(), _DEEP_UP, _CLEAR_DOWN, port,
+                _gate_cfg(enforce_queue_clear_gate=True),
+                lifecycle_state=state)
+            assert admitted == [], state
+            assert "bypassed" not in why, state
+
     def test_a_missing_port_leaves_every_caller_as_it_was(self):
         # The shadow seam and every existing test build a seam with no flow port.
         up = _intent(side="UP", token="tok-up", price=0.47)

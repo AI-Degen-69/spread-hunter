@@ -489,15 +489,28 @@ class MakerConfig:
     # the recorded `movement_usd` column. The unified universe now pays one
     # tape read per volume-qualified market BEFORE its two book fetches, so a
     # stale market costs one request instead of three, and a recorded metric
-    # nobody acted on became a real gate. $500/30min is deliberately lenient
-    # against the $125k/24h volume bar -- whose markets average ~$2.6k per 30
-    # minutes -- so it refuses multi-hour stalls, not quiet-but-alive books.
+    # nobody acted on became a real gate. $200/30min (#416; was $500) stays
+    # far below the $125k/24h volume bar -- whose markets average ~$2.6k per
+    # 30 minutes -- so it refuses multi-hour stalls, not quiet-but-alive or
+    # normally-swinging sports books.
     # Unmeasured tape stays fail-open: `movement_reject` passes None, because
     # a failed HTTP call must not empty the universe on one bad minute.
     select_movement_window_sec: float = 1800.0
-    select_min_movement_usd: float = 500.0
+    # WIDENED 2026-10-08 (#416). $500/30m refused ordinary live-sports
+    # point swings: a 5c-8c tennis move on modest size prints roughly
+    # $100-300 of notional per 30m, so an active match read as a stall.
+    # $200 keeps a wide margin above a true stall ($0 printed for hours)
+    # while admitting a normally-trading sports book. The range gate below
+    # is ANDed with this one, so a one-tick flicker still needs real
+    # notional to pass. Operator-tunable without code via
+    # HUNTER_MIN_MOVEMENT_USD.
+    select_min_movement_usd: float = 200.0
     select_velocity_gate_enabled: bool = True
-    select_min_range_cents: float = 2.0
+    # WIDENED 2026-10-08 (#416). 2.0c refused books whose 30m range was a
+    # live but narrow 1c+ drift around an ordinary sports swing. 1.0c still
+    # refuses a truly flat tape (0.00c) while the movement bar above remains
+    # the real proof of activity. Operator-tunable via HUNTER_MIN_RANGE_CENTS.
+    select_min_range_cents: float = 1.0
     select_max_book_spread: float = 0.06
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
