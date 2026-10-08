@@ -55,12 +55,97 @@ def test_a_fill_never_exceeds_what_is_left_of_the_order():
     assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 10.0)]
 
 
-def test_volume_at_another_price_or_token_credits_nothing():
+def test_volume_at_another_token_credits_nothing():
     orders = [_order()]
-    fills, _ = credit_fills(orders, {"tok-up": {0.46: 999.0},
-                                     "tok-dn": {0.47: 999.0}})
+    fills, _ = credit_fills(orders, {"tok-dn": {0.46: 999.0, 0.47: 999.0}})
 
     assert fills == []
+
+
+def test_volume_above_our_price_credits_nothing():
+    orders = [_order()]
+    fills, _ = credit_fills(orders, {"tok-up": {0.48: 999.0}})
+
+    assert fills == []
+
+
+def test_sell_print_below_our_bid_clears_queue_and_fills_remainder():
+    orders = [_order(queue_ahead=500.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46: 1.0}})
+
+    assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 100.0)]
+    assert queues["ord-1"] == 0.0
+
+
+def test_trade_through_fills_only_what_is_left():
+    orders = [_order(filled=30.0, queue_ahead=500.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46: 1.0}})
+
+    assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 70.0)]
+    assert queues["ord-1"] == 0.0
+
+
+def test_trade_through_on_a_full_order_credits_no_fill_but_clears_queue():
+    orders = [_order(filled=100.0, queue_ahead=50.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46: 1.0}})
+
+    assert fills == []
+    assert queues["ord-1"] == 0.0
+
+
+def test_one_lower_print_fills_every_order_above_it():
+    """The lower bucket is evidence the level cleared, not volume to share."""
+    orders = [_order(local_id="ord-1", queue_ahead=200.0),
+              _order(local_id="ord-2", queue_ahead=200.0)]
+    fills, _ = credit_fills(orders, {"tok-up": {0.46: 1.0}})
+
+    assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 100.0),
+                     ShadowFill("ord-2", "tok-up", 0.47, 100.0)]
+
+
+def test_lower_print_fills_only_orders_above_it():
+    orders = [_order(local_id="ord-1", queue_ahead=200.0),
+              _order(local_id="ord-2", price=0.45, queue_ahead=10.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46: 1.0}})
+
+    assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 100.0)]
+    assert queues["ord-2"] == 10.0
+
+
+def test_sweep_evidence_survives_regardless_of_order_sequence():
+    """Evidence is snapshotted: an order resting at the print price must not
+    consume the proof a higher order needs, whichever comes first."""
+    orders = [_order(local_id="ord-lo", price=0.46),
+              _order(local_id="ord-hi", price=0.47, queue_ahead=200.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46: 1.0}})
+
+    assert fills == [ShadowFill("ord-lo", "tok-up", 0.46, 1.0),
+                     ShadowFill("ord-hi", "tok-up", 0.47, 100.0)]
+    assert queues["ord-hi"] == 0.0
+
+
+def test_zero_volume_below_our_price_is_not_a_sweep():
+    orders = [_order(queue_ahead=60.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46: 0.0, 0.47: 100.0}})
+
+    assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 40.0)]
+    assert queues["ord-1"] == 0.0
+
+
+def test_non_finite_volume_below_our_price_is_not_a_sweep():
+    orders = [_order(queue_ahead=60.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46: float("inf")}})
+
+    assert fills == []
+    assert queues["ord-1"] == 60.0
+
+
+def test_price_that_rounds_to_our_level_uses_the_exact_price_rule():
+    orders = [_order(queue_ahead=60.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46999: 25.0}})
+
+    assert fills == []
+    assert queues["ord-1"] == 35.0
 
 
 def test_queue_multiple_is_queue_over_size():
