@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -859,8 +860,9 @@ def run_shadow(
     deadline rotation. The guard runs before anything is constructed, so even a wrong `db_path`
     fails before a table exists. Config loads through the same
     `core_brain.config.load()` the live loop uses -- same gates, same caps --
-    with the live bankroll read attempted and config bankroll kept on failure,
-    exactly as `trader_loop.main` does.
+    but the bankroll is always the fixed rehearsal value, never the live
+    wallet: an explicit `starting_bankroll_usd` pins it, otherwise the config
+    default (or its env override) stands.
 
     `fetch_books` and `flow_fn` are the two LIVE reads the seam will not choose
     for itself: `run_shadow` passes both straight through, and the entrypoint is
@@ -912,28 +914,22 @@ def run_shadow(
 
     if cfg is None:
         cfg = shadow_cfg()
+        # Every rehearsal starts from the same fixed bankroll: the config
+        # default (or its env override). The live wallet is never read here.
+        # `funder` stays keyword-compatible but no longer funds the bankroll.
 
-        # Same open question, same answer as the live loop: attempt the real
-        # balance read (it needs only the public funder address), fall back to the
-        # configured bankroll on any failure.
-        maker = funder or os.environ.get("POLY_FUNDER")
-        if maker and paired_depth_arm is None and paired_admission_arm is None:
-            try:
-                from core_brain.account import fetch_live_balance
-                live_bal = fetch_live_balance(maker)
-                if live_bal is not None and live_bal > 0:
-                    cfg = dc_replace(cfg, bankroll_usd=live_bal)
-            except Exception as e:  # noqa: BLE001 - degrade, do not stop
-                log.warning("live balance read failed, using config bankroll: %s", e)
-
-    if paired_depth_arm is not None:
-        if starting_bankroll_usd is None or starting_bankroll_usd <= 0:
-            raise ValueError("paired starting bankroll must be positive")
+    bankroll_source = "config"
+    if starting_bankroll_usd is not None:
+        if not math.isfinite(starting_bankroll_usd) or starting_bankroll_usd <= 0:
+            raise ValueError(
+                "starting bankroll must be finite and positive, "
+                f"got: {starting_bankroll_usd}")
         cfg = dc_replace(cfg, bankroll_usd=float(starting_bankroll_usd))
-    if paired_admission_arm is not None:
-        if starting_bankroll_usd is None or starting_bankroll_usd <= 0:
-            raise ValueError("paired starting bankroll must be positive")
-        cfg = dc_replace(cfg, bankroll_usd=float(starting_bankroll_usd))
+        bankroll_source = "explicit override"
+    elif (os.environ.get("SPREAD_HUNTER_BANKROLL") or "").strip() or \
+            (os.environ.get("HUNTER_BANKROLL") or "").strip():
+        bankroll_source = "environment"
+    log.info("starting bankroll $%.2f (%s)", cfg.bankroll_usd, bankroll_source)
 
     # One line that retires "what did this rehearsal actually run under?".
     # The two offset knobs are env-overridable per run, and recovering what a
@@ -1428,11 +1424,13 @@ def _parse_args(argv: Optional[list[str]] = None):
                     help="read this arm from --markets-path as an atomic paired-admission bundle")
     ap.add_argument("--paired-depth-cutoff-usd", type=float, default=None,
                     help="expected cutoff in this paired bundle (must match its arm metadata)")
-    ap.add_argument("--paired-starting-bankroll-usd", type=float, default=100.0,
-                    help="equal fixed bankroll for paired shadow arms (default: $100)")
+    ap.add_argument("--starting-bankroll-usd", "--paired-starting-bankroll-usd",
+                    type=float, default=None,
+                    help="fixed starting bankroll for this rehearsal "
+                         "(default: config bankroll ($100) or SPREAD_HUNTER_BANKROLL; "
+                         "paired arms default to $100)")
     ap.add_argument("--funder", default=None,
-                    help="funder address for the live balance read "
-                         "(default: POLY_FUNDER)")
+                    help="kept for compatibility; does not set the shadow bankroll")
     ap.add_argument("--dash-port", type=int, default=None,
                     help="metadata port of the dashboard monitoring this shadow run")
     return ap.parse_args(argv)
@@ -1511,6 +1509,14 @@ def main(
         a.markets_path if a.markets_path is not None else "default",
         revision_label(code_revision_record))
 
+    if a.starting_bankroll_usd is not None:
+        starting_bankroll = a.starting_bankroll_usd
+    elif a.paired_depth_arm is not None or a.paired_admission_arm is not None:
+        from core_brain.config import MakerConfig
+        starting_bankroll = MakerConfig.__dataclass_fields__["bankroll_usd"].default
+    else:
+        starting_bankroll = None
+
     result = run_shadow(
         minutes=a.minutes,
         db_path=db,
@@ -1536,10 +1542,7 @@ def main(
         paired_depth_arm=a.paired_depth_arm,
         paired_depth_cutoff_usd=a.paired_depth_cutoff_usd,
         paired_admission_arm=a.paired_admission_arm,
-        starting_bankroll_usd=(a.paired_starting_bankroll_usd
-                               if (a.paired_depth_arm is not None
-                                   or a.paired_admission_arm is not None)
-                               else None),
+        starting_bankroll_usd=starting_bankroll,
         dash_port=a.dash_port,
         code_revision=code_revision_record,
     )
