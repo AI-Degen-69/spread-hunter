@@ -32,7 +32,7 @@ Branch: i419/trader-loop-hold-a-resting-order-and-never-requote | Issue: #419
 
 ## Tasks
 
-### T1 [ ] — RED+GREEN: mid-hold band on the missing-intent branch [Backend/Logic] (M)
+### T1 [x] — RED+GREEN: mid-hold band on the missing-intent branch [Backend/Logic] (M)
 
 - Target files: `core_brain/trader_loop.py`, `tests/test_plan_orders_mid_hold.py` (new)
 - Build: add `MID_HOLD_BAND = 0.02` with a one-line rule comment; add keyword-only `token_mids=None` to `plan_orders`; add a helper holding iff the token has a mid and `mid <= price + MID_HOLD_BAND + price_eps`. In the no-intent branch keep this order: transient-refusal hold → terminal-refusal cancel (incl. hard stop) → in-band hold (no `CANCEL_NOT_QUOTED`, token joins `held_tokens`) → `not_quoted` cancel. Add the distinct grace-expiry `VisitOutcome` member at the `_visit_one` assignment (`trader_loop.py:1759-1762`) and thread it so grace expiry holds in band while terminal refusals cancel. New test file in the style of `test_plan_orders_asymmetric_hold.py` (UP order at 0.48): equality mid 0.50 holds (empty cancels, no UP submit, no UP `not_quoted`); in-band 0.46 holds; out-of-band 0.501 cancels `not_quoted`; missing mid cancels; `token_mids=None` cancels; terminal refusal at 0.50 cancels; grace expiry at 0.50 holds with nothing submitted; drifted intent (UP intent at 0.40, mid 0.46) neither cancels nor submits.
