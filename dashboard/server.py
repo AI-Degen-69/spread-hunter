@@ -1551,17 +1551,26 @@ def _save_starting_account_value(val: float) -> None:
 
 
 def _capture_starting_capital() -> float | None:
-    """Snapshot the real account equity from the venue.
+    """Snapshot the real account equity from the venue -- LIVE stores only.
 
     Returns the venue-reported account_value_usd, or None if the venue is
     unreachable. Updates processes.json with starting_account_value if not set.
     Never raises -- a failed balance read at start time must not block the
     bot or dashboard from launching.
+
+    A SHADOW store is refused outright (#422): the venue read writes an account
+    mark into the rehearsal's isolated database and reports real capital, which
+    contradicts the fixed starting bankroll a rehearsal runs under. UNKNOWN
+    fails closed the same way -- no sweep we cannot prove belongs to the live
+    page. `start_bot` and the reset flow call this for the live stack, so their
+    behaviour is unchanged.
     """
+    db_path = resolve_db_path(_ACTIVE_DB_OVERRIDE)
+    if resolve_db_identity(db_path)["mode"] != "LIVE":
+        return None
     try:
         from core_brain.order_manager import account_sweep
-        db_path = str(resolve_db_path(_ACTIVE_DB_OVERRIDE))
-        result = account_sweep(quiet=True, db_path=db_path)
+        result = account_sweep(quiet=True, db_path=str(db_path))
         if isinstance(result, dict) and result.get("account_value_usd") is not None:
             val = float(result["account_value_usd"])
             _save_starting_account_value(val)

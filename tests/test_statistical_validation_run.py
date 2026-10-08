@@ -386,6 +386,47 @@ class TestEndToEndHarness:
         content = ring_file.read_text(encoding="utf-8")
         assert "quoting" in content
 
+    def test_a_rehearsal_never_sizes_from_the_live_wallet(
+            self, tmp_path, monkeypatch):
+        """#422: this harness writes to a shadow store, so the live wallet must
+        not set its bankroll -- every rehearsal starts at the config value.
+
+        The harness used to read the venue balance through the funder address
+        and size the run from it, which made two rehearsals incomparable and
+        contradicted the fixed starting bankroll the loop itself applies.
+        """
+        from core_brain import account
+
+        db = tmp_path / "shadow_stat_bankroll.db"
+        report_dir = tmp_path / "stat_bankroll_report"
+        read_funder: list = []
+
+        def spy_fetch_live_balance(maker=None):
+            read_funder.append(maker)
+            return 5000.0
+
+        monkeypatch.setattr(account, "fetch_live_balance", spy_fetch_live_balance)
+        # Without the funder the old code skipped the read, so set it: this is
+        # the exact configuration that made the bug reachable.
+        monkeypatch.setenv("POLY_FUNDER", "0xabc")
+
+        now = [1000.0]
+        main(
+            ["--target-closes", "1", "--max-hours", "0.001",
+             "--db", str(db), "--report", str(report_dir)],
+            markets_fn=lambda max_markets=None: [FakeMarket("0xabc")],
+            client_fn=lambda: object(),
+            decide_fn=lambda cfg, up, dn, inv, t_rem, wf: ([], "declined"),
+            fetch_books=_books,
+            clock=lambda: now[0],
+            sleep=lambda seconds: now.__setitem__(0, now[0] + seconds),
+        )
+
+        assert read_funder == [], "the rehearsal sized itself from the live wallet"
+        snapshot = json.loads(
+            (report_dir / "config_snapshot.json").read_text(encoding="utf-8"))
+        assert snapshot["bankroll_usd"] == 100.0
+
     def test_underpowered_run_exits_inconclusive_without_go_verdict(self, tmp_path, caplog):
         """Acceptance Criteria: run with target-closes 999 exits INCONCLUSIVE with underpowered reason."""
         db = tmp_path / "shadow_stat_underpowered.db"

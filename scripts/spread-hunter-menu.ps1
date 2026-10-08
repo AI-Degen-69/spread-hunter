@@ -1354,7 +1354,10 @@ function Resume-ShadowRun {
     if (Test-Path $runBeatPath) {
         try { $beatBefore = [double](Get-Content $runBeatPath -Raw | ConvertFrom-Json).heartbeat_ts } catch { $beatBefore = $null }
     }
-    $shadowArgs = @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId)
+    # A rehearsal starts at the fixed $100 bankroll and says so on the command
+    # line (#422): relying on the process default would let an exported
+    # SPREAD_HUNTER_BANKROLL change what this session rehearsed under.
+    $shadowArgs = @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $script:ShadowRunId, "--starting-bankroll-usd", "100")
     if ($trial) { $shadowArgs += @("--markets-path", $trial.markets_path) }
     $shadowRun = Invoke-WithRehearsalTrialEnv {
         Start-Process -FilePath "python" `
@@ -1653,10 +1656,10 @@ function Start-NewShadowRun {
     Register-StackService -Key "filter" -Process $screener
     Lsh-Ok "Market screener loop running (PID $($screener.Id))."
 
-    Lsh-Step "Starting the rehearsal loop (python -m core_brain.shadow_run --minutes $mins --db $script:ShadowDbPath --run-id $runId)..."
+    Lsh-Step "Starting the rehearsal loop (python -m core_brain.shadow_run --minutes $mins --db $script:ShadowDbPath --run-id $runId --starting-bankroll-usd 100)..."
     $shadowRun = Invoke-WithRehearsalTrialEnv {
         Start-Process -FilePath "python" `
-            -ArgumentList (Format-ProcessArgs @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $runId)) `
+            -ArgumentList (Format-ProcessArgs @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $runId, "--starting-bankroll-usd", "100")) `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $RunDir "shadow_run-$runId.out.log") `
             -RedirectStandardError (Join-Path $RunDir "shadow_run-$runId.err.log")
