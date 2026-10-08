@@ -303,6 +303,14 @@ def plan_orders(
     Orders on tokens we no longer quote are cancelled. An intent with no kept
     order near its price is submitted.
 
+    MID HOLD (#419). The two rules above gain one exception: while a token's
+    mid sits at or below its resting order's price plus `MID_HOLD_BAND`
+    (0.02, inclusive), the order is held -- no `not_quoted` cancel, no
+    `lifecycle_replace`, no duplicate submit. Terminal refusals, hard stop,
+    `lifecycle_cancel`, and explicit cancel sets still cancel in band, and
+    a missing, one-sided, or crossed book falls back to the rules above.
+    `token_mids` carries this cycle's mids; `None` keeps the old behavior.
+
     TWO INDEPENDENT REASONS TO KEEP AN ORDER, and the tolerance is the larger
     of them so neither can silently disable the other:
 

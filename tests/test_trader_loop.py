@@ -1710,6 +1710,39 @@ class TestMidHoldVisit:
         assert [o["order_id"] for o in captured["cancel"]] == ["o-up"]
 
 
+class TestCycleMids:
+    """#419: the mid feed leaves out every token without a tradable book."""
+
+    @staticmethod
+    def _mids(up, dn):
+        from core_brain.trader_loop import _cycle_mids
+        return _cycle_mids(up, dn)
+
+    @staticmethod
+    def _book(token, bid, ask):
+        return {"token_id": token, "best_bid": bid, "best_ask": ask}
+
+    def test_two_sided_books_give_both_mids(self):
+        mids = self._mids(self._book("tok-up", 0.45, 0.47),
+                          self._book("tok-dn", 0.50, 0.52))
+        assert mids["tok-up"] == pytest.approx(0.46)
+        assert mids["tok-dn"] == pytest.approx(0.51)
+
+    def test_crossed_book_leaves_the_token_out(self):
+        mids = self._mids(self._book("tok-up", 0.50, 0.48),
+                          self._book("tok-dn", 0.50, 0.52))
+        assert mids == {"tok-dn": 0.51}
+
+    def test_one_sided_or_missing_book_leaves_the_token_out(self):
+        mids = self._mids(self._book("tok-up", 0.45, None), {})
+        assert mids == {}
+
+    def test_non_numeric_book_leaves_the_token_out(self):
+        mids = self._mids(self._book("tok-up", "bad", 0.47),
+                          self._book("tok-dn", 0.50, 0.52))
+        assert mids == {"tok-dn": 0.51}
+
+
 class TestLifecycleStops:
     """One enumerated stop list (#402 T1): every refusal maps to one code."""
 
