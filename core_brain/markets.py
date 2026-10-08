@@ -59,6 +59,32 @@ class SeriesState:
     evidence_ts: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class TapeWalkReport:
+    name: str
+    status: str
+    pages_read: int
+    rows_read: int
+    qualifying_rows: int
+    accepted_volume: float
+    rejected_rows: dict[str, int]
+    non_qualifying_rows: dict[str, int]
+    first_trade_ts: int | None
+    last_trade_ts: int | None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class TradeTapeReport:
+    status: str
+    volume_by_token_price: dict[str, dict[float, float]]
+    walks: tuple[TapeWalkReport, ...]
+
+
+class _TapePayloadError(Exception):
+    pass
+
+
 _BO_SUFFIX_RE = re.compile(r"\b[Bb][Oo]\s?(\d{1,2})\b")
 _BEST_OF_TEXT_RE = re.compile(r"best\s+of\s+(\d{1,2})", re.IGNORECASE)
 _PERIOD_GAMES_RE = re.compile(r"^\s*(\d{1,2})\s*/\s*(\d{1,2})\s*$")
@@ -550,77 +576,75 @@ def full_book(clob_host: str, token_id: str) -> dict:
 
 def recent_trades(condition_id: str, seen: set, limit: int = 500,
                   taker_side: str | None = "SELL") -> dict:
+    """Compatibility wrapper returning only normalized qualifying volume."""
+    report = recent_trades_detailed(
+        condition_id, seen, limit=limit, taker_side=taker_side,
+    )
+    return report.volume_by_token_price
+
+
+def recent_trades_detailed(condition_id: str, seen: set, limit: int = 500,
+                           taker_side: str | None = "SELL") -> TradeTapeReport:
     """Volume by (token_id, price) that could fill a RESTING BID since we looked.
 
-    The fill model needs this to tell a level that was TRADED from one that was
-    CANCELLED -- from the book they are identical, and guessing costs an order
-    of magnitude: on recorded books the book-only model reported a 50% fill
-    rate where the tape-confirmed rate was 3%, because every fill it produced
-    came from the "level emptied, credit the whole remainder" branch.
-
-    De-duplicated by trade identity rather than by timestamp window: the API
-    stamps trades to the second while we poll faster than that, so a time-based
-    cursor would double-count or skip. The identity key carries the normalized
-    side, so a BUY-labelled row (mint leg) can never suppress the matching
-    SELL row -- rows the filter rejects still take their own keys, which is
-    what lets the page walk below recognise a fully-read page.
-
-    Two walks per call. Walk 1 pages the taker view (`limit` rows, `offset`
-    pages, at most TRADE_MAX_PAGES) and counts `taker_side` rows exactly as
-    before. Walk 2 pages the full view (`takerOnly=False`) and counts only
-    BUY rows whose trade never appeared in walk 1: those are resting bids the
-    tape filled from the maker side, e.g. the DOWN leg of a mint whose taker
-    row prints UP. Maker SELL rows stay uncounted -- a lifted ask is not queue
-    drain, and under-counting is the conservative direction for a fill model.
-    Rows carry no role field, so walk 2 identifies maker rows by subtracting
-    walk 1's identities. Either walk stops early on a short page, a page with
-    nothing new, or the page bound. Each walk commits its volume and identities
-    only when it finishes: a failed walk keeps nothing of its own pages, so a
-    later poll re-reads them instead of skipping silently -- while walk 1's
-    committed result always survives a walk 2 failure.
-
-    Row-level garbage is skipped, never raised: the parse sits OUTSIDE the
-    fetch try, and before this a single unparseable price crashed out of the
-    loop -- which the sweep's "exceptions propagate" contract turned into a
-    market that silently vanished from every sweep with no status, no err and
-    no event. A skipped trade only under-counts volume at a level, which is
-    the conservative direction for a fill model.
-
-    `taker_side` is the side the AGGRESSOR took, and it defaults to the only
-    side that can reach a resting bid. A resting BUY at $0.42 fills when
-    somebody SELLS at $0.42; a taker who BUYS at $0.42 lifts an ask or mints
-    against the complement leg and leaves our bid where it was. Returning both
-    directions credited the fill model volume it could never touch -- on a live
-    500-trade sample the endpoint returned 84% BUY, so the shadow queue drained
-    roughly six times too fast and every rehearsal fill rate built on it read
-    fast. A row whose side is missing or unreadable is skipped rather than
-    counted: if the endpoint ever drops the field the rehearsal must report no
-    fills instead of inventing them. Pass `taker_side=None` for the whole tape,
-    which is what a recorder measuring market activity wants.
+    The status distinguishes a proven empty tape from malformed, failed, or
+    page-bounded reads. Only a successfully completed walk commits its
+    identities; malformed rows are rejected without suppressing repaired
+    evidence from the maker walk.
     """
     out: dict[str, dict[float, float]] = {}
     wanted = None if taker_side is None else str(taker_side).strip().upper()
-    taker_ids: set = set()  # side-blind identities from walk 1, this call
-    try:
-        staged, walk_out = _walk_tape(condition_id, seen, taker_ids,
-                                      wanted, limit, taker_only=None)
-    except Exception as e:
-        log.debug("tape fetch failed: %s", e)
-        return {}                       # no tape -> caller falls back to books
-    seen.update(staged)
-    _merge_tape_volume(out, walk_out)
+    reports: list[TapeWalkReport] = []
+    taker_ids: set = {
+        marker[1] for marker in seen
+        if (isinstance(marker, tuple) and len(marker) == 2
+            and marker[0] == _TAPE_BLIND_IDENTITY_TAG
+            and isinstance(marker[1], tuple))
+    }
+
+    report, staged, walk_out = _walk_tape(
+        condition_id, seen, taker_ids, wanted, limit, taker_only=None,
+        name="taker",
+    )
+    reports.append(report)
+    if report.status != "unavailable":
+        seen.update(staged)
+        _merge_tape_volume(out, walk_out)
+
     if wanted in (None, "SELL"):
         # Resting-bid settlement (and the whole-tape recorder) only: a
         # taker-BUY request must read taker BUYs, never maker fills.
-        try:
-            staged, walk_out = _walk_tape(condition_id, seen, taker_ids,
-                                              wanted, limit, taker_only=False)
-        except (requests.RequestException, ValueError) as e:
-            log.debug("maker tape fetch failed: %s", e)
-        else:
-            seen.update(staged)
-            _merge_tape_volume(out, walk_out)
-    return out
+        if report.error is None:
+            report, staged, walk_out = _walk_tape(
+                condition_id, seen, taker_ids, wanted, limit,
+                taker_only=False, name="maker",
+            )
+            reports.append(report)
+            if report.status != "unavailable":
+                seen.update(staged)
+                _merge_tape_volume(out, walk_out)
+
+    has_failure = any(w.error is not None for w in reports)
+    has_malformed = any(w.rejected_rows for w in reports)
+    has_truncated = any(w.status == "truncated" for w in reports)
+    has_completed_walk = any(
+        w.status in ("complete", "empty", "partial", "truncated")
+        for w in reports
+    )
+    has_volume = any(by_price for by_price in out.values())
+
+    if (has_failure or has_malformed) and has_completed_walk:
+        status = "partial"
+    elif has_failure or (has_malformed and not has_completed_walk):
+        status = "unavailable"
+    elif has_truncated:
+        status = "truncated"
+    elif has_volume:
+        status = "complete"
+    else:
+        status = "empty"
+
+    return TradeTapeReport(status, out, tuple(reports))
 
 
 # Pages per settlement read. Walk 1 preserves the old single-page shape on a
@@ -633,7 +657,7 @@ TRADE_MAX_OFFSET = 10000
 
 def _row_side(t: dict):
     side = t.get("side")
-    return None if side is None else str(side).strip().upper()
+    return None if not isinstance(side, str) else side.strip().upper()
 
 
 def _merge_tape_volume(out: dict, walk_out: dict) -> None:
@@ -643,69 +667,201 @@ def _merge_tape_volume(out: dict, walk_out: dict) -> None:
             slot[p] = slot.get(p, 0.0) + size
 
 
+def _failure_label(exc: BaseException) -> str:
+    """Return safe failure metadata, excluding exception text and payload."""
+    label = type(exc).__name__
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and 100 <= status_code <= 599:
+        return f"{label} (HTTP {status_code})"
+    return label
+
+
+def _count_reason(counts: dict[str, int], reason: str) -> None:
+    counts[reason] = counts.get(reason, 0) + 1
+
+
+_TAPE_BLIND_IDENTITY_TAG = "markets.tape-blind-identity.v1"
+
+
+def _tape_blind_marker(blind: tuple) -> tuple:
+    """Tag the side-blind identity without colliding with six-part row keys."""
+    return (_TAPE_BLIND_IDENTITY_TAG, blind)
+
+
+def _validate_tape_row(row: object):
+    """Return normalized row data or the first malformed-field reason."""
+    if not isinstance(row, dict):
+        return None, "row"
+    tx = row.get("transactionHash")
+    token = row.get("asset")
+    if not isinstance(tx, str) or not tx.strip():
+        return None, "identity"
+    if not isinstance(token, str) or not token.strip():
+        return None, "token"
+    side = _row_side(row)
+    if side not in ("BUY", "SELL"):
+        return None, "side"
+    raw_ts = row.get("timestamp")
+    if isinstance(raw_ts, bool):
+        return None, "timestamp"
+    try:
+        timestamp_value = float(raw_ts)
+    except (TypeError, ValueError, OverflowError):
+        return None, "timestamp"
+    if (not math.isfinite(timestamp_value) or timestamp_value <= 0
+            or not timestamp_value.is_integer()):
+        return None, "timestamp"
+    raw_price = row.get("price")
+    if isinstance(raw_price, bool):
+        return None, "price"
+    try:
+        price_value = float(raw_price)
+    except (TypeError, ValueError, OverflowError):
+        return None, "price"
+    if not math.isfinite(price_value) or price_value <= 0:
+        return None, "price"
+    raw_size = row.get("size")
+    if isinstance(raw_size, bool):
+        return None, "size"
+    try:
+        size = float(raw_size)
+    except (TypeError, ValueError, OverflowError):
+        return None, "size"
+    if not math.isfinite(size) or size <= 0:
+        return None, "size"
+    tx_id = str(tx)
+    token_id = token
+    blind = (tx_id, token_id, raw_ts, raw_price, raw_size)
+    key = blind + (side,)
+    return (tx_id, token_id, int(timestamp_value), side, blind, key,
+            round(price_value, 4), size), None
+
+
 def _walk_tape(condition_id: str, seen: set, taker_ids: set,
-               wanted, limit: int, taker_only):
-    """One paginated pass over the tape.
+               wanted, limit: int, taker_only, *, name: str = "taker"):
+    """Read one paginated tape view and report its validation and completeness.
 
-    Returns this walk's `(staged_identities, volume)`; the caller commits
-    both into `seen`/`out` only when the walk finishes. A fetch failure
-    raises, discarding the walk's pages so a later poll re-reads them.
-
-    `taker_only=None` is the taker-view baseline walk: every row takes a
-    side-aware staged key, its side-blind identity joins `taker_ids`, and
-    only `wanted`-side rows count. `taker_only=False` is the maker walk: only
-    BUY rows (or every row when `wanted` is None) whose identity walk 1 never
-    carried count -- resting-bid fills the baseline view cannot see.
+    A failed walk returns no staged identities or volume so its rows are
+    eligible for a later poll. `taker_ids` contains validated side-blind
+    identities already committed by the taker-view walk.
     """
     staged: set = set()
-    walk_out: dict = {}
+    walk_out: dict[str, dict[float, float]] = {}
+    pages_read = 0
+    rows_read = 0
+    qualifying_rows = 0
+    accepted_volume = 0.0
+    rejected_rows: dict[str, int] = {}
+    non_qualifying_rows: dict[str, int] = {}
+    timestamps: list[int] = []
     maker_walk = taker_only is not None
+    page_size = int(limit)
+    truncated = False
+    failure: str | None = None
+    valid_rows = 0
+
+    def build_report(status: str) -> TapeWalkReport:
+        return TapeWalkReport(
+            name=name,
+            status=status,
+            pages_read=pages_read,
+            rows_read=rows_read,
+            qualifying_rows=qualifying_rows,
+            accepted_volume=accepted_volume,
+            rejected_rows=dict(rejected_rows),
+            non_qualifying_rows=dict(non_qualifying_rows),
+            first_trade_ts=timestamps[0] if timestamps else None,
+            last_trade_ts=timestamps[-1] if timestamps else None,
+            error=failure,
+        )
+
     for page in range(TRADE_MAX_PAGES):
-        offset = page * int(limit)
+        offset = page * page_size
         if offset >= TRADE_MAX_OFFSET:
             break
         params = {"market": condition_id, "limit": limit, "offset": offset}
         if maker_walk:
             params["takerOnly"] = False
-        r = _SESSION.get(TRADES_API, params=params, timeout=TAPE_TIMEOUT)
-        r.raise_for_status()
-        rows = r.json() or []
+        try:
+            response = _SESSION.get(
+                TRADES_API, params=params, timeout=TAPE_TIMEOUT,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            failure = _failure_label(exc)
+            break
+        try:
+            rows = response.json()
+        except (requests.RequestException, json.JSONDecodeError, ValueError) as exc:
+            failure = _failure_label(exc)
+            break
+        pages_read += 1
         if not isinstance(rows, list):
-            log.debug("tape response is not a list (got %s)",
-                      type(rows).__name__)
-            return staged, walk_out
+            _count_reason(rejected_rows, "payload_not_list")
+            failure = "TapePayloadError"
+            break
+
+        rows_read += len(rows)
         fresh = False
-        for t in rows:
-            if not isinstance(t, dict):
+        for row in rows:
+            parsed, reason = _validate_tape_row(row)
+            if reason is not None:
+                _count_reason(rejected_rows, reason)
                 continue
-            side = _row_side(t)
-            blind = (str(t.get("transactionHash") or ""), str(t.get("asset")),
-                     t.get("timestamp"), t.get("price"), t.get("size"))
-            key = blind + (side,)
+            tx_id, token, timestamp, side, blind, key, price, size = parsed
+            valid_rows += 1
+            timestamps.append(timestamp)
+            if not maker_walk:
+                taker_ids.add(blind)
+                staged.add(_tape_blind_marker(blind))
             if key in seen or key in staged:
+                _count_reason(non_qualifying_rows, "duplicate")
                 continue
             staged.add(key)
             fresh = True
-            if not maker_walk:
-                taker_ids.add(blind)
-                if wanted is not None and side != wanted:
-                    continue
-            else:
+            if maker_walk:
                 if blind in taker_ids:
+                    _count_reason(non_qualifying_rows, "already_in_taker_view")
                     continue
                 if wanted is not None and side != "BUY":
+                    _count_reason(non_qualifying_rows, "side_mismatch")
                     continue
-            tok = str(t.get("asset"))
-            try:
-                p = round(float(t.get("price") or 0), 4)
-                size = float(t.get("size") or 0)
-            except (TypeError, ValueError):
+            elif wanted is not None and side != wanted:
+                _count_reason(non_qualifying_rows, "side_mismatch")
                 continue
-            slot = walk_out.setdefault(tok, {})
-            slot[p] = slot.get(p, 0.0) + size
-        if len(rows) < int(limit) or not fresh:
+            qualifying_rows += 1
+            accepted_volume += size
+            slot = walk_out.setdefault(token, {})
+            slot[price] = slot.get(price, 0.0) + size
+
+        if len(rows) < page_size or not fresh:
             break
-    return staged, walk_out
+        if (page == TRADE_MAX_PAGES - 1
+                or offset + page_size >= TRADE_MAX_OFFSET):
+            truncated = True
+            break
+
+    if failure is not None:
+        # Counts describe the failed attempt, but none of its partial result is
+        # eligible for settlement or deduplication.
+        staged.clear()
+        walk_out.clear()
+        qualifying_rows = 0
+        accepted_volume = 0.0
+        timestamps.clear()
+        status = "unavailable"
+    elif truncated and not (rejected_rows and valid_rows):
+        status = "truncated"
+    elif rejected_rows and valid_rows:
+        status = "partial"
+    elif rejected_rows:
+        status = "unavailable"
+    elif qualifying_rows:
+        status = "complete"
+    else:
+        status = "empty"
+    return build_report(status), staged, walk_out
 
 
 class SellFlow(NamedTuple):

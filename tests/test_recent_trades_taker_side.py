@@ -14,7 +14,10 @@ fill exists only when the venue says so.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
+from requests import RequestException
 
 from core_brain import markets
 
@@ -327,3 +330,198 @@ def test_taker_buy_mode_never_opens_the_maker_walk(paged_tape):
     # Assert
     assert out == {"tok": {0.26: 93.0}}
     assert not any(p.get("takerOnly") is False for p in paged_tape.calls)
+
+
+def test_detailed_tape_report_preserves_qualifying_normalized_volume(paged_tape):
+    taker_sell = _trade("SELL", 0.26004, 3.0, "0xtaker")
+    maker_buy = _trade("BUY", 0.26004, 4.0, "0xmaker")
+    paged_tape({
+        0: [_trade("BUY", 0.26, 100.0, "0xother"), taker_sell],
+        (0, False): [dict(taker_sell), maker_buy],
+    })
+
+    report = markets.recent_trades_detailed("0xcond", set())
+
+    assert report.status == "complete"
+    assert report.volume_by_token_price == {"tok": {0.26: 7.0}}
+    assert [walk.status for walk in report.walks] == ["complete", "complete"]
+    assert [walk.accepted_volume for walk in report.walks] == [3.0, 4.0]
+    assert [walk.qualifying_rows for walk in report.walks] == [1, 1]
+    assert report.walks[0].non_qualifying_rows == {"side_mismatch": 1}
+    assert report.walks[1].non_qualifying_rows == {"duplicate": 1}
+
+
+def test_detailed_tape_report_distinguishes_empty_from_unavailable(paged_tape):
+    paged_tape({0: [], (0, False): []})
+
+    empty = markets.recent_trades_detailed("0xcond", set())
+
+    assert empty.status == "empty"
+    assert empty.volume_by_token_price == {}
+    assert [walk.status for walk in empty.walks] == ["empty", "empty"]
+
+    paged_tape({0: RequestException("secret venue URL and payload")})
+    unavailable = markets.recent_trades_detailed("0xcond", set())
+
+    assert unavailable.status == "unavailable"
+    assert unavailable.volume_by_token_price == {}
+    assert unavailable.walks[0].error == "RequestException"
+    assert "secret" not in unavailable.walks[0].error
+
+
+def test_detailed_tape_partial_keeps_taker_volume_when_maker_walk_fails(
+        paged_tape):
+    paged_tape({
+        0: [_trade("SELL", 0.26, 7.0, "0xtaker")],
+        (0, False): RequestException("sensitive request details"),
+    })
+
+    report = markets.recent_trades_detailed("0xcond", set())
+
+    assert report.status == "partial"
+    assert report.volume_by_token_price == {"tok": {0.26: 7.0}}
+    assert [walk.status for walk in report.walks] == ["complete", "unavailable"]
+    assert report.walks[1].error == "RequestException"
+
+
+def test_maker_retry_does_not_recredit_taker_trade_seen_on_prior_poll(
+        paged_tape):
+    taker_print = _trade("SELL", 0.26, 7.0, "0xshared")
+    maker_row = _trade("BUY", 0.26, 7.0, "0xshared")
+    seen = set()
+    paged_tape({
+        0: [taker_print],
+        (0, False): RequestException("maker view unavailable"),
+    })
+
+    first = markets.recent_trades_detailed("0xcond", seen)
+
+    assert first.status == "partial"
+    assert first.volume_by_token_price == {"tok": {0.26: 7.0}}
+
+    paged_tape({0: [dict(taker_print)], (0, False): [maker_row]})
+
+    second = markets.recent_trades_detailed("0xcond", seen)
+
+    assert second.volume_by_token_price == {}
+    assert second.walks[1].non_qualifying_rows == {
+        "already_in_taker_view": 1,
+    }
+
+
+def test_detailed_tape_malformed_rows_are_counted_without_volume(paged_tape):
+    missing_side = _trade("SELL", 0.26, 5.0, "0xmissing")
+    missing_side.pop("side")
+    nonfinite_price = _trade("SELL", float("nan"), 9.0, "0xnan")
+    missing_token = _trade("SELL", 0.26, 1.0, "0xtoken")
+    missing_token["asset"] = None
+    bad_timestamp = _trade("SELL", 0.26, 1.0, "0xtimestamp")
+    bad_timestamp["timestamp"] = "not-a-timestamp"
+    bad_size = _trade("SELL", 0.26, 0.0, "0xsize")
+    bad_identity = _trade("SELL", 0.26, 1.0, "")
+    paged_tape({0: [
+        None, bad_identity, missing_token, missing_side, bad_timestamp,
+        nonfinite_price, bad_size,
+    ]})
+
+    report = markets.recent_trades_detailed(
+        "0xcond", set(), taker_side="BUY")
+
+    assert report.status == "unavailable"
+    assert report.volume_by_token_price == {}
+    assert report.walks[0].rejected_rows == {
+        "row": 1, "identity": 1, "token": 1, "side": 1,
+        "timestamp": 1, "price": 1, "size": 1,
+    }
+    assert report.walks[0].qualifying_rows == 0
+    assert report.walks[0].status == "unavailable"
+
+
+@pytest.mark.parametrize("payload", [None, {"not": "a list"}])
+def test_detailed_tape_malformed_payload_is_not_empty(paged_tape, payload):
+    paged_tape({0: payload})
+
+    report = markets.recent_trades_detailed("0xcond", set(), taker_side="BUY")
+
+    assert report.status == "unavailable"
+    assert report.volume_by_token_price == {}
+    assert report.walks[0].rejected_rows == {"payload_not_list": 1}
+    assert report.walks[0].status == "unavailable"
+    assert report.walks[0].error == "TapePayloadError"
+
+
+def test_detailed_tape_json_decode_failure_is_unavailable(monkeypatch):
+    class InvalidJsonResponse(_FakeResponse):
+        def json(self):
+            raise json.JSONDecodeError("secret body", "secret body", 0)
+
+    monkeypatch.setattr(
+        markets._SESSION, "get",
+        lambda *args, **kwargs: InvalidJsonResponse(None), raising=False)
+
+    report = markets.recent_trades_detailed(
+        "0xcond", set(), taker_side="BUY")
+
+    assert report.status == "unavailable"
+    assert report.walks[0].error == "JSONDecodeError"
+    assert "secret" not in report.walks[0].error
+
+
+@pytest.mark.parametrize("transaction_hash", [[], {}, "", "   "])
+def test_detailed_tape_rejects_non_string_or_empty_identity(
+        paged_tape, transaction_hash):
+    malformed = _trade("SELL", 0.26, 5.0, "0xvalid")
+    malformed["transactionHash"] = transaction_hash
+    paged_tape({0: [malformed]})
+
+    report = markets.recent_trades_detailed(
+        "0xcond", set(), taker_side="BUY")
+
+    assert report.status == "unavailable"
+    assert report.volume_by_token_price == {}
+    assert report.walks[0].rejected_rows == {"identity": 1}
+
+
+@pytest.mark.parametrize("asset", [[], {}, "", "   "])
+def test_detailed_tape_rejects_non_string_or_empty_asset(paged_tape, asset):
+    malformed = _trade("SELL", 0.26, 5.0, "0xvalid")
+    malformed["asset"] = asset
+    paged_tape({0: [malformed]})
+
+    report = markets.recent_trades_detailed(
+        "0xcond", set(), taker_side="BUY")
+
+    assert report.status == "unavailable"
+    assert report.volume_by_token_price == {}
+    assert report.walks[0].rejected_rows == {"token": 1}
+
+
+def test_malformed_taker_row_does_not_suppress_valid_maker_evidence(paged_tape):
+    malformed = _trade("BUY", 0.26, 5.0, "0xmaker")
+    malformed.pop("side")
+    valid_maker = _trade("BUY", 0.26, 5.0, "0xmaker")
+    paged_tape({0: [malformed], (0, False): [valid_maker]})
+
+    report = markets.recent_trades_detailed("0xcond", set())
+
+    assert report.status == "partial"
+    assert report.volume_by_token_price == {"tok": {0.26: 5.0}}
+    assert report.walks[0].rejected_rows == {"side": 1}
+    assert report.walks[1].qualifying_rows == 1
+
+
+def test_detailed_tape_truncated_full_page_bound_keeps_volume(paged_tape):
+    bound = getattr(markets, "TRADE_MAX_PAGES", 4)
+    pages = {
+        page: [_trade("BUY", 0.26, 2.0, f"0xpage{page}")]
+        for page in range(bound)
+    }
+    paged_tape(pages)
+
+    report = markets.recent_trades_detailed(
+        "0xcond", set(), limit=1, taker_side="BUY")
+
+    assert report.status == "truncated"
+    assert report.volume_by_token_price == {"tok": {0.26: float(bound * 2)}}
+    assert report.walks[0].status == "truncated"
+    assert report.walks[0].pages_read == bound
