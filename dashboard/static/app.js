@@ -5616,7 +5616,7 @@ function getStageHero(key, funnel) {
     case 'movement':
       return {
         param: 'TEST: RECENT TRADED NOTIONAL',
-        value: `≥ $500 / 30m on the tape`,
+        value: `≥ $200 / 30m on the tape`,
       };
     case 'volume':
       return {

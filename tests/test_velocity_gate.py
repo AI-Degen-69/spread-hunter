@@ -137,10 +137,68 @@ def test_velocity_gate_fail_open_on_unmeasured_tape():
     assert reason == ""
 
 
+def test_normal_sports_swing_passes_the_widened_range_bar():
+    # #416 — a 6c range over a live 30m tape is ordinary play, not flat.
+    stats = {"movement_usd": 275.0, "trade_count": 12,
+             "last_trade_sec_ago": 45.0, "range_cents": 6.0}
+    rejected, reason = velocity_gate_reject(
+        stats, min_trades=0, max_last_trade_sec=None, min_range_cents=1.0,
+        enabled=True)
+    assert not rejected
+    assert reason == ""
+
+
+def test_sub_cent_drift_is_still_refused_at_the_widened_bar():
+    # The widening is not a removal: half-a-cent drift is still flat.
+    stats = {"movement_usd": 275.0, "trade_count": 12,
+             "last_trade_sec_ago": 45.0, "range_cents": 0.5}
+    rejected, reason = velocity_gate_reject(
+        stats, min_trades=0, max_last_trade_sec=None, min_range_cents=1.0,
+        enabled=True)
+    assert rejected
+    assert "flat range" in reason
+
+
+def test_evaluate_admits_a_normal_swing_at_production_bars():
+    # End to end with the production velocity bars (enabled, 1.0c): a 6c
+    # swing on real notional is admitted, not gated as flat.
+    import time as _time
+    t_now = _time.time()
+    session = _TapeSession(
+        [_trade(t_now - 60 - 60 * i, 0.52 + 0.01 * (i % 7), 50.0)
+         for i in range(10)]
+    )
+    m = {
+        "condition_id": "0xswing",
+        "question": "Will BTC reach 100k?",
+        "tokens": [{"token_id": "1"}, {"token_id": "2"}],
+        "rewards": {"max_spread": 3.5, "min_size": 50},
+        "closed": False,
+        "acceptingOrders": True,
+    }
+    row = evaluate(
+        session, rate=10.0, m=m, source="spread",
+        min_trades=0, max_last_trade_sec=None, min_range_cents=1.0,
+        velocity_gate_enabled=True,
+    )
+    assert "flat range" not in row.get("reject_reason", "")
+
+
+def test_shipped_production_bars_are_the_widened_ones():
+    # #416 pins the widened defaults: $200/30m movement (was $500) and
+    # 1.0c range (was 2.0c), gate still enabled. Fails if anyone moves the
+    # bars without updating the documented rationale.
+    from scripts import filter_markets as fm
+
+    assert fm.MIN_MOVEMENT_USD == 200.0
+    assert fm.MIN_RANGE_CENTS == 1.0
+    assert fm.VELOCITY_GATE_ENABLED is True
+
+
 def test_evaluate_integrates_velocity_gate_rejection():
     import time as _time
     t_now = _time.time()
-    # Session provides 2 trades at identical price (flat range: 0.0) with $1000 volume (> $500 bar)
+    # Session provides 2 trades at identical price (flat range: 0.0) with $1000 volume (> $200 bar)
     session = _TapeSession([
         _trade(t_now - 60, 0.50, 1000.0),
         _trade(t_now - 120, 0.50, 1000.0),

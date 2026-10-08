@@ -7,8 +7,9 @@ up resting capital that was never going to fill.
 
 The gate shipped RECORD-ONLY (`select_min_movement_usd` = 0.0) so the bar could
 be chosen from the recorded `movement_usd` column. The unified-universe redesign
-(2026-09-08) turned it into a real gate: $500 of traded notional per 30-minute
-window, measured BEFORE the two book fetches -- a dead tape costs one request,
+(2026-09-08) turned it into a real gate: $200 of traded notional per 30-minute
+window (#416 widened it from $500 for live-sports point swings), measured
+BEFORE the two book fetches -- a dead tape costs one request,
 not three. Unmeasured tape stays fail-open: None proceeds and is recorded,
 never treated as flat.
 """
@@ -245,7 +246,7 @@ def test_evaluate_refuses_a_flat_market_once_the_bar_is_set(monkeypatch):
 
 def test_evaluate_refuses_a_flat_market_at_the_shipped_bar():
     # Arrange — nothing has traded in the window; no monkeypatch, the shipped
-    # $500/30m bar does the refusing on its own now.
+    # $200/30m bar (#416) does the refusing on its own now.
     session = _MarketSession([_trade(1.0, 0.23, 500.0)])
 
     # Act
@@ -314,6 +315,44 @@ def test_non_finite_and_negative_prints_are_skipped():
     assert measured == pytest.approx(50.0)
 
 
+def test_a_normal_live_sports_swing_clears_the_widened_bar():
+    # #416 — a 5c-8c point swing on modest size (~$275/30m) is ordinary live
+    # play, not a stall: it clears the $200 bar with margin to spare.
+    flagged, reason = movement_reject(275.0, min_movement_usd=200.0)
+    assert flagged is False
+    assert reason == ""
+
+
+def test_a_quiet_but_alive_book_still_clears_the_widened_bar():
+    # $200 refuses multi-hour stalls ($0), not quiet-but-alive books.
+    flagged, _ = movement_reject(200.0, min_movement_usd=200.0)
+    assert flagged is False
+
+
+def test_a_near_dead_tape_is_still_refused_at_the_widened_bar():
+    # The widening is not a removal: $12/30m is no market at all.
+    flagged, reason = movement_reject(12.0, min_movement_usd=200.0)
+    assert flagged is True
+    assert "no movement" in reason
+
+
+def test_evaluate_admits_a_normal_sports_swing_at_shipped_bars():
+    # End to end at the shipped defaults: prices swinging 0.52-0.58 (6c)
+    # on ~$275/30m of prints is admitted, not refused for movement.
+    import time as _time
+    t_now = _time.time()
+    tape = [_trade(t_now - 60 - 60 * i, 0.52 + 0.01 * (i % 7), 50.0)
+            for i in range(10)]
+    session = _MarketSession(tape)
+
+    row = evaluate(session, 5.0, _candidate(), volume_24h=250_000.0,
+                   source="spread")
+
+    assert row is not None
+    assert row["eligible"] is True
+    assert "no movement" not in row.get("reject_reason", "")
+
+
 def test_non_finite_env_overrides_are_refused(monkeypatch):
     # Arrange — `inf` would refuse every market on earth; `nan` compares false
     # against everything and silently disables the gate.
@@ -325,6 +364,7 @@ def test_non_finite_env_overrides_are_refused(monkeypatch):
     # Act
     cfg = load()
 
-    # Assert — the shipped defaults stand (now enforced, per the redesign).
-    assert cfg.select_min_movement_usd == 500.0
+    # Assert — the shipped defaults stand (now enforced, per the redesign;
+    # movement bar widened to $200 by #416 for live-sports point swings).
+    assert cfg.select_min_movement_usd == 200.0
     assert cfg.select_movement_window_sec == 1800.0
