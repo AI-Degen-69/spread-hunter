@@ -952,6 +952,11 @@ class MakerConfig:
     enforce_queue_clear_gate: bool = False
     max_queue_clear_minutes: float = 60.0
     queue_flow_window_sec: float = 1800.0
+    # Sister bar: the ranker's maker-queue bar (`select_max_queue_minutes`
+    # = 15.0, `enforce_max_queue_minutes = False` in `scoring/config.py`)
+    # measures the same queue minutes at market-selection time, before the
+    # book fetches. Same arithmetic, different moment — see
+    # `docs/issues/398-maker-queue-bars.md` for why the two stay separate.
 
     # Only quote while the window is open enough to resolve sensibly.
     min_t_remaining_sec: float = 15.0

@@ -1,3 +1,37 @@
+# CONSTRAINTS — #398 (locked by Station II, enforced through Station V)
+
+Governs the `i398` branch only; #422 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass: `tests/test_maker_queue_bar.py`,
+  `tests/test_queue_clear_gate.py`.
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only
+  the focused suites.
+- Every new assertion needs a reason to fail (pins the documented contract).
+
+## Bar-value freeze
+
+- `select_max_queue_minutes`, `max_queue_clear_minutes`,
+  `queue_flow_window_sec`: values untouched. No retuning.
+- `enforce_max_queue_minutes`, `enforce_queue_clear_gate`: flags untouched.
+  Both ship record-only; flipping either is its own operator decision.
+- No pricing, routing, registry, or shadow-seam changes — comments, record,
+  and test pins only.
+
+## Stores are evidence, not scratch
+
+- `data/orders.db` is the production registry: read it, never rewrite it.
+- No schema migration; tests use temporary DBs.
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit operator approval.
+
+---
+
 # CONSTRAINTS — #422 (locked by Station II, enforced through Station V)
 
 Supersedes the previous issue plan constraints for this branch only.

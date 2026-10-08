@@ -425,6 +425,11 @@ class MakerConfig:
     # silent. That is correct for the run we measured and still the wrong way
     # to ship it: record the number for a day, then decide with real data.
     enforce_max_queue_minutes: bool = False
+    # Sister bar: the placement-time queue-clear gate (`max_queue_clear_minutes`
+    # = 60.0, `enforce_queue_clear_gate = False` in `core_brain/config.py`)
+    # judges the same queue minutes at the bid actually posted. Same arithmetic
+    # (`scoring/selector.py`), different moment — see
+    # `docs/issues/398-maker-queue-bars.md` for why the two stay separate.
     # DEPTH-GATE TRIAL (U32). When set, the RANKER gates on this bar instead of
     # `select_min_top3_depth_usd` -- a controlled loosening licensed by the
     # near-miss tracker (READY_TO_TRIAL: 29 unique markets, 19 with measured
