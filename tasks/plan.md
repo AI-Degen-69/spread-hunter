@@ -163,7 +163,7 @@ Branch: i398/unify-or-justify-the-two-maker-queue-bars | Issue: #398
 - Decision: **two bars stay**, one shared vocabulary. Ranker: `select_max_queue_minutes = 15.0`, `enforce_max_queue_minutes = False`, selection time, inert while unenforced. Gate: `max_queue_clear_minutes = 60.0`, `enforce_queue_clear_gate = False`, `queue_flow_window_sec = 1800.0`, placement time on the actual bid. Shared arithmetic: `queue_minutes_at` + `maker_queue_allowed` (`max ≤ 0` disables).
 - Out of scope: retuning either value, `decide_quotes`/pricing, shadow seam, other ranker thresholds, flipping either `enforce_*` flag.
 
-### T1 [ ] — Decision record `docs/issues/398-maker-queue-bars.md` [Docs] (S)
+### T1 [x] — Decision record `docs/issues/398-maker-queue-bars.md` [Docs] (S)
 
 - Target files: `docs/issues/398-maker-queue-bars.md` (new, in the `384-place-and-wait.md` shape).
 - Build: per layer the setting name, default, measurement moment, and the reason the two moments keep different bars; shared arithmetic; no retune, no enforce flip, consolidation deferred to operator.
@@ -171,7 +171,7 @@ Branch: i398/unify-or-justify-the-two-maker-queue-bars | Issue: #398
 - Depends on: nothing.
 - Verify: read the record — each layer lists setting, default, moment, keep-separate reason.
 
-### T2 [ ] — Bidirectional cross-ref comments in both configs [Docs] (S)
+### T2 [x] — Bidirectional cross-ref comments in both configs [Docs] (S)
 
 - Target files: `scoring/config.py` (ranker bar), `core_brain/config.py` (gate).
 - Build: ranker comment names the gate (setting, default, moment); gate comment names the ranker bar back. No value changes.

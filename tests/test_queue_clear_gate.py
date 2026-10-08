@@ -639,3 +639,28 @@ class TestQueueGateSettings:
                              {"HUNTER_MAX_QUEUE_CLEAR_MIN": "1441"}):
             with pytest.raises(ValueError, match="HUNTER_MAX_QUEUE_CLEAR_MIN"):
                 load()
+
+    def test_the_two_bars_ship_independent_and_record_only(self):
+        # #398: the ranker bar and this gate share arithmetic
+        # (`scoring.selector`), never a setting. Both ship record-only, and
+        # moving one bar leaves the other untouched. A future consolidation
+        # that couples them must update the record first — this fails before
+        # it slides in silently.
+        from dataclasses import replace
+
+        from scoring.config import MakerConfig as RankerConfig
+        from scripts.filter_markets import resolve_queue_bar
+
+        ranker = RankerConfig()
+        assert ranker.select_max_queue_minutes == 15.0
+        assert ranker.enforce_max_queue_minutes is False
+        assert resolve_queue_bar(ranker) is None
+
+        gate = MakerConfig()
+        assert gate.max_queue_clear_minutes == 60.0
+        assert gate.enforce_queue_clear_gate is False
+        assert gate.queue_flow_window_sec == 1800.0
+
+        moved = replace(ranker, select_max_queue_minutes=5.0)
+        assert moved.select_max_queue_minutes == 5.0
+        assert MakerConfig().max_queue_clear_minutes == 60.0

@@ -1,7 +1,7 @@
 # Todo — #398 (active) + #422 (done, history) + #419 (done, history)
 
-- [ ] #398 T1 — Decision record `docs/issues/398-maker-queue-bars.md`
-- [ ] #398 T2 — Bidirectional cross-ref comments in both configs
+- [x] #398 T1 — Decision record `docs/issues/398-maker-queue-bars.md`
+- [x] #398 T2 — Bidirectional cross-ref comments in both configs
 - [ ] #398 T3 — Independence pin in the existing suites
 
 - [x] T1 — RED+GREEN: one fixed bankroll path in `run_shadow`
