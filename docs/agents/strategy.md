@@ -123,3 +123,11 @@ through the cap.
 
 Fewer orders posted is the expected result of both rules, not a regression — wide markets
 are declined rather than quoted into an empty book.
+
+**Mid-hold band** (`MID_HOLD_BAND`, `0.02`, inclusive). While a token's mid sits
+at or below its resting order's price plus the band, the order is held — never
+cancelled, never re-quoted, never duplicated. It covers the price-driven
+planner routes (`not_quoted` cancels, grace expiry, `lifecycle_replace`);
+terminal refusals, hard stop, `lifecycle_cancel`, and explicit cancel sets
+still cancel in band, and a missing, one-sided, or crossed book falls back to
+today's behavior.

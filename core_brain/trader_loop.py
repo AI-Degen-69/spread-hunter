@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # annotation only -- markets is imported lazily at the call s
 
 from core_brain.quotes import (
     Inventory, QuoteIntent, dynamic_offset_for, evaluate_market_quote,
+    mid_price,
 )
 from core_brain.cycle_stream import emit as _emit_cycle_event
 from core_brain.market_lifecycle import (
@@ -240,6 +241,29 @@ def _note_lifecycle_stop(
         log.warning("lifecycle_stop store failed: %s: %s",
                     type(e).__name__, e)
     return True
+
+
+def _cycle_mids(up_book: dict, down_book: dict) -> dict:
+    """This cycle's per-token midpoints for the mid-hold band (#419).
+
+    A token is left out when its book is missing, one-sided, non-numeric,
+    or crossed: with no trustworthy mid the planner keeps today's behavior.
+    """
+    mids: dict[str, float] = {}
+    for book in (up_book or {}, down_book or {}):
+        token_id = book.get("token_id")
+        try:
+            bid = float(book.get("best_bid"))
+            ask = float(book.get("best_ask"))
+        except (TypeError, ValueError):
+            continue
+        if (token_id is None or not math.isfinite(bid)
+                or not math.isfinite(ask) or bid >= ask):
+            continue
+        mid = mid_price(bid, ask)
+        if mid is not None:
+            mids[str(token_id)] = mid
+    return mids
 
 
 def plan_orders(
@@ -1829,6 +1853,7 @@ def _visit_one(
             "hold_below_target": float(
                 getattr(cfg, "requote_hold_below_target", 0.0)),
             "visit_outcome": visit_outcome,
+            "token_mids": _cycle_mids(ev.up_book, ev.down_book),
         }
         lifecycle_context = ev.lifecycle_context
         if lifecycle_context is not None and (

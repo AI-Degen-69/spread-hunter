@@ -50,7 +50,7 @@ Branch: i419/trader-loop-hold-a-resting-order-and-never-requote | Issue: #419
 - Depends on: T1.
 - Verify: `python -m pytest -q tests/test_plan_orders_mid_hold.py tests/test_plan_orders_asymmetric_hold.py` — all green.
 
-### T3 [ ] — Wire real mids from `_visit_one`, protect visit contracts, document [Backend/Logic] (M)
+### T3 [x] — Wire real mids from `_visit_one`, protect visit contracts, document [Backend/Logic] (M)
 
 - Target files: `core_brain/trader_loop.py`, `tests/test_trader_loop.py`, `docs/agents/strategy.md`
 - Build: in `_visit_one`, build `token_mids` from this cycle's UP/DOWN books keyed by `token_id` via `quotes.mid_price`; omit on missing id, missing side, or bid >= ask. Pass it on every `(plan_fn or plan_orders)(...)` call (spies forward `**kwargs`, no wrapper changes). A rotated-away token has no book and still cancels. Move the shared `TestRefusedHold` books to 0.66/0.68 (out of band for the 0.60 UP order) so the grace-expiry test keeps asserting cancel; add a separate in-band grace test (0.59/0.61 books, transient refusal × GRACE cycles → held, nothing submitted). Add visit tests: in-band (UP 0.48, book 0.45/0.47, DOWN-only intent → no UP cancel) and crossed book (0.50/0.48 → `not_quoted` cancel). Re-check: terminal-refusal, token-rotation, quote-resets-streak, patient-wait (UP remainder via cancel set), escalation (DOWN mid 0.51 outside the 0.48 band → replace proceeds), escalation-preserve, hard-stop, refused-escalation — assertions unchanged. Append one paragraph to `docs/agents/strategy.md` (inclusive rule, covered routes, still-cancelling routes, missing/crossed fallback) without rewriting the dead-band text. Confirm zero changes in `shadow_fills.py`, `config.py`, `quotes.py`, `_market_cfg`.
