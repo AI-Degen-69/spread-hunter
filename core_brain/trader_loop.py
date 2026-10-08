@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import sys
 import time
@@ -31,12 +32,23 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 if TYPE_CHECKING:  # annotation only -- markets is imported lazily at the call site
     from core_brain.markets import SellFlow
 
-from core_brain.quotes import Inventory, QuoteIntent, evaluate_market_quote
+from core_brain.quotes import (
+    Inventory, QuoteIntent, dynamic_offset_for, evaluate_market_quote,
+)
 from core_brain.cycle_stream import emit as _emit_cycle_event
 from core_brain.market_lifecycle import (
     LifecycleStop, classify_refusal, resolved_condition_ids,
 )
 from core_brain.order_registry import InstanceInUse, OrderRegistry
+from core_brain import risk
+from core_brain.single_leg_lifecycle import (
+    LegState,
+    LifecycleDecision,
+    LifecycleQuoteContext,
+    LifecycleQuoteOverride,
+    SingleLegPosition,
+    evaluate as evaluate_single_leg_lifecycle,
+)
 
 log = logging.getLogger("main_spread_hunter_loop")
 
@@ -236,6 +248,10 @@ def plan_orders(
     hold_queue_shares: float = 0.0,
     hold_below_target: float = 0.0,
     visit_outcome: Optional[VisitOutcome] = None,
+    preserve_order_ids: Optional[set[str] | frozenset[str]] = None,
+    replace_order_ids: Optional[set[str] | frozenset[str]] = None,
+    cancel_order_ids: Optional[set[str] | frozenset[str]] = None,
+    lifecycle_pair_id: str | None = None,
 ) -> tuple[list[dict], list[QuoteIntent]]:
     """Split open orders + desired intents into (cancel, submit).
 
@@ -345,6 +361,9 @@ def plan_orders(
     whoever is resting in front of it.
     """
     tolerance = max(float(price_eps), float(dead_band))
+    preserve_ids = {str(value) for value in preserve_order_ids or ()}
+    replace_ids = {str(value) for value in replace_order_ids or ()}
+    cancel_ids = {str(value) for value in cancel_order_ids or ()}
 
     wanted: dict[str, list[QuoteIntent]] = {}
     for i in intents:
@@ -390,6 +409,18 @@ def plan_orders(
     to_cancel: list[dict] = []
     for o in open_orders:
         tok = o["token_id"]
+        key = str(o.get("id") or o.get("order_id") or "")
+        if key in replace_ids or key in cancel_ids:
+            _record(
+                o,
+                "lifecycle_replace" if key in replace_ids else "lifecycle_cancel",
+            )
+            to_cancel.append(o)
+            continue
+        if key in preserve_ids:
+            kept.setdefault(tok, []).append(o)
+            held_tokens.add(tok)
+            continue
         targets = wanted.get(tok)
         if not targets:
             if visit_outcome is VisitOutcome.REFUSED_TRANSIENT:
@@ -411,6 +442,9 @@ def plan_orders(
 
     to_submit: list[QuoteIntent] = []
     for i in intents:
+        if lifecycle_pair_id is not None and i.pair_id == lifecycle_pair_id:
+            to_submit.append(i)
+            continue
         if i.token_id in held_tokens:
             # We chose to keep the resting order on this token. Posting the new
             # price as well would leave both working.
@@ -1177,6 +1211,287 @@ def _check_uma_resolution_before_fetch(
     )
 
 
+def _lifecycle_quote_context(
+    seam: VenueSeam,
+    market: Any,
+    cfg: Any,
+    up_book: dict,
+    down_book: dict,
+    inventory: Inventory,
+    open_orders: list[dict],
+    *,
+    cycle: int,
+    title: str,
+    emit_fn: Callable,
+) -> LifecycleQuoteContext:
+    """Build pair-scoped lifecycle decisions from the already-fetched books."""
+    pair_orders: dict[str, list[dict]] = {}
+    for order in open_orders:
+        pair_id = order.get("pair_id")
+        if pair_id:
+            pair_orders.setdefault(str(pair_id), []).append(order)
+    if not pair_orders:
+        return LifecycleQuoteContext()
+
+    registry = seam.registry
+    required = ("get_orders_by_pair", "get_size_matched",
+                "get_matched_notional", "get_lifecycle_state",
+                "save_lifecycle_state")
+    if registry is None or any(not callable(getattr(registry, name, None))
+                               for name in required):
+        raise RuntimeError(
+            "active paired orders require lifecycle-capable registry methods")
+
+    up_token = str(market.up_token)
+    down_token = str(market.down_token)
+    base_offset, _ = dynamic_offset_for(cfg)
+    decisions: list[tuple[str, SingleLegPosition, LifecycleDecision]] = []
+    preserve_order_ids: set[str] = set()
+    replace_order_ids: set[str] = set()
+    cancel_order_ids: set[str] = set()
+    escalated_order_already_resting = False
+
+    def refusal_context(reason: str, pair_ids: list[str]) -> LifecycleQuoteContext:
+        emit_fn(
+            service="decide", cycle=cycle, phase="quoting",
+            action="single_leg_refusal", market_slug=title, reason=reason,
+            extra={"condition_id": str(market.condition_id),
+                   "pair_ids": pair_ids},
+        )
+        return LifecycleQuoteContext(refusal_reason=reason)
+
+    def preserve_refusal_context(
+        reason: str, pair_ids: list[str],
+    ) -> LifecycleQuoteContext:
+        """Refuse WITHOUT cancelling the resting hedge: preserve pair orders."""
+        emit_fn(
+            service="decide", cycle=cycle, phase="quoting",
+            action="single_leg_refusal", market_slug=title, reason=reason,
+            extra={"condition_id": str(market.condition_id),
+                   "pair_ids": pair_ids},
+        )
+        preserved = set(preserve_order_ids)
+        for pair_id in pair_ids:
+            for order in pair_orders.get(pair_id, []):
+                order_id = str(order.get("id") or order.get("order_id") or "")
+                if order_id:
+                    preserved.add(order_id)
+        return LifecycleQuoteContext(
+            refusal_reason=reason,
+            preserve_order_ids=frozenset(preserved),
+        )
+
+    for pair_id, active_pair_orders in pair_orders.items():
+        sizes = {"UP": 0.0, "DOWN": 0.0}
+        notionals = {"UP": 0.0, "DOWN": 0.0}
+        pair_records = registry.get_orders_by_pair(pair_id)
+        if not pair_records:
+            raise ValueError(
+                f"active lifecycle pair {pair_id!r} has no registry orders")
+        for order in pair_records:
+            if order.condition_id != market.condition_id:
+                raise ValueError(
+                    f"lifecycle pair {pair_id!r} contains an order for "
+                    f"condition {order.condition_id!r}")
+            if order.side != "BUY":
+                continue
+            if order.token_id == up_token:
+                side = "UP"
+            elif order.token_id == down_token:
+                side = "DOWN"
+            else:
+                raise ValueError(
+                    f"lifecycle pair {pair_id!r} contains an unknown token "
+                    f"{order.token_id!r}")
+            matched = float(registry.get_size_matched(order.id))
+            notional = float(registry.get_matched_notional(order.id))
+            if not math.isfinite(matched) or not math.isfinite(notional):
+                raise ValueError(
+                    f"lifecycle pair {pair_id!r} has non-finite fill totals")
+            sizes[side] += matched
+            notionals[side] += notional
+
+        up_avg = notionals["UP"] / sizes["UP"] if sizes["UP"] else 0.0
+        down_avg = (
+            notionals["DOWN"] / sizes["DOWN"] if sizes["DOWN"] else 0.0
+        )
+        position = SingleLegPosition(
+            pair_id=pair_id,
+            condition_id=str(market.condition_id),
+            up_token_id=up_token,
+            down_token_id=down_token,
+            up_size=sizes["UP"],
+            down_size=sizes["DOWN"],
+            up_avg_price=up_avg,
+            down_avg_price=down_avg,
+            up_best_bid=up_book.get("best_bid"),
+            down_best_bid=down_book.get("best_bid"),
+            base_offset=base_offset,
+        )
+        previous = registry.get_lifecycle_state(pair_id)
+        decision = evaluate_single_leg_lifecycle(
+            position,
+            registry,
+            max_pair_cost=float(cfg.max_pair_cost),
+            tick_size=float(cfg.price_tick),
+        )
+        decisions.append((pair_id, position, decision))
+
+        previous_state = previous.state if previous is not None else None
+        if (decision.action != "refused"
+                and (previous_state is None
+                     or previous_state != decision.state.value)):
+            held_bid = None
+            if decision.held_token_id == position.up_token_id:
+                held_bid = position.up_best_bid
+            elif decision.held_token_id == position.down_token_id:
+                held_bid = position.down_best_bid
+            emit_fn(
+                service="decide", cycle=cycle, phase="quoting",
+                action="single_leg_transition", market_slug=title,
+                reason=decision.reason,
+                extra={
+                    "condition_id": position.condition_id,
+                    "pair_id": pair_id,
+                    "previous_state": previous_state,
+                    "state": decision.state.value,
+                    "held_token_id": decision.held_token_id,
+                    "held_average_price": decision.held_average_price,
+                    "held_best_bid": held_bid,
+                    "naked_size": decision.naked_size,
+                    "opposite_token_id": decision.opposite_token_id,
+                    "opposite_limit_price": decision.opposite_limit_price,
+                },
+            )
+
+        if decision.action == "wait":
+            for order in active_pair_orders:
+                order_id = str(order.get("id") or order.get("order_id") or "")
+                if not order_id:
+                    continue
+                if order.get("token_id") == decision.held_token_id:
+                    cancel_order_ids.add(order_id)
+                else:
+                    preserve_order_ids.add(order_id)
+        elif decision.action == "hedge":
+            for order in active_pair_orders:
+                order_id = str(order.get("id") or order.get("order_id") or "")
+                if not order_id:
+                    continue
+                if order.get("token_id") == decision.opposite_token_id:
+                    if (decision.opposite_limit_price is not None
+                            and math.isclose(
+                                float(order["price"]),
+                                decision.opposite_limit_price,
+                                rel_tol=0.0,
+                                abs_tol=1e-9,
+                            )):
+                        preserve_order_ids.add(order_id)
+                        escalated_order_already_resting = True
+                        continue
+                    replace_order_ids.add(order_id)
+                cancel_order_ids.add(order_id)
+
+    hard_stops = [
+        (pair_id, _position, decision)
+        for pair_id, _position, decision in decisions
+        if decision.action == "hard_stop"
+    ]
+    if hard_stops:
+        reason = "; ".join(
+            f"lifecycle hard stop for pair {pair_id}: {decision.reason}"
+            for pair_id, _position, decision in hard_stops
+        )
+        return refusal_context(
+            reason, [pair_id for pair_id, _position, _ in hard_stops])
+
+    refused_escalations = [
+        (pair_id, _position, decision)
+        for pair_id, _position, decision in decisions
+        if decision.action == "refused"
+    ]
+    if refused_escalations:
+        # A refused escalation must not strand the pair by cancelling its
+        # resting hedge: hold every working order and suppress a fresh quote,
+        # retrying next cycle. Only the poll's hard-stop exit may cancel.
+        reason = "; ".join(
+            f"lifecycle refused for pair {pair_id}: {decision.reason}"
+            for pair_id, _position, decision in refused_escalations
+        )
+        return preserve_refusal_context(
+            reason,
+            [pair_id for pair_id, _position, _decision in refused_escalations],
+        )
+
+    escalations = [
+        (pair_id, position, decision)
+        for pair_id, position, decision in decisions
+        if decision.action == "hedge"
+    ]
+    if len(escalations) > 1:
+        pair_ids = [pair_id for pair_id, _position, _decision in escalations]
+        reason = (
+            "lifecycle ambiguous: simultaneous escalations for pairs "
+            + ", ".join(pair_ids)
+        )
+        return refusal_context(reason, pair_ids)
+
+    if len(escalations) == 1:
+        pair_id, position, decision = escalations[0]
+        if (decision.held_average_price is None
+                or decision.opposite_limit_price is None
+                or decision.opposite_token_id is None
+                or not math.isfinite(decision.held_average_price)
+                or not math.isfinite(decision.opposite_limit_price)
+                or decision.naked_size <= 0
+                or not math.isfinite(decision.naked_size)):
+            return preserve_refusal_context(
+                f"lifecycle escalation for pair {pair_id} has invalid price "
+                "or residual size",
+                [pair_id],
+            )
+        side = "DOWN" if decision.held_token_id == up_token else "UP"
+        pair_price = (
+            decision.held_average_price + decision.opposite_limit_price
+        )
+        size_cap = risk.size_for(
+            cfg, inventory, side, decision.opposite_limit_price,
+            pair_price=pair_price,
+        )
+        size = min(int(decision.naked_size), size_cap)
+        if size < cfg.min_quote_shares:
+            # Keep the resting hedge instead of cancelling it; a transient
+            # size refusal is not a reason to strand the pair ahead of the
+            # hard-stop or settlement path (see single_leg_refusal).
+            return preserve_refusal_context(
+                f"lifecycle escalation size {size} below venue minimum "
+                f"{cfg.min_quote_shares}",
+                [pair_id],
+            )
+        return LifecycleQuoteContext(
+            override=LifecycleQuoteOverride(
+                pair_id=pair_id,
+                token_id=decision.opposite_token_id,
+                price=decision.opposite_limit_price,
+                size=size,
+                state=decision.state,
+                held_average_price=decision.held_average_price,
+            ),
+            preserve_order_ids=frozenset(preserve_order_ids),
+            replace_order_ids=frozenset(replace_order_ids),
+            cancel_order_ids=frozenset(cancel_order_ids),
+            lifecycle_pair_id=(
+                None if escalated_order_already_resting else pair_id
+            ),
+        )
+
+    return LifecycleQuoteContext(
+        preserve_order_ids=frozenset(preserve_order_ids),
+        replace_order_ids=frozenset(replace_order_ids),
+        cancel_order_ids=frozenset(cancel_order_ids),
+    )
+
+
 def _visit_one(
     seam: VenueSeam,
     spec,
@@ -1278,6 +1593,18 @@ def _visit_one(
     # the ERROR returns before it are the only callers that never read it.
     queue_why = ""
     try:
+        open_orders = (
+            seam.open_orders_fn(market)
+            if seam.open_orders_fn
+            else []
+        )
+
+        def lifecycle_context_for(got_market, up_book, down_book, inventory):
+            return _lifecycle_quote_context(
+                seam, got_market, cfg, up_book, down_book, inventory,
+                open_orders, cycle=cycle, title=title, emit_fn=emit_fn,
+            )
+
         ev = evaluate_market_quote(
             cid, cfg, seam.clob_host,
             # The market is already fetched (the block above exists so a fetch
@@ -1287,9 +1614,9 @@ def _visit_one(
             fetch_books=seam.fetch_books,
             inventory_for=seam.inventory_fn or (lambda m: Inventory()),
             decide=seam.decide,
+            lifecycle_context_for=lifecycle_context_for,
         )
         intents, why = ev.intents, ev.why
-        open_orders = seam.open_orders_fn(market) if seam.open_orders_fn else []
         # The hedge ask for a token is the OTHER token's ask -- that is the
         # price a fill on this leg would have to pay to finish the pair.
         # `evaluate_market_quote` already fetched both books; re-reading them
@@ -1319,8 +1646,26 @@ def _visit_one(
         # is a refusal, not a disappearance. Transient reasons hold resting
         # orders; terminal ones (settled, expired, exited, unfunded) cancel.
         # `None` (legacy callers) keeps the old cancel-on-empty semantics.
+        lifecycle_refused = bool(
+            ev.lifecycle_context is not None
+            and ev.lifecycle_context.refusal_reason
+        )
+        lifecycle_holds = bool(
+            ev.lifecycle_context is not None
+            and ev.lifecycle_context.preserve_order_ids
+        )
+        # A refused ESCALATION preserves its resting orders (resting hedge):
+        # classify it like an ordinary refusal so transient reasons hold and
+        # only genuinely terminal reasons (plus hard-stop's own cancellations,
+        # which are explicit in the lifecycle context) cancel. A lifecycle
+        # refusal with no preserve intent (hard stop, or a refusal that the
+        # planner itself must convert) stays terminal -- it is the poll that
+        # executes the hard stop after re-reading venue state.
         visit_outcome = (
-            _classify_refusal(why) if not intents else VisitOutcome.QUOTED
+            VisitOutcome.REFUSED_TERMINAL
+            if lifecycle_refused and not lifecycle_holds
+            else _classify_refusal(why) if not intents
+            else VisitOutcome.QUOTED
         )
         grace_expired = (
             visit_outcome is VisitOutcome.REFUSED_TRANSIENT
@@ -1338,14 +1683,36 @@ def _visit_one(
             _note_lifecycle_stop(
                 seam, cid, title, _visit_stop(why, grace_expired),
                 why, stop_memory, cycle, emit_fn)
+        plan_kwargs = {
+            "dead_band": float(getattr(cfg, "requote_dead_band", 0.0)),
+            "cfg": cfg,
+            "hedge_asks": hedge_asks,
+            "hedge_held": hedge_held,
+            "reasons": cancel_reasons,
+            "queue_ahead": queue_ahead,
+            "hold_queue_shares": float(
+                getattr(cfg, "requote_hold_queue_shares", 0.0)),
+            "hold_below_target": float(
+                getattr(cfg, "requote_hold_below_target", 0.0)),
+            "visit_outcome": visit_outcome,
+        }
+        lifecycle_context = ev.lifecycle_context
+        if lifecycle_context is not None and (
+                lifecycle_context.preserve_order_ids
+                or lifecycle_context.replace_order_ids
+                or lifecycle_context.cancel_order_ids
+                or lifecycle_context.lifecycle_pair_id is not None):
+            plan_kwargs.update({
+                "preserve_order_ids": set(
+                    lifecycle_context.preserve_order_ids),
+                "replace_order_ids": set(
+                    lifecycle_context.replace_order_ids),
+                "cancel_order_ids": set(
+                    lifecycle_context.cancel_order_ids),
+                "lifecycle_pair_id": lifecycle_context.lifecycle_pair_id,
+            })
         to_cancel, to_submit = (plan_fn or plan_orders)(
-            open_orders, intents,
-            dead_band=float(getattr(cfg, "requote_dead_band", 0.0)),
-            cfg=cfg, hedge_asks=hedge_asks, hedge_held=hedge_held,
-            reasons=cancel_reasons, queue_ahead=queue_ahead,
-            hold_queue_shares=float(getattr(cfg, "requote_hold_queue_shares", 0.0)),
-            hold_below_target=float(getattr(cfg, "requote_hold_below_target", 0.0)),
-            visit_outcome=visit_outcome,
+            open_orders, intents, **plan_kwargs,
         )
         # THE QUEUE-CLEAR GATE (#393), on NEW placements only and after the
         # planner, so held orders, the refusal-grace counter and every recorded

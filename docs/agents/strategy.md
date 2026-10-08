@@ -68,8 +68,26 @@ a log string and feeds no sizing decision.
 ## The two failure modes
 
 A pair assembled **over $1.00** is a booked loss on an instrument that pays exactly $1.00.
-A **one-sided fill** is a directional bet nobody decided to take. Everything in `risk.py`,
-`unhedged_stop_loss.py` and `single_buy_saver.py` exists to prevent those two states.
+A **one-sided fill** is a directional bet nobody decided to take. `risk.py` protects pair
+cost and exposure limits; the single-leg lifecycle manages the one-sided position;
+`unhedged_stop_loss.py` remains a separate per-market markout gate.
+
+## One-sided fill lifecycle (#413)
+
+The policy lives in `core_brain/single_leg_lifecycle.py` and persists its state per pair.
+`DUAL_RESTING` becomes `PATIENT_WAIT` after one leg fills: leave the opposite maker at its
+target and do not taker-complete during ordinary management. Once the held-leg drawdown
+(fill average minus best bid) reaches `2 × dynamic_offset_for(cfg)[0]`, transition
+persistently to `ESCALATED_HEDGE`. The Trader raises the opposite maker to the highest
+tick-aligned bid fitting `min($0.99, cfg.max_pair_cost) - held average`; once escalated,
+the state remains escalated until the pair locks or another terminal route applies.
+
+`HARD_STOP` takes precedence when the held best bid is at or below `$0.15` and routes
+through `single_buy_saver.py`'s guarded exit. Balanced inventory within the configured
+pair cap becomes `PAIR_LOCKED`. The only automatic taker-completion exception is the
+existing market-end-aware settlement fallback: it makes one capped attempt when due,
+then uses the guarded exit if completion is refused. `single_buy_saver.py` executes these
+routes; it is not an independent lifecycle policy.
 
 ## The completable-cost gate and the re-quote dead band
 
@@ -78,12 +96,14 @@ Two execution rules from shadow run `run-2809a7161de1` (209 orders, zero fills, 
 **Completable-cost gate** (`max_completable_pair_cost`, default `1.00`). The existing
 `max_pair_cost = 0.99` checks a **both-maker** pair: `up_bid + down_bid`. On a binary
 market the legs are anti-correlated (`UP + DOWN ≈ 1.00`, measured correlation −0.9989),
-so a double-maker fill is rare by construction — almost every pair actually assembles as
-one maker fill plus a **taker completion at the other leg's ask**. The new gate refuses a
-resting bid when `price + best_ask(hedge) >= max_completable_pair_cost`. It fires only
-when we hold none of the hedge token (otherwise `max_pair_cost` governs), has no opinion
-when the hedge book has no ask (`book_health` already refuses unreadable books), and does
-not replace `max_pair_cost` — the two bound different questions and both must hold.
+so a double-maker fill is rare by construction and one-sided fills require deliberate
+lifecycle management. The completable-cost gate refuses a resting bid when
+`price + best_ask(hedge) >= max_completable_pair_cost`; it does not itself trigger a taker
+completion. It fires only when we hold none of the hedge token (otherwise `max_pair_cost`
+governs), has no opinion when the hedge book has no ask (`book_health` already refuses
+unreadable books), and does not replace `max_pair_cost` — the two bound different
+questions and both must hold. During normal lifecycle management, the opposite maker
+waits or escalates; the settlement fallback is the sole automatic taker-completion path.
 Switch it off with `enforce_completable_pair_cost=false`; override the cap with env var
 `HUNTER_COMPLETABLE_CAP`.
 

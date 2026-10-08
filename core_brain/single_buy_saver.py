@@ -1,15 +1,8 @@
-"""Stage 3 — stop-loss / naked exit for a one-sided live pair.
+"""Guarded execution paths for closing one-sided pair exposure.
 
-This is the pairs rule already proven in the paper run, not a redesign of it.
-The trigger there fired 16
-times across 26,777 pairs, always on `pair_cost >= max_pair_cost`, and cost
-3.67c per exit against 3.68c gained per completed pair. Those numbers are the
-reason it is worth porting faithfully.
-
-What changes in live is not the rule but the failure surface. In the paper run a
-cancel always succeeds, a book read is free, and nobody else can fill our order
-between two statements. Live, each of those is a place to lose money, so the
-sequence is written around them:
+`manage_single_leg_positions` owns the lifecycle policy. This module keeps
+completion and exit execution fail-closed because live cancellation, venue
+reads, and concurrent fills can turn a correct decision into a worse position.
 
     cancel  ->  re-read the venue  ->  sell (only if still one-sided)
 
@@ -662,6 +655,8 @@ def exit_single_buy(
     venue_positions: Optional[dict[str, float]] = None,
     reason: Optional[str] = None,
     method: str = "single_buy_exit",
+    *,
+    force: bool = False,
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
 
@@ -669,6 +664,9 @@ def exit_single_buy(
     persisted on the close so later forensics need not reconstruct it. Purely
     instrumentation: it changes no trigger, threshold, or route decision, and
     callers without one (stray-guard) keep working unchanged.
+
+    `force` skips only the economic preference to complete a profitable pair;
+    all cancellation, venue-position, size, depth, and slippage safeguards remain.
 
     `action` in the returned dict is one of:
       balanced       -- nothing single, nothing to do
@@ -707,10 +705,10 @@ def exit_single_buy(
 
     light_token = pair["light"]["token_id"]
     light_ask = None
-    if light_token:
+    if not force and light_token:
         light_ask = best_ask(client.get_order_book(light_token))
 
-    if not should_exit(pair["fill_cost"], light_ask, max_pair_cost):
+    if not force and not should_exit(pair["fill_cost"], light_ask, max_pair_cost):
         return {
             "action": "hold",
             "pair_id": pair_id,
@@ -1091,6 +1089,11 @@ AGED_OUT_QUIET_ACTIONS = (
     "awaiting_lead", "hold", "balanced", "would_exit", "would_complete",
 )
 
+SINGLE_LEG_QUIET_ACTIONS = frozenset({
+    "patient_wait", "escalated_wait", "pair_locked", "dual_resting",
+    "awaiting_lead", "would_exit", "would_complete",
+})
+
 # The verdicts `aged_out_verdict` returns. `due` is the only one that acts.
 AGED_OUT_DUE = "due"
 AGED_OUT_AWAITING_LEAD = "awaiting_lead"
@@ -1197,81 +1200,19 @@ def auto_manage_pairs(
     venue_positions: Optional[dict[str, float]] = None,
     funder: Optional[str] = None,
     resolved_cids: Optional[set[str]] = None,
+    market_state_fn=None,
+    state_cache: Optional[AgedOutMarketStateCache] = None,
+    gamma_host: Optional[str] = None,
 ) -> list[dict]:
-    """U35 in the live loop: convert each in-window one-sided fill.
-
-    One pass per poll cycle, run after reconcile so the registry is fresh.
-    Discovery is from the fills ledger: every pair that has a fill, whose
-    last fill is inside `pairs_exit_window_sec`, whose fills are not already
-    covered by a later close on the condition, and whose legs are unbalanced.
-    Each such pair is routed exactly like the paper run's sweep -- complete the
-    missing leg at ask when the pair stays under `max_pair_cost`, else
-    same-window exit of the naked leg at the best bid.
-
-    Closing actions only, so the direction gate pre-approves them. Per-pair
-    failures are isolated and reported: one pair's refusal never stops the
-    cycle. An unreadable Data API positions endpoint fails the pass closed --
-    the leg stays naked one more tick and the read is retried next cycle.
-
-    `resolved_cids` (#402): pairs on resolved conditions are skipped before
-    any state fetch or book request -- no buy, no sell, no cancel, inventory
-    untouched. Skips are one summary line per pass, not one row per pair.
-    """
+    """Compatibility adapter for the unified one-sided lifecycle pass."""
     if not getattr(cfg, "enable_pairs_rule", True):
         return []
-
-    now_s = now if now is not None else time.time()
-    window_ms = int(getattr(cfg, "pairs_exit_window_sec", 900.0) * 1000)
-    max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
-    resolved = {str(c).lower() for c in (resolved_cids or ()) if c}
-
-    # Same pre-flight the manual exit uses: selling a size the venue does not
-    # agree we hold is an oversell. `None` means the caller supplied no view;
-    # when we are live we fetch one, and an unreadable endpoint fails the pass
-    # closed rather than acting blind.
-    if venue_positions is None and live and funder:
-        try:
-            venue_positions = fetch_positions(funder)
-        except Exception as e:
-            return [{
-                "pair_id": None, "action": "error",
-                "error": f"positions read failed: {type(e).__name__}: {e}",
-            }]
-
-    latest_close_ms = _latest_close_ms_by_condition(registry)
-    last_fill_ms, pair_cids = _last_fill_ms_by_pair(registry)
-
-    out: list[dict] = []
-    skipped_resolved = 0
-    for pid, last_ms in last_fill_ms.items():
-        cid = pair_cids.get(pid)
-        if cid and str(cid).lower() in resolved:
-            skipped_resolved += 1
-            continue
-        if cid and last_ms <= latest_close_ms.get(cid, 0):
-            continue
-        # U35 window: act only while the fill is fresh enough that the measured
-        # drift is still ~0. An undated fill (no venue_ts) is left alone --
-        # "older than the window is left alone" reads both directions.
-        if last_ms <= 0 or (now_s * 1000.0 - last_ms) > window_ms:
-            continue
-        try:
-            pair = load_pair(registry, pid)
-            if pair["naked"] <= SIZE_EPS:
-                continue
-            out.append(_route_pair(
-                client, registry, pair, max_pair_cost, live, venue_positions,
-                cfg=cfg, last_ms=last_ms, now_s=now_s))
-        except (PairExitRefused, PairCompletionRefused) as e:
-            out.append({"pair_id": pid, "action": "error", "error": str(e)})
-        except Exception as e:
-            out.append({"pair_id": pid, "action": "error",
-                        "error": f"{type(e).__name__}: {e}"})
-    if skipped_resolved:
-        log.info("pairs pass: %d pair(s) on resolved markets skipped "
-                 "(reason=resolved; no buy, sell, or cancel)",
-                 skipped_resolved)
-    return out
+    return manage_single_leg_positions(
+        client, registry, cfg, live=live, now=now,
+        venue_positions=venue_positions, funder=funder,
+        market_state_fn=market_state_fn, state_cache=state_cache,
+        gamma_host=gamma_host, resolved_cids=resolved_cids,
+    )
 
 
 @contextmanager
@@ -1433,6 +1374,302 @@ class AgedOutMarketStateCache:
         return (float(end_ts) - float(lead_sec) - now_s) > self._skip_margin_sec
 
 
+def manage_single_leg_positions(
+    client,
+    registry: OrderRegistry,
+    cfg,
+    *,
+    live: bool = True,
+    now: Optional[float] = None,
+    venue_positions: Optional[dict[str, float]] = None,
+    funder: Optional[str] = None,
+    market_state_fn=None,
+    state_cache: Optional[AgedOutMarketStateCache] = None,
+    gamma_host: Optional[str] = None,
+    resolved_cids: Optional[set[str]] = None,
+) -> list[dict]:
+    """Apply the shared lifecycle policy to every active one-sided pair.
+
+    Ordinary exposure waits for its resting hedge; an escalated hedge is
+    managed by the Trader's quote path. The poll owns only the hard-stop sell
+    and the existing market-end-aware settlement fallback.
+    """
+    pairs_enabled = bool(getattr(cfg, "enable_pairs_rule", True))
+    aged_out_enabled = bool(getattr(cfg, "enable_aged_out_rescue", True))
+    if not pairs_enabled and not aged_out_enabled:
+        return []
+
+    from core_brain.quotes import dynamic_offset_for
+    from core_brain.single_leg_lifecycle import (
+        LegState, SingleLegPosition, evaluate, persist_decision, transition,
+    )
+
+    now_s = now if now is not None else time.time()
+    window_ms = int(getattr(cfg, "pairs_exit_window_sec", 900.0) * 1000)
+    lead_sec = float(getattr(cfg, "aged_out_rescue_lead_sec", 900.0))
+    max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
+    tick_size = float(getattr(cfg, "price_tick", DEFAULT_TICK_SIZE))
+    resolved = {str(cid).lower() for cid in (resolved_cids or ()) if cid}
+
+    if market_state_fn is None:
+        from core_brain.market_resolution import (
+            DEFAULT_GAMMA_HOST, fetch_open_market_state,
+        )
+        host = gamma_host or DEFAULT_GAMMA_HOST
+        market_state_fn = lambda cid: fetch_open_market_state(host, cid)
+    if state_cache is None:
+        state_cache = AgedOutMarketStateCache()
+
+    if venue_positions is None and live and funder:
+        try:
+            venue_positions = fetch_positions(funder)
+        except Exception as exc:
+            return [{
+                "pair_id": None, "action": "error",
+                "error": f"positions read failed: {type(exc).__name__}: {exc}",
+            }]
+
+    latest_close_ms = _latest_close_ms_by_condition(registry)
+    last_fill_ms_by_pair, pair_cids = _last_fill_ms_by_pair(registry)
+    base_offset = float(dynamic_offset_for(cfg)[0])
+    quoted_tokens: dict[str, dict[str, tuple[float, str]]] = {}
+    for quote in registry.get_all_quotes():
+        cid = str(quote.get("condition_id") or "")
+        side = str(quote.get("side") or "").upper()
+        token_id = str(quote.get("token_id") or "")
+        if not cid or not token_id or side not in ("UP", "DOWN"):
+            continue
+        ts = float(quote.get("ts") or 0.0)
+        prior = quoted_tokens.setdefault(cid, {}).get(side)
+        if prior is None or ts >= prior[0]:
+            quoted_tokens[cid][side] = (ts, token_id)
+    out: list[dict] = []
+    skipped_resolved = 0
+
+    for pair_id, last_fill_ms in last_fill_ms_by_pair.items():
+        condition_id = pair_cids.get(pair_id)
+        if condition_id and condition_id.lower() in resolved:
+            skipped_resolved += 1
+            continue
+        if (condition_id
+                and last_fill_ms <= latest_close_ms.get(condition_id, 0)):
+            continue
+
+        is_aged_out = (
+            last_fill_ms > 0
+            and (now_s * 1000.0 - last_fill_ms) > window_ms
+        )
+        if not pairs_enabled and not (is_aged_out and aged_out_enabled):
+            continue
+
+        try:
+            pair = load_pair(registry, pair_id)
+            if pair["naked"] <= SIZE_EPS:
+                continue
+
+            if is_ladder_pair(pair_id):
+                # Ladder-stamped pairs bypass the shared lifecycle and keep
+                # the pre-#413 `_route_pair` semantics: under `ladder_mode`
+                # one-shot rungs rest until `ladder_exit_sec`, then leave
+                # with the `ladder_exit` method; without it they answer to
+                # the ordinary grace timer with `single_buy_exit`. The
+                # unified routing retired the `_route_pair` call; this
+                # restores it for ladder-stamped pairs only.
+                out.append(_route_pair(
+                    client, registry, pair, max_pair_cost, live,
+                    venue_positions, cfg=cfg, last_ms=last_fill_ms,
+                    now_s=now_s,
+                ))
+                continue
+
+            pair_side_tokens: dict[str, list[str]] = {}
+            for token_id in pair["legs"]:
+                side = _token_side(registry, pair["condition_id"], token_id)
+                if side in ("UP", "DOWN"):
+                    pair_side_tokens.setdefault(side, []).append(token_id)
+            if any(len(tokens) > 1 for tokens in pair_side_tokens.values()):
+                raise PairExitRefused(
+                    f"pair_id={pair_id!r} maps multiple tokens to one outcome"
+                )
+            side_tokens = {
+                side: tokens[0]
+                for side, tokens in pair_side_tokens.items()
+            }
+            for side in ("UP", "DOWN"):
+                if side not in side_tokens:
+                    token = quoted_tokens.get(pair["condition_id"], {}).get(side)
+                    if token is not None:
+                        side_tokens[side] = token[1]
+            if set(side_tokens) != {"UP", "DOWN"}:
+                raise PairExitRefused(
+                    f"pair_id={pair_id!r} does not identify one UP token and "
+                    "one DOWN token in the quotes ledger"
+                )
+
+            empty_leg = {"matched": 0.0, "notional": 0.0}
+            up_leg = pair["legs"].get(side_tokens["UP"], empty_leg)
+            down_leg = pair["legs"].get(side_tokens["DOWN"], empty_leg)
+            up_size = float(up_leg["matched"])
+            down_size = float(down_leg["matched"])
+            held_token = (
+                side_tokens["UP"] if up_size > down_size else side_tokens["DOWN"]
+            )
+            held_book = client.get_order_book(held_token)
+            held_bid = best_bid(held_book)
+            up_bid = held_bid if held_token == side_tokens["UP"] else None
+            down_bid = held_bid if held_token == side_tokens["DOWN"] else None
+
+            position = SingleLegPosition(
+                pair_id=pair_id,
+                condition_id=pair["condition_id"],
+                up_token_id=side_tokens["UP"],
+                down_token_id=side_tokens["DOWN"],
+                up_size=up_size,
+                down_size=down_size,
+                up_avg_price=(
+                    float(up_leg["notional"]) / up_size if up_size > 0 else 0.0
+                ),
+                down_avg_price=(
+                    float(down_leg["notional"]) / down_size
+                    if down_size > 0 else 0.0
+                ),
+                up_best_bid=up_bid,
+                down_best_bid=down_bid,
+                base_offset=base_offset,
+            )
+            # The poll loop owns only the hard-stop and settlement-fallback
+            # decisions. Escalation is the Trader's to own: computing it here
+            # with `transition` (pure) never persists a Trader-owned state, so
+            # the two processes cannot overwrite each other's row or disagree
+            # about the threshold via a different base offset.
+            previous_record = registry.get_lifecycle_state(pair_id)
+            if (previous_record is not None
+                    and previous_record.condition_id != position.condition_id):
+                raise PairExitRefused(
+                    f"pair_id={pair_id!r} lifecycle state belongs to condition "
+                    f"{previous_record.condition_id!r}, not "
+                    f"{position.condition_id!r}"
+                )
+            previous_state = (
+                LegState(previous_record.state)
+                if previous_record is not None else None
+            )
+            decision = transition(
+                position, previous_state, max_pair_cost=max_pair_cost,
+                settlement_due=False, tick_size=tick_size,
+            )
+            if decision.action == "hard_stop":
+                # The poll's hard stop is its own to persist: it survives
+                # restart and is observable, and only the poll executes it.
+                persist_decision(
+                    registry, position, decision, previous_state,
+                )
+            if decision.action == "hard_stop":
+                result = exit_single_buy(
+                    client, registry, pair_id, max_pair_cost,
+                    live=live, venue_positions=venue_positions,
+                    reason="lifecycle_hard_stop", force=True,
+                )
+                result.update(
+                    route="hard_stop", lifecycle_state=decision.state.value,
+                    reason=decision.reason,
+                )
+                out.append(result)
+                continue
+
+            if (is_aged_out and aged_out_enabled and last_fill_ms > 0
+                    and condition_id):
+                state = state_cache.state_for(
+                    condition_id, market_state_fn, now_s=now_s,
+                    lead_sec=lead_sec,
+                )
+                verdict, reason = aged_out_verdict(
+                    last_fill_ms=last_fill_ms, window_ms=window_ms,
+                    now_s=now_s, end_ts=getattr(state, "end_ts", None),
+                    lead_sec=lead_sec,
+                    venue_closed=getattr(state, "closed", None),
+                    venue_accepting=getattr(state, "accepting_orders", None),
+                )
+                if verdict == AGED_OUT_DUE:
+                    decision = evaluate(
+                        position, registry, max_pair_cost=max_pair_cost,
+                        settlement_due=True, tick_size=tick_size,
+                    )
+                    result = _settlement_fallback(
+                        client, registry, pair, cfg, max_pair_cost, live,
+                        venue_positions, reason,
+                    )
+                    if result.get("action") in ("completed", "exited"):
+                        result["action"] = "aged_out_rescue"
+                    result.update(
+                        lifecycle_stage="settlement_fallback",
+                        lifecycle_state=decision.state.value,
+                        settlement_reason=reason,
+                    )
+                    out.append(result)
+                    continue
+                if verdict != AGED_OUT_NOT_AGED_OUT:
+                    out.append({
+                        "pair_id": pair_id, "condition_id": condition_id,
+                        "action": verdict, "lifecycle_state": decision.state.value,
+                        "reason": reason,
+                    })
+                    continue
+
+            action = {
+                "wait": "patient_wait",
+                "hedge": "escalated_wait",
+                "locked": "pair_locked",
+                "rest": "dual_resting",
+                "refused": "refused",
+            }.get(decision.action, decision.action)
+            out.append({
+                "pair_id": pair_id, "condition_id": condition_id,
+                "action": action, "lifecycle_state": decision.state.value,
+                "reason": decision.reason,
+            })
+        except (PairExitRefused, PairCompletionRefused) as exc:
+            out.append({
+                "pair_id": pair_id, "condition_id": condition_id,
+                "action": "error", "error": str(exc),
+            })
+        except Exception as exc:
+            out.append({
+                "pair_id": pair_id, "condition_id": condition_id,
+                "action": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+
+    if skipped_resolved:
+        log.info(
+            "single-leg lifecycle: %d pair(s) on resolved markets skipped "
+            "(reason=resolved; inventory preserved)", skipped_resolved,
+        )
+    return out
+
+
+def _settlement_fallback(client, registry, pair, cfg, max_pair_cost, live,
+                         venue_positions, reason: str) -> dict:
+    """Try one capped completion at settlement time, then use guarded exit."""
+    try:
+        with _completion_target(client, pair["pair_id"]):
+            result = complete_pair(
+                client, registry, pair["pair_id"], max_pair_cost, live=live,
+                max_order_usd=getattr(cfg, "max_order_usd", None) or 25.0,
+            )
+    except PairCompletionRefused:
+        result = exit_single_buy(
+            client, registry, pair["pair_id"], max_pair_cost,
+            live=live, venue_positions=venue_positions,
+            reason="aged_out_rescue", force=True,
+        )
+        result["route"] = "exited"
+    else:
+        result["route"] = "completed"
+    result["reason"] = reason
+    return result
+
+
 def rescue_aged_out_legs(
     client,
     registry: OrderRegistry,
@@ -1447,166 +1684,15 @@ def rescue_aged_out_legs(
     gamma_host: Optional[str] = None,
     resolved_cids: Optional[set[str]] = None,
 ) -> list[dict]:
-    """Close a naked leg the rescue window deliberately does not reach (#311).
-
-    `auto_manage_pairs` discovers pairs whose last fill is INSIDE
-    `pairs_exit_window_sec`; this arm is the complement -- dated last fill
-    strictly older than the window -- which is the set that used to sit
-    unmanaged until settlement booked whatever the outcome was.
-
-    Per discovery: the same close-coverage guard the in-window pass uses (a leg
-    already closed by merge, exit or settlement is never sold again), naked legs
-    only, and then `aged_out_verdict` on the venue's own market state. `due`
-    routes exactly like the in-window cap check -- complete under
-    `max_pair_cost` when that is available, otherwise exit the naked leg at the
-    best bid with reason `aged_out_rescue`.    Everything else is a no-op that is reported, never acted on.
-
-    Fail closed at every port: an unreadable market state or end time leaves the
-    leg naked and the read is retried next rotation; the venue's own position
-    read failing fails the whole pass rather than selling blind. Per-pair
-    failures are isolated -- one pair's refusal never stops the cycle.
-
-    Market state comes through `state_cache`: one read per condition per TTL,
-    shared across cycles when the caller owns the cache. A caller with no cache
-    still gets one read per condition per pass, never one per naked pair.
-
-    `resolved_cids` (#402): legs on resolved conditions are skipped before any
-    state fetch or book request -- no buy, no sell, no cancel, inventory
-    untouched, no settlement invented. Skips are one summary line per pass.
-    """
+    """Compatibility adapter for lifecycle-managed settlement fallback."""
     if not getattr(cfg, "enable_aged_out_rescue", True):
         return []
-
-    now_s = now if now is not None else time.time()
-    window_ms = int(getattr(cfg, "pairs_exit_window_sec", 900.0) * 1000)
-    lead_sec = float(getattr(cfg, "aged_out_rescue_lead_sec", 900.0))
-    max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
-
-    if market_state_fn is None:
-        from core_brain.market_resolution import (
-            DEFAULT_GAMMA_HOST, fetch_open_market_state,
-        )
-        host = gamma_host or DEFAULT_GAMMA_HOST
-        market_state_fn = lambda cid: fetch_open_market_state(host, cid)  # noqa: E731
-
-    if state_cache is None:
-        state_cache = AgedOutMarketStateCache()
-
-    # The same pre-flight the in-window pass uses: selling a size the venue
-    # does not agree we hold is an oversell. An unreadable endpoint fails this
-    # pass closed, so the leg stays naked one more tick and the read is retried.
-    if venue_positions is None and live and funder:
-        try:
-            venue_positions = fetch_positions(funder)
-        except Exception as e:
-            return [{
-                "pair_id": None, "action": "error",
-                "error": f"positions read failed: {type(e).__name__}: {e}",
-            }]
-
-    latest_close_ms = _latest_close_ms_by_condition(registry)
-    last_fill_ms, pair_cids = _last_fill_ms_by_pair(registry)
-    resolved = {str(c).lower() for c in (resolved_cids or ()) if c}
-
-    out: list[dict] = []
-    skipped_resolved = 0
-    for pid, fill_ms in last_fill_ms.items():
-        cid = pair_cids.get(pid)
-        if cid and str(cid).lower() in resolved:
-            skipped_resolved += 1
-            continue
-        if cid and fill_ms <= latest_close_ms.get(cid, 0):
-            continue
-        # Undated fills never reach here (`_last_fill_ms_by_pair` drops them),
-        # and the verdict re-checks the window so the two arms partition the
-        # fills exactly once.
-        #
-        # Balance is checked BEFORE the market read: an old pair that is already
-        # whole is the ordinary state of every merged pair, and it has nothing
-        # to rescue -- no reason to spend a venue read on it, or a log line
-        # every rotation.
-        try:
-            pair = load_pair(registry, pid)
-            if pair["naked"] <= SIZE_EPS:
-                continue
-        except Exception as e:
-            out.append({"pair_id": pid, "condition_id": cid, "action": "error",
-                        "error": f"{type(e).__name__}: {e}"})
-            continue
-        try:
-            state = (state_cache.state_for(cid, market_state_fn, now_s=now_s,
-                                           lead_sec=lead_sec)
-                     if cid else None)
-            verdict, reason = aged_out_verdict(
-                last_fill_ms=fill_ms, window_ms=window_ms, now_s=now_s,
-                end_ts=getattr(state, "end_ts", None),
-                lead_sec=lead_sec,
-                venue_closed=getattr(state, "closed", None),
-                venue_accepting=(
-                    getattr(state, "accepting_orders", None)
-                    if state is not None else None),
-            )
-            if verdict == AGED_OUT_NOT_AGED_OUT:
-                continue
-            if verdict != AGED_OUT_DUE:
-                out.append({"pair_id": pid, "condition_id": cid,
-                            "action": verdict, "reason": reason})
-                continue
-            out.append(_route_aged_out_pair(
-                client, registry, pair, cfg, max_pair_cost, live,
-                venue_positions, reason))
-        except (PairExitRefused, PairCompletionRefused) as e:
-            out.append({"pair_id": pid, "condition_id": cid,
-                        "action": "error", "error": str(e)})
-        except Exception as e:
-            out.append({"pair_id": pid, "condition_id": cid,
-                        "action": "error",
-                        "error": f"{type(e).__name__}: {e}"})
-    if skipped_resolved:
-        log.info("aged-out pass: %d pair(s) on resolved markets skipped "
-                 "(reason=resolved; inventory preserved)",
-                 skipped_resolved)
-    return out
-
-
-def _route_aged_out_pair(client, registry, pair, cfg, max_pair_cost, live,
-                         venue_positions, reason: str) -> dict:
-    """Complete under the cap if that is still available, else sell the leg.
-
-    The same priority as the in-window route: assembling a pair under
-    `max_pair_cost` and merging at parity beats dumping a leg into the bid. The
-    reason travels with whichever route fired, so the forensics can tell an
-    aged-out rescue from an in-window one without reconstructing it.
-    """
-    light_token = pair["light"]["token_id"]
-    ask = best_ask(client.get_order_book(light_token)) if light_token else None
-    if not should_exit(pair["fill_cost"], ask, max_pair_cost):
-        try:
-            max_order = getattr(cfg, "max_order_usd", None)
-            # Name the pair for the crossing: an in-window naked pair on the
-            # same token is the shim's default target, and the fill would be
-            # booked to it while this pair stayed naked and was bought again.
-            with _completion_target(client, pair["pair_id"]):
-                res = complete_pair(client, registry, pair["pair_id"],
-                                    max_pair_cost, live=live,
-                                    max_order_usd=max_order)
-            if isinstance(res, dict):
-                res["route"] = "completed"
-                res["reason"] = reason
-                if res.get("action") == "completed":
-                    res["action"] = "aged_out_rescue"
-            return res
-        except PairCompletionRefused:
-            pass  # fall through to the same-window exit
-    res = exit_single_buy(client, registry, pair["pair_id"], max_pair_cost,
-                          live=live, venue_positions=venue_positions,
-                          reason="aged_out_rescue")
-    if isinstance(res, dict):
-        res["route"] = "exited"
-        res["reason"] = reason
-        if res.get("action") == "exited":
-            res["action"] = "aged_out_rescue"
-    return res
+    return manage_single_leg_positions(
+        client, registry, cfg, live=live, now=now,
+        venue_positions=venue_positions, funder=funder,
+        market_state_fn=market_state_fn, state_cache=state_cache,
+        gamma_host=gamma_host, resolved_cids=resolved_cids,
+    )
 
 
 def _route_pair(client, registry, pair, max_pair_cost, live,

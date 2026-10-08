@@ -1,94 +1,95 @@
-# Plan — #411: Apply asymmetric requote thresholds and enforce the pair-cost ceiling
+# Plan — #413: Consolidate single-leg exposure into a unified lifecycle
 
-Branch: i411/apply-asymmetric-requote-thresholds-and-enforce-the-pair-cost-ceiling | Issue: #411
+Branch: i413/tune-live-activity-gates-protect-hedge | Issue: #413
 
-- Tier: **Standard** — one config seam, one risk seam, and two quote/planner paths (`quotes.py`, `trader_loop.py`) plus focused regression tests. The work is narrow but cross-cutting because the cap and the hold are enforced in multiple branches.
-- Task type: **Code + Debug + Security** (real-money path; a pair over $1.00 is a booked loss, and a bad cancel path can turn a valid fill into a churn loop).
-- Stack: Python, pytest (`python -m pytest -q tests/test_plan_orders_asymmetric_hold.py tests/test_ladder_quotes.py tests/test_completable_pair_gate.py tests/test_trader_loop.py tests/test_live_quotes.py` for focused checks).
-- Skills: `test-driven-development`, `incremental-implementation`, `debugging-and-error-recovery`.
-- Spec: issue body for #411 plus the CodeRabbit design notes already in the issue comments; no external dependency and no schema migration.
-- CodeRabbit plan intake (read once; rendered copy used, HTML echo ignored):
-  - Adopted: hard $0.99 ceiling as a guardrail that always applies to any rounded pair, while configured caps only tighten the rule; asymmetric BUY rule should compare the current mid to the resting bid (`mid - resting >= edge_vs_mid + dead_band`) and keep a downward move inside the hold window instead of cancelling; planner logic keeps wanted tokens held until the target has moved past the configured floor; ladder/legacy quote paths must reuse the same pair-cost refusal helper before emitting a quote.
-  - Rejected/trimmed: over-split work merged into 4 atomic tasks; no registry or order-manager work; no new public abstractions or new files.
-  - `[UNVERIFIED]` at plan time to confirm in build: the exact call sites for the ladder path and legacy path in `quotes.py`, and whether the asymmetry is enforced in `plan_orders` before or after the existing token-without-intent logic. These are code-backed checks, not guesses.
-- Open questions: none at plan time; issue already names the exact policy contract and the affected seams.
-- Skipped personae: none; direct reads of `quotes.py`, `risk.py`, `trader_loop.py`, and the relevant tests were enough to ground the plan.
+- Tier: **Large** — durable position state, quote admission, live close execution, poll/shadow integration, and safety documentation cross multiple runtime surfaces.
+- Task type: **Code + Security + Debug + Docs** — changes affect real-money position lifecycle and must preserve every cancellation, position, sizing, and sell guard.
+- Stack: Python, SQLite registry, pytest; no external dependency.
+- Approved specification: [Unified Single-Leg Lifecycle design](../docs/superpowers/specs/2026-10-08-single-leg-lifecycle-design.md).
+- Detailed execution plan: [Unified Single-Leg Lifecycle implementation plan](../docs/superpowers/plans/2026-10-08-unified-single-leg-lifecycle.md).
+- Reconciliation: this replaces the previous #413 activity-gate plan at the operator's direction. No prior task is marked complete. Do not change market movement/velocity selector behavior in this build.
+- Safety: do not open or rewrite `data/orders.db`; tests use temporary DBs. Do not run live quoting, Trader, manual completion, or dashboard START. Shadow rehearsal is the only permitted order-loop validation.
 
-## Interface lock
+## Locked behavior
 
-Changed (`core_brain/config.py`):
-- `max_pair_cost` remains the general cap and `max_completable_pair_cost` stays the both-maker gate; the new hard ceiling is always-on and must not be bypassed by configuration.
-- `requote_dead_band` stays the hysteresis threshold; `requote_hold_below_target` is the downward-move hold cap that prevents cancellation when the market is arriving on a resting BUY.
-
-Changed (`core_brain/risk.py`):
-- Add a single helper that refuses any rounded pair above `$0.99` when the pair is evaluated against the opposite-side hold or best ask.
-- Use the effective cap helper to return `min(cfg.max_pair_cost, 0.99)` so config cannot loosen the rule.
-- Keep `completable_pair_block` and `hard_block` active; this bug is a missing enforcement layer, not a rewrite of the risk gates.
-
-Changed (`core_brain/quotes.py`):
-- Apply the hard pair ceiling in the from-mid production path and in the ladder/legacy quote generation that may assemble a pair over the cap.
-- `quote_resting_price` and the quote-generation branches should be checked for final-price refusal before a quote is emitted.
-
-Changed (`core_brain/trader_loop.py`):
-- `plan_orders` is the asymmetric re-quote gate. It must treat a falling target differently from a rising target for resting BUY orders so a tide of downward fills is not cancelled away.
-- Keep the existing reason-recording path (`reasons` dict / CANCEL_* constants) and only add or tighten the decision gate logic.
-
-Frozen / out of scope:
-- `core_brain/single_buy_saver.py`
-- `core_brain/order_registry.py`
-- `core_brain/order_manager.py`
-- `core_brain/shadow_run.py`
-- `core_brain/shadow_exec.py`
-- `core_brain/markets.py`
-- `core_brain/cancel_report.py`
-- `scoring/config.py`
-- `tests/conftest.py`
-- `tests/test_limit_order_pricing.py` (regression-only reference, not a driver for this issue)
-- `docs/` and all non-code collateral
-
-## Improvement proposal (adopted — hardening, evidence-based)
-
-> A resting BUY that is being swept downward should not be cancelled by the market arriving at it; the bot should hold it within the configured threshold while a real pair-cost failure still rejects it. Evidence: the issue asks for the asymmetric BUY rule and the repo already documents `requote_hold_below_target` as a downward hold in `core_brain/config.py`, while the current `plan_orders` contract still treats the two directions as the same event. This is the missing logic step that hardens the queue without changing the strategy objective.
+- `DUAL_RESTING` → `PATIENT_WAIT` on a per-pair one-sided fill; keep the opposite maker order at its target and do not immediately taker-complete.
+- Escalate when `held_average_fill - held_best_bid >= 2.0 * dynamic_offset_for(cfg)[0]`.
+- Sticky `ESCALATED_HEDGE` price is `floor_to_tick(min(0.99, cfg.max_pair_cost) - held_average_fill)`; exactly `$0.99` is permitted only for this lifecycle escalation and its resulting pair lock.
+- Only lifecycle escalation may bypass `max_spread_from_mid`; book-health, price-band, pair-cost, order, naked-risk, bankroll, and venue checks remain.
+- `HARD_STOP` triggers at held best bid `<= $0.15`, precedes completion, cancels then re-reads venue state, and uses the guarded exit mechanics.
+- Balanced inventory at or below `$0.99` and no stricter configured cap is `PAIR_LOCKED`.
+- Preserve the existing settlement/aged-out fallback; only there may the controller try one final under-cap completion before guarded exit.
+- Trader, order-manager poll, and shadow rehearsal call one shared lifecycle policy. `single_buy_saver` remains its executor; `unhedged_stop_loss` remains the independent markout gate.
 
 ## Dependency graph
 
-- T1 → T2 → T3 → T4
-- T1 and T2 are the main policy blocks; T3 uses them in quote generation; T4 is final validation and regression sweep.
-- Checkpoint C1 after T1: hard cap helper and config values are wired and unit-tested.
-- Checkpoint C2 after T2: `plan_orders` holds falling BUY targets and cancels only when the cap or drift test truly says to.
+- T1 → T2
+- T1 → T3
+- T1 + T2 → T4 → T5
+- T1 + T2 + T3 + T5 → T6
+- T1–T6 → T7
 
 ## Tasks
 
-### T1 [ ] — Hard ceiling helper + config defaults [Backend/Logic] (S)
+### T1 [x] — Implement pure lifecycle transitions [Backend/Logic] (M)
 
-- Target files: `core_brain/config.py`, `core_brain/risk.py`
-- Build: add the always-on helper implementing the hard `$0.99` cap and the effective-cap function; leave the existing `hard_block`/`completable_pair_block` call sites intact while tightening them by the new helper.
-- Verify: `tests/test_completable_pair_gate.py` and a new focused assertion that a rounded pair above `0.99` is refused by the helper even when config is looser.
+- Target files: `core_brain/single_leg_lifecycle.py`, `tests/test_single_leg_lifecycle.py`
+- Build: add `LegState`, per-pair position/decision dataclasses, hard-stop / settlement / sticky escalation precedence, threshold computation, and tick-floored cap logic.
+- Helper skill: `test-driven-development`
 - Depends on: none.
+- Verify: `python -m pytest -q tests/test_single_leg_lifecycle.py`; cover all five states, exact boundaries, missing books, partial fills, and invalid cap prices.
 
-### T2 [ ] — Asymmetric BUY re-gate in `plan_orders` [Backend/Logic] (M)
+### T2 [x] — Persist sticky state in the registry [Backend/Logic] (M)
 
-- Target files: `core_brain/trader_loop.py`, `tests/test_plan_orders_asymmetric_hold.py`
-- Build: restore the intended asymmetric behavior in the held-order path so a falling target inside `requote_hold_below_target` is kept, while a truly stale or rising target keeps the old cancel discipline; make the pair-cost re-gate use the same hard cap and effective cap semantics as the quote generation path.
-- Verify: the existing `test_plan_orders_asymmetric_hold.py` suite, especially the held-BUY cases and the cap-edge assertions for a downward move inside the threshold.
+- Target files: `core_brain/order_registry.py`, `core_brain/single_leg_lifecycle.py`, `tests/test_order_registry.py`, `tests/test_single_leg_lifecycle.py`
+- Build: add an additive lifecycle table and typed `get_lifecycle_state` / `save_lifecycle_state` methods; fail explicitly on persistence errors.
+- Helper skill: `test-driven-development`
 - Depends on: T1.
+- Verify: `python -m pytest -q tests/test_order_registry.py -k "lifecycle_state or lifecycle_schema"` using temporary databases; prove existing order/fill values remain unchanged and escalation state survives reopen.
 
-### T3 [ ] — Quote generation uses the same bound in all paths [Backend/Logic] (M)
+### T3 [x] — Add guarded hard-stop selling [Backend/Logic] (M)
 
-- Target files: `core_brain/quotes.py`, `tests/test_ladder_quotes.py`, `tests/test_live_quotes.py`
-- Build: apply the helper in the from-mid, ladder, and legacy quote branches before submission so no path can emit a pair above `$0.99`. Keep the existing fill-quality logic and only reject the over-cap outcomes.
-- Verify: `tests/test_ladder_quotes.py` and the live-quote regression file for the touched quote routing; every new case should fail without the helper placement.
+- Target files: `core_brain/single_buy_saver.py`, `tests/test_single_buy_saver.py`, `tests/test_dual_stop_loss.py`
+- Build: add `force=False` to `exit_single_buy`; when the lifecycle passes `force=True`, bypass only the profitable-completion preference, retaining cancel-both, venue reread, position agreement, sell sizing, depth, slippage, and close recording.
+- Helper skill: `test-driven-development`
+- Depends on: T1.
+- Verify: `python -m pytest -q tests/test_single_buy_saver.py tests/test_dual_stop_loss.py -k "force_exit or cancel or venue or position or slippage or hard_stop"`; profitable completion must not block the hard stop, while failed safety checks must send no sell.
+
+### T4 [x] — Add the narrow escalated quote path [Backend/Logic] (L)
+
+- Target files: `core_brain/risk.py`, `core_brain/quotes.py`, `tests/test_live_quotes.py`
+- Build: pass a typed lifecycle override through quote decisions; require the exact tick-floored maximum bid and pair-scoped cost, then apply normal book-health, price-band, and size checks for the reducing side. Bypass only spread-distance and permit equality at `min(0.99, cfg.max_pair_cost)` only for this explicit lifecycle override; keep the Trader's final funding caps intact.
+- Helper skill: `api-and-interface-design`, `test-driven-development`
 - Depends on: T1, T2.
+- Verify: `python -m pytest -q tests/test_live_quotes.py`; assert non-lifecycle calls remain strict, lifecycle cost `<= min(0.99, cfg.max_pair_cost)` passes, a larger cost fails, and every other safety gate remains active.
 
-### T4 [ ] — Regression sweep + final proof [Backend/Logic] (S)
+### T5 [x] — Integrate lifecycle decisions into the Trader [Backend/Logic] (L)
 
-- Target files: `tests/test_completable_pair_gate.py`, `tests/test_trader_loop.py`, `tests/test_cancel_attribution.py`, `tests/test_shadow_run.py` (selected regression set)
-- Build: run the focused, issue-matched suite and confirm there are no cancel-reason regressions or pair-cost escapes. No live venue commands are run in this station.
-- Verify: `python -m pytest -q tests/test_plan_orders_asymmetric_hold.py tests/test_ladder_quotes.py tests/test_completable_pair_gate.py tests/test_trader_loop.py tests/test_live_quotes.py` plus any additional regression file needed for the exact touched path.
-- Depends on: T1, T2, T3.
+- Target files: `core_brain/trader_loop.py`, `core_brain/quotes.py`, `tests/test_trader_loop.py`, `tests/test_live_quotes.py`
+- Build: derive pair-scoped position snapshots from fills and fetched books, load persisted state, keep patient orders unchanged, carry escalation price and existing pair ID through planning, and emit transition events only on changes.
+- Helper skill: `test-driven-development`, `api-and-interface-design`
+- Depends on: T1, T2, T4.
+- Verify: `python -m pytest -q tests/test_trader_loop.py tests/test_live_quotes.py`; cover patient keep, exact escalation replace, hard-stop no-buy, pair-ID attribution, unchanged-state quietness, and ambiguous simultaneous pair handling.
 
-## Verification plan
+### T6 [x] — Unify poll and shadow rescue routing [Backend/Logic] (L)
 
-- Focused gate: `python -m pytest -q tests/test_plan_orders_asymmetric_hold.py tests/test_ladder_quotes.py tests/test_completable_pair_gate.py tests/test_trader_loop.py tests/test_live_quotes.py`
-- This is the exact issue-control set for the changed behavior and covers both the cancel path and the quote generation path. The full suite remains the GitHub CI merge gate.
-- No live `quote`, `complete`, or dashboard START command is run in this station; the proof is the red/green test loop and the fact that the logic is isolated to quoting and planner decisions.
+- Target files: `core_brain/single_leg_lifecycle.py`, `core_brain/single_buy_saver.py`, `core_brain/order_manager.py`, `core_brain/shadow_run.py`, `tests/test_auto_pairs.py`, `tests/test_dual_stop_loss.py`, `tests/test_aged_out_rescue.py`, `tests/test_shadow_run.py`, `tests/test_shadow_exec.py`
+- Build: add one shared post-reconcile `manage_single_leg_positions` service for all active one-sided pairs, hard stops, and settlement fallback. Retire automatic in-window completion/drift/grace decisions; retain `auto_manage_pairs` and `rescue_aged_out_legs` as delegating compatibility adapters. Wire both poll and shadow through the same service and one pass per cycle.
+- Helper skill: `test-driven-development`, `debugging-and-error-recovery`
+- Depends on: T1, T2, T3, T5.
+- Verify: `python -m pytest -q tests/test_auto_pairs.py tests/test_dual_stop_loss.py tests/test_aged_out_rescue.py tests/test_shadow_run.py tests/test_shadow_exec.py`; shadow actions must stay in the explicit shadow DB and use no signing client.
+
+### T7 [x] — Document safeguards and finish focused verification [Docs + Backend/Logic] (M)
+
+- Target files: `docs/agents/architecture.md`, `docs/agents/safety.md`, `docs/agents/strategy.md`, all focused tests listed in the detailed plan
+- Build: document state ownership, thresholds, sticky escalation, exact-cap exception, hard-stop safeguards, settlement-only completion, and hands-on shadow verification.
+- Helper skill: `documentation-and-adrs`, `verification-before-completion`
+- Depends on: T1, T2, T3, T4, T5, T6.
+- Verify: run the focused suite listed in Task 7 of the detailed plan; inspect the full diff for any production DB, live-command, selector-gate, or unrelated changes.
+
+## Checkpoints
+
+- C1 after T1–T2: transition logic and restart-persistent state work against temporary stores.
+- C2 after T3–T4: forced sell safeguards and the narrowly scoped quote exception are proven.
+- C3 after T5–T6: Trader, poll, and shadow use the shared lifecycle controller.
+- C4 after T7: focused regression set and operator-facing docs agree.

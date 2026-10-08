@@ -2101,6 +2101,7 @@ class TestUmaResolutionGateVisit:
         assert "uma_check_unreachable" in warns
         assert discards == [] and events == []
 
+
     def test_failed_cancels_reported_and_retried(self):
         from core_brain.trader_loop import _visit_one
 
@@ -2175,3 +2176,347 @@ class TestUmaResolutionGateVisit:
         assert res.status != "CANCELLED"
         assert "uma_check_unreachable" in warns
         assert discards == [] and events == []
+
+
+def _seed_lifecycle_pair(
+    registry,
+    pair_id,
+    *,
+    up_filled=0.0,
+    down_filled=0.0,
+    up_price=0.48,
+    down_price=0.48,
+    order_size=200.0,
+):
+    from core_brain.order_registry import FillRecord, OrderRecord
+
+    active_orders = []
+    for side, token_id, fill_size, price in (
+        ("UP", "tok-up", up_filled, up_price),
+        ("DOWN", "tok-dn", down_filled, down_price),
+    ):
+        order_id = f"{pair_id}-{side.lower()}"
+        status = (
+            "filled" if fill_size >= order_size
+            else "partial" if fill_size > 0
+            else "open"
+        )
+        registry.create_order(OrderRecord(
+            id=order_id,
+            condition_id="0xabc",
+            token_id=token_id,
+            side="BUY",
+            price=price,
+            original_size=order_size,
+            status=status,
+            posted_ts=1,
+            last_polled_ts=1,
+            order_id=f"venue-{order_id}",
+            pair_id=pair_id,
+        ))
+        if fill_size > 0:
+            registry.record_fill(FillRecord(
+                trade_id=f"fill-{order_id}",
+                order_uuid=order_id,
+                size=fill_size,
+                price=price,
+                venue_ts=1,
+                recorded_ts=1,
+                run_id="lifecycle-test",
+            ))
+        if status in ("open", "partial"):
+            active_orders.append({
+                "id": order_id,
+                "order_id": f"venue-{order_id}",
+                "condition_id": "0xabc",
+                "token_id": token_id,
+                "side": "BUY",
+                "price": price,
+                "status": status,
+                "pair_id": pair_id,
+            })
+    return active_orders
+
+
+def _lifecycle_visit_seam(tmp_path, pairs, *, up_bid=0.45, decide):
+    from core_brain.order_registry import inventory_from_registry
+    from core_brain.trader_loop import VenueSeam
+
+    from core_brain.order_registry import OrderRegistry
+
+    registry = OrderRegistry(tmp_path / "lifecycle-visit.db",
+                             run_id="lifecycle-test")
+    active_orders = []
+    for pair_id, pair_options in pairs:
+        active_orders.extend(
+            _seed_lifecycle_pair(registry, pair_id, **pair_options))
+    books = {
+        "tok-up": {
+            "token_id": "tok-up",
+            "best_bid": up_bid,
+            "best_ask": up_bid + 0.02,
+            "bids": {up_bid: 1000.0},
+            "asks": {up_bid + 0.02: 1000.0},
+        },
+        "tok-dn": {
+            "token_id": "tok-dn",
+            "best_bid": 0.50,
+            "best_ask": 0.52,
+            "bids": {0.50: 1000.0},
+            "asks": {0.52: 1000.0},
+        },
+    }
+    cfg = MakerConfig(
+        objective="spread_capture",
+        size_mode="shares",
+        quote_shares=120,
+        min_quote_shares=5,
+        max_pair_cost=0.99,
+        max_naked_usd=100.0,
+        reward_offset=0.02,
+    )
+    seam = VenueSeam(
+        client=object(),
+        registry=registry,
+        base_cfg=cfg,
+        fetch_market=lambda cid: FakeMarket(cid),
+        fetch_books=lambda host, token: books[token],
+        decide=decide,
+        submit_fn=lambda *args, **kwargs: 0,
+        cancel_fn=lambda *args, **kwargs: len(args[2]),
+        reconcile_fn=lambda *args, **kwargs: None,
+        sweep_fn=lambda: None,
+        inventory_fn=lambda market: inventory_from_registry(
+            market.condition_id,
+            market.up_token,
+            market.down_token,
+            db_path=registry.db_path,
+        ),
+        open_orders_fn=lambda market: list(active_orders),
+    )
+    return seam, registry, active_orders
+
+
+def _capture_lifecycle_plan(captured):
+    def plan_fn(open_orders, intents, price_eps=1e-9, **kwargs):
+        result = plan_orders(open_orders, intents, price_eps, **kwargs)
+        captured["cancel"] = result[0]
+        captured["submit"] = result[1]
+        captured["preserve_order_ids"] = kwargs.get("preserve_order_ids", set())
+        captured["replace_order_ids"] = kwargs.get("replace_order_ids", set())
+        return result
+    return plan_fn
+
+
+class TestSingleLegLifecycleVisit:
+    def test_patient_wait_preserves_opposite_order_and_emits_transition_once(
+        self, tmp_path
+    ):
+        seam, registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-patient", {"up_filled": 100.0})],
+            up_bid=0.45,
+            decide=lambda *args, **kwargs: ([], "unfunded by the allocator"),
+        )
+        captured = {}
+        events = []
+        plan_fn = _capture_lifecycle_plan(captured)
+
+        for cycle in (1, 2):
+            result = _visit_one(
+                seam,
+                {"cid": "0xabc"},
+                live=False,
+                cycle=cycle,
+                emit_fn=lambda **event: events.append(event),
+                plan_fn=plan_fn,
+            )
+            assert result.submitted == 0
+
+        patient_order = next(
+            order for order in seam.open_orders_fn(FakeMarket())
+            if order["token_id"] == "tok-dn"
+        )
+        assert patient_order["id"] in captured["preserve_order_ids"]
+        assert [row["id"] for row in captured["cancel"]] == [
+            "pair-patient-up",
+        ]
+        assert captured["submit"] == []
+        assert registry.get_lifecycle_state("pair-patient").state == "PATIENT_WAIT"
+        transitions = [
+            event for event in events
+            if event.get("action") == "single_leg_transition"
+        ]
+        assert len(transitions) == 1
+        assert transitions[0]["extra"]["pair_id"] == "pair-patient"
+        assert transitions[0]["extra"]["state"] == "PATIENT_WAIT"
+
+    def test_escalation_replaces_only_its_pair_order_at_exact_maximum_bid(
+        self, tmp_path
+    ):
+        from core_brain.quotes import decide_quotes
+
+        seam, registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-escalate", {"up_filled": 100.0})],
+            up_bid=0.43,
+            decide=decide_quotes,
+        )
+        captured = {}
+        result = _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=_capture_lifecycle_plan(captured),
+        )
+
+        old_hedge_id = "pair-escalate-down"
+        assert old_hedge_id in captured["replace_order_ids"]
+        assert old_hedge_id in [row["id"] for row in captured["cancel"]]
+        assert [intent.price for intent in captured["submit"]] == [pytest.approx(0.51)]
+        assert [intent.pair_id for intent in captured["submit"]] == ["pair-escalate"]
+        assert [intent.size for intent in captured["submit"]] == [100]
+        assert result.intents[0].pair_id == "pair-escalate"
+        assert registry.get_lifecycle_state("pair-escalate").state == "ESCALATED_HEDGE"
+
+    def test_escalation_keeps_an_order_already_at_the_maximum_bid(self, tmp_path):
+        from core_brain.quotes import decide_quotes
+
+        seam, _registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-already-escalated", {
+                "up_filled": 100.0,
+                "down_price": 0.51,
+            })],
+            up_bid=0.43,
+            decide=decide_quotes,
+        )
+        captured = {}
+
+        _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=_capture_lifecycle_plan(captured),
+        )
+
+        order_id = "pair-already-escalated-down"
+        assert order_id in captured["preserve_order_ids"]
+        assert [row["id"] for row in captured["cancel"]] == [
+            "pair-already-escalated-up",
+        ]
+        assert captured["submit"] == []
+
+    def test_hard_stop_is_terminal_and_never_submits_a_buy(self, tmp_path):
+        seam, _registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-stop", {"up_filled": 100.0})],
+            up_bid=0.15,
+            decide=lambda *args, **kwargs: pytest.fail(
+                "hard-stop refusal must skip quote decision"),
+        )
+        captured = {}
+
+        result = _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=_capture_lifecycle_plan(captured),
+        )
+
+        assert "hard stop" in result.why
+        assert captured["submit"] == []
+        assert {row["id"] for row in captured["cancel"]} == {
+            "pair-stop-up", "pair-stop-down",
+        }
+
+
+    def test_refused_escalation_preserves_the_resting_hedge(self, tmp_path):
+        from core_brain.quotes import decide_quotes
+
+        # A held average near the cap leaves no positive tick-aligned hedge
+        # bid, so the lifecycle refuses the escalation. It must NOT cancel the
+        # resting hedge order -- that would strand a single unmatched buy.
+        seam, _registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-refused", {
+                "up_filled": 100.0, "up_price": 0.99,
+            })],
+            up_bid=0.43,
+            decide=decide_quotes,
+        )
+        captured = {}
+
+        result = _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=_capture_lifecycle_plan(captured),
+        )
+
+        assert "refused" in result.why
+        # Both resting orders are preserved; nothing is cancelled or submitted.
+        assert {"pair-refused-up", "pair-refused-down"} <= set(
+            captured["preserve_order_ids"])
+        assert captured["cancel"] == []
+        assert captured["submit"] == []
+        seam, _registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [
+                ("pair-a", {"up_filled": 100.0}),
+                ("pair-b", {"up_filled": 100.0}),
+            ],
+            up_bid=0.43,
+            decide=lambda *args, **kwargs: pytest.fail(
+                "ambiguous escalations must not reach quote decision"),
+        )
+        captured = {}
+
+        result = _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=_capture_lifecycle_plan(captured),
+        )
+
+        assert "ambiguous" in result.why.lower()
+        assert captured["submit"] == []
+        assert {row["id"] for row in captured["cancel"]} == {
+            "pair-a-up", "pair-a-down", "pair-b-up", "pair-b-down",
+        }
+
+    def test_locked_pair_does_not_receive_a_lifecycle_replacement(self, tmp_path):
+        calls = []
+
+        def ordinary_decide(*args, **kwargs):
+            calls.append(kwargs)
+            return [_intent(side="DOWN", token="tok-dn", price=0.50)], ""
+
+        seam, registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-locked", {
+                "up_filled": 100.0,
+                "down_filled": 100.0,
+                "down_price": 0.48,
+                "order_size": 200.0,
+            })],
+            decide=ordinary_decide,
+        )
+        captured = {}
+
+        _visit_one(
+            seam,
+            {"cid": "0xabc"},
+            live=False,
+            emit_fn=lambda **event: None,
+            plan_fn=_capture_lifecycle_plan(captured),
+        )
+
+        assert registry.get_lifecycle_state("pair-locked").state == "PAIR_LOCKED"
+        assert calls == [{}]
+        assert all(intent.pair_id is None for intent in captured["submit"])

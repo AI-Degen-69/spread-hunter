@@ -19,6 +19,8 @@ duck-typed on `Inventory` so the dependency runs one way only.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
+import math
 from typing import Optional
 
 from core_brain import config
@@ -408,14 +410,25 @@ def queue_clear_block(cfg, side: str, price: float, queue_shares: float,
     return allowed, f"{why} ({side} @ {float(price):.4f})"
 
 
-def hard_block(cfg, inv, side: str, price: float,
-               own_book: dict, hedge_book: dict) -> Optional[str]:
+def hard_block(
+    cfg,
+    inv,
+    side: str,
+    price: float,
+    own_book: dict,
+    hedge_book: dict,
+    *,
+    allow_pair_cost_equal: bool = False,
+    lifecycle_escalation: bool = False,
+    pair_cost_average: float | None = None,
+) -> Optional[str]:
     """Why a NEW bid on `side` must not rest, or None if it may.
 
     One function rather than five inline branches, because the caller has to
     report a single reason and the operator reading it has to be able to tell
-    which limit bound. `price` is the provisional resting price, read by the
-    last two arms.
+    which limit bound. For ordinary quotes, `price` is provisional; lifecycle
+    escalation passes its final bid so the price and per-pair average are
+    checked together.
 
     Five arms, cheapest and most certain first, so the reason names the
     rejection that is hardest to argue with:
@@ -435,7 +448,8 @@ def hard_block(cfg, inv, side: str, price: float,
         useful reading than what a new fill would be worth.
       * PAIR COST (R7). `price + inv.avg(other) >= max_pair_cost`. The pair
         pays exactly $1.00, so a pair assembled above that is a booked loss,
-        not a risk.
+        not a risk. The explicit lifecycle escalation instead uses its
+        pair-scoped held average and may equal the cap, never exceed it.
 
     The last two are not new rules. Both have existed in `strategy/quotes.py`
     since the beginning and neither has ever executed: they sit in the legacy
@@ -459,7 +473,9 @@ def hard_block(cfg, inv, side: str, price: float,
     $1.00, and "reduces exposure" does not make a guaranteed loss
     acceptable. It is checked before R4 returns, so the light side is exempt
     from the exposure arms only -- never from the cap that exists to stop a
-    pair that cannot be profitable.
+    pair that cannot be profitable. The lifecycle escalation is a narrower
+    exception: it must be the light side, uses its pair's filled-leg average,
+    and continues through book-health and price-band checks.
     """
     other = OTHER[side]
 
@@ -475,18 +491,47 @@ def hard_block(cfg, inv, side: str, price: float,
     # seen in production (and how the paper run's own docstring records buying 14
     # pairs at $1.0200 against a $0.995 cap). For the heavy side the arm still
     # reports LAST, preserving the documented "most useful reason first" order.
-    other_avg = inv.avg(other)
+    if allow_pair_cost_equal and not lifecycle_escalation:
+        return "pair-cost equality is reserved for lifecycle escalation"
+    if lifecycle_escalation:
+        if not allow_pair_cost_equal or pair_cost_average is None:
+            return "lifecycle escalation requires its held-leg average and cap mode"
+        heavy_side = naked_side(inv)
+        if heavy_side is None:
+            return "lifecycle escalation requires an existing imbalance"
+        if side == heavy_side:
+            return "lifecycle escalation must reduce the existing imbalance"
+        if (not isinstance(pair_cost_average, (int, float))
+                or isinstance(pair_cost_average, bool)
+                or not math.isfinite(pair_cost_average)
+                or not 0 < pair_cost_average <= 1):
+            return "lifecycle held-leg average must be finite and in (0, 1]"
+        other_avg = pair_cost_average
+    else:
+        if pair_cost_average is not None:
+            return "pair-cost average override is reserved for lifecycle escalation"
+        other_avg = inv.avg(other)
     pair_cost_block = None
-    if other_avg > 0 and (price + other_avg) >= cfg.max_pair_cost:
-        pair_cost_block = (
-            f"pair {price:.3f}+{other_avg:.3f}=${price + other_avg:.4f} "
-            f">= ${cfg.max_pair_cost:.3f} cap -- pays exactly $1.00")
+    if other_avg > 0:
+        pair_cost = Decimal(str(price)) + Decimal(str(other_avg))
+        pair_cost_cap = Decimal(str(cfg.max_pair_cost))
+        pair_cost_blocked = (
+            pair_cost > pair_cost_cap
+            if allow_pair_cost_equal
+            else pair_cost >= pair_cost_cap
+        )
+        if pair_cost_blocked:
+            comparison = ">" if allow_pair_cost_equal else ">="
+            pair_cost_block = (
+                f"pair {price:.3f}+{other_avg:.3f}=${pair_cost:.4f} "
+                f"{comparison} ${cfg.max_pair_cost:.3f} cap -- pays exactly $1.00")
 
-    if _shares(inv, side) < _shares(inv, other):
+    if _shares(inv, side) < _shares(inv, other) and not lifecycle_escalation:
         return pair_cost_block
 
-    # enable_hard_blocks gates only the exposure and price-band arms below
-    if not getattr(cfg, "enable_hard_blocks", True):
+    # Ordinary light-side quotes retain R4's early return. A lifecycle
+    # escalation is also light-side, but must still pass book and price gates.
+    if not lifecycle_escalation and not getattr(cfg, "enable_hard_blocks", True):
         return None
 
     hedge = book_health(hedge_book, cfg)

@@ -481,15 +481,11 @@ def test_stale_tape_does_not_credit_to_fresh_orders(registry):
     assert inv.up_shares == 10.0
 
 
-def test_a_single_buy_is_completed_against_the_shadow_store(registry):
-    """One leg filled, the other not: the pairs pass completes it, and the
-    completing buy lands as a shadow fill rather than a venue order.
+def test_a_single_buy_waits_without_crossing_in_the_shadow_store(registry):
+    """The lifecycle keeps the resting complement and reports patient wait.
 
-    tok-up fills 20 at 0.47, tok-dn rests unfilled. With the light ask at
-    0.51 the pair costs 0.98 -- under the default max_pair_cost of 0.995 --
-    so `auto_manage_pairs` routes this to `complete_pair`, not the exit. That
-    makes `completed` the only correct outcome for this fixture; asserting a
-    looser `("completed", "exited")` would hide a routing regression.
+    Ownership: PATIENT_WAIT is Trader-persisted; the poll reports the
+    decision but writes no lifecycle row for it.
     """
     from core_brain.order_registry import inventory_from_registry
     from core_brain.shadow_exec import (
@@ -523,30 +519,15 @@ def test_a_single_buy_is_completed_against_the_shadow_store(registry):
     )
 
     assert results, "auto_manage_pairs produced no result for the naked pair"
-    assert results[0]["action"] == "completed", results
+    assert results[0]["action"] == "patient_wait", results
+    assert results[0]["lifecycle_state"] == "PATIENT_WAIT", results
+    assert reg.get_lifecycle_state(results[0]["pair_id"]) is None
 
     inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
     assert inv.up_shares == pytest.approx(20.0)
-    assert inv.down_shares == pytest.approx(20.0)
-
-    # The completion writes a SECOND tok-dn row (status "filled"); the
-    # ORIGINAL resting tok-dn row from record_submit is still there too, now
-    # "cancelled", and was already `shadow-` labelled before the completion
-    # ever ran -- asserting against whichever row `next()` happens to return
-    # first (posted_ts ASC, so the original) would pass even if the new
-    # completion row's id were unlabelled. Select the completion row
-    # explicitly by its status.
-    completion_order = next(
-        r for r in reg.get_orders_by_pair(results[0]["pair_id"])
-        if r.token_id == "tok-dn" and r.status == "filled"
-    )
-    assert (completion_order.order_id or "").startswith("shadow-")
-
-    completion_fill = next(
-        f for f in reg.get_all_fills()
-        if f["order_uuid"] == completion_order.id
-    )
-    assert completion_fill["trade_id"].startswith("shadow-")
+    assert inv.down_shares == pytest.approx(0.0)
+    assert not any(fill["token_id"] == "tok-dn"
+                   for fill in reg.get_all_fills())
 
 
 def test_completion_refuses_when_pair_has_empty_condition_id(registry):

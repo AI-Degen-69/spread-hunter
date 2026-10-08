@@ -410,6 +410,15 @@ CREATE TABLE IF NOT EXISTS cycle_intent (
     run_id TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS single_leg_lifecycle (
+    pair_id TEXT PRIMARY KEY,
+    condition_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    updated_ts_ms INTEGER NOT NULL,
+    evidence_json TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_pair_id ON orders(pair_id);
@@ -820,6 +829,16 @@ class DivergenceEventRecord:
     run_id: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class LifecycleStateRecord:
+    pair_id: str
+    condition_id: str
+    state: str
+    reason: str
+    updated_ts_ms: int
+    evidence_json: str
+
+
 class OrderRegistry:
     """Thread-safe SQLite-backed registry for live orders, fills, and operational telemetry."""
 
@@ -1073,6 +1092,52 @@ class OrderRegistry:
             if row is None:
                 return None
             return self._row_to_order(row)
+
+    def get_lifecycle_state(self, pair_id: str) -> Optional[LifecycleStateRecord]:
+        """Fetch the last persisted lifecycle transition for one pair."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT pair_id, condition_id, state, reason, updated_ts_ms, "
+                "evidence_json FROM single_leg_lifecycle WHERE pair_id = ?",
+                (pair_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return LifecycleStateRecord(
+                pair_id=row["pair_id"],
+                condition_id=row["condition_id"],
+                state=row["state"],
+                reason=row["reason"],
+                updated_ts_ms=int(row["updated_ts_ms"]),
+                evidence_json=row["evidence_json"],
+            )
+
+    def save_lifecycle_state(self, record: LifecycleStateRecord) -> None:
+        """Atomically insert or replace the current state for one pair."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO single_leg_lifecycle (
+                    pair_id, condition_id, state, reason, updated_ts_ms, evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pair_id) DO UPDATE SET
+                    condition_id = excluded.condition_id,
+                    state = excluded.state,
+                    reason = excluded.reason,
+                    updated_ts_ms = excluded.updated_ts_ms,
+                    evidence_json = excluded.evidence_json
+                """,
+                (
+                    record.pair_id,
+                    record.condition_id,
+                    record.state,
+                    record.reason,
+                    int(record.updated_ts_ms),
+                    record.evidence_json,
+                ),
+            )
+            conn.commit()
 
     def get_order_by_venue_id(self, venue_order_id: str) -> Optional[OrderRecord]:
         """Fetch order record by venue order_id."""

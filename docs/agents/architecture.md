@@ -7,10 +7,12 @@ spread-hunter/
   core_brain/             Core trading & execution engine
     quotes.py             THE decision layer: where to rest both legs, and why not to
     risk.py               Sizing ladder, inventory skew, dollar caps, hard blocks
-    unhedged_stop_loss.py Per-market markout state machine + trader posture
+    unhedged_stop_loss.py Per-market markout gate + trader posture
     trader_loop.py        Multi-market rotation: decide -> plan -> submit/cancel
     order_manager.py      CLI: status, quote, poll, merge, redeem, exit, cancel
-    single_buy_saver.py   Single-buy rescue (U35): complete the pair, or exit the buy
+    single_leg_lifecycle.py Pure per-pair policy for one-sided fills
+    single_buy_saver.py   Guarded completion and exit execution for single-leg positions
+    shadow_run.py         Isolated full-loop rehearsal with the shared lifecycle policy
     merge_pairs.py        Gasless merge & redemption (ABI, alt-bn128, EIP-712)
     order_registry.py     SQLite order/fill tracking + reconcile (data/orders.db)
     registry_state.py     Read side of the registry; what the dashboard renders
@@ -51,6 +53,32 @@ spread-hunter/
   docs/archive/           Superseded human-written docs (readable, not active contract)
   tests/                  Full hermetic unit & integration test suite
 ```
+
+## Single-leg lifecycle (#413)
+
+`single_leg_lifecycle.py` is the single policy owner for a one-sided fill. Its per-pair
+state is persisted in the order registry so a restart does not erase an escalation:
+
+1. **`DUAL_RESTING`** — no filled exposure; both maker legs can rest at their target prices.
+2. **`PATIENT_WAIT`** — one leg filled; keep the opposite maker at its target. This state
+   does not taker-complete the pair.
+3. **`ESCALATED_HEDGE`** — when the held leg's fill average minus its best bid reaches
+   twice the dynamic quote offset, the state sticks and the Trader quotes the opposite
+   leg at the highest tick-aligned price that fits
+   `min($0.99, configured max_pair_cost) - held average`.
+4. **`HARD_STOP`** — a held-leg best bid at or below `$0.15` takes precedence over the
+   other routes and requests a guarded exit.
+5. **`PAIR_LOCKED`** — both legs are balanced and their average prices total no more than
+   the configured cap, itself bounded at `$0.99`.
+
+The Trader owns the escalated maker quote; the order-manager poll and shadow loop call the
+same lifecycle policy for hard stops and the market-end-aware settlement fallback.
+`single_buy_saver.py` is the guarded executor, not a second policy owner. The settlement
+fallback is the only automatic taker-completion exception: when due, it tries one
+cap-checked completion and uses the guarded exit if completion is refused. A hard-stop
+exit retains venue-position, cancellation, fill-reread, residual-size, depth, and
+slippage protections. `unhedged_stop_loss.py` remains the separate per-market markout gate;
+it does not replace the pair lifecycle.
 
 ## Where generated files go
 

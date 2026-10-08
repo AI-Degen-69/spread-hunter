@@ -1,10 +1,23 @@
 """Unit tests for live/engine/quotes.py, risk.py, gate.py and inventory rebuilding."""
+from dataclasses import replace
 import sqlite3
 import pytest
 from core_brain.config import MakerConfig
 from core_brain.order_registry import OrderRecord, OrderRegistry, FillRecord, inventory_from_registry
-from core_brain.quotes import Inventory, QuoteIntent, decide_quotes, mid_price
+from core_brain.quotes import (
+    Inventory,
+    MarketQuoteError,
+    QuoteIntent,
+    decide_quotes,
+    evaluate_market_quote,
+    mid_price,
+)
 from core_brain import risk, unhedged_stop_loss
+from core_brain.single_leg_lifecycle import (
+    LegState,
+    LifecycleQuoteContext,
+    LifecycleQuoteOverride,
+)
 
 
 def test_mid_price_calculation():
@@ -335,3 +348,365 @@ def test_unbalanced_deficit_leg_keeps_its_size():
     out, _ = _require_two_sided(cfg, heavy, both, "")
     assert [i.size for i in out] == [9, 10]
     assert all("clamped" not in i.reason for i in out)
+
+
+def _lifecycle_quote_case(*, price=0.51, size=10, price_band_low=0.10,
+                          quote_shares=120, bid_depth=1000.0,
+                          max_pair_cost=0.99, enable_hard_blocks=True):
+    cfg = MakerConfig(
+        objective="rewards",
+        size_mode="shares",
+        quote_shares=quote_shares,
+        min_quote_shares=5,
+        reward_offset=0.02,
+        max_spread_from_mid=0.045,
+        max_pair_cost=max_pair_cost,
+        max_naked_usd=100.0,
+        enable_hard_blocks=enable_hard_blocks,
+        enforce_price_band=True,
+        price_band_low=price_band_low,
+        price_band_high=0.90,
+        min_book_depth_sh=1.0,
+    )
+    up_book = {
+        "token_id": "token-up",
+        "best_bid": 0.39,
+        "best_ask": 0.41,
+        "bids": {0.39: bid_depth},
+        "asks": {0.41: bid_depth},
+    }
+    down_book = {
+        "token_id": "token-down",
+        "best_bid": 0.59,
+        "best_ask": 0.61,
+        "bids": {0.59: bid_depth},
+        "asks": {0.61: bid_depth},
+    }
+    inventory = Inventory(
+        up_shares=10.0,
+        down_shares=0.0,
+        up_cost=5.0,
+        down_cost=0.0,
+    )
+    override = LifecycleQuoteOverride(
+        pair_id="pair-lifecycle",
+        token_id="token-down",
+        price=price,
+        size=size,
+        state=LegState.ESCALATED_HEDGE,
+        held_average_price=0.48,
+    )
+    return cfg, up_book, down_book, inventory, override
+
+
+def test_lifecycle_escalation_bypasses_only_spread_distance_and_keeps_pair_id():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(
+        max_pair_cost=0.995,
+    )
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert why == ""
+    assert len(intents) == 1
+    assert intents[0].side == "DOWN"
+    assert intents[0].price == pytest.approx(0.51)
+    assert intents[0].size == 10
+    assert intents[0].pair_id == "pair-lifecycle"
+
+
+def test_lifecycle_escalation_uses_the_venue_price_tick():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(price=0.505)
+    override = replace(override, held_average_price=0.485)
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert why == ""
+    assert len(intents) == 1
+    assert intents[0].price == pytest.approx(0.505)
+
+
+def test_lifecycle_override_rejects_pair_cost_above_ninety_nine_cents():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(price=0.511)
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert intents == []
+    assert "pair cost" in why.lower() or "cap" in why.lower()
+
+
+def test_lifecycle_escalation_rejects_a_bid_below_the_maximum_profitable_price():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(price=0.50)
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert intents == []
+    assert "maximum profitable" in why
+
+
+def test_lifecycle_pair_equality_is_not_allowed_by_ordinary_hard_block():
+    cfg, up, down, inventory, _ = _lifecycle_quote_case()
+    inventory = Inventory(
+        up_shares=10.0,
+        down_shares=0.0,
+        up_cost=4.8,
+        down_cost=0.0,
+    )
+
+    reason = risk.hard_block(cfg, inventory, "DOWN", 0.51, down, up)
+
+    assert reason is not None
+    assert "pair" in reason
+    assert ">=" in reason
+
+
+def test_pair_cost_equality_cannot_be_enabled_without_lifecycle_marker():
+    cfg, up, down, inventory, _ = _lifecycle_quote_case()
+
+    reason = risk.hard_block(
+        cfg, inventory, "DOWN", 0.51, down, up,
+        allow_pair_cost_equal=True,
+    )
+
+    assert reason == "pair-cost equality is reserved for lifecycle escalation"
+
+
+def test_lifecycle_escalation_refuses_a_heavy_side_override():
+    cfg, up, down, inventory, override = _lifecycle_quote_case()
+    heavy_override = replace(override, token_id="token-up")
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=heavy_override,
+    )
+
+    assert intents == []
+    assert "must reduce" in why
+
+
+def test_lifecycle_pair_cap_never_exceeds_ninety_nine_cents():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(
+        price=0.511,
+        max_pair_cost=0.995,
+    )
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert intents == []
+    assert "0.9910" in why
+    assert "0.990" in why
+
+
+def test_ordinary_quote_path_keeps_its_existing_pair_cost_gate():
+    cfg, up, down, inventory, _ = _lifecycle_quote_case()
+
+    intents, why = decide_quotes(cfg, up, down, inventory, 1e9, None)
+
+    assert intents == []
+    assert "pair" in why
+
+
+def test_lifecycle_escalation_keeps_book_health_checks_active():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(bid_depth=0.0)
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert intents == []
+    assert "not tradeable" in why or "thin" in why
+
+
+def test_lifecycle_book_health_cannot_be_disabled_by_ordinary_gate_toggle():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(
+        bid_depth=0.0,
+        enable_hard_blocks=False,
+    )
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert intents == []
+    assert "not tradeable" in why or "thin" in why
+
+
+def test_lifecycle_escalation_keeps_price_band_checks_active():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(
+        price_band_low=0.52,
+    )
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert intents == []
+    assert "outside band" in why
+
+
+def test_lifecycle_escalation_respects_zero_allocation():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(
+        quote_shares=0,
+    )
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert intents == []
+    assert "unfunded" in why
+
+
+def test_lifecycle_escalation_size_is_capped_to_remaining_naked_inventory():
+    cfg, up, down, inventory, override = _lifecycle_quote_case(size=100)
+
+    intents, why = decide_quotes(
+        cfg, up, down, inventory, 1e9, None,
+        lifecycle_override=override,
+    )
+
+    assert why == ""
+    assert len(intents) == 1
+    assert intents[0].size <= inventory.up_shares - inventory.down_shares
+
+
+def test_quote_evaluation_supplies_lifecycle_context_after_its_single_book_fetch():
+    class Market:
+        condition_id = "condition"
+        up_token = "token-up"
+        down_token = "token-down"
+
+        def t_remaining(self):
+            return 3600.0
+
+    calls = []
+    market = Market()
+    up = {"token_id": "token-up", "best_bid": 0.39, "best_ask": 0.41}
+    down = {"token_id": "token-down", "best_bid": 0.59, "best_ask": 0.61}
+    inventory = Inventory(up_shares=10.0, up_cost=4.8)
+    override = LifecycleQuoteOverride(
+        pair_id="pair-lifecycle",
+        token_id="token-down",
+        price=0.51,
+        size=10,
+        state=LegState.ESCALATED_HEDGE,
+        held_average_price=0.48,
+    )
+    context = LifecycleQuoteContext(override=override)
+
+    def fetch_books(host, token):
+        calls.append(f"book:{token}")
+        return up if token == "token-up" else down
+
+    def inventory_for(_market):
+        calls.append("inventory")
+        return inventory
+
+    def context_for(got_market, got_up, got_down, got_inventory):
+        assert got_market is market
+        assert got_up is up and got_down is down
+        assert got_inventory is inventory
+        calls.append("lifecycle")
+        return context
+
+    def decide(cfg, up_book, down_book, inv, remaining, window,
+               *, lifecycle_override=None):
+        calls.append("decide")
+        assert lifecycle_override is override
+        return [], ""
+
+    result = evaluate_market_quote(
+        "condition",
+        MakerConfig(),
+        "https://clob.polymarket.com",
+        fetch_market=lambda cid: market,
+        fetch_books=fetch_books,
+        inventory_for=inventory_for,
+        decide=decide,
+        lifecycle_context_for=context_for,
+    )
+
+    assert calls == [
+        "book:token-up", "book:token-down", "inventory", "lifecycle", "decide",
+    ]
+    assert result.lifecycle_context is context
+
+
+def test_lifecycle_refusal_skips_quote_decision_and_returns_no_intents():
+    class Market:
+        condition_id = "condition"
+        up_token = "token-up"
+        down_token = "token-down"
+
+        def t_remaining(self):
+            return 3600.0
+
+    called = []
+    result = evaluate_market_quote(
+        "condition",
+        MakerConfig(),
+        "https://clob.polymarket.com",
+        fetch_market=lambda cid: Market(),
+        fetch_books=lambda host, token: {"token_id": token},
+        inventory_for=lambda market: Inventory(),
+        decide=lambda *args, **kwargs: called.append("decide") or ([], ""),
+        lifecycle_context_for=lambda *args: LifecycleQuoteContext(
+            refusal_reason="lifecycle hard stop for pair pair-1"),
+    )
+
+    assert result.intents == []
+    assert result.why == "lifecycle hard stop for pair pair-1"
+    assert called == []
+
+
+def test_custom_decision_port_cannot_silently_drop_lifecycle_override():
+    class Market:
+        condition_id = "condition"
+        up_token = "token-up"
+        down_token = "token-down"
+
+        def t_remaining(self):
+            return 3600.0
+
+    override = LifecycleQuoteOverride(
+        pair_id="pair-lifecycle",
+        token_id="token-down",
+        price=0.51,
+        size=10,
+        state=LegState.ESCALATED_HEDGE,
+        held_average_price=0.48,
+    )
+
+    def custom_decide(cfg, up, down, inv, remaining, window, **kwargs):
+        return [], ""
+
+    with pytest.raises(MarketQuoteError, match="cannot accept lifecycle override"):
+        evaluate_market_quote(
+            "condition",
+            MakerConfig(),
+            "https://clob.polymarket.com",
+            fetch_market=lambda cid: Market(),
+            fetch_books=lambda host, token: {"token_id": token},
+            inventory_for=lambda market: Inventory(),
+            decide=custom_decide,
+            lifecycle_context_for=lambda *args: LifecycleQuoteContext(
+                override=override),
+        )

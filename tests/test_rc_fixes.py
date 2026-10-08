@@ -248,25 +248,15 @@ def test_exit_close_is_subtracted_from_inventory(registry: OrderRegistry):
 
 
 def test_auto_pass_does_not_re_exit_after_the_close(registry: OrderRegistry):
-    """The regression test for the repeat-sell loop itself.
-
-    Cycle 1 exits and records the close. Cycle 2 must find nothing to do: the
-    fill is older than the condition's close, so the pair is skipped instead
-    of sold again.
-    """
-    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    """The lifecycle pass ignores fills already covered by a recorded close."""
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
     client = FakeClient(best_ask=0.40)
+    lp.exit_naked_leg(client, registry, "pair-1",
+                      max_pair_cost=MAX_PAIR_COST, live=True)
 
-    out1 = auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
-    assert [r["action"] for r in out1] == ["exited"]
-    sells_after_first = sum(c.startswith("sell:") for c in client.calls)
-    assert sells_after_first == 1
-
-    # Second cycle: same registry, no new fills. The close covers the fill.
-    out2 = auto_manage_pairs(client, registry, _cfg(), now=NOW_S + 5.0)
-    assert out2 == []
-    sells_total = sum(c.startswith("sell:") for c in client.calls)
-    assert sells_total == 1
+    out = auto_manage_pairs(client, registry, _cfg(), now=NOW_S)
+    assert out == []
+    assert sum(c.startswith("sell:") for c in client.calls) == 1
 
 
 def test_a_fill_after_the_close_re_arms_the_rule(registry: OrderRegistry):
@@ -291,7 +281,12 @@ def test_a_fill_after_the_close_re_arms_the_rule(registry: OrderRegistry):
     client = FakeClient(best_ask=0.40)
     out = auto_manage_pairs(client, registry, _cfg(),
                             now=(after_close_ms / 1000.0) + 60.0)
-    assert [r["action"] for r in out] == ["exited"]
+    assert [r["action"] for r in out] == ["escalated_wait"]
+    assert out[0]["lifecycle_state"] == "ESCALATED_HEDGE"
+    # Ownership: the poll reports the escalation but persists nothing --
+    # ESCALATED_HEDGE rows are Trader-written.
+    assert registry.get_lifecycle_state("pair-2") is None
+    assert not any(c.startswith("sell:") for c in client.calls)
 
 
 def test_exit_refuses_when_the_sold_leg_side_is_unresolvable(
