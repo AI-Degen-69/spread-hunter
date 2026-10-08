@@ -4,7 +4,7 @@
 - [x] #427 T2 — `dashboard/server.py` wiring + stream mark frames
 - [x] #427 T3 — `dashboard/static/app.js` + harness tests
 - [x] #427 T4 — Positions-surface finesse
-- [ ] #427 T5 — How-to-verify block
+- [x] #427 T5 — How-to-verify block
 
 - [x] #398 T1 — Decision record `docs/issues/398-maker-queue-bars.md`
 - [x] #398 T2 — Bidirectional cross-ref comments in both configs

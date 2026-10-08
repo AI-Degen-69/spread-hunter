@@ -242,7 +242,7 @@ Branch: i427/realtime-position-value-updates | Issue: #427
 - Depends on: T3.
 - Verify: hands-on — dashboard in `sim` mode, cells tick sub-second, layout still.
 
-### T5 [ ] — How-to-verify block [Docs] (XS)
+### T5 [x] — How-to-verify block [Docs] (XS)
 
 - Target files: PR body (hands-on steps, sim mode, failure signs, no trading actions).
 - Depends on: T1–T4.
