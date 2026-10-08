@@ -1,41 +1,45 @@
-# CONSTRAINTS — #419 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #422 (locked by Station II, enforced through Station V)
 
 Supersedes the previous issue plan constraints for this branch only.
 
 ## Zero regressions
 
 - Focused suites that must pass for the touched behavior:
-  `tests/test_plan_orders_mid_hold.py` (new),
-  `tests/test_plan_orders_asymmetric_hold.py`,
-  `tests/test_trader_loop.py`.
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every behavior change needs a test that fails without the change (RED first, per `test-driven-development`).
-- The shared `TestRefusedHold` books move only as far as the plan says
-  (0.66/0.68) with every existing assertion in that class still holding;
-  a separate in-band grace test proves the new hold.
+  `tests/test_shadow_run.py` (plus `tests/test_shadow_run_run_id.py` style
+  coverage if the CLI test lands there).
+- Existing paired tests stay unchanged in meaning, including
+  `test_admission_arm_requires_markets_path_and_bankroll`.
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only
+  the focused suites.
+- Every behavior change needs a test that fails without the change
+  (RED first, per `test-driven-development`) — notably a test that fails
+  if the live balance read returns.
 
-## Cancel-path freeze
+## Bankroll-source freeze
 
-- Terminal refusals (named stops, hard stop), `lifecycle_cancel`, explicit
-  `cancel_order_ids`, and the cancel-wins-over-replace rule: unchanged,
-  in band or out.
-- `token_mids=None` (and any caller that never passes it) keeps today's
-  behavior exactly — the guard is additive only.
-- Missing midpoint, one-sided book, crossed book: guard stands down.
-- No duplicate submits for held tokens on either submit branch.
-- `shadow_fills.py`, `config.py`, `quotes.py`, `live_fill_engine.py`,
-  `markets.py`, `_market_cfg`: untouched.
+- `core_brain/config.py`: bankroll default (line 41), env overrides
+  (1521-1528), and bounds: untouched.
+- `derive_dynamic_caps` and `trader_loop._fleet_state`: untouched —
+  no live trading path changes.
+- Early paired checks (`shadow_run.py:902-911`, mutual exclusion +
+  markets-path + explicit-bankroll requirements): unchanged.
+- Paired consumption (`shadow_run.py:1013-1034`, `record_paired_run_start` /
+  `record_paired_equity_mark`): unchanged.
+- Validation error text must still contain "bankroll" so existing
+  test matches keep passing.
 
 ## Stores are evidence, not scratch
 
 - `data/orders.db` is the production registry: read it, never rewrite it.
 - No schema migration, no database rewriting; tests use temporary DBs.
-- No live orders are opened or completed; no `quote`, `complete`, Trader
-  loop, or dashboard START. Visit tests run `_visit_one` with stubs.
+- Shadow rehearsals use a fresh unique store per run
+  (`data/NN_shadow_<stamp>.db`); `data/orders.db` is refused as a store.
+- No live orders are opened; no `quote`, `complete`, Trader loop,
+  or dashboard START.
 
 ## Anti-cheat
 
 - No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
 - No new external dependencies without explicit operator approval.
-- One named module constant (`MID_HOLD_BAND = 0.02`); no new config
-  field, no new helper module.
+- `statistical_validation_run/run.py` and `scripts/shadow_tournament.py`:
+  untouched (verified out of scope, see SPEC.md).

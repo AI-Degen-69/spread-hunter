@@ -184,11 +184,19 @@ store automatically.
 - `--interval` — rotation cadence (default `5.0`)
 - `--db` — required, explicit per-run shadow store (for example, `data/04_shadow_24-09_test.db`); `data/orders.db` is refused
 - `--max-markets N` — cap rotation universe
-- `--funder ADDR` — balance-read funder
+- `--funder ADDR` — kept for compatibility; it does **not** set the shadow bankroll
+- `--starting-bankroll-usd USD` — override the starting bankroll for this run (`--paired-starting-bankroll-usd` is the old name and still works)
+
+**Every shadow run starts at the config bankroll — $100 by default.** Override
+it with `--starting-bankroll-usd` or `SPREAD_HUNTER_BANKROLL`; the live wallet is
+never read, so every risk cap (order 25%, naked 6%, ceiling 90%) is the same at
+the start of every rehearsal and two runs can be compared. Paired arms keep
+their preregistered $100 unless the flag is passed.
 
 It rehearses everything: the same `MakerConfig`, the same `MAX_ORDER_USD` /
 `MAX_TOTAL_USD`, the same gates, the same `decide_quotes`. Only the signer, the
-store, and the wall clock differ. Point the shadow dashboard at the same per-run
+store, and the wall clock differ — the bankroll is fixed, not read from the
+wallet. Point the shadow dashboard at the same per-run
 store path and it updates live while the rehearsal runs.
 
 **Every rehearsal records the code it is holding.** The banner names it

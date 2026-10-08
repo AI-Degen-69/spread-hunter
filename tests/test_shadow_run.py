@@ -2249,3 +2249,182 @@ class TestResolvedStaysQuietAcrossConsumers:
         assert len([r for r in reg.get_all_market_events()
                     if r["kind"] == "lifecycle_stop"
                     and r["reason_code"] == "resolved"]) >= 1
+
+
+class TestFixedStartingBankroll:
+    """#422: every rehearsal starts at the config bankroll, never the wallet.
+
+    The same command used to rehearse at a different bankroll one day to the
+    next: an ordinary run read the LIVE wallet through the funder address and
+    only fell back to the config value when that read failed, so every risk cap
+    (order 25%, naked 6%, ceiling 90%) silently moved with the wallet and two
+    runs could never be compared. These tests fail if that live read returns.
+    """
+
+    @staticmethod
+    def _capture_cfg(tmp_path, monkeypatch, **kwargs):
+        """The config the rehearsal actually runs under.
+
+        `run_shadow` resolves the bankroll before it builds the seam (and the
+        seam re-imports `trader_loop.run` at call time), so intercepting the
+        loop call and reading `seam.base_cfg` observes the resolved config
+        without depending on any wiring detail between here and the loop.
+        """
+        from core_brain import shadow_run as sr
+        from core_brain import trader_loop
+
+        seen = {}
+
+        def fake_loop_run(seam, **kw):
+            seen["cfg"] = seam.base_cfg
+            return []
+
+        monkeypatch.setattr(trader_loop, "run", fake_loop_run)
+        sr.run_shadow(
+            minutes=0.0, db_path=tmp_path / "shadow.db",
+            markets_fn=lambda max_markets=None: [],
+            client_fn=lambda: object(),
+            **kwargs,
+        )
+        assert "cfg" in seen, "the rehearsal never reached the loop"
+        return seen["cfg"]
+
+    def test_an_ordinary_run_uses_the_config_bankroll_not_the_live_wallet(
+            self, tmp_path, monkeypatch):
+        """The acceptance criterion: a wallet far from $100 must not move the
+        caps the rehearsal computes."""
+        # `conftest` scrubs only `HUNTER_*`; `SPREAD_HUNTER_BANKROLL` is the
+        # first name `config.load()` reads, so clear it to assert the default.
+        monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
+        from core_brain import account
+        from core_brain.config import derive_dynamic_caps
+
+        calls = []
+
+        def spy_fetch_live_balance(maker):
+            calls.append(maker)
+            return 5000.0
+
+        monkeypatch.setattr(account, "fetch_live_balance", spy_fetch_live_balance)
+
+        cfg = self._capture_cfg(tmp_path, monkeypatch, funder="0xabc")
+
+        assert calls == [], "an ordinary rehearsal must never read the live wallet"
+        assert cfg.bankroll_usd == 100.0
+        caps = derive_dynamic_caps(cfg)
+        assert caps["max_order_usd"] == 25.0
+        assert caps["max_naked_usd"] == 6.0
+        assert caps["max_total_usd"] == 90.0
+
+    def test_an_explicit_override_still_sets_a_different_bankroll(
+            self, tmp_path, monkeypatch):
+        cfg = self._capture_cfg(tmp_path, monkeypatch,
+                               starting_bankroll_usd=250.0)
+
+        assert cfg.bankroll_usd == 250.0
+
+    def test_the_environment_can_still_choose_the_bankroll(
+            self, tmp_path, monkeypatch):
+        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
+        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
+
+        cfg = self._capture_cfg(tmp_path, monkeypatch)
+
+        assert cfg.bankroll_usd == 50.0
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"),
+                                     float("-inf"), 0.0, -5.0])
+    def test_a_non_finite_or_non_positive_bankroll_is_refused(
+            self, tmp_path, monkeypatch, bad):
+        from core_brain.shadow_run import run_shadow
+
+        # The refusal under test is this function's own; an externally set
+        # bankroll env would raise a different (capitalised) message first.
+        monkeypatch.delenv("SPREAD_HUNTER_BANKROLL", raising=False)
+        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
+
+        with pytest.raises(ValueError, match="bankroll"):
+            run_shadow(
+                minutes=0.0, db_path=tmp_path / "shadow.db",
+                markets_fn=lambda max_markets=None: [],
+                client_fn=lambda: object(),
+                starting_bankroll_usd=bad,
+            )
+
+
+class TestStartingBankrollCli:
+    """#422: one flag for every run, the paired spelling kept as an alias."""
+
+    def test_both_flag_spellings_parse_to_one_setting(self):
+        from core_brain.shadow_run import _parse_args
+
+        new = _parse_args(["--db", "data/04_shadow_test.db",
+                           "--starting-bankroll-usd", "250"])
+        old = _parse_args(["--db", "data/04_shadow_test.db",
+                           "--paired-starting-bankroll-usd", "250"])
+
+        assert new.starting_bankroll_usd == 250.0
+        assert old.starting_bankroll_usd == 250.0
+
+    def test_the_flag_default_is_unset_not_one_hundred(self):
+        """A default of 100 would pin every ordinary run and shadow the env."""
+        from core_brain.shadow_run import _parse_args
+
+        a = _parse_args(["--db", "data/04_shadow_test.db"])
+
+        assert a.starting_bankroll_usd is None
+
+    @staticmethod
+    def _forwarded(monkeypatch, argv):
+        import core_brain.shadow_run as sr
+
+        seen = {}
+
+        class Result:
+            results: list = []
+            intents: list = []
+            skipped_stages: tuple = ()
+
+        def fake_run_shadow(**kwargs):
+            seen.update(kwargs)
+            return Result()
+
+        monkeypatch.setattr(sr, "run_shadow", fake_run_shadow)
+        sr.main(argv)
+        return seen["starting_bankroll_usd"]
+
+    def test_an_ordinary_run_without_the_flag_forwards_none(
+            self, tmp_path, monkeypatch):
+        forwarded = self._forwarded(
+            monkeypatch,
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db")])
+
+        assert forwarded is None
+
+    def test_an_ordinary_run_forwards_an_explicit_flag(
+            self, tmp_path, monkeypatch):
+        forwarded = self._forwarded(
+            monkeypatch,
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db"),
+             "--starting-bankroll-usd", "250"])
+
+        assert forwarded == 250.0
+
+    def test_a_paired_arm_without_the_flag_forwards_the_config_default(
+            self, tmp_path, monkeypatch):
+        """Paired arms keep their preregistered $100 and ignore the env, as
+        before -- but the number is read from the config field, not a second
+        hard-coded copy that can drift from `config.py:41`."""
+        from core_brain.config import MakerConfig
+
+        monkeypatch.delenv("HUNTER_BANKROLL", raising=False)
+        monkeypatch.setenv("SPREAD_HUNTER_BANKROLL", "50")
+
+        forwarded = self._forwarded(
+            monkeypatch,
+            ["--minutes", "0", "--db", str(tmp_path / "shadow.db"),
+             "--markets-path", str(tmp_path / "feed.json"),
+             "--paired-depth-arm", "treatment"])
+
+        assert forwarded == MakerConfig.__dataclass_fields__["bankroll_usd"].default
+        assert forwarded == 100.0
