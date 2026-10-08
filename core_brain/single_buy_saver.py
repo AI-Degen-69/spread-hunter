@@ -1467,6 +1467,21 @@ def manage_single_leg_positions(
             if pair["naked"] <= SIZE_EPS:
                 continue
 
+            if is_ladder_pair(pair_id):
+                # Ladder-stamped pairs bypass the shared lifecycle and keep
+                # the pre-#413 `_route_pair` semantics: under `ladder_mode`
+                # one-shot rungs rest until `ladder_exit_sec`, then leave
+                # with the `ladder_exit` method; without it they answer to
+                # the ordinary grace timer with `single_buy_exit`. The
+                # unified routing retired the `_route_pair` call; this
+                # restores it for ladder-stamped pairs only.
+                out.append(_route_pair(
+                    client, registry, pair, max_pair_cost, live,
+                    venue_positions, cfg=cfg, last_ms=last_fill_ms,
+                    now_s=now_s,
+                ))
+                continue
+
             pair_side_tokens: dict[str, list[str]] = {}
             for token_id in pair["legs"]:
                 side = _token_side(registry, pair["condition_id"], token_id)

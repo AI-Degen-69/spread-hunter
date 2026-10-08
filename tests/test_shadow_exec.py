@@ -482,7 +482,11 @@ def test_stale_tape_does_not_credit_to_fresh_orders(registry):
 
 
 def test_a_single_buy_waits_without_crossing_in_the_shadow_store(registry):
-    """The lifecycle keeps the resting complement and records patient wait."""
+    """The lifecycle keeps the resting complement and reports patient wait.
+
+    Ownership: PATIENT_WAIT is Trader-persisted; the poll reports the
+    decision but writes no lifecycle row for it.
+    """
     from core_brain.order_registry import inventory_from_registry
     from core_brain.shadow_exec import (
         ShadowExecutionClient, ensure_shadow_tables, record_submit,
@@ -516,7 +520,8 @@ def test_a_single_buy_waits_without_crossing_in_the_shadow_store(registry):
 
     assert results, "auto_manage_pairs produced no result for the naked pair"
     assert results[0]["action"] == "patient_wait", results
-    assert reg.get_lifecycle_state(results[0]["pair_id"]).state == "PATIENT_WAIT"
+    assert results[0]["lifecycle_state"] == "PATIENT_WAIT", results
+    assert reg.get_lifecycle_state(results[0]["pair_id"]) is None
 
     inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
     assert inv.up_shares == pytest.approx(20.0)

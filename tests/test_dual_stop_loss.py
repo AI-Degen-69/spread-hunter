@@ -133,14 +133,19 @@ def test_adverse_drift_escalates_the_resting_hedge(registry):
     assert not any(c.startswith(("buy:", "sell:")) for c in client.calls)
 
 
-def test_escalated_hedge_state_persists_without_an_exit(registry):
-    """The lifecycle records escalation while leaving the held leg untouched."""
+def test_escalated_hedge_reports_without_an_exit(registry):
+    """The poll reports escalation while leaving the held leg untouched.
+
+    Ownership: ESCALATED_HEDGE is Trader-persisted; the poll reports the
+    decision in the result dict but writes no lifecycle row for it.
+    """
     _one_sided_pair(registry, fill_price=0.60)
     now_s = (FILL_TS_MS / 1000.0) + 5.0
     client = FakeClient(best_ask=0.45, best_bid=0.52)
     results = auto_manage_pairs(client, registry, _cfg(), now=now_s)
     assert results[0]["action"] == "escalated_wait"
-    assert registry.get_lifecycle_state("pair-sl").state == "ESCALATED_HEDGE"
+    assert results[0]["lifecycle_state"] == "ESCALATED_HEDGE"
+    assert registry.get_lifecycle_state("pair-sl") is None
     assert registry.get_all_closes() == []
 
 

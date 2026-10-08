@@ -282,7 +282,10 @@ def test_a_fill_after_the_close_re_arms_the_rule(registry: OrderRegistry):
     out = auto_manage_pairs(client, registry, _cfg(),
                             now=(after_close_ms / 1000.0) + 60.0)
     assert [r["action"] for r in out] == ["escalated_wait"]
-    assert registry.get_lifecycle_state("pair-2").state == "ESCALATED_HEDGE"
+    assert out[0]["lifecycle_state"] == "ESCALATED_HEDGE"
+    # Ownership: the poll reports the escalation but persists nothing --
+    # ESCALATED_HEDGE rows are Trader-written.
+    assert registry.get_lifecycle_state("pair-2") is None
     assert not any(c.startswith("sell:") for c in client.calls)
 
 

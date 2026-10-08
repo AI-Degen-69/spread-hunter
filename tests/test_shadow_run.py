@@ -397,7 +397,11 @@ class TestPairsSweep:
                 "malformed": 0}
 
     def test_a_naked_pair_waits_for_its_resting_hedge(self, tmp_path):
-        """The shadow sweep records PATIENT_WAIT without taker completion."""
+        """The shadow sweep reports PATIENT_WAIT without taker completion.
+
+        Ownership: PATIENT_WAIT is Trader-persisted; the sweep reports the
+        decision but writes no lifecycle row for it.
+        """
         from core_brain.order_registry import OrderRegistry, inventory_from_registry
         from core_brain.shadow_run import run_shadow
 
@@ -417,8 +421,7 @@ class TestPairsSweep:
         pair_ids = {order["pair_id"] for order in registry.get_all_orders()}
         assert len(pair_ids) == 1
         state = registry.get_lifecycle_state(pair_ids.pop())
-        assert state is not None
-        assert state.state == "PATIENT_WAIT"
+        assert state is None
 
         inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
         assert inv.up_shares == pytest.approx(20.0)
@@ -494,7 +497,9 @@ class TestPairsSweep:
         pair_ids = {o["pair_id"] for o in reg.get_all_orders()
                     if o["condition_id"] == "0xabc"}
         assert len(pair_ids) == 1
-        assert reg.get_lifecycle_state(pair_ids.pop()).state == "PATIENT_WAIT"
+        # The sweep reports the wait (asserted via fills/inventory above)
+        # but persists no Trader-owned lifecycle row.
+        assert reg.get_lifecycle_state(pair_ids.pop()) is None
         inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
         assert inv.up_shares == pytest.approx(20.0)
         assert inv.down_shares == pytest.approx(0.0)
