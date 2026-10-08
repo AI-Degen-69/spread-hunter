@@ -70,8 +70,9 @@ def test_both_legs_share_one_pair_id(registry):
 
 
 def test_a_carried_pair_id_joins_the_resting_pair(registry):
-    # #206: a replacement leg tagged by plan_orders joins the pair whose
-    # complement still rests, instead of opening a fresh one-legged pair.
+    # #206 (#397): a replacement leg carrying a stamped pair_id joins the
+    # pair whose complement still rests, instead of opening a fresh
+    # one-legged pair.
     from core_brain.shadow_exec import ensure_shadow_tables, record_submit
 
     reg, db = registry

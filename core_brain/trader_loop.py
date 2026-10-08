@@ -2171,10 +2171,15 @@ def _submit_intents(client, registry, market, intents, cfg) -> int:
     pair_id = f"pair-{uuid.uuid4().hex[:12]}"
     max_pair_cost = getattr(cfg, "max_pair_cost", 0.995)
 
-    # A carried pair_id (stamped on the intents by `plan_orders`) means this
-    # batch REPLACES one leg of an existing pair whose complement still rests:
-    # the replacement must join that pair, not open a new one, or the market
-    # ends up with two one-legged pairs -- the detachment seen live (#206).
+    # A carried pair_id means this batch REPLACES one leg of an existing pair
+    # whose complement still rests: the replacement must join that pair, not
+    # open a new one, or the market ends up with two one-legged pairs -- the
+    # detachment seen live (#206). `plan_orders` never stamps -- it only reads
+    # the carry (`i.pair_id == lifecycle_pair_id`). The stamps come from the
+    # ladder (`make_ladder_decide` in `core_brain/ladder.py`, one
+    # `ladder_pair_id` per market) and the lifecycle-escalation path in
+    # `core_brain/quotes.py` (which carries `override.pair_id`); a fresh
+    # `decide_quotes` batch carries None and mints below (#397).
     # Every carried intent in one batch shares one complement, so one id wins;
     # a batch mixing carried ids would be a planner bug, and minting fresh is
     # the safe fall-back rather than silently picking a side.

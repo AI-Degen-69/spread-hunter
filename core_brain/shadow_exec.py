@@ -281,8 +281,10 @@ def record_submit(
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
 
     # Same carry `trader_loop._submit_intents` applies: a replacement leg
-    # tagged by `plan_orders` joins the pair whose complement still rests,
-    # so a rehearsal splits no pairs the live loop would no longer split.
+    # carrying a stamped pair_id (ladder `make_ladder_decide` or the
+    # lifecycle-escalation path -- never `plan_orders`, which only reads the
+    # carry) joins the pair whose complement still rests, so a rehearsal
+    # splits no pairs the live loop would no longer split (#397).
     carried = {getattr(i, "pair_id", None) for i in intents} - {None}
     if len(carried) == 1:
         pair_id = carried.pop()
