@@ -8,6 +8,9 @@ This module belongs to the rehearsal and to nothing else.
 `core_brain/live_fill_engine.py` carries the opposite rule and keeps it: live, a
 fill exists only when the venue says so. Inferring one there would be the worst
 failure available to this system.
+
+A sell print below our resting price is a sweep that cleared our level: it
+zeroes the queue ahead and fills the full remainder at our own price.
 """
 from __future__ import annotations
 
@@ -95,6 +98,13 @@ def credit_fills(
     the last look. Volume consumes each order's remaining `queue_ahead` before
     any of it reaches the order itself.
 
+    Two cases, compared at rounded price levels. A print at our own price
+    consumes the queue first and then fills what it reaches, oldest first.
+    A print strictly below our price is a trade-through: it proves our level
+    was cleared, so the queue drops to zero and the full remainder fills at
+    our own price. The lower print is evidence, not shared volume -- it is
+    never consumed, so one print can fill every order resting above it.
+
     Returns the credited fills and every order's updated `queue_ahead`, so the
     caller can persist a queue that shrank without producing a fill -- forgetting
     that is how the same volume gets counted twice.
@@ -105,10 +115,28 @@ def credit_fills(
             key = (str(token_id), round(float(price), 4))
             remaining_volume[key] = remaining_volume.get(key, 0.0) + float(volume)
 
+    # Trade-through evidence, snapshotted before any exact-price consumption:
+    # every level with finite, positive tape. A print below our price proves
+    # the level cleared, so it stays available no matter which order is
+    # credited first.
+    swept = {
+        key for key, volume in remaining_volume.items()
+        if math.isfinite(volume) and volume > 0.0
+    }
+
     fills: list[ShadowFill] = []
     queues: dict[str, float] = {}
     for o in orders:
-        key = (str(o.token_id), round(float(o.price), 4))
+        own = round(float(o.price), 4)
+        token = str(o.token_id)
+        if any(price < own for (t, price) in swept if t == token):
+            queues[o.local_id] = 0.0
+            if o.remaining > 0:
+                fills.append(ShadowFill(o.local_id, o.token_id, o.price,
+                                        o.remaining))
+            continue
+
+        key = (token, own)
         volume = remaining_volume.get(key, 0.0)
         queue = float(o.queue_ahead)
 
