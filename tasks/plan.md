@@ -226,7 +226,7 @@ Branch: i427/realtime-position-value-updates | Issue: #427
 
 **Checkpoint:** server path provable via tests.
 
-### T3 [ ] — `dashboard/static/app.js` + harness tests [Design/UI] (M)
+### T3 [x] — `dashboard/static/app.js` + harness tests [Design/UI] (M)
 
 - Target files: `dashboard/static/app.js`, `tests/js/live_marks_harness.cjs` (new), `tests/test_positions_live_marks.py` (new).
 - Build: `mark` listener in `connectSSE()` (ticker untouched), `liveMarks` map, positions helper passing live mids into `positionMarkValue()`, cell attrs, rAF-merged writes, sort fallback, switch-reset clearing.
@@ -234,7 +234,7 @@ Branch: i427/realtime-position-value-updates | Issue: #427
 - Depends on: T2.
 - Verify: `python -m pytest -q tests/test_positions_live_marks.py` — all green.
 
-### T4 [ ] — Positions-surface finesse [Design/UI] (S)
+### T4 [x] — Positions-surface finesse [Design/UI] (S)
 
 - Target files: `dashboard/static/app.js`, `dashboard/static/styles.css`.
 - Build: live affordance polish within existing tokens (live class, tooltip, no layout churn). No chart rework.

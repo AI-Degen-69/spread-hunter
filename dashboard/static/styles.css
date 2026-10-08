@@ -1508,6 +1508,13 @@ th[aria-sort] .ot-sort-btn {
 #orders-trades-table .ot-pair-row > td.ot-pair-value:first-of-type {
   border-left: 1px solid var(--border-subtle);
 }
+/* Live mark (#427): a value cell priced from the venue feed rather than the
+   last quote. Color only — the same green the pills and tags already use —
+   so a ticking cell never shifts the row. The age tooltip on the cell says
+   how fresh the mark is. */
+#orders-trades-table .ot-pair-row > td.ot-pair-value.live {
+  color: #34d399;
+}
 /* Status tags under the market name. Three tones, one meaning each:
    good — the merge books a profit; alert — it books a loss; warn — the pair is
    half-built and the resting leg is a single buy waiting to happen. */

@@ -2,8 +2,8 @@
 
 - [x] #427 T1 — `core_brain/live_marks.py` + `tests/test_live_marks.py`
 - [x] #427 T2 — `dashboard/server.py` wiring + stream mark frames
-- [ ] #427 T3 — `dashboard/static/app.js` + harness tests
-- [ ] #427 T4 — Positions-surface finesse
+- [x] #427 T3 — `dashboard/static/app.js` + harness tests
+- [x] #427 T4 — Positions-surface finesse
 - [ ] #427 T5 — How-to-verify block
 
 - [x] #398 T1 — Decision record `docs/issues/398-maker-queue-bars.md`
