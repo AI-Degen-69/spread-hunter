@@ -1,6 +1,6 @@
 # Unified Single-Leg Lifecycle — Design
 
-**Status:** approved design; awaiting written-spec review
+**Status:** accepted, 2026-10-08
 **Scope:** replace the conflicting automatic single-leg routing with one persisted,
 shared lifecycle controller. Keep the existing venue-safe execution mechanics.
 
