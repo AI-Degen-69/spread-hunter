@@ -78,7 +78,7 @@ Add comprehensive end-to-end unit tests covering the redesigned market filtering
 ### Checkpoint 1 (After Tasks 1 & 2)
 Verify basic screening gates, edge cases, fail-fast order, and snapshot persistence cleanly pass without hitting the venue.
 
-### Task 3: Live Sports & eSports Market Priority Tests
+### Task 3: Live Sports & eSports Market Priority Tests [x]
 - **Task ID:** TASK-3
 - **Size:** S
 - **Domain Tag:** `[Core/Logic]`

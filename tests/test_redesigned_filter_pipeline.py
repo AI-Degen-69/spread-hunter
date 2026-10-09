@@ -32,23 +32,30 @@ class _Resp:
     def json(self):
         return self._payload
 
+    def raise_for_status(self):
+        pass
+
 
 class _FakeSession:
     """Offline requests session that logs URLs and returns configurable responses."""
 
     def __init__(self, trades: Optional[list] = None,
                  books_by_token: Optional[dict[str, dict]] = None,
-                 default_book: Optional[dict] = None):
+                 default_book: Optional[dict] = None,
+                 events: Optional[list] = None):
         self.trades = trades or []
         self.books_by_token = books_by_token or {}
         self.default_book = default_book or {
             "bids": [{"price": "0.49", "size": "5000"}],
             "asks": [{"price": "0.51", "size": "5000"}],
         }
+        self.events = events or []
         self.requests: list[tuple[str, Optional[dict]]] = []
 
     def get(self, url: str, params: Optional[dict] = None, timeout: Optional[float] = None):
         self.requests.append((url, params))
+        if "events" in url:
+            return _Resp(self.events)
         if "trades" in url:
             return _Resp(self.trades)
         if "book" in url:
@@ -509,4 +516,157 @@ def test_pipeline_snapshot_and_universe_accounting(tmp_path):
         if not row["eligible"]:
             assert row["reject_reason"] != ""
             assert _cause(row["reject_reason"]) in causes
+
+
+# ==============================================================================
+# Task 3: Live Sports & eSports Market Priority Tests
+# ==============================================================================
+
+_ESPORTS_EVENT = {
+    "id": "9001",
+    "slug": "esports-cs2-navi-faze",
+    "title": "NAVI vs. FaZe Clan",
+    "live": True,
+    "ended": False,
+    "sport": {"id": 88, "sport": "esports", "name": "eSports"},
+    "tags": [{"label": "eSports"}, {"label": "CS2"}],
+    "series": [{"id": "2001", "slug": "iem-cologne", "title": "CS2 IEM Cologne"}],
+    "markets": [
+        {
+            "conditionId": "0xcs2main",
+            "slug": "esports-cs2-navi-faze",
+            "question": "NAVI vs. FaZe Clan",
+            "sportsMarketType": "moneyline",
+            "marketType": "moneyline",
+            "groupItemTitle": None,
+            "clobTokenIds": '["0xcs2main-yes", "0xcs2main-no"]',
+            "volume24hr": 48_000.0,
+            "spread": 0.015,
+            "gameStartTime": (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat(),
+            "endDate": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "enableOrderBook": True,
+            "acceptingOrders": True,
+            "closed": False,
+            "orderMinSize": 5,
+            "orderPriceMinTickSize": 0.01,
+            "rewardsMaxSpread": 3.5,
+            "rewardsMinSize": 50,
+        }
+    ],
+}
+
+
+def test_live_event_merges_and_qualifies_esports_market():
+    now_ts = time.time()
+    now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+    cid = "0xcs2main"
+
+    scanned = {
+        "condition_id": cid,
+        "market_slug": "from-the-scan",
+        "question": "NAVI vs. FaZe Clan",
+    }
+
+    session = _FakeSession(events=[_ESPORTS_EVENT])
+    merged, stats = fm.merge_live_event_markets([scanned], session)
+
+    assert len(merged) == 1
+    assert merged[0]["market_slug"] == "esports-cs2-navi-faze"
+    assert merged[0]["_live_event"] is True
+    assert stats["live_rows_already_scanned"] == 1
+
+    # Evaluate the merged live market
+    yes_book, no_book = _books(0.49, 0.505, depth_usd=2400.0)
+    session.trades = _active_tape(now_ts, total_usd=10_000.0, count=60)
+    session.books_by_token = {f"{cid}-yes": yes_book, f"{cid}-no": no_book}
+
+    result = fm.evaluate(
+        session, rate=50.0, m=merged[0], volume_24h=48_000.0,
+        source="spread", min_volume_usd=125_000.0, max_spread=0.02,
+        velocity_gate_enabled=True, now_iso=now_iso,
+    )
+
+    assert result["eligible"] is True
+    assert result["volatility_exempt"] is True
+    assert result.get("reject_reason") in (None, "")
+
+    # Counter-factual: non-live market is rejected by in-play clock gate
+    non_live_cand = dict(merged[0], _live_event=False)
+    result_non_live = fm.evaluate(
+        session, rate=50.0, m=non_live_cand, volume_24h=48_000.0,
+        source="spread", min_volume_usd=125_000.0, max_spread=0.02,
+        velocity_gate_enabled=True, now_iso=now_iso,
+    )
+    assert result_non_live["eligible"] is False
+    assert "in-play" in result_non_live["reject_reason"]
+
+
+def test_live_market_does_not_bypass_book_safety_gates():
+    now_ts = time.time()
+    now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+    cid = "0xcs2_widespread"
+
+    live_cand = _candidate(
+        cid,
+        question="Team Spirit vs Astralis",
+        series_title="CS2 Major",
+        category="eSports",
+        market_type="moneyline",
+        sports_market_type="moneyline",
+        _live_event=True,
+        gameStartTime=(datetime.fromtimestamp(now_ts, timezone.utc) - timedelta(minutes=30)).isoformat(),
+        _volume_24h=48_000.0,
+    )
+
+    # Spread 0.04 > 0.02
+    yes_book, no_book = _books(0.48, 0.52, depth_usd=2400.0)
+    session = _FakeSession(
+        trades=_active_tape(now_ts),
+        books_by_token={f"{cid}-yes": yes_book, f"{cid}-no": no_book},
+    )
+
+    result = fm.evaluate(
+        session, rate=50.0, m=live_cand, volume_24h=48_000.0,
+        source="spread", min_volume_usd=125_000.0, max_spread=0.02,
+        velocity_gate_enabled=True, now_iso=now_iso,
+    )
+
+    assert result["eligible"] is False
+    assert result["reject_reason"] == "YES: spread 0.0400 > 0.0200"
+    assert _cause(result["reject_reason"]) == "YES spread"
+
+
+def test_live_sports_market_ranking_priority():
+    now_ts = time.time()
+
+    live_row = {
+        "condition_id": "0xlive_sports",
+        "title": "FaZe vs NAVI",
+        "volatility_exempt": True,
+        "return_pct_day": 2.0,
+        "movement_usd": 15_000.0,
+        "trade_count": 80,
+        "days_to_resolve": 1.0,
+    }
+
+    non_live_row = {
+        "condition_id": "0xnon_live",
+        "title": "Crypto Annual High",
+        "volatility_exempt": False,
+        "return_pct_day": 25.0,
+        "movement_usd": 15_000.0,
+        "trade_count": 80,
+        "days_to_resolve": 5.0,
+    }
+
+    sorted_rows = fm.sort_eligible([non_live_row, live_row])
+    assert sorted_rows[0]["condition_id"] == "0xlive_sports"
+
+    live_with_start = dict(
+        live_row,
+        _start_iso=(datetime.fromtimestamp(now_ts, timezone.utc) - timedelta(hours=1)).isoformat(),
+    )
+    score = fm.rank_score(live_with_start, now=now_ts)
+    assert score == pytest.approx(live_row["return_pct_day"] * fm.RANK_LIVE_BOOST)
+
 
