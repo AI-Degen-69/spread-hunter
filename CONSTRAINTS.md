@@ -1,6 +1,37 @@
-# CONSTRAINTS — #435 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #441 (locked by Station II, enforced through Station V)
 
-Governs the `i435` branch only; #434 constraints below stay as history.
+Governs the `i441` branch only; #435 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_dashboard_server.py`
+  `tests/test_redesigned_filter_pipeline.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+
+## Scope & File Boundaries
+
+- Target files for modification:
+  `dashboard/static/app.js`
+  `tests/test_dashboard_server.py`
+  `tasks/plan.md`
+  `tasks/todo.md`
+- No modification permitted to core trading/scoring/orders logic:
+  `scripts/filter_markets.py`
+  `scoring/selector.py`
+  `core_brain/order_manager.py`
+  `core_brain/order_registry.py`
+  `core_brain/markets.py`
+  `data/orders.db`
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies.
+
+---
+
+# CONSTRAINTS — #435 (history)
 
 ## Zero regressions
 

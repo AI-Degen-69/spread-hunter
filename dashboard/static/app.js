@@ -5652,7 +5652,7 @@ const BUCKET_DEFS = [
   { key: 'volume', name: '4. Volume Gate', cls: 'rejected' },
   { key: 'depth', name: '5. Depth Gate', cls: 'rejected' },
   { key: 'spread', name: '6. Spread Gate', cls: 'rejected' },
-  { key: 'horizon', name: '7. Horizon & Income Gate', cls: 'rejected' },
+  { key: 'horizon', name: '7. Horizon Gate', cls: 'rejected' },
   { key: 'passed', name: '8. Passed (Quoting)', cls: 'passed' },
 ];
 const STAGE_DEFS = BUCKET_DEFS;
@@ -5767,9 +5767,6 @@ function getStageHero(key, funnel) {
   const depthGate = gateBar(funnel?.depth_gate_usd, 500);
   const spreadGate = gateBar(funnel?.spread_gate, 0.0205);
   const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
-  const rewardIncome = gateBar(funnel?.reward_min_income_usd_day, 0);
-  const spreadIncome = gateBar(funnel?.spread_min_income_usd_day, 0);
-  const maxPairCost = gateBar(funnel?.max_pair_cost, 0.995);
 
   switch (key) {
     case 'raw':
@@ -5806,13 +5803,13 @@ function getStageHero(key, funnel) {
       };
     case 'horizon':
       return {
-        param: 'TEST: HORIZON & INCOME',
-        value: `≤ ${Number(horizonDays).toFixed(1)} days · income > $0.00/day`,
+        param: 'TEST: HORIZON',
+        value: `≤ ${Number(horizonDays).toFixed(1)} days`,
       };
     case 'passed':
       return {
-        param: 'TEST: PAIR MERGE ARBITRAGE',
-        value: `Pair Cost ≤ $${Number(maxPairCost).toFixed(3)} ➔ $1.00 USDC`,
+        param: 'QUALIFIED FLEET',
+        value: 'Passed all screening gates · Quoting on venue',
       };
     default:
       return { param: 'GATE TEST', value: '--' };
