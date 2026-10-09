@@ -305,7 +305,7 @@ def sample_pending_markouts(
             # Fetch market mid if not cached
             if cid not in mids_cache:
                 try:
-                    m = fetch_pinned_market(cid, require_rewards=False)
+                    m = fetch_pinned_market(cid)
                     if m:
                         up_book = full_book(clob_host, m.up_token)
                         dn_book = full_book(clob_host, m.down_token)

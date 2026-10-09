@@ -1217,19 +1217,19 @@ def test_quote_says_why_a_market_was_rejected(monkeypatch, tmp_path):
     # and the dry run prints the legs it would rest.
     seen = {}
 
-    def unfunded(cid, require_rewards=True):
-        seen["require_rewards"] = require_rewards
-        return None if require_rewards else Market()
+    def unfunded(cid, **kwargs):
+        seen["kwargs"] = kwargs
+        return Market()
 
     monkeypatch.setattr("core_brain.markets.fetch_pinned_market", unfunded)
     live_exec.quote(COND, price=0.48, size=5.0, live=False,
                     db_path=tmp_path / "live.db")
-    assert seen["require_rewards"] is False
+    assert seen["kwargs"] == {}
 
     # Unusable for a reason that is not funding: refused, and the message names
     # the causes that are left rather than blaming the id.
     monkeypatch.setattr("core_brain.markets.fetch_pinned_market",
-                        lambda cid, require_rewards=True: None)
+                        lambda cid, **kwargs: None)
     with pytest.raises(SystemExit, match="no tradeable market") as exc_info:
         live_exec.quote(COND, price=0.48, size=5.0, live=False,
                         db_path=tmp_path / "live.db")

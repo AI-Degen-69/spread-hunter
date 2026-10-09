@@ -780,8 +780,8 @@ def test_quote_does_not_require_maker_rewards(tmp_path):
     )
     seen = {}
 
-    def _fetch(cid, require_rewards=True):
-        seen["require_rewards"] = require_rewards
+    def _fetch(cid, **kwargs):
+        seen["kwargs"] = kwargs
         return dummy_market
 
     mock_client = MagicMock()
@@ -790,11 +790,14 @@ def test_quote_does_not_require_maker_rewards(tmp_path):
         lambda vid: {"asset_id": "tok_up"} if vid == "venue-up" else {"asset_id": "tok_dn"}
     )
 
-    with patch("core_brain.markets.fetch_pinned_market", side_effect=_fetch),          patch.object(le, "client", return_value=mock_client),          patch.object(le, "open_notional", return_value=0.0),          patch.object(le, "RUN", tmp_path):
+    with patch("core_brain.markets.fetch_pinned_market", side_effect=_fetch), \
+         patch.object(le, "client", return_value=mock_client), \
+         patch.object(le, "open_notional", return_value=0.0), \
+         patch.object(le, "RUN", tmp_path):
         le.quote(cond_id, price=0.50, size=5.0, live=True,
                  db_path=tmp_path / "live.db")
 
-    assert seen["require_rewards"] is False
+    assert seen["kwargs"] == {}
     assert mock_client.post_orders.call_count == 1
 
 

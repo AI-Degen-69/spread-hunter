@@ -2084,7 +2084,7 @@ def _market_specs(max_markets: Optional[int] = None, registry=None,
 def _fetch_market(cid: str):
     """Resolve one market on the venue, raising so the loop records ERROR."""
     from core_brain.markets import fetch_pinned_market
-    m = fetch_pinned_market(cid, require_rewards=False)
+    m = fetch_pinned_market(cid)
     if m is None:
         raise LookupError(
             f"no tradeable market at {cid[:16]}... (missing, closed, or not 2 tokens)")

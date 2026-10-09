@@ -193,7 +193,6 @@ def test_fetch_pinned_market_reads_game_start_time(monkeypatch):
 
     monkeypatch.setattr(markets_mod._SESSION, "get",
                         lambda *a, **k: _Resp())
-    market = markets_mod.fetch_pinned_market("0xfuria",
-                                             require_rewards=False)
+    market = markets_mod.fetch_pinned_market("0xfuria")
     assert market.game_start_ts == _FURIA_KICKOFF
     assert market.end_ts == _FURIA_END

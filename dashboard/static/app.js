@@ -5652,7 +5652,7 @@ const BUCKET_DEFS = [
   { key: 'volume', name: '4. Volume Gate', cls: 'rejected' },
   { key: 'depth', name: '5. Depth Gate', cls: 'rejected' },
   { key: 'spread', name: '6. Spread Gate', cls: 'rejected' },
-  { key: 'horizon', name: '7. Horizon & Yield Gate', cls: 'rejected' },
+  { key: 'horizon', name: '7. Horizon & Income Gate', cls: 'rejected' },
   { key: 'passed', name: '8. Passed (Quoting)', cls: 'passed' },
 ];
 const STAGE_DEFS = BUCKET_DEFS;
@@ -5767,7 +5767,7 @@ function getStageHero(key, funnel) {
   const depthGate = gateBar(funnel?.depth_gate_usd, 500);
   const spreadGate = gateBar(funnel?.spread_gate, 0.06);
   const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
-  const rewardIncome = gateBar(funnel?.reward_min_income_usd_day, 1.5);
+  const rewardIncome = gateBar(funnel?.reward_min_income_usd_day, 0);
   const spreadIncome = gateBar(funnel?.spread_min_income_usd_day, 0);
   const maxPairCost = gateBar(funnel?.max_pair_cost, 0.995);
 
@@ -5806,12 +5806,8 @@ function getStageHero(key, funnel) {
       };
     case 'horizon':
       return {
-        param: 'TEST: HORIZON & PAYOUT',
-        // The payout floor is a rewards rule. A spread market is paid by
-        // whoever lifts the offer, so it passes on any income at all --
-        // stating one universal bar here would call a passing market a
-        // failure.
-        value: `≤ ${Number(horizonDays).toFixed(1)} days · rewards ≥ $${Number(rewardIncome).toFixed(2)}/day · spread > $${Number(spreadIncome).toFixed(2)}/day`,
+        param: 'TEST: HORIZON & INCOME',
+        value: `≤ ${Number(horizonDays).toFixed(1)} days · income > $0.00/day`,
       };
     case 'passed':
       return {

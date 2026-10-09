@@ -1,3 +1,46 @@
+# CONSTRAINTS — #431 (locked by Station II, enforced through Station V)
+
+Governs the `i431` branch only; #427 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_pipeline_snapshot_gates.py`
+  `tests/test_order_manager.py`
+  `tests/scoring/test_markets.py`
+  `tests/test_unified_universe.py`
+  `tests/test_single_buy_saver.py`
+  `tests/test_pre_start_gate.py`
+  `tests/test_dashboard_server.py`
+  `tests/test_live_funnel.py`
+  `tests/test_market_quote.py`
+  `tests/test_markout_maturity.py`
+  `tests/test_milestone7_telemetry.py`
+  `tests/test_shadow_markouts.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
+
+## Horizon and Trading Gate Safety Freeze
+
+- The resolution horizon gate (events closing within 30 days / `MAX_DAYS_TO_RESOLVE`) remains active, unchanged, and strictly enforced.
+- Spread calculation, depth gates, velocity gates, and dynamic risk caps remain untouched.
+- Quote pricing (`core_brain/quotes.py`) and order execution remain untouched.
+- `tradable()` and scoring geometry remain untouched.
+
+## Stores are evidence, not scratch
+
+- `data/orders.db` is the production registry: read it, never rewrite it.
+- No schema migration; tests use temporary DBs or isolated state.
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit operator approval.
+- Tests stay isolated from the real network (stub HTTP).
+
+---
+
 # CONSTRAINTS — #427 (locked by Station II, enforced through Station V)
 
 Governs the `i427` branch only; #398 constraints below stay as history.

@@ -1559,12 +1559,13 @@ def test_app_js_reads_every_gate_bar_from_the_funnel():
 
 
 def test_app_js_states_the_payout_floor_per_market_source():
-    """One universal payout bar would call a passing spread market a failure."""
+    """Stage 7 displays the unified horizon and income gate rule."""
     app_js = _read_static("app.js")
     assert 'rewardIncome' in app_js
     assert 'spreadIncome' in app_js
-    assert 'rewards ≥ $' in app_js or 'rewards ≥ $' in app_js
-    assert 'spread > $' in app_js
+    assert 'TEST: HORIZON & INCOME' in app_js
+    assert 'income > $0.00/day' in app_js
+    assert 'rewards ≥ $' not in app_js
 
 
 def test_app_js_does_not_fabricate_sequential_gate_flow():
