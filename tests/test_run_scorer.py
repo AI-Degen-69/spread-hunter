@@ -251,18 +251,23 @@ def test_shadow_run_finish_line_triggers(tmp_path):
     _create_test_db(db, orders=50, fills=20, closes_stop=5, closes_merge=15)
 
     # run_shadow with finish_line_reliable=True should immediately hit the finish line on rotation
-    called_cycles = []
+    sleep_calls = []
 
     def mock_markets(_=None):
         return []
 
-    res = run_shadow(
-        minutes=1.0,
-        db_path=db,
-        run_id="test-run",
-        markets_fn=mock_markets,
-        sleep_fn=lambda s: None,
-        finish_line_reliable=True,
-    )
+    def recording_sleep(s):
+        sleep_calls.append(s)
+
+    with patch("core_brain.trader_loop._fetch_market", return_value=None):
+        res = run_shadow(
+            minutes=1.0,
+            db_path=db,
+            run_id="test-run",
+            markets_fn=mock_markets,
+            sleep_fn=recording_sleep,
+            finish_line_reliable=True,
+        )
     assert res is not None
+    assert len(sleep_calls) == 0
 

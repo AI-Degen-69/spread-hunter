@@ -803,9 +803,11 @@ function Start-ShadowDashboard {
     }
     $port = $LivePort
     $url = $DashUrl
-    if (Test-DashboardAlive -or (Test-Port -PortNumber $port)) {
+    if (Test-DashboardServer -or (Test-Port -PortNumber $port)) {
         if (-not (Get-DashInstance)) {
-            $null = Adopt-DashboardInstance
+            if (Test-DashboardServer) {
+                $null = Adopt-DashboardInstance
+            }
         }
         $inst = Get-DashInstance
         $pidText = if ($inst) { " (PID $($inst.pid))" } else { "" }

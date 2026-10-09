@@ -2690,8 +2690,27 @@ def api_shadow_reliability(db: str | None = None, run_id: str | None = None):
     """Score the active or requested database for authenticity and action reliability."""
     from core_brain.run_scorer import score_run
     target_db = resolve_db_path(db if db is not None else _ACTIVE_DB_OVERRIDE)
-    score = score_run(target_db, run_id=run_id)
-    return JSONResponse(score.to_dict())
+    if db is not None:
+        try:
+            import tempfile
+            resolved_p = target_db.resolve()
+            temp_root = Path(tempfile.gettempdir()).resolve()
+            allowed = [
+                LIVE_ROOT.resolve(),
+                (LIVE_ROOT / "data").resolve(),
+                (LIVE_ROOT / "runtime").resolve(),
+                temp_root,
+            ]
+            if not any(resolved_p == root or root in resolved_p.parents for root in allowed):
+                return JSONResponse({"error": "Forbidden database path"}, status_code=403)
+        except Exception:
+            return JSONResponse({"error": "Invalid database path"}, status_code=400)
+
+    try:
+        score = score_run(target_db, run_id=run_id)
+        return JSONResponse(score.to_dict())
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to score run: {e}"}, status_code=400)
 
 
 @app.get("/api/scan-state")

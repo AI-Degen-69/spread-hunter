@@ -178,11 +178,16 @@ def score_run(
                 params.append(run_id)
             total_closed_trades = cur.execute(q, params).fetchone()[0]
 
-            # Stop losses: lifecycle_hard_stop, aged_out_rescue, or single_buy_exit
-            q_stop = (
-                "SELECT count(*) FROM closes WHERE (reason IN ('lifecycle_hard_stop', "
-                "'aged_out_rescue') OR method = 'single_buy_exit')"
-            )
+            # Inspect closes columns to handle older schema without 'reason'
+            closes_cols = {col[1] for col in cur.execute("PRAGMA table_info(closes)").fetchall()}
+            if "reason" in closes_cols:
+                q_stop = (
+                    "SELECT count(*) FROM closes WHERE (reason IN ('lifecycle_hard_stop', "
+                    "'aged_out_rescue') OR method = 'single_buy_exit')"
+                )
+            else:
+                q_stop = "SELECT count(*) FROM closes WHERE method = 'single_buy_exit'"
+
             params_stop = []
             if run_id:
                 q_stop += " AND run_id = ?"
@@ -197,6 +202,19 @@ def score_run(
                 params_merge.append(run_id)
             merged_count = cur.execute(q_merge, params_merge).fetchone()[0]
 
+    except sqlite3.Error:
+        return RunReliabilityScore(
+            db_path=str(path),
+            run_id=run_id,
+            authenticity_score_pct=0.0,
+            confidence_tier="UNREADABLE",
+            is_reliable=False,
+            finish_line_reached=False,
+            total_closed_trades=0,
+            total_fills=0,
+            actions=empty_actions,
+            bottlenecks=list(empty_actions.keys()),
+        )
     finally:
         conn.close()
 

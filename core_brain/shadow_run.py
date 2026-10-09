@@ -1203,17 +1203,22 @@ def run_shadow(
         rotations += 1
         write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations)
         if finish_line_trades is not None or finish_line_merges is not None or finish_line_reliable:
-            from core_brain.run_scorer import score_run
-            s = score_run(db_path, run_id=run_id)
-            if finish_line_reliable and s.is_reliable:
-                log.warning("SHADOW RUN finish line reached: all reliability action thresholds met (%s)", s.confidence_tier)
-                raise _FinishLine()
-            if finish_line_trades is not None and s.total_closed_trades >= finish_line_trades:
-                log.warning("SHADOW RUN finish line reached: target closed trades reached (%d/%d)", s.total_closed_trades, finish_line_trades)
-                raise _FinishLine()
-            if finish_line_merges is not None and s.actions["positions_merged"].observed >= finish_line_merges:
-                log.warning("SHADOW RUN finish line reached: target merges reached (%d/%d)", s.actions["positions_merged"].observed, finish_line_merges)
-                raise _FinishLine()
+            try:
+                from core_brain.run_scorer import score_run
+                s = score_run(db_path, run_id=run_id)
+                if finish_line_reliable and s.is_reliable:
+                    log.warning("SHADOW RUN finish line reached: all reliability action thresholds met (%s)", s.confidence_tier)
+                    raise _FinishLine()
+                if finish_line_trades is not None and s.total_closed_trades >= finish_line_trades:
+                    log.warning("SHADOW RUN finish line reached: target closed trades reached (%d/%d)", s.total_closed_trades, finish_line_trades)
+                    raise _FinishLine()
+                if finish_line_merges is not None and s.actions["positions_merged"].observed >= finish_line_merges:
+                    log.warning("SHADOW RUN finish line reached: target merges reached (%d/%d)", s.actions["positions_merged"].observed, finish_line_merges)
+                    raise _FinishLine()
+            except _FinishLine:
+                raise
+            except Exception as e:
+                log.warning("Could not score run for finish-line check: %s", e)
         resolved_sleep_fn(seconds)
 
     results = loop_run(
