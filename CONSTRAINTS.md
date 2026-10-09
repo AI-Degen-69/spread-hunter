@@ -1,3 +1,47 @@
+# CONSTRAINTS — #435 (locked by Station II, enforced through Station V)
+
+Governs the `i435` branch only; #434 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_redesigned_filter_pipeline.py`
+  `tests/test_pipeline_snapshot_gates.py`
+  `tests/test_unified_universe.py`
+  `tests/test_velocity_gate.py`
+  `tests/test_in_play_gate.py`
+  `tests/test_rank_score.py`
+  `tests/test_order_manager_decide.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
+
+## Scope & File Boundaries
+
+- New test file: `tests/test_redesigned_filter_pipeline.py`.
+- No modification permitted to production logic or schemas:
+  `scripts/filter_markets.py`
+  `scoring/selector.py`
+  `scoring/config.py`
+  `core_brain/order_manager.py`
+  `core_brain/order_registry.py`
+  `core_brain/markets.py`
+  `core_brain/market_feed.py`
+  `core_brain/quotes.py`
+  `data/orders.db`
+  `tests/conftest.py`
+- Tests must be strictly offline:
+  - Stub HTTP calls via fake sessions/responses (`_FakeSession`, `_Resp`).
+  - Capture request order in a log to prove fail-fast behavior.
+  - Temporary files (`tmp_path`) for SQLite databases and feed files.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies.
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+
+---
+
 # CONSTRAINTS — #434 (locked by Station II, enforced through Station V)
 
 Governs the `i434` branch only; #433 constraints below stay as history.
