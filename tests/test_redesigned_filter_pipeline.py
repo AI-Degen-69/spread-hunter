@@ -773,4 +773,32 @@ def test_zero_reward_graduated_market_generates_quotes_downstream(tmp_path, monk
     assert len(orders) == 0
 
 
+# ==============================================================================
+# Task 5: Visual UI Verification & Pipeline Kanban Preview
+# ==============================================================================
+
+def test_preview_filter_pipeline_generates_dashboard_snapshots(tmp_path):
+    from scripts.preview_filter_pipeline import generate_preview_snapshot
+
+    pipe_file = generate_preview_snapshot(out_dir=tmp_path)
+    assert pipe_file.exists()
+
+    snap = json.loads(pipe_file.read_text(encoding="utf-8"))
+    assert "counts" in snap
+    assert snap["counts"]["eligible"] >= 2
+    assert snap["counts"]["rejected"] >= 5
+
+    # Confirm rejection causes match expected Kanban buckets
+    causes = {entry["cause"] for entry in snap["rejections"]}
+    assert "YES decided mid" in causes
+    assert "YES spread" in causes
+    assert "volume" in causes
+    assert "horizon" in causes
+
+    # Confirm universe file was also written
+    univ_file = tmp_path / "market_universe.json"
+    assert univ_file.exists()
+
+
+
 

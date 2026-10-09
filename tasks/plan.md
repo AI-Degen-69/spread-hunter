@@ -109,7 +109,7 @@ Verify basic screening gates, edge cases, fail-fast order, and snapshot persiste
   - Run regression suites: `tests/test_pipeline_snapshot_gates.py`, `tests/test_unified_universe.py`, `tests/test_velocity_gate.py`.
 - **Verification:** `python -m pytest -q tests/test_redesigned_filter_pipeline.py tests/test_pipeline_snapshot_gates.py tests/test_unified_universe.py tests/test_velocity_gate.py`
 
-### Task 5: Visual UI Verification & Pipeline Kanban Preview
+### Task 5: Visual UI Verification & Pipeline Kanban Preview [x]
 - **Task ID:** TASK-5
 - **Size:** S
 - **Domain Tag:** `[Design/UI]`
