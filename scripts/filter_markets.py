@@ -44,7 +44,7 @@ from scoring.config import load as _load_cfg   # noqa: E402
 from scoring.family_admission import classify_identity   # noqa: E402
 from scoring.markets import parse_book   # noqa: E402
 from scoring.rewards import score_per_share   # noqa: E402
-from scoring.selector import (identity_allowed, maker_queue_allowed,  # noqa: E402
+from scoring.selector import (identity_allowed, is_sports_or_esports, maker_queue_allowed,  # noqa: E402
                               pair_books_allowed, top_depth_usd)
 from scripts.family_probe import family_key   # noqa: E402
 
@@ -105,6 +105,7 @@ MIN_MOVEMENT_USD = _CFG.select_min_movement_usd
 TRADES_API = "https://data-api.polymarket.com/trades"
 MAX_BOOK_SPREAD = _CFG.select_max_book_spread
 MIN_RANGE_CENTS = getattr(_CFG, "select_min_range_cents", 2.0)
+VOLATILITY_WINDOW_SEC = getattr(_CFG, "select_volatility_window_sec", 7200.0)
 VELOCITY_GATE_ENABLED = getattr(_CFG, "select_velocity_gate_enabled", True)
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
@@ -396,11 +397,13 @@ def tape_movement_and_range(
     window_sec: float = MOVEMENT_WINDOW_SEC,
     now_ts: Optional[float] = None,
     limit: int = 500,
+    range_window_sec: Optional[float] = None,
 ) -> dict:
     """Read recent tape: traded notional, trade count, last trade latency, and price range.
 
     `movement_usd` is None when unmeasured (failed HTTP / malformed JSON).
     Unmeasured tape stays fail-open so venue network hiccups never empty the universe.
+    `range_window_sec` controls the lookback for price swing (defaults to `VOLATILITY_WINDOW_SEC`).
     """
     if not condition_id:
         return {
@@ -432,6 +435,7 @@ def tape_movement_and_range(
         }
     now = time.time() if now_ts is None else now_ts
     cutoff = now - max(0.0, window_sec)
+    r_cutoff = now - max(0.0, range_window_sec if range_window_sec is not None else VOLATILITY_WINDOW_SEC)
     total = 0.0
     trade_count = 0
     latest_ts = None
@@ -454,22 +458,23 @@ def tape_movement_and_range(
             continue
         if latest_ts is None or ts > latest_ts:
             latest_ts = ts
-        # A row we cannot place in time cannot be counted toward a windowed
-        # figure. Skipping it under-counts, which is the safe direction for a
-        # gate that refuses on "too little".
-        if ts < cutoff:
-            continue
-        trade_count += 1
-        total += price * size
-        # Normalize outcome price: if trade is on outcome 1 (e.g. "No"/"Down"), invert (1.0 - price)
-        # so all prices in the window share the same reference outcome frame (#378, #370).
-        outcome_idx = t.get("outcomeIndex")
-        outcome_str = str(t.get("outcome") or "").strip().lower()
-        if outcome_idx == 1 or outcome_str in ("no", "down"):
-            norm_price = 1.0 - price
-        else:
-            norm_price = price
-        prices_in_window.append(norm_price)
+
+        # Volume movement window cutoff (e.g. 30m)
+        if ts >= cutoff:
+            trade_count += 1
+            total += price * size
+
+        # Range volatility window cutoff (e.g. 2h)
+        if ts >= r_cutoff:
+            # Normalize outcome price: if trade is on outcome 1 (e.g. "No"/"Down"), invert (1.0 - price)
+            # so all prices in the window share the same reference outcome frame (#378, #370).
+            outcome_idx = t.get("outcomeIndex")
+            outcome_str = str(t.get("outcome") or "").strip().lower()
+            if outcome_idx == 1 or outcome_str in ("no", "down"):
+                norm_price = 1.0 - price
+            else:
+                norm_price = price
+            prices_in_window.append(norm_price)
 
     last_trade_sec_ago = max(0.0, now - latest_ts) if latest_ts is not None else None
     range_cents = (
@@ -511,8 +516,13 @@ def velocity_gate_reject(
     min_range_cents: float = 0.0,
     window_sec: float = MOVEMENT_WINDOW_SEC,
     enabled: bool = False,
+    range_exempt: bool = False,
+    range_window_sec: Optional[float] = None,
 ) -> tuple[bool, str]:
-    """Reject candidate if trade velocity is low, tape is stale, or price range is flat (#370)."""
+    """Reject candidate if trade velocity is low, tape is stale, or price swing is flat (#370, #434).
+
+    When `range_exempt` is True (e.g. active live sports/eSports), the range swing gate is bypassed.
+    """
     if not enabled:
         return False, ""
     if tape_stats.get("movement_usd") is None:
@@ -527,10 +537,21 @@ def velocity_gate_reject(
         if last_trade_sec_ago is None or last_trade_sec_ago > max_last_trade_sec:
             ago_str = f"{last_trade_sec_ago:.0f}s" if last_trade_sec_ago is not None else "unknown"
             return True, f"stale tape: last trade {ago_str} ago > {max_last_trade_sec:.0f}s"
+    if range_exempt:
+        return False, ""
     range_cents = tape_stats.get("range_cents", 0.0)
     if min_range_cents > 0 and (range_cents is None or range_cents < min_range_cents):
         r_str = f"{range_cents:.2f}c" if range_cents is not None else "0.00c"
-        return True, f"flat range: price range {r_str} in last {minutes}m < {min_range_cents:.2f}c"
+        rw_sec = range_window_sec if range_window_sec is not None else VOLATILITY_WINDOW_SEC
+        rw_hours = rw_sec / 3600.0
+        rw_mins = rw_sec / 60.0
+        if rw_sec >= 3600.0 and rw_sec % 3600.0 == 0:
+            win_str = f"{int(rw_hours)}h"
+        elif rw_sec >= 3600.0:
+            win_str = f"{rw_hours:.1f}h"
+        else:
+            win_str = f"{int(round(rw_mins))}m"
+        return True, f"flat market: price swing {r_str} in last {win_str} < {min_range_cents:.2f}c"
     return False, ""
 
 
@@ -628,12 +649,12 @@ def _flat_penalty(row: dict, base: float) -> float:
 
 
 def sort_eligible(rows: list[dict]) -> list[dict]:
-    """Shipped ranking order: highest rank_score first.
+    """Shipped ranking order: volatility-exempt live sports first, then highest rank_score (#434).
 
     Its own function so the production wiring is directly testable -- an
     inline key in `main` could be reverted without any test noticing.
     """
-    return sorted(rows, key=lambda r: -rank_score(r))
+    return sorted(rows, key=lambda r: (not bool(r.get("volatility_exempt")), -rank_score(r)))
 
 
 def tradable(volume_24h: float | None,
@@ -1573,6 +1594,17 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     vel_measured_at = tape_stats.get("measured_at")
     trade_count = tape_stats.get("trade_count", 0)
 
+    # Active live sports and eSports exemption (#434)
+    is_sports_market = is_sports_or_esports(
+        title=m.get("question") or m.get("title"),
+        slug=m.get("market_slug") or m.get("slug"),
+        category=m.get("category") or m.get("categorySlug"),
+        series_title=m.get("series_title"),
+        event_title=m.get("event_title"),
+        sports_market_type=m.get("sports_market_type"),
+    )
+    is_volatility_exempt = bool(declared_live and is_sports_market)
+
     flat, flat_reason = movement_reject(
         movement_usd, min_movement_usd=movement_bar,
         window_sec=MOVEMENT_WINDOW_SEC)
@@ -1582,7 +1614,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                            movement_window_sec=MOVEMENT_WINDOW_SEC,
                            range_cents=range_cents,
                            velocity_measured_at=vel_measured_at,
-                           trade_count=trade_count)
+                           trade_count=trade_count,
+                           volatility_exempt=is_volatility_exempt)
 
     vel_rejected, vel_reason = velocity_gate_reject(
         tape_stats,
@@ -1591,6 +1624,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         min_range_cents=min_range_cents if min_range_cents is not None else 0.0,
         window_sec=MOVEMENT_WINDOW_SEC,
         enabled=bool(velocity_gate_enabled),
+        range_exempt=is_volatility_exempt,
     )
     if vel_rejected:
         return _reject_row(source, vel_reason, m, volume_24h,
@@ -1598,7 +1632,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                            movement_window_sec=MOVEMENT_WINDOW_SEC,
                            range_cents=range_cents,
                            velocity_measured_at=vel_measured_at,
-                           trade_count=trade_count)
+                           trade_count=trade_count,
+                           volatility_exempt=is_volatility_exempt)
 
     q1 = q2 = 0.0
     capital_per_share = 0.0
@@ -1614,7 +1649,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                             params={"token_id": tok}, timeout=12).json()
         except Exception:
             return _reject_row(source, f"{side}: book fetch failed", m,
-                               volume_24h, movement_usd=movement_usd)
+                               volume_24h, movement_usd=movement_usd,
+                               volatility_exempt=is_volatility_exempt)
         # The fetch is guarded with Exception, and so is the parse: the whole
         # point is that the scorer must never crash on venue data, whatever
         # parse_book's structural-failure type evolves into. This also rounds
@@ -1624,7 +1660,8 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             book = parse_book(b, tok)
         except Exception:
             return _reject_row(source, f"{side}: book parse failed", m,
-                               volume_24h, movement_usd=movement_usd)
+                               volume_24h, movement_usd=movement_usd,
+                               volatility_exempt=is_volatility_exempt)
         # A skipped level under-counts competitor depth, which OVERSTATES our
         # income share -- the dangerous direction for a funding decision.
         # Fail closed rather than scoring against a partial book; this used
@@ -1632,12 +1669,14 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         # the exception aborted every ThreadPool worker).
         if book["malformed"]:
             return _reject_row(source, f"{side}: malformed book", m,
-                               volume_24h, movement_usd=movement_usd)
+                               volume_24h, movement_usd=movement_usd,
+                               volatility_exempt=is_volatility_exempt)
         bids = list(book["bids"].items())
         asks = list(book["asks"].items())
         if not bids or not asks:
             return _reject_row(source, f"{side}: empty or one-sided book", m,
-                               volume_24h, movement_usd=movement_usd)
+                               volume_24h, movement_usd=movement_usd,
+                               volatility_exempt=is_volatility_exempt)
         books.append((side, bids, asks))
         mid = (max(bids)[0] + min(asks)[0]) / 2.0
         # Outside [0.15, 0.85] the book is one-sided in practice and the
@@ -1712,6 +1751,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
             "slug": m.get("market_slug", ""),
             "movement_usd": movement_usd,
             "fetch_truncated": bool(m.get("fetch_truncated")),
+            "volatility_exempt": is_volatility_exempt,
             **_book_stats(book_spreads, book_depths),
         }
 
@@ -1827,6 +1867,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         "no_spread": round(book_spreads[1], 4),
         "yes_depth_usd": round(book_depths[0], 2),
         "no_depth_usd": round(book_depths[1], 2),
+        "volatility_exempt": is_volatility_exempt,
     }
     # THE LIVE EVIDENCE, carried onto the funnel row (empty for scanned rows).
     row.update(_live_evidence(m))
@@ -1905,6 +1946,8 @@ def _cause(reason: str) -> str:
         return "in-play"
     if "no movement" in r:
         return "no movement"
+    if "flat market" in r:
+        return "flat market"
     if "flat range" in r:
         return "flat range"
     if "low velocity" in r:
