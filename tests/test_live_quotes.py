@@ -81,7 +81,7 @@ def test_decide_quotes_outside_band_or_settled_declined():
     inv = Inventory()
     intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
     assert len(intents) == 0
-    assert "settled" in why or "outside band" in why or "not tradeable" in why or "decided market" in why or "outside [0.20,0.80]" in why
+    assert "settled" in why or "outside band" in why or "not tradeable" in why or "decided market" in why or "outside [0.15,0.85]" in why
 
 
 def test_inventory_from_registry(tmp_path):
@@ -710,3 +710,57 @@ def test_custom_decision_port_cannot_silently_drop_lifecycle_override():
             lifecycle_context_for=lambda *args: LifecycleQuoteContext(
                 override=override),
         )
+
+
+def test_decide_quotes_admits_mid_between_15_and_20_cents():
+    cfg = MakerConfig(
+        objective="rewards",
+        size_mode="shares",
+        quote_shares=120,
+        min_quote_shares=50,
+        reward_offset=0.02,
+        price_band_low=0.10,
+        price_band_high=0.90,
+    )
+    # Mid 0.17 for UP, Mid 0.83 for DOWN - inside [0.15, 0.85]
+    up_book = {
+        "token_id": "tok_up",
+        "best_bid": 0.16, "best_ask": 0.18,
+        "bids": {0.16: 1000.0}, "asks": {0.18: 1000.0}
+    }
+    down_book = {
+        "token_id": "tok_down",
+        "best_bid": 0.82, "best_ask": 0.84,
+        "bids": {0.82: 1000.0}, "asks": {0.84: 1000.0}
+    }
+    inv = Inventory()
+    intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
+    assert len(intents) == 2
+    assert "decided market" not in why
+
+
+def test_decide_quotes_refuses_mid_outside_15_to_85_cents():
+    cfg = MakerConfig(
+        objective="rewards",
+        quote_shares=120,
+        min_quote_shares=50,
+        price_band_low=0.10,
+        price_band_high=0.90,
+    )
+    # Mid 0.1499 for UP, Mid 0.8501 for DOWN - outside [0.15, 0.85]
+    up_book = {
+        "token_id": "tok_up",
+        "best_bid": 0.1399, "best_ask": 0.1599,
+        "bids": {0.1399: 1000.0}, "asks": {0.1599: 1000.0}
+    }
+    down_book = {
+        "token_id": "tok_down",
+        "best_bid": 0.8401, "best_ask": 0.8601,
+        "bids": {0.8401: 1000.0}, "asks": {0.8601: 1000.0}
+    }
+    inv = Inventory()
+    intents, why = decide_quotes(cfg, up_book, down_book, inv, 1e9, None)
+    assert len(intents) == 0
+    assert "UP: mid 0.150 outside [0.15,0.85] -- decided market" in why
+    assert "DOWN: mid 0.850 outside [0.15,0.85] -- decided market" in why
+

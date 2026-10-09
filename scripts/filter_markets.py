@@ -271,7 +271,7 @@ def pre_start(start_iso: Optional[str],
 
     A tennis market opens before the first serve and sits flat with zero tape
     until the match begins: 4.3 hours on Vilius Gaubas at 0.23 with 1,777
-    shares ahead and nothing traded. The [0.20, 0.80] mid gate cannot catch it
+    shares ahead and nothing traded. The [0.15, 0.85] mid gate cannot catch it
     -- a pre-start 0.45/0.55 is squarely inside the band -- so the start time
     is its own gate.
 
@@ -307,7 +307,7 @@ def in_play(start_iso: Optional[str],
     """Is this market's event already under way?
 
     The mirror image of `pre_start`, and the reason it exists: a started match
-    passes the pre-start gate, passes the [0.20, 0.80] mid gate while the line
+    passes the pre-start gate, passes the [0.15, 0.85] mid gate while the line
     is still a coin flip, and then reaches the depth arm -- where its book is a
     live-in-play book, thin between rounds and collapsing toward 100c/0c as the
     result firms up. That is how the 2026-10-06 CS2 market (Falcons vs Natus
@@ -1640,19 +1640,18 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                                volume_24h, movement_usd=movement_usd)
         books.append((side, bids, asks))
         mid = (max(bids)[0] + min(asks)[0]) / 2.0
-        # Outside [0.20, 0.80] the book is one-sided in practice and the
+        # Outside [0.15, 0.85] the book is one-sided in practice and the
         # position is mostly a bet on a near-settled outcome.
-        # Tightened 2026-08-28 from [0.05, 0.95] per operator directive:
-        # 5c left no room to work — a finished market at 100%/0.1% was still
-        # quotable until the settled-book arm caught it. 20c keeps a real
-        # spread to capture and prevents a decided leg from ever entering the
+        # Tightened 2026-08-28 from [0.05, 0.95] per operator directive,
+        # widened 2026-10-09 to [0.15, 0.85] (#432) to capture additional
+        # viable pairs while preventing settled legs from entering the
         # graduated universe.
         #
         # LIVE-SERIES EXEMPTION (#402): a best-of series with games remaining
         # is quotable outside the band -- without this, the feed drops the
         # series and the Trader cancels it as market_dropped. Same predicate
         # as the quoter's, read off the row's series evidence.
-        if not 0.20 < mid < 0.80 and not live_series_with_games_remaining(
+        if not 0.15 < mid < 0.85 and not live_series_with_games_remaining(
                 parse_series_state(
                     sports_market_type=m.get("sports_market_type"),
                     score=m.get("_event_score"),
@@ -1664,7 +1663,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
                 time.time()):
             return _reject_row(
                 source,
-                f"{side}: decided mid {mid:.2f} outside [0.20, 0.80]",
+                f"{side}: decided mid {mid:.2f} outside [0.15, 0.85]",
                 m, volume_24h, movement_usd=movement_usd,
                 **_book_stats({j: min(asks)[0] - max(bids)[0]},
                               {j: top_depth_usd(bids)}))

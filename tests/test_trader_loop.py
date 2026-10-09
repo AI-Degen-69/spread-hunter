@@ -1458,8 +1458,8 @@ class TestClassifyRefusal:
     """#390: the refusal classifier pins every terminal marker, so a reworded
     `quotes.py` reason cannot silently flip a settled market to hold."""
     @pytest.mark.parametrize("why", [
-        "UP: mid 0.950 outside [0.20,0.80] -- decided market; "
-        "DOWN: mid 0.050 outside [0.20,0.80] -- decided market",
+        "UP: mid 0.950 outside [0.15,0.85] -- decided market; "
+        "DOWN: mid 0.050 outside [0.15,0.85] -- decided market",
         "UP: hedge token DOWN not tradeable (settled book 0.999/0.001) "
         "-- a fill here could not be closed",
         "t_remaining 0s < 0s",
@@ -1486,8 +1486,8 @@ class TestRefusedHold:
 
     TRANSIENT_WHY = ("UP: 8.0c from mid > 4.5c reward window; "
                      "DOWN: 8.0c from mid > 4.5c reward window")
-    TERMINAL_WHY = ("UP: mid 0.950 outside [0.20,0.80] -- decided market; "
-                    "DOWN: mid 0.050 outside [0.20,0.80] -- decided market")
+    TERMINAL_WHY = ("UP: mid 0.950 outside [0.15,0.85] -- decided market; "
+                    "DOWN: mid 0.050 outside [0.15,0.85] -- decided market")
 
     def _seam(self, decide, calls, books=None):
         def open_orders_fn(m):
@@ -1773,7 +1773,7 @@ class TestLifecycleStops:
     """One enumerated stop list (#402 T1): every refusal maps to one code."""
 
     CASES = [
-        ("UP: mid 0.850 outside [0.20,0.80] -- decided market",
+        ("UP: mid 0.880 outside [0.15,0.85] -- decided market",
          "decided_by_price"),
         ("settled book: quote at an end, no spread", "settled_book"),
         ("t_remaining elapsed: window over", "countdown_expired"),
@@ -1979,8 +1979,8 @@ class TestLifecycleStopRows:
         return reg, seam, calls
 
     def test_terminal_refusal_writes_one_row(self, tmp_path):
-        why = ("UP: mid 0.950 outside [0.20,0.80] -- decided market; "
-               "DOWN: mid 0.050 outside [0.20,0.80] -- decided market")
+        why = ("UP: mid 0.950 outside [0.15,0.85] -- decided market; "
+               "DOWN: mid 0.050 outside [0.15,0.85] -- decided market")
         reg, seam, _calls = self._seam(
             tmp_path, lambda *a: ([], why))
         idx = [0]
@@ -2012,7 +2012,7 @@ class TestLifecycleStopRows:
         assert len(_stop_rows(reg, "hold_expired")) == 1
 
     def test_quote_between_stops_rearms_the_row(self, tmp_path):
-        why = ("UP: mid 0.950 outside [0.20,0.80] -- decided market")
+        why = ("UP: mid 0.950 outside [0.15,0.85] -- decided market")
         seq = [[], "quote", []]
         calls = {"n": 0}
 

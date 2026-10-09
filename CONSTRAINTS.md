@@ -1,3 +1,42 @@
+# CONSTRAINTS — #432 (locked by Station II, enforced through Station V)
+
+Governs the `i432` branch only; #431 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_live_quotes.py`
+  `tests/test_trader_loop.py`
+  `tests/test_unified_universe.py`
+  `tests/test_wide_book_trial.py`
+  `tests/test_live_event_discovery.py`
+  `tests/test_market_selection_bars.py`
+  `tests/test_pipeline_snapshot_gates.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
+
+## Gate Parameter Freezes & Boundaries
+
+- Price band gate: strictly set to `[0.15, 0.85]` across quoting (`core_brain/quotes.py`) and screening (`scripts/filter_markets.py`). Refusal messages explicitly specify `outside [0.15, 0.85]`.
+- Max book spread gate: strictly set to `0.0205` in `core_brain/config.py`, `scoring/config.py`, `scoring/selector.py`, and `scripts/filter_markets.py`.
+- Float precision guard: in `scoring/selector.py:book_allowed`, spread must be rounded to 6 decimal places before checking `spread > max_spread` so `0.5105 - 0.49` is not rejected.
+- Out of scope & frozen: volume gates (`MIN_VOLUME_24H`), depth gates (`MIN_TOP3_DEPTH_USD`), velocity gates (`select_min_range_cents`, `select_min_movement_usd`), horizon gate (30 days), and runtime book health spread (`max_book_spread = 0.06`).
+- `HUNTER_WIDE_BOOK_TRIAL` parser and trial mechanisms remain untouched.
+
+## Stores are evidence, not scratch
+
+- `data/orders.db` is the production registry: read it, never rewrite it.
+- No schema migration; tests use temporary DBs or isolated state.
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit operator approval.
+- Tests stay isolated from the real network (stub HTTP).
+
+---
+
 # CONSTRAINTS — #431 (locked by Station II, enforced through Station V)
 
 Governs the `i431` branch only; #427 constraints below stay as history.

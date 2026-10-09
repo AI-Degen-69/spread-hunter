@@ -341,9 +341,9 @@ def test_a_zero_ours_score_is_retained_as_a_rejection_row():
 
 
 def test_a_decided_mid_buckets_as_one_gate():
-    assert (fm._cause("YES: decided mid 0.85 outside [0.20, 0.80]")
+    assert (fm._cause("YES: decided mid 0.88 outside [0.15, 0.85]")
             == "YES decided mid")
-    assert (fm._cause("NO: decided mid 0.11 outside [0.20, 0.80]")
+    assert (fm._cause("NO: decided mid 0.11 outside [0.15, 0.85]")
             == "NO decided mid")
 
 
