@@ -63,7 +63,7 @@ Add comprehensive end-to-end unit tests covering the redesigned market filtering
     - Row 3: Expired end date refusal (0 HTTP requests made).
     - Row 4: Flat tape movement refusal (1 tape HTTP request, 0 book HTTP requests).
     - Row 5: Velocity gate refusal (1 tape HTTP request, 0 book HTTP requests).
-    - Row 6: Decided mid refusal (tape request followed by 2 book requests).
+    - Row 6: Decided mid refusal (tape request followed by 1 book request, YES side fails first).
     - Row 7: Thin book depth refusal (tape request followed by 2 book requests).
     - Row 8: Low 24h volume refusal (tape request followed by 2 book requests).
     - Row 9: Distant horizon refusal (tape request followed by 2 book requests).

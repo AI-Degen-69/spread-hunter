@@ -213,9 +213,20 @@ def generate_preview_snapshot(out_dir: Path | str = "runtime") -> Path:
 
 
 if __name__ == "__main__":
-    target = generate_preview_snapshot()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate demo preview snapshots for UI inspection.")
+    parser.add_argument(
+        "--out-dir",
+        default="runtime",
+        help="Directory to write preview snapshots (default: runtime for dashboard viewing)",
+    )
+    args = parser.parse_args()
+
+    target = generate_preview_snapshot(out_dir=args.out_dir)
     print("=" * 70)
-    print("  MARKET FILTER PIPELINE — PREVIEW SNAPSHOT GENERATED")
+    print("  [DEMO DATA] MARKET FILTER PIPELINE — PREVIEW SNAPSHOT GENERATED")
+    print("  WARNING: Contains simulated demonstration data for visual UI inspection.")
     print("=" * 70)
     print(f"  Snapshot written to: {target.resolve()}")
     print()
