@@ -34,8 +34,8 @@ class _GoodSession:
         if "trades" in url:
             return _Resp(self._trades)
         return _Resp({
-            "bids": [{"price": "0.48", "size": "5000"}],
-            "asks": [{"price": "0.52", "size": "5000"}],
+            "bids": [{"price": "0.49", "size": "5000"}],
+            "asks": [{"price": "0.51", "size": "5000"}],
         })
 
 
@@ -64,7 +64,7 @@ def _candidate(cid: str, **over) -> dict:
         "end_date_iso": (datetime.now(timezone.utc)
                          + timedelta(days=2)).isoformat(),
         "_order_min": 5,
-        "_spread": 0.04,
+        "_spread": 0.02,
         "_volume_24h": 250_000.0,
         "closed": False,
         "accepting_orders": True,
@@ -394,8 +394,8 @@ class _ThinBookSession(_GoodSession):
         if "trades" in url:
             return _Resp(self._trades)
         return _Resp({
-            "bids": [{"price": "0.48", "size": "100"}],
-            "asks": [{"price": "0.52", "size": "100"}],
+            "bids": [{"price": "0.49", "size": "100"}],
+            "asks": [{"price": "0.51", "size": "100"}],
         })
 
 
