@@ -190,6 +190,32 @@ class TestPlanOrders:
         fresh_pid = pids.pop()
         assert fresh_pid.startswith("pair-")
 
+    def test_ladder_carried_pair_id_is_reused_not_minted(self):
+        # #397: a ladder-stamped batch keeps its carried id through submit.
+        # If the comment's claim and the code disagree again (carry dropped
+        # or re-minted), this fails.
+        intents = [
+            _intent(side="UP", token="tok-up", price=0.71,
+                    pair_id="ladder-0xmkt"),
+            _intent(side="DOWN", token="tok-dn", price=0.25,
+                    pair_id="ladder-0xmkt"),
+        ]
+
+        from unittest.mock import MagicMock
+        from core_brain.trader_loop import _submit_intents
+
+        venue = MagicMock()
+        venue.get_open_orders.return_value = []
+        venue.create_order.return_value = {"signed": True}
+        venue.post_orders.return_value = [{"orderID": "0x1"}, {"orderID": "0x2"}]
+        registry = MagicMock()
+        from core_brain.config import MakerConfig
+
+        _submit_intents(venue, registry, FakeMarket("0xmkt"), intents, MakerConfig())
+        created = [call.args[0] for call in registry.create_order.call_args_list]
+        assert len(created) == 2
+        assert {o.pair_id for o in created} == {"ladder-0xmkt"}
+
     def test_fresh_submit_beside_a_held_leg_carries_no_stale_pair_id(self):
         # The planner stamps nothing: UP rests (held, its pair_id untouched);
         # DOWN is fresh and submits with no pair_id for the submit path.

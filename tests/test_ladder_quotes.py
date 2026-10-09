@@ -134,3 +134,28 @@ def test_rung_prices_clamped_to_valid_range():
     ups = [i.price for i in intents if i.side == "UP"]
     assert ups == [0.01]
 
+
+def test_route_quotes_never_stamps_pair_id():
+    """#397: `route_quotes` itself stamps nothing -- the ladder stamps after."""
+    cfg = MakerConfig(ladder_mode=True, ladder_rungs=2,
+                      ladder_budget_usd=20.0)
+    up, down = _books()
+    intents, _ = route_quotes(cfg, _market(), up, down, _inv(), 290.0,
+                              window_frac=0.0, now=NOW)
+    assert intents, "expected ladder rungs in the open window"
+    assert all(i.pair_id is None for i in intents)
+
+
+def test_make_ladder_decide_stamps_one_pair_id_per_market():
+    """#397: the ladder decide closure is the real stamper."""
+    from core_brain.ladder import ladder_pair_id, make_ladder_decide
+    cfg = MakerConfig(ladder_mode=True, ladder_rungs=2,
+                      ladder_budget_usd=20.0)
+    market = _market()
+    decide = make_ladder_decide(cfg, [market], now_fn=lambda: NOW)
+    up = {"token_id": "U", "best_bid": 0.47, "best_ask": 0.50}
+    down = {"token_id": "D", "best_bid": 0.47, "best_ask": 0.50}
+    intents, _ = decide(cfg, up, down, _inv(), 290.0)
+    assert intents, "expected ladder rungs in the open window"
+    assert {i.pair_id for i in intents} == {ladder_pair_id("0xc")}
+
