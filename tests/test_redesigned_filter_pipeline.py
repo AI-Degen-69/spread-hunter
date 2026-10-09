@@ -786,12 +786,13 @@ def test_preview_filter_pipeline_generates_dashboard_snapshots(tmp_path):
     snap = json.loads(pipe_file.read_text(encoding="utf-8"))
     assert "counts" in snap
     assert snap["counts"]["eligible"] >= 2
-    assert snap["counts"]["rejected"] >= 5
+    assert snap["counts"]["rejected"] == 6
 
     # Confirm rejection causes match expected Kanban buckets
     causes = {entry["cause"] for entry in snap["rejections"]}
     assert "YES decided mid" in causes
     assert "YES spread" in causes
+    assert "YES: top-3 bid depth" in causes
     assert "volume" in causes
     assert "horizon" in causes
 
