@@ -68,7 +68,7 @@ Branch: i432/update-screener-price-band-to-015-085-and-tighten | Issue: #432
 - **Verification:**
   - Unit tests asserting `select_max_book_spread == 0.0205` and boundary spread gating (`0.0205` passes, `0.0206` fails).
 
-### Task 3: Update Dashboard Telemetry Copy & Explainer HTML
+### Task 3: Update Dashboard Telemetry Copy & Explainer HTML [x]
 - **Size:** S
 - **Domain Tag:** `[Design/UI]`
 - **Helper Skill:** `frontend-ui-engineering`

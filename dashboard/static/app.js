@@ -5765,7 +5765,7 @@ function getStageHero(key, funnel) {
   // reads as a gate change nobody made.
   const volGate = gateBar(funnel?.volume_gate_usd, 125000);
   const depthGate = gateBar(funnel?.depth_gate_usd, 500);
-  const spreadGate = gateBar(funnel?.spread_gate, 0.06);
+  const spreadGate = gateBar(funnel?.spread_gate, 0.0205);
   const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
   const rewardIncome = gateBar(funnel?.reward_min_income_usd_day, 0);
   const spreadIncome = gateBar(funnel?.spread_min_income_usd_day, 0);
@@ -5782,7 +5782,7 @@ function getStageHero(key, funnel) {
     case 'identity':
       return {
         param: 'TEST: CONTRACT & KEYWORDS',
-        value: 'Binary · Mid [0.20, 0.80]',
+        value: 'Binary · Mid [0.15, 0.85]',
       };
     case 'movement':
       return {
