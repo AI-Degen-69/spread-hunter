@@ -82,7 +82,7 @@ Branch: i432/update-screener-price-band-to-015-085-and-tighten | Issue: #432
 - **Verification:**
   - Inspection of string rendering in `dashboard/static/app.js` and `dashboard/static/strategy_explainer.html`.
 
-### Task 4: Align Regression Test Suites for Selector, Universe, Snapshot & Trial Bars
+### Task 4: Align Regression Test Suites for Selector, Universe, Snapshot & Trial Bars [x]
 - **Size:** M
 - **Domain Tag:** `[Backend/Logic]`
 - **Helper Skill:** `test-driven-development`
