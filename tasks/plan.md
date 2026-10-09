@@ -93,7 +93,7 @@ Verify basic screening gates, edge cases, fail-fast order, and snapshot persiste
   - Verify ranking behavior: `sort_eligible` places `volatility_exempt` live market at the top ahead of non-exempt markets; verify `rank_score` live boost (1.5x) when start time is provided.
 - **Verification:** `python -m pytest -q tests/test_redesigned_filter_pipeline.py -k "test_live"`
 
-### Task 4: Zero-Reward Market Independence & Downstream Decide Verification
+### Task 4: Zero-Reward Market Independence & Downstream Decide Verification [x]
 - **Task ID:** TASK-4
 - **Size:** S
 - **Domain Tag:** `[Core/Logic]`

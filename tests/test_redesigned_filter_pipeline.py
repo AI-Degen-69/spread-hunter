@@ -670,3 +670,107 @@ def test_live_sports_market_ranking_priority():
     assert score == pytest.approx(live_row["return_pct_day"] * fm.RANK_LIVE_BOOST)
 
 
+# ==============================================================================
+# Task 4: Zero-Reward Market Independence & Downstream Decide Verification
+# ==============================================================================
+
+def test_zero_reward_market_passes_screener_independently():
+    now_ts = time.time()
+    now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+    cid = "0xzeroreward"
+
+    cand = _candidate(cid, rewards={})
+    yes_book, no_book = _books(0.49, 0.51, depth_usd=2400.0)
+    session = _FakeSession(
+        trades=_active_tape(now_ts),
+        books_by_token={f"{cid}-yes": yes_book, f"{cid}-no": no_book},
+    )
+
+    result = fm.evaluate(
+        session, rate=50.0, m=cand, volume_24h=cand["_volume_24h"],
+        source="spread", velocity_gate_enabled=True, now_iso=now_iso,
+    )
+
+    assert result["eligible"] is True
+    assert result["source"] == "spread"
+    assert result.get("daily", 0.0) == 0.0
+
+
+def test_zero_reward_graduated_market_generates_quotes_downstream(tmp_path, monkeypatch):
+    from core_brain import market_feed
+    from core_brain.markets import LiveMarket
+    from core_brain.order_manager import decide
+    from core_brain.order_registry import OrderRegistry
+
+    cid = "0x6a571e1b83c8238df6cf49e89ff815d98b522d01db7af1568a514f3d37ec8ce0"
+    feed_row = {
+        "source": "spread",
+        "spread": 0.01,
+        "eligible": True,
+        "reject_reason": "",
+        "volume_24h": 150_000.0,
+        "days_to_resolve": 6.63,
+        "cid": cid,
+        "title": "Cincinnati Open: Faria vs Walton",
+        "slug": "atp-faria-walton-2026-08-18",
+        "daily": 0.0,
+        "min_size": 5.0,
+        "max_spread": 4.5,
+        "tick": 0.01,
+        "shares": 120,
+        "est_income": 2.6,
+        "est_capital": 120.0,
+        "return_pct_day": 2.2,
+        "their_score": 11180.9,
+    }
+
+    feed_file = tmp_path / "markets.json"
+    feed_file.write_text(json.dumps([feed_row]), encoding="utf-8")
+    monkeypatch.setattr(market_feed, "DEFAULT_MARKETS_PATH", feed_file)
+
+    mock_live_market = LiveMarket(
+        condition_id=cid,
+        market_slug="atp-faria-walton-2026-08-18",
+        up_token="10439858151242",
+        down_token="69795149601155",
+        start_ts=1000.0,
+        end_ts=time.time() + 30 * 86400,
+        tick_size=0.01,
+        neg_risk=False,
+    )
+
+    up_book = {
+        "best_bid": 0.52, "best_ask": 0.53,
+        "bids": {0.52: 1000.0}, "asks": {0.53: 1000.0},
+    }
+    dn_book = {
+        "best_bid": 0.47, "best_ask": 0.48,
+        "bids": {0.47: 1000.0}, "asks": {0.48: 1000.0},
+    }
+
+    db_path = tmp_path / "live.db"
+
+    with patch("core_brain.markets.fetch_pinned_market", return_value=mock_live_market), \
+         patch("core_brain.markets.full_book", side_effect=[up_book, dn_book]), \
+         patch("core_brain.order_manager.fetch_live_balance", return_value=None):
+
+        results = decide(target="0", db_path=db_path)
+
+        assert len(results) == 1
+        res = results[0]
+        assert res["cid"] == cid
+        assert len(res["intents"]) == 2
+        assert not res["why"]
+
+    registry = OrderRegistry(db_path=db_path)
+    events = registry.get_all_market_events()
+    assert any(e.get("kind") == "QUOTING" and e.get("reason_code") == "INTENT_GENERATED" for e in events)
+
+    hedge = registry.get_all_hedge_census()
+    assert any(h.get("condition_id") == cid for h in hedge)
+
+    orders = registry.get_all_orders()
+    assert len(orders) == 0
+
+
+
