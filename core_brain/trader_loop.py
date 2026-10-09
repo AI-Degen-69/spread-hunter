@@ -848,7 +848,9 @@ def run(
                 # The shadow deadline sleep subclasses KeyboardInterrupt to
                 # end a time-boxed rehearsal. Matched by class NAME so this
                 # module never imports the shadow runner.
-                shutdown_reason = ("deadline"
+                shutdown_reason = ("finish_line"
+                                   if type(e).__name__ == "_FinishLine"
+                                   else "deadline"
                                    if type(e).__name__ == "_Deadline"
                                    else "interrupt")
                 break

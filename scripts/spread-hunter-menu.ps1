@@ -1,4 +1,4 @@
-﻿# SPREAD HUNTER - CONTROL CENTER
+# SPREAD HUNTER - CONTROL CENTER
 # Standalone menu for the spread hunter execution engine
 # (C:\Users\Tiger\Agents\Projects\spread-hunter).
 #
@@ -144,43 +144,31 @@ $ShadowDbPath  = $null
 $StatsDbPath   = $null
 $ShadowRunId   = $null
 
-# Shadow dashboard ports derive from the run id (#288): shadow-01 -> 8801,
-# shadow-02 -> 8802, through shadow-99 -> 8899. :8799 is live-only and is
-# never derived here. The unnumbered "shadow-resume" fallback id gets :8900 --
-# off the live port and outside every numbered instance. Anything else fails
-# loudly rather than silently landing back beside the live stack.
+# Unified dashboard port: all runs (live and shadow) settle on the single project
+# dashboard on :8799. The on-page run switcher modal toggles between runs.
 function Get-ShadowDashPort {
-    param([Parameter(Mandatory)][string]$RunId)
-    if ($RunId -match '^shadow-(0[1-9]|[1-9][0-9])$') {
-        return 8800 + [int]$Matches[1]
-    }
-    if ($RunId -match '^shadow-(0[1-9]|[1-9][0-9])-prudent$') {
-        return 8850 + [int]$Matches[1]
-    }
-    if ($RunId -eq "shadow-resume") {
-        return 8900
-    }
-    throw "Cannot derive a shadow dashboard port from run id '$RunId' (expected 'shadow-NN', 01-99). Refusing rather than reusing the live dashboard port."
+    param([Parameter(Mandatory=$false)][string]$RunId = $script:ShadowRunId)
+    if ($script:Port) { return [int]$script:Port }
+    return 8799
 }
 function Get-ShadowDashUrl {
-    <# The single builder of shadow dashboard URLs -- every open-browser and
-       status call site uses this so none can disagree about where an
-       instance lives. #>
-    param([Parameter(Mandatory)][string]$RunId)
+    <# The single builder of dashboard URLs (:8799). #>
+    param([Parameter(Mandatory=$false)][string]$RunId = $script:ShadowRunId)
     return "http://127.0.0.1:$(Get-ShadowDashPort $RunId)"
 }
 function Get-ShadowDashPidFile {
-    param([Parameter(Mandatory)][string]$RunId)
+    param([Parameter(Mandatory=$false)][string]$RunId = $script:ShadowRunId)
+    if (-not $RunId) { return Join-Path $RunDir "shadow-dash.pids.json" }
     return Join-Path $RunDir "shadow-dash-$RunId.pids.json"
 }
 function Get-ShadowDashLogs {
-    param([Parameter(Mandatory)][string]$RunId)
-    return @{ out = (Join-Path $RunDir "shadow_dash_$RunId.out.log"); err = (Join-Path $RunDir "shadow_dash_$RunId.err.log") }
+    param([Parameter(Mandatory=$false)][string]$RunId = $script:ShadowRunId)
+    return @{ out = $OutLog; err = $ErrLog }
 }
 function Open-ShadowDashboard {
-    <# Open the dashboard browser for one shadow instance. Returns the URL. #>
+    <# Open the dashboard browser for the unified project dashboard (:8799). Returns the URL. #>
     param([string]$RunId = $script:ShadowRunId)
-    $url = Get-ShadowDashUrl $RunId
+    $url = $DashUrl
     Start-Process $url
     return $url
 }
@@ -813,51 +801,21 @@ function Start-ShadowDashboard {
         Lsh-Fail "Start-ShadowDashboard needs a shadow run id in scope (or a store name it can be derived from)."
         return $false
     }
-    $port = Get-ShadowDashPort $runId
-    $url = Get-ShadowDashUrl $runId
-    $inst = Get-ShadowDashInstance -RunId $runId
-    if ($null -ne $inst) {
-        Lsh-Ok "Shadow dashboard already running (PID $($inst.pid), up $(Format-Uptime $inst.proc.StartTime))."
-        return $true
-    }
-    # Each instance owns its 880x port, so the live dashboard on :8799 is no
-    # longer a conflict -- only this instance's own port matters here.
-    if (Test-Port -PortNumber $port) {
-        $portPid = Get-PortPid -PortNumber $port
-        if (Test-ShadowDashboardServer -RunId $runId) {
-            # Something dashboard-like is already there serving a shadow
-            # store -- adopt it as ours.
-            if ($Action -ne "") {
-                if (Adopt-ShadowDashboardInstance -RunId $runId) {
-                    $inst = Get-ShadowDashInstance -RunId $runId
-                    Lsh-Ok "Adopted running shadow dashboard on :$port (PID $($inst.pid), up $(Format-Uptime $inst.proc.StartTime))."
-                    return $true
-                }
-            } else {
-                $resp = Read-Host "  A dashboard is already serving on :$port (PID $portPid). Adopt it as shadow? [y/N]"
-                if ($resp -match '^[yY]' -and (Adopt-ShadowDashboardInstance -RunId $runId)) {
-                    $inst = Get-ShadowDashInstance -RunId $runId
-                    Lsh-Ok "Adopted running shadow dashboard on :$port (PID $($inst.pid))."
-                    return $true
-                } else {
-                    Lsh-Warn "Not adopting PID $portPid."
-                    return $true
-                }
+    $port = $LivePort
+    $url = $DashUrl
+    if (Test-DashboardServer -or (Test-Port -PortNumber $port)) {
+        if (-not (Get-DashInstance)) {
+            if (Test-DashboardServer) {
+                $null = Adopt-DashboardInstance
             }
         }
-        Lsh-Fail "Port $port is occupied by PID $portPid, which is not a shadow dashboard. Free the port, then retry."
-        return $false
+        $inst = Get-DashInstance
+        $pidText = if ($inst) { " (PID $($inst.pid))" } else { "" }
+        Lsh-Ok "Dashboard already running on $url$pidText."
+        return $true
     }
-    if (Test-ShadowDashboardServer -RunId $runId) {
-        # Edge: port test missed but server answers — adopt
-        if (Adopt-ShadowDashboardInstance -RunId $runId) {
-            $inst = Get-ShadowDashInstance -RunId $runId
-            Lsh-Ok "Adopted running shadow dashboard (PID $($inst.pid))."
-            return $true
-        }
-    }
-    $logs = Get-ShadowDashLogs $runId
-    Lsh-Step "Launching shadow dashboard (python -m dashboard.server --db $ShadowDbPath --port $port)..."
+    $logs = @{ out = $OutLog; err = $ErrLog }
+    Lsh-Step "Launching unified dashboard (python -m dashboard.server --port $port)..."
     if ($script:ShadowPreset) { Set-Item "Env:HUNTER_TOURNAMENT_PRESET" $script:ShadowPreset }
     # Same stray-PORT guard as Start-Dashboard: a PORT=0 in this shell is
     # inherited by the child and crashes dashboard/server.py at import,
@@ -867,7 +825,7 @@ function Start-ShadowDashboard {
     if ($hadPort) { $savedPort = $env:PORT; Remove-Item Env:PORT }
     try {
         $dash = Start-Process -FilePath "python" `
-            -ArgumentList (Format-ProcessArgs @("-m", "dashboard.server", "--db", $ShadowDbPath, "--port", "$port")) `
+            -ArgumentList (Format-ProcessArgs @("-m", "dashboard.server", "--port", "$port")) `
             -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput $logs.out `
             -RedirectStandardError  $logs.err
@@ -875,7 +833,7 @@ function Start-ShadowDashboard {
         if ($script:ShadowPreset) { Remove-Item "Env:HUNTER_TOURNAMENT_PRESET" -ErrorAction SilentlyContinue }
         if ($hadPort) { $env:PORT = $savedPort }
     }
-    Save-ShadowDashInstance -DashProcess $dash -RunId $runId -Port $port
+    Save-DashInstance -DashProcess $dash
     $deadline = (Get-Date).AddSeconds(45)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 500
@@ -884,14 +842,14 @@ function Start-ShadowDashboard {
         if ($dash.HasExited) { break }
     }
     if (-not (Test-Port -PortNumber $port)) {
-        Lsh-Fail "Shadow dashboard failed to bind port $port. See $($logs.err)"
-        Remove-Item (Get-ShadowDashPidFile $runId) -ErrorAction SilentlyContinue
+        Lsh-Fail "Dashboard failed to bind port $port. See $($logs.err)"
+        Remove-Item $DashPidFile -ErrorAction SilentlyContinue
         if ($dash -and -not $dash.HasExited) {
             taskkill /T /F /PID $($dash.Id) 2>$null | Out-Null
         }
         return $false
     }
-    Lsh-Ok "Shadow dashboard serving on $url (PID $($dash.Id), db=$ShadowDbPath)."
+    Lsh-Ok "Dashboard serving on $url (PID $($dash.Id))."
     return $true
 }
 
@@ -3008,13 +2966,13 @@ function Show-MenuGrid {
         @{ Header = "🟢 LIVE - real maker bids"; Items = @(
             @{ K = "1"; Icon = "▶"; IconColor = "Success"; V = "Start Bot + Dashboard";     D = "Stops, wipes data & starts fresh bot + dashboard" }
             @{ K = "2"; Icon = "■"; IconColor = "Error";   V = "Stop Bot + Dashboard";      D = "Stops bot processes and dashboard" }
-            @{ K = "3"; Icon = "◉"; IconColor = "Warning"; V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts live DB & opens browser" }
+            @{ K = "3"; Icon = "◉"; IconColor = "Warning"; V = "Host & Open Dashboard";     D = "Hosts unified dashboard on :8799 (live DB) & opens browser" }
         ) }
         @{ Header = "🥷 SHADOW - rehearsal, spends nothing"; Items = @(
             @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Shadow Run";          D = "Start new shadow rehearsal (standard or prudent); prompts profile + minutes (no wipe)" }
             @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
-            @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Releases our other-env :8799 dashboard (no wipe), hosts shadow DB & opens browser" }
-            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all / Prudent, dashboard(s) reattached" }
+            @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Hosts unified dashboard on :8799 (shadow DB) & opens browser" }
+            @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all / Prudent" }
             @{ K = "t"; Icon = "◈"; IconColor = "Info";    V = "Start Depth-Bar Trial";  D = "Start a trial rehearsal on its own feed (no wipe, siblings keep running); prompts depth" }
         ) }
         @{ Header = "MAINTENANCE & STATUS"; Items = @(

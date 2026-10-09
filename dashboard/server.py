@@ -901,6 +901,14 @@ def read_shadow_run(active_db_path: str | None, now: float | None = None) -> dic
     # the evidence `code_predates_tree` reads, so no second lookup is needed.
     winner["code_stale"] = code_revision.code_predates_tree(
         winner, clock=code_revision.decision_code_mtime())
+    try:
+        from core_brain.run_scorer import score_run
+        winner["reliability"] = score_run(
+            winner.get("db_path") or active_db_path,
+            run_id=winner.get("run_id"),
+        ).to_dict()
+    except Exception:
+        winner["reliability"] = None
     return winner
 
 
@@ -2674,6 +2682,35 @@ def get_trial_readiness():
         resolve_runtime_file("near_misses.jsonl", root=LIVE_ROOT),
         resolve_runtime_file("volume_near_misses.jsonl", root=LIVE_ROOT),
     )
+
+
+@app.get("/api/reliability")
+@app.get("/api/shadow/reliability")
+def api_shadow_reliability(db: str | None = None, run_id: str | None = None):
+    """Score the active or requested database for authenticity and action reliability."""
+    from core_brain.run_scorer import score_run
+    target_db = resolve_db_path(db if db is not None else _ACTIVE_DB_OVERRIDE)
+    if db is not None:
+        try:
+            import tempfile
+            resolved_p = target_db.resolve()
+            temp_root = Path(tempfile.gettempdir()).resolve()
+            allowed = [
+                LIVE_ROOT.resolve(),
+                (LIVE_ROOT / "data").resolve(),
+                (LIVE_ROOT / "runtime").resolve(),
+                temp_root,
+            ]
+            if not any(resolved_p == root or root in resolved_p.parents for root in allowed):
+                return JSONResponse({"error": "Forbidden database path"}, status_code=403)
+        except Exception:
+            return JSONResponse({"error": "Invalid database path"}, status_code=400)
+
+    try:
+        score = score_run(target_db, run_id=run_id)
+        return JSONResponse(score.to_dict())
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to score run: {e}"}, status_code=400)
 
 
 @app.get("/api/scan-state")
