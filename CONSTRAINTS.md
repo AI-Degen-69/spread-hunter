@@ -1,33 +1,53 @@
-# CONSTRAINTS — #441 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #443 (locked by Station II, enforced through Station V)
 
-Governs the `i441` branch only; #435 constraints below stay as history.
+Governs the `i443` branch only; #441 constraints below stay as history.
 
 ## Zero regressions
 
 - Focused suites that must pass:
-  `tests/test_dashboard_server.py`
-  `tests/test_redesigned_filter_pipeline.py`
+  `tests/test_kpi.py`
+  `tests/test_trade_analytics.py`
+  `tests/test_mean_pnl_ci.py`
+  `tests/test_stat_gate.py`
+  `tests/test_analytics_api.py`
+  `tests/test_analytics_surface_mount.py`
+  `tests/test_analytics_impact_tiers.py`
+  `tests/test_negative_values_read_as_losses.py`
 - Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
 
 ## Scope & File Boundaries
 
 - Target files for modification:
+  `core_brain/kpi.py`
+  `dashboard/static/index.html`
   `dashboard/static/app.js`
-  `tests/test_dashboard_server.py`
+  `dashboard/static/styles.css`
+  `tests/js/analytics_surface_harness.cjs`
+  `tests/test_kpi.py` (new)
+  `tests/test_analytics_api.py`
+  `tests/test_analytics_surface_mount.py`
+  `tests/test_analytics_impact_tiers.py`
+  `tests/test_negative_values_read_as_losses.py`
+  `SPEC.md`
+  `CONSTRAINTS.md`
   `tasks/plan.md`
   `tasks/todo.md`
-- No modification permitted to core trading/scoring/orders logic:
-  `scripts/filter_markets.py`
-  `scoring/selector.py`
+- No modification permitted to core trading/orders or other modules:
+  `core_brain/config.py`
   `core_brain/order_manager.py`
   `core_brain/order_registry.py`
-  `core_brain/markets.py`
   `data/orders.db`
+  `dashboard/server.py`
 
 ## Anti-cheat
 
 - No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
 - No new external dependencies.
+
+---
+
+# CONSTRAINTS — #441 (history)
 
 ---
 

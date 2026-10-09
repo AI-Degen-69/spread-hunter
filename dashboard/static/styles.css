@@ -2840,6 +2840,57 @@ th[aria-sort] .ot-sort-btn {
   line-height: 1.45;
 }
 
+/* -- Sample size & confidence level sufficiency (#443) -- */
+.sample-sufficiency-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sample-suff-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.sample-suff-meta b {
+  color: var(--text-primary);
+}
+
+.sample-suff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.sample-suff-table th {
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sample-suff-table td {
+  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+}
+
+.sample-suff-table td.progress-cell {
+  min-width: 140px;
+}
+
+.sample-suff-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  padding: 6px 0;
+}
+
 /* -- Stepped Execution Funnel -- */
 .funnel-container {
   display: flex;

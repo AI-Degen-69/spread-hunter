@@ -42,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 253
+KPI_PAYLOAD_VERSION = 254
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -77,6 +77,16 @@ def _wilson_ci(successes: int, n: int, z: float = 1.96) -> Optional[dict[str, fl
 Z_ALPHA_90_ONE_SIDED = 1.645   # one-sided 90% confidence (alpha=0.05)
 Z_BETA_80_POWER = 0.8416       # 80% power (beta=0.20)
 Z_95_TWO_SIDED = 1.96          # 95% two-sided (used by _wilson_ci default)
+
+# Two-tailed z-scores for mean sample size sufficiency (Issue #443)
+Z_95_SAMPLE_SUFFICIENCY = 1.95996
+Z_98_SAMPLE_SUFFICIENCY = 2.32635
+Z_99_SAMPLE_SUFFICIENCY = 2.57583
+SAMPLE_SUFFICIENCY_LEVELS = (
+    (95, Z_95_SAMPLE_SUFFICIENCY),
+    (98, Z_98_SAMPLE_SUFFICIENCY),
+    (99, Z_99_SAMPLE_SUFFICIENCY),
+)
 
 
 # Two-sided normal critical values, by confidence level. Used once the sample
@@ -189,6 +199,26 @@ def required_sample_size(
     if not math.isfinite(z_beta) or z_beta <= 0.0:
         return None
     return math.ceil(((z_alpha + z_beta) * sigma / delta) ** 2)
+
+
+def required_sample_size_for_mean(
+    std_dev: float | None,
+    target_margin: float | None = 0.02,
+    z: float = Z_95_SAMPLE_SUFFICIENCY,
+) -> int:
+    """Minimum sample size for mean estimation within target margin of error.
+
+    Formula: ``n = ceil(((z * std_dev) / target_margin) ** 2)``
+
+    Returns 0 when any input is non-positive, non-finite, or missing.
+    """
+    if std_dev is None or target_margin is None or z is None:
+        return 0
+    if not math.isfinite(std_dev) or not math.isfinite(target_margin) or not math.isfinite(z):
+        return 0
+    if std_dev <= 0.0 or target_margin <= 0.0 or z <= 0.0:
+        return 0
+    return math.ceil(((z * std_dev) / target_margin) ** 2)
 
 
 def power_table(
@@ -343,6 +373,7 @@ def compute_trade_analytics(
     equity_series: list[dict],
     float_marks: list[dict],
     pnl_by_fill_path: dict[str, Any] | None = None,
+    target_margin_usd: float = 0.02,
 ) -> dict[str, Any]:
     """Per-trade outcome statistics and risk factors for the Level 1 tiles.
 
@@ -421,6 +452,44 @@ def compute_trade_analytics(
         }
 
     mean_pnl_ci = _mean_pnl_ci(wins + losses)
+
+    # Issue #443: Sample size sufficiency per confidence level on dashboard
+    pnls = wins + losses
+    std_dev_usd: Optional[float] = None
+    if n > 1:
+        try:
+            std_dev_usd = statistics.stdev(pnls)
+        except Exception:
+            std_dev_usd = None
+
+    sufficiency_levels = []
+    for conf_pct, z_val in SAMPLE_SUFFICIENCY_LEVELS:
+        req_n = required_sample_size_for_mean(std_dev_usd, target_margin_usd, z_val)
+        if req_n > 0 and n > 1 and std_dev_usd and std_dev_usd > 0:
+            rem_n = max(0, req_n - n)
+            prog_pct = min(100, round((n / req_n) * 100))
+            sufficiency_levels.append({
+                "confidence_pct": conf_pct,
+                "z": z_val,
+                "required_n": req_n,
+                "remaining_n": rem_n,
+                "progress_pct": prog_pct,
+            })
+        else:
+            sufficiency_levels.append({
+                "confidence_pct": conf_pct,
+                "z": z_val,
+                "required_n": None,
+                "remaining_n": None,
+                "progress_pct": None,
+            })
+
+    sample_size_sufficiency = {
+        "current_n": n,
+        "std_dev_usd": std_dev_usd if n > 1 else None,
+        "target_margin_usd": target_margin_usd,
+        "levels": sufficiency_levels,
+    }
 
     avg_win_usd = statistics.mean(wins) if wins else None
     avg_loss_usd = statistics.mean(losses) if losses else None
@@ -503,6 +572,7 @@ def compute_trade_analytics(
         "ci90_lower_pct": ci90_lower_pct,
         "ci95_return_pct": ci95_return_pct,
         "mean_pnl_ci": mean_pnl_ci,
+        "sample_size_sufficiency": sample_size_sufficiency,
         "avg_win_usd": avg_win_usd,
         "avg_loss_usd": avg_loss_usd,
         "risk_reward_ratio": risk_reward_ratio,
