@@ -5,7 +5,7 @@ Branch: i433/build-market-metrics-telemetry-script | Issue: #433
 ## Intake & CodeRabbit Synthesis
 - **Adopted from CodeRabbit:**
   - Standalone read-only module in `scripts/research_market_metrics.py` with CLI module execution support.
-  - Import reuse: `full_book` from `scoring.markets`, `top_depth_usd` from `scoring.selector`, `_event_list` from `scripts.live_events_probe`, `LIVE_ROOT` from `core_brain.config`.
+  - Import reuse: `full_book` from `scoring.markets`, `top_depth_usd` from `scoring.selector`, `_event_list` from `scripts.live_events_probe`, `LIVE_ROOT` from `core_brain.runtime_paths`.
   - Venue constants: `GAMMA_PAGE_SIZE = 100`, `GAMMA_MAX_PAGES = 5`, `TRADE_PAGE_LIMIT = 500`, `TRADE_MAX_PAGES = 10`, `WINDOW_SECONDS = 1800`, `DEFAULT_SAMPLE_SIZE = 50`, `MAX_SAMPLE_SIZE = 100`.
   - Paging active markets from Gamma until cap or short page.
   - Measure 24h volume from market payload (`volume24hr` or `volume_24h`).

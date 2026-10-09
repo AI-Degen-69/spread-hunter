@@ -220,7 +220,9 @@ def fetch_window_trades(
         )
         r.raise_for_status()
         page = r.json()
-        if not isinstance(page, list) or not page:
+        if not isinstance(page, list):
+            raise ValueError("the trades payload is not a list")
+        if not page:
             break
         all_trades.extend(t for t in page if isinstance(t, dict))
         if len(page) < page_limit:
@@ -484,7 +486,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         d_val: float | None = None
         try:
             d_val = measure_market_depth(CLOB_HOST, yes_tok, no_tok, session=session)
-        except Exception:
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("market %s depth probe failed: %s", cid, exc)
             error_count += 1
         depth_vals.append(d_val)
 
@@ -500,7 +503,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             notional_val = notional_in_window(trades, cutoff=now - WINDOW_SECONDS)
             if not window_complete:
                 incomplete_windows_count += 1
-        except Exception:
+        except (requests.RequestException, ValueError) as exc:
+            log.warning("market %s trade tape probe failed: %s", cid, exc)
             error_count += 1
         notional_vals.append(notional_val)
 

@@ -30,7 +30,7 @@ Governs the `i433` branch only; #432 constraints below stay as history.
 ## Anti-cheat
 
 - No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit operator approval (`requests` is standard).
+- No new external dependencies without explicit operator approval; `requests` is already declared in `requirements.txt`.
 - Tests stay isolated from the real network (stub HTTP with `_FakeResponse` / `_FakeSession`).
 
 ---

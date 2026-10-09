@@ -196,6 +196,17 @@ def test_fetch_window_trades_incomplete_flag():
     assert window_complete is False
 
 
+def test_fetch_window_trades_non_list_payload_raises():
+    fake_session = MagicMock()
+    fake_session.get.return_value = _FakeResponse({"error": "bad request"})
+    with pytest.raises(ValueError, match="not a list"):
+        fetch_window_trades(
+            session=fake_session,
+            condition_id="c_test",
+            now=10000.0,
+        )
+
+
 def test_active_markets_pagination():
     fake_session = MagicMock()
     page1 = [{"id": "m1"}, {"id": "m2"}]
