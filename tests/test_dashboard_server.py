@@ -1571,6 +1571,21 @@ def test_app_js_states_the_horizon_gate_rule():
     assert 'Passed all screening gates · Quoting on venue' in app_js
 
 
+def test_app_js_passed_market_cards_omit_redundant_metrics():
+    """Passed and eligible cards in the Market Filter Kanban omit redundant metrics.
+
+    P&L, spread %, and estimated return are redundant on this pipeline page;
+    only essential operational metrics (Fills, 24h Vol, Days) are displayed.
+    """
+    app_js = _read_static("app.js")
+    assert '<div>Fills: <span class="card-fills">' in app_js
+    assert '<div>24h Vol: <span style="color:var(--text-primary)">${volStr}</span></div>' in app_js
+    assert '<div>Days: <span style="color:var(--text-primary)">${daysStr}</span></div>' in app_js
+    assert 'P&L:' not in app_js
+    assert '<div>Spread:' not in app_js
+    assert 'Est Ret:' not in app_js
+
+
 def test_app_js_does_not_fabricate_sequential_gate_flow():
     """The ranker stops at the first failure and not in board order.
 
@@ -1622,8 +1637,7 @@ def test_app_js_escapes_snapshot_derived_values():
     """Snapshot fields are escaped before they reach the page."""
     app_js = _read_static("app.js")
     assert 'esc(m.days_to_resolve)' in app_js
-    assert 'esc(m.return_pct_day)' in app_js
-    assert 'esc(el.ret_day_pct)' in app_js
+    assert 'esc(el.days_to_resolve)' in app_js
     assert 'esc(r.days)' in app_js
     assert 'esc(s.days)' in app_js
     assert 'aria-label="${esc(def.name)}"' in app_js

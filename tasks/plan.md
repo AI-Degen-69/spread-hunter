@@ -41,7 +41,7 @@ Refine Dashboard Tab 3 ("Market Filter Pipeline") Kanban board:
     - Update `test_app_js_states_the_payout_floor_per_market_source` to `test_app_js_states_the_horizon_gate_rule`: assert `TEST: HORIZON` present, `income >` absent, and `TEST: PAIR MERGE ARBITRAGE` absent.
 - **Verification:** `python -m pytest -q tests/test_dashboard_server.py -k "horizon or payout"`
 
-### Task 2: Remove Redundant Card Metrics from Passed & Eligible Cards [ ]
+### Task 2: Remove Redundant Card Metrics from Passed & Eligible Cards [x]
 - **Task ID:** TASK-2
 - **Size:** S
 - **Domain Tag:** `[Design/UI]`
