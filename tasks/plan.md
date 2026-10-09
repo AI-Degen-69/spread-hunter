@@ -1,74 +1,73 @@
-# Implementation Plan — #433: Build Market Metrics Telemetry Script for Volume, Notional, and Depth
+# Implementation Plan — #434: Implement Price Volatility Gate with Live Sports and Gaming Priority
 
-Branch: i433/build-market-metrics-telemetry-script | Issue: #433
+Branch: i434/implement-price-volatility-gate-with-live-sports | Issue: #434
 
 ## Intake & CodeRabbit Synthesis
 - **Adopted from CodeRabbit:**
-  - Standalone read-only module in `scripts/research_market_metrics.py` with CLI module execution support.
-  - Import reuse: `full_book` from `scoring.markets`, `top_depth_usd` from `scoring.selector`, `_event_list` from `scripts.live_events_probe`, `LIVE_ROOT` from `core_brain.runtime_paths`.
-  - Venue constants: `GAMMA_PAGE_SIZE = 100`, `GAMMA_MAX_PAGES = 5`, `TRADE_PAGE_LIMIT = 500`, `TRADE_MAX_PAGES = 10`, `WINDOW_SECONDS = 1800`, `DEFAULT_SAMPLE_SIZE = 50`, `MAX_SAMPLE_SIZE = 100`.
-  - Paging active markets from Gamma until cap or short page.
-  - Measure 24h volume from market payload (`volume24hr` or `volume_24h`).
-  - Outcome depth: measure both token depths via `full_book` and `top_depth_usd(bids)`; report min across outcomes as `top3_bid_depth`.
-  - Traded notional: query Data API `/trades`, deduplicate by `(transactionHash, asset, timestamp, price, size)`, sum `price * size` in `[now - 1800, now]`.
-  - Statistical summaries: `count`, `min`, `p25`, `median`, `p75`, `max`, `mean` via `nearest_rank` (`ceil(fraction * n) - 1`).
-  - Terminal table formatting and optional JSON report export to `reports/market_metrics_statistics_report_<timestamp>.json` on `--save` or `--output`.
-  - Dedicated offline unit tests in `tests/test_research_market_metrics.py` with mock HTTP sessions.
-- **Rejected from CodeRabbit:**
-  - Over-splitting into 5 micro-tasks; consolidated into 3 vertical slices.
-- **Unverified items:** None. All cited imports, signatures, and API structures verified against repository code.
+  - Introduce configurable 2-hour volatility window (`select_volatility_window_sec = 7200.0`, env `HUNTER_VOLATILITY_WINDOW_SEC`). Keep volume movement window at 30 minutes (`1800.0` seconds).
+  - Enforce price volatility / range bar: minimum 2.0 cents ($0.02) swing (`high - low >= $0.02`).
+  - Clear, distinct rejection reason: `flat market: price swing {r_str} in last {window_str} < {min_range_cents:.2f}c`.
+  - Sports & eSports detection helper `is_sports_or_esports` in `scoring/selector.py` matching `sports_market_type` or sports series keywords across title, event_title, series_title, slug, category.
+  - Exemption: active live sports/eSports markets (`_live_event` or `live_event: true` AND `is_sports_or_esports`) are exempt from the flat range rejection (`range_exempt=True` in `velocity_gate_reject`).
+  - Flag `volatility_exempt: True` on the market row.
+  - Sorting priority: `sort_eligible` prioritizes exempt live sports markets ahead of non-exempt markets, preserving primary return ranking (`-rank_score`) within each group.
+- **Adjustments / Consolidations:**
+  - Consolidated into 3 vertical slices adhering to TDD.
+  - Rejection text formatted dynamically for window (e.g. `2h` for 7200s, `30m` for 1800s).
+  - `tape_movement_and_range` accepts `range_window_sec: float | None = None` so price swing can evaluate over 2 hours while `movement_usd` evaluates over 30 minutes.
 
 ## Goal & Acceptance Criteria
-- Running `python -m scripts.research_market_metrics --sample-size 50` fetches live active markets and prints a statistical distribution table to stdout.
-- Key metrics captured per market: `volume_24h`, `recent_traded_notional_30m`, and `top3_bid_depth`.
-- Running with `--save` writes a structured JSON report to `reports/market_metrics_statistics_report_<UTC>.json`.
-- Script is completely read-only and standalone (zero live trading calls, no writes to `data/orders.db`).
-- Comprehensive unit test suite in `tests/test_research_market_metrics.py` passes without network dependencies.
-
-## Improvement Proposal (Evidence-based)
-- **Evidence:** High-activity markets may produce >500 trades within 30 minutes. In `scoring/markets.py:recent_trades`, only a single unpaginated request of `limit=500` is performed.
-- **Classification:** Edge-case hardening (adopted by default).
-- **Resolution:** `fetch_window_trades` will paginate trades up to a bounded cap (`TRADE_MAX_PAGES = 10`), stopping as soon as trades pass the 30m cutoff or return a short page. It returns a tuple `(trades, window_complete: bool)`. If the cap is reached before the 30m cutoff, `window_complete=False` is flagged and reported in telemetry so incomplete windows are visible rather than silently undercounting notional.
+- Markets with price swing < 2.0c over 2h are rejected with reason `flat market: price swing < 2.00c in last 2h` (unless live sports/eSports).
+- Live sports and eSports markets are exempted from the swing requirement and tagged `volatility_exempt: True`.
+- `sort_eligible` places `volatility_exempt: True` markets at the top of the eligible queue.
+- Unmeasured tape remains fail-open.
+- Focused test suite in `tests/test_velocity_gate.py` passes 100%.
 
 ---
 
 ## Task Breakdown
 
-### Task 1: Core Sampling & Metric Measurement Logic [Core/Logic] [Size: M] [x]
-- **Target files:** `scripts/research_market_metrics.py`, `tests/test_research_market_metrics.py`
+### Task 1: Volatility Window & Range Gate Configuration with Sports/eSports Detector [Core/Logic] [Size: S] [x]
+- **Target files:** `scoring/config.py`, `scoring/selector.py`, `tests/test_velocity_gate.py`
 - **Depends on:** None
 - **What is built:**
-  - `active_markets(session, limit_per_page=100, max_pages=5)`: queries `https://gamma-api.polymarket.com/markets` with `active=true&closed=false`, paginates by offset, unwraps via `_event_list`.
-  - `parse_binary_tokens(market)`: validates binary outcomes and extracts YES/NO token IDs.
-  - `sample_markets(markets, size=50, seed=None)`: seeded random sample of usable markets.
-  - `measure_market_volume(market)`: extracts float 24h volume.
-  - `measure_outcome_depth(clob_host, token_id, session=None)`: fetches book and calculates `top_depth_usd(bids)`. Captures both tokens and calculates `top3_bid_depth = min(depth_yes, depth_no)` when both present.
-  - `fetch_window_trades(session, condition_id, now, window_seconds=1800, max_pages=10)`: paginates trades from `https://data-api.polymarket.com/trades?market=...&takerOnly=true`, checks cutoff, returns trades and `window_complete`.
-  - `notional_in_window(trades, cutoff)`: deduplicates trades by `(transactionHash, asset, timestamp, price, size)` and computes total notional.
-  - Unit tests in `tests/test_research_market_metrics.py` with `_FakeResponse` and `_FakeSession` verifying all data extraction functions.
-- **Verification:** `python -m pytest -q tests/test_research_market_metrics.py -k "test_data or test_sample or test_depth or test_trade"`
+  - In `scoring/config.py`:
+    - Add `select_volatility_window_sec: float = 7200.0` to `MakerConfig`.
+    - Update `select_min_range_cents: float = 2.0` default.
+    - Add env override for `HUNTER_VOLATILITY_WINDOW_SEC` in `load()`.
+  - In `scoring/selector.py`:
+    - Add `is_sports_or_esports(title=None, slug=None, category=None, series_title=None, event_title=None, sports_market_type=None) -> bool`. Matches `sports_market_type` or `_SPORTS_SERIES_RE` or sports keywords.
+  - In `tests/test_velocity_gate.py`:
+    - Add unit tests for `is_sports_or_esports` against various tennis, League of Legends, CS2, NFL, and non-sports macro/crypto titles.
+- **Verification:** `python -m pytest -q tests/test_velocity_gate.py -k "test_is_sports"`
 
-### Task 2: Statistical Summaries, Table Formatting & JSON Reporting [Core/Logic] [Size: S] [x]
-- **Target files:** `scripts/research_market_metrics.py`, `tests/test_research_market_metrics.py`
+### Task 2: Range Exemption & Live Priority Sorting in Screener [Core/Logic] [Size: M] [x]
+- **Target files:** `scripts/filter_markets.py`, `tests/test_velocity_gate.py`
 - **Depends on:** Task 1
 - **What is built:**
-  - `nearest_rank(values, fraction)`: computes percentile rank using `ceil(fraction * n) - 1`.
-  - `summarize_metric(values)`: computes `count`, `min`, `p25`, `median`, `p75`, `max`, `mean` using `statistics.fmean`, skipping `None` and tracking missing count.
-  - `format_table(summaries, sample_size, pool_size, seed, error_count, incomplete_windows)`: formats aligned ASCII terminal table with footer metadata.
-  - `build_report(summaries, market_records, seed, sample_size, pool_size)`: generates serializable JSON report dict with metadata, summaries, and individual market records.
-  - Unit tests verifying percentile calculations (edge cases: empty, 1 item, 1..10 values, mixed None) and table rendering.
-- **Verification:** `python -m pytest -q tests/test_research_market_metrics.py -k "test_stat or test_table or test_report"`
+  - In `scripts/filter_markets.py`:
+    - Update module constants: `VOLATILITY_WINDOW_SEC = getattr(_CFG, "select_volatility_window_sec", 7200.0)`, `MIN_RANGE_CENTS = getattr(_CFG, "select_min_range_cents", 2.0)`.
+    - Update `tape_movement_and_range`: add `range_window_sec: Optional[float] = None` (defaults to `VOLATILITY_WINDOW_SEC`). Calculate `prices_in_window` within `now - range_window_sec` while volume and trades use `window_sec` (30m).
+    - Update `velocity_gate_reject`: add `range_exempt: bool = False`, `range_window_sec: Optional[float] = None`. When `range_exempt=True`, skip min range check. When rejected for range, output reason: `f"flat market: price swing {r_str} in last {win_str} < {min_range_cents:.2f}c"`.
+    - In `evaluate`:
+      - Detect live sports/esports via `is_sports_or_esports(...)` and `m.get("_live_event") or m.get("live_event")`.
+      - Pass `range_exempt` to `velocity_gate_reject`.
+      - Attach `"volatility_exempt": is_exempt` to market row.
+    - In `sort_eligible`:
+      - Sort by `(not r.get("volatility_exempt", False), -rank_score(r))`.
+    - In `_cause`:
+      - Map `"flat market"` to bucket `"flat market"`.
+  - In `tests/test_velocity_gate.py`:
+    - Add tests for 2-hour lookback range calculation with 30-minute volume.
+    - Add tests for `velocity_gate_reject` with `range_exempt=True`.
+    - Add tests for `sort_eligible` prioritizing exempt markets.
+- **Verification:** `python -m pytest -q tests/test_velocity_gate.py`
 
-### Task 3: CLI Interface, File Output & Regression Gate [Core/Logic] [Size: S] [x]
-- **Target files:** `scripts/research_market_metrics.py`, `tests/test_research_market_metrics.py`
+### Task 3: Regression Suite, Gate Verification & Diagnostics [Core/Logic] [Size: S] [x]
+- **Target files:** `tests/test_velocity_gate.py`, `tests/scoring/test_markets.py`, `tests/test_unified_universe.py`
 - **Depends on:** Task 1, Task 2
 - **What is built:**
-  - `main(argv=None)`: CLI arguments parsing:
-    - `--sample-size`: integer 1..100 (default 50, error if <1 or >100 with exit code 2).
-    - `--seed`: optional integer seed (generates random seed if omitted and prints it).
-    - `--save`: writes report to `reports/market_metrics_statistics_report_<YYYYMMDD_HHMMSS>.json`.
-    - `--output`: custom report destination path.
-  - Handles errors gracefully: venue unreachable (exit 1), unreadable market list (exit 1).
-  - Preserves UTF-8 encoding, indented JSON, trailing newline on saved files.
-  - Unit tests covering CLI execution, arguments validation, report writing, and error cases.
-- **Verification:** Focused test suite `python -m pytest -q tests/test_research_market_metrics.py` and regression test suites.
+  - Update any existing tests checking the older `flat range: price range ...` string or old 1.0c default.
+  - Verify that `sort_eligible` maintains strict order stability and correctly promotes live sports.
+  - Verify full focused suite passes cleanly.
+- **Verification:** `python -m pytest -q tests/test_velocity_gate.py tests/scoring/test_markets.py tests/test_unified_universe.py`

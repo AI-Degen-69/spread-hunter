@@ -1,3 +1,50 @@
+# CONSTRAINTS — #434 (locked by Station II, enforced through Station V)
+
+Governs the `i434` branch only; #433 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_velocity_gate.py`
+  `tests/scoring/test_markets.py`
+  `tests/test_unified_universe.py`
+  `tests/test_live_quotes.py`
+  `tests/test_trader_loop.py`
+  `tests/test_market_selection_bars.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
+
+## Volatility Gate Parameters & Exemptions
+
+- Lookback window: 2 hours (`7200.0` seconds), configurable via `select_volatility_window_sec` in `scoring/config.py` (env `HUNTER_VOLATILITY_WINDOW_SEC`, default `7200.0`). Traded volume movement window remains strictly 30m (`1800.0` seconds).
+- Minimum range/swing bar: strictly `2.0c` (`$0.02`), configured via `select_min_range_cents = 2.0` (env `HUNTER_MIN_RANGE_CENTS`, default `2.0`).
+- Rejection reason: exact format `flat market: price swing {r_str} in last {minutes_or_hours} < {min_range_cents:.2f}c` (e.g. `flat market: price swing 0.50c in last 2h < 2.00c`).
+- Sports & eSports live exemption:
+  - Reusable helper `is_sports_or_esports` in `scoring/selector.py` matching sports/esports keywords (`sports_market_type` or `_SPORTS_SERIES_RE` across title, slug, series, category).
+  - When market has active live event signal (`_live_event` or `live_event: true`) AND `is_sports_or_esports(...)`:
+    - Range/swing gate is skipped (`range_exempt=True` in `velocity_gate_reject`).
+    - Market row receives `volatility_exempt = True`.
+    - Note: trade count and last trade latency checks in `velocity_gate_reject` are NOT skipped.
+- Sorting priority:
+  - In `sort_eligible` (`scripts/filter_markets.py`), eligible markets sort primarily by `volatility_exempt` (exempt/live sports first: `not r.get("volatility_exempt")`), and secondarily by `-rank_score(r)`.
+- Boundary freezes:
+  - Book depth gate ($500), 24h volume gate ($125k / $10k live), max spread gate (0.0205), and decided mid band [0.15, 0.85] remain strictly untouched.
+  - Zero live venue orders, zero edits to `data/orders.db`.
+
+## Stores are evidence, not scratch
+
+- `data/orders.db` is the production registry: read it, never rewrite it.
+- No schema migration; tests use temporary state or fakes.
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit operator approval.
+- Tests stay isolated from the real network (stub HTTP with `_TapeSession` / `_FakeResponse`).
+
+---
+
 # CONSTRAINTS — #433 (locked by Station II, enforced through Station V)
 
 Governs the `i433` branch only; #432 constraints below stay as history.
