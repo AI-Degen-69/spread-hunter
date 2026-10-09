@@ -3364,7 +3364,7 @@ def main() -> None:
              f"admitted on 24h volume >= ${MIN_VOLUME_24H_LIVE:,.0f} instead; "
              f"24h volume >= {volume_bar_str}, "
              f"YES+NO top-3 bid depth >= {depth_bar_str} each, "
-             f"spread <= {spread_bar:.2f}"
+             f"spread <= {spread_bar:.4f}"
              f"{' (TRIAL)' if spread_trial_active else ''}, "
              f"resolves within {MAX_DAYS_TO_RESOLVE:.0f}d, "
              f"movement >= ${movement_bar:,.0f}/"

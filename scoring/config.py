@@ -516,7 +516,9 @@ class MakerConfig:
     # refuses a truly flat tape (0.00c) while the movement bar above remains
     # the real proof of activity. Operator-tunable via HUNTER_MIN_RANGE_CENTS.
     select_min_range_cents: float = 1.0
-    select_max_book_spread: float = 0.06
+    # Tightened 2026-10-09 (#432) to 2.05 cents (0.0205 in price units) to
+    # prevent entry into wide/slippage-heavy books.
+    select_max_book_spread: float = 0.0205
     # 30 days admits liquid macro, sports, and political markets while keeping
     # long-dated 2027 markets excluded.
     select_max_days_to_resolve: float = 30.0

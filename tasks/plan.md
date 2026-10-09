@@ -50,7 +50,7 @@ Branch: i432/update-screener-price-band-to-015-085-and-tighten | Issue: #432
 - **Verification:**
   - `python -m pytest -q tests/test_live_quotes.py tests/test_trader_loop.py tests/test_live_event_discovery.py tests/test_unified_universe.py`
 
-### Task 2: Tighten Maximum Book Spread Gate to `0.0205` in Configs and Selector
+### Task 2: Tighten Maximum Book Spread Gate to `0.0205` in Configs and Selector [x]
 - **Size:** M
 - **Domain Tag:** `[Backend/Logic]`
 - **Helper Skill:** `test-driven-development`
