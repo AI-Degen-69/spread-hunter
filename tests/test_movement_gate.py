@@ -158,10 +158,10 @@ class _MarketSession:
             payload = self.tape
         else:
             payload = {
-                "bids": [{"price": "0.48", "size": "5000"},
-                         {"price": "0.47", "size": "5000"}],
-                "asks": [{"price": "0.52", "size": "5000"},
-                         {"price": "0.53", "size": "5000"}],
+                "bids": [{"price": "0.49", "size": "5000"},
+                         {"price": "0.48", "size": "5000"}],
+                "asks": [{"price": "0.51", "size": "5000"},
+                         {"price": "0.52", "size": "5000"}],
             }
 
         class _Resp:
@@ -178,8 +178,8 @@ class _UnmeasuredTapeSession:
         if "trades" in url:
             raise OSError("tape unreachable")
         payload = {
-            "bids": [{"price": "0.48", "size": "5000"}],
-            "asks": [{"price": "0.52", "size": "5000"}],
+            "bids": [{"price": "0.49", "size": "5000"}],
+            "asks": [{"price": "0.51", "size": "5000"}],
         }
 
         class _Resp:
@@ -206,7 +206,7 @@ def _candidate() -> dict:
         # one under test rather than the one that fires first.
         "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
         "_order_min": 5,
-        "_spread": 0.04,
+        "_spread": 0.02,
         # The resolution state every real gamma_universe row carries; the
         # horizon gate reads it (#312).
         "closed": False,

@@ -1,81 +1,108 @@
-Branch: i431/remove-maker-rewards-requirement-from-screener | Issue: #431
+# Implementation Plan — #432: Update Screener Price Band to [0.15, 0.85] and Tighten Max Spread to 2c
 
-# Implementation Plan — Remove Maker Rewards Requirement from Screener Filters (#431)
+Branch: i432/update-screener-price-band-to-015-085-and-tighten | Issue: #432
 
-## Summary & Goal
-Allow markets with $0/day maker rewards to pass the screener and pinned market fetching routines as long as spread and resolution horizon criteria are satisfied. Pure spread-capture pair trades do not rely on maker reward subsidies.
+## Intake & CodeRabbit Synthesis
+- **Adopted from CodeRabbit:**
+  - Update mid-price band to `[0.15, 0.85]` across quoting (`core_brain/quotes.py`) and screening (`scripts/filter_markets.py`) with refusal strings matching `outside [0.15, 0.85]`.
+  - Update `select_max_book_spread` to `0.0205` in `core_brain/config.py`, `scoring/config.py`, `scoring/selector.py` (`book_allowed`, `pair_books_allowed`), and `scripts/filter_markets.py`.
+  - Floating point residue guard: round computed spread to 6 decimal places before `spread > max_spread` in `scoring/selector.py:book_allowed` to prevent IEEE-754 false rejections (e.g. `0.5105 - 0.49`).
+  - Formatting `spread <= {spread_bar:.4f}` in `scripts/filter_markets.py` console print.
+  - Updating dashboard telemetry fallback in `dashboard/static/app.js` and explainer copy in `dashboard/static/strategy_explainer.html`.
+  - Specific test adjustments: moving test mids in `tests/test_live_event_discovery.py` to `0.88/0.12`, updating `tests/test_trader_loop.py`, `tests/test_unified_universe.py` fixtures (`0.49/0.51`), and `tests/test_wide_book_trial.py`.
+- **Rejected from CodeRabbit:**
+  - Over-splitting into separate sub-phases and speculative test fixtures with mock frameworks. Consolidated into 4 clear vertical slices.
+- **Unverified items:** None. All line numbers, code symbols, and test expectations verified against live codebase.
 
-## CodeRabbit Plan Intake
-- **Adopted**: Removal of `require_rewards` from `fetch_pinned_market` in both `scoring/markets.py` and `core_brain/markets.py`; removal of `MIN_PAYOUT` and `FLOOR_MULTIPLE` from `scripts/filter_markets.py`; standardization of funnel snapshot `reward_min_income_usd_day` to `0.0`; dashboard stage-7 label update to Horizon & Income.
-- **Rejected**: Any modifications to `scoring/selector.py` (which already has no reward check) or `tradable()` / `MAX_DAYS_TO_RESOLVE` (must remain strictly locked).
-- **Unverified**: None. All references and call-sites verified directly in codebase.
+## Goal & Acceptance Criteria
+- Markets with mid prices in `[0.15, 0.85]` (e.g. `0.17` or `0.83`) pass the price band gate.
+- Markets with order book spreads exceeding `0.0205` (e.g. `0.03`) are refused by the spread gate with `spread {spread:.4f} > {max_spread:.4f}`.
+- Refusal messages consistently state `outside [0.15, 0.85]` for decided market/mid rejections.
+- Zero regressions across targeted test suites.
 
-## Improvement Proposal (Adopted Simplification)
-- **Evidence**: `scripts/filter_markets.py` exported `reward_min_income_usd_day` as `1.5` and `spread_min_income_usd_day` as `0.0`, resulting in dual-bar UI text on the dashboard.
-- **Proposal**: Unify both thresholds to `0.0` in the pipeline snapshot and consolidate the dashboard Stage 7 hero into a single clean rule: `≤ 30.0 days · income > $0.00/day`.
+## Improvement Proposal (Evidence-based)
+- **Evidence:** `scoring/selector.py:204` calculates `spread = best_ask - best_bid` and checks `spread > max_spread`. With `max_spread = 0.0205`, `0.5105 - 0.49` evaluates to `0.020500000000000018`, failing the gate strictly due to IEEE-754 precision.
+- **Classification:** Simplification / edge-case hardening (adopted by default).
+- **Resolution:** In `scoring/selector.py:book_allowed`, round calculated spread to 6 decimal places (`round(best_ask - best_bid, 6)`) before comparing against `max_spread`.
 
 ---
 
-## Tasks
+## Task Breakdown
 
-### Task 1: Core & Scoring Pinned Fetch Refactor [Backend/Logic] [Size: S] [x]
-- **Depends on**: None
-- **Files**:
-  - `scoring/markets.py`
-  - `core_brain/markets.py`
-  - `core_brain/order_manager.py`
-  - `core_brain/trader_loop.py`
-  - `core_brain/markout.py`
-  - `core_brain/audit.py`
-- **Description**:
-  - Remove `require_rewards` parameter and the `if require_rewards and daily <= 0:` refusal in `scoring/markets.py:fetch_pinned_market` and `core_brain/markets.py:fetch_pinned_market`.
-  - Preserve `daily` sum calculation, closed-market checks, accepting-orders checks, token checks, and `game_start_time` handling.
-  - Remove `require_rewards=False` argument from call sites in `core_brain/order_manager.py`, `core_brain/trader_loop.py`, `core_brain/markout.py`, and `core_brain/audit.py`.
-  - Update comments in `core_brain/order_manager.py:449-455`.
-- **Verification**: `python -m pytest -q tests/scoring/test_markets.py tests/test_order_manager.py`
-
-### Task 2: Screener Filter & Funnel Snapshot Standardization [Backend/Logic] [Size: S] [x]
-- **Depends on**: Task 1
-- **Files**:
+### Task 1: Update Mid-Price Band Gate to `[0.15, 0.85]` and Align Core Quoting/Filtering [x]
+- **Size:** M
+- **Domain Tag:** `[Backend/Logic]`
+- **Helper Skill:** `test-driven-development`
+- **Depends on:** None
+- **Target Files:**
+  - `core_brain/quotes.py`
   - `scripts/filter_markets.py`
-- **Description**:
-  - Remove `MIN_PAYOUT` and `FLOOR_MULTIPLE` constants.
-  - In `evaluate()`, check `income > 0` for both `rewards` and `spread` sources. Use reason `"no reward income"` for rewards and `"no spread income"` for spread.
-  - Confirm `_cause` correctly categorizes `"no reward income"` and `"no spread income"` to `income`.
-  - In snapshot export, set `"reward_min_income_usd_day": 0.0`.
-  - Update `--legacy-rewards` CLI help and output text to reflect `income > $0/day` across both sources without payout floor.
-- **Verification**: `python -m pytest -q tests/test_pipeline_snapshot_gates.py tests/test_unified_universe.py tests/test_live_funnel.py`
-
-### Task 3: Dashboard Stage-7 Hero & Label Alignment [Design/UI] [Size: XS] [x]
-- **Depends on**: Task 2
-- **Files**:
-  - `dashboard/static/app.js`
-- **Description**:
-  - Rename `7. Horizon & Yield Gate` in `BUCKET_DEFS` / `STAGE_DEFS` to `7. Horizon & Income Gate` (keep `key: 'horizon'`).
-  - Update `getStageHero('horizon', funnel)`: set `param` to `TEST: HORIZON & INCOME` and `value` to `≤ ${Number(horizonDays).toFixed(1)} days · income > $0.00/day`.
-  - Update `reward_min_income_usd_day` fallback from `1.5` to `0`.
-  - Ensure `categorizeGate` preserves grouping for both `income` and legacy `payout` causes.
-- **Verification**: `python -m pytest -q tests/test_dashboard_server.py`
-
-### Task 4: Comprehensive Test Suite & Regression Verification [Backend/Logic] [Size: S] [x]
-- **Depends on**: Task 1, Task 2, Task 3
-- **Files**:
-  - `tests/scoring/test_markets.py`
-  - `tests/test_order_manager.py`
-  - `tests/test_pre_start_gate.py`
-  - `tests/test_single_buy_saver.py`
-  - `tests/test_market_quote.py`
-  - `tests/test_markout_maturity.py`
-  - `tests/test_milestone7_telemetry.py`
-  - `tests/test_shadow_markouts.py`
-  - `tests/test_pipeline_snapshot_gates.py`
+  - `tests/test_live_quotes.py`
+  - `tests/test_trader_loop.py`
+  - `tests/test_live_event_discovery.py`
   - `tests/test_unified_universe.py`
-  - `tests/test_dashboard_server.py`
-- **Description**:
-  - Add real pinned-fetch tests for zero-reward markets and closed markets in `tests/scoring/test_markets.py` and `tests/test_order_manager.py`.
-  - Update `test_quote_does_not_require_maker_rewards` and fakes in `tests/test_single_buy_saver.py`, `tests/test_pre_start_gate.py`, etc.
-  - Update snapshot assertions in `tests/test_pipeline_snapshot_gates.py` to expect `0.0`.
-  - Add/update tests in `tests/test_unified_universe.py` confirming zero-reward spread markets pass horizon gate while out-of-horizon markets are rejected.
-  - Update dashboard server tests for the new stage-7 title and fallback.
-- **Verification**:
-  `python -m pytest -q tests/test_pipeline_snapshot_gates.py tests/test_order_manager.py tests/scoring/test_markets.py tests/test_unified_universe.py tests/test_single_buy_saver.py tests/test_pre_start_gate.py tests/test_dashboard_server.py tests/test_live_funnel.py tests/test_market_quote.py tests/test_markout_maturity.py tests/test_milestone7_telemetry.py tests/test_shadow_markouts.py`
+- **Details:**
+  - In `core_brain/quotes.py` (lines 350-351, 649-651), change `(mid <= 0.20 or mid >= 0.80)` to `(mid <= 0.15 or mid >= 0.85)` and refusal message to `f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market"`.
+  - In `scripts/filter_markets.py` (lines 1655, 1667), change `0.20 < mid < 0.80` to `0.15 < mid < 0.85` and rejection reason to `f"{side}: decided mid {mid:.2f} outside [0.15, 0.85]"`.
+  - Update comments in `filter_markets.py` referencing the mid gate band.
+  - Update test assertions in `tests/test_live_quotes.py`, `tests/test_trader_loop.py`, `tests/test_unified_universe.py`, and `tests/test_live_event_discovery.py` (moving test mid to `0.88/0.12`).
+  - Add test cases proving that mid `0.17` and `0.83` are admitted while `0.14` and `0.86` are refused.
+- **Verification:**
+  - `python -m pytest -q tests/test_live_quotes.py tests/test_trader_loop.py tests/test_live_event_discovery.py tests/test_unified_universe.py`
+
+### Task 2: Tighten Maximum Book Spread Gate to `0.0205` in Configs and Selector [x]
+- **Size:** M
+- **Domain Tag:** `[Backend/Logic]`
+- **Helper Skill:** `test-driven-development`
+- **Depends on:** Task 1
+- **Target Files:**
+  - `core_brain/config.py`
+  - `scoring/config.py`
+  - `scoring/selector.py`
+  - `scripts/filter_markets.py`
+- **Details:**
+  - In `core_brain/config.py` line 544 and `scoring/config.py` line 519, set `select_max_book_spread: float = 0.0205`. Update comment to explain 2.05 cents in price units.
+  - In `scoring/selector.py` (lines 180, 216), set default `max_spread: float = 0.0205` in `book_allowed` and `pair_books_allowed`.
+  - In `scoring/selector.py:book_allowed`, round `spread = round(best_ask - best_bid, 6)`.
+  - In `scripts/filter_markets.py` line 3368, update print format to `spread <= {spread_bar:.4f}`.
+- **Verification:**
+  - Unit tests asserting `select_max_book_spread == 0.0205` and boundary spread gating (`0.0205` passes, `0.0206` fails).
+
+### Task 3: Update Dashboard Telemetry Copy & Explainer HTML [x]
+- **Size:** S
+- **Domain Tag:** `[Design/UI]`
+- **Helper Skill:** `frontend-ui-engineering`
+- **Depends on:** Task 2
+- **Target Files:**
+  - `dashboard/static/app.js`
+  - `dashboard/static/strategy_explainer.html`
+- **Details:**
+  - In `dashboard/static/app.js`: update line 5768 `spreadGate` fallback from `0.06` to `0.0205`; update line 5785 mid value from `'Binary · Mid [0.20, 0.80]'` to `'Binary · Mid [0.15, 0.85]'`.
+  - In `dashboard/static/strategy_explainer.html`: update line 385 from `spread < 6¢` to `spread ≤ 2.05¢ (0.0205)`; update line 576 diagram text from `Spread<6c` to `Spread≤2.05¢`.
+- **Verification:**
+  - Inspection of string rendering in `dashboard/static/app.js` and `dashboard/static/strategy_explainer.html`.
+
+### Task 4: Align Regression Test Suites for Selector, Universe, Snapshot & Trial Bars [x]
+- **Size:** M
+- **Domain Tag:** `[Backend/Logic]`
+- **Helper Skill:** `test-driven-development`
+- **Depends on:** Task 2, Task 3
+- **Target Files:**
+  - `tests/test_market_selection_bars.py`
+  - `tests/test_wide_book_trial.py`
+  - `tests/test_unified_universe.py`
+  - `tests/test_pipeline_snapshot_gates.py`
+- **Details:**
+  - In `tests/test_market_selection_bars.py`: add tests for default `select_max_book_spread == 0.0205` and boundary checks for `book_allowed` with `0.49/0.5105` (passes) vs `0.4794/0.5000` (fails).
+  - In `tests/test_wide_book_trial.py`: update `cfg.select_max_book_spread == 0.0205` in `test_load_leaves_the_ceilings_alone_when_unset`.
+  - In `tests/test_unified_universe.py`: update mock book fixtures in `_FakeSession` from `0.48/0.52` to `0.49/0.51` (spread 0.02), update candidate `_spread` to `0.02`, pass explicit `max_spread=0.06` to `test_a_zero_ours_score_is_retained_as_a_rejection_row` (`_ZeroScoreSession` has spread 0.05).
+  - Add tests in `tests/test_unified_universe.py` asserting `fm.MAX_BOOK_SPREAD == 0.0205` and rejection of spread `0.0300 > 0.0205`.
+- **Verification:**
+  - `python -m pytest -q tests/test_live_quotes.py tests/test_trader_loop.py tests/test_unified_universe.py tests/test_wide_book_trial.py tests/test_live_event_discovery.py tests/test_market_selection_bars.py tests/test_pipeline_snapshot_gates.py`
+
+---
+
+## Checkpoints
+- **Checkpoint 1 (after Task 1):** Price band gate tests passing with new `[0.15, 0.85]` boundaries in quoting and filter_markets.
+- **Checkpoint 2 (after Task 2 & 3):** Max book spread threshold `0.0205` and dashboard telemetry copy updated and consistent.
+- **Checkpoint 3 (after Task 4):** All 7 targeted regression suites passing cleanly.

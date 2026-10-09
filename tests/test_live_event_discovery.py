@@ -576,7 +576,7 @@ def test_a_live_series_row_carries_its_series_evidence():
 
 
 def test_the_rank_keeps_a_live_series_past_the_mid_gate(monkeypatch):
-    # Arrange: books with UP mid 0.85 / DOWN mid 0.15 -- outside [0.20, 0.80]
+    # Arrange: books with UP mid 0.88 / DOWN mid 0.12 -- outside [0.15, 0.85]
     # on both sides. A series row must sail past the mid gate; the same books
     # on a single-game row must refuse as decided.
     import time
@@ -591,7 +591,7 @@ def test_the_rank_keeps_a_live_series_past_the_mid_gate(monkeypatch):
                          "measured_at": "t", "trade_count": 100})
 
     def books(url, params=None, timeout=None):
-        mid = 0.85 if params["token_id"] == "101" else 0.15
+        mid = 0.88 if params["token_id"] == "101" else 0.12
         return _FakeResponse({
             "bids": [{"price": f"{mid - 0.01:.2f}", "size": "5000"}],
             "asks": [{"price": f"{mid + 0.01:.2f}", "size": "5000"}]})

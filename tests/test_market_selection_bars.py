@@ -125,3 +125,41 @@ def test_a_thin_leg_refuses_the_pair_even_when_the_other_leg_is_deep():
 
     assert not ok
     assert reason.startswith("NO:")
+
+
+def test_the_permanent_spread_bar_is_two_point_zero_five_cents():
+    assert ScoringConfig().select_max_book_spread == 0.0205
+    assert MakerConfig().select_max_book_spread == 0.0205
+
+
+def test_the_filter_markets_spread_bar_matches_config():
+    import scripts.filter_markets as filter_markets
+    assert filter_markets.MAX_BOOK_SPREAD == 0.0205
+
+
+def test_book_allowed_default_spread_gate_boundary():
+    import pytest
+    from scoring.selector import book_allowed
+
+    # 0.49 / 0.5105 has exact spread 0.0205; must be admitted with sufficient depth
+    ok, reason, _, spread = book_allowed({0.49: 20_000.0}, {0.5105: 20_000.0})
+    assert ok, reason
+    assert spread == pytest.approx(0.0205)
+
+    # 0.4794 / 0.5000 has spread 0.0206 > 0.0205; must be refused
+    ok, reason, _, _ = book_allowed({0.4794: 20_000.0}, {0.5000: 20_000.0})
+    assert not ok
+    assert "spread 0.0206 > 0.0205" in reason
+
+
+def test_pair_books_allowed_refuses_wide_book_by_default():
+    from scoring.selector import pair_books_allowed
+
+    # YES book 2c spread, NO book 3c spread
+    yes_bids, yes_asks = {0.49: 20_000.0}, {0.51: 20_000.0}
+    no_bids, no_asks = {0.485: 20_000.0}, {0.515: 20_000.0}
+
+    ok, reason = pair_books_allowed([("YES", yes_bids, yes_asks), ("NO", no_bids, no_asks)])
+    assert not ok
+    assert "NO: spread 0.0300 > 0.0205" in reason
+

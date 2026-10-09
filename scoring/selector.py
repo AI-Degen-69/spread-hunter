@@ -177,7 +177,7 @@ def top_depth_usd(levels: Mapping[float, float] | Iterable[tuple[float, float]],
 def book_allowed(bids: Mapping[float, float] | Iterable[tuple[float, float]],
                  asks: Mapping[float, float] | Iterable[tuple[float, float]],
                  min_depth_usd: float = 5000.0,
-                 max_spread: float = 0.04) -> tuple[bool, str, float, float]:
+                 max_spread: float = 0.0205) -> tuple[bool, str, float, float]:
     """Check one token's two-sided book and return depth/spread diagnostics."""
     bid_items = list(bids.items()) if isinstance(bids, Mapping) else list(bids)
     ask_items = list(asks.items()) if isinstance(asks, Mapping) else list(asks)
@@ -201,7 +201,7 @@ def book_allowed(bids: Mapping[float, float] | Iterable[tuple[float, float]],
         return False, "one-sided or empty book", top_depth_usd(valid_bids), 0.0
     best_bid = max(p for p, _ in valid_bids)
     best_ask = min(p for p, _ in valid_asks)
-    spread = best_ask - best_bid
+    spread = round(best_ask - best_bid, 6)
     depth = top_depth_usd(valid_bids)
     if spread < 0 or spread > max_spread:
         return False, f"spread {spread:.4f} > {max_spread:.4f}", depth, spread
@@ -213,7 +213,7 @@ def book_allowed(bids: Mapping[float, float] | Iterable[tuple[float, float]],
 def pair_books_allowed(books: Iterable[tuple[str, Mapping[float, float],
                                              Mapping[float, float]]],
                        min_depth_usd: float = 5000.0,
-                       max_spread: float = 0.04) -> tuple[bool, str]:
+                       max_spread: float = 0.0205) -> tuple[bool, str]:
     """Require the same book contract independently on YES and NO."""
     for label, bids, asks in books:
         ok, reason, _, _ = book_allowed(bids, asks, min_depth_usd, max_spread)

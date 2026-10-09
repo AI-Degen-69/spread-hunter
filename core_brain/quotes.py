@@ -334,10 +334,10 @@ def _decide_quotes_from_mid(
             continue
 
         # DECIDED MARKET — no room to work. The filter's [0.05,0.95] was
-        # 5c from the edge, tightened 2026-08-28 to [0.20,0.80] per operator
-        # directive: a finished Darja/Nikola at 100.0%/0.1% was still
-        # quotable with no spread to capture. Mirrors
-        # scripts/filter_markets.py:462. When both sides block here,
+        # 5c from the edge, tightened 2026-08-28 to [0.20,0.80], widened
+        # 2026-10-09 to [0.15,0.85] per operator directive (#432): captures
+        # additional viable pairs while continuing to block settled books.
+        # Mirrors scripts/filter_markets.py:462. When both sides block here,
         # plan_orders() sees empty intents and cancels all OPEN orders for
         # this market — the safe path for a settled book (Polymarket also
         # cancels at settlement, but we don't wait for it).
@@ -347,8 +347,8 @@ def _decide_quotes_from_mid(
         # is a live market, not a settled one). The exemption is venue
         # evidence only -- unknown, stale, or clinched state keeps the band.
         series_exempt = live_series_with_games_remaining(series_state)
-        if (mid <= 0.20 or mid >= 0.80) and not series_exempt:
-            blocked.append(f"{side}: mid {mid:.3f} outside [0.20,0.80] -- decided market")
+        if (mid <= 0.15 or mid >= 0.85) and not series_exempt:
+            blocked.append(f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market")
             continue
 
         # INVENTORY SKEW. Push the heavy side away from mid and pull the light
@@ -646,9 +646,9 @@ def _decide_lifecycle_escalation(
     mid = mid_price(own_book.get("best_bid"), own_book.get("best_ask"))
     if mid is None:
         return [], f"{side}: no two-sided book"
-    if (mid <= 0.20 or mid >= 0.80) and not live_series_with_games_remaining(
+    if (mid <= 0.15 or mid >= 0.85) and not live_series_with_games_remaining(
             series_state):
-        return [], f"{side}: mid {mid:.3f} outside [0.20,0.80] -- decided market"
+        return [], f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market"
 
     blocked = risk.hard_block(
         cfg,

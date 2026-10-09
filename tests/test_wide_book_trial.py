@@ -144,7 +144,7 @@ def test_load_leaves_the_ceilings_alone_when_unset(mod, monkeypatch):
 
     assert cfg.wide_book_trial is None
     assert cfg.max_book_spread == 0.06
-    assert cfg.select_max_book_spread == 0.06
+    assert cfg.select_max_book_spread == 0.0205
     assert cfg.max_spread_from_mid == 0.045
 
 

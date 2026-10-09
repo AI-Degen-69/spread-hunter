@@ -1,22 +1,6 @@
-# Checklist — Issue #431
- 
-- [x] **Task 1: Core & Scoring Pinned Fetch Refactor**
-  - [x] Remove `require_rewards` from `scoring/markets.py:fetch_pinned_market`
-  - [x] Remove `require_rewards` from `core_brain/markets.py:fetch_pinned_market`
-  - [x] Clean up call-sites in `core_brain/audit.py`, `core_brain/markout.py`, `core_brain/order_manager.py`, `core_brain/trader_loop.py`
-  - [x] Run focused tests for Task 1
-- [x] **Task 2: Screener Filter & Funnel Snapshot Standardization**
-  - [x] Remove `MIN_PAYOUT` & `FLOOR_MULTIPLE` from `scripts/filter_markets.py`
-  - [x] Standardize `evaluate()` to `income > 0` for all sources
-  - [x] Export `"reward_min_income_usd_day": 0.0`
-  - [x] Update `--legacy-rewards` help text
-  - [x] Run focused tests for Task 2
-- [x] **Task 3: Dashboard Stage-7 Hero & Label Alignment**
-  - [x] Rename stage 7 in `dashboard/static/app.js` to `7. Horizon & Income Gate`
-  - [x] Update stage 7 hero parameter & single-rule value format
-  - [x] Update fallback to 0.0
-  - [x] Run dashboard tests
-- [x] **Task 4: Comprehensive Test Suite & Regression Verification**
-  - [x] Add real pinned-fetch HTTP-mocked unit tests in `tests/scoring/test_markets.py` & `tests/test_order_manager.py`
-  - [x] Update unit tests across `tests/test_single_buy_saver.py`, `tests/test_pre_start_gate.py`, `tests/test_pipeline_snapshot_gates.py`, `tests/test_unified_universe.py`, `tests/test_dashboard_server.py`, etc.
-  - [x] Run the full focused test suite batch
+# Task Checklist — #432
+
+- [x] Task 1: Update Mid-Price Band Gate to `[0.15, 0.85]` and Align Core Quoting/Filtering
+- [x] Task 2: Tighten Maximum Book Spread Gate to `0.0205` in Configs and Selector
+- [x] Task 3: Update Dashboard Telemetry Copy & Explainer HTML
+- [x] Task 4: Align Regression Test Suites for Selector, Universe, Snapshot & Trial Bars

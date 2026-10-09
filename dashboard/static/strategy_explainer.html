@@ -382,7 +382,7 @@
           <div class="time-tag">EVERY 10 MIN (600s)</div>
           <h4>🔍 Market Filter Loop</h4>
           <p>
-            <code>scripts/filter_loop.py</code> queries the venue, evaluates ~200 candidate markets for depth &gt; 200sh and spread &lt; 6¢, and writes survivors to <code>runtime/markets.json</code>.
+            <code>scripts/filter_loop.py</code> queries the venue, evaluates ~200 candidate markets for depth &gt; 200sh and spread &le; 2.05¢ (0.0205), and writes survivors to <code>runtime/markets.json</code>.
           </p>
         </div>
 
@@ -573,7 +573,7 @@
 
             subgraph L1["Loop 1: Market Universe Filter (Every 600s / 10 min)"]
                 API["Polymarket Venue API"] --> FL["scripts/filter_loop.py"]:::filterNode
-                FL -->|"Filters: 24h Vol, Depth>200sh, Spread<6c, Horizon<30d"| MKT["runtime/markets.json"]:::filterNode
+                FL -->|"Filters: 24h Vol, Depth>200sh, Spread≤2.05¢, Horizon<30d"| MKT["runtime/markets.json"]:::filterNode
             end
 
             subgraph L2["Loop 2: Execution & Quoting Rotation (Every 1.0s)"]

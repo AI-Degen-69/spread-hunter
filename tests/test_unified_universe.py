@@ -58,8 +58,8 @@ class _FakeSession:
             return _Resp(self.trades)
         self.book_calls += 1
         return _Resp({
-            "bids": [{"price": "0.48", "size": "5000"}],
-            "asks": [{"price": "0.52", "size": "5000"}],
+            "bids": [{"price": "0.49", "size": "5000"}],
+            "asks": [{"price": "0.51", "size": "5000"}],
         })
 
 
@@ -69,7 +69,7 @@ def _gamma_row(cid: str, vol: float, **over) -> dict:
         "question": f"Market {cid}",
         "slug": f"mkt-{cid}",
         "volume24hr": vol,
-        "spread": 0.04,
+        "spread": 0.02,
         "clobTokenIds": json.dumps([f"{cid}-yes", f"{cid}-no"]),
         "enableOrderBook": True,
         "acceptingOrders": True,
@@ -96,7 +96,7 @@ def _universe_candidate(cid: str) -> dict:
         "end_date_iso": (datetime.now(timezone.utc)
                          + timedelta(days=2)).isoformat(),
         "_order_min": 5,
-        "_spread": 0.04,
+        "_spread": 0.02,
         "_volume_24h": 250_000.0,
         "closed": False,
         "accepting_orders": True,
@@ -308,10 +308,10 @@ def test_an_eligible_row_carries_movement_and_book_stats():
     assert row["eligible"] is True
     assert row["source"] == "spread"
     assert row["movement_usd"] == pytest.approx(2000.0)
-    assert row["yes_spread"] == 0.04
-    assert row["no_spread"] == 0.04
-    assert row["yes_depth_usd"] == 2400.0
-    assert row["no_depth_usd"] == 2400.0
+    assert row["yes_spread"] == 0.02
+    assert row["no_spread"] == 0.02
+    assert row["yes_depth_usd"] == 2450.0
+    assert row["no_depth_usd"] == 2450.0
 
 
 class _ZeroScoreSession:
@@ -331,7 +331,7 @@ def test_a_zero_ours_score_is_retained_as_a_rejection_row():
     market["minimum_tick_size"] = 0.001
 
     row = evaluate(_ZeroScoreSession(), 5.0, market,
-                   volume_24h=250_000.0, source="spread")
+                   volume_24h=250_000.0, source="spread", max_spread=0.06)
 
     assert row["eligible"] is False
     assert row["reject_reason"] == (
@@ -341,9 +341,9 @@ def test_a_zero_ours_score_is_retained_as_a_rejection_row():
 
 
 def test_a_decided_mid_buckets_as_one_gate():
-    assert (fm._cause("YES: decided mid 0.85 outside [0.20, 0.80]")
+    assert (fm._cause("YES: decided mid 0.88 outside [0.15, 0.85]")
             == "YES decided mid")
-    assert (fm._cause("NO: decided mid 0.11 outside [0.20, 0.80]")
+    assert (fm._cause("NO: decided mid 0.11 outside [0.15, 0.85]")
             == "NO decided mid")
 
 
@@ -1157,3 +1157,62 @@ def test_evaluate_missing_end_date_falls_through_to_tradable():
     assert row["eligible"] is False
     assert row["reject_reason"] == "horizon unknown"
     assert fm._cause(row["reject_reason"]) == "horizon"
+
+
+def test_screening_spread_gate_boundary():
+    assert fm.MAX_BOOK_SPREAD == 0.0205
+
+    class _CustomBookSession(_FakeSession):
+        def __init__(self, bids, asks):
+            super().__init__([], trades=_TRADES)
+            self._bids = bids
+            self._asks = asks
+
+        def get(self, url, params=None, timeout=None):
+            if "trades" in url:
+                return _Resp(self.trades)
+            return _Resp({"bids": self._bids, "asks": self._asks})
+
+    # Books with 2c spread: admitted
+    m = _universe_candidate("0xok")
+    session_ok = _CustomBookSession([{"price": "0.49", "size": "5000"}], [{"price": "0.51", "size": "5000"}])
+    row = evaluate(session_ok, 5.0, m, volume_24h=250_000.0, source="spread")
+    assert row["eligible"] is True
+
+    # Books with 3c spread: rejected by spread gate
+    session_wide = _CustomBookSession([{"price": "0.485", "size": "5000"}], [{"price": "0.515", "size": "5000"}])
+    row_wide = evaluate(session_wide, 5.0, m, volume_24h=250_000.0, source="spread")
+    assert row_wide["eligible"] is False
+    assert "spread 0.0300 > 0.0205" in row_wide["reject_reason"]
+
+
+def test_screening_mid_price_band_boundary():
+    class _MidBookSession(_FakeSession):
+        def __init__(self, yes_mid, no_mid):
+            super().__init__([], trades=_TRADES)
+            self._yes_mid = yes_mid
+            self._no_mid = no_mid
+
+        def get(self, url, params=None, timeout=None):
+            if "trades" in url:
+                return _Resp(self.trades)
+            mid = self._yes_mid if params and "yes" in str(params.get("token_id", "")) else self._no_mid
+            return _Resp({
+                "bids": [{"price": f"{mid - 0.01:.4f}", "size": "5000"}],
+                "asks": [{"price": f"{mid + 0.01:.4f}", "size": "5000"}],
+            })
+
+    m = _universe_candidate("0xmid")
+
+    # Mids 0.17 and 0.83 (inside [0.15, 0.85]): admitted
+    session_in = _MidBookSession(0.17, 0.83)
+    row_in = evaluate(session_in, 5.0, m, volume_24h=250_000.0, source="spread")
+    assert row_in["eligible"] is True
+
+    # Mids 0.14 and 0.86 (outside [0.15, 0.85]): rejected as decided mid
+    session_out = _MidBookSession(0.14, 0.86)
+    row_out = evaluate(session_out, 5.0, m, volume_24h=250_000.0, source="spread")
+    assert row_out["eligible"] is False
+    assert "decided mid" in row_out["reject_reason"]
+    assert "outside [0.15, 0.85]" in row_out["reject_reason"]
+
