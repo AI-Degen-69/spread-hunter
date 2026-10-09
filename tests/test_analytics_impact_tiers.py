@@ -41,6 +41,7 @@ def styles_css() -> str:
 TIER_BY_CARD = {
     "card-pnl-ci": "1",
     "card-execution-funnel": "1",
+    "card-sample-sufficiency": "1",
     "card-position-returns-dist": "1",
     "card-markout": "1",
     "card-hist-kde": "2",

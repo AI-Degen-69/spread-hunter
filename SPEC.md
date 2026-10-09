@@ -1,86 +1,33 @@
-# SPEC — #427: Open positions show live market value and unrealized P&L
+# SPEC — #443: Sample size sufficiency per confidence level on dashboard
 
-Scope note: this file covers issue #427 only
-(branch `i427/realtime-position-value-updates`).
-It supersedes the #422 spec (done work). Deleted or superseded when the
-next Standard/Large issue writes its own.
-
-## Problem (operator words)
-
-Dashboard open positions show stale cost basis and shares instead of current
-market value and unrealized P&L — values only refresh on the 2-second poll
-while prices move sub-second.
-
-## Goals
-
-1. Open positions show current market value and unrealized P&L updating in
-   real-time as prices move (sub-second during active markets).
-2. Delivery reuses the existing `/api/cycle-stream` SSE connection as named
-   `mark` events — no new endpoint, ticker unchanged, no table rebuilds.
-3. A `sim` source lets the operator watch it live with zero trading actions.
-
-## Non-goals
-
-Historical/closed data, order management, account-level metrics, chart-wide
-rework. Matched pairs stay at $1; finished markets stay excluded.
-
----
-
-# SPEC — #422: Every shadow rehearsal starts at a fixed $100 bankroll
-
-Scope note: this file covers issue #422 only
-(branch `i422/shadowrun-every-rehearsal-starts-at-a-fixed-bankro`).
-It supersedes the #419 spec (done work). Deleted or superseded when the
-next Standard/Large issue writes its own.
+Scope note: this file covers issue #443 only
+(branch `i443/sample-size-sufficiency-per-confidence-level`).
+It supersedes the #427 spec (done work).
 
 ## Problem (operator words)
 
-The same rehearsal command rehearses at a different bankroll one day to the
-next. An ordinary shadow run reads the LIVE wallet balance through the funder
-address and only falls back to the config bankroll when that read fails — so
-every risk cap (order 25%, naked 6%, ceiling 90%) silently moves with the
-wallet, and two runs can never be compared.
+Strategy analytics displays PnL expectancy and confidence intervals, but the dashboard never surfaces how many closed trades are needed to reach statistical confidence at each confidence level (95%, 98%, 99%). Operators cannot tell whether the expectancy readout rests on enough observations or how many more closed trades are needed.
 
 ## Goals
 
-1. Every shadow rehearsal starts from a fixed $100 bankroll by default —
-   `bankroll_usd = 100.0` in `core_brain/config.py:41` stays the source of truth.
-2. An explicit override (`--starting-bankroll-usd` or `SPREAD_HUNTER_BANKROLL`)
-   still sets a different bankroll for experiments.
-3. Paired arms use the same mechanism, not a second copy of it
-   (unify, don't fork; old `--paired-starting-bankroll-usd` keeps working).
+1. Pure calculation helper `required_sample_size_for_mean(std_dev, target_margin, z)` computes `ceil(((z * std_dev) / target_margin) ** 2)`. Returns 0 for non-positive or non-finite inputs.
+2. Extend `/api/kpi` (`trade_analytics.sample_size_sufficiency`) with current N, sample standard deviation, target margin of error ($0.02 USD per close default), and a 3-row evaluation for 95%, 98%, and 99% two-tailed confidence.
+3. Add a "Sample Size & Confidence Level Sufficiency" card to the Tier 1 decision row in the dashboard (`dashboard/static/index.html`, `app.js`, `styles.css`) with progress bars, showing "unmeasured" and clean guidance when N < 2 or when sample spread is 0.
+4. Version synchronization: bump `KPI_PAYLOAD_VERSION` and `EXPECTED_PAYLOAD_VERSION` from 253 to 254.
 
-## Acceptance criteria (from the issue)
+## Acceptance Criteria
 
-- [x] A shadow run with a live balance far from $100 still rehearses caps
-      computed from $100 (order cap $25, naked $6, ceiling $90)
-- [x] An explicit override flag still sets a different bankroll when passed
-- [x] Focused shadow-run tests pass unchanged in meaning
-      (update only pins that assumed the live read)
+- [ ] Helper `required_sample_size_for_mean(std_dev, target_margin, z)` implements `ceil(((z * std) / E)^2)`, returns 0 for non-positive/non-finite inputs, and matches Z-values (1.95996, 2.32635, 2.57583) at E = 0.02.
+- [ ] `/api/kpi` payload carries `trade_analytics.sample_size_sufficiency` with `current_n`, `std_dev_usd`, `target_margin_usd`, and `levels` (95, 98, 99) with `confidence_pct`, `z`, `required_n`, `remaining_n`, `progress_pct`.
+- [ ] When N < 2 or spread is zero, `std_dev_usd` and row calculated metrics are `null`, avoiding false sufficiency.
+- [ ] Dashboard card inside Tier 1 row (`#tier1-decision-row`) renders rows, progress bars, and informative text for N < 2 or zero spread without `undefined` or `NaN`.
+- [ ] `KPI_PAYLOAD_VERSION` and `EXPECTED_PAYLOAD_VERSION` bumped to 254.
+- [ ] Tests pass in `tests/test_kpi.py`, `tests/test_analytics_api.py`, `tests/test_analytics_surface_mount.py`, `tests/test_analytics_impact_tiers.py`, and `tests/test_negative_values_read_as_losses.py`.
 
-## Edge cases
+## Explicit Out of Scope
 
-- Precedence, ordinary run: explicit flag → env (`SPREAD_HUNTER_BANKROLL` /
-  `HUNTER_BANKROLL` via `config.load()`) → config default $100.
-- Precedence, paired run: explicit flag → $100 default (today's preregistered
-  behavior; paired arms ignore the env, unchanged).
-- `starting_bankroll_usd` of NaN or infinity raises `ValueError` matching
-  "bankroll" (`math.isfinite` check; today's `<= 0` misses them).
-- `funder` keyword stays for compatibility (`statistical_validation_run/run.py`
-  passes it) but no longer sets the shadow bankroll.
-- Callers that pass `cfg` keep using that `cfg` as-is (ladder scripts,
-  statistical validation).
-- A reused shadow store with old account marks can still move the sizing base
-  after startup — out of scope, runs already require a fresh store.
-
-## Explicit out of scope
-
-- Live trading and the cap math itself (`derive_dynamic_caps`,
-  `trader_loop._fleet_state`: untouched).
-- `core_brain/config.py` bankroll default, env parsing, and bounds: untouched.
-- `statistical_validation_run/run.py` (reads its own live balance at
-  `run.py:364-368`, passes its own `cfg`): separate ticket, untouched.
-- `scripts/shadow_tournament.py` (launches the CLI as a subprocess):
-  no edit needed; old paired flag name keeps working as an alias.
-- `docs/runs/2026-09-28-paired-depth-pilot.md`: its
-  `--paired-starting-bankroll-usd 100` commands keep working, untouched.
+- Changing gating or live quoting decisions.
+- Adding new HTTP routes or endpoints.
+- Modifying `evaluate_stat_gate`, `power_table`, or existing 90% CI gate logic.
+- Adding new configuration settings to `core_brain/config.py`.
+- Restyling other cards or modifying other tiers.

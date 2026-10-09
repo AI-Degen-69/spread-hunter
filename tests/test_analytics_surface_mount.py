@@ -170,3 +170,59 @@ def test_no_analytics_sub_view_hides_the_go_no_go_row(view):
     # otherwise pass this test on a filter that never ran at all.
     assert not [e for e in out["errors"] if e.startswith("filter ")]
     assert out["tier1_visibility"][view] != "none"
+
+
+# -- Sample size sufficiency rendering (#443) --------------------------------
+
+def test_sample_sufficiency_renders_three_levels():
+    payload = {
+        "current_n": 4,
+        "std_dev_usd": 0.11547,
+        "target_margin_usd": 0.02,
+        "levels": [
+            {"confidence_pct": 95, "z": 1.95996, "required_n": 129, "remaining_n": 125, "progress_pct": 3},
+            {"confidence_pct": 98, "z": 2.32635, "required_n": 181, "remaining_n": 177, "progress_pct": 2},
+            {"confidence_pct": 99, "z": 2.57583, "required_n": 222, "remaining_n": 218, "progress_pct": 2},
+        ],
+    }
+    kpi = {"trade_analytics": {"sample_size_sufficiency": payload}}
+    out = _mount(kpi)
+    assert not out["errors"]
+    html = out["sample_sufficiency_html"]
+    assert "95%" in html and "98%" in html and "99%" in html
+    assert "129" in html and "181" in html and "222" in html
+    assert "125" in html and "177" in html and "218" in html
+    assert "dist-progress-bar" in html
+    assert "dist-progress-fill" in html
+
+
+def test_sample_sufficiency_n_zero_has_no_undefined():
+    payload = {
+        "current_n": 0,
+        "std_dev_usd": None,
+        "target_margin_usd": 0.02,
+        "levels": [
+            {"confidence_pct": 95, "z": 1.95996, "required_n": None, "remaining_n": None, "progress_pct": None},
+            {"confidence_pct": 98, "z": 2.32635, "required_n": None, "remaining_n": None, "progress_pct": None},
+            {"confidence_pct": 99, "z": 2.57583, "required_n": None, "remaining_n": None, "progress_pct": None},
+        ],
+    }
+    kpi = {"trade_analytics": {"sample_size_sufficiency": payload}}
+    out = _mount(kpi)
+    assert not out["errors"]
+    html = out["sample_sufficiency_html"]
+    assert "unmeasured" in html
+    assert "undefined" not in html
+    assert "NaN" not in html
+    assert "At least two closed trades are needed" in html
+
+
+def test_sample_sufficiency_missing_object_mounts():
+    for kpi in ({"trade_analytics": {}}, {}):
+        out = _mount(kpi)
+        assert not out["errors"]
+        html = out["sample_sufficiency_html"]
+        assert "undefined" not in html
+        assert "NaN" not in html
+        assert "unmeasured" in html
+
