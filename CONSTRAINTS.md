@@ -1,3 +1,40 @@
+# CONSTRAINTS — #433 (locked by Station II, enforced through Station V)
+
+Governs the `i433` branch only; #432 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_research_market_metrics.py`
+  `tests/test_live_events_probe.py`
+  `tests/scoring/test_markets.py`
+  `tests/test_market_selection_bars.py`
+  `tests/test_data_retention.py`
+  `tests/test_report_destination_is_root_anchored.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
+
+## Read-only Research Scope & Isolation
+
+- Standalone telemetry script: `scripts/research_market_metrics.py` only collects empirical distributions.
+- Zero venue state alteration: no orders, no cancellations, no writes to `data/orders.db` or `runtime/`.
+- Zero changes to production screening thresholds, gates, or order managers (`core_brain/config.py`, `scoring/config.py`, `core_brain/quotes.py`, `scripts/filter_markets.py` remain untouched).
+- Reuses existing domain helpers without side effects: `scoring.selector.top_depth_usd`, `scoring.markets.full_book`, `scripts.live_events_probe._event_list`.
+
+## Stores are evidence, not scratch
+
+- `data/orders.db` is the production registry: read it, never rewrite it.
+- No schema migration; tests use temporary state or fakes.
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit operator approval (`requests` is standard).
+- Tests stay isolated from the real network (stub HTTP with `_FakeResponse` / `_FakeSession`).
+
+---
+
 # CONSTRAINTS — #432 (locked by Station II, enforced through Station V)
 
 Governs the `i432` branch only; #431 constraints below stay as history.

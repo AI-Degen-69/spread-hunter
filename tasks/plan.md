@@ -1,108 +1,74 @@
-# Implementation Plan — #432: Update Screener Price Band to [0.15, 0.85] and Tighten Max Spread to 2c
+# Implementation Plan — #433: Build Market Metrics Telemetry Script for Volume, Notional, and Depth
 
-Branch: i432/update-screener-price-band-to-015-085-and-tighten | Issue: #432
+Branch: i433/build-market-metrics-telemetry-script | Issue: #433
 
 ## Intake & CodeRabbit Synthesis
 - **Adopted from CodeRabbit:**
-  - Update mid-price band to `[0.15, 0.85]` across quoting (`core_brain/quotes.py`) and screening (`scripts/filter_markets.py`) with refusal strings matching `outside [0.15, 0.85]`.
-  - Update `select_max_book_spread` to `0.0205` in `core_brain/config.py`, `scoring/config.py`, `scoring/selector.py` (`book_allowed`, `pair_books_allowed`), and `scripts/filter_markets.py`.
-  - Floating point residue guard: round computed spread to 6 decimal places before `spread > max_spread` in `scoring/selector.py:book_allowed` to prevent IEEE-754 false rejections (e.g. `0.5105 - 0.49`).
-  - Formatting `spread <= {spread_bar:.4f}` in `scripts/filter_markets.py` console print.
-  - Updating dashboard telemetry fallback in `dashboard/static/app.js` and explainer copy in `dashboard/static/strategy_explainer.html`.
-  - Specific test adjustments: moving test mids in `tests/test_live_event_discovery.py` to `0.88/0.12`, updating `tests/test_trader_loop.py`, `tests/test_unified_universe.py` fixtures (`0.49/0.51`), and `tests/test_wide_book_trial.py`.
+  - Standalone read-only module in `scripts/research_market_metrics.py` with CLI module execution support.
+  - Import reuse: `full_book` from `scoring.markets`, `top_depth_usd` from `scoring.selector`, `_event_list` from `scripts.live_events_probe`, `LIVE_ROOT` from `core_brain.config`.
+  - Venue constants: `GAMMA_PAGE_SIZE = 100`, `GAMMA_MAX_PAGES = 5`, `TRADE_PAGE_LIMIT = 500`, `TRADE_MAX_PAGES = 10`, `WINDOW_SECONDS = 1800`, `DEFAULT_SAMPLE_SIZE = 50`, `MAX_SAMPLE_SIZE = 100`.
+  - Paging active markets from Gamma until cap or short page.
+  - Measure 24h volume from market payload (`volume24hr` or `volume_24h`).
+  - Outcome depth: measure both token depths via `full_book` and `top_depth_usd(bids)`; report min across outcomes as `top3_bid_depth`.
+  - Traded notional: query Data API `/trades`, deduplicate by `(transactionHash, asset, timestamp, price, size)`, sum `price * size` in `[now - 1800, now]`.
+  - Statistical summaries: `count`, `min`, `p25`, `median`, `p75`, `max`, `mean` via `nearest_rank` (`ceil(fraction * n) - 1`).
+  - Terminal table formatting and optional JSON report export to `reports/market_metrics_statistics_report_<timestamp>.json` on `--save` or `--output`.
+  - Dedicated offline unit tests in `tests/test_research_market_metrics.py` with mock HTTP sessions.
 - **Rejected from CodeRabbit:**
-  - Over-splitting into separate sub-phases and speculative test fixtures with mock frameworks. Consolidated into 4 clear vertical slices.
-- **Unverified items:** None. All line numbers, code symbols, and test expectations verified against live codebase.
+  - Over-splitting into 5 micro-tasks; consolidated into 3 vertical slices.
+- **Unverified items:** None. All cited imports, signatures, and API structures verified against repository code.
 
 ## Goal & Acceptance Criteria
-- Markets with mid prices in `[0.15, 0.85]` (e.g. `0.17` or `0.83`) pass the price band gate.
-- Markets with order book spreads exceeding `0.0205` (e.g. `0.03`) are refused by the spread gate with `spread {spread:.4f} > {max_spread:.4f}`.
-- Refusal messages consistently state `outside [0.15, 0.85]` for decided market/mid rejections.
-- Zero regressions across targeted test suites.
+- Running `python -m scripts.research_market_metrics --sample-size 50` fetches live active markets and prints a statistical distribution table to stdout.
+- Key metrics captured per market: `volume_24h`, `recent_traded_notional_30m`, and `top3_bid_depth`.
+- Running with `--save` writes a structured JSON report to `reports/market_metrics_statistics_report_<UTC>.json`.
+- Script is completely read-only and standalone (zero live trading calls, no writes to `data/orders.db`).
+- Comprehensive unit test suite in `tests/test_research_market_metrics.py` passes without network dependencies.
 
 ## Improvement Proposal (Evidence-based)
-- **Evidence:** `scoring/selector.py:204` calculates `spread = best_ask - best_bid` and checks `spread > max_spread`. With `max_spread = 0.0205`, `0.5105 - 0.49` evaluates to `0.020500000000000018`, failing the gate strictly due to IEEE-754 precision.
-- **Classification:** Simplification / edge-case hardening (adopted by default).
-- **Resolution:** In `scoring/selector.py:book_allowed`, round calculated spread to 6 decimal places (`round(best_ask - best_bid, 6)`) before comparing against `max_spread`.
+- **Evidence:** High-activity markets may produce >500 trades within 30 minutes. In `scoring/markets.py:recent_trades`, only a single unpaginated request of `limit=500` is performed.
+- **Classification:** Edge-case hardening (adopted by default).
+- **Resolution:** `fetch_window_trades` will paginate trades up to a bounded cap (`TRADE_MAX_PAGES = 10`), stopping as soon as trades pass the 30m cutoff or return a short page. It returns a tuple `(trades, window_complete: bool)`. If the cap is reached before the 30m cutoff, `window_complete=False` is flagged and reported in telemetry so incomplete windows are visible rather than silently undercounting notional.
 
 ---
 
 ## Task Breakdown
 
-### Task 1: Update Mid-Price Band Gate to `[0.15, 0.85]` and Align Core Quoting/Filtering [x]
-- **Size:** M
-- **Domain Tag:** `[Backend/Logic]`
-- **Helper Skill:** `test-driven-development`
+### Task 1: Core Sampling & Metric Measurement Logic [Core/Logic] [Size: M] [x]
+- **Target files:** `scripts/research_market_metrics.py`, `tests/test_research_market_metrics.py`
 - **Depends on:** None
-- **Target Files:**
-  - `core_brain/quotes.py`
-  - `scripts/filter_markets.py`
-  - `tests/test_live_quotes.py`
-  - `tests/test_trader_loop.py`
-  - `tests/test_live_event_discovery.py`
-  - `tests/test_unified_universe.py`
-- **Details:**
-  - In `core_brain/quotes.py` (lines 350-351, 649-651), change `(mid <= 0.20 or mid >= 0.80)` to `(mid <= 0.15 or mid >= 0.85)` and refusal message to `f"{side}: mid {mid:.3f} outside [0.15,0.85] -- decided market"`.
-  - In `scripts/filter_markets.py` (lines 1655, 1667), change `0.20 < mid < 0.80` to `0.15 < mid < 0.85` and rejection reason to `f"{side}: decided mid {mid:.2f} outside [0.15, 0.85]"`.
-  - Update comments in `filter_markets.py` referencing the mid gate band.
-  - Update test assertions in `tests/test_live_quotes.py`, `tests/test_trader_loop.py`, `tests/test_unified_universe.py`, and `tests/test_live_event_discovery.py` (moving test mid to `0.88/0.12`).
-  - Add test cases proving that mid `0.17` and `0.83` are admitted while `0.14` and `0.86` are refused.
-- **Verification:**
-  - `python -m pytest -q tests/test_live_quotes.py tests/test_trader_loop.py tests/test_live_event_discovery.py tests/test_unified_universe.py`
+- **What is built:**
+  - `active_markets(session, limit_per_page=100, max_pages=5)`: queries `https://gamma-api.polymarket.com/markets` with `active=true&closed=false`, paginates by offset, unwraps via `_event_list`.
+  - `parse_binary_tokens(market)`: validates binary outcomes and extracts YES/NO token IDs.
+  - `sample_markets(markets, size=50, seed=None)`: seeded random sample of usable markets.
+  - `measure_market_volume(market)`: extracts float 24h volume.
+  - `measure_outcome_depth(clob_host, token_id, session=None)`: fetches book and calculates `top_depth_usd(bids)`. Captures both tokens and calculates `top3_bid_depth = min(depth_yes, depth_no)` when both present.
+  - `fetch_window_trades(session, condition_id, now, window_seconds=1800, max_pages=10)`: paginates trades from `https://data-api.polymarket.com/trades?market=...&takerOnly=true`, checks cutoff, returns trades and `window_complete`.
+  - `notional_in_window(trades, cutoff)`: deduplicates trades by `(transactionHash, asset, timestamp, price, size)` and computes total notional.
+  - Unit tests in `tests/test_research_market_metrics.py` with `_FakeResponse` and `_FakeSession` verifying all data extraction functions.
+- **Verification:** `python -m pytest -q tests/test_research_market_metrics.py -k "test_data or test_sample or test_depth or test_trade"`
 
-### Task 2: Tighten Maximum Book Spread Gate to `0.0205` in Configs and Selector [x]
-- **Size:** M
-- **Domain Tag:** `[Backend/Logic]`
-- **Helper Skill:** `test-driven-development`
+### Task 2: Statistical Summaries, Table Formatting & JSON Reporting [Core/Logic] [Size: S] [x]
+- **Target files:** `scripts/research_market_metrics.py`, `tests/test_research_market_metrics.py`
 - **Depends on:** Task 1
-- **Target Files:**
-  - `core_brain/config.py`
-  - `scoring/config.py`
-  - `scoring/selector.py`
-  - `scripts/filter_markets.py`
-- **Details:**
-  - In `core_brain/config.py` line 544 and `scoring/config.py` line 519, set `select_max_book_spread: float = 0.0205`. Update comment to explain 2.05 cents in price units.
-  - In `scoring/selector.py` (lines 180, 216), set default `max_spread: float = 0.0205` in `book_allowed` and `pair_books_allowed`.
-  - In `scoring/selector.py:book_allowed`, round `spread = round(best_ask - best_bid, 6)`.
-  - In `scripts/filter_markets.py` line 3368, update print format to `spread <= {spread_bar:.4f}`.
-- **Verification:**
-  - Unit tests asserting `select_max_book_spread == 0.0205` and boundary spread gating (`0.0205` passes, `0.0206` fails).
+- **What is built:**
+  - `nearest_rank(values, fraction)`: computes percentile rank using `ceil(fraction * n) - 1`.
+  - `summarize_metric(values)`: computes `count`, `min`, `p25`, `median`, `p75`, `max`, `mean` using `statistics.fmean`, skipping `None` and tracking missing count.
+  - `format_table(summaries, sample_size, pool_size, seed, error_count, incomplete_windows)`: formats aligned ASCII terminal table with footer metadata.
+  - `build_report(summaries, market_records, seed, sample_size, pool_size)`: generates serializable JSON report dict with metadata, summaries, and individual market records.
+  - Unit tests verifying percentile calculations (edge cases: empty, 1 item, 1..10 values, mixed None) and table rendering.
+- **Verification:** `python -m pytest -q tests/test_research_market_metrics.py -k "test_stat or test_table or test_report"`
 
-### Task 3: Update Dashboard Telemetry Copy & Explainer HTML [x]
-- **Size:** S
-- **Domain Tag:** `[Design/UI]`
-- **Helper Skill:** `frontend-ui-engineering`
-- **Depends on:** Task 2
-- **Target Files:**
-  - `dashboard/static/app.js`
-  - `dashboard/static/strategy_explainer.html`
-- **Details:**
-  - In `dashboard/static/app.js`: update line 5768 `spreadGate` fallback from `0.06` to `0.0205`; update line 5785 mid value from `'Binary · Mid [0.20, 0.80]'` to `'Binary · Mid [0.15, 0.85]'`.
-  - In `dashboard/static/strategy_explainer.html`: update line 385 from `spread < 6¢` to `spread ≤ 2.05¢ (0.0205)`; update line 576 diagram text from `Spread<6c` to `Spread≤2.05¢`.
-- **Verification:**
-  - Inspection of string rendering in `dashboard/static/app.js` and `dashboard/static/strategy_explainer.html`.
-
-### Task 4: Align Regression Test Suites for Selector, Universe, Snapshot & Trial Bars [x]
-- **Size:** M
-- **Domain Tag:** `[Backend/Logic]`
-- **Helper Skill:** `test-driven-development`
-- **Depends on:** Task 2, Task 3
-- **Target Files:**
-  - `tests/test_market_selection_bars.py`
-  - `tests/test_wide_book_trial.py`
-  - `tests/test_unified_universe.py`
-  - `tests/test_pipeline_snapshot_gates.py`
-- **Details:**
-  - In `tests/test_market_selection_bars.py`: add tests for default `select_max_book_spread == 0.0205` and boundary checks for `book_allowed` with `0.49/0.5105` (passes) vs `0.4794/0.5000` (fails).
-  - In `tests/test_wide_book_trial.py`: update `cfg.select_max_book_spread == 0.0205` in `test_load_leaves_the_ceilings_alone_when_unset`.
-  - In `tests/test_unified_universe.py`: update mock book fixtures in `_FakeSession` from `0.48/0.52` to `0.49/0.51` (spread 0.02), update candidate `_spread` to `0.02`, pass explicit `max_spread=0.06` to `test_a_zero_ours_score_is_retained_as_a_rejection_row` (`_ZeroScoreSession` has spread 0.05).
-  - Add tests in `tests/test_unified_universe.py` asserting `fm.MAX_BOOK_SPREAD == 0.0205` and rejection of spread `0.0300 > 0.0205`.
-- **Verification:**
-  - `python -m pytest -q tests/test_live_quotes.py tests/test_trader_loop.py tests/test_unified_universe.py tests/test_wide_book_trial.py tests/test_live_event_discovery.py tests/test_market_selection_bars.py tests/test_pipeline_snapshot_gates.py`
-
----
-
-## Checkpoints
-- **Checkpoint 1 (after Task 1):** Price band gate tests passing with new `[0.15, 0.85]` boundaries in quoting and filter_markets.
-- **Checkpoint 2 (after Task 2 & 3):** Max book spread threshold `0.0205` and dashboard telemetry copy updated and consistent.
-- **Checkpoint 3 (after Task 4):** All 7 targeted regression suites passing cleanly.
+### Task 3: CLI Interface, File Output & Regression Gate [Core/Logic] [Size: S] [x]
+- **Target files:** `scripts/research_market_metrics.py`, `tests/test_research_market_metrics.py`
+- **Depends on:** Task 1, Task 2
+- **What is built:**
+  - `main(argv=None)`: CLI arguments parsing:
+    - `--sample-size`: integer 1..100 (default 50, error if <1 or >100 with exit code 2).
+    - `--seed`: optional integer seed (generates random seed if omitted and prints it).
+    - `--save`: writes report to `reports/market_metrics_statistics_report_<YYYYMMDD_HHMMSS>.json`.
+    - `--output`: custom report destination path.
+  - Handles errors gracefully: venue unreachable (exit 1), unreadable market list (exit 1).
+  - Preserves UTF-8 encoding, indented JSON, trailing newline on saved files.
+  - Unit tests covering CLI execution, arguments validation, report writing, and error cases.
+- **Verification:** Focused test suite `python -m pytest -q tests/test_research_market_metrics.py` and regression test suites.
