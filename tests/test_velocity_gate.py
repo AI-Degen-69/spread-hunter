@@ -14,18 +14,25 @@ WINDOW = 1800.0  # 30m
 
 
 class _TapeSession:
-    """A session that answers the trades endpoint with a canned payload."""
+    """A session that answers the trades endpoint and book endpoints with canned payloads."""
 
-    def __init__(self, payload, boom: bool = False):
+    def __init__(self, payload, boom: bool = False, book_payload: dict | None = None):
         self.payload = payload
         self.boom = boom
+        self.book_payload = book_payload or {
+            "bids": [{"price": "0.49", "size": "5000"}, {"price": "0.48", "size": "5000"}],
+            "asks": [{"price": "0.51", "size": "5000"}, {"price": "0.52", "size": "5000"}],
+        }
         self.calls = 0
 
     def get(self, url, params=None, timeout=None):
         self.calls += 1
         if self.boom:
             raise OSError("tape unreachable")
-        payload = self.payload
+        if "trades" in url:
+            payload = self.payload
+        else:
+            payload = self.book_payload
 
         class _Resp:
             def json(self_inner):
@@ -50,9 +57,14 @@ def test_tape_movement_and_range_counts_trades_and_calculates_range():
     stats = tape_movement_and_range(session, "0xmarket", window_sec=WINDOW, now_ts=NOW)
 
     assert stats["trade_count"] == 3
-    assert stats["last_trade_sec_ago"] == 60.0
-    # Range: 0.53 - 0.50 = 0.03 -> 3.0 cents
-    assert stats["range_cents"] == 3.0
+    # With default range_window_sec=7200s, the trade at NOW-4000 (0.40) is within 2h lookback:
+    # 0.53 - 0.40 = 0.13 -> 13.0 cents.
+    assert stats["range_cents"] == 13.0
+    # If range_window_sec is explicitly 1800s (30m):
+    stats_30m = tape_movement_and_range(
+        session, "0xmarket", window_sec=WINDOW, now_ts=NOW, range_window_sec=WINDOW
+    )
+    assert stats_30m["range_cents"] == 3.0
     # Notional: 0.50*100 + 0.53*50 + 0.51*80 = 50 + 26.5 + 40.8 = 117.3
     assert stats["movement_usd"] == 117.3
 
@@ -118,9 +130,9 @@ def test_velocity_gate_reject_stale_tape():
 
 def test_velocity_gate_reject_flat_range():
     stats = {"movement_usd": 100.0, "trade_count": 10, "last_trade_sec_ago": 60.0, "range_cents": 0.0}
-    rejected, reason = velocity_gate_reject(stats, min_trades=8, max_last_trade_sec=300.0, min_range_cents=0.01, enabled=True)
+    rejected, reason = velocity_gate_reject(stats, min_trades=8, max_last_trade_sec=300.0, min_range_cents=0.01, enabled=True, range_window_sec=1800.0)
     assert rejected
-    assert "flat range: price range 0.00c in last 30m < 0.01c" in reason
+    assert "flat market: price swing 0.00c in last 30m < 0.01c" in reason
 
 
 def test_velocity_gate_passes_active_oscillating_tape():
@@ -138,40 +150,40 @@ def test_velocity_gate_fail_open_on_unmeasured_tape():
 
 
 def test_normal_sports_swing_passes_the_widened_range_bar():
-    # #416 — a 6c range over a live 30m tape is ordinary play, not flat.
+    # 6c range over a live tape is ordinary play, not flat.
     stats = {"movement_usd": 275.0, "trade_count": 12,
              "last_trade_sec_ago": 45.0, "range_cents": 6.0}
     rejected, reason = velocity_gate_reject(
-        stats, min_trades=0, max_last_trade_sec=None, min_range_cents=1.0,
+        stats, min_trades=0, max_last_trade_sec=None, min_range_cents=2.0,
         enabled=True)
     assert not rejected
     assert reason == ""
 
 
 def test_sub_cent_drift_is_still_refused_at_the_widened_bar():
-    # The widening is not a removal: half-a-cent drift is still flat.
+    # The bar refuses flat drift below 2.0c (e.g. 0.5c).
     stats = {"movement_usd": 275.0, "trade_count": 12,
              "last_trade_sec_ago": 45.0, "range_cents": 0.5}
     rejected, reason = velocity_gate_reject(
-        stats, min_trades=0, max_last_trade_sec=None, min_range_cents=1.0,
+        stats, min_trades=0, max_last_trade_sec=None, min_range_cents=2.0,
         enabled=True)
     assert rejected
-    assert "flat range" in reason
+    assert "flat market" in reason
+    assert "price swing 0.50c in last 2h < 2.00c" in reason
 
 
 def test_evaluate_admits_a_normal_swing_at_production_bars():
-    # End to end with the production velocity bars, read from the module
-    # rather than a literal: a tape swinging 1.5c on real notional is admitted
-    # at the shipped 1.0c bar. The band matters -- a 1.5c range sits ABOVE the
-    # shipped bar and BELOW the former 2.0c one, so this test fails if the
-    # default ever climbs back to 2.0c, which a 6c tape would have hidden.
+    # End to end with the production velocity bars: a tape swinging 2.5c on real notional is admitted
     import time as _time
 
     from scripts import filter_markets as fm
 
+    from datetime import datetime, timedelta, timezone
+
     t_now = _time.time()
+    # 3.0c swing between min (0.50) and max (0.53) with > $200 volume
     session = _TapeSession(
-        [_trade(t_now - 60 - 60 * i, 0.52 + 0.0025 * (i % 7), 50.0)
+        [_trade(t_now - 60 - 60 * i, 0.50 + 0.005 * (i % 7), 50.0)
          for i in range(10)]
     )
     m = {
@@ -180,25 +192,30 @@ def test_evaluate_admits_a_normal_swing_at_production_bars():
         "tokens": [{"token_id": "1"}, {"token_id": "2"}],
         "rewards": {"max_spread": 3.5, "min_size": 50},
         "closed": False,
+        "accepting_orders": True,
         "acceptingOrders": True,
+        "minimum_tick_size": 0.01,
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
     }
     row = evaluate(
         session, rate=10.0, m=m, source="spread",
+        volume_24h=250_000.0,
         min_trades=0, max_last_trade_sec=None,
         min_range_cents=fm.MIN_RANGE_CENTS,
         velocity_gate_enabled=True,
     )
+    assert row.get("eligible") is True
+    assert "flat market" not in row.get("reject_reason", "")
     assert "flat range" not in row.get("reject_reason", "")
 
 
 def test_shipped_production_bars_are_the_widened_ones():
-    # #416 pins the widened defaults: $200/30m movement (was $500) and
-    # 1.0c range (was 2.0c), gate still enabled. Fails if anyone moves the
-    # bars without updating the documented rationale.
+    # #416, #434 pins the production defaults: $200/30m movement, 2.0c/2h range swing, gate enabled.
     from scripts import filter_markets as fm
 
     assert fm.MIN_MOVEMENT_USD == 200.0
-    assert fm.MIN_RANGE_CENTS == 1.0
+    assert fm.MIN_RANGE_CENTS == 2.0
+    assert fm.VOLATILITY_WINDOW_SEC == 7200.0
     assert fm.VELOCITY_GATE_ENABLED is True
 
 
@@ -226,7 +243,7 @@ def test_evaluate_integrates_velocity_gate_rejection():
         velocity_gate_enabled=True,
     )
     assert not row_rej["eligible"]
-    assert "flat range" in row_rej["reject_reason"]
+    assert "flat market" in row_rej["reject_reason"]
     assert row_rej["range_cents"] == 0.0
 
     # Disabled gate does not reject on flat range
@@ -236,5 +253,108 @@ def test_evaluate_integrates_velocity_gate_rejection():
         velocity_gate_enabled=False,
     )
     # Book fetch fails because mock doesn't answer CLOB book, but reject_reason won't be flat range
-    assert "flat range" not in row_pass.get("reject_reason", "")
+    assert "flat market" not in row_pass.get("reject_reason", "")
+
+
+def test_is_sports_or_esports():
+    from scoring.selector import is_sports_or_esports
+
+    # Explicit sports_market_type
+    assert is_sports_or_esports(sports_market_type="moneyline")
+    # Series title / league regex
+    assert is_sports_or_esports(series_title="ATP Wimbledon 2026")
+    assert is_sports_or_esports(title="Chiefs vs 49ers", slug="chiefs-49ers-nfl")
+    assert is_sports_or_esports(category="esports", title="T1 vs Gen.G")
+    assert is_sports_or_esports(title="NAVI vs FaZe - CS2 Major")
+    assert is_sports_or_esports(category="gaming")
+    assert is_sports_or_esports(category="sports")
+    # Non-sports
+    assert not is_sports_or_esports(title="Will Fed cut rates in May?", category="economics")
+    assert not is_sports_or_esports(title="Bitcoin above $100k by end of year?", slug="btc-100k")
+    assert not is_sports_or_esports(title="US Presidential Election Winner 2028", category="politics")
+
+
+def test_volatility_config_defaults_and_env(monkeypatch):
+    import scoring.config as sc
+
+    cfg = sc.MakerConfig()
+    assert cfg.select_min_range_cents == 2.0
+    assert cfg.select_volatility_window_sec == 7200.0
+
+    monkeypatch.setenv("HUNTER_VOLATILITY_WINDOW_SEC", "3600.0")
+    monkeypatch.setenv("HUNTER_MIN_RANGE_CENTS", "3.5")
+    loaded = sc.load()
+    assert loaded.select_volatility_window_sec == 3600.0
+    assert loaded.select_min_range_cents == 3.5
+
+
+def test_velocity_gate_range_exempt_skips_flat_rejection_but_keeps_velocity():
+    stats = {"movement_usd": 100.0, "trade_count": 10, "last_trade_sec_ago": 60.0, "range_cents": 0.0}
+    # Range is flat (0.0c < 2.0c). Without exemption -> rejected
+    rej, reason = velocity_gate_reject(stats, min_trades=2, min_range_cents=2.0, enabled=True, range_exempt=False)
+    assert rej
+    assert "flat market" in reason
+
+    # With range_exempt=True -> not rejected for flat range
+    rej_exempt, reason_exempt = velocity_gate_reject(stats, min_trades=2, min_range_cents=2.0, enabled=True, range_exempt=True)
+    assert not rej_exempt
+    assert reason_exempt == ""
+
+    # But low velocity is STILL rejected even with range_exempt=True
+    rej_low_vel, reason_low_vel = velocity_gate_reject(stats, min_trades=50, min_range_cents=2.0, enabled=True, range_exempt=True)
+    assert rej_low_vel
+    assert "low velocity" in reason_low_vel
+
+
+def test_sort_eligible_prioritizes_volatility_exempt():
+    from scripts.filter_markets import sort_eligible
+
+    rows = [
+        {"cid": "1", "volatility_exempt": False, "return_pct_day": 5.0},
+        {"cid": "2", "volatility_exempt": True, "return_pct_day": 2.0},
+        {"cid": "3", "volatility_exempt": False, "return_pct_day": 10.0},
+        {"cid": "4", "volatility_exempt": True, "return_pct_day": 8.0},
+    ]
+
+    sorted_rows = sort_eligible(rows)
+    # The two volatility_exempt markets must come first, sorted by return (8.0, then 2.0).
+    # Then non-exempt markets sorted by return (10.0, then 5.0).
+    assert [r["cid"] for r in sorted_rows] == ["4", "2", "3", "1"]
+
+
+def test_evaluate_marks_and_exempts_live_sports():
+    import time as _time
+    from datetime import datetime, timedelta, timezone
+
+    t_now = _time.time()
+    # 2 trades with identical price (flat swing: 0.0c), >$200 volume
+    session = _TapeSession([
+        _trade(t_now - 60, 0.50, 1000.0),
+        _trade(t_now - 120, 0.50, 1000.0),
+    ])
+    # Live sports market with documented live_event: True signal
+    m_sports = {
+        "condition_id": "0xsports",
+        "question": "Chiefs vs 49ers",
+        "market_slug": "chiefs-49ers-nfl",
+        "live_event": True,
+        "tokens": [{"token_id": "1"}, {"token_id": "2"}],
+        "rewards": {"max_spread": 3.5, "min_size": 50},
+        "closed": False,
+        "accepting_orders": True,
+        "acceptingOrders": True,
+        "minimum_tick_size": 0.01,
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+    }
+    row = evaluate(
+        session, rate=10.0, m=m_sports, source="spread",
+        volume_24h=250_000.0,
+        min_trades=2, max_last_trade_sec=300.0, min_range_cents=2.0,
+        velocity_gate_enabled=True,
+    )
+    assert row.get("volatility_exempt") is True
+    assert row.get("eligible") is True
+    # Not rejected for flat market
+    assert "flat market" not in row.get("reject_reason", "")
+
 
