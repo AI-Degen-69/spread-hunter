@@ -324,6 +324,10 @@ class _Deadline(KeyboardInterrupt):
     """
 
 
+class _FinishLine(KeyboardInterrupt):
+    """Raised from the shadow loop when the target action quota / finish line is reached."""
+
+
 def make_deadline_sleep(
     deadline_ts: float,
     clock: Callable[[], float] = time.time,
@@ -853,6 +857,9 @@ def run_shadow(
     markets_fn_empty_is_routine: bool = False,
     dash_port: Optional[int] = None,
     code_revision: Optional[dict] = None,
+    finish_line_trades: Optional[int] = None,
+    finish_line_merges: Optional[int] = None,
+    finish_line_reliable: bool = False,
 ) -> ShadowResult:
     """One shadow session: rotate until `minutes` elapse, record, spend nothing.
 
@@ -1195,6 +1202,18 @@ def run_shadow(
         nonlocal rotations
         rotations += 1
         write_shadow_heartbeat(**heartbeat_kwargs, cycle=rotations)
+        if finish_line_trades is not None or finish_line_merges is not None or finish_line_reliable:
+            from core_brain.run_scorer import score_run
+            s = score_run(db_path, run_id=run_id)
+            if finish_line_reliable and s.is_reliable:
+                log.warning("SHADOW RUN finish line reached: all reliability action thresholds met (%s)", s.confidence_tier)
+                raise _FinishLine()
+            if finish_line_trades is not None and s.total_closed_trades >= finish_line_trades:
+                log.warning("SHADOW RUN finish line reached: target closed trades reached (%d/%d)", s.total_closed_trades, finish_line_trades)
+                raise _FinishLine()
+            if finish_line_merges is not None and s.actions["positions_merged"].observed >= finish_line_merges:
+                log.warning("SHADOW RUN finish line reached: target merges reached (%d/%d)", s.actions["positions_merged"].observed, finish_line_merges)
+                raise _FinishLine()
         resolved_sleep_fn(seconds)
 
     results = loop_run(
@@ -1439,6 +1458,12 @@ def _parse_args(argv: Optional[list[str]] = None):
                     help="kept for compatibility; does not set the shadow bankroll")
     ap.add_argument("--dash-port", type=int, default=None,
                     help="metadata port of the dashboard monitoring this shadow run")
+    ap.add_argument("--finish-line-trades", "--target-trades", type=int, default=None,
+                    help="stop rehearsal early when total closed trades reaches this count")
+    ap.add_argument("--finish-line-merges", "--target-merges", type=int, default=None,
+                    help="stop rehearsal early when total merged pairs reaches this count")
+    ap.add_argument("--finish-line-reliable", "--target-reliable", action="store_true", default=False,
+                    help="stop rehearsal early as soon as all reliability action thresholds are satisfied")
     return ap.parse_args(argv)
 
 
@@ -1551,6 +1576,9 @@ def main(
         starting_bankroll_usd=starting_bankroll,
         dash_port=a.dash_port,
         code_revision=code_revision_record,
+        finish_line_trades=a.finish_line_trades,
+        finish_line_merges=a.finish_line_merges,
+        finish_line_reliable=a.finish_line_reliable,
     )
 
     quoted = sum(1 for r in result.results if r.status == "QUOTED")

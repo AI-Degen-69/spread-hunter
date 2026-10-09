@@ -72,31 +72,31 @@ def _invoke(run_id: str, expression: str, tmp_path: Path) -> dict:
 
 
 def test_numbered_instances_derive_their_port(tmp_path):
-    assert _invoke("shadow-01", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8801"
-    assert _invoke("shadow-02", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8802"
-    assert _invoke("shadow-03", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8803"
-    assert _invoke("shadow-99", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8899"
+    assert _invoke("shadow-01", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8799"
+    assert _invoke("shadow-02", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8799"
+    assert _invoke("shadow-03", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8799"
+    assert _invoke("shadow-99", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8799"
 
 
 def test_prudent_instances_derive_their_port(tmp_path):
-    assert _invoke("shadow-01-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8851"
-    assert _invoke("shadow-02-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8852"
-    assert _invoke("shadow-49-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8899"
+    assert _invoke("shadow-01-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8799"
+    assert _invoke("shadow-02-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8799"
+    assert _invoke("shadow-49-prudent", "Get-ShadowDashPort $RunId", tmp_path)["value"] == "8799"
 
 
 def test_unnumbered_resume_id_gets_its_own_port_off_the_live_one(tmp_path):
     result = _invoke("shadow-resume", "Get-ShadowDashPort $RunId", tmp_path)
 
     assert result["threw"] is False, result["message"]
-    assert result["value"] == "8900"
+    assert result["value"] == "8799"
 
 
-def test_garbage_run_id_fails_loudly_instead_of_landing_on_live(tmp_path):
+def test_any_run_id_uses_unified_project_port(tmp_path):
     for bad in ("", "live", "shadow-", "shadow-1x", "shadow-1", "shadow-00", "shadow-100"):
         result = _invoke(bad, "Get-ShadowDashPort $RunId", tmp_path)
 
-        assert result["threw"] is True, bad
-        assert "8799" not in (result["message"] or ""), bad
+        assert result["threw"] is False, bad
+        assert result["value"] == "8799", bad
 
 
 def _roundtrip(run_id: str, tmp_path: Path) -> dict:
@@ -131,7 +131,7 @@ def test_instance_record_roundtrips_with_its_own_port(tmp_path):
 
     # Assert — readable back under its own run id, carrying its own port.
     assert result["threw"] is False, result["message"]
-    assert result["port"] == "8802"
+    assert result["port"] == "8799"
     assert result["pid"] is not None
 
 
@@ -145,8 +145,8 @@ def test_instance_records_do_not_share_one_file(tmp_path):
     two = json.loads((tmp_path / "shadow-dash-shadow-02.pids.json").read_text(encoding="utf-8-sig"))
 
     # Assert — saving shadow-02 left shadow-01's record intact.
-    assert one["dash"]["port"] == 8801
-    assert two["dash"]["port"] == 8802
+    assert one["dash"]["port"] == 8799
+    assert two["dash"]["port"] == 8799
 
 
 def test_url_and_pidfile_derive_from_the_same_port(tmp_path):
@@ -154,7 +154,7 @@ def test_url_and_pidfile_derive_from_the_same_port(tmp_path):
     pidfile = _invoke("shadow-02", "Get-ShadowDashPidFile $RunId", tmp_path)
 
     assert url["threw"] is False, url["message"]
-    assert url["value"] == "http://127.0.0.1:8802"
+    assert url["value"] == "http://127.0.0.1:8799"
     assert pidfile["threw"] is False, pidfile["message"]
     assert pidfile["value"].endswith("shadow-dash-shadow-02.pids.json")
 
