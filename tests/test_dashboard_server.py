@@ -1548,8 +1548,7 @@ def test_app_js_reads_every_gate_bar_from_the_funnel():
     """
     app_js = _read_static("app.js")
     for key in ('volume_gate_usd', 'depth_gate_usd', 'spread_gate',
-                'horizon_gate_days', 'reward_min_income_usd_day',
-                'spread_min_income_usd_day', 'max_pair_cost'):
+                'horizon_gate_days'):
         assert key in app_js, key
     # The literals these replaced must be gone.
     assert '0.0600 (6.00%)' not in app_js
@@ -1558,14 +1557,33 @@ def test_app_js_reads_every_gate_bar_from_the_funnel():
     assert '$0.995' not in app_js
 
 
-def test_app_js_states_the_payout_floor_per_market_source():
-    """Stage 7 displays the unified horizon and income gate rule."""
+def test_app_js_states_the_horizon_gate_rule():
+    """Stage 7 displays the horizon gate rule without the obsolete income floor,
+    and Stage 8 hero represents qualified quoting fleet rather than an arbitrage test."""
     app_js = _read_static("app.js")
-    assert 'rewardIncome' in app_js
-    assert 'spreadIncome' in app_js
-    assert 'TEST: HORIZON & INCOME' in app_js
-    assert 'income > $0.00/day' in app_js
-    assert 'rewards ≥ $' not in app_js
+    assert '7. Horizon Gate' in app_js
+    assert '7. Horizon & Income Gate' not in app_js
+    assert 'TEST: HORIZON' in app_js
+    assert 'TEST: HORIZON & INCOME' not in app_js
+    assert 'income > $0.00/day' not in app_js
+    assert 'TEST: PAIR MERGE ARBITRAGE' not in app_js
+    assert 'QUALIFIED FLEET' in app_js
+    assert 'Passed all screening gates · Quoting on venue' in app_js
+
+
+def test_app_js_passed_market_cards_omit_redundant_metrics():
+    """Passed and eligible cards in the Market Filter Kanban omit redundant metrics.
+
+    P&L, spread %, and estimated return are redundant on this pipeline page;
+    only essential operational metrics (Fills, 24h Vol, Days) are displayed.
+    """
+    app_js = _read_static("app.js")
+    assert '<div>Fills: <span class="card-fills">' in app_js
+    assert '<div>24h Vol: <span style="color:var(--text-primary)">${volStr}</span></div>' in app_js
+    assert '<div>Days: <span style="color:var(--text-primary)">${daysStr}</span></div>' in app_js
+    assert 'P&L:' not in app_js
+    assert '<div>Spread:' not in app_js
+    assert 'Est Ret:' not in app_js
 
 
 def test_app_js_does_not_fabricate_sequential_gate_flow():
@@ -1619,8 +1637,7 @@ def test_app_js_escapes_snapshot_derived_values():
     """Snapshot fields are escaped before they reach the page."""
     app_js = _read_static("app.js")
     assert 'esc(m.days_to_resolve)' in app_js
-    assert 'esc(m.return_pct_day)' in app_js
-    assert 'esc(el.ret_day_pct)' in app_js
+    assert 'esc(el.days_to_resolve)' in app_js
     assert 'esc(r.days)' in app_js
     assert 'esc(s.days)' in app_js
     assert 'aria-label="${esc(def.name)}"' in app_js

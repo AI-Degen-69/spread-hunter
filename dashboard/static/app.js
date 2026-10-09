@@ -5652,7 +5652,7 @@ const BUCKET_DEFS = [
   { key: 'volume', name: '4. Volume Gate', cls: 'rejected' },
   { key: 'depth', name: '5. Depth Gate', cls: 'rejected' },
   { key: 'spread', name: '6. Spread Gate', cls: 'rejected' },
-  { key: 'horizon', name: '7. Horizon & Income Gate', cls: 'rejected' },
+  { key: 'horizon', name: '7. Horizon Gate', cls: 'rejected' },
   { key: 'passed', name: '8. Passed (Quoting)', cls: 'passed' },
 ];
 const STAGE_DEFS = BUCKET_DEFS;
@@ -5767,9 +5767,6 @@ function getStageHero(key, funnel) {
   const depthGate = gateBar(funnel?.depth_gate_usd, 500);
   const spreadGate = gateBar(funnel?.spread_gate, 0.0205);
   const horizonDays = gateBar(funnel?.horizon_gate_days, 30);
-  const rewardIncome = gateBar(funnel?.reward_min_income_usd_day, 0);
-  const spreadIncome = gateBar(funnel?.spread_min_income_usd_day, 0);
-  const maxPairCost = gateBar(funnel?.max_pair_cost, 0.995);
 
   switch (key) {
     case 'raw':
@@ -5806,13 +5803,13 @@ function getStageHero(key, funnel) {
       };
     case 'horizon':
       return {
-        param: 'TEST: HORIZON & INCOME',
-        value: `≤ ${Number(horizonDays).toFixed(1)} days · income > $0.00/day`,
+        param: 'TEST: HORIZON',
+        value: `≤ ${Number(horizonDays).toFixed(1)} days`,
       };
     case 'passed':
       return {
-        param: 'TEST: PAIR MERGE ARBITRAGE',
-        value: `Pair Cost ≤ $${Number(maxPairCost).toFixed(3)} ➔ $1.00 USDC`,
+        param: 'QUALIFIED FLEET',
+        value: 'Passed all screening gates · Quoting on venue',
       };
     default:
       return { param: 'GATE TEST', value: '--' };
@@ -6155,11 +6152,8 @@ function renderScreener(kpi, scanState, status, engineOpts) {
         const renderedCids = new Set();
         for (const m of graduatedList) {
           renderedCids.add(m.condition_id);
-          const income = m.pnl !== null && m.pnl !== undefined ? fmtUSD(m.pnl) : '--';
           const volStr = m.volume !== null && m.volume !== undefined ? fmtUSD(m.volume) : '--';
-          const spreadStr = m.spread !== null && m.spread !== undefined ? (Number(m.spread) * 100).toFixed(2) + '%' : '--';
           const daysStr = m.days_to_resolve !== null && m.days_to_resolve !== undefined ? esc(m.days_to_resolve) + 'd' : '--';
-          const retStr = m.return_pct_day !== null && m.return_pct_day !== undefined ? esc(m.return_pct_day) + '%/d' : (m.est_income ? '$' + Number(m.est_income).toFixed(2) + '/d' : '--');
           const shortCid = m.condition_id ? (m.condition_id.slice(0, 6) + '...' + m.condition_id.slice(-4)) : '';
 
           cardsHtml += `<div class="market-card passed-card" role="listitem">
@@ -6170,11 +6164,8 @@ function renderScreener(kpi, scanState, status, engineOpts) {
             <div class="card-title" title="${esc(m.title || m.slug || '')}">${marketLink(m)}</div>
             <div class="card-metrics-grid">
               <div>Fills: <span class="card-fills">${esc(m.fills || 0)}</span></div>
-              <div>P&L: <span class="card-income">${income}</span></div>
               <div>24h Vol: <span style="color:var(--text-primary)">${volStr}</span></div>
-              <div>Spread: <span style="color:var(--text-primary)">${spreadStr}</span></div>
               <div>Days: <span style="color:var(--text-primary)">${daysStr}</span></div>
-              <div>Est Ret: <span class="card-ret">${retStr}</span></div>
             </div>
           </div>`;
         }
@@ -6189,7 +6180,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
               <span class="card-metric">${esc(el.source || 'spread')}</span>
             </div>
             <div class="card-title" title="${esc(el.title || '')}">${marketLink(el)}</div>
-            <div class="card-metric">Est Ret: <span class="card-ret">${el.ret_day_pct !== null && el.ret_day_pct !== undefined ? esc(el.ret_day_pct) + '%/d' : '--'}</span> | Vol: ${fmtUSD(el.volume || 0)}</div>
+            <div class="card-metric">Vol: ${fmtUSD(el.volume || 0)}${el.days_to_resolve ? ' · ' + esc(el.days_to_resolve) + 'd' : ''}</div>
           </div>`;
         }
       }

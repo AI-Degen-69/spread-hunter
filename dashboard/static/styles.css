@@ -1194,7 +1194,7 @@ td { font-size: 13px; }
 .market-card .card-fills { color: var(--open); font-weight: 700; }
 .market-card .card-metrics-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
