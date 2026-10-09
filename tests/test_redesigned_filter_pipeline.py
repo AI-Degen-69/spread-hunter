@@ -301,3 +301,212 @@ def test_spread_edge_precedes_thin_depth_failure():
     assert result["eligible"] is False
     assert result["reject_reason"] == "YES: spread 0.0400 > 0.0200"
     assert _cause(result["reject_reason"]) == "YES spread"
+
+
+# ==============================================================================
+# Task 2: Gate Evaluation Order Matrix & Snapshot Accounting Tests
+# ==============================================================================
+
+@pytest.mark.parametrize("row_id, cand_patch, tape_factory, book_factory, expected_cause, max_requests, expect_tape, expect_books", [
+    (
+        "row_1_identity",
+        {"market_group": "Spread -3.5"},
+        lambda now: _active_tape(now),
+        lambda cid: _books(0.49, 0.51),
+        "carries a submarket group label",
+        0, False, False,
+    ),
+    (
+        "row_2_in_play",
+        {"gameStartTime": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(), "_live_event": False},
+        lambda now: _active_tape(now),
+        lambda cid: _books(0.49, 0.51),
+        "in-play",
+        0, False, False,
+    ),
+    (
+        "row_3_expired",
+        {"end_date_iso": (datetime.now(timezone.utc) - timedelta(hours=16)).isoformat(), "category": "Crypto"},
+        lambda now: _active_tape(now),
+        lambda cid: _books(0.49, 0.51),
+        "horizon",
+        0, False, False,
+    ),
+    (
+        "row_4_flat_tape",
+        {},
+        lambda now: _flat_tape(now),
+        lambda cid: _books(0.49, 0.51),
+        "no movement",
+        1, True, False,
+    ),
+    (
+        "row_5_low_velocity",
+        {},
+        lambda now: _active_tape(now, count=5, total_usd=10_000.0),
+        lambda cid: _books(0.49, 0.51),
+        "low velocity",
+        1, True, False,
+    ),
+    (
+        "row_6_decided_mid",
+        {},
+        lambda now: _active_tape(now),
+        lambda cid: _books(0.09, 0.11),
+        "YES decided mid",
+        2, True, True,
+    ),
+    (
+        "row_7_thin_depth",
+        {},
+        lambda now: _active_tape(now),
+        lambda cid: _books(0.49, 0.51, depth_usd=100.0),
+        "YES: top-3 bid depth",
+        3, True, True,
+    ),
+    (
+        "row_8_low_volume",
+        {"_volume_24h": 50_000.0},
+        lambda now: _active_tape(now),
+        lambda cid: _books(0.49, 0.51, depth_usd=2400.0),
+        "volume",
+        3, True, True,
+    ),
+    (
+        "row_9_distant_horizon",
+        {"end_date_iso": (datetime.now(timezone.utc) + timedelta(days=45)).isoformat()},
+        lambda now: _active_tape(now),
+        lambda cid: _books(0.49, 0.51, depth_usd=2400.0),
+        "horizon",
+        3, True, True,
+    ),
+])
+def test_gate_evaluation_fail_fast_order_matrix(
+    row_id, cand_patch, tape_factory, book_factory, expected_cause,
+    max_requests, expect_tape, expect_books
+):
+    now_ts = time.time()
+    now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+    cid = f"0xmatrix_{row_id}"
+    cand = _candidate(cid, **cand_patch)
+    yes_book, no_book = book_factory(cid)
+
+    session = _FakeSession(
+        trades=tape_factory(now_ts),
+        books_by_token={f"{cid}-yes": yes_book, f"{cid}-no": no_book},
+    )
+
+    result = fm.evaluate(
+        session, rate=50.0, m=cand, volume_24h=cand.get("_volume_24h"),
+        source="spread", min_volume_usd=125_000.0, min_depth_usd=500.0,
+        max_spread=0.02, min_trades=20 if row_id == "row_5_low_velocity" else None,
+        velocity_gate_enabled=True, now_iso=now_iso,
+    )
+
+    assert result["eligible"] is False
+    assert _cause(result["reject_reason"]) == expected_cause
+    assert len(session.requests) == max_requests
+
+    urls = [url for url, _ in session.requests]
+    has_tape = any("trades" in u for u in urls)
+    has_book = any("book" in u for u in urls)
+    assert has_tape == expect_tape
+    assert has_book == expect_books
+
+    if has_tape and has_book:
+        tape_idx = next(i for i, u in enumerate(urls) if "trades" in u)
+        first_book_idx = next(i for i, u in enumerate(urls) if "book" in u)
+        assert tape_idx < first_book_idx
+
+
+def test_pipeline_snapshot_and_universe_accounting(tmp_path):
+    now_ts = time.time()
+    now_iso = datetime.fromtimestamp(now_ts, timezone.utc).isoformat()
+
+    eligible_cand = _candidate("0xelig")
+    rejected_price = _candidate("0xrej_price")
+    rejected_spread = _candidate("0xrej_spread")
+    rejected_volume = _candidate("0xrej_vol", _volume_24h=10_000.0)
+
+    all_cands = [eligible_cand, rejected_price, rejected_spread, rejected_volume]
+
+    books_map = {
+        "0xelig-yes": _books(0.49, 0.51)[0],
+        "0xelig-no": _books(0.49, 0.51)[1],
+        "0xrej_price-yes": _books(0.09, 0.11)[0],
+        "0xrej_price-no": _books(0.09, 0.11)[1],
+        "0xrej_spread-yes": _books(0.48, 0.52)[0],
+        "0xrej_spread-no": _books(0.48, 0.52)[1],
+        "0xrej_vol-yes": _books(0.49, 0.51)[0],
+        "0xrej_vol-no": _books(0.49, 0.51)[1],
+    }
+
+    session = _FakeSession(
+        trades=_active_tape(now_ts),
+        books_by_token=books_map,
+    )
+
+    jobs = [(50.0, c, c.get("_volume_24h"), "spread") for c in all_cands]
+
+    out = fm.score_pool(
+        jobs, session_factory=lambda: session, max_workers=1,
+        min_volume_usd=125_000.0, min_depth_usd=500.0, max_spread=0.02,
+        velocity_gate_enabled=True,
+    )
+
+    eligible_rows = [r for r in out if r.get("eligible")]
+    rejected_rows = [r for r in out if not r.get("eligible")]
+    assert len(eligible_rows) == 1
+    assert len(rejected_rows) == 3
+
+    causes = {}
+    for r in rejected_rows:
+        cause = _cause(r.get("reject_reason") or "")
+        causes[cause] = causes.get(cause, 0) + 1
+
+    fm._write_pipeline_snapshot(
+        cands=[], spread_cands=all_cands, out=out,
+        eligible=eligible_rows, picked=eligible_rows,
+        causes=causes, census={"scanned": len(all_cands)},
+        gates={"min_volume": 125_000.0, "max_spread": 0.02},
+        attempted=len(all_cands), rejected=len(rejected_rows),
+        out_dir=tmp_path,
+    )
+
+    fm._write_universe_file(
+        universe_rows=out,
+        discovery_meta={"scanned": len(all_cands)},
+        out_dir=tmp_path,
+    )
+
+    # Read back pipeline.json
+    pipe_path = tmp_path / "pipeline.json"
+    assert pipe_path.exists()
+    snap = json.loads(pipe_path.read_text(encoding="utf-8"))
+
+    counts = snap["counts"]
+    assert counts["scored"] == counts["rejected"] + counts["eligible"]
+    assert counts["attempted"] == counts["scored"] + counts["dropped_no_verdict"]
+    assert sum(entry["n"] for entry in snap["rejections"]) == counts["rejected"]
+
+    for entry in snap["rejections"]:
+        assert set(entry.keys()) == {"cause", "n", "would_fund", "traps", "examples"}
+        assert len(entry["examples"]) <= 4
+        for ex in entry["examples"]:
+            assert "title" in ex
+            assert "reason" in ex
+
+    assert len(snap["final"]) == len(eligible_rows)
+    assert len(snap["picked"]) == len(eligible_rows)
+
+    # Read back market_universe.json
+    univ_path = tmp_path / "market_universe.json"
+    assert univ_path.exists()
+    univ = json.loads(univ_path.read_text(encoding="utf-8"))
+    assert len(univ["rows"]) == len(all_cands)
+
+    for row in univ["rows"]:
+        if not row["eligible"]:
+            assert row["reject_reason"] != ""
+            assert _cause(row["reject_reason"]) in causes
+

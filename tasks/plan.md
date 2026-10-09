@@ -49,7 +49,7 @@ Add comprehensive end-to-end unit tests covering the redesigned market filtering
   - Implement spread edge tests: parametrized spread with `max_spread=0.02`: spread 0.03 fails with `YES: spread 0.0300 > 0.0200` and bucket `YES spread`; spread 0.01 succeeds; wide spread with thin depth fails with spread reason (spread check precedes depth check).
 - **Verification:** `python -m pytest -q tests/test_redesigned_filter_pipeline.py -k "test_baseline or test_price or test_spread"`
 
-### Task 2: Gate Evaluation Order Matrix & Snapshot Accounting Tests
+### Task 2: Gate Evaluation Order Matrix & Snapshot Accounting Tests [x]
 - **Task ID:** TASK-2
 - **Size:** M
 - **Domain Tag:** `[Core/Logic]`
