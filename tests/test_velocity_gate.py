@@ -238,3 +238,35 @@ def test_evaluate_integrates_velocity_gate_rejection():
     # Book fetch fails because mock doesn't answer CLOB book, but reject_reason won't be flat range
     assert "flat range" not in row_pass.get("reject_reason", "")
 
+
+def test_is_sports_or_esports():
+    from scoring.selector import is_sports_or_esports
+
+    # Explicit sports_market_type
+    assert is_sports_or_esports(sports_market_type="moneyline")
+    # Series title / league regex
+    assert is_sports_or_esports(series_title="ATP Wimbledon 2026")
+    assert is_sports_or_esports(title="Chiefs vs 49ers", slug="chiefs-49ers-nfl")
+    assert is_sports_or_esports(category="esports", title="T1 vs Gen.G")
+    assert is_sports_or_esports(title="NAVI vs FaZe - CS2 Major")
+    assert is_sports_or_esports(category="gaming")
+    assert is_sports_or_esports(category="sports")
+    # Non-sports
+    assert not is_sports_or_esports(title="Will Fed cut rates in May?", category="economics")
+    assert not is_sports_or_esports(title="Bitcoin above $100k by end of year?", slug="btc-100k")
+    assert not is_sports_or_esports(title="US Presidential Election Winner 2028", category="politics")
+
+
+def test_volatility_config_defaults_and_env(monkeypatch):
+    import scoring.config as sc
+
+    cfg = sc.MakerConfig()
+    assert cfg.select_min_range_cents == 2.0
+    assert cfg.select_volatility_window_sec == 7200.0
+
+    monkeypatch.setenv("HUNTER_VOLATILITY_WINDOW_SEC", "3600.0")
+    monkeypatch.setenv("HUNTER_MIN_RANGE_CENTS", "3.5")
+    loaded = sc.load()
+    assert loaded.select_volatility_window_sec == 3600.0
+    assert loaded.select_min_range_cents == 3.5
+

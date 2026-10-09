@@ -511,11 +511,14 @@ class MakerConfig:
     # HUNTER_MIN_MOVEMENT_USD.
     select_min_movement_usd: float = 200.0
     select_velocity_gate_enabled: bool = True
-    # WIDENED 2026-10-08 (#416). 2.0c refused books whose 30m range was a
-    # live but narrow 1c+ drift around an ordinary sports swing. 1.0c still
-    # refuses a truly flat tape (0.00c) while the movement bar above remains
-    # the real proof of activity. Operator-tunable via HUNTER_MIN_RANGE_CENTS.
-    select_min_range_cents: float = 1.0
+    # Volatility / range gate (#416, #434). 2.0c minimum swing over the volatility
+    # window (default 2h) refuses flat markets while active live sports/eSports
+    # are exempted and prioritized. Operator-tunable via HUNTER_MIN_RANGE_CENTS.
+    select_min_range_cents: float = 2.0
+    # Price volatility lookback window in seconds (#434). Distinct from the
+    # 30-minute volume movement window (`select_movement_window_sec = 1800.0`).
+    # Defaults to 2 hours (7200s). Operator-tunable via HUNTER_VOLATILITY_WINDOW_SEC.
+    select_volatility_window_sec: float = 7200.0
     # Tightened 2026-10-09 (#432) to 2.05 cents (0.0205 in price units) to
     # prevent entry into wide/slippage-heavy books.
     select_max_book_spread: float = 0.0205
@@ -992,6 +995,14 @@ def load() -> MakerConfig:
             rc = float(rcents)
             if math.isfinite(rc) and rc >= 0:
                 kw["select_min_range_cents"] = rc
+        except ValueError:
+            pass
+    vwin = os.environ.get("HUNTER_VOLATILITY_WINDOW_SEC") or ""
+    if vwin.strip():
+        try:
+            vw = float(vwin)
+            if math.isfinite(vw) and vw > 0:
+                kw["select_volatility_window_sec"] = vw
         except ValueError:
             pass
     vtri = os.environ.get("HUNTER_VOLUME_TRIAL_USD") or ""

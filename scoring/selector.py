@@ -152,6 +152,30 @@ def identity_allowed(title: object = "", slug: object = "",
     return True, ""
 
 
+def is_sports_or_esports(
+    title: object = "",
+    slug: object = "",
+    category: object = "",
+    series_title: object = "",
+    event_title: object = "",
+    sports_market_type: object = "",
+) -> bool:
+    """Return whether metadata identifies a sports or esports market (#434).
+
+    Identified via explicit `sports_market_type` signal, known series regex
+    `_SPORTS_SERIES_RE`, or category/slug tokens matching sports or esports.
+    """
+    if str(sports_market_type or "").strip():
+        return True
+    all_text = _text(title, slug, category, series_title, event_title)
+    if _SPORTS_SERIES_RE.search(all_text):
+        return True
+    cat_lower = str(category or "").strip().lower()
+    if cat_lower in ("sports", "esports", "gaming"):
+        return True
+    return False
+
+
 def top_depth_usd(levels: Mapping[float, float] | Iterable[tuple[float, float]],
                   count: int = 3) -> float:
     """Notional depth in the best ``count`` bid levels.
