@@ -1525,7 +1525,7 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # clock-first reading would refuse a game that is being played right now as
     # "has not started". Every other gate below still applies unchanged.
     start_iso = market_start_iso(m)
-    declared_live = bool(m.get("_live_event"))
+    declared_live = bool(m.get("_live_event") or m.get("live_event"))
     if not declared_live:
         not_started, start_reason = pre_start(start_iso, now_iso=now_iso)
         if not_started:

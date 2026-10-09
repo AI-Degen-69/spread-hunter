@@ -14,18 +14,25 @@ WINDOW = 1800.0  # 30m
 
 
 class _TapeSession:
-    """A session that answers the trades endpoint with a canned payload."""
+    """A session that answers the trades endpoint and book endpoints with canned payloads."""
 
-    def __init__(self, payload, boom: bool = False):
+    def __init__(self, payload, boom: bool = False, book_payload: dict | None = None):
         self.payload = payload
         self.boom = boom
+        self.book_payload = book_payload or {
+            "bids": [{"price": "0.49", "size": "5000"}, {"price": "0.48", "size": "5000"}],
+            "asks": [{"price": "0.51", "size": "5000"}, {"price": "0.52", "size": "5000"}],
+        }
         self.calls = 0
 
     def get(self, url, params=None, timeout=None):
         self.calls += 1
         if self.boom:
             raise OSError("tape unreachable")
-        payload = self.payload
+        if "trades" in url:
+            payload = self.payload
+        else:
+            payload = self.book_payload
 
         class _Resp:
             def json(self_inner):
@@ -171,7 +178,10 @@ def test_evaluate_admits_a_normal_swing_at_production_bars():
 
     from scripts import filter_markets as fm
 
+    from datetime import datetime, timedelta, timezone
+
     t_now = _time.time()
+    # 3.0c swing between min (0.50) and max (0.53) with > $200 volume
     session = _TapeSession(
         [_trade(t_now - 60 - 60 * i, 0.50 + 0.005 * (i % 7), 50.0)
          for i in range(10)]
@@ -182,14 +192,19 @@ def test_evaluate_admits_a_normal_swing_at_production_bars():
         "tokens": [{"token_id": "1"}, {"token_id": "2"}],
         "rewards": {"max_spread": 3.5, "min_size": 50},
         "closed": False,
+        "accepting_orders": True,
         "acceptingOrders": True,
+        "minimum_tick_size": 0.01,
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
     }
     row = evaluate(
         session, rate=10.0, m=m, source="spread",
+        volume_24h=250_000.0,
         min_trades=0, max_last_trade_sec=None,
         min_range_cents=fm.MIN_RANGE_CENTS,
         velocity_gate_enabled=True,
     )
+    assert row.get("eligible") is True
     assert "flat market" not in row.get("reject_reason", "")
     assert "flat range" not in row.get("reject_reason", "")
 
@@ -309,29 +324,36 @@ def test_sort_eligible_prioritizes_volatility_exempt():
 
 def test_evaluate_marks_and_exempts_live_sports():
     import time as _time
+    from datetime import datetime, timedelta, timezone
+
     t_now = _time.time()
     # 2 trades with identical price (flat swing: 0.0c), >$200 volume
     session = _TapeSession([
         _trade(t_now - 60, 0.50, 1000.0),
         _trade(t_now - 120, 0.50, 1000.0),
     ])
-    # Live sports market
+    # Live sports market with documented live_event: True signal
     m_sports = {
         "condition_id": "0xsports",
         "question": "Chiefs vs 49ers",
         "market_slug": "chiefs-49ers-nfl",
-        "_live_event": True,
+        "live_event": True,
         "tokens": [{"token_id": "1"}, {"token_id": "2"}],
         "rewards": {"max_spread": 3.5, "min_size": 50},
         "closed": False,
+        "accepting_orders": True,
         "acceptingOrders": True,
+        "minimum_tick_size": 0.01,
+        "end_date_iso": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
     }
     row = evaluate(
         session, rate=10.0, m=m_sports, source="spread",
+        volume_24h=250_000.0,
         min_trades=2, max_last_trade_sec=300.0, min_range_cents=2.0,
         velocity_gate_enabled=True,
     )
     assert row.get("volatility_exempt") is True
+    assert row.get("eligible") is True
     # Not rejected for flat market
     assert "flat market" not in row.get("reject_reason", "")
 
