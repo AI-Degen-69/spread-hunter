@@ -28,16 +28,17 @@ def test_snapshot_carries_every_gate_bar(tmp_path, monkeypatch):
     assert snap["volume_gate_usd"] == 250000.0
     assert snap["spread_gate"] == fm.MAX_BOOK_SPREAD
     assert snap["horizon_gate_days"] == fm.MAX_DAYS_TO_RESOLVE
-    assert snap["reward_min_income_usd_day"] == fm.MIN_PAYOUT * fm.FLOOR_MULTIPLE
+    assert snap["reward_min_income_usd_day"] == 0.0
+    assert not hasattr(fm, "MIN_PAYOUT")
+    assert not hasattr(fm, "FLOOR_MULTIPLE")
     assert snap["max_pair_cost"] == getattr(fm._CFG, "max_pair_cost", 0.995)
 
 
 def test_payout_floor_is_exported_per_market_source(tmp_path, monkeypatch):
-    """`evaluate` holds only reward markets to the payout floor.
+    """`evaluate` holds both sources to positive income without a legacy payout floor.
 
-    A spread market is paid by whoever lifts the offer and passes on any
-    income at all. One universal bar in the snapshot would have the dashboard
-    call a passing spread market a failure.
+    Both sources export 0.0 min income per day. One universal bar in the snapshot
+    would have the dashboard call a passing spread market a failure.
     """
     monkeypatch.setattr(fm, "RUN", tmp_path)
 
@@ -48,7 +49,7 @@ def test_payout_floor_is_exported_per_market_source(tmp_path, monkeypatch):
 
     snap = json.loads((tmp_path / "pipeline.json").read_text(encoding="utf-8"))
 
-    assert snap["reward_min_income_usd_day"] == fm.MIN_PAYOUT * fm.FLOOR_MULTIPLE
+    assert snap["reward_min_income_usd_day"] == 0.0
     assert snap["spread_min_income_usd_day"] == 0.0
     # The source-blind key must be gone, not merely shadowed.
     assert "min_income_usd_day" not in snap

@@ -183,3 +183,57 @@ def test_parse_market_skips_a_row_whose_token_ids_are_not_usable():
     assert _parse_market(empty) is None
     assert _parse_market(blank) is None
     assert _parse_market(boolean) is None
+
+
+# --- fetch_pinned_market zero rewards & closed checks (#431) --------------
+
+def test_fetch_pinned_market_admits_zero_rewards(monkeypatch):
+    payload = {
+        "condition_id": "0xpinned",
+        "accepting_orders": True,
+        "closed": False,
+        "tokens": [{"token_id": "tok_up"}, {"token_id": "tok_dn"}],
+        "end_date_iso": "2026-09-01T00:00:00Z",
+        "rewards": {"rates": []},
+        "minimum_order_size": 5.0,
+        "minimum_tick_size": 0.01,
+    }
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(markets._SESSION, "get", lambda *a, **k: _Resp())
+
+    m = markets.fetch_pinned_market("0xpinned")
+    assert m is not None
+    assert m.condition_id == "0xpinned"
+    assert m.up_token == "tok_up"
+    assert m.down_token == "tok_dn"
+
+
+def test_fetch_pinned_market_refuses_closed_market(monkeypatch):
+    payload = {
+        "condition_id": "0xclosed",
+        "accepting_orders": True,
+        "closed": True,
+        "tokens": [{"token_id": "tok_up"}, {"token_id": "tok_dn"}],
+        "end_date_iso": "2026-09-01T00:00:00Z",
+        "rewards": {"rates": []},
+    }
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(markets._SESSION, "get", lambda *a, **k: _Resp())
+
+    m = markets.fetch_pinned_market("0xclosed")
+    assert m is None
+

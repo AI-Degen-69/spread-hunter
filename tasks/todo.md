@@ -1,20 +1,22 @@
-# Todo — #427 (active) + #398 (done, history) + #422 (done, history)
-
-- [x] #427 T1 — `core_brain/live_marks.py` + `tests/test_live_marks.py`
-- [x] #427 T2 — `dashboard/server.py` wiring + stream mark frames
-- [x] #427 T3 — `dashboard/static/app.js` + harness tests
-- [x] #427 T4 — Positions-surface finesse
-- [x] #427 T5 — How-to-verify block
-
-- [x] #398 T1 — Decision record `docs/issues/398-maker-queue-bars.md`
-- [x] #398 T2 — Bidirectional cross-ref comments in both configs
-- [x] #398 T3 — Independence pin in the existing suites (merged PR #428)
-
-- [x] T1 — RED+GREEN: one fixed bankroll path in `run_shadow`
-- [x] T2 — GREEN: unify the CLI flag, keep the old name working
-- [x] T3 — GREEN: focused tests that fail if the live read returns
-- [x] T4 — Operator docs match the new behavior
-- [x] #419 T1 — RED+GREEN: mid-hold band on the missing-intent branch
-- [x] #419 T2 — GREEN: hold in-band lifecycle replacements, no duplicate submits
-- [x] #419 T3 — Wire real mids from `_visit_one`, protect visit contracts, document
-
+# Checklist — Issue #431
+ 
+- [x] **Task 1: Core & Scoring Pinned Fetch Refactor**
+  - [x] Remove `require_rewards` from `scoring/markets.py:fetch_pinned_market`
+  - [x] Remove `require_rewards` from `core_brain/markets.py:fetch_pinned_market`
+  - [x] Clean up call-sites in `core_brain/audit.py`, `core_brain/markout.py`, `core_brain/order_manager.py`, `core_brain/trader_loop.py`
+  - [x] Run focused tests for Task 1
+- [x] **Task 2: Screener Filter & Funnel Snapshot Standardization**
+  - [x] Remove `MIN_PAYOUT` & `FLOOR_MULTIPLE` from `scripts/filter_markets.py`
+  - [x] Standardize `evaluate()` to `income > 0` for all sources
+  - [x] Export `"reward_min_income_usd_day": 0.0`
+  - [x] Update `--legacy-rewards` help text
+  - [x] Run focused tests for Task 2
+- [x] **Task 3: Dashboard Stage-7 Hero & Label Alignment**
+  - [x] Rename stage 7 in `dashboard/static/app.js` to `7. Horizon & Income Gate`
+  - [x] Update stage 7 hero parameter & single-rule value format
+  - [x] Update fallback to 0.0
+  - [x] Run dashboard tests
+- [x] **Task 4: Comprehensive Test Suite & Regression Verification**
+  - [x] Add real pinned-fetch HTTP-mocked unit tests in `tests/scoring/test_markets.py` & `tests/test_order_manager.py`
+  - [x] Update unit tests across `tests/test_single_buy_saver.py`, `tests/test_pre_start_gate.py`, `tests/test_pipeline_snapshot_gates.py`, `tests/test_unified_universe.py`, `tests/test_dashboard_server.py`, etc.
+  - [x] Run the full focused test suite batch
