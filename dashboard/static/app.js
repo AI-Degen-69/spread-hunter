@@ -5558,6 +5558,7 @@ const CLOSE_REASON_LABELS = {
   aged_out_rescue: 'Aged-out rescue',
   adverse_drift: 'Adverse drift',
   grace_expired: 'Grace expired',
+  ladder_exit: 'Ladder exit',
   lifecycle_hard_stop: 'Stop-loss',
 };
 
@@ -5569,7 +5570,7 @@ const CLOSE_REASON_LABELS = {
  * this list and keep the quiet gray chip: red is for "money left by force".
  * The WHY rides INSIDE the red badge, not beside it -- one red thing to find
  * on the row, not two pills to read in sequence. */
-const EXIT_METHODS = new Set(['single_buy_exit', 'aged_out_exit', 'stop_loss_exit']);
+const EXIT_METHODS = new Set(['single_buy_exit', 'naked_exit', 'ladder_exit', 'aged_out_exit', 'stop_loss_exit']);
 
 function closeReasonIsExit(info) {
   if (!info) return false;
