@@ -102,7 +102,7 @@ def test_full_stack_refuses_and_launches_nothing(tmp_path, monkeypatch):
 
 
 def test_start_rollback_stops_only_what_it_launched(tmp_path, monkeypatch):
-    """A failed third launch kills the first two, keeps the reused entry."""
+    """A failed second launch rolls back the first launch and keeps the reused entry."""
     import dashboard.server as ds
 
     procs_file = _start_fixture(
@@ -123,6 +123,5 @@ def test_start_rollback_stops_only_what_it_launched(tmp_path, monkeypatch):
     # Only the service THIS call launched is stopped; the reused pid is not.
     assert 4242 not in stopped
     assert stopped  # the launched one was rolled back
-    if procs_file.exists():
-        kept = json.loads(procs_file.read_text(encoding="utf-8"))
-        assert kept["query"]["pid"] == 4242
+    kept = json.loads(procs_file.read_text(encoding="utf-8"))
+    assert kept["query"]["pid"] == 4242

@@ -334,3 +334,31 @@ def test_reset_aborts_when_stop_cannot_confirm_down(tmp_path, monkeypatch):
     client = TestClient(ds.app)
     res = client.post("/api/system/reset", headers={"X-Control-Token": ds.CONTROL_TOKEN})
     assert res.status_code == 409
+
+
+def test_stop_mixed_alive_and_dead_targets_reports_not_running(tmp_path, monkeypatch):
+    """A target that was already dead when STOP was invoked gets 'not_running' outcome."""
+    import dashboard.server as ds
+
+    procs_file = _stop_fixture(
+        tmp_path, monkeypatch,
+        '{"filter": {"pid": 5001, "started_at": 1.0}, "decide": {"pid": 5002, "started_at": 1.0}}'
+    )
+    # filter (5001) is already dead; decide (5002) is alive initially
+    monkeypatch.setattr(ds.sys, "platform", "win32")
+    alive = {"v": True}
+    monkeypatch.setattr(ds, "_is_pid_alive", lambda pid, started_at=None: alive["v"] if pid == 5002 else False)
+    monkeypatch.setattr(ds.time, "sleep", lambda s: None)
+
+    def run_taskkill(argv, **kwargs):
+        alive["v"] = False
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", run_taskkill)
+
+    result = ds.stop_bot()
+
+    assert result["ok"] is True
+    assert result["services"]["filter"]["outcome"] == "not_running"
+    assert result["services"]["decide"]["outcome"] == "stopped"
+

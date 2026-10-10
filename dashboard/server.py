@@ -2052,7 +2052,8 @@ def _stop_services(targets: list, subprocess) -> dict:
     called through the `time` module so tests can script them.
     """
     outcomes: dict[str, dict[str, str]] = {}
-    alive = [(n, p, s) for (n, p, s) in targets if _is_pid_alive(p, s)]
+    initially_alive = {p for (n, p, s) in targets if _is_pid_alive(p, s)}
+    alive = [(n, p, s) for (n, p, s) in targets if p in initially_alive]
     if not alive:
         for name, _, _ in targets:
             outcomes[name] = {"outcome": "not_running", "detail": ""}
@@ -2135,6 +2136,8 @@ def _stop_services(targets: list, subprocess) -> dict:
     for name, pid, _ in targets:
         if pid in still:
             outcomes[name] = {"outcome": "still_running", "detail": errors.get(pid, "")}
+        elif pid not in initially_alive:
+            outcomes[name] = {"outcome": "not_running", "detail": errors.get(pid, "")}
         elif pid in forced_pids:
             # It only came down after the force pass: report that honestly.
             outcomes[name] = {"outcome": "forced", "detail": errors.get(pid, "")}
