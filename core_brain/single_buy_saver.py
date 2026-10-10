@@ -1137,22 +1137,24 @@ def complete_pair(
 
     local_comp_id = str(uuid.uuid4())
     now_ms = int(time.time() * 1000)
-    registry.create_order(
-        OrderRecord(
-            id=local_comp_id,
-            order_id="",
-            condition_id=pair["condition_id"],
-            token_id=light_token,
-            side="BUY",
-            price=ask,
-            original_size=size,
-            status="pending",
-            posted_ts=now_ms,
-            last_polled_ts=now_ms,
-            pair_id=pair_id,
-            max_pair_cost_at_post=max_pair_cost,
+    is_shadow = type(client).__name__ == "ShadowExecutionClient" or getattr(client, "is_shadow", False)
+    if not is_shadow:
+        registry.create_order(
+            OrderRecord(
+                id=local_comp_id,
+                order_id="",
+                condition_id=pair["condition_id"],
+                token_id=light_token,
+                side="BUY",
+                price=ask,
+                original_size=size,
+                status="pending",
+                posted_ts=now_ms,
+                last_polled_ts=now_ms,
+                pair_id=pair_id,
+                max_pair_cost_at_post=max_pair_cost,
+            )
         )
-    )
 
     resp = client.create_and_post_market_order(
         MarketOrderArgsV2(token_id=light_token, amount=notional, side="BUY",
@@ -1162,7 +1164,7 @@ def complete_pair(
     venue_oid = ""
     if isinstance(resp, dict):
         venue_oid = str(resp.get("orderID") or resp.get("order_id") or resp.get("id") or "")
-    if venue_oid:
+    if venue_oid and not is_shadow:
         registry.attach_venue_order_id(local_comp_id, venue_oid)
         if hasattr(client, "get_order"):
             try:
@@ -1512,7 +1514,8 @@ def manage_single_leg_positions(
 
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
-        LegState, SingleLegPosition, evaluate, persist_decision, transition,
+        LegState, SingleLegPosition, evaluate, max_profitable_hedge_bid,
+        persist_decision, transition,
     )
 
     now_s = now if now is not None else time.time()

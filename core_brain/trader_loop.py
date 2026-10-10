@@ -1993,6 +1993,7 @@ def _visit_one(
         # Cancel first: cancelling old quotes before submitting replacements
         # prevents exceeding MAX_TOTAL_USD notional exposure and avoids double
         # quoting if replacement submission occurs while stale orders rest.
+        confirmed_cancelled_lifecycle = []
         if to_cancel:
             for row in to_cancel:
                 key = str(row.get("id") or row.get("order_id") or "")
@@ -2008,11 +2009,13 @@ def _visit_one(
                         f"cancel failed: {len(still_resting)}/{len(to_cancel)} still "
                         f"resting; aborting replacement submission"
                     )
+            # Only consider lifecycle orders whose cancellation confirmed complete
+            confirmed_cancelled_lifecycle = list(cancelled_lifecycle_orders)
         if to_submit:
             submitted = seam.submit_fn(seam.client, seam.registry, market, to_submit, cfg)
-            if submitted == 0 and cancelled_lifecycle_orders:
+            if submitted == 0 and confirmed_cancelled_lifecycle:
                 # Submit accepted zero orders: attempt to restore cancelled hedge order
-                for old_o in cancelled_lifecycle_orders:
+                for old_o in confirmed_cancelled_lifecycle:
                     try:
                         restore_intent = QuoteIntent(
                             side=old_o.get("side", "BUY"),
@@ -2028,9 +2031,10 @@ def _visit_one(
                     except Exception as rest_err:
                         log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
     except Exception as e:
-        if cancelled_lifecycle_orders and not submitted:
-            # Submit raised exception: attempt to restore cancelled hedge order
-            for old_o in cancelled_lifecycle_orders:
+        submitted = getattr(e, PARTIAL_SUBMIT_PLACED_ATTR, getattr(e, "placed", submitted))
+        if confirmed_cancelled_lifecycle and submitted == 0:
+            # Submit raised exception with 0 placed: attempt to restore confirmed cancelled hedge order
+            for old_o in confirmed_cancelled_lifecycle:
                 try:
                     restore_intent = QuoteIntent(
                         side=old_o.get("side", "BUY"),
@@ -2045,8 +2049,6 @@ def _visit_one(
                     log.warning("[HEDGE RESTORED] %s | Restored hedge %s after submit failure", title, old_o.get("id"))
                 except Exception as rest_err:
                     log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
-
-        submitted = getattr(e, PARTIAL_SUBMIT_PLACED_ATTR, getattr(e, "placed", submitted))
         # A submit/cancel failure (venue rejection, a split couple rolled back)
         # must degrade this market to ERROR, never stop the rotation.
         emit_fn(service="decide", cycle=cycle, phase="quoting",

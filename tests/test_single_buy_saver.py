@@ -1483,3 +1483,27 @@ def test_manage_single_leg_positions_stranded_completion_when_enabled(registry: 
     assert any(r.get("action") == "would_complete" for r in results)
 
 
+def test_manage_single_leg_positions_stranded_maker_wait_and_forced_exit(registry: OrderRegistry):
+    from core_brain.single_buy_saver import manage_single_leg_positions
+    from core_brain.config import MakerConfig
+
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+    light_order = next(o for o in registry.get_orders_by_pair(pair_id) if o.token_id == TOK_DN)
+    registry.update_order_status(light_order.id, "cancelled", last_polled_ts=1000)
+
+    # fill venue_ts is 1_000_000 ms = 1000s.
+    # Case 1: Completion disabled (or ask > cap), age <= stranded_max_wait (e.g. now = 1000 + 100 = 1100s <= 1300s)
+    # -> action is stranded_awaiting_maker
+    client = FakeClient(best_ask=0.60)  # 0.55 + 0.60 = 1.15 > 0.99
+    cfg = MakerConfig(stranded_completion_enabled=False, stranded_max_wait_sec=300.0, max_pair_cost=0.99)
+
+    results_wait = manage_single_leg_positions(client, registry, cfg, live=False, now=1100.0)
+    assert any(r.get("action") == "stranded_awaiting_maker" for r in results_wait)
+
+    # Case 2: age > stranded_max_wait (e.g. now = 1000 + 350 = 1350s > 1300s)
+    # -> forces stranded exit
+    results_exit = manage_single_leg_positions(client, registry, cfg, live=False, now=1350.0)
+    assert any(r.get("action") == "would_exit" and r.get("route") == "stranded_exit" for r in results_exit)
+
+
+
