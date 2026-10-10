@@ -1,44 +1,80 @@
-# CONSTRAINTS — #473 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #475 (locked by Station II, enforced through Station V)
 
-Governs the `i473/base-shadow-rehearsal` branch only.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_dashboard_server.py`
-  `tests/test_service_toggles.py`
-  `tests/test_live_state_language.py`
-- Node harness check:
-  `node tests/js/start_toggle_harness.cjs dashboard/static/app.js`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
+Governs the `i475/rework-control-center-menu-navigation-and-retire-depth-trial`
+branch only.
 
 ## Scope & File Boundaries
 
 - Target files for modification:
-  `dashboard/server.py` (add /api/system/shadow/start and stop endpoints per operator directive)
-  `dashboard/static/app.js` (master START SHADOW / STOP SHADOW toggle in shadow view)
-  `tests/js/start_toggle_harness.cjs` (extend harness to capture master START element and assertions)
-  `tests/test_dashboard_server.py` (add regression tests for master START and shadow endpoints)
-  `CONSTRAINTS.md`
-  `tasks/plan.md`
-  `tasks/todo.md`
-- Runtime / verification artifacts generated during execution:
-  `runtime/markets.json` (seeded from workspace runtime if missing)
-  `data/val_step1.db` (created by rehearsal, never `data/orders.db`)
-  `reports/` (statistics observer output)
+  - `scripts/spread-hunter-menu.ps1` (menu surface ONLY: usage header, `$TrialDepth`
+    param, `Start-ShadowTrial`, `Show-MenuGrid` rows, `Invoke-LiveAction` switch,
+    `Read-MenuChoice`, the action map, the allow-list, the entry point — and the new
+    `Invoke-InteractiveMenu` loop).
+  - `tests/test_menu_shadow_trial.py` (delete the six launcher tests; keep the three
+    resume/manifest tests; add `test_depth_bar_trial_launcher_is_gone` and
+    `test_trial_aliases_are_unknown_actions`).
+  - `tests/test_menu_resume_action.py` (remove `"Start-ShadowTrial"` from the tuple in
+    `test_every_shadow_launcher_disables_timeouts_only_for_unlimited_runs`; nothing else).
+  - `tests/test_menu_navigation.py` (NEW — key-set, header, storage-word, branch-coverage,
+    `Read-MenuChoice`, and `pwsh` interactive-loop tests).
+  - `tests/test_menu_extra_words.py` (must stay green; expected unchanged).
+  - `docs/agents/architecture.md` §"Trial feeds (shadow-03, #291)" — state the launcher is
+    retired; keep the manifest-replay / shared-feed / not-global-filter / `--out-dir` /
+    `--markets-path` claims; point paired runs at
+    `docs/runs/2026-09-28-paired-depth-experiment.md`.
+  - `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
 - Files that must NOT be modified:
-  `core_brain/shadow_run.py`
-  `core_brain/order_manager.py`
-  `core_brain/trader_loop.py`
-  `data/orders.db` (production DB is untouched)
+  - `scripts/filter_markets.py`, `scripts/filter_loop.py`, `core_brain/config.py`
+    (ranker/engine/config behaviour — trial fields stay exactly as they are).
+  - The `Resume-ShadowRun` function body (old trial stores must keep resuming from their
+    `data/<store>.trial.json` manifest) and `Invoke-WithRehearsalTrialEnv`.
+  - All other existing action bodies (`Reset-Environment`, `Start-NewShadowRun`,
+    `Stop-*`, `Open-Dashboard`, stop helpers, generic session readers) and every
+    confirmation prompt.
+  - `data/orders.db`.
+
+## Zero regressions
+
+- Focused suites that must pass (run locally after every task):
+  `tests/test_menu_shadow_trial.py`, `tests/test_menu_extra_words.py`,
+  `tests/test_menu_resume_action.py`, `tests/test_menu_navigation.py`.
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the four
+  focused suites (per the CodeRabbit plan and the repo's verifying rules).
+- Every new behaviour needs a test that fails without the change (RED first).
+
+## Menu behaviour freeze
+
+- Single-shot CLI mode is unchanged: `.\scripts\spread-hunter-menu.ps1 <action>` maps the
+  alias, checks `-Yes` for key `1`, calls `Invoke-LiveAction $key`, then `exit 0`. The
+  unknown-action path keeps `exit 1`.
+- After the key-set unification the one key list is `1`–`9`, `r`, `a`, `p`, `q`; the grid,
+  the `Select [...]` prompt, the invalid-selection message, the CLI allow-list and the
+  usage header all name that identical set. `audit`/`storage-audit`/`retention` → `a`,
+  `prune`/`storage-prune` → `p` on the CLI.
+- Interactive mode loops until `q`, Ctrl+C, or end of input; a thrown action error is shown
+  and the menu returns. Per-action inputs (`Minutes`, `Hours`, `Watch`, `ResumeDb`,
+  `ShadowPreset`) reset each pass.
+- No depth-bar trial remains: no `t` row, no `"t"` branch, no `Start-ShadowTrial`, no
+  `$TrialDepth`, no `shadow-trial`/`trial-shadow` alias.
+- Do not change what keys 5 and 6 DO — only their labels ("Stop Shadow Run" /
+  "Open Shadow Dashboard").
 
 ## Anti-cheat
 
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- Zero signer loaded; no real trades or live venue requests; rehearsal only.
+- No skipping/disabling tests, no deleting assertions (the six trial launcher assertions are
+  deliberately replaced by launcher-is-gone assertions, not silently dropped), no suppressing
+  lint/type checks.
+- No new external dependencies without explicit approval.
+- Never run key `1`, `start`, or any live action while doing this work. Tests use copied
+  functions and stubs only; never dot-source or load the whole menu script in a test (it takes
+  over the console).
 - No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-- Never write to or delete `data/orders.db`. Rehearsal is strictly isolated to `data/val_step1.db`.
+
+---
+
+# CONSTRAINTS — #473 (history; merged as #480)
+
+Governed the `i473/base-shadow-rehearsal` branch only.
 
 ---
 

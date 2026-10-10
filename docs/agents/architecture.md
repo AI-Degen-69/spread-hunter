@@ -169,11 +169,18 @@ A depth-bar trial ranker publishes to `runtime/trials/<run-id>/` (via
 with the same flag plus `--trial-depth`) instead of the shared feed above, so
 the shadow-01/02 baselines never see trial rows. The trial shadow loop reads
 only its own feed through `core_brain/shadow_run.py --markets-path`
-(`_market_specs(path=...)` underneath). The feed choice persists in
-`data/<store>.trial.json` (absolute paths) and Menu R replays it; stores
-without a manifest resume on the shared feed exactly as before. The trial
-screener is recorded in its per-run session file only, never as the global
-`filter` entry in `processes.json`.
+(`_market_specs(path=...)` underneath).
+
+The menu's depth-bar trial launcher (`Start-ShadowTrial`, the `t` key, the
+`shadow-trial`/`trial-shadow` aliases) was retired in #475: no new trial store
+can be started from the menu, and those aliases are now unknown actions. Old
+trial stores still resume: Menu R (`Resume-ShadowRun`) replays the feed choice
+persisted in `data/<store>.trial.json` (absolute paths); stores without a
+manifest resume on the shared feed exactly as before. The trial screener is
+recorded in its per-run session file only, never as the global `filter` entry
+in `processes.json`. To run a fresh paired depth experiment, use the commands
+in `docs/runs/2026-09-28-paired-depth-experiment.md` (the ranker and loop
+flags above are still the shared building blocks).
 
 Add a state file: write it through `runtime_file(...)`, read it through
 `resolve_runtime_file(...)`, and if you ever rename one, add the old name to

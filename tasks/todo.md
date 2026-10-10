@@ -1,7 +1,9 @@
-# Todo - Issue 473 (Branch: i473/base-shadow-rehearsal)
+# Todo - Issue 475 (Branch: i475/rework-control-center-menu-navigation-and-retire-depth-trial)
 
-- [x] T1 [S] [Frontend/UI] Disable master START on non-production/shadow view in `dashboard/static/app.js`
-- [x] T2 [S] [Backend/Logic + Test] Regression test coverage for master START button in harness and pytest
-- [ ] T3 [M] [Validation] Execute 10-minute base shadow rehearsal and verify loop end-to-end
+- [x] 1.1 [S] [Menu/Tests] Retire the depth-bar trial launcher — delete Start-ShadowTrial, t row/branch, aliases, allow-list t; add launcher-is-gone tests; update resume tuple + architecture.md
+- [x] 1.2 [M] [Menu/Tests] One key set everywhere — $script:MenuKeys (1-9,r,a,p,q); grid rows for r/a/p/q; a/p branches + aliases; header; test_menu_navigation.py text + pwsh dispatch
+- [ ] 1.3 [M] [Menu/Tests] Interactive menu loop — Invoke-InteractiveMenu; Read-MenuChoice Enter/EOF; per-pass input reset; error-safe loop; pwsh loop tests
 
-Checkpoints: after T2 (unit tests green) / after T3 (rehearsal verified & report generated).
+Checkpoints: after 1.1 (trial gone, resume intact) / after 1.2 (one key set, a/p work) /
+after 1.3 (loop + CLI single-shot green). All done → /iii-build-plan.
+

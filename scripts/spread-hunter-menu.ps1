@@ -3,8 +3,8 @@
 # (C:\Users\Tiger\Agents\Projects\spread-hunter).
 #
 # Usage:
-#   .\scripts\spread-hunter-menu.ps1          # interactive menu (press 1-9/q, no Enter; one choice, then exits)
-#   .\scripts\spread-hunter-menu.ps1 8        # run menu option 8 directly (1-9, q all work)
+#   .\scripts\spread-hunter-menu.ps1          # interactive menu (press 1-9, r, a, p, q; loops until q or Ctrl+C)
+#   .\scripts\spread-hunter-menu.ps1 8        # run menu option 8 directly (1-9, r, a, p, q all work; single shot)
 #   .\scripts\spread-hunter-menu.ps1 start -Yes    # 1 · LIVE: preflight-stop + wipe, fresh bot + dashboard (real bids)
 #   .\scripts\spread-hunter-menu.ps1 stop          # 2 · LIVE: stop bot + dashboard
 #   .\scripts\spread-hunter-menu.ps1 host          # 3 · LIVE: release :8799 from the other menu-owned dashboard (no wipe), host live & open
@@ -13,9 +13,10 @@
 #   .\scripts\spread-hunter-menu.ps1 stop-shadow   # 5 · SHADOW: stop loop, watcher and viewer
 #   .\scripts\spread-hunter-menu.ps1 open-shadow   # 6 · SHADOW: release :8799 from the other menu-owned dashboard (no wipe), host shadow & open
 #   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] [-ResumeDb <path|all>] [-Preset <name>] [-Prudent] # R · SHADOW: resume shadow run(s) in place (no wipe) & reattach dashboard(s) — interactive picks 01 / 02 / all / Prudent
-#   .\scripts\spread-hunter-menu.ps1 shadow-trial [-Minutes N] [-TrialDepth USD] # T · SHADOW: start a depth-bar trial rehearsal on its own feed (no wipe, siblings keep running)
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
+#   .\scripts\spread-hunter-menu.ps1 audit         # A · MAINTENANCE: storage audit (read-only disk usage)
+#   .\scripts\spread-hunter-menu.ps1 prune         # P · MAINTENANCE: storage prune (deletes stale stores/reports)
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
 # starting-capital snapshot, shared run_id). The dashboard process itself is
 # owned by this script via runtime/live-dash.pids.json.
@@ -36,7 +37,6 @@ param(
     [double]$Hours = 0,
     [switch]$Watch,
     [string]$ResumeDb = "",
-    [double]$TrialDepth = 250,
     [string]$Preset = "",
     [switch]$Prudent,
     # Collect stray words (e.g. `audit and`) so the menu can answer with its
@@ -1466,142 +1466,6 @@ function Resume-ShadowRun {
     }
     return $true
 }
-function Start-ShadowTrial {
-    <# Start a depth-bar TRIAL rehearsal (#291) on its own feed: mint the next
-    store/run id, seed runtime/trials/<run-id>/ with --trial-depth/--out-dir,
-    refresh it with a trial filter_loop, and quote it with --markets-path.
-    NON-DESTRUCTIVE: nothing is stopped or wiped -- sibling 01/02 sessions
-    keep running on the shared feed. The feed choice persists in
-    data/<store>.trial.json (absolute paths) so Menu R replays it; the trial
-    screener is recorded in the per-run session file only, never as the
-    global "filter" entry. -TrialDepth defaults to 250, -Minutes to 1440;
-    -1 explicitly runs until stopped. #>
-    $depth = if ($TrialDepth -gt 0) { [double]$TrialDepth } else { 250.0 }
-    $mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes
-    $stamp = Get-Date -Format "dd-MM_HH-mm"
-    $dbSeq = Get-NextShadowSeq
-    $script:ShadowRunId = "shadow-$dbSeq"
-    $script:ShadowDbPath = Join-Path $ProjectPath "data/${dbSeq}_shadow_${stamp}.db"
-    $script:StatsDbPath = Join-Path $ProjectPath "data/stats_${stamp}_$($script:ShadowRunId).db"
-    $runId = $script:ShadowRunId
-    $trialDir = Join-Path $ProjectPath "runtime/trials/$runId"
-    $feedPath = Join-Path $trialDir "markets.json"
-    $manifestPath = Join-Path (Split-Path $script:ShadowDbPath -Parent) (([IO.Path]::GetFileNameWithoutExtension($script:ShadowDbPath)) + ".trial.json")
-
-    $durationLabel = if ($mins -lt 0) { "until stopped" } else { "for $mins minute(s)" }
-    Lsh-Ok "Starting depth-bar trial $runId (bar `$$depth, $durationLabel) - nothing stopped, nothing wiped."
-    if (-not (Start-ShadowDashboard)) { return $false }
-
-    Lsh-Step "Seeding the trial universe feed..."
-    Push-Location $ProjectPath
-    try { & python -m scripts.filter_markets --trial-depth $depth --out-dir $trialDir } finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $feedPath)) {
-        Lsh-Fail "Trial ranking produced no feed at $feedPath - trial aborted, siblings untouched."
-        return $false
-    }
-    Lsh-Ok "Trial feed ready ($feedPath)."
-    $screener = Start-Process -FilePath "python" -ArgumentList (Format-ProcessArgs @("-m", "scripts.filter_loop", "--trial-depth", "$depth", "--out-dir", $trialDir)) `
-        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $RunDir "trial_screener-$runId.out.log") `
-        -RedirectStandardError (Join-Path $RunDir "trial_screener-$runId.err.log")
-    Lsh-Ok "Trial screener loop running (PID $($screener.Id))."
-    # Deliberately no global filter registration: the trial screener is
-    # per-run. Registering it under the shared filter key would replace the
-    # baseline screener in dashboard status and stop paths. It is recorded in
-    # the session below instead.
-    Lsh-Step "Starting the trial rehearsal loop..."
-    $shadowRun = Invoke-WithRehearsalTrialEnv {
-        Start-Process -FilePath "python" `
-            -ArgumentList (Format-ProcessArgs @("-m", "core_brain.shadow_run", "--minutes", "$mins", "--db", $script:ShadowDbPath, "--run-id", $runId, "--markets-path", $feedPath)) `
-            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput (Join-Path $RunDir "shadow_trial-$runId.out.log") `
-            -RedirectStandardError (Join-Path $RunDir "shadow_trial-$runId.err.log")
-    }
-    Lsh-Ok "Trial loop running (PID $($shadowRun.Id), $(if ($mins -gt 0) { "$mins minute(s)" } else { "until stopped" }))."
-    $observerHours = if ($mins -gt 0) { ($mins / 60) + 0.08 } else { -1 }
-    $observer = Start-Process -FilePath "python" `
-        -ArgumentList (Format-ProcessArgs @("-m", "core_brain.statistics_observer", "--mode", "shadow", "--watch", $script:ShadowDbPath, "--run-id", $runId, "--data-dir", (Join-Path $ProjectPath "data"), "--interval", "5", "--max-hours", $observerHours)) `
-        -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $RunDir "trial_observer-$runId.out.log") `
-        -RedirectStandardError (Join-Path $RunDir "trial_observer-$runId.err.log")
-    Lsh-Ok "Statistics observer running (PID $($observer.Id), db=$($script:StatsDbPath))."
-
-    $ring = $null
-    # The trial's own ring, by fixed name (as Resume-ShadowRun does): with
-    # 01/02 still running, "newest shadow-*.jsonl" would hand the watcher a
-    # sibling's ring while --db points at the trial store -- no working
-    # stop-loss coverage and a wrong ring in the session file.
-    $expectedRing = Join-Path $RunDir ("shadow-{0}.jsonl" -f ($runId -replace "^shadow-", ""))
-    $deadline = (Get-Date).AddSeconds(30)
-    while ($null -eq $ring -and (Get-Date) -lt $deadline) {
-        if (Test-Path $expectedRing) { $ring = $expectedRing; break }
-        Start-Sleep -Milliseconds 500
-        if ($shadowRun.HasExited) { break }
-    }
-    $guardrail = $null
-    if ($ring) {
-        $guardrail = Start-Process -FilePath "python" `
-            -ArgumentList (Format-ProcessArgs @("-m", "scripts.global_stop_loss", "--db", $script:ShadowDbPath, "--ring", $ring)) `
-            -WorkingDirectory $ProjectPath -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput (Join-Path $RunDir "trial_guardrail-$runId.out.log") `
-            -RedirectStandardError (Join-Path $RunDir "trial_guardrail-$runId.err.log")
-        Lsh-Ok "Stop-loss watcher engaged (PID $($guardrail.Id)) on $ring."
-    } else {
-        Lsh-Warn "Could not resolve the rehearsal ring; stop-loss watcher not engaged."
-    }
-    if ($mins -gt 0) {
-        $timerTargets = @(@{ id = [int]$screener.Id; ticks = $screener.StartTime.ToUniversalTime().Ticks })
-        if ($guardrail) { $timerTargets += @{ id = [int]$guardrail.Id; ticks = $guardrail.StartTime.ToUniversalTime().Ticks } }
-        $killSec = [int]($mins * 60)
-        $killCmd = "Start-Sleep -Seconds $killSec"
-        foreach ($t in $timerTargets) {
-            $killCmd += "; `$p = Get-Process -Id $($t.id) -ErrorAction SilentlyContinue; if (`$p -and `$p.StartTime.ToUniversalTime().Ticks -eq $($t.ticks)) { Stop-Process -Id $($t.id) -Force -ErrorAction SilentlyContinue }"
-        }
-        Start-Process -FilePath "powershell" `
-            -ArgumentList "-NoProfile", "-Command", $killCmd `
-            -WindowStyle Hidden
-    }
-
-    [ordered]@{
-        trial_depth_usd = $depth
-        ranker_out_dir = $trialDir
-        markets_path = $feedPath
-    } | ConvertTo-Json | Set-Content -Path $manifestPath -Encoding UTF8
-    Lsh-Ok "Trial manifest written ($manifestPath)."
-    $session = [ordered]@{
-        started = (Get-Date).ToString("o")
-        started_ticks = (Get-Date).ToUniversalTime().Ticks
-        run_id = $runId
-        ShadowRunId = $runId
-        shadow_db = $script:ShadowDbPath
-        ShadowDbPath = $script:ShadowDbPath
-        stats_db = $script:StatsDbPath
-        StatsDbPath = $script:StatsDbPath
-        report_path = (Join-Path $ProjectPath "reports")
-        trial_depth_usd = $depth
-        TrialDepthUsd = $depth
-        ranker_out_dir = $trialDir
-        RankerOutDir = $trialDir
-        markets_path = $feedPath
-        MarketsPath = $feedPath
-        screener = [ordered]@{ pid = $screener.Id; started_ticks = $screener.StartTime.ToUniversalTime().Ticks }
-        loop = [ordered]@{ pid = $shadowRun.Id; started_ticks = $shadowRun.StartTime.ToUniversalTime().Ticks }
-        observer = [ordered]@{ pid = $observer.Id; started_ticks = $observer.StartTime.ToUniversalTime().Ticks }
-        watcher = if ($guardrail) { [ordered]@{ pid = $guardrail.Id; started_ticks = $guardrail.StartTime.ToUniversalTime().Ticks } } else { $null }
-        ring = $ring
-    }
-    $session | ConvertTo-Json -Depth 5 | Set-Content -Path (Get-ShadowSessionFile -RunId $runId) -Encoding UTF8
-
-    Start-Sleep -Seconds 3
-    $openedUrl = Open-ShadowDashboard
-    Lsh-Ok "Opened $openedUrl in default browser (trial db=$($script:ShadowDbPath))."
-    if ($Watch) {
-        Lsh-Step "Watching the trial loop live (Ctrl-C ends the watcher; $(if ($mins -gt 0) { "session self-stops after $mins min" } else { "session runs until stop-shadow" }))."
-        Get-Content (Join-Path $RunDir "shadow_trial-$runId.err.log") -Wait -ErrorAction SilentlyContinue
-    }
-    return $true
-}
-
 function Start-NewShadowRun {
     <# Start a fresh shadow rehearsal on a brand new database without wiping
        existing stores in data/. Allows running standard baseline (shadow-01,
@@ -2984,6 +2848,21 @@ function Reset-Environment {
 }
 
 # ── Menu ──
+# One ordered key list is the single source of truth for the menu: the grid,
+# the prompt, the invalid-selection message and the command-line allow-list
+# all derive from it, so a new key only has to be added in one place (#475).
+$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'q')
+
+function Format-MenuHint {
+    <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
+       The 1-9 span collapses to a range; the remaining keys list verbatim. #>
+    $numbers = $script:MenuKeys | Where-Object { $_ -match '^\d+$' }
+    $letters = $script:MenuKeys | Where-Object { $_ -notmatch '^\d+$' }
+    $span = "{0}-{1}" -f ($numbers[0]), ($numbers[-1])
+    $parts = @($span) + $letters
+    return ($parts -join ', ')
+}
+
 function Show-MenuGrid {
     $cInfo    = Get-ProfileColor -Name Info
     $cStrong  = Get-ProfileColor -Name Strong
@@ -3005,15 +2884,16 @@ function Show-MenuGrid {
         ) }
         @{ Header = "🥷 SHADOW - rehearsal, spends nothing"; Items = @(
             @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Shadow Run";          D = "Start new shadow rehearsal (standard or prudent); prompts profile + minutes (no wipe)" }
-            @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
-            @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Hosts unified dashboard on :8799 (shadow DB) & opens browser" }
+            @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Shadow Run";           D = "Stops rehearsal loop, watcher and dashboard" }
+            @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Open Shadow Dashboard";     D = "Hosts unified dashboard on :8799 (shadow DB) & opens browser" }
             @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all / Prudent" }
-            @{ K = "t"; Icon = "◈"; IconColor = "Info";    V = "Start Depth-Bar Trial";  D = "Start a trial rehearsal on its own feed (no wipe, siblings keep running); prompts depth" }
         ) }
         @{ Header = "MAINTENANCE & STATUS"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop & Clean";       D = "Kills all bot processes/dashboards, wipes data, verifies" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
             @{ K = "9"; Icon = "▣"; IconColor = "Info";    V = "Overnight Statistics";         D = "Run shadow + statistics + dashboard for hours" }
+            @{ K = "a"; Icon = "◫"; IconColor = "Neutral"; V = "Storage Audit";             D = "Report disk usage of every store and report (read-only)" }
+            @{ K = "p"; Icon = "⨯"; IconColor = "Error";   V = "Storage Prune";             D = "Delete stale stores/reports per retention (prunes data)" }
         ) }
     )
 
@@ -3208,38 +3088,27 @@ function Invoke-LiveAction {
                 Lsh-Fail ("Resume incomplete: {0} store(s) failed: {1}." -f $failedResumes.Count, ($failedNames -join ", "))
             }
         }
-        "t" {
-            # Depth-bar trial: a new rehearsal on its own feed. Nothing is
-            # stopped or wiped; sibling sessions keep running untouched.
-            $mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes
-            if ($Action -eq "") {
-                $resp = Read-Host "  Trial depth bar in USD (default 250)?"
-                if ($resp -and $resp -match '^\s*[0-9]+(?:\.[0-9]+)?\s*$') { $script:TrialDepth = [double]$resp }
-                $trialDuration = if ($mins -gt 0) { "$mins-minute" } else { "unlimited" }
-                $confirm = Read-Host "  Start an $trialDuration depth-bar trial rehearsal (no wipe, siblings keep running)? [y/N]"
-                if ($confirm -notmatch '^[yY]') { Lsh-Warn "Shadow trial cancelled."; return }
-            }
-            $script:Minutes = [int]$mins
-            $null = Start-ShadowTrial
-        }
-        "audit" {
+        "a" {
             Invoke-StorageAudit
         }
-        "prune" {
+        "p" {
             Invoke-StoragePrune -Force:$Yes
         }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
-            Lsh-Warn "Invalid selection: $Key (choose 1-9, or q)."
+            # The hint already ends in q, so do not append ", or q" again.
+            Lsh-Warn ("Invalid selection: {0} (choose {1})." -f $Key, (Format-MenuHint))
             Start-Sleep -Seconds 1
         }
     }
 }
 
 function Read-MenuChoice {
-    <# Single-keypress menu input: 1-9/q run at once, no Enter needed.
-       Non-printable keys (arrows, etc.) are ignored; Enter exits.
-       Falls back to Read-Host when stdin is redirected or non-interactive. #>
+    <# Single-keypress menu input: 1-9/r/a/p/q run at once, no Enter needed.
+       Non-printable keys (arrows, etc.) are ignored. Enter returns "" so the
+       caller redraws the menu; end of input (redirected stdin runs out, or no
+       console at all) returns $null so the caller leaves. Falls back to
+       Read-Host when stdin is redirected or non-interactive. #>
     try {
         while ($true) {
             $key = [Console]::ReadKey($true)
@@ -3253,10 +3122,61 @@ function Read-MenuChoice {
         try { $fallback = Read-Host }
         catch {
             Write-Host "No interactive console; pass a menu option directly (e.g. .\scripts\spread-hunter-menu.ps1 8)."
-            return ""
+            return $null
         }
-        if ($null -eq $fallback) { return "" }
+        if ($null -eq $fallback) { return $null }
         return $fallback.Trim().ToLower()
+    }
+}
+
+function Read-MenuPause {
+    <# "Press any key to return to the menu" between actions. Reads one keypress
+       on a real console; returns immediately (no key) when stdin is redirected
+       or there is no console, so a piped/CI run is never blocked here. #>
+    try { $null = [Console]::ReadKey($true) } catch { }
+}
+
+function Invoke-InteractiveMenu {
+    <# The interactive control center (#475). It loops until q (its branch
+       calls exit 0), Ctrl+C, or end of input, so a failed action never throws
+       the operator out. Each pass redraws the banner + grid and runs one key.
+       Per-action inputs reset every pass (a second 4 re-prompts the profile; r
+       keeps a launch -Preset), and a thrown action error is shown before the
+       menu returns. #>
+    $launchMinutes   = $Minutes
+    $launchHours     = $Hours
+    $launchWatch     = $Watch
+    $launchResumeDb  = $ResumeDb
+    $launchPreset    = if ($Preset) { $Preset.Trim().ToLower() } elseif ($Prudent) { "prudent" } else { "" }
+    while ($true) {
+        Lsh-Banner -Title "SPREAD HUNTER - CONTROL CENTER"
+        Show-MenuGrid
+        Write-Host "  Select " -ForegroundColor (Get-ProfileColor -Name Text) -NoNewline
+        Write-Host ("[{0}]" -f (Format-MenuHint)) -ForegroundColor (Get-ProfileColor -Name Command) -NoNewline
+        Write-Host " › " -ForegroundColor (Get-ProfileColor -Name Highlight) -NoNewline
+        $choice = Read-MenuChoice
+        if ($null -eq $choice) { return }
+        if ($choice -eq "") { continue }
+        try {
+            Invoke-LiveAction $choice
+        } catch {
+            Lsh-Fail ("Action failed: {0}" -f $_.Exception.Message)
+        } finally {
+            # Restore per-pass inputs so the next pass behaves like a fresh
+            # launch, and clear the resolved run identity a launcher may have set.
+            $script:Minutes     = $launchMinutes
+            $script:Hours       = $launchHours
+            $script:Watch       = $launchWatch
+            $script:ResumeDb    = $launchResumeDb
+            $script:ShadowPreset = $launchPreset
+            $script:ShadowRunId  = $null
+            $script:ShadowDbPath = $null
+            $script:StatsDbPath  = $null
+        }
+        # Pause so the action's output stays readable before the menu redraws.
+        Write-Host ""
+        Write-Host "  Press any key to return to the menu..." -ForegroundColor (Get-ProfileColor -Name Neutral)
+        Read-MenuPause
     }
 }
 
@@ -3288,8 +3208,6 @@ if ($Action -ne "") {
         "shadow-resume" = "r"
         "resume-shadow" = "r"
         "resume-01"    = "r"
-        "shadow-trial" = "t"
-        "trial-shadow" = "t"
         "reset"        = "7"
         "clean"        = "7"
         "get"          = "7"
@@ -3298,11 +3216,11 @@ if ($Action -ne "") {
         "stats"        = "9"
         "overnight"    = "9"
         "statistical-run" = "9"
-        "audit"        = "audit"
-        "storage-audit"= "audit"
-        "retention"    = "audit"
-        "prune"        = "prune"
-        "storage-prune"= "prune"
+        "audit"        = "a"
+        "storage-audit"= "a"
+        "retention"    = "a"
+        "prune"        = "p"
+        "storage-prune"= "p"
     }
     if ($ExtraArgs.Count -gt 0) {
         Write-Host ("ERROR: Too many words: '{0} {1}'. Run one action at a time (e.g. .\scripts\spread-hunter-menu.ps1 audit) — '-and' is not a menu word; call the menu twice to run two actions." -f $Action, ($ExtraArgs -join ' ')) -ForegroundColor Red
@@ -3314,8 +3232,10 @@ if ($Action -ne "") {
     # Menu numbers work directly too: `.\scripts\spread-hunter-menu.ps1 8`
     # runs option 8 at once, no menu shown. Reject anything else here so a
     # typo fails fast instead of falling into the "invalid selection" path.
-    if (@("1","2","3","4","5","6","7","8","9","r","t","audit","prune","q") -notcontains $key) {
-        Write-Host "ERROR: Unknown action '$Action' (use 1-9, q, or a name like start/stop/status/audit/prune)" -ForegroundColor Red
+    # The allow-list is the same key set the grid, prompt and error message
+    # name (#475), so a stray action can never be accepted here.
+    if ($script:MenuKeys -notcontains $key) {
+        Write-Host ("ERROR: Unknown action '{0}' (use {1}, or a name like start/stop/status/audit/prune)" -f $Action, (Format-MenuHint)) -ForegroundColor Red
         exit 1
     }
 
@@ -3330,12 +3250,7 @@ if ($Action -ne "") {
     exit 0
 }
 
-Lsh-Banner -Title "SPREAD HUNTER - CONTROL CENTER"
-Show-MenuGrid
-Write-Host "  Select " -ForegroundColor (Get-ProfileColor -Name Text) -NoNewline
-Write-Host "[1-9, q]" -ForegroundColor (Get-ProfileColor -Name Command) -NoNewline
-Write-Host " › " -ForegroundColor (Get-ProfileColor -Name Highlight) -NoNewline
-$choice = Read-MenuChoice
-if ($null -eq $choice -or $choice -eq "") { exit 0 }
-Invoke-LiveAction $choice
+# No command-line action: run the interactive control center, which loops until
+# q / Ctrl+C / end of input (#475).
+Invoke-InteractiveMenu
 exit 0
