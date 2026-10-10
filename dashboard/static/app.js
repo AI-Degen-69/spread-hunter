@@ -4945,14 +4945,20 @@ function activeMarketsRows(kpi, state, sort) {
     // Screening filter parameters and current values
     const upToken = (m.quotes || []).find(q => normalizeLeg(q.side) === 'UP')?.token_id;
     const liveMid = upToken ? liveMarkMid(upToken) : null;
-    const midPrice = liveMid ?? (legs.up ? legs.up.mid : (legs.dn && legs.dn.mid !== null ? 1 - legs.dn.mid : null)) ?? m.mid_price ?? m.mid ?? null;
-    const volume30m = m.movement_usd ?? m.volume_30m ?? null;
+    const midPrice = liveMid
+      ?? (legs.up && Number.isFinite(legs.up.mid) ? legs.up.mid : null)
+      ?? (legs.dn && Number.isFinite(legs.dn.mid) ? 1 - legs.dn.mid : null)
+      ?? m.mid_price ?? m.mid ?? null;
+    const volume30m = (Number(m.movement_window_sec) === 1800 || m.movement_window_sec === undefined)
+      ? (m.movement_usd ?? m.volume_30m ?? null)
+      : (m.volume_30m ?? null);
     const volume24h = m.volume_24h ?? null;
-    const top3Depth = (m.top3_bid_depth !== undefined && m.top3_bid_depth !== null)
-      ? m.top3_bid_depth
-      : ((m.yes_depth_usd !== undefined && m.no_depth_usd !== undefined && m.yes_depth_usd !== null && m.no_depth_usd !== null)
-          ? Math.min(Number(m.yes_depth_usd), Number(m.no_depth_usd))
-          : (m.yes_depth_usd ?? m.no_depth_usd ?? null));
+    const yesDepth = otNum(m.yes_depth_usd);
+    const noDepth = otNum(m.no_depth_usd);
+    const top3Depth = otNum(m.top3_bid_depth)
+      ?? (yesDepth !== null && noDepth !== null
+          ? Math.min(yesDepth, noDepth)
+          : (yesDepth ?? noDepth));
     const horizon = (m.days_to_resolve !== undefined && m.days_to_resolve !== null) ? m.days_to_resolve : null;
 
     return {

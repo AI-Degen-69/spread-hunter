@@ -354,6 +354,7 @@ def test_active_markets_displays_screening_parameters():
     # Mid Price, $ traded in last 30m, 24h Volume, Top-3 Bid Depth, Horizon.
     kpi = _kpi()
     kpi["by_market"][CID_QUOTED]["movement_usd"] = 14192.85
+    kpi["by_market"][CID_QUOTED]["movement_window_sec"] = 1800.0
     kpi["by_market"][CID_QUOTED]["yes_depth_usd"] = 2015.95
     kpi["by_market"][CID_QUOTED]["no_depth_usd"] = 6642.05
 
@@ -371,15 +372,44 @@ def test_active_markets_displays_screening_parameters():
 
 
 @requires_node
+def test_active_markets_displays_feed_top3_bid_depth_without_side_depths():
+    kpi = _kpi()
+    market = kpi["by_market"][CID_QUOTED]
+    market["top3_bid_depth"] = 3123.45
+    market.pop("yes_depth_usd", None)
+    market.pop("no_depth_usd", None)
+
+    rendered = _render("active-markets", kpi, _state())
+
+    assert "$3k" in rendered["html"]
+
+
+@requires_node
+def test_active_markets_handles_mixed_depths():
+    # Arrange — one nonnumeric depth and one numeric depth should fall back to finite depth
+    kpi = _kpi()
+    market = kpi["by_market"][CID_QUOTED]
+    market.pop("top3_bid_depth", None)
+    market["yes_depth_usd"] = "invalid"
+    market["no_depth_usd"] = 4500.0
+
+    rendered = _render("active-markets", kpi, _state())
+
+    assert "$5k" in rendered["html"]
+
+
+@requires_node
 def test_active_markets_status_pills_distinguish_resting_and_quoting():
     # Arrange — CID_QUOTED has resting orders (RESTING); CID_HELD has quotes but no resting orders (QUOTING).
     rendered = _render("active-markets", _kpi(), _state())
     html = rendered["html"]
 
-    # Assert — RESTING uses resting-breathing (bright green in css),
-    # QUOTING uses quoting-breathing (less bright green in css).
-    assert 'class="pill resting-breathing"' in html
-    assert 'class="pill quoting-breathing"' in html
+    # Assert — RESTING uses resting-breathing (bright green in css) on CID_QUOTED row,
+    # QUOTING uses quoting-breathing (less bright green in css) on CID_HELD row.
+    quoted_row = html.split(f'data-cid="{CID_QUOTED}"')[1].split("</tr>")[0]
+    held_row = html.split(f'data-cid="{CID_HELD}"')[1].split("</tr>")[0]
+    assert 'class="pill resting-breathing"' in quoted_row
+    assert 'class="pill quoting-breathing"' in held_row
 
 
 # ── Open orders ─────────────────────────────────────────────────────────────
