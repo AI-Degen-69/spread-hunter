@@ -593,7 +593,7 @@ function renderCachedSections() {
   }
   // Tab 2: PERFORMANCE & ANALYTICS (KPI tiles → rail Reports page)
   if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
-    renderPortfolioOverview(currentKpi, lastStatus);
+    renderPortfolioOverview(currentKpi, lastStatus, lastState);
   }
   if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
     renderKPIs(currentKpi, lastStatus);
@@ -2010,7 +2010,7 @@ function portfolioEquity(kpi, status) {
   };
 }
 
-function renderBrokerPortfolioOverview(kpi, status) {
+function renderBrokerPortfolioOverview(kpi, status, state) {
   if (!kpi) return;
   const p = kpi.portfolio || {};
   const ta = kpi.trade_analytics || {};
@@ -2066,10 +2066,23 @@ function renderBrokerPortfolioOverview(kpi, status) {
   // Aligned KPI Strip
   // Derived from the headline, never from the wallet mark: a cash figure on a
   // different basis than the equity above it cannot be reconciled by eye.
-  const cashVal = totalVal - (p.open_committed_usd || 0);
-  const cashPct = totalVal > 0 ? ((cashVal / totalVal) * 100).toFixed(1) : '100.0';
-  const committedVal = p.open_committed_usd || (p.account?.positions_value_usd || 0);
-  const committedPct = totalVal > 0 ? ((committedVal / totalVal) * 100).toFixed(1) : '0.0';
+  // #460: three-way allocation — dollars resting in open orders (local
+  // registry, exact, fresh each poll) plus dollars held in positions, with
+  // cash as the remainder. An unread leg is unmeasured ('--'), never a
+  // fabricated $0.00: cash computes only when all three inputs are numbers.
+  const _numOrNull = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+  const restingVal = _numOrNull(state?.capital?.resting_committed);
+  const heldRaw = p.open_committed_usd ?? p.account?.positions_value_usd ?? null;
+  const committedVal = _numOrNull(heldRaw);
+  const cashVal = (restingVal !== null && committedVal !== null)
+    // Held can be a venue market value rather than a cost, so the legs can
+    // sum past the headline — a negative remainder is not cash anyone holds.
+    ? Math.max(0, totalVal - restingVal - committedVal) : null;
+  const _pctOf = (v) => (v === null || !(totalVal > 0))
+    ? null : ((v / totalVal) * 100).toFixed(1);
+  const restingPct = _pctOf(restingVal);
+  const committedPct = _pctOf(committedVal);
+  const cashPct = _pctOf(cashVal);
   const activePairs = (kpi.funnel?.graduated || []).length;
   const n = ta.n_closes ?? (ta.closes_count || 0);
   const winRate = ta.win_rate != null && n > 0 ? (ta.win_rate * 100).toFixed(1) : '0.0';
@@ -2084,6 +2097,8 @@ function renderBrokerPortfolioOverview(kpi, status) {
   const elCashPct = document.getElementById('broker-kpi-cash-pct');
   const elCommitted = document.getElementById('broker-kpi-committed');
   const elCommittedPct = document.getElementById('broker-kpi-committed-pct');
+  const elResting = document.getElementById('broker-kpi-resting');
+  const elRestingPct = document.getElementById('broker-kpi-resting-pct');
   const elPairs = document.getElementById('broker-kpi-pairs');
   const elSpread = document.getElementById('broker-kpi-spread');
   const elExpectancy = document.getElementById('broker-kpi-expectancy');
@@ -2093,11 +2108,15 @@ function renderBrokerPortfolioOverview(kpi, status) {
   const elSharpe = document.getElementById('broker-kpi-sharpe');
 
   if (elCash) elCash.textContent = fmtUSD(cashVal);
-  if (elCashPct) elCashPct.textContent = `${cashPct}% Liquid USDC`;
+  // Cash keeps its Liquid-USDC unit; an unmeasured remainder is '--', and a
+  // percent of an unknown is unknown — never '0.0% Liquid USDC'.
+  if (elCashPct) elCashPct.textContent = cashPct === null ? '--' : `${cashPct}% Liquid USDC`;
   if (elCommitted) elCommitted.textContent = fmtUSD(committedVal);
   // The unit is part of the number: "42.6% Committed Risk" read as a risk
   // figure while the value is the tile's share of the equity headline.
-  if (elCommittedPct) elCommittedPct.textContent = `${committedPct}% of Equity`;
+  if (elCommittedPct) elCommittedPct.textContent = committedPct === null ? '--' : `${committedPct}% of Equity`;
+  if (elResting) elResting.textContent = fmtUSD(restingVal);
+  if (elRestingPct) elRestingPct.textContent = restingPct === null ? '--' : `${restingPct}% of Equity`;
   // `graduated` counts MARKETS the Market Filter quoted, not pairs held --
   // "3 Pairs" once sat above an OPEN POSITIONS table showing one Unpaired
   // position, and nothing about a graduated market is hedged yet.
@@ -2120,9 +2139,11 @@ function renderBrokerPortfolioOverview(kpi, status) {
 
   // Bento progress bars & edge indicator
   const elCashBar = document.getElementById('bento-cash-bar');
-  if (elCashBar) elCashBar.style.width = `${Math.min(100, Math.max(0, parseFloat(cashPct) || 0))}%`;
+  if (elCashBar) elCashBar.style.width = cashPct === null ? '' : `${Math.min(100, Math.max(0, parseFloat(cashPct) || 0))}%`;
   const elCommittedBar = document.getElementById('bento-committed-bar');
-  if (elCommittedBar) elCommittedBar.style.width = `${Math.min(100, Math.max(0, parseFloat(committedPct) || 0))}%`;
+  if (elCommittedBar) elCommittedBar.style.width = committedPct === null ? '' : `${Math.min(100, Math.max(0, parseFloat(committedPct) || 0))}%`;
+  const elRestingBar = document.getElementById('bento-resting-bar');
+  if (elRestingBar) elRestingBar.style.width = restingPct === null ? '' : `${Math.min(100, Math.max(0, parseFloat(restingPct) || 0))}%`;
   const elWinrateBar = document.getElementById('bento-winrate-bar');
   if (elWinrateBar) elWinrateBar.style.width = `${Math.min(100, Math.max(0, parseFloat(winRate) || 0))}%`;
   const elEdgeTag = document.getElementById('bento-edge-tag');
@@ -4141,13 +4162,13 @@ function renderAnalyticsSurface(kpi, status) {
  * stayed on Reports; painting them from renderKPIs — which the poll gates
  * behind the Reports grid — froze the card at its pre-data standby on every
  * other page. They are their own paint now, gated by their own target. */
-function renderPortfolioOverview(kpi, status) {
+function renderPortfolioOverview(kpi, status, state) {
   // Same contract as renderKPIs: a payload without a portfolio is malformed
   // for this paint, and computed-from-nothing standby figures must not
   // overwrite whatever the card last showed.
   if (!kpi || !kpi.portfolio) return;
   renderRunProfitability(kpi);
-  renderBrokerPortfolioOverview(kpi, status);
+  renderBrokerPortfolioOverview(kpi, status, state);
 }
 
 function renderKPIs(kpi, status) {
@@ -8026,7 +8047,7 @@ async function pollStatus() {
     // own gate: the card lives on page-home since #140, and painting it only
     // behind the Reports grid froze it at standby on every other page (#268).
     if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
-      renderPortfolioOverview(currentKpi, status);
+      renderPortfolioOverview(currentKpi, status, lastState);
     }
 
     // Render KPIs (Tab 2 → rail Reports page)

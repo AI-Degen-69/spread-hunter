@@ -32,7 +32,7 @@ WALLET = STARTING
 def _render(portfolio: dict, starting_capital: float | None = STARTING,
             equity_series: list[dict] | None = None,
             timeframe: str = "ALL", trade_analytics: dict | None = None,
-            funnel: dict | None = None) -> dict:
+            funnel: dict | None = None, state: dict | None = None) -> dict:
     payload = {
         "kpi": {
             "portfolio": portfolio,
@@ -42,6 +42,7 @@ def _render(portfolio: dict, starting_capital: float | None = STARTING,
         },
         "status": None if starting_capital is None else {"starting_capital": starting_capital},
         "timeframe": timeframe,
+        "state": state,
     }
     out = subprocess.run([shutil.which("node"), str(HARNESS), json.dumps(payload)],
                          capture_output=True, text=True, check=True)
@@ -164,7 +165,10 @@ def test_headline_equals_the_charts_final_point_on_a_shadow_run():
 
 def test_cash_available_is_consistent_with_the_headline():
     # Arrange — a dollar of the book is committed to resting orders.
-    card = _render(_shadow_portfolio(open_committed_usd=1.0))
+    # #460: cash needs the registry's resting leg too, so the fixture carries
+    # an empty-book state (resting $0.00, measured) beside the $1.00 held.
+    card = _render(_shadow_portfolio(open_committed_usd=1.0),
+                   state={"capital": {"resting_committed": 0.0}})
 
     # Act / Assert — cash is headline minus committed, not the wallet mark.
     assert card["equity"] == "$85.77"
@@ -360,4 +364,58 @@ def test_tooltip_falls_back_when_basis_and_hold_unmeasured():
     assert "Method:" not in tip
     assert "Held:</span>" in tip
     assert tip.count("--") >= 2  # unmeasured percent AND unmeasured hold
+
+# --- Issue 460: Resting-in-orders + held-positions allocation ---
+
+
+def test_resting_tile_shows_registry_dollars_with_held_and_cash_split():
+    card = _render(_shadow_portfolio(open_committed_usd=10.0),
+                   state={"capital": {"resting_committed": 7.0}})
+    assert card["resting"] == "$7.00"
+    assert "% of Equity" in card["resting_pct"]
+    assert card["committed"] == "$10.00"
+    assert card["cash"] == "$68.77"
+    assert card["equity"] == "$85.77"
+
+
+def test_resting_nonzero_without_sweep_leaves_held_and_cash_unmeasured():
+    card = _render(_shadow_portfolio(open_committed_usd=None, account={}),
+                   state={"capital": {"resting_committed": 5.0}})
+    assert card["resting"] == "$5.00"
+    assert card["committed"] == "--"
+    assert card["cash"] == "--"
+
+
+def test_resting_missing_state_leaves_cash_unmeasured():
+    card = _render(_shadow_portfolio(open_committed_usd=10.0), state=None)
+    assert card["resting"] == "--"
+    assert card["committed"] == "$10.00"
+    assert card["cash"] == "--"
+
+
+def test_held_falls_back_to_venue_positions_value():
+    card = _render(
+        _shadow_portfolio(open_committed_usd=None,
+                          account={"positions_value_usd": 12.0}),
+        state={"capital": {"resting_committed": 3.0}})
+    assert card["resting"] == "$3.00"
+    assert card["committed"] == "$12.00"
+    assert card["cash"] == "$70.77"
+
+
+def test_cash_never_goes_negative_when_legs_exceed_the_headline():
+    # Venue positions_value_usd is a market value, not a cost: the legs can
+    # sum past total. The remainder clamps at $0.00, still measured.
+    card = _render(_shadow_portfolio(open_committed_usd=80.0),
+                   state={"capital": {"resting_committed": 10.0}})
+    assert card["resting"] == "$10.00"
+    assert card["committed"] == "$80.00"
+    assert card["cash"] == "$0.00"
+    assert card["equity"] == "$85.77"
+
+
+def test_resting_tile_marks_up_a_label_for_resting_orders():
+    strip = _strip_markup()
+    assert "Resting in orders" in strip
+
 

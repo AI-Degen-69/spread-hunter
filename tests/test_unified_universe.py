@@ -1137,6 +1137,7 @@ def test_evaluate_refuses_expired_market_before_fetching_tape_or_books():
     m = _universe_candidate("0xexpired")
     m["end_date_iso"] = past_iso
     m["category"] = "Crypto"
+    m["closed"] = True
 
     session = _ExplodingSessionForExpired()
     row = evaluate(session, 5.0, m, volume_24h=250_000.0, source="spread")
@@ -1145,7 +1146,71 @@ def test_evaluate_refuses_expired_market_before_fetching_tape_or_books():
     assert row["eligible"] is False
     assert "horizon passed" in row["reject_reason"]
     assert "expired" in row["reject_reason"]
+    assert "market closed on the venue" in row["reject_reason"]
     assert fm._cause(row["reject_reason"]) == "horizon"
+
+
+def _open_election_market(cid: str, end_iso: str) -> dict:
+    """A runoff-style election market past its first-round endDate but still open (#461)."""
+    m = _universe_candidate(cid)
+    m["question"] = "Will Lula win the 2026 Brazilian presidential election?"
+    m["market_slug"] = "will-lula-win-the-2026-brazilian-presidential-election"
+    m["category"] = "Politics"
+    m["series_title"] = "Brazilian Election"
+    m["event_title"] = "Brazilian presidential election"
+    m["end_date_iso"] = end_iso
+    m["closed"] = False
+    m["accepting_orders"] = True
+    return m
+
+
+def test_expired_at_intake_admits_open_election_market_past_end_date():
+    # Arrange — venue-open runoff market ~5.4d past its first-round endDate (#461).
+    now = "2026-10-10T12:00:00Z"
+    past = "2026-10-05T03:59:00Z"
+    state = resolve_state(False, True, past)
+
+    # Act
+    expired, reason = expired_at_intake(
+        past, start_iso=None, category="Politics", now_iso=now, state=state)
+
+    # Assert
+    assert expired is False
+    assert reason == ""
+
+
+def test_expired_at_intake_refuses_closed_and_unreadable_past_end_date():
+    # Arrange — genuinely finished past-endDate markets stay refused (#461).
+    now = "2026-10-10T12:00:00Z"
+    past = "2026-10-05T03:59:00Z"
+    cases = [
+        (resolve_state(True, True, past), "market closed on the venue"),
+        (resolve_state(False, False, past), "venue stopped accepting orders"),
+        (resolve_state(None, None, past), "resolution state unreadable"),
+    ]
+
+    # Act + Assert — each names the venue signal and stays in the horizon bucket.
+    for state, venue_signal in cases:
+        expired, reason = expired_at_intake(
+            past, start_iso=None, category="Politics", now_iso=now, state=state)
+        assert expired is True
+        assert venue_signal in reason
+        assert "horizon passed" in reason
+        assert fm._cause(reason) == "horizon"
+
+
+def test_evaluate_admits_open_election_market_past_end_date():
+    # Arrange — end-to-end through evaluate: venue open, past endDate, tape alive.
+    m = _open_election_market("0xrunoff", "2026-10-05T03:59:00Z")
+
+    # Act
+    session = _FakeSession([], trades=_TRADES)
+    row = evaluate(session, 5.0, m, volume_24h=250_000.0, source="spread")
+
+    # Assert — admitted, and the book fetch proves the expiry gate let it through.
+    assert row["eligible"] is True
+    assert "horizon passed" not in row["reject_reason"]
+    assert session.book_calls > 0
 
 
 def test_evaluate_missing_end_date_falls_through_to_tradable():

@@ -1,7 +1,12 @@
 # CONSTRAINTS — #459 (locked by Station II, enforced through Station V)
 
-Governs the `i459/fix-live-stream-trades-tab-shows-no-trades-and-ro` branch only;
-#453 constraints below stay as history.
+Governs the `i459/fix-live-stream-trades-tab-shows-no-trades-and-ro` branch only.
+
+---
+
+# CONSTRAINTS — #460 (history; merged as #467)
+
+Governs the `i460` branch only; #461 constraints stay as history below.
 
 ## Zero regressions
 
@@ -51,6 +56,72 @@ Governs the `i459/fix-live-stream-trades-tab-shows-no-trades-and-ro` branch only
 - No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
 - Inspect code statically only; stub all relayer HTTP, signing, and balance calls in tests.
 - Never infer a trade from inventory changes or order counts.
+
+---
+
+# CONSTRAINTS — #460 (history; merged as #467): scope tail & rules
+  `dashboard/static/index.html`
+  `dashboard/static/app.js`
+  `tests/js/portfolio_card_harness.cjs`
+  `tests/test_portfolio_card_basis.py`
+  `tests/test_dashboard_server.py`
+  `tests/test_account_kpi.py`
+  `CONSTRAINTS.md`
+  `tasks/plan.md`
+  `tasks/todo.md`
+- Behavior-frozen (call but do not change):
+  `core_brain/registry_state.py` resting/filled/total committed math (`:232-304`, `:439-450`)
+  `core_brain/kpi.py` `open_committed_usd` (`:1993-1995`), account block (`:2094-2115`), hero equity / bankroll / realized-gain pill
+- Files that must NOT be modified:
+  `core_brain/*` (no backend change; `resting_committed` read as-is)
+  `data/orders.db`
+- No new endpoints; wire through the existing `/api/state` capital + `/api/kpi` portfolio/account poll path only.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit approval.
+- Tests stay offline (temp DBs, node harness with stub DOM).
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+
+---
+
+
+
+Governs the `i461` branch only; #453 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_unified_universe.py`
+  `tests/test_in_play_gate.py`
+  `tests/test_pre_start_gate.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
+
+## Scope & File Boundaries
+
+- Target files for modification:
+  `scripts/filter_markets.py`
+  `tests/test_unified_universe.py`
+  `CONSTRAINTS.md`
+  `tasks/plan.md`
+  `tasks/todo.md`
+- Behavior-frozen (call but do not change):
+  `resolve_state`, `days_to_resolve`, `tradable`, `_cause`, `now_iso` handling.
+- Files that must NOT be modified:
+  `scripts/filter_loop.py`
+  `scripts/family_probe.py`
+  `core_brain/*`
+  `data/orders.db`
+- The EXPIRY GATE refusal stays before the UMA gate and before any queue, tape, or book fetch: no new network reads inside the gate.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit approval.
+- Tests stay offline (fake sessions: `_ExplodingSessionForExpired`, `_FakeSession`).
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
 
 ---
 
