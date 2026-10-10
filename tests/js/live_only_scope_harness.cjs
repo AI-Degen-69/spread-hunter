@@ -40,6 +40,7 @@ class FakeEl {
   appendChild() {}
   setAttribute() {}
   getAttribute() { return null; }
+  removeAttribute() {}
 }
 
 const elements = new Map();
