@@ -1780,17 +1780,19 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
         }
       }
       if (lines.length) {
+        // The backend's own words are the primary line the operator reads;
+        // the `[START]`/`[STOP]` tag is the secondary detail. Reversing these
+        // would hide the refusal reason behind the details toggle (#459).
         appendTickerEvent(`[${action.toUpperCase()}] ${lines.join(' · ')}`,
-          action === 'stop'
-            ? 'Stack stop reported by the backend.'
-            : 'Stack start reported by the backend.', '');
+          lines.join(' · '), action === 'stop' ? 'stop' : 'start', 'control',
+          action, {});
       }
       if (data && data.status) {
         lastStatus = data.status;
       }
     } catch (e) {
       appendTickerEvent(`[${action.toUpperCase()} ERROR] ${e.message || String(e)}`,
-        'The request never reached the backend. Check the dashboard process.', '');
+        e.message || String(e), 'start', 'control', action, {});
     } finally {
       isStarting = false;
       isStopping = false;
