@@ -1492,12 +1492,19 @@ def test_manage_single_leg_positions_stranded_maker_wait_and_forced_exit(registr
     registry.update_order_status(light_order.id, "cancelled", last_polled_ts=1000)
 
     # fill venue_ts is 1_000_000 ms = 1000s.
-    # Case 1: Completion disabled (or ask > cap), age <= stranded_max_wait (e.g. now = 1000 + 100 = 1100s <= 1300s)
+    # Case 1: Completion disabled (or ask > cap), aged out past pairs_exit_window_sec (100s)
+    # but age <= stranded_max_wait (e.g. now = 1000 + 101 = 1101s <= 1300s)
     # -> action is stranded_awaiting_maker
     client = FakeClient(best_ask=0.60)  # 0.55 + 0.60 = 1.15 > 0.99
-    cfg = MakerConfig(stranded_completion_enabled=False, stranded_max_wait_sec=300.0, max_pair_cost=0.99)
+    cfg = MakerConfig(
+        stranded_completion_enabled=False,
+        enable_aged_out_rescue=False,
+        pairs_exit_window_sec=100.0,
+        stranded_max_wait_sec=300.0,
+        max_pair_cost=0.99,
+    )
 
-    results_wait = manage_single_leg_positions(client, registry, cfg, live=False, now=1100.0)
+    results_wait = manage_single_leg_positions(client, registry, cfg, live=False, now=1101.0)
     assert any(r.get("action") == "stranded_awaiting_maker" for r in results_wait)
 
     # Case 2: age > stranded_max_wait (e.g. now = 1000 + 350 = 1350s > 1300s)

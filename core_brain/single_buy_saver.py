@@ -1739,9 +1739,13 @@ def manage_single_leg_positions(
                 stranded_max_wait = float(getattr(cfg, "stranded_max_wait_sec", 300.0))
                 min_quote_shares = float(getattr(cfg, "min_quote_shares", 5.0) or 5.0)
 
-                # Stranded or gap below maker minimum
-                if exp.status.value in ("stranded", "under_covered") and (
-                    exp.status.value == "stranded" or exp.coverage_shortfall < min_quote_shares
+                # Stranded exposure resolution (#453)
+                # When completion is enabled with a profitable cross, complete immediately.
+                # When stranded without working hedge and aged out past regular window, force resolution.
+                if (stranded_completion_on or is_aged_out) and (
+                    exp.status.value in ("stranded", "under_covered") and (
+                        exp.status.value == "stranded" or exp.coverage_shortfall < min_quote_shares
+                    )
                 ):
                     opposing_token = exp.light_token_id
                     opposing_book = client.get_order_book(opposing_token) if (opposing_token and hasattr(client, "get_order_book")) else None
