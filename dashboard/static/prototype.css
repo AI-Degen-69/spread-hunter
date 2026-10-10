@@ -286,3 +286,1306 @@
     opacity: 0.35;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * STITCH REDESIGN: High-Frequency Arbitrage Terminal Bento Grid & Polish
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+.proto-body {
+  background-color: #080c12 !important;
+  color: #e2e8f0;
+}
+
+/* Header Telemetry Styling */
+.proto-body header {
+  background: #0d121c;
+  border-bottom: 1px solid #1a2333;
+}
+
+.proto-body .brand-title {
+  color: #ffffff;
+  letter-spacing: 0.06em;
+}
+
+.proto-body #wallet-addr {
+  background: #121824;
+  border: 1px solid #212c3f;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: #cbd5e1;
+}
+
+/* Master Action Buttons */
+.proto-body .btn-start-run {
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid #10b981;
+  color: #6ee7b7;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+}
+.proto-body .btn-start-run:hover {
+  background: rgba(16, 185, 129, 0.35);
+  color: #ffffff;
+}
+
+.proto-body .btn-stop-run {
+  background: rgba(244, 63, 94, 0.2);
+  border: 1px solid #f43f5e;
+  color: #fda4af;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(244, 63, 94, 0.25);
+}
+.proto-body .btn-stop-run:hover {
+  background: rgba(244, 63, 94, 0.4);
+  color: #ffffff;
+}
+
+.proto-body .btn-sync {
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  color: #38bdf8;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+}
+.proto-body .btn-sync:hover {
+  background: rgba(6, 182, 212, 0.28);
+  color: #e0f2fe;
+}
+
+.proto-body .btn-reset {
+  background: #121824;
+  border: 1px solid #212c3f;
+  color: #cbd5e1;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+.proto-body .btn-reset:hover {
+  background: #1a2333;
+  color: #ffffff;
+}
+
+/* Sidebar Navigation Aesthetics */
+.proto-body .proto-sidebar {
+  background: #0c111a;
+  border-color: #1a2333;
+}
+
+.proto-body .proto-nav-btn {
+  color: #94a3b8;
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+.proto-body .proto-nav-btn:hover {
+  background: #121926;
+  color: #f1f5f9;
+}
+.proto-body .proto-nav-btn[aria-current="page"] {
+  background: rgba(6, 182, 212, 0.12);
+  border-color: rgba(6, 182, 212, 0.4);
+  color: #ffffff;
+}
+.proto-body .proto-nav-btn[aria-current="page"] .proto-nav-icon {
+  color: #06b6d4;
+}
+
+/* Bento Hero Grid */
+.proto-body .broker-portfolio-card.bento-hero-grid {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+.proto-body .broker-portfolio-card.bento-hero-grid::before {
+  display: none !important;
+}
+
+.proto-body .bento-grid-container {
+  display: grid;
+  grid-template-columns: 3.2fr 5.6fr 3.2fr;
+  gap: 18px;
+  align-items: stretch;
+  width: 100%;
+}
+@media (max-width: 1200px) {
+  .proto-body .bento-grid-container {
+    grid-template-columns: 1fr;
+  }
+}
+
+.proto-body .bento-col {
+  background: #0f1522;
+  border: 1px solid #1d273a;
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  position: relative;
+  overflow: hidden;
+}
+
+.proto-body .bento-accent-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #10b981, #06b6d4);
+}
+
+.proto-body .bento-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.proto-body .bento-card-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b949e;
+}
+
+.proto-body .bento-tag-usdc {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  background: #162031;
+  color: #94a3b8;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #233147;
+}
+
+.proto-body .bento-tag-engine {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(6, 182, 212, 0.12);
+  color: #06b6d4;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.proto-body .bento-subcards-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.proto-body .bento-subcard {
+  background: #0a0e16;
+  border: 1px solid #172132;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.proto-body .bento-subcard:hover {
+  border-color: #233147;
+  background: #0c121c;
+}
+
+.proto-body .bento-subcard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.proto-body .bento-progress-track {
+  width: 100%;
+  height: 5px;
+  background: #1a2333;
+  border-radius: 9999px;
+  overflow: hidden;
+  margin: 2px 0;
+}
+
+.proto-body .bento-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+}
+.proto-body .bento-emerald-fill {
+  background: #10b981;
+}
+.proto-body .bento-cyan-fill {
+  background: #06b6d4;
+}
+.proto-body .bento-emerald-gradient-fill {
+  background: linear-gradient(90deg, #059669, #10b981);
+}
+
+.proto-body .bento-subcard-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #94a3b8;
+}
+
+.proto-body .bento-sub-muted {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.proto-body .bento-tag-edge {
+  color: #10b981;
+  font-weight: 600;
+  font-size: 10px;
+}
+
+.proto-body .bento-telemetry-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.proto-body .bento-compact-row {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+/* Orders and Trades Stitch Terminal Polish */
+.proto-body #orders-trades-card {
+  background: #0f1522;
+  border: 1px solid #1d273a;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  padding: 20px;
+}
+
+.proto-body .ot-header-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  color: #06b6d4;
+  text-transform: uppercase;
+}
+
+.proto-body .ot-search-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.proto-body .ot-search-icon {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: #64748b;
+  pointer-events: none;
+}
+
+.proto-body .ot-search-input {
+  background: #090d15;
+  border: 1px solid #1a2333;
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 6px 12px 6px 32px;
+  width: 220px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.proto-body .ot-search-input:focus {
+  border-color: #06b6d4;
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.3);
+}
+
+.proto-body .ot-tabs {
+  background: #090d15;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid #1a2333;
+  gap: 3px;
+}
+
+.proto-body .ot-tab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.proto-body .ot-tab-btn:hover {
+  background: #121926;
+  color: #f1f5f9;
+}
+
+.proto-body .ot-tab-btn.active {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.45);
+  color: #06b6d4;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(6, 182, 212, 0.15);
+}
+
+.proto-body .ot-tab-btn .ot-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+}
+
+.proto-body .ot-tab-btn.active .ot-count {
+  background: rgba(6, 182, 212, 0.3);
+  color: #38bdf8;
+}
+
+.proto-body #orders-trades-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+
+.proto-body #orders-trades-table th {
+  background: #0b101a;
+  border-bottom: 1px solid #1a2333;
+  color: #8b949e;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 12px 16px;
+}
+
+.proto-body #orders-trades-table td {
+  border-bottom: 1px solid #162030;
+  padding: 14px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #cbd5e1;
+  vertical-align: middle;
+}
+
+.proto-body #orders-trades-table tr:hover td {
+  background: #121927;
+}
+
+.proto-body #orders-trades-table td.ot-market a,
+.proto-body #orders-trades-table td.ot-market .market-link {
+  color: #f8fafc;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.proto-body #orders-trades-table tr:hover td.ot-market a,
+.proto-body #orders-trades-table tr:hover td.ot-market .market-link {
+  color: #38bdf8;
+}
+
+.proto-body #orders-trades-table .caption-muted {
+  font-size: 10.5px;
+  color: #64748b;
+  margin-top: 3px;
+}
+
+/* Paired Arb Badge in Stitch styling */
+.proto-body .ot-tag.is-good {
+  background: rgba(6, 78, 59, 0.35);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #10b981;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 2px 8px;
+}
+
+.proto-body .ot-tag.is-warn {
+  background: rgba(120, 53, 15, 0.35);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #f59e0b;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 2px 8px;
+}
+
+.proto-body .ot-tag.is-alert {
+  background: rgba(127, 29, 29, 0.4);
+  border: 1px solid rgba(244, 63, 94, 0.45);
+  color: #f43f5e;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 2px 8px;
+}
+
+.proto-body .ot-cost {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.proto-body .ot-cost.is-good .ot-cost-value {
+  color: #10b981;
+  font-weight: 700;
+}
+
+.proto-body .ot-cost.is-alert .ot-cost-value {
+  color: #f43f5e;
+  font-weight: 700;
+}
+
+.proto-body .ot-cost.is-warn .ot-cost-value {
+  color: #f59e0b;
+  font-weight: 700;
+}
+
+/* Leg Badges UP / DOWN in table */
+.proto-body .pill.active {
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  color: #06b6d4;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.proto-body .pill.reconnecting {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #f59e0b;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Fast Action Buttons */
+.proto-body .ot-action-btn {
+  background: #162031;
+  border: 1px solid #233147;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.proto-body .ot-action-btn:hover {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.5);
+  color: #38bdf8;
+}
+
+.proto-body .ot-action-btn.cancel:hover {
+  background: rgba(244, 63, 94, 0.15);
+  border-color: rgba(244, 63, 94, 0.5);
+  color: #f43f5e;
+}
+
+/* Stitch Pair-Native Orders Table */
+.proto-body .stitch-ot-row {
+  transition: background-color 0.15s ease;
+}
+
+.proto-body .stitch-ot-row:hover {
+  background: #121927 !important;
+}
+
+.proto-body .stitch-ot-row.is-unpaired {
+  background: rgba(120, 53, 15, 0.05);
+}
+
+.proto-body .stitch-market-cell {
+  padding: 14px 16px;
+  vertical-align: middle;
+}
+
+.proto-body .stitch-market-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.proto-body .stitch-market-dot.is-paired {
+  background-color: #34d399;
+}
+
+.proto-body .stitch-market-dot.is-unpaired {
+  background-color: #fbbf24;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.proto-body .stitch-market-title {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #ffffff;
+  line-height: 1.35;
+  transition: color 0.15s ease;
+}
+
+.proto-body .stitch-market-title a {
+  color: #ffffff;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.proto-body .stitch-ot-row:hover .stitch-market-title a {
+  color: #38bdf8;
+}
+
+.proto-body .stitch-market-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.proto-body .stitch-meta-category {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: #94a3b8;
+}
+
+.proto-body .stitch-meta-sep {
+  color: #475569;
+  font-size: 10px;
+}
+
+.proto-body .stitch-meta-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+/* Arb Badges */
+.proto-body .stitch-arb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.proto-body .stitch-arb-badge.is-paired {
+  background: rgba(6, 78, 59, 0.6);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.proto-body .stitch-arb-badge.is-unpaired {
+  background: rgba(120, 53, 15, 0.6);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #fcd34d;
+}
+
+.proto-body .stitch-arb-badge.is-partial {
+  background: rgba(120, 53, 15, 0.5);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.proto-body .stitch-arb-badge .badge-val {
+  color: #ffffff;
+}
+
+.proto-body .stitch-arb-badge .badge-edge {
+  color: #6ee7b7;
+}
+
+.proto-body .stitch-arb-badge .badge-sep {
+  color: #64748b;
+}
+
+/* Quotes */
+.proto-body .stitch-quote-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+}
+
+.proto-body .stitch-quote-rung {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.proto-body .stitch-leg-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1.5px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+
+.proto-body .stitch-leg-pill.yes,
+.proto-body .stitch-leg-pill.up,
+.proto-body .badge-yes,
+.proto-body .badge-up {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  color: #4ade80;
+}
+
+.proto-body .stitch-leg-pill.no,
+.proto-body .stitch-leg-pill.down,
+.proto-body .badge-no,
+.proto-body .badge-down {
+  background: rgba(244, 63, 94, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  color: #fb7185;
+}
+
+.proto-body .stitch-leg-pill.missing {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #64748b;
+}
+
+.proto-body .stitch-quote-subcost {
+  color: #64748b;
+  font-size: 10.5px;
+}
+
+.proto-body .stitch-quote-awaiting {
+  color: #64748b;
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* Total Committed */
+.proto-body .stitch-commit-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.proto-body .stitch-commit-val.is-unhedged {
+  color: #fcd34d;
+}
+
+.proto-body .stitch-commit-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.proto-body .stitch-commit-sub.is-unhedged {
+  color: rgba(251, 191, 36, 0.8);
+  font-weight: 500;
+}
+
+/* Queue Depth */
+.proto-body .stitch-queue-depth {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: #cbd5e1;
+}
+
+.proto-body .stitch-queue-sub {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.proto-body .stitch-queue-bar {
+  width: 96px;
+  height: 4px;
+  background: #1e293b;
+  border-radius: 9999px;
+  margin-top: 5px;
+  overflow: hidden;
+}
+
+.proto-body .stitch-queue-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: #06b6d4;
+  transition: width 0.3s ease;
+}
+
+.proto-body .stitch-queue-fill.is-amber {
+  background: #f59e0b;
+}
+
+.proto-body .stitch-queue-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+/* Age & Stamp */
+.proto-body .stitch-age-stopwatch {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: #e2e8f0;
+}
+
+.proto-body .stitch-age-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+/* Action Buttons */
+.proto-body .stitch-action-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.proto-body .stitch-btn {
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: #162031;
+  border: 1px solid #233147;
+  color: #cbd5e1;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.proto-body .stitch-btn:hover {
+  background: #083344;
+  border-color: rgba(6, 182, 212, 0.5);
+  color: #38bdf8;
+}
+
+.proto-body .stitch-btn.cancel {
+  color: #94a3b8;
+}
+
+.proto-body .stitch-btn.cancel:hover {
+  background: #4c0519;
+  border-color: rgba(244, 63, 94, 0.5);
+  color: #fb7185;
+}
+
+.proto-body .stitch-btn.force {
+  background: rgba(120, 53, 15, 0.4);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fcd34d;
+  font-weight: 700;
+}
+
+.proto-body .stitch-btn.force:hover {
+  background: rgba(120, 53, 15, 0.7);
+  border-color: #f59e0b;
+  color: #fef08a;
+}
+
+/* Stitch Active Markets Table Styles */
+.proto-body .stitch-category-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #182232;
+  border: 1px solid #233147;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.proto-body .stitch-quote-yes,
+.proto-body .stitch-quote-up {
+  color: #4ade80;
+  font-weight: 700;
+  font-size: 12.5px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.proto-body .stitch-quote-no,
+.proto-body .stitch-quote-down {
+  color: #fb7185;
+  font-weight: 700;
+  font-size: 12.5px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.proto-body .stitch-mid-sub {
+  color: #64748b;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 2px;
+}
+
+.proto-body .stitch-pair-cost {
+  color: #f8fafc;
+  font-weight: 700;
+  font-size: 12.5px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.proto-body .stitch-edge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.proto-body .stitch-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2.5px 8.5px;
+  border-radius: 9999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.proto-body .stitch-status-badge.quoting {
+  background: rgba(6, 78, 59, 0.6);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.proto-body .stitch-status-badge.resting {
+  background: rgba(8, 51, 68, 0.6);
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  color: #22d3ee;
+}
+
+.proto-body .stitch-status-badge.idle {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #64748b;
+}
+
+.proto-body .stitch-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+}
+
+.proto-body .stitch-status-dot.quoting {
+  background-color: #34d399;
+}
+
+.proto-body .stitch-status-dot.resting {
+  background-color: #22d3ee;
+}
+
+.proto-body .stitch-status-dot.idle {
+  background-color: #64748b;
+}
+
+/* Stitch Open Positions Table Styles */
+.proto-body .stitch-pnl-cell {
+  display: flex;
+  flex-direction: column;
+}
+
+.proto-body .stitch-pnl-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.proto-body .stitch-pnl-val.pos {
+  color: #34d399;
+}
+
+.proto-body .stitch-pnl-val.neg {
+  color: #f43f5e;
+}
+
+.proto-body .stitch-pnl-val.flat {
+  color: #94a3b8;
+}
+
+.proto-body .stitch-pnl-pct {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.proto-body .stitch-pnl-pct.pos {
+  color: #10b981;
+}
+
+.proto-body .stitch-pnl-pct.neg {
+  color: #fb7185;
+}
+
+.proto-body .stitch-pnl-pct.flat {
+  color: #64748b;
+}
+
+.proto-body .stitch-mark-val {
+  color: #f8fafc;
+  font-weight: 700;
+  font-size: 12.5px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+
+
+
+
+/* ── Stitch Closed Trades & Execution Ledger ── */
+.proto-body .stitch-market-row {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.proto-body .stitch-market-row:hover {
+  background: #121927 !important;
+}
+
+.proto-body .stitch-market-row.expanded {
+  background: rgba(6, 182, 212, 0.04) !important;
+  border-bottom: none !important;
+}
+
+.proto-body .stitch-cat-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  color: #38bdf8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.proto-body .stitch-winner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  white-space: nowrap;
+}
+
+.proto-body .stitch-reason-chip {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(100, 116, 139, 0.15);
+  border: 1px solid rgba(100, 116, 139, 0.3);
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+}
+
+.proto-body .stitch-reason-chip.is-exit {
+  background: rgba(244, 63, 94, 0.12);
+  border-color: rgba(244, 63, 94, 0.35);
+  color: #fb7185;
+  font-weight: 600;
+}
+
+.proto-body .stitch-breakdown-pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.proto-body .stitch-pill-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.proto-body .stitch-pill-count.merged {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #34d399;
+}
+
+.proto-body .stitch-pill-count.stop-loss {
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  color: #fb7185;
+}
+
+.proto-body .stitch-pill-count.grace-expired {
+  background: rgba(251, 146, 60, 0.12);
+  border: 1px solid rgba(251, 146, 60, 0.3);
+  color: #fb923c;
+}
+
+.proto-body .stitch-pill-count.neutral {
+  background: rgba(100, 116, 139, 0.12);
+  border: 1px solid rgba(100, 116, 139, 0.25);
+  color: #94a3b8;
+}
+
+.proto-body .stitch-ledger-toggle-btn {
+  background: rgba(6, 182, 212, 0.08);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  color: #38bdf8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.proto-body .stitch-ledger-toggle-btn:hover {
+  background: rgba(6, 182, 212, 0.18);
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.proto-body .stitch-closed-ledger-card {
+  margin: 6px 16px 16px;
+  background: #0b111d;
+  border: 1px solid #1e293b;
+  border-left: 3px solid #06b6d4;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+}
+
+.proto-body .stitch-closed-ledger-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.proto-body .stitch-strip-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.proto-body .stitch-strip-divider {
+  color: #334155;
+}
+
+.proto-body .stitch-strip-metric b {
+  color: #f8fafc;
+  font-weight: 700;
+  margin-left: 4px;
+}
+
+.proto-body .stitch-strip-metric b.pos {
+  color: #34d399 !important;
+}
+
+.proto-body .stitch-strip-metric b.neg {
+  color: #f43f5e !important;
+}
+
+.proto-body .stitch-strip-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.proto-body .stitch-badge-outcome {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.proto-body .stitch-badge-outcome.merged {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.proto-body .stitch-badge-outcome.stop-loss {
+  background: rgba(244, 63, 94, 0.15);
+  border: 1px solid rgba(244, 63, 94, 0.4);
+  color: #fb7185;
+}
+
+.proto-body .stitch-badge-outcome.grace-expired {
+  background: rgba(251, 146, 60, 0.15);
+  border: 1px solid rgba(251, 146, 60, 0.4);
+  color: #fb923c;
+}
+
+.proto-body .stitch-badge-outcome.clean {
+  background: rgba(100, 116, 139, 0.12);
+  border: 1px solid rgba(100, 116, 139, 0.3);
+  color: #94a3b8;
+}
+
+.proto-body .stitch-ledger-table-wrap {
+  overflow-x: auto;
+}
+
+.proto-body .stitch-ledger-subtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.proto-body .stitch-ledger-subtable th {
+  padding: 9px 14px;
+  text-align: left;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  border-bottom: 1px solid #1e293b;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.proto-body .stitch-ledger-subtable td {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(30, 41, 59, 0.5);
+  font-family: 'JetBrains Mono', monospace;
+  vertical-align: middle;
+}
+
+.proto-body .stitch-ledger-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.proto-body .stitch-dual-rung-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.proto-body .stitch-dual-rung-badge .badge-plus {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.proto-body .stitch-leg-sub {
+  font-size: 10.5px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.proto-body .stitch-leg-role {
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 600;
+  margin-left: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.proto-body .stitch-badge-neutral {
+  font-size: 11px;
+  color: #94a3b8;
+  background: rgba(100, 116, 139, 0.15);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.proto-body .stitch-status-badge.stop-loss {
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  background: rgba(244, 63, 94, 0.1);
+  color: #fb7185;
+}
+
+.proto-body .stitch-status-dot.stop-loss {
+  background: #fb7185;
+  box-shadow: 0 0 6px rgba(244, 63, 94, 0.5);
+}
+
+.proto-body .stitch-status-badge.grace-expired {
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  background: rgba(251, 146, 60, 0.1);
+  color: #fb923c;
+}
+
+.proto-body .stitch-status-dot.grace-expired {
+  background: #fb923c;
+  box-shadow: 0 0 6px rgba(251, 146, 60, 0.5);
+}

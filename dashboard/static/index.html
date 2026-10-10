@@ -50,7 +50,7 @@
   <link rel="stylesheet" href="/static/styles.css?v=5">
   <!-- Sidebar-pages layout. Every rule is scoped to a class `prototype.js`
        only adds on /prototype, so this is inert on the live page. -->
-  <link rel="stylesheet" href="/static/prototype.css">
+  <link rel="stylesheet" href="/static/prototype.css?v=9">
 </head>
 <body>
 <div class="container">
@@ -60,7 +60,7 @@
     <div class="brand">
       <span class="brand-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="var(--gold)" style="display:block"><path d="M13 2 4.5 13.5h5L10 22l8.5-11.5h-5L13 2z"/></svg></span>
       <div>
-        <div class="font-display brand-title">SPREAD HUNTER</div>
+        <div class="font-display brand-title" style="display:flex;align-items:center;gap:8px;">SPREAD HUNTER</div>
         <div class="brand-sub" id="wallet-addr">0xeE3B...1624</div>
       </div>
     </div>
@@ -134,28 +134,39 @@
 
     <!-- Orders & Trades: one table, three views of the same run -->
     <div class="card" style="margin-bottom:16px" id="orders-trades-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px" class="ot-card-header">
         <div>
-          <div class="font-display" style="font-size:15px;letter-spacing:0.04em;color:var(--text-primary)">
-            ORDERS &amp; TRADES
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div class="font-display" style="font-size:15px;letter-spacing:0.04em;color:var(--text-primary)">
+              ORDERS &amp; TRADES
+            </div>
+            <span class="ot-header-badge">PAIR-NATIVE ARB</span>
           </div>
           <div id="orders-trades-note" style="font-size:11px;color:var(--text-muted);margin-top:2px">
-            Markets that graduated the Market Filter and are being quoted.
+            Markets that graduated the Market Filter and are being quoted. Dual-leg arbitrage execution pipeline.
           </div>
         </div>
-        <div class="ot-tabs" role="tablist" aria-label="Orders and trades view">
-          <button class="ot-tab-btn active" type="button" role="tab" aria-selected="true"
-                  aria-controls="orders-trades-panel"
-                  data-ot-view="active-markets">ACTIVE MARKETS <span class="ot-count mono" data-ot-count="active-markets">0</span></button>
-          <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
-                  aria-controls="orders-trades-panel"
-                  data-ot-view="open-orders">Orders <span class="ot-count mono" data-ot-count="open-orders">0</span></button>
-          <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
-                  aria-controls="orders-trades-panel"
-                  data-ot-view="positions">OPEN POSITIONS <span class="ot-count mono" data-ot-count="positions">0</span></button>
-          <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
-                  aria-controls="orders-trades-panel"
-                  data-ot-view="closed-trades">CLOSED TRADES <span class="ot-count mono" data-ot-count="closed-trades">0</span></button>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div class="ot-tabs" role="tablist" aria-label="Orders and trades view">
+            <button class="ot-tab-btn active" type="button" role="tab" aria-selected="true"
+                    aria-controls="orders-trades-panel"
+                    data-ot-view="active-markets">Active Markets <span class="ot-count mono" data-ot-count="active-markets">0</span></button>
+            <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
+                    aria-controls="orders-trades-panel"
+                    data-ot-view="open-orders">Orders <span class="ot-count mono" data-ot-count="open-orders">0</span></button>
+            <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
+                    aria-controls="orders-trades-panel"
+                    data-ot-view="positions">Open Positions <span class="ot-count mono" data-ot-count="positions">0</span></button>
+            <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
+                    aria-controls="orders-trades-panel"
+                    data-ot-view="closed-trades">Closed Trades <span class="ot-count mono" data-ot-count="closed-trades">0</span></button>
+          </div>
+          <div class="ot-search-container">
+            <svg class="ot-search-icon" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:14px;height:14px;position:absolute;left:10px;">
+              <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            <input id="ot-search-input" class="ot-search-input" type="text" placeholder="Filter market or category..." aria-label="Filter market or category">
+          </div>
         </div>
       </div>
       <div id="orders-trades-panel" role="tabpanel" style="overflow-x:auto">
@@ -239,92 +250,158 @@
 
   <!-- ── Tab 2: Performance & Analytics ── -->
   <section id="tab-2" role="tabpanel" aria-labelledby="tab-btn-2" hidden>
-    <!-- Broker Portfolio Overview Hero Card -->
-    <div id="broker-portfolio-overview" class="card broker-portfolio-card" style="margin-bottom:16px">
-      <!-- Broker Card Header -->
-      <div class="broker-header-row">
-        <div class="broker-title-group">
-          <div class="font-display broker-section-title">PORTFOLIO OVERVIEW &amp; ACCOUNT VALUE</div>
-          <div class="broker-starting-cap mono">Starting Bankroll: <b id="broker-starting-cap">$100.00</b></div>
-        </div>
-        <div class="broker-controls-group">
-          <div class="broker-timeframe-selector" role="group" aria-label="Portfolio chart timeframe">
-            <button class="broker-tf-btn active" type="button" data-tf="1D">1D</button>
-            <button class="broker-tf-btn" type="button" data-tf="1W">1W</button>
-            <button class="broker-tf-btn" type="button" data-tf="1M">1M</button>
-            <button class="broker-tf-btn" type="button" data-tf="ALL">ALL</button>
+    <!-- Broker Portfolio Overview Hero Card (Bento Grid) -->
+    <div id="broker-portfolio-overview" class="card broker-portfolio-card bento-hero-grid" style="margin-bottom:16px">
+      <div id="broker-kpi-strip" class="broker-kpi-strip bento-grid-container">
+        <!-- Bento Card 1: Account Liquidity & Bankroll (Left: 3 cols) -->
+        <section class="bento-col bento-col-liquidity" data-purpose="account-liquidity-card">
+          <div class="bento-accent-top"></div>
+          <div class="bento-card-header">
+            <span class="bento-card-title">TOTAL ACCOUNT VALUE</span>
+            <span class="bento-tag-usdc">USDC</span>
           </div>
-          <div id="run-profitability" class="broker-run-badge" role="status" aria-live="polite">
-            <span class="rp-run-chip" id="rp-run-id">RUN #LIVE</span>
-            <span id="rp-verdict" class="rp-verdict-text">$0.00 (STANDBY)</span>
-            <span id="rp-details" style="display:none"></span>
-            <span id="rp-venue" style="display:none"></span>
-          </div>
-        </div>
-      </div>
 
-      <!-- Broker Hero Value & Realized Gains -->
-      <div class="broker-hero-metrics">
-        <div class="broker-equity-main">
-          <div class="broker-equity-val mono" id="broker-hero-equity">$100.00</div>
-          <div class="broker-pnl-group">
-            <div class="broker-pnl-pill" id="broker-hero-pnl">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
-              <span id="broker-pnl-amount">+$0.00</span>
-              <span id="broker-pnl-pct">(+0.00%)</span>
+          <!-- Hero Value & Realized Gains -->
+          <div class="broker-hero-metrics">
+            <div class="broker-equity-main">
+              <div class="broker-equity-val mono" id="broker-hero-equity">$100.00</div>
+              <div class="broker-pnl-group">
+                <div class="broker-pnl-pill" id="broker-hero-pnl">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                  <span id="broker-pnl-amount">+$0.00</span>
+                  <span id="broker-pnl-pct">(+0.00%)</span>
+                </div>
+                <span class="broker-pnl-sub">All-Time Realized Gain</span>
+              </div>
             </div>
-            <span class="broker-pnl-sub">All-Time Realized Gain</span>
+            <div class="broker-starting-cap mono">Starting Bankroll: <b id="broker-starting-cap">$100.00</b></div>
+            <div class="broker-equity-meta mono">
+              <div id="broker-venue-wallet-row" style="display:none">Venue wallet: <b id="broker-venue-wallet">--</b> <span id="broker-venue-wallet-note" style="color:var(--text-muted)"></span></div>
+            </div>
           </div>
-        </div>
-        <div class="broker-equity-meta mono">
-          <div id="broker-venue-wallet-row" style="display:none">Venue wallet: <b id="broker-venue-wallet">--</b> <span id="broker-venue-wallet-note" style="color:var(--text-muted)"></span></div>
-        </div>
-      </div>
 
-      <!-- Main Broker Line Chart Container with Interactive Crosshair & Tooltip -->
-      <div class="broker-chart-wrapper">
-        <div id="broker-chart-svg-container" class="broker-chart-canvas"></div>
-        <div id="broker-chart-tooltip" class="broker-tooltip" style="display:none"></div>
-      </div>
+          <!-- Liquidity Breakdown Sub-Cards -->
+          <div class="bento-subcards-stack">
+            <!-- Cash Available -->
+            <div class="broker-kpi-tile bento-subcard">
+              <div class="bento-subcard-header">
+                <span class="broker-kpi-label">Cash Available</span>
+                <span class="broker-kpi-val mono" id="broker-kpi-cash">$100.00</span>
+              </div>
+              <div class="bento-progress-track">
+                <div class="bento-progress-fill bento-emerald-fill" id="bento-cash-bar" style="width:100%"></div>
+              </div>
+              <div class="bento-subcard-footer">
+                <span class="broker-kpi-sub mono" id="broker-kpi-cash-pct">100.0% Liquid USDC</span>
+                <span class="bento-sub-muted">Free Balance</span>
+              </div>
+            </div>
 
-      <!-- Tidy, Aligned KPI Strip (Broker Summary Matrix) -->
-      <div class="broker-kpi-strip" id="broker-kpi-strip">
-        <div class="broker-kpi-tile">
-          <div class="broker-kpi-label">Cash Available</div>
-          <div class="broker-kpi-val mono" id="broker-kpi-cash">$100.00</div>
-          <div class="broker-kpi-sub mono" id="broker-kpi-cash-pct">100.0% Liquid USDC</div>
-        </div>
-        <div class="broker-kpi-tile">
-          <!-- The value is the venue's initialValue sum over OPEN positions:
-               the cost of what is HELD. "In Resting Bids" said the money was
-               still on the book, which filled inventory is not. -->
-          <div class="broker-kpi-label">Held Positions</div>
-          <div class="broker-kpi-val mono text-primary" id="broker-kpi-committed">$0.00</div>
-          <div class="broker-kpi-sub mono" id="broker-kpi-committed-pct">0.0% of Equity</div>
-        </div>
-        <div class="broker-kpi-tile">
-          <!-- The value is `kpi.funnel.graduated`: markets the Market Filter
-               quoted, not pairs held. "Hedged Pairs" claimed a hedge nothing
-               had measured. -->
-          <div class="broker-kpi-label">Markets Quoted</div>
-          <div class="broker-kpi-val mono text-signal" id="broker-kpi-pairs">0 Markets</div>
-          <div class="broker-kpi-sub mono">by the Market Filter</div>
-        </div>
-        <div class="broker-kpi-tile">
-          <div class="broker-kpi-label">Realized Spread</div>
-          <div class="broker-kpi-val mono" id="broker-kpi-spread">+$0.00</div>
-          <div class="broker-kpi-sub mono" id="broker-kpi-expectancy">Avg $0.000 / close</div>
-        </div>
-        <div class="broker-kpi-tile">
-          <div class="broker-kpi-label">Win Rate</div>
-          <div class="broker-kpi-val mono" id="broker-kpi-winrate">0.0%</div>
-          <div class="broker-kpi-sub mono" id="broker-kpi-wins">0 Wins / 0 Losses</div>
-        </div>
-        <div class="broker-kpi-tile">
-          <div class="broker-kpi-label">Profit Factor</div>
-          <div class="broker-kpi-val mono text-primary" id="broker-kpi-pf">0.00x</div>
-          <div class="broker-kpi-sub mono">Sharpe: 0.00</div>
-        </div>
+            <!-- Held Positions -->
+            <div class="broker-kpi-tile bento-subcard">
+              <div class="bento-subcard-header">
+                <!-- The value is the venue's initialValue sum over OPEN positions:
+                     the cost of what is HELD. "In Resting Bids" said the money was
+                     still on the book, which filled inventory is not. -->
+                <span class="broker-kpi-label">Held Positions</span>
+                <span class="broker-kpi-val mono text-primary" id="broker-kpi-committed">$0.00</span>
+              </div>
+              <div class="bento-progress-track">
+                <div class="bento-progress-fill bento-cyan-fill" id="bento-committed-bar" style="width:0%"></div>
+              </div>
+              <div class="bento-subcard-footer">
+                <span class="broker-kpi-sub mono" id="broker-kpi-committed-pct">0.0% of Equity</span>
+                <span class="bento-sub-muted">Exposure</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Bento Card 2: Performance Curve & Real-Time Equity Chart (Center: 6 cols) -->
+        <section class="bento-col bento-col-chart" data-purpose="equity-curve-card">
+          <div class="broker-header-row">
+            <div class="broker-title-group">
+              <div class="font-display broker-section-title">PORTFOLIO EQUITY &amp; REALIZED PNL</div>
+              <div id="run-profitability" class="broker-run-badge" role="status" aria-live="polite">
+                <span class="rp-run-chip" id="rp-run-id">RUN #LIVE</span>
+                <span id="rp-verdict" class="rp-verdict-text">$0.00 (STANDBY)</span>
+                <span id="rp-details" style="display:none"></span>
+                <span id="rp-venue" style="display:none"></span>
+              </div>
+            </div>
+            <div class="broker-controls-group">
+              <div class="broker-timeframe-selector" role="group" aria-label="Portfolio chart timeframe">
+                <button class="broker-tf-btn active" type="button" data-tf="1D">1D</button>
+                <button class="broker-tf-btn" type="button" data-tf="1W">1W</button>
+                <button class="broker-tf-btn" type="button" data-tf="1M">1M</button>
+                <button class="broker-tf-btn" type="button" data-tf="ALL">ALL</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Main Broker Line Chart Container with Interactive Crosshair & Tooltip -->
+          <div class="broker-chart-wrapper">
+            <div id="broker-chart-svg-container" class="broker-chart-canvas"></div>
+            <div id="broker-chart-tooltip" class="broker-tooltip" style="display:none"></div>
+          </div>
+        </section>
+
+        <!-- Bento Card 3: Execution Telemetry & Performance Metrics (Right: 3 cols) -->
+        <section class="bento-col bento-col-telemetry" data-purpose="execution-telemetry-card">
+          <div class="bento-card-header">
+            <span class="bento-card-title">EXECUTION TELEMETRY</span>
+            <span class="bento-tag-engine">POLY-ENGINE</span>
+          </div>
+
+          <div class="bento-telemetry-stack">
+            <!-- Win Rate -->
+            <div class="broker-kpi-tile bento-subcard">
+              <div class="bento-subcard-header">
+                <span class="broker-kpi-label">Win Rate</span>
+                <span class="broker-kpi-val mono" id="broker-kpi-winrate">0.0%</span>
+              </div>
+              <div class="bento-progress-track">
+                <div class="bento-progress-fill bento-emerald-gradient-fill" id="bento-winrate-bar" style="width:0%"></div>
+              </div>
+              <div class="bento-subcard-footer">
+                <span class="broker-kpi-sub mono" id="broker-kpi-wins">0 Wins / 0 Losses</span>
+                <span class="bento-tag-edge" id="bento-edge-tag">Edge</span>
+              </div>
+            </div>
+
+            <!-- Profit Factor -->
+            <div class="broker-kpi-tile bento-subcard">
+              <div class="bento-subcard-header">
+                <span class="broker-kpi-label">Profit Factor</span>
+                <span class="broker-kpi-val mono text-primary" id="broker-kpi-pf">0.00x</span>
+              </div>
+              <div class="bento-subcard-footer">
+                <span class="broker-kpi-sub mono" id="broker-kpi-sharpe">Sharpe: 0.00</span>
+              </div>
+            </div>
+
+            <!-- Realized Spread -->
+            <div class="broker-kpi-tile bento-subcard bento-compact-row">
+              <div>
+                <div class="broker-kpi-label">Realized Spread</div>
+                <div class="broker-kpi-sub mono" id="broker-kpi-expectancy">Avg $0.000 / close</div>
+              </div>
+              <div class="broker-kpi-val mono" id="broker-kpi-spread">+$0.00</div>
+            </div>
+
+            <!-- Quoted Markets -->
+            <div class="broker-kpi-tile bento-subcard bento-compact-row">
+              <div>
+                <!-- The value is `kpi.funnel.graduated`: markets the Market Filter
+                     quoted, not pairs held. "Hedged Pairs" claimed a hedge nothing
+                     had measured. -->
+                <div class="broker-kpi-label">Markets Quoted</div>
+                <div class="broker-kpi-sub mono">by the Market Filter</div>
+              </div>
+              <div class="broker-kpi-val mono text-signal" id="broker-kpi-pairs">0 Markets</div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -619,9 +696,9 @@
 <script>
   const CONTROL_TOKEN = "__LIVE_DASH_CONTROL_TOKEN__";
 </script>
-<script src="/static/app.js?v=5"></script>
+<script src="/static/app.js?v=9"></script>
 <!-- Runs after app.js has bound every panel, and only on /prototype: it moves
      those same nodes into the sidebar pages rather than re-rendering them. -->
-<script src="/static/prototype.js"></script>
+<script src="/static/prototype.js?v=6"></script>
 </body>
 </html>
