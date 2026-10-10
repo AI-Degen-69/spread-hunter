@@ -1894,6 +1894,7 @@ function renderBrokerPortfolioOverview(kpi, status) {
   const elWinrate = document.getElementById('broker-kpi-winrate');
   const elWins = document.getElementById('broker-kpi-wins');
   const elPf = document.getElementById('broker-kpi-pf');
+  const elSharpe = document.getElementById('broker-kpi-sharpe');
 
   if (elCash) elCash.textContent = fmtUSD(cashVal);
   if (elCashPct) elCashPct.textContent = `${cashPct}% Liquid USDC`;
@@ -1919,6 +1920,7 @@ function renderBrokerPortfolioOverview(kpi, status) {
       + `${losses == null ? '--' : losses} Losses`;
   }
   if (elPf) elPf.innerHTML = `${profitFactor} <span style="font-size:10px;color:var(--text-muted);font-weight:500">· SR ${sharpe}</span>`;
+  if (elSharpe) elSharpe.textContent = `Sharpe: ${sharpe}`;
 
   // Bento progress bars & edge indicator
   const elCashBar = document.getElementById('bento-cash-bar');

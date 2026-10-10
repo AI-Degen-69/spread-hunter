@@ -58,8 +58,23 @@ def test_stitch_closed_trades_pair_renders_single_row_with_both_legs_and_single_
         ts: 1700000000
     }];
     const html = app.renderStitchClosedLedgerRows('0x123', {}, settlements, [], Date.now());
+    const kpi = {
+        by_market: {
+            '0x123': {
+                condition_id: '0x123',
+                title: 'Fed Rate Cut in June',
+                category: 'Finance',
+                settlements: settlements,
+                realized_pnl: 0.70,
+                total_cost: 9.30,
+                total_sh: 10
+            }
+        }
+    };
+    const parentTableHtml = app.stitchClosedTradesRows(kpi, { orders: [] }, null);
     console.log(JSON.stringify({
         html,
+        parentTableHtml,
         hasYes: html.includes('<span class="stitch-leg-pill yes">YES</span>'),
         hasNo: html.includes('<span class="stitch-leg-pill no">NO</span>'),
         rowCount: (html.match(/<tr /g) || []).length,
@@ -75,6 +90,9 @@ def test_stitch_closed_trades_pair_renders_single_row_with_both_legs_and_single_
     assert "YES" in res["html"]
     assert "NO" in res["html"]
     assert "MERGED" in res["html"]
+    assert "Fed Rate Cut in June" in res["parentTableHtml"]
+    assert "+$0.70" in res["parentTableHtml"]
+    assert "1 Merged" in res["parentTableHtml"]
 
 
 @requires_node
