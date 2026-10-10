@@ -99,6 +99,11 @@ class PairCompletionRefused(RuntimeError):
     """
 
 
+class ExposureUnavailable(RuntimeError):
+    """Open orders or venue state cannot be read to evaluate condition exposure."""
+
+
+
 def should_exit(fill_cost: float, light_ask: Optional[float],
                 max_pair_cost: float) -> bool:
     """Exit when the pair cannot complete under the cap.
@@ -201,6 +206,77 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
         offset += POSITIONS_PAGE_SIZE
 
     return positions
+
+
+def load_condition_exposure(
+    client,
+    registry: OrderRegistry,
+    condition_id: str,
+    tokens: tuple[str, str] | list[str],
+) -> "ConditionExposure":
+    """Load inventory and active working BUY orders to evaluate condition exposure.
+
+    Uses `inventory_from_registry` for share holdings per token.
+    Counts active working BUY orders from the registry, requiring venue ID confirmation
+    when `client.get_open_orders()` is supported.
+    Raises `ExposureUnavailable` if open orders cannot be read.
+    """
+    from core_brain.order_registry import inventory_from_registry
+    from core_brain.single_leg_lifecycle import evaluate_exposure
+
+    if len(tokens) < 2:
+        up_token, down_token = (tokens[0], tokens[0]) if tokens else ("", "")
+    else:
+        up_token, down_token = tokens[0], tokens[1]
+
+    # 1. Holdings
+    db_path = getattr(registry, "db_path", getattr(registry, "_db_path", None))
+    if db_path is not None:
+        inv = inventory_from_registry(condition_id, up_token, down_token, db_path=db_path)
+    else:
+        inv = inventory_from_registry(condition_id, up_token, down_token)
+
+    held = {
+        up_token: float(getattr(inv, "up_shares", 0.0) or 0.0),
+        down_token: float(getattr(inv, "down_shares", 0.0) or 0.0),
+    }
+
+    # 2. Working BUY orders confirmed by venue
+    venue_open_ids: set[str] | None = None
+    if client is not None and hasattr(client, "get_open_orders"):
+        try:
+            raw_orders = client.get_open_orders()
+            if raw_orders is None:
+                raise ExposureUnavailable("venue get_open_orders returned None")
+            venue_open_ids = {
+                str(o.get("id") or o.get("order_id") or o.get("orderID") or "")
+                for o in raw_orders
+                if isinstance(o, dict)
+            }
+        except Exception as exc:
+            raise ExposureUnavailable(f"failed to read open orders from venue: {exc}") from exc
+
+    working_buys: dict[str, float] = {up_token: 0.0, down_token: 0.0}
+    active_rows = registry.get_active_orders()
+    for row in active_rows:
+        if row.condition_id != condition_id:
+            continue
+        if row.side != "BUY":
+            continue
+        tok = row.token_id
+        if tok not in working_buys:
+            continue
+        if venue_open_ids is not None and row.order_id:
+            if row.order_id not in venue_open_ids:
+                continue
+
+        # Remaining working size
+        matched = registry.get_size_matched(row.id)
+        remaining = max(0.0, float(row.original_size) - matched)
+        working_buys[tok] += remaining
+
+    return evaluate_exposure(condition_id, held, working_buys)
+
 
 
 WORKING_STATUSES = ("open", "partial", "pending")
@@ -1056,10 +1132,45 @@ def complete_pair(
     # fresh exposure on the leg this path exists to close. None of the guards
     # above would have caught it, because every one of them validated the
     # $3.00 we meant.
+    import uuid
+    from core_brain.order_registry import OrderRecord
+
+    local_comp_id = str(uuid.uuid4())
+    now_ms = int(time.time() * 1000)
+    is_shadow = type(client).__name__ == "ShadowExecutionClient" or getattr(client, "is_shadow", False)
+    if not is_shadow:
+        registry.create_order(
+            OrderRecord(
+                id=local_comp_id,
+                order_id="",
+                condition_id=pair["condition_id"],
+                token_id=light_token,
+                side="BUY",
+                price=ask,
+                original_size=size,
+                status="pending",
+                posted_ts=now_ms,
+                last_polled_ts=now_ms,
+                pair_id=pair_id,
+                max_pair_cost_at_post=max_pair_cost,
+            )
+        )
+
     resp = client.create_and_post_market_order(
         MarketOrderArgsV2(token_id=light_token, amount=notional, side="BUY",
                           price=ask)
     )
+
+    venue_oid = ""
+    if isinstance(resp, dict):
+        venue_oid = str(resp.get("orderID") or resp.get("order_id") or resp.get("id") or "")
+    if venue_oid and not is_shadow:
+        registry.attach_venue_order_id(local_comp_id, venue_oid)
+        if hasattr(client, "get_order"):
+            try:
+                client.get_order(venue_oid)
+            except Exception as exc:
+                log.debug("get_order re-read on %s failed: %s", venue_oid, exc)
 
     return {
         "action": "completed",
@@ -1073,7 +1184,9 @@ def complete_pair(
         "cancelled": cancelled,
         "venue_light_matched": venue_light_matched,
         "response": resp,
+        "order_id": venue_oid,
     }
+
 
 
 # --- aged-out legs (the window's complement) ---------------------------------
@@ -1401,7 +1514,8 @@ def manage_single_leg_positions(
 
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
-        LegState, SingleLegPosition, evaluate, persist_decision, transition,
+        LegState, SingleLegPosition, evaluate, max_profitable_hedge_bid,
+        persist_decision, transition,
     )
 
     now_s = now if now is not None else time.time()
@@ -1616,6 +1730,82 @@ def manage_single_leg_positions(
                     })
                     continue
 
+            # Stranded exposure resolution (#453)
+            # Evaluate condition exposure when neither hard-stop nor settlement fallback acted.
+            try:
+                tokens = (side_tokens["UP"], side_tokens["DOWN"])
+                exp = load_condition_exposure(client, registry, condition_id, tokens)
+                stranded_completion_on = bool(getattr(cfg, "stranded_completion_enabled", False))
+                stranded_max_wait = float(getattr(cfg, "stranded_max_wait_sec", 300.0))
+                min_quote_shares = float(getattr(cfg, "min_quote_shares", 5.0) or 5.0)
+
+                # Stranded exposure resolution (#453)
+                # When completion is enabled with a profitable cross, complete immediately.
+                # When stranded without working hedge and aged out past regular window, force resolution.
+                if (stranded_completion_on or is_aged_out) and (
+                    exp.status.value in ("stranded", "under_covered") and (
+                        exp.status.value == "stranded" or exp.coverage_shortfall < min_quote_shares
+                    )
+                ):
+                    opposing_token = exp.light_token_id
+                    opposing_book = client.get_order_book(opposing_token) if (opposing_token and hasattr(client, "get_order_book")) else None
+                    opposing_ask = best_ask(opposing_book) if opposing_book else None
+                    held_avg = position.up_avg_price if exp.heavy_token_id == position.up_token_id else position.down_avg_price
+
+                    if (
+                        stranded_completion_on
+                        and opposing_ask is not None
+                        and opposing_ask > 0
+                        and (held_avg + opposing_ask) < max_pair_cost
+                    ):
+                        with _completion_target(client, pair_id):
+                            res = complete_pair(
+                                client, registry, pair_id, max_pair_cost,
+                                live=live, max_order_usd=getattr(cfg, "max_order_usd", 25.0) or 25.0,
+                            )
+                        if res.get("action") == "completed":
+                            # Attempt live merge if live and non-interactive merge entry point is available
+                            if live:
+                                try:
+                                    from core_brain.order_manager import merge
+                                    # merge requires positional args; log operator directive if manual
+                                    log.info("Completed stranded pair %s; ready for merge", pair_id)
+                                except Exception as m_exc:
+                                    log.warning("Merge retry next cycle: %s", m_exc)
+                        out.append(res)
+                        continue
+
+                    # Otherwise, check maker tick availability & age
+                    age_s = (now_s * 1000.0 - last_fill_ms) / 1000.0 if last_fill_ms > 0 else 0.0
+                    try:
+                        max_profitable_hedge_bid(held_avg, max_pair_cost, tick_size)
+                        has_maker_tick = True
+                    except ValueError:
+                        has_maker_tick = False
+
+                    if has_maker_tick and age_s <= stranded_max_wait:
+                        out.append({
+                            "pair_id": pair_id,
+                            "condition_id": condition_id,
+                            "action": "stranded_awaiting_maker",
+                            "lifecycle_state": decision.state.value,
+                            "reason": f"unhedged leg awaiting maker quote (age {age_s:.1f}s <= {stranded_max_wait:.1f}s)",
+                        })
+                        continue
+                    else:
+                        exit_res = exit_single_buy(
+                            client, registry, pair_id, max_pair_cost,
+                            live=live, venue_positions=venue_positions,
+                            reason="stranded_unhedged_exit", force=True,
+                        )
+                        exit_res.update(route="stranded_exit", lifecycle_state=decision.state.value)
+                        out.append(exit_res)
+                        continue
+            except ExposureUnavailable as exp_exc:
+                log.info("Exposure check skipped for pair %s: %s", pair_id, exp_exc)
+            except Exception as exp_exc:
+                log.debug("Exposure resolution check skipped for pair %s: %s", pair_id, exp_exc)
+
             action = {
                 "wait": "patient_wait",
                 "hedge": "escalated_wait",
@@ -1625,7 +1815,8 @@ def manage_single_leg_positions(
             }.get(decision.action, decision.action)
             out.append({
                 "pair_id": pair_id, "condition_id": condition_id,
-                "action": action, "lifecycle_state": decision.state.value,
+                "action": action,
+ "lifecycle_state": decision.state.value,
                 "reason": decision.reason,
             })
         except (PairExitRefused, PairCompletionRefused) as exc:

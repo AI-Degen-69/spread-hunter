@@ -24,6 +24,131 @@ class LegState(str, Enum):
     PAIR_LOCKED = "PAIR_LOCKED"
 
 
+class ExposureState(str, Enum):
+    BALANCED = "balanced"
+    COVERED = "covered"
+    UNDER_COVERED = "under_covered"
+    STRANDED = "stranded"
+
+
+@dataclass(frozen=True)
+class ConditionExposure:
+    condition_id: str
+    heavy_token_id: str | None
+    light_token_id: str | None
+    held_deficit: float
+    coverage_shortfall: float
+    over_coverage: float
+    status: ExposureState
+
+
+def evaluate_exposure(
+    condition_id: str,
+    held_shares_by_token: dict[str, float],
+    working_buy_shares_by_token: dict[str, float],
+) -> ConditionExposure:
+    """Evaluate held inventory vs working buy orders on a binary condition.
+
+    Calculates net exposure, heavy/light tokens, deficit, coverage shortfall,
+    and returns one of ExposureState (balanced, covered, under_covered, stranded).
+    Uses SIZE_EPS for all comparisons.
+    """
+    all_tokens = list(set(held_shares_by_token.keys()) | set(working_buy_shares_by_token.keys()))
+    if len(all_tokens) == 0:
+        return ConditionExposure(
+            condition_id=condition_id,
+            heavy_token_id=None,
+            light_token_id=None,
+            held_deficit=0.0,
+            coverage_shortfall=0.0,
+            over_coverage=0.0,
+            status=ExposureState.BALANCED,
+        )
+
+    if len(all_tokens) == 1:
+        t0 = all_tokens[0]
+        h0 = held_shares_by_token.get(t0, 0.0)
+        w0 = working_buy_shares_by_token.get(t0, 0.0)
+        if h0 <= SIZE_EPS:
+            return ConditionExposure(
+                condition_id=condition_id,
+                heavy_token_id=None,
+                light_token_id=None,
+                held_deficit=0.0,
+                coverage_shortfall=0.0,
+                over_coverage=0.0,
+                status=ExposureState.BALANCED,
+            )
+        return ConditionExposure(
+            condition_id=condition_id,
+            heavy_token_id=t0,
+            light_token_id=None,
+            held_deficit=h0,
+            coverage_shortfall=h0,
+            over_coverage=0.0,
+            status=ExposureState.STRANDED,
+        )
+
+    t1, t2 = all_tokens[0], all_tokens[1]
+    h1 = held_shares_by_token.get(t1, 0.0)
+    h2 = held_shares_by_token.get(t2, 0.0)
+
+    if abs(h1 - h2) <= SIZE_EPS:
+        return ConditionExposure(
+            condition_id=condition_id,
+            heavy_token_id=None,
+            light_token_id=None,
+            held_deficit=0.0,
+            coverage_shortfall=0.0,
+            over_coverage=0.0,
+            status=ExposureState.BALANCED,
+        )
+
+    if h1 > h2:
+        heavy_token = t1
+        light_token = t2
+        deficit = h1 - h2
+    else:
+        heavy_token = t2
+        light_token = t1
+        deficit = h2 - h1
+
+    working_hedge = working_buy_shares_by_token.get(light_token, 0.0)
+
+    if working_hedge <= SIZE_EPS:
+        return ConditionExposure(
+            condition_id=condition_id,
+            heavy_token_id=heavy_token,
+            light_token_id=light_token,
+            held_deficit=deficit,
+            coverage_shortfall=deficit,
+            over_coverage=0.0,
+            status=ExposureState.STRANDED,
+        )
+
+    if working_hedge + SIZE_EPS >= deficit:
+        return ConditionExposure(
+            condition_id=condition_id,
+            heavy_token_id=heavy_token,
+            light_token_id=light_token,
+            held_deficit=deficit,
+            coverage_shortfall=0.0,
+            over_coverage=max(0.0, working_hedge - deficit),
+            status=ExposureState.COVERED,
+        )
+
+    return ConditionExposure(
+        condition_id=condition_id,
+        heavy_token_id=heavy_token,
+        light_token_id=light_token,
+        held_deficit=deficit,
+        coverage_shortfall=max(0.0, deficit - working_hedge),
+        over_coverage=0.0,
+        status=ExposureState.UNDER_COVERED,
+    )
+
+
+
 @dataclass(frozen=True)
 class SingleLegPosition:
     pair_id: str
@@ -74,6 +199,7 @@ class LifecycleQuoteContext:
     # registry state rather than an inferred flag. None on the dual-resting
     # path, which keeps full gate behavior.
     lifecycle_state: str | None = None
+    shortfall: float = 0.0
 
 
 def max_profitable_hedge_bid(

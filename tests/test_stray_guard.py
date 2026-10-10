@@ -760,3 +760,28 @@ def test_failed_book_read_retries_after_backoff_without_resolving(tmp_path):
 
 
 
+
+
+def test_classify_market_orders_protected_orders_never_hopeless():
+    from core_brain.stray_guard import classify_market_orders
+
+    cond = "0xcond_protect"
+    tok_up = "tok_up"
+    tok_dn = "tok_dn"
+    # Order would be hopeless because price 0.50 + ask 0.50 >= 0.99
+    o1 = make_order("o1", cond, tok_dn, 0.50, pair_id=None)
+    books = {tok_up: {"asks": [{"price": 0.50, "size": 10.0}]}}
+
+    # When NOT protected -> hopeless
+    res_unprotected = classify_market_orders([o1], books=books, max_pair_cost=0.99, market_tokens={cond: (tok_up, tok_dn)})
+    assert len(res_unprotected.hopeless_strays) == 1
+
+    # When protected -> in protected list, never hopeless
+    res_protected = classify_market_orders(
+        [o1], books=books, max_pair_cost=0.99,
+        market_tokens={cond: (tok_up, tok_dn)},
+        protected_order_ids={"o1"}
+    )
+    assert len(res_protected.hopeless_strays) == 0
+    assert len(res_protected.protected) == 1
+    assert res_protected.protected[0].id == "o1"

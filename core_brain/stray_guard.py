@@ -52,6 +52,8 @@ class ClassificationResult:
     complementary_detached: list[DetachedPair] = field(default_factory=list)
     hopeless_strays: list[HopelessStray] = field(default_factory=list)
     viable_strays: list[ClassifiedOrder] = field(default_factory=list)
+    protected: list[OrderRecord] = field(default_factory=list)
+
 
 
 def _best_ask_from_book(book: dict | None) -> Optional[float]:
@@ -81,10 +83,12 @@ def classify_market_orders(
     books: dict[str, Any] | None = None,
     max_pair_cost: float = 0.99,
     market_tokens: dict[str, tuple[str, str]] | None = None,
+    protected_order_ids: set[str] | frozenset[str] | None = None,
 ) -> ClassificationResult:
     """Classify a set of active orders into paired, detached complementary, hopeless, or viable."""
     books = books or {}
     market_tokens = market_tokens or {}
+    protected_ids = set(protected_order_ids or ())
     result = ClassificationResult()
 
     # Group orders by condition_id
@@ -144,6 +148,10 @@ def classify_market_orders(
 
         # For remaining lone orders, check feasibility against opposing book ask
         for o in remaining_unpaired:
+            if o.id in protected_ids or (o.order_id and o.order_id in protected_ids):
+                result.protected.append(o)
+                continue
+
             tokens = market_tokens.get(cond)
             opposing_token: Optional[str] = None
             if tokens:
@@ -177,6 +185,7 @@ def classify_market_orders(
                 )
 
     return result
+
 
 
 def adopt_detached_legs(
@@ -490,12 +499,37 @@ def run_stray_guard(
                     book_tracker.note_failure(tok)
                 log.debug("Failed to get order book for %s: %s", tok, exc)
 
+    # Evaluate condition exposure to protect resting hedges covering held inventory
+    protected_order_ids: set[str] = set()
+    from core_brain.single_buy_saver import load_condition_exposure, ExposureUnavailable
+    for cond, (t1, t2) in market_tokens.items():
+        try:
+            exp = load_condition_exposure(client, registry, cond, (t1, t2))
+            if exp.held_deficit > 1e-6 and exp.light_token_id:
+                # Protect active BUY orders on the light token
+                for o in candidate_orders:
+                    if o.condition_id == cond and o.token_id == exp.light_token_id and o.side == "BUY":
+                        protected_order_ids.add(o.id)
+                        if o.order_id:
+                            protected_order_ids.add(o.order_id)
+        except ExposureUnavailable as exc:
+            log.warning("Exposure unavailable for %s (%s); protecting all active orders on condition", cond, exc)
+            for o in candidate_orders:
+                if o.condition_id == cond:
+                    protected_order_ids.add(o.id)
+                    if o.order_id:
+                        protected_order_ids.add(o.order_id)
+        except Exception as exc:
+            log.debug("Exposure check error for %s: %s", cond, exc)
+
     classification = classify_market_orders(
         candidate_orders,
         books=books,
         max_pair_cost=max_pair_cost,
         market_tokens=market_tokens,
+        protected_order_ids=protected_order_ids,
     )
+
 
     adopted_pairs = adopt_detached_legs(registry, classification.complementary_detached, live=live)
 

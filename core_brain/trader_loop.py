@@ -532,6 +532,33 @@ def plan_orders(
         if not any(abs(o["price"] - i.price) <= tolerance for o in sits):
             to_submit.append(i)
 
+    # Delta top-up (#453): if an existing hedge is preserved (kept) on a lifecycle pair
+    # but leaves a shortfall >= min_quote_shares, generate a supplemental maker intent
+    # for the missing delta shares on the same token and pair ID.
+    if lifecycle_pair_id is not None and hasattr(cfg, "min_quote_shares"):
+        min_shares = float(getattr(cfg, "min_quote_shares", 5.0) or 5.0)
+        # Check if any kept order belongs to lifecycle_pair_id
+        for tok, sits in kept.items():
+            pair_sits = [o for o in sits if str(o.get("pair_id") or "") == str(lifecycle_pair_id)]
+            if not pair_sits:
+                continue
+            # Look for an intent that matches this lifecycle pair to determine desired size and price
+            matching_intents = [i for i in intents if i.pair_id == lifecycle_pair_id and i.token_id == tok]
+            if matching_intents:
+                target_intent = matching_intents[0]
+                total_resting_shares = sum(float(o.get("size") or o.get("original_size") or 0.0) for o in pair_sits)
+                shortfall = float(target_intent.size) - total_resting_shares
+                if shortfall >= min_shares:
+                    to_submit.append(QuoteIntent(
+                        side=target_intent.side,
+                        token_id=tok,
+                        price=target_intent.price,
+                        size=int(shortfall),
+                        mid=target_intent.mid,
+                        edge_vs_mid=target_intent.edge_vs_mid,
+                        pair_id=lifecycle_pair_id,
+                    ))
+
     return to_cancel, to_submit
 
 
@@ -1934,11 +1961,39 @@ def _visit_one(
             condition_id=cid, title=title, why=why, intents=list(intents),
             queue_why=queue_why)
 
+    # Hedge preservation (#453):
+    # Do not cancel an active hedge under `lifecycle_replace` if no replacement intent survives placement admission filters.
+    if to_cancel:
+        filtered_to_cancel = []
+        for o in to_cancel:
+            key = str(o.get("id") or o.get("order_id") or "")
+            reason = cancel_reasons.get(key, "")
+            if reason == "lifecycle_replace":
+                tok = o.get("token_id")
+                # Check if there is an admitted submission covering this token on the lifecycle pair
+                has_admitted_replacement = any(
+                    i.token_id == tok and getattr(i, "pair_id", None) == o.get("pair_id")
+                    for i in to_submit
+                ) if o.get("pair_id") else any(i.token_id == tok for i in to_submit)
+                if not has_admitted_replacement:
+                    log.warning(
+                        "[HEDGE PRESERVED] %s | Aborting cancellation of resting hedge %s: no replacement survived admission",
+                        title, key,
+                    )
+                    continue
+            filtered_to_cancel.append(o)
+        to_cancel = filtered_to_cancel
+
     submitted = cancelled = 0
+    cancelled_lifecycle_orders = [
+        o for o in to_cancel
+        if cancel_reasons.get(str(o.get("id") or o.get("order_id") or "")) == "lifecycle_replace"
+    ]
     try:
         # Cancel first: cancelling old quotes before submitting replacements
         # prevents exceeding MAX_TOTAL_USD notional exposure and avoids double
         # quoting if replacement submission occurs while stale orders rest.
+        confirmed_cancelled_lifecycle = []
         if to_cancel:
             for row in to_cancel:
                 key = str(row.get("id") or row.get("order_id") or "")
@@ -1954,10 +2009,46 @@ def _visit_one(
                         f"cancel failed: {len(still_resting)}/{len(to_cancel)} still "
                         f"resting; aborting replacement submission"
                     )
+            # Only consider lifecycle orders whose cancellation confirmed complete
+            confirmed_cancelled_lifecycle = list(cancelled_lifecycle_orders)
         if to_submit:
             submitted = seam.submit_fn(seam.client, seam.registry, market, to_submit, cfg)
+            if submitted == 0 and confirmed_cancelled_lifecycle:
+                # Submit accepted zero orders: attempt to restore cancelled hedge order
+                for old_o in confirmed_cancelled_lifecycle:
+                    try:
+                        restore_intent = QuoteIntent(
+                            side=old_o.get("side", "BUY"),
+                            token_id=old_o.get("token_id"),
+                            price=float(old_o["price"]),
+                            size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
+                            mid=float(old_o["price"]),
+                            edge_vs_mid=0.0,
+                            pair_id=old_o.get("pair_id"),
+                        )
+                        seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
+                        log.warning("[HEDGE RESTORED] %s | Restored hedge %s after 0 orders submitted", title, old_o.get("id"))
+                    except Exception as rest_err:
+                        log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
     except Exception as e:
         submitted = getattr(e, PARTIAL_SUBMIT_PLACED_ATTR, getattr(e, "placed", submitted))
+        if confirmed_cancelled_lifecycle and submitted == 0:
+            # Submit raised exception with 0 placed: attempt to restore confirmed cancelled hedge order
+            for old_o in confirmed_cancelled_lifecycle:
+                try:
+                    restore_intent = QuoteIntent(
+                        side=old_o.get("side", "BUY"),
+                        token_id=old_o.get("token_id"),
+                        price=float(old_o["price"]),
+                        size=int(old_o.get("size") or old_o.get("original_size") or cfg.min_quote_shares),
+                        mid=float(old_o["price"]),
+                        edge_vs_mid=0.0,
+                        pair_id=old_o.get("pair_id"),
+                    )
+                    seam.submit_fn(seam.client, seam.registry, market, [restore_intent], cfg)
+                    log.warning("[HEDGE RESTORED] %s | Restored hedge %s after submit failure", title, old_o.get("id"))
+                except Exception as rest_err:
+                    log.error("[HEDGE RESTORE FAILED] %s | Failed to restore hedge %s: %s", title, old_o.get("id"), rest_err)
         # A submit/cancel failure (venue rejection, a split couple rolled back)
         # must degrade this market to ERROR, never stop the rotation.
         emit_fn(service="decide", cycle=cycle, phase="quoting",
