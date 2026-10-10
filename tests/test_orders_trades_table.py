@@ -1072,10 +1072,33 @@ def test_the_expanded_row_names_the_leg_it_belongs_to():
     rendered = _render("closed-trades", kpi, state, expand=[CID_SETTLED])
     expanded = _expanded(rendered)
 
-    # Assert -- both legs named, and each pill coloured by its own leg.
-    assert "UP · BUY" in expanded
-    assert "DOWN · BUY" in expanded
+    # Assert -- both legs named on their own: the leg is the identity and
+    # every engine order is a BUY, so the word BUY says nothing and is only
+    # kept for a SELL, which would be the news (tested below).
+    assert ">UP<" in expanded
+    assert ">DOWN<" in expanded
     assert "badge-down" in expanded
+
+
+@requires_node
+def test_a_sell_keeps_its_side_word_beside_the_leg():
+    # Arrange -- a SELL would be the news on this book, so it keeps the
+    # explicit two-word label that a BUY no longer gets.
+    kpi = _kpi()
+    kpi["by_market"][CID_SETTLED]["quotes"] = [
+        {"token_id": "tok-up", "side": "UP"},
+    ]
+    state = _state()
+    state["orders"] = [
+        _settled_order("ord-sell", "tok-up", side="SELL", pair_id="pair-s"),
+    ]
+
+    # Act / Assert
+    expanded = _expanded(_render("closed-trades", kpi, state,
+                                 expand=[CID_SETTLED]))
+    assert "UP · SELL" in expanded
+    assert "badge-down" not in expanded
+
 
 
 def _settled_order(order_id: str, token: str, **over) -> dict:
@@ -1462,6 +1485,56 @@ def test_a_closed_trade_names_the_reason_it_closed_with():
     assert "close-reason-pill" in rendered["html"]
     assert "Aged-out rescue" in rendered["html"]
     assert "aged_out_rescue" in rendered["html"]
+
+
+@requires_node
+def test_an_exit_carries_the_reason_word_inside_the_exit_badge():
+    # Arrange -- the WHY goes inside the HOW: one red badge the eye can find,
+    # not two pills to read in sequence. The word follows the reason;
+    # the red follows the exit.
+    kpi = _with_settlements({"method": "single_buy_exit", "pnl": -2.6,
+                             "reason": "aged_out_rescue", "ts": 1788526463.0})
+
+    # Act
+    rendered = _render("closed-trades", kpi, _state())
+    pill = rendered["html"][rendered["html"].index("close-reason-pill") - 200:
+                          rendered["html"].index("</span>", rendered["html"].index("close-reason-pill")) + 6]
+
+    # Assert -- an EXIT badge, red, with the reason word inside it and the
+    # span carries the close-reason hook the older assertions read.
+    assert 'class="close-reason-pill is-exit"' in rendered["html"]
+    assert "EXIT · Aged-out rescue" in rendered["html"]
+
+
+@requires_node
+def test_an_exit_the_page_has_never_seen_is_still_an_exit():
+    # Arrange -- a NEW named stop reason from the Python side. Whether this
+    # page knows its words or not, a booked-loss single-buy exit is an exit.
+    kpi = _with_settlements({"method": "single_buy_exit", "pnl": -1.0,
+                             "reason": "collateral_sweep", "ts": 1788526463.0})
+
+    # Act / Assert -- the fallback words ride inside the badge too.
+    assert 'close-reason-pill is-exit' in rendered_exit_html(kpi)
+    assert "EXIT · Collateral sweep" in rendered_exit_html(kpi)
+
+
+def rendered_exit_html(kpi):
+    return _render("closed-trades", kpi, _state())["html"]
+
+
+@requires_node
+def test_a_named_close_that_is_not_an_exit_stays_quiet():
+    # Arrange -- stop codes are exits; a named bookkeeping close is not.
+    # Whatever the method, a non-exit reason keeps the quiet gray chip:
+    # red is reserved for "money left the position by force".
+    kpi = _with_settlements({"method": "shadow_migration", "pnl": 0.1,
+                             "reason": "collateral_sweep", "ts": 1788526463.0})
+
+    # Act / Assert -- no is-exit class, no EXIT word, just the quiet words.
+    html = _render("closed-trades", kpi, _state())["html"]
+    assert "is-exit" not in html
+    assert "EXIT" not in html.replace("Collateral sweep", "")
+    assert "Collateral sweep" in html
 
 
 @requires_node

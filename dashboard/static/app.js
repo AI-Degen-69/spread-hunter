@@ -4234,8 +4234,15 @@ function renderExpandedOrders(orders, fills, showCancelled, legOf) {
       const isDown = sideLabel === 'DOWN'
         || (o.outcome && (o.outcome.toLowerCase().includes('no') || o.outcome.toLowerCase().includes('down')));
       const badgeCls = isDown ? 'badge-down' : 'badge-up';
+      // The leg is the identity; the side is the action. On a book where
+      // every order the engine posts is a BUY, spelling BUY on each row
+      // answers a question nobody asked, so a known leg renders alone and
+      // a SELL (which would be the news) keeps its word beside the leg.
+      const knownLeg = sideLabel && !o.outcome;
+      const isBuy = String(o.side || '').toUpperCase() === 'BUY';
       const label = o.outcome ? `${o.outcome} (${fmtSide(o.side)})`
-        : (sideLabel ? `${sideLabel} · ${fmtSide(o.side)}` : fmtSide(o.side));
+        : (knownLeg ? (isBuy ? sideLabel : `${sideLabel} · ${fmtSide(o.side)}`)
+        : fmtSide(o.side));
       const isCancelled = isCancelledStatus(o.status);
       html += `<tr class="${isCancelled ? 'order-cancelled ' : ''}pair-row" style="--pair-hue:${hue}; background: hsla(${hue},72%,60%,0.06)">
         <td class="mono" style="font-size:11px;color:var(--text-muted)"><span class="pair-label"${pairTitle}><span class="pair-dot" style="--pair-hue:${hue}"></span>${esc(pairDisplay)}</span></td>
@@ -5551,7 +5558,28 @@ const CLOSE_REASON_LABELS = {
   aged_out_rescue: 'Aged-out rescue',
   adverse_drift: 'Adverse drift',
   grace_expired: 'Grace expired',
+  lifecycle_hard_stop: 'Stop-loss',
 };
+
+/* Exit reasons are the closes that took money out of a position by force:
+ * the dual stop-loss watcher's cancels and the RESOLVED end states -- a
+ * booked-loss single-buy exit is an exit whether the page knows its name or
+ * not, so unknown reasons exit too (worth knowing beats worth reading).
+ * Bookkeeping-named closes (nothing force-sold, no position lost) stay off
+ * this list and keep the quiet gray chip: red is for "money left by force".
+ * The WHY rides INSIDE the red badge, not beside it -- one red thing to find
+ * on the row, not two pills to read in sequence. */
+const EXIT_METHODS = new Set(['single_buy_exit', 'aged_out_exit', 'stop_loss_exit']);
+
+function closeReasonIsExit(info) {
+  if (!info) return false;
+  return EXIT_METHODS.has(String(info.method || '').trim());
+}
+
+function closeReasonBadgeLabel(reason, isExit) {
+  const words = closeReasonLabel(reason);
+  return isExit ? `EXIT · ${words}` : words;
+}
 
 function closeReasonLabel(reason) {
   const raw = String(reason === null || reason === undefined ? '' : reason).trim();
@@ -5738,8 +5766,9 @@ function marketRowPairHtml(cid, m, opts) {
   // `closeReasonOf`). A quiet chip: DESIGN.md keeps every saturated hue for the
   // live-state vocabulary, and provenance is not a state.
   const reasonInfo = closeReasonOf(m);
+  const reasonIsExit = closeReasonIsExit(reasonInfo);
   const reasonHtml = reasonInfo
-    ? `<div class="close-reason-line"><span class="close-reason-pill" title="${esc(closeReasonTitle(reasonInfo))}">${esc(closeReasonLabel(reasonInfo.reason))}</span></div>`
+    ? `<div class="close-reason-line"><span class="close-reason-pill${reasonIsExit ? ' is-exit' : ''}" title="${esc(closeReasonTitle(reasonInfo))}">${esc(closeReasonBadgeLabel(reasonInfo.reason, reasonIsExit))}</span></div>`
     : '';
 
   let html = `<tr class="market-row${isExpanded ? ' expanded' : ''}" data-cid="${esc(cid)}" tabindex="0" role="button" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} market orders for ${esc(m.title || m.slug || cid.slice(0,10))}">
