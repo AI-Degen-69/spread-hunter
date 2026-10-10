@@ -181,6 +181,49 @@ def test_active_orders_preserved_in_by_market_when_days_to_resolve_negative(tmp_
     assert rep["by_market"][cid]["resolved"] is False
 
 
+def test_expired_market_with_a_booked_close_stays_in_by_market(tmp_path, monkeypatch):
+    """A run's closed trade survives the expired-market drop: the market's
+    days_to_resolve went negative, it holds nothing and has no open orders,
+    but it booked a realized loss. Dropping it hides the run's own trade from
+    the Closed Trades tab while the loss still counts in the headline."""
+    import sqlite3, time
+    from core_brain.kpi import report
+    from core_brain.order_registry import SCHEMA, CloseRecord, OrderRegistry
+
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        kpi_mod,
+        "_resolve_market_meta",
+        lambda cid, closes, quotes: {
+            "condition_id": cid,
+            "title": "Swansea Match",
+            "slug": "swansea-match",
+            "url": "https://polymarket.com/market/swansea-match",
+            "category": "Soccer",
+            "days_to_resolve": -0.07,
+        },
+    )
+
+    db_file = tmp_path / "test_closed.db"
+    con = sqlite3.connect(str(db_file))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+
+    reg = OrderRegistry(db_file)
+    cid = "0xswansea"
+    reg.log_close(CloseRecord(
+        ts=time.time(), condition_id=cid, method="single_buy_exit", shares=10.0,
+        dn_price=0.15, cost_basis=1.70, proceeds=1.50, realized_pnl=-0.20,
+        dn_cost_removed=1.70, run_id="run-1", reason="lifecycle_hard_stop",
+    ))
+
+    rep = report(db_file, run_id="run-1")
+    assert cid in rep["by_market"], "expired market with a booked close was dropped"
+    assert len(rep["by_market"][cid]["settlements"]) == 1
+    assert rep["by_market"][cid]["realized_pnl"] == pytest.approx(-0.20)
+
+
 @pytest.mark.parametrize("status", ["pending", "partial"])
 def test_pending_partial_orders_preserved_in_by_market(tmp_path, monkeypatch, status):
     """pending and partial orders count as active — market must appear in by_market."""

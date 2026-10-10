@@ -1662,6 +1662,10 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     # dead rows. The kanban's rejection buckets still aggregate why markets
     # were refused this cycle; the dashboard's Data & Markets table shows only
     # markets the bot quoted, filled, holds orders on, or closed.
+    # A market with a booked close is always kept, even when its
+    # days_to_resolve went negative and nothing is held or resting on it: that
+    # row is the run's own closed trade, and dropping it hides the trade from
+    # the Closed Trades tab while its loss still counts in the headline.
     order_cids = {o.get("condition_id") for o in orders if o.get("condition_id")}
     by_mkt = {
         cid: m for cid, m in by_mkt.items()
@@ -1674,6 +1678,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
                     and not ((m.get("up_sh") or 0) > 0 or (m.get("dn_sh") or 0) > 0)
                     and m.get("days_to_resolve") is not None
                     and m.get("days_to_resolve") < 0
+                    and not m["settlements"]
                 )
                 and (m["quotes_count"] > 0 or m["fills_count"] > 0
                      or cid in order_cids or m["settlements"])
