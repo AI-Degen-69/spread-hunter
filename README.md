@@ -138,10 +138,28 @@ dry-run preview.
 | `exit <pair_id>` | Stop-loss exit of a single buy |
 | `cancel` / `cancel-market` / `cancel-all` | Pull resting orders |
 
-**Bot stack** — the dashboard's START/STOP buttons (or the PowerShell menu) control the
+**Bot stack** — one state-driven master button (or the PowerShell menu) controls the
 Market Filter (`filter`), Query Polymarket (`query`) and Decide & Execute (`decide`).
-START launches all three; STOP stops them. Decide & Execute rests real maker bids: verify
-dashboard state before starting.
+The button shows **START RUN** when the stack is stopped and **STOP RUN** when any
+service runs, and every start/stop refusal, outcome, or error is reported on screen
+(never console-only). Decide & Execute rests real maker bids: verify dashboard state
+before starting.
+
+- **START** fills only the missing services: a partial stack is completed, not
+  refused, and only a complete duplicate stack (all three alive) is rejected. It
+  preserves the already-captured `starting_account_value` instead of re-snapshotting
+  capital.
+- **STOP** asks politely (SIGTERM / `taskkill /T`), waits a bounded grace period,
+  escalates to force (SIGKILL / `taskkill /F /T`), verifies each service is down, and
+  reports a per-service outcome (`stopped` / `forced` / `still_running`). The registry
+  is rewritten rather than deleted, so `starting_account_value` and any survivor's
+  entry survive for a retry. A survivor is reported honestly, not as a clean stop.
+
+Known acceptance gaps: whole-tree stop is complete only on Linux/macOS for services
+launched by the dashboard's START (they own a new process group); on Windows the
+down-check confirms only the root process; legacy and service-card launches signal
+only the root, so their children can survive as orphans; and STOP does not cancel
+resting venue orders.
 
 **PowerShell control center** — `.\scripts\spread-hunter-menu.ps1` offers
 `start` / `stop` / `status` / `open`. The `status` view shows the dashboard, every stack

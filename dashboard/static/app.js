@@ -113,6 +113,12 @@ function applyPayloadVersion(kpi) {
 // first status arrives we cannot claim a live view, and START is refused on it.
 let lastDbIsProduction = false;
 let isStopping = false;
+let isStarting = false;
+// Bumped on every master-control request start and end. A poll captures the
+// value when it begins; if it changed before the poll's status arrives, the
+// poll's own (older) payload must not repaint the button over the click's
+// result (#457).
+let masterLifecycleSeq = 0;
 
 /* ── Live-state language (DESIGN.md) ──────────────────────────────────
  * Six states, one vocabulary, applied identically to every process, feed and
@@ -1297,10 +1303,13 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   // Master Control Header & Buttons
   const masterIndicator = document.getElementById('master-status-indicator');
-  const masterStartBtn = document.getElementById('btn-master-start');
-  const masterStopBtn = document.getElementById('btn-master-stop');
+  const masterToggle = document.getElementById('btn-master-toggle');
   const servicesPill = document.getElementById('hud-services-pill');
   const guardrailPill = document.getElementById('hud-guardrail-pill');
+
+  // A null service entry is not a running one.
+  const serviceEntries = (status && status.services) ? Object.values(status.services) : [];
+  const anyServiceRunning = serviceEntries.some(s => s && s.running);
 
   if (masterIndicator) {
     if (isStopping) {
@@ -1360,20 +1369,36 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     hudGuardrailSub.textContent = guardrailState === 'unknown'
       ? 'telemetry unavailable' : `${alertsTotal} alerts`;
   }
-  if (masterStartBtn) {
-    masterStartBtn.disabled = isRunning;
-    masterStartBtn.style.opacity = isRunning ? '0.45' : '1';
-    masterStartBtn.style.cursor = isRunning ? 'not-allowed' : 'pointer';
-  }
-  if (masterStopBtn) {
-    if (isStopping) {
-      masterStopBtn.disabled = true;
-      masterStopBtn.style.opacity = '0.45';
-      masterStopBtn.style.cursor = 'wait';
+  if (masterToggle) {
+    if (isStarting || isStopping) {
+      // Busy overrides status: no second click while a request is in flight.
+      const busyLabel = isStopping ? 'STOPPING…' : 'STARTING…';
+      masterToggle.className = isStopping ? 'btn-stop-run' : 'btn-start-run';
+      masterToggle.disabled = true;
+      masterToggle.setAttribute('aria-busy', 'true');
+      masterToggle.style.opacity = '0.6';
+      masterToggle.style.cursor = 'wait';
+      masterToggle.innerHTML = `<svg class="btn-syncing-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>${busyLabel}`;
+      masterToggle.dataset.action = isStopping ? 'stop' : 'start';
     } else {
-      masterStopBtn.disabled = !isRunning;
-      masterStopBtn.style.opacity = !isRunning ? '0.45' : '1';
-      masterStopBtn.style.cursor = !isRunning ? 'not-allowed' : 'pointer';
+      masterToggle.removeAttribute('aria-busy');
+      if (anyServiceRunning) {
+        masterToggle.className = 'btn-stop-run';
+        masterToggle.setAttribute('aria-label', 'Stop bot execution stack');
+        masterToggle.dataset.action = 'stop';
+        masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP RUN`;
+        masterToggle.disabled = false;
+        masterToggle.style.opacity = '1';
+        masterToggle.style.cursor = 'pointer';
+      } else {
+        masterToggle.className = 'btn-start-run';
+        masterToggle.setAttribute('aria-label', 'Start bot execution stack');
+        masterToggle.dataset.action = 'start';
+        masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>START RUN`;
+        masterToggle.disabled = false;
+        masterToggle.style.opacity = '1';
+        masterToggle.style.cursor = 'pointer';
+      }
     }
   }
 }
@@ -1508,70 +1533,74 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
 
 }
 
-// Master Start / Stop / Sync Button Handlers
-const masterStartBtn = document.getElementById('btn-master-start');
-if (masterStartBtn && !masterStartBtn.dataset.wired) {
-  masterStartBtn.dataset.wired = 'true';
-  masterStartBtn.addEventListener('click', async () => {
-    try {
-      masterStartBtn.innerHTML = `
-        <svg class="btn-syncing-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-        STARTING…`;
-      masterStartBtn.disabled = true;
-      const res = await controlFetch('/api/system/start');
-      const data = await res.json();
-      if (!data.ok && data.message) {
-        console.warn('Start message:', data.message);
+// Master toggle handler (Issue #457): one button, both actions.
+// dataset.action ('start' | 'stop') is painted by renderServiceHeader from the
+// live status, so the click never guesses what the backend will accept.
+const masterToggleBtn = document.getElementById('btn-master-toggle');
+if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
+  masterToggleBtn.dataset.wired = 'true';
+  masterToggleBtn.addEventListener('click', async () => {
+    // A second click while a request is in flight is the race this button
+    // exists to remove: the flags, not the DOM, are the authority.
+    if (isStarting || isStopping || masterToggleBtn.disabled) return;
+    const action = masterToggleBtn.dataset.action === 'stop' ? 'stop' : 'start';
+    if (action === 'stop') {
+      isStopping = true;
+      const pill = document.getElementById('master-status-indicator');
+      if (pill) {
+        pill.className = 'pill state-degraded font-display';
+        pill.textContent = 'STACK STOPPING';
+        pill.setAttribute('aria-label', 'STACK STOPPING');
       }
-    } catch (e) {
-      console.error('Start stack error:', e);
-    } finally {
-      masterStartBtn.innerHTML = `
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        START RUN`;
-      pollStatus();
+    } else {
+      isStarting = true;
     }
-  });
-}
-
-const masterStopBtn = document.getElementById('btn-master-stop');
-if (masterStopBtn && !masterStopBtn.dataset.wired) {
-  masterStopBtn.dataset.wired = 'true';
-  masterStopBtn.addEventListener('click', async () => {
-    if (isStopping || masterStopBtn.disabled) return;
-    isStopping = true;
+    masterLifecycleSeq++;
+    renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
     try {
-      masterStopBtn.innerHTML = `
-        <svg class="btn-syncing-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-        STOPPING…`;
-      masterStopBtn.disabled = true;
-      masterStopBtn.style.opacity = '0.45';
-      masterStopBtn.style.cursor = 'wait';
-
-      const masterIndicator = document.getElementById('master-status-indicator');
-      if (masterIndicator) {
-        masterIndicator.className = 'pill state-degraded font-display';
-        masterIndicator.textContent = 'STACK STOPPING';
-        masterIndicator.setAttribute('aria-label', 'STACK STOPPING');
-      }
-      const res = await controlFetch('/api/system/stop');
+      const res = await controlFetch(`/api/system/${action}`);
+      let data = null;
       try {
-        const data = await res.json();
-        if (data && data.status) {
-          renderDbMode(data.status);
-          renderServiceCards(data.status);
-        }
+        data = await res.json();
       } catch {
-        // Non-JSON reply or network parse failure; pollStatus will handle
+        // Non-JSON reply (proxy error page, empty 500): say so on screen.
+      }
+      const lines = [];
+      if (!res.ok || !data || data.ok !== true) {
+        lines.push(data && data.message
+          ? data.message
+          : `Request failed (HTTP ${res.status}).`);
+      } else if (data.message) {
+        lines.push(data.message);
+      }
+      // Per-service outcomes the operator must see, not just "ok".
+      if (data && data.services) {
+        for (const [name, svc] of Object.entries(data.services)) {
+          const outcome = svc && svc.outcome;
+          if (outcome && outcome !== 'stopped' && outcome !== 'not_running') {
+            const detail = svc.detail ? ` — ${svc.detail}` : '';
+            lines.push(`${name}: ${outcome}${detail}`);
+          }
+        }
+      }
+      if (lines.length) {
+        appendTickerEvent(`[${action.toUpperCase()}] ${lines.join(' · ')}`,
+          action === 'stop'
+            ? 'Stack stop reported by the backend.'
+            : 'Stack start reported by the backend.', '');
+      }
+      if (data && data.status) {
+        lastStatus = data.status;
       }
     } catch (e) {
-      console.error('Stop stack error:', e);
+      appendTickerEvent(`[${action.toUpperCase()} ERROR] ${e.message || String(e)}`,
+        'The request never reached the backend. Check the dashboard process.', '');
     } finally {
+      isStarting = false;
       isStopping = false;
-      masterStopBtn.innerHTML = `
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>
-        STOP RUN`;
-      await pollStatus();
+      masterLifecycleSeq++;
+      renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
+      pollStatus();
     }
   });
 }
@@ -7759,6 +7788,9 @@ let isPolling = false;
 async function pollStatus() {
   if (isPolling) return;
   isPolling = true;
+  // A poll that began before a master-control click resolves after it; its
+  // older status must not repaint the button the click just changed (#457).
+  const pollSeq = masterLifecycleSeq;
   try {
     const [state, status, kpi, scanState, trialReadiness, guardAlerts, guardHealth] = await Promise.all([
       safeJsonFetch('/api/state', 15000),
@@ -7828,7 +7860,10 @@ async function pollStatus() {
     // is global chrome: renderServiceCards paints it before the card grid, so
     // on any page but Trades the poll paints just the header — and on Trades
     // one renderServiceCards call covers both.
-    if (status) {
+    // A master-control click in flight owns the button right now: this poll's
+    // status is older than the click, so repainting here would flash the old
+    // state over the new one (#457).
+    if (status && pollSeq === masterLifecycleSeq) {
       if (paintable(tab1, document.getElementById('service-cards'))) {
         renderServiceCards(status, guardHealth, guardAlerts);
       } else {

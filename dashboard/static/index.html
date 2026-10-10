@@ -80,13 +80,12 @@
         <span id="exposure-text" class="mono">$0/$100</span>
         <div class="exposure-track"><div id="exposure-fill" class="exposure-fill" style="width:0%;background:var(--exposure-safe)"></div></div>
       </div>
-      <button id="btn-master-start" class="btn-start-run" type="button" aria-label="Start bot execution stack">
+      <!-- One master button, state-driven by renderServiceHeader: green START
+           when stopped, red STOP when running, disabled + spinner in flight.
+           Replaces the two separate master buttons (#457). -->
+      <button id="btn-master-toggle" class="btn-start-run" type="button" aria-label="Start bot execution stack">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         START RUN
-      </button>
-      <button id="btn-master-stop" class="btn-stop-run" type="button" aria-label="Stop bot execution stack">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>
-        STOP RUN
       </button>
       <button id="btn-sync" class="btn-sync" type="button" title="Reconcile orders/fills and account vs venue (read-only, fixes stale dashboard when Polymarket shows 0/0)">SYNC VENUE</button>
       <button id="btn-reset" class="btn-reset" type="button">RESET</button>

@@ -1,8 +1,8 @@
-# Todo - Issue 460 (Branch: i460/account-tile-resting-and-held-dollars)
+# Todo - Issue 457 (Branch: i457/single-state-driven-start-stop-button-with-graceful-stack)
 
-- [x] T1 [M] [Tests] Tile contract tests first (RED)
-- [x] T2 [S] [Frontend] Resting subcard markup + harness outputs
-- [x] T3 [M] [Frontend] Render math + poll wiring (GREEN)
-- [x] T4 [XS] [Tests] Focused verification
+- [ ] T1 [M] [Backend/Logic] Graceful, verified, honest STOP — helper + registry rewrite
+- [ ] T2 [M] [Backend/Logic] Partial START fills only missing services — fix NameError + scoped rollback
+- [x] T3 [M] [Frontend/UI] One state-driven toggle with visible feedback — button, handler, harness
 
-Checkpoints: after T1 (RED proof) / after T3 (progress line). Next: /iii-build-plan auto.
+Checkpoints: after T1 (STOP honest) / after T2 (no NameError) / after T3 (toggle + harness green).
+All done. Next: /iv-review-build-and-pr.

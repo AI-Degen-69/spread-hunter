@@ -40,6 +40,7 @@ class FakeEl {
   appendChild() {}
   setAttribute() {}
   getAttribute() { return null; }
+  removeAttribute() {}
 }
 
 // One stopped, togglable service. `classList` has no `on`, so a click takes the
