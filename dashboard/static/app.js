@@ -1920,6 +1920,19 @@ function renderBrokerPortfolioOverview(kpi, status) {
   }
   if (elPf) elPf.innerHTML = `${profitFactor} <span style="font-size:10px;color:var(--text-muted);font-weight:500">· SR ${sharpe}</span>`;
 
+  // Bento progress bars & edge indicator
+  const elCashBar = document.getElementById('bento-cash-bar');
+  if (elCashBar) elCashBar.style.width = `${Math.min(100, Math.max(0, parseFloat(cashPct) || 0))}%`;
+  const elCommittedBar = document.getElementById('bento-committed-bar');
+  if (elCommittedBar) elCommittedBar.style.width = `${Math.min(100, Math.max(0, parseFloat(committedPct) || 0))}%`;
+  const elWinrateBar = document.getElementById('bento-winrate-bar');
+  if (elWinrateBar) elWinrateBar.style.width = `${Math.min(100, Math.max(0, parseFloat(winRate) || 0))}%`;
+  const elEdgeTag = document.getElementById('bento-edge-tag');
+  if (elEdgeTag) {
+    const wr = parseFloat(winRate) || 0;
+    elEdgeTag.textContent = wr >= 70 ? 'High Edge' : (wr >= 50 ? 'Positive Edge' : 'Neutral');
+  }
+
   // Render Line Chart
   renderBrokerPortfolioChart(kpi, currentBrokerTimeframe);
 }
