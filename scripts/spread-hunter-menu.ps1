@@ -3104,9 +3104,11 @@ function Invoke-LiveAction {
 }
 
 function Read-MenuChoice {
-    <# Single-keypress menu input: 1-9/q run at once, no Enter needed.
-       Non-printable keys (arrows, etc.) are ignored; Enter exits.
-       Falls back to Read-Host when stdin is redirected or non-interactive. #>
+    <# Single-keypress menu input: 1-9/r/a/p/q run at once, no Enter needed.
+       Non-printable keys (arrows, etc.) are ignored. Enter returns "" so the
+       caller redraws the menu; end of input (redirected stdin runs out, or no
+       console at all) returns $null so the caller leaves. Falls back to
+       Read-Host when stdin is redirected or non-interactive. #>
     try {
         while ($true) {
             $key = [Console]::ReadKey($true)
@@ -3120,10 +3122,61 @@ function Read-MenuChoice {
         try { $fallback = Read-Host }
         catch {
             Write-Host "No interactive console; pass a menu option directly (e.g. .\scripts\spread-hunter-menu.ps1 8)."
-            return ""
+            return $null
         }
-        if ($null -eq $fallback) { return "" }
+        if ($null -eq $fallback) { return $null }
         return $fallback.Trim().ToLower()
+    }
+}
+
+function Read-MenuPause {
+    <# "Press any key to return to the menu" between actions. Reads one keypress
+       on a real console; returns immediately (no key) when stdin is redirected
+       or there is no console, so a piped/CI run is never blocked here. #>
+    try { $null = [Console]::ReadKey($true) } catch { }
+}
+
+function Invoke-InteractiveMenu {
+    <# The interactive control center (#475). It loops until q (its branch
+       calls exit 0), Ctrl+C, or end of input, so a failed action never throws
+       the operator out. Each pass redraws the banner + grid and runs one key.
+       Per-action inputs reset every pass (a second 4 re-prompts the profile; r
+       keeps a launch -Preset), and a thrown action error is shown before the
+       menu returns. #>
+    $launchMinutes   = $Minutes
+    $launchHours     = $Hours
+    $launchWatch     = $Watch
+    $launchResumeDb  = $ResumeDb
+    $launchPreset    = if ($Preset) { $Preset.Trim().ToLower() } elseif ($Prudent) { "prudent" } else { "" }
+    while ($true) {
+        Lsh-Banner -Title "SPREAD HUNTER - CONTROL CENTER"
+        Show-MenuGrid
+        Write-Host "  Select " -ForegroundColor (Get-ProfileColor -Name Text) -NoNewline
+        Write-Host ("[{0}]" -f (Format-MenuHint)) -ForegroundColor (Get-ProfileColor -Name Command) -NoNewline
+        Write-Host " › " -ForegroundColor (Get-ProfileColor -Name Highlight) -NoNewline
+        $choice = Read-MenuChoice
+        if ($null -eq $choice) { return }
+        if ($choice -eq "") { continue }
+        try {
+            Invoke-LiveAction $choice
+        } catch {
+            Lsh-Fail ("Action failed: {0}" -f $_.Exception.Message)
+        } finally {
+            # Restore per-pass inputs so the next pass behaves like a fresh
+            # launch, and clear the resolved run identity a launcher may have set.
+            $script:Minutes     = $launchMinutes
+            $script:Hours       = $launchHours
+            $script:Watch       = $launchWatch
+            $script:ResumeDb    = $launchResumeDb
+            $script:ShadowPreset = $launchPreset
+            $script:ShadowRunId  = $null
+            $script:ShadowDbPath = $null
+            $script:StatsDbPath  = $null
+        }
+        # Pause so the action's output stays readable before the menu redraws.
+        Write-Host ""
+        Write-Host "  Press any key to return to the menu..." -ForegroundColor (Get-ProfileColor -Name Neutral)
+        Read-MenuPause
     }
 }
 
@@ -3197,12 +3250,7 @@ if ($Action -ne "") {
     exit 0
 }
 
-Lsh-Banner -Title "SPREAD HUNTER - CONTROL CENTER"
-Show-MenuGrid
-Write-Host "  Select " -ForegroundColor (Get-ProfileColor -Name Text) -NoNewline
-Write-Host ("[{0}]" -f (Format-MenuHint)) -ForegroundColor (Get-ProfileColor -Name Command) -NoNewline
-Write-Host " › " -ForegroundColor (Get-ProfileColor -Name Highlight) -NoNewline
-$choice = Read-MenuChoice
-if ($null -eq $choice -or $choice -eq "") { exit 0 }
-Invoke-LiveAction $choice
+# No command-line action: run the interactive control center, which loops until
+# q / Ctrl+C / end of input (#475).
+Invoke-InteractiveMenu
 exit 0

@@ -88,7 +88,17 @@ def test_storage_words_map_to_letter_keys():
 
 
 def test_every_key_has_a_branch():
-    """Every key in the list reaches a switch branch in Invoke-LiveAction."""
+    """Every key in the list reaches a switch branch in Invoke-LiveAction.
+
+    A key advertised in the grid/prompt/allow-list but missing from the switch
+    would fall through to the invalid-selection warning: the operator presses a
+    shown key and nothing happens. This pins the grid list and the switch
+    together.
+    """
+    dispatch = _function_source("Invoke-LiveAction")
+    for key in _menu_keys():
+        assert re.search(r'^\s*"%s" \{' % re.escape(key), dispatch, re.MULTILINE), (
+            f'key "{key}" is in $script:MenuKeys but has no "{key}" switch branch')
 
 
 @requires_pwsh
@@ -152,7 +162,3 @@ Write-Host "ALL DISPATCH CHECKS PASS"
     assert res.returncode == 0, res.stdout + res.stderr
     assert "ALL DISPATCH CHECKS PASS" in res.stdout
 
-    dispatch = _function_source("Invoke-LiveAction")
-    for key in _menu_keys():
-        assert re.search(r'^\s*"%s" \{' % re.escape(key), dispatch, re.MULTILINE), (
-            f'key "{key}" is in $script:MenuKeys but has no "{key}" switch branch')
