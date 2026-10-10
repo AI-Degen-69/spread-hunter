@@ -22,7 +22,9 @@ from core_brain.cycle_stream import (
     close_intent_connections,
     emit,
     fill_extra,
+    lifecycle_extra,
     make_fill_observer,
+    relayer_extra,
     read_ring,
 )
 from core_brain.order_registry import FillRecord, OrderRecord
@@ -549,3 +551,57 @@ class TestFillTelemetry:
                 "SELECT name FROM sqlite_master WHERE type='table' "
                 "AND name='cycle_intent'").fetchall()
         assert tables == []
+
+
+class TestLifecycleTelemetry:
+    def test_allow_list_copies_known_keys_and_drops_response(self):
+        result = {
+            "action": "exited", "pair_id": "pair_e1", "condition_id": "0xcond_e",
+            "token_id": "0xtok_e", "side": "UP", "size": 4.0,
+            "requested_size": 4.0, "fill_price": 0.44, "min_price": 0.43,
+            "route": "hard_stop", "lifecycle_state": "HARD_STOP",
+            "settlement_reason": "grace expired",
+            "response": {"venue": "SOLD"}, "positions_checked": True,
+        }
+        extra = lifecycle_extra(result)
+        assert extra["pair_id"] == "pair_e1"
+        assert extra["outcome"] == "UP"
+        assert extra["venue_side"] == "SELL"
+        assert extra["fill_price"] == 0.44
+        assert "response" not in extra
+        assert "positions_checked" not in extra
+        assert "side" not in extra
+
+    def test_completed_maps_to_buy_and_ignores_unknown_side(self):
+        extra = lifecycle_extra({"action": "completed", "side": "YES", "size": 2.0})
+        assert extra["venue_side"] == "BUY"
+        assert "outcome" not in extra
+
+    def test_wait_actions_carry_no_venue_side(self):
+        extra = lifecycle_extra({"action": "patient_wait", "pair_id": "p"})
+        assert "venue_side" not in extra
+        assert extra["pair_id"] == "p"
+
+    def test_non_dict_returns_empty(self):
+        assert lifecycle_extra(None) == {}
+        assert lifecycle_extra("exited") == {}
+
+
+class TestRelayerTelemetry:
+    def test_size_only_when_measured(self):
+        assert relayer_extra(condition_id="0xc") == {"condition_id": "0xc"}
+        assert relayer_extra(condition_id="0xc", size=5.0)["size"] == 5.0
+
+    def test_hash_and_id_stay_separate(self):
+        extra = relayer_extra(
+            condition_id="0xc", relayer_state="STATE_EXECUTED",
+            transaction_hash="0xhash", transaction_id="relay-1",
+        )
+        assert extra["transaction_hash"] == "0xhash"
+        assert extra["transaction_id"] == "relay-1"
+        assert extra["relayer_state"] == "STATE_EXECUTED"
+
+    def test_same_hash_and_id_dedupes(self):
+        extra = relayer_extra(condition_id="0xc", transaction_hash="0xabc", transaction_id="0xabc")
+        assert extra["transaction_hash"] == "0xabc"
+        assert "transaction_id" not in extra

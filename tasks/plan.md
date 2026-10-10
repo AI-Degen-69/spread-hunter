@@ -79,7 +79,7 @@ Verification: `python -m pytest -q tests/test_cycle_stream.py tests/test_order_r
 (RED first: new tests fail before the change). Checkpoint: fake fill reconciled →
 one `fill_recorded` in ring, zero `cycle_intent` rows.
 
-### T2 — Exit, completion, merge and redeem events [M] [Backend/Logic]
+### T2 — Exit, completion, merge and redeem events [x] [M] [Backend/Logic]
 
 Target files: `core_brain/cycle_stream.py`, `core_brain/order_manager.py`
 (lifecycle ~2345, `_submit_and_log` 758–1041).

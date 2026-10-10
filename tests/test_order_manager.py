@@ -1300,3 +1300,177 @@ def test_probe_with_both_flags_rejected():
     with pytest.raises(SystemExit) as exc:
         le.probe(series="btc-up-or-down-5m", token_id="tok_fixed_456", live=False)
     assert "probe accepts either --series or --token-id, not both" in str(exc.value)
+
+
+class _StubConn:
+    def __init__(self, rows=None):
+        self._rows = rows or []
+        self.closed = False
+    def execute(self, *a, **k):
+        parent = self
+        class _Cur:
+            def fetchall(self):
+                return list(parent._rows)
+        return _Cur()
+
+class _StubConnCtx:
+    def __init__(self, conn):
+        self._conn = conn
+    def __enter__(self):
+        return self._conn
+    def __exit__(self, *a):
+        return False
+
+
+def _merge_call_data(shares: float) -> str:
+    amount = int(shares * 10**6)
+    return "0xmerge000" + ("0" * 64) * 4 + f"{amount:064x}"
+
+
+def _run_submit(monkeypatch, *, action, res=None, urlopen_exc=None, call_data="0x", kind_status=None):
+    import urllib.request
+    emitted = []
+    audit = {}
+    monkeypatch.setattr(le, "_log_order", lambda rec: "entry-1")
+    def _update(entry_id, updates):
+        audit.update(updates)
+        return True
+    monkeypatch.setattr(le, "_update_order_log", _update)
+    monkeypatch.setattr("core_brain.cycle_stream.emit",
+                        lambda *a, **k: emitted.append(k))
+    if urlopen_exc is not None:
+        def _boom(req, timeout=30):
+            raise urlopen_exc
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+    else:
+        payload = res if res is not None else {}
+        monkeypatch.setattr(urllib.request, "urlopen",
+                            lambda req, timeout=30: MockResponse(payload))
+    closes = []
+    stub_reg = MagicMock()
+    stub_reg._conn.return_value = _StubConnCtx(_StubConn([]))
+    stub_reg.log_close.side_effect = lambda rec: closes.append(rec)
+    monkeypatch.setattr("core_brain.order_registry.OrderRegistry", lambda *a, **k: stub_reg)
+    return emitted, audit, closes
+
+
+class TestSettlementTelemetry:
+    def test_merge_executed_emit_keeps_audit_status(self, monkeypatch):
+        emitted, audit, closes = _run_submit(
+            monkeypatch, action="MERGE",
+            res={"state": "STATE_EXECUTED", "transactionHash": "0xhash1"},
+            call_data=_merge_call_data(5.0),
+        )
+        le._submit_and_log(
+            action="MERGE", condition_id="0xcond_m1", funder="0xfunder",
+            signer_addr="0xsigner", call_data=_merge_call_data(5.0),
+            nonce=1, deadline=99, payload={}, headers={},
+            relayer_url="http://mock-relayer",
+        )
+        assert audit.get("status") == "executed"
+        merges = [e for e in emitted if e.get("action") == "merge_executed"]
+        assert len(merges) == 1
+        assert merges[0]["service"] == "query"
+        assert merges[0]["phase"] == "settling"
+        assert merges[0].get("can_rotate") is False
+        assert merges[0]["extra"]["size"] == 5.0
+        assert merges[0]["extra"]["transaction_hash"] == "0xhash1"
+        assert merges[0]["extra"]["relayer_state"] == "STATE_EXECUTED"
+        assert len(closes) == 1  # settlement accounting untouched
+
+    def test_merge_failed_maps_reverted_state(self, monkeypatch):
+        emitted, audit, _ = _run_submit(
+            monkeypatch, action="MERGE",
+            res={"state": "STATE_REVERTED", "transactionHash": "0xhash2"},
+        )
+        le._submit_and_log(
+            action="MERGE", condition_id="0xcond_m2", funder="0xfunder",
+            signer_addr="0xsigner", call_data="0xshort",
+            nonce=1, deadline=99, payload={}, headers={},
+            relayer_url="http://mock-relayer",
+        )
+        assert audit.get("status") == "failed"
+        fails = [e for e in emitted if e.get("action") == "merge_failed"]
+        assert len(fails) == 1
+        assert "size" not in fails[0]["extra"]
+
+    def test_redeem_submitted_carries_no_size(self, monkeypatch):
+        emitted, audit, _ = _run_submit(
+            monkeypatch, action="REDEEM", res={"status": "PENDING"},
+        )
+        le._submit_and_log(
+            action="REDEEM", condition_id="0xcond_r1", funder="0xfunder",
+            signer_addr="0xsigner", call_data="0x",
+            nonce=1, deadline=99, payload={}, headers={},
+            relayer_url="http://mock-relayer",
+        )
+        assert audit.get("status") == "submitted"
+        subs = [e for e in emitted if e.get("action") == "redeem_submitted"]
+        assert len(subs) == 1
+        assert "size" not in subs[0]["extra"]
+
+    def test_unknown_emit_on_submit_exception(self, monkeypatch):
+        emitted, audit, _ = _run_submit(
+            monkeypatch, action="MERGE", urlopen_exc=RuntimeError("net down"),
+        )
+        import pytest as _pt
+        with _pt.raises(SystemExit):
+            le._submit_and_log(
+                action="MERGE", condition_id="0xcond_m3", funder="0xfunder",
+                signer_addr="0xsigner", call_data="0x",
+                nonce=1, deadline=99, payload={}, headers={},
+                relayer_url="http://mock-relayer",
+            )
+        assert audit.get("status") == "unknown"
+        unknowns = [e for e in emitted if e.get("action") == "merge_unknown"]
+        assert len(unknowns) == 1
+
+    def test_emit_failure_never_breaks_settlement(self, monkeypatch):
+        _run_submit(monkeypatch, action="MERGE",
+                    res={"state": "STATE_EXECUTED", "transactionHash": "0xh"})
+        monkeypatch.setattr("core_brain.cycle_stream.emit",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ring down")))
+        le._submit_and_log(  # must not raise: audit write succeeded
+            action="MERGE", condition_id="0xcond_m4", funder="0xfunder",
+            signer_addr="0xsigner", call_data="0x",
+            nonce=1, deadline=99, payload={}, headers={},
+            relayer_url="http://mock-relayer",
+        )
+
+    def test_tx_hash_and_relayer_id_stay_separate(self, monkeypatch):
+        emitted, audit, _ = _run_submit(
+            monkeypatch, action="MERGE",
+            res={"state": "STATE_EXECUTED", "transactionHash": "0xhash9", "transactionID": "relay-9"},
+        )
+        le._submit_and_log(
+            action="MERGE", condition_id="0xcond_m5", funder="0xfunder",
+            signer_addr="0xsigner", call_data="0x",
+            nonce=1, deadline=99, payload={}, headers={},
+            relayer_url="http://mock-relayer",
+        )
+        merges = [e for e in emitted if e.get("action") == "merge_executed"]
+        assert merges[0]["extra"]["transaction_hash"] == "0xhash9"
+        assert merges[0]["extra"]["transaction_id"] == "relay-9"
+
+    def test_poll_lifecycle_exit_is_enriched(self, monkeypatch, tmp_path):
+        from tests.test_order_registry import MockClobClient
+        monkeypatch.setattr(le, "account_sweep", MagicMock())
+        emitted = []
+        monkeypatch.setattr("core_brain.cycle_stream.emit",
+                            lambda *a, **k: emitted.append(k))
+        outcome = [{
+            "action": "exited", "pair_id": "pair_lc1", "condition_id": "0xcond_lc",
+            "token_id": "0xtok_lc", "side": "DOWN", "size": 4.0,
+            "fill_price": 0.44, "route": "hard_stop",
+            "lifecycle_state": "HARD_STOP", "reason": "grace expired",
+            "response": {"venue": "SOLD"},
+        }]
+        monkeypatch.setattr("core_brain.single_buy_saver.manage_single_leg_positions",
+                            lambda *a, **k: list(outcome))
+        client = MockClobClient(open_orders=[], trades=[])
+        le.poll(interval=0.01, once=True, db_path=tmp_path / "lc.db", client=client)
+        exits = [e for e in emitted if e.get("action") == "lifecycle_exited"]
+        assert len(exits) == 1
+        assert exits[0]["extra"].get("outcome") == "DOWN"
+        assert exits[0]["extra"].get("venue_side") == "SELL"
+        assert "response" not in exits[0]["extra"]
