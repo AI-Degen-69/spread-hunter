@@ -997,10 +997,13 @@ def _is_temp_or_test_db(path: Any) -> bool:
                 return False
         if temp_dir in p.parents or p == temp_dir:
             return True
-    except Exception:
+    except (OSError, ValueError, TypeError, RuntimeError):
         pass
-    norm = str(path).replace("\\", "/").lower()
-    return "/temp/" in norm or "/tmp/" in norm or "pytest" in norm or "\\temp\\" in str(path).lower()
+    parts = str(path).replace("\\", "/").lower().split("/")
+    return any(
+        part in ("temp", "tmp", "pytest") or part.startswith("pytest-")
+        for part in parts[:-1]
+    )
 
 
 def _read_shadow_heartbeat_file(

@@ -258,7 +258,10 @@ def test_is_temp_or_test_db_detection():
     assert srv._is_temp_or_test_db("/tmp/shadow.db") is True
     assert srv._is_temp_or_test_db("C:\\Users\\Tiger\\Agents\\Projects\\spread-hunter\\data\\orders.db") is False
     assert srv._is_temp_or_test_db("data/NN_shadow_123.db") is False
+    assert srv._is_temp_or_test_db("data/pytest_ladder_01.db") is False
+    assert srv._is_temp_or_test_db("data/pytest-123/shadow.db") is True
     assert srv._is_temp_or_test_db(None) is False
+    assert srv._is_temp_or_test_db(12345) is False
 
 
 def test_temp_and_pytest_dbs_are_excluded_from_shadow_run_list(tmp_path, monkeypatch):
