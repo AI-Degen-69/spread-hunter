@@ -144,21 +144,73 @@ def build_arm_view(plan: dict, arm: dict) -> dict[str, Any]:
     return view
 
 
+def find_all_records() -> list[Path]:
+    """Every tournament plan record, newest first by mtime.
+
+    The hub merges them all: a second batch (new issue, new ports) must appear
+    beside the first instead of replacing it. Ordered newest-first so the
+    newest batch sorts to the top of the merged view.
+    """
+    if not TOURNAMENT_DIR.is_dir():
+        return []
+    records = []
+    for p in TOURNAMENT_DIR.glob("*.json"):
+        if not p.is_file():
+            continue
+        # Only real plan records: a dict carrying "arms". The arms-definition
+        # file (a bare list) lives in the same directory and must be skipped.
+        plan = _read_json(p)
+        if isinstance(plan, dict) and isinstance(plan.get("arms"), list):
+            records.append(p)
+    return sorted(records, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
 def build_hub_state(record_path: Optional[Path] = None) -> dict[str, Any]:
-    record = record_path or find_latest_record()
-    if record is None or not record.exists():
+    """Arms from one record, or every record merged when none is pinned.
+
+    With an explicit `record_path` the behaviour is unchanged (single batch).
+    With none, all tournament records are merged into one arm list so the hub
+    is a single page over every running batch.
+    """
+    if record_path is not None:
+        records = [record_path]
+        merged = False
+    else:
+        records = find_all_records()
+        merged = True
+    records = [r for r in records if r.exists()]
+    if not records:
         return {"available": False, "reason": "no tournament record found"}
-    plan = _read_json(record) or {}
-    arms = [build_arm_view(plan, arm) for arm in plan.get("arms", [])]
+
+    arms: list[dict[str, Any]] = []
+    seen_ports: set[int] = set()
+    for record in records:
+        plan = _read_json(record) or {}
+        for arm in plan.get("arms", []):
+            port = int(arm.get("dash_port"))
+            # One card per port: the newest record wins, so a superseded batch
+            # (same issue, older stamp, ports reused) cannot show stale ghosts.
+            # Newest-first ordering above makes the first sighting the keeper.
+            if port in seen_ports:
+                continue
+            view = build_arm_view(plan, arm)
+            view["issue"] = plan.get("issue")
+            view["stamp"] = plan.get("stamp")
+            seen_ports.add(port)
+            arms.append(view)
+
     return {
         "available": True,
-        "record_path": str(record),
-        "issue": plan.get("issue"),
-        "stamp": plan.get("stamp"),
-        "minutes": plan.get("minutes"),
-        "interval": plan.get("interval"),
-        "results_path": str(_resolve_path(plan["results_path"], ROOT))
-        if plan.get("results_path") else None,
+        "merged": merged,
+        "record_path": str(records[0]),
+        "record_paths": [str(r) for r in records],
+        "issue": _read_json(records[0]).get("issue") if records else None,
+        "stamp": _read_json(records[0]).get("stamp") if records else None,
+        "minutes": _read_json(records[0]).get("minutes") if records else None,
+        "interval": _read_json(records[0]).get("interval") if records else None,
+        "results_path": str(_resolve_path(
+            _read_json(records[0])["results_path"], ROOT))
+        if (_read_json(records[0]) or {}).get("results_path") else None,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "arms": arms,
     }
@@ -263,16 +315,22 @@ function render(state) {
     document.getElementById("sub").textContent = state.reason || "";
     return;
   }
+  const batches = state.merged
+    ? `${state.arms.length} arms across ${new Set(state.arms.map(a => a.issue)).size} batches`
+    : `issue <code>#${state.issue}</code> · stamp <code>${state.stamp}</code>`;
   document.getElementById("sub").innerHTML =
-    `issue <code>#${state.issue}</code> · stamp <code>${state.stamp}</code> · ` +
-    `${state.minutes} min · refreshed ${state.generated_at}`;
+    `${batches} · ${state.minutes} min · refreshed ${state.generated_at}`;
 
-  const arms = [...state.arms].sort((a, b) =>
-    ARMS_ORDER.indexOf(a.name) - ARMS_ORDER.indexOf(b.name));
+  // Group by issue (batch) first so both batches stay visually together, then
+  // by the known arm order within each batch.
+  const arms = [...state.arms].sort((a, b) => {
+    if (a.issue !== b.issue) return (a.issue ?? 0) - (b.issue ?? 0);
+    return ARMS_ORDER.indexOf(a.name) - ARMS_ORDER.indexOf(b.name);
+  });
   wrap.innerHTML = arms.map(a => `
     <div class="card">
       <div class="top">
-        <span class="name">#${a.index} ${a.name}</span>
+        <span class="name">#${a.issue} · ${a.name}</span>
         ${statusPill(a)}
       </div>
       <dl class="rows">${rows(a)}</dl>
