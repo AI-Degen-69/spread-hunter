@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spread Hunter — Neon Tokyo Terminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/neon.css">
+</head>
+<body>
+<div class="nt-shell">
+
+  <!-- ── Sidebar ── -->
+  <aside class="nt-sidebar" id="sidebar">
+    <div>
+      <div class="nt-sidebar-top">
+        <div class="nt-logo-icon">
+          <svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        </div>
+        <div class="nt-brand-name">SPREAD HUNTER <span class="nt-pro-badge">PRO</span></div>
+      </div>
+      <button class="nt-pin-toggle" id="pin-toggle" type="button" title="Toggle sidebar pin">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="nt-pin-text">Pin sidebar</span>
+        <span class="nt-pin-badge" id="pin-badge">AUTO</span>
+      </button>
+      <nav class="nt-nav" id="nav">
+        <a class="nt-nav-item active" data-page="dashboard" href="#">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nt-nav-label">Dashboard</span>
+          <span class="nt-nav-dot"></span>
+        </a>
+        <a class="nt-nav-item" data-page="markets" href="#">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nt-nav-label">Data &amp; Markets</span>
+        </a>
+        <a class="nt-nav-item" data-page="strategy" href="#">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20m10-10H2m17.07-7.07l-1.414 1.414M6.343 17.657l-1.414 1.414m12.141 0l-1.414-1.414M6.343 6.343L4.929 4.929M12 6a6 6 0 100 12 6 6 0 000-12z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nt-nav-label">Strategy</span>
+        </a>
+        <a class="nt-nav-item" data-page="trades" href="#">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nt-nav-label">Trades &amp; Positions</span>
+        </a>
+        <a class="nt-nav-item" data-page="reports" href="#">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nt-nav-label">Reports &amp; Analytics</span>
+        </a>
+      </nav>
+    </div>
+    <div class="nt-sidebar-footer">
+      <a class="nt-footer-link" href="https://polymarket.com" target="_blank" rel="noopener noreferrer">
+        <svg fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 14.93V18h-2v-1.07A6.002 6.002 0 016 11h2a4 4 0 004 4 4 4 0 004-4c0-1.78-1.18-2.65-2.73-3.23C11.18 7.02 10 6.13 10 4.5A3.5 3.5 0 0113 1.07V2h2v1.07A6.002 6.002 0 0120 9h-2a4 4 0 00-4-4 4 4 0 00-4 4c0 1.78 1.18 2.65 2.73 3.23 2.09.75 3.27 1.64 3.27 3.27a3.5 3.5 0 01-3 3.43z"/></svg>
+        <span class="nt-sidebar-footer-text">Polymarket</span>
+      </a>
+      <a class="nt-footer-link" href="https://github.com/AI-Degen-69/spread-hunter" target="_blank" rel="noopener noreferrer">
+        <svg fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+        <span class="nt-sidebar-footer-text">Repository</span>
+        <span class="nt-footer-version">v2.4-sh</span>
+      </a>
+    </div>
+  </aside>
+
+  <!-- ── Main column ── -->
+  <div style="flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;">
+
+    <!-- Stale banner -->
+    <div class="nt-stale-banner" id="stale-banner" role="alert">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>DATA STALE — lost contact with engine</span>
+      <span class="nt-tabular" id="stale-age"></span>
+    </div>
+
+    <!-- Header -->
+    <header class="nt-header">
+      <div class="nt-header-left">
+        <div class="nt-badge">
+          <span class="nt-status-dot" style="background:#a78bfa"></span>
+          <span>POLY:</span>
+          <span class="nt-badge-value nt-tabular" id="wallet-addr">--</span>
+        </div>
+        <div class="nt-badge">
+          <span>RUN:</span>
+          <span class="nt-badge-accent" id="run-id">--</span>
+          <span class="nt-tabular nt-text-muted" id="run-duration">--</span>
+        </div>
+        <!-- Health popover -->
+        <div class="nt-health-trigger" id="health-trigger" tabindex="0">
+          <span class="nt-pulse-dot"></span>
+          <span id="health-label">Checking...</span>
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div class="nt-health-popover" id="health-popover">
+            <div class="nt-popover-header">
+              <span>Service Telemetry</span>
+              <span class="nt-text-green" id="health-latency">--</span>
+            </div>
+            <div id="health-rows"></div>
+          </div>
+        </div>
+      </div>
+      <div class="nt-header-actions">
+        <button class="nt-btn" id="btn-reset" type="button" title="Reset dashboard UI preferences">RESET</button>
+        <button class="nt-btn nt-btn-cyan" id="btn-sync" type="button" title="Sync venue data">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          SYNC VENUE
+        </button>
+        <button class="nt-btn nt-btn-danger" id="btn-stop" type="button" title="Stop the running stack">
+          <span style="width:8px;height:8px;background:currentColor;border-radius:2px;display:inline-block"></span>
+          STOP RUN
+        </button>
+      </div>
+    </header>
+
+    <!-- Main scroll area -->
+    <main class="nt-main" id="main-area">
+      <div class="nt-main-header">
+        <div>
+          <h1 class="nt-main-title">DASHBOARD</h1>
+          <p class="nt-main-subtitle">Real-time account, equity, and market overview.</p>
+        </div>
+        <div class="nt-feed-indicator">
+          <span class="nt-feed-dot" id="feed-dot"></span>
+          <span id="feed-status">Connecting...</span>
+        </div>
+      </div>
+
+      <!-- Bento grid -->
+      <div class="nt-bento">
+        <!-- Card 1: Account -->
+        <section class="nt-card nt-col-3">
+          <div class="nt-card-accent-bar"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span class="nt-card-label">Total Account Value</span>
+            <span style="font-size:10px;background:var(--nt-border);color:var(--nt-text-secondary);padding:2px 6px;border-radius:3px;font-family:var(--nt-font-mono)">USDC</span>
+          </div>
+          <div class="nt-card-value nt-tabular" id="total-equity">$0.00</div>
+          <div id="pnl-badge" style="display:none;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;font-family:var(--nt-font-mono);font-size:12px;font-weight:600">
+            <span id="pnl-text">--</span>
+          </div>
+          <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--nt-border);display:flex;justify-content:space-between;font-family:var(--nt-font-mono);font-size:12px;color:var(--nt-text-secondary)">
+            <span>Starting Bankroll:</span>
+            <span class="nt-text-white nt-tabular" id="bankroll">$0.00</span>
+          </div>
+          <div style="margin-top:16px">
+            <div class="nt-metric-row" style="margin-top:0">
+              <div class="nt-metric-header">
+                <span class="nt-metric-label">Cash Available</span>
+                <span class="nt-metric-value green nt-tabular" id="cash-available">$0.00</span>
+              </div>
+              <div class="nt-bar"><div class="nt-bar-fill green" id="cash-bar" style="width:100%"></div></div>
+              <div class="nt-metric-footer">
+                <span id="cash-pct">100.0% Liquid</span>
+                <span>Free Balance</span>
+              </div>
+            </div>
+            <div class="nt-metric-row">
+              <div class="nt-metric-header">
+                <span class="nt-metric-label">Held Positions</span>
+                <span class="nt-metric-value cyan nt-tabular" id="held-positions">$0.00</span>
+              </div>
+              <div class="nt-bar"><div class="nt-bar-fill cyan" id="held-bar" style="width:0%"></div></div>
+              <div class="nt-metric-footer">
+                <span id="held-pct">0.0% of Equity</span>
+                <span id="exposure-label">Zero Exposure</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Card 2: Equity chart -->
+        <section class="nt-card nt-col-6">
+          <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">
+            <div>
+              <span class="nt-card-label">Portfolio Equity &amp; Realized PnL</span>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                <span style="font-family:var(--nt-font-mono);font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);color:var(--nt-green)" id="run-pnl-badge">RUN #-- • +$0.00 net</span>
+              </div>
+            </div>
+            <div class="nt-segment" id="range-selector">
+              <button class="nt-segment-btn active" data-range="1d" type="button">1D</button>
+              <button class="nt-segment-btn" data-range="1w" type="button">1W</button>
+              <button class="nt-segment-btn" data-range="1m" type="button">1M</button>
+              <button class="nt-segment-btn" data-range="all" type="button">ALL</button>
+            </div>
+          </div>
+          <div class="nt-chart-container">
+            <svg class="nt-chart-svg" id="equity-chart" viewBox="0 0 700 200" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="eqGrad" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stop-color="#10b981" stop-opacity="0.32"/>
+                  <stop offset="65%" stop-color="#10b981" stop-opacity="0.05"/>
+                  <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+                </linearGradient>
+                <filter id="neonGlow" height="140%" width="140%" x="-20%" y="-20%">
+                  <feDropShadow dx="0" dy="0" flood-color="#10b981" flood-opacity="0.7" stdDeviation="3.5"/>
+                </filter>
+              </defs>
+              <g id="chart-grid"></g>
+              <path id="chart-area" fill="url(#eqGrad)" d=""/>
+              <path id="chart-line" fill="none" filter="url(#neonGlow)" stroke="#10b981" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.5" d=""/>
+              <circle id="chart-dot-outer" cx="0" cy="0" r="5.5" fill="#0a0a12" stroke="#10b981" stroke-width="3" style="display:none"/>
+              <circle id="chart-dot-inner" cx="0" cy="0" r="2.5" fill="#10b981" style="display:none"/>
+            </svg>
+            <div style="display:flex;justify-content:space-between;font-family:var(--nt-font-mono);font-size:11px;color:var(--nt-text-muted);padding-top:8px;border-top:1px solid var(--nt-border);margin-top:8px" id="chart-x-axis"></div>
+          </div>
+        </section>
+
+        <!-- Card 3: Telemetry -->
+        <section class="nt-card nt-col-3">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <span class="nt-card-label">Execution Telemetry</span>
+            <span style="font-size:10px;background:rgba(6,78,110,0.2);color:var(--nt-cyan);border:1px solid rgba(6,182,212,0.3);padding:2px 6px;border-radius:3px;font-family:var(--nt-font-mono)">POLY-ENGINE</span>
+          </div>
+          <div class="nt-metric-row" style="margin-top:0">
+            <div class="nt-metric-header">
+              <span class="nt-metric-label">Win Rate</span>
+              <span class="nt-metric-value green nt-tabular" id="win-rate">--</span>
+            </div>
+            <div class="nt-bar"><div class="nt-bar-fill green" id="win-rate-bar" style="width:0%"></div></div>
+            <div class="nt-metric-footer">
+              <span id="win-loss-count">--</span>
+              <span class="nt-text-green" id="win-rate-label">--</span>
+            </div>
+          </div>
+          <div class="nt-metric-row">
+            <div class="nt-metric-header">
+              <span class="nt-metric-label">Profit Factor</span>
+              <span class="nt-metric-value white nt-tabular" id="profit-factor">--</span>
+            </div>
+            <div class="nt-metric-footer">
+              <span>Sharpe: <span class="nt-text-white" id="sharpe">--</span></span>
+              <span>SR Ratio: <span class="nt-text-white nt-tabular" id="sr-ratio">--</span></span>
+            </div>
+          </div>
+          <div class="nt-metric-row" style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <span class="nt-metric-label" style="display:block">Realized Spread</span>
+              <span style="font-size:10px;color:var(--nt-text-faint)" id="avg-spread">--</span>
+            </div>
+            <span class="nt-text-green nt-tabular" style="font-weight:700;font-size:14px" id="realized-spread">--</span>
+          </div>
+          <div class="nt-metric-row" style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <span class="nt-metric-label" style="display:block">Quoted Markets</span>
+              <span style="font-size:10px;color:var(--nt-text-faint)">Active Market Filter</span>
+            </div>
+            <span class="nt-text-white nt-tabular" style="font-weight:700;font-size:14px" id="quoted-markets">--</span>
+          </div>
+        </section>
+      </div>
+
+      <!-- Orders & Trades table -->
+      <section class="nt-table-section">
+        <div class="nt-table-header">
+          <div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span class="nt-table-title">Orders &amp; Trades</span>
+              <span class="nt-table-badge">PAIR-NATIVE ARB</span>
+            </div>
+            <p class="nt-table-desc">Dual-leg Polymarket arbitrage order books and automated quoting pipeline.</p>
+          </div>
+          <div class="nt-table-controls">
+            <div class="nt-segment" id="table-tabs">
+              <button class="nt-segment-btn active" data-tab="markets" type="button">Markets <span class="nt-tabular" id="count-markets">0</span></button>
+              <button class="nt-segment-btn" data-tab="orders" type="button">Orders <span class="nt-tabular" id="count-orders">0</span></button>
+              <button class="nt-segment-btn" data-tab="positions" type="button">Positions <span class="nt-tabular" id="count-positions">0</span></button>
+              <button class="nt-segment-btn" data-tab="closed" type="button">Closed <span class="nt-tabular" id="count-closed">0</span></button>
+            </div>
+            <div style="position:relative">
+              <input class="nt-search-input" id="search-input" type="text" placeholder="Filter market...">
+              <svg style="position:absolute;left:10px;top:8px;width:14px;height:14px;color:var(--nt-text-faint)" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+          </div>
+        </div>
+        <div class="nt-table-wrap">
+          <table class="nt-table">
+            <thead>
+              <tr id="table-head-row">
+                <th>Age / Stamp</th>
+                <th>Market</th>
+                <th>Category</th>
+                <th>UP Quote</th>
+                <th>DOWN Quote</th>
+                <th>Pair Cost</th>
+                <th>Edge</th>
+                <th>Volume</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="table-body">
+              <tr><td colspan="9"><div class="nt-empty"><div class="nt-empty-title">Loading...</div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="nt-table-footer">
+          <div class="nt-footer-stats">
+            <span id="table-summary">--</span>
+            <span style="color:var(--nt-border-light)">&bull;</span>
+            <span class="nt-footer-stat"><span class="nt-status-dot" style="background:var(--nt-green)"></span> <span id="quoting-count">0</span> Quoting</span>
+            <span class="nt-footer-stat"><span class="nt-status-dot" style="background:var(--nt-cyan)"></span> <span id="resting-count">0</span> Resting</span>
+          </div>
+          <div>
+            <span class="nt-text-muted">Universe 24h Vol: <span class="nt-text-white nt-tabular" id="total-volume">--</span></span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="/static/neon-app.js"></script>
+</body>
+</html>
