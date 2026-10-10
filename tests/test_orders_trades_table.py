@@ -1523,6 +1523,21 @@ def rendered_exit_html(kpi):
 
 
 @requires_node
+@pytest.mark.parametrize("method", ["naked_exit", "ladder_exit"])
+def test_sibling_exit_methods_carry_the_red_exit_badge(method):
+    # Arrange -- the engine writes three names for the same forced sale
+    # (`single_buy_exit`, `naked_exit`, `ladder_exit`); the badge must not
+    # depend on which spelling the close carries.
+    kpi = _with_settlements({"method": method, "pnl": -1.0,
+                             "reason": "grace_expired", "ts": 1788526463.0})
+
+    # Act / Assert
+    html = rendered_exit_html(kpi)
+    assert 'close-reason-pill is-exit' in html
+    assert "EXIT · Grace expired" in html
+
+
+@requires_node
 def test_a_named_close_that_is_not_an_exit_stays_quiet():
     # Arrange -- stop codes are exits; a named bookkeeping close is not.
     # Whatever the method, a non-exit reason keeps the quiet gray chip:
