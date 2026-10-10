@@ -58,7 +58,7 @@ Verification: T1 RED cases turn green, nothing else changes. Skill: incremental-
 Depends on: T2.
 
 ### T4 [x] [XS] [Tests] Focused verification
-Files: none. Run pytest -q test_account_kpi + test_dashboard_server + test_portfolio_card_basis + test_registry_state (agent-run, background-only).
+Files: none. Run `python -m pytest -q tests/test_account_kpi.py tests/test_dashboard_server.py tests/test_portfolio_card_basis.py tests/test_registry_state.py` (agent-run, background-only).
 Verification: all green; git status shows only intended files.
 Depends on: T3.
 
@@ -68,7 +68,7 @@ Depends on: T3.
 
 ## How to verify (hands-on, no pytest/gh/git)
 
-- Shadow store only (never data/orders.db): dashboard.server --db data/X.db --port 8799, then shadow_run --minutes 5 --db data/X.db; open http://127.0.0.1:8799.
+- Shadow store only (never data/orders.db): `python -m dashboard.server --db data/X.db --port 8799`, then `python -m core_brain.shadow_run --minutes 5 --db data/X.db`; open http://127.0.0.1:8799 (the shadow entry point cannot sign or place live orders).
 - Bids resting: Resting above \.00; no sweep: Held --; all measured: resting+held+cash = hero, bars match pct; hero + Starting Bankroll unchanged.
 
 ## Rejected scope (do not resurface)

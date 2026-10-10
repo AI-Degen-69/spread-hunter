@@ -1879,7 +1879,9 @@ function renderBrokerPortfolioOverview(kpi, status, state) {
   const heldRaw = p.open_committed_usd ?? p.account?.positions_value_usd ?? null;
   const committedVal = _numOrNull(heldRaw);
   const cashVal = (restingVal !== null && committedVal !== null)
-    ? totalVal - restingVal - committedVal : null;
+    // Held can be a venue market value rather than a cost, so the legs can
+    // sum past the headline — a negative remainder is not cash anyone holds.
+    ? Math.max(0, totalVal - restingVal - committedVal) : null;
   const _pctOf = (v) => (v === null || !(totalVal > 0))
     ? null : ((v / totalVal) * 100).toFixed(1);
   const restingPct = _pctOf(restingVal);

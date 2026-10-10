@@ -403,6 +403,17 @@ def test_held_falls_back_to_venue_positions_value():
     assert card["cash"] == "$70.77"
 
 
+def test_cash_never_goes_negative_when_legs_exceed_the_headline():
+    # Venue positions_value_usd is a market value, not a cost: the legs can
+    # sum past total. The remainder clamps at $0.00, still measured.
+    card = _render(_shadow_portfolio(open_committed_usd=80.0),
+                   state={"capital": {"resting_committed": 10.0}})
+    assert card["resting"] == "$10.00"
+    assert card["committed"] == "$80.00"
+    assert card["cash"] == "$0.00"
+    assert card["equity"] == "$85.77"
+
+
 def test_resting_tile_marks_up_a_label_for_resting_orders():
     strip = _strip_markup()
     assert "Resting in orders" in strip
