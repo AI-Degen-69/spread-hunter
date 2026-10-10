@@ -141,3 +141,130 @@ def test_sample_size_sufficiency_empty_closes():
     assert suff_empty["statuses"]["fill_rate"]["current_n"] == 0
     assert suff_empty["statuses"]["fill_rate"]["levels"][0]["remaining_n"] == 385
 
+
+def test_active_orders_preserved_in_by_market_when_days_to_resolve_negative(tmp_path, monkeypatch):
+    import sqlite3, time
+    from core_brain.kpi import report
+    from core_brain.order_registry import SCHEMA, OrderRecord, OrderRegistry
+
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        kpi_mod,
+        "_resolve_market_meta",
+        lambda cid, closes, quotes: {
+            "condition_id": cid,
+            "title": "Live Match",
+            "slug": "live-match",
+            "url": "https://polymarket.com/market/live-match",
+            "category": "Soccer",
+            "days_to_resolve": -0.05,
+        },
+    )
+
+    db_file = tmp_path / "test.db"
+    con = sqlite3.connect(str(db_file))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+
+    reg = OrderRegistry(db_file)
+    now = int(time.time())
+    cid = "0xlivematch"
+    reg.create_order(OrderRecord(
+        id="ord-1", condition_id=cid, token_id="tok-1", side="BUY", price=0.45,
+        original_size=5.0, status="open", posted_ts=now, last_polled_ts=now,
+        order_id="venue-ord-1", pair_id="pair-1", run_id="run-1",
+    ))
+
+    rep = report(db_file, run_id="run-1")
+    assert cid in rep["by_market"]
+    assert rep["by_market"][cid]["resolved"] is False
+
+
+@pytest.mark.parametrize("status", ["pending", "partial"])
+def test_pending_partial_orders_preserved_in_by_market(tmp_path, monkeypatch, status):
+    """pending and partial orders count as active — market must appear in by_market."""
+    import sqlite3, time
+    from core_brain.kpi import report
+    from core_brain.order_registry import SCHEMA, OrderRecord, OrderRegistry
+
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        kpi_mod,
+        "_resolve_market_meta",
+        lambda cid, closes, quotes: {
+            "condition_id": cid,
+            "title": "Live Match",
+            "slug": "live-match",
+            "url": "https://polymarket.com/market/live-match",
+            "category": "Soccer",
+            "days_to_resolve": -0.05,
+        },
+    )
+
+    db_file = tmp_path / f"test_{status}.db"
+    con = sqlite3.connect(str(db_file))
+    con.executescript(SCHEMA)
+    con.commit()
+    con.close()
+
+    reg = OrderRegistry(db_file)
+    now = int(time.time())
+    cid = "0xlivematch2"
+    reg.create_order(OrderRecord(
+        id=f"ord-{status}", condition_id=cid, token_id="tok-2", side="BUY", price=0.45,
+        original_size=5.0, status=status, posted_ts=now, last_polled_ts=now,
+        order_id=f"venue-{status}", pair_id="pair-2", run_id="run-1",
+    ))
+
+    rep = report(db_file, run_id="run-1")
+    assert cid in rep["by_market"], f"CID missing from by_market for status={status!r}"
+    assert rep["by_market"][cid]["resolved"] is False
+
+
+def test_market_with_open_order_and_filled_quote_not_resolved(tmp_path, monkeypatch):
+    """A market with an open resting order AND a partially-filled quote must not be
+    marked resolved when days_to_resolve < 0.  This exercises both active_order_cids
+    guard and the up_sh branch of the resolved flag."""
+    import sqlite3, time
+    from core_brain.kpi import report
+    from core_brain.order_registry import SCHEMA, OrderRecord, OrderRegistry
+
+    monkeypatch.setattr(kpi_mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        kpi_mod,
+        "_resolve_market_meta",
+        lambda cid, closes, quotes: {
+            "condition_id": cid,
+            "title": "Live Match",
+            "slug": "live-match",
+            "url": "https://polymarket.com/market/live-match",
+            "category": "Soccer",
+            "days_to_resolve": -0.05,
+        },
+    )
+
+    db_file = tmp_path / "test_held.db"
+    con = sqlite3.connect(str(db_file))
+    con.executescript(SCHEMA)
+    # Quote with filled > 0 creates inventory signal; the open order keeps it active
+    con.execute(
+        "INSERT INTO quotes (ts, condition_id, token_id, side, price, size, filled, run_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (1.0, "0xlivematch3", "tok-yes", "YES", 0.45, 5.0, 2.5, "run-1"),
+    )
+    con.commit()
+    con.close()
+
+    reg = OrderRegistry(db_file)
+    now = int(time.time())
+    cid = "0xlivematch3"
+    reg.create_order(OrderRecord(
+        id="ord-open", condition_id=cid, token_id="tok-yes", side="BUY", price=0.45,
+        original_size=5.0, status="open", posted_ts=now, last_polled_ts=now,
+        order_id="venue-open", pair_id="pair-4", run_id="run-1",
+    ))
+
+    rep = report(db_file, run_id="run-1")
+    assert cid in rep["by_market"]
+    assert rep["by_market"][cid]["resolved"] is False

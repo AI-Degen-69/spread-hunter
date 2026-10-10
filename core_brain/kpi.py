@@ -1470,6 +1470,11 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         ) if cid
     }
 
+    active_order_cids = {
+        o.get("condition_id") for o in orders
+        if o.get("condition_id") and str(o.get("status") or "").lower() in ("open", "pending", "partial")
+    }
+
     by_mkt: dict[str, dict[str, Any]] = {}
     for cid in all_cids:
         meta = _resolve_market_meta(cid, closes, quotes)
@@ -1597,7 +1602,9 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
             # market visible so the operator sees it resolve, not vanish).
             "resolved": (cid.lower() in resolution_cids)
                        or (isinstance(meta.get("days_to_resolve"), (int, float))
-                           and meta.get("days_to_resolve") < 0),
+                           and meta.get("days_to_resolve") < 0
+                           and cid not in active_order_cids
+                           and not (up_sh > 0 or dn_sh > 0)),
             # Winner + resolved time when the sweeper recorded a resolution,
             # else None. The dashboard renders this under the FINISHED pill.
             "resolution": resolution_by_cid.get(cid.lower()),
@@ -1658,10 +1665,20 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
     order_cids = {o.get("condition_id") for o in orders if o.get("condition_id")}
     by_mkt = {
         cid: m for cid, m in by_mkt.items()
-        if cid not in resolved_cids
-        and not (m.get("days_to_resolve") is not None and m.get("days_to_resolve") < 0)
-        and (m["quotes_count"] > 0 or m["fills_count"] > 0
-             or cid in order_cids or m["settlements"])
+        if (
+            cid in active_order_cids
+            or (
+                cid not in resolved_cids
+                and not (
+                    cid not in active_order_cids
+                    and not ((m.get("up_sh") or 0) > 0 or (m.get("dn_sh") or 0) > 0)
+                    and m.get("days_to_resolve") is not None
+                    and m.get("days_to_resolve") < 0
+                )
+                and (m["quotes_count"] > 0 or m["fills_count"] > 0
+                     or cid in order_cids or m["settlements"])
+            )
+        )
     }
 
     balances = [m["balance"] for m in by_mkt.values() if m["balance"] is not None]
