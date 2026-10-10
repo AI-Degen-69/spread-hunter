@@ -1445,12 +1445,15 @@ def test_operational_statuses_share_one_top_nav_bar():
         "hud-guardrail-pill",
         "hud-guardrail-state",
         "hud-guardrail-sub",
-        "btn-master-start",
-        "btn-master-stop",
+        # Issue #457: one state-driven toggle replaced the start/stop pair.
+        "btn-master-toggle",
     )
     for element_id in moved_ids:
         assert f'id="{element_id}"' in top_meta
         assert html.count(f'id="{element_id}"') == 1
+    # The two old buttons must be gone, not merely unrendered.
+    assert "btn-master-start" not in html
+    assert "btn-master-stop" not in html
 
     assert 'id="btn-sync"' in top_meta
     assert ">SYNC VENUE<" in top_meta
@@ -2354,3 +2357,77 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
     assert all("ticker-raw" not in r for r in out["detailsOff"])
     assert all("ticker-raw" in r for r in out["detailsOn"])
     assert all("ticker-raw" in r for r in out["detailsAfterRebuild"])
+
+
+# ── Issue #457: the single master toggle ──────────────────────────────────────
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_master_toggle_renders_every_state():
+    """One button, three looks, driven by the real app.js handler.
+
+    The click is what is tested, not the words in the file: STOP look when any
+    service runs, START look when stopped, busy + one POST under a double
+    click, and the backend's message on screen -- never console-only.
+    """
+    harness = Path(__file__).resolve().parent / "js" / "master_toggle_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+
+    stop_look = out["running"]
+    assert stop_look["className"] == "btn-stop-run"
+    assert "STOP RUN" in stop_look["text"]
+    assert stop_look["ariaLabel"] == "Stop bot execution stack"
+    assert stop_look["action"] == "stop"
+    assert stop_look["disabled"] is False
+
+    # A partial stack is still "running": the STOP look, not START.
+    assert out["partial"]["className"] == "btn-stop-run"
+    assert out["partial"]["action"] == "stop"
+
+    start_look = out["stopped"]
+    assert start_look["className"] == "btn-start-run"
+    assert "START RUN" in start_look["text"]
+    assert start_look["ariaLabel"] == "Start bot execution stack"
+    assert start_look["action"] == "start"
+
+    # UNKNOWN reads as stopped to the operator: START look, no crash.
+    assert out["unknown"]["className"] == "btn-start-run"
+    assert out["unknown"]["action"] == "start"
+
+    # A null service entry is not a crash and is not a running service.
+    assert "error" not in out["nullEntry"]
+    assert out["nullEntry"]["className"] == "btn-stop-run"  # query still runs
+
+    # Double click: exactly one POST, busy state while in flight.
+    assert out["doubleClick"]["posts"] == 1
+    busy = out["doubleClick"]["busyMidFlight"]
+    assert busy["disabled"] is True
+    assert busy["ariaBusy"] == "true"
+    assert "STOPPING" in busy["text"]
+    assert busy["pill"] == "STACK STOPPING"
+
+    # After a confirmed stop, the button is back to START and clickable.
+    after = out["doubleClick"]["afterStop"]
+    assert after["className"] == "btn-start-run"
+    assert after["disabled"] is False
+    assert after["ariaBusy"] is None
+
+    # A refused START puts the backend's reason on screen. The button itself
+    # corrects on the next poll (the click's own poll is deliberately skipped
+    # so it cannot paint over the click's result); what must hold is that the
+    # operator sees WHY, not a silent console warning.
+    assert "unreadable" in out["refused"]["ticker"]
+
+    # A partial STOP names the survivor and its outcome.
+    assert "decide" in out["partialStop"]["ticker"]
+    assert "still_running" in out["partialStop"]["ticker"]
+
+    # A non-JSON 500 produces an error line, not a crash.
+    assert "500" in out["httpFailure"]["ticker"]

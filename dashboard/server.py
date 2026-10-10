@@ -692,6 +692,14 @@ def get_state():
 # generation of work.
 PID_START_TOLERANCE_S: float = 60.0
 
+# Issue #457: the stop budget. One shared deadline keeps the whole stop inside
+# the 30s ops-lock takeover window, so another control request can never observe
+# a half-stopped stack as fully stopped. 10 + 5 + 2×5 = 25s.
+_STOP_POLITE_WAIT_S: float = 10.0
+_STOP_FORCE_WAIT_S: float = 5.0
+_STOP_TASKKILL_TIMEOUT_S: float = 5.0
+_STOP_POLL_INTERVAL_S: float = 0.25
+
 
 def _win_process_times(pid: int) -> tuple[float | None, float | None] | None:
     """(created, exited) as Unix timestamps for a Windows PID.
@@ -1762,7 +1770,12 @@ def start_bot() -> dict:
         query_alive = svcs.get("query", {}).get("running", False)
         decide_alive = svcs.get("decide", {}).get("running", False)
 
-        if (filter_alive and query_alive and decide_alive) or current.get("bot_state") == "RUNNING":
+        # Issue #457: a partial stack is fillable, not a refusal. Refuse only a
+        # COMPLETE duplicate stack (all three alive), or a RUNNING verdict with
+        # no per-service state to reason from. Otherwise launch the gap.
+        if filter_alive and query_alive and decide_alive:
+            return {"ok": False, "message": "Bot stack is already running; refusing to start a duplicate instance.", "status": current}
+        if current.get("bot_state") == "RUNNING" and not (filter_alive or query_alive or decide_alive):
             return {"ok": False, "message": "Bot stack is already running; refusing to start a duplicate instance.", "status": current}
         if current.get("bot_state") == "UNKNOWN":
             return {"ok": False, "message": f"Cannot read the process file at {current.get('registry_path')}; refusing to start until it is readable, because a second live stack cannot be ruled out.", "status": current}
@@ -1770,12 +1783,25 @@ def start_bot() -> dict:
         procs_file = runtime_file("processes.json", root=LIVE_ROOT)
         procs_file.parent.mkdir(parents=True, exist_ok=True)
 
+        # Load the registry BEFORE any alive check: the `else` branches below
+        # read saved_procs to keep a running service's entry, and reading it
+        # after those branches is the NameError that made every partial-stack
+        # START crash instead of filling the gap.
+        saved_procs, read_err = _read_saved_procs()
+        if saved_procs is None:
+            return {"ok": False, "message": read_err, "status": current}
+
         # Derive a stable run_id so fleet/exec/dash share one session id.
         # Without this, each process generates its own UUID at import time
         # and fills/orders are tagged to inconsistent run_ids, which makes
         # the dashboard default run selector show a misleading zeros grid.
         from core_brain.order_registry import get_run_id
         child_env = {**os.environ, "SH_RUN_ID": get_run_id()}
+
+        # POSIX only: a new session makes each launched service a process-group
+        # leader, so STOP can signal the whole tree (ranker/watcher children
+        # included) instead of just the root.
+        popen_group = {"start_new_session": True} if sys.platform != "win32" else {}
 
         stack_cmds = _start_stack_commands(resolve_sweep_interval())
 
@@ -1787,6 +1813,7 @@ def start_bot() -> dict:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=child_env,
+                **popen_group,
             )
             launched_procs.append(p_scr)
             filter_entry = {"pid": p_scr.pid, "started_at": time.time()}
@@ -1802,6 +1829,7 @@ def start_bot() -> dict:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=child_env,
+                **popen_group,
             )
             launched_procs.append(p_eng)
             query_entry = {"pid": p_eng.pid, "started_at": time.time(),
@@ -1817,13 +1845,15 @@ def start_bot() -> dict:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=child_env,
+                **popen_group,
             )
             launched_procs.append(p_fleet)
             decide_entry = {"pid": p_fleet.pid, "started_at": time.time()}
         else:
             decide_entry = service_entry(saved_procs, "decide")
 
-        # Load existing procs file to preserve starting_account_value if present
+        # Preserve starting_account_value: a partial START must not re-snapshot
+        # capital the stack already captured at its real start.
         existing_starting_value = None
         if procs_file.exists():
             try:
@@ -1831,8 +1861,10 @@ def start_bot() -> dict:
                 existing_starting_value = existing_data.get("starting_account_value")
             except Exception:
                 pass
+        partial = bool(launched_procs) and any(
+            (filter_alive, query_alive, decide_alive))
 
-        saved_procs = {
+        new_procs = {
             "filter": filter_entry,
             "query": query_entry,
             "decide": decide_entry,
@@ -1844,26 +1876,44 @@ def start_bot() -> dict:
         # constant that nobody deposited." This snapshot is the real number.
         # It may be None if the venue is unreachable at start time; the
         # dashboard shows a "estimated baseline" label in that case.
-        starting_account_value = _capture_starting_capital()
-        if starting_account_value is not None:
-            saved_procs["starting_account_value"] = starting_account_value
+        if not partial:
+            starting_account_value = _capture_starting_capital()
+            if starting_account_value is not None:
+                new_procs["starting_account_value"] = starting_account_value
+            elif existing_starting_value is not None:
+                # Preserve previously captured value if current capture fails
+                new_procs["starting_account_value"] = existing_starting_value
         elif existing_starting_value is not None:
-            # Preserve previously captured value if current capture fails
-            saved_procs["starting_account_value"] = existing_starting_value
-        procs_file.write_text(json.dumps(saved_procs, indent=2), encoding="utf-8")
+            new_procs["starting_account_value"] = existing_starting_value
+        procs_file.write_text(json.dumps(new_procs, indent=2), encoding="utf-8")
 
-        return {"ok": True, "message": "Bot stack started", "status": get_system_status()}
+        reused = [n for n, alive in
+                  (("filter", filter_alive), ("query", query_alive), ("decide", decide_alive))
+                  if alive]
+        return {
+            "ok": True,
+            "message": "Bot stack started",
+            "launched": [n for n, alive in
+                         (("filter", not filter_alive), ("query", not query_alive),
+                          ("decide", not decide_alive)) if alive],
+            "reused": reused,
+            "status": get_system_status(),
+        }
     except Exception as e:
-        # Cleanup: terminate any children launched before the failure.
-        for proc in launched_procs:
-            try:
-                proc.terminate()
-                proc.wait(timeout=2)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+        # Cleanup: terminate only the children THIS call launched, through the
+        # same honest stop helper STOP uses. A reused service was already
+        # running before START and must survive a failed fill; stopping it
+        # would turn a gap-fill failure into an outage.
+        launched_targets = [
+            (name, proc.pid, None)
+            for name, proc in zip(
+                [n for n, alive in
+                 (("filter", not filter_alive), ("query", not query_alive),
+                  ("decide", not decide_alive)) if alive],
+                launched_procs,
+            )
+        ]
+        _stop_services(launched_targets, subprocess)
         return {
             "ok": False,
             "message": f"Failed to start bot stack: {e}",
@@ -1895,7 +1945,25 @@ def stop_bot() -> dict:
 
 
 def _stop_bot_locked(subprocess) -> dict:
-    """The stop itself; caller must hold the ops lock."""
+    """The stop itself; caller must hold the ops lock.
+
+    Issue #457: STOP is now honest. Ask politely (SIGTERM / taskkill /T), wait a
+    bounded grace period, escalate to force (SIGKILL / taskkill /F /T), verify
+    each service is actually down, and report one outcome per service. The
+    registry is REWRITTEN rather than deleted, so `starting_account_value` and
+    any survivor's entry survive the stop and a retry can reach them.
+
+    Known acceptance gaps (deliberate, not full coverage):
+    - Whole-tree stop is complete only on Linux/macOS for services launched by
+      this master START (they own a new process group). Legacy records and
+      service-card launches are single processes, so their children can
+      survive as orphans.
+    - On Windows the down-check confirms only the root process; descendant
+      death relies on taskkill /T and its return code.
+    - A zombie owned by another parent can still look alive; STOP then reports
+      `still_running`, which is the safe, honest answer.
+    - Stopping processes does not cancel resting venue orders.
+    """
     procs_file = resolve_runtime_file("processes.json", root=LIVE_ROOT)
     if procs_file.exists():
         try:
@@ -1917,24 +1985,165 @@ def _stop_bot_locked(subprocess) -> dict:
                 "status": get_system_status(),
             }
 
-        for name, info in saved_procs.items():
+        # Every dict entry that holds a pid, whatever its key: pre-rename
+        # screener/engine/fleet registries stop under the current name.
+        targets = []
+        for key, info in saved_procs.items():
             if not isinstance(info, dict):
                 continue
             pid = info.get("pid")
-            if pid and _is_pid_alive(pid, info.get("started_at")):
-                try:
-                    if sys.platform == "win32":
-                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
-                    else:
-                        os.kill(int(pid), 15)
-                except Exception:
-                    pass
+            if not pid:
+                continue
+            targets.append((_legacy_canonical(key), pid, info.get("started_at")))
+
+        outcomes = _stop_services(targets, subprocess)
+
+        survivors = [n for n, o in outcomes.items() if o["outcome"] == "still_running"]
+        if not survivors:
+            message = "Stack stopped"
+            if any(o["outcome"] == "forced" for o in outcomes.values()):
+                forced = next(n for n, o in outcomes.items() if o["outcome"] == "forced")
+                message = f"Stack stopped ({forced} force-killed)"
+        else:
+            first = survivors[0]
+            pid = next(
+                (p for n, p, _ in targets if n == first), None)
+            message = (
+                f"STOP incomplete: {first} still running"
+                + (f" (PID {pid})" if pid else "")
+                + ". Registry kept for retry."
+            )
+
+        # Rewrite, never unlink: survivors and non-service metadata (capital,
+        # reset_at) must survive the stop.
+        rewritten = {
+            k: v for k, v in saved_procs.items()
+            if not (isinstance(v, dict) and v.get("pid") and k not in survivors)
+        }
         try:
-            procs_file.unlink()
-        except Exception:
+            procs_file.write_text(json.dumps(rewritten, indent=2), encoding="utf-8")
+        except OSError:
+            logger.warning("Could not rewrite %s after STOP", procs_file)
+
+        return {
+            "ok": not survivors,
+            "message": message,
+            "services": outcomes,
+            "status": get_system_status(),
+        }
+
+    return {
+        "ok": True,
+        "message": "Stack already stopped",
+        "status": get_system_status(),
+    }
+
+
+def _legacy_canonical(key: str) -> str:
+    """Map a pre-rename registry key to its current service name."""
+    return {"screener": "filter", "engine": "query", "fleet": "decide"}.get(key, key)
+
+
+def _stop_services(targets: list, subprocess) -> dict:
+    """Stop a list of (name, pid, started_at) under one shared deadline.
+
+    Returns {name: {"outcome": ..., "detail": ...}} with outcome in
+    not_running | stopped | forced | still_running. The clock and sleep are
+    called through the `time` module so tests can script them.
+    """
+    outcomes: dict[str, dict[str, str]] = {}
+    initially_alive = {p for (n, p, s) in targets if _is_pid_alive(p, s)}
+    alive = [(n, p, s) for (n, p, s) in targets if p in initially_alive]
+    if not alive:
+        for name, _, _ in targets:
+            outcomes[name] = {"outcome": "not_running", "detail": ""}
+        return outcomes
+
+    is_windows = sys.platform == "win32"
+    errors: dict[str, str] = {}
+    forced_pids: set[int] = set()
+
+    def _signal(pid: int, sig: int) -> None:
+        """Polite or forced signal, group-aware on POSIX, taskkill on Windows."""
+        if sig == 9:
+            forced_pids.add(pid)
+        if is_windows:
+            argv = (["taskkill", "/F", "/T"] if sig == 9 else ["taskkill", "/T"]) + ["/PID", str(pid)]
+            try:
+                res = subprocess.run(
+                    argv, capture_output=True, timeout=_STOP_TASKKILL_TIMEOUT_S)
+                if res.returncode != 0:
+                    errors[pid] = f"taskkill exited {res.returncode}"
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                errors[pid] = str(exc)
+            return
+        group = None
+        try:
+            group = os.getpgid(pid) if os.getpgid(pid) == pid else None
+        except OSError:
+            group = None
+        try:
+            if group is not None:
+                os.killpg(group, sig)
+            else:
+                os.kill(pid, sig)
+        except OSError as exc:
+            errors[pid] = str(exc)
+
+    def _reap(pid: int) -> None:
+        # WNOHANG only exists on POSIX; Windows has no waitpid to reap.
+        if is_windows or not hasattr(os, "WNOHANG"):
+            return
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
             pass
 
-    return {"ok": True, "message": "Bot stack stopped", "status": get_system_status()}
+    def _down(pid: int) -> bool:
+        if is_windows:
+            return not _is_pid_alive(pid, None)
+        try:
+            os.killpg(os.getpgid(pid), 0)
+            return False
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return not _is_pid_alive(pid, None)
+
+    # Polite pass.
+    for _, pid, _ in alive:
+        _signal(pid, 15)
+    polite_deadline = time.monotonic() + _STOP_POLITE_WAIT_S
+    while alive and time.monotonic() < polite_deadline:
+        for _, pid, _ in alive:
+            _reap(pid)
+        alive = [(n, p, s) for (n, p, s) in alive if not _down(p)]
+        if alive:
+            time.sleep(_STOP_POLL_INTERVAL_S)
+
+    # Force pass for whoever is left.
+    for _, pid, _ in alive:
+        _signal(pid, 9)
+    force_deadline = time.monotonic() + _STOP_FORCE_WAIT_S
+    while alive and time.monotonic() < force_deadline:
+        for _, pid, _ in alive:
+            _reap(pid)
+        alive = [(n, p, s) for (n, p, s) in alive if not _down(p)]
+        if alive:
+            time.sleep(_STOP_POLL_INTERVAL_S)
+
+    still = {p for _, p, _ in alive}
+    for name, pid, _ in targets:
+        if pid in still:
+            outcomes[name] = {"outcome": "still_running", "detail": errors.get(pid, "")}
+        elif pid not in initially_alive:
+            outcomes[name] = {"outcome": "not_running", "detail": errors.get(pid, "")}
+        elif pid in forced_pids:
+            # It only came down after the force pass: report that honestly.
+            outcomes[name] = {"outcome": "forced", "detail": errors.get(pid, "")}
+        else:
+            outcomes[name] = {"outcome": "stopped", "detail": errors.get(pid, "")}
+    return outcomes
 
 
 def set_sweep_interval(raw: str | None) -> dict:

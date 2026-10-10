@@ -14,8 +14,33 @@ SERVER_PY = ROOT / "dashboard" / "server.py"
 
 def _frontend_api_calls() -> set[str]:
     text = APP_JS.read_text(encoding="utf-8")
+    # The master-toggle builds its control URL as `/api/system/${action}`, where
+    # `action` is 'start' or 'stop' at runtime. Emit BOTH concrete endpoints so
+    # the scan sees what the browser can actually call instead of the bare
+    # `/api/system/` prefix the template leaves in the source (a path Python
+    # never serves). A single `.replace()` would drop the second branch, so the
+    # interpolation is expanded into both variants on separate source copies.
+    expanded = {text.replace("${action}", variant)
+                for variant in ("start", "stop")}
     # Normalize to a leading-slash form: "api/state" -> "/api/state".
-    return {c if c.startswith("/") else "/" + c for c in re.findall(r"api/[a-z0-9_/-]+", text)}
+    calls: set[str] = set()
+    for source in expanded:
+        calls |= {c if c.startswith("/") else "/" + c
+                  for c in re.findall(r"api/[a-z0-9_/-]+", source)}
+    return calls
+
+
+def test_master_toggle_control_url_expands_to_served_endpoints():
+    """`/api/system/${action}` must not leak the bare `/api/system/` prefix.
+
+    The regex scan can read past a `${...}` only if the interpolation is
+    expanded first; the two real targets, start and stop, must both survive and
+    the phantom `/api/system/` (which Python does not route) must be gone.
+    """
+    calls = _frontend_api_calls()
+    assert "/api/system/start" in calls
+    assert "/api/system/stop" in calls
+    assert "/api/system/" not in calls
 
 
 def _python_api_routes() -> set[str]:
