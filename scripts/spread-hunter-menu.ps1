@@ -47,7 +47,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectPath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$Port    = 8799
+$Port    = 8899
 $LivePort     = $Port
 $DashUrl     = "http://127.0.0.1:$Port"
 $RunDir      = Join-Path $ProjectPath "runtime"
