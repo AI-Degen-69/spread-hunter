@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>חמש גישות להצבת מחיר, באותו שוק, בלי כסף אמיתי</title>
+<style>
+  :root {
+    --bg: #FDF6EF;
+    --ink: #26170B;
+    --muted: #7A5C3E;
+    --accent: #C2410C;
+    --card: #FFFFFF;
+    --border: #EBD9C6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", Arial, sans-serif;
+    padding: 28px 20px 40px;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 26px; line-height: 1.3; margin-bottom: 10px; }
+  h1 em { color: var(--accent); font-style: normal; }
+  .lede { font-size: 16px; color: var(--muted); margin-bottom: 22px; }
+  .lede b { color: var(--ink); }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  h2 { font-size: 17px; margin-bottom: 12px; }
+  h2 .dot { color: var(--accent); }
+  canvas { display: block; width: 100%; height: 300px; }
+  .controls { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .controls label { font-size: 14px; color: var(--muted); }
+  input[type=range] { flex: 1 1 200px; accent-color: var(--accent); }
+  .wobble-val { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--accent); min-width: 44px; text-align: center; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: right; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  td:first-child { font-weight: 700; }
+  .pill {
+    display: inline-block; background: #FDEBDD; color: var(--accent);
+    border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 700;
+  }
+  ol { padding-right: 20px; font-size: 15px; }
+  ol li { margin-bottom: 10px; }
+  code {
+    background: #F7EDE1; border: 1px solid var(--border); border-radius: 6px;
+    padding: 1px 6px; font-size: 13px; direction: ltr; display: inline-block;
+  }
+  .foot { font-size: 13px; color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>חמש גישות להצבת מחיר <em>על אותו שוק, בלי כסף אמיתי</em></h1>
+  <p class="lede">
+    <b>לפני:</b> לא היה ידוע איזו גישת הצבת מחיר מתמלאת יותר טוב — רק תיאוריה על נייר.<br>
+    <b>עכשיו:</b> חמש גישות רצות יחד באימון, כל אחת בשוק הזמנות משל עצמה, ובסוף מקבלים ספירה לכל גישה.
+  </p>
+
+  <div class="card">
+    <h2><span class="dot">●</span> נסו בעצמכם: כמה רחוק כל גישה עומדת כשהשוק רועד</h2>
+    <canvas id="demo" aria-label="הדגמה: מרחק ההצבה של כל גישה כשינוי של תנודת השוק"></canvas>
+    <div class="controls">
+      <label for="wobble">תנודת השוק</label>
+      <input id="wobble" type="range" min="0" max="10" step="0.5" value="4">
+      <span class="wobble-val" id="wobbleVal">4.0</span>
+    </div>
+  <p class="hint">
+    הזיזו את הסליידר. כל שורה היא גישה; הקו האנכי הוא מקום ההזמנות בשוק,
+    והפס מודד <b>כמה סנטים הגישה מתרחקת אחורה מהשוק</b>.
+    השורות מסודרות מלמעלה (קרובה) ללמטה (רחוקה).
+    קריאת התוצאה: <b>רחוקה יותר = מתמלאת לאט ובמחיר זול, אבל כמעט לא קונה כלום.</b>
+    קרובה יותר = מתמלאת מהר ובמחיר יקר, עם סיכון גבוה שרק רגל אחת תתמלא.<br>
+    כלומר "שמרנית" כאן פירושה <b>סבלנית במילוי</b> — לא שמרנית במחיר. זו בדיוק הנקודה שתחרות האימון באה למדוד.
+  </p>
+  </div>
+
+  <div class="card">
+    <h2><span class="dot">●</span> מה מקבלים בסוף הריצה</h2>
+    <p style="font-size:15px; margin-bottom:12px;">
+      קובץ אחד עם שורה לכל גישה: כמה פעמים התמלאה, כמה זוגות נסגרו, ותוצאה מחושבת.
+      <b>אין הכרזת מנצחת</b> — זהו רק מפגש אימון קצר כדי לראות איך כל גישה מתנהגת.
+    </p>
+    <table>
+      <tr><th>גישה</th><th>כלל ההצבה</th><th>מה שמייחד אותה</th></tr>
+      <tr><td>בקרה</td><td>קבועה תמיד, 2 סנט</td><td rowspan="5">כמות מילויים, זוגות שנסגרו, תוצאה מחושבת</td></tr>
+      <tr><td>תוקפנית</td><td>צמודה לשוק, עד 3 סנט</td></tr>
+      <tr><td>מאוזנת</td><td>עוקבת בחצי כוח, עד 4 סנט</td></tr>
+      <tr><td>זהירה</td><td>שילוב ביניים, עד 4 סנט</td></tr>
+      <tr><td>שמרנית</td><td>הרחוקה ביותר, עד 5 סנט</td></tr>
+    </table>
+    <p class="hint" style="margin-top:10px;">
+      נסו לקרוא את הטור מלמעלה למטה: <b>מלמעלה — מתמלאת הכי מהר, מלמטה — כמעט לא מתמלאת.</b>
+      זו הנקודה, כי בלי מילוי אין עסקה בכלל — מורד הרחוק מדי קונה אפס.
+    </p>
+    <p class="hint" style="margin-top:8px;">
+      תזכורת בכנות: מילויים כאן מחושבים, הריצה קצרה, וכל גישה קוראה את השוק ברגע קצת שונה.
+      זו תמונה ראשונה, לא ממצא סטטיסטי.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2><span class="dot">●</span> איך בודקים את זה במערכת עצמה</h2>
+    <ol>
+      <li>הריצו <code>python -m scripts.shadow_tournament --minutes 15 --dry-run</code><br>
+        תראו: תוכנית חמש הגישות, יציאות 8801 עד 8805, וקובץ תוצאות מוכן — בלי שנשלח שום דבר.</li>
+      <li>הריצו <code>python -m scripts.shadow_tournament --minutes 15 --dashboards</code><br>
+        תראו: חמש חלונות נפתחות, אחת לכל גישה. <b>לא לוחצים START</b>.</li>
+      <li>פתחו <code>http://localhost:8801</code> ועד 8805<br>
+        תראו: כל חלון מסומנת "SHADOW" ומציגה את ספר ההזמנות שלה בלבד.</li>
+      <li>אחרי הריצה, פתחו את קובץ התוצאות שהודפס<br>
+        תראו: חמש שורות, אחת לכל גישה, עם ספירות ותוצאה מחושבת.</li>
+    </ol>
+  </div>
+
+  <p class="foot">
+    שינוי זה נכנס בחלק מקו הרצף של אימות — קודם מכינות את הרצף עצמו,
+    ואז מריצים אותו על הגישות. בחירת הגישה הסופית נשארת להמשך, אחרי שרואים נתוני מילוי אמיתיים.
+  </p>
+
+</div>
+
+<script>
+(function () {
+  var ARMS = [
+    { name: "תוקפנית",   mode: "dyn",   mult: 0.25, cap: 3 },
+    { name: "מאוזנת",    mode: "dyn",   mult: 0.50, cap: 4 },
+    { name: "זהירה",     mode: "dyn",   mult: 0.60, cap: 4 },
+    { name: "שמרנית",    mode: "dyn",   mult: 0.75, cap: 5 },
+    { name: "בקרה",      mode: "fixed", mult: 0.00, cap: 2, fixed: 2 }
+  ];
+  var INK = "#26170B", MUTED = "#7A5C3E", ACCENT = "#C2410C", BAR = "#F0B48A", LANE = "#F4E7DA";
+
+  function offset(arm, w) {
+    if (arm.mode === "fixed") return arm.fixed;
+    return Math.min(arm.cap, Math.max(2, arm.mult * w));
+  }
+
+  var canvas = document.getElementById("demo");
+  var slider = document.getElementById("wobble");
+  var valEl = document.getElementById("wobbleVal");
+
+  function initCanvas(c) {
+    var dpr = window.devicePixelRatio || 1;
+    var rect = c.getBoundingClientRect();
+    c.width = Math.max(1, Math.round(rect.width * dpr));
+    c.height = Math.max(1, Math.round(rect.height * dpr));
+    var ctx = c.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx: ctx, w: rect.width, h: rect.height };
+  }
+
+  function draw() {
+    var s = initCanvas(canvas);
+    var ctx = s.ctx, W = s.w, H = s.h;
+    ctx.clearRect(0, 0, W, H);
+    ctx.font = "14px 'Segoe UI', Arial";
+    ctx.textBaseline = "middle";
+
+    var top = 22, laneH = Math.min(54, (H - top - 8) / ARMS.length);
+    var labelW = 92, baseX = W - 30;           // baseX = the queue front (RTL: far right)
+    var pxPerCent = Math.max(18, (baseX - labelW - 60) / 5);
+    var w = parseFloat(slider.value);
+
+    ARMS.forEach(function (arm, i) {
+      var cy = top + laneH * i + laneH / 2;
+      var cents = offset(arm, w);
+      var barLen = cents * pxPerCent;
+      var x0 = baseX - barLen;
+
+      ctx.fillStyle = LANE;
+      ctx.fillRect(labelW - 4, cy - 13, baseX - labelW + 8, 26);
+
+      ctx.fillStyle = BAR;
+      ctx.fillRect(x0, cy - 9, barLen, 18);
+
+      // queue front line
+      ctx.strokeStyle = MUTED;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(baseX, cy - 15); ctx.lineTo(baseX, cy + 15); ctx.stroke();
+
+      ctx.fillStyle = INK;
+      ctx.textAlign = "right";
+      ctx.fillText(arm.name, labelW - 12, cy);
+
+      ctx.fillStyle = ACCENT;
+      ctx.textAlign = "left";
+      ctx.font = "bold 14px 'Segoe UI', Arial";
+      ctx.fillText(cents.toFixed(0) + "¢", Math.max(6, x0 - 34), cy);
+      ctx.font = "14px 'Segoe UI', Arial";
+    });
+
+    ctx.fillStyle = MUTED;
+    ctx.textAlign = "right";
+    ctx.fillText("שוק ההזמנות", baseX, H - 4);
+  }
+
+  slider.addEventListener("input", function () {
+    valEl.textContent = parseFloat(slider.value).toFixed(1);
+    draw();
+  });
+  window.addEventListener("resize", draw);
+  draw();
+})();
+</script>
+</body>
+</html>

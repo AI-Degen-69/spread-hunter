@@ -1499,7 +1499,9 @@ const SERVICE_DEFS = [
  * chrome on every page, so a poll whose card grid the Trades gate skips must
  * still refresh them. */
 function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
-  const isRunning = status?.bot_state === 'RUNNING' || (status?.services && Object.values(status.services).some(s => s.running));
+  const executionServiceKeys = ['filter', 'query', 'decide'];
+  const anyExecutionServiceRunning = executionServiceKeys.some(k => Boolean(status?.services?.[k]?.running));
+  const isRunning = status?.bot_state === 'RUNNING' || anyExecutionServiceRunning;
   // `lastDbIsProduction` is the START guard's flag and `renderDbMode` owns it.
   // Writing it from here too gave one safety flag two writers: a status payload
   // that carries service state but not `db_is_production` silently reset the
@@ -1512,9 +1514,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const servicesPill = document.getElementById('hud-services-pill');
   const guardrailPill = document.getElementById('hud-guardrail-pill');
 
-  // A null service entry is not a running one.
-  const serviceEntries = (status && status.services) ? Object.values(status.services) : [];
-  const anyServiceRunning = serviceEntries.some(s => s && s.running);
+  const anyServiceRunning = anyExecutionServiceRunning;
 
   if (masterIndicator) {
     if (isStopping) {
@@ -1552,7 +1552,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   let activeCount = 0;
   if (status?.services) {
-    activeCount = Object.values(status.services).filter(s => s?.running).length;
+    activeCount = executionServiceKeys.filter(k => Boolean(status.services[k]?.running)).length;
   }
   if (guardrailHealth?.running) activeCount++;
 
@@ -1598,17 +1598,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       masterToggle.dataset.mode = isShadow ? 'shadow' : 'live';
     } else {
       masterToggle.removeAttribute('aria-busy');
-      if (anyServiceRunning) {
-        masterToggle.dataset.mode = 'live';
-        masterToggle.className = 'btn-stop-run';
-        masterToggle.setAttribute('aria-label', 'Stop bot execution stack');
-        masterToggle.dataset.action = 'stop';
-        masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP RUN`;
-        masterToggle.disabled = false;
-        masterToggle.style.opacity = '1';
-        masterToggle.style.cursor = 'pointer';
-        masterToggle.title = '';
-      } else if (isShadow) {
+      if (isShadow) {
         masterToggle.dataset.mode = 'shadow';
         const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
         if (shadowRunning) {
@@ -1630,6 +1620,16 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
           masterToggle.style.cursor = 'pointer';
           masterToggle.title = 'Start shadow rehearsal for this database (safe, no signer)';
         }
+      } else if (anyExecutionServiceRunning) {
+        masterToggle.dataset.mode = 'live';
+        masterToggle.className = 'btn-stop-run';
+        masterToggle.setAttribute('aria-label', 'Stop bot execution stack');
+        masterToggle.dataset.action = 'stop';
+        masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP RUN`;
+        masterToggle.disabled = false;
+        masterToggle.style.opacity = '1';
+        masterToggle.style.cursor = 'pointer';
+        masterToggle.title = '';
       } else {
         masterToggle.dataset.mode = 'live';
         masterToggle.className = 'btn-start-run';
