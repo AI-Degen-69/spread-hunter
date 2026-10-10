@@ -81,7 +81,8 @@ const app = mod.exports;
 const out = { exportsOk: false };
 try {
   out.exportsOk = ['buildStreamSentence', 'isTradeEvent', 'streamMarketName',
-    'setTickerFilter', 'setTickerShowDetails', 'connectSSE', 'translateEvent']
+    'setTickerFilter', 'setTickerShowDetails', 'connectSSE', 'translateEvent',
+    'noteStreamTitles']
     .every((k) => typeof app[k] === 'function');
 
   const tickerEl = () => document.getElementById('event-ticker');
@@ -160,6 +161,19 @@ try {
          market_title: '<script>alert(1)</script>' } });
   app.setTickerFilter('all');
   out.escapedRows = rows();
+
+  // Market-name precedence: cached ledger titles beat slug words.
+  app.noteStreamTitles({ '0xcc': { title: 'Cached Market' } });
+  out.cachedName = app.buildStreamSentence(
+    { ts: '2024-01-15T14:28:00Z', service: 'query', action: 'fill_recorded',
+      market_slug: 'cached-market', extra: { size: 1, price: 0.5, condition_id: '0xcc' } });
+  out.titleBeatsCache = app.buildStreamSentence(
+    { ts: '2024-01-15T14:28:00Z', service: 'query', action: 'fill_recorded',
+      market_slug: 'cached-market', extra: { size: 1, price: 0.5, condition_id: '0xcc',
+      market_title: 'Direct Title' } });
+  out.slugWords = app.buildStreamSentence(
+    { ts: '2024-01-15T14:28:00Z', service: 'query', action: 'fill_recorded',
+      market_slug: 'some-market-name', extra: { size: 1, price: 0.5 } });
 
   // Details toggle: hidden by default, shown on toggle, survives rebuilds.
   app.setTickerShowDetails(false);

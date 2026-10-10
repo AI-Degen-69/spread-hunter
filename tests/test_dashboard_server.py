@@ -2267,6 +2267,7 @@ def test_trades_tab_filter_and_sentence_builders_ship():
     assert "buildStreamSentence" in app_js
     assert "isTradeEvent" in app_js
     assert "streamMarketName" in app_js
+    assert "noteStreamTitles" in app_js
     # The buffer keeps `extra` so sentences survive rebuilds.
     assert "extra: extra || {}" in app_js
     # Trade markers cover fills, exits, completions, rescues, merge/redeem.
@@ -2331,6 +2332,12 @@ def test_event_stream_trades_tab_shows_only_trade_rows():
     assert m["decideFill"] and m["queryExit"] and m["rescue"] and m["mergeAny"]
     assert m["submitPlaced"] and not m["submitEmpty"]
     assert not m["decideSkip"] and not m["waiting"]
+
+    # Cached ledger titles beat slug words; direct titles beat the cache.
+    assert "Cached Market" in out["cachedName"]
+    assert "cached-market" not in out["cachedName"]
+    assert "Direct Title" in out["titleBeatsCache"]
+    assert "some market name" in out["slugWords"]
 
     # Hostile titles are escaped, never executed.
     assert "<script>" not in "".join(out["escapedRows"])

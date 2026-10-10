@@ -847,10 +847,25 @@ const EVENT_TRANSLATIONS = {
  * are keyed by action and read only `extra`; unknown actions fall back to a
  * plain-words prefix so a new producer never renders as code. */
 
+// Titles seen in table renders, keyed by condition id. The stream is
+// standalone (it works before any table polls), so this only ever upgrades
+// slug-words to a real name — never the other way around.
+const streamTitleCache = {};
+function noteStreamTitles(byMarket) {
+  try {
+    if (!byMarket || typeof byMarket !== 'object') return;
+    for (const [cid, m] of Object.entries(byMarket)) {
+      const name = m && (m.title || m.name);
+      if (cid && name) streamTitleCache[cid] = String(name);
+    }
+  } catch { /* telemetry only: a bad ledger never breaks rendering */ }
+}
+
 function streamMarketName(ev, lookup) {
   const ex = (ev && ev.extra) || {};
   if (ex.market_title) return String(ex.market_title);
   const cid = ex.condition_id || '';
+  if (cid && streamTitleCache[cid]) return streamTitleCache[cid];
   if (cid && typeof lookup === 'function') {
     try {
       const name = lookup(cid);
@@ -4985,6 +5000,7 @@ function marketCell(market, conditionId, opts) {
  * condition_id), then a bare condition id that still renders as a truncated,
  * searchable cell. */
 function orderGroupMarket(group, conditionId, byMarket, state) {
+  noteStreamTitles(byMarket);
   if (byMarket[conditionId]) return byMarket[conditionId];
   const pairs = (state && state.pairs) || [];
   const hit = pairs.find(p => p.pair_id && p.pair_id === group.key)
@@ -8062,7 +8078,7 @@ if (typeof module === 'undefined' || !module.exports) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
-    streamMarketName, quoteList, humanizeAction, appendTickerEvent,
+    streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState,
     setTickerFilter, setTickerShowDetails, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
