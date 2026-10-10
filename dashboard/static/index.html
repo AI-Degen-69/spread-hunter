@@ -229,18 +229,19 @@
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="ticker-filters" role="group" aria-label="Ticker event filter" style="display:flex;gap:4px">
             <button class="ticker-filter-btn active" data-filter="all" type="button">ALL</button>
-            <button class="ticker-filter-btn" data-filter="decide" type="button">TRADES</button>
+            <button class="ticker-filter-btn" data-filter="trades" type="button">TRADES</button>
             <button class="ticker-filter-btn" data-filter="filter" type="button">MARKET FILTER</button>
             <button class="ticker-filter-btn" data-filter="guardrail" type="button">ALERTS</button>
           </div>
           <button id="btn-clear-ticker" class="toggle-cancelled-btn" type="button" style="padding:4px 8px;font-size:11px">CLEAR FEED</button>
+          <button id="btn-ticker-details" class="toggle-cancelled-btn" type="button" style="padding:4px 8px;font-size:11px">SHOW DETAILS</button>
           <button id="btn-pause-ticker" class="toggle-cancelled-btn" type="button" style="padding:4px 8px;font-size:11px">AUTOSCROLL: ON</button>
         </div>
       </div>
       <div id="sse-reconnect" class="sse-reconnecting" style="display:none">Connecting to live cycle stream...</div>
       <div id="event-ticker" class="event-ticker" role="log" aria-live="polite" aria-label="Live event stream" style="max-height:240px;min-height:160px">
         <div class="empty-state">
-          <div class="empty-state-title">No events yet</div>
+          <div class="empty-state-title">No events yet.</div>
           <div class="empty-state-msg">Events will appear here as the strategy execution loop runs.</div>
         </div>
       </div>

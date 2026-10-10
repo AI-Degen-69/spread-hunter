@@ -1,20 +1,65 @@
-# CONSTRAINTS — #460 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #459 (locked by Station II, enforced through Station V)
 
-Governs the `i460` branch only; #461 constraints below stay as history.
+Governs the `i459/fix-live-stream-trades-tab-shows-no-trades-and-ro` branch only.
+
+---
+
+# CONSTRAINTS — #460 (history; merged as #467)
+
+Governs the `i460` branch only; #461 constraints stay as history below.
 
 ## Zero regressions
 
 - Focused suites that must pass:
-  `tests/test_account_kpi.py`
+  `tests/test_cycle_stream.py`
   `tests/test_dashboard_server.py`
-  `tests/test_portfolio_card_basis.py`
-  `tests/test_registry_state.py`
+  `tests/test_order_registry.py`
+  `tests/test_order_manager.py`
+  `tests/test_trader_loop.py`
 - Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
 - Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
 
 ## Scope & File Boundaries
 
 - Target files for modification:
+  `core_brain/cycle_stream.py` (new pure helpers only — `emit()` body, `cycle_intent` writes, rotation untouched)
+  `core_brain/order_registry.py` (optional `on_fill_recorded` callback only — `record_fill()`, trade ids, dedup, markout, status transitions untouched)
+  `core_brain/order_manager.py` (observer wiring, lifecycle `extra`, relayer outcome events — relayer mapping, audit rows, idempotency, close-writing untouched)
+  `core_brain/trader_loop.py` (production reconcile wiring, decide `extra` — reconcile port signature untouched)
+  `dashboard/static/app.js` (sentence builders, `trades` filter, two-line rows, details toggle — EventSource open/close, `mark` listener, reconnect, start/stop controls, KPIs untouched)
+  `dashboard/static/index.html` (TRADES `data-filter`, SHOW DETAILS button, empty-state text)
+  `dashboard/static/styles.css` (row/toggle styling with existing variables, no animation)
+  `SPEC.md`
+  `CONSTRAINTS.md`
+  `tasks/plan.md`
+  `tasks/todo.md`
+  And test files under `tests/` (including new `tests/js/event_stream_harness.cjs`).
+- Files that must NOT be modified:
+  `dashboard/server.py` (stream transport and replay)
+  `core_brain/single_buy_saver.py`
+  `core_brain/market_meta.py`
+  `core_brain/market_feed.py`
+  `core_brain/quotes.py`
+  `core_brain/live_fill_engine.py`
+  `core_brain/shadow_run.py`
+  `scripts/global_stop_loss.py`
+  `scripts/filter_loop.py`
+  `data/orders.db`
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks
+  (existing assertions stay, except the two named source-presence checks if the
+  filter rename breaks them).
+- No new external dependencies without explicit approval.
+- Narrow `except` clauses; a broad `except` is acceptable only around the telemetry callback.
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+- Inspect code statically only; stub all relayer HTTP, signing, and balance calls in tests.
+- Never infer a trade from inventory changes or order counts.
+
+---
+
+# CONSTRAINTS — #460 (history; merged as #467): scope tail & rules
   `dashboard/static/index.html`
   `dashboard/static/app.js`
   `tests/js/portfolio_card_harness.cjs`

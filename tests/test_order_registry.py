@@ -502,6 +502,183 @@ def test_duplicate_trade_id_across_polls(registry: OrderRegistry):
     assert registry.get_size_matched(local_id) == 3.0
 
 
+def _fill_callback_order(registry: OrderRegistry, local_id="order-cb-1",
+                         venue_order_id="0xvenue_cb_1"):
+    now_ms = 1723840000000
+    registry.create_order(
+        OrderRecord(
+            id=local_id,
+            order_id=venue_order_id,
+            condition_id="0xcond_cb",
+            token_id="0xtok_cb",
+            side="BUY",
+            price=0.50,
+            original_size=10.0,
+            status="open",
+            posted_ts=now_ms,
+            last_polled_ts=now_ms,
+            pair_id="pair_cb_1",
+        )
+    )
+    return now_ms
+
+
+def test_on_fill_recorded_fires_once_for_direct_fill(registry: OrderRegistry):
+    """A directly matched fill invokes the callback once; replay does not refire."""
+    now_ms = _fill_callback_order(registry)
+    calls = []
+    trade = {"id": "tr_cb_1", "order_id": "0xvenue_cb_1", "size": 3.0,
+             "price": 0.50, "timestamp": now_ms + 1000}
+    client = MockClobClient(open_orders=[{"id": "0xvenue_cb_1"}], trades=[trade])
+
+    s1 = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000,
+                          on_fill_recorded=lambda f, o: calls.append((f, o)))
+    assert s1.fills_recorded == 1
+    assert len(calls) == 1
+    fill, order = calls[0]
+    assert fill.trade_id == "tr_cb_1"
+    assert order.id == "order-cb-1"
+
+    s2 = reconcile_orders(client, registry, current_ts_ms=now_ms + 10000,
+                          on_fill_recorded=lambda f, o: calls.append((f, o)))
+    assert s2.duplicates_ignored == 1
+    assert len(calls) == 1
+
+
+def test_on_fill_recorded_fires_for_maker_orders_fill(registry: OrderRegistry):
+    """An aggregate maker_orders entry reports with a {trade}_{order10} trade id."""
+    now_ms = _fill_callback_order(registry)
+    calls = []
+    trade = {"id": "tr_cb_m1", "size": 5.0, "price": 0.50,
+             "timestamp": now_ms + 1000,
+             "maker_orders": [{"order_id": "0xvenue_cb_1",
+                               "matched_amount": 5.0, "price": 0.50}]}
+    client = MockClobClient(open_orders=[{"id": "0xvenue_cb_1"}], trades=[trade])
+
+    summary = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000,
+                               on_fill_recorded=lambda f, o: calls.append((f, o)))
+    assert summary.fills_recorded == 1
+    assert len(calls) == 1
+    assert calls[0][0].trade_id == "tr_cb_m1_0xvenue_cb"
+
+
+def test_on_fill_recorded_fires_for_adopted_unattributed_order(registry: OrderRegistry):
+    """A fill on an unattributed venue order still reports through the callback."""
+    now_ms = 1723840000000
+    calls = []
+    venue_id = "0xvenue_orphan_1"
+    trade = {"id": "tr_cb_u1", "order_id": venue_id, "size": 2.0,
+             "price": 0.80, "timestamp": now_ms + 1000}
+    client = MockClobClient(
+        open_orders=[{"id": venue_id, "market": "0xcond_other",
+                      "asset_id": "0xtok_other", "side": "SELL",
+                      "price": 0.80, "size": 50.0}],
+        trades=[trade],
+    )
+    summary = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000,
+                               on_fill_recorded=lambda f, o: calls.append((f, o)))
+    assert summary.unattributed_recorded == 1
+    assert len(calls) == 1
+    assert calls[0][1].status == "unattributed"
+
+
+def test_two_partial_fills_fire_twice(registry: OrderRegistry):
+    """Each new partial fill reports with its own size."""
+    now_ms = _fill_callback_order(registry)
+    calls = []
+    trades = [
+        {"id": "tr_cb_p1", "order_id": "0xvenue_cb_1", "size": 3.0,
+         "price": 0.50, "timestamp": now_ms + 1000},
+        {"id": "tr_cb_p2", "order_id": "0xvenue_cb_1", "size": 4.0,
+         "price": 0.50, "timestamp": now_ms + 2000},
+    ]
+    client = MockClobClient(open_orders=[{"id": "0xvenue_cb_1"}], trades=trades)
+    summary = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000,
+                               on_fill_recorded=lambda f, o: calls.append((f, o)))
+    assert summary.fills_recorded == 2
+    assert [f.size for f, _ in calls] == [3.0, 4.0]
+
+
+def test_raising_callback_keeps_fill_and_status(registry: OrderRegistry):
+    """A failing telemetry callback must not change fill persistence or status."""
+    now_ms = _fill_callback_order(registry)
+
+    def boom(fill, order):
+        raise RuntimeError("telemetry down")
+
+    trade = {"id": "tr_cb_r1", "order_id": "0xvenue_cb_1", "size": 3.0,
+             "price": 0.50, "timestamp": now_ms + 1000}
+    client = MockClobClient(open_orders=[{"id": "0xvenue_cb_1"}], trades=[trade])
+    summary = reconcile_orders(client, registry, current_ts_ms=now_ms + 5000,
+                               on_fill_recorded=boom)
+    assert summary.fills_recorded == 1
+    assert registry.get_size_matched("order-cb-1") == 3.0
+    assert registry.get_order("order-cb-1").status == "partial"
+
+
+def test_markout_failure_still_reports_committed_fill(registry: OrderRegistry, monkeypatch):
+    """The callback fires before markout, so a markout failure keeps the report."""
+    now_ms = _fill_callback_order(registry)
+    calls = []
+
+    def boom_markout(markout):
+        raise RuntimeError("markout down")
+
+    monkeypatch.setattr(registry, "log_markout", boom_markout)
+    trade = {"id": "tr_cb_mo1", "order_id": "0xvenue_cb_1", "size": 3.0,
+             "price": 0.50, "timestamp": now_ms + 1000}
+    client = MockClobClient(open_orders=[{"id": "0xvenue_cb_1"}], trades=[trade])
+    with pytest.raises(RuntimeError):
+        reconcile_orders(client, registry, current_ts_ms=now_ms + 5000,
+                         on_fill_recorded=lambda f, o: calls.append((f, o)))
+    assert len(calls) == 1
+
+    # Replay: the fill is a duplicate, so no new report and no new markout write.
+    s2 = reconcile_orders(client, registry, current_ts_ms=now_ms + 10000,
+                          on_fill_recorded=lambda f, o: calls.append((f, o)))
+    assert s2.duplicates_ignored == 1
+    assert len(calls) == 1
+
+
+def test_poll_emits_fill_recorded_with_detail(temp_db: Path, monkeypatch):
+    """One poll cycle emits fill_recorded with side/size/price beside reconcile_ok."""
+    from core_brain import order_manager as live_exec
+
+    monkeypatch.setattr(live_exec, "account_sweep", MagicMock())
+    emitted = []
+    monkeypatch.setattr(
+        "core_brain.cycle_stream.emit", lambda *a, **k: emitted.append(k))
+
+    now_ms = 1723840000000
+    registry = OrderRegistry(db_path=temp_db)
+    registry.create_order(
+        OrderRecord(
+            id="order-poll-1",
+            order_id="0xvenue_poll_1",
+            condition_id="0xcond_poll",
+            token_id="0xtok_poll",
+            side="BUY",
+            price=0.50,
+            original_size=10.0,
+            status="open",
+            posted_ts=now_ms,
+            last_polled_ts=now_ms,
+        )
+    )
+    trade = {"id": "tr_poll_1", "order_id": "0xvenue_poll_1", "size": 3.0,
+             "price": 0.48, "timestamp": now_ms + 1000}
+    client = MockClobClient(open_orders=[{"id": "0xvenue_poll_1"}], trades=[trade])
+    live_exec.poll(interval=0.01, once=True, db_path=temp_db, client=client)
+
+    fills = [e for e in emitted if e.get("action") == "fill_recorded"]
+    assert len(fills) == 1
+    assert fills[0]["extra"]["side"] == "BUY"
+    assert fills[0]["extra"]["size"] == 3.0
+    assert fills[0]["extra"]["price"] == 0.48
+    reconcile = [e for e in emitted if e.get("action") == "reconcile_ok"]
+    assert reconcile and reconcile[0]["extra"]["fills"] == 1
+
+
 def test_orphan_adoption_and_unattributed(registry: OrderRegistry):
     """Test 6: Orphan venue order is adopted, and an unmatchable one is recorded as unattributed."""
     now_ms = 1723840000000

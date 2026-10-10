@@ -2253,6 +2253,112 @@ def test_start_stop_live_marks_lifecycle():
     assert ds._LIVE_MARKS_WORKER is None
 
 
+def test_trades_tab_filter_and_sentence_builders_ship():
+    """TRADES is action-keyed and rows read as plain-English sentences."""
+    app_js = _read_static("app.js")
+    index_html = _read_static("index.html")
+    css = _read_static("styles.css")
+
+    # TRADES tab is its own filter value, not the decide service.
+    assert 'data-filter="trades"' in index_html
+    assert 'data-filter="decide"' not in index_html
+    # Card-level details toggle.
+    assert "btn-ticker-details" in index_html
+    assert "SHOW DETAILS" in index_html
+    assert "tickerShowDetails" in app_js
+    # Sentence builders, trade markers, market-name helper.
+    assert "buildStreamSentence" in app_js
+    assert "isTradeEvent" in app_js
+    assert "streamMarketName" in app_js
+    assert "noteStreamTitles" in app_js
+    # The buffer keeps `extra` so sentences survive rebuilds.
+    assert "extra: extra || {}" in app_js
+    # Trade markers cover fills, exits, completions, rescues, merge/redeem.
+    for marker in ("fill_recorded", "lifecycle_exited", "lifecycle_completed",
+                   "lifecycle_aged_out_rescue", "merge_", "redeem_"):
+        assert marker in app_js
+    # Honest wording: decide rows never claim a quote was placed.
+    assert "Decided to quote" in app_js
+    assert "Skipped" in app_js
+    # Exact empty-state copy.
+    assert "No trades yet" in app_js
+    assert "Fills, sells, exits, merges and redeems show up here as they happen." in app_js
+    assert "No market filter updates yet." in app_js
+    assert "No alerts right now." in app_js
+    assert "Feed cleared" in app_js
+    assert "New events will appear here." in app_js
+    # Two-line rows reuse the existing muted raw style; no animation added.
+    assert "ticker-translation" in app_js
+    assert "ticker-raw" in app_js
+    assert ".ticker-event .ticker-translation" in css
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_event_stream_trades_tab_shows_only_trade_rows():
+    """A fill and a skip-only decide: TRADES shows just the fill sentence."""
+    harness = Path(__file__).resolve().parent / "js" / "event_stream_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+    assert harness.exists()
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out.get("exportsOk") is True, out.get("error")
+
+    # TRADES shows only the fill; ALL shows both.
+    assert len(out["tradesRows"]) == 1
+    assert "Bought" in out["tradesRows"][0]
+    assert "Brazil election" in out["tradesRows"][0]
+    assert len(out["allRows"]) == 2
+    assert out["scrolledToTop"] is True
+
+    # Sentences carry names and numbers, never codes or raw slugs.
+    s = out["sentences"]
+    assert "UP 3 shares at $0.48" in s["fill"]
+    assert "Decided to quote UP 5 at $0.48 and DOWN 6 at $0.49" in s["quoted"]
+    assert "Skipped Brazil election because spread too wide." in s["skipped"]
+    assert "Sold about DOWN 4 shares" in s["exit"]
+    assert "Merge completed on Brazil election" in s["mergeDone"]
+    assert "state reverted" in s["mergeFailed"]
+    assert "STATE_REVERTED" not in s["mergeFailed"]
+    for key, line in s.items():
+        main = line.split("—")[0] if "—" in line else line
+        assert "_" not in main, (key, line)
+        assert "[DECIDE" not in line and "[QUERY" not in line, (key, line)
+        assert "brazil-election" not in line, (key, line)
+
+    # Trade markers are service-independent.
+    m = out["tradeMarkers"]
+    assert m["decideFill"] and m["queryExit"] and m["rescue"] and m["mergeAny"]
+    assert m["submitPlaced"] and not m["submitEmpty"]
+    assert not m["decideSkip"] and not m["waiting"]
+
+    # Cached ledger titles beat slug words; direct titles beat the cache.
+    assert "Cached Market" in out["cachedName"]
+    assert "cached-market" not in out["cachedName"]
+    assert "Direct Title" in out["titleBeatsCache"]
+    assert "some market name" in out["slugWords"]
+
+    # Hostile titles are escaped, never executed.
+    assert "<script>" not in "".join(out["escapedRows"])
+    assert "&lt;script&gt;" in "".join(out["escapedRows"])
+
+    # Empty states match copy per tab.
+    assert "No trades yet" in out["emptyTrades"]
+    assert "Fills, sells, exits, merges and redeems show up here" in out["emptyTrades"]
+    assert "No market filter updates yet" in out["emptyFilter"]
+    assert "No alerts right now" in out["emptyAlerts"]
+    assert "No events yet" in out["emptyAll"]
+
+    # Details toggle hides the raw line until asked, and sticks.
+    assert all("ticker-raw" not in r for r in out["detailsOff"])
+    assert all("ticker-raw" in r for r in out["detailsOn"])
+    assert all("ticker-raw" in r for r in out["detailsAfterRebuild"])
+
+
 # ── Issue #457: the single master toggle ──────────────────────────────────────
 
 

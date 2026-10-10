@@ -444,6 +444,122 @@ def emit(
         print(f"WARNING: cycle_stream emit failed: {exc}", file=sys.stderr)
 
 
+def fill_extra(fill: Any, order: Any, meta: dict | None = None) -> dict:
+    """Shape one venue-confirmed fill into a `fill_recorded` event payload.
+
+    Pure: size and price always come from the fill, identity from the order.
+    `outcome` (UP/DOWN) and `market_title` ride in only when the caller already
+    knows them via `meta` -- unknown stays unknown, never guessed.
+    """
+    extra: dict[str, Any] = {
+        "condition_id": getattr(order, "condition_id", None),
+        "token_id": getattr(order, "token_id", None),
+        "order_id": getattr(order, "order_id", None) or getattr(order, "id", None),
+        "trade_id": getattr(fill, "trade_id", None),
+        "pair_id": getattr(order, "pair_id", None),
+        "side": str(getattr(order, "side", "") or "").upper() or None,
+        "size": float(getattr(fill, "size", 0.0) or 0.0),
+        "price": float(getattr(fill, "price", 0.0) or 0.0),
+    }
+    if isinstance(meta, dict):
+        outcome = meta.get("outcome")
+        if outcome in ("UP", "DOWN"):
+            extra["outcome"] = outcome
+        title = meta.get("title")
+        if title:
+            extra["market_title"] = title
+    return {k: v for k, v in extra.items() if v is not None}
+
+
+def make_fill_observer(emit_fn: Any, *, service: str, phase: str,
+                       meta_lookup: Any = None) -> Any:
+    """Build the `on_fill_recorded` callback for `reconcile_orders`.
+
+    `meta_lookup` maps a condition id to a market-meta dict (callers pass
+    `resolve_market_meta`, which reads local files only). A failing lookup
+    still emits with empty name fields; a failing emitter never raises into
+    the reconcile pass.
+    """
+    def _on_fill_recorded(fill: Any, order: Any) -> None:
+        try:
+            meta = None
+            if meta_lookup is not None:
+                try:
+                    meta = meta_lookup(getattr(order, "condition_id", "") or "")
+                except Exception:
+                    meta = None
+            slug = ""
+            if isinstance(meta, dict):
+                slug = meta.get("slug") or ""
+            emit_fn(
+                service=service,
+                cycle=0,
+                phase=phase,
+                action="fill_recorded",
+                market_slug=slug,
+                extra=fill_extra(fill, order, meta if isinstance(meta, dict) else None),
+            )
+        except Exception as exc:
+            print(f"WARNING: fill observer failed: {exc}", file=sys.stderr)
+
+    return _on_fill_recorded
+
+_LIFECYCLE_ALLOW = {
+    "pair_id", "condition_id", "token_id", "size", "requested_size",
+    "fill_price", "min_price", "ask", "pair_cost", "notional",
+    "order_id", "route", "lifecycle_state", "settlement_reason",
+}
+
+
+def lifecycle_extra(result) -> dict:
+    """Shape one lifecycle result into the enriched `lifecycle_*` payload.
+
+    Allow-listed copy only: `side` becomes `outcome` (UP/DOWN), `venue_side`
+    is derived (SELL for `exited`, BUY for `completed`), and `response` never
+    leaves this function. Pure and never raises into the caller.
+    """
+    if not isinstance(result, dict):
+        return {}
+    extra: dict = {}
+    for key in sorted(_LIFECYCLE_ALLOW):
+        if key in result and result[key] is not None:
+            extra[key] = result[key]
+    side = result.get("side")
+    if side in ("UP", "DOWN"):
+        extra["outcome"] = side
+    action = result.get("action")
+    if action == "exited":
+        extra["venue_side"] = "SELL"
+    elif action == "completed":
+        extra["venue_side"] = "BUY"
+    return extra
+
+
+def relayer_extra(
+    *,
+    condition_id: str,
+    size=None,
+    relayer_state: str = "",
+    transaction_hash=None,
+    transaction_id=None,
+) -> dict:
+    """Shape one relayer outcome into a `merge_*`/`redeem_*` payload.
+
+    `size` rides only when the caller measured it; hash and id stay separate
+    so no sentence ever presents a relayer id as on-chain proof. Pure.
+    """
+    extra: dict = {"condition_id": condition_id}
+    if size is not None:
+        extra["size"] = float(size)
+    if relayer_state:
+        extra["relayer_state"] = relayer_state
+    if transaction_hash:
+        extra["transaction_hash"] = transaction_hash
+    if transaction_id and transaction_id != transaction_hash:
+        extra["transaction_id"] = transaction_id
+    return extra
+
+
 # Where a tail read starts, counted back from the end of the ring. A cycle
 # event is a few hundred bytes, so this covers a 100-line tail many times over
 # and the loop below widens it on the rare line that is longer.
