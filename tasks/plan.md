@@ -72,7 +72,7 @@ on the T1 arm layout for full verification but touches separate functions.
 
 ## Tasks
 
-- [ ] **T1** [M] [Backend/Logic] — Five-profile defaults with full preset
+- [x] **T1** [M] [Backend/Logic] — Five-profile defaults with full preset
   application.
   - Files: `scripts/shadow_tournament.py`, `tests/test_shadow_tournament.py`.
   - Change: `default_order` becomes
@@ -90,7 +90,7 @@ on the T1 arm layout for full verification but touches separate functions.
   - Verify: `python -m pytest -q tests/test_shadow_tournament.py`
   - Depends on: none
 
-- [ ] **T2** [M] [Backend/Logic] — Read-only per-arm results + launch hook.
+- [x] **T2** [M] [Backend/Logic] — Read-only per-arm results + launch hook.
   - Files: `scripts/shadow_tournament.py`, `tests/test_shadow_tournament.py`.
   - Change: `read_arm_results` (`mode=ro`, `run_id`-filtered, imports
     `MERGE_METHODS` + `NON_TRADE_CLOSE_METHODS` from `core_brain.kpi`);
