@@ -235,6 +235,9 @@ const server = createServer((req, res) => {
     }
     return serveIndex(req, res);
   }
+  if (pathname === '/neon' || pathname === '/neon.html') {
+    return serveStatic(req, res, '/neon-index.html');
+  }
 
   return json(res, 404, { ok: false, error: 'not found' });
 });
