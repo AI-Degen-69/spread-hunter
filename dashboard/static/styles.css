@@ -2479,6 +2479,13 @@ th[aria-sort] .ot-sort-btn {
   border-radius: 4px;
   border: 1px solid var(--border-strong);
 }
+/* Red only when money left the position by force (a stop or a rescue);
+ * the hue is the meaning, so the pill keeps the quiet gray otherwise. */
+.close-reason-pill.is-exit {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
 .param-value-box {
   display: flex;
   align-items: baseline;
