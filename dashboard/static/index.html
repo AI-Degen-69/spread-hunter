@@ -297,6 +297,24 @@
               </div>
             </div>
 
+            <!-- Resting in orders -->
+            <div class="broker-kpi-tile bento-subcard">
+              <div class="bento-subcard-header">
+                <!-- Dollars resting in open orders from the local registry
+                     (state.capital.resting_committed, fresh each poll) — the
+                     money on the book, distinct from filled inventory below. -->
+                <span class="broker-kpi-label">Resting in orders</span>
+                <span class="broker-kpi-val mono text-primary" id="broker-kpi-resting">--</span>
+              </div>
+              <div class="bento-progress-track">
+                <div class="bento-progress-fill bento-cyan-fill" id="bento-resting-bar" style="width:0%"></div>
+              </div>
+              <div class="bento-subcard-footer">
+                <span class="broker-kpi-sub mono" id="broker-kpi-resting-pct">--</span>
+                <span class="bento-sub-muted">On the book</span>
+              </div>
+            </div>
+
             <!-- Held Positions -->
             <div class="broker-kpi-tile bento-subcard">
               <div class="bento-subcard-header">
