@@ -295,3 +295,36 @@ def test_instance_enumeration_lists_every_record_file(tmp_path):
     assert result["threw"] is False, result.get("message")
     assert sorted(result["ids"].split(",")) == ["shadow-01", "shadow-02"], result
     assert sorted(result["ports"].split(",")) == ["8801", "8802"], result
+
+
+def test_resume_stores_discovers_all_presets(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "01_shadow_08-10_18-11.db").touch()
+    (data_dir / "02_shadow_prudent_09-10_15-48.db").touch()
+    (data_dir / "03_shadow_conservative_09-10_16-41.db").touch()
+
+    project_dir = str(tmp_path).replace("'", "''")
+    script = "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        _lift("Get-ShadowResumeStores"),
+        f"$ProjectPath = '{project_dir}'",
+        "try {",
+        "  $stores = @(Get-ShadowResumeStores)",
+        "  $out = @{ threw = $false;",
+        "            runs = @($stores | ForEach-Object { [string]$_.RunId }) -join ',';",
+        "            names = @($stores | ForEach-Object { [string]$_.Name }) -join ',' }",
+        "} catch {",
+        "  $out = @{ threw = $true; message = $_.Exception.Message }",
+        "}",
+        "$out | ConvertTo-Json -Compress",
+    ])
+    out = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", script],
+                         capture_output=True, text=True, check=True, encoding="utf-8")
+    result = json.loads(out.stdout)
+    assert result["threw"] is False, result.get("message")
+    runs = result["runs"].split(",")
+    assert "shadow-01" in runs
+    assert "shadow-02-prudent" in runs
+    assert "shadow-03-conservative" in runs
+
