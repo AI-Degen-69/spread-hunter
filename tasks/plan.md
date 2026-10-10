@@ -52,9 +52,16 @@ T1 (frontend master START guard in app.js) ──> T2 (harness & python regressi
   - Depends on: T1
   - Verification: `python -m pytest -q tests/test_dashboard_server.py -k "master_start"` and `node tests/js/start_toggle_harness.cjs dashboard/static/app.js`.
 
-- [ ] **T3** [M] [Validation] — Execute 10-minute base shadow rehearsal and verify loop.
+- [x] **T3** [M] [Validation] — Execute 10-minute base shadow rehearsal and verify loop.
   - Target files: Runtime data files (`runtime/markets.json`, `data/val_step1.db`, `reports/`)
   - Changes: Seed `runtime/markets.json`. Run `python -m core_brain.shadow_run --minutes 10 --db data\val_step1.db --run-id val-step1` alongside `statistics_observer`. Check console banner for "NO SIGNER LOADED". Switch dashboard to `data\val_step1.db`, verify SHADOW badge and disabled START button. Verify resting orders, simulated fills/closes in dashboard and observer report.
   - Helper skill: `incremental-implementation`
   - Depends on: T1, T2
-  - Verification: Review terminal logs, dashboard UI, and generated report file.
+  - Verification: Review terminal logs, dashboard UI, and generated report file `reports/10-10_20-55_shadow_val-step1_statistics_report.md`.
+
+- [x] **T4** [M] [Frontend/UI + Backend] — Operator expanded scope: smart master toggle for both Live and Shadow.
+  - Target files: `dashboard/server.py`, `dashboard/static/app.js`, `tests/js/start_toggle_harness.cjs`, `tests/test_dashboard_server.py`
+  - Changes: Add backend endpoints `/api/system/shadow/start` and `/api/system/shadow/stop`. In `dashboard/static/app.js`, when reading a shadow DB view, dynamically render `START SHADOW` (when stopped) and `STOP SHADOW` (when running), routing clicks safely to shadow rehearsal lifecycle without touching live bot or signer. When reading live view, keep `START RUN` and `STOP RUN`. Update harness and pytest suite.
+  - Helper skill: `frontend-ui-engineering`
+  - Depends on: T1, T2, T3
+  - Verification: 117 tests passing; live and shadow toggle verified in test harness.

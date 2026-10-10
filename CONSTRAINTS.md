@@ -16,9 +16,10 @@ Governs the `i473/base-shadow-rehearsal` branch only.
 ## Scope & File Boundaries
 
 - Target files for modification:
-  `dashboard/static/app.js` (disable master START in SHADOW/non-production view, tooltip, alert)
+  `dashboard/server.py` (add /api/system/shadow/start and stop endpoints per operator directive)
+  `dashboard/static/app.js` (master START SHADOW / STOP SHADOW toggle in shadow view)
   `tests/js/start_toggle_harness.cjs` (extend harness to capture master START element and assertions)
-  `tests/test_dashboard_server.py` (add regression tests for master START disabled on shadow view)
+  `tests/test_dashboard_server.py` (add regression tests for master START and shadow endpoints)
   `CONSTRAINTS.md`
   `tasks/plan.md`
   `tasks/todo.md`
@@ -30,7 +31,6 @@ Governs the `i473/base-shadow-rehearsal` branch only.
   `core_brain/shadow_run.py`
   `core_brain/order_manager.py`
   `core_brain/trader_loop.py`
-  `dashboard/server.py`
   `data/orders.db` (production DB is untouched)
 
 ## Anti-cheat
