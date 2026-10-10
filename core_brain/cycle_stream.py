@@ -560,7 +560,6 @@ def relayer_extra(
     return extra
 
 
-
 # Where a tail read starts, counted back from the end of the ring. A cycle
 # event is a few hundred bytes, so this covers a 100-line tail many times over
 # and the loop below widens it on the rare line that is longer.

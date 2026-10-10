@@ -850,7 +850,7 @@ const EVENT_TRANSLATIONS = {
 // Titles seen in table renders, keyed by condition id. The stream is
 // standalone (it works before any table polls), so this only ever upgrades
 // slug-words to a real name — never the other way around.
-const streamTitleCache = {};
+const streamTitleCache = Object.create(null);
 function noteStreamTitles(byMarket) {
   try {
     if (!byMarket || typeof byMarket !== 'object') return;
