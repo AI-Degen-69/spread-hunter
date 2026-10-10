@@ -172,18 +172,23 @@ PAGE_HTML = """<!doctype html>
 <title>Tournament Hub</title>
 <style>
   :root {
-    --fg: var(--foreground, #e6e6e6);
-    --muted: var(--muted-foreground, #8b8b8b);
-    --accent: var(--accent, #6ea8fe);
-    --border: var(--border, #2a2f3a);
-    --card: var(--card, #151a23);
+    /* Standalone page: these colors must guarantee contrast on their own,
+       because the hub may be opened on a light or dark host. The theme vars
+       are only a fallback hint — the card/body backgrounds are set explicitly
+       below so pale text never lands on a pale background. */
+    --fg: #e9edf3;
+    --muted: #9aa4b2;
+    --accent: #6ea8fe;
+    --border: #2b3240;
+    --card: #161b24;
     --ok: #4ec9a5;
     --warn: #e0a458;
     --bad: #e06c75;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 16px; background: transparent; color: var(--fg);
+    margin: 0; padding: 16px;
+    background: #0d1117; color: var(--fg);
     font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   h1 { font-size: 18px; margin: 0 0 4px; letter-spacing: .2px; }
@@ -195,7 +200,7 @@ PAGE_HTML = """<!doctype html>
     padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
   }
   .top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-  .name { font-weight: 650; font-size: 15px; text-transform: capitalize; }
+  .name { font-weight: 650; font-size: 15px; text-transform: capitalize; color: var(--fg); }
   .pill {
     font-size: 11px; padding: 2px 8px; border-radius: 999px;
     border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
@@ -205,13 +210,14 @@ PAGE_HTML = """<!doctype html>
   .pill.done { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
   .rows { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12.5px; }
   .rows dt { color: var(--muted); }
-  .rows dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .rows dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); }
   .open {
     display: block; text-align: center; text-decoration: none; padding: 7px 10px;
     border-radius: 8px; border: 1px solid var(--border); color: var(--fg); font-size: 13px;
+    background: #1d2531;
   }
   .open:hover { border-color: var(--accent); color: var(--accent); }
-  .open.disabled { opacity: .45; pointer-events: none; }
+  .open.disabled { opacity: .5; pointer-events: none; }
   .stop { color: var(--accent); font-weight: 600; }
   .empty { color: var(--muted); padding: 24px; text-align: center; }
 </style>
