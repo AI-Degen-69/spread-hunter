@@ -1929,6 +1929,23 @@ def _visit_one(
                                error=f"{type(e).__name__}: {e}")
 
     event_extra = {"intent_count": len(intents), "condition_id": cid}
+    if title:
+        event_extra["market_title"] = title
+    _decide_quotes = []
+    for _di in list(intents)[:4]:
+        _dside = getattr(_di, "side", None)
+        if _dside not in ("UP", "DOWN"):
+            continue
+        try:
+            _decide_quotes.append({
+                "side": _dside,
+                "price": float(getattr(_di, "price", 0.0)),
+                "size": float(getattr(_di, "size", 0.0)),
+            })
+        except (TypeError, ValueError):
+            continue
+    if _decide_quotes:
+        event_extra["quotes"] = _decide_quotes
     if queue_why:
         event_extra["queue_why"] = queue_why
     if feed_metadata.get("paired_depth_arm"):

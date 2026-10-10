@@ -92,7 +92,7 @@ Verification: `python -m pytest -q tests/test_cycle_stream.py tests/test_order_r
 Checkpoint: stubbed relayer outcomes → `merge_executed`/`merge_failed`/
 `merge_submitted`/`redeem_unknown` with unchanged audit statuses.
 
-### T3 — Planned prices and title on decide events [S] [Backend/Logic]
+### T3 — Planned prices and title on decide events [x] [S] [Backend/Logic]
 
 Target files: `core_brain/trader_loop.py` (~1940).
 Build: add `extra.market_title` + `extra.quotes` (≤4) from existing intents;

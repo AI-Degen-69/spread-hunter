@@ -2826,3 +2826,60 @@ def test_production_reconcile_passes_fill_observer(monkeypatch):
     assert emitted[0]["action"] == "fill_recorded"
     assert emitted[0]["service"] == "decide"
     assert emitted[0]["extra"]["side"] == "SELL"
+
+
+class TestDecideTelemetry:
+    def _seam(self, intents, market=None):
+        from core_brain.config import MakerConfig
+        from core_brain.trader_loop import VenueSeam
+        market = market or FakeMarket("0xdecide1")
+        return VenueSeam(
+            base_cfg=MakerConfig(),
+            fetch_market=lambda cid: market,
+            fetch_books=lambda host, token: {
+                "token_id": token, "best_bid": 0.47, "best_ask": 0.49,
+                "bids": {0.47: 100}, "asks": {0.49: 100},
+            },
+            decide=lambda *a: (list(intents), ""),
+            submit_fn=lambda *a, **k: 0,
+            cancel_fn=lambda *a, **k: 0,
+            reconcile_fn=lambda *a, **k: None,
+            sweep_fn=lambda: None,
+        )
+
+    def test_decide_carries_title_and_first_quote(self):
+        from core_brain.trader_loop import _visit_one
+        emitted = []
+        seam = self._seam([_intent(side="UP", price=0.48, size=5),
+                           _intent(side="DOWN", token="tok-dn", price=0.49, size=6)])
+        _visit_one(seam, {"cid": "0xdecide1"}, cycle=1, live=False,
+                   emit_fn=lambda **event: emitted.append(event))
+        decision = next(e for e in emitted if e.get("action") == "decide")
+        assert decision["extra"]["intent_count"] == 2
+        assert decision["extra"]["market_title"]
+        assert decision["extra"]["quotes"][0] == {"side": "UP", "price": 0.48, "size": 5.0}
+        assert len(decision["extra"]["quotes"]) == 2
+
+    def test_skip_decide_has_title_but_no_quotes(self):
+        from core_brain.trader_loop import _visit_one
+        emitted = []
+        seam = self._seam([])
+        _visit_one(seam, {"cid": "0xdecide1"}, cycle=1, live=False,
+                   emit_fn=lambda **event: emitted.append(event))
+        decision = next(e for e in emitted if e.get("action") == "decide")
+        assert decision["extra"]["intent_count"] == 0
+        assert decision["extra"]["market_title"]
+        assert "quotes" not in decision["extra"]
+
+    def test_quotes_capped_at_four_and_skips_unknown_sides(self):
+        from core_brain.trader_loop import _visit_one
+        emitted = []
+        intents = [_intent(side="UP", price=0.40 + i * 0.01, size=5) for i in range(5)]
+        bad = _intent(side="YES", price=0.50, size=5)
+        seam = self._seam(intents + [bad])
+        _visit_one(seam, {"cid": "0xdecide1"}, cycle=1, live=False,
+                   emit_fn=lambda **event: emitted.append(event))
+        decision = next(e for e in emitted if e.get("action") == "decide")
+        assert decision["extra"]["intent_count"] == 6
+        assert len(decision["extra"]["quotes"]) == 4
+        assert {q["side"] for q in decision["extra"]["quotes"]} == {"UP"}
