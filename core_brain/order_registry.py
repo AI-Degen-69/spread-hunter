@@ -20,13 +20,14 @@ import os
 import logging
 import sqlite3
 import statistics
+import sys
 import threading
 import time
 import uuid
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Literal, Optional
+from typing import Any, Iterator, Literal, Optional
 
 from core_brain.runtime_paths import resolve_runtime_file, runtime_file
 
@@ -1929,6 +1930,7 @@ def reconcile_orders(
     lookback_ms: Optional[int] = None,
     enable_stray_guard: bool = True,
     live: bool = True,
+    on_fill_recorded: Optional[Any] = None,
 ) -> ReconcileSummary:
     """Reconcile registry state against venue open orders and trades."""
     now_ms = current_ts_ms if current_ts_ms is not None else int(time.time() * 1000)
@@ -1942,7 +1944,18 @@ def reconcile_orders(
             lookback_ms=lookback_ms,
             enable_stray_guard=enable_stray_guard,
             live=live,
+            on_fill_recorded=on_fill_recorded,
         )
+
+
+def _notify_fill_recorded(on_fill_recorded: Optional[Any], fill: Any, order: Any) -> None:
+    """Report one committed fill to telemetry without ever breaking the pass."""
+    if on_fill_recorded is None:
+        return
+    try:
+        on_fill_recorded(fill, order)
+    except Exception as exc:
+        print(f"WARNING: on_fill_recorded callback failed: {exc}", file=sys.stderr)
 
 
 def _reconcile_pass(
@@ -1954,6 +1967,7 @@ def _reconcile_pass(
     lookback_ms: Optional[int] = None,
     enable_stray_guard: bool = True,
     live: bool = True,
+    on_fill_recorded: Optional[Any] = None,
 ) -> ReconcileSummary:
     """One reconcile pass. Callers must already hold the reconcile lock."""
     summary = ReconcileSummary(polled_ts=now_ms)
@@ -2123,6 +2137,7 @@ def _reconcile_pass(
                         if registry.record_fill(fill_rec):
                             summary.fills_recorded += 1
                             summary.transitions.append(f"FILL {m_order.id[:8]} ({m_order.order_id}): +{m_size} @ {m_price}")
+                            _notify_fill_recorded(on_fill_recorded, fill_rec, m_order)
                             # Record markout entry
                             fill_sec = (t_ts / 1000.0) if t_ts else (now_ms / 1000.0)
                             registry.log_markout(
@@ -2178,6 +2193,7 @@ def _reconcile_pass(
                 if registry.record_fill(fill_rec):
                     summary.fills_recorded += 1
                     summary.transitions.append(f"FILL {order.id[:8]} ({order.order_id}): +{t_size} @ {t_price}")
+                    _notify_fill_recorded(on_fill_recorded, fill_rec, order)
                     fill_sec = (t_ts / 1000.0) if t_ts else (now_ms / 1000.0)
                     registry.log_markout(
                         MarkoutRecord(

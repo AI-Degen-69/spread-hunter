@@ -755,6 +755,51 @@ def build_redeem_submit_payload(from_addr: str, funder: str, nonce: int | str,
     }
 
 
+def _emit_settlement_event(
+    *,
+    kind: str,
+    condition_id: str,
+    status: str,
+    relayer_state: str = "",
+    tx_hash=None,
+    tx_id=None,
+    size=None,
+) -> None:
+    """Report one relayer outcome to the ring without ever breaking settlement."""
+    try:
+        from core_brain.cycle_stream import emit as _emit_settlement, relayer_extra
+        try:
+            from core_brain.market_meta import resolve_market_meta
+            meta = resolve_market_meta(condition_id)
+            slug = (meta or {}).get("slug") or "" if isinstance(meta, dict) else ""
+        except Exception:
+            slug = ""
+        _emit_settlement(
+            service="query", cycle=0, phase="settling",
+            action=f"{kind}_{status}", market_slug=slug,
+            extra=relayer_extra(
+                condition_id=condition_id, size=size,
+                relayer_state=relayer_state or "",
+                transaction_hash=tx_hash, transaction_id=tx_id,
+            ),
+            can_rotate=False,
+        )
+    except Exception as exc:
+        import sys as _sys
+        print(f"WARNING: settlement emit failed: {exc}", file=_sys.stderr)
+
+
+def _merge_size_from_call_data(call_data: str | None) -> float | None:
+    """Best-effort merge share count from the merge call data; None when unreadable."""
+    try:
+        if call_data and len(call_data) >= 10 + 64 * 5:
+            amount_hex = call_data[10 + 64 * 4: 10 + 64 * 5]
+            return int(amount_hex, 16) / 10**6
+    except Exception:
+        pass
+    return None
+
+
 def _submit_and_log(
     action: str,
     condition_id: str,
@@ -824,6 +869,14 @@ def _submit_and_log(
             f"Full in-flight transaction record:\n{record_dump}",
             file=sys.stderr,
         )
+        try:
+            if log_ok:
+                _emit_settlement_event(
+                    kind=str(action).lower(), condition_id=condition_id,
+                    status="interrupted",
+                )
+        except Exception:
+            pass
         raise SystemExit(
             f"Relayer submit interrupted (KeyboardInterrupt).\n"
             f"Transaction was signed and may have been broadcast (nonce={nonce}, id={entry_id}).\n"
@@ -865,6 +918,15 @@ def _submit_and_log(
                 f"WARNING: Audit row in live_orders.json could NOT be updated (see stderr dump).\n"
                 f"On-chain status must be checked manually before any retry."
             )
+        try:
+            if log_ok:
+                _emit_settlement_event(
+                    kind=str(action).lower(), condition_id=condition_id,
+                    status="unknown",
+                    relayer_state=type(exc).__name__,
+                )
+        except Exception:
+            pass
         raise SystemExit(
             f"Relayer submit failed with {type(exc).__name__}: {exc}\n"
             f"Transaction was signed and sent (nonce={nonce}, id={entry_id}).\n"
@@ -936,6 +998,16 @@ def _submit_and_log(
             f"On-chain status must be verified before any retry. See stderr for full transaction record."
         )
 
+    try:
+        _emit_settlement_event(
+            kind=str(action).lower(), condition_id=condition_id,
+            status=status, relayer_state=state or "",
+            tx_hash=(res.get("transactionHash") if isinstance(res, dict) else None),
+            tx_id=((res.get("transactionID") or res.get("id")) if isinstance(res, dict) else None),
+            size=(_merge_size_from_call_data(call_data) if str(action).upper() == "MERGE" else None),
+        )
+    except Exception:
+        pass
     print(f"  RELAYER RESPONSE: {json.dumps(res)[:400]}")
     print(f"\nlogged to {RUN / 'live_orders.json'}")
 
@@ -2047,7 +2119,8 @@ def poll(
     """
     import datetime
     import signal
-    from core_brain.cycle_stream import emit as _emit_cycle_event
+    from core_brain.cycle_stream import emit as _emit_cycle_event, make_fill_observer
+    from core_brain.market_meta import resolve_market_meta
     from core_brain.order_registry import (
         OrderRegistry,
         reconcile_orders,
@@ -2059,6 +2132,13 @@ def poll(
 
     db_p = Path(db_path) if db_path else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db_p)
+
+    # Telemetry only: every venue-confirmed fill is reported as a
+    # `fill_recorded` event. Execution and accounting are unchanged.
+    _fill_observer = make_fill_observer(
+        _emit_cycle_event, service="query", phase="reconciling",
+        meta_lookup=resolve_market_meta,
+    )
 
     # Remember whether a client was injected before building one: the markout
     # sampler must only start on the production path, never beside a test or
@@ -2225,7 +2305,10 @@ def poll(
                     )
 
                 try:
-                    summary = reconcile_orders(client, registry, maker_address=funder)
+                    summary = reconcile_orders(
+                        client, registry, maker_address=funder,
+                        on_fill_recorded=_fill_observer,
+                    )
                     consecutive_errors = 0
 
                     # Log any state transitions to event log
@@ -2340,10 +2423,28 @@ def poll(
                             else:
                                 print(line)
                             _log_event(line)
+                        try:
+                            from core_brain.cycle_stream import lifecycle_extra as _lifecycle_extra
+                            _lifecycle_payload = _lifecycle_extra(pr if isinstance(pr, dict) else {})
+                        except Exception:
+                            _lifecycle_payload = {"pair_id": pr.get("pair_id")} if isinstance(pr, dict) else {}
+                        _lifecycle_reason = ""
+                        _lifecycle_slug = ""
+                        if isinstance(pr, dict):
+                            _lifecycle_reason = str(pr.get("reason") or pr.get("error") or "")
+                            try:
+                                from core_brain.market_meta import resolve_market_meta as _resolve_meta
+                                _meta = _resolve_meta(str(pr.get("condition_id") or ""))
+                                if isinstance(_meta, dict):
+                                    _lifecycle_slug = _meta.get("slug") or ""
+                            except Exception:
+                                _lifecycle_slug = ""
                         _emit_cycle_event(
                             service="query", cycle=cycle, phase="settling",
                             action="lifecycle_" + action,
-                            extra={"pair_id": pr.get("pair_id")},
+                            market_slug=_lifecycle_slug,
+                            reason=_lifecycle_reason,
+                            extra=_lifecycle_payload,
                         )
                 except Exception as exc:
                     err_msg = f"[POLL {now_iso}] lifecycle pass failed: {exc}"

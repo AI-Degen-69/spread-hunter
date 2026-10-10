@@ -1,8 +1,7 @@
-# Todo - Issue 460 (Branch: i460/account-tile-resting-and-held-dollars)
+# Todo — #459
 
-- [x] T1 [M] [Tests] Tile contract tests first (RED)
-- [x] T2 [S] [Frontend] Resting subcard markup + harness outputs
-- [x] T3 [M] [Frontend] Render math + poll wiring (GREEN)
-- [x] T4 [XS] [Tests] Focused verification
-
-Checkpoints: after T1 (RED proof) / after T3 (progress line). Next: /iii-build-plan auto.
+- [x] T1 — Fill telemetry end to end (sub-issue #463)
+- [x] T2 — Exit, completion, merge and redeem events (sub-issue #464, blocked by #463)
+- [x] T3 — Planned prices and title on decide events (sub-issue #465, blocked by #463)
+- [x] T4 — Plain-English rows, TRADES filter, details toggle (sub-issue #466, blocked by #463/#464/#465)
+- [ ] Operator decision: file follow-up issue for guardrail_alert ring gap (opt-in proposal)
