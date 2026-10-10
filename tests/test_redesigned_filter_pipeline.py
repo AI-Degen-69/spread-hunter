@@ -333,7 +333,7 @@ def test_spread_edge_precedes_thin_depth_failure():
     ),
     (
         "row_3_expired",
-        {"end_date_iso": (datetime.now(timezone.utc) - timedelta(hours=16)).isoformat(), "category": "Crypto"},
+        {"end_date_iso": (datetime.now(timezone.utc) - timedelta(hours=16)).isoformat(), "category": "Crypto", "closed": True},
         lambda now: _active_tape(now),
         lambda cid: _books(0.49, 0.51),
         "horizon",
