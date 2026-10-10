@@ -199,6 +199,7 @@ class LifecycleQuoteContext:
     # registry state rather than an inferred flag. None on the dual-resting
     # path, which keeps full gate behavior.
     lifecycle_state: str | None = None
+    shortfall: float = 0.0
 
 
 def max_profitable_hedge_bid(

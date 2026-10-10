@@ -146,7 +146,29 @@ class TestAsymmetricRequoteHold:
         assert to_cancel == []
         assert to_submit == []
 
-
+    def test_delta_top_up_intent_generated_when_shortfall_exceeds_minimum(self):
+        # When a resting order on a lifecycle pair is kept (preserved) but its size (e.g. 10)
+        # is less than the desired target intent size (e.g. 20) by >= min_quote_shares (5),
+        # plan_orders should append a supplemental delta maker intent.
+        open_order = {"token_id": "tok-up", "price": 0.60, "order_id": "o1", "side": "BUY", "status": "open", "size": 10.0, "pair_id": "pair-lc-1"}
+        target_intent = QuoteIntent(
+            side="UP", token_id="tok-up", price=0.60, size=20,
+            mid=0.61, edge_vs_mid=0.01, pair_id="pair-lc-1"
+        )
+        cfg = MakerConfig(min_quote_shares=5.0)
+        to_cancel, to_submit = plan_orders(
+            [open_order], [target_intent],
+            preserve_order_ids={"o1"},
+            lifecycle_pair_id="pair-lc-1",
+            cfg=cfg,
+        )
+        assert to_cancel == []
+        assert len(to_submit) == 1
+        delta_intent = to_submit[0]
+        assert delta_intent.pair_id == "pair-lc-1"
+        assert delta_intent.token_id == "tok-up"
+        assert delta_intent.size == 10
+        assert delta_intent.price == 0.60
 
 
 class TestConfigWiring:

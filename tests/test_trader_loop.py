@@ -2734,3 +2734,66 @@ class TestSingleLegLifecycleVisit:
 
         assert seen, "the placement gate must be consulted on every visit"
         assert {state for state, _ in seen} == {None}
+
+    def test_hedge_replacement_aborts_cancel_if_no_replacement_survives_admission(
+        self, tmp_path, monkeypatch
+    ):
+        """Hedge preservation (#453): if an escalated hedge replacement is filtered
+        out by admission gating, do not cancel the resting hedge order into thin air.
+        """
+        from core_brain import trader_loop
+        from core_brain.quotes import decide_quotes
+
+        # Mock _admit_placements to reject all submissions
+        monkeypatch.setattr(
+            trader_loop, "_admit_placements",
+            lambda to_submit, market, up_book, down_book, flow_fn, cfg, lifecycle_state=None: ([], "filtered_out")
+        )
+
+        escalated, _registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-escalate", {"up_filled": 100.0})],
+            up_bid=0.43,
+            decide=decide_quotes,
+        )
+        cancels = []
+        escalated.cancel_fn = lambda client, registry, to_cancel: (cancels.extend(to_cancel) or len(to_cancel))
+
+        result = _visit_one(escalated, {"cid": "0xabc"}, live=True, emit_fn=lambda **event: None)
+
+        # The resting hedge order ("pair-escalate-down") must NOT have been cancelled!
+        cancelled_ids = [str(o.get("id") or o.get("order_id")) for o in cancels]
+        assert "pair-escalate-down" not in cancelled_ids
+
+    def test_hedge_replacement_restores_hedge_if_submit_fails(
+        self, tmp_path
+    ):
+        """Hedge restore (#453): if an escalated hedge is cancelled for replacement
+        but submit fails or raises an error, attempt to restore the previous hedge.
+        """
+        from core_brain.quotes import decide_quotes
+
+        escalated, _registry, _ = _lifecycle_visit_seam(
+            tmp_path,
+            [("pair-escalate", {"up_filled": 100.0})],
+            up_bid=0.43,
+            decide=decide_quotes,
+        )
+        submits = []
+        def failing_submit(client, registry, market, intents, cfg):
+            submits.append(list(intents))
+            if len(submits) == 1:
+                # First submit (the replacement) fails
+                raise RuntimeError("venue connection dropped")
+            # Second submit is the restore attempt
+            return len(intents)
+
+        escalated.submit_fn = failing_submit
+
+        result = _visit_one(escalated, {"cid": "0xabc"}, live=True, emit_fn=lambda **event: None)
+
+        # A restore attempt was made with the original hedge order's parameters
+        assert len(submits) == 2
+        restored_intent = submits[1][0]
+        assert restored_intent.token_id == "tok-dn"
+        assert restored_intent.pair_id == "pair-escalate"
