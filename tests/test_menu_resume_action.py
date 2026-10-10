@@ -384,7 +384,7 @@ def test_menu_duration_helper_keeps_zero_finite_and_negative_unlimited():
 
 def test_every_shadow_launcher_disables_timeouts_only_for_unlimited_runs():
     src = _menu_source()
-    for name in ("Resume-ShadowRun", "Start-ShadowTrial", "Start-NewShadowRun"):
+    for name in ("Resume-ShadowRun", "Start-NewShadowRun"):
         body = src.split(f"function {name} {{", 1)[1].split(chr(10) + "function ", 1)[0]
         assert "$mins = Resolve-ShadowMinutes -RequestedMinutes $Minutes" in body
         assert "else { -1 }" in body, f"{name} must leave its observer uncapped"
