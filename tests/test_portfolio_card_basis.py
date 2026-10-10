@@ -165,7 +165,10 @@ def test_headline_equals_the_charts_final_point_on_a_shadow_run():
 
 def test_cash_available_is_consistent_with_the_headline():
     # Arrange — a dollar of the book is committed to resting orders.
-    card = _render(_shadow_portfolio(open_committed_usd=1.0))
+    # #460: cash needs the registry's resting leg too, so the fixture carries
+    # an empty-book state (resting $0.00, measured) beside the $1.00 held.
+    card = _render(_shadow_portfolio(open_committed_usd=1.0),
+                   state={"capital": {"resting_committed": 0.0}})
 
     # Act / Assert — cash is headline minus committed, not the wallet mark.
     assert card["equity"] == "$85.77"
