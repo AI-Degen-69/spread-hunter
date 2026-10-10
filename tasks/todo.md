@@ -1,8 +1,8 @@
-# Todo — Issue #461 (Branch: i461/fix-horizon-gate-falsely-rejects-open-election-mar)
+# Todo - Issue 460 (Branch: i460/account-tile-resting-and-held-dollars)
 
-- [x] T1 [S] [Debug] Confirm venue fields for the 3 reported markets (read-only, go/no-go)
-- [x] T2 [M] [Backend/Logic] Regression tests first (RED) in `tests/test_unified_universe.py`
-- [x] T3 [S] [Backend/Logic] Venue-state-gated expiry (GREEN) in `scripts/filter_markets.py`
-- [x] T4 [XS] [Backend/Logic] Focused verification (`test_unified_universe` + `test_in_play_gate` + `test_pre_start_gate`)
+- [x] T1 [M] [Tests] Tile contract tests first (RED)
+- [x] T2 [S] [Frontend] Resting subcard markup + harness outputs
+- [x] T3 [M] [Frontend] Render math + poll wiring (GREEN)
+- [x] T4 [XS] [Tests] Focused verification
 
-Checkpoints: after T1 (go/no-go) · after T3 (progress line). Next: `/iii-build-plan auto`.
+Checkpoints: after T1 (RED proof) / after T3 (progress line). Next: /iii-build-plan auto.
