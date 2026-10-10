@@ -198,3 +198,21 @@ def test_rewritten_feed_file_picked_up_immediately(tmp_path):
     meta2 = mm.resolve_market_meta(CID_CRYPTO, [], [], root=tmp_path)
     assert meta2["category"] == "Macro"
 
+
+def test_screening_fields_resolved_from_feed(tmp_path):
+    _write_feed(tmp_path, [{
+        "cid": CID_CRYPTO, "slug": "btc-up", "title": "Crypto 1",
+        "category": "Crypto", "series_title": "", "market_group": "",
+        "tags": [], "volume_24h": 50000.0, "days_to_resolve": 5.5,
+        "movement_usd": 12000.0, "movement_window_sec": 1800.0,
+        "yes_depth_usd": 3000.0, "no_depth_usd": 4500.0,
+    }])
+    meta = mm.resolve_market_meta(CID_CRYPTO, [], [], root=tmp_path)
+    assert meta["volume_24h"] == 50000.0
+    assert meta["days_to_resolve"] == 5.5
+    assert meta["movement_usd"] == 12000.0
+    assert meta["movement_window_sec"] == 1800.0
+    assert meta["top3_bid_depth"] == 3000.0
+    assert meta["yes_depth_usd"] == 3000.0
+    assert meta["no_depth_usd"] == 4500.0
+
