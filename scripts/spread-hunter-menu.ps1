@@ -920,7 +920,7 @@ function Stop-ShadowRun {
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
                 ($_.CommandLine -like "*$ProjectPath*") -and `
-                ((($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*--run-id*")) -and ((-not $RunId) -or ($_.CommandLine -like "*--run-id $RunId*")) -or `
+                ((($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*")) -and ((-not $RunId) -or ($_.CommandLine -like "*--run-id $RunId*")) -or `
                  (($_.CommandLine -like "*scripts.global_stop_loss*") -and ($_.CommandLine -like "*shadow_*.db*" -or $_.CommandLine -like "*shadow.db*") -and ((-not $RunId) -or ($_.CommandLine -like "*$RunId*"))))
             })
     } catch {
@@ -1072,15 +1072,16 @@ function Get-ShadowResumeStores {
         Where-Object { $_.BaseName -match '^(\d{1,2})_shadow_' -and $Matches[1] -ne '00' } |
         ForEach-Object {
             $file = $_
-            $null = $file.BaseName -match '^(\d{1,2})_shadow_'
+            $null = $file.BaseName -match '^(\d{1,2})_shadow_(?:([a-zA-Z]+)_)?'
             $seq = [int]$Matches[1]
-            $runId = if ($file.BaseName -match '^(\d{1,2})_shadow_prudent') {
-                "shadow-" + $seq.ToString("D2") + "-prudent"
+            $presetTag = $Matches[2]
+            $runId = if ($presetTag -and ($presetTag -ne "trial")) {
+                "shadow-" + $seq.ToString("D2") + "-" + $presetTag
             } else {
                 "shadow-" + $seq.ToString("D2")
             }
             if ((-not $byRun.ContainsKey($runId)) -or ($file.LastWriteTime -gt $byRun[$runId].File.LastWriteTime)) {
-                $sortSeq = if ($runId -like "*-prudent") { 100 + $seq } else { $seq }
+                $sortSeq = if ($presetTag -and ($presetTag -ne "trial")) { 100 + $seq } else { $seq }
                 $byRun[$runId] = @{ File = $file; Seq = $sortSeq; RunId = $runId }
             }
         }
@@ -1120,11 +1121,12 @@ function Resume-ShadowRun {
         }
         $script:ShadowDbPath = $db.FullName
         # Seq prefix is the run id: NN_shadow_... -> shadow-NN.
-        if ($db.BaseName -match '^(\d{1,2})_shadow_') {
+        if ($db.BaseName -match '^(\d{1,2})_shadow_(?:([a-zA-Z]+)_)?') {
             $seq = [int]$Matches[1]
-            if ($db.BaseName -match '^(\d{1,2})_shadow_prudent') {
-                $script:ShadowRunId = "shadow-" + $seq.ToString("D2") + "-prudent"
-                if (-not $script:ShadowPreset) { $script:ShadowPreset = "prudent" }
+            $presetTag = $Matches[2]
+            if ($presetTag -and ($presetTag -ne "trial")) {
+                $script:ShadowRunId = "shadow-" + $seq.ToString("D2") + "-" + $presetTag
+                if (-not $script:ShadowPreset) { $script:ShadowPreset = $presetTag }
             } else {
                 $script:ShadowRunId = "shadow-" + $seq.ToString("D2")
             }
@@ -1206,21 +1208,47 @@ function Resume-ShadowRun {
     # Belt and braces: an UNRECORDED loop/observer for this run id (crashed
     # supervisor, lost session file) would write the same store as the
     # resumed loop. The recorded-PID check above cannot see it; the
-    # --run-id token can. Fail closed when the table cannot be read.
+    # --run-id token and db leaf match can. Terminate any strays automatically
+    # so the operator does not have to stop them by hand.
+    $dbLeaf = Split-Path $script:ShadowDbPath -Leaf
     try {
         $strays = @(Get-CimInstance Win32_Process -ErrorAction Stop |
             Where-Object {
                 $_.Name -match '^python' -and $_.CommandLine -and `
-                (($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*")) -and `
-                ($_.CommandLine -like "*--run-id $($script:ShadowRunId)*")
+                (($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*") -or ($_.CommandLine -like "*scripts.global_stop_loss*")) -and `
+                (($_.CommandLine -like "*--run-id $($script:ShadowRunId)*") -or ($_.CommandLine -like "*$dbLeaf*"))
             })
     } catch {
         Lsh-Fail "Could not verify the previous rehearsal stopped (process scan inconclusive). Resume aborted - stop it manually (stop-shadow), then retry."
         return $false
     }
     if ($strays.Count -gt 0) {
-        Lsh-Fail "An unrecorded rehearsal process for $($script:ShadowRunId) is still alive (PID $($strays[0].ProcessId)). Resume aborted - stop it manually (stop-shadow), then retry."
-        return $false
+        foreach ($stray in $strays) {
+            $what = if ($stray.CommandLine -like "*core_brain.shadow_run*") { "rehearsal loop" } elseif ($stray.CommandLine -like "*statistics_observer*") { "statistics observer" } else { "shadow stop-loss watcher" }
+            Lsh-Step "Stopping unrecorded $what PID $($stray.ProcessId) for $($script:ShadowRunId)..."
+            taskkill /F /T /PID $stray.ProcessId 2>$null | Out-Null
+            if (Wait-ProcessGone -ProcessId $stray.ProcessId) {
+                Lsh-Ok "Terminated unrecorded $what (PID $($stray.ProcessId))."
+            } else {
+                Lsh-Warn "Could not terminate unrecorded $what PID $($stray.ProcessId)."
+            }
+        }
+        Start-Sleep -Seconds 1
+        try {
+            $remainingStrays = @(Get-CimInstance Win32_Process -ErrorAction Stop |
+                Where-Object {
+                    $_.Name -match '^python' -and $_.CommandLine -and `
+                    (($_.CommandLine -like "*core_brain.shadow_run*") -or ($_.CommandLine -like "*statistics_observer*") -or ($_.CommandLine -like "*scripts.global_stop_loss*")) -and `
+                    (($_.CommandLine -like "*--run-id $($script:ShadowRunId)*") -or ($_.CommandLine -like "*$dbLeaf*"))
+                })
+        } catch {
+            Lsh-Fail "Could not verify unrecorded rehearsal processes stopped. Resume aborted."
+            return $false
+        }
+        if ($remainingStrays.Count -gt 0) {
+            Lsh-Fail "An unrecorded rehearsal process for $($script:ShadowRunId) is still alive (PID $($remainingStrays[0].ProcessId)). Resume aborted - stop it manually (stop-shadow), then retry."
+            return $false
+        }
     }
     # The killed loop's `fleet` row survives it (#352): a loop stopped by
     # kill never runs the lock's cleanup, and a resume inside the 5-minute
