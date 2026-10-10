@@ -2047,7 +2047,8 @@ def poll(
     """
     import datetime
     import signal
-    from core_brain.cycle_stream import emit as _emit_cycle_event
+    from core_brain.cycle_stream import emit as _emit_cycle_event, make_fill_observer
+    from core_brain.market_meta import resolve_market_meta
     from core_brain.order_registry import (
         OrderRegistry,
         reconcile_orders,
@@ -2059,6 +2060,13 @@ def poll(
 
     db_p = Path(db_path) if db_path else DEFAULT_DB_PATH
     registry = OrderRegistry(db_path=db_p)
+
+    # Telemetry only: every venue-confirmed fill is reported as a
+    # `fill_recorded` event. Execution and accounting are unchanged.
+    _fill_observer = make_fill_observer(
+        _emit_cycle_event, service="query", phase="reconciling",
+        meta_lookup=resolve_market_meta,
+    )
 
     # Remember whether a client was injected before building one: the markout
     # sampler must only start on the production path, never beside a test or
@@ -2225,7 +2233,10 @@ def poll(
                     )
 
                 try:
-                    summary = reconcile_orders(client, registry, maker_address=funder)
+                    summary = reconcile_orders(
+                        client, registry, maker_address=funder,
+                        on_fill_recorded=_fill_observer,
+                    )
                     consecutive_errors = 0
 
                     # Log any state transitions to event log

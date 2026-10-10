@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>שווקי בחירות פתוחים כבר לא נזרקים</title>
+<style>
+  :root{
+    --bg:#FAF8F4; --ink:rgba(0,0,0,.82); --muted:rgba(0,0,0,.55);
+    --accent:#C2410C; --accent-soft:#FBE3D3;
+    --ok:#15803D; --ok-soft:#DCFCE7;
+    --no:#B91C1C; --no-soft:#FEE2E2;
+    --card:#FFFFFF; --line:rgba(0,0,0,.12);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI",Tahoma,Arial,sans-serif;line-height:1.7}
+  main{max-width:760px;margin:0 auto;padding:40px 20px 64px}
+  h1{font-size:2rem;margin:0 0 8px}
+  .lede{font-size:1.15rem;color:var(--muted);margin:0 0 28px}
+  .lede b{color:var(--accent)}
+  section.card{background:var(--card);border:1px solid var(--line);
+    border-radius:16px;padding:24px;margin:0 0 20px}
+  section.card h2{font-size:1.1rem;margin:0 0 4px}
+  section.card p.sub{margin:0 0 16px;color:var(--muted);font-size:.95rem}
+  .market{border:2px dashed var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+  .market .name{font-weight:700;font-size:1.05rem}
+  .market .date{color:var(--muted);font-size:.9rem}
+  .opts{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px}
+  .opts button{border:1px solid var(--line);background:#fff;color:var(--ink);
+    border-radius:999px;padding:8px 16px;font-size:.95rem;cursor:pointer;font-family:inherit}
+  .opts button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .qlabel{font-size:.85rem;color:var(--muted);margin:14px 0 0}
+  .verdict{border-radius:12px;padding:16px;margin-top:16px;font-weight:700;font-size:1.05rem}
+  .verdict small{display:block;font-weight:400;font-size:.9rem;margin-top:4px}
+  .verdict.pass{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok)}
+  .verdict.stop{background:var(--no-soft);color:var(--no);border:1px solid var(--no)}
+  .before{border-right:4px solid var(--no);padding-right:12px;color:var(--muted)}
+  ul.real{list-style:none;padding:0;margin:0}
+  ul.real li{padding:10px 0;border-bottom:1px solid var(--line);font-size:.98rem}
+  ul.real li:last-child{border-bottom:none}
+  .pill{display:inline-block;border-radius:999px;padding:2px 12px;font-size:.82rem;font-weight:700}
+  .pill.open{background:var(--ok-soft);color:var(--ok)}
+  .pill.shut{background:var(--no-soft);color:var(--no)}
+  .try ol{margin:0;padding-right:20px}
+  .try li{margin:6px 0}
+  footer{color:var(--muted);font-size:.9rem;margin-top:8px}
+  footer a{color:var(--accent)}
+</style>
+</head>
+<body>
+<main>
+  <h1>שווקי בחירות פתוחים כבר לא נזרקים</h1>
+  <p class="lede">קודם: שוק שהתאריך שלו עבר נדחה אוטומטית — <b>גם כשהזירה אמרה שהוא עדיין פתוח</b>.
+  עכשיו: שואלים קודם את הזירה. פתוח — נשאר. סגור — נדחה עם הסבר.</p>
+
+  <section class="card" aria-label="הדגמה">
+    <h2>נסו בעצמכם: שתי שאלות, תשובה אחת</h2>
+    <p class="sub">שוק הבחירות למטה כבר עבר את התאריך הרשום. שחקו עם שני המתגים וראו מתי הוא נדחה ומתי הוא נשאר.</p>
+    <div class="market">
+      <div class="name">מי ינצח בבחירות בברזיל?</div>
+      <div class="date">התאריך הרשום עבר לפני כחמישה ימים (סיבוב ראשון)</div>
+
+      <p class="qlabel">1. מה הזירה אומרת על השוק?</p>
+      <div class="opts" id="venueOpts" role="group" aria-label="מצב הזירה">
+        <button type="button" data-v="open" class="active">פתוח ומקבל הוראות</button>
+        <button type="button" data-v="shut">סגור</button>
+      </div>
+
+      <p class="qlabel">2. ומה עם התאריך?</p>
+      <div class="opts" id="dateOpts" role="group" aria-label="מצב התאריך">
+        <button type="button" data-v="past" class="active">התאריך עבר</button>
+        <button type="button" data-v="future">התאריך בעתיד</button>
+      </div>
+
+      <div class="verdict pass" id="verdict" role="status"></div>
+    </div>
+    <p class="before"><b>קודם:</b> התשובה הייתה תמיד דחייה ברגע שהתאריך עבר — המתג העליון לא היה קיים.</p>
+  </section>
+
+  <section class="card" aria-label="שווקים אמיתיים">
+    <h2>מה קרה לשווקים האמיתיים</h2>
+    <p class="sub">נבדק מול הזירה החיה לפני התיקון — שניים היו פתוחים ונדחו בטעות:</p>
+    <ul class="real">
+      <li><span class="pill open">פתוח</span> לולה בברזיל — התאריך 05.10, הזירה מקבלת הוראות → <b>עכשיו נשאר</b></li>
+      <li><span class="pill open">פתוח</span> קארן באס, ראשות לוס אנג׳לס — התאריך 03.06, הזירה מקבלת הוראות → <b>עכשיו נשארת</b></li>
+      <li><span class="pill shut">סגור</span> שווקי הסיבוב הראשון שהסתיימו (למשל טרסיזיו) → <b>נדחים כרגיל, עם הסבר</b></li>
+    </ul>
+  </section>
+
+  <section class="card try" aria-label="לבדוק במערכת">
+    <h2>לראות את זה במערכת החיה</h2>
+    <ol>
+      <li>פתחו את לוח הבקרה → <b>כרטיס HORIZON GATE</b></li>
+      <li>חפשו את שווקי הבחירות הפתוחים → <b>הם כבר לא מופיעים כנדחים</b></li>
+      <li>שוק סגור שעבר את התאריך → <b>מופיע כנדחה, והסיבה אומרת קודם מה הזירה אמרה</b></li>
+    </ol>
+  </section>
+
+  <footer>בעיה <a href="https://github.com/AI-Degen-69/spread-hunter/issues/461">#461</a> ·
+  שינוי <a href="https://github.com/AI-Degen-69/spread-hunter/pull/462">#462</a> (מוזג) ·
+  הפייפליין טרם נסגר רשמית — דף זה נבנה לפני סגירה.</footer>
+</main>
+<script>
+(function(){
+  var venue = "open", date = "past";
+  var verdict = document.getElementById("verdict");
+  function paint(){
+    var buttons;
+    buttons = document.querySelectorAll("#venueOpts button");
+    for (var i = 0; i < buttons.length; i++)
+      buttons[i].classList.toggle("active", buttons[i].getAttribute("data-v") === venue);
+    buttons = document.querySelectorAll("#dateOpts button");
+    for (var j = 0; j < buttons.length; j++)
+      buttons[j].classList.toggle("active", buttons[j].getAttribute("data-v") === date);
+    var pass, head, tail;
+    if (date === "future") {
+      pass = true;
+      head = "נשאר במשחק.";
+      tail = "התאריך עוד לא הגיע — אין בכלל שאלה של תפוגה.";
+    } else if (venue === "open") {
+      pass = true;
+      head = "נשאר במשחק. זה התיקון.";
+      tail = "התאריך עבר, אבל הזירה אומרת שהשוק פתוח — אז הוא עובר לבדיקות הבאות.";
+    } else {
+      pass = false;
+      head = "נדחה לפני כל בדיקה.";
+      tail = "הזירה אומרת שהשוק סגור — והסיבה שנרשמת אומרת קודם כל את זה.";
+    }
+    verdict.className = "verdict " + (pass ? "pass" : "stop");
+    verdict.innerHTML = "";
+    var h = document.createElement("span"); h.textContent = head;
+    var t = document.createElement("small"); t.textContent = tail;
+    verdict.appendChild(h); verdict.appendChild(t);
+  }
+  function wire(id, set){
+    var buttons = document.querySelectorAll("#" + id + " button");
+    for (var i = 0; i < buttons.length; i++)
+      buttons[i].addEventListener("click", function(){ set(this.getAttribute("data-v")); paint(); });
+  }
+  wire("venueOpts", function(v){ venue = v; });
+  wire("dateOpts", function(v){ date = v; });
+  paint();
+})();
+</script>
+</body>
+</html>

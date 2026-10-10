@@ -27,6 +27,7 @@ from core_brain.trader_loop import (
     VenueSeam,
     VisitOutcome,
     _classify_refusal,
+    _production_reconcile_fn,
     _visit_one,
     plan_orders,
     run,
@@ -2797,3 +2798,31 @@ class TestSingleLegLifecycleVisit:
         restored_intent = submits[1][0]
         assert restored_intent.token_id == "tok-dn"
         assert restored_intent.pair_id == "pair-escalate"
+
+
+def test_production_reconcile_passes_fill_observer(monkeypatch):
+    """The production reconcile wiring reports fills through the Trader emitter."""
+    from core_brain.order_registry import FillRecord, OrderRecord
+
+    seen = {}
+    monkeypatch.setattr(
+        "core_brain.order_registry.reconcile_orders",
+        lambda c, r, **kw: seen.update(kw) or object(),
+    )
+    emitted = []
+    reconcile = _production_reconcile_fn(lambda **kw: emitted.append(kw))
+    reconcile(object(), object(), "0xmaker")
+    observer = seen.get("on_fill_recorded")
+    assert callable(observer)
+
+    fill = FillRecord(trade_id="tr_tl_1", order_uuid="o-tl-1", size=2.0, price=0.47)
+    order = OrderRecord(
+        id="o-tl-1", order_id="0xvenue_tl_1", condition_id="0xcond_tl",
+        token_id="0xtok_tl", side="SELL", price=0.47, original_size=5.0,
+        status="open", posted_ts=1723840000000, last_polled_ts=1723840000000,
+    )
+    observer(fill, order)
+    assert len(emitted) == 1
+    assert emitted[0]["action"] == "fill_recorded"
+    assert emitted[0]["service"] == "decide"
+    assert emitted[0]["extra"]["side"] == "SELL"

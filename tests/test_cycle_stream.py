@@ -21,8 +21,11 @@ from core_brain.cycle_stream import (
     KEEP_LINES,
     close_intent_connections,
     emit,
+    fill_extra,
+    make_fill_observer,
     read_ring,
 )
+from core_brain.order_registry import FillRecord, OrderRecord
 
 REQUIRED_FIELDS = {
     "ts", "service", "cycle", "phase", "action",
@@ -413,3 +416,136 @@ class TestCycleIntent:
                  ring_path=ring, db_path=db)
         (count,) = _query_intent(db, "SELECT COUNT(*) FROM cycle_intent")[0]
         assert count == 200
+
+
+def _fill_and_order():
+    fill = FillRecord(
+        trade_id="tr_fill_1",
+        order_uuid="order-uuid-1",
+        size=3.0,
+        price=0.48,
+        venue_ts=1723840001000,
+        recorded_ts=1723840005000,
+    )
+    order = OrderRecord(
+        id="order-uuid-1",
+        order_id="0xvenue_fill_1",
+        condition_id="0xcond_fill",
+        token_id="0xtok_fill",
+        side="BUY",
+        price=0.50,
+        original_size=10.0,
+        status="open",
+        posted_ts=1723840000000,
+        last_polled_ts=1723840000000,
+        pair_id="pair_fill_1",
+    )
+    return fill, order
+
+
+class TestFillTelemetry:
+    def test_fill_extra_uses_fill_size_and_price(self):
+        fill, order = _fill_and_order()
+        extra = fill_extra(fill, order)
+        assert extra["size"] == 3.0
+        assert extra["price"] == 0.48
+        assert extra["side"] == "BUY"
+        assert extra["trade_id"] == "tr_fill_1"
+        assert extra["condition_id"] == "0xcond_fill"
+        assert extra["token_id"] == "0xtok_fill"
+        assert extra["order_id"] == "0xvenue_fill_1"
+        assert extra["pair_id"] == "pair_fill_1"
+        assert "outcome" not in extra
+        assert "market_title" not in extra
+
+    def test_fill_extra_takes_outcome_and_title_from_meta(self):
+        fill, order = _fill_and_order()
+        extra = fill_extra(
+            fill, order,
+            {"outcome": "UP", "title": "Brazil election", "slug": "brazil"},
+        )
+        assert extra["outcome"] == "UP"
+        assert extra["market_title"] == "Brazil election"
+
+    def test_fill_extra_ignores_unknown_outcome(self):
+        fill, order = _fill_and_order()
+        extra = fill_extra(fill, order, {"outcome": "YES"})
+        assert "outcome" not in extra
+
+    def test_fill_observer_emits_fill_recorded(self):
+        fill, order = _fill_and_order()
+        calls = []
+
+        def fake_emit(**kw):
+            calls.append(kw)
+
+        observer = make_fill_observer(
+            fake_emit, service="query", phase="reconciling",
+            meta_lookup=lambda cid: {"slug": "brazil-election", "title": "Brazil"},
+        )
+        observer(fill, order)
+        assert len(calls) == 1
+        call = calls[0]
+        assert call["action"] == "fill_recorded"
+        assert call["service"] == "query"
+        assert call["phase"] == "reconciling"
+        assert call["market_slug"] == "brazil-election"
+        assert call["extra"]["size"] == 3.0
+        assert call["extra"]["price"] == 0.48
+        assert call["extra"]["side"] == "BUY"
+
+    def test_fill_observer_meta_lookup_failure_still_emits(self):
+        fill, order = _fill_and_order()
+        calls = []
+
+        def fake_emit(**kw):
+            calls.append(kw)
+
+        def boom(cid):
+            raise RuntimeError("feed unreadable")
+
+        observer = make_fill_observer(
+            fake_emit, service="query", phase="reconciling", meta_lookup=boom)
+        observer(fill, order)
+        assert len(calls) == 1
+        assert calls[0]["action"] == "fill_recorded"
+        assert "market_title" not in calls[0]["extra"]
+
+    def test_fill_observer_never_raises(self):
+        fill, order = _fill_and_order()
+
+        def boom(**kw):
+            raise RuntimeError("ring down")
+
+        observer = make_fill_observer(boom, service="query", phase="reconciling")
+        observer(fill, order)  # must not raise
+
+    def test_fill_recorded_passes_through_ring_and_writes_no_intent_row(self, tmp_path):
+        from core_brain import cycle_stream as cycle_stream_module
+
+        ring = tmp_path / "cycle_events.jsonl"
+        db = tmp_path / "live.db"
+
+        def emit_fn(**kw):
+            cycle_stream_module.emit(
+                kw.get("cycle", 0), kw.get("phase", ""), kw.get("action", ""),
+                service=kw.get("service", "query"),
+                market_slug=kw.get("market_slug", ""),
+                extra=kw.get("extra"),
+                ring_path=ring, db_path=db,
+            )
+
+        fill, order = _fill_and_order()
+        observer = make_fill_observer(emit_fn, service="query", phase="reconciling")
+        observer(fill, order)
+
+        events = read_ring(ring_path=ring, tail=10)
+        assert len(events) == 1
+        assert events[0]["action"] == "fill_recorded"
+        assert events[0]["extra"]["size"] == 3.0
+        assert events[0]["extra"]["price"] == 0.48
+        with contextlib.closing(sqlite3.connect(str(db))) as conn:
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='cycle_intent'").fetchall()
+        assert tables == []

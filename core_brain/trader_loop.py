@@ -2630,6 +2630,31 @@ def start_resolution_sweeper(
     return thread
 
 
+def _production_reconcile_fn(emit_fn: Any) -> Any:
+    """Production reconcile wiring: report each new fill through `emit_fn`.
+
+    Keeps the 3-argument reconcile port `(client, registry, maker_address)`
+    unchanged; only adds the telemetry observer. Telemetry-only: execution
+    and accounting are unchanged.
+    """
+    from core_brain.cycle_stream import make_fill_observer
+    from core_brain.market_meta import resolve_market_meta
+    from core_brain.order_registry import reconcile_orders
+
+    observer = make_fill_observer(
+        emit_fn, service="decide", phase="reconciling",
+        meta_lookup=resolve_market_meta,
+    )
+
+    def _reconcile(client: Any, registry: Any, maker_address: Any) -> Any:
+        return reconcile_orders(
+            client, registry, maker_address=maker_address,
+            on_fill_recorded=observer,
+        )
+
+    return _reconcile
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """The Trader loop entry point.
 
@@ -2643,7 +2668,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     from core_brain.config import load
     from core_brain.markets import full_book, recent_sell_flow
     from core_brain.order_registry import DEFAULT_DB_PATH, OrderRegistry
-    from core_brain.order_registry import reconcile_orders
     from core_brain.quotes import decide_quotes
 
     ap = argparse.ArgumentParser(
@@ -2715,6 +2739,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                  "(they need auth) and only show decide/plan outcomes")
         client = object()
 
+    decide_emit = partial(_emit_cycle_event, db_path=db_path)
     seam = VenueSeam(
         client=client,
         registry=registry,
@@ -2728,7 +2753,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         cancel_fn=_cancel_orders,
         reconcile_fn=(
             (lambda c, r, m: None) if a.no_reconcile
-            else (lambda c, r, m: reconcile_orders(c, r, maker_address=m))
+            else _production_reconcile_fn(decide_emit)
         ),
         sweep_fn=(
             (lambda: None) if a.no_sweep
@@ -2738,7 +2763,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         open_orders_fn=_make_open_orders_fn(registry),
         fleet_state_fn=lambda r: _fleet_state(r, cfg),
         resting_order_ids_fn=_venue_resting_order_ids,
-        emit_fn=partial(_emit_cycle_event, db_path=db_path),
+        emit_fn=decide_emit,
         # The live fleet measures reachable tape flow for the queue-clear gate.
         # The shadow seam deliberately does NOT wire this: its client is a
         # deny-by-default proxy, so a blocked tape read would come back as an
