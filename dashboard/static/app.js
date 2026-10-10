@@ -4320,7 +4320,7 @@ const OT_COLUMNS = {
   // and only the remainder is marked, which cannot be split across two rows
   // without inventing a per-leg figure that does not exist.
   'positions': ['Timestamp', 'Market', 'Leg', 'Size', 'Avg Price', 'Cost',
-                'Mark Value', 'Unrealized', 'Realized'],
+                'Mark Value', 'Unrealized'],
   // A CLOSED TRADE row is a MARKET, not a position: the positions are the rows
   // inside it, one click down. So this view carries no cost column -- a market
   // holds nothing once it closes, and `Commit ($)` read $0.00 beside a booked
@@ -4614,13 +4614,34 @@ function paintLiveMarks() {
     const age = (overlay.ageMs !== null) ? `Live mark, ${(overlay.ageMs / 1000).toFixed(1)}s old` : 'Live mark';
     for (const el of body.querySelectorAll('td[data-cell="value"]')) {
       if (el.getAttribute && el.getAttribute('data-cid') !== cid) continue;
-      el.textContent = mark === null ? '--' : fmtUSD(mark);
+      const valEl = el.querySelector ? el.querySelector('.stitch-mark-val') : null;
+      if (valEl) {
+        valEl.textContent = mark === null ? '--' : fmtUSD(mark);
+      } else {
+        el.textContent = mark === null ? '--' : fmtUSD(mark);
+      }
       if (el.classList) el.classList.add('live');
       el.title = age;
     }
     for (const el of body.querySelectorAll('td[data-cell="unrealized"]')) {
       if (el.getAttribute && el.getAttribute('data-cid') !== cid) continue;
-      el.innerHTML = signedUSD(unrealized);
+      const pnlCell = el.querySelector ? el.querySelector('.stitch-pnl-cell') : null;
+      if (pnlCell) {
+        const valEl = pnlCell.querySelector('.stitch-pnl-val');
+        const pctEl = pnlCell.querySelector('.stitch-pnl-pct');
+        const pnlCls = unrealized > 0 ? 'pos' : (unrealized < 0 ? 'neg' : 'flat');
+        const unrealizedPct = (cost > 0 && unrealized !== null) ? ((unrealized / cost) * 100) : null;
+        if (valEl) {
+          valEl.className = `stitch-pnl-val ${pnlCls}`;
+          valEl.innerHTML = unrealized === null ? '--' : signedUSD(unrealized);
+        }
+        if (pctEl) {
+          pctEl.className = `stitch-pnl-pct ${pnlCls}`;
+          pctEl.innerHTML = unrealizedPct !== null ? `(${unrealizedPct >= 0 ? '+' : ''}${unrealizedPct.toFixed(1)}%)` : '--';
+        }
+      } else {
+        el.innerHTML = signedUSD(unrealized);
+      }
       if (el.classList) el.classList.add('live');
       el.title = age;
     }
@@ -5390,8 +5411,7 @@ function positionsRows(kpi, state, sort) {
         ? ` title="Live mark, ${(liveAgeMs / 1000).toFixed(1)}s old"` : '';
       const pairNumbers = legIndex === 0
         ? `<td class="mono ot-pair-value${liveCls}" rowspan="${span}" data-cid="${esc(cid)}" data-cell="value"${liveTitle}>${mark === null ? '--' : fmtUSD(mark)}</td>
-      <td class="mono ot-pair-value${liveCls}" rowspan="${span}" data-cid="${esc(cid)}" data-cell="unrealized"${liveTitle}>${signedUSD(unrealized)}</td>
-      <td class="mono ot-pair-value" rowspan="${span}">${signedUSD(m.realized_pnl)}</td>`
+      <td class="mono ot-pair-value${liveCls}" rowspan="${span}" data-cid="${esc(cid)}" data-cell="unrealized"${liveTitle}>${signedUSD(unrealized)}</td>`
         : '';
       return `<tr class="${rowClass.join(' ')}" data-cid="${esc(cid)}" data-leg="${esc(entry.leg)}">
       ${tsHtml}
@@ -5835,6 +5855,182 @@ function stitchActiveMarketsRows(kpi, state, sort) {
   }).join('');
 }
 
+function stitchPositionsHeadHtml(sort) {
+  const active = (sort && Number.isInteger(sort.col)) ? sort : null;
+  const cols = [
+    { label: 'AGE / STAMP', sortIdx: 0 },
+    { label: 'MARKET & CLASSIFICATION', sortIdx: 1 },
+    { label: 'CATEGORY', sortIdx: 2 },
+    { label: 'UP HELD', sortIdx: 3 },
+    { label: 'DOWN HELD', sortIdx: 4 },
+    { label: 'TOTAL COST', sortIdx: 5 },
+    { label: 'MARK VALUE', sortIdx: 6 },
+    { label: 'UNREALIZED P&L', sortIdx: 7 },
+    { label: 'HEDGE STATUS', sortIdx: 8 },
+  ];
+  const cells = cols.map((col) => {
+    const isActive = Boolean(active && active.col === col.sortIdx);
+    const dir = isActive ? active.dir : null;
+    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
+    const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
+    return `<th${ariaSort}>`
+      + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
+      + `<span class="ot-sort-label">${esc(col.label)}</span>${arrow}</button></th>`;
+  }).join('');
+  return `<tr>${cells}</tr>`;
+}
+
+function stitchPositionsRows(kpi, state, sort) {
+  const entries = heldMarketEntries(kpi, false);
+
+  if (!entries.length) {
+    return `<tr><td colspan="9" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No legs have filled, so nothing is held.</td></tr>`;
+  }
+
+  const rows = entries.map(([cid, m]) => {
+    const overlay = liveLegMids(m);
+    const mark = positionMarkValue(m, overlay.mids);
+    const cost = Number(m.total_cost) || 0;
+    const upSh = Number(m.up_sh) || 0;
+    const upCost = Number(m.up_cost) || 0;
+    const upAvg = upSh > 0 ? (upCost / upSh) : null;
+    const dnSh = Number(m.dn_sh) || 0;
+    const dnCost = Number(m.dn_cost) || 0;
+    const dnAvg = dnSh > 0 ? (dnCost / dnSh) : null;
+    const totalSh = upSh + dnSh;
+    const status = pairStatus(upSh, dnSh);
+    const unrealized = mark === null ? null : (mark - cost);
+    const unrealizedPct = (cost > 0 && unrealized !== null) ? ((unrealized / cost) * 100) : null;
+    const ts = latestFillTs(m);
+    const category = marketCategory(m);
+    return {
+      cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost: cost, totalSh,
+      mark, unrealized, unrealizedPct, status, ts, category,
+      live: overlay.live, liveAgeMs: overlay.ageMs,
+    };
+  });
+
+  const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
+    switch (col) {
+      case 0: return otNum(r.ts);
+      case 1: return String(r.m.title || r.m.name || r.m.slug || '');
+      case 2: return r.category;
+      case 3: return otNum(r.upSh);
+      case 4: return otNum(r.dnSh);
+      case 5: return otNum(r.totalCost);
+      case 6: return otNum(r.mark);
+      case 7: return otNum(r.unrealized);
+      case 8: return r.status;
+      default: return null;
+    }
+  }) : rows;
+
+  if (!sort) {
+    sorted.sort((a, b) => (b.totalCost - a.totalCost) || ((b.ts || 0) - (a.ts || 0)));
+  }
+
+  const nowMs = Date.now();
+
+  return sorted.map(({
+    cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost, totalSh,
+    mark, unrealized, unrealizedPct, status, ts, category, live, liveAgeMs
+  }) => {
+    const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
+    const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
+    const classification = m.event_title || m.subtitle || m.category || 'Polymarket Position';
+
+    // Age / Stopwatch
+    const ageSec = (ts && Number.isFinite(ts)) ? Math.max(0, Math.round((nowMs - toMs(ts)) / 1000)) : null;
+    const ageDisp = ageSec !== null ? fmtStopwatch(ageSec) : '--';
+    const tsDisp = (ts && Number.isFinite(toMs(ts))) ? fmtTimestamp(ts) : '--';
+
+    // Status / Hedge badge
+    let statusBadge = '';
+    if (status === 'paired') {
+      const pc = (m.pair_cost !== null && m.pair_cost !== undefined) ? fmtPrice(m.pair_cost) : '';
+      statusBadge = `<span class="stitch-status-badge quoting"><span class="stitch-status-dot quoting"></span>PAIRED${pc ? ` (${pc})` : ''}</span>`;
+    } else if (status === 'partial') {
+      statusBadge = `<span class="stitch-status-badge resting"><span class="stitch-status-dot resting"></span>PARTIAL</span>`;
+    } else {
+      statusBadge = `<span class="stitch-status-badge idle" style="border-color:rgba(244,63,94,0.3);background:rgba(244,63,94,0.1);color:#fb7185;"><span class="stitch-status-dot idle" style="background:#fb7185;"></span>⚠️ UNPAIRED</span>`;
+    }
+
+    // PnL state
+    const pnlCls = unrealized > 0 ? 'pos' : (unrealized < 0 ? 'neg' : 'flat');
+
+    // Live tooltip
+    const liveTitle = (live && liveAgeMs !== null) ? ` title="Live mark, ${(liveAgeMs / 1000).toFixed(1)}s old"` : '';
+
+    return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
+      <!-- Col 0: AGE / STAMP -->
+      <td class="mono font-tabular" style="white-space:nowrap;">
+        <div class="stitch-age-stopwatch">${ageDisp}</div>
+        <div class="stitch-age-meta">${tsDisp}</div>
+      </td>
+
+      <!-- Col 1: MARKET & CLASSIFICATION -->
+      <td class="stitch-market-cell">
+        <div class="stitch-market-title">
+          <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
+        </div>
+        <div class="stitch-market-meta" style="margin-top:2px;">
+          <span style="font-size:11px;color:#94a3b8;">${esc(classification)}</span>
+        </div>
+      </td>
+
+      <!-- Col 2: CATEGORY -->
+      <td>
+        <span class="stitch-category-pill">${esc(category)}</span>
+      </td>
+
+      <!-- Col 3: UP HELD -->
+      <td class="mono font-tabular">
+        ${upSh > 0 ? `
+          <div class="stitch-quote-up">${fmtShares(upSh)} sh @ ${fmtPrice(upAvg)}</div>
+          <div class="stitch-mid-sub">cost ${fmtUSD(upCost)}</div>
+        ` : `<span style="color:#64748b;font-size:11px;">--</span>`}
+      </td>
+
+      <!-- Col 4: DOWN HELD -->
+      <td class="mono font-tabular">
+        ${dnSh > 0 ? `
+          <div class="stitch-quote-down">${fmtShares(dnSh)} sh @ ${fmtPrice(dnAvg)}</div>
+          <div class="stitch-mid-sub">cost ${fmtUSD(dnCost)}</div>
+        ` : `<span style="color:#64748b;font-size:11px;">--</span>`}
+      </td>
+
+      <!-- Col 5: TOTAL COST -->
+      <td class="mono font-tabular">
+        <div class="stitch-pair-cost">${fmtUSD(totalCost)}</div>
+        <div class="stitch-mid-sub">${fmtShares(totalSh)} sh total</div>
+      </td>
+
+      <!-- Col 6: MARK VALUE -->
+      <td class="mono font-tabular"${liveTitle} data-cid="${esc(cid)}" data-cell="value">
+        <div class="stitch-mark-val">${mark === null ? '--' : fmtUSD(mark)}</div>
+        ${live ? `<div class="stitch-mid-sub" style="color:#34d399;">● live mark</div>` : ''}
+      </td>
+
+      <!-- Col 7: UNREALIZED P&L ($ and %) -->
+      <td class="mono font-tabular" data-cid="${esc(cid)}" data-cell="unrealized">
+        <div class="stitch-pnl-cell">
+          <div class="stitch-pnl-val ${pnlCls}">
+            ${unrealized === null ? '--' : signedUSD(unrealized)}
+          </div>
+          <div class="stitch-pnl-pct ${pnlCls}">
+            ${unrealizedPct !== null ? `(${unrealizedPct >= 0 ? '+' : ''}${unrealizedPct.toFixed(1)}%)` : '--'}
+          </div>
+        </div>
+      </td>
+
+      <!-- Col 8: HEDGE STATUS -->
+      <td>
+        ${statusBadge}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
 function renderOrdersTrades(kpi, state) {
   const head = document.getElementById('orders-trades-head');
   const body = document.getElementById('orders-trades-body');
@@ -5871,6 +6067,9 @@ function renderOrdersTrades(kpi, state) {
   } else if (isStitchTerminal && view === 'active-markets') {
     head.innerHTML = stitchActiveMarketsHeadHtml(sort);
     body.innerHTML = stitchActiveMarketsRows(kpi, state, sort);
+  } else if (isStitchTerminal && view === 'positions') {
+    head.innerHTML = stitchPositionsHeadHtml(sort);
+    body.innerHTML = stitchPositionsRows(kpi, state, sort);
   } else {
     head.innerHTML = otHeadHtml(view, sort);
     body.innerHTML = ordersTradesRows(view, kpi, state, sort);
