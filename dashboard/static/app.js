@@ -5257,13 +5257,15 @@ function heldLegs(m) {
  * A market can settle with the account flat -- a pair merged before
  * resolution, a leg never filled -- and its realized P&L is zero. That is
  * not a closed trade: there is no profit or loss to read, and a row of
- * zeros pushed the trades the tab exists to show below the fold. */
+ * zeros pushed the trades the tab exists to show below the fold.
+ *
+ * A booked close stays listed even while the bot is quoting the market
+ * again: the close is this run's history, and hiding it behind a resting
+ * order made the loss count in the headline while its trade was invisible. */
 function closedTradesEntries(kpi, state) {
-  const ordersByMarket = groupOrdersByMarket(state && state.orders);
   return Object.entries((kpi && kpi.by_market) || {})
-    .filter(([cid, m]) => (m.settlements || []).length > 0
-                           && Number(m.realized_pnl) !== 0
-                           && !(ordersByMarket[cid] || []).some(isRestingOrder))
+    .filter(([, m]) => (m.settlements || []).length > 0
+                       && Number(m.realized_pnl) !== 0)
     .sort((a, b) => (Number(b[1].realized_pnl) || 0) - (Number(a[1].realized_pnl) || 0));
 }
 

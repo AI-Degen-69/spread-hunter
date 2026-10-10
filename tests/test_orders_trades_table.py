@@ -1308,8 +1308,10 @@ def test_a_position_with_quotes_but_no_fills_shows_no_timestamp():
 
 
 @requires_node
-def test_closed_trades_excludes_a_settled_market_with_a_resting_order():
-    # Arrange — CID_SETTLED is settled with booked P&L, but has a working (open) order
+def test_closed_trades_includes_a_settled_market_with_a_resting_order():
+    # Arrange — CID_SETTLED is settled with booked P&L and the bot is quoting
+    # it again with a working (open) order. The close is this run's history:
+    # it stays listed while the new quote rests on the book.
     state = _state()
     state["orders"].append({
         "condition_id": CID_SETTLED,
@@ -1323,11 +1325,11 @@ def test_closed_trades_excludes_a_settled_market_with_a_resting_order():
     # Act
     rendered = _render("closed-trades", _kpi(), state)
 
-    # Assert — the market with a working order is not closed; count drops matching the exclusion
-    assert "Settled Market" not in rendered["html"]
+    # Assert — both closed trades listed; count follows the inclusion
+    assert "Settled Market" in rendered["html"]
     assert "Closed Market" in rendered["html"]
-    assert rendered["rows"] == 1
-    assert rendered["counts"]["closed-trades"] == 1
+    assert rendered["rows"] == 2
+    assert rendered["counts"]["closed-trades"] == 2
 
 
 @requires_node
