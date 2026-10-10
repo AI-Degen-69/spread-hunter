@@ -4248,8 +4248,10 @@ function renderExpandedOrders(orders, fills, showCancelled, legOf) {
         || (o.outcome && (o.outcome.toLowerCase().includes('no') || o.outcome.toLowerCase().includes('down')));
       const badgeCls = isDown ? 'badge-down' : 'badge-up';
       // The leg is the identity; the side is the action. On a book where
-      // every order the engine posts is a BUY, spelling BUY on each row
-      // answers a question nobody asked, so a known leg renders alone and
+      // every order the engine posts is a BUY, spelling BUY on each row
+
+      // answers a question nobody asked, so a known leg renders alone and
+
       // a SELL (which would be the news) keeps its word beside the leg.
       const knownLeg = sideLabel && !o.outcome;
       const isBuy = String(o.side || '').toUpperCase() === 'BUY';
@@ -4320,7 +4322,7 @@ const OT_COLUMNS = {
   // and only the remainder is marked, which cannot be split across two rows
   // without inventing a per-leg figure that does not exist.
   'positions': ['Timestamp', 'Market', 'Leg', 'Size', 'Avg Price', 'Cost',
-                'Mark Value', 'Unrealized'],
+                'Mark Value', 'Unrealized', 'Realized'],
   // A CLOSED TRADE row is a MARKET, not a position: the positions are the rows
   // inside it, one click down. So this view carries no cost column -- a market
   // holds nothing once it closes, and `Commit ($)` read $0.00 beside a booked
@@ -5411,7 +5413,8 @@ function positionsRows(kpi, state, sort) {
         ? ` title="Live mark, ${(liveAgeMs / 1000).toFixed(1)}s old"` : '';
       const pairNumbers = legIndex === 0
         ? `<td class="mono ot-pair-value${liveCls}" rowspan="${span}" data-cid="${esc(cid)}" data-cell="value"${liveTitle}>${mark === null ? '--' : fmtUSD(mark)}</td>
-      <td class="mono ot-pair-value${liveCls}" rowspan="${span}" data-cid="${esc(cid)}" data-cell="unrealized"${liveTitle}>${signedUSD(unrealized)}</td>`
+      <td class="mono ot-pair-value${liveCls}" rowspan="${span}" data-cid="${esc(cid)}" data-cell="unrealized"${liveTitle}>${signedUSD(unrealized)}</td>
+      <td class="mono ot-pair-value" rowspan="${span}" data-cid="${esc(cid)}" data-cell="realized">${signedUSD(m.realized_pnl)}</td>`
         : '';
       return `<tr class="${rowClass.join(' ')}" data-cid="${esc(cid)}" data-leg="${esc(entry.leg)}">
       ${tsHtml}
@@ -5476,7 +5479,7 @@ function stitchOpenOrdersHeadHtml(sort) {
   const active = (sort && Number.isInteger(sort.col)) ? sort : null;
   const cols = [
     { label: 'Market & Arbitrage Status', sortIdx: 1 },
-    { label: 'Dual-Leg Quotes (UP / DOWN)', sortIdx: 3 },
+    { label: 'Dual-Leg Quotes (YES / NO)', sortIdx: 3 },
     { label: 'Total Committed', sortIdx: 5 },
     { label: 'Queue Ahead (Depth)', sortIdx: 6 },
     { label: 'Age / Stamp', sortIdx: 0 },
@@ -5634,22 +5637,22 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         <div class="stitch-quote-box">
           <div class="stitch-quote-rung">
             ${upOrder ? `
-              <span class="stitch-leg-pill up">UP</span>
+              <span class="stitch-leg-pill yes">YES</span>
               <span style="color:#e2e8f0;">${fmtShares(upSize)} @ ${fmtPrice(upPrice)}</span>
               <span class="stitch-quote-subcost">(${fmtUSD(upCost)})</span>
             ` : `
-              <span class="stitch-leg-pill missing">UP</span>
-              <span class="stitch-quote-awaiting">[Awaiting UP Quote]</span>
+              <span class="stitch-leg-pill missing">YES</span>
+              <span class="stitch-quote-awaiting">[Awaiting YES Quote]</span>
             `}
           </div>
           <div class="stitch-quote-rung">
             ${dnOrder ? `
-              <span class="stitch-leg-pill down">DOWN</span>
+              <span class="stitch-leg-pill no">NO</span>
               <span style="color:#e2e8f0;">${fmtShares(dnSize)} @ ${fmtPrice(dnPrice)}</span>
               <span class="stitch-quote-subcost">(${fmtUSD(dnCost)})</span>
             ` : `
-              <span class="stitch-leg-pill missing">DOWN</span>
-              <span class="stitch-quote-awaiting">[Awaiting DOWN Quote]</span>
+              <span class="stitch-leg-pill missing">NO</span>
+              <span class="stitch-quote-awaiting">[Awaiting NO Quote]</span>
             `}
           </div>
         </div>
@@ -5701,8 +5704,8 @@ function stitchActiveMarketsHeadHtml(sort) {
     { label: 'AGE / STAMP', sortIdx: 0 },
     { label: 'MARKET & CLASSIFICATION', sortIdx: 1 },
     { label: 'CATEGORY', sortIdx: 2 },
-    { label: 'UP QUOTE', sortIdx: 3 },
-    { label: 'DOWN QUOTE', sortIdx: 4 },
+    { label: 'YES QUOTE', sortIdx: 3 },
+    { label: 'NO QUOTE', sortIdx: 4 },
     { label: 'PAIR COST', sortIdx: 5 },
     { label: 'EDGE', sortIdx: 6 },
     { label: '24H VOLUME', sortIdx: 7 },
@@ -5861,8 +5864,8 @@ function stitchPositionsHeadHtml(sort) {
     { label: 'AGE / STAMP', sortIdx: 0 },
     { label: 'MARKET & CLASSIFICATION', sortIdx: 1 },
     { label: 'CATEGORY', sortIdx: 2 },
-    { label: 'UP HELD', sortIdx: 3 },
-    { label: 'DOWN HELD', sortIdx: 4 },
+    { label: 'YES HELD', sortIdx: 3 },
+    { label: 'NO HELD', sortIdx: 4 },
     { label: 'TOTAL COST', sortIdx: 5 },
     { label: 'MARK VALUE', sortIdx: 6 },
     { label: 'UNREALIZED P&L', sortIdx: 7 },
@@ -6031,6 +6034,507 @@ function stitchPositionsRows(kpi, state, sort) {
   }).join('');
 }
 
+function stitchClosedTradesHeadHtml(sort) {
+  const active = (sort && Number.isInteger(sort.col)) ? sort : null;
+  const cols = [
+    { label: 'AGE / CLOSED', sortIdx: 0 },
+    { label: 'MARKET & OUTCOME', sortIdx: 1 },
+    { label: 'CATEGORY', sortIdx: 2 },
+    { label: 'TOTAL COST', sortIdx: 3 },
+    { label: 'REALIZED P&L', sortIdx: 4 },
+    { label: 'OUTCOME BREAKDOWN', sortIdx: 5 },
+    { label: 'STATUS', sortIdx: 6 },
+    { label: 'EXECUTION LEDGER', sortIdx: 7 },
+  ];
+  const cells = cols.map(col => {
+    const isActive = active && active.col === col.sortIdx;
+    const dir = isActive ? active.dir : null;
+    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
+    const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
+    return `<th${ariaSort}>`
+      + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
+      + `<span class="ot-sort-label">${esc(col.label)}</span>${arrow}</button></th>`;
+  }).join('');
+  return `<tr>${cells}</tr>`;
+}
+
+function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
+  if (settlements && settlements.length > 0) {
+    return settlements.map(s => {
+      const ts = s.ts;
+      const ageSec = (ts && Number.isFinite(ts)) ? Math.max(0, Math.round((nowMs - toMs(ts)) / 1000)) : null;
+      const ageDisp = ageSec !== null ? fmtStopwatch(ageSec) : '--';
+      const tsDisp = (ts && Number.isFinite(toMs(ts))) ? fmtTimestamp(ts) : '--';
+
+      const shares = Number(s.shares || 0);
+      const costBasis = Number(s.cost_basis || 0);
+      const proceeds = Number(s.proceeds || 0);
+      const realizedPnl = Number(s.realized_pnl != null ? s.realized_pnl : (proceeds - costBasis));
+      const pnlPct = costBasis > 0 ? (realizedPnl / costBasis) * 100 : 0;
+      const pnlCls = realizedPnl > 0 ? 'pos' : (realizedPnl < 0 ? 'neg' : 'flat');
+
+      const method = String(s.method || '').toLowerCase();
+      const reason = String(s.reason || '').toLowerCase();
+
+      const isMerge = method === 'merge' || method === 'shadow_merge';
+      const isStopLoss = reason === 'lifecycle_hard_stop' || method === 'stop_loss_exit' || reason.includes('stop_loss') || reason === 'adverse_drift';
+      const isGraceExpired = reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out');
+      const isSettlement = method === 'settlement' || method === 'shadow_settlement';
+
+      const upCostRem = Number(s.up_cost_removed || 0);
+      const dnCostRem = Number(s.dn_cost_removed || 0);
+      const isPair = isMerge || (upCostRem > 0 && dnCostRem > 0);
+
+      // Entry / Buy Price & Exit Price
+      let entryPrice = null;
+      if (costBasis > 0 && shares > 0) {
+        entryPrice = costBasis / shares;
+      } else if (upCostRem > 0 && dnCostRem > 0 && shares > 0) {
+        entryPrice = (upCostRem + dnCostRem) / shares;
+      }
+
+      let exitPrice = 0.0;
+      if (isMerge) {
+        exitPrice = 1.0000; // Merged back into $1.0000 USDC per pair
+      } else if (proceeds > 0 && shares > 0) {
+        exitPrice = proceeds / shares;
+      } else if (s.up_price !== null && s.up_price !== undefined) {
+        exitPrice = Number(s.up_price);
+      } else if (s.dn_price !== null && s.dn_price !== undefined) {
+        exitPrice = Number(s.dn_price);
+      } else if (isSettlement) {
+        exitPrice = realizedPnl > 0 ? 1.0000 : 0.0000;
+      }
+
+      // Status Badge
+      let statusBadge = '';
+      if (isMerge) {
+        statusBadge = `<span class="stitch-status-badge filled"><span class="stitch-status-dot filled"></span>MERGED</span>`;
+      } else if (isStopLoss) {
+        statusBadge = `<span class="stitch-status-badge stop-loss"><span class="stitch-status-dot stop-loss"></span>STOP LOSS</span>`;
+      } else if (isGraceExpired) {
+        statusBadge = `<span class="stitch-status-badge grace-expired"><span class="stitch-status-dot grace-expired"></span>GRACE EXPIRED</span>`;
+      } else if (isSettlement) {
+        statusBadge = `<span class="stitch-status-badge quoting"><span class="stitch-status-dot quoting"></span>SETTLED</span>`;
+      } else {
+        statusBadge = `<span class="stitch-status-badge idle"><span class="stitch-status-dot idle"></span>ORPHAN SOLD</span>`;
+      }
+
+      // 1 big cell for positions: YES in green, NO in light red
+      let legHtml = '';
+      if (isPair) {
+        const upCost = upCostRem > 0 ? upCostRem : (costBasis > 0 ? costBasis / 2 : 0);
+        const dnCost = dnCostRem > 0 ? dnCostRem : (costBasis > 0 ? costBasis / 2 : 0);
+        const upPx = (shares > 0 && upCost > 0) ? (upCost / shares) : (s.up_price != null ? Number(s.up_price) : (entryPrice != null ? entryPrice / 2 : 0));
+        const dnPx = (shares > 0 && dnCost > 0) ? (dnCost / shares) : (s.dn_price != null ? Number(s.dn_price) : (entryPrice != null ? entryPrice / 2 : 0));
+
+        legHtml = `<div class="stitch-quote-box">
+          <div class="stitch-quote-rung">
+            <span class="stitch-leg-pill yes">YES</span>
+            <span style="color:#e2e8f0;">${shares > 0 ? `${fmtShares(shares)} @ ` : ''}${fmtPrice(upPx)}</span>
+            <span class="stitch-quote-subcost">(${fmtUSD(upCost)})</span>
+          </div>
+          <div class="stitch-quote-rung">
+            <span class="stitch-leg-pill no">NO</span>
+            <span style="color:#e2e8f0;">${shares > 0 ? `${fmtShares(shares)} @ ` : ''}${fmtPrice(dnPx)}</span>
+            <span class="stitch-quote-subcost">(${fmtUSD(dnCost)})</span>
+          </div>
+        </div>`;
+      } else {
+        // Solo position: each position has its own row and pnl cell
+        const isUp = upCostRem > 0 || (s.up_price !== null && s.up_price !== undefined);
+        const isDn = dnCostRem > 0 || (s.dn_price !== null && s.dn_price !== undefined);
+        const legLabel = isUp ? 'YES' : (isDn ? 'NO' : 'SOLO');
+        const pillCls = isUp ? 'yes' : (isDn ? 'no' : 'missing');
+        const legCost = costBasis > 0 ? costBasis : (isUp ? upCostRem : dnCostRem);
+        const legPx = (shares > 0 && legCost > 0) ? (legCost / shares) : (entryPrice !== null ? entryPrice : 0);
+
+        legHtml = `<div class="stitch-quote-box">
+          <div class="stitch-quote-rung">
+            <span class="stitch-leg-pill ${pillCls}">${legLabel}</span>
+            <span style="color:#e2e8f0;">${shares > 0 ? `${fmtShares(shares)} @ ` : ''}${fmtPrice(legPx)}</span>
+            ${legCost > 0 ? `<span class="stitch-quote-subcost">(${fmtUSD(legCost)})</span>` : ''}
+          </div>
+        </div>`;
+      }
+
+      return `<tr class="stitch-ledger-row">
+        <!-- AGE / TIME -->
+        <td class="mono font-tabular">
+          <div class="stitch-age-stopwatch">${ageDisp}</div>
+          <div class="stitch-age-meta">${tsDisp}</div>
+        </td>
+
+        <!-- POSITIONS (YES / NO) (1 big cell) -->
+        <td>
+          ${legHtml}
+        </td>
+
+        <!-- ENTRY / BUY PRICE -->
+        <td class="mono font-tabular">
+          <div class="stitch-price-val">${entryPrice !== null ? fmtPrice(entryPrice) : '--'}</div>
+          <div class="stitch-mid-sub">cost ${fmtUSD(costBasis)}</div>
+        </td>
+
+        <!-- SOLD / EXIT PRICE -->
+        <td class="mono font-tabular">
+          <div class="stitch-sold-price" style="color:#f8fafc;font-weight:700;">${fmtPrice(exitPrice)}</div>
+          <div class="stitch-mid-sub" style="color:#38bdf8;">proceeds ${fmtUSD(proceeds)}</div>
+        </td>
+
+        <!-- SIZE (SH) -->
+        <td class="mono font-tabular">
+          <div class="stitch-size-val">${fmtShares(shares)} ${isPair ? 'pairs' : 'sh'}</div>
+        </td>
+
+        <!-- REALIZED P&L ($ and %) -->
+        <td class="mono font-tabular">
+          <div class="stitch-pnl-cell">
+            <div class="stitch-pnl-val ${pnlCls}">
+              ${realizedPnl >= 0 ? '+' : ''}${fmtUSD(realizedPnl)}
+            </div>
+            <div class="stitch-pnl-pct ${pnlCls}">
+              (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)
+            </div>
+          </div>
+        </td>
+
+        <!-- STATUS -->
+        <td>
+          ${statusBadge}
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Fallback if no settlements array but orders exist
+  if (allOrders && allOrders.length > 0) {
+    const byId = {};
+    for (const o of allOrders) {
+      const pid = o.pair_id || o.condition_id || 'solo';
+      if (!byId[pid]) byId[pid] = [];
+      byId[pid].push(o);
+    }
+
+    return Object.values(byId).map(group => {
+      const upOrder = group.find(o => o.token_side === 'UP' || String(o.outcome||'').toLowerCase().includes('yes'));
+      const dnOrder = group.find(o => o.token_side === 'DOWN' || o.token_side === 'DN' || String(o.outcome||'').toLowerCase().includes('no'));
+
+      if (upOrder && dnOrder) {
+        const upSize = Number(upOrder.size_matched || upOrder.original_size || 0);
+        const dnSize = Number(dnOrder.size_matched || dnOrder.original_size || 0);
+        const shares = Math.min(upSize, dnSize) || upSize || dnSize;
+        const upPx = Number(upOrder.price || 0);
+        const dnPx = Number(dnOrder.price || 0);
+        const upCost = upPx * upSize;
+        const dnCost = dnPx * dnSize;
+        const costBasis = upCost + dnCost;
+        const entryPrice = upPx + dnPx;
+        const isMerged = String(upOrder.status || '').toLowerCase() === 'merged' || String(dnOrder.status || '').toLowerCase() === 'merged';
+        const exitPrice = isMerged ? 1.0000 : entryPrice;
+        const proceeds = exitPrice * shares;
+        const pnl = proceeds - costBasis;
+        const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+        const pnlCls = pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat');
+        const ageSec = upOrder.age_sec != null ? upOrder.age_sec : dnOrder.age_sec;
+        const ageDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
+
+        return `<tr class="stitch-ledger-row">
+          <td class="mono font-tabular">
+            <div class="stitch-age-stopwatch">${ageDisp}</div>
+          </td>
+          <td>
+            <div class="stitch-quote-box">
+              <div class="stitch-quote-rung">
+                <span class="stitch-leg-pill yes">YES</span>
+                <span style="color:#e2e8f0;">${fmtShares(upSize)} @ ${fmtPrice(upPx)}</span>
+                <span class="stitch-quote-subcost">(${fmtUSD(upCost)})</span>
+              </div>
+              <div class="stitch-quote-rung">
+                <span class="stitch-leg-pill no">NO</span>
+                <span style="color:#e2e8f0;">${fmtShares(dnSize)} @ ${fmtPrice(dnPx)}</span>
+                <span class="stitch-quote-subcost">(${fmtUSD(dnCost)})</span>
+              </div>
+            </div>
+          </td>
+          <td class="mono font-tabular">
+            <div class="stitch-price-val">${fmtPrice(entryPrice)}</div>
+            <div class="stitch-mid-sub">cost ${fmtUSD(costBasis)}</div>
+          </td>
+          <td class="mono font-tabular">
+            <div class="stitch-sold-price" style="color:#f8fafc;font-weight:700;">${fmtPrice(exitPrice)}</div>
+            <div class="stitch-mid-sub" style="color:#38bdf8;">proceeds ${fmtUSD(proceeds)}</div>
+          </td>
+          <td class="mono font-tabular">
+            <div class="stitch-size-val">${fmtShares(shares)} pairs</div>
+          </td>
+          <td class="mono font-tabular">
+            <div class="stitch-pnl-cell">
+              <div class="stitch-pnl-val ${pnlCls}">${pnl >= 0 ? '+' : ''}${fmtUSD(pnl)}</div>
+              <div class="stitch-pnl-pct ${pnlCls}">(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</div>
+            </div>
+          </td>
+          <td>
+            <span class="stitch-status-badge ${isMerged ? 'filled' : 'idle'}">${isMerged ? 'MERGED' : 'FINISHED'}</span>
+          </td>
+        </tr>`;
+      }
+
+      return group.map(o => {
+        const isUp = (o.token_side === 'UP' || String(o.outcome||'').toLowerCase().includes('yes'));
+        const legLabel = isUp ? 'YES' : 'NO';
+        const pillCls = isUp ? 'yes' : 'no';
+        const price = Number(o.price || 0);
+        const size = Number(o.size_matched || o.original_size || 0);
+        const status = String(o.status || '').toLowerCase();
+        const isMerged = status === 'merged';
+        const exitPrice = isMerged ? 1.0000 : price;
+        const costBasis = price * size;
+        const proceeds = exitPrice * size;
+        const pnl = proceeds - costBasis;
+        const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+        const pnlCls = pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat');
+        const ageSec = o.age_sec != null ? o.age_sec : null;
+        const ageDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
+
+        return `<tr class="stitch-ledger-row">
+          <td class="mono font-tabular">
+            <div class="stitch-age-stopwatch">${ageDisp}</div>
+          </td>
+          <td>
+            <div class="stitch-quote-box">
+              <div class="stitch-quote-rung">
+                <span class="stitch-leg-pill ${pillCls}">${legLabel}</span>
+                <span style="color:#e2e8f0;">${size > 0 ? `${fmtShares(size)} @ ` : ''}${fmtPrice(price)}</span>
+                ${costBasis > 0 ? `<span class="stitch-quote-subcost">(${fmtUSD(costBasis)})</span>` : ''}
+              </div>
+            </div>
+          </td>
+          <td class="mono font-tabular">
+            <div class="stitch-price-val">${fmtPrice(price)}</div>
+            <div class="stitch-mid-sub">cost ${fmtUSD(costBasis)}</div>
+          </td>
+          <td class="mono font-tabular">
+            <div class="stitch-sold-price" style="color:#f8fafc;font-weight:700;">${fmtPrice(exitPrice)}</div>
+            <div class="stitch-mid-sub" style="color:#38bdf8;">proceeds ${fmtUSD(proceeds)}</div>
+          </td>
+          <td class="mono font-tabular">
+            <div class="stitch-size-val">${fmtShares(size)} sh</div>
+          </td>
+          <td class="mono font-tabular">
+            <div class="stitch-pnl-cell">
+              <div class="stitch-pnl-val ${pnlCls}">${pnl >= 0 ? '+' : ''}${fmtUSD(pnl)}</div>
+              <div class="stitch-pnl-pct ${pnlCls}">(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</div>
+            </div>
+          </td>
+          <td>
+            <span class="stitch-status-badge ${isMerged ? 'filled' : 'idle'}">${isMerged ? 'MERGED' : fmtOrderStatus(status)}</span>
+          </td>
+        </tr>`;
+      }).join('');
+    }).join('');
+  }
+
+  return `<tr><td colspan="7" style="text-align:center;color:#64748b;padding:20px;font-family:'JetBrains Mono',monospace;">No execution details available.</td></tr>`;
+}
+
+function stitchClosedTradesRows(kpi, state, sort) {
+  const entries = closedTradesEntries(kpi, state);
+  if (!entries.length) {
+    return `<tr><td colspan="8" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No closed trades yet: nothing has settled with a booked profit or loss.</td></tr>`;
+  }
+
+  const ordersByMarket = groupOrdersByMarket(state && state.orders);
+  const nowMs = Date.now();
+
+  const sorted = sort ? otSortGroups(entries, sort, ([cid, m], col) => {
+    switch (col) {
+      case 0: return closeTsOf(m);
+      case 1: return String(m.title || m.name || m.slug || '');
+      case 2: return marketCategory(m);
+      case 3: return otNum(m.total_cost || 0);
+      case 4: return otNum(m.realized_pnl || 0);
+      case 5: return (m.settlements || []).length;
+      case 6: return 'FINISHED';
+      default: return null;
+    }
+  }) : entries;
+
+  return sorted.map(([cid, m]) => {
+    const isExpanded = expandedMarkets.has(cid);
+    const settlements = m.settlements || [];
+    const allOrders = ordersByMarket[cid] || [];
+    const closeTs = closeTsOf(m);
+    const ageSec = (closeTs && Number.isFinite(closeTs)) ? Math.max(0, Math.round((nowMs - toMs(closeTs)) / 1000)) : null;
+    const ageDisp = ageSec !== null ? fmtStopwatch(ageSec) : '--';
+    const tsDisp = (closeTs && Number.isFinite(toMs(closeTs))) ? fmtTimestamp(closeTs) : '--';
+    const marketUrl = m.url || (m.slug ? `https://polymarket.com/event/${m.slug}` : `https://polymarket.com/market/${cid}`);
+    const title = m.title || m.name || m.slug || cid.slice(0, 16);
+    const category = marketCategory(m);
+    const categoryShort = (category || 'ARB').slice(0, 4).toUpperCase();
+
+    // Summary counts of exit outcomes
+    let mergedCount = 0;
+    let stopLossCount = 0;
+    let graceExpiredCount = 0;
+    let settledCount = 0;
+
+    for (const s of settlements) {
+      const method = String(s.method || '').toLowerCase();
+      const reason = String(s.reason || '').toLowerCase();
+      if (method === 'merge' || method === 'shadow_merge') {
+        mergedCount++;
+      } else if (reason === 'lifecycle_hard_stop' || method === 'stop_loss_exit' || reason.includes('stop_loss') || reason === 'adverse_drift') {
+        stopLossCount++;
+      } else if (reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out')) {
+        graceExpiredCount++;
+      } else if (method === 'settlement' || method === 'shadow_settlement') {
+        settledCount++;
+      }
+    }
+
+    const totalCost = Number(m.total_cost || 0) || settlements.reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
+    const realizedPnl = Number(m.realized_pnl || 0);
+    const pnlPct = totalCost > 0 ? (realizedPnl / totalCost) * 100 : 0;
+    const pnlCls = realizedPnl > 0 ? 'pos' : (realizedPnl < 0 ? 'neg' : 'flat');
+
+    // Winner badge if resolved
+    let winnerHtml = '';
+    if (m.resolution && m.resolution.winner) {
+      const resAgo = m.resolution.resolved_ts ? fmtAgo(m.resolution.resolved_ts) : '';
+      winnerHtml = `<span class="stitch-winner-badge">✓ Winner: ${esc(m.resolution.winner)}${resAgo ? ` · ${resAgo}` : ''}</span>`;
+    }
+
+    // Reason chip
+    const reasonInfo = closeReasonOf(m);
+    const reasonIsExit = closeReasonIsExit(reasonInfo);
+    let reasonChipHtml = '';
+    if (reasonInfo) {
+      const rLabel = closeReasonBadgeLabel(reasonInfo.reason, reasonIsExit);
+      reasonChipHtml = `<span class="stitch-reason-chip${reasonIsExit ? ' is-exit' : ''}" title="${esc(closeReasonTitle(reasonInfo))}">${esc(rLabel)}</span>`;
+    }
+
+    const fillsCount = m.fills_count || allOrders.length || settlements.length;
+    const executionItemsCount = settlements.length > 0 ? settlements.length : (allOrders.length || fillsCount);
+
+    let html = `<tr class="stitch-ot-row stitch-market-row${isExpanded ? ' expanded' : ''}" data-cid="${esc(cid)}" tabindex="0" role="button" aria-expanded="${isExpanded}">
+      <!-- Col 0: AGE / CLOSED -->
+      <td class="mono font-tabular" style="white-space:nowrap;">
+        <div class="stitch-age-stopwatch">${ageDisp}</div>
+        <div class="stitch-age-meta">${tsDisp}</div>
+      </td>
+
+      <!-- Col 1: MARKET & OUTCOME -->
+      <td class="stitch-market-cell">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="stitch-cat-avatar">${esc(categoryShort)}</div>
+          <div style="flex:1;min-width:0;">
+            <div class="stitch-market-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
+              ${winnerHtml}
+            </div>
+            <div class="stitch-market-meta" style="margin-top:3px;gap:6px;">
+              ${reasonChipHtml}
+              <span style="font-size:11px;color:#64748b;">· ${fillsCount} fill${fillsCount !== 1 ? 's' : ''}</span>
+            </div>
+          </div>
+        </div>
+      </td>
+
+      <!-- Col 2: CATEGORY -->
+      <td>
+        <span class="stitch-category-pill">${esc(category)}</span>
+      </td>
+
+      <!-- Col 3: TOTAL COST -->
+      <td class="mono font-tabular">
+        <div class="stitch-pair-cost">${fmtUSD(totalCost)}</div>
+        <div class="stitch-mid-sub">${Number(m.total_sh || 0) > 0 ? `${fmtShares(m.total_sh)} sh` : `${executionItemsCount} items`}</div>
+      </td>
+
+      <!-- Col 4: REALIZED P&L ($ and %) -->
+      <td class="mono font-tabular">
+        <div class="stitch-pnl-cell">
+          <div class="stitch-pnl-val ${pnlCls}">
+            ${realizedPnl >= 0 ? '+' : ''}${fmtUSD(realizedPnl)}
+          </div>
+          <div class="stitch-pnl-pct ${pnlCls}">
+            (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)
+          </div>
+        </div>
+      </td>
+
+      <!-- Col 5: OUTCOME BREAKDOWN (Summary counts) -->
+      <td>
+        <div class="stitch-breakdown-pills">
+          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
+          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">⚠️ ${stopLossCount} Stop</span>` : ''}
+          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">⏱ ${graceExpiredCount} Expired</span>` : ''}
+          ${(mergedCount === 0 && stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-pill-count neutral">${settledCount > 0 ? `${settledCount} Settled` : `${executionItemsCount} Closed`}</span>` : ''}
+        </div>
+      </td>
+
+      <!-- Col 6: STATUS -->
+      <td>
+        <span class="stitch-status-badge finished"><span class="stitch-status-dot finished"></span>FINISHED</span>
+      </td>
+
+      <!-- Col 7: ACTIONS / EXPAND -->
+      <td>
+        <button type="button" class="stitch-ledger-toggle-btn" data-cid="${esc(cid)}" aria-expanded="${isExpanded}">
+          ${isExpanded ? '▲ Hide Ledger' : '▼ View Ledger'} (${executionItemsCount})
+        </button>
+      </td>
+    </tr>`;
+
+    // Collapsible Execution Ledger Card
+    if (isExpanded) {
+      html += `<tr class="stitch-expand-row">
+        <td colspan="8" style="padding:0;background:#090d16;">
+          <div class="stitch-closed-ledger-card">
+            <!-- Summary Strip -->
+            <div class="stitch-closed-ledger-strip">
+              <div class="stitch-strip-left">
+                <span class="stitch-strip-metric">Total Cost: <b>${fmtUSD(totalCost)}</b></span>
+                <span class="stitch-strip-divider">|</span>
+                <span class="stitch-strip-metric">Net Realized: <b class="${pnlCls}">${realizedPnl >= 0 ? '+' : ''}${fmtUSD(realizedPnl)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</b></span>
+              </div>
+              <div class="stitch-strip-badges">
+                <span class="stitch-badge-outcome merged">● ${mergedCount} Merged Pair${mergedCount !== 1 ? 's' : ''}</span>
+                ${stopLossCount > 0 ? `<span class="stitch-badge-outcome stop-loss">⚠️ ${stopLossCount} Stop Loss</span>` : ''}
+                ${graceExpiredCount > 0 ? `<span class="stitch-badge-outcome grace-expired">⏱ ${graceExpiredCount} Grace Expired</span>` : ''}
+                ${(stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-badge-outcome clean">✓ 0 Orphan / 0 Stops</span>` : ''}
+              </div>
+            </div>
+
+            <!-- Ledger Table -->
+            <div class="stitch-ledger-table-wrap">
+              <table class="stitch-ledger-subtable">
+                <thead>
+                  <tr>
+                    <th>AGE / TIME</th>
+                    <th>POSITIONS (YES / NO)</th>
+                    <th>ENTRY / BUY PRICE</th>
+                    <th>SOLD / EXIT PRICE</th>
+                    <th>SIZE (SH)</th>
+                    <th>REALIZED P&L</th>
+                    <th>STATUS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </td>
+      </tr>`;
+    }
+
+    return html;
+  }).join('');
+}
+
 function renderOrdersTrades(kpi, state) {
   const head = document.getElementById('orders-trades-head');
   const body = document.getElementById('orders-trades-body');
@@ -6070,6 +6574,9 @@ function renderOrdersTrades(kpi, state) {
   } else if (isStitchTerminal && view === 'positions') {
     head.innerHTML = stitchPositionsHeadHtml(sort);
     body.innerHTML = stitchPositionsRows(kpi, state, sort);
+  } else if (isStitchTerminal && view === 'closed-trades') {
+    head.innerHTML = stitchClosedTradesHeadHtml(sort);
+    body.innerHTML = stitchClosedTradesRows(kpi, state, sort);
   } else {
     head.innerHTML = otHeadHtml(view, sort);
     body.innerHTML = ordersTradesRows(view, kpi, state, sort);
@@ -6448,9 +6955,9 @@ function marketRowPairHtml(cid, m, opts) {
  * CLOSED TRADES view; `rerender` redraws whichever table owns the body. */
 function wireMarketRowExpansion(body, ordersByMarket, rerender) {
   // Wire up click/keyboard handlers for expandable rows
-  body.querySelectorAll('.market-row').forEach(row => {
+  body.querySelectorAll('.market-row, .stitch-market-row').forEach(row => {
     const cid = row.dataset.cid;
-    if (!cid || !ordersByMarket[cid]) return;
+    if (!cid || (!row.classList.contains('stitch-market-row') && !ordersByMarket[cid])) return;
 
     row.addEventListener('click', (e) => {
       if (e.target.closest('a')) return;
@@ -7398,5 +7905,9 @@ if (typeof module !== 'undefined' && module.exports) {
     get backendStale() { return backendStale; },
     get backendLastSeenMs() { return backendLastSeenMs; },
     switchTab, pollStatus, renderCachedSections, tabVisible, deferPaint,
-    initTopMetaScrollCue, updateTopMetaScrollCue };
+    initTopMetaScrollCue, updateTopMetaScrollCue,
+    renderStitchClosedLedgerRows, stitchClosedTradesRows, stitchClosedTradesHeadHtml,
+    stitchOpenOrdersRows, stitchOpenOrdersHeadHtml,
+    stitchPositionsRows, stitchPositionsHeadHtml,
+    stitchActiveMarketsRows, stitchActiveMarketsHeadHtml };
 }
