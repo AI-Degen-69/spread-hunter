@@ -5593,9 +5593,7 @@ function closeReasonTitle(info) {
     ? 'the one close that names a reason'
     : `${info.namedCount} of ${info.closeCount} closes name a reason`);
   return parts.join(' · ');
-}
-
-/* The state of the positions under a MARKET, rolled up.
+}/* The state of the positions under a MARKET, rolled up.
  *
  * The column used to read `min(up, down) / max(up, down)` and answer
  * "Hedged"/"One-Sided". On a closed market it then read `One-Sided` on every
@@ -5611,6 +5609,13 @@ function closeReasonTitle(info) {
  * the rows under it agree, and DESIGN.md's rule holds -- no saturated hue for
  * something that is not a live state (Flat is gray).
  *
+ * On a FINISHED market the pair-assembly words would lie: `Unpaired` claims
+ * the engine is still trying to complete a pair, and a resolved market will
+ * never see that partner. The naked shares on one are what they are --
+ * `Unsettled`, a directional buy that the resolution decided alone -- so the
+ * word changes with the market's state, and the tone stays `alert`: the
+ * risk is the same money either way.
+ *
  * Both share counts are read directly rather than `m.balance`: the same ratio,
  * but it cannot go missing with a payload, and a missing number must never be
  * what decides whether a position reads as paired. */
@@ -5622,8 +5627,13 @@ function hedgeStateOf(m) {
              title: 'nothing held: every position under this market is closed' };
   }
   const status = pairStatus(up, dn);
+  const settled = isFinishedMarket(m);
+  if (settled && status === 'unpaired') {
+    return { state: 'Unsettled', tone: 'alert',
+             title: hedgeTitle('unpaired', up, dn) + ' -- settled without its counter-leg' };
+  }
   return { state: PAIR_STATUS[status].label, tone: PAIR_STATUS[status].tone,
-           title: hedgeTitle(status, up, dn) };
+           title: hedgeTitle(status, up, dn) + (settled ? ' -- settled' : '') };
 }
 
 /* The roll-up in shares, so a tag that says `Unpaired` also says how much and
