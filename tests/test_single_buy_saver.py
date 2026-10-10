@@ -1435,3 +1435,31 @@ def test_force_exit_does_not_sell_below_the_venue_minimum_depth(
         )
 
     assert not any(call.startswith("sell:") for call in client.calls)
+
+
+def test_load_condition_exposure_with_venue_open_orders(registry: OrderRegistry):
+    from core_brain.single_buy_saver import load_condition_exposure
+    from core_brain.single_leg_lifecycle import ExposureState
+
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = MagicMock()
+    # venue confirms the light resting order
+    client.get_open_orders.return_value = [{"id": "venue-light"}]
+
+    exposure = load_condition_exposure(client, registry, COND, (TOK_UP, TOK_DN))
+    assert exposure.status == ExposureState.COVERED
+    assert exposure.heavy_token_id == TOK_UP
+    assert exposure.light_token_id == TOK_DN
+    assert exposure.held_deficit == 10.0
+    assert exposure.coverage_shortfall == 0.0
+
+
+def test_load_condition_exposure_raises_when_venue_unreachable(registry: OrderRegistry):
+    from core_brain.single_buy_saver import load_condition_exposure, ExposureUnavailable
+
+    _one_sided_pair(registry, filled_size=10.0, fill_price=0.60)
+    client = MagicMock()
+    client.get_open_orders.side_effect = Exception("CLOB offline")
+
+    with pytest.raises(ExposureUnavailable, match="CLOB offline"):
+        load_condition_exposure(client, registry, COND, (TOK_UP, TOK_DN))

@@ -266,3 +266,43 @@ def test_evaluate_propagates_lifecycle_state_write_errors():
             BrokenRegistry(),
             max_pair_cost=0.99,
         )
+
+
+def test_evaluate_exposure_balanced_when_no_holdings():
+    from core_brain.single_leg_lifecycle import evaluate_exposure, ExposureState
+    res = evaluate_exposure("cond-1", {"tok-up": 0.0, "tok-dn": 0.0}, {"tok-up": 10.0, "tok-dn": 10.0})
+    assert res.status == ExposureState.BALANCED
+    assert res.held_deficit == 0.0
+    assert res.coverage_shortfall == 0.0
+
+
+def test_evaluate_exposure_covered_when_opposite_orders_match_or_exceed():
+    from core_brain.single_leg_lifecycle import evaluate_exposure, ExposureState
+    res = evaluate_exposure("cond-1", {"tok-up": 10.0, "tok-dn": 0.0}, {"tok-up": 0.0, "tok-dn": 12.0})
+    assert res.status == ExposureState.COVERED
+    assert res.heavy_token_id == "tok-up"
+    assert res.light_token_id == "tok-dn"
+    assert res.held_deficit == 10.0
+    assert res.coverage_shortfall == 0.0
+    assert res.over_coverage == 2.0
+
+
+def test_evaluate_exposure_under_covered_when_orders_less_than_deficit():
+    from core_brain.single_leg_lifecycle import evaluate_exposure, ExposureState
+    res = evaluate_exposure("cond-1", {"tok-up": 10.0, "tok-dn": 0.0}, {"tok-up": 0.0, "tok-dn": 7.0})
+    assert res.status == ExposureState.UNDER_COVERED
+    assert res.heavy_token_id == "tok-up"
+    assert res.light_token_id == "tok-dn"
+    assert res.held_deficit == 10.0
+    assert res.coverage_shortfall == 3.0
+    assert res.over_coverage == 0.0
+
+
+def test_evaluate_exposure_stranded_when_no_opposing_orders():
+    from core_brain.single_leg_lifecycle import evaluate_exposure, ExposureState
+    res = evaluate_exposure("cond-1", {"tok-up": 10.0, "tok-dn": 0.0}, {"tok-up": 0.0, "tok-dn": 0.0})
+    assert res.status == ExposureState.STRANDED
+    assert res.heavy_token_id == "tok-up"
+    assert res.light_token_id == "tok-dn"
+    assert res.held_deficit == 10.0
+    assert res.coverage_shortfall == 10.0

@@ -99,6 +99,11 @@ class PairCompletionRefused(RuntimeError):
     """
 
 
+class ExposureUnavailable(RuntimeError):
+    """Open orders or venue state cannot be read to evaluate condition exposure."""
+
+
+
 def should_exit(fill_cost: float, light_ask: Optional[float],
                 max_pair_cost: float) -> bool:
     """Exit when the pair cannot complete under the cap.
@@ -201,6 +206,77 @@ def fetch_positions(funder: str, timeout: float = 10.0) -> dict[str, float]:
         offset += POSITIONS_PAGE_SIZE
 
     return positions
+
+
+def load_condition_exposure(
+    client,
+    registry: OrderRegistry,
+    condition_id: str,
+    tokens: tuple[str, str] | list[str],
+) -> "ConditionExposure":
+    """Load inventory and active working BUY orders to evaluate condition exposure.
+
+    Uses `inventory_from_registry` for share holdings per token.
+    Counts active working BUY orders from the registry, requiring venue ID confirmation
+    when `client.get_open_orders()` is supported.
+    Raises `ExposureUnavailable` if open orders cannot be read.
+    """
+    from core_brain.order_registry import inventory_from_registry
+    from core_brain.single_leg_lifecycle import evaluate_exposure
+
+    if len(tokens) < 2:
+        up_token, down_token = (tokens[0], tokens[0]) if tokens else ("", "")
+    else:
+        up_token, down_token = tokens[0], tokens[1]
+
+    # 1. Holdings
+    db_path = getattr(registry, "db_path", getattr(registry, "_db_path", None))
+    if db_path is not None:
+        inv = inventory_from_registry(condition_id, up_token, down_token, db_path=db_path)
+    else:
+        inv = inventory_from_registry(condition_id, up_token, down_token)
+
+    held = {
+        up_token: float(getattr(inv, "up_shares", 0.0) or 0.0),
+        down_token: float(getattr(inv, "down_shares", 0.0) or 0.0),
+    }
+
+    # 2. Working BUY orders confirmed by venue
+    venue_open_ids: set[str] | None = None
+    if client is not None and hasattr(client, "get_open_orders"):
+        try:
+            raw_orders = client.get_open_orders()
+            if raw_orders is None:
+                raise ExposureUnavailable("venue get_open_orders returned None")
+            venue_open_ids = {
+                str(o.get("id") or o.get("order_id") or o.get("orderID") or "")
+                for o in raw_orders
+                if isinstance(o, dict)
+            }
+        except Exception as exc:
+            raise ExposureUnavailable(f"failed to read open orders from venue: {exc}") from exc
+
+    working_buys: dict[str, float] = {up_token: 0.0, down_token: 0.0}
+    active_rows = registry.get_active_orders()
+    for row in active_rows:
+        if row.condition_id != condition_id:
+            continue
+        if row.side != "BUY":
+            continue
+        tok = row.token_id
+        if tok not in working_buys:
+            continue
+        if venue_open_ids is not None and row.order_id:
+            if row.order_id not in venue_open_ids:
+                continue
+
+        # Remaining working size
+        matched = registry.get_size_matched(row.id)
+        remaining = max(0.0, float(row.original_size) - matched)
+        working_buys[tok] += remaining
+
+    return evaluate_exposure(condition_id, held, working_buys)
+
 
 
 WORKING_STATUSES = ("open", "partial", "pending")
