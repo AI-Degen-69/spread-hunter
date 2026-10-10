@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>כפתור אחד חכם ששולט גם במסחר חי וגם בריצת אימון</title>
+<style>
+  :root {
+    --bg: #F8FAFC;
+    --card: #FFFFFF;
+    --ink: #0F172A;
+    --muted: #64748B;
+    --line: #E2E8F0;
+    --live: #16A34A;
+    --live-soft: #DCFCE7;
+    --live-stop: #DC2626;
+    --live-stop-soft: #FEE2E2;
+    --shadow: #7C3AED;
+    --shadow-soft: #F3E8FF;
+    --shadow-stop: #D97706;
+    --shadow-stop-soft: #FEF3C7;
+    --accent: #2563EB;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+  }
+  main {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 36px 20px 60px;
+  }
+  h1 {
+    font-size: 1.9rem;
+    margin: 0 0 10px;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .lede {
+    font-size: 1.15rem;
+    color: var(--muted);
+    margin: 0 0 28px;
+    line-height: 1.6;
+  }
+  .lede b { color: var(--ink); }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.04);
+  }
+  .card h2 {
+    font-size: 1.2rem;
+    margin: 0 0 6px;
+  }
+  .card p.sub {
+    margin: 0 0 18px;
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+
+  /* Interactive Simulator */
+  .sim-box {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #F1F5F9;
+    padding: 20px;
+  }
+  .view-switch {
+    display: flex;
+    gap: 8px;
+    background: #E2E8F0;
+    padding: 4px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+  }
+  .view-switch button {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--muted);
+    transition: all 0.15s ease;
+    font-family: inherit;
+  }
+  .view-switch button.active {
+    background: #FFFFFF;
+    color: var(--ink);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+  }
+
+  .screen-preview {
+    background: #FFFFFF;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .top-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+  .badge.live-mode { background: var(--live-soft); color: var(--live); }
+  .badge.shadow-mode { background: var(--shadow-soft); color: var(--shadow); }
+
+  .master-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #F8FAFC;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .master-title {
+    font-weight: 700;
+    font-size: 1.05rem;
+  }
+  .master-desc {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .btn-master {
+    border: none;
+    border-radius: 10px;
+    padding: 12px 24px;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.1s ease, filter 0.15s ease;
+    font-family: inherit;
+  }
+  .btn-master:active { transform: scale(0.98); }
+
+  /* States */
+  .btn-live-start { background: var(--live); color: #fff; }
+  .btn-live-stop { background: var(--live-stop); color: #fff; }
+  .btn-shadow-start { background: var(--shadow); color: #fff; }
+  .btn-shadow-stop { background: var(--shadow-stop); color: #fff; }
+
+  .services-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .service-item {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: #FFFFFF;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .svc-name { font-size: 0.9rem; font-weight: 600; }
+  .svc-pill {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-weight: 700;
+  }
+  .svc-live-active { background: var(--live-soft); color: var(--live); }
+  .svc-locked { background: #E2E8F0; color: #64748B; border: 1px dashed #CBD5E1; }
+
+  .explainer-banner {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    font-size: 0.92rem;
+    font-weight: 500;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .banner-live { background: #F0FDF4; border: 1px solid #BBF7D0; color: #166534; }
+  .banner-shadow { background: #FAF5FF; border: 1px solid #E9D5FF; color: #581C87; }
+
+  /* Comparison Cards */
+  .compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media(max-width: 620px) {
+    .compare-grid { grid-template-columns: 1fr; }
+    .services-row { grid-template-columns: 1fr; }
+  }
+  .c-box {
+    border-radius: 12px;
+    padding: 18px;
+    border: 1px solid var(--line);
+  }
+  .c-box.before {
+    background: #FFF5F5;
+    border-color: #FED7D7;
+  }
+  .c-box.after {
+    background: #F0FDF4;
+    border-color: #BBF7D0;
+  }
+  .c-box h3 {
+    margin: 0 0 8px;
+    font-size: 1.05rem;
+  }
+  .c-box.before h3 { color: #991B1B; }
+  .c-box.after h3 { color: #166534; }
+  .c-box ul {
+    margin: 0;
+    padding-right: 18px;
+    font-size: 0.92rem;
+    color: var(--ink);
+  }
+  .c-box li { margin-bottom: 6px; }
+
+  /* Steps section */
+  .steps-list {
+    margin: 0;
+    padding-right: 20px;
+  }
+  .steps-list li {
+    margin-bottom: 10px;
+    font-size: 0.98rem;
+  }
+  .steps-list li b { color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>כפתור אחד חכם ששולט גם במסחר חי וגם בריצת אימון</h1>
+  <p class="lede">
+    קודם: מסך הניהול ידע להפעיל רק מסחר חי עם כסף אמיתי, וריצות אימון הצריכו פקודות ידניות.<br>
+    עכשיו: <b>הכפתור הראשי מזהה בעצמו איפה אתם נמצאים</b> ומפעיל בדיוק את הריצה הנכונה — בלי לערבב ובלי לסכן אגורה.
+  </p>
+
+  <!-- Interactive Sandbox -->
+  <section class="card" aria-label="סימולטור אינטראקטיבי">
+    <h2>הדגמה חיה: ראו איך הכפתור משתנה לפי המצב</h2>
+    <p class="sub">בחרו מצב צפייה ולחצו על הכפתור כדי לראות את ההתנהגות וההגנות בפעולה:</p>
+
+    <div class="sim-box">
+      <div class="view-switch" role="tablist">
+        <button type="button" id="tabLive" class="active" onclick="switchView('live')">צפייה במסחר חי (Live)</button>
+        <button type="button" id="tabShadow" onclick="switchView('shadow')">צפייה בריצת אימון (Shadow Rehearsal)</button>
+      </div>
+
+      <div class="screen-preview">
+        <div class="top-status">
+          <div>
+            <span style="font-weight:700;font-size:0.95rem;">מצב נוכחי במסך:</span>
+            <span id="modeBadge" class="badge live-mode">מסחר חי (Live Orders)</span>
+          </div>
+          <div style="font-size:0.85rem;color:var(--muted);" id="dbLabel">
+            בסיס נתונים: data/orders.db
+          </div>
+        </div>
+
+        <div class="master-action">
+          <div>
+            <div class="master-title" id="actionTitle">הפעלה כוללת של המסחר</div>
+            <div class="master-desc" id="actionDesc">מפעיל את כל שירותי המסחר החי ברקע</div>
+          </div>
+          <button type="button" id="btnMaster" class="btn-master btn-live-start" onclick="toggleRun()">
+            START RUN
+          </button>
+        </div>
+
+        <div style="font-size:0.85rem;font-weight:700;margin-bottom:8px;color:var(--muted);">
+          שירותי מערכת ומצב נעילה:
+        </div>
+        <div class="services-row">
+          <div class="service-item">
+            <span class="svc-name">סורק שווקים (Scanner)</span>
+            <span id="svcScanner" class="svc-pill svc-live-active">פעיל</span>
+          </div>
+          <div class="service-item">
+            <span class="svc-name">מנוע עסקאות (Trader)</span>
+            <span id="svcTrader" class="svc-pill svc-live-active">מוכן לפקודה</span>
+          </div>
+        </div>
+
+        <div id="explainerBanner" class="explainer-banner banner-live">
+          <span>●</span>
+          <div id="bannerText">
+            <b>מצב מסחר חי:</b> לחיצה על הכפתור מפעילה את הבוט בזירה האמיתית. הכפתור ירוק, והפקודות מגיעות ישירות לחשבון.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Before vs Now -->
+  <section class="card" aria-label="לפני ואחרי">
+    <h2>מה השתנה במערכת?</h2>
+    <p class="sub">הבדל ברור בין הגרסה הקודמת לגרסה הנוכחית:</p>
+
+    <div class="compare-grid">
+      <div class="c-box before">
+        <h3>לפני השינוי</h3>
+        <ul>
+          <li>הכפתור הראשי ידע רק לשלוח פקודות מסחר חי.</li>
+          <li>כשצפית בריצת אימון, הכפתור הראשי היה מנוטרל או חסר שימוש.</li>
+          <li>כדי להריץ אימון היה חובה לפתוח חלון שחור ולהריץ פקודה טכנית.</li>
+          <li>חשש מתמיד שלחיצה בטעות תפעיל כסף אמיתי בזמן צפייה באימון.</li>
+        </ul>
+      </div>
+
+      <div class="c-box after">
+        <h3>עכשיו (מעודכן)</h3>
+        <ul>
+          <li><b>זיהוי חכם:</b> הכפתור מזהה מיד אם מביטים במסחר אמיתי או באימון.</li>
+          <li><b>הפעלה בלחיצה:</b> אפשר להפעיל ולעצור ריצת אימון ישירות מהמסך.</li>
+          <li><b>הגנת ברזל:</b> בצפייה באימון, כל שירותי המסחר האמיתיים ננעלים (LIVE ONLY).</li>
+          <li><b>אפס סיכון:</b> ריצת האימון רצה ללא מפתח חתימה ואף פעם לא נוגעת בקובץ הכסף האמיתי.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Hands-on Instructions -->
+  <section class="card" aria-label="איך לבדוק בעצמכם">
+    <h2>איך תבדקו את זה ישירות במערכת?</h2>
+    <p class="sub">בלי בדיקות קוד, פשוט לפתוח את המסך ולראות:</p>
+
+    <ol class="steps-list">
+      <li>מפעילים את מסך הניהול: <code>python -m dashboard.server</code></li>
+      <li>פותחים את הדפדפן בכתובת: <b>http://127.0.0.1:8799</b></li>
+      <li>מביטים בכפתור הראשי למעלה — הוא ירוק וכתוב עליו <b>START RUN</b>.</li>
+      <li>עוברים בתפריט העליון לתצוגת קובץ אימון (למשל קובץ שדו) — הכפתור הופך אוטומטית לסגול ורושם <b>START SHADOW</b>!</li>
+      <li>לוחצים עליו — הכפתור מתחלף לענבר ורושם <b>STOP SHADOW</b>, וריצת האימון מתחילה ברקע בבטחה.</li>
+    </ol>
+  </section>
+
+</main>
+
+<script>
+  let currentView = 'live';
+  let isRunning = false;
+
+  function switchView(view) {
+    currentView = view;
+    isRunning = false; // reset running state on view change
+    updateUI();
+  }
+
+  function toggleRun() {
+    isRunning = !isRunning;
+    updateUI();
+  }
+
+  function updateUI() {
+    const tabLive = document.getElementById('tabLive');
+    const tabShadow = document.getElementById('tabShadow');
+    const modeBadge = document.getElementById('modeBadge');
+    const dbLabel = document.getElementById('dbLabel');
+    const actionTitle = document.getElementById('actionTitle');
+    const actionDesc = document.getElementById('actionDesc');
+    const btnMaster = document.getElementById('btnMaster');
+    const svcScanner = document.getElementById('svcScanner');
+    const svcTrader = document.getElementById('svcTrader');
+    const explainerBanner = document.getElementById('explainerBanner');
+    const bannerText = document.getElementById('bannerText');
+
+    if (currentView === 'live') {
+      tabLive.className = 'active';
+      tabShadow.className = '';
+      modeBadge.className = 'badge live-mode';
+      modeBadge.textContent = 'מסחר חי (Live Orders)';
+      dbLabel.textContent = 'בסיס נתונים: data/orders.db';
+      actionTitle.textContent = 'הפעלה כוללת של המסחר';
+      actionDesc.textContent = 'מפעיל את כל שירותי המסחר החי ברקע';
+
+      svcScanner.className = 'svc-pill svc-live-active';
+      svcScanner.textContent = isRunning ? 'רץ (Scanning)' : 'פעיל';
+      svcTrader.className = 'svc-pill svc-live-active';
+      svcTrader.textContent = isRunning ? 'עובד (Trading)' : 'מוכן לפקודה';
+
+      explainerBanner.className = 'explainer-banner banner-live';
+
+      if (!isRunning) {
+        btnMaster.className = 'btn-master btn-live-start';
+        btnMaster.textContent = 'START RUN';
+        bannerText.innerHTML = '<b>מצב מסחר חי (מופסק):</b> לחיצה על הכפתור מפעילה את שירותי המסחר האמיתיים עם כסף חי בזירה.';
+      } else {
+        btnMaster.className = 'btn-master btn-live-stop';
+        btnMaster.textContent = 'STOP RUN';
+        bannerText.innerHTML = '<b>מצב מסחר חי (פעיל כעת):</b> הבוט סורק ומגיש פקודות. לחיצה תבצע עצירה מסודרת ומאובטחת.';
+      }
+
+    } else {
+      tabLive.className = '';
+      tabShadow.className = 'active';
+      modeBadge.className = 'badge shadow-mode';
+      modeBadge.textContent = 'ריצת אימון על יבש (Shadow Rehearsal)';
+      dbLabel.textContent = 'בסיס נתונים: data/shadow_run.db';
+      actionTitle.textContent = 'הפעלת ריצת אימון בטוחה';
+      actionDesc.textContent = 'מריץ סימולציה מלאה ברקע ללא סיכון כסף אמיתי';
+
+      svcScanner.className = 'svc-pill svc-locked';
+      svcScanner.textContent = 'נעול (LIVE ONLY)';
+      svcTrader.className = 'svc-pill svc-locked';
+      svcTrader.textContent = 'נעול (LIVE ONLY)';
+
+      explainerBanner.className = 'explainer-banner banner-shadow';
+
+      if (!isRunning) {
+        btnMaster.className = 'btn-master btn-shadow-start';
+        btnMaster.textContent = 'START SHADOW';
+        bannerText.innerHTML = '<b>מצב אימון (Shadow):</b> שירותי המסחר האמיתיים נעולים לחלוטין. לחיצה תתחיל ריצת אימון בטוחה ברקע.';
+      } else {
+        btnMaster.className = 'btn-master btn-shadow-stop';
+        btnMaster.textContent = 'STOP SHADOW';
+        bannerText.innerHTML = '<b>ריצת אימון פעילה כעת:</b> האימון רץ ברקע ומנתח שווקים ללא שום מפתח חתימה. לחיצה תעצור את האימון.';
+      }
+    }
+  }
+</script>
+</body>
+</html>
