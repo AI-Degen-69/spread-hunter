@@ -1169,7 +1169,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "reward_offset": 0.020,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "description": "Static 2¢ offset baseline control arm with queue hold",
+        "single_buy_max_loss_usd": 0.045,
+        "description": "Static 2¢ offset baseline control arm with queue hold; stop $0.045",
     },
     "conservative": {
         "dynamic_offset_enabled": True,
@@ -1178,7 +1179,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 5,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold",
+        "single_buy_max_loss_usd": 0.030,
+        "description": "Wider safety buffer in volatile swings (2¢–5¢) with queue hold; stop $0.030",
     },
     "balanced": {
         "dynamic_offset_enabled": True,
@@ -1187,7 +1189,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 4,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "description": "Proportional volatility tracking (2¢–4¢) with queue hold",
+        "single_buy_max_loss_usd": 0.050,
+        "description": "Proportional volatility tracking (2¢–4¢) with queue hold; stop $0.050",
     },
     "aggressive": {
         "dynamic_offset_enabled": True,
@@ -1196,7 +1199,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 3,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold",
+        "single_buy_max_loss_usd": 0.065,
+        "description": "Tight queue priority capturing fast fills (2¢–3¢) with queue hold; stop $0.065",
     },
     "prudent": {
         "dynamic_offset_enabled": True,
@@ -1205,7 +1209,8 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "dynamic_offset_max_cents": 4,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
-        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold",
+        "single_buy_max_loss_usd": 0.038,
+        "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold; stop $0.038",
     },
 }
 

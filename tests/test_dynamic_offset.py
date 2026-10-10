@@ -201,6 +201,41 @@ def test_apply_tournament_preset():
         apply_tournament_preset(base, "yolo")
 
 
+def test_tournament_presets_distinct_stop_loss_usd():
+    """Each arm carries its own single-buy stop, distinct and ordered by fill patience.
+
+    A wider-offset arm fills cheaper with more cushion, so it tolerates a
+    tighter dollar stop; a tight-offset arm fills near the touch and needs room
+    before the pair can complete. Asserting order locks that rationale.
+    """
+    stops = {name: TOURNAMENT_PRESETS[name]["single_buy_max_loss_usd"]
+             for name in TOURNAMENT_PRESETS}
+    assert set(stops.values()).__len__() == len(stops)  # all distinct
+    assert stops["conservative"] < stops["prudent"] < stops["control"] < stops["balanced"] < stops["aggressive"]
+    # none disable the rule (0 disables) and none exceed a sensible bound
+    for name, v in stops.items():
+        assert 0.0 < v < 1.0, name
+
+
+def test_tournament_preset_stop_flows_to_env_and_config():
+    """The preset stop reaches the shadow child process and the loaded config."""
+    import os
+    from unittest import mock
+    from scripts.shadow_tournament import _preset_to_env
+
+    for name, expected in [
+        ("conservative", 0.030),
+        ("balanced", 0.050),
+        ("aggressive", 0.065),
+    ]:
+        env = _preset_to_env({"name": name, **TOURNAMENT_PRESETS[name]})
+        assert env["HUNTER_SINGLE_BUY_MAX_LOSS_USD"] == str(expected)
+
+        with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": name}):
+            cfg = load()
+        assert cfg.single_buy_max_loss_usd == expected
+
+
 def test_load_config_with_preset_and_env_overrides():
     with mock.patch.dict(os.environ, {"HUNTER_TOURNAMENT_PRESET": "prudent"}):
         cfg = load()
