@@ -1463,3 +1463,23 @@ def test_load_condition_exposure_raises_when_venue_unreachable(registry: OrderRe
 
     with pytest.raises(ExposureUnavailable, match="CLOB offline"):
         load_condition_exposure(client, registry, COND, (TOK_UP, TOK_DN))
+
+
+def test_manage_single_leg_positions_stranded_completion_when_enabled(registry: OrderRegistry):
+    from core_brain.single_buy_saver import manage_single_leg_positions
+    from core_brain.config import MakerConfig
+
+    pair_id = _one_sided_pair(registry, filled_size=10.0, fill_price=0.55)
+    # Mark the resting light order as canceled to make the position truly stranded (no working hedge)
+    light_order = next(o for o in registry.get_orders_by_pair(pair_id) if o.token_id == TOK_DN)
+    registry.update_order_status(light_order.id, "cancelled", last_polled_ts=1000)
+
+    # opposing ask is 0.40 -> 0.55 + 0.40 = 0.95 < 0.99
+    # fill venue_ts is 1_000_000 ms = 1000s; now=1010s (within 900s window)
+    client = FakeClient(best_ask=0.40)
+    cfg = MakerConfig(stranded_completion_enabled=True, max_pair_cost=0.99)
+
+    results = manage_single_leg_positions(client, registry, cfg, live=False, now=1010.0)
+    assert any(r.get("action") == "would_complete" for r in results)
+
+

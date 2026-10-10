@@ -1018,6 +1018,15 @@ class MakerConfig:
     single_buy_grace_sec: float = 0.0
     # Max adverse price move from fill price before triggering immediate stop-loss exit
     single_buy_max_loss_pct: float = 0.10
+
+    # --- stranded leg exposure resolution (#453) ---------------------------
+    # Governs unhedged positions when no working maker hedge is active.
+    # When enabled, permits taker completion ONLY when held_avg + opposing_ask < max_pair_cost.
+    # An operator must supervise live start with this flag enabled; rehearse in shadow first.
+    stranded_completion_enabled: bool = False
+    # Max seconds to wait for a maker quote before forcing stop-loss exit on stranded legs.
+    stranded_max_wait_sec: float = 300.0
+
     single_buy_max_loss_usd: float = 0.045
     # Optional sizing ceiling per quote (None for standard mode; set via .env / CLI)
     max_quote_shares: float | None = None
