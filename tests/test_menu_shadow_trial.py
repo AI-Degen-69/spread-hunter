@@ -82,11 +82,14 @@ def test_depth_bar_trial_launcher_is_gone():
     assert "shadow-trial" not in mapping
     assert "trial-shadow" not in mapping
     assert "t" not in mapping.values()
-    # No switch branch for "t" and the allow-list no longer contains it.
+    # No switch branch for "t", and the allow-list no longer contains it. The
+    # allow-list is now the shared $script:MenuKeys list (#475), so assert that
+    # the guard reads that list and that "t" is not one of its entries.
     assert not re.search(r'^\s*"t" \{', src, re.MULTILINE)
-    allow = re.search(r'if \(@\((.*?)\) -notcontains \$key\)', src, re.DOTALL)
-    assert allow, "allow-list check not found"
-    assert '"t"' not in allow.group(1)
+    allow = re.search(r"if \(\$script:MenuKeys -notcontains \$key\)", src)
+    assert allow, "the allow-list guard must read $script:MenuKeys"
+    menu_keys = re.search(r"\$script:MenuKeys\s*=\s*@\(([^)]*)\)", src)
+    assert "t" not in menu_keys.group(1)
     # The grid label is gone too.
     assert "Depth-Bar Trial" not in src
 

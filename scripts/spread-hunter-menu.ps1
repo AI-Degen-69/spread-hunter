@@ -3,8 +3,8 @@
 # (C:\Users\Tiger\Agents\Projects\spread-hunter).
 #
 # Usage:
-#   .\scripts\spread-hunter-menu.ps1          # interactive menu (press 1-9/q, no Enter; one choice, then exits)
-#   .\scripts\spread-hunter-menu.ps1 8        # run menu option 8 directly (1-9, q all work)
+#   .\scripts\spread-hunter-menu.ps1          # interactive menu (press 1-9, r, a, p, q; loops until q or Ctrl+C)
+#   .\scripts\spread-hunter-menu.ps1 8        # run menu option 8 directly (1-9, r, a, p, q all work; single shot)
 #   .\scripts\spread-hunter-menu.ps1 start -Yes    # 1 · LIVE: preflight-stop + wipe, fresh bot + dashboard (real bids)
 #   .\scripts\spread-hunter-menu.ps1 stop          # 2 · LIVE: stop bot + dashboard
 #   .\scripts\spread-hunter-menu.ps1 host          # 3 · LIVE: release :8799 from the other menu-owned dashboard (no wipe), host live & open
@@ -15,6 +15,8 @@
 #   .\scripts\spread-hunter-menu.ps1 shadow-resume [-Minutes N] [-ResumeDb <path|all>] [-Preset <name>] [-Prudent] # R · SHADOW: resume shadow run(s) in place (no wipe) & reattach dashboard(s) — interactive picks 01 / 02 / all / Prudent
 #   .\scripts\spread-hunter-menu.ps1 clean         # 7 · GLOBAL: kill all + wipe data + verify (no start)
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
+#   .\scripts\spread-hunter-menu.ps1 audit         # A · MAINTENANCE: storage audit (read-only disk usage)
+#   .\scripts\spread-hunter-menu.ps1 prune         # P · MAINTENANCE: storage prune (deletes stale stores/reports)
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
 # starting-capital snapshot, shared run_id). The dashboard process itself is
 # owned by this script via runtime/live-dash.pids.json.
@@ -2846,6 +2848,21 @@ function Reset-Environment {
 }
 
 # ── Menu ──
+# One ordered key list is the single source of truth for the menu: the grid,
+# the prompt, the invalid-selection message and the command-line allow-list
+# all derive from it, so a new key only has to be added in one place (#475).
+$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'q')
+
+function Format-MenuHint {
+    <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
+       The 1-9 span collapses to a range; the remaining keys list verbatim. #>
+    $numbers = $script:MenuKeys | Where-Object { $_ -match '^\d+$' }
+    $letters = $script:MenuKeys | Where-Object { $_ -notmatch '^\d+$' }
+    $span = "{0}-{1}" -f ($numbers[0]), ($numbers[-1])
+    $parts = @($span) + $letters
+    return ($parts -join ', ')
+}
+
 function Show-MenuGrid {
     $cInfo    = Get-ProfileColor -Name Info
     $cStrong  = Get-ProfileColor -Name Strong
@@ -2867,14 +2884,16 @@ function Show-MenuGrid {
         ) }
         @{ Header = "🥷 SHADOW - rehearsal, spends nothing"; Items = @(
             @{ K = "4"; Icon = "▷"; IconColor = "Info";    V = "Start Shadow Run";          D = "Start new shadow rehearsal (standard or prudent); prompts profile + minutes (no wipe)" }
-            @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Bot + Dashboard";      D = "Stops rehearsal loop, watcher and dashboard" }
-            @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Host & Open Dashboard";     D = "Hosts unified dashboard on :8799 (shadow DB) & opens browser" }
+            @{ K = "5"; Icon = "□"; IconColor = "Neutral"; V = "Stop Shadow Run";           D = "Stops rehearsal loop, watcher and dashboard" }
+            @{ K = "6"; Icon = "◎"; IconColor = "Info";    V = "Open Shadow Dashboard";     D = "Hosts unified dashboard on :8799 (shadow DB) & opens browser" }
             @{ K = "r"; Icon = "↻"; IconColor = "Info";    V = "Resume Shadow Run(s)";  D = "Resume a shadow rehearsal in place (no wipe): pick 01 / 02 / all / Prudent" }
         ) }
         @{ Header = "MAINTENANCE & STATUS"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop & Clean";       D = "Kills all bot processes/dashboards, wipes data, verifies" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
             @{ K = "9"; Icon = "▣"; IconColor = "Info";    V = "Overnight Statistics";         D = "Run shadow + statistics + dashboard for hours" }
+            @{ K = "a"; Icon = "◫"; IconColor = "Neutral"; V = "Storage Audit";             D = "Report disk usage of every store and report (read-only)" }
+            @{ K = "p"; Icon = "⨯"; IconColor = "Error";   V = "Storage Prune";             D = "Delete stale stores/reports per retention (prunes data)" }
         ) }
     )
 
@@ -3069,15 +3088,16 @@ function Invoke-LiveAction {
                 Lsh-Fail ("Resume incomplete: {0} store(s) failed: {1}." -f $failedResumes.Count, ($failedNames -join ", "))
             }
         }
-        "audit" {
+        "a" {
             Invoke-StorageAudit
         }
-        "prune" {
+        "p" {
             Invoke-StoragePrune -Force:$Yes
         }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
-            Lsh-Warn "Invalid selection: $Key (choose 1-9, or q)."
+            # The hint already ends in q, so do not append ", or q" again.
+            Lsh-Warn ("Invalid selection: {0} (choose {1})." -f $Key, (Format-MenuHint))
             Start-Sleep -Seconds 1
         }
     }
@@ -3143,11 +3163,11 @@ if ($Action -ne "") {
         "stats"        = "9"
         "overnight"    = "9"
         "statistical-run" = "9"
-        "audit"        = "audit"
-        "storage-audit"= "audit"
-        "retention"    = "audit"
-        "prune"        = "prune"
-        "storage-prune"= "prune"
+        "audit"        = "a"
+        "storage-audit"= "a"
+        "retention"    = "a"
+        "prune"        = "p"
+        "storage-prune"= "p"
     }
     if ($ExtraArgs.Count -gt 0) {
         Write-Host ("ERROR: Too many words: '{0} {1}'. Run one action at a time (e.g. .\scripts\spread-hunter-menu.ps1 audit) — '-and' is not a menu word; call the menu twice to run two actions." -f $Action, ($ExtraArgs -join ' ')) -ForegroundColor Red
@@ -3159,8 +3179,10 @@ if ($Action -ne "") {
     # Menu numbers work directly too: `.\scripts\spread-hunter-menu.ps1 8`
     # runs option 8 at once, no menu shown. Reject anything else here so a
     # typo fails fast instead of falling into the "invalid selection" path.
-    if (@("1","2","3","4","5","6","7","8","9","r","audit","prune","q") -notcontains $key) {
-        Write-Host "ERROR: Unknown action '$Action' (use 1-9, q, or a name like start/stop/status/audit/prune)" -ForegroundColor Red
+    # The allow-list is the same key set the grid, prompt and error message
+    # name (#475), so a stray action can never be accepted here.
+    if ($script:MenuKeys -notcontains $key) {
+        Write-Host ("ERROR: Unknown action '{0}' (use {1}, or a name like start/stop/status/audit/prune)" -f $Action, (Format-MenuHint)) -ForegroundColor Red
         exit 1
     }
 
@@ -3178,7 +3200,7 @@ if ($Action -ne "") {
 Lsh-Banner -Title "SPREAD HUNTER - CONTROL CENTER"
 Show-MenuGrid
 Write-Host "  Select " -ForegroundColor (Get-ProfileColor -Name Text) -NoNewline
-Write-Host "[1-9, q]" -ForegroundColor (Get-ProfileColor -Name Command) -NoNewline
+Write-Host ("[{0}]" -f (Format-MenuHint)) -ForegroundColor (Get-ProfileColor -Name Command) -NoNewline
 Write-Host " › " -ForegroundColor (Get-ProfileColor -Name Highlight) -NoNewline
 $choice = Read-MenuChoice
 if ($null -eq $choice -or $choice -eq "") { exit 0 }
