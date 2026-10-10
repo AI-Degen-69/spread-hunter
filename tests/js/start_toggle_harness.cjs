@@ -179,13 +179,13 @@ function reset() {
   const NOTHING_RUNNING_STACK = {
     services: {
       filter: { running: false }, query: { running: false },
-      decide: { running: false }, dash: { running: false },
+      decide: { running: false }, dash: { running: true },
     },
   };
   const RUNNING_STACK = {
     services: {
       filter: { running: true }, query: { running: false },
-      decide: { running: false }, dash: { running: false },
+      decide: { running: false }, dash: { running: true },
     },
   };
   const SHADOW_RUNNING_STATUS = {
