@@ -1,4 +1,47 @@
-# CONSTRAINTS — #461 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #460 (locked by Station II, enforced through Station V)
+
+Governs the `i460` branch only; #461 constraints below stay as history.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_account_kpi.py`
+  `tests/test_dashboard_server.py`
+  `tests/test_portfolio_card_basis.py`
+  `tests/test_registry_state.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
+
+## Scope & File Boundaries
+
+- Target files for modification:
+  `dashboard/static/index.html`
+  `dashboard/static/app.js`
+  `tests/js/portfolio_card_harness.cjs`
+  `tests/test_portfolio_card_basis.py`
+  `tests/test_dashboard_server.py`
+  `tests/test_account_kpi.py`
+  `CONSTRAINTS.md`
+  `tasks/plan.md`
+  `tasks/todo.md`
+- Behavior-frozen (call but do not change):
+  `core_brain/registry_state.py` resting/filled/total committed math (`:232-304`, `:439-450`)
+  `core_brain/kpi.py` `open_committed_usd` (`:1993-1995`), account block (`:2094-2115`), hero equity / bankroll / realized-gain pill
+- Files that must NOT be modified:
+  `core_brain/*` (no backend change; `resting_committed` read as-is)
+  `data/orders.db`
+- No new endpoints; wire through the existing `/api/state` capital + `/api/kpi` portfolio/account poll path only.
+
+## Anti-cheat
+
+- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
+- No new external dependencies without explicit approval.
+- Tests stay offline (temp DBs, node harness with stub DOM).
+- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+
+---
+
+
 
 Governs the `i461` branch only; #453 constraints below stay as history.
 

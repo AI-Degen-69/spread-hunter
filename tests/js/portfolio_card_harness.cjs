@@ -1,8 +1,9 @@
 /* Drives renderBrokerPortfolioOverview against a stub DOM and prints what the
  * Portfolio Overview card would show. Used by tests/test_portfolio_card_basis.py.
  *
- * Reads one JSON payload {kpi, status} on argv[2] and writes the rendered
- * values as JSON on stdout.
+ * Reads one JSON payload {kpi, status, state} on argv[2] and writes the rendered
+ * values as JSON on stdout. `state` is the /api/state payload (or null);
+ * the tile reads resting dollars from state.capital.resting_committed (#460).
  */
 const fs = require('fs');
 const path = require('path');
@@ -67,7 +68,7 @@ const mod = { exports: {} };
 new Function('module', 'exports', 'document', 'window', 'localStorage', 'EventSource', source)(
   mod, mod.exports, global.document, global.window, global.localStorage, global.EventSource);
 const app = mod.exports;
-app.renderBrokerPortfolioOverview(input.kpi, input.status);
+app.renderBrokerPortfolioOverview(input.kpi, input.status, input.state ?? null);
 
 // Read the chart's deterministic series helper directly so the focused test
 // can assert real close points, empty-state behavior, and the Current point.
@@ -113,4 +114,9 @@ process.stdout.write(JSON.stringify({
   wins: element('broker-kpi-wins').textContent,
   committed: element('broker-kpi-committed').textContent,
   committed_pct: element('broker-kpi-committed-pct').textContent,
+  committed_bar_width: element('bento-committed-bar').style.width,
+  // #460: the Resting-in-orders tile reads /api/state, not /api/kpi.
+  resting: element('broker-kpi-resting').textContent,
+  resting_pct: element('broker-kpi-resting-pct').textContent,
+  resting_bar_width: element('bento-resting-bar').style.width,
 }));
