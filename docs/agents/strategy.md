@@ -59,6 +59,24 @@ The alternative branch (`objective="pair"`) prices off the **ask** and was measu
 it puts every quote half a spread *above* mid, so the pair costs `1.00 + spread` by
 construction. It is unreachable in production and must stay that way.
 
+### What `offset` physically means
+
+`offset` is **cents of distance behind mid, not cents of price improvement.** The
+resting price is `mid - offset` (`quotes.quote_resting_price`), so a *larger* offset is a
+*more passive* quote: it sits further from the touch, fills later and at a cheaper price,
+and it protects against the pair crossing $1.00 by leaving more room. A *smaller* offset
+sits closer to the market, fills sooner and at a higher price, and carries more one-legged
+risk.
+
+This inverts the plain-English reading of the tournament arm names. **"Conservative"
+means patient in fill, not careful in price.** It takes the widest offset (up to 5¢) and is
+the arm most likely to buy nothing at all — the `run-2809a7161de1` failure (209 orders,
+zero fills) is the wide end of exactly this dial. **"Aggressive" means aggressive about
+filling**, running a tight offset (up to 3¢) to win queue priority.
+
+The arm names describe *fill behaviour*, never price safety. Judge them on fill and pair
+cost together, never on one axis.
+
 No reward-economics knob reaches live code. `reward_min_payout_usd`,
 `reward_floor_multiple`, `est_reward_pool_usd`, `rebate_rate`, `marginal_return_floor`,
 `allocation_budget` and `max_market_frac` belong to the allocator in `scoring/allocate.py`

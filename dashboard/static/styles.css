@@ -398,6 +398,70 @@ header {
 .db-run-row:hover { background: rgba(255, 255, 255, 0.04); }
 .db-run-row.current { background: rgba(255, 255, 255, 0.06); }
 .db-run-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The SERVICES pill dropdown (terminal-redesign pattern): the summary pill in
+   the top bar doubles as the trigger; a child of <header>, NOT of .top-meta,
+   so the scrollport of .top-meta can never clip the open panel. */
+.services-pill-host { position: relative; display: inline-flex; }
+.services-pill-trigger {
+  cursor: pointer;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.services-pill-trigger:hover { border-color: var(--border-strong); }
+.services-pill-trigger[aria-expanded="true"] { border-color: var(--border-strong); }
+.services-caret { font-size: 9px; opacity: 0.7; transition: transform 0.15s; }
+.services-pill-trigger[aria-expanded="true"] .services-caret { transform: rotate(180deg); }
+.services-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+.services-dropdown-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 6px 8px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 6px;
+}
+.services-dropdown-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+}
+.services-dropdown-row:hover { background: rgba(255, 255, 255, 0.04); }
+.services-dropdown-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.services-dropdown-meta { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.services-dropdown-live { color: var(--signal); font-weight: 700; }
+.services-dropdown-foot {
+  padding: 6px 6px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .services-caret { transition: none; }
+}
 .db-run-state.state-running { color: var(--signal); }
 .db-run-state.state-stopped { color: var(--text-muted); }
 .db-run-current { color: var(--text-muted); font-size: 10px; letter-spacing: 0.06em; }

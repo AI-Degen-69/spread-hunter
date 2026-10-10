@@ -71,7 +71,14 @@
       <span id="scan-state-pill" class="pill state-unknown mono" title="Quote engine heartbeat: runtime/shadow_run_<run_id>.json or runtime/live_poll_heartbeat.json"><span class="pill-label">ENGINE</span> <span id="scan-engine-state">UNKNOWN</span></span>
       <span id="scan-engine-elsewhere" class="engine-elsewhere-pill mono" style="display:none"></span>
       <span id="master-status-indicator" class="pill state-unknown font-display" style="font-size:11px;padding:4px 10px">STACK UNKNOWN</span>
-      <span id="hud-services-pill" class="pill state-unknown mono" title="Stack services liveness: how many of the stack's services (and the watchdog) are running. The quote engine's own heartbeat is the ENGINE pill beside this."><span class="pill-label">SERVICES</span> <span id="hud-services-state">UNKNOWN</span> <span id="hud-services-sub" class="pill-detail">--</span></span>
+      <!-- SERVICES pill: a live summary AND the dropdown trigger. The trigger
+           opens #services-dropdown, which app.js fills with a row per service.
+           A child of <header>, NOT of .top-meta: that row is a scroll container,
+           and a dropdown anchored inside it gets clipped by its own scrollport. -->
+      <div class="services-pill-host">
+        <button id="hud-services-pill" class="pill state-unknown mono services-pill-trigger" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="services-dropdown" title="Stack services liveness: how many of the stack's services (and the watchdog) are running. The quote engine's own heartbeat is the ENGINE pill beside this."><span class="pill-label">SERVICES</span> <span id="hud-services-state">UNKNOWN</span> <span id="hud-services-sub" class="pill-detail">--</span> <span class="services-caret" aria-hidden="true">▾</span></button>
+        <div id="services-dropdown" class="services-dropdown" role="menu" aria-label="Stack services telemetry" style="display:none"></div>
+      </div>
       <span id="hud-guardrail-pill" class="pill state-unknown mono" title="Risk watchdog status"><span class="pill-label">WATCHDOG</span> <span id="hud-guardrail-state">UNKNOWN</span> <span id="hud-guardrail-sub" class="pill-detail">--</span></span>
       <!-- Which registry the numbers on this page came from. -->
       <span id="db-mode-badge" class="pill state-unknown mono" title="Active registry">DB: UNKNOWN</span>

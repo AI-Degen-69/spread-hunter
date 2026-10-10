@@ -1498,6 +1498,87 @@ const SERVICE_DEFS = [
  * buttons. Split from the card grid (CodeRabbit round on #267): these are
  * chrome on every page, so a poll whose card grid the Trades gate skips must
  * still refresh them. */
+
+/* Services dropdown: the SERVICES pill in the top bar is a summary AND the
+ * trigger. The rows mirror SERVICE_DEFS so the dropdown can never name a
+ * service the card grid does not. The state vocabulary is the same as the
+ * cards' (statePillHtml): RUNNING/STOPPED, and UNKNOWN only when a telemetry
+ * read genuinely failed. */
+function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, overallState) {
+  const trigger = document.getElementById('hud-services-pill');
+  const panel = document.getElementById('services-dropdown');
+  if (!trigger || !panel) return;
+
+  const rows = SERVICE_DEFS.map(def => {
+    let state, meta, pid;
+    if (def.key === 'guardrail') {
+      const running = guardrailHealth?.running || false;
+      pid = guardrailHealth?.pid;
+      const telemetryError = guardrailHealth?.telemetry_error;
+      const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined && !telemetryError;
+      const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
+      const hasAlert = (guardrailAlerts?.alerts?.length > 0);
+      state = !healthKnown ? 'unknown'
+        : hasAlert ? 'degraded'
+        : (running ? stateKey(true, age, cadenceThresholds(5)) : stateKey(false, age));
+      const alertsTotal = guardrailHealth?.alerts_total || 0;
+      meta = telemetryError ? 'telemetry down'
+        : (hasAlert ? `${alertsTotal} alert${alertsTotal === 1 ? '' : 's'}` : 'auto-watch');
+    } else {
+      const svc = status?.services?.[def.key];
+      const running = svc?.running || false;
+      pid = svc?.pid;
+      state = running ? 'running' : 'stopped';
+      meta = def.liveOnly ? 'live only' : (pid ? `pid ${pid}` : 'stopped');
+    }
+    const dot = `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`;
+    const label = state.toUpperCase();
+    const liveCls = state === 'running' ? ' services-dropdown-live' : '';
+    return `<div class="services-dropdown-row">
+      <span class="pill state-${state}">${dot}${label}</span>
+      <span class="services-dropdown-name" title="${esc(def.name)}">${esc(def.name)}</span>
+      <span class="services-dropdown-meta">${esc(meta)}</span>
+    </div>`;
+  }).join('');
+
+  const head = `<div class="services-dropdown-head"><span>Service Telemetry</span><span>${activeCount} active</span></div>`;
+  const foot = `<div class="services-dropdown-foot">Full controls on the Live Operations tab</div>`;
+  panel.innerHTML = head + rows + foot;
+
+  // The pill stays the summary; the caret flips with the open state. The pill
+  // classes are owned by renderServiceHeader, so only aria-expanded is set here.
+  trigger.setAttribute('aria-expanded', panel.style.display === 'block' ? 'true' : 'false');
+}
+
+/* Open/close the services dropdown. A click anywhere else closes it, and Esc
+ * closes it too — the same contract as the run switcher beside it. */
+let servicesDropdownBound = false;
+function bindServicesDropdown() {
+  if (servicesDropdownBound) return;
+  servicesDropdownBound = true;
+  const trigger = document.getElementById('hud-services-pill');
+  const panel = document.getElementById('services-dropdown');
+  if (!trigger || !panel) return;
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = panel.style.display === 'block';
+    panel.style.display = open ? 'none' : 'block';
+    trigger.setAttribute('aria-expanded', open ? 'false' : 'true');
+  });
+  document.addEventListener('click', (e) => {
+    if (panel.style.display !== 'block') return;
+    if (panel.contains(e.target) || trigger.contains(e.target)) return;
+    panel.style.display = 'none';
+    trigger.setAttribute('aria-expanded', 'false');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && panel.style.display === 'block') {
+      panel.style.display = 'none';
+      trigger.setAttribute('aria-expanded', 'false');
+    }
+  });
+}
+
 function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const executionServiceKeys = ['filter', 'query', 'decide'];
   const anyExecutionServiceRunning = executionServiceKeys.some(k => Boolean(status?.services?.[k]?.running));
@@ -1515,6 +1596,8 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const guardrailPill = document.getElementById('hud-guardrail-pill');
 
   const anyServiceRunning = anyExecutionServiceRunning;
+
+  renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, servicesState);
 
   if (masterIndicator) {
     if (isStopping) {
@@ -8198,6 +8281,7 @@ if (typeof module === 'undefined' || !module.exports) {
   initOrdersTradesTabs();
   initDistControls();
   initTopMetaScrollCue();
+  bindServicesDropdown();
   pollStatus();
   renderParameters();
   setInterval(pollStatus, POLL_MS);
