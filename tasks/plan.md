@@ -51,14 +51,13 @@ The refusal reason must keep both keywords (`resolved…; horizon passed…`) so
 T1 (venue check, read-only) → T2 (tests RED) → T3 (fix GREEN) → T4 (focused verification). T2 before T3 is the TDD loop: T2's admission test must FAIL on current code (Prove-It), T3 makes it pass.
 
 ## Tasks (atomic vertical slices)
-
-### T1 [S] [Debug] Confirm venue fields for the 3 reported markets (read-only)
+### T1 [x] [S] [Debug] Confirm venue fields for the 3 reported markets (read-only)
 Files: none (no code). Read `endDate`, `closed`, `acceptingOrders` once per market (2× Brazil presidential, 1× LA mayoral) via Gamma/order-book API.
 Expect `closed=false`, `acceptingOrders=true`, `endDate` on the first-round date. If any market is closed/not-accepting → STOP, report; the refusal is correct and the ticket needs a different fix. Record values at the bottom of this file.
 Verification: values recorded in `tasks/plan.md`; zero code touched; spends nothing.
 Depends on: —
 
-### T2 [M] [Backend/Logic] Regression tests first (RED)
+### T2 [x] [M] [Backend/Logic] Regression tests first (RED)
 File: `tests/test_unified_universe.py` (+ `_universe_candidate` helper stays).
 - Update `test_evaluate_refuses_expired_market_before_fetching_tape_or_books` (:1134): set `closed=True`; keep all existing asserts; add `assert "market closed on the venue" in reason`. Leave `test_expired_at_intake_refuses_past_end_date_for_non_sports` (:1081) byte-identical (None-state backward compat).
 - Add election helper (Politics category, past `end_date_iso`, `closed=False`, `accepting_orders=True`).
@@ -86,7 +85,10 @@ Depends on: T3
 
 ## Venue confirmation log (T1 writes here)
 
-- (pending)
+GO — first-round-date hypothesis verified 2026-10-10 via Gamma `public-search` (read-only):
+- Brazil: `will-luiz-incio-lula-da-silva-win-the-2026-brazilian-presidential-election` — `closed=false`, `acceptingOrders=true`, `endDate=2026-10-05T03:59:00Z` (~5.4d past). Open + past endDate = the bug shape. (Defeated siblings e.g. Tarcisio/Bolsonaro/Haddad markets are `closed=true` → correctly refused.)
+- LA: `will-karen-bass-win-the-2026-los-angeles-mayoral-election` — `closed=false`, `acceptingOrders=true`, `endDate=2026-06-03T03:59:00Z` (~129.4d past, vol $1.47M). Open + past endDate = the bug shape. (First-round-winner / advance-to-2nd-round markets are `closed=true` → correctly refused.)
+- RED proof: `test_evaluate_admits_open_election_market_past_end_date` fails pre-fix (`eligible False`); `state`-kwarg unit tests fail pre-fix (unexpected kwarg).
 
 ## Rejected scope (do not resurface)
 
