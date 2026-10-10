@@ -2051,8 +2051,6 @@ def _stop_services(targets: list, subprocess) -> dict:
     not_running | stopped | forced | still_running. The clock and sleep are
     called through the `time` module so tests can script them.
     """
-    deadline = time.monotonic() + (
-        _STOP_POLITE_WAIT_S + _STOP_FORCE_WAIT_S + 2 * _STOP_TASKKILL_TIMEOUT_S)
     outcomes: dict[str, dict[str, str]] = {}
     alive = [(n, p, s) for (n, p, s) in targets if _is_pid_alive(p, s)]
     if not alive:

@@ -177,12 +177,6 @@ function reset() {
   global.__tickerWrites = [];
 }
 
-function deferred() {
-  let resolve;
-  const promise = new Promise((r) => { resolve = r; });
-  return { promise, resolve };
-}
-
 (async () => {
   // ── RUNNING: STOP look ──
   reset();
@@ -217,11 +211,6 @@ function deferred() {
   // ── Double click while RUNNING: exactly one POST, busy state shown ──
   reset();
   setStatus(runningStack());
-  const gate = deferred();
-  fetchImpl = async () => ({
-    ok: true, status: 200,
-    json: async () => ({ ok: true, message: 'Stack stopped', status: stoppedStack() }),
-  });
   // Hold the fetch open until both clicks have been attempted.
   let release;
   const held = new Promise((r) => { release = r; });
