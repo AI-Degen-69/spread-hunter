@@ -110,8 +110,8 @@ def read_arm_results(db_path: Path, run_id: str) -> dict[str, Any]:
     and sentinel close methods are not trades.
     """
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except Exception as exc:
+        conn = sqlite3.connect(f"{Path(db_path).resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
         return {"status": "unavailable", "error": str(exc)}
     try:
         try:
@@ -150,7 +150,7 @@ def write_tournament_results(plan: TournamentPlan, exit_codes: list[int]) -> Pat
         out_path = ROOT / out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     arms_data = []
-    for arm, code in zip(plan.arms, exit_codes):
+    for arm, code in zip(plan.arms, exit_codes, strict=True):
         result = read_arm_results(arm.db_path, arm.run_id)
         arms_data.append({
             "name": arm.name,
@@ -430,14 +430,24 @@ def launch_tournament(plan: TournamentPlan) -> int:
         # Wait for all shadow runs to finish
         exit_codes = [p.wait() for p in shadow_procs]
         log.info("All shadow runs finished with codes: %s", exit_codes)
+        results_ok = True
         try:
             write_tournament_results(plan, exit_codes)
         except Exception:
             log.exception("Tournament results step failed")
-        return max(exit_codes) if exit_codes else 0
+            results_ok = False
+        return _tournament_exit_code(exit_codes, results_ok)
 
     finally:
         _cleanup()
+
+
+def _tournament_exit_code(exit_codes: list[int], results_ok: bool) -> int:
+    """Worker codes win; a failed report step turns an all-green run non-zero."""
+    code = max(exit_codes) if exit_codes else 0
+    if not results_ok and code == 0:
+        return 1
+    return code
 
 
 def main(argv: Optional[list[str]] = None) -> int:

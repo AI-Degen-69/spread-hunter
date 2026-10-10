@@ -388,6 +388,44 @@ def test_read_arm_results_no_fills(tmp_path: Path):
     assert res["close_events"] == 0
 
 
+def test_read_arm_results_path_with_space(tmp_path: Path):
+    from scripts.shadow_tournament import read_arm_results
+
+    db = tmp_path / "dir with space" / "arm.db"
+    db.parent.mkdir(parents=True)
+    _seed_arm_db(db, "run-A",
+                 fills=[{"order_uuid": "o1"}],
+                 closes=[{"method": "shadow_merge", "realized_pnl": 0.05}])
+    res = read_arm_results(db, "run-A")
+    assert res["status"] == "ok"
+    assert res["fill_events"] == 1
+
+
+def test_write_tournament_results_rejects_length_mismatch(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan, write_tournament_results
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    plan.results_path = tmp_path / "mismatch_results.json"
+    with pytest.raises(ValueError, match="shorter"):
+        write_tournament_results(plan, [0, 0])
+
+
+def test_tournament_exit_code_prefers_workers_but_flags_report_failure():
+    from scripts.shadow_tournament import _tournament_exit_code
+
+    assert _tournament_exit_code([0, 0, 0, 0, 0], True) == 0
+    assert _tournament_exit_code([0, 1, 0, 0, 0], True) == 1
+    assert _tournament_exit_code([0, 0, 0, 0, 0], False) == 1
+    assert _tournament_exit_code([0, 2, 0, 0, 0], False) == 2
+    assert _tournament_exit_code([], True) == 0
+
+
 def test_read_arm_results_missing_db(tmp_path: Path):
     from scripts.shadow_tournament import read_arm_results
 
