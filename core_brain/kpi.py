@@ -42,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `payload_version`. The frontend compares it against its own expectation to
 # tell "backend older than the page" apart from "field genuinely unmeasured".
 # Bump this whenever new payload fields ship.
-KPI_PAYLOAD_VERSION = 254
+KPI_PAYLOAD_VERSION = 255
 
 # Historical VaR/CVaR need a 5% tail to actually contain an observation; below
 # 20 measured per-close returns the tail is empty and the metric stays NULL
@@ -221,6 +221,47 @@ def required_sample_size_for_mean(
     return math.ceil(((z * std_dev) / target_margin) ** 2)
 
 
+DEFAULT_COHEN_D = 0.20
+DEFAULT_PROPORTION_MARGIN = 0.05
+
+
+def required_sample_size_cohen_d(
+    d: float | None = DEFAULT_COHEN_D,
+    z: float = Z_95_SAMPLE_SUFFICIENCY,
+) -> int:
+    """Minimum sample size for continuous metric using Cohen's d effect size (Issue #448).
+
+    Formula: ``N = ceil((z / d) ** 2)``
+
+    Returns 0 when d or z is non-positive or non-finite.
+    """
+    if d is None or z is None:
+        return 0
+    if not math.isfinite(d) or not math.isfinite(z) or d <= 0.0 or z <= 0.0:
+        return 0
+    return math.ceil((z / d) ** 2)
+
+
+def required_sample_size_proportion(
+    p: float | None = 0.50,
+    margin: float | None = DEFAULT_PROPORTION_MARGIN,
+    z: float = Z_95_SAMPLE_SUFFICIENCY,
+) -> int:
+    """Minimum sample size for binary status proportion (Issue #448).
+
+    Formula: ``N = ceil((z**2 * p * (1 - p)) / (margin**2))``
+
+    Returns 0 when p, margin, or z is invalid.
+    """
+    if p is None or margin is None or z is None:
+        return 0
+    if not math.isfinite(p) or not math.isfinite(margin) or not math.isfinite(z):
+        return 0
+    if p <= 0.0 or p >= 1.0 or margin <= 0.0 or z <= 0.0:
+        return 0
+    return math.ceil((z ** 2 * p * (1.0 - p)) / (margin ** 2))
+
+
 def power_table(
     sigma: float,
     deltas: tuple[float, ...] = (0.01, 0.02, 0.04),
@@ -374,6 +415,7 @@ def compute_trade_analytics(
     float_marks: list[dict],
     pnl_by_fill_path: dict[str, Any] | None = None,
     target_margin_usd: float = 0.02,
+    orders_count: int = 0,
 ) -> dict[str, Any]:
     """Per-trade outcome statistics and risk factors for the Level 1 tiles.
 
@@ -453,7 +495,7 @@ def compute_trade_analytics(
 
     mean_pnl_ci = _mean_pnl_ci(wins + losses)
 
-    # Issue #443: Sample size sufficiency per confidence level on dashboard
+    # Issue #443 & Issue #448: Sample size sufficiency per confidence level & status
     pnls = wins + losses
     std_dev_usd: Optional[float] = None
     if n > 1:
@@ -462,33 +504,82 @@ def compute_trade_analytics(
         except Exception:
             std_dev_usd = None
 
-    sufficiency_levels = []
+    # Continuous Cohen's d levels (d = 0.20) for PnL Expectancy
+    pnl_levels = []
     for conf_pct, z_val in SAMPLE_SUFFICIENCY_LEVELS:
-        req_n = required_sample_size_for_mean(std_dev_usd, target_margin_usd, z_val)
-        if req_n > 0 and n > 1 and std_dev_usd and std_dev_usd > 0:
-            rem_n = max(0, req_n - n)
-            prog_pct = min(100, round((n / req_n) * 100))
-            sufficiency_levels.append({
+        req_n = required_sample_size_cohen_d(DEFAULT_COHEN_D, z_val)
+        rem_n = max(0, req_n - n) if n > 0 else req_n
+        prog_pct = min(100, round((n / req_n) * 100)) if req_n > 0 else 0
+        pnl_levels.append({
+            "confidence_pct": conf_pct,
+            "z": z_val,
+            "required_n": req_n,
+            "remaining_n": rem_n,
+            "progress_pct": prog_pct,
+        })
+
+    # Proportional levels (margin = 0.05, p = 0.50 conservative)
+    def _build_prop_levels(current_cnt: int) -> list[dict[str, Any]]:
+        lvls = []
+        for conf_pct, z_val in SAMPLE_SUFFICIENCY_LEVELS:
+            req_n = required_sample_size_proportion(0.50, DEFAULT_PROPORTION_MARGIN, z_val)
+            rem_n = max(0, req_n - current_cnt) if current_cnt > 0 else req_n
+            prog_pct = min(100, round((current_cnt / req_n) * 100)) if req_n > 0 else 0
+            lvls.append({
                 "confidence_pct": conf_pct,
                 "z": z_val,
                 "required_n": req_n,
                 "remaining_n": rem_n,
                 "progress_pct": prog_pct,
             })
-        else:
-            sufficiency_levels.append({
-                "confidence_pct": conf_pct,
-                "z": z_val,
-                "required_n": None,
-                "remaining_n": None,
-                "progress_pct": None,
-            })
+        return lvls
+
+    stop_loss_levels = _build_prop_levels(n)
+    merge_levels = _build_prop_levels(n)
+    fill_rate_levels = _build_prop_levels(orders_count)
+
+    statuses = {
+        "pnl_expectancy": {
+            "label": "PnL Expectancy",
+            "type": "continuous",
+            "base": "closes",
+            "current_n": n,
+            "effect_size_d": DEFAULT_COHEN_D,
+            "levels": pnl_levels,
+        },
+        "stop_loss_rate": {
+            "label": "Stop Loss Rate",
+            "type": "proportion",
+            "base": "closes",
+            "current_n": n,
+            "target_margin": DEFAULT_PROPORTION_MARGIN,
+            "levels": stop_loss_levels,
+        },
+        "merge_rate": {
+            "label": "Merge Rate",
+            "type": "proportion",
+            "base": "closes",
+            "current_n": n,
+            "target_margin": DEFAULT_PROPORTION_MARGIN,
+            "levels": merge_levels,
+        },
+        "fill_rate": {
+            "label": "Fill Rate",
+            "type": "proportion",
+            "base": "orders",
+            "current_n": orders_count,
+            "target_margin": DEFAULT_PROPORTION_MARGIN,
+            "levels": fill_rate_levels,
+        },
+    }
 
     sample_size_sufficiency = {
         "current_n": n,
         "std_dev_usd": std_dev_usd if n > 1 else None,
         "target_margin_usd": target_margin_usd,
-        "levels": sufficiency_levels,
+        "effect_size_d": DEFAULT_COHEN_D,
+        "levels": pnl_levels,
+        "statuses": statuses,
     }
 
     avg_win_usd = statistics.mean(wins) if wins else None
@@ -2070,6 +2161,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         equity_series=equity_series,
         float_marks=float_marks,
         pnl_by_fill_path=pnl_split,
+        orders_count=len(orders),
     )
 
     # ── Run profitability verdict (dashboard quick-answer) ─────────────────

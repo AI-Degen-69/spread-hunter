@@ -173,9 +173,10 @@ def test_the_payload_version_is_pinned_on_both_sides(app_js, kpi_module):
     assert backend and frontend
     assert backend.group(1) == frontend.group(1)
     # #252 shipped the DB anchor; #272's Data & Markets cleanup added a
-    # payload field (active_quoting_markets); #443 added sample_size_sufficiency:
-    # both sides sit at 254.
-    assert backend.group(1) == "254"
+    # payload field (active_quoting_markets); #443 added sample_size_sufficiency;
+    # #448 redesigned sample size sufficiency with Cohen's d & statuses:
+    # both sides sit at 255.
+    assert backend.group(1) == "255"
 
 
 def test_a_stale_backend_shows_a_restart_note(app_js, index_html, styles_css):

@@ -217,12 +217,73 @@ def test_sample_sufficiency_n_zero_has_no_undefined():
     assert "At least two closed trades are needed" in html
 
 
-def test_sample_sufficiency_missing_object_mounts():
-    for kpi in ({"trade_analytics": {}}, {}):
-        out = _mount(kpi)
-        assert not out["errors"]
-        html = out["sample_sufficiency_html"]
-        assert "undefined" not in html
-        assert "NaN" not in html
-        assert "unmeasured" in html
+def test_sample_sufficiency_renders_segmented_statuses():
+    payload = {
+        "current_n": 4,
+        "std_dev_usd": 0.11547,
+        "target_margin_usd": 0.02,
+        "effect_size_d": 0.20,
+        "statuses": {
+            "pnl_expectancy": {
+                "label": "PnL Expectancy",
+                "type": "continuous",
+                "base": "closes",
+                "current_n": 4,
+                "effect_size_d": 0.20,
+                "levels": [
+                    {"confidence_pct": 95, "z": 1.95996, "required_n": 97, "remaining_n": 93, "progress_pct": 4},
+                ],
+            },
+            "stop_loss_rate": {
+                "label": "Stop Loss Rate",
+                "type": "proportion",
+                "base": "closes",
+                "current_n": 4,
+                "target_margin": 0.05,
+                "levels": [
+                    {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 381, "progress_pct": 1},
+                ],
+            },
+            "merge_rate": {
+                "label": "Merge Rate",
+                "type": "proportion",
+                "base": "closes",
+                "current_n": 4,
+                "target_margin": 0.05,
+                "levels": [
+                    {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 381, "progress_pct": 1},
+                ],
+            },
+            "fill_rate": {
+                "label": "Fill Rate",
+                "type": "proportion",
+                "base": "orders",
+                "current_n": 15,
+                "target_margin": 0.05,
+                "levels": [
+                    {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 370, "progress_pct": 4},
+                ],
+            },
+        },
+        "levels": [
+            {"confidence_pct": 95, "z": 1.95996, "required_n": 97, "remaining_n": 93, "progress_pct": 4},
+        ],
+    }
+    kpi = {"trade_analytics": {"sample_size_sufficiency": payload}}
+    out = _mount(kpi)
+    assert not out["errors"]
+    html = out["sample_sufficiency_html"]
+    assert "PnL Expectancy" in html
+    assert "Stop Loss Rate" in html
+    assert "Merge Rate" in html
+    assert "Fill Rate" in html
+    assert "Cohen&#39;s d = 0.2" in html or "Cohen's d = 0.2" in html
+    assert "Margin = 5%" in html
+    assert "(closes)" in html
+    assert "(orders)" in html
+    assert "97" in html
+    assert "385" in html
+    assert "undefined" not in html
+    assert "NaN" not in html
+
 

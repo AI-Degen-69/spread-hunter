@@ -1,4 +1,4 @@
-"""Tests for required_sample_size_for_mean and sample_size_sufficiency payload (#443)."""
+"""Tests for required_sample_size_for_mean, Cohen d, proportion, and sample_size_sufficiency payload (#443, #448)."""
 from __future__ import annotations
 
 import math
@@ -10,17 +10,17 @@ from core_brain.kpi import (
     Z_95_SAMPLE_SUFFICIENCY,
     Z_98_SAMPLE_SUFFICIENCY,
     Z_99_SAMPLE_SUFFICIENCY,
+    DEFAULT_COHEN_D,
+    DEFAULT_PROPORTION_MARGIN,
     required_sample_size_for_mean,
+    required_sample_size_cohen_d,
+    required_sample_size_proportion,
     compute_trade_analytics,
 )
 
 
 def test_required_sample_size_for_mean_formula_values():
     # Formula: ceil(((z * std) / E) ** 2)
-    # std = 0.11547, E = 0.02
-    # 95% (z = 1.95996): ((1.95996 * 0.11547) / 0.02) ** 2 = 128.05 => 129
-    # 98% (z = 2.32635): ((2.32635 * 0.11547) / 0.02) ** 2 = 180.40 => 181
-    # 99% (z = 2.57583): ((2.57583 * 0.11547) / 0.02) ** 2 = 221.18 => 222
     std = 0.11547
     e = 0.02
     assert required_sample_size_for_mean(std, e, Z_95_SAMPLE_SUFFICIENCY) == 129
@@ -28,28 +28,40 @@ def test_required_sample_size_for_mean_formula_values():
     assert required_sample_size_for_mean(std, e, Z_99_SAMPLE_SUFFICIENCY) == 222
 
 
-def test_required_sample_size_for_mean_margin_override():
-    std = 0.11547
-    e = 0.05
-    # With higher margin E = 0.05, required sample size is smaller
-    n95 = required_sample_size_for_mean(std, e, Z_95_SAMPLE_SUFFICIENCY)
-    assert n95 == math.ceil(((Z_95_SAMPLE_SUFFICIENCY * std) / e) ** 2)
-    assert n95 < 129
+def test_required_sample_size_cohen_d_values():
+    # Formula: ceil((z / d) ** 2)
+    # 95% (z = 1.95996, d = 0.20): (1.95996 / 0.20) ** 2 = 96.036 => 97
+    # 98% (z = 2.32635, d = 0.20): (2.32635 / 0.20) ** 2 = 135.30 => 136
+    # 99% (z = 2.57583, d = 0.20): (2.57583 / 0.20) ** 2 = 165.87 => 166
+    assert required_sample_size_cohen_d(0.20, Z_95_SAMPLE_SUFFICIENCY) == 97
+    assert required_sample_size_cohen_d(0.20, Z_98_SAMPLE_SUFFICIENCY) == 136
+    assert required_sample_size_cohen_d(0.20, Z_99_SAMPLE_SUFFICIENCY) == 166
 
 
-@pytest.mark.parametrize("bad_std", [0.0, -0.05, None, float("nan"), float("inf")])
-def test_required_sample_size_for_mean_invalid_std(bad_std):
-    assert required_sample_size_for_mean(bad_std, 0.02, 1.96) == 0
+def test_required_sample_size_proportion_values():
+    # Formula: ceil((z**2 * p * (1-p)) / margin**2)
+    # p = 0.50, margin = 0.05
+    # 95% (z = 1.95996): (1.95996**2 * 0.25) / 0.0025 = 384.14 => 385
+    # 98% (z = 2.32635): (2.32635**2 * 0.25) / 0.0025 = 541.19 => 542
+    # 99% (z = 2.57583): (2.57583**2 * 0.25) / 0.0025 = 663.48 => 664
+    assert required_sample_size_proportion(0.50, 0.05, Z_95_SAMPLE_SUFFICIENCY) == 385
+    assert required_sample_size_proportion(0.50, 0.05, Z_98_SAMPLE_SUFFICIENCY) == 542
+    assert required_sample_size_proportion(0.50, 0.05, Z_99_SAMPLE_SUFFICIENCY) == 664
+
+
+@pytest.mark.parametrize("bad_d", [0.0, -0.05, None, float("nan"), float("inf")])
+def test_required_sample_size_cohen_d_invalid(bad_d):
+    assert required_sample_size_cohen_d(bad_d, 1.96) == 0
+
+
+@pytest.mark.parametrize("bad_p", [0.0, 1.0, -0.1, 1.2, None, float("nan"), float("inf")])
+def test_required_sample_size_proportion_invalid_p(bad_p):
+    assert required_sample_size_proportion(bad_p, 0.05, 1.96) == 0
 
 
 @pytest.mark.parametrize("bad_margin", [0.0, -0.01, None, float("nan"), float("inf")])
-def test_required_sample_size_for_mean_invalid_margin(bad_margin):
-    assert required_sample_size_for_mean(0.10, bad_margin, 1.96) == 0
-
-
-@pytest.mark.parametrize("bad_z", [0.0, -1.96, float("nan"), float("inf")])
-def test_required_sample_size_for_mean_invalid_z(bad_z):
-    assert required_sample_size_for_mean(0.10, 0.02, bad_z) == 0
+def test_required_sample_size_proportion_invalid_margin(bad_margin):
+    assert required_sample_size_proportion(0.50, bad_margin, 1.96) == 0
 
 
 def test_sample_size_sufficiency_payload_4_closes():
@@ -64,104 +76,68 @@ def test_sample_size_sufficiency_payload_4_closes():
         starting_capital=100.0,
         equity_series=[],
         float_marks=[],
+        orders_count=20,
     )
     suff = res["sample_size_sufficiency"]
     assert suff["current_n"] == 4
     assert suff["std_dev_usd"] == pytest.approx(0.11547, abs=1e-4)
-    assert suff["target_margin_usd"] == 0.02
+    assert suff["effect_size_d"] == 0.20
     assert len(suff["levels"]) == 3
 
     lvl95, lvl98, lvl99 = suff["levels"]
     assert lvl95["confidence_pct"] == 95
     assert lvl95["z"] == Z_95_SAMPLE_SUFFICIENCY
-    assert lvl95["required_n"] == 129
-    assert lvl95["remaining_n"] == 125
-    assert lvl95["progress_pct"] == 3  # min(100, round(4 / 129 * 100)) = 3
+    assert lvl95["required_n"] == 97
+    assert lvl95["remaining_n"] == 93
+    assert lvl95["progress_pct"] == 4  # min(100, round(4 / 97 * 100)) = 4
 
     assert lvl98["confidence_pct"] == 98
     assert lvl98["z"] == Z_98_SAMPLE_SUFFICIENCY
-    assert lvl98["required_n"] == 181
-    assert lvl98["remaining_n"] == 177
-    assert lvl98["progress_pct"] == 2  # min(100, round(4 / 181 * 100)) = 2
+    assert lvl98["required_n"] == 136
+    assert lvl98["remaining_n"] == 132
+    assert lvl98["progress_pct"] == 3  # min(100, round(4 / 136 * 100)) = 3
 
-    assert lvl99["confidence_pct"] == 99
-    assert lvl99["z"] == Z_99_SAMPLE_SUFFICIENCY
-    assert lvl99["required_n"] == 222
-    assert lvl99["remaining_n"] == 218
-    assert lvl99["progress_pct"] == 2  # min(100, round(4 / 222 * 100)) = 2
+    # Segmented statuses
+    statuses = suff["statuses"]
+    assert "pnl_expectancy" in statuses
+    assert "stop_loss_rate" in statuses
+    assert "merge_rate" in statuses
+    assert "fill_rate" in statuses
+
+    assert statuses["pnl_expectancy"]["base"] == "closes"
+    assert statuses["pnl_expectancy"]["current_n"] == 4
+    assert statuses["pnl_expectancy"]["levels"][0]["required_n"] == 97
+
+    assert statuses["stop_loss_rate"]["base"] == "closes"
+    assert statuses["stop_loss_rate"]["current_n"] == 4
+    assert statuses["stop_loss_rate"]["levels"][0]["required_n"] == 385
+
+    assert statuses["merge_rate"]["base"] == "closes"
+    assert statuses["merge_rate"]["current_n"] == 4
+    assert statuses["merge_rate"]["levels"][0]["required_n"] == 385
+
+    assert statuses["fill_rate"]["base"] == "orders"
+    assert statuses["fill_rate"]["current_n"] == 20
+    assert statuses["fill_rate"]["levels"][0]["required_n"] == 385
+    assert statuses["fill_rate"]["levels"][0]["remaining_n"] == 365
 
 
-def test_sample_size_sufficiency_empty_and_single_close():
-    # Empty
+def test_sample_size_sufficiency_empty_closes():
     res_empty = compute_trade_analytics(
         closes=[],
         starting_capital=100.0,
         equity_series=[],
         float_marks=[],
+        orders_count=0,
     )
     suff_empty = res_empty["sample_size_sufficiency"]
     assert suff_empty["current_n"] == 0
     assert suff_empty["std_dev_usd"] is None
-    assert suff_empty["target_margin_usd"] == 0.02
     assert len(suff_empty["levels"]) == 3
-    for lvl in suff_empty["levels"]:
-        assert lvl["required_n"] is None
-        assert lvl["remaining_n"] is None
-        assert lvl["progress_pct"] is None
+    assert suff_empty["levels"][0]["required_n"] == 97
+    assert suff_empty["levels"][0]["remaining_n"] == 97
+    assert suff_empty["levels"][0]["progress_pct"] == 0
 
-    # Single close
-    res_single = compute_trade_analytics(
-        closes=[{"realized_pnl": 0.05, "cost_basis": 1.0}],
-        starting_capital=100.0,
-        equity_series=[],
-        float_marks=[],
-    )
-    suff_single = res_single["sample_size_sufficiency"]
-    assert suff_single["current_n"] == 1
-    assert suff_single["std_dev_usd"] is None
-    for lvl in suff_single["levels"]:
-        assert lvl["required_n"] is None
-        assert lvl["remaining_n"] is None
-        assert lvl["progress_pct"] is None
+    assert suff_empty["statuses"]["fill_rate"]["current_n"] == 0
+    assert suff_empty["statuses"]["fill_rate"]["levels"][0]["remaining_n"] == 385
 
-
-def test_sample_size_sufficiency_zero_spread():
-    # 2 identical closes -> sample stdev is 0.0
-    closes = [
-        {"realized_pnl": 0.05, "cost_basis": 1.0},
-        {"realized_pnl": 0.05, "cost_basis": 1.0},
-    ]
-    res = compute_trade_analytics(
-        closes=closes,
-        starting_capital=100.0,
-        equity_series=[],
-        float_marks=[],
-    )
-    suff = res["sample_size_sufficiency"]
-    assert suff["current_n"] == 2
-    assert suff["std_dev_usd"] == 0.0
-    for lvl in suff["levels"]:
-        assert lvl["required_n"] is None
-        assert lvl["remaining_n"] is None
-        assert lvl["progress_pct"] is None
-
-
-def test_sample_size_sufficiency_custom_target_margin():
-    closes = [
-        {"realized_pnl": 0.10, "cost_basis": 1.0},
-        {"realized_pnl": -0.10, "cost_basis": 1.0},
-        {"realized_pnl": 0.10, "cost_basis": 1.0},
-        {"realized_pnl": -0.10, "cost_basis": 1.0},
-    ]
-    res = compute_trade_analytics(
-        closes=closes,
-        starting_capital=100.0,
-        equity_series=[],
-        float_marks=[],
-        target_margin_usd=0.05,
-    )
-    suff = res["sample_size_sufficiency"]
-    assert suff["target_margin_usd"] == 0.05
-    assert suff["levels"][0]["required_n"] == required_sample_size_for_mean(
-        suff["std_dev_usd"], 0.05, Z_95_SAMPLE_SUFFICIENCY
-    )

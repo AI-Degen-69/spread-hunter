@@ -85,7 +85,7 @@ let lastStatusAtMs = null;
  * envelope; anything lower (or missing) means this page is newer than the
  * process answering it. Keep EXPECTED_PAYLOAD_VERSION matched with
  * KPI_PAYLOAD_VERSION in core_brain/kpi.py. */
-const EXPECTED_PAYLOAD_VERSION = 254;
+const EXPECTED_PAYLOAD_VERSION = 255;
 let payloadVersionWarned = false;
 
 // True when the payload is absent, malformed, or predates this page.
@@ -3621,16 +3621,85 @@ function renderSampleSufficiency(ta) {
   if (!host) return;
 
   const suff = ta?.sample_size_sufficiency || {};
+  const statuses = suff.statuses || {};
+  const hasStatuses = Object.keys(statuses).length > 0;
+
+  if (hasStatuses) {
+    const statusKeys = ['pnl_expectancy', 'stop_loss_rate', 'merge_rate', 'fill_rate'];
+    const blocksHtml = statusKeys.map(key => {
+      const st = statuses[key];
+      if (!st) return '';
+      const label = esc(st.label || key);
+      const base = esc(st.base || 'closes');
+      const currentN = (st.current_n != null && Number.isFinite(Number(st.current_n)))
+        ? Number(st.current_n)
+        : 0;
+      const targetParam = st.type === 'continuous'
+        ? `Cohen's d = ${st.effect_size_d || 0.20}`
+        : `Margin = ${(Number(st.target_margin || 0.05) * 100).toFixed(0)}%`;
+
+      const levels = Array.isArray(st.levels) ? st.levels : [];
+      // Focus on 95% primary gate row while also rendering full table or rows
+      const rows = levels.map(lv => {
+        const conf = esc(String(lv.confidence_pct || 0)) + '%';
+        const req = (lv.required_n != null && Number.isFinite(Number(lv.required_n)))
+          ? String(lv.required_n)
+          : 'unmeasured';
+        const rem = (lv.remaining_n != null && Number.isFinite(Number(lv.remaining_n)))
+          ? String(lv.remaining_n)
+          : 'unmeasured';
+        const prog = (lv.progress_pct != null && Number.isFinite(Number(lv.progress_pct)))
+          ? Math.max(0, Math.min(100, Number(lv.progress_pct)))
+          : (req !== 'unmeasured' ? 0 : null);
+
+        const progBarHtml = prog !== null
+          ? `<div class="dist-progress-wrap">
+               <div class="dist-progress-bar"><div class="dist-progress-fill" style="width:${prog}%"></div></div>
+               <span class="mono" style="font-size:11px;min-width:32px;text-align:right">${prog}%</span>
+             </div>`
+          : `<span class="mono" style="color:var(--text-muted)">unmeasured</span>`;
+
+        return `
+          <tr>
+            <td class="mono font-semibold">${conf}</td>
+            <td class="mono">${esc(req)}</td>
+            <td class="mono">${esc(rem)}</td>
+            <td class="progress-cell">${progBarHtml}</td>
+          </tr>
+        `;
+      }).join('');
+
+      return `
+        <div class="sample-suff-block" style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.05)">
+          <div class="sample-suff-meta" style="margin-bottom:6px">
+            <span><b class="font-display">${label}</b> <span class="mono" style="font-size:10px;color:var(--text-muted)">(${base})</span></span>
+            <span>Current: <b class="mono">${currentN}</b> | Target: <span class="mono">${targetParam}</span></span>
+          </div>
+          <table class="sample-suff-table">
+            <thead>
+              <tr>
+                <th>Confidence</th>
+                <th>Required</th>
+                <th>Remaining</th>
+                <th>Progress</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }).join('');
+
+    host.innerHTML = blocksHtml;
+    return;
+  }
+
+  // Fallback if statuses is absent
   const n = (suff.current_n != null && Number.isFinite(Number(suff.current_n)))
     ? Number(suff.current_n)
     : (ta?.n_closes != null ? Number(ta.n_closes) : 0);
-  const targetMargin = (suff.target_margin_usd != null && Number.isFinite(Number(suff.target_margin_usd)))
-    ? Number(suff.target_margin_usd)
-    : 0.02;
-  const stdDev = (suff.std_dev_usd != null && Number.isFinite(Number(suff.std_dev_usd)))
-    ? Number(suff.std_dev_usd)
-    : null;
-
   const defaultLevels = [
     { confidence_pct: 95, z: 1.95996, required_n: null, remaining_n: null, progress_pct: null },
     { confidence_pct: 98, z: 2.32635, required_n: null, remaining_n: null, progress_pct: null },
@@ -3641,8 +3710,6 @@ function renderSampleSufficiency(ta) {
   let noteHtml = '';
   if (n < 2) {
     noteHtml = `<div class="sample-suff-note mono">At least two closed trades are needed to measure spread.</div>`;
-  } else if (stdDev === 0) {
-    noteHtml = `<div class="sample-suff-note mono">All closed trades have the same result, so the spread is zero.</div>`;
   }
 
   const rows = levels.map(lv => {
@@ -3677,7 +3744,7 @@ function renderSampleSufficiency(ta) {
   host.innerHTML = `
     <div class="sample-suff-meta">
       <span>Current observations: <b class="mono">${n}</b></span>
-      <span>Target margin: <b class="mono">${fmtUSD(targetMargin)} / close</b></span>
+      <span>Effect size: <b class="mono">Cohen's d = 0.20</b></span>
     </div>
     <table class="sample-suff-table">
       <thead>
