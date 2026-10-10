@@ -33,7 +33,6 @@ def _wire_runtime(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(
         srv, "resolve_runtime_file", lambda name, root=None: runtime / name
     )
-    monkeypatch.setattr(srv, "_is_temp_or_test_db", lambda path: False)
     return runtime
 
 

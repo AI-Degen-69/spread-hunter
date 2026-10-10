@@ -62,7 +62,6 @@ def _wire_runtime(tmp_path, monkeypatch) -> Path:
     runtime.mkdir(exist_ok=True)
     monkeypatch.setattr(srv, "resolve_runtime_file",
                         lambda name, root=None: runtime / name)
-    monkeypatch.setattr(srv, "_is_temp_or_test_db", lambda path: False)
     return runtime
 
 

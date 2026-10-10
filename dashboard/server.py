@@ -987,6 +987,14 @@ def _is_temp_or_test_db(path: Any) -> bool:
     try:
         p = Path(path).resolve()
         temp_dir = Path(tempfile.gettempdir()).resolve()
+        runtime_dir = Path(resolve_runtime_file("shadow_run.json", root=LIVE_ROOT)).parent.resolve()
+        if temp_dir in runtime_dir.parents or runtime_dir == temp_dir:
+            # Running under a test fixture with runtime redirected to temp.
+            # Allow databases located within the fixture's sandboxed root,
+            # but reject foreign temp or pytest paths outside it.
+            fixture_root = runtime_dir.parent
+            if fixture_root in p.parents or p.parent == fixture_root:
+                return False
         if temp_dir in p.parents or p == temp_dir:
             return True
     except Exception:
