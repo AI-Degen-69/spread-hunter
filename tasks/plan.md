@@ -103,7 +103,7 @@ Verification: `python -m pytest -q tests/test_cycle_stream.py tests/test_trader_
 Checkpoint: decide event carries quotes[0] `{side, price, size}` + title,
 `intent_count` unchanged.
 
-### T4 — Plain-English rows, TRADES filter, details toggle [L] [Design/UI + UX/Copy]
+### T4 — Plain-English rows, TRADES filter, details toggle [x] [L] [Design/UI + UX/Copy]
 
 Target files: `dashboard/static/app.js` (~787–974), `dashboard/static/index.html`
 (~220–242), `dashboard/static/styles.css`, new

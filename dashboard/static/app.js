@@ -841,54 +841,225 @@ const EVENT_TRANSLATIONS = {
   'guardrail|guardrail_alert': 'Risk limit triggered. The guardrail watchdog is blocking new quotes until the alert clears.',
 };
 
-function translateEvent(ev) {
-  const svc = (ev.service || '').toLowerCase();
-  const action = (ev.action || '').toLowerCase();
-  const reason = ev.reason || '';
-  const slug = ev.market_slug || '';
+/* ── Stream sentences: one plain-English line per event ──
+ * Every row reads as a sentence with local time and market name: no service
+ * abbreviations, action codes, or raw slugs on the main line. Builders below
+ * are keyed by action and read only `extra`; unknown actions fall back to a
+ * plain-words prefix so a new producer never renders as code. */
 
-  // Try exact match first
-  let translation = EVENT_TRANSLATIONS[svc + '|' + action] || null;
+function streamMarketName(ev, lookup) {
+  const ex = (ev && ev.extra) || {};
+  if (ex.market_title) return String(ex.market_title);
+  const cid = ex.condition_id || '';
+  if (cid && typeof lookup === 'function') {
+    try {
+      const name = lookup(cid);
+      if (name) return String(name);
+    } catch { /* fall through to slug words */ }
+  }
+  const slug = (ev && ev.market_slug) || '';
+  if (slug) {
+    const words = String(slug).replace(/[-_]+/g, ' ').trim();
+    if (words) return words;
+  }
+  return 'a market';
+}
 
-  // If no exact match, try prefix match for dynamic actions (pairs_*)
-  if (!translation && action.startsWith('pairs_')) {
-    translation = EVENT_TRANSLATIONS['query|' + action] || EVENT_TRANSLATIONS['engine|' + action] || null;
+function streamTime(ev) {
+  try {
+    const s = fmtLocalTime(ev && ev.ts);
+    return s || '';
+  } catch { return ''; }
+}
+
+function streamShares(n) {
+  const f = Number(n);
+  if (!isFinite(f)) return 'some';
+  return String(Math.round(f * 100) / 100);
+}
+
+function streamPrice(n) {
+  const f = Number(n);
+  if (!isFinite(f) || f <= 0) return '';
+  return '$' + f.toFixed(f < 1 ? 2 : 3).replace(/0$/, '');
+}
+
+function humanizeAction(action) {
+  return String(action || '').replace(/[_-]+/g, ' ').trim() || 'activity';
+}
+
+function shareWord(n) {
+  return Number(n) === 1 ? 'share' : 'shares';
+}
+
+// Relayer states arrive as UPPER_SNAKE codes; skip reasons arrive as words.
+// Keep words untouched, turn codes into words so no code hits the main line.
+function plainReason(reason) {
+  const r = String(reason || '');
+  if (/^[A-Z0-9_\-\s]+$/.test(r) && /[_-]/.test(r)) {
+    return r.replace(/[_-]+/g, ' ').toLowerCase();
+  }
+  return r;
+}
+
+function quoteList(quotes) {
+  const parts = [];
+  for (const q of (quotes || [])) {
+    if (!q || (q.side !== 'UP' && q.side !== 'DOWN')) continue;
+    const px = streamPrice(q.price);
+    parts.push(`${q.side} ${streamShares(q.size)}${px ? ' at ' + px : ''}`);
+  }
+  return parts;
+}
+
+// Actions that count as trades regardless of which service emitted them:
+// fills, exits, completions, rescues, every merge/redeem outcome, and any
+// submit that actually placed orders.
+function isTradeEvent(ev) {
+  const action = ((ev && ev.action) || '').toLowerCase();
+  if (action === 'fill_recorded') return true;
+  if (action === 'lifecycle_exited' || action === 'lifecycle_completed' ||
+      action === 'lifecycle_aged_out_rescue') return true;
+  if (action.startsWith('merge_') || action.startsWith('redeem_')) return true;
+  if (action === 'submit') {
+    const ex = (ev && ev.extra) || {};
+    return Number(ex.submitted || 0) > 0;
+  }
+  return false;
+}
+
+function buildStreamSentence(ev, lookup) {
+  const action = ((ev && ev.action) || '').toLowerCase();
+  const ex = (ev && ev.extra) || {};
+  const reason = (ev && ev.reason) || '';
+  const market = streamMarketName(ev, lookup);
+  const clock = streamTime(ev);
+  const when = clock ? `${clock} — ` : '';
+  const because = reason ? ` (${plainReason(reason)})` : '';
+
+  if (action === 'fill_recorded') {
+    const out = ex.outcome === 'UP' || ex.outcome === 'DOWN' ? ` ${ex.outcome}` : '';
+    const px = streamPrice(ex.price);
+    return `${when}Bought${out} ${streamShares(ex.size)} ${shareWord(ex.size)}${px ? ' at ' + px : ''} on ${market}.`;
+  }
+  if (action === 'lifecycle_exited') {
+    const out = ex.outcome === 'UP' || ex.outcome === 'DOWN' ? ` ${ex.outcome}` : '';
+    const px = streamPrice(ex.fill_price || ex.min_price);
+    return `${when}Sold about${out} ${streamShares(ex.size)} ${shareWord(ex.size)}${px ? ' at about ' + px : ''} on ${market}${because}.`;
+  }
+  if (action === 'lifecycle_completed') {
+    const ask = streamPrice(ex.ask);
+    return `${when}Completed the pair on ${market}${ask ? ' at ' + ask + ' ask' : ''}${because}.`;
+  }
+  if (action === 'lifecycle_aged_out_rescue') {
+    return `${when}Rescued an aged-out position on ${market}${because}.`;
+  }
+  if (action.startsWith('merge_')) {
+    const n = ex.size != null ? `${streamShares(ex.size)} ${shareWord(ex.size)}` : '';
+    if (action === 'merge_executed') return `${when}Merge completed on ${market} (${n} now collateral).`;
+    if (action === 'merge_failed') return `${when}Merge on ${market} failed${because}.`;
+    if (action === 'merge_submitted') return n ? `${when}Sent ${n} on ${market} to the relayer for merging.` : `${when}Sent a merge on ${market} to the relayer.`;
+    if (action === 'merge_interrupted') return `${when}Merge on ${market} was interrupted before confirmation.`;
+    return `${when}Merge on ${market} needs a manual check${because}.`;
+  }
+  if (action.startsWith('redeem_')) {
+    if (action === 'redeem_executed') return `${when}Redemption completed on ${market}.`;
+    if (action === 'redeem_failed') return `${when}Redemption on ${market} failed${because}.`;
+    if (action === 'redeem_submitted') return `${when}Sent a redemption on ${market} to the relayer.`;
+    if (action === 'redeem_interrupted') return `${when}Redemption on ${market} was interrupted before confirmation.`;
+    return `${when}Redemption on ${market} needs a manual check${because}.`;
+  }
+  if (action === 'decide') {
+    const count = Number(ex.intent_count || 0);
+    if (count > 0) {
+      const parts = quoteList(ex.quotes);
+      const what = parts.length ? parts.join(' and ') : `${count} orders`;
+      return `${when}Decided to quote ${what} on ${market}.`;
+    }
+    return reason
+      ? `${when}Skipped ${market} because ${reason}.`
+      : `${when}Skipped ${market} — no quote this cycle.`;
+  }
+  if (action === 'submit') {
+    const n = Number(ex.submitted || 0);
+    if (n > 0) return `${when}Placed ${n} maker orders on ${market}.`;
+    return `${when}No orders placed on ${market}${because}.`;
   }
 
-  // Build context suffix from market slug only (reason is in the raw line)
-  let ctx = '';
-  if (slug) ctx = slug;
+  // Static fallbacks for televised-but-unchanged producers.
+  const svc = ((ev && ev.service) || '').toLowerCase();
+  const key = svc + '|' + action;
+  if (EVENT_TRANSLATIONS[key]) {
+    const base = EVENT_TRANSLATIONS[key];
+    return `${when}${base} (${market})`;
+  }
+  if (action.startsWith('pairs_') && (EVENT_TRANSLATIONS['query|' + action] || EVENT_TRANSLATIONS['engine|' + action])) {
+    return `${when}${EVENT_TRANSLATIONS['query|' + action] || EVENT_TRANSLATIONS['engine|' + action]} (${market})`;
+  }
 
-  return { translation, ctx };
+  // Plain-words prefix fallback: never a code, never an underscore.
+  const prefix = (svc === 'decide' || svc === 'fleet') ? 'Quoting update'
+    : (svc === 'query' || svc === 'engine') ? 'Venue check'
+    : (svc === 'filter' || svc === 'screener') ? 'Market scan'
+    : svc === 'guardrail' ? 'Risk note'
+    : 'Status update';
+  return `${when}${prefix} on ${market}: ${humanizeAction(action)}${because}.`;
+}
+
+function translateEvent(ev) {
+  return { translation: buildStreamSentence(ev), ctx: '' };
 }
 
 let tickerFilter = 'all';
 let tickerAutoscroll = true;
+let tickerShowDetails = false;
 const allTickerEvents = [];
 
-function appendTickerEvent(line, translation, ctx, service, action) {
+function setTickerFilter(f) { tickerFilter = f || 'all'; renderTickerFeed(); }
+function setTickerShowDetails(b) { tickerShowDetails = !!b; renderTickerFeed(); }
+
+function appendTickerEvent(line, translation, ctx, service, action, extra) {
   const empty = tickerEl.querySelector('.empty-state');
   if (empty) empty.remove();
 
-  const evObj = { line, translation, ctx, service: (service || '').toLowerCase(), action: (action || '').toLowerCase() };
+  const evObj = { line, translation, ctx, service: (service || '').toLowerCase(), action: (action || '').toLowerCase(), extra: extra || {} };
   allTickerEvents.unshift(evObj);
   while (allTickerEvents.length > 200) allTickerEvents.pop();
 
   renderTickerFeed();
 }
 
+function tickerMatches(ev) {
+  if (tickerFilter === 'all') return true;
+  // The TRADES tab is action-keyed and service-independent: fills, exits,
+  // completions, rescues, every merge/redeem outcome, and submits that
+  // actually placed orders. `decide` is the pre-rename value of the same tab.
+  if (tickerFilter === 'trades' || tickerFilter === 'decide') return isTradeEvent(ev);
+  if (tickerFilter === 'filter') return ev.service.includes('filter') || ev.service.includes('screener');
+  if (tickerFilter === 'guardrail') return ev.service.includes('guardrail') || ev.action.includes('alert') || ev.action.includes('stop_loss');
+  return true;
+}
+
+function tickerEmptyState() {
+  if (tickerFilter === 'trades' || tickerFilter === 'decide') {
+    return { title: 'No trades yet.', msg: 'Fills, sells, exits, merges and redeems show up here as they happen.' };
+  }
+  if (tickerFilter === 'filter') {
+    return { title: 'No market filter updates yet.', msg: 'Scans show up here as they run.' };
+  }
+  if (tickerFilter === 'guardrail') {
+    return { title: 'No alerts right now.', msg: 'Risk notes show up here if a guardrail trips.' };
+  }
+  return { title: 'No events yet.', msg: 'Events will appear here as the strategy execution loop runs.' };
+}
+
 function renderTickerFeed() {
   tickerEl.innerHTML = '';
-  const filtered = allTickerEvents.filter(ev => {
-    if (tickerFilter === 'all') return true;
-    if (tickerFilter === 'decide') return ev.service.includes('decide') || ev.service.includes('fleet') || ev.action.includes('buy') || ev.action.includes('quote') || ev.action.includes('fill');
-    if (tickerFilter === 'filter') return ev.service.includes('filter') || ev.service.includes('screener');
-    if (tickerFilter === 'guardrail') return ev.service.includes('guardrail') || ev.action.includes('alert') || ev.action.includes('stop_loss');
-    return true;
-  });
+  const filtered = allTickerEvents.filter(tickerMatches);
 
   if (filtered.length === 0) {
-    tickerEl.innerHTML = '<div class="empty-state"><div class="empty-state-title">No events matched</div><div class="empty-state-msg">Try selecting "ALL" or waiting for live execution cycles.</div></div>';
+    const st = tickerEmptyState();
+    tickerEl.innerHTML = `<div class="empty-state"><div class="empty-state-title">${esc(st.title)}</div><div class="empty-state-msg">${esc(st.msg)}</div></div>`;
     return;
   }
 
@@ -896,7 +1067,8 @@ function renderTickerFeed() {
     const div = document.createElement('div');
     div.className = 'ticker-event';
     if (ev.translation) {
-      div.innerHTML = `<div class="ticker-translation">${esc(ev.translation)}${ev.ctx ? ' <span class="ticker-ctx">' + esc(ev.ctx) + '</span>' : ''}</div><div class="ticker-raw">${esc(ev.line)}</div>`;
+      const raw = tickerShowDetails ? `<div class="ticker-raw">${esc(ev.line)}</div>` : '';
+      div.innerHTML = `<div class="ticker-translation">${esc(ev.translation)}</div>${raw}`;
     } else {
       div.innerHTML = `<div class="ticker-raw">${esc(ev.line)}</div>`;
     }
@@ -918,11 +1090,20 @@ document.querySelectorAll('.ticker-filter-btn').forEach(btn => {
   });
 });
 
+const btnTickerDetails = document.getElementById('btn-ticker-details');
+if (btnTickerDetails) {
+  btnTickerDetails.addEventListener('click', () => {
+    tickerShowDetails = !tickerShowDetails;
+    btnTickerDetails.textContent = tickerShowDetails ? 'HIDE DETAILS' : 'SHOW DETAILS';
+    renderTickerFeed();
+  });
+}
+
 const btnClearTicker = document.getElementById('btn-clear-ticker');
 if (btnClearTicker) {
   btnClearTicker.addEventListener('click', () => {
     allTickerEvents.length = 0;
-    tickerEl.innerHTML = '<div class="empty-state"><div class="empty-state-title">Event stream cleared</div><div class="empty-state-msg">New events will appear here as the bot executes.</div></div>';
+    tickerEl.innerHTML = '<div class="empty-state"><div class="empty-state-title">Feed cleared</div><div class="empty-state-msg">New events will appear here.</div></div>';
   });
 }
 
@@ -952,7 +1133,7 @@ function connectSSE() {
       const reason = ev.reason ? ` — ${ev.reason}` : '';
       const rawLine = `[${ts}] [${svc}] ${action} ${slug}${reason}`;
       const { translation, ctx } = translateEvent(ev);
-      appendTickerEvent(rawLine, translation, ctx, ev.service, ev.action);
+      appendTickerEvent(rawLine, translation, ctx, ev.service, ev.action, ev.extra);
     } catch {
       // Non-JSON line
     }
@@ -7879,7 +8060,11 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink,
+    EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
+    streamMarketName, quoteList, humanizeAction, appendTickerEvent,
+    renderTickerFeed, tickerMatches, tickerEmptyState,
+    setTickerFilter, setTickerShowDetails, groupOrdersByMarket, renderBrokerPortfolioOverview, portfolioEquity, buildBrokerEquitySeries,
 
     statsFilterScope, pruneStatsSubnav, STATS_VIEW_TARGETS, applyStatsViewFilter,
     payloadIsStale, applyPayloadVersion, EXPECTED_PAYLOAD_VERSION,
