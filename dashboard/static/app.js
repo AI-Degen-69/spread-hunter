@@ -1597,6 +1597,14 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
 
   const anyServiceRunning = anyExecutionServiceRunning;
 
+  let activeCount = 0;
+  if (status?.services) {
+    activeCount = executionServiceKeys.filter(k => Boolean(status.services[k]?.running)).length;
+  }
+  if (guardrailHealth?.running) activeCount++;
+
+  const servicesState = processState(isRunning, status?.registry_unreadable);
+
   renderServicesDropdown(status, guardrailHealth, guardrailAlerts, activeCount, servicesState);
 
   if (masterIndicator) {
@@ -1633,13 +1641,6 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   const hudGuardrailState = document.getElementById('hud-guardrail-state');
   const hudGuardrailSub = document.getElementById('hud-guardrail-sub');
 
-  let activeCount = 0;
-  if (status?.services) {
-    activeCount = executionServiceKeys.filter(k => Boolean(status.services[k]?.running)).length;
-  }
-  if (guardrailHealth?.running) activeCount++;
-
-  const servicesState = processState(isRunning, status?.registry_unreadable);
   if (servicesPill) servicesPill.className = `pill state-${servicesState} mono`;
   if (hudServicesState) hudServicesState.textContent = servicesState.toUpperCase();
   if (hudServicesSub) hudServicesSub.textContent = isRunning ? `${activeCount} active` : 'all stopped';
@@ -1670,7 +1671,9 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
     if (isStarting || isStopping) {
       // Busy overrides status: no second click while a request is in flight.
       const busyLabel = isStopping ? 'STOPPING…' : 'STARTING…';
-      masterToggle.className = isStopping ? 'btn-stop-run' : 'btn-start-run';
+      masterToggle.className = isStopping
+        ? (isShadow ? 'btn-stop-run btn-stop-shadow' : 'btn-stop-run')
+        : (isShadow ? 'btn-start-run btn-start-shadow' : 'btn-start-run');
       masterToggle.disabled = true;
       masterToggle.setAttribute('aria-busy', 'true');
       masterToggle.style.opacity = '0.6';
@@ -1685,7 +1688,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.dataset.mode = 'shadow';
         const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
         if (shadowRunning) {
-          masterToggle.className = 'btn-stop-run';
+          masterToggle.className = 'btn-stop-run btn-stop-shadow';
           masterToggle.setAttribute('aria-label', 'Stop shadow rehearsal');
           masterToggle.dataset.action = 'stop';
           masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP SHADOW`;
@@ -1694,7 +1697,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
           masterToggle.style.cursor = 'pointer';
           masterToggle.title = 'Stop shadow rehearsal for this database';
         } else {
-          masterToggle.className = 'btn-start-run';
+          masterToggle.className = 'btn-start-run btn-start-shadow';
           masterToggle.setAttribute('aria-label', 'Start shadow rehearsal');
           masterToggle.dataset.action = 'start';
           masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>START SHADOW`;

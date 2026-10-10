@@ -206,6 +206,7 @@ function reset() {
     action: masterBtn.dataset.action,
     mode: masterBtn.dataset.mode,
     html: masterBtn.innerHTML,
+    className: masterBtn.className,
   };
   reset();
   await masterBtn.click();
@@ -218,6 +219,7 @@ function reset() {
     action: masterBtn.dataset.action,
     mode: masterBtn.dataset.mode,
     html: masterBtn.innerHTML,
+    className: masterBtn.className,
   };
   reset();
   await masterBtn.click();

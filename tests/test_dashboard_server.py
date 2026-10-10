@@ -1957,13 +1957,14 @@ def test_master_toggle_controls_shadow_rehearsal_on_shadow_view():
     out = json.loads(res.stdout)
     master = out["master"]
 
-    # Shadow view, not running: enabled, full opacity, pointer, START SHADOW
+    # Shadow view, not running: enabled, full opacity, pointer, START SHADOW with shadow class
     assert master["shadow"]["disabled"] is False
     assert master["shadow"]["opacity"] == "1"
     assert master["shadow"]["cursor"] == "pointer"
     assert master["shadow"]["action"] == "start"
     assert master["shadow"]["mode"] == "shadow"
     assert "START SHADOW" in master["shadow"]["html"]
+    assert "btn-start-shadow" in master["shadow"]["className"]
 
     # Click on START SHADOW: POSTs to /api/system/shadow/start, 0 alerts, 0 live starts
     assert master["shadowClick"]["prompts"] == 0
@@ -1971,11 +1972,12 @@ def test_master_toggle_controls_shadow_rehearsal_on_shadow_view():
     assert master["shadowClick"]["shadowStarts"] == 1
     assert master["shadowClick"]["wholeStackStarts"] == 0
 
-    # Shadow view, rehearsal running: enabled STOP SHADOW
+    # Shadow view, rehearsal running: enabled STOP SHADOW with shadow class
     assert master["shadowRunning"]["disabled"] is False
     assert master["shadowRunning"]["action"] == "stop"
     assert master["shadowRunning"]["mode"] == "shadow"
     assert "STOP SHADOW" in master["shadowRunning"]["html"]
+    assert "btn-stop-shadow" in master["shadowRunning"]["className"]
 
     # Click on STOP SHADOW: POSTs to /api/system/shadow/stop
     assert master["shadowStopClick"]["shadowStops"] == 1
