@@ -1944,7 +1944,6 @@ def test_shadow_view_toggle_never_prompts_or_posts_a_start():
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
-@pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_master_toggle_controls_shadow_rehearsal_on_shadow_view():
     """In SHADOW view, master button toggles shadow rehearsal (START SHADOW / STOP SHADOW)."""
     harness = Path(__file__).resolve().parent / "js" / "start_toggle_harness.cjs"
