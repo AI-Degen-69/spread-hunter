@@ -2280,6 +2280,8 @@ class TestFixedStartingBankroll:
             return []
 
         monkeypatch.setattr(trader_loop, "run", fake_loop_run)
+        monkeypatch.setattr(sr, "shadow_heartbeat_path",
+                            lambda root=None, run_id="": tmp_path / "shadow_run.json")
         sr.run_shadow(
             minutes=0.0, db_path=tmp_path / "shadow.db",
             markets_fn=lambda max_markets=None: [],

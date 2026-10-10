@@ -26,6 +26,7 @@ import logging
 import secrets
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -932,6 +933,8 @@ def read_other_live_shadow_runs(active_db_path: str | None, now: float | None = 
         if run is None or not run.get("running"):
             continue
         run_db = run.get("db_path")
+        if _is_temp_or_test_db(run_db):
+            continue
         if _same_path(run_db, active_db_path):
             continue
         run_id = str(run.get("run_id") or path.stem)
@@ -971,6 +974,25 @@ def _same_path(a: Any, b: Any) -> bool:
         return Path(a).resolve() == Path(b).resolve()
     except (OSError, ValueError, TypeError, RuntimeError):
         return False
+
+
+def _is_temp_or_test_db(path: Any) -> bool:
+    """Whether `path` is in a temporary or pytest directory.
+
+    Temporary database files created under system Temp or pytest directories
+    are transient test artifacts and are out of scope for the operations dashboard.
+    """
+    if not path:
+        return False
+    try:
+        p = Path(path).resolve()
+        temp_dir = Path(tempfile.gettempdir()).resolve()
+        if temp_dir in p.parents or p == temp_dir:
+            return True
+    except Exception:
+        pass
+    norm = str(path).replace("\\", "/").lower()
+    return "/temp/" in norm or "/tmp/" in norm or "pytest" in norm or "\\temp\\" in str(path).lower()
 
 
 def _read_shadow_heartbeat_file(
@@ -1120,6 +1142,8 @@ def list_shadow_runs(active_db_path: str | None = None,
             continue
         run = _read_shadow_heartbeat_file(path, active_db_path, now, match_db=False)
         if run is None:
+            continue
+        if _is_temp_or_test_db(run.get("db_path")):
             continue
         run["is_active_db"] = _same_path(run.get("db_path"), active_db_path)
         run["source_file"] = path.name
@@ -2048,6 +2072,15 @@ def switch_active_db(path: str | None) -> dict:
         return {"ok": False,
                 "message": "No database path given.",
                 "status": get_system_status()}
+    if _is_temp_or_test_db(path):
+        return {
+            "ok": False,
+            "message": (
+                f"Refused database at {path}: temporary or test directories "
+                "are out of scope for the operations dashboard."
+            ),
+            "status": get_system_status(),
+        }
     target = Path(path)
     if not target.is_file():
         return {

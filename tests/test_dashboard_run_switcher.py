@@ -62,6 +62,7 @@ def _wire_runtime(tmp_path, monkeypatch) -> Path:
     runtime.mkdir(exist_ok=True)
     monkeypatch.setattr(srv, "resolve_runtime_file",
                         lambda name, root=None: runtime / name)
+    monkeypatch.setattr(srv, "_is_temp_or_test_db", lambda path: False)
     return runtime
 
 
@@ -245,3 +246,66 @@ def test_switching_to_a_file_that_is_not_there_is_refused(client, tmp_path):
     assert "nope.db" in body["message"]
     # The refusal must not have moved the page.
     assert Path(body["status"]["db_path"]).name == "01_shadow.db"
+
+
+# ── Temp / test DB exclusion: keep transient artifacts out of scope ───────
+
+def test_is_temp_or_test_db_detection():
+    import tempfile
+    temp_dir = tempfile.gettempdir()
+    assert srv._is_temp_or_test_db(f"{temp_dir}\\test.db") is True
+    assert srv._is_temp_or_test_db(f"{temp_dir}/pytest-123/shadow.db") is True
+    assert srv._is_temp_or_test_db("C:\\Users\\Tiger\\AppData\\Local\\Temp\\pytest-of-Tiger\\pytest-2504\\test0\\shadow.db") is True
+    assert srv._is_temp_or_test_db("/tmp/shadow.db") is True
+    assert srv._is_temp_or_test_db("C:\\Users\\Tiger\\Agents\\Projects\\spread-hunter\\data\\orders.db") is False
+    assert srv._is_temp_or_test_db("data/NN_shadow_123.db") is False
+    assert srv._is_temp_or_test_db(None) is False
+
+
+def test_temp_and_pytest_dbs_are_excluded_from_shadow_run_list(tmp_path, monkeypatch):
+    import tempfile
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    monkeypatch.setattr(srv, "resolve_runtime_file",
+                        lambda name, root=None: runtime / name)
+    # Testing server's real _is_temp_or_test_db, NOT mocked
+    normal_db = srv.LIVE_ROOT / "data" / "01_shadow_real.db"
+    temp_db = Path(tempfile.gettempdir()) / "pytest-999" / "shadow.db"
+
+    _hb(runtime, "shadow_run_temp.json", temp_db, "temp-run", age=2.0)
+    _hb(runtime, "shadow_run_normal.json", normal_db, "normal-run", age=2.0)
+
+    runs = srv.list_shadow_runs(now=_clock())
+    run_ids = [r["run_id"] for r in runs]
+    assert "normal-run" in run_ids
+    assert "temp-run" not in run_ids
+
+
+def test_temp_and_pytest_dbs_are_excluded_from_other_live_runs(tmp_path, monkeypatch):
+    import tempfile
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    monkeypatch.setattr(srv, "resolve_runtime_file",
+                        lambda name, root=None: runtime / name)
+    # Testing server's real _is_temp_or_test_db, NOT mocked
+    normal_db = srv.LIVE_ROOT / "data" / "01_shadow_real.db"
+    temp_db = Path(tempfile.gettempdir()) / "pytest-999" / "shadow.db"
+
+    _hb(runtime, "shadow_run_temp.json", temp_db, "temp-run", age=2.0)
+    _hb(runtime, "shadow_run_normal.json", normal_db, "normal-run", age=2.0)
+
+    other = srv.read_other_live_shadow_runs(active_db_path="data/orders.db", now=_clock())
+    run_ids = [r["run_id"] for r in other]
+    assert "normal-run" in run_ids
+    assert "temp-run" not in run_ids
+
+
+def test_switching_to_temp_db_is_refused(client):
+    import tempfile
+    temp_db = str(Path(tempfile.gettempdir()) / "test.db")
+    res = client.post("/api/system/db", params={"db": temp_db}, headers=_token())
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert "temporary or test directories are out of scope" in body["message"]
+
