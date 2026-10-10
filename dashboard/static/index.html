@@ -50,7 +50,7 @@
   <link rel="stylesheet" href="/static/styles.css?v=5">
   <!-- Sidebar-pages layout. Every rule is scoped to a class `prototype.js`
        only adds on /prototype, so this is inert on the live page. -->
-  <link rel="stylesheet" href="/static/prototype.css">
+  <link rel="stylesheet" href="/static/prototype.css?v=6">
 </head>
 <body>
 <div class="container">
@@ -134,28 +134,39 @@
 
     <!-- Orders & Trades: one table, three views of the same run -->
     <div class="card" style="margin-bottom:16px" id="orders-trades-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px" class="ot-card-header">
         <div>
-          <div class="font-display" style="font-size:15px;letter-spacing:0.04em;color:var(--text-primary)">
-            ORDERS &amp; TRADES
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div class="font-display" style="font-size:15px;letter-spacing:0.04em;color:var(--text-primary)">
+              ORDERS &amp; TRADES
+            </div>
+            <span class="ot-header-badge">PAIR-NATIVE ARB</span>
           </div>
           <div id="orders-trades-note" style="font-size:11px;color:var(--text-muted);margin-top:2px">
-            Markets that graduated the Market Filter and are being quoted.
+            Markets that graduated the Market Filter and are being quoted. Dual-leg arbitrage execution pipeline.
           </div>
         </div>
-        <div class="ot-tabs" role="tablist" aria-label="Orders and trades view">
-          <button class="ot-tab-btn active" type="button" role="tab" aria-selected="true"
-                  aria-controls="orders-trades-panel"
-                  data-ot-view="active-markets">ACTIVE MARKETS <span class="ot-count mono" data-ot-count="active-markets">0</span></button>
-          <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
-                  aria-controls="orders-trades-panel"
-                  data-ot-view="open-orders">Orders <span class="ot-count mono" data-ot-count="open-orders">0</span></button>
-          <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
-                  aria-controls="orders-trades-panel"
-                  data-ot-view="positions">OPEN POSITIONS <span class="ot-count mono" data-ot-count="positions">0</span></button>
-          <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
-                  aria-controls="orders-trades-panel"
-                  data-ot-view="closed-trades">CLOSED TRADES <span class="ot-count mono" data-ot-count="closed-trades">0</span></button>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div class="ot-tabs" role="tablist" aria-label="Orders and trades view">
+            <button class="ot-tab-btn active" type="button" role="tab" aria-selected="true"
+                    aria-controls="orders-trades-panel"
+                    data-ot-view="active-markets">Active Markets <span class="ot-count mono" data-ot-count="active-markets">0</span></button>
+            <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
+                    aria-controls="orders-trades-panel"
+                    data-ot-view="open-orders">Orders <span class="ot-count mono" data-ot-count="open-orders">0</span></button>
+            <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
+                    aria-controls="orders-trades-panel"
+                    data-ot-view="positions">Open Positions <span class="ot-count mono" data-ot-count="positions">0</span></button>
+            <button class="ot-tab-btn" type="button" role="tab" aria-selected="false"
+                    aria-controls="orders-trades-panel"
+                    data-ot-view="closed-trades">Closed Trades <span class="ot-count mono" data-ot-count="closed-trades">0</span></button>
+          </div>
+          <div class="ot-search-container">
+            <svg class="ot-search-icon" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:14px;height:14px;position:absolute;left:10px;">
+              <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            <input id="ot-search-input" class="ot-search-input" type="text" placeholder="Filter market or category...">
+          </div>
         </div>
       </div>
       <div id="orders-trades-panel" role="tabpanel" style="overflow-x:auto">
@@ -685,9 +696,9 @@
 <script>
   const CONTROL_TOKEN = "__LIVE_DASH_CONTROL_TOKEN__";
 </script>
-<script src="/static/app.js?v=5"></script>
+<script src="/static/app.js?v=6"></script>
 <!-- Runs after app.js has bound every panel, and only on /prototype: it moves
      those same nodes into the sidebar pages rather than re-rendering them. -->
-<script src="/static/prototype.js"></script>
+<script src="/static/prototype.js?v=6"></script>
 </body>
 </html>

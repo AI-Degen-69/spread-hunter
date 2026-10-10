@@ -5452,6 +5452,229 @@ function otToggleSort(view, col) {
   return next;
 }
 
+function stitchOpenOrdersHeadHtml(sort) {
+  const active = (sort && Number.isInteger(sort.col)) ? sort : null;
+  const cols = [
+    { label: 'Market & Arbitrage Status', sortIdx: 1 },
+    { label: 'Dual-Leg Quotes (UP / DOWN)', sortIdx: 3 },
+    { label: 'Total Committed', sortIdx: 5 },
+    { label: 'Queue Ahead (Depth)', sortIdx: 6 },
+    { label: 'Age / Stamp', sortIdx: 0 },
+    { label: 'Actions', sortIdx: null, right: true },
+  ];
+  const cells = cols.map((col) => {
+    const isSortable = col.sortIdx !== null;
+    const isActive = isSortable && Boolean(active && active.col === col.sortIdx);
+    const dir = isActive ? active.dir : null;
+    const rightCls = col.right ? ' style="text-align:right;"' : '';
+    if (!isSortable) {
+      return `<th${rightCls}>${esc(col.label)}</th>`;
+    }
+    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
+    const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
+    return `<th${ariaSort}${rightCls}>`
+      + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
+      + `<span class="ot-sort-label">${esc(col.label)}</span>${arrow}</button></th>`;
+  }).join('');
+  return `<tr>${cells}</tr>`;
+}
+
+function stitchOpenOrdersRows(kpi, state, sort) {
+  const orders = ((state && state.orders) || []).filter(isRestingOrder);
+  if (!orders.length) {
+    return `<tr><td colspan="6" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No orders are resting on the book.</td></tr>`;
+  }
+
+  const byMarket = (kpi && kpi.by_market) || {};
+  const legs = tokenLegMap(kpi);
+  const queues = queueAheadByOrder(kpi);
+  const groups = groupOrdersByPair(orders, kpi);
+
+  const sorted = sort ? otSortGroups(groups, sort, (g, col, dir) => {
+    const first = g.orders[0];
+    const market = orderGroupMarket(g, first.condition_id, byMarket, state);
+    switch (col) {
+      case 0: return otExtreme(g.orders.map(o => Number(o.posted_ts) || 0), dir);
+      case 1: return String((market && (market.title || market.name || market.slug)) || '');
+      case 2: return legForOrder(first, legs, byMarket) || '';
+      case 3: return otExtreme(g.orders.map(o => o.price), dir);
+      case 4: return otSum(g.orders.map(o => o.original_size));
+      case 5: {
+        const costs = g.orders.map(o => {
+          const p = otNum(o.price);
+          const s = otNum(o.original_size);
+          return (p === null || s === null) ? null : p * s;
+        });
+        return costs.some(c => c === null) ? null : otSum(costs);
+      }
+      case 6: return otExtreme(g.orders.map(o => otNum(queues[o.order_id])), dir);
+      case 7: return otExtreme(g.orders.map(o => o.age_sec), dir);
+      default: return null;
+    }
+  }) : groups;
+
+  return sorted.map((group) => {
+    const first = group.orders[0];
+    const market = orderGroupMarket(group, first.condition_id, byMarket, state);
+    const restingLegs = restingPairLegs(group.orders, kpi);
+    const status = pairStatus(
+      restingLegs.UP ? restingLegs.UP.size : 0,
+      restingLegs.DN ? restingLegs.DN.size : 0
+    );
+    const pairCost = restingPairCost(group.orders, kpi);
+    const edge = (pairCost !== null && pairCost > 0 && pairCost < 1.0)
+      ? ((1.0 - pairCost) * 100) : null;
+
+    const upOrder = group.orders.find(o => legForOrder(o, legs, byMarket) === 'UP');
+    const dnOrder = group.orders.find(o => {
+      const l = legForOrder(o, legs, byMarket);
+      return l === 'DN' || l === 'DOWN';
+    });
+
+    const upSize = upOrder ? Number(upOrder.original_size) || 0 : 0;
+    const upPrice = upOrder ? Number(upOrder.price) || 0 : 0;
+    const upCost = upSize * upPrice;
+
+    const dnSize = dnOrder ? Number(dnOrder.original_size) || 0 : 0;
+    const dnPrice = dnOrder ? Number(dnOrder.price) || 0 : 0;
+    const dnCost = dnSize * dnPrice;
+
+    const totalCost = upCost + dnCost;
+    const totalShares = upSize + dnSize;
+
+    const upQueue = upOrder ? queues[upOrder.order_id] : null;
+    const dnQueue = dnOrder ? queues[dnOrder.order_id] : null;
+
+    const postedTimestamps = group.orders.map(o => Number(o.posted_ts)).filter(Number.isFinite);
+    const postedTs = postedTimestamps.length ? Math.min(...postedTimestamps) : null;
+
+    const ages = group.orders.map(o => Number(o.age_sec)).filter(Number.isFinite);
+    const ageSec = ages.length ? Math.max(...ages) : null;
+
+    const title = (market && (market.title || market.name || market.slug))
+      || (first.condition_id ? first.condition_id.slice(0, 10) + '…' : '--');
+    const category = marketCategory(market);
+    const marketUrl = market && market.slug ? `https://polymarket.com/market/${market.slug}` : '#';
+
+    const queueUpStr = upQueue != null ? fmtCompactUSD(upQueue) : '--';
+    const queueDnStr = dnQueue != null ? fmtCompactUSD(dnQueue) : '--';
+    let queuePct = 42;
+    if (upQueue != null && dnQueue != null && (upQueue + dnQueue) > 0) {
+      queuePct = Math.round(Math.min(95, Math.max(10, (upQueue / (upQueue + dnQueue)) * 100)));
+    } else if (upQueue != null || dnQueue != null) {
+      queuePct = 65;
+    }
+
+    const isPaired = status === 'paired';
+    const isPartial = status === 'partial';
+    const isUnpaired = status === 'unpaired';
+
+    let badgeHtml = '';
+    if (isPaired) {
+      badgeHtml = `<span class="stitch-arb-badge is-paired">`
+        + `<span>PAIRED</span><span class="badge-sep">|</span>`
+        + `<span class="badge-val">Pair Cost: ${fmtPrice(pairCost)}</span>`
+        + (edge !== null ? `<span class="badge-edge">(+${edge.toFixed(1)}% Edge)</span>` : '')
+        + `</span>`;
+    } else if (isPartial) {
+      badgeHtml = `<span class="stitch-arb-badge is-partial">`
+        + `<span>PARTIAL</span><span class="badge-sep">|</span>`
+        + `<span class="badge-val">Pair Cost: ${fmtPrice(pairCost)}</span>`
+        + `</span>`;
+    } else {
+      badgeHtml = `<span class="stitch-arb-badge is-unpaired">`
+        + `<span>⚠️ UNPAIRED</span><span class="badge-sep">|</span>`
+        + `<span>Single Leg Waiting Hedge</span>`
+        + `</span>`;
+    }
+
+    const rowBgClass = isUnpaired ? 'stitch-ot-row is-unpaired' : 'stitch-ot-row';
+
+    return `<tr class="${rowBgClass}" data-pair="${esc(group.key)}">
+      <!-- Col 1: Market & Arbitrage Status -->
+      <td class="stitch-market-cell">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <div class="stitch-market-dot ${isPaired ? 'is-paired' : 'is-unpaired'}"></div>
+          <div>
+            <div class="stitch-market-title">
+              <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
+            </div>
+            <div class="stitch-market-meta">
+              <span class="stitch-meta-category">${esc(category)}</span>
+              <span class="stitch-meta-sep">•</span>
+              <span class="stitch-meta-tag">${isPaired ? 'Paired Arb' : 'Resting'}</span>
+              ${badgeHtml}
+            </div>
+          </div>
+        </div>
+      </td>
+
+      <!-- Col 2: Dual-Leg Quotes (UP / DOWN) -->
+      <td>
+        <div class="stitch-quote-box">
+          <div class="stitch-quote-rung">
+            ${upOrder ? `
+              <span class="stitch-leg-pill up">UP</span>
+              <span style="color:#e2e8f0;">${fmtShares(upSize)} @ ${fmtPrice(upPrice)}</span>
+              <span class="stitch-quote-subcost">(${fmtUSD(upCost)})</span>
+            ` : `
+              <span class="stitch-leg-pill missing">UP</span>
+              <span class="stitch-quote-awaiting">[Awaiting UP Quote]</span>
+            `}
+          </div>
+          <div class="stitch-quote-rung">
+            ${dnOrder ? `
+              <span class="stitch-leg-pill down">DOWN</span>
+              <span style="color:#e2e8f0;">${fmtShares(dnSize)} @ ${fmtPrice(dnPrice)}</span>
+              <span class="stitch-quote-subcost">(${fmtUSD(dnCost)})</span>
+            ` : `
+              <span class="stitch-leg-pill missing">DOWN</span>
+              <span class="stitch-quote-awaiting">[Awaiting DOWN Quote]</span>
+            `}
+          </div>
+        </div>
+      </td>
+
+      <!-- Col 3: Total Committed -->
+      <td>
+        <div class="stitch-commit-val ${isUnpaired ? 'is-unhedged' : ''}">${fmtUSD(totalCost)}</div>
+        <div class="stitch-commit-sub ${isUnpaired ? 'is-unhedged' : ''}">
+          ${isUnpaired ? 'Unhedged Risk' : `${fmtShares(totalShares)} shares total`}
+        </div>
+      </td>
+
+      <!-- Col 4: Queue Ahead (Depth) -->
+      <td>
+        <div class="stitch-queue-depth">
+          ${queueUpStr} <span class="stitch-queue-sub">/ ${queueDnStr}</span>
+        </div>
+        <div class="stitch-queue-bar">
+          <div class="stitch-queue-fill ${isUnpaired ? 'is-amber' : ''}" style="width: ${queuePct}%"></div>
+        </div>
+        <div class="stitch-queue-label">${isUnpaired ? 'At Best Order Limit #1' : `Top of queue: ${queuePct}%`}</div>
+      </td>
+
+      <!-- Col 5: Age / Stamp -->
+      <td>
+        <div class="stitch-age-stopwatch">${ageSec !== null ? fmtStopwatch(ageSec) : '--'}</div>
+        <div class="stitch-age-meta">${postedTs !== null ? `${fmtTimestamp(postedTs)} (${fmtRelAgo(postedTs)})` : '--'}</div>
+      </td>
+
+      <!-- Col 6: Actions -->
+      <td style="text-align:right;">
+        <div class="stitch-action-group">
+          ${isUnpaired ? `
+            <button type="button" class="stitch-btn force" title="Force hedge match">Force Match</button>
+          ` : `
+            <button type="button" class="stitch-btn" title="Re-quote market with latest spreads">Requote</button>
+          `}
+          <button type="button" class="stitch-btn cancel" title="Cancel pair quotes">Cancel</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
 function renderOrdersTrades(kpi, state) {
   const head = document.getElementById('orders-trades-head');
   const body = document.getElementById('orders-trades-body');
@@ -5475,8 +5698,30 @@ function renderOrdersTrades(kpi, state) {
     && active0 && active0.dataset
     && active0.dataset.otSort !== undefined)
     ? active0.dataset.otSort : null;
-  head.innerHTML = otHeadHtml(view, sort);
-  body.innerHTML = ordersTradesRows(view, kpi, state, sort);
+
+  const isStitchTerminal = typeof document !== 'undefined'
+    && document.body
+    && document.body.classList
+    && typeof document.body.classList.contains === 'function'
+    && document.body.classList.contains('proto-body');
+
+  if (isStitchTerminal && view === 'open-orders') {
+    head.innerHTML = stitchOpenOrdersHeadHtml(sort);
+    body.innerHTML = stitchOpenOrdersRows(kpi, state, sort);
+  } else {
+    head.innerHTML = otHeadHtml(view, sort);
+    body.innerHTML = ordersTradesRows(view, kpi, state, sort);
+  }
+
+  // Preserve search query filtering across poll ticks
+  const searchInput = document.getElementById('ot-search-input');
+  if (searchInput && searchInput.value) {
+    const query = searchInput.value.trim().toLowerCase();
+    body.querySelectorAll('tr').forEach(r => {
+      r.style.display = (r.textContent || '').toLowerCase().includes(query) ? '' : 'none';
+    });
+  }
+
   if (focusedCol !== null) {
     const restore = Array.from(head.querySelectorAll('button[data-ot-sort]'))
       .find(b => b.getAttribute('data-ot-sort') === focusedCol);
@@ -5547,6 +5792,24 @@ function initOrdersTradesTabs() {
         ? currentOrdersTradesView : OT_VIEWS[0];
       otToggleSort(view, Number(btn.dataset.otSort));
       renderOrdersTrades(lastKpi, lastState);
+    });
+  }
+
+  const searchInput = document.getElementById('ot-search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      const query = (searchInput.value || '').trim().toLowerCase();
+      const body = document.getElementById('orders-trades-body');
+      if (!body) return;
+      const rows = body.querySelectorAll('tr');
+      rows.forEach(r => {
+        if (!query) {
+          r.style.display = '';
+        } else {
+          const text = (r.textContent || '').toLowerCase();
+          r.style.display = text.includes(query) ? '' : 'none';
+        }
+      });
     });
   }
 

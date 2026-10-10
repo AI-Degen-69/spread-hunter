@@ -560,27 +560,564 @@
   padding: 10px 12px;
 }
 
-/* Orders and Trades Polish */
+/* Orders and Trades Stitch Terminal Polish */
 .proto-body #orders-trades-card {
   background: #0f1522;
   border: 1px solid #1d273a;
   border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  padding: 20px;
+}
+
+.proto-body .ot-header-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  color: #06b6d4;
+  text-transform: uppercase;
+}
+
+.proto-body .ot-search-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.proto-body .ot-search-icon {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: #64748b;
+  pointer-events: none;
+}
+
+.proto-body .ot-search-input {
+  background: #090d15;
+  border: 1px solid #1a2333;
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 6px 12px 6px 32px;
+  width: 220px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.proto-body .ot-search-input:focus {
+  border-color: #06b6d4;
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.3);
+}
+
+.proto-body .ot-tabs {
+  background: #090d15;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid #1a2333;
+  gap: 3px;
+}
+
+.proto-body .ot-tab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.proto-body .ot-tab-btn:hover {
+  background: #121926;
+  color: #f1f5f9;
+}
+
+.proto-body .ot-tab-btn.active {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.45);
+  color: #06b6d4;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(6, 182, 212, 0.15);
+}
+
+.proto-body .ot-tab-btn .ot-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+}
+
+.proto-body .ot-tab-btn.active .ot-count {
+  background: rgba(6, 182, 212, 0.3);
+  color: #38bdf8;
+}
+
+.proto-body #orders-trades-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
 }
 
 .proto-body #orders-trades-table th {
   background: #0b101a;
   border-bottom: 1px solid #1a2333;
   color: #8b949e;
+  font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 10px 14px;
+  padding: 12px 16px;
 }
 
 .proto-body #orders-trades-table td {
   border-bottom: 1px solid #162030;
-  padding: 12px 14px;
+  padding: 14px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #cbd5e1;
+  vertical-align: middle;
 }
 
 .proto-body #orders-trades-table tr:hover td {
   background: #121927;
 }
+
+.proto-body #orders-trades-table td.ot-market a,
+.proto-body #orders-trades-table td.ot-market .market-link {
+  color: #f8fafc;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.proto-body #orders-trades-table tr:hover td.ot-market a,
+.proto-body #orders-trades-table tr:hover td.ot-market .market-link {
+  color: #38bdf8;
+}
+
+.proto-body #orders-trades-table .caption-muted {
+  font-size: 10.5px;
+  color: #64748b;
+  margin-top: 3px;
+}
+
+/* Paired Arb Badge in Stitch styling */
+.proto-body .ot-tag.is-good {
+  background: rgba(6, 78, 59, 0.35);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #10b981;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 2px 8px;
+}
+
+.proto-body .ot-tag.is-warn {
+  background: rgba(120, 53, 15, 0.35);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #f59e0b;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 2px 8px;
+}
+
+.proto-body .ot-tag.is-alert {
+  background: rgba(127, 29, 29, 0.4);
+  border: 1px solid rgba(244, 63, 94, 0.45);
+  color: #f43f5e;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 2px 8px;
+}
+
+.proto-body .ot-cost {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.proto-body .ot-cost.is-good .ot-cost-value {
+  color: #10b981;
+  font-weight: 700;
+}
+
+.proto-body .ot-cost.is-alert .ot-cost-value {
+  color: #f43f5e;
+  font-weight: 700;
+}
+
+.proto-body .ot-cost.is-warn .ot-cost-value {
+  color: #f59e0b;
+  font-weight: 700;
+}
+
+/* Leg Badges UP / DOWN in table */
+.proto-body .pill.active {
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  color: #06b6d4;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.proto-body .pill.reconnecting {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #f59e0b;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Fast Action Buttons */
+.proto-body .ot-action-btn {
+  background: #162031;
+  border: 1px solid #233147;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.proto-body .ot-action-btn:hover {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.5);
+  color: #38bdf8;
+}
+
+.proto-body .ot-action-btn.cancel:hover {
+  background: rgba(244, 63, 94, 0.15);
+  border-color: rgba(244, 63, 94, 0.5);
+  color: #f43f5e;
+}
+
+/* Stitch Pair-Native Orders Table */
+.proto-body .stitch-ot-row {
+  transition: background-color 0.15s ease;
+}
+
+.proto-body .stitch-ot-row:hover {
+  background: #121927 !important;
+}
+
+.proto-body .stitch-ot-row.is-unpaired {
+  background: rgba(120, 53, 15, 0.05);
+}
+
+.proto-body .stitch-market-cell {
+  padding: 14px 16px;
+  vertical-align: middle;
+}
+
+.proto-body .stitch-market-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.proto-body .stitch-market-dot.is-paired {
+  background-color: #34d399;
+}
+
+.proto-body .stitch-market-dot.is-unpaired {
+  background-color: #fbbf24;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.proto-body .stitch-market-title {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #ffffff;
+  line-height: 1.35;
+  transition: color 0.15s ease;
+}
+
+.proto-body .stitch-market-title a {
+  color: #ffffff;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.proto-body .stitch-ot-row:hover .stitch-market-title a {
+  color: #38bdf8;
+}
+
+.proto-body .stitch-market-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.proto-body .stitch-meta-category {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: #94a3b8;
+}
+
+.proto-body .stitch-meta-sep {
+  color: #475569;
+  font-size: 10px;
+}
+
+.proto-body .stitch-meta-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+/* Arb Badges */
+.proto-body .stitch-arb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.proto-body .stitch-arb-badge.is-paired {
+  background: rgba(6, 78, 59, 0.6);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.proto-body .stitch-arb-badge.is-unpaired {
+  background: rgba(120, 53, 15, 0.6);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #fcd34d;
+}
+
+.proto-body .stitch-arb-badge.is-partial {
+  background: rgba(120, 53, 15, 0.5);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.proto-body .stitch-arb-badge .badge-val {
+  color: #ffffff;
+}
+
+.proto-body .stitch-arb-badge .badge-edge {
+  color: #6ee7b7;
+}
+
+.proto-body .stitch-arb-badge .badge-sep {
+  color: #64748b;
+}
+
+/* Quotes */
+.proto-body .stitch-quote-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+}
+
+.proto-body .stitch-quote-rung {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.proto-body .stitch-leg-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1.5px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+
+.proto-body .stitch-leg-pill.up {
+  background: #083344;
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  color: #22d3ee;
+}
+
+.proto-body .stitch-leg-pill.down {
+  background: #451a03;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.proto-body .stitch-leg-pill.missing {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #64748b;
+}
+
+.proto-body .stitch-quote-subcost {
+  color: #64748b;
+  font-size: 10.5px;
+}
+
+.proto-body .stitch-quote-awaiting {
+  color: #64748b;
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* Total Committed */
+.proto-body .stitch-commit-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.proto-body .stitch-commit-val.is-unhedged {
+  color: #fcd34d;
+}
+
+.proto-body .stitch-commit-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.proto-body .stitch-commit-sub.is-unhedged {
+  color: rgba(251, 191, 36, 0.8);
+  font-weight: 500;
+}
+
+/* Queue Depth */
+.proto-body .stitch-queue-depth {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: #cbd5e1;
+}
+
+.proto-body .stitch-queue-sub {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.proto-body .stitch-queue-bar {
+  width: 96px;
+  height: 4px;
+  background: #1e293b;
+  border-radius: 9999px;
+  margin-top: 5px;
+  overflow: hidden;
+}
+
+.proto-body .stitch-queue-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: #06b6d4;
+  transition: width 0.3s ease;
+}
+
+.proto-body .stitch-queue-fill.is-amber {
+  background: #f59e0b;
+}
+
+.proto-body .stitch-queue-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+/* Age & Stamp */
+.proto-body .stitch-age-stopwatch {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: #e2e8f0;
+}
+
+.proto-body .stitch-age-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+/* Action Buttons */
+.proto-body .stitch-action-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.proto-body .stitch-btn {
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: #162031;
+  border: 1px solid #233147;
+  color: #cbd5e1;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.proto-body .stitch-btn:hover {
+  background: #083344;
+  border-color: rgba(6, 182, 212, 0.5);
+  color: #38bdf8;
+}
+
+.proto-body .stitch-btn.cancel {
+  color: #94a3b8;
+}
+
+.proto-body .stitch-btn.cancel:hover {
+  background: #4c0519;
+  border-color: rgba(244, 63, 94, 0.5);
+  color: #fb7185;
+}
+
+.proto-body .stitch-btn.force {
+  background: rgba(120, 53, 15, 0.4);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fcd34d;
+  font-weight: 700;
+}
+
+.proto-body .stitch-btn.force:hover {
+  background: rgba(120, 53, 15, 0.7);
+  border-color: #f59e0b;
+  color: #fef08a;
+}
+
