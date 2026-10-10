@@ -418,7 +418,7 @@ def test_write_tournament_results_file(tmp_path: Path):
 
 
 def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
-    from scripts.shadow_tournament import main
+    from scripts.shadow_tournament import ROOT, main
 
     rc = main([
         "--dry-run",
@@ -431,4 +431,5 @@ def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["results_path"].endswith("371_20261005-039999_results.json")
     assert list(tmp_path.glob("*results.json")) == []
+    assert not (ROOT / data["results_path"]).exists()
 
