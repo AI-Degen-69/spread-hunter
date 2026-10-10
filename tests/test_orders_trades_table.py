@@ -907,6 +907,10 @@ def _hedged_kpi() -> dict:
     kpi["by_market"][CID_DONE] = {
         **kpi["by_market"][CID_SETTLED],
         "condition_id": CID_DONE, "title": "Naked Market", "category": "MLB",
+        "resolved": False, "days_to_resolve": 3.0, "resolution": None,
+        # Still a closed trade here: it carries the settled fixture's
+        # settlement and booked P&L (an aged-out single-buy exit), but the
+        # market itself is not finished -- days_to_resolve is forward.
         "up_sh": 10.0, "dn_sh": 0.0, "realized_pnl": -1.4,
     }
     kpi["by_market"][CID_PARTIAL] = {
@@ -931,7 +935,38 @@ def _hedge_cell(html: str, marker: str) -> str:
 
 
 @requires_node
-def test_the_market_roll_up_speaks_the_vocabulary_of_the_rows_inside_it():
+def test_a_settled_market_with_time_on_its_hands_is_unsettled_not_unpaired():
+    # Arrange -- CID_SETTLED settled with a booked profit and holds 10 shares
+    # on only one leg. `Unpaired` is the pair-assembly word: it claims the
+    # engine is still trying to complete a pair, and a settled market is
+    # not. The word here has to be one a settled market can say truthfully.
+    kpi = _kpi()
+    kpi["by_market"][CID_SETTLED].update({"up_sh": 0, "dn_sh": 10})
+
+    # Act / Assert
+    cell = _hedge_cell(_render("closed-trades", kpi, _state())["html"],
+                       "Settled Market")
+    assert ">Unpaired<" not in cell
+    assert ">Unsettled<" in cell
+
+
+@requires_node
+def test_the_unsettled_single_buy_says_what_it_is():
+    # Arrange -- the naked shares on a settled market are not a wait for a
+    # partner; they are a wanton directional bet the market's own resolution
+    # decided alone. The hover has to say that, not promise a merge.
+    kpi = _kpi()
+    kpi["by_market"][CID_SETTLED].update({"up_sh": 0, "dn_sh": 10})
+
+    # Act / Assert
+    cell = _hedge_cell(_render("closed-trades", kpi, _state())["html"],
+                       "Settled Market")
+    assert "settled without its counter-leg" in cell
+
+
+@requires_node
+@requires_node
+def test_an_unfinished_market_still_says_unpaired():
     # Arrange -- the four states of the positions under a market. Paired,
     # Partial and Unpaired are the three words the OPEN POSITIONS table already
     # uses on the positions themselves, and Flat is the fourth case that
@@ -941,11 +976,14 @@ def test_the_market_roll_up_speaks_the_vocabulary_of_the_rows_inside_it():
     # Act
     html = rendered["html"]
 
-    # Assert
+    # Assert -- `Unpaired` belongs to the market that can still assemble a
+    # pair (CID_DONE is unfinished here, up 10 dn 0); the settled market says
+    # `Unsettled` instead, which is what time ran out on it.
     assert ">Paired<" in _hedge_cell(html, "Settled Market")
     assert ">Partial<" in _hedge_cell(html, "Partly Paired Market")
     assert ">Unpaired<" in _hedge_cell(html, "Naked Market")
     assert ">Flat<" in _hedge_cell(html, "Closed Market")
+    assert ">Unpaired<" not in _hedge_cell(html, "Settled Market")
     # The words the glossary retired from a state name.
     assert "One-Sided" not in html
     assert ">Hedged<" not in html
