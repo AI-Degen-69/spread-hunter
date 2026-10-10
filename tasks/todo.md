@@ -1,7 +1,7 @@
-# Todo - Issue 472 (Branch: i472/multi-arm-shadow-tournament-profile-comparison)
+# Todo - Issue 473 (Branch: i473/base-shadow-rehearsal)
 
-- [x] T1 [M] [Backend/Logic] Five-profile defaults with full preset application
-- [x] T2 [M] [Backend/Logic] Read-only per-arm results + launch hook
+- [x] T1 [S] [Frontend/UI] Disable master START on non-production/shadow view in `dashboard/static/app.js`
+- [x] T2 [S] [Backend/Logic + Test] Regression test coverage for master START button in harness and pytest
+- [ ] T3 [M] [Validation] Execute 10-minute base shadow rehearsal and verify loop end-to-end
 
-Checkpoints: after T1 (five arms on 8801-8805) / after T2 (results JSON, no winner).
-All done. Next: /iii-build-plan auto.
+Checkpoints: after T2 (unit tests green) / after T3 (rehearsal verified & report generated).

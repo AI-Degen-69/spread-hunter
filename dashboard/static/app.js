@@ -112,6 +112,13 @@ function applyPayloadVersion(kpi) {
 // Whether the page is reading the production registry. Starts false: until the
 // first status arrives we cannot claim a live view, and START is refused on it.
 let lastDbIsProduction = false;
+let lastDbIsShadow = false;
+
+function isShadowMode(status) {
+  if (status && (status.db_is_production === false || status.db_mode === 'SHADOW')) return true;
+  if (status && (status.db_is_production === true || status.db_mode === 'LIVE')) return false;
+  return lastDbIsShadow === true;
+}
 let isStopping = false;
 let isStarting = false;
 // Bumped on every master-control request start and end. A poll captures the
@@ -1410,7 +1417,8 @@ function renderDbMode(status) {
   if (!el) return;
 
   const mode = status?.db_mode || null;
-  lastDbIsProduction = status?.db_is_production === true;
+  lastDbIsProduction = status?.db_is_production === true || mode === 'LIVE';
+  lastDbIsShadow = status?.db_is_production === false || mode === 'SHADOW';
   const verdict = dbModeVerdict(status);
 
   if (!mode) {
@@ -1496,6 +1504,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   // Writing it from here too gave one safety flag two writers: a status payload
   // that carries service state but not `db_is_production` silently reset the
   // guard, and whether that ends up safe depended purely on call order.
+  const isShadow = isShadowMode(status);
 
   // Master Control Header & Buttons
   const masterIndicator = document.getElementById('master-status-indicator');
@@ -1510,8 +1519,17 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   if (masterIndicator) {
     if (isStopping) {
       masterIndicator.className = 'pill state-degraded font-display';
-      masterIndicator.textContent = 'STACK STOPPING';
-      masterIndicator.setAttribute('aria-label', 'STACK STOPPING');
+      const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
+      masterIndicator.textContent = stopText;
+      masterIndicator.setAttribute('aria-label', stopText);
+    } else if (isShadow) {
+      const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+      const shadowState = shadowRunning ? 'running' : 'stopped';
+      const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
+      masterIndicator.className = `pill state-${shadowState} font-display`;
+      masterIndicator.innerHTML = (shadowState === 'running' ? '<span class="pulse-dot active"></span>' : '')
+        + esc(shadowLabel);
+      masterIndicator.setAttribute('aria-label', shadowLabel);
     } else {
       // Canonical live-state vocabulary (DESIGN.md): the stack pill carries
       // the blinking liveness dot rather than unicode glyphs. textContent is
@@ -1574,11 +1592,14 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       masterToggle.setAttribute('aria-busy', 'true');
       masterToggle.style.opacity = '0.6';
       masterToggle.style.cursor = 'wait';
+      masterToggle.title = '';
       masterToggle.innerHTML = `<svg class="btn-syncing-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>${busyLabel}`;
       masterToggle.dataset.action = isStopping ? 'stop' : 'start';
+      masterToggle.dataset.mode = isShadow ? 'shadow' : 'live';
     } else {
       masterToggle.removeAttribute('aria-busy');
       if (anyServiceRunning) {
+        masterToggle.dataset.mode = 'live';
         masterToggle.className = 'btn-stop-run';
         masterToggle.setAttribute('aria-label', 'Stop bot execution stack');
         masterToggle.dataset.action = 'stop';
@@ -1586,7 +1607,31 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.disabled = false;
         masterToggle.style.opacity = '1';
         masterToggle.style.cursor = 'pointer';
+        masterToggle.title = '';
+      } else if (isShadow) {
+        masterToggle.dataset.mode = 'shadow';
+        const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+        if (shadowRunning) {
+          masterToggle.className = 'btn-stop-run';
+          masterToggle.setAttribute('aria-label', 'Stop shadow rehearsal');
+          masterToggle.dataset.action = 'stop';
+          masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><rect x="6" y="6" width="12" height="12"/></svg>STOP SHADOW`;
+          masterToggle.disabled = false;
+          masterToggle.style.opacity = '1';
+          masterToggle.style.cursor = 'pointer';
+          masterToggle.title = 'Stop shadow rehearsal for this database';
+        } else {
+          masterToggle.className = 'btn-start-run';
+          masterToggle.setAttribute('aria-label', 'Start shadow rehearsal');
+          masterToggle.dataset.action = 'start';
+          masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>START SHADOW`;
+          masterToggle.disabled = false;
+          masterToggle.style.opacity = '1';
+          masterToggle.style.cursor = 'pointer';
+          masterToggle.title = 'Start shadow rehearsal for this database (safe, no signer)';
+        }
       } else {
+        masterToggle.dataset.mode = 'live';
         masterToggle.className = 'btn-start-run';
         masterToggle.setAttribute('aria-label', 'Start bot execution stack');
         masterToggle.dataset.action = 'start';
@@ -1594,6 +1639,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.disabled = false;
         masterToggle.style.opacity = '1';
         masterToggle.style.cursor = 'pointer';
+        masterToggle.title = '';
       }
     }
   }
@@ -1729,24 +1775,49 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
 
 }
 
-// Master toggle handler (Issue #457): one button, both actions.
-// dataset.action ('start' | 'stop') is painted by renderServiceHeader from the
-// live status, so the click never guesses what the backend will accept.
+// Master toggle handler (Issue #457, #473): one button, both actions and both modes (live / shadow).
+// dataset.action ('start' | 'stop') and dataset.mode ('live' | 'shadow') are
+// painted by renderServiceHeader from the live status, so the click never
+// guesses what the backend will accept.
 const masterToggleBtn = document.getElementById('btn-master-toggle');
 if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
   masterToggleBtn.dataset.wired = 'true';
   masterToggleBtn.addEventListener('click', async () => {
     // A second click while a request is in flight is the race this button
     // exists to remove: the flags, not the DOM, are the authority.
-    if (isStarting || isStopping || masterToggleBtn.disabled) return;
+    if (isStarting || isStopping) return;
     const action = masterToggleBtn.dataset.action === 'stop' ? 'stop' : 'start';
+    const isShadow = masterToggleBtn.dataset.mode === 'shadow';
+
+    if (!isShadow) {
+      if (action === 'start') {
+        const isProd = (lastStatus && typeof lastStatus.db_is_production === 'boolean')
+          ? lastStatus.db_is_production === true
+          : (lastStatus?.db_mode === 'LIVE' || !lastDbIsShadow);
+        if (!isProd || masterToggleBtn.disabled) {
+          if (!isProd) {
+            alert('This dashboard is not reading the production registry. '
+              + 'Service controls act on the live stack against data/orders.db, whose orders '
+              + 'would not appear on this page. Restart the dashboard without '
+              + '--db / LIVE_DB_PATH first.');
+          }
+          return;
+        }
+      } else if (masterToggleBtn.disabled) {
+        return;
+      }
+    } else if (masterToggleBtn.disabled) {
+      return;
+    }
+
     if (action === 'stop') {
       isStopping = true;
       const pill = document.getElementById('master-status-indicator');
       if (pill) {
         pill.className = 'pill state-degraded font-display';
-        pill.textContent = 'STACK STOPPING';
-        pill.setAttribute('aria-label', 'STACK STOPPING');
+        const stopText = isShadow ? 'SHADOW STOPPING' : 'STACK STOPPING';
+        pill.textContent = stopText;
+        pill.setAttribute('aria-label', stopText);
       }
     } else {
       isStarting = true;
@@ -1754,7 +1825,12 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
     masterLifecycleSeq++;
     renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
     try {
-      const res = await controlFetch(`/api/system/${action}`);
+      let endpoint = `/api/system/${action}`;
+      if (isShadow) {
+        const targetDb = lastStatus?.db_path || '';
+        endpoint = `/api/system/shadow/${action}${targetDb ? `?db=${encodeURIComponent(targetDb)}` : ''}`;
+      }
+      const res = await controlFetch(endpoint);
       let data = null;
       try {
         data = await res.json();
@@ -1780,10 +1856,8 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
         }
       }
       if (lines.length) {
-        // The backend's own words are the primary line the operator reads;
-        // the `[START]`/`[STOP]` tag is the secondary detail. Reversing these
-        // would hide the refusal reason behind the details toggle (#459).
-        appendTickerEvent(`[${action.toUpperCase()}] ${lines.join(' · ')}`,
+        const tag = isShadow ? `[SHADOW ${action.toUpperCase()}]` : `[${action.toUpperCase()}]`;
+        appendTickerEvent(`${tag} ${lines.join(' · ')}`,
           lines.join(' · '), action === 'stop' ? 'stop' : 'start', 'control',
           action, {});
       }
@@ -1791,7 +1865,8 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
         lastStatus = data.status;
       }
     } catch (e) {
-      appendTickerEvent(`[${action.toUpperCase()} ERROR] ${e.message || String(e)}`,
+      const errTag = isShadow ? `[SHADOW ${action.toUpperCase()} ERROR]` : `[${action.toUpperCase()} ERROR]`;
+      appendTickerEvent(`${errTag} ${e.message || String(e)}`,
         e.message || String(e), 'start', 'control', action, {});
     } finally {
       isStarting = false;

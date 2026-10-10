@@ -2146,6 +2146,127 @@ def _stop_services(targets: list, subprocess) -> dict:
     return outcomes
 
 
+def start_shadow_run(
+    custom_db: str | None = None,
+    custom_run_id: str | None = None,
+    minutes: float = 10.0,
+) -> dict:
+    """Launch background shadow rehearsal without signer."""
+    import subprocess
+
+    target_db = resolve_db_path(custom_db or _ACTIVE_DB_OVERRIDE)
+    db_identity = resolve_db_identity(target_db)
+    if db_identity["is_production"]:
+        return {
+            "ok": False,
+            "message": "Refusing shadow start: cannot run shadow rehearsal against production database data/orders.db.",
+            "status": get_system_status(),
+        }
+
+    # Check if a rehearsal is already running for this database
+    shadow = read_shadow_run(str(target_db))
+    if shadow and shadow.get("running") and not shadow.get("ended"):
+        pid = shadow.get("pid")
+        if pid and _is_pid_alive(pid, shadow.get("process_started_at")):
+            return {
+                "ok": False,
+                "message": f"Shadow rehearsal {shadow.get('run_id')} (PID {pid}) is already running on {target_db}.",
+                "status": get_system_status(),
+            }
+
+    # Run ID resolution
+    if custom_run_id and str(custom_run_id).strip():
+        run_id = str(custom_run_id).strip()
+    elif shadow and shadow.get("run_id"):
+        run_id = str(shadow.get("run_id"))
+    else:
+        stem = target_db.stem.replace("_", "-")
+        run_id = stem if stem and stem != "orders" else f"shadow-{int(time.time())}"
+
+    popen_group = {"start_new_session": True} if sys.platform != "win32" else {}
+    cmd = [
+        sys.executable,
+        "-m",
+        "core_brain.shadow_run",
+        "--minutes",
+        str(minutes),
+        "--db",
+        str(target_db),
+        "--run-id",
+        str(run_id),
+    ]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **popen_group,
+        )
+    except Exception as e:
+        return {
+            "ok": False,
+            "message": f"Failed to start shadow rehearsal: {e}",
+            "status": get_system_status(),
+        }
+
+    status = get_system_status()
+    if not status.get("shadow_run") or not status["shadow_run"].get("running"):
+        status["shadow_run"] = {
+            "running": True,
+            "ended": False,
+            "pid": proc.pid,
+            "run_id": run_id,
+            "db_path": str(target_db),
+            "minutes": minutes,
+            "elapsed_sec": 0,
+        }
+
+    return {
+        "ok": True,
+        "message": f"Shadow rehearsal started ({run_id}) on {target_db.name}.",
+        "pid": proc.pid,
+        "run_id": run_id,
+        "status": status,
+    }
+
+
+def stop_shadow_run(custom_db: str | None = None) -> dict:
+    """Stop running background shadow rehearsal."""
+    import subprocess
+
+    target_db = resolve_db_path(custom_db or _ACTIVE_DB_OVERRIDE)
+    shadow = read_shadow_run(str(target_db))
+    if not shadow or not shadow.get("running") or shadow.get("ended"):
+        return {
+            "ok": True,
+            "message": "No active shadow rehearsal running for this store.",
+            "status": get_system_status(),
+        }
+
+    pid = shadow.get("pid")
+    if not pid or not _is_pid_alive(pid, shadow.get("process_started_at")):
+        return {
+            "ok": True,
+            "message": "Shadow rehearsal is already stopped.",
+            "status": get_system_status(),
+        }
+
+    outcomes = _stop_services([("shadow", pid, shadow.get("process_started_at"))], subprocess)
+    outcome = outcomes.get("shadow", {}).get("outcome", "stopped")
+    status = get_system_status()
+    if status.get("shadow_run"):
+        status["shadow_run"]["running"] = False
+        status["shadow_run"]["ended"] = True
+    return {
+        "ok": outcome in ("stopped", "forced", "not_running"),
+        "message": f"Shadow rehearsal (PID {pid}) {outcome}.",
+        "outcome": outcome,
+        "status": status,
+    }
+
+
 def set_sweep_interval(raw: str | None) -> dict:
     """Apply and persist the account-sweep cadence.
 
@@ -2336,6 +2457,41 @@ def api_system_service_stop(request: Request, service: str | None = None):
     """Stop one stack service, leaving the others running."""
     _authorize_control(request)
     return JSONResponse(stop_service(service or ""))
+
+
+@app.post("/api/system/shadow/start")
+async def api_system_shadow_start(
+    request: Request,
+    db: str | None = None,
+    run_id: str | None = None,
+    minutes: float = 10.0,
+):
+    """Launch background shadow rehearsal without signer."""
+    _authorize_control(request)
+    body = {}
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    target_db = body.get("db") or db
+    target_run_id = body.get("run_id") or run_id
+    target_minutes = body.get("minutes") if body.get("minutes") is not None else minutes
+    return JSONResponse(start_shadow_run(target_db, target_run_id, float(target_minutes)))
+
+
+@app.post("/api/system/shadow/stop")
+async def api_system_shadow_stop(request: Request, db: str | None = None):
+    """Stop running background shadow rehearsal."""
+    _authorize_control(request)
+    body = {}
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    target_db = body.get("db") or db
+    return JSONResponse(stop_shadow_run(target_db))
 
 
 @app.post("/api/system/sweep-interval")

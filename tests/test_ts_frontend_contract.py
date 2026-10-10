@@ -71,6 +71,8 @@ def test_frontend_control_surface_is_expected():
         "/api/system/reset",
         "/api/system/service/start",
         "/api/system/service/stop",
+        "/api/system/shadow/start",
+        "/api/system/shadow/stop",
         "/api/system/start",
         "/api/system/status",
         "/api/system/stop",

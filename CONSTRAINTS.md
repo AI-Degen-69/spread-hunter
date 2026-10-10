@@ -1,56 +1,48 @@
-# CONSTRAINTS — #472 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #473 (locked by Station II, enforced through Station V)
 
-Governs the `i472/multi-arm-shadow-tournament-profile-comparison` branch only;
-#459 constraints below stay as history.
+Governs the `i473/base-shadow-rehearsal` branch only.
 
 ## Zero regressions
 
 - Focused suites that must pass:
-  `tests/test_shadow_tournament.py`
-  `tests/test_dynamic_offset.py`
-  `tests/test_pair_fill_report.py`
-  `tests/test_run_scorer.py`
-  `tests/test_run_attribution.py`
-  `tests/test_shadow_guard.py`
+  `tests/test_dashboard_server.py`
+  `tests/test_service_toggles.py`
+  `tests/test_live_state_language.py`
+- Node harness check:
+  `node tests/js/start_toggle_harness.cjs dashboard/static/app.js`
 - Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
 - Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
 
 ## Scope & File Boundaries
 
 - Target files for modification:
-  `scripts/shadow_tournament.py` (default five-arm list, preset selector env,
-  read-only results reader + writer, `results_path` in plan JSON)
-  `tests/test_shadow_tournament.py` (default-membership update + new
-  selector/ports/results tests)
-  `SPEC.md`
+  `dashboard/server.py` (add /api/system/shadow/start and stop endpoints per operator directive)
+  `dashboard/static/app.js` (master START SHADOW / STOP SHADOW toggle in shadow view)
+  `tests/js/start_toggle_harness.cjs` (extend harness to capture master START element and assertions)
+  `tests/test_dashboard_server.py` (add regression tests for master START and shadow endpoints)
   `CONSTRAINTS.md`
   `tasks/plan.md`
   `tasks/todo.md`
-- Behavior-frozen (import or copy counting rules only, do not change):
-  `core_brain/config.py` (`TOURNAMENT_PRESETS` stays exactly as-is)
-  `core_brain/quotes.py` (`dynamic_offset_for` untouched)
-  `core_brain/shadow_run.py`, `core_brain/shadow_exec.py`, `core_brain/shadow_guard.py`
-  `core_brain/order_registry.py`, `core_brain/kpi.py` (import `MERGE_METHODS` /
-  `NON_TRADE_CLOSE_METHODS`; never redefine or rank arms)
-  `core_brain/run_scorer.py`, `scripts/pair_fill_report.py` (patterns only)
-  `dashboard/server.py`, `scripts/stat_gate.py`, `core_brain/statistics_*`
+- Runtime / verification artifacts generated during execution:
+  `runtime/markets.json` (seeded from workspace runtime if missing)
+  `data/val_step1.db` (created by rehearsal, never `data/orders.db`)
+  `reports/` (statistics observer output)
 - Files that must NOT be modified:
-  `data/orders.db`
-- No arm ranking, no production-winner naming — the stat gate (#471) decides.
+  `core_brain/shadow_run.py`
+  `core_brain/order_manager.py`
+  `core_brain/trader_loop.py`
+  `data/orders.db` (production DB is untouched)
 
 ## Anti-cheat
 
 - No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit approval.
-- Results reader opens arm DBs `mode=ro` only; never constructs `OrderRegistry`
-  on an input; never creates a missing file; `unavailable` status carries the
-  error text instead of zero-filled counts.
-- Tests stay offline (temp DBs seeded via direct SQL with the real registry schema).
+- Zero signer loaded; no real trades or live venue requests; rehearsal only.
 - No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
+- Never write to or delete `data/orders.db`. Rehearsal is strictly isolated to `data/val_step1.db`.
 
 ---
 
-# CONSTRAINTS — #459 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #459 (history; merged as #466)
 
 Governs the `i459/fix-live-stream-trades-tab-shows-no-trades-and-ro` branch only.
 

@@ -838,6 +838,8 @@ def test_control_endpoints_reject_untokened_posts(client):
         "/api/system/reset-db",
         "/api/system/restart-dash",
         "/api/system/sweep-interval",
+        "/api/system/shadow/start",
+        "/api/system/shadow/stop",
     ):
         assert client.post(path).status_code == 403, f"{path} accepted an untokened POST"
 
@@ -1939,6 +1941,142 @@ def test_shadow_view_toggle_never_prompts_or_posts_a_start():
     assert out["liveFilter"]["prompts"] == 0
     assert out["liveFilter"]["starts"] == 1
     assert out["liveFilter"]["wholeStackStarts"] == 0
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_master_toggle_controls_shadow_rehearsal_on_shadow_view():
+    """In SHADOW view, master button toggles shadow rehearsal (START SHADOW / STOP SHADOW)."""
+    harness = Path(__file__).resolve().parent / "js" / "start_toggle_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    master = out["master"]
+
+    # Shadow view, not running: enabled, full opacity, pointer, START SHADOW
+    assert master["shadow"]["disabled"] is False
+    assert master["shadow"]["opacity"] == "1"
+    assert master["shadow"]["cursor"] == "pointer"
+    assert master["shadow"]["action"] == "start"
+    assert master["shadow"]["mode"] == "shadow"
+    assert "START SHADOW" in master["shadow"]["html"]
+
+    # Click on START SHADOW: POSTs to /api/system/shadow/start, 0 alerts, 0 live starts
+    assert master["shadowClick"]["prompts"] == 0
+    assert master["shadowClick"]["alerts"] == 0
+    assert master["shadowClick"]["shadowStarts"] == 1
+    assert master["shadowClick"]["wholeStackStarts"] == 0
+
+    # Shadow view, rehearsal running: enabled STOP SHADOW
+    assert master["shadowRunning"]["disabled"] is False
+    assert master["shadowRunning"]["action"] == "stop"
+    assert master["shadowRunning"]["mode"] == "shadow"
+    assert "STOP SHADOW" in master["shadowRunning"]["html"]
+
+    # Click on STOP SHADOW: POSTs to /api/system/shadow/stop
+    assert master["shadowStopClick"]["shadowStops"] == 1
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_master_toggle_controls_live_stack_on_live_view():
+    """In LIVE view, master button toggles live execution stack (START RUN / STOP RUN)."""
+    harness = Path(__file__).resolve().parent / "js" / "start_toggle_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    master = out["master"]
+
+    # Live with nothing running: enabled START RUN, full opacity, pointer
+    assert master["liveNothingRunning"]["disabled"] is False
+    assert master["liveNothingRunning"]["opacity"] == "1"
+    assert master["liveNothingRunning"]["cursor"] == "pointer"
+    assert master["liveNothingRunning"]["action"] == "start"
+    assert master["liveNothingRunning"]["mode"] == "live"
+    assert "START RUN" in master["liveNothingRunning"]["html"]
+
+    # Live view click: exactly 1 whole-stack start POST, 0 alerts, 0 shadow starts
+    assert master["liveClick"]["wholeStackStarts"] == 1
+    assert master["liveClick"]["shadowStarts"] == 0
+    assert master["liveClick"]["alerts"] == 0
+
+    # Live with running service: switches to STOP RUN
+    assert master["liveRunning"]["disabled"] is False
+    assert master["liveRunning"]["action"] == "stop"
+    assert master["liveRunning"]["mode"] == "live"
+    assert "STOP RUN" in master["liveRunning"]["html"]
+
+
+def test_shadow_start_endpoint_refuses_production(client, monkeypatch):
+    """POST /api/system/shadow/start refuses to start against production database."""
+    import dashboard.server as dash_mod
+
+    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", None)
+    res = client.post("/api/system/shadow/start", headers=_control(client))
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is False
+    assert "Refusing shadow start" in data["message"]
+
+
+def test_shadow_start_and_stop_endpoints(client, monkeypatch, tmp_path):
+    """POST /api/system/shadow/start and stop successfully trigger shadow rehearsal."""
+    import dashboard.server as dash_mod
+
+    shadow_db = tmp_path / "shadow_test.db"
+    shadow_db.touch()
+    monkeypatch.setattr(dash_mod, "_ACTIVE_DB_OVERRIDE", shadow_db)
+
+    # Mock subprocess.Popen
+    class FakeProc:
+        pid = 98765
+
+    spawned = []
+    def fake_popen(cmd, **kwargs):
+        spawned.append(cmd)
+        return FakeProc()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    res_start = client.post(
+        f"/api/system/shadow/start?minutes=5",
+        headers=_control(client),
+    )
+    assert res_start.status_code == 200
+    data_start = res_start.json()
+    assert data_start["ok"] is True
+    assert data_start["pid"] == 98765
+    assert len(spawned) == 1
+    assert "core_brain.shadow_run" in spawned[0]
+    assert data_start["status"]["shadow_run"]["running"] is True
+
+    # Test stop endpoint
+    monkeypatch.setattr(
+        dash_mod,
+        "read_shadow_run",
+        lambda *args, **kwargs: {"running": True, "ended": False, "pid": 98765, "process_started_at": 100.0},
+    )
+    monkeypatch.setattr(dash_mod, "_is_pid_alive", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        dash_mod,
+        "_stop_services",
+        lambda targets, sp: {"shadow": {"outcome": "stopped"}},
+    )
+
+    res_stop = client.post("/api/system/shadow/stop", headers=_control(client))
+    assert res_stop.status_code == 200
+    data_stop = res_stop.json()
+    assert data_stop["ok"] is True
+    assert data_stop["outcome"] == "stopped"
 
 
 def test_page_surfaces_the_active_database_mode():
