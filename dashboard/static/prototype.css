@@ -1121,3 +1121,99 @@
   color: #fef08a;
 }
 
+/* Stitch Active Markets Table Styles */
+.proto-body .stitch-category-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #182232;
+  border: 1px solid #233147;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.proto-body .stitch-quote-up {
+  color: #22d3ee;
+  font-weight: 700;
+  font-size: 12.5px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.proto-body .stitch-quote-down {
+  color: #fbbf24;
+  font-weight: 700;
+  font-size: 12.5px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.proto-body .stitch-mid-sub {
+  color: #64748b;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 2px;
+}
+
+.proto-body .stitch-pair-cost {
+  color: #f8fafc;
+  font-weight: 700;
+  font-size: 12.5px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.proto-body .stitch-edge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.proto-body .stitch-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2.5px 8.5px;
+  border-radius: 9999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.proto-body .stitch-status-badge.quoting {
+  background: rgba(6, 78, 59, 0.6);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.proto-body .stitch-status-badge.resting {
+  background: rgba(8, 51, 68, 0.6);
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  color: #22d3ee;
+}
+
+.proto-body .stitch-status-badge.idle {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #64748b;
+}
+
+.proto-body .stitch-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+}
+
+.proto-body .stitch-status-dot.quoting {
+  background-color: #34d399;
+}
+
+.proto-body .stitch-status-dot.resting {
+  background-color: #22d3ee;
+}
+
+.proto-body .stitch-status-dot.idle {
+  background-color: #64748b;
+}
+
+

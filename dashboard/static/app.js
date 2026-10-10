@@ -5675,6 +5675,166 @@ function stitchOpenOrdersRows(kpi, state, sort) {
   }).join('');
 }
 
+function stitchActiveMarketsHeadHtml(sort) {
+  const active = (sort && Number.isInteger(sort.col)) ? sort : null;
+  const cols = [
+    { label: 'AGE / STAMP', sortIdx: 0 },
+    { label: 'MARKET & CLASSIFICATION', sortIdx: 1 },
+    { label: 'CATEGORY', sortIdx: 2 },
+    { label: 'UP QUOTE', sortIdx: 3 },
+    { label: 'DOWN QUOTE', sortIdx: 4 },
+    { label: 'PAIR COST', sortIdx: 5 },
+    { label: 'EDGE', sortIdx: 6 },
+    { label: '24H VOLUME', sortIdx: 7 },
+    { label: 'RESOLVES', sortIdx: 8 },
+    { label: 'STATUS', sortIdx: 9 },
+  ];
+  const cells = cols.map((col) => {
+    const isActive = Boolean(active && active.col === col.sortIdx);
+    const dir = isActive ? active.dir : null;
+    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
+    const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
+    return `<th${ariaSort}>`
+      + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
+      + `<span class="ot-sort-label">${esc(col.label)}</span>${arrow}</button></th>`;
+  }).join('');
+  return `<tr>${cells}</tr>`;
+}
+
+function stitchActiveMarketsRows(kpi, state, sort) {
+  const ordersByMarket = groupOrdersByMarket(state && state.orders);
+  const entries = Object.entries((kpi && kpi.by_market) || {})
+    .filter(([cid, m]) => isQuotedMarket(m, ordersByMarket[cid])
+      && ((m.quotes_count || 0) > 0
+        || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
+
+  if (!entries.length) {
+    return `<tr><td colspan="10" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No markets are being quoted.</td></tr>`;
+  }
+
+  const rows = entries.map(([cid, m]) => {
+    const legs = latestLegQuotes(m);
+    const upQuote = legs.up ? legs.up.price : null;
+    const dnQuote = legs.dn ? legs.dn.price : null;
+    const upMid = legs.up ? legs.up.mid : null;
+    const dnMid = legs.dn ? legs.dn.mid : null;
+    const pairCost = (upQuote !== null && dnQuote !== null) ? (upQuote + dnQuote) : null;
+    const edge = pairCost === null ? null : 1 - pairCost;
+    const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
+    const ts = latestQuoteTs(m);
+    return { cid, m, upQuote, dnQuote, upMid, dnMid, pairCost, edge, restingHere, ts };
+  });
+
+  const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
+    switch (col) {
+      case 0: return otNum(r.ts);
+      case 1: return String(r.m.title || r.m.name || r.m.slug || '');
+      case 2: return marketCategory(r.m);
+      case 3: return otNum(r.upQuote);
+      case 4: return otNum(r.dnQuote);
+      case 5: return otNum(r.pairCost);
+      case 6: return otNum(r.edge);
+      case 7: return otNum(r.m.volume_24h);
+      case 8: return otNum(r.m.days_to_resolve);
+      case 9: return r.restingHere ? 'RESTING' : ((r.m.quotes_count || 0) > 0 ? 'QUOTING' : 'IDLE');
+      default: return null;
+    }
+  }) : rows;
+
+  if (!sort) {
+    sorted.sort((a, b) => (b.m.quotes_count || 0) - (a.m.quotes_count || 0)
+      || String(a.m.title || '').localeCompare(String(b.m.title || '')));
+  }
+
+  const nowMs = Date.now();
+
+  return sorted.map(({ cid, m, upQuote, dnQuote, upMid, dnMid, pairCost, edge, restingHere, ts }) => {
+    const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
+    const category = marketCategory(m);
+    const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
+
+    // Classification / subtitle
+    const classification = m.event_title || m.subtitle || m.category || 'Polymarket Arbitrage';
+
+    // Age / Stopwatch
+    const ageSec = (ts && Number.isFinite(ts)) ? Math.max(0, Math.round((nowMs - toMs(ts)) / 1000)) : null;
+    const ageDisp = ageSec !== null ? fmtStopwatch(ageSec) : '--';
+    const tsDisp = (ts && Number.isFinite(toMs(ts))) ? fmtTimestamp(ts) : '--';
+
+    // Status pill
+    let statusBadge = '';
+    if (restingHere) {
+      statusBadge = `<span class="stitch-status-badge resting"><span class="stitch-status-dot resting"></span>RESTING</span>`;
+    } else if ((m.quotes_count || 0) > 0) {
+      statusBadge = `<span class="stitch-status-badge quoting"><span class="stitch-status-dot quoting"></span>QUOTING</span>`;
+    } else {
+      statusBadge = `<span class="stitch-status-badge idle"><span class="stitch-status-dot idle"></span>IDLE</span>`;
+    }
+
+    return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
+      <!-- Col 0: AGE / STAMP -->
+      <td class="mono font-tabular" style="white-space:nowrap;">
+        <div class="stitch-age-stopwatch">${ageDisp}</div>
+        <div class="stitch-age-meta">${tsDisp}</div>
+      </td>
+
+      <!-- Col 1: MARKET & CLASSIFICATION -->
+      <td class="stitch-market-cell">
+        <div class="stitch-market-title">
+          <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
+        </div>
+        <div class="stitch-market-meta" style="margin-top:2px;">
+          <span style="font-size:11px;color:#94a3b8;">${esc(classification)}</span>
+        </div>
+      </td>
+
+      <!-- Col 2: CATEGORY -->
+      <td>
+        <span class="stitch-category-pill">${esc(category)}</span>
+      </td>
+
+      <!-- Col 3: UP QUOTE + Mid Price -->
+      <td class="mono font-tabular">
+        <div class="stitch-quote-up">${fmtPrice(upQuote)}</div>
+        ${upMid !== null ? `<div class="stitch-mid-sub">mid ${fmtPrice(upMid)}</div>` : ''}
+      </td>
+
+      <!-- Col 4: DOWN QUOTE + Mid Price -->
+      <td class="mono font-tabular">
+        <div class="stitch-quote-down">${fmtPrice(dnQuote)}</div>
+        ${dnMid !== null ? `<div class="stitch-mid-sub">mid ${fmtPrice(dnMid)}</div>` : ''}
+      </td>
+
+      <!-- Col 5: PAIR COST -->
+      <td class="mono font-tabular">
+        <div class="stitch-pair-cost">${fmtPrice(pairCost)}</div>
+      </td>
+
+      <!-- Col 6: EDGE -->
+      <td class="mono font-tabular">
+        <div class="stitch-edge">
+          ${edge === null ? '--' : `<span class="${edge > 0 ? 'text-emerald-400 font-bold' : 'text-rose-400'}" style="color:${edge > 0 ? '#34d399' : '#f43f5e'};font-weight:700;">+${(edge * 100).toFixed(1)}¢</span>`}
+        </div>
+      </td>
+
+      <!-- Col 7: 24H VOLUME -->
+      <td class="mono font-tabular" style="color:#94a3b8;">
+        ${fmtCompactUSD(m.volume_24h)}
+      </td>
+
+      <!-- Col 8: RESOLVES -->
+      <td class="mono font-tabular" style="color:#64748b;">
+        ${(m.days_to_resolve === null || m.days_to_resolve === undefined) ? '--' : `${Number(m.days_to_resolve).toFixed(1)}d`}
+      </td>
+
+      <!-- Col 9: STATUS -->
+      <td>
+        ${statusBadge}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
 function renderOrdersTrades(kpi, state) {
   const head = document.getElementById('orders-trades-head');
   const body = document.getElementById('orders-trades-body');
@@ -5708,6 +5868,9 @@ function renderOrdersTrades(kpi, state) {
   if (isStitchTerminal && view === 'open-orders') {
     head.innerHTML = stitchOpenOrdersHeadHtml(sort);
     body.innerHTML = stitchOpenOrdersRows(kpi, state, sort);
+  } else if (isStitchTerminal && view === 'active-markets') {
+    head.innerHTML = stitchActiveMarketsHeadHtml(sort);
+    body.innerHTML = stitchActiveMarketsRows(kpi, state, sort);
   } else {
     head.innerHTML = otHeadHtml(view, sort);
     body.innerHTML = ordersTradesRows(view, kpi, state, sort);
