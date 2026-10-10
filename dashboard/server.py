@@ -1770,7 +1770,12 @@ def start_bot() -> dict:
         query_alive = svcs.get("query", {}).get("running", False)
         decide_alive = svcs.get("decide", {}).get("running", False)
 
-        if (filter_alive and query_alive and decide_alive) or current.get("bot_state") == "RUNNING":
+        # Issue #457: a partial stack is fillable, not a refusal. Refuse only a
+        # COMPLETE duplicate stack (all three alive), or a RUNNING verdict with
+        # no per-service state to reason from. Otherwise launch the gap.
+        if filter_alive and query_alive and decide_alive:
+            return {"ok": False, "message": "Bot stack is already running; refusing to start a duplicate instance.", "status": current}
+        if current.get("bot_state") == "RUNNING" and not (filter_alive or query_alive or decide_alive):
             return {"ok": False, "message": "Bot stack is already running; refusing to start a duplicate instance.", "status": current}
         if current.get("bot_state") == "UNKNOWN":
             return {"ok": False, "message": f"Cannot read the process file at {current.get('registry_path')}; refusing to start until it is readable, because a second live stack cannot be ruled out.", "status": current}
@@ -1778,12 +1783,25 @@ def start_bot() -> dict:
         procs_file = runtime_file("processes.json", root=LIVE_ROOT)
         procs_file.parent.mkdir(parents=True, exist_ok=True)
 
+        # Load the registry BEFORE any alive check: the `else` branches below
+        # read saved_procs to keep a running service's entry, and reading it
+        # after those branches is the NameError that made every partial-stack
+        # START crash instead of filling the gap.
+        saved_procs, read_err = _read_saved_procs()
+        if saved_procs is None:
+            return {"ok": False, "message": read_err, "status": current}
+
         # Derive a stable run_id so fleet/exec/dash share one session id.
         # Without this, each process generates its own UUID at import time
         # and fills/orders are tagged to inconsistent run_ids, which makes
         # the dashboard default run selector show a misleading zeros grid.
         from core_brain.order_registry import get_run_id
         child_env = {**os.environ, "SH_RUN_ID": get_run_id()}
+
+        # POSIX only: a new session makes each launched service a process-group
+        # leader, so STOP can signal the whole tree (ranker/watcher children
+        # included) instead of just the root.
+        popen_group = {"start_new_session": True} if sys.platform != "win32" else {}
 
         stack_cmds = _start_stack_commands(resolve_sweep_interval())
 
@@ -1795,6 +1813,7 @@ def start_bot() -> dict:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=child_env,
+                **popen_group,
             )
             launched_procs.append(p_scr)
             filter_entry = {"pid": p_scr.pid, "started_at": time.time()}
@@ -1810,6 +1829,7 @@ def start_bot() -> dict:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=child_env,
+                **popen_group,
             )
             launched_procs.append(p_eng)
             query_entry = {"pid": p_eng.pid, "started_at": time.time(),
@@ -1825,13 +1845,15 @@ def start_bot() -> dict:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=child_env,
+                **popen_group,
             )
             launched_procs.append(p_fleet)
             decide_entry = {"pid": p_fleet.pid, "started_at": time.time()}
         else:
             decide_entry = service_entry(saved_procs, "decide")
 
-        # Load existing procs file to preserve starting_account_value if present
+        # Preserve starting_account_value: a partial START must not re-snapshot
+        # capital the stack already captured at its real start.
         existing_starting_value = None
         if procs_file.exists():
             try:
@@ -1839,8 +1861,10 @@ def start_bot() -> dict:
                 existing_starting_value = existing_data.get("starting_account_value")
             except Exception:
                 pass
+        partial = bool(launched_procs) and any(
+            (filter_alive, query_alive, decide_alive))
 
-        saved_procs = {
+        new_procs = {
             "filter": filter_entry,
             "query": query_entry,
             "decide": decide_entry,
@@ -1852,26 +1876,44 @@ def start_bot() -> dict:
         # constant that nobody deposited." This snapshot is the real number.
         # It may be None if the venue is unreachable at start time; the
         # dashboard shows a "estimated baseline" label in that case.
-        starting_account_value = _capture_starting_capital()
-        if starting_account_value is not None:
-            saved_procs["starting_account_value"] = starting_account_value
+        if not partial:
+            starting_account_value = _capture_starting_capital()
+            if starting_account_value is not None:
+                new_procs["starting_account_value"] = starting_account_value
+            elif existing_starting_value is not None:
+                # Preserve previously captured value if current capture fails
+                new_procs["starting_account_value"] = existing_starting_value
         elif existing_starting_value is not None:
-            # Preserve previously captured value if current capture fails
-            saved_procs["starting_account_value"] = existing_starting_value
-        procs_file.write_text(json.dumps(saved_procs, indent=2), encoding="utf-8")
+            new_procs["starting_account_value"] = existing_starting_value
+        procs_file.write_text(json.dumps(new_procs, indent=2), encoding="utf-8")
 
-        return {"ok": True, "message": "Bot stack started", "status": get_system_status()}
+        reused = [n for n, alive in
+                  (("filter", filter_alive), ("query", query_alive), ("decide", decide_alive))
+                  if alive]
+        return {
+            "ok": True,
+            "message": "Bot stack started",
+            "launched": [n for n, alive in
+                         (("filter", not filter_alive), ("query", not query_alive),
+                          ("decide", not decide_alive)) if alive],
+            "reused": reused,
+            "status": get_system_status(),
+        }
     except Exception as e:
-        # Cleanup: terminate any children launched before the failure.
-        for proc in launched_procs:
-            try:
-                proc.terminate()
-                proc.wait(timeout=2)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+        # Cleanup: terminate only the children THIS call launched, through the
+        # same honest stop helper STOP uses. A reused service was already
+        # running before START and must survive a failed fill; stopping it
+        # would turn a gap-fill failure into an outage.
+        launched_targets = [
+            (name, proc.pid, None)
+            for name, proc in zip(
+                [n for n, alive in
+                 (("filter", not filter_alive), ("query", not query_alive),
+                  ("decide", not decide_alive)) if alive],
+                launched_procs,
+            )
+        ]
+        _stop_services(launched_targets, subprocess)
         return {
             "ok": False,
             "message": f"Failed to start bot stack: {e}",
