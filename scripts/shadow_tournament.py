@@ -17,6 +17,7 @@ import os
 import re
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -29,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core_brain.config import TOURNAMENT_PRESETS
+from core_brain.kpi import MERGE_METHODS, NON_TRADE_CLOSE_METHODS
 from core_brain.shadow_guard import assert_not_production_registry
 from core_brain.shadow_run import (
     build_tournament_db_path,
@@ -73,6 +75,8 @@ class TournamentPlan:
     interval: float
     dashboards: bool
     record_path: Path
+    results_path: Path
+    markets_path: Optional[str] = None
     arms: list[ArmPlan] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -84,8 +88,98 @@ class TournamentPlan:
             "interval": self.interval,
             "dashboards": self.dashboards,
             "record_path": str(self.record_path),
+            "results_path": str(self.results_path),
+            "markets_path": self.markets_path,
             "arms": [a.to_dict() for a in self.arms],
         }
+
+
+RESULTS_NOTE = (
+    "Shadow results are modeled. Do not choose a production winner from this file. "
+    "The stat gate decides. Arms read books at slightly different moments, so the "
+    "market list is shared but the books are not an identical snapshot."
+)
+
+
+def read_arm_results(db_path: Path, run_id: str) -> dict[str, Any]:
+    """Read per-arm fill/close counts, read-only, filtered by run_id.
+
+    Opens the store with `mode=ro` so a report can never alter what it
+    reports (and a missing file is never created). Counting rules follow
+    `kpi._execution_funnel`: one filled order is one distinct `order_uuid`,
+    and sentinel close methods are not trades.
+    """
+    try:
+        conn = sqlite3.connect(f"{Path(db_path).resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        return {"status": "unavailable", "error": str(exc)}
+    try:
+        try:
+            fill_events = conn.execute(
+                "SELECT count(*) FROM fills WHERE run_id = ?", (run_id,)
+            ).fetchone()[0]
+            filled_orders = conn.execute(
+                "SELECT count(DISTINCT order_uuid) FROM fills WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT method, realized_pnl FROM closes WHERE run_id = ?", (run_id,)
+            ).fetchall()
+        except sqlite3.Error as exc:
+            return {"status": "unavailable", "error": str(exc)}
+        traded = [r for r in rows if (r[0] or "unknown") not in NON_TRADE_CLOSE_METHODS]
+        merged = [r for r in traded if (r[0] or "unknown") in MERGE_METHODS]
+        pnl = sum(float(r[1] or 0.0) for r in traded)
+        return {
+            "fill_events": fill_events,
+            "filled_orders": filled_orders,
+            "close_events": len(traded),
+            "merges": len(merged),
+            "single_leg_exits": len(traded) - len(merged),
+            "realized_pnl_usd": pnl,
+            "status": "no_fills" if fill_events == 0 else "ok",
+        }
+    finally:
+        conn.close()
+
+
+def write_tournament_results(plan: TournamentPlan, exit_codes: list[int]) -> Path:
+    """Write one comparison file for every arm (including failed ones)."""
+    out_path = Path(plan.results_path)
+    if not out_path.is_absolute():
+        out_path = ROOT / out_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    arms_data = []
+    for arm, code in zip(plan.arms, exit_codes, strict=True):
+        result = read_arm_results(arm.db_path, arm.run_id)
+        arms_data.append({
+            "name": arm.name,
+            "db_path": str(arm.db_path),
+            "run_id": arm.run_id,
+            "dash_port": arm.dash_port,
+            "exit_code": code,
+            **result,
+        })
+    payload = {
+        "issue": plan.issue,
+        "stamp": plan.stamp,
+        "minutes": plan.minutes,
+        "markets_path": plan.markets_path,
+        "note": RESULTS_NOTE,
+        "arms": arms_data,
+    }
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"Tournament results: {out_path}")
+    for entry in arms_data:
+        if entry["status"] == "unavailable":
+            print(f"  {entry['name']:<12} unavailable ({entry.get('error', '?')})"
+                  f" exit={entry['exit_code']}")
+        else:
+            print(f"  {entry['name']:<12} fills={entry['fill_events']}"
+                  f" orders={entry['filled_orders']} closes={entry['close_events']}"
+                  f" merges={entry['merges']} exits={entry['single_leg_exits']}"
+                  f" pnl={entry['realized_pnl_usd']:+.4f} exit={entry['exit_code']}")
+    return out_path
 
 
 def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
@@ -135,7 +229,7 @@ def build_tournament_plan(
 
     # If arms not provided, default to TOURNAMENT_PRESETS in balanced order
     if arms is None:
-        default_order = ["control", "conservative", "balanced", "aggressive"]
+        default_order = ["control", "conservative", "balanced", "aggressive", "prudent"]
         arms = []
         for name in default_order:
             if name in TOURNAMENT_PRESETS:
@@ -168,6 +262,11 @@ def build_tournament_plan(
                         f"Invalid environment override {k!r}: only HUNTER_* overrides are permitted"
                     )
                 arm_env[k] = str(v)
+        # Full-profile selector: applies the whole preset (including the
+        # shared queue-hold settings _preset_to_env does not copy). Only
+        # for names the config knows; custom arms keep their explicit env.
+        if name in TOURNAMENT_PRESETS:
+            arm_env.setdefault("HUNTER_TOURNAMENT_PRESET", name)
 
         # Port assignment & validation
         dash_port = base_port + (idx - 1)
@@ -241,6 +340,7 @@ def build_tournament_plan(
         )
 
     record_path = Path("runtime") / "tournaments" / f"{issue}_{stamp}.json"
+    results_path = Path("reports") / "tournaments" / f"{issue}_{stamp}_results.json"
     return TournamentPlan(
         issue=issue,
         stamp=stamp,
@@ -249,6 +349,8 @@ def build_tournament_plan(
         interval=interval,
         dashboards=dashboards,
         record_path=record_path,
+        results_path=results_path,
+        markets_path=str(markets_path) if markets_path is not None else None,
         arms=arm_plans,
     )
 
@@ -328,10 +430,24 @@ def launch_tournament(plan: TournamentPlan) -> int:
         # Wait for all shadow runs to finish
         exit_codes = [p.wait() for p in shadow_procs]
         log.info("All shadow runs finished with codes: %s", exit_codes)
-        return max(exit_codes) if exit_codes else 0
+        results_ok = True
+        try:
+            write_tournament_results(plan, exit_codes)
+        except Exception:
+            log.exception("Tournament results step failed")
+            results_ok = False
+        return _tournament_exit_code(exit_codes, results_ok)
 
     finally:
         _cleanup()
+
+
+def _tournament_exit_code(exit_codes: list[int], results_ok: bool) -> int:
+    """Worker codes win; a failed report step turns an all-green run non-zero."""
+    code = max(exit_codes) if exit_codes else 0
+    if not results_ok and code == 0:
+        return 1
+    return code
 
 
 def main(argv: Optional[list[str]] = None) -> int:

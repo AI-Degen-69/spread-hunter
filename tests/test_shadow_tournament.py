@@ -132,13 +132,10 @@ def test_build_tournament_plan_defaults(tmp_path: Path):
     )
     assert plan.issue == 371
     assert plan.stamp == "20261005-032000"
-    assert len(plan.arms) == 4
-    # Default order: control, conservative, balanced, aggressive
+    assert len(plan.arms) == 5
+    # Default order: control, conservative, balanced, aggressive, prudent
     arm_names = [a.name for a in plan.arms]
-    assert "control" in arm_names
-    assert "conservative" in arm_names
-    assert "balanced" in arm_names
-    assert "aggressive" in arm_names
+    assert arm_names == ["control", "conservative", "balanced", "aggressive", "prudent"]
 
     # Check first arm details
     first = plan.arms[0]
@@ -232,5 +229,245 @@ def test_dry_run_cli_output(capsys, tmp_path: Path):
     data = json.loads(captured.out)
     assert data["issue"] == 371
     assert data["stamp"] == "20261005-032000"
-    assert len(data["arms"]) == 4
+    assert len(data["arms"]) == 5
+
+
+def test_default_arms_set_preset_selector(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    for arm in plan.arms:
+        assert arm.env["HUNTER_TOURNAMENT_PRESET"] == arm.name
+
+
+def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
+    from core_brain.config import TOURNAMENT_PRESETS
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    for arm in plan.arms:
+        preset = TOURNAMENT_PRESETS[arm.name]
+        assert arm.env["HUNTER_DYNAMIC_OFFSET"] == ("1" if preset["dynamic_offset_enabled"] else "0")
+        if "dynamic_offset_multiplier" in preset:
+            assert float(arm.env["HUNTER_DYNAMIC_OFFSET_MULT"]) == preset["dynamic_offset_multiplier"]
+        if "dynamic_offset_min_cents" in preset:
+            assert int(arm.env["HUNTER_DYNAMIC_OFFSET_MIN_CENTS"]) == preset["dynamic_offset_min_cents"]
+        if "dynamic_offset_max_cents" in preset:
+            assert int(arm.env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == preset["dynamic_offset_max_cents"]
+    by_name = {a.name: a for a in plan.arms}
+    assert float(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MULT"]) == 0.60
+    assert int(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == 4
+    assert by_name["control"].env["HUNTER_DYNAMIC_OFFSET"] == "0"
+
+
+def test_default_arm_ports_and_paths(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    assert [a.dash_port for a in plan.arms] == [8801, 8802, 8803, 8804, 8805]
+    db_names = [a.db_path.name for a in plan.arms]
+    assert len(set(db_names)) == 5
+    run_ids = [a.run_id for a in plan.arms]
+    assert len(set(run_ids)) == 5
+    for arm in plan.arms:
+        assert f"_tournament_{arm.index:02d}_{arm.name}_" in arm.db_path.name
+
+
+def _seed_arm_db(path, run_id, fills, closes):
+    import sqlite3
+
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "CREATE TABLE fills (trade_id TEXT PRIMARY KEY, order_uuid TEXT,"
+            " size REAL, price REAL, run_id TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE closes (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " ts REAL, method TEXT, realized_pnl REAL, run_id TEXT)"
+        )
+        for i, f in enumerate(fills):
+            conn.execute(
+                "INSERT INTO fills (trade_id, order_uuid, size, price, run_id)"
+                " VALUES (?,?,?,?,?)",
+                (f"t-{run_id}-{i}", f["order_uuid"], f.get("size", 1.0),
+                 f.get("price", 0.5), f.get("run_id", run_id)),
+            )
+        for c in closes:
+            conn.execute(
+                "INSERT INTO closes (ts, method, realized_pnl, run_id)"
+                " VALUES (?,?,?,?)",
+                (1.0, c["method"], c.get("realized_pnl", 0.0), c.get("run_id", run_id)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_read_arm_results_filters_by_run_id(tmp_path: Path):
+    from scripts.shadow_tournament import read_arm_results
+
+    db = tmp_path / "arm.db"
+    _seed_arm_db(db, "run-A",
+                 fills=[{"order_uuid": "o1"}, {"order_uuid": "o2", "run_id": "run-B"}],
+                 closes=[{"method": "shadow_merge", "realized_pnl": 0.05}])
+    res = read_arm_results(db, "run-A")
+    assert res["status"] == "ok"
+    assert res["fill_events"] == 1
+    assert res["filled_orders"] == 1
+
+
+def test_read_arm_results_partial_fills_count_once(tmp_path: Path):
+    from scripts.shadow_tournament import read_arm_results
+
+    db = tmp_path / "arm.db"
+    _seed_arm_db(db, "run-A",
+                 fills=[{"order_uuid": "o1"}, {"order_uuid": "o1"}],
+                 closes=[])
+    res = read_arm_results(db, "run-A")
+    assert res["status"] == "ok"
+    assert res["fill_events"] == 2
+    assert res["filled_orders"] == 1
+
+
+def test_read_arm_results_close_split(tmp_path: Path):
+    from scripts.shadow_tournament import read_arm_results
+
+    db = tmp_path / "arm.db"
+    _seed_arm_db(db, "run-A",
+                 fills=[{"order_uuid": "o1"}],
+                 closes=[{"method": "shadow_merge", "realized_pnl": 0.05},
+                         {"method": "single_buy_exit", "realized_pnl": -0.02}])
+    res = read_arm_results(db, "run-A")
+    assert res["merges"] == 1
+    assert res["single_leg_exits"] == 1
+    assert res["close_events"] == 2
+    assert res["realized_pnl_usd"] == pytest.approx(0.03)
+
+
+def test_read_arm_results_excludes_sentinel_closes(tmp_path: Path):
+    from scripts.shadow_tournament import read_arm_results
+
+    db = tmp_path / "arm.db"
+    _seed_arm_db(db, "run-A",
+                 fills=[{"order_uuid": "o1"}],
+                 closes=[{"method": "shadow_merge", "realized_pnl": 0.05},
+                         {"method": "venue_sync", "realized_pnl": 99.0}])
+    res = read_arm_results(db, "run-A")
+    assert res["close_events"] == 1
+    assert res["realized_pnl_usd"] == pytest.approx(0.05)
+
+
+def test_read_arm_results_no_fills(tmp_path: Path):
+    from scripts.shadow_tournament import read_arm_results
+
+    db = tmp_path / "arm.db"
+    _seed_arm_db(db, "run-A", fills=[], closes=[])
+    res = read_arm_results(db, "run-A")
+    assert res["status"] == "no_fills"
+    assert res["fill_events"] == 0
+    assert res["filled_orders"] == 0
+    assert res["close_events"] == 0
+
+
+def test_read_arm_results_path_with_space(tmp_path: Path):
+    from scripts.shadow_tournament import read_arm_results
+
+    db = tmp_path / "dir with space" / "arm.db"
+    db.parent.mkdir(parents=True)
+    _seed_arm_db(db, "run-A",
+                 fills=[{"order_uuid": "o1"}],
+                 closes=[{"method": "shadow_merge", "realized_pnl": 0.05}])
+    res = read_arm_results(db, "run-A")
+    assert res["status"] == "ok"
+    assert res["fill_events"] == 1
+
+
+def test_write_tournament_results_rejects_length_mismatch(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan, write_tournament_results
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    plan.results_path = tmp_path / "mismatch_results.json"
+    with pytest.raises(ValueError, match="shorter"):
+        write_tournament_results(plan, [0, 0])
+
+
+def test_tournament_exit_code_prefers_workers_but_flags_report_failure():
+    from scripts.shadow_tournament import _tournament_exit_code
+
+    assert _tournament_exit_code([0, 0, 0, 0, 0], True) == 0
+    assert _tournament_exit_code([0, 1, 0, 0, 0], True) == 1
+    assert _tournament_exit_code([0, 0, 0, 0, 0], False) == 1
+    assert _tournament_exit_code([0, 2, 0, 0, 0], False) == 2
+    assert _tournament_exit_code([], True) == 0
+
+
+def test_read_arm_results_missing_db(tmp_path: Path):
+    from scripts.shadow_tournament import read_arm_results
+
+    missing = tmp_path / "nope.db"
+    res = read_arm_results(missing, "run-A")
+    assert res["status"] == "unavailable"
+    assert res["error"]
+    assert "fill_events" not in res
+    assert not missing.exists()
+
+
+def test_write_tournament_results_file(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan, write_tournament_results
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    plan.results_path = tmp_path / "371_20261005-032000_results.json"
+    out = write_tournament_results(plan, [0, 1, 0, 0, 0])
+    data = json.loads(Path(out).read_text(encoding="utf-8"))
+    assert len(data["arms"]) == 5
+    assert [a["exit_code"] for a in data["arms"]] == [0, 1, 0, 0, 0]
+    assert "stat gate decides" in data["note"]
+
+
+def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
+    from scripts.shadow_tournament import ROOT, main
+
+    rc = main([
+        "--dry-run",
+        "--issue", "371",
+        "--base-dir", str(tmp_path),
+        "--stamp", "20261005-039999",
+        "--no-port-check",
+    ])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["results_path"].endswith("371_20261005-039999_results.json")
+    assert list(tmp_path.glob("*results.json")) == []
+    assert not (ROOT / data["results_path"]).exists()
 

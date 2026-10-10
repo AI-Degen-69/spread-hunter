@@ -1,8 +1,7 @@
-# Todo - Issue 457 (Branch: i457/single-state-driven-start-stop-button-with-graceful-stack)
+# Todo - Issue 472 (Branch: i472/multi-arm-shadow-tournament-profile-comparison)
 
-- [ ] T1 [M] [Backend/Logic] Graceful, verified, honest STOP — helper + registry rewrite
-- [ ] T2 [M] [Backend/Logic] Partial START fills only missing services — fix NameError + scoped rollback
-- [x] T3 [M] [Frontend/UI] One state-driven toggle with visible feedback — button, handler, harness
+- [x] T1 [M] [Backend/Logic] Five-profile defaults with full preset application
+- [x] T2 [M] [Backend/Logic] Read-only per-arm results + launch hook
 
-Checkpoints: after T1 (STOP honest) / after T2 (no NameError) / after T3 (toggle + harness green).
-All done. Next: /iv-review-build-and-pr.
+Checkpoints: after T1 (five arms on 8801-8805) / after T2 (results JSON, no winner).
+All done. Next: /iii-build-plan auto.

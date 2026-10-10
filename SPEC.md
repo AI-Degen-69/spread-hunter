@@ -1,48 +1,50 @@
-# SPEC — #459: Live stream TRADES tab shows trades in plain English
+# SPEC — #472: Multi-arm shadow tournament (profile comparison)
 
 ## Goals
 
-1. Real trade activity (fills, exits, completions, merges, redeems) appears in the
-   dashboard TRADES tab regardless of which service emitted it.
-2. Every stream row reads as one plain-English sentence with local time and market
-   name; no service abbreviations, action codes, or raw slugs on the main line.
-3. Decide rows show planned prices or the skip reason in words.
-4. Trading behavior, execution, and accounting are unchanged — telemetry only
-   observes existing outcomes.
+1. One command runs all five quote-placement profiles (control, conservative,
+   balanced, aggressive, prudent) as isolated shadow arms on the same market
+   list, each with its own scratch DB, run id, and dashboard port.
+2. Each default arm actually applies its full named profile, including the
+   shared queue-hold settings — not just the offset fields.
+3. After the workers finish, one results file in `reports/tournaments/` records
+   per-arm fill/close counts for later comparison. No winner is named; the
+   stat gate (#471) decides that later.
 
 ## Acceptance criteria
 
-- While trades happen, TRADES never shows an empty state; fills, exits,
-  completions, merges, and redeems each render a sentence.
-- Main lines contain no `_`, no `[DECIDE`/`[QUERY`/`[FILTER` tags, no raw slugs.
-- Decide rows: `intent_count > 0` → "Decided to quote …" with prices;
-  `intent_count == 0` → "Skipped … because …" with the reason in words.
-- Every inventoried action has a sentence; unknown actions fall back to a
-  plain-words prefix fallback, never a code.
-- ALL, MARKET FILTER, ALERTS, CLEAR FEED, and AUTOSCROLL behave as today.
-- New tests fail without the change and pass with it.
+- `--dry-run` prints the tournament plan JSON (five arms, ports 8801–8805,
+  five distinct DB paths, `results_path`) with no error.
+- The live run launches each arm in its own shadow DB with its own dashboard
+  port; dashboards show the SHADOW badge and separate databases.
+- Per-arm fill/close counts (fill events, filled orders, close events, merges,
+  exits, modeled P&L, status, exit code) are recorded in one results JSON.
+- Runnable: `python -m scripts.shadow_tournament --minutes 15 --dry-run`
+  then `python -m scripts.shadow_tournament --minutes 15 --dashboards`.
 
-## Edge cases (from issue analysis)
+## Edge cases (from issue + code analysis)
 
-- No producer emits `pairs_*` today; merge/redeem truth lives only in the
-  relayer helper `_submit_and_log` — emit there, not in the lifecycle pass.
-- Decide events predate submission and also fire in dry-run: "Decided to quote",
-  never "Quoted at".
-- Exit size/price may be estimates → "about" wording.
-- `transaction_hash` may hold a relayer id, not a chain hash — keep hash and id
-  separate, never describe as on-chain proof.
-- Both the poll loop and the Trader reconcile; the first to insert a fill
-  reports it — wire the observer in both or some fills go missing.
-- `lifecycle_*` waiting events repeat every poll: keep them out of TRADES,
-  do not change their volume.
-- The event buffer must retain `extra` or sentences lose market names/reasons.
+- Today's default list has four arms and omits prudent; the bare acceptance
+  command has no `--arms-file`, so the default list itself must gain prudent.
+- `_preset_to_env` copies only offset fields and drops the shared queue-hold
+  settings (`requote_hold_queue_shares` 500.0, `requote_hold_below_target`
+  0.08); without the `HUNTER_TOURNAMENT_PRESET` selector the default arms do
+  not match the presets they are named after.
+- "The same live books": each arm fetches its own books at its own moments.
+  Only the market *list* can be shared (frozen `--markets-path` file); the
+  results note records the timing skew openly.
+- Inherited `HUNTER_*` env vars (or `.env`) override a profile silently —
+  the run instructions require a clean-shell check first.
+- `--dry-run` does not check port availability; only the live run does.
+- Dashboards stop when the run ends — check them during the run, never
+  press START on them.
+- Interrupted runs may skip the results step; per-arm DBs still exist.
+- A 15-minute run is short and fills are modeled — close counts are not a
+  statistical sample size.
 
 ## Out of scope
 
-- Stream transport and replay (`dashboard/server.py`) — untouched.
-- `single_buy_saver.py` execution/lifecycle results — untouched.
-- `global_stop_loss.py` `disable_rotation` vs `can_rotate` mismatch and
-  `guardrail_alert` never reaching the ring — separate follow-up issue, not this
-  change (ALERTS semantics stay as-is).
-- Any change to quoting, sizing, strategy, reconciliation accounting, or venue calls.
-- `data/orders.db` production registry.
+- Editing `TOURNAMENT_PRESETS` or `dynamic_offset_for` — presets frozen.
+- Choosing a production winner (needs the #471 stat gate).
+- Any LIVE execution, any change to the strategy itself.
+- `data/orders.db` production registry (tournament uses isolated shadow DBs).
