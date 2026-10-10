@@ -37,6 +37,20 @@ from core_brain.shadow_run import (
     build_tournament_run_id,
 )
 
+# The Market Filter (`scripts.filter_loop`) refreshes the shared market feed
+# `runtime/markets.json` that every arm reads. Arms re-read that file each cycle
+# (`dynamic_markets_fn`), so a live filter keeps a long run trading fresh
+# markets instead of a universe that settles out from under it -- and, because
+# `load_graduated_markets` refuses a feed older than the staleness window, the
+# filter is also what stops every arm from refusing the feed mid-run. It writes
+# the SHARED feed on purpose: the arms must compare over the same universe.
+#
+# The cycle length is the env var `SH_FILTER_INTERVAL_SEC`, not a CLI flag --
+# `filter_loop` takes no `--interval`. Set it in the child's environment so the
+# shipped 600s default and any operator override in .env are both honoured.
+FILTER_LOOP_ARGV = [sys.executable, "-m", "scripts.filter_loop"]
+FILTER_INTERVAL_SEC = 600
+
 log = logging.getLogger("shadow_tournament")
 
 ARM_NAME_PATTERN = re.compile(r"^[a-z0-9-]{1,24}$")
@@ -395,6 +409,30 @@ def launch_tournament(plan: TournamentPlan) -> int:
             pass
 
     try:
+        # 0. Start the Market Filter so the shared feed stays fresh for the whole
+        #    run. It refreshes runtime/markets.json, which every arm re-reads
+        #    each cycle; without it a multi-hour run trades a universe that
+        #    settles out and then trips the feed-staleness refusal entirely.
+        #    It must be up before the arms start, so a long run never begins on
+        #    a feed already older than the staleness window.
+        filter_proc = None
+        try:
+            filter_env = {
+                k: v for k, v in os.environ.items() if not k.startswith("HUNTER_")
+            }
+            filter_env.setdefault("SH_FILTER_INTERVAL_SEC", str(FILTER_INTERVAL_SEC))
+            filter_proc = subprocess.Popen(
+                FILTER_LOOP_ARGV, env=filter_env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            procs.append((filter_proc, "market-filter"))
+            log.info("Started Market Filter (scripts.filter_loop, PID %d, "
+                     "%ds cycle) refreshing the shared feed",
+                     filter_proc.pid, FILTER_INTERVAL_SEC)
+        except Exception:
+            log.exception("Market Filter failed to start; arms will run on the "
+                          "current runtime/markets.json until it goes stale")
+
         # 1. Spawn dashboard servers if requested
         if plan.dashboards:
             for arm in plan.arms:

@@ -471,3 +471,73 @@ def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
     assert list(tmp_path.glob("*results.json")) == []
     assert not (ROOT / data["results_path"]).exists()
 
+
+class _FakeProc:
+    """Stand-in for a subprocess.Popen child: records calls, never spawns."""
+
+    def __init__(self, label, running=True):
+        self.label = label
+        self.pid = 4242
+        self._running = running
+        self.terminated = False
+        self.killed = False
+        self.waited = False
+
+    def poll(self):
+        # None while running (terminate is warranted); a code once it has
+        # exited, matching a real child the launcher stops at shutdown.
+        return None if self._running else 0
+
+    def terminate(self):
+        self.terminated = True
+        self._running = False
+
+    def kill(self):
+        self.killed = True
+        self._running = False
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
+
+
+def test_launch_starts_and_stops_the_market_filter(tmp_path, monkeypatch):
+    """A tournament run must start the Market Filter and tear it down on exit.
+
+    Arms re-read runtime/markets.json each cycle, so the filter is what keeps a
+    long run trading fresh markets and stops the feed-staleness refusal from
+    killing every arm mid-run. The filter is a real subprocess in production;
+    here it is faked so the test spawns nothing and touches no shared feed.
+    """
+    import scripts.shadow_tournament as st
+
+    spawned: list[tuple[list[str], _FakeProc]] = []
+
+    def fake_popen(argv, env=None, **kwargs):
+        label = "market-filter" if "filter_loop" in " ".join(argv) else "child"
+        proc = _FakeProc(label)
+        spawned.append((list(argv), proc))
+        return proc
+
+    monkeypatch.setattr(st.subprocess, "Popen", fake_popen)
+
+    plan = st.build_tournament_plan(
+        issue=371,
+        arms=[{"name": "solo", **st.TOURNAMENT_PRESETS["balanced"]}],
+        base_dir=tmp_path,
+        stamp="20261010-120000",
+        check_ports=False,
+    )
+    plan.dashboards = False  # only the filter + one arm, no dashboard server
+    rc = st.launch_tournament(plan)
+    assert rc == 0
+
+    filter_calls = [(a, p) for a, p in spawned if "filter_loop" in " ".join(a)]
+    assert len(filter_calls) == 1, "Market Filter must start exactly once per run"
+    argv, proc = filter_calls[0]
+    # No --interval flag: filter_loop reads its cycle from SH_FILTER_INTERVAL_SEC.
+    assert argv == [st.sys.executable, "-m", "scripts.filter_loop"]
+
+    # It is still running at shutdown and must be stopped, never left behind.
+    assert proc.terminated or proc.killed, "filter must be stopped on run exit"
+
