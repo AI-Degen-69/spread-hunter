@@ -692,6 +692,14 @@ def get_state():
 # generation of work.
 PID_START_TOLERANCE_S: float = 60.0
 
+# Issue #457: the stop budget. One shared deadline keeps the whole stop inside
+# the 30s ops-lock takeover window, so another control request can never observe
+# a half-stopped stack as fully stopped. 10 + 5 + 2×5 = 25s.
+_STOP_POLITE_WAIT_S: float = 10.0
+_STOP_FORCE_WAIT_S: float = 5.0
+_STOP_TASKKILL_TIMEOUT_S: float = 5.0
+_STOP_POLL_INTERVAL_S: float = 0.25
+
 
 def _win_process_times(pid: int) -> tuple[float | None, float | None] | None:
     """(created, exited) as Unix timestamps for a Windows PID.
@@ -1895,7 +1903,25 @@ def stop_bot() -> dict:
 
 
 def _stop_bot_locked(subprocess) -> dict:
-    """The stop itself; caller must hold the ops lock."""
+    """The stop itself; caller must hold the ops lock.
+
+    Issue #457: STOP is now honest. Ask politely (SIGTERM / taskkill /T), wait a
+    bounded grace period, escalate to force (SIGKILL / taskkill /F /T), verify
+    each service is actually down, and report one outcome per service. The
+    registry is REWRITTEN rather than deleted, so `starting_account_value` and
+    any survivor's entry survive the stop and a retry can reach them.
+
+    Known acceptance gaps (deliberate, not full coverage):
+    - Whole-tree stop is complete only on Linux/macOS for services launched by
+      this master START (they own a new process group). Legacy records and
+      service-card launches are single processes, so their children can
+      survive as orphans.
+    - On Windows the down-check confirms only the root process; descendant
+      death relies on taskkill /T and its return code.
+    - A zombie owned by another parent can still look alive; STOP then reports
+      `still_running`, which is the safe, honest answer.
+    - Stopping processes does not cancel resting venue orders.
+    """
     procs_file = resolve_runtime_file("processes.json", root=LIVE_ROOT)
     if procs_file.exists():
         try:
@@ -1917,24 +1943,164 @@ def _stop_bot_locked(subprocess) -> dict:
                 "status": get_system_status(),
             }
 
-        for name, info in saved_procs.items():
+        # Every dict entry that holds a pid, whatever its key: pre-rename
+        # screener/engine/fleet registries stop under the current name.
+        targets = []
+        for key, info in saved_procs.items():
             if not isinstance(info, dict):
                 continue
             pid = info.get("pid")
-            if pid and _is_pid_alive(pid, info.get("started_at")):
-                try:
-                    if sys.platform == "win32":
-                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
-                    else:
-                        os.kill(int(pid), 15)
-                except Exception:
-                    pass
+            if not pid:
+                continue
+            targets.append((_legacy_canonical(key), pid, info.get("started_at")))
+
+        outcomes = _stop_services(targets, subprocess)
+
+        survivors = [n for n, o in outcomes.items() if o["outcome"] == "still_running"]
+        if not survivors:
+            message = "Stack stopped"
+            if any(o["outcome"] == "forced" for o in outcomes.values()):
+                forced = next(n for n, o in outcomes.items() if o["outcome"] == "forced")
+                message = f"Stack stopped ({forced} force-killed)"
+        else:
+            first = survivors[0]
+            pid = next(
+                (p for n, p, _ in targets if n == first), None)
+            message = (
+                f"STOP incomplete: {first} still running"
+                + (f" (PID {pid})" if pid else "")
+                + ". Registry kept for retry."
+            )
+
+        # Rewrite, never unlink: survivors and non-service metadata (capital,
+        # reset_at) must survive the stop.
+        rewritten = {
+            k: v for k, v in saved_procs.items()
+            if not (isinstance(v, dict) and v.get("pid") and k not in survivors)
+        }
         try:
-            procs_file.unlink()
-        except Exception:
+            procs_file.write_text(json.dumps(rewritten, indent=2), encoding="utf-8")
+        except OSError:
+            logger.warning("Could not rewrite %s after STOP", procs_file)
+
+        return {
+            "ok": not survivors,
+            "message": message,
+            "services": outcomes,
+            "status": get_system_status(),
+        }
+
+    return {
+        "ok": True,
+        "message": "Stack already stopped",
+        "status": get_system_status(),
+    }
+
+
+def _legacy_canonical(key: str) -> str:
+    """Map a pre-rename registry key to its current service name."""
+    return {"screener": "filter", "engine": "query", "fleet": "decide"}.get(key, key)
+
+
+def _stop_services(targets: list, subprocess) -> dict:
+    """Stop a list of (name, pid, started_at) under one shared deadline.
+
+    Returns {name: {"outcome": ..., "detail": ...}} with outcome in
+    not_running | stopped | forced | still_running. The clock and sleep are
+    called through the `time` module so tests can script them.
+    """
+    deadline = time.monotonic() + (
+        _STOP_POLITE_WAIT_S + _STOP_FORCE_WAIT_S + 2 * _STOP_TASKKILL_TIMEOUT_S)
+    outcomes: dict[str, dict[str, str]] = {}
+    alive = [(n, p, s) for (n, p, s) in targets if _is_pid_alive(p, s)]
+    if not alive:
+        for name, _, _ in targets:
+            outcomes[name] = {"outcome": "not_running", "detail": ""}
+        return outcomes
+
+    is_windows = sys.platform == "win32"
+    errors: dict[str, str] = {}
+    forced_pids: set[int] = set()
+
+    def _signal(pid: int, sig: int) -> None:
+        """Polite or forced signal, group-aware on POSIX, taskkill on Windows."""
+        if sig == 9:
+            forced_pids.add(pid)
+        if is_windows:
+            argv = (["taskkill", "/F", "/T"] if sig == 9 else ["taskkill", "/T"]) + ["/PID", str(pid)]
+            try:
+                res = subprocess.run(
+                    argv, capture_output=True, timeout=_STOP_TASKKILL_TIMEOUT_S)
+                if res.returncode != 0:
+                    errors[pid] = f"taskkill exited {res.returncode}"
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                errors[pid] = str(exc)
+            return
+        group = None
+        try:
+            group = os.getpgid(pid) if os.getpgid(pid) == pid else None
+        except OSError:
+            group = None
+        try:
+            if group is not None:
+                os.killpg(group, sig)
+            else:
+                os.kill(pid, sig)
+        except OSError as exc:
+            errors[pid] = str(exc)
+
+    def _reap(pid: int) -> None:
+        # WNOHANG only exists on POSIX; Windows has no waitpid to reap.
+        if is_windows or not hasattr(os, "WNOHANG"):
+            return
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
             pass
 
-    return {"ok": True, "message": "Bot stack stopped", "status": get_system_status()}
+    def _down(pid: int) -> bool:
+        if is_windows:
+            return not _is_pid_alive(pid, None)
+        try:
+            os.killpg(os.getpgid(pid), 0)
+            return False
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return not _is_pid_alive(pid, None)
+
+    # Polite pass.
+    for _, pid, _ in alive:
+        _signal(pid, 15)
+    polite_deadline = time.monotonic() + _STOP_POLITE_WAIT_S
+    while alive and time.monotonic() < polite_deadline:
+        for _, pid, _ in alive:
+            _reap(pid)
+        alive = [(n, p, s) for (n, p, s) in alive if not _down(p)]
+        if alive:
+            time.sleep(_STOP_POLL_INTERVAL_S)
+
+    # Force pass for whoever is left.
+    for _, pid, _ in alive:
+        _signal(pid, 9)
+    force_deadline = time.monotonic() + _STOP_FORCE_WAIT_S
+    while alive and time.monotonic() < force_deadline:
+        for _, pid, _ in alive:
+            _reap(pid)
+        alive = [(n, p, s) for (n, p, s) in alive if not _down(p)]
+        if alive:
+            time.sleep(_STOP_POLL_INTERVAL_S)
+
+    still = {p for _, p, _ in alive}
+    for name, pid, _ in targets:
+        if pid in still:
+            outcomes[name] = {"outcome": "still_running", "detail": errors.get(pid, "")}
+        elif pid in forced_pids:
+            # It only came down after the force pass: report that honestly.
+            outcomes[name] = {"outcome": "forced", "detail": errors.get(pid, "")}
+        else:
+            outcomes[name] = {"outcome": "stopped", "detail": errors.get(pid, "")}
+    return outcomes
 
 
 def set_sweep_interval(raw: str | None) -> dict:

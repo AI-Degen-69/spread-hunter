@@ -283,17 +283,25 @@ def test_stop_refuses_on_an_unreadable_registry(tmp_path, monkeypatch):
 
 
 def test_stop_clears_a_readable_registry(tmp_path, monkeypatch):
-    """The normal path is unchanged: readable registry, record removed."""
+    """The normal path is unchanged: readable registry, record removed.
+
+    Issue #457: the file is rewritten rather than deleted -- a survivor entry
+    and `starting_account_value` must survive the stop so a retry can reach
+    them. A stopped stack leaves no service entries behind.
+    """
     from dashboard import server
 
-    _write_registry(tmp_path, '{"decide": {"pid": 999999999, "started_at": 1.0}}')
+    _write_registry(tmp_path, '{"decide": {"pid": 999999999, "started_at": 1.0},'
+                              ' "starting_account_value": 42.0}')
     procs_file = tmp_path / "runtime" / "processes.json"
     monkeypatch.setattr(server, "LIVE_ROOT", tmp_path)
 
     result = server.stop_bot()
 
     assert result["ok"] is True
-    assert not procs_file.exists()
+    kept = json.loads(procs_file.read_text(encoding="utf-8"))
+    assert "decide" not in kept
+    assert kept["starting_account_value"] == 42.0
 
 
 def test_idempotency_guard_reads_the_pre_rename_order_log(tmp_path, monkeypatch):
