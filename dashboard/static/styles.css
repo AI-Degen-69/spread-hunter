@@ -2423,6 +2423,34 @@ th[aria-sort] .ot-sort-btn {
   transform: none;
 }
 
+.btn-start-shadow,
+.btn-start-run[data-mode="shadow"] {
+  background: #7c3aed;
+  color: #f5f3ff;
+  border-color: #8b5cf6;
+}
+.btn-start-shadow:hover:not(:disabled),
+.btn-start-run[data-mode="shadow"]:hover:not(:disabled) {
+  background: #8b5cf6;
+  border-color: #a78bfa;
+  transform: translateY(-1px);
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+}
+.btn-stop-shadow,
+.btn-stop-run[data-mode="shadow"] {
+  background: rgba(168, 85, 247, 0.16);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.45);
+}
+.btn-stop-shadow:hover:not(:disabled),
+.btn-stop-run[data-mode="shadow"]:hover:not(:disabled) {
+  background: rgba(168, 85, 247, 0.28);
+  border-color: #a855f7;
+  color: #e9d5ff;
+  box-shadow: 0 0 14px rgba(168, 85, 247, 0.3);
+  transform: translateY(-1px);
+}
+
 /* Service Card enhancements */
 .service-card-head {
   display: flex;
