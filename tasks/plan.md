@@ -66,7 +66,7 @@ File: `tests/test_unified_universe.py` (+ `_universe_candidate` helper stays).
 Verification: run focused file; new admission tests MUST fail on current code (RED proof), refusal/existing tests pass. Skill: `test-driven-development`.
 Depends on: T1
 
-### T3 [S] [Backend/Logic] Venue-state-gated expiry (GREEN)
+### T3 [x] [S] [Backend/Logic] Venue-state-gated expiry (GREEN)
 File: `scripts/filter_markets.py` only.
 - `expired_at_intake`: add `state=None` kwarg; check order unchanged (unknown/not-past → not expired; sports/start exemption → not expired) then new venue check via `_unpack_state` (same as `tradable`); `None` → exact old reason; open → `(False, "")`; else `{verdict}; horizon passed (expired {when} ago)`; docstring: `endDate` alone is not end-of-trading, runoff elections beside sports kickoffs.
 - `evaluate` EXPIRY GATE (:1544-1552): `resolve_state(closed, accepting_orders, end_date_iso, + both UMA fields)` → pass as `state`; refusal stays before UMA gate and all fetches. Do NOT touch `resolve_state`, `days_to_resolve`, `tradable`, `_cause`, `now_iso`.

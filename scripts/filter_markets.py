@@ -366,18 +366,26 @@ def in_play(start_iso: Optional[str],
 def expired_at_intake(end_iso: Optional[str],
                       start_iso: Optional[str] = None,
                       category: object = None,
-                      now_iso: Optional[str] = None) -> tuple[bool, str]:
+                      now_iso: Optional[str] = None,
+                      state: object = None) -> tuple[bool, str]:
     """Has this market already passed its end date without being an in-play sports kickoff?
 
     A non-sports market whose end date is in the past has already resolved or lapsed,
     so spending cycle time, tape reads, and book reads on it is wasted venue work (#357).
+
+    `endDate` alone is not the end of trading: a market the venue still reports
+    open and accepting orders is admitted even past its end date, so multi-round
+    elections resolving on a runoff are not refused on their first-round date
+    (#461). Only a venue-closed, not-accepting, UMA-resolved, or unreadable
+    market is refused here, with a reason naming the venue signal first.
 
     In-play sports markets are exempt: on Polymarket, `endDate` is often kickoff,
     not the final whistle (see lines 392-396), so an open sports market past kickoff
     continues to trade live and is governed by the quote-time gate.
 
     Unknown or missing end date is NOT treated as expired: it falls through to
-    downstream resolution and horizon gates.
+    downstream resolution and horizon gates. `state=None` keeps the legacy
+    clock-only refusal byte-identical for callers with no venue signal.
     """
     days = days_to_resolve(end_iso, now_iso=now_iso)
     if days is None or days >= 0:
@@ -388,7 +396,14 @@ def expired_at_intake(end_iso: Optional[str],
     elapsed_seconds = abs(days * 86400.0)
     hours = elapsed_seconds / 3600.0
     when = f"{hours:.1f}h" if hours < 24.0 else f"{hours / 24.0:.1f}d"
-    return True, f"horizon passed (expired {when} ago)"
+    clock_part = f"horizon passed (expired {when} ago)"
+    if state is None:
+        return True, clock_part
+    resolved, verdict, _end, _gate = _unpack_state(state)
+    if resolved is False:
+        return False, ""
+    venue_part = verdict or "resolved: resolution state unreadable"
+    return True, f"{venue_part}; {clock_part}"
 
 
 def tape_movement_and_range(
@@ -1544,10 +1559,18 @@ def evaluate(session: requests.Session, rate: float, m: dict,
     # THE EXPIRY GATE, before the queue, tape, and book fetches below. A market
     # whose end date has passed and which carries no sports kickoff signal has
     # already resolved or lapsed, so scoring it is wasted venue work (#357).
+    # The venue's own verdict decides first: an open, accepting-orders market
+    # past its end date (a runoff election past its first-round date) is not
+    # refused here (#461).
     is_expired, expired_reason = expired_at_intake(
         m.get("end_date_iso"), start_iso,
         category=m.get("category") or m.get("venue_category"),
-        now_iso=now_iso)
+        now_iso=now_iso,
+        state=resolve_state(
+            m.get("closed"), m.get("accepting_orders"),
+            m.get("end_date_iso"),
+            uma_status=m.get("uma_resolution_status") or m.get("umaResolutionStatus"),
+            uma_statuses=m.get("uma_resolution_statuses") or m.get("umaResolutionStatuses")))
     if is_expired:
         return _reject_row(source, expired_reason, m, volume_24h)
 
