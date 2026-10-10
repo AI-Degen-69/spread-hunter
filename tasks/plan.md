@@ -73,7 +73,7 @@ File: `scripts/filter_markets.py` only.
 Verification: T2's RED tests turn green with no other test changed. Skill: `incremental-implementation`.
 Depends on: T2
 
-### T4 [XS] [Backend/Logic] Focused verification + sports unchanged
+### T4 [x] [XS] [Backend/Logic] Focused verification + sports unchanged
 Files: none. Run `python -m pytest -q tests/test_unified_universe.py tests/test_in_play_gate.py tests/test_pre_start_gate.py` (agent-run, background-only — never an operator verify step).
 Verification: all green; `git status` shows only the 2 intended files (+ plan artifacts) modified.
 Depends on: T3
