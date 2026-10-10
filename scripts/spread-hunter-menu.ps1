@@ -1072,16 +1072,19 @@ function Get-ShadowResumeStores {
         Where-Object { $_.BaseName -match '^(\d{1,2})_shadow_' -and $Matches[1] -ne '00' } |
         ForEach-Object {
             $file = $_
-            $null = $file.BaseName -match '^(\d{1,2})_shadow_(?:([a-zA-Z]+)_)?'
+            $null = $file.BaseName -match '^(\d{1,2})_shadow_'
             $seq = [int]$Matches[1]
+            $null = $file.BaseName -match '^(\d{1,2})_shadow_(?:([a-zA-Z]+)_)?'
             $presetTag = $Matches[2]
-            $runId = if ($presetTag -and ($presetTag -ne "trial")) {
+            $runId = if ($file.BaseName -match '^(\d{1,2})_shadow_prudent') {
+                "shadow-" + $seq.ToString("D2") + "-prudent"
+            } elseif ($presetTag -and ($presetTag -ne "trial")) {
                 "shadow-" + $seq.ToString("D2") + "-" + $presetTag
             } else {
                 "shadow-" + $seq.ToString("D2")
             }
             if ((-not $byRun.ContainsKey($runId)) -or ($file.LastWriteTime -gt $byRun[$runId].File.LastWriteTime)) {
-                $sortSeq = if ($presetTag -and ($presetTag -ne "trial")) { 100 + $seq } else { $seq }
+                $sortSeq = if ($runId -like "*-prudent") { 100 + $seq } elseif ($presetTag -and ($presetTag -ne "trial")) { 200 + $seq } else { $seq }
                 $byRun[$runId] = @{ File = $file; Seq = $sortSeq; RunId = $runId }
             }
         }
@@ -1121,10 +1124,14 @@ function Resume-ShadowRun {
         }
         $script:ShadowDbPath = $db.FullName
         # Seq prefix is the run id: NN_shadow_... -> shadow-NN.
-        if ($db.BaseName -match '^(\d{1,2})_shadow_(?:([a-zA-Z]+)_)?') {
+        if ($db.BaseName -match '^(\d{1,2})_shadow_') {
             $seq = [int]$Matches[1]
+            $null = $db.BaseName -match '^(\d{1,2})_shadow_(?:([a-zA-Z]+)_)?'
             $presetTag = $Matches[2]
-            if ($presetTag -and ($presetTag -ne "trial")) {
+            if ($db.BaseName -match '^(\d{1,2})_shadow_prudent') {
+                $script:ShadowRunId = "shadow-" + $seq.ToString("D2") + "-prudent"
+                if (-not $script:ShadowPreset) { $script:ShadowPreset = "prudent" }
+            } elseif ($presetTag -and ($presetTag -ne "trial")) {
                 $script:ShadowRunId = "shadow-" + $seq.ToString("D2") + "-" + $presetTag
                 if (-not $script:ShadowPreset) { $script:ShadowPreset = $presetTag }
             } else {
