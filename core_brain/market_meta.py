@@ -155,6 +155,11 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
         "days_to_resolve": None,
         "min_size": None,
         "volume_24h": None,
+        "movement_usd": None,
+        "movement_window_sec": None,
+        "top3_bid_depth": None,
+        "yes_depth_usd": None,
+        "no_depth_usd": None,
         "source": None,
     }
     if not cid:
@@ -169,6 +174,19 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
     event_title = None
     if row is not None:
         event_title = row.get("event_title")
+        yes_d = row.get("yes_depth_usd")
+        no_d = row.get("no_depth_usd")
+        top3_d = None
+        if yes_d is not None and no_d is not None:
+            try:
+                top3_d = min(float(yes_d), float(no_d))
+            except (TypeError, ValueError):
+                pass
+        elif row.get("top3_bid_depth") is not None:
+            top3_d = row.get("top3_bid_depth")
+        elif yes_d is not None or no_d is not None:
+            top3_d = yes_d if yes_d is not None else no_d
+
         out.update({
             "title": row.get("title") or event_title,
             "slug": row.get("slug"),
@@ -186,6 +204,11 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
             "days_to_resolve": row.get("days_to_resolve"),
             "min_size": row.get("min_size"),
             "volume_24h": row.get("volume_24h"),
+            "movement_usd": row.get("movement_usd"),
+            "movement_window_sec": row.get("movement_window_sec"),
+            "top3_bid_depth": top3_d,
+            "yes_depth_usd": yes_d,
+            "no_depth_usd": no_d,
             "source": row.get("source"),
         })
 

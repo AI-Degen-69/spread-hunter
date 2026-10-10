@@ -4290,8 +4290,9 @@ const OT_NOTES = {
 };
 
 const OT_COLUMNS = {
-  'active-markets': ['Timestamp', 'Market', 'Category', 'UP Quote', 'DOWN Quote', 'Pair Cost',
-                     'Edge', '24h Volume', 'Resolves', 'Status'],
+  'active-markets': ['Timestamp', 'Market', 'Category', 'UP Quote', 'DOWN Quote',
+                     'Mid Price', '$ Traded 30m', '24h Volume', 'Top-3 Bid Depth',
+                     'Horizon', 'Status'],
   'open-orders': ['Timestamp', 'Market', 'Leg', 'Price', 'Size',
                   'Total Cost', 'Queue Ahead', 'Age'],
   // Per-leg on the left, pair-level on the right. Mark Value and both PnLs
@@ -4339,7 +4340,7 @@ function normalizeLeg(side) {
  * other column answers "which is biggest / deepest / oldest" and starts
  * descending. One rule, two directions, no per-column special cases. */
 const OT_TEXT_COLUMNS = {
-  'active-markets': new Set([1, 2, 9]),   // Market, Category, Status
+  'active-markets': new Set([1, 2, 10]),  // Market, Category, Status
   'open-orders': new Set([1, 2]),         // Market, Leg
   'positions': new Set([1, 2]),           // Market, Leg
   'closed-trades': new Set([1, 2, 5]),    // Market, Hedge, Status
@@ -4914,7 +4915,7 @@ function signedUSD(v) {
  */
 function marketStatusPill(m, restingHere) {
   const quoting = Number(m && m.quotes_count) > 0;
-  if (restingHere) return '<span class="pill quoting-breathing" title="Orders are resting on the book">RESTING</span>';
+  if (restingHere) return '<span class="pill resting-breathing" title="Orders are resting on the book">RESTING</span>';
   if (quoting) return '<span class="pill quoting-breathing" title="The engine is actively quoting this market (no orders resting on the book right now)">QUOTING</span>';
   return '<span class="pill stopped" title="No quote activity observed">IDLE</span>';
 }
@@ -4938,11 +4939,33 @@ function activeMarketsRows(kpi, state, sort) {
     const legs = latestLegQuotes(m);
     const upQuote = legs.up ? legs.up.price : null;
     const dnQuote = legs.dn ? legs.dn.price : null;
-    const pairCost = (upQuote !== null && dnQuote !== null) ? (upQuote + dnQuote) : null;
-    const edge = pairCost === null ? null : 1 - pairCost;
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
     const ts = latestQuoteTs(m);
-    return { cid, m, upQuote, dnQuote, pairCost, edge, restingHere, ts };
+
+    // Screening filter parameters and current values
+    const upToken = (m.quotes || []).find(q => normalizeLeg(q.side) === 'UP')?.token_id;
+    const liveMid = upToken ? liveMarkMid(upToken) : null;
+    const midPrice = liveMid
+      ?? (legs.up && Number.isFinite(legs.up.mid) ? legs.up.mid : null)
+      ?? (legs.dn && Number.isFinite(legs.dn.mid) ? 1 - legs.dn.mid : null)
+      ?? m.mid_price ?? m.mid ?? null;
+    const volume30m = (Number(m.movement_window_sec) === 1800 || m.movement_window_sec === undefined)
+      ? (m.movement_usd ?? m.volume_30m ?? null)
+      : (m.volume_30m ?? null);
+    const volume24h = m.volume_24h ?? null;
+    const yesDepth = otNum(m.yes_depth_usd);
+    const noDepth = otNum(m.no_depth_usd);
+    const top3Depth = otNum(m.top3_bid_depth)
+      ?? (yesDepth !== null && noDepth !== null
+          ? Math.min(yesDepth, noDepth)
+          : (yesDepth ?? noDepth));
+    const horizon = (m.days_to_resolve !== undefined && m.days_to_resolve !== null) ? m.days_to_resolve : null;
+
+    return {
+      cid, m, upQuote, dnQuote, midPrice,
+      volume30m, volume24h, top3Depth, horizon,
+      restingHere, ts,
+    };
   });
 
   const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
@@ -4952,11 +4975,12 @@ function activeMarketsRows(kpi, state, sort) {
       case 2: return marketCategory(r.m);
       case 3: return otNum(r.upQuote);
       case 4: return otNum(r.dnQuote);
-      case 5: return otNum(r.pairCost);
-      case 6: return otNum(r.edge);
-      case 7: return otNum(r.m.volume_24h);
-      case 8: return otNum(r.m.days_to_resolve);
-      case 9: return r.restingHere ? 'RESTING' : ((r.m.quotes_count || 0) > 0 ? 'QUOTING' : 'IDLE');
+      case 5: return otNum(r.midPrice);
+      case 6: return otNum(r.volume30m);
+      case 7: return otNum(r.volume24h);
+      case 8: return otNum(r.top3Depth);
+      case 9: return otNum(r.horizon);
+      case 10: return r.restingHere ? 'RESTING' : ((r.m.quotes_count || 0) > 0 ? 'QUOTING' : 'IDLE');
       default: return null;
     }
   }) : rows;
@@ -4966,16 +4990,17 @@ function activeMarketsRows(kpi, state, sort) {
       || String(a.m.title || '').localeCompare(String(b.m.title || '')));
   }
 
-  return sorted.map(({ cid, m, upQuote, dnQuote, pairCost, edge, restingHere, ts }) => `<tr data-cid="${esc(cid)}">
+  return sorted.map(({ cid, m, upQuote, dnQuote, midPrice, volume30m, volume24h, top3Depth, horizon, restingHere, ts }) => `<tr data-cid="${esc(cid)}">
       ${timestampCell(ts)}
       <td class="ot-market">${marketCell(m, cid)}</td>
       <td class="mono">${esc(marketCategory(m))}</td>
       <td class="mono">${fmtPrice(upQuote)}</td>
       <td class="mono">${fmtPrice(dnQuote)}</td>
-      <td class="mono">${fmtPrice(pairCost)}</td>
-      <td class="mono">${edge === null ? '--' : `<span class="${edge > 0 ? 'positive' : 'negative'}">${(edge * 100).toFixed(1)}¢</span>`}</td>
-      <td class="mono">${fmtCompactUSD(m.volume_24h)}</td>
-      <td class="mono">${(m.days_to_resolve === null || m.days_to_resolve === undefined) ? '--' : `${Number(m.days_to_resolve).toFixed(1)}d`}</td>
+      <td class="mono">${fmtPrice(midPrice)}</td>
+      <td class="mono">${fmtCompactUSD(volume30m)}</td>
+      <td class="mono">${fmtCompactUSD(volume24h)}</td>
+      <td class="mono">${fmtCompactUSD(top3Depth)}</td>
+      <td class="mono">${(horizon === null || horizon === undefined) ? '--' : `${Number(horizon).toFixed(1)}d`}</td>
       <td>${marketStatusPill(m, restingHere)}</td>
     </tr>`).join('');
 }

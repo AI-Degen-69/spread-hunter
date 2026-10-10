@@ -417,20 +417,34 @@ header {
 .pill.error { background: var(--red-bg); color: #fca5a5; border: 1px solid var(--red-border); }
 .pill.reconnecting { background: var(--amber-bg); color: #fbbf24; border: 1px solid var(--amber-border); }
 .pill.finished { background: rgba(100,116,139,0.10); color: #94a3b8; border: 1px solid rgba(148,163,184,0.18); }
-/* QUOTING is live-but-busy: canonical running pill with the 1 Hz blink
-   (DESIGN.md live-state language). The old glow-breathe animation was
-   decorative motion and is retired. */
-.pill.quoting-breathing {
+/* RESTING is the active resting-on-book state: bright green with 1 Hz blink */
+.pill.resting-breathing,
+.pill.quoting-breathing.resting {
   background: var(--green-bg); color: #34d399; border: 1px solid var(--green-border);
+}
+.pill.resting-breathing::before,
+.pill.quoting-breathing.resting::before {
+  content: '';
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #34d399;
+  display: inline-block;
+  animation: hb-blink 1s steps(1, end) infinite;
+}
+
+/* QUOTING is live quoting without resting orders: less bright green color */
+.pill.quoting-breathing {
+  background: rgba(6, 78, 59, 0.22); color: #059669; border: 1px solid rgba(5, 150, 105, 0.38);
 }
 .pill.quoting-breathing::before {
   content: '';
   width: 6px; height: 6px; border-radius: 50%;
-  background: var(--signal);
+  background: #059669;
   display: inline-block;
   animation: hb-blink 1s steps(1, end) infinite;
 }
 @media (prefers-reduced-motion: reduce) {
+  .pill.resting-breathing::before,
+  .pill.quoting-breathing.resting::before,
   .pill.quoting-breathing::before { animation: none; }
 }
 

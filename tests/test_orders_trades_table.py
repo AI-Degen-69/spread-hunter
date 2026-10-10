@@ -236,8 +236,8 @@ def test_active_markets_carries_no_share_count():
     assert "shares" not in joined
     assert "size" not in joined
     assert rendered["columns"] == ["Timestamp", "Market", "Category", "UP Quote", "DOWN Quote",
-                                   "Pair Cost", "Edge", "24h Volume", "Resolves",
-                                   "Status"]
+                                   "Mid Price", "$ Traded 30m", "24h Volume", "Top-3 Bid Depth",
+                                   "Horizon", "Status"]
 
 
 @requires_node
@@ -296,40 +296,34 @@ def test_active_markets_lists_the_markets_being_quoted():
 
 @requires_node
 def test_active_markets_prices_the_pair_off_the_bot_s_own_quotes():
-    # Arrange — the pair is only worth quoting while UP + DOWN is under $1.00,
-    # so the row shows what the bot is bidding on each leg and what the pair
-    # would cost if both filled.
+    # Arrange — the row shows what the bot is bidding on each leg and the mid
+    # price from screening, while pair cost and edge are removed.
     rendered = _render("active-markets", _kpi(), _state())
 
-    # Act / Assert — 0.45 + 0.48 = 0.93, so 7.0 cents of edge.
+    # Act / Assert — 0.45 UP quote, 0.48 DOWN quote, 0.490 mid price; no pair cost or edge.
     assert "$0.450" in rendered["html"]
     assert "$0.480" in rendered["html"]
-    assert "$0.930" in rendered["html"]
-    assert "7.0¢" in rendered["html"]
+    assert "$0.490" in rendered["html"]
+    assert "$0.930" not in rendered["html"]
+    assert "7.0¢" not in rendered["html"]
 
 
 @requires_node
-def test_active_markets_edge_is_not_computed_from_mids():
-    # Arrange — UP mid and DOWN mid sum to $1.00 by construction: they are two
-    # sides of one binary. An edge computed from them reads 0.0¢ on every row
-    # of every real database, which is what it did before this.
-    kpi = _kpi()
-    mids = kpi["by_market"][CID_QUOTED]["quotes"]
-    assert round(mids[0]["mid"] + mids[1]["mid"], 6) == 1.0
-
-    # Act
-    rendered = _render("active-markets", kpi, _state())
+def test_active_markets_edge_and_pair_cost_are_removed():
+    # Arrange / Act — Pair Cost and Edge columns are removed from Active Markets.
+    rendered = _render("active-markets", _kpi(), _state())
 
     # Assert
-    assert "0.0¢" not in rendered["html"]
-    assert "$1.000" not in rendered["html"]
+    assert "Pair Cost" not in rendered["columns"]
+    assert "Edge" not in rendered["columns"]
+    assert "$0.930" not in rendered["html"]
+    assert "7.0¢" not in rendered["html"]
 
 
 @requires_node
 def test_active_markets_reads_the_down_leg_however_it_is_spelled():
     # Arrange — the quote log writes the down leg as `DOWN`; orders and the
-    # pair summary call it `DN`. Accepting only one spelling left every real
-    # database showing a blank DOWN mid, pair cost and edge.
+    # pair summary call it `DN`. Accepting both spellings ensures quotes and mids render.
     kpi = _kpi()
     kpi["by_market"][CID_QUOTED]["quotes"] = [
         _quote("tok-up", "UP", 0.49, 100.0, price=0.45),
@@ -341,8 +335,8 @@ def test_active_markets_reads_the_down_leg_however_it_is_spelled():
 
     # Assert
     assert "$0.480" in rendered["html"]
-    assert "$0.930" in rendered["html"]
-    assert "7.0¢" in rendered["html"]
+    assert "$0.490" in rendered["html"]
+    assert "$0.930" not in rendered["html"]
 
 
 @requires_node
@@ -352,6 +346,70 @@ def test_active_markets_says_so_when_nothing_is_quoted():
 
     # Assert
     assert "No markets are being quoted." in rendered["html"]
+
+
+@requires_node
+def test_active_markets_displays_screening_parameters():
+    # Arrange — Active Markets must show the screening filter parameters:
+    # Mid Price, $ traded in last 30m, 24h Volume, Top-3 Bid Depth, Horizon.
+    kpi = _kpi()
+    kpi["by_market"][CID_QUOTED]["movement_usd"] = 14192.85
+    kpi["by_market"][CID_QUOTED]["movement_window_sec"] = 1800.0
+    kpi["by_market"][CID_QUOTED]["yes_depth_usd"] = 2015.95
+    kpi["by_market"][CID_QUOTED]["no_depth_usd"] = 6642.05
+
+    # Act
+    rendered = _render("active-markets", kpi, _state())
+    html = rendered["html"]
+
+    # Assert — each screening parameter renders in the row:
+    # Mid Price ($0.490), 30m traded ($14k), 24h volume ($166k), top-3 bid depth ($2k), horizon (6.9d)
+    assert "$0.490" in html
+    assert "$14k" in html
+    assert "$166k" in html
+    assert "$2k" in html
+    assert "6.9d" in html
+
+
+@requires_node
+def test_active_markets_displays_feed_top3_bid_depth_without_side_depths():
+    kpi = _kpi()
+    market = kpi["by_market"][CID_QUOTED]
+    market["top3_bid_depth"] = 3123.45
+    market.pop("yes_depth_usd", None)
+    market.pop("no_depth_usd", None)
+
+    rendered = _render("active-markets", kpi, _state())
+
+    assert "$3k" in rendered["html"]
+
+
+@requires_node
+def test_active_markets_handles_mixed_depths():
+    # Arrange — one nonnumeric depth and one numeric depth should fall back to finite depth
+    kpi = _kpi()
+    market = kpi["by_market"][CID_QUOTED]
+    market.pop("top3_bid_depth", None)
+    market["yes_depth_usd"] = "invalid"
+    market["no_depth_usd"] = 4500.0
+
+    rendered = _render("active-markets", kpi, _state())
+
+    assert "$5k" in rendered["html"]
+
+
+@requires_node
+def test_active_markets_status_pills_distinguish_resting_and_quoting():
+    # Arrange — CID_QUOTED has resting orders (RESTING); CID_HELD has quotes but no resting orders (QUOTING).
+    rendered = _render("active-markets", _kpi(), _state())
+    html = rendered["html"]
+
+    # Assert — RESTING uses resting-breathing (bright green in css) on CID_QUOTED row,
+    # QUOTING uses quoting-breathing (less bright green in css) on CID_HELD row.
+    quoted_row = html.split(f'data-cid="{CID_QUOTED}"')[1].split("</tr>")[0]
+    held_row = html.split(f'data-cid="{CID_HELD}"')[1].split("</tr>")[0]
+    assert 'class="pill resting-breathing"' in quoted_row
+    assert 'class="pill quoting-breathing"' in held_row
 
 
 # ── Open orders ─────────────────────────────────────────────────────────────
@@ -1839,7 +1897,7 @@ def test_every_column_header_is_a_real_button_the_keyboard_can_reach():
 
     # Assert — one button per column, and a native button turns Enter and
     # Space into a click without any key handling of its own.
-    assert head.count('<button type="button"') == 10
+    assert head.count('<button type="button"') == 11
 
 
 @requires_node
