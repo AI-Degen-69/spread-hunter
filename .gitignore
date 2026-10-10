@@ -73,6 +73,9 @@ python-BACKUP/
 # Session tooling
 .freebuff/
 
+# playwright-cli browser-gate traces (console/page dumps); scratch, never committed
+.playwright-cli/
+
 # OS & Editor files
 .DS_Store
 Thumbs.db
