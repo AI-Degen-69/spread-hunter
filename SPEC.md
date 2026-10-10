@@ -1,33 +1,56 @@
-# SPEC — #443: Sample size sufficiency per confidence level on dashboard
+# SPEC — #448: Redesign sample size sufficiency using effect size and per-status observation bases
 
-Scope note: this file covers issue #443 only
-(branch `i443/sample-size-sufficiency-per-confidence-level`).
-It supersedes the #427 spec (done work).
+Scope note: this file covers issue #448 only
+(branch `i448/redesign-sample-size-sufficiency`).
+It supersedes the #443 spec.
 
 ## Problem (operator words)
 
-Strategy analytics displays PnL expectancy and confidence intervals, but the dashboard never surfaces how many closed trades are needed to reach statistical confidence at each confidence level (95%, 98%, 99%). Operators cannot tell whether the expectancy readout rests on enough observations or how many more closed trades are needed.
+The current sample size sufficiency card on the Reports & Analytics dashboard requires 30,000 to 52,000 observations because it calculates sample size using a fixed absolute margin $E = \$0.02$ against high dollar standard deviation ($\sigma \approx 1.77$). In a live market setting, sample size sufficiency must be practical (200–400 observations) and categorized per metric status (closed trades vs placed orders) rather than collapsing all metrics into a single arbitrary dollar threshold.
 
 ## Goals
 
-1. Pure calculation helper `required_sample_size_for_mean(std_dev, target_margin, z)` computes `ceil(((z * std_dev) / target_margin) ** 2)`. Returns 0 for non-positive or non-finite inputs.
-2. Extend `/api/kpi` (`trade_analytics.sample_size_sufficiency`) with current N, sample standard deviation, target margin of error ($0.02 USD per close default), and a 3-row evaluation for 95%, 98%, and 99% two-tailed confidence.
-3. Add a "Sample Size & Confidence Level Sufficiency" card to the Tier 1 decision row in the dashboard (`dashboard/static/index.html`, `app.js`, `styles.css`) with progress bars, showing "unmeasured" and clean guidance when N < 2 or when sample spread is 0.
-4. Version synchronization: bump `KPI_PAYLOAD_VERSION` and `EXPECTED_PAYLOAD_VERSION` from 253 to 254.
+1. **Continuous metrics (Cohen's d = 0.20):**
+   Implement relative effect size sample size calculation:
+   $$N = \left(\frac{Z}{d}\right)^2$$
+   For continuous metrics:
+   - PnL Expectancy (based on `closes` table)
+   - Holding Duration (based on `closes` table)
+   With $Z_{95\%} \approx 1.95996$ and $d = 0.20$, $N \approx \lceil(1.95996 / 0.20)^2\rceil = 97$ (or ~97–100 observations).
+
+2. **Proportion-based status metrics ($E_{pct} = 0.05$):**
+   Implement proportion-based sample size calculation:
+   $$N = \left\lceil \frac{Z^2 \cdot p(1-p)}{E_{pct}^2} \right\rceil$$
+   With $Z_{95\%} = 1.95996$, conservative $p = 0.50$ (or measured rate when available), $E_{pct} = 0.05$:
+   $N \approx \lceil (1.95996^2 \cdot 0.25) / 0.0025 \rceil = 385$ observations.
+   Categorized across respective observation bases:
+   - Stop Loss Exit Rate (`closes` table, exits via stop loss / single buy)
+   - Merge Rate (`closes` table, exits via merge / shadow merge)
+   - Fill Rate (`orders` table, total orders placed vs fills received)
+
+3. **Domain Separation of Observation Counts:**
+   - `closes` table as observation base for PnL Expectancy, Holding Duration, Stop Loss exits, and Merge exits.
+   - `orders` table as observation base for Fill Rate.
+
+4. **Surface on Dashboard UI:**
+   Update the Reports & Analytics dashboard tab (`#card-sample-sufficiency` / `#sample-sufficiency-readout`) to surface segmented sufficiency metrics per status (PnL Expectancy, Stop Loss Rate, Merge Rate, Fill Rate) with their respective observation counts, targets, and progress bars.
+
+5. **Version synchronization:**
+   Bump `KPI_PAYLOAD_VERSION` in `core_brain/kpi.py` and `EXPECTED_PAYLOAD_VERSION` in `dashboard/static/app.js` to 255.
 
 ## Acceptance Criteria
 
-- [ ] Helper `required_sample_size_for_mean(std_dev, target_margin, z)` implements `ceil(((z * std) / E)^2)`, returns 0 for non-positive/non-finite inputs, and matches Z-values (1.95996, 2.32635, 2.57583) at E = 0.02.
-- [ ] `/api/kpi` payload carries `trade_analytics.sample_size_sufficiency` with `current_n`, `std_dev_usd`, `target_margin_usd`, and `levels` (95, 98, 99) with `confidence_pct`, `z`, `required_n`, `remaining_n`, `progress_pct`.
-- [ ] When N < 2 or spread is zero, `std_dev_usd` and row calculated metrics are `null`, avoiding false sufficiency.
-- [ ] Dashboard card inside Tier 1 row (`#tier1-decision-row`) renders rows, progress bars, and informative text for N < 2 or zero spread without `undefined` or `NaN`.
-- [ ] `KPI_PAYLOAD_VERSION` and `EXPECTED_PAYLOAD_VERSION` bumped to 254.
-- [ ] Tests pass in `tests/test_kpi.py`, `tests/test_analytics_api.py`, `tests/test_analytics_surface_mount.py`, `tests/test_analytics_impact_tiers.py`, and `tests/test_negative_values_read_as_losses.py`.
+- [ ] Continuous sample size formula $N = \lceil (Z / d)^2 \rceil$ evaluates to ~97–100 observations for $d = 0.20$ at 95% CL.
+- [ ] Proportional sample size formula $N = \lceil (Z^2 \cdot p(1-p)) / E^2 \rceil$ evaluates to ~385 observations for $E = 0.05$ (at $p = 0.5$).
+- [ ] `sample_size_sufficiency` payload in `/api/kpi` separates status targets:
+  - `pnl_expectancy` (continuous, base: closes)
+  - `stop_loss_rate` (proportional, base: closes)
+  - `merge_rate` (proportional, base: closes)
+  - `fill_rate` (proportional, base: orders)
+- [ ] Dashboard displays individual sufficiency metrics per status on the Reports & Analytics tab.
+- [ ] `tests/test_statistical_analytics.py`, `tests/test_mean_pnl_ci.py`, `tests/test_kpi.py`, `tests/test_analytics_api.py`, `tests/test_analytics_surface_mount.py` pass with 0 failures.
 
 ## Explicit Out of Scope
 
-- Changing gating or live quoting decisions.
-- Adding new HTTP routes or endpoints.
-- Modifying `evaluate_stat_gate`, `power_table`, or existing 90% CI gate logic.
-- Adding new configuration settings to `core_brain/config.py`.
-- Restyling other cards or modifying other tiers.
+- Modifying live trading execution parameters or live order pricing logic.
+- Adding external dependencies.

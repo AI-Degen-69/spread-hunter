@@ -1,136 +1,176 @@
-# Plan: Issue #443 — Sample size sufficiency per confidence level on dashboard
-Branch: i443/sample-size-sufficiency-per-confidence-level | Issue: #443
+# Plan: Issue #448 — Redesign sample size sufficiency using effect size and per-status observation bases
+Branch: i448/redesign-sample-size-sufficiency | Issue: #448
 
-## Intake from CodeRabbit Plan
-- **Adopted from CodeRabbit plan:**
-  - Pure helper name `required_sample_size_for_mean(std_dev, target_margin, z)` with formula `ceil(((z * std_dev) / target_margin) ** 2)`.
-  - Nested payload placement in `trade_analytics.sample_size_sufficiency` on `/api/kpi`.
-  - Levels for 95%, 98%, 99% using two-tailed Z-scores (1.95996, 2.32635, 2.57583).
-  - Null behavior on N < 2 or zero spread so "unmeasured" is rendered rather than false sufficiency.
-  - Bump `KPI_PAYLOAD_VERSION` & `EXPECTED_PAYLOAD_VERSION` to 254.
-  - Tier 1 card placement in `index.html` inside `#tier1-decision-row`.
-- **Rejected from CodeRabbit plan:**
-  - Splitting into unnecessary sub-tasks/phases; condensed into 3 atomic vertical tasks.
-  - Adding new routes or modifying `config.py` (ruled out).
-- **Verified from live codebase:**
-  - `KPI_PAYLOAD_VERSION` in `core_brain/kpi.py` is currently 253.
-  - `EXPECTED_PAYLOAD_VERSION` in `dashboard/static/app.js` is currently 253.
-  - `test_the_payload_version_is_pinned_on_both_sides` in `tests/test_analytics_api.py` checks both versions and literal "253".
-  - `tests/test_negative_values_read_as_losses.py` line 249 has literal `payload_version=253`.
-  - `tests/test_analytics_impact_tiers.py` checks `#tier1-decision-row` and `TIER_BY_CARD`. Adding a card inside `#tier1-decision-row` with `data-tier="1"` needs an entry in `TIER_BY_CARD` if registered as a deck ID, or can be structured cleanly.
+## Intake & Context Analysis
+- **Context & Diagnosis:**
+  - Issue #443 introduced `required_sample_size_for_mean` using $E = \$0.02$ against PnL dollar standard deviation $\sigma$. When $\sigma \approx 1.77$, $N = \lceil ((1.96 \cdot 1.77)/0.02)^2 \rceil \approx 30,000$, which is unrealistic for live trading evaluation.
+  - Issue #448 redesigns sample size calculation:
+    1. Continuous metrics (Cohen's d = 0.20): $N = \lceil (Z / d)^2 \rceil \approx 97$ at 95% CL ($Z = 1.95996, d = 0.20$).
+    2. Proportional metrics ($E_{pct} = 0.05$): $N = \lceil (Z^2 \cdot p(1-p)) / E_{pct}^2 \rceil \approx 385$ at 95% CL ($p = 0.50, E_{pct} = 0.05$).
+    3. Separation of observation bases:
+       - `closes` table for PnL Expectancy, Holding Duration (or exits), Stop Loss exits, and Merge exits.
+       - `orders` table for Fill Rate (orders placed vs fills received).
+- **Adopted Elements:**
+  - Relative effect size helper `required_sample_size_cohen_d(d=0.20, z=Z_95_SAMPLE_SUFFICIENCY) -> int`.
+  - Proportional sample size helper `required_sample_size_proportion(p=0.50, margin=0.05, z=Z_95_SAMPLE_SUFFICIENCY) -> int`.
+  - Keep backward-compatible signature for `required_sample_size_for_mean` (or alias/deprecate cleanly) while updating sufficiency evaluation.
+  - Structure `sample_size_sufficiency` payload into per-status categories: `pnl_expectancy`, `stop_loss_rate`, `merge_rate`, `fill_rate` (and overall summary if applicable).
+  - Surface status segmentation on the Reports & Analytics tab in the dashboard.
+  - Bump `KPI_PAYLOAD_VERSION` & `EXPECTED_PAYLOAD_VERSION` to 255.
+- **Improvement Proposal (Ground in Evidence):**
+  - *Evidence:* Issue description states:
+    > "Separate observation counts across their correct domain tables:
+    > - `closes` table for PnL Expectancy, Holding Duration, Stop Loss exits, and Merge exits.
+    > - `orders` table for Fill Rate (Orders Placed vs Fills Received)."
+  - *Classification:* Simplification / edge-case hardening (adopt-by-default).
+  - *Implementation:* In `core_brain/kpi.py`, pass `total_orders_count = len(orders)` or read from orders into `compute_trade_analytics` (or enrich sufficiency in `report()`), so `fill_rate` sufficiency uses placed orders as `current_n`, while `pnl_expectancy`, `stop_loss_rate`, and `merge_rate` use `n_closes`. When `orders` is empty/not provided, `current_n` defaults cleanly to 0 without breaking standalone callers.
+
+---
 
 ## Interface Contracts & Schemas
 
-### 1. Python Helper & Payload
-```python
-# Constants
-Z_95_SAMPLE_SUFFICIENCY = 1.95996
-Z_98_SAMPLE_SUFFICIENCY = 2.32635
-Z_99_SAMPLE_SUFFICIENCY = 2.57583
-SAMPLE_SUFFICIENCY_LEVELS = (
-    (95, Z_95_SAMPLE_SUFFICIENCY),
-    (98, Z_98_SAMPLE_SUFFICIENCY),
-    (99, Z_99_SAMPLE_SUFFICIENCY),
-)
+### 1. Mathematical Formulas & Helpers (`core_brain/kpi.py`)
 
-def required_sample_size_for_mean(
-    std_dev: float | None,
-    target_margin: float | None = 0.02,
+```python
+DEFAULT_COHEN_D = 0.20
+DEFAULT_PROPORTION_MARGIN = 0.05
+
+def required_sample_size_cohen_d(
+    d: float | None = DEFAULT_COHEN_D,
     z: float = Z_95_SAMPLE_SUFFICIENCY,
 ) -> int:
-    """Calculates minimum sample size N = ceil(((z * std_dev) / target_margin) ** 2).
-    Returns 0 if std_dev or target_margin is non-positive or non-finite.
+    """Minimum sample size for continuous metric using Cohen's d effect size.
+    Formula: N = ceil((z / d) ** 2)
+    Returns 0 when d or z is non-positive or non-finite.
     """
+    if d is None or z is None:
+        return 0
+    if not math.isfinite(d) or not math.isfinite(z) or d <= 0.0 or z <= 0.0:
+        return 0
+    return math.ceil((z / d) ** 2)
+
+
+def required_sample_size_proportion(
+    p: float | None = 0.50,
+    margin: float | None = DEFAULT_PROPORTION_MARGIN,
+    z: float = Z_95_SAMPLE_SUFFICIENCY,
+) -> int:
+    """Minimum sample size for binary status proportion.
+    Formula: N = ceil((z**2 * p * (1 - p)) / (margin**2))
+    Returns 0 when p, margin, or z is invalid.
+    """
+    if p is None or margin is None or z is None:
+        return 0
+    if not math.isfinite(p) or not math.isfinite(margin) or not math.isfinite(z):
+        return 0
+    if p <= 0.0 or p >= 1.0 or margin <= 0.0 or z <= 0.0:
+        return 0
+    return math.ceil((z ** 2 * p * (1.0 - p)) / (margin ** 2))
 ```
 
-Payload structure in `kpi["trade_analytics"]["sample_size_sufficiency"]`:
+### 2. Payload Structure (`trade_analytics.sample_size_sufficiency` in `/api/kpi`)
+
 ```json
 {
   "current_n": 4,
-  "std_dev_usd": 0.11547,
-  "target_margin_usd": 0.02,
-  "levels": [
-    {
-      "confidence_pct": 95,
-      "z": 1.95996,
-      "required_n": 129,
-      "remaining_n": 125,
-      "progress_pct": 3
+  "statuses": {
+    "pnl_expectancy": {
+      "label": "PnL Expectancy",
+      "type": "continuous",
+      "base": "closes",
+      "current_n": 4,
+      "effect_size_d": 0.2,
+      "levels": [
+        {"confidence_pct": 95, "z": 1.95996, "required_n": 97, "remaining_n": 93, "progress_pct": 4},
+        {"confidence_pct": 98, "z": 2.32635, "required_n": 136, "remaining_n": 132, "progress_pct": 3},
+        {"confidence_pct": 99, "z": 2.57583, "required_n": 166, "remaining_n": 162, "progress_pct": 2}
+      ]
     },
-    {
-      "confidence_pct": 98,
-      "z": 2.32635,
-      "required_n": 181,
-      "remaining_n": 177,
-      "progress_pct": 2
+    "stop_loss_rate": {
+      "label": "Stop Loss Rate",
+      "type": "proportion",
+      "base": "closes",
+      "current_n": 4,
+      "target_margin": 0.05,
+      "levels": [
+        {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 381, "progress_pct": 1},
+        {"confidence_pct": 98, "z": 2.32635, "required_n": 542, "remaining_n": 538, "progress_pct": 1},
+        {"confidence_pct": 99, "z": 2.57583, "required_n": 664, "remaining_n": 660, "progress_pct": 1}
+      ]
     },
-    {
-      "confidence_pct": 99,
-      "z": 2.57583,
-      "required_n": 222,
-      "remaining_n": 218,
-      "progress_pct": 2
+    "merge_rate": {
+      "label": "Merge Rate",
+      "type": "proportion",
+      "base": "closes",
+      "current_n": 4,
+      "target_margin": 0.05,
+      "levels": [
+        {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 381, "progress_pct": 1},
+        {"confidence_pct": 98, "z": 2.32635, "required_n": 542, "remaining_n": 538, "progress_pct": 1},
+        {"confidence_pct": 99, "z": 2.57583, "required_n": 664, "remaining_n": 660, "progress_pct": 1}
+      ]
+    },
+    "fill_rate": {
+      "label": "Fill Rate",
+      "type": "proportion",
+      "base": "orders",
+      "current_n": 12,
+      "target_margin": 0.05,
+      "levels": [
+        {"confidence_pct": 95, "z": 1.95996, "required_n": 385, "remaining_n": 373, "progress_pct": 3},
+        {"confidence_pct": 98, "z": 2.32635, "required_n": 542, "remaining_n": 530, "progress_pct": 2},
+        {"confidence_pct": 99, "z": 2.57583, "required_n": 664, "remaining_n": 652, "progress_pct": 2}
+      ]
     }
-  ]
+  },
+  "levels": [ ... ] // backward compatibility with 95/98/99 levels for pnl_expectancy
 }
 ```
-*(When current_n < 2 or std_dev_usd is 0, std_dev_usd is null or 0, and required_n, remaining_n, progress_pct are null).*
-
-### 2. Dashboard UI Contract
-- Card added in `dashboard/static/index.html` inside `#tier1-decision-row`:
-  `<div class="card tier1-card" id="card-sample-sufficiency" data-tier="1">`
-    Header: `.tier1-head` with title "SAMPLE SIZE & CONFIDENCE SUFFICIENCY", tag "TIER 1 · OBSERVATION DEPTH".
-    Body: `<div id="sample-sufficiency-readout" class="sample-sufficiency-readout"></div>`
-  `</div>`
-- In `dashboard/static/app.js`:
-  `function renderSampleSufficiency(ta)` mounted in `renderAnalyticsSurface(kpi, status)`.
-  When N < 2: displays message "At least two closed trades are needed to estimate spread." and rows with "unmeasured".
-  When std_dev is 0: displays "All closed trades have the same result, so the spread is zero." and "unmeasured".
-- In `tests/js/analytics_surface_harness.cjs`:
-  Register `sample-sufficiency-readout` and `card-sample-sufficiency` in stub ID list, invoke `app.renderSampleSufficiency(kpi.trade_analytics)`.
 
 ---
 
 ## Tasks
 
-### Task 1: [Backend/Logic] Formula helper, KPI payload extension, and version bump [x]
+### Task 1: [Backend/Logic] Mathematical helpers, per-status sufficiency computation & KPI version bump [x]
+- **Task ID:** task-1
 - **Size:** M
-- **Target files:** `core_brain/kpi.py`, `tests/test_kpi.py`, `tests/test_analytics_api.py`, `tests/test_negative_values_read_as_losses.py`
+- **Domain:** `[Backend/Logic]`
+- **Target files:** `core_brain/kpi.py`, `tests/test_kpi.py`, `tests/test_statistical_analytics.py`, `tests/test_mean_pnl_ci.py`, `tests/test_analytics_api.py`, `tests/test_negative_values_read_as_losses.py`
 - **Depends on:** None
 - **Helper skills:** `test-driven-development`
 - **Description:**
-  1. Add Z constants and `required_sample_size_for_mean(std_dev, target_margin=0.02, z=Z_95_SAMPLE_SUFFICIENCY) -> int` in `core_brain/kpi.py`.
-  2. In `compute_trade_analytics()`, calculate `sample_size_sufficiency` using sample stdev of realized PnL (`wins + losses` / `_pnl_vals`). If `n < 2`, `std_dev_usd` is `None` and row stats are `None`. If `std_dev_usd == 0`, row stats are `None`.
-  3. Bump `KPI_PAYLOAD_VERSION` to 254 in `core_brain/kpi.py`.
-  4. Update version pins in `tests/test_analytics_api.py` and `tests/test_negative_values_read_as_losses.py`.
-  5. Add unit tests in `tests/test_kpi.py` testing formula edge cases, negative/zero inputs, 95/98/99 levels, empty state, and payload structure.
-- **Verification:** `python -m pytest -q tests/test_kpi.py tests/test_analytics_api.py tests/test_negative_values_read_as_losses.py`
+  1. Add `required_sample_size_cohen_d(d=0.20, z=Z_95_SAMPLE_SUFFICIENCY)` and `required_sample_size_proportion(p=0.50, margin=0.05, z=Z_95_SAMPLE_SUFFICIENCY)` in `core_brain/kpi.py`.
+  2. In `compute_trade_analytics()`, support `orders_count: int = 0` (or derive from context). Compute per-status sufficiency for `pnl_expectancy` (continuous, Cohen's d=0.20, base closes), `stop_loss_rate` (proportional, margin=0.05, base closes), `merge_rate` (proportional, margin=0.05, base closes), and `fill_rate` (proportional, margin=0.05, base orders).
+  3. Maintain backward compatibility in `levels` array mapping to `pnl_expectancy` levels.
+  4. Pass `orders_count=len(orders)` from `report()` in `core_brain/kpi.py`.
+  5. Bump `KPI_PAYLOAD_VERSION` to 255.
+  6. Update tests in `tests/test_kpi.py`, `tests/test_analytics_api.py`, `tests/test_negative_values_read_as_losses.py`.
+- **Verification:** `python -m pytest -q tests/test_kpi.py tests/test_statistical_analytics.py tests/test_mean_pnl_ci.py tests/test_analytics_api.py`
 
-### Task 2: [Design/UI] Frontend card, CSS styling, and client-side render logic [x]
+### Task 2: [Design/UI] Frontend status segmentation rendering & CSS styling [x]
+- **Task ID:** task-2
 - **Size:** M
-- **Target files:** `dashboard/static/index.html`, `dashboard/static/app.js`, `dashboard/static/styles.css`, `tests/test_analytics_impact_tiers.py`
-- **Depends on:** Task 1
+- **Domain:** `[Design/UI]`
+- **Target files:** `dashboard/static/app.js`, `dashboard/static/styles.css`
+- **Depends on:** task-1
 - **Helper skills:** `frontend-ui-engineering`
 - **Description:**
-  1. In `dashboard/static/index.html`, add `.card.tier1-card#card-sample-sufficiency[data-tier="1"]` inside `#tier1-decision-row`.
-  2. In `tests/test_analytics_impact_tiers.py`, add `"card-sample-sufficiency": "1"` to `TIER_BY_CARD`.
-  3. In `dashboard/static/styles.css`, add styling for `.sample-sufficiency-readout` (table layout, typography, progress bar spacing).
-  4. In `dashboard/static/app.js`:
-     - Update comment contract and bump `EXPECTED_PAYLOAD_VERSION` to 254.
-     - Implement `renderSampleSufficiency(ta)` handling empty/null states, formatting columns, rendering progress bars with `.dist-progress-wrap`, `.dist-progress-bar`, `.dist-progress-fill`.
-     - Call `renderSampleSufficiency(ta)` safely inside `renderAnalyticsSurface`.
-     - Export `renderSampleSufficiency` in `module.exports`.
+  1. Bump `EXPECTED_PAYLOAD_VERSION` to 255 in `dashboard/static/app.js`.
+  2. Update `renderSampleSufficiency(ta)` in `dashboard/static/app.js`:
+     - Render segmented cards/sections for each status (`pnl_expectancy`, `stop_loss_rate`, `merge_rate`, `fill_rate`).
+     - Display metric label, observation base (`closes` vs `orders`), current N, required N, remaining N, and progress bar.
+     - Show clear note if observations are 0 or below minimum.
+  3. Update `dashboard/static/styles.css` if necessary for segmented sufficiency table or multi-metric readout.
 - **Verification:** `python -m pytest -q tests/test_analytics_api.py tests/test_analytics_impact_tiers.py`
 
-### Task 3: [Backend/Logic] JS Harness integration, mount test suite & end-to-end verification [x]
+### Task 3: [Backend/Logic] JS Harness and mount tests update [x]
+- **Task ID:** task-3
 - **Size:** S
+- **Domain:** `[Backend/Logic]`
 - **Target files:** `tests/js/analytics_surface_harness.cjs`, `tests/test_analytics_surface_mount.py`
-- **Depends on:** Task 1, Task 2
+- **Depends on:** task-1, task-2
 - **Helper skills:** `test-driven-development`
 - **Description:**
-  1. In `tests/js/analytics_surface_harness.cjs`, add `sample-sufficiency-readout` and `card-sample-sufficiency` to element stubs, invoke `app.renderSampleSufficiency(kpi.trade_analytics || {})`, and return `sufficiency_html`.
-  2. In `tests/test_analytics_surface_mount.py`, add tests:
-     - `test_sample_sufficiency_renders_three_levels` (asserts 95%, 98%, 99%, required values, and progress fills).
-     - `test_sample_sufficiency_n_zero_has_no_undefined` (empty state, "unmeasured", no NaN/undefined).
-     - `test_sample_sufficiency_missing_object_mounts` (handles missing payload gracefully).
-- **Verification:** `python -m pytest -q tests/test_analytics_surface_mount.py tests/test_analytics_api.py tests/test_kpi.py`
+  1. Update `tests/js/analytics_surface_harness.cjs` and `tests/test_analytics_surface_mount.py` to assert the segmented status readout.
+  2. Verify all 4 statuses (PnL Expectancy, Stop Loss Rate, Merge Rate, Fill Rate) render correctly with ~97 and ~385 targets and no `undefined` or `NaN`.
+- **Verification:** `python -m pytest -q tests/test_analytics_surface_mount.py`
