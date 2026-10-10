@@ -1941,6 +1941,66 @@ def test_shadow_view_toggle_never_prompts_or_posts_a_start():
     assert out["liveFilter"]["wholeStackStarts"] == 0
 
 
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_master_start_disabled_on_non_production_view():
+    """Master START is disabled on SHADOW rehearsals and non-production DB views."""
+    harness = Path(__file__).resolve().parent / "js" / "start_toggle_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    master = out["master"]
+
+    # Active shadow rehearsal: disabled, dimmed, not-allowed, tooltip
+    assert master["shadow"]["disabled"] is True
+    assert master["shadow"]["opacity"] == "0.45"
+    assert master["shadow"]["cursor"] == "not-allowed"
+    assert "Disabled in SHADOW view" in master["shadow"]["title"]
+
+    # Finished shadow and missing production flag: disabled
+    assert master["finishedShadow"]["disabled"] is True
+    assert master["missingProd"]["disabled"] is True
+
+    # Live with nothing running: enabled, full opacity, pointer
+    assert master["liveNothingRunning"]["disabled"] is False
+    assert master["liveNothingRunning"]["opacity"] == "1"
+    assert master["liveNothingRunning"]["cursor"] == "pointer"
+    assert master["liveNothingRunning"]["action"] == "start"
+
+    # Live with running service: switches to STOP (start unavailable)
+    assert master["liveRunning"]["action"] == "stop"
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_master_start_click_on_shadow_view_posts_nothing():
+    """Clicking master START on a SHADOW view alerts and never POSTs."""
+    harness = Path(__file__).resolve().parent / "js" / "start_toggle_harness.cjs"
+    app_js = Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js"
+
+    res = subprocess.run(
+        [NODE, str(harness), str(app_js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    master = out["master"]
+
+    # Shadow view click: 1 alert, 0 starts
+    assert master["shadowClick"]["prompts"] == 0
+    assert master["shadowClick"]["starts"] == 0
+    assert master["shadowClick"]["wholeStackStarts"] == 0
+    assert master["shadowClick"]["alerts"] == 1
+    assert "production registry" in master["shadowClick"]["alertMsg"]
+
+    # Live view click: exactly 1 whole-stack start POST, 0 alerts
+    assert master["liveClick"]["wholeStackStarts"] == 1
+    assert master["liveClick"]["alerts"] == 0
+
+
 def test_page_surfaces_the_active_database_mode():
     """The badge and its wiring ship with the page, not just in the payload."""
     assert "db-mode-badge" in _read_static("index.html")

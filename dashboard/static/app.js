@@ -1574,6 +1574,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       masterToggle.setAttribute('aria-busy', 'true');
       masterToggle.style.opacity = '0.6';
       masterToggle.style.cursor = 'wait';
+      masterToggle.title = '';
       masterToggle.innerHTML = `<svg class="btn-syncing-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-2px;margin-right:4px;animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>${busyLabel}`;
       masterToggle.dataset.action = isStopping ? 'stop' : 'start';
     } else {
@@ -1586,14 +1587,26 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
         masterToggle.disabled = false;
         masterToggle.style.opacity = '1';
         masterToggle.style.cursor = 'pointer';
+        masterToggle.title = '';
       } else {
         masterToggle.className = 'btn-start-run';
         masterToggle.setAttribute('aria-label', 'Start bot execution stack');
         masterToggle.dataset.action = 'start';
         masterToggle.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-block;vertical-align:-2px;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>START RUN`;
-        masterToggle.disabled = false;
-        masterToggle.style.opacity = '1';
-        masterToggle.style.cursor = 'pointer';
+        const isProd = (status && typeof status.db_is_production === 'boolean')
+          ? status.db_is_production === true
+          : lastDbIsProduction === true;
+        if (!isProd) {
+          masterToggle.disabled = true;
+          masterToggle.style.opacity = '0.45';
+          masterToggle.style.cursor = 'not-allowed';
+          masterToggle.title = 'Disabled in SHADOW view: cannot start live execution from a rehearsal database';
+        } else {
+          masterToggle.disabled = false;
+          masterToggle.style.opacity = '1';
+          masterToggle.style.cursor = 'pointer';
+          masterToggle.title = '';
+        }
       }
     }
   }
@@ -1738,8 +1751,24 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
   masterToggleBtn.addEventListener('click', async () => {
     // A second click while a request is in flight is the race this button
     // exists to remove: the flags, not the DOM, are the authority.
-    if (isStarting || isStopping || masterToggleBtn.disabled) return;
+    if (isStarting || isStopping) return;
     const action = masterToggleBtn.dataset.action === 'stop' ? 'stop' : 'start';
+    if (action === 'start') {
+      const isProd = (lastStatus && typeof lastStatus.db_is_production === 'boolean')
+        ? lastStatus.db_is_production === true
+        : lastDbIsProduction === true;
+      if (!isProd || masterToggleBtn.disabled) {
+        if (!isProd) {
+          alert('This dashboard is not reading the production registry. '
+            + 'Service controls act on the live stack against data/orders.db, whose orders '
+            + 'would not appear on this page. Restart the dashboard without '
+            + '--db / LIVE_DB_PATH first.');
+        }
+        return;
+      }
+    } else if (masterToggleBtn.disabled) {
+      return;
+    }
     if (action === 'stop') {
       isStopping = true;
       const pill = document.getElementById('master-status-indicator');
