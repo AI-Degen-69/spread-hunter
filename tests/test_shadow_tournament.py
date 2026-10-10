@@ -132,13 +132,10 @@ def test_build_tournament_plan_defaults(tmp_path: Path):
     )
     assert plan.issue == 371
     assert plan.stamp == "20261005-032000"
-    assert len(plan.arms) == 4
-    # Default order: control, conservative, balanced, aggressive
+    assert len(plan.arms) == 5
+    # Default order: control, conservative, balanced, aggressive, prudent
     arm_names = [a.name for a in plan.arms]
-    assert "control" in arm_names
-    assert "conservative" in arm_names
-    assert "balanced" in arm_names
-    assert "aggressive" in arm_names
+    assert arm_names == ["control", "conservative", "balanced", "aggressive", "prudent"]
 
     # Check first arm details
     first = plan.arms[0]
@@ -232,5 +229,64 @@ def test_dry_run_cli_output(capsys, tmp_path: Path):
     data = json.loads(captured.out)
     assert data["issue"] == 371
     assert data["stamp"] == "20261005-032000"
-    assert len(data["arms"]) == 4
+    assert len(data["arms"]) == 5
+
+
+def test_default_arms_set_preset_selector(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    for arm in plan.arms:
+        assert arm.env["HUNTER_TOURNAMENT_PRESET"] == arm.name
+
+
+def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
+    from core_brain.config import TOURNAMENT_PRESETS
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    for arm in plan.arms:
+        preset = TOURNAMENT_PRESETS[arm.name]
+        assert arm.env["HUNTER_DYNAMIC_OFFSET"] == ("1" if preset["dynamic_offset_enabled"] else "0")
+        if "dynamic_offset_multiplier" in preset:
+            assert float(arm.env["HUNTER_DYNAMIC_OFFSET_MULT"]) == preset["dynamic_offset_multiplier"]
+        if "dynamic_offset_min_cents" in preset:
+            assert int(arm.env["HUNTER_DYNAMIC_OFFSET_MIN_CENTS"]) == preset["dynamic_offset_min_cents"]
+        if "dynamic_offset_max_cents" in preset:
+            assert int(arm.env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == preset["dynamic_offset_max_cents"]
+    by_name = {a.name: a for a in plan.arms}
+    assert float(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MULT"]) == 0.60
+    assert int(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == 4
+    assert by_name["control"].env["HUNTER_DYNAMIC_OFFSET"] == "0"
+
+
+def test_default_arm_ports_and_paths(tmp_path: Path):
+    from scripts.shadow_tournament import build_tournament_plan
+
+    plan = build_tournament_plan(
+        issue=371,
+        base_port=8801,
+        base_dir=tmp_path,
+        stamp="20261005-032000",
+        check_ports=False,
+    )
+    assert [a.dash_port for a in plan.arms] == [8801, 8802, 8803, 8804, 8805]
+    db_names = [a.db_path.name for a in plan.arms]
+    assert len(set(db_names)) == 5
+    run_ids = [a.run_id for a in plan.arms]
+    assert len(set(run_ids)) == 5
+    for arm in plan.arms:
+        assert f"_tournament_{arm.index:02d}_{arm.name}_" in arm.db_path.name
 

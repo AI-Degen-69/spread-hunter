@@ -135,7 +135,7 @@ def build_tournament_plan(
 
     # If arms not provided, default to TOURNAMENT_PRESETS in balanced order
     if arms is None:
-        default_order = ["control", "conservative", "balanced", "aggressive"]
+        default_order = ["control", "conservative", "balanced", "aggressive", "prudent"]
         arms = []
         for name in default_order:
             if name in TOURNAMENT_PRESETS:
@@ -168,6 +168,11 @@ def build_tournament_plan(
                         f"Invalid environment override {k!r}: only HUNTER_* overrides are permitted"
                     )
                 arm_env[k] = str(v)
+        # Full-profile selector: applies the whole preset (including the
+        # shared queue-hold settings _preset_to_env does not copy). Only
+        # for names the config knows; custom arms keep their explicit env.
+        if name in TOURNAMENT_PRESETS:
+            arm_env.setdefault("HUNTER_TOURNAMENT_PRESET", name)
 
         # Port assignment & validation
         dash_port = base_port + (idx - 1)
