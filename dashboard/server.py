@@ -2473,11 +2473,13 @@ _REPORTING_SERVICES: dict[str, dict[str, Any]] = {
         "port": 8798,
         "module": "scripts.tournament_hub",
         "probe_path": "/hub/api/state",
+        "timeout": 2.0,
     },
     "cockpit": {
         "port": 8800,
         "module": "scripts.tournament_cockpit_server",
         "probe_path": "/api/stats",
+        "timeout": 2.0,
     },
 }
 _reporting_processes: dict[str, Any] = {}
@@ -2502,7 +2504,7 @@ def _reporting_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.
             return False
 
 
-def _reporting_fetch_json(port: int, path: str = "", host: str = "127.0.0.1", timeout: float = 0.5) -> dict | None:
+def _reporting_fetch_json(port: int, path: str = "", host: str = "127.0.0.1", timeout: float = 2.0) -> dict | None:
     try:
         url = f"http://{host}:{port}{path}"
         req = urllib.request.Request(url, headers={"User-Agent": "SpreadHunterDashboard/1.0"})
@@ -2538,7 +2540,7 @@ def _probe_service_status(name: str) -> dict:
 
     is_open = _reporting_port_open(port)
     if is_open:
-        payload = _reporting_fetch_json(port, svc.get("probe_path", ""))
+        payload = _reporting_fetch_json(port, svc.get("probe_path", ""), timeout=svc.get("timeout", 2.0))
         data_available = False
         if payload is not None and isinstance(payload, dict):
             if name == "hub":
