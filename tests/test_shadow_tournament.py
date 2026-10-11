@@ -541,3 +541,22 @@ def test_launch_starts_and_stops_the_market_filter(tmp_path, monkeypatch):
     # It is still running at shutdown and must be stopped, never left behind.
     assert proc.terminated or proc.killed, "filter must be stopped on run exit"
 
+
+def test_hybrid_preset_configuration():
+    from core_brain.config import MakerConfig, apply_tournament_preset, TOURNAMENT_PRESETS
+
+    assert "hybrid" in TOURNAMENT_PRESETS
+    preset = TOURNAMENT_PRESETS["hybrid"]
+    assert preset["dynamic_offset_enabled"] is False
+    assert preset["reward_offset"] == 0.020
+    assert preset["requote_dead_band"] == 0.060
+    assert preset["single_buy_max_loss_usd"] == 0.045
+    assert preset["single_buy_grace_sec"] == 45.0
+
+    cfg = apply_tournament_preset(MakerConfig(), "hybrid")
+    assert cfg.reward_offset == 0.020
+    assert cfg.requote_dead_band == 0.060
+    assert cfg.single_buy_max_loss_usd == 0.045
+    assert cfg.single_buy_grace_sec == 45.0
+    assert cfg.dynamic_offset_enabled is False
+

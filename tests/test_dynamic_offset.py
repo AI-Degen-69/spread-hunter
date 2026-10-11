@@ -128,7 +128,7 @@ def test_decide_quotes_refuses_when_dynamic_pair_sum_exceeds_dollar():
 
 
 def test_tournament_presets_registry_contents():
-    expected_presets = {"control", "conservative", "balanced", "aggressive", "prudent"}
+    expected_presets = {"control", "conservative", "balanced", "aggressive", "prudent", "hybrid"}
     assert set(TOURNAMENT_PRESETS.keys()) == expected_presets
 
     control = TOURNAMENT_PRESETS["control"]
@@ -208,8 +208,10 @@ def test_tournament_presets_distinct_stop_loss_usd():
     tighter dollar stop; a tight-offset arm fills near the touch and needs room
     before the pair can complete. Asserting order locks that rationale.
     """
+    # The 5 original tournament arms have distinct stops ordered by fill patience:
+    tournament_arms = ["control", "conservative", "balanced", "aggressive", "prudent"]
     stops = {name: TOURNAMENT_PRESETS[name]["single_buy_max_loss_usd"]
-             for name in TOURNAMENT_PRESETS}
+             for name in tournament_arms}
     assert set(stops.values()).__len__() == len(stops)  # all distinct
     assert stops["conservative"] < stops["prudent"] < stops["control"] < stops["balanced"] < stops["aggressive"]
     # none disable the rule (0 disables) and none exceed a sensible bound

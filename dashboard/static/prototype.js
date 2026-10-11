@@ -261,6 +261,11 @@ function buildNavLabel(doc, text) {
  * are adopted by navigation rather than restyled into the shell. */
 const RAIL_LINKS = [
   {
+    href: 'http://127.0.0.1:8800',
+    label: 'Tournament Cockpit',
+    icon: 'M2 13.5h12 M3 11l3-6 4 4 4-7',
+  },
+  {
     href: 'https://polymarket.com/markets',
     label: 'Polymarket',
     icon: 'M8 1.6a6.4 6.4 0 1 0 0 12.8A6.4 6.4 0 0 0 8 1.6z M1.6 8h12.8 '

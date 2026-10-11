@@ -277,6 +277,11 @@ PAGE_HTML = """<!doctype html>
 <body>
 <h1>🏆 Tournament Hub</h1>
 <div class="sub" id="sub">loading…</div>
+<div style="margin-bottom: 16px;">
+  <a href="http://127.0.0.1:8800" target="_blank" style="display: inline-flex; align-items: center; gap: 8px; background: #162438; border: 1px solid #2b568e; color: #6ea8fe; padding: 8px 16px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 13px;">
+    🚀 Open Advanced Analytics &amp; Decision Cockpit (Port 8800)
+  </a>
+</div>
 <div id="arms" class="grid"><div class="empty">loading…</div></div>
 
 <script>

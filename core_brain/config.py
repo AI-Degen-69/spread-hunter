@@ -1212,6 +1212,16 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
         "single_buy_max_loss_usd": 0.038,
         "description": "Hybrid conservative-balanced tracking (2¢–4¢, 0.60x) with queue hold; stop $0.038",
     },
+    "hybrid": {
+        "dynamic_offset_enabled": False,
+        "reward_offset": 0.020,
+        "requote_dead_band": 0.060,
+        "requote_hold_queue_shares": 500.0,
+        "requote_hold_below_target": 0.08,
+        "single_buy_grace_sec": 45.0,
+        "single_buy_max_loss_usd": 0.045,
+        "description": "Empirical Winner Hybrid: Control edge (2¢ offset, $0.045 stop) + Deadband-Wide queue stability (6¢ deadband, 45s grace)",
+    },
 }
 
 

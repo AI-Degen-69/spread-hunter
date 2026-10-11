@@ -59,7 +59,7 @@ def test_menu_key_set_is_identical_everywhere():
     place silently misses another — the exact drift that hid `t` from the
     prompt and let `audit`/`prune` live outside the grid.
     """
-    assert _menu_keys() == ["1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "a", "p", "q"]
+    assert _menu_keys() == ["1", "2", "3", "4", "5", "6", "7", "8", "9", "r", "a", "p", "c", "q"]
     src = _menu_source()
     # The allow-list reads that same list, not a hand-written literal.
     assert "$script:MenuKeys -notcontains $key" in src
@@ -85,6 +85,8 @@ def test_storage_words_map_to_letter_keys():
         assert mapping.get(word) == "a", f"{word!r} must map to 'a'"
     for word in ("prune", "storage-prune"):
         assert mapping.get(word) == "p", f"{word!r} must map to 'p'"
+    for word in ("cockpit", "tournament-cockpit"):
+        assert mapping.get(word) == "c", f"{word!r} must map to 'c'"
 
 
 def test_every_key_has_a_branch():
@@ -148,7 +150,7 @@ if ($script:pruneForce -ne $true)  { $failures.Add("p did not pass Force under -
 $Yes = $false; Invoke-LiveAction "p"
 if ($script:pruneForce -ne $false) { $failures.Add("p passed Force without -Yes") | Out-Null }
 $warned = (Invoke-LiveAction "z" *>&1 | Out-String)
-if (-not $warned.Contains("1-9, r, a, p, q")) { $failures.Add("warn did not name the full hint") | Out-Null }
+if (-not $warned.Contains("1-9, r, a, p, c, q")) { $failures.Add("warn did not name the full hint") | Out-Null }
 if ($failures.Count) { $failures | ForEach-Object { Write-Host ("FAIL " + $_) }; exit 1 }
 Write-Host "ALL DISPATCH CHECKS PASS"
 """,
