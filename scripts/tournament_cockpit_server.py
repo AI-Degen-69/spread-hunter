@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.server
 import json
 import math
@@ -149,29 +150,37 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
         }
 
     try:
-        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
-        c = conn.cursor()
+        with contextlib.closing(
+            sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        ) as conn:
+            c = conn.cursor()
 
-        # Check time window
-        ts_row = c.execute("SELECT min(ts), max(ts) FROM queue_marks").fetchone()
-        first_ts = ts_row[0] or 0.0
-        last_ts = ts_row[1] or first_ts
-        elapsed_min = (last_ts - first_ts) / 60.0 if first_ts else 0.0
-        rem_min = max(0.0, target_minutes - elapsed_min)
+            # Check time window
+            ts_row = c.execute(
+                "SELECT min(ts), max(ts) FROM queue_marks WHERE run_id = ?",
+                (cfg["run_id"],),
+            ).fetchone()
+            first_ts = ts_row[0] or 0.0
+            last_ts = ts_row[1] or first_ts
+            elapsed_min = (last_ts - first_ts) / 60.0 if first_ts else 0.0
+            rem_min = max(0.0, target_minutes - elapsed_min)
 
-        # Fills and Orders
-        fills_cnt = c.execute("SELECT count(*) FROM fills WHERE run_id = ?", (cfg["run_id"],)).fetchone()[0]
-        orders_cnt = c.execute("SELECT count(DISTINCT order_uuid) FROM fills WHERE run_id = ?", (cfg["run_id"],)).fetchone()[0]
+            # Fills and Orders
+            fills_cnt = c.execute(
+                "SELECT count(*) FROM fills WHERE run_id = ?", (cfg["run_id"],)
+            ).fetchone()[0]
+            orders_cnt = c.execute(
+                "SELECT count(DISTINCT order_uuid) FROM fills WHERE run_id = ?", (cfg["run_id"],)
+            ).fetchone()[0]
 
-        # Closes
-        rows = c.execute(
-            "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares FROM closes "
-            "WHERE run_id = ? AND method NOT IN ('settlement', 'shadow_merge_note', '') "
-            "ORDER BY ts ASC",
-            (cfg["run_id"],)
-        ).fetchall()
-        conn.close()
-    except Exception as exc:
+            # Closes
+            rows = c.execute(
+                "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares FROM closes "
+                "WHERE run_id = ? AND method NOT IN ('settlement', 'shadow_merge_note', '') "
+                "ORDER BY ts ASC",
+                (cfg["run_id"],)
+            ).fetchall()
+    except sqlite3.Error as exc:
         return {
             **cfg,
             "status": "error",
@@ -624,7 +633,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
         <div id="progress-bar" class="progress-bar-fill" style="width: 87.5%;"></div>
       </div>
     </div>
-    <button class="btn" id="btn-refresh" onclick="fetchLiveStats()">↻ Refresh Data</button>
+    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+      <button class="btn" id="btn-refresh" onclick="fetchLiveStats()">↻ Refresh Data</button>
+      <span id="refresh-status" style="font-size: 11px; color: var(--text-muted);">Loaded</span>
+    </div>
   </div>
 </header>
 
@@ -659,13 +671,13 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 
 <!-- Tabs Navigation -->
 <div class="tabs">
-  <button class="tab-btn active" onclick="switchTab('overview')">🏆 Leaderboard &amp; Overview</button>
-  <button class="tab-btn" onclick="switchTab('hybrid-config')">⚙️ HYBRID Configuration Blueprint</button>
-  <button class="tab-btn" onclick="switchTab('pnl-chart')">📈 Cumulative PnL Curves</button>
-  <button class="tab-btn" onclick="switchTab('risk-stats')">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
-  <button class="tab-btn" onclick="switchTab('execution')">🎯 Merge vs Fallout Quality</button>
-  <button class="tab-btn" onclick="switchTab('monte-carlo')">🎲 Monte Carlo Projections</button>
-  <button class="tab-btn" onclick="switchTab('recommendations')">🚀 Live Readiness Decision Matrix</button>
+  <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
+  <button class="tab-btn" onclick="switchTab('hybrid-config', this)">⚙️ HYBRID Configuration Blueprint</button>
+  <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
+  <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
+  <button class="tab-btn" onclick="switchTab('execution', this)">🎯 Merge vs Fallout Quality</button>
+  <button class="tab-btn" onclick="switchTab('monte-carlo', this)">🎲 Monte Carlo Projections</button>
+  <button class="tab-btn" onclick="switchTab('recommendations', this)">🚀 Live Readiness Decision Matrix</button>
 </div>
 
 <!-- TAB 1: OVERVIEW & LEADERBOARD -->
@@ -723,10 +735,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.08), rgba(0, 176, 255, 0.08)); border: 1px solid rgba(0, 230, 118, 0.3); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
       <div>
-        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 EMPIRICAL WINNER SYNTHESIS</span>
+        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 EMPIRICAL WINNER SYNTHESIS (FIXED RUN EVALUATION NOTES)</span>
         <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">Production HYBRID Configuration Blueprint</h2>
         <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px;">
-          Combines Issue #484 <strong>Control pricing edge</strong> (+$25.34 PnL, $0.180 EV/trade) with Issue #485 <strong>Deadband-Wide queue defense</strong> (+$14.36 PnL, $7.50 max DD, zero queue churn).
+          Note: Static benchmark synthesis from initial 12h run evaluation. Combines Issue #484 <strong>Control pricing edge</strong> (+$25.34 PnL, $0.180 EV/trade) with Issue #485 <strong>Deadband-Wide queue defense</strong> (+$14.36 PnL, $7.50 max DD, zero queue churn).
         </p>
       </div>
       <div style="text-align: right;">
@@ -753,14 +765,14 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
           <td class="tabular positive" style="font-size: 14px;"><strong>0.020 (2.0¢)</strong></td>
           <td><code>HUNTER_REWARD_OFFSET</code></td>
           <td><span class="badge badge-green">#484 control</span></td>
-          <td>Rests quotes exactly 2¢ below mid-market on both legs. With mid UP + mid DN ≈ $1.00, locks in pair cost ≤ $0.96 ($0.04 spread gross edge). High enough fill velocity without giving up spread margin.</td>
+          <td>Rests quotes exactly 2¢ below mid-market on both legs. When mid UP + mid DN ≈ $1.00, targets pair cost ≤ $0.96 ($0.04 spread gross edge). High enough fill velocity without giving up spread margin.</td>
         </tr>
         <tr>
           <td><strong>Requote Deadband</strong></td>
           <td class="tabular positive" style="font-size: 14px;"><strong>0.060 (6.0¢)</strong></td>
           <td><code>HUNTER_REQUOTE_DEAD_BAND</code></td>
           <td><span class="badge badge-green">#485 deadband-wide</span></td>
-          <td><strong>Queue Priority Defender:</strong> Suppresses cancellation &amp; requote when book shifts ≤ 6¢. Eliminates the catastrophic $27.86 churn penalty seen in tight deadbands, ensuring our order stays in front of the venue queue.</td>
+          <td><strong>Queue Priority Defender:</strong> Suppresses cancellation &amp; requote when book shifts ≤ 6¢. Eliminates excessive requoting churn seen in tighter deadbands, ensuring our order stays in front of the venue queue.</td>
         </tr>
         <tr>
           <td><strong>Single-Buy Stop Cap</strong></td>
@@ -802,7 +814,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
           <td class="tabular" style="font-size: 14px; color: var(--amber);"><strong>$0.990</strong></td>
           <td><code>max_pair_cost_cap</code></td>
           <td><span class="badge badge-amber">Core Safety Law</span></td>
-          <td>Under no circumstances can UP + DOWN cost combined exceed $0.99. Guarantees minimum $0.01 profit on every merged pair ($1.00 payout).</td>
+          <td>Under no circumstances can UP + DOWN cost combined exceed $0.99. Targets a minimum $0.01 gross margin per pair before fees and gas ($1.00 payout).</td>
         </tr>
       </tbody>
     </table>
@@ -816,11 +828,11 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 # 1. Interactive Menu - Select Preset "hybrid":
 .\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset hybrid -Minutes 60
 
-# 2. Or Direct Python Rehearsal:
-python -m core_brain.shadow_run --preset hybrid --minutes 60.0 --interval 5.0
+# 2. Or Direct Tournament / Python Rehearsal with hybrid preset:
+python -m scripts.shadow_tournament --minutes 60.0 --interval 5.0
 
-# 3. Dedicated Dashboard:
-python -m dashboard.server --port 8800
+# 3. Tournament Analytics Cockpit:
+python -m scripts.tournament_cockpit_server --port 8800
       </pre>
     </div>
 
@@ -909,15 +921,15 @@ HUNTER_REQUOTE_HOLD_BELOW=0.08
 <div id="tab-recommendations" class="tab-pane">
   <div class="decision-grid">
     <div class="decision-box" style="border-left: 4px solid var(--green);">
-      <h3 style="color: var(--green);">🌟 Recommended Production Configuration</h3>
+      <h3 style="color: var(--green);">🌟 Recommended Production Configuration (Fixed Run Evaluation Notes)</h3>
       <ul>
-        <li><strong>Primary Winner: <code>control</code> (Issue #484)</strong> — Consistently highest realized PnL (+$$18.38), highest win rate (65%), controlled drawdown ($$7.66), and robust EV per trade.</li>
-        <li><strong>Best Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Outperformed tight deadbands by +$$26.65 PnL difference! Why: A 2-cent requote deadband avoids burning queue priority on micro-fluctuations.</li>
-        <li><strong>The Optimal Hybrid Synthesis:</strong> Combine <code>control</code> baseline pricing (fixed 2c offset, $$0.045 single-buy loss cap) with <code>deadband-wide</code> (2c requote deadband) for maximum order stability and minimum queue churn.</li>
+        <li><strong>Primary Winner: <code>control</code> (Issue #484)</strong> — Highest realized PnL in initial run (+$18.38), highest win rate (65%), controlled drawdown ($7.66), and robust EV per trade.</li>
+        <li><strong>Best Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Outperformed tight deadbands by +$26.65 PnL difference! Why: A 2-cent requote deadband avoids burning queue priority on micro-fluctuations.</li>
+        <li><strong>The Optimal Hybrid Synthesis:</strong> Combine <code>control</code> baseline pricing (fixed 2c offset, $0.045 single-buy loss cap) with <code>deadband-wide</code> (2c requote deadband) for maximum order stability and minimum queue churn.</li>
       </ul>
     </div>
     <div class="decision-box" style="border-left: 4px solid var(--red);">
-      <h3 style="color: var(--red);">⚠️ Configurations to Avoid for Live Deployment</h3>
+      <h3 style="color: var(--red);">⚠️ Configurations to Avoid for Live Deployment (Fixed Run Evaluation Notes)</h3>
       <ul>
         <li><strong>Avoid: <code>queuehug</code> (PnL: -$14.96)</strong> — Aggressively jumping queue when size is small caused extreme adverse selection, getting filled predominantly right before market moved against the quote.</li>
         <li><strong>Avoid: <code>deadband-tight</code> (PnL: -$17.40)</strong> — Continuous order cancellations reset venue queue position, paying maximum taker penalties without capturing fill queue priority.</li>
@@ -931,10 +943,11 @@ HUNTER_REQUOTE_HOLD_BELOW=0.08
 let state = {json_embedded};
 let charts = {{}};
 
-function switchTab(name) {{
+function switchTab(name, btn) {{
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-  event.target.classList.add('active');
+  const activeBtn = btn || (typeof event !== 'undefined' ? event.target : null);
+  if (activeBtn) activeBtn.classList.add('active');
   const target = document.getElementById('tab-' + name);
   if (target) target.classList.add('active');
 }}
@@ -1204,14 +1217,33 @@ function renderCharts() {{
   }}
 }}
 
+let lastUpdateTime = new Date().toLocaleTimeString();
+
 function fetchLiveStats() {{
+  const statusEl = document.getElementById('refresh-status');
   fetch('/api/stats')
-    .then(r => r.json())
+    .then(r => {{
+      if (!r.ok) {{
+        throw new Error('HTTP ' + r.status);
+      }}
+      return r.json();
+    }})
     .then(data => {{
       state = data;
+      lastUpdateTime = new Date().toLocaleTimeString();
+      if (statusEl) {{
+        statusEl.textContent = 'Updated ' + lastUpdateTime;
+        statusEl.style.color = 'var(--text-muted)';
+      }}
       renderAll();
     }})
-    .catch(err => console.log('Static or offline mode:', err));
+    .catch(err => {{
+      console.log('Stats refresh offline or error:', err);
+      if (statusEl) {{
+        statusEl.textContent = '⚠️ Update failed (' + (lastUpdateTime ? 'last ' + lastUpdateTime : 'offline') + ')';
+        statusEl.style.color = 'var(--amber)';
+      }}
+    }});
 }}
 
 // Initial render
@@ -1224,6 +1256,22 @@ setInterval(fetchLiveStats, 10000);
 """
 
 
+_STATS_CACHE: dict[str, Any] = {}
+_STATS_CACHE_TIME: float = 0.0
+_STATS_CACHE_LOCK = threading.Lock()
+_STATS_CACHE_TTL_SEC: float = 3.0
+
+
+def get_cached_stats() -> dict[str, Any]:
+    global _STATS_CACHE, _STATS_CACHE_TIME
+    with _STATS_CACHE_LOCK:
+        now = time.time()
+        if not _STATS_CACHE or (now - _STATS_CACHE_TIME) >= _STATS_CACHE_TTL_SEC:
+            _STATS_CACHE = collect_all_stats()
+            _STATS_CACHE_TIME = now
+        return _STATS_CACHE
+
+
 class CockpitHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         # Mute normal HTTP log spam
@@ -1231,7 +1279,7 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path in ("/", "/index.html"):
-            stats = collect_all_stats()
+            stats = get_cached_stats()
             html = generate_cockpit_html(stats)
             data = html.encode("utf-8")
             self.send_response(200)
@@ -1240,11 +1288,10 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         elif self.path == "/api/stats":
-            stats = collect_all_stats()
+            stats = get_cached_stats()
             data = json.dumps(stats).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

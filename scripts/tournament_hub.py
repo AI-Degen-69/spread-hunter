@@ -82,7 +82,7 @@ def _arm_counts(db_path: Path, run_id: str) -> dict[str, Any]:
     finally:
         conn.close()
 
-    nontrade = {"", None, "unknown", "shadow_merge_note", "settlement"}
+    nontrade = {"", None, "unknown", "shadow_merge_note"}
     traded = [r for r in rows if (r[0] or "unknown") not in nontrade]
     merges = [r for r in traded if (r[0] or "") == "shadow_merge"]
     return {
@@ -133,13 +133,7 @@ def build_arm_view(plan: dict, arm: dict) -> dict[str, Any]:
         "heartbeat_age_sec": round(float(beat_age), 1) if beat_age is not None else None,
     }
 
-    alive = (
-        started > 0
-        and not bool(heartbeat.get("finished"))
-        and beat_age is not None
-        and float(beat_age) < 60.0
-    )
-    view["alive"] = alive
+    view["alive"] = bool(heartbeat.get("running"))
     view.update(_arm_counts(db_path, run_id) if db_path.exists() else {})
     return view
 
@@ -183,20 +177,24 @@ def build_hub_state(record_path: Optional[Path] = None) -> dict[str, Any]:
         return {"available": False, "reason": "no tournament record found"}
 
     arms: list[dict[str, Any]] = []
-    seen_ports: set[int] = set()
+    seen_arms: set[tuple[Any, Any]] = set()
     for record in records:
-        plan = _read_json(record) or {}
+        plan = _read_json(record)
+        if not isinstance(plan, dict):
+            continue
         for arm in plan.get("arms", []):
-            port = int(arm.get("dash_port"))
-            # One card per port: the newest record wins, so a superseded batch
-            # (same issue, older stamp, ports reused) cannot show stale ghosts.
-            # Newest-first ordering above makes the first sighting the keeper.
-            if port in seen_ports:
+            if not isinstance(arm, dict):
+                continue
+            # Deduplicate by issue and arm name (run identity), so separate batches
+            # sharing ports don't clobber each other while superseded runs of the
+            # same arm in the same issue keep the newest sighting.
+            arm_key = (plan.get("issue"), arm.get("name"))
+            if arm_key in seen_arms:
                 continue
             view = build_arm_view(plan, arm)
             view["issue"] = plan.get("issue")
             view["stamp"] = plan.get("stamp")
-            seen_ports.add(port)
+            seen_arms.add(arm_key)
             arms.append(view)
 
     return {
@@ -298,15 +296,25 @@ function statusPill(a) {
   return '<span class="pill dead">stopped</span>';
 }
 
+function esc(s) {
+  if (s === null || s === undefined) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function rows(a) {
   const off = a.dynamic_offset === "1"
-    ? `${a.offset_min_cents ?? "?"}–${a.offset_max_cents ?? "?"}¢ (×${a.offset_mult ?? "?"})`
+    ? `${esc(a.offset_min_cents ?? "?")}–${esc(a.offset_max_cents ?? "?")}¢ (×${esc(a.offset_mult ?? "?")})`
     : "static";
   return `
-    <dt>stop</dt><dd class="stop">$${a.stop_loss_usd ?? "?"}</dd>
+    <dt>stop</dt><dd class="stop">$${esc(a.stop_loss_usd ?? "?")}</dd>
     <dt>offset</dt><dd>${off}</dd>
-    <dt>run id</dt><dd title="${a.run_id ?? ""}">${a.run_id ?? "—"}</dd>
-    <dt>cycle</dt><dd>${a.cycle ?? "—"}</dd>
+    <dt>run id</dt><dd title="${esc(a.run_id ?? "")}">${esc(a.run_id ?? "—")}</dd>
+    <dt>cycle</dt><dd>${esc(a.cycle ?? "—")}</dd>
     <dt>left</dt><dd>${fmt(a.remaining_min, 0)} min</dd>
     <dt>fills</dt><dd>${a.fill_events ?? 0} / ${a.filled_orders ?? 0} ord</dd>
     <dt>closes</dt><dd>${a.close_events ?? 0} (⇄${a.merges ?? 0} ✕${a.single_leg_exits ?? 0})</dd>
@@ -335,13 +343,13 @@ function render(state) {
   wrap.innerHTML = arms.map(a => `
     <div class="card">
       <div class="top">
-        <span class="name">#${a.issue} · ${a.name}</span>
+        <span class="name">#${esc(a.issue)} · ${esc(a.name)}</span>
         ${statusPill(a)}
       </div>
       <dl class="rows">${rows(a)}</dl>
       <a class="open ${a.dashboard_reachable ? "" : "disabled"}"
-         href="${a.dashboard_url}" target="_blank" rel="noopener">
-        ${a.dashboard_reachable ? "Open dashboard :" + a.dash_port : "dashboard offline :" + a.dash_port}
+         href="${esc(a.dashboard_url)}" target="_blank" rel="noopener">
+        ${a.dashboard_reachable ? "Open dashboard :" + esc(a.dash_port) : "dashboard offline :" + esc(a.dash_port)}
       </a>
     </div>`).join("");
 }

@@ -136,11 +136,14 @@ def test_dispatch_routes_storage_keys_and_warns_on_unknown():
         r"""
 $script:auditCalls = 0
 $script:pruneForce = $null
+$script:startedProcesses = New-Object System.Collections.Generic.List[string]
 function Invoke-StorageAudit { $script:auditCalls++ }
 function Invoke-StoragePrune { param([switch]$Force) $script:pruneForce = $Force }
+function Start-Process { param($FilePath) $script:startedProcesses.Add($FilePath) | Out-Null }
 function Lsh-Warn   { param($m) Write-Host ("WARN " + $m) }
 function Lsh-Banner { param($Title,$Subtitle) }
 function Lsh-Fail   { param($m) Write-Host ("FAIL " + $m) }
+function Lsh-Ok     { param($m) Write-Host ("OK " + $m) }
 function Start-Sleep { }
 $failures = New-Object System.Collections.Generic.List[string]
 Invoke-LiveAction "a"
@@ -149,6 +152,10 @@ $Yes = $true;  Invoke-LiveAction "p"
 if ($script:pruneForce -ne $true)  { $failures.Add("p did not pass Force under -Yes") | Out-Null }
 $Yes = $false; Invoke-LiveAction "p"
 if ($script:pruneForce -ne $false) { $failures.Add("p passed Force without -Yes") | Out-Null }
+Invoke-LiveAction "c"
+if ($script:startedProcesses.Count -ne 1 -or $script:startedProcesses[0] -ne "http://127.0.0.1:8800") {
+    $failures.Add("c did not start cockpit URL http://127.0.0.1:8800") | Out-Null
+}
 $warned = (Invoke-LiveAction "z" *>&1 | Out-String)
 if (-not $warned.Contains("1-9, r, a, p, c, q")) { $failures.Add("warn did not name the full hint") | Out-Null }
 if ($failures.Count) { $failures | ForEach-Object { Write-Host ("FAIL " + $_) }; exit 1 }

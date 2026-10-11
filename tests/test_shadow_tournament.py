@@ -511,15 +511,16 @@ def test_launch_starts_and_stops_the_market_filter(tmp_path, monkeypatch):
     """
     import scripts.shadow_tournament as st
 
-    spawned: list[tuple[list[str], _FakeProc]] = []
+    spawned: list[tuple[list[str], dict | None, _FakeProc]] = []
 
     def fake_popen(argv, env=None, **kwargs):
         label = "market-filter" if "filter_loop" in " ".join(argv) else "child"
         proc = _FakeProc(label)
-        spawned.append((list(argv), proc))
+        spawned.append((list(argv), env.copy() if env is not None else None, proc))
         return proc
 
     monkeypatch.setattr(st.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("HUNTER_DUMMY_LEAK", "should_be_stripped")
 
     plan = st.build_tournament_plan(
         issue=371,
@@ -532,14 +533,26 @@ def test_launch_starts_and_stops_the_market_filter(tmp_path, monkeypatch):
     rc = st.launch_tournament(plan)
     assert rc == 0
 
-    filter_calls = [(a, p) for a, p in spawned if "filter_loop" in " ".join(a)]
+    filter_calls = [(a, e, p) for a, e, p in spawned if "filter_loop" in " ".join(a)]
     assert len(filter_calls) == 1, "Market Filter must start exactly once per run"
-    argv, proc = filter_calls[0]
+    argv, filter_env, proc = filter_calls[0]
     # No --interval flag: filter_loop reads its cycle from SH_FILTER_INTERVAL_SEC.
     assert argv == [st.sys.executable, "-m", "scripts.filter_loop"]
+    assert filter_env is not None
+    assert filter_env.get("SH_FILTER_INTERVAL_SEC") == str(st.FILTER_INTERVAL_SEC)
+    assert not any(k.startswith("HUNTER_") for k in filter_env), "inherited HUNTER_* must be removed"
 
     # It is still running at shutdown and must be stopped, never left behind.
     assert proc.terminated or proc.killed, "filter must be stopped on run exit"
+
+    # Now verify explicit interval override in environment is honored by setdefault
+    spawned.clear()
+    monkeypatch.setenv("SH_FILTER_INTERVAL_SEC", "120")
+    rc_override = st.launch_tournament(plan)
+    assert rc_override == 0
+    override_filter_calls = [(a, e, p) for a, e, p in spawned if "filter_loop" in " ".join(a)]
+    assert len(override_filter_calls) == 1
+    assert override_filter_calls[0][1].get("SH_FILTER_INTERVAL_SEC") == "120"
 
 
 def test_hybrid_preset_configuration():
