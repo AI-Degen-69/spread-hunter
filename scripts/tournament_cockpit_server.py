@@ -30,110 +30,326 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-ARMS_CONFIG = [
+ARMS_CONFIG_484 = [
     # Issue #484: Strategy Profiles
     {
         "issue": 484,
-        "name": "control",
-        "label": "Control (Baseline)",
+        "name": "control-1",
+        "label": "Control (#1)",
         "port": 8801,
-        "db": "data/484_tournament_01_control_r2_0031.db",
-        "run_id": "shadow-484-t01-control-r2_0031",
+        "db": "data/i484_tournament_control-1.db",
+        "run_id": "i484_tournament_control-1",
         "color": "#00e676",
-        "desc": "Baseline fixed 2c offset, $0.045 single-buy loss stop"
+        "desc": "Baseline fixed 2c offset, $0.045 single-buy loss stop",
+        "worst_catalyst": "single_buy_max_loss_usd ($0.045 static)",
+        "worst_catalyst_desc": "Fixed stop dumped 56 trades on temporary 4.5c noise (-$15.16 in rescue/stop haircuts)",
+        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.060",
+        "tweak_rationale": "Widen stop from 4.5c to 6.0c to absorb noise and prevent premature panic exits while keeping adverse limit intact",
     },
     {
         "issue": 484,
-        "name": "conservative",
-        "label": "Conservative",
+        "name": "conservative-1",
+        "label": "Conservative (#1)",
         "port": 8802,
-        "db": "data/484_tournament_02_conservative_r2_0031.db",
-        "run_id": "shadow-484-t02-conservative-r2_0031",
+        "db": "data/i484_tournament_conservative-1.db",
+        "run_id": "i484_tournament_conservative-1",
         "color": "#00b0ff",
-        "desc": "Dynamic offset 0.75x (2-5c), tighter $0.030 single-buy stop"
+        "desc": "Dynamic offset 0.75x (2-5c), tighter $0.030 single-buy stop",
+        "worst_catalyst": "single_buy_max_loss_usd ($0.030 tight)",
+        "worst_catalyst_desc": "Hair-trigger 3c stop panic-sold 28 trades via aged_out_rescue (-$15.43, -$0.55/tr)",
+        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.045",
+        "tweak_rationale": "Relax hair-trigger 3c stop to standard 4.5c so normal maker variance does not force emergency bailouts",
     },
     {
         "issue": 484,
-        "name": "balanced",
-        "label": "Balanced",
+        "name": "balanced-1",
+        "label": "Balanced (#1)",
         "port": 8803,
-        "db": "data/484_tournament_03_balanced_r2_0031.db",
-        "run_id": "shadow-484-t03-balanced-r2_0031",
+        "db": "data/i484_tournament_balanced-1.db",
+        "run_id": "i484_tournament_balanced-1",
         "color": "#e040fb",
-        "desc": "Dynamic offset 0.50x (2-4c), standard $0.045 single-buy stop"
+        "desc": "Dynamic offset 0.50x (2-4c), standard $0.045 single-buy stop",
+        "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
+        "worst_catalyst_desc": "No-man's land offset missed tight volume; lowest merge revenue in tournament (+$28.69)",
+        "hypothesized_tweak": "dynamic_offset_multiplier -> 0.25x (2-3c)",
+        "tweak_rationale": "Tighten multiplier from 0.50x to 0.25x to sit closer to market mid and capture high-volume flow",
     },
     {
         "issue": 484,
-        "name": "aggressive",
-        "label": "Aggressive",
+        "name": "aggressive-1",
+        "label": "Aggressive (#1)",
         "port": 8804,
-        "db": "data/484_tournament_04_aggressive_r2_0031.db",
-        "run_id": "shadow-484-t04-aggressive-r2_0031",
+        "db": "data/i484_tournament_aggressive-1.db",
+        "run_id": "i484_tournament_aggressive-1",
         "color": "#ffd600",
-        "desc": "Dynamic offset 0.25x (2-3c), wider $0.060 single-buy stop"
+        "desc": "Dynamic offset 0.25x (2-3c), wider $0.060 single-buy stop",
+        "worst_catalyst": "single_buy_max_loss_usd ($0.065 wide)",
+        "worst_catalyst_desc": "Wide 6.5c leash allowed adverse single buys to bleed deeper (-$0.32 avg loss per stop)",
+        "hypothesized_tweak": "single_buy_max_loss_usd -> $0.045",
+        "tweak_rationale": "Reign in excessive 6.5c stop to standard 4.5c to cap catastrophic single-leg drawdown",
     },
     {
         "issue": 484,
-        "name": "prudent",
-        "label": "Prudent",
+        "name": "prudent-1",
+        "label": "Prudent (#1)",
         "port": 8805,
-        "db": "data/484_tournament_05_prudent_r2_0031.db",
-        "run_id": "shadow-484-t05-prudent-r2_0031",
+        "db": "data/i484_tournament_prudent-1.db",
+        "run_id": "i484_tournament_prudent-1",
         "color": "#ff6d00",
-        "desc": "Fixed 3c offset, conservative $0.035 single-buy stop"
+        "desc": "Fixed 3c offset, conservative $0.035 single-buy stop",
+        "worst_catalyst": "dynamic_offset_multiplier (0.60x / 2-4c)",
+        "worst_catalyst_desc": "Wide resting distance caused asymmetric fills; leg 2 failed to fill before settlement (-$15.28)",
+        "hypothesized_tweak": "dynamic_offset_multiplier -> 0.30x (2-3c)",
+        "tweak_rationale": "Narrow offset multiplier from 0.60x to 0.30x so leg 2 remains reachable before game close",
     },
     # Issue #485: Queue & Execution Mechanics
     {
         "issue": 485,
-        "name": "stickhold",
-        "label": "Stick-Hold (45s)",
+        "name": "stickhold-1",
+        "label": "Stick-Hold (#1)",
         "port": 8806,
-        "db": "data/485_tournament_01_stickhold_12hr.db",
-        "run_id": "shadow-485-t01-stickhold-12hr",
+        "db": "data/i485_tournament_stickhold-1.db",
+        "run_id": "i485_tournament_stickhold-1",
         "color": "#69f0ae",
-        "desc": "Dynamic offset 0.25x, 45s single grace, $0.065 loss cap"
+        "desc": "Dynamic offset 0.25x, 45s single grace, $0.065 loss cap",
+        "worst_catalyst": "requote_hold_queue_shares (0 / no hold)",
+        "worst_catalyst_desc": "Zero queue hold surrendered priority on every tick; forced 57 single-buy exits (-$20.56)",
+        "hypothesized_tweak": "requote_hold_queue_shares -> 500",
+        "tweak_rationale": "Enable 500 share queue hold to defend priority against micro-price flicker and avoid queue demotions",
     },
     {
         "issue": 485,
-        "name": "queuehug",
-        "label": "Queue-Hug",
+        "name": "queuehug-1",
+        "label": "Queue-Hug (#1)",
         "port": 8807,
-        "db": "data/485_tournament_02_queuehug_12hr.db",
-        "run_id": "shadow-485-t02-queuehug-12hr",
+        "db": "data/i485_tournament_queuehug-1.db",
+        "run_id": "i485_tournament_queuehug-1",
         "color": "#ff5252",
-        "desc": "Requote hold below 100 shares, queue hold 150 shares"
+        "desc": "Requote hold below 100 shares, queue hold 150 shares",
+        "worst_catalyst": "requote_hold_below_target (1.0 / unconstrained)",
+        "worst_catalyst_desc": "Held bids while market collapsed to zero, eating toxic fills into settlement (-$31.65)",
+        "hypothesized_tweak": "requote_hold_below_target -> 0.08",
+        "tweak_rationale": "Constrain drop tolerance to 8c so collapsing books trigger immediate bid cancellations instead of toxic fills",
     },
     {
         "issue": 485,
-        "name": "deadband-tight",
-        "label": "Deadband-Tight (1c)",
+        "name": "deadband-tight-1",
+        "label": "Deadband-Tight (#1)",
         "port": 8808,
-        "db": "data/485_tournament_03_deadband-tight_12hr.db",
-        "run_id": "shadow-485-t03-deadband-tight-12hr",
+        "db": "data/i485_tournament_deadband-tight-1.db",
+        "run_id": "i485_tournament_deadband-tight-1",
         "color": "#ff4081",
-        "desc": "Strict 1c requote deadband, frequent requoting"
+        "desc": "Strict 1c requote deadband, frequent requoting",
+        "worst_catalyst": "requote_dead_band (0.01 / 1c strict)",
+        "worst_catalyst_desc": "1c tick flutter churned hedging orders to back of queue; leg 2 never filled (-$38.03 settlement)",
+        "hypothesized_tweak": "requote_dead_band -> 0.05 (5c buffer)",
+        "tweak_rationale": "Widen deadband to 5c to prevent 1c jitter from resetting queue rank on complementary hedge legs",
     },
     {
         "issue": 485,
-        "name": "deadband-wide",
-        "label": "Deadband-Wide (2c)",
+        "name": "deadband-wide-1",
+        "label": "Deadband-Wide (#1)",
         "port": 8809,
-        "db": "data/485_tournament_04_deadband-wide_12hr.db",
-        "run_id": "shadow-485-t04-deadband-wide-12hr",
+        "db": "data/i485_tournament_deadband-wide-1.db",
+        "run_id": "i485_tournament_deadband-wide-1",
         "color": "#76ff03",
-        "desc": "Wide 2c requote deadband, reduces unnecessary churn"
+        "desc": "Wide 2c requote deadband, reduces unnecessary churn",
+        "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
+        "worst_catalyst_desc": "Inherited 0.50x offset backed off on volatility, capping merges to +$35.14 vs control's +$39.91",
+        "hypothesized_tweak": "dynamic_offset_multiplier -> 0.25x (2-3c)",
+        "tweak_rationale": "Lower multiplier to 0.25x so wide-deadband stability pairs with tighter maker pricing to boost merges",
     },
     {
         "issue": 485,
-        "name": "snapstop",
-        "label": "Snap-Stop (30s)",
+        "name": "snapstop-1",
+        "label": "Snap-Stop (#1)",
         "port": 8810,
-        "db": "data/485_tournament_05_snapstop_12hr.db",
-        "run_id": "shadow-485-t05-snapstop-12hr",
+        "db": "data/i485_tournament_snapstop-1.db",
+        "run_id": "i485_tournament_snapstop-1",
         "color": "#b388ff",
-        "desc": "Fast 30s single buy grace, tight $0.040 loss cap"
+        "desc": "Fast 30s single buy grace, tight $0.040 loss cap",
+        "worst_catalyst": "single_buy_grace_sec (0s / zero patience)",
+        "worst_catalyst_desc": "0s grace gave leg 2 zero time as maker; rushed taker hedge failed, wiping out -$14.82 at settlement",
+        "hypothesized_tweak": "single_buy_grace_sec -> 45s",
+        "tweak_rationale": "Provide 45s of maker patience so leg 2 can fill organically before triggering forced market cross",
     },
 ]
+
+ARMS_CONFIG_487 = [
+    # Issue #487: 10 Tweaked Arms with Worst Parameter Catalyst Corrected
+    {
+        "issue": 487,
+        "name": "control-2",
+        "label": "Control (#2)",
+        "port": 8811,
+        "db": "data/i487_tournament_control-2.db",
+        "run_id": "i487_tournament_control-2",
+        "color": "#00e676",
+        "desc": "Control baseline with adverse noise stop relaxed to $0.060 (absorbs micro-volatility)",
+        "worst_catalyst": "single_buy_max_loss_usd ($0.045 static)",
+        "worst_catalyst_desc": "Baseline dumped 56 trades prematurely on 4.5c noise (-$15.16 haircut losses)",
+        "hypothesized_tweak": "single_buy_max_loss_usd = 0.060",
+        "tweak_rationale": "Relaxed stop threshold to 6.0c to absorb noise and prevent premature panic exits while keeping adverse limit intact",
+    },
+    {
+        "issue": 487,
+        "name": "conservative-2",
+        "label": "Conservative (#2)",
+        "port": 8812,
+        "db": "data/i487_tournament_conservative-2.db",
+        "run_id": "i487_tournament_conservative-2",
+        "color": "#00b0ff",
+        "desc": "Conservative profile with hair-trigger stop widened from $0.030 to standard $0.045",
+        "worst_catalyst": "single_buy_max_loss_usd ($0.030 tight)",
+        "worst_catalyst_desc": "Hair-trigger 3c stop panic-sold 28 trades via aged_out_rescue (-$15.43, -$0.55/tr)",
+        "hypothesized_tweak": "single_buy_max_loss_usd = 0.045",
+        "tweak_rationale": "Relaxed hair-trigger 3c stop to standard 4.5c so normal maker variance does not force emergency bailouts",
+    },
+    {
+        "issue": 487,
+        "name": "balanced-2",
+        "label": "Balanced (#2)",
+        "port": 8813,
+        "db": "data/i487_tournament_balanced-2.db",
+        "run_id": "i487_tournament_balanced-2",
+        "color": "#e040fb",
+        "desc": "Balanced profile with offset multiplier tightened from 0.50x to 0.25x (closer to mid)",
+        "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
+        "worst_catalyst_desc": "No-man's land offset missed tight volume; lowest merge revenue in tournament (+$28.69)",
+        "hypothesized_tweak": "dynamic_offset_multiplier = 0.25x",
+        "tweak_rationale": "Tightened multiplier from 0.50x to 0.25x to sit closer to market mid and capture high-volume flow",
+    },
+    {
+        "issue": 487,
+        "name": "aggressive-2",
+        "label": "Aggressive (#2)",
+        "port": 8814,
+        "db": "data/i487_tournament_aggressive-2.db",
+        "run_id": "i487_tournament_aggressive-2",
+        "color": "#ffd600",
+        "desc": "Aggressive tight offset with loose stop reigned in from $0.065 to standard $0.045",
+        "worst_catalyst": "single_buy_max_loss_usd ($0.065 wide)",
+        "worst_catalyst_desc": "Wide 6.5c leash allowed adverse single buys to bleed deeper (-$0.32 avg loss per stop)",
+        "hypothesized_tweak": "single_buy_max_loss_usd = 0.045",
+        "tweak_rationale": "Reigned in excessive 6.5c stop to standard 4.5c to cap catastrophic single-leg drawdown",
+    },
+    {
+        "issue": 487,
+        "name": "prudent-2",
+        "label": "Prudent (#2)",
+        "port": 8815,
+        "db": "data/i487_tournament_prudent-2.db",
+        "run_id": "i487_tournament_prudent-2",
+        "color": "#ff6d00",
+        "desc": "Prudent profile with offset multiplier narrowed from 0.60x to 0.30x (2nd leg reachable)",
+        "worst_catalyst": "dynamic_offset_multiplier (0.60x / 2-4c)",
+        "worst_catalyst_desc": "Wide resting distance caused asymmetric fills; leg 2 failed to fill before settlement (-$15.28)",
+        "hypothesized_tweak": "dynamic_offset_multiplier = 0.30x",
+        "tweak_rationale": "Narrowed offset multiplier from 0.60x to 0.30x so leg 2 remains reachable before game close",
+    },
+    {
+        "issue": 487,
+        "name": "stickhold-2",
+        "label": "Stick-Hold (#2)",
+        "port": 8816,
+        "db": "data/i487_tournament_stickhold-2.db",
+        "run_id": "i487_tournament_stickhold-2",
+        "color": "#69f0ae",
+        "desc": "Stick-Hold with queue hold activated at 500 shares (prevents churn demotions)",
+        "worst_catalyst": "requote_hold_queue_shares (0 / no hold)",
+        "worst_catalyst_desc": "Zero queue hold surrendered priority on every tick; forced 57 single-buy exits (-$20.56)",
+        "hypothesized_tweak": "requote_hold_queue_shares = 500",
+        "tweak_rationale": "Enabled 500 share queue hold to defend priority against micro-price flicker and avoid queue demotions",
+    },
+    {
+        "issue": 487,
+        "name": "queuehug-2",
+        "label": "Queue-Hug (#2)",
+        "port": 8817,
+        "db": "data/i487_tournament_queuehug-2.db",
+        "run_id": "i487_tournament_queuehug-2",
+        "color": "#ff5252",
+        "desc": "Queue-Hug with hold below target capped at 8¢ (drops toxic collapsing books)",
+        "worst_catalyst": "requote_hold_below_target (1.0 / unconstrained)",
+        "worst_catalyst_desc": "Held bids while market collapsed to zero, eating toxic fills into settlement (-$31.65)",
+        "hypothesized_tweak": "requote_hold_below_target = 0.08",
+        "tweak_rationale": "Constrained drop tolerance to 8c so collapsing books trigger immediate bid cancellations instead of toxic fills",
+    },
+    {
+        "issue": 487,
+        "name": "deadband-tight-2",
+        "label": "Deadband-Tight (#2)",
+        "port": 8818,
+        "db": "data/i487_tournament_deadband-tight-2.db",
+        "run_id": "i487_tournament_deadband-tight-2",
+        "color": "#ff4081",
+        "desc": "Deadband arm with requote threshold widened from 1¢ to 5¢ (eliminates queue resets)",
+        "worst_catalyst": "requote_dead_band (0.01 / 1c strict)",
+        "worst_catalyst_desc": "1c tick flutter churned hedging orders to back of queue; leg 2 never filled (-$38.03 settlement)",
+        "hypothesized_tweak": "requote_dead_band = 0.05",
+        "tweak_rationale": "Widened deadband to 5c to prevent 1c jitter from resetting queue rank on complementary hedge legs",
+    },
+    {
+        "issue": 487,
+        "name": "deadband-wide-2",
+        "label": "Deadband-Wide (#2)",
+        "port": 8819,
+        "db": "data/i487_tournament_deadband-wide-2.db",
+        "run_id": "i487_tournament_deadband-wide-2",
+        "color": "#76ff03",
+        "desc": "Wide 6¢ deadband queue defense paired with tighter 0.25x offset multiplier for more merges",
+        "worst_catalyst": "dynamic_offset_multiplier (0.50x / 2-4c)",
+        "worst_catalyst_desc": "Inherited 0.50x offset backed off on volatility, capping merges to +$35.14 vs control's +$39.91",
+        "hypothesized_tweak": "dynamic_offset_multiplier = 0.25x",
+        "tweak_rationale": "Lowered multiplier to 0.25x so wide-deadband stability pairs with tighter maker pricing to boost merges",
+    },
+    {
+        "issue": 487,
+        "name": "snapstop-2",
+        "label": "Snap-Stop (#2)",
+        "port": 8820,
+        "db": "data/i487_tournament_snapstop-2.db",
+        "run_id": "i487_tournament_snapstop-2",
+        "color": "#b388ff",
+        "desc": "Snap-Stop with maker patience restored to 45 seconds (allows organic pairing)",
+        "worst_catalyst": "single_buy_grace_sec (0s / zero patience)",
+        "worst_catalyst_desc": "0s grace gave leg 2 zero time as maker; rushed taker hedge failed, wiping out -$14.82 at settlement",
+        "hypothesized_tweak": "single_buy_grace_sec = 45s",
+        "tweak_rationale": "Provided 45s of maker patience so leg 2 can fill organically before triggering forced market cross",
+    },
+]
+
+# Active Default / Backwards Compatibility Pointer
+ARMS_CONFIG = ARMS_CONFIG_484
+
+TOURNAMENTS = {
+    "484": {
+        "id": "484",
+        "title": "Issue #484 / #485 Baseline Tournament",
+        "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Issue #484 (Strategy Profiles) & Issue #485 (Execution Mechanics)",
+        "badge": "ROUND 1 BASELINE",
+        "badge_cls": "badge-amber",
+        "description": "Baseline parameters evaluation across 10 arms measuring initial parameter performance and identifying failure mode catalysts.",
+        "arms": ARMS_CONFIG_484,
+        "page_url": "/",
+        "static_filename": "tournament_cockpit.html",
+        "issue_primary": 484,
+        "issue_secondary": 485,
+    },
+    "487": {
+        "id": "487",
+        "title": "Issue #487 Tweaked Catalyst Tournament",
+        "subtitle": "12-Hour Multi-Arm Shadow Evaluation | Single Worst-Parameter Catalyst Tweaked Independently per Arm",
+        "badge": "ROUND 2 TWEAKED",
+        "badge_cls": "badge-green",
+        "description": "Isolated single-parameter improvements tested against baseline: each arm's worst catalyst improved while holding all other parameters fixed.",
+        "arms": ARMS_CONFIG_487,
+        "page_url": "/487",
+        "static_filename": "tournament_cockpit_487.html",
+        "issue_primary": 487,
+        "issue_secondary": 487,
+    },
+}
 
 
 def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> dict[str, Any]:
@@ -328,9 +544,11 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     }
 
 
-def collect_all_stats() -> dict[str, Any]:
-    """Analyze all 10 tournament arms and compile overall metrics."""
-    arms_data = [analyze_arm_database(cfg) for cfg in ARMS_CONFIG]
+def collect_all_stats(tourney_key: str = "484") -> dict[str, Any]:
+    """Analyze all tournament arms for the selected tournament and compile overall metrics."""
+    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS["484"])
+    arms_config = meta["arms"]
+    arms_data = [analyze_arm_database(cfg) for cfg in arms_config]
     
     # Sort by Total PnL descending for leaderboard
     sorted_arms = sorted(arms_data, key=lambda x: x.get("total_pnl", -999.0), reverse=True)
@@ -345,18 +563,34 @@ def collect_all_stats() -> dict[str, Any]:
     time_rem_min = max(0.0, 720.0 - max_elapsed)
     
     # Leaders
-    leader_484 = max(
-        (a for a in arms_data if a.get("issue") == 484),
-        key=lambda x: x.get("total_pnl", -999.0),
-        default=None
-    )
-    leader_485 = max(
-        (a for a in arms_data if a.get("issue") == 485),
-        key=lambda x: x.get("total_pnl", -999.0),
-        default=None
-    )
+    leader_1 = None
+    leader_2 = None
+    if tourney_key == "484":
+        leader_1 = max(
+            (a for a in arms_data if a.get("issue") == 484),
+            key=lambda x: x.get("total_pnl", -999.0),
+            default=None
+        )
+        leader_2 = max(
+            (a for a in arms_data if a.get("issue") == 485),
+            key=lambda x: x.get("total_pnl", -999.0),
+            default=None
+        )
+        l1_title = "#484 Strategy Leader"
+        l2_title = "#485 Execution Leader"
+    else:
+        # Issue 487 Tweaked Arms
+        if sorted_arms:
+            leader_1 = sorted_arms[0]
+            leader_2 = sorted_arms[1] if len(sorted_arms) > 1 else sorted_arms[0]
+        l1_title = "#487 Top Performer"
+        l2_title = "#487 Runner-Up"
+
+    top_arm = sorted_arms[0] if sorted_arms else {}
 
     return {
+        "tourney_key": tourney_key,
+        "tourney_meta": meta,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total_trades": total_trades,
         "total_merges": total_merges,
@@ -366,10 +600,18 @@ def collect_all_stats() -> dict[str, Any]:
         "rem_hours": round(time_rem_min / 60.0, 2),
         "progress_pct": progress_pct,
         "is_completed": max_elapsed >= 719.0,
-        "leader_484": leader_484["name"] if leader_484 else "N/A",
-        "leader_484_pnl": leader_484.get("total_pnl", 0.0) if leader_484 else 0.0,
-        "leader_485": leader_485["name"] if leader_485 else "N/A",
-        "leader_485_pnl": leader_485.get("total_pnl", 0.0) if leader_485 else 0.0,
+        "l1_title": l1_title,
+        "leader_484": leader_1["name"] if leader_1 else "N/A",
+        "leader_484_label": leader_1.get("label", "N/A") if leader_1 else "N/A",
+        "leader_484_port": leader_1.get("port", 0) if leader_1 else 0,
+        "leader_484_pnl": leader_1.get("total_pnl", 0.0) if leader_1 else 0.0,
+        "l2_title": l2_title,
+        "leader_485": leader_2["name"] if leader_2 else "N/A",
+        "leader_485_label": leader_2.get("label", "N/A") if leader_2 else "N/A",
+        "leader_485_port": leader_2.get("port", 0) if leader_2 else 0,
+        "leader_485_pnl": leader_2.get("total_pnl", 0.0) if leader_2 else 0.0,
+        "top_score": top_arm.get("score", 0),
+        "top_readiness": top_arm.get("readiness", "PENDING"),
         "arms": sorted_arms,
     }
 
@@ -414,6 +656,54 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   }}
   .tabular {{ font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }}
   
+  /* Tournament Navigation Switcher */
+  .tourney-nav {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #0f141f;
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }}
+  .tourney-nav-label {{
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-right: 6px;
+  }}
+  .tourney-pill {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    transition: all 0.2s;
+  }}
+  .tourney-pill:hover {{
+    color: var(--text-primary);
+    background: var(--bg-card);
+    border-color: var(--border);
+  }}
+  .tourney-pill.active {{
+    background: rgba(0, 230, 118, 0.12);
+    color: var(--green);
+    border-color: rgba(0, 230, 118, 0.4);
+  }}
+  .tourney-pill.active-amber {{
+    background: rgba(255, 214, 0, 0.12);
+    color: var(--amber);
+    border-color: rgba(255, 214, 0, 0.4);
+  }}
+
   /* Top Bar */
   header {{
     display: flex;
@@ -618,10 +908,25 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 </head>
 <body>
 
+<!-- Tournament Navigation Switcher -->
+<div class="tourney-nav">
+  <span class="tourney-nav-label">Select Tournament Evaluation:</span>
+  <a href="/" class="tourney-pill {'active-amber' if initial_data.get('tourney_key') == '484' else ''}">
+    <span>🏛️</span>
+    <span>#484 Baseline (10 Arms)</span>
+    <span class="badge badge-amber" style="font-size: 9px; padding: 1px 5px;">R1 BASELINE</span>
+  </a>
+  <a href="/487" class="tourney-pill {'active' if initial_data.get('tourney_key') == '487' else ''}">
+    <span>⚡</span>
+    <span>#487 Tweaked Catalysts (10 Arms)</span>
+    <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">R2 TWEAKED</span>
+  </a>
+</div>
+
 <header>
   <div class="header-titles">
-    <h1><span class="pulse-dot"></span> Spread Hunter — Tournament Cockpit</h1>
-    <p>12-Hour Multi-Arm Live Shadow Evaluation | Issue #484 (Strategy Profiles) &amp; Issue #485 (Execution Mechanics)</p>
+    <h1><span class="pulse-dot"></span> {initial_data.get('tourney_meta', {}).get('title', 'Spread Hunter — Tournament Cockpit')}</h1>
+    <p>{initial_data.get('tourney_meta', {}).get('subtitle', '12-Hour Multi-Arm Live Shadow Evaluation')}</p>
   </div>
   <div class="header-controls">
     <div class="progress-card">
@@ -643,29 +948,29 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <!-- Top Headline Metric Cards -->
 <div class="metrics-grid">
   <div class="m-card">
-    <div class="m-label">#484 Strategy Leader</div>
-    <div class="m-val tabular positive" id="m-leader-484">control</div>
-    <div class="m-sub" id="m-leader-484-pnl">PnL: +$18.38 | Port 8801</div>
+    <div class="m-label" id="m-l1-title">{initial_data.get('l1_title', 'Top Performer')}</div>
+    <div class="m-val tabular positive" id="m-leader-484">{initial_data.get('leader_484_label', initial_data.get('leader_484', 'N/A'))}</div>
+    <div class="m-sub" id="m-leader-484-pnl">PnL: {('+$' if initial_data.get('leader_484_pnl', 0.0) >= 0 else '-$') + f"{abs(initial_data.get('leader_484_pnl', 0.0)):.2f}"} | Port {initial_data.get('leader_484_port', 0)}</div>
   </div>
   <div class="m-card">
-    <div class="m-label">#485 Execution Leader</div>
-    <div class="m-val tabular positive" id="m-leader-485">deadband-wide</div>
-    <div class="m-sub" id="m-leader-485-pnl">PnL: +$9.25 | Port 8809</div>
+    <div class="m-label" id="m-l2-title">{initial_data.get('l2_title', 'Runner-Up')}</div>
+    <div class="m-val tabular positive" id="m-leader-485">{initial_data.get('leader_485_label', initial_data.get('leader_485', 'N/A'))}</div>
+    <div class="m-sub" id="m-leader-485-pnl">PnL: {('+$' if initial_data.get('leader_485_pnl', 0.0) >= 0 else '-$') + f"{abs(initial_data.get('leader_485_pnl', 0.0)):.2f}"} | Port {initial_data.get('leader_485_port', 0)}</div>
   </div>
   <div class="m-card">
     <div class="m-label">Total Pair Merges</div>
-    <div class="m-val tabular" id="m-merges">612</div>
+    <div class="m-val tabular" id="m-merges">{initial_data.get('total_merges', 0):,}</div>
     <div class="m-sub" id="m-merges-sub">Across all 10 tournament arms</div>
   </div>
   <div class="m-card">
     <div class="m-label">Total Venue Fills</div>
-    <div class="m-val tabular" id="m-fills">1,926</div>
+    <div class="m-val tabular" id="m-fills">{initial_data.get('total_fills', 0):,}</div>
     <div class="m-sub">Sample size for statistical significance</div>
   </div>
   <div class="m-card">
     <div class="m-label">Top Live Candidate Score</div>
-    <div class="m-val tabular positive" id="m-top-score">86 / 100</div>
-    <div class="m-sub">Readiness: READY FOR LIVE</div>
+    <div class="m-val tabular positive" id="m-top-score">{initial_data.get('top_score', 0)} / 100</div>
+    <div class="m-sub">Readiness: {initial_data.get('top_readiness', 'EVALUATING')}</div>
   </div>
 </div>
 
@@ -697,6 +1002,7 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
           <th>EV / Trade</th>
           <th>Std Dev (&sigma;)</th>
           <th>Max DD</th>
+          <th>Worst Catalyst &amp; Hypothesized Tweak</th>
           <th>Live Score</th>
           <th>Readiness Verdict</th>
           <th>Action</th>
@@ -957,9 +1263,9 @@ function renderAll() {{
   document.getElementById('progress-text').innerText = state.elapsed_hours + 'h / 12.0h';
   document.getElementById('rem-text').innerText = '~' + state.rem_hours + 'h rem';
   document.getElementById('progress-bar').style.width = state.progress_pct + '%';
-  document.getElementById('m-leader-484').innerText = state.leader_484;
+  document.getElementById('m-leader-484').innerText = state.leader_484_label || state.leader_484;
   document.getElementById('m-leader-484-pnl').innerText = 'PnL: ' + (state.leader_484_pnl >= 0 ? '+$' : '-$') + Math.abs(state.leader_484_pnl).toFixed(2);
-  document.getElementById('m-leader-485').innerText = state.leader_485;
+  document.getElementById('m-leader-485').innerText = state.leader_485_label || state.leader_485;
   document.getElementById('m-leader-485-pnl').innerText = 'PnL: ' + (state.leader_485_pnl >= 0 ? '+$' : '-$') + Math.abs(state.leader_485_pnl).toFixed(2);
   document.getElementById('m-merges').innerText = state.total_merges.toLocaleString();
   document.getElementById('m-fills').innerText = state.total_fills.toLocaleString();
@@ -983,6 +1289,14 @@ function renderAll() {{
       <td class="tabular">${{(arm.mean_pnl || 0).toFixed(3)}}</td>
       <td class="tabular">${{(arm.std_pnl || 0).toFixed(3)}}</td>
       <td class="tabular negative">$$${{(arm.max_drawdown || 0).toFixed(2)}}</td>
+      <td style="max-width: 290px; text-align: left;">
+        <div style="font-weight: 600; color: #ffab91; font-size: 11px; font-family: monospace;">🚨 ${{arm.worst_catalyst || 'N/A'}}</div>
+        <div style="font-size: 10px; color: var(--text-muted); line-height: 1.2; margin-top: 2px;">${{arm.worst_catalyst_desc || ''}}</div>
+        <div style="margin-top: 4px; padding-top: 3px; border-top: 1px dashed rgba(255,255,255,0.1);">
+          <span style="font-weight: 600; color: #69f0ae; font-size: 11px; font-family: monospace;">💡 Tweak: ${{arm.hypothesized_tweak || 'N/A'}}</span>
+          <div style="font-size: 10px; color: #b0bec5; line-height: 1.2; margin-top: 1px;">${{arm.tweak_rationale || ''}}</div>
+        </div>
+      </td>
       <td class="tabular"><strong>${{arm.score || 0}}</strong></td>
       <td><span class="badge ${{arm.badge_cls}}">${{arm.readiness}}</span></td>
       <td><a href="http://127.0.0.1:${{arm.port}}" target="_blank" class="btn" style="padding: 3px 8px; font-size: 11px;">Open Dash</a></td>
@@ -1054,8 +1368,8 @@ function renderCharts() {{
   const radarCtx = document.getElementById('radarChart');
   if (radarCtx) {{
     if (charts.radar) charts.radar.destroy();
-    const ctrl = state.arms.find(a => a.name === 'control') || state.arms[0];
-    const dbw = state.arms.find(a => a.name === 'deadband-wide') || state.arms[1];
+    const ctrl = state.arms.find(a => a.name.startsWith('control')) || state.arms[0];
+    const dbw = state.arms.find(a => a.name.startsWith('deadband-wide')) || state.arms[1];
     charts.radar = new Chart(radarCtx, {{
       type: 'radar',
       data: {{
@@ -1105,7 +1419,7 @@ function renderCharts() {{
     charts.ev = new Chart(evCtx, {{
       type: 'bar',
       data: {{
-        labels: state.arms.map(a => a.name),
+        labels: state.arms.map(a => a.label),
         datasets: [
           {{
             label: 'EV per Trade ($)',
@@ -1138,7 +1452,7 @@ function renderCharts() {{
     charts.pf = new Chart(pfCtx, {{
       type: 'bar',
       data: {{
-        labels: state.arms.map(a => a.name),
+        labels: state.arms.map(a => a.label),
         datasets: [{{
           label: 'Profit Factor',
           data: state.arms.map(a => a.profit_factor),
@@ -1197,7 +1511,7 @@ function renderCharts() {{
     charts.mc = new Chart(mcCtx, {{
       type: 'bar',
       data: {{
-        labels: state.arms.map(a => a.name),
+        labels: state.arms.map(a => a.label),
         datasets: [
           {{ label: 'Worst Case (5th %ile)', data: state.arms.map(a => a.mc_p5), backgroundColor: '#ff5252' }},
           {{ label: 'Median Expectation (50th %ile)', data: state.arms.map(a => a.mc_p50), backgroundColor: '#ffd600' }},
@@ -1221,7 +1535,8 @@ let lastUpdateTime = new Date().toLocaleTimeString();
 
 function fetchLiveStats() {{
   const statusEl = document.getElementById('refresh-status');
-  fetch('/api/stats')
+  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '484';
+  fetch('/api/stats?tourney=' + tourneyKey)
     .then(r => {{
       if (!r.ok) {{
         throw new Error('HTTP ' + r.status);
@@ -1256,20 +1571,22 @@ setInterval(fetchLiveStats, 10000);
 """
 
 
-_STATS_CACHE: dict[str, Any] = {}
-_STATS_CACHE_TIME: float = 0.0
+_STATS_CACHE: dict[str, dict[str, Any]] = {}
+_STATS_CACHE_TIME: dict[str, float] = {}
 _STATS_CACHE_LOCK = threading.Lock()
 _STATS_CACHE_TTL_SEC: float = 3.0
 
 
-def get_cached_stats() -> dict[str, Any]:
+def get_cached_stats(tourney_key: str = "484") -> dict[str, Any]:
     global _STATS_CACHE, _STATS_CACHE_TIME
     with _STATS_CACHE_LOCK:
         now = time.time()
-        if not _STATS_CACHE or (now - _STATS_CACHE_TIME) >= _STATS_CACHE_TTL_SEC:
-            _STATS_CACHE = collect_all_stats()
-            _STATS_CACHE_TIME = now
-        return _STATS_CACHE
+        last_time = _STATS_CACHE_TIME.get(tourney_key, 0.0)
+        cached = _STATS_CACHE.get(tourney_key)
+        if not cached or (now - last_time) >= _STATS_CACHE_TTL_SEC:
+            _STATS_CACHE[tourney_key] = collect_all_stats(tourney_key)
+            _STATS_CACHE_TIME[tourney_key] = now
+        return _STATS_CACHE[tourney_key]
 
 
 class CockpitHandler(http.server.BaseHTTPRequestHandler):
@@ -1278,8 +1595,12 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self) -> None:
-        if self.path in ("/", "/index.html"):
-            stats = get_cached_stats()
+        clean_path = self.path.split("?")[0].rstrip("/")
+        query = self.path.split("?")[1] if "?" in self.path else ""
+
+        # Route 1: Baseline Round 1 (/ or /index.html)
+        if clean_path in ("", "/index.html", "/484"):
+            stats = get_cached_stats("484")
             html = generate_cockpit_html(stats)
             data = html.encode("utf-8")
             self.send_response(200)
@@ -1287,8 +1608,25 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        elif self.path == "/api/stats":
-            stats = get_cached_stats()
+        # Route 2: Tweaked Catalysts Round 2 (/487 or /487.html)
+        elif clean_path in ("/487", "/487.html", "/cockpit_487"):
+            stats = get_cached_stats("487")
+            html = generate_cockpit_html(stats)
+            data = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        # Route 3: JSON API (/api/stats or /api/stats?tourney=487)
+        elif clean_path == "/api/stats":
+            tourney = "484"
+            for param in query.split("&"):
+                if param.startswith("tourney="):
+                    tourney = param.split("=")[1].strip()
+            if tourney not in TOURNAMENTS:
+                tourney = "484"
+            stats = get_cached_stats(tourney)
             data = json.dumps(stats).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1301,21 +1639,29 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
 
 
 def run_cockpit_server(port: int = 8800) -> None:
-    # Also write out a standalone static copy to reports/tournament_cockpit.html
-    stats = collect_all_stats()
-    static_html = generate_cockpit_html(stats)
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
-    out_file = reports_dir / "tournament_cockpit.html"
-    out_file.write_text(static_html, encoding="utf-8")
-    print(f"Static Cockpit generated at: {out_file}")
+
+    # 1. Export standalone static copy for Issue #484 baseline
+    stats_484 = collect_all_stats("484")
+    static_484 = generate_cockpit_html(stats_484)
+    out_file_484 = reports_dir / "tournament_cockpit.html"
+    out_file_484.write_text(static_484, encoding="utf-8")
+    print(f"Static Cockpit (#484) generated at: {out_file_484}")
+
+    # 2. Export standalone static copy for Issue #487 tweaked catalysts
+    stats_487 = collect_all_stats("487")
+    static_487 = generate_cockpit_html(stats_487)
+    out_file_487 = reports_dir / "tournament_cockpit_487.html"
+    out_file_487.write_text(static_487, encoding="utf-8")
+    print(f"Static Cockpit (#487) generated at: {out_file_487}")
 
     class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         allow_reuse_address = True
 
     server = ThreadedServer(("127.0.0.1", port), CockpitHandler)
-    print(f"Tournament Cockpit server running at http://127.0.0.1:{port}")
+    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / and /487)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

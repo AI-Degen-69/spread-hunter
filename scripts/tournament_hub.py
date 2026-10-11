@@ -14,6 +14,7 @@ Defaults to the newest tournament record under `runtime/tournaments/`.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import socket
 import sqlite3
@@ -61,6 +62,21 @@ def _port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.35) -> boo
         return s.connect_ex((host, port)) == 0
 
 
+def _ports_reachable(ports: list[int], timeout: float = 0.15) -> dict[int, bool]:
+    if not ports:
+        return {}
+    results: dict[int, bool] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, max(len(ports), 1))) as ex:
+        futures = {ex.submit(_port_open, p, "127.0.0.1", timeout): p for p in set(ports)}
+        for f in concurrent.futures.as_completed(futures):
+            p = futures[f]
+            try:
+                results[p] = bool(f.result())
+            except Exception:
+                results[p] = False
+    return results
+
+
 def _arm_counts(db_path: Path, run_id: str) -> dict[str, Any]:
     """Read-only fill/close counts for one arm. Never creates the store."""
     try:
@@ -95,7 +111,7 @@ def _arm_counts(db_path: Path, run_id: str) -> dict[str, Any]:
     }
 
 
-def build_arm_view(plan: dict, arm: dict) -> dict[str, Any]:
+def build_arm_view(plan: dict, arm: dict, reachable_map: Optional[dict[int, bool]] = None) -> dict[str, Any]:
     """One arm's status: preset, stop, port reachability, liveness, counts."""
     env = arm.get("env") or {}
     preset = env.get("HUNTER_TOURNAMENT_PRESET", arm.get("name"))
@@ -110,14 +126,22 @@ def build_arm_view(plan: dict, arm: dict) -> dict[str, Any]:
     remaining_min = max(0.0, minutes - elapsed_min)
     beat_age = heartbeat.get("heartbeat_age_sec")
 
+    dash_port = arm.get("dash_port")
+    if reachable_map is not None and dash_port is not None:
+        dashboard_reachable = reachable_map.get(int(dash_port), False)
+    elif dash_port is not None:
+        dashboard_reachable = _port_open(int(dash_port))
+    else:
+        dashboard_reachable = False
+
     view: dict[str, Any] = {
         "index": arm.get("index"),
         "name": arm.get("name"),
         "preset": preset,
         "run_id": run_id,
-        "dash_port": arm.get("dash_port"),
-        "dashboard_url": f"http://127.0.0.1:{arm.get('dash_port')}/",
-        "dashboard_reachable": _port_open(int(arm.get("dash_port"))),
+        "dash_port": dash_port,
+        "dashboard_url": f"http://127.0.0.1:{dash_port}/",
+        "dashboard_reachable": dashboard_reachable,
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
         "stop_loss_usd": env.get("HUNTER_SINGLE_BUY_MAX_LOSS_USD"),
@@ -176,6 +200,19 @@ def build_hub_state(record_path: Optional[Path] = None) -> dict[str, Any]:
     if not records:
         return {"available": False, "reason": "no tournament record found"}
 
+    # Pre-probe all distinct dashboard ports concurrently to avoid sequential socket delays
+    ports_to_check: list[int] = []
+    for record in records:
+        plan = _read_json(record)
+        if isinstance(plan, dict):
+            for arm in plan.get("arms", []):
+                if isinstance(arm, dict) and arm.get("dash_port") is not None:
+                    try:
+                        ports_to_check.append(int(arm["dash_port"]))
+                    except (ValueError, TypeError):
+                        pass
+    reachable_map = _ports_reachable(ports_to_check)
+
     arms: list[dict[str, Any]] = []
     seen_arms: set[tuple[Any, Any]] = set()
     for record in records:
@@ -191,7 +228,7 @@ def build_hub_state(record_path: Optional[Path] = None) -> dict[str, Any]:
             arm_key = (plan.get("issue"), arm.get("name"))
             if arm_key in seen_arms:
                 continue
-            view = build_arm_view(plan, arm)
+            view = build_arm_view(plan, arm, reachable_map=reachable_map)
             view["issue"] = plan.get("issue")
             view["stamp"] = plan.get("stamp")
             seen_arms.add(arm_key)
@@ -391,6 +428,10 @@ def build_app():
     @hub.get("/hub/api/state")
     def state(record: str | None = None):
         return JSONResponse(build_hub_state(Path(record) if record else None))
+
+    @hub.get("/hub/api/health")
+    def health():
+        return JSONResponse({"ok": True, "service": "hub"})
 
     return hub
 

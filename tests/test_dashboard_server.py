@@ -2730,6 +2730,28 @@ def test_reporting_services_probe_paths():
     from dashboard.server import _REPORTING_SERVICES
     assert _REPORTING_SERVICES["hub"]["probe_path"] == "/hub/api/state"
     assert _REPORTING_SERVICES["cockpit"]["probe_path"] == "/api/stats"
+    assert _REPORTING_SERVICES["hub"]["timeout"] == 2.0
+    assert _REPORTING_SERVICES["cockpit"]["timeout"] == 2.0
+
+
+def test_tournament_hub_concurrent_ports_reachable(monkeypatch):
+    from scripts.tournament_hub import _ports_reachable, build_arm_view
+
+    ports = [8701, 8702, 8703]
+    fake_reachable = {8701: True, 8702: False, 8703: True}
+    monkeypatch.setattr("scripts.tournament_hub._port_open", lambda p, *args, **kwargs: fake_reachable.get(p, False))
+
+    res = _ports_reachable(ports)
+    assert res == fake_reachable
+
+    plan = {"minutes": 10}
+    arm = {"name": "test", "dash_port": 8701, "db_path": "data/test.db"}
+    view = build_arm_view(plan, arm, reachable_map=res)
+    assert view["dashboard_reachable"] is True
+
+    arm_offline = {"name": "test2", "dash_port": 8702, "db_path": "data/test2.db"}
+    view_offline = build_arm_view(plan, arm_offline, reachable_map=res)
+    assert view_offline["dashboard_reachable"] is False
 
 
 def test_reporting_fetch_json_contracts(monkeypatch):
