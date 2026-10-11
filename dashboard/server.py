@@ -2463,18 +2463,19 @@ def api_system_service_stop(request: Request, service: str | None = None):
 # Reporting & Tournament Services (Issue #485)
 # ---------------------------------------------------------------------------
 import socket
+import urllib.error
 import urllib.request
 
 _REPORTING_SERVICES: dict[str, dict[str, Any]] = {
     "hub": {
         "port": 8798,
         "module": "scripts.tournament_hub",
-        "probe_path": "/api/tournament",
+        "probe_path": "/hub/api/state",
     },
     "cockpit": {
         "port": 8800,
         "module": "scripts.tournament_cockpit_server",
-        "probe_path": "/api/state",
+        "probe_path": "/api/stats",
     },
 }
 _reporting_processes: dict[str, Any] = {}
@@ -2507,7 +2508,7 @@ def _reporting_fetch_json(port: int, path: str = "", host: str = "127.0.0.1", ti
             if resp.status == 200:
                 raw = resp.read().decode("utf-8")
                 return json.loads(raw)
-    except Exception:
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError):
         pass
     return None
 
@@ -2642,26 +2643,27 @@ def api_service_start(request: Request, name: str = "hub"):
             str(port),
         ]
         log_dir = REPO_ROOT / "runtime"
-        log_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = log_dir / f"{name}_service.log"
-        out_f = open(stdout_path, "a", encoding="utf-8")
-
-        popen_kwargs: dict[str, Any] = {
-            "cwd": str(REPO_ROOT),
-            "stdin": subprocess.DEVNULL,
-            "stdout": out_f,
-            "stderr": subprocess.STDOUT,
-            "env": {k: v for k, v in os.environ.items() if k != "PORT"},
-        }
-        if sys.platform == "win32":
-            popen_kwargs["creationflags"] = (
-                subprocess.CREATE_NEW_PROCESS_GROUP
-                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            )
-        else:
-            popen_kwargs["start_new_session"] = True
+        out_f = None
 
         try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            out_f = open(stdout_path, "a", encoding="utf-8")
+            popen_kwargs: dict[str, Any] = {
+                "cwd": str(REPO_ROOT),
+                "stdin": subprocess.DEVNULL,
+                "stdout": out_f,
+                "stderr": subprocess.STDOUT,
+                "env": {k: v for k, v in os.environ.items() if k != "PORT"},
+            }
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = (
+                    subprocess.CREATE_NEW_PROCESS_GROUP
+                    | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                )
+            else:
+                popen_kwargs["start_new_session"] = True
+
             proc = subprocess.Popen(cmd, **popen_kwargs)
             out_f.close()
             _reporting_processes[name] = proc
@@ -2672,8 +2674,9 @@ def api_service_start(request: Request, name: str = "hub"):
                 "message": f"Started {name} on port {port}.",
                 "pid": proc.pid,
             })
-        except Exception as exc:
-            out_f.close()
+        except OSError as exc:
+            if out_f is not None and not out_f.closed:
+                out_f.close()
             return JSONResponse({
                 "error": str(exc),
                 "error_type": type(exc).__name__,

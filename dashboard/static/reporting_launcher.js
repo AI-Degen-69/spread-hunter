@@ -34,6 +34,8 @@
           title += ' (no tournament data yet)';
         } else if (status.state === 'conflict') {
           title += ' (port in use by another program)';
+        } else if (status.state === 'failed' && status.detail) {
+          title += ` (${status.detail})`;
         }
         dot.setAttribute('title', title);
       }
@@ -101,8 +103,11 @@
         }
         if (!res.ok) {
           if (tab && !tab.closed) tab.close();
-          updateDot(name, { name, state: 'failed' });
-          throw new Error(`Start request failed with HTTP ${res.status}`);
+          return res.json().catch(() => ({})).then(data => {
+            const errDetail = data.detail || data.error || `HTTP ${res.status}`;
+            updateDot(name, { name, state: 'failed', detail: errDetail });
+            throw new Error(`Start request failed with HTTP ${res.status}: ${errDetail}`);
+          });
         }
         return res.json();
       })
