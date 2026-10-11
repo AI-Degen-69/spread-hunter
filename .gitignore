@@ -126,3 +126,6 @@ HANDOFF-*.md
 # Committing it instead is a dependency-policy call, not a dashboard one.
 node_modules/
 package-lock.json
+
+# Node build artifacts
+dist/
