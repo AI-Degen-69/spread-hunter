@@ -2593,16 +2593,20 @@ def _probe_service_status(name: str) -> dict:
         }
 
 
+@app.get("/api/services/hub/status")
+@app.get("/api/services/cockpit/status")
 @app.get("/api/services/{name}/status")
-def api_service_status(name: str):
+def api_service_status(name: str = "hub"):
     """Return live status of Tournament Hub or Tournament Cockpit."""
     if name not in _REPORTING_SERVICES:
         return JSONResponse({"error": f"Unknown service: {name}"}, status_code=404)
     return JSONResponse(_probe_service_status(name))
 
 
+@app.post("/api/services/hub/start")
+@app.post("/api/services/cockpit/start")
 @app.post("/api/services/{name}/start")
-def api_service_start(request: Request, name: str):
+def api_service_start(request: Request, name: str = "hub"):
     """Start Tournament Hub or Tournament Cockpit as a detached background service."""
     _authorize_control(request)
     if name not in _REPORTING_SERVICES:

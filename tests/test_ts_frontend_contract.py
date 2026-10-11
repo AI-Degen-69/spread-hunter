@@ -78,3 +78,18 @@ def test_frontend_control_surface_is_expected():
         "/api/system/stop",
         "/api/system/sync",
     }
+
+
+def test_reporting_launcher_api_calls_are_served_by_python():
+    """Endpoints called in reporting_launcher.js must be served by dashboard/server.py."""
+    launcher_js = ROOT / "dashboard" / "static" / "reporting_launcher.js"
+    assert launcher_js.exists()
+    text = launcher_js.read_text(encoding="utf-8")
+    expanded = {text.replace("${name}", name) for name in ("hub", "cockpit")}
+    calls: set[str] = set()
+    for source in expanded:
+        calls |= {c if c.startswith("/") else "/" + c
+                  for c in re.findall(r"/api/[a-z0-9_/-]+", source)}
+    routes = _python_api_routes()
+    missing = {c for c in calls if c not in routes}
+    assert not missing, f"reporting launcher calls not served by Python: {sorted(missing)}"
