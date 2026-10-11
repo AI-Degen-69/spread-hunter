@@ -1,72 +1,83 @@
-# Plan — #485 [ADD] Tournament Hub and Cockpit one-click launcher buttons in main dashboard
+# Plan — #488 [FEAT] Decouple Offense (Quoting), Defense (Stop-Loss Sentry), and Settlement (Merge Sweeper) into independent loops
 
-Branch: i485/tournament-hub-cockpit-launcher | Issue: #485
-Size: Standard | Type: Code (Backend API + UI rail links + launcher handler)
-Stack: Python (FastAPI, pytest), Vanilla HTML/JS (`prototype.js`, `reporting_launcher.js`, `index.html`, `styles.css`)
+Branch: i488/decouple-offense-defense-settlement-loops | Issue: #488
+Size: Standard | Type: Code (Backend Architecture / Execution Loops / TDD)
+Stack: Python (FastAPI, pytest, SQLite)
 Labels: enhancement, ready-for-agent
 
-## CodeRabbit plan intake
+## Architecture Specification (The 3 Decoupled Loops)
 
-Adopted from the issue thread with simplicity enforcement:
-- Backend: `GET /api/services/{name}/status` and `POST /api/services/{name}/start` for `name in ("hub", "cockpit")`.
-- Ports: Hub runs on port 8798 (`scripts.tournament_hub`), Cockpit runs on port 8800 (`scripts.tournament_cockpit_server`).
-- Probe checks port readiness via socket probe, state classification (`stopped`, `starting`, `running`, `conflict`, `failed`).
-- Detached background execution via `subprocess.Popen` (OS-specific detach, `CREATE_NEW_PROCESS_GROUP` on Windows, `start_new_session` on POSIX).
-- Frontend: Add Tournament Hub (:8798) to `RAIL_LINKS` in `dashboard/static/prototype.js` alongside existing Cockpit (:8800).
-- Strict separation: Zero `fetch(` or `/api/` in `prototype.js` (keeps existing architectural invariant tested by `test_sidebar_prototype.py`).
-- Dedicated client helper `dashboard/static/reporting_launcher.js` loaded in `index.html` to handle status polling, start trigger, and tab opening.
+1. **Process 1: Offense (Risk-Off Market Quoter)**
+   - Module: `core_brain/trader_loop.py`
+   - Cadence: 5.0s – 10.0s (Relaxed)
+   - Scope: Scans approved binary markets, evaluates spreads, places dual-sided maker limit orders.
+   - Decoupled from open position waiting or merge blocking; never starves quoting or freezes capital across the broader universe.
 
-## One improvement proposal (Step 5)
+2. **Process 2: Defense Sentry (Risk-On Position Guardian)**
+   - Module: `core_brain/risk_guardian.py` (and invoked within `shadow_run.py` / `trader_loop.py` fast-path)
+   - Cadence: Sub-second to 1.0s (High Alert / Critical)
+   - Scope: Active exclusively when unhedged, single-leg exposure exists (`up_shares != down_shares`).
+   - Trigger: Event-woken instantly upon any fill event or active inventory check.
+   - Responsibilities:
+     - Continuously evaluates immediate stop-loss limits on deteriorating positions.
+     - Guards and completes complementary hedge orders.
+     - Returns to idle/chill once balanced (`up_shares == down_shares`).
 
-**Adopted (simplification):** Instead of an overly complex multi-tier heartbeat parser for fingerprints, verify service port and basic HTTP response header / endpoint probe (`/api/tournament` for hub, `/api/state` for cockpit). If port is occupied by an alien service that does not respond, report `conflict`. This is resilient, fast, and stdlib-only.
+3. **Process 3: Settlement Sweeper (Capital Recycler)**
+   - Module: `core_brain/settlement_sweeper.py` (invoked as background service / periodic pass)
+   - Cadence: 60s – 300s (Very Chill / Low Priority)
+   - Scope: Completely separated from high-alert risk defense.
+   - Responsibilities:
+     - Identifies balanced pairs (`min(up_shares, down_shares) >= 1.0`).
+     - Executes gasless CTF `merge()` calls to redeem $1.00 USDC and replenish spendable collateral.
+     - Because paired positions carry 0 market risk, contract latency or RPC hiccups in merging never impede Offense or Defense.
 
-## Locked constraints (CONSTRAINTS.md)
+## Locked Constraints (CONSTRAINTS.md)
 
 - Focused suites that must pass:
-  - `tests/test_dashboard_server.py`
-  - `tests/test_sidebar_prototype.py`
-  - `tests/test_ts_frontend_contract.py`
-- Protected files: `core_brain/order_manager.py`, `core_brain/order_registry.py`, `data/orders.db`.
+  - `tests/test_single_buy_saver.py`
+  - `tests/test_trader_loop.py`
+  - `tests/test_shadow_run.py`
+  - `tests/test_shadow_tournament.py`
+- Production safety: `data/orders.db` must never be touched, modified, or overwritten.
 - No new external packages.
-- Security: `POST /api/services/{name}/start` guarded by `_authorize_control(request)`.
+- Zero regression on existing dynamic caps and position risk limits.
 
-## Dependency graph
+## Dependency Graph
 
-- Task 1 (Backend endpoints in `dashboard/server.py`) — unblocks Task 3.
-- Task 2 (Rail navigation links and status dot in `prototype.js` and `prototype.css`) — unblocks Task 3.
-- Task 3 (Client launcher script `reporting_launcher.js` + `index.html` + `test_ts_frontend_contract.py`) — Depends on: Task 1, Task 2.
-- Task 4 (End-to-end verification and regression gate) — Depends on: Task 3.
+- Task 1 (Extract Settlement Sweeper for chill background merging) — unblocks Task 2.
+- Task 2 (Build Defense Sentry: dedicated high-frequency <=1.0s unhedged position guardian) — unblocks Task 3.
+- Task 3 (Streamline Offense Quoter in `trader_loop.py` to be non-blocking & wire seams) — Depends on: Task 1, Task 2.
+- Task 4 (Shadow Seam & Tournament integration in `shadow_run.py` & `shadow_tournament.py`) — Depends on: Task 3.
+- Task 5 (Targeted test verification & verification report) — Depends on: Task 4.
 
 ## Tasks
 
-### Task 1 — Backend service status and start endpoints (Size: M)
-- Domain: Backend/Logic. Files: `dashboard/server.py`, `tests/test_dashboard_server.py`.
-- Add `GET /api/services/{name}/status` and `POST /api/services/{name}/start` for `hub` and `cockpit`.
-- Implement safe subprocess spawning with OS-specific detachment, socket port probing, and state detection.
-- Add unit tests covering status (stopped, running, conflict, 404 for unknown service) and start (spawns once, 403 unauthorized, 409 conflict).
-- Helper skill: `test-driven-development`.
-- Verify: `python -m pytest -q tests/test_dashboard_server.py -k "services"`
+### [x] Task 1 — Extract Settlement Sweeper (`core_brain/settlement_sweeper.py`) [Size: S]
+- Domain: Backend/Logic.
+- Extract merge detection (`min(up_shares, down_shares) >= 1.0`) and CTF merge batching from `single_buy_saver.py` into `core_brain/settlement_sweeper.py`.
+- Provides standalone `run_settlement_sweep(registry, client, ...)` with configurable 60s+ interval and background execution.
+- Tests: `tests/test_settlement_sweeper.py`.
 
-### Task 2 — Rail links & launcher attributes in prototype.js (Size: S)
-- Domain: Design/UI. Files: `dashboard/static/prototype.js`, `dashboard/static/prototype.css`, `tests/test_sidebar_prototype.py`.
-- Add Tournament Hub (`http://127.0.0.1:8798`) to `RAIL_LINKS` with launcher key `hub`.
-- Add launcher key `cockpit` to Tournament Cockpit.
-- In `buildRailLinks`: attach `data-launcher="{key}"` and status indicator dot `<span class="proto-service-dot dot-stopped" aria-hidden="true"></span>`.
-- In `prototype.css`: add status dot styles for running (green), starting (amber pulse), stopped (neutral/dim), failed (red), conflict (warning).
-- In `initPrototype`: ensure click listener only switches pages for `[data-page]`, letting launcher/external links navigate cleanly.
-- Verify: `python -m pytest -q tests/test_sidebar_prototype.py`
+### [x] Task 2 — Build Defense Sentry (`core_brain/risk_guardian.py`) [Size: M]
+- Domain: Backend/Logic.
+- Create dedicated `RiskGuardian` sentry loop that monitors active unhedged positions (`up_shares != down_shares`).
+- Operates at <= 1.0s cadence when active, evaluates stop losses on all open positions concurrently, and idles when exposure is zero.
+- Tests: `tests/test_risk_guardian.py`.
 
-### Task 3 — Reporting launcher script & frontend wiring (Size: M)
-- Domain: Frontend/Logic. Files: `dashboard/static/reporting_launcher.js`, `dashboard/static/index.html`, `tests/test_ts_frontend_contract.py`.
-- Create `dashboard/static/reporting_launcher.js`:
-  - Listens to clicks on `[data-launcher]`.
-  - If service is stopped, triggers `POST /api/services/{name}/start`, polls `/api/services/{name}/status` until active, and navigates.
-  - Polls `/api/services/{name}/status` periodically to update indicator dots and tooltips.
-- Load `reporting_launcher.js` in `dashboard/static/index.html` right after `prototype.js`.
-- Update `tests/test_ts_frontend_contract.py` to recognize the new reporting launcher endpoints.
-- Verify: `python -m pytest -q tests/test_ts_frontend_contract.py tests/test_sidebar_prototype.py`
+### [x] Task 3 — Streamline Offense Quoter (`core_brain/trader_loop.py`) [Size: M]
+- Domain: Backend/Logic.
+- Remove synchronous blocking single-buy and merge sweeps from the critical path of the universe quoting loop.
+- Quoter focuses cleanly on scanning markets and placing maker limit orders without being blocked by stale positions.
+- Verify: `python -m pytest -q tests/test_trader_loop.py`.
 
-### Task 4 — Final verification & regression run (Size: S)
-- Run all focused suites:
-  `python -m pytest -q tests/test_dashboard_server.py tests/test_sidebar_prototype.py tests/test_ts_frontend_contract.py`
-- Verify git status clean, prepare for Station IV review & PR.
+### [x] Task 4 — Shadow Run & Tournament Runner Integration [Size: M]
+- Domain: Backend/Logic.
+- Update `core_brain/shadow_run.py` and `scripts/shadow_tournament.py` to support the 3-loop architecture in shadow mode.
+- Ensure all 10 tournament arms run with the high-alert <= 1.0s defense loop and independent background settlement.
+- Verify: `python -m pytest -q tests/test_shadow_run.py tests/test_shadow_tournament.py`.
+
+### [x] Task 5 — Full Targeted Verification & Hands-On Verify [Size: S]
+- Domain: Testing/Verification.
+- Run all focused test suites.
+- Verify with a 1-minute dry-run / rehearsal smoke test.

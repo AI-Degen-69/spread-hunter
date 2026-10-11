@@ -41,6 +41,7 @@ import sqlite3
 import sys
 import uuid
 import time
+import threading
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1182,6 +1183,34 @@ def run_shadow(
     shadow_sweep._state_cache = AgedOutMarketStateCache()  # type: ignore[attr-defined]
     seam.sweep_fn = shadow_sweep
 
+    # Task 4 (#488): Wire the independent background threads in shadow mode
+    reg = getattr(seam, "registry", None)
+    stop_bg = threading.Event()
+    if reg is not None and getattr(seam, "client", None) is not None:
+        from core_brain.trader_loop import start_risk_guardian, start_settlement_sweeper
+        from core_brain.shadow_exec import record_shadow_merges
+
+        start_settlement_sweeper(
+            registry=reg,
+            merge_fn=lambda condition_id, amount, live=False: record_shadow_merges(reg, db_path),
+            interval=60.0,
+            live=False,
+            db_path=db_path,
+            stop_event=stop_bg,
+        )
+        log.info("shadow settlement sweeper engaged (every 60s, background)")
+
+        start_risk_guardian(
+            client=seam.client,
+            registry=reg,
+            cfg=cfg,
+            interval=1.0,
+            live=False,
+            single_buy_saver_fn=lambda c, r, config, live=False: [shadow_sweep()],
+            stop_event=stop_bg,
+        )
+        log.info("shadow risk guardian sentry engaged (every 1.0s, background)")
+
     deadline_ts = started_at + max(0.0, minutes * 60.0)
     if sleep_fn is not None:
         resolved_sleep_fn = sleep_fn
@@ -1221,17 +1250,20 @@ def run_shadow(
                 log.warning("Could not score run for finish-line check: %s", e)
         resolved_sleep_fn(seconds)
 
-    results = loop_run(
-        seam,
-        interval=interval,
-        once=False,
-        live=True,  # safe: submit/cancel are recorders, the client cannot sign
-        markets=markets,
-        markets_fn=dynamic_markets_fn,
-        sleep_fn=beating_sleep,
-        suspects_box=shadow_suspects,
-        shutdown_box=shutdown_box,
-    )
+    try:
+        results = loop_run(
+            seam,
+            interval=interval,
+            once=False,
+            live=True,  # safe: submit/cancel are recorders, the client cannot sign
+            markets=markets,
+            markets_fn=dynamic_markets_fn,
+            sleep_fn=beating_sleep,
+            suspects_box=shadow_suspects,
+            shutdown_box=shutdown_box,
+        )
+    finally:
+        stop_bg.set()
     # Only a clean end is marked finished. A crash leaves the heartbeat
     # unrefreshed, which the reader calls ended once it goes stale -- so the
     # two endings stay distinguishable.
