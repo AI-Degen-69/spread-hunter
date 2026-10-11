@@ -102,35 +102,28 @@ def shadow_heartbeat_path(root=None, run_id: str = "") -> Path:
 
 
 TOURNAMENT_DB_PATTERN = re.compile(
-    r"^(?:.*[\\/])?i(?P<issue>\d+)_tournament_(?P<arm>[a-z0-9-]+)\.db$"
+    r"^(?:.*[\\/])?(?P<issue>\d+)_tournament_(?P<index>\d+)_(?P<arm>[a-z0-9-]+)_(?P<stamp>\d{8}-\d{6})\.db$"
 )
 
 
 def parse_tournament_db_path(path: str | Path | None) -> dict | None:
     """Parse a tournament scratch DB filename into its constituent parts.
 
-    Returns {'issue': int, 'arm': str} if matched, otherwise None.
-    Specifically rejects non-tournament names and NN_shadow_*.db.
+    Returns {'issue': int, 'index': int, 'arm': str, 'stamp': str} if matched,
+    otherwise None. Specifically rejects non-tournament names and NN_shadow_*.db.
     """
     if not path:
         return None
     raw = str(path).strip()
     m = TOURNAMENT_DB_PATTERN.match(raw)
     if not m:
-        # Also support legacy pattern for backwards compatibility: <issue>_tournament_<idx>_<arm>_<stamp>.db
-        legacy = re.match(r"^(?:.*[\\/])?(?P<issue>\d+)_tournament_(?P<index>\d+)_(?P<arm>[a-z0-9-]+)_(?P<stamp>[a-zA-Z0-9_-]+)\.db$", raw)
-        if legacy:
-            return {
-                "issue": int(legacy.group("issue")),
-                "index": int(legacy.group("index")),
-                "arm": legacy.group("arm"),
-                "stamp": legacy.group("stamp"),
-            }
         return None
     try:
         return {
             "issue": int(m.group("issue")),
+            "index": int(m.group("index")),
             "arm": m.group("arm"),
+            "stamp": m.group("stamp"),
         }
     except (ValueError, TypeError):
         return None
@@ -138,26 +131,28 @@ def parse_tournament_db_path(path: str | Path | None) -> dict | None:
 
 def build_tournament_db_path(
     issue: int | str,
-    index: int = 1,
-    arm: str = "control-1",
-    stamp: str | None = None,
+    index: int,
+    arm: str,
+    stamp: str,
     base_dir: str | Path = "data",
 ) -> Path:
-    """Generate canonical tournament DB path data/i<issue>_tournament_<arm>.db."""
-    clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-") or "arm"
-    filename = f"i{issue}_tournament_{clean_arm}.db"
+    """Generate canonical tournament DB path data/<issue>_tournament_<idx>_<arm>_<stamp>.db."""
+    clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
+    idx_str = f"{int(index):02d}"
+    filename = f"{issue}_tournament_{idx_str}_{clean_arm}_{stamp}.db"
     return Path(base_dir) / filename
 
 
 def build_tournament_run_id(
     issue: int | str,
-    index: int = 1,
-    arm: str = "control-1",
-    stamp: str | None = None,
+    index: int,
+    arm: str,
+    stamp: str,
 ) -> str:
-    """Build unique run id: i<issue>_tournament_<arm> (<= 64 chars, valid tokens)."""
-    clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-") or "arm"
-    token = f"i{issue}_tournament_{clean_arm}"
+    """Build unique run id: shadow-<issue>-t<idx>-<arm>-<stamp> (<= 64 chars, valid tokens)."""
+    clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
+    idx_str = f"{int(index):02d}"
+    token = f"shadow-{issue}-t{idx_str}-{clean_arm}-{stamp}"
     return re.sub(r"[^A-Za-z0-9_.-]", "-", token).strip("-.")[:64]
 
 

@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import time
+import threading
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
@@ -680,6 +681,7 @@ def run(
     sleep_fn: Optional[Callable] = None,
     suspects_box: Optional[dict] = None,
     shutdown_box: Optional[dict] = None,
+    spawn_guardian: bool = False,
 ) -> list[LiveFleetResult]:
     """Rotate over `markets`: reconcile, then decide+submit per market, then sweep.
 
@@ -744,7 +746,30 @@ def run(
         if isinstance(registry, OrderRegistry)
         else nullcontext(None)
     )
+    stop_workers = threading.Event()
     with lock_cm as holder:
+        if spawn_guardian and registry is not None:
+            from core_brain.order_manager import merge as live_merge
+            start_settlement_sweeper(
+                registry=registry,
+                merge_fn=live_merge,
+                interval=60.0,
+                live=live,
+                db_path=getattr(registry, "db_path", None),
+                stop_event=stop_workers,
+            )
+            log.info("settlement sweeper started (every 60s, background)")
+
+            start_risk_guardian(
+                client=seam.client,
+                registry=registry,
+                cfg=seam.base_cfg,
+                interval=1.0,
+                live=live,
+                stop_event=stop_workers,
+            )
+            log.info("risk guardian sentry started (every 1.0s, background)")
+
         while True:
             cycle += 1
             # Fleet-wide aggregates (naked cost, committed capital, pooled posture)
@@ -881,6 +906,7 @@ def run(
                                    if type(e).__name__ == "_Deadline"
                                    else "interrupt")
                 break
+        stop_workers.set()
 
     _finish_shutdown()
     return once_results if once else last_cycle
@@ -2698,6 +2724,7 @@ def start_risk_guardian(
 
     def _loop() -> None:
         while not evt.is_set():
+            t0 = time.monotonic()
             try:
                 run_guardian_tick(
                     client=client,
@@ -2708,7 +2735,8 @@ def start_risk_guardian(
                 )
             except Exception as e:
                 log.warning("risk guardian tick failed: %s: %s", type(e).__name__, e)
-            evt.wait(max(0.1, interval))
+            elapsed = time.monotonic() - t0
+            evt.wait(max(0.01, interval - elapsed))
 
     thread = threading.Thread(
         daemon=True, name="risk-guardian-sentry", target=_loop)
@@ -2878,31 +2906,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.info("resolution sweeper started (every %ss, background)",
                  a.resolution_interval)
 
-        from core_brain.order_manager import merge as live_merge
-        start_settlement_sweeper(
-            registry=registry,
-            merge_fn=live_merge,
-            interval=60.0,
-            live=a.live,
-            db_path=db_path,
-        )
-        log.info("settlement sweeper started (every 60s, background)")
-
-        start_risk_guardian(
-            client=client,
-            registry=registry,
-            cfg=cfg,
-            interval=1.0,
-            live=a.live,
-        )
-        log.info("risk guardian sentry started (every 1.0s, background)")
-
     try:
         results = run(
             seam,
             interval=a.interval, once=a.once, live=a.live, markets=specs,
             markets_fn=lambda: _market_specs(a.max_markets, registry=registry),
             suspects_box=suspects_box,
+            spawn_guardian=not a.once,
         )
     except InstanceInUse as exc:
         print(f"fleet refused: {exc}", file=sys.stderr)
