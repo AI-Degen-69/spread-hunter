@@ -204,10 +204,12 @@ function initPrototype(doc) {
 
   scope.querySelectorAll('.proto-nav-btn').forEach(button => {
     button.addEventListener('click', () => {
-      showPage(button.dataset.page, scope);
-      // On a narrow window the rail is a drawer over the page, so a chosen
-      // page has to close it or the operator cannot see what they picked.
-      setNavOpen(false, scope);
+      if (button.dataset && button.dataset.page) {
+        showPage(button.dataset.page, scope);
+        // On a narrow window the rail is a drawer over the page, so a chosen
+        // page has to close it or the operator cannot see what they picked.
+        setNavOpen(false, scope);
+      }
     });
   });
 
@@ -261,9 +263,16 @@ function buildNavLabel(doc, text) {
  * are adopted by navigation rather than restyled into the shell. */
 const RAIL_LINKS = [
   {
+    href: 'http://127.0.0.1:8798',
+    label: 'Tournament Hub',
+    icon: 'M2 4h12v9H2z M5 2h6 M5 15h6',
+    launcher: 'hub',
+  },
+  {
     href: 'http://127.0.0.1:8800',
     label: 'Tournament Cockpit',
     icon: 'M2 13.5h12 M3 11l3-6 4 4 4-7',
+    launcher: 'cockpit',
   },
   {
     href: 'https://polymarket.com/markets',
@@ -313,8 +322,17 @@ function buildRailLinks(doc) {
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.title = entry.label;
+    if (entry.launcher) {
+      link.setAttribute('data-launcher', entry.launcher);
+    }
     link.appendChild(buildIcon(doc, entry.icon));
     link.appendChild(buildNavLabel(doc, entry.label));
+    if (entry.launcher) {
+      const dot = doc.createElement('span');
+      dot.className = 'proto-service-dot dot-stopped';
+      dot.setAttribute('aria-hidden', 'true');
+      link.appendChild(dot);
+    }
     item.appendChild(link);
     list.appendChild(item);
   }

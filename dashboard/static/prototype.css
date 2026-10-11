@@ -153,6 +153,34 @@
   text-decoration: none;
   font-weight: 500;
 }
+.proto-service-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-left: auto;
+  flex: 0 0 7px;
+  display: inline-block;
+  transition: background-color 200ms ease, box-shadow 200ms ease;
+}
+.proto-service-dot.dot-running {
+  background: var(--green-ok, #22c55e);
+  box-shadow: 0 0 6px var(--green-ok, #22c55e);
+}
+.proto-service-dot.dot-starting {
+  background: var(--amber-warn, #f59e0b);
+  box-shadow: 0 0 6px var(--amber-warn, #f59e0b);
+}
+.proto-service-dot.dot-stopped {
+  background: var(--text-muted, #64748b);
+  opacity: 0.5;
+}
+.proto-service-dot.dot-failed {
+  background: var(--red-alert, #ef4444);
+  box-shadow: 0 0 6px var(--red-alert, #ef4444);
+}
+.proto-service-dot.dot-conflict {
+  background: var(--amber-warn, #f59e0b);
+}
 .proto-nav {
   list-style: none;
   margin: 0;

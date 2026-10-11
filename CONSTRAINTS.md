@@ -1,4 +1,36 @@
-# CONSTRAINTS — #475 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #485 (locked by Station II, enforced through Station V)
+
+Governs the `i485/tournament-hub-cockpit-launcher` branch only.
+
+## Scope & File Boundaries
+
+- Target files for modification:
+  - `dashboard/server.py` (Add `/api/services/{name}/status` and `/api/services/{name}/start` routes and service runner logic).
+  - `dashboard/static/prototype.js` (Add Tournament Hub to `RAIL_LINKS`, add `data-launcher` attributes and dot element in `buildRailLinks`).
+  - `dashboard/static/prototype.css` (Status dot styling for running, starting, stopped, failed, conflict).
+  - `dashboard/static/reporting_launcher.js` (NEW — client-side launcher interactions, polling status, starting services, opening tabs).
+  - `dashboard/static/index.html` (Include `reporting_launcher.js` script tag after `prototype.js`).
+  - `tests/test_dashboard_server.py` (Unit and integration tests for service status & start endpoints).
+  - `tests/test_sidebar_prototype.py` (Tests for rail links, launcher attributes, and click handling).
+  - `tests/test_ts_frontend_contract.py` (Verify frontend api endpoints match python server routes).
+  - `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
+- Files that must NOT be modified:
+  - `core_brain/order_manager.py`, `core_brain/order_registry.py`, `core_brain/trader_loop.py` (live trading execution engine is strictly untouched).
+  - `scripts/filter_markets.py`, `scripts/filter_loop.py`.
+  - `data/orders.db` (production database is never touched).
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_dashboard_server.py`
+  `tests/test_sidebar_prototype.py`
+  `tests/test_ts_frontend_contract.py`
+- Architectural rule: `prototype.js` must contain NO `fetch(` or `/api/` calls (all networking stays in `reporting_launcher.js`).
+- Control security: `POST /api/services/{name}/start` must enforce `_authorize_control(request)`.
+
+---
+
+# CONSTRAINTS — #475 (history)
 
 Governs the `i475/rework-control-center-menu-navigation-and-retire-depth-trial`
 branch only.

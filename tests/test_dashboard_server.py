@@ -2571,3 +2571,243 @@ def test_master_toggle_renders_every_state():
 
     # A non-JSON 500 produces an error line, not a crash.
     assert "500" in out["httpFailure"]["ticker"]
+
+
+# ---------------------------------------------------------------------------
+# Reporting & Tournament Services Tests (Issue #485)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_reporting_services():
+    from dashboard.server import _reporting_services_reset
+    _reporting_services_reset()
+    yield
+    _reporting_services_reset()
+
+
+def test_reporting_service_status_unknown_404(client):
+    res = client.get("/api/services/nonexistent/status")
+    assert res.status_code == 404
+    assert "Unknown service" in res.json().get("error", "")
+
+
+def test_reporting_service_status_stopped(client, monkeypatch):
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: False)
+    for name in ("hub", "cockpit"):
+        res = client.get(f"/api/services/{name}/status")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["name"] == name
+        assert data["state"] == "stopped"
+        assert data["data_available"] is False
+
+
+def test_reporting_service_status_running_with_data(client, monkeypatch):
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: True)
+
+    def fake_fetch(port, path="", *args, **kwargs):
+        if port == 8798:
+            return {"available": True, "arms": [{"run_id": "arm-1"}]}
+        elif port == 8800:
+            return {"arms": [{"status": "running"}]}
+        return None
+
+    monkeypatch.setattr("dashboard.server._reporting_fetch_json", fake_fetch)
+
+    res_hub = client.get("/api/services/hub/status")
+    assert res_hub.status_code == 200
+    assert res_hub.json()["state"] == "running"
+    assert res_hub.json()["data_available"] is True
+
+    res_cockpit = client.get("/api/services/cockpit/status")
+    assert res_cockpit.status_code == 200
+    assert res_cockpit.json()["state"] == "running"
+    assert res_cockpit.json()["data_available"] is True
+
+
+def test_reporting_service_status_running_without_data(client, monkeypatch):
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: True)
+
+    def fake_fetch(port, path="", *args, **kwargs):
+        if port == 8798:
+            return {"available": False, "arms": []}
+        elif port == 8800:
+            return {"arms": [{"status": "missing_db"}]}
+        return None
+
+    monkeypatch.setattr("dashboard.server._reporting_fetch_json", fake_fetch)
+
+    res_hub = client.get("/api/services/hub/status")
+    assert res_hub.status_code == 200
+    assert res_hub.json()["state"] == "running"
+    assert res_hub.json()["data_available"] is False
+
+    res_cockpit = client.get("/api/services/cockpit/status")
+    assert res_cockpit.status_code == 200
+    assert res_cockpit.json()["state"] == "running"
+    assert res_cockpit.json()["data_available"] is False
+
+
+def test_reporting_service_status_conflict(client, monkeypatch):
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: True)
+    monkeypatch.setattr("dashboard.server._reporting_fetch_json", lambda *args, **kwargs: None)
+
+    for name, port in (("hub", 8798), ("cockpit", 8800)):
+        res = client.get(f"/api/services/{name}/status")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["state"] == "conflict"
+        assert str(port) in data["detail"]
+
+
+def test_reporting_service_start_requires_auth(client):
+    res = client.post("/api/services/hub/start")
+    assert res.status_code == 403
+
+
+def test_reporting_service_start_unknown_404(client):
+    res = client.post("/api/services/ghost/start", headers=_control(client))
+    assert res.status_code == 404
+
+
+def test_reporting_service_start_conflict_409(client, monkeypatch):
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: True)
+    monkeypatch.setattr("dashboard.server._reporting_fetch_json", lambda *args, **kwargs: None)
+
+    res = client.post("/api/services/hub/start", headers=_control(client))
+    assert res.status_code == 409
+    assert res.json()["state"] == "conflict"
+    assert "8798" in res.json()["message"]
+
+
+def test_reporting_service_start_spawns_process(client, monkeypatch, tmp_path):
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: False)
+    monkeypatch.setattr("dashboard.server.REPO_ROOT", tmp_path)
+
+    spawned = []
+
+    class DummyProc:
+        def __init__(self, cmd, **kwargs):
+            self.pid = 9999
+            spawned.append(cmd)
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr("subprocess.Popen", DummyProc)
+
+    res = client.post("/api/services/hub/start", headers=_control(client))
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    assert res.json()["state"] == "starting"
+    assert res.json()["pid"] == 9999
+    assert len(spawned) == 1
+    assert "scripts.tournament_hub" in spawned[0]
+
+    # Starting again while running/starting returns success without re-spawning
+    res2 = client.post("/api/services/hub/start", headers=_control(client))
+    assert res2.status_code == 200
+    assert res2.json()["ok"] is True
+    assert len(spawned) == 1
+
+
+def test_reporting_service_start_error_500(client, monkeypatch, tmp_path):
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: False)
+    monkeypatch.setattr("dashboard.server.REPO_ROOT", tmp_path)
+
+    def boom(*args, **kwargs):
+        raise OSError("Failed to execute process")
+
+    monkeypatch.setattr("subprocess.Popen", boom)
+
+    res = client.post("/api/services/hub/start", headers=_control(client))
+    assert res.status_code == 500
+    assert res.json()["error_type"] == "OSError"
+    assert "Failed to execute" in res.json()["error"]
+
+
+def test_reporting_services_probe_paths():
+    from dashboard.server import _REPORTING_SERVICES
+    assert _REPORTING_SERVICES["hub"]["probe_path"] == "/hub/api/state"
+    assert _REPORTING_SERVICES["cockpit"]["probe_path"] == "/api/stats"
+
+
+def test_reporting_fetch_json_contracts(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    from dashboard.server import _reporting_fetch_json
+
+    # 1. Successful 200 JSON
+    class Fake200:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self):
+            return b'{"ok": true, "available": true}'
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: Fake200())
+    res = _reporting_fetch_json(8798, "/hub/api/state")
+    assert res == {"ok": True, "available": True}
+
+    # 2. HTTP Error (404/500)
+    def fake_http_err(*args, **kwargs):
+        raise urllib.error.HTTPError("http://127.0.0.1:8798", 404, "Not Found", {}, io.BytesIO(b"Not Found"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_http_err)
+    assert _reporting_fetch_json(8798, "/hub/api/state") is None
+
+    # 3. Network URLError / Timeout
+    def fake_url_err(*args, **kwargs):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_url_err)
+    assert _reporting_fetch_json(8798, "/hub/api/state") is None
+
+    # 4. Invalid JSON
+    class FakeInvalidJson:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self):
+            return b"<html><body>Not JSON</body></html>"
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: FakeInvalidJson())
+    assert _reporting_fetch_json(8798, "/hub/api/state") is None
+
+
+def test_reporting_untracked_service_arbitrary_http_is_conflict_not_running(client, monkeypatch):
+    """An unrelated HTTP server or broken response on the port must NOT be classified as running."""
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: True)
+    # Returns None because probe_path is not an expected endpoint
+    monkeypatch.setattr("dashboard.server._reporting_fetch_json", lambda port, path, *args, **kwargs: None)
+
+    for name in ("hub", "cockpit"):
+        res = client.get(f"/api/services/{name}/status")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["state"] == "conflict"
+        assert data["data_available"] is False
+
+
+def test_reporting_service_start_filesystem_mkdir_error_500(client, monkeypatch, tmp_path):
+    monkeypatch.setattr("dashboard.server._reporting_port_open", lambda port, *args, **kwargs: False)
+
+    class FailingPath:
+        def __truediv__(self, other):
+            return self
+        def mkdir(self, *args, **kwargs):
+            raise OSError("Read-only file system")
+
+    monkeypatch.setattr("dashboard.server.REPO_ROOT", FailingPath())
+
+    res = client.post("/api/services/hub/start", headers=_control(client))
+    assert res.status_code == 500
+    assert res.json()["error_type"] == "OSError"
+    assert "Read-only file system" in res.json()["error"]
+
+

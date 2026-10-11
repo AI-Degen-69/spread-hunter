@@ -629,3 +629,24 @@ def test_the_keyboard_opens_the_rail_without_the_mouse_holding_it_open():
     # Assert
     assert ":focus-within" not in body
     assert ":has(:focus-visible)" in body
+
+
+def test_rail_links_include_tournament_hub_and_cockpit():
+    js = (_STATIC / "prototype.js").read_text(encoding="utf-8")
+    assert "Tournament Hub" in js
+    assert "Tournament Cockpit" in js
+    assert "http://127.0.0.1:8798" in js
+    assert "http://127.0.0.1:8800" in js
+    assert "data-launcher" in js
+    assert "proto-service-dot" in js
+
+
+def test_service_dot_styles_exist_in_prototype_css():
+    css = (_STATIC / "prototype.css").read_text(encoding="utf-8")
+    assert ".proto-service-dot" in css
+    assert ".dot-running" in css
+    assert ".dot-starting" in css
+    assert ".dot-stopped" in css
+    assert ".dot-failed" in css
+    assert ".dot-conflict" in css
+
