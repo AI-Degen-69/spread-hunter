@@ -17,6 +17,7 @@
 #   .\scripts\spread-hunter-menu.ps1 status        # 8 · status page
 #   .\scripts\spread-hunter-menu.ps1 audit         # A · MAINTENANCE: storage audit (read-only disk usage)
 #   .\scripts\spread-hunter-menu.ps1 prune         # P · MAINTENANCE: storage prune (deletes stale stores/reports)
+#   .\scripts\spread-hunter-menu.ps1 cockpit       # C · MAINTENANCE: tournament cockpit (opens :8800)
 # the same code path as the dashboard's START/STOP buttons (interprocess lock,
 # starting-capital snapshot, shared run_id). The dashboard process itself is
 # owned by this script via runtime/live-dash.pids.json.
@@ -2851,7 +2852,7 @@ function Reset-Environment {
 # One ordered key list is the single source of truth for the menu: the grid,
 # the prompt, the invalid-selection message and the command-line allow-list
 # all derive from it, so a new key only has to be added in one place (#475).
-$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'q')
+$script:MenuKeys = @('1', '2', '3', '4', '5', '6', '7', '8', '9', 'r', 'a', 'p', 'c', 'q')
 
 function Format-MenuHint {
     <# Render the key list as the operator-facing hint, e.g. "1-9, r, a, p, q".
@@ -2891,6 +2892,7 @@ function Show-MenuGrid {
         @{ Header = "MAINTENANCE & STATUS"; Items = @(
             @{ K = "7"; Icon = "⎚"; IconColor = "Warning"; V = "Global Stop & Clean";       D = "Kills all bot processes/dashboards, wipes data, verifies" }
             @{ K = "8"; Icon = "≡"; IconColor = "Info";    V = "Check System Status";        D = "Static Status page" }
+            @{ K = "c"; Icon = "⌖"; IconColor = "Success"; V = "Tournament Cockpit";         D = "Open Advanced Analytics & Decision Cockpit on :8800" }
             @{ K = "9"; Icon = "▣"; IconColor = "Info";    V = "Overnight Statistics";         D = "Run shadow + statistics + dashboard for hours" }
             @{ K = "a"; Icon = "◫"; IconColor = "Neutral"; V = "Storage Audit";             D = "Report disk usage of every store and report (read-only)" }
             @{ K = "p"; Icon = "⨯"; IconColor = "Error";   V = "Storage Prune";             D = "Delete stale stores/reports per retention (prunes data)" }
@@ -2934,7 +2936,7 @@ function Invoke-LiveAction {
         }
         "4" {
             $mins = $Minutes
-            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent')
+            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent', 'hybrid')
             if ($Preset) {
                 $cleanPreset = $Preset.Trim().ToLower()
                 if ($cleanPreset -notin $validPresets) {
@@ -3000,7 +3002,7 @@ function Invoke-LiveAction {
             # Interactive with no -ResumeDb lists what is on disk and asks.
             # Non-interactive with no -ResumeDb keeps the pinned 01 default.
             $resumeDbList = @()
-            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent')
+            $validPresets = @('control', 'conservative', 'balanced', 'aggressive', 'prudent', 'hybrid')
             if ($Preset) {
                 $cleanPreset = $Preset.Trim().ToLower()
                 if ($cleanPreset -notin $validPresets) {
@@ -3093,6 +3095,10 @@ function Invoke-LiveAction {
         }
         "p" {
             Invoke-StoragePrune -Force:$Yes
+        }
+        "c" {
+            Start-Process "http://127.0.0.1:8800"
+            Lsh-Ok "Opened Tournament Cockpit at http://127.0.0.1:8800"
         }
         "q" { Write-Host "Exiting Spread Hunter menu." -ForegroundColor (Get-ProfileColor -Name Neutral); exit 0 }
         default {
@@ -3221,6 +3227,8 @@ if ($Action -ne "") {
         "retention"    = "a"
         "prune"        = "p"
         "storage-prune"= "p"
+        "cockpit"      = "c"
+        "tournament-cockpit" = "c"
     }
     if ($ExtraArgs.Count -gt 0) {
         Write-Host ("ERROR: Too many words: '{0} {1}'. Run one action at a time (e.g. .\scripts\spread-hunter-menu.ps1 audit) — '-and' is not a menu word; call the menu twice to run two actions." -f $Action, ($ExtraArgs -join ' ')) -ForegroundColor Red

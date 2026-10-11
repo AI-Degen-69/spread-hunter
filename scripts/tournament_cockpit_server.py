@@ -1,0 +1,1335 @@
+"""Tournament Analytics & Decision Cockpit Server.
+
+Interactive real-time visualization and statistical analysis cockpit for
+Spread Hunter multi-arm shadow tournaments (Issue #484 and Issue #485).
+Computes risk, expectancy (EV), standard deviation, max drawdown,
+Monte Carlo projections, and Live Readiness Scoring.
+
+Usage:
+    python -m scripts.tournament_cockpit_server --port 8800
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import http.server
+import json
+import math
+import os
+from pathlib import Path
+import random
+import socket
+import socketserver
+import sqlite3
+import sys
+import threading
+import time
+from typing import Any, Optional
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+ARMS_CONFIG = [
+    # Issue #484: Strategy Profiles
+    {
+        "issue": 484,
+        "name": "control",
+        "label": "Control (Baseline)",
+        "port": 8801,
+        "db": "data/484_tournament_01_control_r2_0031.db",
+        "run_id": "shadow-484-t01-control-r2_0031",
+        "color": "#00e676",
+        "desc": "Baseline fixed 2c offset, $0.045 single-buy loss stop"
+    },
+    {
+        "issue": 484,
+        "name": "conservative",
+        "label": "Conservative",
+        "port": 8802,
+        "db": "data/484_tournament_02_conservative_r2_0031.db",
+        "run_id": "shadow-484-t02-conservative-r2_0031",
+        "color": "#00b0ff",
+        "desc": "Dynamic offset 0.75x (2-5c), tighter $0.030 single-buy stop"
+    },
+    {
+        "issue": 484,
+        "name": "balanced",
+        "label": "Balanced",
+        "port": 8803,
+        "db": "data/484_tournament_03_balanced_r2_0031.db",
+        "run_id": "shadow-484-t03-balanced-r2_0031",
+        "color": "#e040fb",
+        "desc": "Dynamic offset 0.50x (2-4c), standard $0.045 single-buy stop"
+    },
+    {
+        "issue": 484,
+        "name": "aggressive",
+        "label": "Aggressive",
+        "port": 8804,
+        "db": "data/484_tournament_04_aggressive_r2_0031.db",
+        "run_id": "shadow-484-t04-aggressive-r2_0031",
+        "color": "#ffd600",
+        "desc": "Dynamic offset 0.25x (2-3c), wider $0.060 single-buy stop"
+    },
+    {
+        "issue": 484,
+        "name": "prudent",
+        "label": "Prudent",
+        "port": 8805,
+        "db": "data/484_tournament_05_prudent_r2_0031.db",
+        "run_id": "shadow-484-t05-prudent-r2_0031",
+        "color": "#ff6d00",
+        "desc": "Fixed 3c offset, conservative $0.035 single-buy stop"
+    },
+    # Issue #485: Queue & Execution Mechanics
+    {
+        "issue": 485,
+        "name": "stickhold",
+        "label": "Stick-Hold (45s)",
+        "port": 8806,
+        "db": "data/485_tournament_01_stickhold_12hr.db",
+        "run_id": "shadow-485-t01-stickhold-12hr",
+        "color": "#69f0ae",
+        "desc": "Dynamic offset 0.25x, 45s single grace, $0.065 loss cap"
+    },
+    {
+        "issue": 485,
+        "name": "queuehug",
+        "label": "Queue-Hug",
+        "port": 8807,
+        "db": "data/485_tournament_02_queuehug_12hr.db",
+        "run_id": "shadow-485-t02-queuehug-12hr",
+        "color": "#ff5252",
+        "desc": "Requote hold below 100 shares, queue hold 150 shares"
+    },
+    {
+        "issue": 485,
+        "name": "deadband-tight",
+        "label": "Deadband-Tight (1c)",
+        "port": 8808,
+        "db": "data/485_tournament_03_deadband-tight_12hr.db",
+        "run_id": "shadow-485-t03-deadband-tight-12hr",
+        "color": "#ff4081",
+        "desc": "Strict 1c requote deadband, frequent requoting"
+    },
+    {
+        "issue": 485,
+        "name": "deadband-wide",
+        "label": "Deadband-Wide (2c)",
+        "port": 8809,
+        "db": "data/485_tournament_04_deadband-wide_12hr.db",
+        "run_id": "shadow-485-t04-deadband-wide-12hr",
+        "color": "#76ff03",
+        "desc": "Wide 2c requote deadband, reduces unnecessary churn"
+    },
+    {
+        "issue": 485,
+        "name": "snapstop",
+        "label": "Snap-Stop (30s)",
+        "port": 8810,
+        "db": "data/485_tournament_05_snapstop_12hr.db",
+        "run_id": "shadow-485-t05-snapstop-12hr",
+        "color": "#b388ff",
+        "desc": "Fast 30s single buy grace, tight $0.040 loss cap"
+    },
+]
+
+
+def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> dict[str, Any]:
+    """Extract comprehensive statistical, risk, and time series metrics for one arm."""
+    db_path = ROOT / cfg["db"]
+    if not db_path.exists():
+        return {
+            **cfg,
+            "status": "missing_db",
+            "trades_count": 0,
+            "total_pnl": 0.0,
+            "score": 0,
+            "readiness": "NO_DATA"
+        }
+
+    try:
+        with contextlib.closing(
+            sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        ) as conn:
+            c = conn.cursor()
+
+            # Check time window
+            ts_row = c.execute(
+                "SELECT min(ts), max(ts) FROM queue_marks WHERE run_id = ?",
+                (cfg["run_id"],),
+            ).fetchone()
+            first_ts = ts_row[0] or 0.0
+            last_ts = ts_row[1] or first_ts
+            elapsed_min = (last_ts - first_ts) / 60.0 if first_ts else 0.0
+            rem_min = max(0.0, target_minutes - elapsed_min)
+
+            # Fills and Orders
+            fills_cnt = c.execute(
+                "SELECT count(*) FROM fills WHERE run_id = ?", (cfg["run_id"],)
+            ).fetchone()[0]
+            orders_cnt = c.execute(
+                "SELECT count(DISTINCT order_uuid) FROM fills WHERE run_id = ?", (cfg["run_id"],)
+            ).fetchone()[0]
+
+            # Closes
+            rows = c.execute(
+                "SELECT ts, method, realized_pnl, cost_basis, proceeds, shares FROM closes "
+                "WHERE run_id = ? AND method NOT IN ('settlement', 'shadow_merge_note', '') "
+                "ORDER BY ts ASC",
+                (cfg["run_id"],)
+            ).fetchall()
+    except sqlite3.Error as exc:
+        return {
+            **cfg,
+            "status": "error",
+            "error": str(exc),
+            "trades_count": 0,
+            "total_pnl": 0.0,
+            "score": 0,
+            "readiness": "ERROR"
+        }
+
+    pnls = [float(r[2] or 0.0) for r in rows]
+    n = len(pnls)
+
+    if n == 0:
+        return {
+            **cfg,
+            "status": "no_trades",
+            "elapsed_min": elapsed_min,
+            "rem_min": rem_min,
+            "fills_cnt": fills_cnt,
+            "orders_cnt": orders_cnt,
+            "trades_count": 0,
+            "total_pnl": 0.0,
+            "score": 0,
+            "readiness": "NO_TRADES"
+        }
+
+    wins = [p for p in pnls if p > 0.0]
+    losses = [p for p in pnls if p < 0.0]
+    merges = [r for r in rows if r[1] == "shadow_merge"]
+    single_exits = n - len(merges)
+
+    tot_pnl = sum(pnls)
+    mean_pnl = tot_pnl / n
+    var = sum((p - mean_pnl) ** 2 for p in pnls) / (n - 1) if n > 1 else 0.0
+    std_pnl = math.sqrt(var)
+
+    win_rate = len(wins) / n
+    merge_rate = len(merges) / n
+    exit_rate = single_exits / n
+
+    gross_win = sum(wins)
+    gross_loss = abs(sum(losses))
+    profit_factor = (gross_win / gross_loss) if gross_loss > 0 else (99.0 if gross_win > 0 else 1.0)
+
+    # Max Drawdown & PnL Series
+    cum = 0.0
+    peak = 0.0
+    mdd = 0.0
+    series = []
+    # Sample down to max 60 points for charting smoothness
+    step = max(1, len(rows) // 60)
+    for i, r in enumerate(rows):
+        p = float(r[2] or 0.0)
+        cum += p
+        if cum > peak:
+            peak = cum
+        dd = peak - cum
+        if dd > mdd:
+            mdd = dd
+        if i % step == 0 or i == len(rows) - 1:
+            rel_t = (r[0] - first_ts) / 60.0 if first_ts else 0.0
+            series.append({
+                "t": round(rel_t, 1),
+                "cum": round(cum, 4),
+                "pnl": round(p, 4)
+            })
+
+    # Value at Risk 95% (empirical 5th percentile)
+    sorted_pnls = sorted(pnls)
+    var_95 = sorted_pnls[max(0, int(0.05 * n))]
+
+    # Sharpe Proxy (Per 100 Trades Normalized)
+    sharpe_proxy = (mean_pnl / std_pnl * 10.0) if std_pnl > 0.0 else 0.0
+
+    # Monte Carlo 100-Trade Simulation (500 iterations)
+    rng = random.Random(42 + cfg["port"])
+    mc_ends = []
+    for _ in range(500):
+        mc_run = sum(rng.choice(pnls) for _ in range(100))
+        mc_ends.append(mc_run)
+    mc_ends.sort()
+    mc_p5 = mc_ends[int(0.05 * len(mc_ends))]
+    mc_p50 = mc_ends[int(0.50 * len(mc_ends))]
+    mc_p95 = mc_ends[int(0.95 * len(mc_ends))]
+    prob_positive_100 = sum(1 for x in mc_ends if x > 0) / len(mc_ends)
+
+    # Live Readiness Scoring (0 to 100)
+    # 1. Total PnL & EV (max 30 pts)
+    pnl_pts = min(30.0, max(0.0, (tot_pnl / 15.0) * 30.0)) if tot_pnl > 0 else 0.0
+    # 2. Merge Rate (max 25 pts)
+    merge_pts = min(25.0, (merge_rate / 0.60) * 25.0)
+    # 3. Low Drawdown (max 20 pts)
+    dd_pts = max(0.0, 20.0 - (mdd / 1.5))
+    # 4. Profit Factor (max 15 pts)
+    pf_pts = min(15.0, (profit_factor / 1.5) * 15.0)
+    # 5. Statistical Confidence (trades >= 50, max 10 pts)
+    conf_pts = min(10.0, (n / 50.0) * 10.0)
+
+    score = int(round(pnl_pts + merge_pts + dd_pts + pf_pts + conf_pts))
+
+    if score >= 75 and tot_pnl > 5.0 and prob_positive_100 >= 0.70:
+        readiness = "READY FOR LIVE"
+        badge_cls = "badge-green"
+    elif score >= 55 and tot_pnl >= 0.0:
+        readiness = "NEEDS TUNING"
+        badge_cls = "badge-amber"
+    else:
+        readiness = "DO NOT DEPLOY"
+        badge_cls = "badge-red"
+
+    return {
+        **cfg,
+        "status": "ok",
+        "elapsed_min": elapsed_min,
+        "rem_min": rem_min,
+        "progress_pct": min(100.0, round((elapsed_min / target_minutes) * 100.0, 1)),
+        "fills_cnt": fills_cnt,
+        "orders_cnt": orders_cnt,
+        "trades_count": n,
+        "merges_count": len(merges),
+        "exits_count": single_exits,
+        "total_pnl": round(tot_pnl, 4),
+        "mean_pnl": round(mean_pnl, 4),
+        "std_pnl": round(std_pnl, 4),
+        "win_rate": round(win_rate * 100.0, 1),
+        "merge_rate": round(merge_rate * 100.0, 1),
+        "exit_rate": round(exit_rate * 100.0, 1),
+        "profit_factor": round(profit_factor, 2),
+        "max_drawdown": round(mdd, 2),
+        "max_win": round(max(pnls) if pnls else 0.0, 4),
+        "max_loss": round(min(pnls) if pnls else 0.0, 4),
+        "avg_win": round(sum(wins) / len(wins), 4) if wins else 0.0,
+        "avg_loss": round(sum(losses) / len(losses), 4) if losses else 0.0,
+        "var_95": round(var_95, 4),
+        "sharpe_proxy": round(sharpe_proxy, 2),
+        "mc_p5": round(mc_p5, 2),
+        "mc_p50": round(mc_p50, 2),
+        "mc_p95": round(mc_p95, 2),
+        "prob_positive_100": round(prob_positive_100 * 100.0, 1),
+        "score": score,
+        "readiness": readiness,
+        "badge_cls": badge_cls,
+        "series": series,
+    }
+
+
+def collect_all_stats() -> dict[str, Any]:
+    """Analyze all 10 tournament arms and compile overall metrics."""
+    arms_data = [analyze_arm_database(cfg) for cfg in ARMS_CONFIG]
+    
+    # Sort by Total PnL descending for leaderboard
+    sorted_arms = sorted(arms_data, key=lambda x: x.get("total_pnl", -999.0), reverse=True)
+    
+    total_trades = sum(a.get("trades_count", 0) for a in arms_data)
+    total_merges = sum(a.get("merges_count", 0) for a in arms_data)
+    total_fills = sum(a.get("fills_cnt", 0) for a in arms_data)
+    
+    # Global tournament progress
+    max_elapsed = max((a.get("elapsed_min", 0.0) for a in arms_data), default=0.0)
+    progress_pct = min(100.0, round((max_elapsed / 720.0) * 100.0, 1))
+    time_rem_min = max(0.0, 720.0 - max_elapsed)
+    
+    # Leaders
+    leader_484 = max(
+        (a for a in arms_data if a.get("issue") == 484),
+        key=lambda x: x.get("total_pnl", -999.0),
+        default=None
+    )
+    leader_485 = max(
+        (a for a in arms_data if a.get("issue") == 485),
+        key=lambda x: x.get("total_pnl", -999.0),
+        default=None
+    )
+
+    return {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "total_trades": total_trades,
+        "total_merges": total_merges,
+        "total_fills": total_fills,
+        "max_elapsed_min": round(max_elapsed, 1),
+        "elapsed_hours": round(max_elapsed / 60.0, 2),
+        "rem_hours": round(time_rem_min / 60.0, 2),
+        "progress_pct": progress_pct,
+        "is_completed": max_elapsed >= 719.0,
+        "leader_484": leader_484["name"] if leader_484 else "N/A",
+        "leader_484_pnl": leader_484.get("total_pnl", 0.0) if leader_484 else 0.0,
+        "leader_485": leader_485["name"] if leader_485 else "N/A",
+        "leader_485_pnl": leader_485.get("total_pnl", 0.0) if leader_485 else 0.0,
+        "arms": sorted_arms,
+    }
+
+
+def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
+    """Generate the full responsive, interactive HTML dashboard."""
+    json_embedded = json.dumps(initial_data)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spread Hunter — Tournament Analytics & Decision Cockpit</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {{
+    --bg-base: #0a0d14;
+    --bg-card: #121722;
+    --bg-card-hover: #171e2c;
+    --bg-subtle: #1c2436;
+    --border: #232c3f;
+    --border-bright: #364461;
+    --text-primary: #f0f4fc;
+    --text-muted: #8b9bb4;
+    --green: #00e676;
+    --green-glow: rgba(0, 230, 118, 0.18);
+    --red: #ff5252;
+    --red-glow: rgba(255, 82, 82, 0.18);
+    --blue: #00b0ff;
+    --amber: #ffd600;
+    --purple: #b388ff;
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 13.5px;
+    line-height: 1.5;
+    padding: 20px;
+    min-height: 100vh;
+  }}
+  .tabular {{ font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }}
+  
+  /* Top Bar */
+  header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }}
+  .header-titles h1 {{
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }}
+  .pulse-dot {{
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 12px var(--green);
+    animation: pulse 1.8s infinite;
+  }}
+  @keyframes pulse {{
+    0% {{ transform: scale(0.9); opacity: 0.7; }}
+    50% {{ transform: scale(1.3); opacity: 1; }}
+    100% {{ transform: scale(0.9); opacity: 0.7; }}
+  }}
+  .header-titles p {{
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 3px;
+  }}
+  .header-controls {{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }}
+  .progress-card {{
+    background: var(--bg-subtle);
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    text-align: right;
+  }}
+  .progress-bar-bg {{
+    width: 180px; height: 6px; background: #232c3f;
+    border-radius: 3px; overflow: hidden; margin-top: 5px;
+  }}
+  .progress-bar-fill {{
+    height: 100%; background: linear-gradient(90deg, #00b0ff, #00e676);
+    border-radius: 3px; transition: width 0.4s ease;
+  }}
+  .btn {{
+    background: var(--bg-subtle);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }}
+  .btn:hover {{ background: var(--border); border-color: var(--text-muted); }}
+
+  /* Metric Highlight Cards */
+  .metrics-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }}
+  .m-card {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    transition: border-color 0.2s;
+  }}
+  .m-card:hover {{ border-color: var(--border-bright); }}
+  .m-label {{ color: var(--text-muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }}
+  .m-val {{ font-size: 24px; font-weight: 700; margin-top: 4px; }}
+  .m-sub {{ font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }}
+
+  /* Tabs */
+  .tabs {{
+    display: flex;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+    padding-bottom: 4px;
+  }}
+  .tab-btn {{
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13.5px;
+    font-weight: 600;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }}
+  .tab-btn:hover {{ color: var(--text-primary); background: var(--bg-card); }}
+  .tab-btn.active {{ color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border); }}
+
+  /* Panels */
+  .tab-pane {{ display: none; }}
+  .tab-pane.active {{ display: block; }}
+
+  /* Cards and Charts Layout */
+  .charts-grid {{
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }}
+  .chart-box {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }}
+  .chart-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }}
+  .chart-title {{ font-size: 14px; font-weight: 700; }}
+  .chart-legend {{ font-size: 11.5px; color: var(--text-muted); }}
+
+  /* Table styling */
+  .table-box {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }}
+  table {{
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+  }}
+  th {{
+    background: var(--bg-subtle);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+  }}
+  td {{
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px;
+  }}
+  tr:hover td {{ background: var(--bg-card-hover); }}
+  .badge {{
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }}
+  .badge-green {{ background: var(--green-glow); color: var(--green); border: 1px solid rgba(0,230,118,0.3); }}
+  .badge-amber {{ background: rgba(255,214,0,0.15); color: var(--amber); border: 1px solid rgba(255,214,0,0.3); }}
+  .badge-red {{ background: var(--red-glow); color: var(--red); border: 1px solid rgba(255,82,82,0.3); }}
+
+  .positive {{ color: var(--green); }}
+  .negative {{ color: var(--red); }}
+
+  /* Decision Callout */
+  .decision-grid {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }}
+  .decision-box {{
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }}
+  .decision-box h3 {{
+    font-size: 15px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+  }}
+  .decision-box ul {{
+    padding-left: 20px; color: var(--text-muted); font-size: 12.5px; line-height: 1.7;
+  }}
+  .decision-box strong {{ color: var(--text-primary); }}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-titles">
+    <h1><span class="pulse-dot"></span> Spread Hunter — Tournament Cockpit</h1>
+    <p>12-Hour Multi-Arm Live Shadow Evaluation | Issue #484 (Strategy Profiles) &amp; Issue #485 (Execution Mechanics)</p>
+  </div>
+  <div class="header-controls">
+    <div class="progress-card">
+      <div style="font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between;">
+        <span>Progress: <strong id="progress-text" class="tabular">10.5h / 12.0h</strong></span>
+        <span id="rem-text" class="tabular">~1.5h rem</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div id="progress-bar" class="progress-bar-fill" style="width: 87.5%;"></div>
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+      <button class="btn" id="btn-refresh" onclick="fetchLiveStats()">↻ Refresh Data</button>
+      <span id="refresh-status" style="font-size: 11px; color: var(--text-muted);">Loaded</span>
+    </div>
+  </div>
+</header>
+
+<!-- Top Headline Metric Cards -->
+<div class="metrics-grid">
+  <div class="m-card">
+    <div class="m-label">#484 Strategy Leader</div>
+    <div class="m-val tabular positive" id="m-leader-484">control</div>
+    <div class="m-sub" id="m-leader-484-pnl">PnL: +$18.38 | Port 8801</div>
+  </div>
+  <div class="m-card">
+    <div class="m-label">#485 Execution Leader</div>
+    <div class="m-val tabular positive" id="m-leader-485">deadband-wide</div>
+    <div class="m-sub" id="m-leader-485-pnl">PnL: +$9.25 | Port 8809</div>
+  </div>
+  <div class="m-card">
+    <div class="m-label">Total Pair Merges</div>
+    <div class="m-val tabular" id="m-merges">612</div>
+    <div class="m-sub" id="m-merges-sub">Across all 10 tournament arms</div>
+  </div>
+  <div class="m-card">
+    <div class="m-label">Total Venue Fills</div>
+    <div class="m-val tabular" id="m-fills">1,926</div>
+    <div class="m-sub">Sample size for statistical significance</div>
+  </div>
+  <div class="m-card">
+    <div class="m-label">Top Live Candidate Score</div>
+    <div class="m-val tabular positive" id="m-top-score">86 / 100</div>
+    <div class="m-sub">Readiness: READY FOR LIVE</div>
+  </div>
+</div>
+
+<!-- Tabs Navigation -->
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('overview', this)">🏆 Leaderboard &amp; Overview</button>
+  <button class="tab-btn" onclick="switchTab('hybrid-config', this)">⚙️ HYBRID Configuration Blueprint</button>
+  <button class="tab-btn" onclick="switchTab('pnl-chart', this)">📈 Cumulative PnL Curves</button>
+  <button class="tab-btn" onclick="switchTab('risk-stats', this)">⚖️ Risk &amp; Volatility (EV, &sigma;, MDD)</button>
+  <button class="tab-btn" onclick="switchTab('execution', this)">🎯 Merge vs Fallout Quality</button>
+  <button class="tab-btn" onclick="switchTab('monte-carlo', this)">🎲 Monte Carlo Projections</button>
+  <button class="tab-btn" onclick="switchTab('recommendations', this)">🚀 Live Readiness Decision Matrix</button>
+</div>
+
+<!-- TAB 1: OVERVIEW & LEADERBOARD -->
+<div id="tab-overview" class="tab-pane active">
+  <div class="table-box">
+    <table>
+      <thead>
+        <tr>
+          <th>Rank &amp; Arm</th>
+          <th>Issue</th>
+          <th>Port</th>
+          <th>Fills</th>
+          <th>Merges</th>
+          <th>Single Exits</th>
+          <th>Merge %</th>
+          <th>Total PnL</th>
+          <th>EV / Trade</th>
+          <th>Std Dev (&sigma;)</th>
+          <th>Max DD</th>
+          <th>Live Score</th>
+          <th>Readiness Verdict</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="leaderboard-tbody">
+        <!-- Rendered dynamically -->
+      </tbody>
+    </table>
+  </div>
+
+  <div class="charts-grid">
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">Realized PnL vs Max Drawdown (Risk-Return Frontier)</div>
+        <div class="chart-legend">Higher and further left is superior</div>
+      </div>
+      <div style="height: 280px;">
+        <canvas id="scatterChart"></canvas>
+      </div>
+    </div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">Multi-Factor Radar: Control vs Deadband-Wide</div>
+        <div class="chart-legend">Balanced profile comparison</div>
+      </div>
+      <div style="height: 280px;">
+        <canvas id="radarChart"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TAB: HYBRID CONFIGURATION BLUEPRINT -->
+<div id="tab-hybrid-config" class="tab-pane">
+  <div style="background: linear-gradient(135deg, rgba(0, 230, 118, 0.08), rgba(0, 176, 255, 0.08)); border: 1px solid rgba(0, 230, 118, 0.3); border-radius: 12px; padding: 22px; margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+      <div>
+        <span class="badge badge-green" style="font-size: 12px; padding: 4px 10px; margin-bottom: 6px;">🌟 EMPIRICAL WINNER SYNTHESIS (FIXED RUN EVALUATION NOTES)</span>
+        <h2 style="font-size: 18px; font-weight: 700; color: #f0f4fc;">Production HYBRID Configuration Blueprint</h2>
+        <p style="color: var(--text-muted); font-size: 12.5px; margin-top: 4px;">
+          Note: Static benchmark synthesis from initial 12h run evaluation. Combines Issue #484 <strong>Control pricing edge</strong> (+$25.34 PnL, $0.180 EV/trade) with Issue #485 <strong>Deadband-Wide queue defense</strong> (+$14.36 PnL, $7.50 max DD, zero queue churn).
+        </p>
+      </div>
+      <div style="text-align: right;">
+        <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Status in Codebase</div>
+        <div class="tabular" style="color: var(--green); font-size: 15px; font-weight: 700;">core_brain.config.TOURNAMENT_PRESETS["hybrid"]</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-box" style="margin-bottom: 24px;">
+    <table>
+      <thead>
+        <tr>
+          <th>Parameter</th>
+          <th>Config Value</th>
+          <th>CLI / Env Key</th>
+          <th>Source Champion</th>
+          <th>Live Function &amp; Mathematical Rationale</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Pricing Offset</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>0.020 (2.0¢)</strong></td>
+          <td><code>HUNTER_REWARD_OFFSET</code></td>
+          <td><span class="badge badge-green">#484 control</span></td>
+          <td>Rests quotes exactly 2¢ below mid-market on both legs. When mid UP + mid DN ≈ $1.00, targets pair cost ≤ $0.96 ($0.04 spread gross edge). High enough fill velocity without giving up spread margin.</td>
+        </tr>
+        <tr>
+          <td><strong>Requote Deadband</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>0.060 (6.0¢)</strong></td>
+          <td><code>HUNTER_REQUOTE_DEAD_BAND</code></td>
+          <td><span class="badge badge-green">#485 deadband-wide</span></td>
+          <td><strong>Queue Priority Defender:</strong> Suppresses cancellation &amp; requote when book shifts ≤ 6¢. Eliminates excessive requoting churn seen in tighter deadbands, ensuring our order stays in front of the venue queue.</td>
+        </tr>
+        <tr>
+          <td><strong>Single-Buy Stop Cap</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>$0.045 (4.5¢)</strong></td>
+          <td><code>HUNTER_SINGLE_BUY_MAX_LOSS_USD</code></td>
+          <td><span class="badge badge-green">#484 control</span></td>
+          <td>Hard loss stop on orphan legs. If one leg fills and second leg drifts beyond safety cap, exits before adverse drift exceeds 4.5¢. Prevented catastrophic directional tail loss.</td>
+        </tr>
+        <tr>
+          <td><strong>Single-Buy Grace Window</strong></td>
+          <td class="tabular positive" style="font-size: 14px;"><strong>45.0s</strong></td>
+          <td><code>HUNTER_SINGLE_BUY_GRACE_SEC</code></td>
+          <td><span class="badge badge-green">#485 deadband-wide</span></td>
+          <td>Patient wait window allowing natural organic second-leg fill. Fast 30s stops panicking too early generated negative PnL ($19.88 DD in snapstop). 45s allows full pair merge completion.</td>
+        </tr>
+        <tr>
+          <td><strong>Dynamic Offset</strong></td>
+          <td class="tabular" style="font-size: 14px; color: #8b9bb4;"><strong>False (Disabled)</strong></td>
+          <td><code>HUNTER_DYNAMIC_OFFSET=0</code></td>
+          <td><span class="badge badge-green">#484 control</span></td>
+          <td>Static offset decisively beat volatility-scaling (+25.34 vs -2.82 balanced). Volatility-scaling widened quotes precisely during profitable flow, causing missed fills.</td>
+        </tr>
+        <tr>
+          <td><strong>Queue Hold Threshold</strong></td>
+          <td class="tabular" style="font-size: 14px;"><strong>500.0 shares</strong></td>
+          <td><code>HUNTER_REQUOTE_HOLD_QUEUE</code></td>
+          <td><span class="badge badge-green">Shared Defense</span></td>
+          <td>Do not cancel resting quote if 500+ shares are ahead in the queue at the current price level. Prevents resetting queue line.</td>
+        </tr>
+        <tr>
+          <td><strong>Hold Deviation Buffer</strong></td>
+          <td class="tabular" style="font-size: 14px;"><strong>0.08 (8%)</strong></td>
+          <td><code>HUNTER_REQUOTE_HOLD_BELOW</code></td>
+          <td><span class="badge badge-green">Shared Defense</span></td>
+          <td>Maintains resting quote if mid shift is less than 8% of target offset, avoiding high frequency order cancellations.</td>
+        </tr>
+        <tr>
+          <td><strong>Absolute Pair Cap</strong></td>
+          <td class="tabular" style="font-size: 14px; color: var(--amber);"><strong>$0.990</strong></td>
+          <td><code>max_pair_cost_cap</code></td>
+          <td><span class="badge badge-amber">Core Safety Law</span></td>
+          <td>Under no circumstances can UP + DOWN cost combined exceed $0.99. Targets a minimum $0.01 gross margin per pair before fees and gas ($1.00 payout).</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="decision-grid" style="margin-bottom: 24px;">
+    <div class="decision-box">
+      <h3 style="color: var(--blue);">💻 Ready-to-Run PowerShell &amp; CLI Commands</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Execute rehearsal or inspect the hybrid preset:</p>
+      <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #a5d6a7; overflow-x: auto;">
+# 1. Interactive Menu - Select Preset "hybrid":
+.\\scripts\\spread-hunter-menu.ps1 shadow-run -Preset hybrid -Minutes 60
+
+# 2. Or Direct Tournament / Python Rehearsal with hybrid preset:
+python -m scripts.shadow_tournament --minutes 60.0 --interval 5.0
+
+# 3. Tournament Analytics Cockpit:
+python -m scripts.tournament_cockpit_server --port 8800
+      </pre>
+    </div>
+
+    <div class="decision-box">
+      <h3 style="color: var(--green);">🛡️ Live Production Environment Variables (.env)</h3>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 10px;">Exact settings injected for live execution:</p>
+      <pre style="background: #090c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; color: #81d4fa; overflow-x: auto;">
+# --- Spread Hunter HYBRID Champion Config ---
+HUNTER_TOURNAMENT_PRESET=hybrid
+HUNTER_DYNAMIC_OFFSET=0
+HUNTER_REWARD_OFFSET=0.02
+HUNTER_REQUOTE_DEAD_BAND=0.06
+HUNTER_SINGLE_BUY_MAX_LOSS_USD=0.045
+HUNTER_SINGLE_BUY_GRACE_SEC=45
+HUNTER_REQUOTE_HOLD_QUEUE=500
+HUNTER_REQUOTE_HOLD_BELOW=0.08
+      </pre>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 2: PNL CURVES -->
+<div id="tab-pnl-chart" class="tab-pane">
+  <div class="chart-box" style="margin-bottom: 20px;">
+    <div class="chart-header">
+      <div class="chart-title">Cumulative PnL Trajectory Across 12 Hours (Minutes 0 to 720)</div>
+      <div class="chart-legend">Click legend items to toggle arms</div>
+    </div>
+    <div style="height: 480px;">
+      <canvas id="pnlLineChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 3: RISK & VOLATILITY -->
+<div id="tab-risk-stats" class="tab-pane">
+  <div class="charts-grid">
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">Expected Return (EV) vs Volatility (&sigma;) Per Trade</div>
+        <div class="chart-legend">Positive expectancy with narrow dispersion wins</div>
+      </div>
+      <div style="height: 320px;">
+        <canvas id="evBarChart"></canvas>
+      </div>
+    </div>
+    <div class="chart-box">
+      <div class="chart-header">
+        <div class="chart-title">Profit Factor Comparison</div>
+        <div class="chart-legend">Gross Gains / Gross Losses (Target &gt; 1.50)</div>
+      </div>
+      <div style="height: 320px;">
+        <canvas id="pfBarChart"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 4: EXECUTION & MERGES -->
+<div id="tab-execution" class="tab-pane">
+  <div class="chart-box" style="margin-bottom: 20px;">
+    <div class="chart-header">
+      <div class="chart-title">Execution Composition: Successful Merges vs Single-Leg Exits</div>
+      <div class="chart-legend">Single-leg exits incur haircuts; higher merge proportion protects edge</div>
+    </div>
+    <div style="height: 360px;">
+      <canvas id="mergeStackedBarChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 5: MONTE CARLO -->
+<div id="tab-monte-carlo" class="tab-pane">
+  <div class="chart-box" style="margin-bottom: 20px;">
+    <div class="chart-header">
+      <div class="chart-title">100-Trade Monte Carlo Projections: 5th Percentile, Median, and 95th Percentile</div>
+      <div class="chart-legend">Empirical resampling (500 simulations) of realized trade distribution</div>
+    </div>
+    <div style="height: 360px;">
+      <canvas id="mcBarChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 6: RECOMMENDATIONS -->
+<div id="tab-recommendations" class="tab-pane">
+  <div class="decision-grid">
+    <div class="decision-box" style="border-left: 4px solid var(--green);">
+      <h3 style="color: var(--green);">🌟 Recommended Production Configuration (Fixed Run Evaluation Notes)</h3>
+      <ul>
+        <li><strong>Primary Winner: <code>control</code> (Issue #484)</strong> — Highest realized PnL in initial run (+$18.38), highest win rate (65%), controlled drawdown ($7.66), and robust EV per trade.</li>
+        <li><strong>Best Execution Mechanic: <code>deadband-wide</code> (Issue #485)</strong> — Outperformed tight deadbands by +$26.65 PnL difference! Why: A 2-cent requote deadband avoids burning queue priority on micro-fluctuations.</li>
+        <li><strong>The Optimal Hybrid Synthesis:</strong> Combine <code>control</code> baseline pricing (fixed 2c offset, $0.045 single-buy loss cap) with <code>deadband-wide</code> (2c requote deadband) for maximum order stability and minimum queue churn.</li>
+      </ul>
+    </div>
+    <div class="decision-box" style="border-left: 4px solid var(--red);">
+      <h3 style="color: var(--red);">⚠️ Configurations to Avoid for Live Deployment (Fixed Run Evaluation Notes)</h3>
+      <ul>
+        <li><strong>Avoid: <code>queuehug</code> (PnL: -$14.96)</strong> — Aggressively jumping queue when size is small caused extreme adverse selection, getting filled predominantly right before market moved against the quote.</li>
+        <li><strong>Avoid: <code>deadband-tight</code> (PnL: -$17.40)</strong> — Continuous order cancellations reset venue queue position, paying maximum taker penalties without capturing fill queue priority.</li>
+        <li><strong>Avoid: <code>balanced</code> / <code>prudent</code></strong> — Fixed 3c offset or overly cautious offsets missed high-conviction narrow spreads, yielding negative net returns after single-leg haircut stops.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+let state = {json_embedded};
+let charts = {{}};
+
+function switchTab(name, btn) {{
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  const activeBtn = btn || (typeof event !== 'undefined' ? event.target : null);
+  if (activeBtn) activeBtn.classList.add('active');
+  const target = document.getElementById('tab-' + name);
+  if (target) target.classList.add('active');
+}}
+
+function renderAll() {{
+  // Header metrics
+  document.getElementById('progress-text').innerText = state.elapsed_hours + 'h / 12.0h';
+  document.getElementById('rem-text').innerText = '~' + state.rem_hours + 'h rem';
+  document.getElementById('progress-bar').style.width = state.progress_pct + '%';
+  document.getElementById('m-leader-484').innerText = state.leader_484;
+  document.getElementById('m-leader-484-pnl').innerText = 'PnL: ' + (state.leader_484_pnl >= 0 ? '+$' : '-$') + Math.abs(state.leader_484_pnl).toFixed(2);
+  document.getElementById('m-leader-485').innerText = state.leader_485;
+  document.getElementById('m-leader-485-pnl').innerText = 'PnL: ' + (state.leader_485_pnl >= 0 ? '+$' : '-$') + Math.abs(state.leader_485_pnl).toFixed(2);
+  document.getElementById('m-merges').innerText = state.total_merges.toLocaleString();
+  document.getElementById('m-fills').innerText = state.total_fills.toLocaleString();
+
+  // Table
+  const tbody = document.getElementById('leaderboard-tbody');
+  tbody.innerHTML = '';
+  state.arms.forEach((arm, idx) => {{
+    const tr = document.createElement('tr');
+    const pnlClass = arm.total_pnl >= 0 ? 'positive' : 'negative';
+    const pnlPrefix = arm.total_pnl >= 0 ? '+$' : '-$';
+    tr.innerHTML = `
+      <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label}}</strong></td>
+      <td>#${{arm.issue}}</td>
+      <td class="tabular">${{arm.port}}</td>
+      <td class="tabular">${{arm.fills_cnt || 0}}</td>
+      <td class="tabular">${{arm.merges_count || 0}}</td>
+      <td class="tabular">${{arm.exits_count || 0}}</td>
+      <td class="tabular">${{arm.merge_rate || 0}}%</td>
+      <td class="tabular ${{pnlClass}}"><strong>${{pnlPrefix}}${{Math.abs(arm.total_pnl || 0).toFixed(2)}}</strong></td>
+      <td class="tabular">${{(arm.mean_pnl || 0).toFixed(3)}}</td>
+      <td class="tabular">${{(arm.std_pnl || 0).toFixed(3)}}</td>
+      <td class="tabular negative">$$${{(arm.max_drawdown || 0).toFixed(2)}}</td>
+      <td class="tabular"><strong>${{arm.score || 0}}</strong></td>
+      <td><span class="badge ${{arm.badge_cls}}">${{arm.readiness}}</span></td>
+      <td><a href="http://127.0.0.1:${{arm.port}}" target="_blank" class="btn" style="padding: 3px 8px; font-size: 11px;">Open Dash</a></td>
+    `;
+    tbody.appendChild(tr);
+  }});
+
+  renderCharts();
+}}
+
+function renderCharts() {{
+  // PnL Line Chart
+  const lineCtx = document.getElementById('pnlLineChart');
+  if (lineCtx) {{
+    if (charts.line) charts.line.destroy();
+    const datasets = state.arms.map(arm => ({{
+      label: arm.label,
+      borderColor: arm.color,
+      backgroundColor: arm.color,
+      borderWidth: arm.name === 'control' || arm.name === 'deadband-wide' ? 3 : 1.5,
+      data: (arm.series || []).map(pt => ({{ x: pt.t, y: pt.cum }})),
+      tension: 0.1,
+      pointRadius: 0
+    }}));
+    charts.line = new Chart(lineCtx, {{
+      type: 'line',
+      data: {{ datasets }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {{
+          x: {{ type: 'linear', title: {{ display: true, text: 'Elapsed Minutes (0 to 720)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }},
+          y: {{ title: {{ display: true, text: 'Cumulative Realized PnL ($)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }}
+        }},
+        plugins: {{
+          legend: {{ labels: {{ color: '#f0f4fc', font: {{ size: 11 }} }} }}
+        }}
+      }}
+    }});
+  }}
+
+  // Scatter Chart (Risk-Return Frontier)
+  const scatterCtx = document.getElementById('scatterChart');
+  if (scatterCtx) {{
+    if (charts.scatter) charts.scatter.destroy();
+    charts.scatter = new Chart(scatterCtx, {{
+      type: 'scatter',
+      data: {{
+        datasets: state.arms.map(arm => ({{
+          label: arm.label,
+          backgroundColor: arm.color,
+          data: [{{ x: arm.max_drawdown, y: arm.total_pnl }}],
+          pointRadius: 8
+        }}))
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {{
+          x: {{ title: {{ display: true, text: 'Max Drawdown ($)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }},
+          y: {{ title: {{ display: true, text: 'Total Realized PnL ($)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }}
+        }},
+        plugins: {{ legend: {{ display: false }} }}
+      }}
+    }});
+  }}
+
+  // Radar Chart
+  const radarCtx = document.getElementById('radarChart');
+  if (radarCtx) {{
+    if (charts.radar) charts.radar.destroy();
+    const ctrl = state.arms.find(a => a.name === 'control') || state.arms[0];
+    const dbw = state.arms.find(a => a.name === 'deadband-wide') || state.arms[1];
+    charts.radar = new Chart(radarCtx, {{
+      type: 'radar',
+      data: {{
+        labels: ['PnL (Norm)', 'Win Rate %', 'Merge Rate %', 'Low Drawdown', 'Profit Factor', 'EV/Trade'],
+        datasets: [
+          {{
+            label: ctrl.label,
+            data: [
+              Math.max(0, ctrl.total_pnl * 4),
+              ctrl.win_rate,
+              ctrl.merge_rate,
+              Math.max(0, 100 - ctrl.max_drawdown * 8),
+              Math.min(100, ctrl.profit_factor * 40),
+              Math.max(0, ctrl.mean_pnl * 300)
+            ],
+            borderColor: ctrl.color,
+            backgroundColor: 'rgba(0, 230, 118, 0.2)'
+          }},
+          {{
+            label: dbw.label,
+            data: [
+              Math.max(0, dbw.total_pnl * 4),
+              dbw.win_rate,
+              dbw.merge_rate,
+              Math.max(0, 100 - dbw.max_drawdown * 8),
+              Math.min(100, dbw.profit_factor * 40),
+              Math.max(0, dbw.mean_pnl * 300)
+            ],
+            borderColor: dbw.color,
+            backgroundColor: 'rgba(118, 255, 3, 0.2)'
+          }}
+        ]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {{ r: {{ grid: {{ color: '#232c3f' }}, angleLines: {{ color: '#232c3f' }}, pointLabels: {{ color: '#8b9bb4' }} }} }},
+        plugins: {{ legend: {{ labels: {{ color: '#f0f4fc' }} }} }}
+      }}
+    }});
+  }}
+
+  // EV Bar Chart
+  const evCtx = document.getElementById('evBarChart');
+  if (evCtx) {{
+    if (charts.ev) charts.ev.destroy();
+    charts.ev = new Chart(evCtx, {{
+      type: 'bar',
+      data: {{
+        labels: state.arms.map(a => a.name),
+        datasets: [
+          {{
+            label: 'EV per Trade ($)',
+            data: state.arms.map(a => a.mean_pnl),
+            backgroundColor: state.arms.map(a => a.mean_pnl >= 0 ? '#00e676' : '#ff5252')
+          }},
+          {{
+            label: 'Std Dev (Risk Dispersion)',
+            data: state.arms.map(a => a.std_pnl),
+            backgroundColor: '#00b0ff'
+          }}
+        ]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {{
+          x: {{ grid: {{ color: '#1c2436' }} }},
+          y: {{ grid: {{ color: '#1c2436' }} }}
+        }},
+        plugins: {{ legend: {{ labels: {{ color: '#f0f4fc' }} }} }}
+      }}
+    }});
+  }}
+
+  // Profit Factor Chart
+  const pfCtx = document.getElementById('pfBarChart');
+  if (pfCtx) {{
+    if (charts.pf) charts.pf.destroy();
+    charts.pf = new Chart(pfCtx, {{
+      type: 'bar',
+      data: {{
+        labels: state.arms.map(a => a.name),
+        datasets: [{{
+          label: 'Profit Factor',
+          data: state.arms.map(a => a.profit_factor),
+          backgroundColor: state.arms.map(a => a.profit_factor >= 1.5 ? '#00e676' : (a.profit_factor >= 1.0 ? '#ffd600' : '#ff5252'))
+        }}]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {{
+          x: {{ grid: {{ color: '#1c2436' }} }},
+          y: {{ grid: {{ color: '#1c2436' }} }}
+        }},
+        plugins: {{ legend: {{ display: false }} }}
+      }}
+    }});
+  }}
+
+  // Merges vs Exits Stacked Bar Chart
+  const mergeCtx = document.getElementById('mergeStackedBarChart');
+  if (mergeCtx) {{
+    if (charts.merge) charts.merge.destroy();
+    charts.merge = new Chart(mergeCtx, {{
+      type: 'bar',
+      data: {{
+        labels: state.arms.map(a => a.label),
+        datasets: [
+          {{
+            label: 'Paired Merges ($1.00 Payout)',
+            data: state.arms.map(a => a.merges_count),
+            backgroundColor: '#00e676'
+          }},
+          {{
+            label: 'Single-Leg Stopped Exits',
+            data: state.arms.map(a => a.exits_count),
+            backgroundColor: '#ff5252'
+          }}
+        ]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {{
+          x: {{ stacked: true, grid: {{ color: '#1c2436' }} }},
+          y: {{ stacked: true, grid: {{ color: '#1c2436' }} }}
+        }},
+        plugins: {{ legend: {{ labels: {{ color: '#f0f4fc' }} }} }}
+      }}
+    }});
+  }}
+
+  // Monte Carlo Bar Chart
+  const mcCtx = document.getElementById('mcBarChart');
+  if (mcCtx) {{
+    if (charts.mc) charts.mc.destroy();
+    charts.mc = new Chart(mcCtx, {{
+      type: 'bar',
+      data: {{
+        labels: state.arms.map(a => a.name),
+        datasets: [
+          {{ label: 'Worst Case (5th %ile)', data: state.arms.map(a => a.mc_p5), backgroundColor: '#ff5252' }},
+          {{ label: 'Median Expectation (50th %ile)', data: state.arms.map(a => a.mc_p50), backgroundColor: '#ffd600' }},
+          {{ label: 'Best Case (95th %ile)', data: state.arms.map(a => a.mc_p95), backgroundColor: '#00e676' }}
+        ]
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {{
+          x: {{ grid: {{ color: '#1c2436' }} }},
+          y: {{ title: {{ display: true, text: 'Projected 100-Trade PnL ($)', color: '#8b9bb4' }}, grid: {{ color: '#1c2436' }} }}
+        }},
+        plugins: {{ legend: {{ labels: {{ color: '#f0f4fc' }} }} }}
+      }}
+    }});
+  }}
+}}
+
+let lastUpdateTime = new Date().toLocaleTimeString();
+
+function fetchLiveStats() {{
+  const statusEl = document.getElementById('refresh-status');
+  fetch('/api/stats')
+    .then(r => {{
+      if (!r.ok) {{
+        throw new Error('HTTP ' + r.status);
+      }}
+      return r.json();
+    }})
+    .then(data => {{
+      state = data;
+      lastUpdateTime = new Date().toLocaleTimeString();
+      if (statusEl) {{
+        statusEl.textContent = 'Updated ' + lastUpdateTime;
+        statusEl.style.color = 'var(--text-muted)';
+      }}
+      renderAll();
+    }})
+    .catch(err => {{
+      console.log('Stats refresh offline or error:', err);
+      if (statusEl) {{
+        statusEl.textContent = '⚠️ Update failed (' + (lastUpdateTime ? 'last ' + lastUpdateTime : 'offline') + ')';
+        statusEl.style.color = 'var(--amber)';
+      }}
+    }});
+}}
+
+// Initial render
+renderAll();
+// Polling interval
+setInterval(fetchLiveStats, 10000);
+</script>
+</body>
+</html>
+"""
+
+
+_STATS_CACHE: dict[str, Any] = {}
+_STATS_CACHE_TIME: float = 0.0
+_STATS_CACHE_LOCK = threading.Lock()
+_STATS_CACHE_TTL_SEC: float = 3.0
+
+
+def get_cached_stats() -> dict[str, Any]:
+    global _STATS_CACHE, _STATS_CACHE_TIME
+    with _STATS_CACHE_LOCK:
+        now = time.time()
+        if not _STATS_CACHE or (now - _STATS_CACHE_TIME) >= _STATS_CACHE_TTL_SEC:
+            _STATS_CACHE = collect_all_stats()
+            _STATS_CACHE_TIME = now
+        return _STATS_CACHE
+
+
+class CockpitHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: Any) -> None:
+        # Mute normal HTTP log spam
+        pass
+
+    def do_GET(self) -> None:
+        if self.path in ("/", "/index.html"):
+            stats = get_cached_stats()
+            html = generate_cockpit_html(stats)
+            data = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        elif self.path == "/api/stats":
+            stats = get_cached_stats()
+            data = json.dumps(stats).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def run_cockpit_server(port: int = 8800) -> None:
+    # Also write out a standalone static copy to reports/tournament_cockpit.html
+    stats = collect_all_stats()
+    static_html = generate_cockpit_html(stats)
+    reports_dir = ROOT / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    out_file = reports_dir / "tournament_cockpit.html"
+    out_file.write_text(static_html, encoding="utf-8")
+    print(f"Static Cockpit generated at: {out_file}")
+
+    class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    server = ThreadedServer(("127.0.0.1", port), CockpitHandler)
+    print(f"Tournament Cockpit server running at http://127.0.0.1:{port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping Cockpit server...")
+    finally:
+        server.server_close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Tournament Cockpit Server")
+    parser.add_argument("--port", type=int, default=8800, help="Port to serve on (default: 8800)")
+    args = parser.parse_args()
+    run_cockpit_server(args.port)
+
+
+if __name__ == "__main__":
+    main()

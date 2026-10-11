@@ -471,3 +471,105 @@ def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
     assert list(tmp_path.glob("*results.json")) == []
     assert not (ROOT / data["results_path"]).exists()
 
+
+class _FakeProc:
+    """Stand-in for a subprocess.Popen child: records calls, never spawns."""
+
+    def __init__(self, label, running=True):
+        self.label = label
+        self.pid = 4242
+        self._running = running
+        self.terminated = False
+        self.killed = False
+        self.waited = False
+
+    def poll(self):
+        # None while running (terminate is warranted); a code once it has
+        # exited, matching a real child the launcher stops at shutdown.
+        return None if self._running else 0
+
+    def terminate(self):
+        self.terminated = True
+        self._running = False
+
+    def kill(self):
+        self.killed = True
+        self._running = False
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
+
+
+def test_launch_starts_and_stops_the_market_filter(tmp_path, monkeypatch):
+    """A tournament run must start the Market Filter and tear it down on exit.
+
+    Arms re-read runtime/markets.json each cycle, so the filter is what keeps a
+    long run trading fresh markets and stops the feed-staleness refusal from
+    killing every arm mid-run. The filter is a real subprocess in production;
+    here it is faked so the test spawns nothing and touches no shared feed.
+    """
+    import scripts.shadow_tournament as st
+
+    spawned: list[tuple[list[str], dict | None, _FakeProc]] = []
+
+    def fake_popen(argv, env=None, **kwargs):
+        label = "market-filter" if "filter_loop" in " ".join(argv) else "child"
+        proc = _FakeProc(label)
+        spawned.append((list(argv), env.copy() if env is not None else None, proc))
+        return proc
+
+    monkeypatch.setattr(st.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("HUNTER_DUMMY_LEAK", "should_be_stripped")
+
+    plan = st.build_tournament_plan(
+        issue=371,
+        arms=[{"name": "solo", **st.TOURNAMENT_PRESETS["balanced"]}],
+        base_dir=tmp_path,
+        stamp="20261010-120000",
+        check_ports=False,
+    )
+    plan.dashboards = False  # only the filter + one arm, no dashboard server
+    rc = st.launch_tournament(plan)
+    assert rc == 0
+
+    filter_calls = [(a, e, p) for a, e, p in spawned if "filter_loop" in " ".join(a)]
+    assert len(filter_calls) == 1, "Market Filter must start exactly once per run"
+    argv, filter_env, proc = filter_calls[0]
+    # No --interval flag: filter_loop reads its cycle from SH_FILTER_INTERVAL_SEC.
+    assert argv == [st.sys.executable, "-m", "scripts.filter_loop"]
+    assert filter_env is not None
+    assert filter_env.get("SH_FILTER_INTERVAL_SEC") == str(st.FILTER_INTERVAL_SEC)
+    assert not any(k.startswith("HUNTER_") for k in filter_env), "inherited HUNTER_* must be removed"
+
+    # It is still running at shutdown and must be stopped, never left behind.
+    assert proc.terminated or proc.killed, "filter must be stopped on run exit"
+
+    # Now verify explicit interval override in environment is honored by setdefault
+    spawned.clear()
+    monkeypatch.setenv("SH_FILTER_INTERVAL_SEC", "120")
+    rc_override = st.launch_tournament(plan)
+    assert rc_override == 0
+    override_filter_calls = [(a, e, p) for a, e, p in spawned if "filter_loop" in " ".join(a)]
+    assert len(override_filter_calls) == 1
+    assert override_filter_calls[0][1].get("SH_FILTER_INTERVAL_SEC") == "120"
+
+
+def test_hybrid_preset_configuration():
+    from core_brain.config import MakerConfig, apply_tournament_preset, TOURNAMENT_PRESETS
+
+    assert "hybrid" in TOURNAMENT_PRESETS
+    preset = TOURNAMENT_PRESETS["hybrid"]
+    assert preset["dynamic_offset_enabled"] is False
+    assert preset["reward_offset"] == 0.020
+    assert preset["requote_dead_band"] == 0.060
+    assert preset["single_buy_max_loss_usd"] == 0.045
+    assert preset["single_buy_grace_sec"] == 45.0
+
+    cfg = apply_tournament_preset(MakerConfig(), "hybrid")
+    assert cfg.reward_offset == 0.020
+    assert cfg.requote_dead_band == 0.060
+    assert cfg.single_buy_max_loss_usd == 0.045
+    assert cfg.single_buy_grace_sec == 45.0
+    assert cfg.dynamic_offset_enabled is False
+
