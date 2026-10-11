@@ -2459,6 +2459,224 @@ def api_system_service_stop(request: Request, service: str | None = None):
     return JSONResponse(stop_service(service or ""))
 
 
+# ---------------------------------------------------------------------------
+# Reporting & Tournament Services (Issue #485)
+# ---------------------------------------------------------------------------
+import socket
+import urllib.request
+
+_REPORTING_SERVICES: dict[str, dict[str, Any]] = {
+    "hub": {
+        "port": 8798,
+        "module": "scripts.tournament_hub",
+        "probe_path": "/api/tournament",
+    },
+    "cockpit": {
+        "port": 8800,
+        "module": "scripts.tournament_cockpit_server",
+        "probe_path": "/api/state",
+    },
+}
+_reporting_processes: dict[str, Any] = {}
+_reporting_locks: dict[str, threading.Lock] = {
+    "hub": threading.Lock(),
+    "cockpit": threading.Lock(),
+}
+
+
+def _reporting_services_reset() -> None:
+    """Test helper to clear tracked processes."""
+    _reporting_processes.clear()
+
+
+def _reporting_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.35) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        try:
+            s.connect((host, port))
+            return True
+        except (OSError, socket.timeout):
+            return False
+
+
+def _reporting_fetch_json(port: int, path: str = "", host: str = "127.0.0.1", timeout: float = 0.5) -> dict | None:
+    try:
+        url = f"http://{host}:{port}{path}"
+        req = urllib.request.Request(url, headers={"User-Agent": "SpreadHunterDashboard/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw)
+    except Exception:
+        pass
+    return None
+
+
+def _probe_service_status(name: str) -> dict:
+    if name not in _REPORTING_SERVICES:
+        return {"error": f"Unknown service: {name}"}
+    svc = _REPORTING_SERVICES[name]
+    port = svc["port"]
+    url = f"http://127.0.0.1:{port}"
+    proc = _reporting_processes.get(name)
+
+    if proc is not None:
+        poll_res = proc.poll()
+        if poll_res is not None:
+            _reporting_processes.pop(name, None)
+            return {
+                "name": name,
+                "state": "failed" if poll_res != 0 else "stopped",
+                "port": port,
+                "url": url,
+                "data_available": False,
+                "detail": f"Process exited with code {poll_res}",
+            }
+
+    is_open = _reporting_port_open(port)
+    if is_open:
+        payload = _reporting_fetch_json(port, svc.get("probe_path", ""))
+        data_available = False
+        if payload is not None and isinstance(payload, dict):
+            if name == "hub":
+                data_available = bool(payload.get("available", False))
+            elif name == "cockpit":
+                arms = payload.get("arms", [])
+                data_available = (
+                    any(a.get("status") != "missing_db" for a in arms)
+                    if isinstance(arms, list) and arms
+                    else False
+                )
+            return {
+                "name": name,
+                "state": "running",
+                "port": port,
+                "url": url,
+                "data_available": data_available,
+                "detail": "Service is running",
+            }
+        else:
+            if proc is not None and proc.poll() is None:
+                return {
+                    "name": name,
+                    "state": "starting",
+                    "port": port,
+                    "url": url,
+                    "data_available": False,
+                    "detail": "Service is starting",
+                }
+            return {
+                "name": name,
+                "state": "conflict",
+                "port": port,
+                "url": url,
+                "data_available": False,
+                "detail": f"Port {port} is held by another program",
+            }
+    else:
+        if proc is not None and proc.poll() is None:
+            return {
+                "name": name,
+                "state": "starting",
+                "port": port,
+                "url": url,
+                "data_available": False,
+                "detail": "Process starting, waiting for port",
+            }
+        return {
+            "name": name,
+            "state": "stopped",
+            "port": port,
+            "url": url,
+            "data_available": False,
+            "detail": "Service is stopped",
+        }
+
+
+@app.get("/api/services/{name}/status")
+def api_service_status(name: str):
+    """Return live status of Tournament Hub or Tournament Cockpit."""
+    if name not in _REPORTING_SERVICES:
+        return JSONResponse({"error": f"Unknown service: {name}"}, status_code=404)
+    return JSONResponse(_probe_service_status(name))
+
+
+@app.post("/api/services/{name}/start")
+def api_service_start(request: Request, name: str):
+    """Start Tournament Hub or Tournament Cockpit as a detached background service."""
+    _authorize_control(request)
+    if name not in _REPORTING_SERVICES:
+        return JSONResponse({"error": f"Unknown service: {name}"}, status_code=404)
+
+    lock = _reporting_locks[name]
+    with lock:
+        status = _probe_service_status(name)
+        state = status.get("state")
+        port = _REPORTING_SERVICES[name]["port"]
+        url = status.get("url")
+        if state in ("running", "starting"):
+            return JSONResponse({
+                "ok": True,
+                "state": state,
+                "url": url,
+                "message": f"{name} is already {state}.",
+            })
+        if state == "conflict":
+            return JSONResponse({
+                "ok": False,
+                "state": "conflict",
+                "message": f"Port {port} is in use by another program.",
+                "detail": status.get("detail", ""),
+            }, status_code=409)
+
+        import subprocess
+        cmd = [
+            sys.executable,
+            "-m",
+            _REPORTING_SERVICES[name]["module"],
+            "--port",
+            str(port),
+        ]
+        log_dir = REPO_ROOT / "runtime"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = log_dir / f"{name}_service.log"
+        out_f = open(stdout_path, "a", encoding="utf-8")
+
+        popen_kwargs: dict[str, Any] = {
+            "cwd": str(REPO_ROOT),
+            "stdin": subprocess.DEVNULL,
+            "stdout": out_f,
+            "stderr": subprocess.STDOUT,
+            "env": {k: v for k, v in os.environ.items() if k != "PORT"},
+        }
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        try:
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+            out_f.close()
+            _reporting_processes[name] = proc
+            return JSONResponse({
+                "ok": True,
+                "state": "starting",
+                "url": url,
+                "message": f"Started {name} on port {port}.",
+                "pid": proc.pid,
+            })
+        except Exception as exc:
+            out_f.close()
+            return JSONResponse({
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            }, status_code=500)
+
+
+
 @app.post("/api/system/shadow/start")
 async def api_system_shadow_start(
     request: Request,
