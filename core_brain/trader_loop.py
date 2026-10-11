@@ -2647,6 +2647,76 @@ def start_resolution_sweeper(
     return thread
 
 
+def start_settlement_sweeper(
+    registry,
+    merge_fn: Callable[..., Any],
+    interval: float = 60.0,
+    live: bool = True,
+    db_path: Optional[Path | str] = None,
+    stop_event: Optional[Any] = None,
+) -> Any:
+    """Run the capital recycling settlement sweep on a relaxed background cadence (default 60s)."""
+    import threading
+    from core_brain.settlement_sweeper import execute_settlement_sweep
+
+    evt = stop_event if stop_event is not None else threading.Event()
+
+    def _loop() -> None:
+        while not evt.is_set():
+            try:
+                execute_settlement_sweep(
+                    registry=registry,
+                    merge_fn=merge_fn,
+                    db_path=db_path,
+                    live=live,
+                )
+            except Exception as e:
+                log.warning("settlement sweeper failed: %s: %s", type(e).__name__, e)
+            evt.wait(max(10.0, interval))
+
+    thread = threading.Thread(
+        daemon=True, name="settlement-sweeper", target=_loop)
+    thread.stop_event = evt
+    thread.start()
+    return thread
+
+
+def start_risk_guardian(
+    client: Any,
+    registry: Any,
+    cfg: Any,
+    interval: float = 1.0,
+    live: bool = True,
+    single_buy_saver_fn: Optional[Callable] = None,
+    stop_event: Optional[Any] = None,
+) -> Any:
+    """Run the high-alert risk guardian sentry on a tight <=1.0s background cadence."""
+    import threading
+    from core_brain.risk_guardian import run_guardian_tick
+
+    evt = stop_event if stop_event is not None else threading.Event()
+
+    def _loop() -> None:
+        while not evt.is_set():
+            try:
+                run_guardian_tick(
+                    client=client,
+                    registry=registry,
+                    cfg=cfg,
+                    live=live,
+                    single_buy_saver_fn=single_buy_saver_fn,
+                )
+            except Exception as e:
+                log.warning("risk guardian tick failed: %s: %s", type(e).__name__, e)
+            evt.wait(max(0.1, interval))
+
+    thread = threading.Thread(
+        daemon=True, name="risk-guardian-sentry", target=_loop)
+    thread.stop_event = evt
+    thread.start()
+    return thread
+
+
 def _production_reconcile_fn(emit_fn: Any) -> Any:
     """Production reconcile wiring: report each new fill through `emit_fn`.
 
@@ -2807,6 +2877,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         log.info("resolution sweeper started (every %ss, background)",
                  a.resolution_interval)
+
+        from core_brain.order_manager import merge as live_merge
+        start_settlement_sweeper(
+            registry=registry,
+            merge_fn=live_merge,
+            interval=60.0,
+            live=a.live,
+            db_path=db_path,
+        )
+        log.info("settlement sweeper started (every 60s, background)")
+
+        start_risk_guardian(
+            client=client,
+            registry=registry,
+            cfg=cfg,
+            interval=1.0,
+            live=a.live,
+        )
+        log.info("risk guardian sentry started (every 1.0s, background)")
 
     try:
         results = run(
