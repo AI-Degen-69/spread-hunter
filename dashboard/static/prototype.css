@@ -857,6 +857,16 @@
   background: rgba(120, 53, 15, 0.05);
 }
 
+/* Hedge-pending: one leg filled, one still resting — position held, no risk */
+.proto-body .stitch-ot-row.is-hedge-pending {
+  background: rgba(14, 116, 144, 0.06);
+}
+
+.proto-body .stitch-market-dot.is-hedge-pending {
+  background-color: #38bdf8;
+  animation: pulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
 .proto-body .stitch-market-cell {
   padding: 14px 16px;
   vertical-align: middle;
@@ -954,6 +964,12 @@
   background: rgba(120, 53, 15, 0.5);
   border: 1px solid rgba(245, 158, 11, 0.4);
   color: #fbbf24;
+}
+
+.proto-body .stitch-arb-badge.is-hedge-pending {
+  background: rgba(14, 116, 144, 0.5);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  color: #7dd3fc;
 }
 
 .proto-body .stitch-arb-badge .badge-val {
