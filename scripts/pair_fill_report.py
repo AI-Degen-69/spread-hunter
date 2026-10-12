@@ -148,10 +148,12 @@ def report(db_path: Path) -> str:
         # No gas line: the merge is gasless, so gross IS net (#152).
         out.append(f"    {str(slug)[:34]:<36}{shares or 0:>7.0f}sh  "
                    f"${gross:>7.4f}")
-    out.append(f"  single-leg exits : {len(exited)}")
+    # A single-leg exit never prints: `proceeds` is the best-bid mark at the
+    # exit, so labelling it `pnl` reads as a fill that never happened.
+    out.append(f"  single-leg exits (mark-to-exit, est.) : {len(exited)}")
     for slug, shares, pnl in exited:
         out.append(f"    {str(slug)[:34]:<36}{shares or 0:>7.0f}sh  "
-                   f"pnl ${pnl or 0:>7.4f}")
+                   f"mark-to-exit ${pnl or 0:>7.4f}")
     return "\n".join(out)
 
 

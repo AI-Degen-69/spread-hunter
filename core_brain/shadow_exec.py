@@ -51,6 +51,13 @@ MAX_BUY_SLIPPAGE = 0.02
 # passes its own configured value in.
 DEFAULT_PAIRS_WINDOW_SEC = 900.0
 
+# Reasons that must sell NOW into the book read inside the exit call. Every
+# other route fills against the prior rotation's `queue_marks` snapshot (the
+# pre-decision book, adverse-selection protection); a stop-loss priced off a
+# stale snapshot books exits the venue never gave (H1/H2). Both the current
+# lifecycle string and the older alias route here.
+HARD_STOP_SELL_REASONS = frozenset({"hard_stop", "lifecycle_hard_stop"})
+
 
 class ShadowOrderRefused(RuntimeError):
     """A simulated order broke a live cap and was not written."""
@@ -961,12 +968,15 @@ class ShadowExecutionClient:
         return str(cid), pid
 
     def _sell_into_bids(self, token_id: str, shares: float,
-                        *, floor: float) -> tuple[float, float]:
+                        *, floor: float, fresh: bool = False) -> tuple[float, float]:
         """Rest a market SELL against the pre-decision bid ladder.
 
         Returns `(shares_filled, weighted_average_price)`.
 
-        The book filled against is the PRIOR ROTATION's snapshot, not a fresh
+        With `fresh=True` (hard-stop exits only) the snapshot is skipped and
+        the fill comes from the book read inside the exit call -- a stop must
+        sell *now*, and pricing it off a stale snapshot books exits the venue
+        never gave. Every other caller keeps the default: the PRIOR
         read at post time. Seconds pass between the sweep's decision and the
         taker SELL landing, and the fills we get live are precisely the
         adversely-selected ones -- shadow-01 showed h1 markout drift of -17c
@@ -997,13 +1007,15 @@ class ShadowExecutionClient:
         than the floor, and the old conservative answer stands.
         """
         snapshot_ladder: list[tuple[float, float]] = []
-        try:
-            snap = read_last_token_snapshot(
-                self._db_path, str(token_id), run_id=self._registry._run_id())
-        except sqlite3.Error as e:
-            _log.warning("exit snapshot read failed for %s: %s",
-                         str(token_id)[:12], e)
-            snap = None
+        snap = None
+        if not fresh:
+            try:
+                snap = read_last_token_snapshot(
+                    self._db_path, str(token_id), run_id=self._registry._run_id())
+            except sqlite3.Error as e:
+                _log.warning("exit snapshot read failed for %s: %s",
+                             str(token_id)[:12], e)
+                snap = None
         if snap is not None and snap.get("best_bid") is not None:
             best_bid = float(snap["best_bid"])
             depth = float(snap.get("best_bid_size") or 0.0)
@@ -1085,7 +1097,7 @@ class ShadowExecutionClient:
             return float(amount) / float(price), float(price)
         return taken, notional / taken
 
-    def create_and_post_market_order(self, order_args) -> dict:
+    def create_and_post_market_order(self, order_args, *, reason=None) -> dict:
         """Cross the book in the rehearsal: called with one positional
         `MarketOrderArgsV2(token_id=..., amount=..., side=..., price=...)`.
 
@@ -1117,7 +1129,10 @@ class ShadowExecutionClient:
                 f"missing token, amount or price")
 
         if side == "SELL":
-            filled, avg = self._sell_into_bids(token_id, amount, floor=price)
+            filled, avg = self._sell_into_bids(
+                token_id, amount, floor=price,
+                fresh=str(reason) in HARD_STOP_SELL_REASONS,
+            )
             return {
                 "success": True,
                 "orderID": f"{SHADOW_ORDER_PREFIX}{uuid.uuid4().hex[:12]}",
