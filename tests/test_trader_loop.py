@@ -2883,3 +2883,165 @@ class TestDecideTelemetry:
         assert decision["extra"]["intent_count"] == 6
         assert len(decision["extra"]["quotes"]) == 4
         assert {q["side"] for q in decision["extra"]["quotes"]} == {"UP"}
+
+
+class TestQuietTail:
+    """Steady-state visits stay off the terminal; actions print distinctly.
+
+    A rotation that rests unchanged orders (or re-reports the same skip
+    reason) logged an INFO line every cycle, so the terminal scrolled while
+    nothing happened and a real decision was indistinguishable from idle.
+    Steady-state lines now log once per change at INFO (opening with a blank
+    separator line) and drop to DEBUG while unchanged. Posted/cancelled
+    orders always print: an action is news every time.
+    """
+
+    def _books(self):
+        return {
+            "tok-up": {"token_id": "tok-up", "best_bid": 0.50, "best_ask": 0.52,
+                       "bids": {0.50: 5000.0}, "asks": {0.52: 5000.0}},
+            "tok-dn": {"token_id": "tok-dn", "best_bid": 0.46, "best_ask": 0.48,
+                       "bids": {0.46: 5000.0}, "asks": {0.48: 5000.0}},
+        }
+
+    def _resting_seam(self):
+        market = FakeMarket()
+        books = self._books()
+        return VenueSeam(
+            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            fetch_market=lambda cid: market,
+            fetch_books=lambda host, tok: books[tok],
+            decide=lambda *a, **k: ([_intent(price=0.49)], ""),
+            open_orders_fn=lambda m: [_open(price=0.51)],
+        )
+
+    def _skipped_seam(self, box):
+        market = FakeMarket()
+        books = self._books()
+        return VenueSeam(
+            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            fetch_market=lambda cid: market,
+            fetch_books=lambda host, tok: books[tok],
+            decide=lambda *a, **k: ([], box[0]),
+            open_orders_fn=lambda m: [],
+        )
+
+    def _posting_seam(self, calls):
+        market = FakeMarket()
+        books = self._books()
+
+        def fake_submit(client, registry, market, intents, cfg):
+            calls.append(len(intents))
+            return len(intents)
+
+        return VenueSeam(
+            base_cfg=MakerConfig(max_completable_pair_cost=1.00),
+            fetch_market=lambda cid: market,
+            fetch_books=lambda host, tok: books[tok],
+            decide=lambda *a, **k: ([_intent(price=0.49)], ""),
+            open_orders_fn=lambda m: [],
+            submit_fn=fake_submit,
+            cancel_fn=lambda client, registry, orders: len(orders),
+        )
+
+    def test_resting_repeats_go_quiet_after_the_first(self, caplog):
+        import logging
+
+        mem = {}
+        seam = self._resting_seam()
+        with caplog.at_level(logging.DEBUG, logger="main_spread_hunter_loop"):
+            _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True,
+                       tail_memory=mem)
+            _visit_one(seam, {"cid": "0xabc"}, cycle=2, live=True,
+                       tail_memory=mem)
+
+        infos = [r for r in caplog.records
+                 if r.levelno == logging.INFO and "RESTING" in r.getMessage()]
+        debugs = [r for r in caplog.records
+                  if r.levelno == logging.DEBUG and "RESTING" in r.getMessage()]
+        assert len(infos) == 1
+        assert len(debugs) == 1
+
+    def test_steady_lines_end_with_a_blank_separator(self, caplog):
+        import logging
+
+        seam = self._resting_seam()
+        with caplog.at_level(logging.INFO, logger="main_spread_hunter_loop"):
+            _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True,
+                       tail_memory={})
+
+        rec = next(r for r in caplog.records
+                   if "RESTING" in r.getMessage())
+        assert rec.getMessage().startswith("[RESTING]")
+        assert rec.getMessage().endswith("\n")
+
+    def test_skipped_repeats_go_quiet_but_a_new_reason_prints(self, caplog):
+        import logging
+
+        box = ["book too wide"]
+        mem = {}
+        seam = self._skipped_seam(box)
+        with caplog.at_level(logging.DEBUG, logger="main_spread_hunter_loop"):
+            _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True,
+                       tail_memory=mem)
+            _visit_one(seam, {"cid": "0xabc"}, cycle=2, live=True,
+                       tail_memory=mem)
+            box[0] = "mid band moved"
+            _visit_one(seam, {"cid": "0xabc"}, cycle=3, live=True,
+                       tail_memory=mem)
+
+        infos = [r for r in caplog.records
+                 if r.levelno == logging.INFO and "SKIPPED" in r.getMessage()]
+        assert len(infos) == 2
+        assert "book too wide" in infos[0].getMessage()
+        assert "mid band moved" in infos[1].getMessage()
+
+    def test_return_to_resting_after_a_skip_prints_again(self, caplog):
+        """A state transition is news even when the signature is unchanged.
+
+        Resting, then skipped, then resting with the same order count: the
+        second resting visit must print at INFO -- only the same kind twice
+        in a row may go quiet.
+        """
+        import logging
+
+        mem = {}
+        resting = self._resting_seam()
+        box = ["book too wide"]
+        skipped = self._skipped_seam(box)
+        with caplog.at_level(logging.DEBUG, logger="main_spread_hunter_loop"):
+            _visit_one(resting, {"cid": "0xabc"}, cycle=1, live=True,
+                       tail_memory=mem)
+            _visit_one(skipped, {"cid": "0xabc"}, cycle=2, live=True,
+                       tail_memory=mem)
+            _visit_one(resting, {"cid": "0xabc"}, cycle=3, live=True,
+                       tail_memory=mem)
+            _visit_one(resting, {"cid": "0xabc"}, cycle=4, live=True,
+                       tail_memory=mem)
+
+        infos = [r for r in caplog.records
+                 if r.levelno == logging.INFO and "RESTING" in r.getMessage()]
+        debugs = [r for r in caplog.records
+                  if r.levelno == logging.DEBUG and "RESTING" in r.getMessage()]
+        assert len(infos) == 2
+        assert len(debugs) == 1
+
+    def test_posted_orders_print_every_cycle(self, caplog):
+        import logging
+
+        calls = []
+        mem = {}
+        seam = self._posting_seam(calls)
+        with caplog.at_level(logging.DEBUG, logger="main_spread_hunter_loop"):
+            _visit_one(seam, {"cid": "0xabc"}, cycle=1, live=True,
+                       tail_memory=mem)
+            _visit_one(seam, {"cid": "0xabc"}, cycle=2, live=True,
+                       tail_memory=mem)
+
+        assert calls == [1, 1]
+        infos = [r for r in caplog.records
+                 if r.levelno == logging.INFO and "QUOTING" in r.getMessage()]
+        assert len(infos) == 2
+        assert all(r.getMessage().startswith("[QUOTING]")
+                   and r.getMessage().endswith("\n")
+                   for r in infos)

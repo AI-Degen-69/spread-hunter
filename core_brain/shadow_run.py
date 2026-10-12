@@ -418,7 +418,7 @@ def _make_logging_emit(
     inventory_lookup: Optional[Callable[[str], Any]] = None,
     run_id: Optional[str] = None,
 ) -> Callable[..., None]:
-    """`emit`, plus one INFO line per market visit.
+    """`emit`, plus one INFO line per market decision-change.
 
     A shadow run exists to be watched, and before this the only thing it wrote
     to the terminal was the banner and, ten minutes later, the summary. Every
@@ -429,6 +429,12 @@ def _make_logging_emit(
     that carries both the intent count and the rationale. Logging every phase
     would bury the decisions in rotation bookkeeping. Telemetry is unchanged --
     the wrapper calls `emit` first and adds to it, never in place of it.
+
+    An unchanged decision is steady state, not news: the first visit logs at
+    INFO, and repeats of the same count, reason and position drop to DEBUG so
+    the terminal only moves when the decision changes. Every INFO line is
+    followed by a blank line, so a decision stands apart from the idle
+    around it instead of scrolling past inside it.
 
     `inventory_lookup` resolves the decide event's `condition_id` to the
     `Inventory` the seam computed for that market. It has to be a lookup
@@ -461,6 +467,24 @@ def _make_logging_emit(
 
     ring_path = (LIVE_ROOT / "runtime" / _run_ring_name(run_id)) if run_id else None
 
+    # Last decision signature logged per market. Compared on every visit so
+    # an idle rotation stays off the terminal; telemetry is unaffected, it
+    # leaves through `_emit_cycle_event` above before this is even read.
+    last_sig: dict[str, tuple] = {}
+
+    def _note(marker: str, sig: tuple, msg: str, *args) -> None:
+        """INFO once per change, DEBUG while unchanged.
+
+        The INFO line carries a trailing blank line: one visual break after
+        each decision, so an action never hides inside per-cycle scroll. The
+        timestamp stays on the decision line itself.
+        """
+        if last_sig.get(marker) == sig:
+            log.debug(msg, *args)
+            return
+        last_sig[marker] = sig
+        log.info(msg + "\n", *args)
+
     def emit_fn(cycle, phase, action, **kw) -> None:
         from core_brain.cycle_stream import emit as _emit_cycle_event
 
@@ -489,10 +513,13 @@ def _make_logging_emit(
                     cancelled = int(extra.get("cancelled", 0) or 0)
                 except (TypeError, ValueError):
                     cancelled = "?"
-                log.info(
+                slug = kw.get("market_slug") or extra.get("condition_id") or "?"
+                _note(
+                    f"uma:{slug}",
+                    (str(status_value), reason, str(cancelled)),
                     "cycle=%s %s UMA_DISCARD status=%s reason=%s cancelled=%s",
                     cycle,
-                    kw.get("market_slug") or extra.get("condition_id") or "?",
+                    slug,
                     status_value, reason, cancelled,
                 )
                 return
@@ -516,10 +543,13 @@ def _make_logging_emit(
         if inv is not None:
             shares = f" up={inv.up_shares:g} down={inv.down_shares:g}"
 
-        log.info(
+        slug = kw.get("market_slug") or extra.get("condition_id") or "?"
+        _note(
+            f"decide:{slug}",
+            (str(count), reason, shares),
             "cycle=%s %s intents=%s%s%s",
             cycle,
-            kw.get("market_slug") or extra.get("condition_id") or "?",
+            slug,
             count,
             shares,
             f" -- {reason}" if reason else "",
