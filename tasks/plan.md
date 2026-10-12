@@ -74,7 +74,7 @@ Toasts auto-dismiss after a configurable timeout, stack vertically in the bottom
         - No cancel toast on 2s success auto-close.
 - Verify: Syntax and export check in node.
 
-### [ ] Task 2 — Test Harness, Pytest Suite & Regression Verification [Size: M]
+### [x] Task 2 — Test Harness, Pytest Suite & Regression Verification [Size: M]
 - Domain: Testing/TDD.
 - Create `tests/js/toast_harness.cjs`:
   - Extend DOM stub for `#toast-container`, child appending/removal, fake timers, `focus()` tracking.
