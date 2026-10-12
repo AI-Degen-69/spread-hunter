@@ -1497,6 +1497,11 @@ input:focus-visible, select:focus-visible {
 #orders-trades-table td.ot-market {
   min-width: 200px;
 }
+/* The Market anchor sorts its header label flush left, matching the left-aligned
+   market cell it heads; numeric headers stay centred by default. */
+#orders-trades-table th.ot-head-left .ot-sort-btn {
+  justify-content: flex-start;
+}
 
 /* The relative age under the Timestamp cell ("3m ago"): secondary to the
    absolute time it annotates, so it reads small and muted. Reuses the table's

@@ -6167,24 +6167,28 @@ function stitchOpenOrdersRows(kpi, state, sort) {
 
 function stitchActiveMarketsHeadHtml(sort) {
   const active = (sort && Number.isInteger(sort.col)) ? sort : null;
+  // Column hierarchy per the UX spec: Market anchors the far left, the age/timestamp
+  // lives at the far right (before any actions), Category is no longer a standalone
+  // column (it is a badge under the market name), and 24h Volume + Resolves are
+  // stacked into one cell. `sortIdx` is a STABLE logical key — the body's sort switch
+  // keys on it — so reordering these visual columns never touches the sort logic.
   const cols = [
-    { label: 'AGE / STAMP', sortIdx: 0 },
-    { label: 'MARKET & CLASSIFICATION', sortIdx: 1 },
-    { label: 'CATEGORY', sortIdx: 2 },
+    { label: 'MARKET & CATEGORY', sortIdx: 1, left: true },
     { label: 'YES QUOTE', sortIdx: 3 },
     { label: 'NO QUOTE', sortIdx: 4 },
     { label: 'PAIR COST', sortIdx: 5 },
     { label: 'EDGE', sortIdx: 6 },
     { label: '24H VOLUME', sortIdx: 7 },
-    { label: 'RESOLVES', sortIdx: 8 },
     { label: 'STATUS', sortIdx: 9 },
+    { label: 'LAST UPDATED', sortIdx: 0 },
   ];
   const cells = cols.map((col) => {
     const isActive = Boolean(active && active.col === col.sortIdx);
     const dir = isActive ? active.dir : null;
     const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
     const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
-    return `<th${ariaSort}>`
+    const cls = col.left ? ' class="ot-head-left"' : '';
+    return `<th${ariaSort}${cls}>`
       + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
       + `<span class="ot-sort-label">${esc(col.label)}</span>${arrow}</button></th>`;
   }).join('');
@@ -6199,7 +6203,7 @@ function stitchActiveMarketsRows(kpi, state, sort) {
         || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
 
   if (!entries.length) {
-    return `<tr><td colspan="10" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No markets are being quoted.</td></tr>`;
+    return `<tr><td colspan="8" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No markets are being quoted.</td></tr>`;
   }
 
   const rows = entries.map(([cid, m]) => {
@@ -6210,9 +6214,11 @@ function stitchActiveMarketsRows(kpi, state, sort) {
     const dnMid = legs.dn ? legs.dn.mid : null;
     const pairCost = (upQuote !== null && dnQuote !== null) ? (upQuote + dnQuote) : null;
     const edge = pairCost === null ? null : 1 - pairCost;
+    // Edge as a percentage of the pair cost basis: profit over what it cost to assemble.
+    const edgePct = (pairCost !== null && pairCost > 0) ? (edge / pairCost) * 100 : null;
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
     const ts = latestQuoteTs(m);
-    return { cid, m, upQuote, dnQuote, upMid, dnMid, pairCost, edge, restingHere, ts };
+    return { cid, m, upQuote, dnQuote, upMid, dnMid, pairCost, edge, edgePct, restingHere, ts };
   });
 
   const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
@@ -6238,13 +6244,10 @@ function stitchActiveMarketsRows(kpi, state, sort) {
 
   const nowMs = Date.now();
 
-  return sorted.map(({ cid, m, upQuote, dnQuote, upMid, dnMid, pairCost, edge, restingHere, ts }) => {
+  return sorted.map(({ cid, m, upQuote, dnQuote, upMid, dnMid, pairCost, edge, edgePct, restingHere, ts }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const category = marketCategory(m);
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
-
-    // Classification / subtitle
-    const classification = m.event_title || m.subtitle || m.category || 'Polymarket Arbitrage';
 
     // Age / Stopwatch
     const ageSec = (ts && Number.isFinite(ts)) ? Math.max(0, Math.round((nowMs - toMs(ts)) / 1000)) : null;
@@ -6261,65 +6264,58 @@ function stitchActiveMarketsRows(kpi, state, sort) {
       statusBadge = `<span class="stitch-status-badge idle"><span class="stitch-status-dot idle"></span>IDLE</span>`;
     }
 
-    return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
-      <!-- Col 0: AGE / STAMP -->
-      <td class="mono font-tabular" style="white-space:nowrap;">
-        <div class="stitch-age-stopwatch">${ageDisp}</div>
-        <div class="stitch-age-meta">${tsDisp}</div>
-      </td>
+    const edgeColor = edge === null ? '#64748b' : (edge > 0 ? '#34d399' : '#f43f5e');
 
-      <!-- Col 1: MARKET & CLASSIFICATION -->
+    return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
+      <!-- Col 1: MARKET & CATEGORY (market anchors far left; category badge sits under the title) -->
       <td class="stitch-market-cell">
         <div class="stitch-market-title">
           <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
         </div>
-        <div class="stitch-market-meta" style="margin-top:2px;">
-          <span style="font-size:11px;color:#94a3b8;">${esc(classification)}</span>
+        <div class="stitch-market-meta">
+          <span class="stitch-category-pill">${esc(category)}</span>
         </div>
       </td>
 
-      <!-- Col 2: CATEGORY -->
-      <td>
-        <span class="stitch-category-pill">${esc(category)}</span>
-      </td>
-
-      <!-- Col 3: UP QUOTE + Mid Price -->
+      <!-- Col 2: YES QUOTE (green) + mid subtext -->
       <td class="mono font-tabular">
         <div class="stitch-quote-up">${fmtPrice(upQuote)}</div>
         ${upMid !== null ? `<div class="stitch-mid-sub">mid ${fmtPrice(upMid)}</div>` : ''}
       </td>
 
-      <!-- Col 4: DOWN QUOTE + Mid Price -->
+      <!-- Col 3: NO QUOTE (red/pink) + mid subtext -->
       <td class="mono font-tabular">
         <div class="stitch-quote-down">${fmtPrice(dnQuote)}</div>
         ${dnMid !== null ? `<div class="stitch-mid-sub">mid ${fmtPrice(dnMid)}</div>` : ''}
       </td>
 
-      <!-- Col 5: PAIR COST -->
+      <!-- Col 4: PAIR COST -->
       <td class="mono font-tabular">
         <div class="stitch-pair-cost">${fmtPrice(pairCost)}</div>
       </td>
 
-      <!-- Col 6: EDGE -->
+      <!-- Col 5: EDGE (cents + %) -->
       <td class="mono font-tabular">
         <div class="stitch-edge">
-          ${edge === null ? '--' : `<span class="${edge > 0 ? 'text-emerald-400 font-bold' : 'text-rose-400'}" style="color:${edge > 0 ? '#34d399' : '#f43f5e'};font-weight:700;">+${(edge * 100).toFixed(1)}¢</span>`}
+          ${edge === null ? '--' : `<span style="color:${edgeColor};font-weight:700;">+${(edge * 100).toFixed(1)}¢ (${edgePct >= 0 ? '+' : ''}${edgePct.toFixed(1)}%)</span>`}
         </div>
       </td>
 
-      <!-- Col 7: 24H VOLUME -->
+      <!-- Col 6: 24H VOLUME + RESOLVES stacked -->
       <td class="mono font-tabular" style="color:#94a3b8;">
-        ${fmtCompactUSD(m.volume_24h)}
+        <div>${fmtCompactUSD(m.volume_24h)}</div>
+        <div class="stitch-mid-sub" style="color:#64748b;">${(m.days_to_resolve === null || m.days_to_resolve === undefined) ? '--' : `${Number(m.days_to_resolve).toFixed(1)}d`}</div>
       </td>
 
-      <!-- Col 8: RESOLVES -->
-      <td class="mono font-tabular" style="color:#64748b;">
-        ${(m.days_to_resolve === null || m.days_to_resolve === undefined) ? '--' : `${Number(m.days_to_resolve).toFixed(1)}d`}
-      </td>
-
-      <!-- Col 9: STATUS -->
+      <!-- Col 7: STATUS -->
       <td>
         ${statusBadge}
+      </td>
+
+      <!-- Col 8: LAST UPDATED / AGE (far right) -->
+      <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
+        <div class="stitch-age-stopwatch">${ageDisp}</div>
+        <div class="stitch-age-meta">${tsDisp}</div>
       </td>
     </tr>`;
   }).join('');
