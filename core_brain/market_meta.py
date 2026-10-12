@@ -41,10 +41,54 @@ _POLITICS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Display-only sport labels (#501). A detection token maps to the sport's real
+# name, not the league acronym: ATP/WTA are tennis circuits, not their own
+# sport. Ordered so the first regex that hits wins -- Muay Thai is checked
+# before the generic MMA/Boxing rules, and explicit league codes come before
+# bare generic words. Kept local like the regexes above on purpose: these are
+# descriptive labels and must never influence selection or ranking.
+_SPORT_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(?:atp|wta|itf|tennis|wimbledon|roland[- ]garros|"
+                r"australian open)\b", re.IGNORECASE), "Tennis"),
+    (re.compile(r"\b(?:nba|wnba|basketball|euroleague|march madness)\b",
+                re.IGNORECASE), "Basketball"),
+    # "Football" is the hand-egg (oval) sport; a bare "football" lands here.
+    (re.compile(r"\b(?:nfl|super bowl|ncaa football|cfb|american football|"
+                r"football)\b", re.IGNORECASE), "Football"),
+    (re.compile(r"\b(?:mlb|baseball|world series)\b", re.IGNORECASE), "Baseball"),
+    (re.compile(r"\b(?:nhl|hockey|stanley cup)\b", re.IGNORECASE), "Hockey"),
+    # "Soccer" is the leg-kicking sport.
+    (re.compile(r"\b(?:fifa|premier league|epl|la liga|serie a|bundesliga|"
+                r"ligue 1|champions league|mls|soccer|world cup|euros|"
+                r"europa league)\b", re.IGNORECASE), "Soccer"),
+    (re.compile(r"\b(?:pga|lpga|golf|masters|ryder cup)\b", re.IGNORECASE), "Golf"),
+    (re.compile(r"\b(?:f1|formula 1|formula e|nascar|indycar|motogp|le mans|"
+                r"rally|racing)\b", re.IGNORECASE), "Racing"),
+    (re.compile(r"\b(?:muay thai|thai boxing|thai[- ]box)\b", re.IGNORECASE),
+     "Muay Thai"),
+    (re.compile(r"\b(?:ufc|mma|bellator|pfl|one championship|pride fc)\b",
+                re.IGNORECASE), "MMA"),
+    (re.compile(r"\b(?:boxing|wba|wbc|ibf|wbo|title fight|heavyweight)\b",
+                re.IGNORECASE), "Boxing"),
+    (re.compile(r"\b(?:ipl|cricket|test match|ashes)\b", re.IGNORECASE), "Cricket"),
+    (re.compile(r"\b(?:rugby|six nations)\b", re.IGNORECASE), "Rugby"),
+]
+
+
+def _classify_sport(text: str) -> Optional[str]:
+    """The sport's real name for a detection token, or None."""
+    for pattern, label in _SPORT_RULES:
+        if pattern.search(text):
+            return label
+    return None
+
 
 def classify_display_category(title: Any, event_title: Any,
                               slug: Any) -> Optional[str]:
-    """E-Sports, Politics, or None -- pure word-boundary match, no venue I/O."""
+    """E-Sports, a sport's real name, Politics, or None.
+
+    Pure word-boundary match, no venue I/O. Display-only.
+    """
     text = " ".join((
         str(title or ""),
         str(event_title or ""),
@@ -54,6 +98,9 @@ def classify_display_category(title: Any, event_title: Any,
         return None
     if _ESPORTS_RE.search(text):
         return ESPORTS_LABEL
+    sport = _classify_sport(text)
+    if sport is not None:
+        return sport
     if _POLITICS_RE.search(text):
         return POLITICS_LABEL
     return None

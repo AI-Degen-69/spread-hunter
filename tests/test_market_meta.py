@@ -150,6 +150,47 @@ def test_esports_checked_before_politics():
         "Market A resolves up?", "", "market-a") is None
 
 
+def test_sports_map_to_their_real_name():
+    # A detection token becomes the sport's real name, not the league acronym:
+    # ATP/WTA are tennis circuits, not a sport of their own (#501).
+    cases = {
+        "Atp Cuenin Valient 2026 10 12": "Tennis",
+        "Wta Mcnally Starodu 2026 10 12": "Tennis",
+        "Will the Lakers win the NBA finals?": "Basketball",
+        "Chiefs vs 49ers super bowl winner": "Football",
+        "Football game tonight": "Football",
+        "Yankees world series 2026": "Baseball",
+        "Stanley cup favorite 2026": "Hockey",
+        "Premier League title race": "Soccer",
+        "FIFA world cup winner 2026": "Soccer",
+        "PGA masters champion": "Golf",
+        "F1 drivers champion 2026": "Racing",
+        "Nascar daytona 500 winner": "Racing",
+        "UFC 300 main event winner": "MMA",
+        "Canelo boxing title fight": "Boxing",
+        "Muay Thai championship bout": "Muay Thai",
+        "IPL cricket final": "Cricket",
+        "Six nations rugby winner": "Rugby",
+    }
+    for title, expected in cases.items():
+        assert mm.classify_display_category(title, "", "") == expected, title
+
+
+def test_sports_never_mislabel_non_sports():
+    # Politics and crypto stay politics/crypto; a sport regex must not swallow
+    # them just because a generic word appears.
+    assert mm.classify_display_category("US-Iran ceasefire continues", "", "") is None
+    assert mm.classify_display_category("Bitcoin above 100k by december", "", "") is None
+    assert mm.classify_display_category("Presidential election 2028", "", "") == "Politics"
+
+
+def test_muay_thai_wins_over_generic_combat():
+    # Muay Thai is checked before MMA/Boxing so a Thai-boxing market keeps its
+    # own label instead of collapsing into "MMA".
+    assert mm.classify_display_category("Muay Thai title fight", "", "") == "Muay Thai"
+    assert mm.classify_display_category("Thai boxing grand prix", "", "") == "Muay Thai"
+
+
 def test_feed_reads_cached_across_many_cids(tmp_path, monkeypatch):
     rows = [{"cid": f"0xcid_{i}", "slug": f"slug-{i}", "title": f"Title {i}",
              "category": "Crypto", "series_title": "", "market_group": "",
