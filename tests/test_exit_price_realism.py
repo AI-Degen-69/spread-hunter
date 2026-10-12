@@ -18,6 +18,8 @@ it is safe to measure anything:
 """
 from contextlib import closing
 
+import time
+
 import pytest
 
 from core_brain.order_registry import OrderRegistry, get_connection, init_db
@@ -222,7 +224,7 @@ def test_rehearsed_sell_fills_against_the_prior_rotations_snapshot(registry):
     reg, db = registry
     ensure_shadow_tables(db)
     write_queue_mark(
-        db, ts=1_000.0, condition_id="0xabc", market_slug="fake-market",
+        db, ts=time.time(), condition_id="0xabc", market_slug="fake-market",
         token_id="tok-dn", price=0.51, level_size=10.0, traded=0.0,
         cancel_decay=None, queue_minutes=None, run_id=reg._run_id(),
         best_bid=0.60, best_bid_size=3.0,
@@ -240,6 +242,34 @@ def test_rehearsed_sell_fills_against_the_prior_rotations_snapshot(registry):
     assert avg == pytest.approx(0.60)
 
 
+def test_rehearsed_sell_ignores_a_stale_snapshot_and_uses_the_fresh_book(registry):
+    """A 901s-old snapshot is not the pre-decision book: the exit prices fresh.
+
+    Mirrors the i492 NBA leg — booked 0.54 off a fill-time snapshot while the
+    live book read 0.31-0.34. Under the #488 decoupled loops the decision is
+    made in the 1s sentry, so an aged-out leg's snapshot is always stale by
+    construction and must never price the exit.
+    """
+    from core_brain.shadow_exec import ensure_shadow_tables, write_queue_mark
+
+    reg, db = registry
+    ensure_shadow_tables(db)
+    write_queue_mark(
+        db, ts=time.time() - 901.0, condition_id="0xabc",
+        market_slug="fake-market",
+        token_id="tok-dn", price=0.65, level_size=8.0, traded=0.0,
+        cancel_decay=None, queue_minutes=None, run_id=reg._run_id(),
+        best_bid=0.54, best_bid_size=8.0,
+    )
+
+    client = _client(registry, {"bids": {0.33: 20.0}, "asks": {}})
+
+    filled, avg = client._sell_into_bids("tok-dn", 5.0, floor=0.31)
+
+    assert filled == pytest.approx(5.0)
+    assert avg == pytest.approx(0.33)
+
+
 def test_rehearsed_sell_snapshot_still_respects_a_better_fresh_floor(registry):
     """The floor the caller passes stays a real limit over the snapshot.
 
@@ -252,7 +282,7 @@ def test_rehearsed_sell_snapshot_still_respects_a_better_fresh_floor(registry):
     reg, db = registry
     ensure_shadow_tables(db)
     write_queue_mark(
-        db, ts=1_000.0, condition_id="0xabc", market_slug="fake-market",
+        db, ts=time.time(), condition_id="0xabc", market_slug="fake-market",
         token_id="tok-dn", price=0.51, level_size=10.0, traded=0.0,
         cancel_decay=None, queue_minutes=None, run_id=reg._run_id(),
         best_bid=0.61, best_bid_size=10.0,
@@ -293,7 +323,7 @@ def test_rehearsed_sell_ignores_snapshots_from_other_runs(registry):
     ensure_shadow_tables(db)
     # Valid current-run snapshot
     write_queue_mark(
-        db, ts=1_000.0, condition_id="0xabc", market_slug="fake-market",
+        db, ts=time.time(), condition_id="0xabc", market_slug="fake-market",
         token_id="tok-dn", price=0.51, level_size=10.0, traded=0.0,
         cancel_decay=None, queue_minutes=None, run_id=reg._run_id(),
         best_bid=0.61, best_bid_size=10.0,
@@ -324,7 +354,7 @@ def test_rehearsed_sell_without_best_bid_size_does_not_use_level_size(registry):
     reg, db = registry
     ensure_shadow_tables(db)
     write_queue_mark(
-        db, ts=1_000.0, condition_id="0xabc", market_slug="fake-market",
+        db, ts=time.time(), condition_id="0xabc", market_slug="fake-market",
         token_id="tok-dn", price=0.51, level_size=10.0, traded=0.0,
         cancel_decay=None, queue_minutes=None, run_id=reg._run_id(),
         best_bid=0.60, best_bid_size=None,

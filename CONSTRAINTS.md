@@ -1,4 +1,39 @@
-# CONSTRAINTS — #485 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #493 (locked by Station II, enforced through Station V)
+
+Governs the `i493/sentry-and-offense-loops-each-price-what-they-insp` branch only.
+
+## Scope & File Boundaries
+
+- Target files for modification:
+  - `core_brain/shadow_exec.py` (`_sell_into_bids` age-bound snapshot only — nothing else).
+  - `tests/test_exit_price_realism.py` (new stale-snapshot case; now-relative `ts` in existing snapshot cases).
+  - `CONSTRAINTS.md`, `SPEC.md`, `tasks/plan.md`, `tasks/todo.md`.
+- Files that must NOT be modified:
+  - `core_brain/order_manager.py`, `core_brain/order_registry.py`, `core_brain/trader_loop.py`, `core_brain/single_buy_saver.py` (live money path untouched — shadow rehearsal pricing only).
+  - `data/orders.db` and any production database (never touched).
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_exit_price_realism.py`
+  `tests/test_hard_stop_fresh_exit.py`
+  `tests/test_aged_out_rescue.py`
+  `tests/test_risk_guardian.py`
+  `tests/test_settlement_sweeper.py`
+  `tests/test_shadow_exec.py`
+
+## Anti-cheat
+
+- No skipped/disabled tests, no deleted assertions, no new lint suppressions.
+- Existing snapshot-case `ts` updates keep identical price/size assertions; only the clock anchor moves to match the new documented contract (snapshot = prior rotation, i.e. seconds old).
+
+## Performance
+
+- None: one timestamp subtraction per rehearsed exit.
+
+---
+
+# CONSTRAINTS — #485 (history)
 
 Governs the `i485/tournament-hub-cockpit-launcher` branch only.
 

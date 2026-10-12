@@ -1,3 +1,34 @@
+# SPEC — #493: Sentry and offense loops each price what they inspect
+
+## Goals
+
+1. A rehearsed SELL prices off the book the deciding loop read: snapshot only
+   when it is seconds old (prior rotation), fresh book otherwise.
+2. The shadow-01 adverse-selection guard survives for fresh snapshots;
+   the i492 15-minute-stale pathology (NBA 0.54 vs 0.33, Ravens 0.73 vs 0.52)
+   becomes impossible by construction.
+3. Live money path unchanged — shadow rehearsal pricing only.
+
+## Acceptance criteria
+
+- Stale snapshot (901s old) + moved book -> exit books the fresh price.
+- Fresh snapshot (seconds old) -> exit still books the snapshot (guard intact).
+- Runnable: `python -m pytest -q tests/test_exit_price_realism.py tests/test_hard_stop_fresh_exit.py tests/test_aged_out_rescue.py tests/test_risk_guardian.py tests/test_settlement_sweeper.py tests/test_shadow_exec.py`
+
+## Edge cases
+
+- No snapshot row for this run -> fresh book (unchanged fallback).
+- Snapshot row without `best_bid_size` -> fresh book (unchanged fallback).
+- Foreign-run snapshot newer than own -> ignored by run scoping (unchanged).
+- Empty fresh book -> floor fallback (unchanged).
+
+## Out of scope
+
+- Trigger thresholds, grace windows, stop-loss levels; merge arithmetic;
+  live `exit_single_buy` behavior.
+
+---
+
 # SPEC — #472: Multi-arm shadow tournament (profile comparison)
 
 ## Goals
