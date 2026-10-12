@@ -1,6 +1,32 @@
-# CONSTRAINTS — #485 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #478 (locked by Station II, enforced through Station V)
 
-Governs the `i485/tournament-hub-cockpit-launcher` branch only.
+Governs the `i478/toast-notifications-for-operator-actions` branch only.
+
+## Scope & File Boundaries
+
+- Target files for modification:
+  - `dashboard/static/index.html` (mount `#toast-container`)
+  - `dashboard/static/styles.css` (toast container and toast styles using existing tokens)
+  - `dashboard/static/app.js` (implement `showToast`, export `showToast`, wire into Sync, Master Toggle, Reset)
+  - `tests/js/toast_harness.cjs` (NEW - Node stub harness)
+  - `tests/test_dashboard_toasts.py` (NEW - pytest wrapper)
+  - `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
+- Files that must NOT be modified:
+  - `dashboard/server.py`, `server.ts`, `data/orders.db`, `core_brain/*`, `scripts/*`.
+- Dependencies: Zero new dependencies (vanilla JS/CSS).
+- Accessibility: `role="alert"` for error toasts, `role="status"` for ok/warn/neutral. Focus must never be trapped or moved by a toast.
+- Sanitization: Toast text must use `textContent`, never `innerHTML`.
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_dashboard_toasts.py`
+  `tests/ -k "live_state or input_lag or analytics_surface or start_toggle or dashboard"`
+- Type check: `npx tsc --noEmit server.ts`
+
+---
+
+# CONSTRAINTS — #485 (history)
 
 ## Scope & File Boundaries
 

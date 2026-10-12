@@ -1,83 +1,96 @@
-# Plan — #488 [FEAT] Decouple Offense (Quoting), Defense (Stop-Loss Sentry), and Settlement (Merge Sweeper) into independent loops
+# Plan — #478 [IMPROVE] Toast notifications for operator actions
 
-Branch: i488/decouple-offense-defense-settlement-loops | Issue: #488
-Size: Standard | Type: Code (Backend Architecture / Execution Loops / TDD)
-Stack: Python (FastAPI, pytest, SQLite)
-Labels: enhancement, ready-for-agent
+Branch: i478/toast-notifications-for-operator-actions | Issue: #478
+Size: Standard | Type: Code + Design/UI (Frontend Component & Harness TDD)
+Stack: JavaScript / HTML / CSS / Python (Node harness + pytest wrapper)
+Labels: ready-for-agent
 
-## Architecture Specification (The 3 Decoupled Loops)
-
-1. **Process 1: Offense (Risk-Off Market Quoter)**
-   - Module: `core_brain/trader_loop.py`
-   - Cadence: 5.0s – 10.0s (Relaxed)
-   - Scope: Scans approved binary markets, evaluates spreads, places dual-sided maker limit orders.
-   - Decoupled from open position waiting or merge blocking; never starves quoting or freezes capital across the broader universe.
-
-2. **Process 2: Defense Sentry (Risk-On Position Guardian)**
-   - Module: `core_brain/risk_guardian.py` (and invoked within `shadow_run.py` / `trader_loop.py` fast-path)
-   - Cadence: Sub-second to 1.0s (High Alert / Critical)
-   - Scope: Active exclusively when unhedged, single-leg exposure exists (`up_shares != down_shares`).
-   - Trigger: Event-woken instantly upon any fill event or active inventory check.
-   - Responsibilities:
-     - Continuously evaluates immediate stop-loss limits on deteriorating positions.
-     - Guards and completes complementary hedge orders.
-     - Returns to idle/chill once balanced (`up_shares == down_shares`).
-
-3. **Process 3: Settlement Sweeper (Capital Recycler)**
-   - Module: `core_brain/settlement_sweeper.py` (invoked as background service / periodic pass)
-   - Cadence: 60s – 300s (Very Chill / Low Priority)
-   - Scope: Completely separated from high-alert risk defense.
-   - Responsibilities:
-     - Identifies balanced pairs (`min(up_shares, down_shares) >= 1.0`).
-     - Executes gasless CTF `merge()` calls to redeem $1.00 USDC and replenish spendable collateral.
-     - Because paired positions carry 0 market risk, contract latency or RPC hiccups in merging never impede Offense or Defense.
+## Overview
+Add a toast notification system so every operator action (sync, start/stop, reset, errors) gets visible feedback instead of silence.
+Toasts auto-dismiss after a configurable timeout, stack vertically in the bottom-right corner, feature a 44px accessible dismiss button, respect `prefers-reduced-motion`, and map to the existing semantic CSS variables (`ok` -> green, `warn` -> amber, `error` -> red, `neutral` -> surface raised).
 
 ## Locked Constraints (CONSTRAINTS.md)
-
-- Focused suites that must pass:
-  - `tests/test_single_buy_saver.py`
-  - `tests/test_trader_loop.py`
-  - `tests/test_shadow_run.py`
-  - `tests/test_shadow_tournament.py`
-- Production safety: `data/orders.db` must never be touched, modified, or overwritten.
-- No new external packages.
-- Zero regression on existing dynamic caps and position risk limits.
+- Target files for modification:
+  - `dashboard/static/index.html` (mount `#toast-container`)
+  - `dashboard/static/styles.css` (toast container and toast styles using existing tokens)
+  - `dashboard/static/app.js` (implement `showToast`, export `showToast`, wire into Sync, Master Toggle, Reset)
+  - `tests/js/toast_harness.cjs` (NEW - Node stub harness)
+  - `tests/test_dashboard_toasts.py` (NEW - pytest wrapper)
+- Files that must NOT be modified:
+  - `dashboard/server.py`, `server.ts`, `data/orders.db`, `core_brain/*`, `scripts/*`.
+- Dependencies: Zero new dependencies (vanilla JS/CSS).
+- Accessibility: `role="alert"` for error toasts, `role="status"` for ok/warn/neutral. Focus must never be trapped or moved by a toast.
+- Sanitization: Toast text must use `textContent`, never `innerHTML`.
 
 ## Dependency Graph
-
-- Task 1 (Extract Settlement Sweeper for chill background merging) — unblocks Task 2.
-- Task 2 (Build Defense Sentry: dedicated high-frequency <=1.0s unhedged position guardian) — unblocks Task 3.
-- Task 3 (Streamline Offense Quoter in `trader_loop.py` to be non-blocking & wire seams) — Depends on: Task 1, Task 2.
-- Task 4 (Shadow Seam & Tournament integration in `shadow_run.py` & `shadow_tournament.py`) — Depends on: Task 3.
-- Task 5 (Targeted test verification & verification report) — Depends on: Task 4.
+- Task 1 (Core Toast Component & Action Wiring in dashboard) — unblocks Task 2.
+- Task 2 (Node Stub Harness, Pytest Test Suite & Verification) — depends on: Task 1.
 
 ## Tasks
 
-### [x] Task 1 — Extract Settlement Sweeper (`core_brain/settlement_sweeper.py`) [Size: S]
-- Domain: Backend/Logic.
-- Extract merge detection (`min(up_shares, down_shares) >= 1.0`) and CTF merge batching from `single_buy_saver.py` into `core_brain/settlement_sweeper.py`.
-- Provides standalone `run_settlement_sweep(registry, client, ...)` with configurable 60s+ interval and background execution.
-- Tests: `tests/test_settlement_sweeper.py`.
+### [x] Task 1 — Implement Toast Container, Styling & Button Wiring (`dashboard/static/index.html`, `styles.css`, `app.js`) [Size: M]
+- Domain: Design/UI + Frontend Engineering.
+- In `dashboard/static/index.html`:
+  - Add `<div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>` before `#reset-modal`.
+- In `dashboard/static/styles.css`:
+  - Add `.toast-container`: fixed at bottom 24px, right 24px, max-width calc(100vw - 32px), z-index 1100, pointer-events: none, flex column, gap 8px.
+  - Add `.toast`: pointer-events: auto, display flex, align-items center, justify-content space-between, gap 12px, padding 10px 14px, border-radius 6px, font-family JetBrains Mono / IBM Plex Sans, font-size 12px, border 1px solid, background surface raised tint, opacity & transform transitions (disabled under `@media (prefers-reduced-motion: reduce)`).
+  - Tones:
+    - `.toast-ok`: border `var(--green-border)`, bg `var(--green-bg)`, text `var(--text-primary)`, accent `var(--green-ok)`.
+    - `.toast-warn`: border `var(--amber-border)`, bg `var(--amber-bg)`, text `var(--text-primary)`, accent `var(--amber-warn)`.
+    - `.toast-error`: border `var(--red-border)`, bg `var(--red-bg)`, text `var(--text-primary)`, accent `var(--red-alert)`.
+    - `.toast-neutral`: border `var(--border-strong)`, bg `var(--bg-surface-raised)`, text `var(--text-primary)`.
+  - Add `.toast-close`: min 44px x 44px tap target, border none, background transparent, cursor pointer, color `var(--text-secondary)`, hover color `var(--text-primary)`, focus outline.
+- In `dashboard/static/app.js`:
+  - Implement `showToast(message, opts = {})`:
+    - `opts`: `{ tone = 'neutral', timeout = 4000 }` (tone: 'ok' | 'warn' | 'error' | 'neutral').
+    - Container capped at 4 toasts max (remove oldest when 5th arrives).
+    - `div.toast`: role='alert' if tone === 'error' else role='status'.
+    - Message in `span.toast-text` via `textContent` (safe against HTML/XSS).
+    - Close button with `aria-label="Dismiss notification"`.
+    - Timeout: `setTimeout` calls `dismiss()`, returns handle `{ dismiss() }`. `timeout: 0` disables auto-dismiss.
+    - Export `showToast` in `module.exports`.
+  - Wire SYNC (`syncBtn` click):
+    - When clicked, show neutral toast "Venue sync started" and keep handle.
+    - In `finally`: dismiss started toast, then show result toast:
+      - `ok` when `syncOk` and `!isWarning`: "Dashboard synced with Polymarket (read-only)."
+      - `warn` when `isWarning`: with message / summary text.
+      - `error` when failed / caught: "Sync failed — venue may be unreachable. Retrying on next poll."
+  - Wire MASTER TOGGLE (`masterToggleBtn` click):
+    - Before `controlFetch()`: show neutral toast "Start request sent" or "Stop request sent. Waiting for services to shut down."
+    - On result:
+      - `error` for `!res.ok`, no JSON, or `data.ok !== true`.
+      - `warn` for success with notes (e.g. `forced`).
+      - `ok` for clean success (START says running if `data.status?.bot_state === 'RUNNING'` else accepted; STOP says stopped).
+      - In `catch`: show `error` toast with existing error message.
+  - Wire RESET modal & Escape:
+    - Track `resetInFlight` flag.
+    - On `data.ok`: show `ok` toast: "Reset finished. Check the reset steps for warnings."
+    - On failure/catch: show `error` toast with "Failed: ..." or "Error: ...".
+    - User dismissal function called from Close click and Escape key:
+      - If modal was open:
+        - if `!resetInFlight`: neutral "Reset cancelled. Nothing was changed."
+        - if `resetInFlight`: neutral "Dialog closed. The reset is still running."
+        - No cancel toast on 2s success auto-close.
+- Verify: Syntax and export check in node.
 
-### [x] Task 2 — Build Defense Sentry (`core_brain/risk_guardian.py`) [Size: M]
-- Domain: Backend/Logic.
-- Create dedicated `RiskGuardian` sentry loop that monitors active unhedged positions (`up_shares != down_shares`).
-- Operates at <= 1.0s cadence when active, evaluates stop losses on all open positions concurrently, and idles when exposure is zero.
-- Tests: `tests/test_risk_guardian.py`.
-
-### [x] Task 3 — Streamline Offense Quoter (`core_brain/trader_loop.py`) [Size: M]
-- Domain: Backend/Logic.
-- Remove synchronous blocking single-buy and merge sweeps from the critical path of the universe quoting loop.
-- Quoter focuses cleanly on scanning markets and placing maker limit orders without being blocked by stale positions.
-- Verify: `python -m pytest -q tests/test_trader_loop.py`.
-
-### [x] Task 4 — Shadow Run & Tournament Runner Integration [Size: M]
-- Domain: Backend/Logic.
-- Update `core_brain/shadow_run.py` and `scripts/shadow_tournament.py` to support the 3-loop architecture in shadow mode.
-- Ensure all 10 tournament arms run with the high-alert <= 1.0s defense loop and independent background settlement.
-- Verify: `python -m pytest -q tests/test_shadow_run.py tests/test_shadow_tournament.py`.
-
-### [x] Task 5 — Full Targeted Verification & Hands-On Verify [Size: S]
-- Domain: Testing/Verification.
-- Run all focused test suites.
-- Verify with a 1-minute dry-run / rehearsal smoke test.
+### [ ] Task 2 — Test Harness, Pytest Suite & Regression Verification [Size: M]
+- Domain: Testing/TDD.
+- Create `tests/js/toast_harness.cjs`:
+  - Extend DOM stub for `#toast-container`, child appending/removal, fake timers, `focus()` tracking.
+  - Simulate clicks on Sync, Master Toggle, Reset Modal buttons & Escape key.
+  - Execute scenarios and print JSON verdicts.
+- Create `tests/test_dashboard_toasts.py`:
+  - Test roles & tones: `ok`, `warn`, `neutral` get `role="status"`; `error` gets `role="alert"`.
+  - Test toast stack & cap: maximum 4 visible toasts, oldest removed on 5th.
+  - Test close button: dismisses toast, idempotent dismiss.
+  - Test auto dismiss: timer triggers dismissal; `timeout: 0` does not auto-dismiss.
+  - Test focus preservation: focus is never moved to toast.
+  - Test text sanitization: HTML tags rendered as textContent, no innerHTML.
+  - Test SYNC action toasts: started -> success/warn/error.
+  - Test Master Toggle toasts: sent -> running/stopped/error.
+  - Test Reset modal toasts: confirm ok/error, cancel via close / Escape.
+- Run tests:
+  - `python -m pytest -q tests/test_dashboard_toasts.py`
+  - `python -m pytest tests/ -k "live_state or input_lag or analytics_surface or start_toggle or dashboard" -q`
+  - `npx tsc --noEmit server.ts`
