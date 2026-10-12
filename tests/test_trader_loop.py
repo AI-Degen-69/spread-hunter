@@ -2996,6 +2996,36 @@ class TestQuietTail:
         assert "book too wide" in infos[0].getMessage()
         assert "mid band moved" in infos[1].getMessage()
 
+    def test_return_to_resting_after_a_skip_prints_again(self, caplog):
+        """A state transition is news even when the signature is unchanged.
+
+        Resting, then skipped, then resting with the same order count: the
+        second resting visit must print at INFO -- only the same kind twice
+        in a row may go quiet.
+        """
+        import logging
+
+        mem = {}
+        resting = self._resting_seam()
+        box = ["book too wide"]
+        skipped = self._skipped_seam(box)
+        with caplog.at_level(logging.DEBUG, logger="main_spread_hunter_loop"):
+            _visit_one(resting, {"cid": "0xabc"}, cycle=1, live=True,
+                       tail_memory=mem)
+            _visit_one(skipped, {"cid": "0xabc"}, cycle=2, live=True,
+                       tail_memory=mem)
+            _visit_one(resting, {"cid": "0xabc"}, cycle=3, live=True,
+                       tail_memory=mem)
+            _visit_one(resting, {"cid": "0xabc"}, cycle=4, live=True,
+                       tail_memory=mem)
+
+        infos = [r for r in caplog.records
+                 if r.levelno == logging.INFO and "RESTING" in r.getMessage()]
+        debugs = [r for r in caplog.records
+                  if r.levelno == logging.DEBUG and "RESTING" in r.getMessage()]
+        assert len(infos) == 2
+        assert len(debugs) == 1
+
     def test_posted_orders_print_every_cycle(self, caplog):
         import logging
 

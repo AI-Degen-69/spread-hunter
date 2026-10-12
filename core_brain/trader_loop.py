@@ -1734,10 +1734,14 @@ def _tail_note(mem: Optional[dict], cid: str, kind: str, sig: str,
     """
     if mem is not None:
         key = (cid, kind)
-        if mem.get(key) == sig:
+        # A return to a previous state is a transition, not a repeat: resting
+        # again after a skip prints even when the order count is unchanged.
+        # Only the same kind twice in a row may go quiet.
+        if mem.get(key) == sig and mem.get((cid, "__kind")) == kind:
             log.debug(msg, *args)
             return
         mem[key] = sig
+        mem[(cid, "__kind")] = kind
     log.info(msg + "\n", *args)
 
 
