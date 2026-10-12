@@ -486,6 +486,23 @@ function postUrls() {
     pendingAfter: app.isShadowStartPending(),
   };
 
+  /* 8j. A shadow stop clears the pending launch even when it fails */
+  resetHarness();
+  app.noteShadowStartLaunched({ runId: 'harness-shadow', dbName: 'shadow.db', minutes: 10, pid: 4242 });
+  master.dataset.action = 'stop';
+  master.dataset.mode = 'shadow';
+  master.disabled = false;
+  postImpl = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: false, message: 'stop failed: killpg ESRCH' }),
+  });
+  await master.click();
+  await flush();
+  out.shadowStopFailClears = {
+    pendingAfter: app.isShadowStartPending(),
+    toasts: snapToasts(),
+  };
+
   /* 9a. Reset cancelled via Close button */
   resetHarness();
   await el('btn-reset').click();

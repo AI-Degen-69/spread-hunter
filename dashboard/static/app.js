@@ -2074,6 +2074,10 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
 
     if (action === 'stop') {
       isStopping = true;
+      // A stop supersedes any pending start expectation, even if this
+      // request fails or comes back with notes: the boot-resolution toast
+      // must never fire for a run the operator already tried to stop.
+      if (isShadow) clearPendingShadowStart();
       const pill = document.getElementById('master-status-indicator');
       if (pill) {
         pill.className = 'pill state-degraded font-display';
@@ -2162,7 +2166,6 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
             showToast(msg, { tone: 'ok' });
           }
         } else {
-          if (isShadow) clearPendingShadowStart();
           const msg = isShadow
             ? (data.message || 'Shadow rehearsal stopped.')
             : (data.message || 'Bot stopped.');

@@ -259,6 +259,14 @@ def test_escape_mid_reset_says_the_run_continues():
     assert _by_text(out["inFlightToasts"], "Dialog closed. The reset is still running.")
 
 
+def test_shadow_stop_failure_still_clears_pending_launch():
+    out = _run()["shadowStopFailClears"]
+    assert out["pendingAfter"] is False
+    errors = [t for t in out["toasts"] if t["cls"] == "toast toast-error"]
+    assert len(errors) == 1
+    assert "killpg" in errors[0]["text"]
+
+
 def test_escape_after_a_successful_reset_is_not_a_cancel():
     out = _run()["resetEscapeAfterSuccess"]
     assert out["modalOpen"] is False
