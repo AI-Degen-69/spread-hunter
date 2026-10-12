@@ -19,7 +19,9 @@ the fresh book. One condition, both biases dead.
 
 ## Interface contracts
 - `ShadowExecutionClient._sell_into_bids(token_id, shares, *, floor, fresh=False)`
-  signature UNCHANGED; behavior gains: snapshot older than
+  signature unchanged by this round (keeps the `fresh` flag from #491;
+  hard-stop exits keep calling with `fresh=True` -- see
+  `tests/test_hard_stop_fresh_exit.py`); behavior gains: snapshot older than
   `MAX_SNAPSHOT_AGE_SEC = 60.0` is treated as absent (fresh-book path).
 - `read_last_token_snapshot` unchanged (still returns newest row for run).
 - `queue_marks.ts` is epoch seconds; age = `self._now_fn() - snap["ts"]`.
