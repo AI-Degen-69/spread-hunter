@@ -300,10 +300,10 @@ def test_active_markets_prices_the_pair_off_the_bot_s_own_quotes():
     # price from screening, while pair cost and edge are removed.
     rendered = _render("active-markets", _kpi(), _state())
 
-    # Act / Assert — 0.45 UP quote, 0.48 DOWN quote, 0.490 mid price; no pair cost or edge.
-    assert "$0.450" in rendered["html"]
-    assert "$0.480" in rendered["html"]
-    assert "$0.490" in rendered["html"]
+    # Act / Assert — 0.45 UP quote, 0.48 DOWN quote, 0.49 mid price; no pair cost or edge.
+    assert "$0.45" in rendered["html"]
+    assert "$0.48" in rendered["html"]
+    assert "$0.49" in rendered["html"]
     assert "$0.930" not in rendered["html"]
     assert "7.0¢" not in rendered["html"]
 
@@ -334,8 +334,8 @@ def test_active_markets_reads_the_down_leg_however_it_is_spelled():
     rendered = _render("active-markets", kpi, _state())
 
     # Assert
-    assert "$0.480" in rendered["html"]
-    assert "$0.490" in rendered["html"]
+    assert "$0.48" in rendered["html"]
+    assert "$0.49" in rendered["html"]
     assert "$0.930" not in rendered["html"]
 
 
@@ -364,7 +364,7 @@ def test_active_markets_displays_screening_parameters():
 
     # Assert — each screening parameter renders in the row:
     # Mid Price ($0.490), 30m traded ($14k), 24h volume ($166k), top-3 bid depth ($2k), horizon (6.9d)
-    assert "$0.490" in html
+    assert "$0.49" in html
     assert "$14k" in html
     assert "$166k" in html
     assert "$2k" in html
@@ -434,7 +434,7 @@ def test_open_orders_prices_the_order_and_its_cost():
     rendered = _render("open-orders", _kpi(), _state())
 
     # Act / Assert — 5 shares at $0.47 is $2.35.
-    assert "$0.470" in rendered["html"]
+    assert "$0.47" in rendered["html"]
     assert "$2.35" in rendered["html"]
 
 
@@ -537,9 +537,9 @@ def test_open_orders_prices_the_pair_the_two_legs_would_make():
     # That is the number the pair exists to hit, so it belongs on the pair.
     rendered = _render("open-orders", _kpi(), _state())
 
-    # Act / Assert — 0.47 + 0.51 = $0.980.
+    # Act / Assert — 0.47 + 0.51 = $0.98.
     assert "Pair Cost" in rendered["html"]
-    assert "$0.980" in rendered["html"]
+    assert "$0.98" in rendered["html"]
     assert "ot-cost is-good" in rendered["html"]
     # Plain text beside the status pill, not a second pill: a pill reads as a
     # state, and two of them stacked look like two verdicts on one pair.
@@ -558,7 +558,7 @@ def test_open_orders_does_not_call_a_break_even_pair_a_loss():
     rendered = _render("open-orders", _kpi(), state)
 
     # Assert — a warning that the capital earns nothing, not a loss in red.
-    assert "$1.000" in rendered["html"]
+    assert "$1.00" in rendered["html"]
     assert "ot-cost is-warn" in rendered["html"]
     assert "ot-cost is-alert" not in rendered["html"]
 
@@ -604,7 +604,7 @@ def test_open_orders_consolidates_detached_complementary_legs_with_inferred_tag(
     assert "ot-tag is-info" in rendered["html"]
     assert "Inferred" in rendered["html"]
     # Combined cost: 0.47 (UP) + 0.51 (DOWN) = 0.98
-    assert "$0.980" in rendered["html"]
+    assert "$0.98" in rendered["html"]
     assert "Partial" in rendered["html"]  # Sizes: 5.0 vs 3.0 remaining
 
 

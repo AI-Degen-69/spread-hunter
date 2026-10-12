@@ -89,7 +89,9 @@ def test_stitch_closed_trades_pair_renders_single_row_with_both_legs_and_single_
     assert "+$0.70" in res["html"]
     assert "YES" in res["html"]
     assert "NO" in res["html"]
-    assert "MERGED" in res["html"]
+    # EXEC TYPE replaces the old STATUS badge: same outcome, own column.
+    assert "Pair Merge" in res["html"]
+    assert "stitch-exec-type" in res["html"]
     assert "Fed Rate Cut in June" in res["parentTableHtml"]
     assert "+$0.70" in res["parentTableHtml"]
     assert "1 Merged" in res["parentTableHtml"]
@@ -138,8 +140,9 @@ def test_stitch_closed_trades_solos_render_each_in_own_row_with_own_pnl():
     assert res["rowCount"] == 2
     # Two separate PnL cells!
     assert res["pnlCount"] == 2
-    assert "STOP LOSS" in res["html"]
-    assert "GRACE EXPIRED" in res["html"]
+    # EXEC TYPE replaces the old STATUS badge: same outcomes, own column.
+    assert "Stop Loss" in res["html"]
+    assert "Grace Expired" in res["html"]
 
 
 @requires_node
@@ -156,7 +159,9 @@ def test_stitch_open_orders_and_positions_headers_and_pills():
     """
     res = json.loads(_eval_js(code))
     assert "Dual-Leg Quotes (YES / NO)" in res["ordersHead"]
-    assert "YES HELD" in res["posHead"]
-    assert "NO HELD" in res["posHead"]
-    assert "YES QUOTE" in res["mktsHead"]
-    assert "NO QUOTE" in res["mktsHead"]
+    # Positions uses the same shared dual-leg HELD INVENTORY cell as Orders
+    # (single template); the split YES HELD / NO HELD columns are gone.
+    assert "HELD INVENTORY" in res["posHead"]
+    assert "LAST UPDATED" in res["posHead"]
+    assert "YES PRICE" in res["mktsHead"]
+    assert "NO PRICE" in res["mktsHead"]

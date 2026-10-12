@@ -4866,6 +4866,7 @@ function latestLegQuotes(market) {
     if (!best[leg] || ts >= best[leg].ts) {
       best[leg] = {
         ts,
+        token_id: (q.token_id === null || q.token_id === undefined) ? null : String(q.token_id),
         price: (q.price === null || q.price === undefined) ? null : Number(q.price),
         mid: (q.mid === null || q.mid === undefined) ? null : Number(q.mid),
       };
@@ -4908,6 +4909,25 @@ function liveMarkMid(tokenId, nowMs) {
   if (!Number.isFinite(now) || !Number.isFinite(e.tsMs)
       || now - e.tsMs > LIVE_MARK_MAX_AGE_MS) return null;
   return e.mid;
+}
+
+/* The venue's own top-of-book bid and ask, the same freshness gate as the mid.
+ * Active Markets shows the MARKET's price, not the price we are quoting, so it
+ * reads bid/ask straight off the live feed. A one-sided or stale mark returns
+ * null and the cell falls back to the quote mid rather than showing half a
+ * spread as if it were the market's. */
+function liveMarkBidAsk(tokenId, nowMs) {
+  if (tokenId === null || tokenId === undefined) return null;
+  const e = liveMarks.get(String(tokenId));
+  if (!e) return null;
+  const now = (nowMs === undefined) ? Date.now() : Number(nowMs);
+  if (!Number.isFinite(now) || !Number.isFinite(e.tsMs)
+      || now - e.tsMs > LIVE_MARK_MAX_AGE_MS) return null;
+  const bid = Number(e.bid);
+  const ask = Number(e.ask);
+  if (!Number.isFinite(bid) || !Number.isFinite(ask)
+      || bid < 0 || ask > 1 || bid >= ask) return null;
+  return { bid, ask };
 }
 
 /* Fold one `event: mark` payload into the map. A reset clears first; a
@@ -5386,8 +5406,12 @@ function otHeadHtml(view, sort) {
   return `<tr>${cells}</tr>`;
 }
 
+/* Every price — quotes, mids, pair cost, entry price — carries two decimals.
+ * A price is a dollar amount, so it reads like money ($0.95), not like a
+ * three-place quote tick ($0.950). `fmtUSD` already formats dollars to two
+ * places; this keeps prices in the same visual grammar. */
 function fmtPrice(v) {
-  return (v === null || v === undefined) ? '--' : `$${Number(v).toFixed(3)}`;
+  return (v === null || v === undefined) ? '--' : `$${Number(v).toFixed(2)}`;
 }
 
 function fmtShares(v) {
@@ -5942,14 +5966,57 @@ function otToggleSort(view, col) {
   return next;
 }
 
+// ONE shared per-leg line used by BOTH the Orders tab (dual-leg quote cells) and
+// the Positions tab (YES HELD / NO HELD cells). Single template, single set of CSS
+// classes, single spacing. A present leg renders: side badge + `<size> @ $<price>`
+// (green for YES, red for NO) + a muted `cost $X` subline. An absent leg renders the
+// side badge plus a muted `emptyLabel` instead of numbers.
+//   sizeSuffix lets each tab keep its own unit wording (e.g. ' sh' on Positions).
+function dualLegLine({ side, size, price, cost, emptyLabel, sizeSuffix }) {
+  const isYes = side === 'YES';
+  const badgeCls = isYes ? 'yes' : 'no';
+  const priceCls = isYes ? 'stitch-quote-up' : 'stitch-quote-down';
+  const suffix = sizeSuffix || '';
+  const hasLeg = (size !== null && size !== undefined && Number(size) > 0);
+  if (!hasLeg) {
+    return `<div class="stitch-quote-rung">`
+      + `<span class="stitch-leg-pill missing">${side}</span>`
+      + `<span class="stitch-quote-awaiting">${emptyLabel || `[Awaiting ${side} Quote]`}</span>`
+      + `</div>`;
+  }
+  return `<div class="stitch-quote-rung">`
+    + `<span class="stitch-leg-pill ${badgeCls}">${side}</span>`
+    + `<span class="${priceCls}">${fmtShares(size)}${suffix} @ ${fmtPrice(price)}</span>`
+    + `<span class="stitch-quote-subcost">cost ${fmtUSD(cost)}</span>`
+    + `</div>`;
+}
+
+// ONE shared dual-leg (YES / NO) CELL used by BOTH the Orders tab and the
+// Positions tab. It wraps the two per-leg `dualLegLine` rungs in a single
+// `stitch-quote-box` inside one `<td>`, so the two tabs render the identical
+// two-leg block instead of each rolling its own markup. The caller passes the
+// two already-rendered leg lines (from `dualLegLine`) so this stays pure.
+//   opts.cellClass — optional extra class(es) on the `<td>` (e.g. Positions'
+//   'mono font-tabular'); omit for a bare `<td>` like Orders uses.
+function stitchDualLegCell(yesLine, noLine, opts) {
+  const o = opts || {};
+  const cls = o.cellClass ? ` class="${o.cellClass}"` : '';
+  return `<td${cls}>`
+    + `<div class="stitch-quote-box">`
+    + yesLine
+    + noLine
+    + `</div>`
+    + `</td>`;
+}
+
+
 function stitchOpenOrdersHeadHtml(sort) {
   const active = (sort && Number.isInteger(sort.col)) ? sort : null;
   const cols = [
     { label: 'Market & Arbitrage Status', sortIdx: 1 },
     { label: 'Dual-Leg Quotes (YES / NO)', sortIdx: 3 },
     { label: 'Total Committed', sortIdx: 5 },
-    { label: 'Queue Ahead (Depth)', sortIdx: 6 },
-    { label: 'Age / Stamp', sortIdx: 0 },
+    { label: 'LAST UPDATED', sortIdx: 0 },
     { label: 'Actions', sortIdx: null, right: true },
   ];
   const cells = cols.map((col) => {
@@ -5972,19 +6039,18 @@ function stitchOpenOrdersHeadHtml(sort) {
 function stitchOpenOrdersRows(kpi, state, sort) {
   const orders = ((state && state.orders) || []).filter(isRestingOrder);
   if (!orders.length) {
-    return `<tr><td colspan="6" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No orders are resting on the book.</td></tr>`;
+    return `<tr><td colspan="5" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No orders are resting on the book.</td></tr>`;
   }
 
   const byMarket = (kpi && kpi.by_market) || {};
   const legs = tokenLegMap(kpi);
-  const queues = queueAheadByOrder(kpi);
   const groups = groupOrdersByPair(orders, kpi);
 
   const sorted = sort ? otSortGroups(groups, sort, (g, col, dir) => {
     const first = g.orders[0];
     const market = orderGroupMarket(g, first.condition_id, byMarket, state);
     switch (col) {
-      case 0: return otExtreme(g.orders.map(o => Number(o.posted_ts) || 0), dir);
+      case 0: return otExtreme(g.orders.map(o => Number(o.posted_ts) || 0), 'asc');
       case 1: return String((market && (market.title || market.name || market.slug)) || '');
       case 2: return legForOrder(first, legs, byMarket) || '';
       case 3: return otExtreme(g.orders.map(o => o.price), dir);
@@ -5997,7 +6063,6 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         });
         return costs.some(c => c === null) ? null : otSum(costs);
       }
-      case 6: return otExtreme(g.orders.map(o => otNum(queues[o.order_id])), dir);
       case 7: return otExtreme(g.orders.map(o => o.age_sec), dir);
       default: return null;
     }
@@ -6032,9 +6097,6 @@ function stitchOpenOrdersRows(kpi, state, sort) {
     const totalCost = upCost + dnCost;
     const totalShares = upSize + dnSize;
 
-    const upQueue = upOrder ? queues[upOrder.order_id] : null;
-    const dnQueue = dnOrder ? queues[dnOrder.order_id] : null;
-
     const postedTimestamps = group.orders.map(o => Number(o.posted_ts)).filter(Number.isFinite);
     const postedTs = postedTimestamps.length ? Math.min(...postedTimestamps) : null;
 
@@ -6045,15 +6107,6 @@ function stitchOpenOrdersRows(kpi, state, sort) {
       || (first.condition_id ? first.condition_id.slice(0, 10) + '…' : '--');
     const category = marketCategory(market);
     const marketUrl = market && market.slug ? `https://polymarket.com/market/${market.slug}` : '#';
-
-    const queueUpStr = upQueue != null ? fmtCompactUSD(upQueue) : '--';
-    const queueDnStr = dnQueue != null ? fmtCompactUSD(dnQueue) : '--';
-    let queuePct = 42;
-    if (upQueue != null && dnQueue != null && (upQueue + dnQueue) > 0) {
-      queuePct = Math.round(Math.min(95, Math.max(10, (upQueue / (upQueue + dnQueue)) * 100)));
-    } else if (upQueue != null || dnQueue != null) {
-      queuePct = 65;
-    }
 
     const isPaired = status === 'paired';
     const isPartial = status === 'partial';
@@ -6099,31 +6152,11 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         </div>
       </td>
 
-      <!-- Col 2: Dual-Leg Quotes (UP / DOWN) -->
-      <td>
-        <div class="stitch-quote-box">
-          <div class="stitch-quote-rung">
-            ${upOrder ? `
-              <span class="stitch-leg-pill yes">YES</span>
-              <span style="color:#e2e8f0;">${fmtShares(upSize)} @ ${fmtPrice(upPrice)}</span>
-              <span class="stitch-quote-subcost">(${fmtUSD(upCost)})</span>
-            ` : `
-              <span class="stitch-leg-pill missing">YES</span>
-              <span class="stitch-quote-awaiting">[Awaiting YES Quote]</span>
-            `}
-          </div>
-          <div class="stitch-quote-rung">
-            ${dnOrder ? `
-              <span class="stitch-leg-pill no">NO</span>
-              <span style="color:#e2e8f0;">${fmtShares(dnSize)} @ ${fmtPrice(dnPrice)}</span>
-              <span class="stitch-quote-subcost">(${fmtUSD(dnCost)})</span>
-            ` : `
-              <span class="stitch-leg-pill missing">NO</span>
-              <span class="stitch-quote-awaiting">[Awaiting NO Quote]</span>
-            `}
-          </div>
-        </div>
-      </td>
+      <!-- Col 2: Dual-Leg Quotes (YES / NO) -->
+      ${stitchDualLegCell(
+        dualLegLine({ side: 'YES', size: upOrder ? upSize : null, price: upPrice, cost: upCost, emptyLabel: '[Awaiting YES Quote]' }),
+        dualLegLine({ side: 'NO', size: dnOrder ? dnSize : null, price: dnPrice, cost: dnCost, emptyLabel: '[Awaiting NO Quote]' }),
+        {})}
 
       <!-- Col 3: Total Committed -->
       <td>
@@ -6133,24 +6166,13 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         </div>
       </td>
 
-      <!-- Col 4: Queue Ahead (Depth) -->
-      <td>
-        <div class="stitch-queue-depth">
-          ${queueUpStr} <span class="stitch-queue-sub">/ ${queueDnStr}</span>
-        </div>
-        <div class="stitch-queue-bar">
-          <div class="stitch-queue-fill ${isUnpaired ? 'is-amber' : ''}" style="width: ${queuePct}%"></div>
-        </div>
-        <div class="stitch-queue-label">${isUnpaired ? 'At Best Order Limit #1' : `Top of queue: ${queuePct}%`}</div>
-      </td>
-
-      <!-- Col 5: Age / Stamp -->
-      <td>
+      <!-- Col 4: LAST UPDATED / AGE (stopwatch + timestamp, same as Markets) -->
+      <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
         <div class="stitch-age-stopwatch">${ageSec !== null ? fmtStopwatch(ageSec) : '--'}</div>
-        <div class="stitch-age-meta">${postedTs !== null ? `${fmtTimestamp(postedTs)} (${fmtRelAgo(postedTs)})` : '--'}</div>
+        <div class="stitch-age-meta">${postedTs !== null ? fmtTimestamp(postedTs) : '--'}</div>
       </td>
 
-      <!-- Col 6: Actions -->
+      <!-- Col 5: Actions -->
       <td style="text-align:right;">
         <div class="stitch-action-group">
           ${isUnpaired ? `
@@ -6167,24 +6189,27 @@ function stitchOpenOrdersRows(kpi, state, sort) {
 
 function stitchActiveMarketsHeadHtml(sort) {
   const active = (sort && Number.isInteger(sort.col)) ? sort : null;
+  // Column hierarchy per the UX spec: Market anchors the far left, the age/timestamp
+  // lives at the far right (before any actions), Category is no longer a standalone
+  // column (it is a badge under the market name), and 24h Volume + Resolves are
+  // stacked into one cell. `sortIdx` is a STABLE logical key — the body's sort switch
+  // keys on it — so reordering these visual columns never touches the sort logic.
   const cols = [
-    { label: 'AGE / STAMP', sortIdx: 0 },
-    { label: 'MARKET & CLASSIFICATION', sortIdx: 1 },
-    { label: 'CATEGORY', sortIdx: 2 },
-    { label: 'YES QUOTE', sortIdx: 3 },
-    { label: 'NO QUOTE', sortIdx: 4 },
-    { label: 'PAIR COST', sortIdx: 5 },
+    { label: 'MARKET & CATEGORY', sortIdx: 1, left: true },
+    { label: 'YES PRICE', sortIdx: 3 },
+    { label: 'NO PRICE', sortIdx: 4 },
     { label: 'EDGE', sortIdx: 6 },
     { label: '24H VOLUME', sortIdx: 7 },
-    { label: 'RESOLVES', sortIdx: 8 },
     { label: 'STATUS', sortIdx: 9 },
+    { label: 'LAST UPDATED', sortIdx: 0 },
   ];
   const cells = cols.map((col) => {
     const isActive = Boolean(active && active.col === col.sortIdx);
     const dir = isActive ? active.dir : null;
     const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
     const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
-    return `<th${ariaSort}>`
+    const cls = col.left ? ' class="ot-head-left"' : '';
+    return `<th${ariaSort}${cls}>`
       + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
       + `<span class="ot-sort-label">${esc(col.label)}</span>${arrow}</button></th>`;
   }).join('');
@@ -6199,20 +6224,32 @@ function stitchActiveMarketsRows(kpi, state, sort) {
         || (ordersByMarket[cid] || []).some(o => isRestingOrder(o))));
 
   if (!entries.length) {
-    return `<tr><td colspan="10" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No markets are being quoted.</td></tr>`;
+    return `<tr><td colspan="7" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No markets are being quoted.</td></tr>`;
   }
+
+  const nowMs = Date.now();
 
   const rows = entries.map(([cid, m]) => {
     const legs = latestLegQuotes(m);
-    const upQuote = legs.up ? legs.up.price : null;
-    const dnQuote = legs.dn ? legs.dn.price : null;
-    const upMid = legs.up ? legs.up.mid : null;
-    const dnMid = legs.dn ? legs.dn.mid : null;
-    const pairCost = (upQuote !== null && dnQuote !== null) ? (upQuote + dnQuote) : null;
+    // The MARKET's own price, not ours: the venue's top-of-book ask is what
+    // buying this leg costs right now, and the bid is the other side of the
+    // spread. Our resting quote price belongs on the Orders tab, not here.
+    // When the live feed has no fresh, two-sided mark for a leg, fall back to
+    // the quote mid rather than showing half a spread as if it were the book.
+    const upMkt = legs.up ? liveMarkBidAsk(legs.up.token_id, nowMs) : null;
+    const dnMkt = legs.dn ? liveMarkBidAsk(legs.dn.token_id, nowMs) : null;
+    const upPrice = upMkt ? upMkt.ask : (legs.up ? legs.up.mid : null);
+    const dnPrice = dnMkt ? dnMkt.ask : (legs.dn ? legs.dn.mid : null);
+    const upBid = upMkt ? upMkt.bid : null;
+    const dnBid = dnMkt ? dnMkt.bid : null;
+    // Cheapest the pair can be assembled at the venue right now = both asks.
+    const pairCost = (upPrice !== null && dnPrice !== null) ? (upPrice + dnPrice) : null;
     const edge = pairCost === null ? null : 1 - pairCost;
+    // Edge as a percentage of the pair cost basis: profit over what it cost to assemble.
+    const edgePct = (pairCost !== null && pairCost > 0) ? (edge / pairCost) * 100 : null;
     const restingHere = (ordersByMarket[cid] || []).some(o => isRestingOrder(o));
     const ts = latestQuoteTs(m);
-    return { cid, m, upQuote, dnQuote, upMid, dnMid, pairCost, edge, restingHere, ts };
+    return { cid, m, upPrice, dnPrice, upBid, dnBid, pairCost, edge, edgePct, restingHere, ts };
   });
 
   const sorted = sort ? otSortGroups(rows, sort, (r, col) => {
@@ -6220,8 +6257,8 @@ function stitchActiveMarketsRows(kpi, state, sort) {
       case 0: return otNum(r.ts);
       case 1: return String(r.m.title || r.m.name || r.m.slug || '');
       case 2: return marketCategory(r.m);
-      case 3: return otNum(r.upQuote);
-      case 4: return otNum(r.dnQuote);
+      case 3: return otNum(r.upPrice);
+      case 4: return otNum(r.dnPrice);
       case 5: return otNum(r.pairCost);
       case 6: return otNum(r.edge);
       case 7: return otNum(r.m.volume_24h);
@@ -6236,15 +6273,10 @@ function stitchActiveMarketsRows(kpi, state, sort) {
       || String(a.m.title || '').localeCompare(String(b.m.title || '')));
   }
 
-  const nowMs = Date.now();
-
-  return sorted.map(({ cid, m, upQuote, dnQuote, upMid, dnMid, pairCost, edge, restingHere, ts }) => {
+  return sorted.map(({ cid, m, upPrice, dnPrice, upBid, dnBid, pairCost, edge, edgePct, restingHere, ts }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const category = marketCategory(m);
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
-
-    // Classification / subtitle
-    const classification = m.event_title || m.subtitle || m.category || 'Polymarket Arbitrage';
 
     // Age / Stopwatch
     const ageSec = (ts && Number.isFinite(ts)) ? Math.max(0, Math.round((nowMs - toMs(ts)) / 1000)) : null;
@@ -6261,65 +6293,53 @@ function stitchActiveMarketsRows(kpi, state, sort) {
       statusBadge = `<span class="stitch-status-badge idle"><span class="stitch-status-dot idle"></span>IDLE</span>`;
     }
 
-    return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
-      <!-- Col 0: AGE / STAMP -->
-      <td class="mono font-tabular" style="white-space:nowrap;">
-        <div class="stitch-age-stopwatch">${ageDisp}</div>
-        <div class="stitch-age-meta">${tsDisp}</div>
-      </td>
+    const edgeColor = edge === null ? '#64748b' : (edge > 0 ? '#34d399' : '#f43f5e');
 
-      <!-- Col 1: MARKET & CLASSIFICATION -->
+    return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
+      <!-- Col 1: MARKET & CATEGORY (market anchors far left; category badge sits under the title) -->
       <td class="stitch-market-cell">
         <div class="stitch-market-title">
           <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
         </div>
-        <div class="stitch-market-meta" style="margin-top:2px;">
-          <span style="font-size:11px;color:#94a3b8;">${esc(classification)}</span>
-        </div>
+        ${(!category || category === 'Uncategorized') ? '' : `<div class="stitch-market-meta">
+          <span class="stitch-category-pill">${esc(category)}</span>
+        </div>`}
       </td>
 
-      <!-- Col 2: CATEGORY -->
-      <td>
-        <span class="stitch-category-pill">${esc(category)}</span>
-      </td>
-
-      <!-- Col 3: UP QUOTE + Mid Price -->
+      <!-- Col 2: YES PRICE — the venue's ask (what buying YES costs now) + bid subtext -->
       <td class="mono font-tabular">
-        <div class="stitch-quote-up">${fmtPrice(upQuote)}</div>
-        ${upMid !== null ? `<div class="stitch-mid-sub">mid ${fmtPrice(upMid)}</div>` : ''}
+        <div class="stitch-quote-up">${fmtPrice(upPrice)}</div>
+        ${upBid !== null ? `<div class="stitch-mid-sub">bid ${fmtPrice(upBid)}</div>` : ''}
       </td>
 
-      <!-- Col 4: DOWN QUOTE + Mid Price -->
+      <!-- Col 3: NO PRICE — the venue's ask + bid subtext -->
       <td class="mono font-tabular">
-        <div class="stitch-quote-down">${fmtPrice(dnQuote)}</div>
-        ${dnMid !== null ? `<div class="stitch-mid-sub">mid ${fmtPrice(dnMid)}</div>` : ''}
+        <div class="stitch-quote-down">${fmtPrice(dnPrice)}</div>
+        ${dnBid !== null ? `<div class="stitch-mid-sub">bid ${fmtPrice(dnBid)}</div>` : ''}
       </td>
 
-      <!-- Col 5: PAIR COST -->
-      <td class="mono font-tabular">
-        <div class="stitch-pair-cost">${fmtPrice(pairCost)}</div>
-      </td>
-
-      <!-- Col 6: EDGE -->
+      <!-- Col 4: EDGE (cents + %) -->
       <td class="mono font-tabular">
         <div class="stitch-edge">
-          ${edge === null ? '--' : `<span class="${edge > 0 ? 'text-emerald-400 font-bold' : 'text-rose-400'}" style="color:${edge > 0 ? '#34d399' : '#f43f5e'};font-weight:700;">+${(edge * 100).toFixed(1)}¢</span>`}
+          ${edge === null ? '--' : `<span style="color:${edgeColor};font-weight:700;">${edge >= 0 ? '+' : ''}${(edge * 100).toFixed(1)}c (${edgePct >= 0 ? '+' : ''}${edgePct.toFixed(1)}%)</span>`}
         </div>
       </td>
 
-      <!-- Col 7: 24H VOLUME -->
+      <!-- Col 5: 24H VOLUME + RESOLVES stacked -->
       <td class="mono font-tabular" style="color:#94a3b8;">
-        ${fmtCompactUSD(m.volume_24h)}
+        <div>${fmtCompactUSD(m.volume_24h)}</div>
+        <div class="stitch-mid-sub" style="color:#64748b;">${(m.days_to_resolve === null || m.days_to_resolve === undefined) ? '--' : `${Number(m.days_to_resolve).toFixed(1)}d`}</div>
       </td>
 
-      <!-- Col 8: RESOLVES -->
-      <td class="mono font-tabular" style="color:#64748b;">
-        ${(m.days_to_resolve === null || m.days_to_resolve === undefined) ? '--' : `${Number(m.days_to_resolve).toFixed(1)}d`}
-      </td>
-
-      <!-- Col 9: STATUS -->
+      <!-- Col 6: STATUS -->
       <td>
         ${statusBadge}
+      </td>
+
+      <!-- Col 7: LAST UPDATED / AGE (far right) -->
+      <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
+        <div class="stitch-age-stopwatch">${ageDisp}</div>
+        <div class="stitch-age-meta">${tsDisp}</div>
       </td>
     </tr>`;
   }).join('');
@@ -6328,23 +6348,22 @@ function stitchActiveMarketsRows(kpi, state, sort) {
 function stitchPositionsHeadHtml(sort) {
   const active = (sort && Number.isInteger(sort.col)) ? sort : null;
   const cols = [
-    { label: 'AGE / STAMP', sortIdx: 0 },
-    { label: 'MARKET & CLASSIFICATION', sortIdx: 1 },
-    { label: 'CATEGORY', sortIdx: 2 },
-    { label: 'YES HELD', sortIdx: 3 },
-    { label: 'NO HELD', sortIdx: 4 },
+    { label: 'MARKET & CLASSIFICATION', sortIdx: 1, left: true },
+    { label: 'HELD INVENTORY', sortIdx: 3 },
     { label: 'TOTAL COST', sortIdx: 5 },
     { label: 'CURRENT PRICE', sortIdx: 9 },
     { label: 'MARK VALUE', sortIdx: 6 },
     { label: 'UNREALIZED P&L', sortIdx: 7 },
     { label: 'HEDGE STATUS', sortIdx: 8 },
+    { label: 'LAST UPDATED', sortIdx: 0 },
   ];
   const cells = cols.map((col) => {
     const isActive = Boolean(active && active.col === col.sortIdx);
     const dir = isActive ? active.dir : null;
     const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
     const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
-    return `<th${ariaSort}>`
+    const cls = col.left ? ' class="ot-head-left"' : '';
+    return `<th${ariaSort}${cls}>`
       + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
       + `<span class="ot-sort-label">${esc(col.label)}</span>${arrow}</button></th>`;
   }).join('');
@@ -6383,7 +6402,7 @@ function stitchPositionsRows(kpi, state, sort) {
   const entries = heldMarketEntries(kpi, false);
 
   if (!entries.length) {
-    return `<tr><td colspan="10" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No legs have filled, so nothing is held.</td></tr>`;
+    return `<tr><td colspan="8" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No legs have filled, so nothing is held.</td></tr>`;
   }
 
   const rows = entries.map(([cid, m]) => {
@@ -6428,7 +6447,6 @@ function stitchPositionsRows(kpi, state, sort) {
     switch (col) {
       case 0: return otNum(r.ts);
       case 1: return String(r.m.title || r.m.name || r.m.slug || '');
-      case 2: return r.category;
       case 3: return otNum(r.upSh);
       case 4: return otNum(r.dnSh);
       case 5: return otNum(r.totalCost);
@@ -6489,61 +6507,43 @@ function stitchPositionsRows(kpi, state, sort) {
       : `<span style="color:#64748b;font-size:11px;">--</span>`;
 
     return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
-      <!-- Col 0: AGE / STAMP -->
-      <td class="mono font-tabular" style="white-space:nowrap;">
-        <div class="stitch-age-stopwatch">${ageDisp}</div>
-        <div class="stitch-age-meta">${tsDisp}</div>
-      </td>
-
-      <!-- Col 1: MARKET & CLASSIFICATION -->
+      <!-- Col 0: MARKET & CLASSIFICATION (market anchors far left; category pill sits under the title) -->
       <td class="stitch-market-cell">
         <div class="stitch-market-title">
           <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
         </div>
+        ${(!category || category === 'Uncategorized') ? '' : `<div class="stitch-market-meta" style="margin-top:2px;">
+          <span class="stitch-category-pill">${esc(category)}</span>
+        </div>`}
         <div class="stitch-market-meta" style="margin-top:2px;">
           <span style="font-size:11px;color:#94a3b8;">${esc(classification)}</span>
         </div>
       </td>
 
-      <!-- Col 2: CATEGORY -->
-      <td>
-        <span class="stitch-category-pill">${esc(category)}</span>
-      </td>
+      <!-- Col 1: HELD INVENTORY (dual-leg YES / NO block, shared with Orders) -->
+      ${stitchDualLegCell(
+        dualLegLine({ side: 'YES', size: upSh, price: upAvg, cost: upCost, emptyLabel: 'No YES held', sizeSuffix: ' sh' }),
+        dualLegLine({ side: 'NO', size: dnSh, price: dnAvg, cost: dnCost, emptyLabel: 'No NO held', sizeSuffix: ' sh' }),
+        { cellClass: 'mono font-tabular' })}
 
-      <!-- Col 3: UP HELD -->
-      <td class="mono font-tabular">
-        ${upSh > 0 ? `
-          <div class="stitch-quote-up">${fmtShares(upSh)} sh @ ${fmtPrice(upAvg)}</div>
-          <div class="stitch-mid-sub">cost ${fmtUSD(upCost)}</div>
-        ` : `<span style="color:#64748b;font-size:11px;">--</span>`}
-      </td>
-
-      <!-- Col 4: DOWN HELD -->
-      <td class="mono font-tabular">
-        ${dnSh > 0 ? `
-          <div class="stitch-quote-down">${fmtShares(dnSh)} sh @ ${fmtPrice(dnAvg)}</div>
-          <div class="stitch-mid-sub">cost ${fmtUSD(dnCost)}</div>
-        ` : `<span style="color:#64748b;font-size:11px;">--</span>`}
-      </td>
-
-      <!-- Col 5: TOTAL COST -->
+      <!-- Col 2: TOTAL COST -->
       <td class="mono font-tabular">
         <div class="stitch-pair-cost">${fmtUSD(totalCost)}</div>
         <div class="stitch-mid-sub">${fmtShares(totalSh)} sh total</div>
       </td>
 
-      <!-- Col 6 (new): CURRENT PRICE, one line per held leg -->
+      <!-- Col 3: CURRENT PRICE, one line per held leg (merged from #497) -->
       <td class="mono font-tabular${liveCls}"${liveTitle} data-cid="${esc(cid)}" data-cell="cur-price">
         ${curPriceLines}
       </td>
 
-      <!-- Col 7: MARK VALUE (pair total at par) -->
+      <!-- Col 4: MARK VALUE -->
       <td class="mono font-tabular"${liveTitle} data-cid="${esc(cid)}" data-cell="value">
         <div class="stitch-mark-val">${mark === null ? '--' : fmtUSD(mark)}</div>
         ${live ? `<div class="stitch-mid-sub" style="color:#34d399;">● live mark</div>` : ''}
       </td>
 
-      <!-- Col 8: UNREALIZED P&L, one line per held leg plus the total -->
+      <!-- Col 5: UNREALIZED P&L, one line per held leg plus the total -->
       <td class="mono font-tabular" data-cid="${esc(cid)}" data-cell="unrealized">
         <div class="stitch-pnl-cell">
           ${legMarks.map((e) => `
@@ -6559,9 +6559,15 @@ function stitchPositionsRows(kpi, state, sort) {
         </div>
       </td>
 
-      <!-- Col 8: HEDGE STATUS -->
+      <!-- Col 6: HEDGE STATUS -->
       <td>
         ${statusBadge}
+      </td>
+
+      <!-- Col 7: LAST UPDATED / AGE (last cell, flush right) -->
+      <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
+        <div class="stitch-age-stopwatch">${ageDisp}</div>
+        <div class="stitch-age-meta">${tsDisp}</div>
       </td>
     </tr>`;
   }).join('');
@@ -6569,26 +6575,71 @@ function stitchPositionsRows(kpi, state, sort) {
 
 function stitchClosedTradesHeadHtml(sort) {
   const active = (sort && Number.isInteger(sort.col)) ? sort : null;
+  // Market anchors far left; Closed At sits before the toggle at far right.
+  // No standalone CATEGORY (pill sits under the market title) and no STATUS
+  // (every row here is FINISHED -- a column that never varies is no column).
   const cols = [
-    { label: 'AGE / CLOSED', sortIdx: 0 },
-    { label: 'MARKET & OUTCOME', sortIdx: 1 },
-    { label: 'CATEGORY', sortIdx: 2 },
+    { label: 'MARKET', sortIdx: 1, left: true },
     { label: 'TOTAL COST', sortIdx: 3 },
-    { label: 'REALIZED P&L', sortIdx: 4 },
     { label: 'OUTCOME BREAKDOWN', sortIdx: 5 },
-    { label: 'STATUS', sortIdx: 6 },
-    { label: 'EXECUTION LEDGER', sortIdx: 7 },
+    { label: 'REALIZED P&L', sortIdx: 4 },
+    { label: 'CLOSED AT', sortIdx: 0 },
+    { label: 'LEDGER', sortIdx: null },
   ];
   const cells = cols.map(col => {
-    const isActive = active && active.col === col.sortIdx;
+    const isActive = col.sortIdx !== null && active && active.col === col.sortIdx;
     const dir = isActive ? active.dir : null;
     const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
     const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
-    return `<th${ariaSort}>`
+    const cls = col.left ? ' class="ot-head-left"' : '';
+    // LEDGER is a toggle, not a sort key: plain label, no dead sort button.
+    if (col.sortIdx === null) return `<th${cls}><span class="ot-sort-label">${esc(col.label)}</span></th>`;
+    return `<th${ariaSort}${cls}>`
       + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
       + `<span class="ot-sort-label">${esc(col.label)}</span>${arrow}</button></th>`;
   }).join('');
   return `<tr>${cells}</tr>`;
+}
+
+/* Shared Closed-Trades ledger row: TIMESTAMP | EXEC TYPE | DUAL LEGS |
+ * ENTRY | EXIT | SIZE | PNL. One builder for all three row sources
+ * (settlements, paired orders, single orders) so the child table can
+ * never drift into three dialects again. */
+function stitchLedgerChildRow(tsDisp, execType, legsHtml, entryPrice, entryCost, exitPrice, proceeds, sizeLabel, pnl, pnlPct) {
+  const cls = pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat');
+  return `<tr class="stitch-ledger-row">`
+    + `<td class="mono font-tabular"><div class="stitch-age-stopwatch">${tsDisp}</div></td>`
+    + `<td><span class="stitch-exec-type">${execType}</span></td>`
+    + `<td>${legsHtml}</td>`
+    + `<td class="mono font-tabular"><div class="stitch-price-val">${entryPrice !== null ? fmtPrice(entryPrice) : '--'}</div>`
+    + `<div class="stitch-mid-sub">cost ${fmtUSD(entryCost)}</div></td>`
+    + `<td class="mono font-tabular"><div class="stitch-sold-price" style="color:#f8fafc;font-weight:700;">${fmtPrice(exitPrice)}</div>`
+    + `<div class="stitch-mid-sub" style="color:#38bdf8;">proceeds ${fmtUSD(proceeds)}</div></td>`
+    + `<td class="mono font-tabular"><div class="stitch-size-val">${sizeLabel}</div></td>`
+    + `<td class="mono font-tabular"><div class="stitch-pnl-cell">`
+    + `<div class="stitch-pnl-val ${cls}">${pnl >= 0 ? '+' : ''}${fmtUSD(pnl)}</div>`
+    + `<div class="stitch-pnl-pct ${cls}">(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</div>`
+    + `</div></td>`
+    + `</tr>`;
+}
+
+/* One YES/NO leg rung; pair = two rungs stacked, solo = one. */
+function stitchLedgerLegs(isPair, upSize, upPx, upCost, dnSize, dnPx, dnCost, soloLabel, soloPill, soloSize, soloPx, soloCost) {
+  const rung = (label, size, price, cost, pill) =>
+    `<div class="stitch-quote-rung">`
+    + `<span class="stitch-leg-pill ${pill}">${label}</span>`
+    + `<span style="color:#e2e8f0;">${size > 0 ? `${fmtShares(size)} @ ` : ''}${fmtPrice(price)}</span>`
+    + (cost > 0 ? `<span class="stitch-quote-subcost">(${fmtUSD(cost)})</span>` : '')
+    + `</div>`;
+  if (isPair) {
+    return `<div class="stitch-quote-box">`
+      + rung('YES', upSize, upPx, upCost, 'yes')
+      + rung('NO', dnSize, dnPx, dnCost, 'no')
+      + `</div>`;
+  }
+  return `<div class="stitch-quote-box">`
+    + rung(soloLabel, soloSize, soloPx, soloCost, soloPill)
+    + `</div>`;
 }
 
 function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
@@ -6596,15 +6647,14 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
     return settlements.map(s => {
       const ts = s.ts;
       const ageSec = (ts && Number.isFinite(ts)) ? Math.max(0, Math.round((nowMs - toMs(ts)) / 1000)) : null;
-      const ageDisp = ageSec !== null ? fmtStopwatch(ageSec) : '--';
-      const tsDisp = (ts && Number.isFinite(toMs(ts))) ? fmtTimestamp(ts) : '--';
+      // Ledger timestamp: stopwatch only, same as every other tab.
+      const tsDisp = ageSec !== null ? fmtStopwatch(ageSec) : '--';
 
       const shares = Number(s.shares || 0);
       const costBasis = Number(s.cost_basis || 0);
       const proceeds = Number(s.proceeds || 0);
       const realizedPnl = Number(s.realized_pnl != null ? s.realized_pnl : (proceeds - costBasis));
       const pnlPct = costBasis > 0 ? (realizedPnl / costBasis) * 100 : 0;
-      const pnlCls = realizedPnl > 0 ? 'pos' : (realizedPnl < 0 ? 'neg' : 'flat');
 
       const method = String(s.method || '').toLowerCase();
       const reason = String(s.reason || '').toLowerCase();
@@ -6613,6 +6663,10 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       const isStopLoss = reason === 'lifecycle_hard_stop' || method === 'stop_loss_exit' || reason.includes('stop_loss') || reason === 'adverse_drift';
       const isGraceExpired = reason === 'grace_expired' || reason === 'aged_out_rescue' || reason.includes('grace_expired') || method.includes('aged_out');
       const isSettlement = method === 'settlement' || method === 'shadow_settlement';
+      // EXEC TYPE replaces the STATUS badge: the outcome IS the type.
+      const execType = isMerge ? 'Pair Merge'
+        : (isStopLoss ? 'Stop Loss'
+        : (isGraceExpired ? 'Grace Expired' : (isSettlement ? 'Settlement' : 'Sale')));
 
       const upCostRem = Number(s.up_cost_removed || 0);
       const dnCostRem = Number(s.dn_cost_removed || 0);
@@ -6628,7 +6682,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
 
       let exitPrice = 0.0;
       if (isMerge) {
-        exitPrice = 1.0000; // Merged back into $1.0000 USDC per pair
+        exitPrice = 1.00; // Merged back into $1.00 USDC per pair
       } else if (proceeds > 0 && shares > 0) {
         exitPrice = proceeds / shares;
       } else if (s.up_price !== null && s.up_price !== undefined) {
@@ -6636,107 +6690,24 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
       } else if (s.dn_price !== null && s.dn_price !== undefined) {
         exitPrice = Number(s.dn_price);
       } else if (isSettlement) {
-        exitPrice = realizedPnl > 0 ? 1.0000 : 0.0000;
+        exitPrice = realizedPnl > 0 ? 1.00 : 0.00;
       }
 
-      // Status Badge
-      let statusBadge = '';
-      if (isMerge) {
-        statusBadge = `<span class="stitch-status-badge filled"><span class="stitch-status-dot filled"></span>MERGED</span>`;
-      } else if (isStopLoss) {
-        statusBadge = `<span class="stitch-status-badge stop-loss"><span class="stitch-status-dot stop-loss"></span>STOP LOSS</span>`;
-      } else if (isGraceExpired) {
-        statusBadge = `<span class="stitch-status-badge grace-expired"><span class="stitch-status-dot grace-expired"></span>GRACE EXPIRED</span>`;
-      } else if (isSettlement) {
-        statusBadge = `<span class="stitch-status-badge quoting"><span class="stitch-status-dot quoting"></span>SETTLED</span>`;
-      } else {
-        statusBadge = `<span class="stitch-status-badge idle"><span class="stitch-status-dot idle"></span>ORPHAN SOLD</span>`;
-      }
-
-      // 1 big cell for positions: YES in green, NO in light red
-      let legHtml = '';
-      if (isPair) {
-        const upCost = upCostRem > 0 ? upCostRem : (costBasis > 0 ? costBasis / 2 : 0);
-        const dnCost = dnCostRem > 0 ? dnCostRem : (costBasis > 0 ? costBasis / 2 : 0);
-        const upPx = (shares > 0 && upCost > 0) ? (upCost / shares) : (s.up_price != null ? Number(s.up_price) : (entryPrice != null ? entryPrice / 2 : 0));
-        const dnPx = (shares > 0 && dnCost > 0) ? (dnCost / shares) : (s.dn_price != null ? Number(s.dn_price) : (entryPrice != null ? entryPrice / 2 : 0));
-
-        legHtml = `<div class="stitch-quote-box">
-          <div class="stitch-quote-rung">
-            <span class="stitch-leg-pill yes">YES</span>
-            <span style="color:#e2e8f0;">${shares > 0 ? `${fmtShares(shares)} @ ` : ''}${fmtPrice(upPx)}</span>
-            <span class="stitch-quote-subcost">(${fmtUSD(upCost)})</span>
-          </div>
-          <div class="stitch-quote-rung">
-            <span class="stitch-leg-pill no">NO</span>
-            <span style="color:#e2e8f0;">${shares > 0 ? `${fmtShares(shares)} @ ` : ''}${fmtPrice(dnPx)}</span>
-            <span class="stitch-quote-subcost">(${fmtUSD(dnCost)})</span>
-          </div>
-        </div>`;
-      } else {
-        // Solo position: each position has its own row and pnl cell
-        const isUp = upCostRem > 0 || (s.up_price !== null && s.up_price !== undefined);
-        const isDn = dnCostRem > 0 || (s.dn_price !== null && s.dn_price !== undefined);
-        const legLabel = isUp ? 'YES' : (isDn ? 'NO' : 'SOLO');
-        const pillCls = isUp ? 'yes' : (isDn ? 'no' : 'missing');
-        const legCost = costBasis > 0 ? costBasis : (isUp ? upCostRem : dnCostRem);
-        const legPx = (shares > 0 && legCost > 0) ? (legCost / shares) : (entryPrice !== null ? entryPrice : 0);
-
-        legHtml = `<div class="stitch-quote-box">
-          <div class="stitch-quote-rung">
-            <span class="stitch-leg-pill ${pillCls}">${legLabel}</span>
-            <span style="color:#e2e8f0;">${shares > 0 ? `${fmtShares(shares)} @ ` : ''}${fmtPrice(legPx)}</span>
-            ${legCost > 0 ? `<span class="stitch-quote-subcost">(${fmtUSD(legCost)})</span>` : ''}
-          </div>
-        </div>`;
-      }
-
-      return `<tr class="stitch-ledger-row">
-        <!-- AGE / TIME -->
-        <td class="mono font-tabular">
-          <div class="stitch-age-stopwatch">${ageDisp}</div>
-          <div class="stitch-age-meta">${tsDisp}</div>
-        </td>
-
-        <!-- POSITIONS (YES / NO) (1 big cell) -->
-        <td>
-          ${legHtml}
-        </td>
-
-        <!-- ENTRY / BUY PRICE -->
-        <td class="mono font-tabular">
-          <div class="stitch-price-val">${entryPrice !== null ? fmtPrice(entryPrice) : '--'}</div>
-          <div class="stitch-mid-sub">cost ${fmtUSD(costBasis)}</div>
-        </td>
-
-        <!-- SOLD / EXIT PRICE -->
-        <td class="mono font-tabular">
-          <div class="stitch-sold-price" style="color:#f8fafc;font-weight:700;">${fmtPrice(exitPrice)}</div>
-          <div class="stitch-mid-sub" style="color:#38bdf8;">proceeds ${fmtUSD(proceeds)}</div>
-        </td>
-
-        <!-- SIZE (SH) -->
-        <td class="mono font-tabular">
-          <div class="stitch-size-val">${fmtShares(shares)} ${isPair ? 'pairs' : 'sh'}</div>
-        </td>
-
-        <!-- REALIZED P&L ($ and %) -->
-        <td class="mono font-tabular">
-          <div class="stitch-pnl-cell">
-            <div class="stitch-pnl-val ${pnlCls}">
-              ${realizedPnl >= 0 ? '+' : ''}${fmtUSD(realizedPnl)}
-            </div>
-            <div class="stitch-pnl-pct ${pnlCls}">
-              (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)
-            </div>
-          </div>
-        </td>
-
-        <!-- STATUS -->
-        <td>
-          ${statusBadge}
-        </td>
-      </tr>`;
+      // YES/NO legs via the shared builder (exec type replaces STATUS badge).
+      const _upCost = upCostRem > 0 ? upCostRem : (costBasis > 0 ? costBasis / 2 : 0);
+      const _dnCost = dnCostRem > 0 ? dnCostRem : (costBasis > 0 ? costBasis / 2 : 0);
+      const _upPx = (shares > 0 && _upCost > 0) ? (_upCost / shares) : (s.up_price != null ? Number(s.up_price) : (entryPrice != null ? entryPrice / 2 : 0));
+      const _dnPx = (shares > 0 && _dnCost > 0) ? (_dnCost / shares) : (s.dn_price != null ? Number(s.dn_price) : (entryPrice != null ? entryPrice / 2 : 0));
+      const _isUp = upCostRem > 0 || (s.up_price !== null && s.up_price !== undefined);
+      const _isDn = dnCostRem > 0 || (s.dn_price !== null && s.dn_price !== undefined);
+      const _soloCost = costBasis > 0 ? costBasis : (_isUp ? upCostRem : dnCostRem);
+      const _soloPx = (shares > 0 && _soloCost > 0) ? (_soloCost / shares) : (entryPrice !== null ? entryPrice : 0);
+      const _legsHtml = stitchLedgerLegs(isPair, shares, _upPx, _upCost, shares, _dnPx, _dnCost,
+        _isUp ? 'YES' : (_isDn ? 'NO' : 'SOLO'), _isUp ? 'yes' : (_isDn ? 'no' : 'missing'),
+        shares, _soloPx, _soloCost);
+      return stitchLedgerChildRow(tsDisp, execType, _legsHtml,
+        entryPrice, costBasis, exitPrice, proceeds,
+        `${fmtShares(shares)} ${isPair ? 'pairs' : 'sh'}`, realizedPnl, pnlPct);
     }).join('');
   }
 
@@ -6764,106 +6735,35 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
         const costBasis = upCost + dnCost;
         const entryPrice = upPx + dnPx;
         const isMerged = String(upOrder.status || '').toLowerCase() === 'merged' || String(dnOrder.status || '').toLowerCase() === 'merged';
-        const exitPrice = isMerged ? 1.0000 : entryPrice;
+        const exitPrice = isMerged ? 1.00 : entryPrice;
         const proceeds = exitPrice * shares;
         const pnl = proceeds - costBasis;
         const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
-        const pnlCls = pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat');
         const ageSec = upOrder.age_sec != null ? upOrder.age_sec : dnOrder.age_sec;
-        const ageDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
-
-        return `<tr class="stitch-ledger-row">
-          <td class="mono font-tabular">
-            <div class="stitch-age-stopwatch">${ageDisp}</div>
-          </td>
-          <td>
-            <div class="stitch-quote-box">
-              <div class="stitch-quote-rung">
-                <span class="stitch-leg-pill yes">YES</span>
-                <span style="color:#e2e8f0;">${fmtShares(upSize)} @ ${fmtPrice(upPx)}</span>
-                <span class="stitch-quote-subcost">(${fmtUSD(upCost)})</span>
-              </div>
-              <div class="stitch-quote-rung">
-                <span class="stitch-leg-pill no">NO</span>
-                <span style="color:#e2e8f0;">${fmtShares(dnSize)} @ ${fmtPrice(dnPx)}</span>
-                <span class="stitch-quote-subcost">(${fmtUSD(dnCost)})</span>
-              </div>
-            </div>
-          </td>
-          <td class="mono font-tabular">
-            <div class="stitch-price-val">${fmtPrice(entryPrice)}</div>
-            <div class="stitch-mid-sub">cost ${fmtUSD(costBasis)}</div>
-          </td>
-          <td class="mono font-tabular">
-            <div class="stitch-sold-price" style="color:#f8fafc;font-weight:700;">${fmtPrice(exitPrice)}</div>
-            <div class="stitch-mid-sub" style="color:#38bdf8;">proceeds ${fmtUSD(proceeds)}</div>
-          </td>
-          <td class="mono font-tabular">
-            <div class="stitch-size-val">${fmtShares(shares)} pairs</div>
-          </td>
-          <td class="mono font-tabular">
-            <div class="stitch-pnl-cell">
-              <div class="stitch-pnl-val ${pnlCls}">${pnl >= 0 ? '+' : ''}${fmtUSD(pnl)}</div>
-              <div class="stitch-pnl-pct ${pnlCls}">(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</div>
-            </div>
-          </td>
-          <td>
-            <span class="stitch-status-badge ${isMerged ? 'filled' : 'idle'}">${isMerged ? 'MERGED' : 'FINISHED'}</span>
-          </td>
-        </tr>`;
+        const tsDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
+        return stitchLedgerChildRow(tsDisp, isMerged ? 'Pair Merge' : 'Sale',
+          stitchLedgerLegs(true, upSize, upPx, upCost, dnSize, dnPx, dnCost),
+          entryPrice, costBasis, exitPrice, proceeds,
+          `${fmtShares(shares)} pairs`, pnl, pnlPct);
       }
 
       return group.map(o => {
-        const isUp = (o.token_side === 'UP' || String(o.outcome||'').toLowerCase().includes('yes'));
-        const legLabel = isUp ? 'YES' : 'NO';
-        const pillCls = isUp ? 'yes' : 'no';
+        const isUp = (o.token_side === 'UP' || String(o.outcome || '').toLowerCase().includes('yes'));
         const price = Number(o.price || 0);
         const size = Number(o.size_matched || o.original_size || 0);
         const status = String(o.status || '').toLowerCase();
         const isMerged = status === 'merged';
-        const exitPrice = isMerged ? 1.0000 : price;
+        const exitPrice = isMerged ? 1.00 : price;
         const costBasis = price * size;
         const proceeds = exitPrice * size;
         const pnl = proceeds - costBasis;
         const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
-        const pnlCls = pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat');
         const ageSec = o.age_sec != null ? o.age_sec : null;
-        const ageDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
-
-        return `<tr class="stitch-ledger-row">
-          <td class="mono font-tabular">
-            <div class="stitch-age-stopwatch">${ageDisp}</div>
-          </td>
-          <td>
-            <div class="stitch-quote-box">
-              <div class="stitch-quote-rung">
-                <span class="stitch-leg-pill ${pillCls}">${legLabel}</span>
-                <span style="color:#e2e8f0;">${size > 0 ? `${fmtShares(size)} @ ` : ''}${fmtPrice(price)}</span>
-                ${costBasis > 0 ? `<span class="stitch-quote-subcost">(${fmtUSD(costBasis)})</span>` : ''}
-              </div>
-            </div>
-          </td>
-          <td class="mono font-tabular">
-            <div class="stitch-price-val">${fmtPrice(price)}</div>
-            <div class="stitch-mid-sub">cost ${fmtUSD(costBasis)}</div>
-          </td>
-          <td class="mono font-tabular">
-            <div class="stitch-sold-price" style="color:#f8fafc;font-weight:700;">${fmtPrice(exitPrice)}</div>
-            <div class="stitch-mid-sub" style="color:#38bdf8;">proceeds ${fmtUSD(proceeds)}</div>
-          </td>
-          <td class="mono font-tabular">
-            <div class="stitch-size-val">${fmtShares(size)} sh</div>
-          </td>
-          <td class="mono font-tabular">
-            <div class="stitch-pnl-cell">
-              <div class="stitch-pnl-val ${pnlCls}">${pnl >= 0 ? '+' : ''}${fmtUSD(pnl)}</div>
-              <div class="stitch-pnl-pct ${pnlCls}">(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</div>
-            </div>
-          </td>
-          <td>
-            <span class="stitch-status-badge ${isMerged ? 'filled' : 'idle'}">${isMerged ? 'MERGED' : fmtOrderStatus(status)}</span>
-          </td>
-        </tr>`;
+        const tsDisp = ageSec != null ? fmtStopwatch(ageSec) : '--';
+        return stitchLedgerChildRow(tsDisp, isMerged ? 'Pair Merge' : 'Sale',
+          stitchLedgerLegs(false, 0, 0, 0, 0, 0, 0, isUp ? 'YES' : 'NO', isUp ? 'yes' : 'no', size, price, costBasis),
+          price, costBasis, exitPrice, proceeds,
+          `${fmtShares(size)} sh`, pnl, pnlPct);
       }).join('');
     }).join('');
   }
@@ -6874,7 +6774,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
 function stitchClosedTradesRows(kpi, state, sort) {
   const entries = closedTradesEntries(kpi, state);
   if (!entries.length) {
-    return `<tr><td colspan="8" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No closed trades yet: nothing has settled with a booked profit or loss.</td></tr>`;
+    return `<tr><td colspan="6" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No closed trades yet: nothing has settled with a booked profit or loss.</td></tr>`;
   }
 
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
@@ -6950,42 +6850,40 @@ function stitchClosedTradesRows(kpi, state, sort) {
     const fillsCount = m.fills_count || allOrders.length || settlements.length;
     const executionItemsCount = settlements.length > 0 ? settlements.length : (allOrders.length || fillsCount);
 
+    // Parent order: MARKET, TOTAL COST, OUTCOME, REALIZED, CLOSED AT, LEDGER.
+    // Category rides under the title; STATUS is dropped (always FINISHED).
     let html = `<tr class="stitch-ot-row stitch-market-row${isExpanded ? ' expanded' : ''}" data-cid="${esc(cid)}" tabindex="0" role="button" aria-expanded="${isExpanded}">
-      <!-- Col 0: AGE / CLOSED -->
-      <td class="mono font-tabular" style="white-space:nowrap;">
-        <div class="stitch-age-stopwatch">${ageDisp}</div>
-        <div class="stitch-age-meta">${tsDisp}</div>
-      </td>
 
-      <!-- Col 1: MARKET & OUTCOME -->
+      <!-- Col 0: MARKET (anchors far left; category pill sits under the title) -->
       <td class="stitch-market-cell">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <div class="stitch-cat-avatar">${esc(categoryShort)}</div>
-          <div style="flex:1;min-width:0;">
-            <div class="stitch-market-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
-              ${winnerHtml}
-            </div>
-            <div class="stitch-market-meta" style="margin-top:3px;gap:6px;">
-              ${reasonChipHtml}
-              <span style="font-size:11px;color:#64748b;">· ${fillsCount} fill${fillsCount !== 1 ? 's' : ''}</span>
-            </div>
-          </div>
+        <div class="stitch-market-title">
+          <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
+          ${winnerHtml}
+        </div>
+        <div class="stitch-market-meta" style="margin-top:3px;gap:6px;">
+          ${(!category || category === 'Uncategorized') ? '' : `<span class="stitch-category-pill">${esc(category)}</span>`}
+          ${reasonChipHtml}
+          <span style="font-size:11px;color:#64748b;">· ${fillsCount} fill${fillsCount !== 1 ? 's' : ''}</span>
         </div>
       </td>
 
-      <!-- Col 2: CATEGORY -->
-      <td>
-        <span class="stitch-category-pill">${esc(category)}</span>
-      </td>
-
-      <!-- Col 3: TOTAL COST -->
+      <!-- Col 1: TOTAL COST -->
       <td class="mono font-tabular">
         <div class="stitch-pair-cost">${fmtUSD(totalCost)}</div>
         <div class="stitch-mid-sub">${Number(m.total_sh || 0) > 0 ? `${fmtShares(m.total_sh)} sh` : `${executionItemsCount} items`}</div>
       </td>
 
-      <!-- Col 4: REALIZED P&L ($ and %) -->
+      <!-- Col 2: OUTCOME BREAKDOWN (summary counts) -->
+      <td>
+        <div class="stitch-breakdown-pills">
+          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
+          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">⚠️ ${stopLossCount} Stop</span>` : ''}
+          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">⏱ ${graceExpiredCount} Expired</span>` : ''}
+          ${(mergedCount === 0 && stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-pill-count neutral">${settledCount > 0 ? `${settledCount} Settled` : `${executionItemsCount} Closed`}</span>` : ''}
+        </div>
+      </td>
+
+      <!-- Col 3: REALIZED P&L ($ and %) -->
       <td class="mono font-tabular">
         <div class="stitch-pnl-cell">
           <div class="stitch-pnl-val ${pnlCls}">
@@ -6997,22 +6895,14 @@ function stitchClosedTradesRows(kpi, state, sort) {
         </div>
       </td>
 
-      <!-- Col 5: OUTCOME BREAKDOWN (Summary counts) -->
-      <td>
-        <div class="stitch-breakdown-pills">
-          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
-          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">⚠️ ${stopLossCount} Stop</span>` : ''}
-          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">⏱ ${graceExpiredCount} Expired</span>` : ''}
-          ${(mergedCount === 0 && stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-pill-count neutral">${settledCount > 0 ? `${settledCount} Settled` : `${executionItemsCount} Closed`}</span>` : ''}
-        </div>
+
+      <!-- Col 4: CLOSED AT (stopwatch + timestamp, same as other tabs) -->
+      <td class="mono font-tabular" style="white-space:nowrap;text-align:right;">
+        <div class="stitch-age-stopwatch">${ageDisp}</div>
+        <div class="stitch-age-meta">${tsDisp}</div>
       </td>
 
-      <!-- Col 6: STATUS -->
-      <td>
-        <span class="stitch-status-badge finished"><span class="stitch-status-dot finished"></span>FINISHED</span>
-      </td>
-
-      <!-- Col 7: ACTIONS / EXPAND -->
+      <!-- Col 5: LEDGER toggle (far right) -->
       <td>
         <button type="button" class="stitch-ledger-toggle-btn" data-cid="${esc(cid)}" aria-expanded="${isExpanded}">
           ${isExpanded ? '▲ Hide Ledger' : '▼ View Ledger'} (${executionItemsCount})
@@ -7023,7 +6913,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
     // Collapsible Execution Ledger Card
     if (isExpanded) {
       html += `<tr class="stitch-expand-row">
-        <td colspan="8" style="padding:0;background:#090d16;">
+        <td colspan="6" style="padding:0;background:#090d16;">
           <div class="stitch-closed-ledger-card">
             <!-- Summary Strip -->
             <div class="stitch-closed-ledger-strip">
@@ -7045,13 +6935,13 @@ function stitchClosedTradesRows(kpi, state, sort) {
               <table class="stitch-ledger-subtable">
                 <thead>
                   <tr>
-                    <th>AGE / TIME</th>
-                    <th>POSITIONS (YES / NO)</th>
-                    <th>ENTRY / BUY PRICE</th>
-                    <th>SOLD / EXIT PRICE</th>
-                    <th>SIZE (SH)</th>
+                    <th>TIMESTAMP</th>
+                    <th>EXEC TYPE</th>
+                    <th>DUAL LEGS</th>
+                    <th>ENTRY</th>
+                    <th>EXIT</th>
+                    <th>SIZE</th>
                     <th>REALIZED P&L</th>
-                    <th>STATUS</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -8451,7 +8341,8 @@ if (typeof module !== 'undefined' && module.exports) {
     get backendLastSeenMs() { return backendLastSeenMs; },
     switchTab, pollStatus, renderCachedSections, tabVisible, deferPaint,
     initTopMetaScrollCue, updateTopMetaScrollCue,
-    renderStitchClosedLedgerRows, stitchClosedTradesRows, stitchClosedTradesHeadHtml,
+    renderStitchClosedLedgerRows, stitchLedgerChildRow, stitchLedgerLegs,
+    stitchClosedTradesRows, stitchClosedTradesHeadHtml,
     stitchOpenOrdersRows, stitchOpenOrdersHeadHtml,
     stitchPositionsRows, stitchPositionsHeadHtml, stitchHeldLegMarks,
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml };

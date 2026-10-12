@@ -96,8 +96,8 @@ def test_single_leg_row_shows_its_own_current_price_and_pnl():
     """))
     html = res["html"]
     assert 'data-cell="cur-price"' in html
-    assert "YES $0.760" in html
-    assert "NO $0.240" not in html  # unheld leg prints no line
+    assert "YES $0.76<" in html or "YES $0.76 " in html
+    assert "NO $0.24" not in html  # unheld leg prints no line
     assert ">YES <span" in html
     assert "-$0.40" in html
     assert "(-5.0%)" in html
@@ -112,29 +112,29 @@ def test_paired_row_stacks_no_below_yes_with_a_total():
     }}));
     """))
     html = res["html"]
-    yes_at = html.index("YES $0.760")
-    no_at = html.index("NO $0.240")
+    yes_at = html.index("YES $0.76")
+    no_at = html.index("NO $0.24")
     assert yes_at < no_at  # NO below YES in the same cell
     assert "Total" in html
 
 
 @requires_node
 def test_live_overlay_moves_the_per_leg_lines():
-    # Quote mid says $0.835 (the frozen case); a fresh venue mark at $0.765
+    # Quote mid says $0.84 (the frozen case); a fresh venue mark at $0.77
     # must win on the next render.
     res = json.loads(_eval_js(f"""
-    const kpi = {json.dumps(_kpi(up_mid=0.835))};
+    const kpi = {json.dumps(_kpi(up_mid=0.84))};
     const nowMs = Date.now();
     app.applyLiveMarks(
-        {{marks: [{{token_id: 'tok-up', bid: 0.76, ask: 0.77, mid: 0.765,
+        {{marks: [{{token_id: 'tok-up', bid: 0.76, ask: 0.78, mid: 0.77,
                    ts: nowMs, seq: 2}}], snapshot: true}}, nowMs);
     console.log(JSON.stringify({{
         html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
     }}));
     """))
     html = res["html"]
-    assert "YES $0.765" in html
-    assert "-$0.35" in html
+    assert "YES $0.77" in html
+    assert "-$0.30" in html
     assert "live mark" in html
 
 
