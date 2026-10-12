@@ -41,7 +41,7 @@ def test_slug_only_lol_market_resolves_to_esports(tmp_path):
         root=tmp_path)
 
     assert meta["title"] == "Lol Kcb Wd 2026 09 26"
-    assert meta["category"] == "E-Sports"
+    assert meta["category"] == "League of Legends"
     assert meta["url"] == f"https://polymarket.com/market/{LOL_SLUG}"
 
 
@@ -142,12 +142,56 @@ def test_non_string_feed_fields_never_raise(tmp_path):
 
 
 def test_esports_checked_before_politics():
+    # The blanket label survives only for a game this resolver cannot name.
     assert mm.classify_display_category(
-        "Will he win the Dota election", "", "dota-election") == "E-Sports"
+        "Will he win the Dota election", "", "dota-election") == "Dota 2"
     assert mm.classify_display_category(
         "Senate race outcome", "", "senate-race") == "Politics"
     assert mm.classify_display_category(
         "Market A resolves up?", "", "market-a") is None
+
+
+def test_esports_label_the_game_not_the_genre():
+    # "E-Sports" names the genre and nothing else, the same way "Uncategorized"
+    # named no category at all. A LoL market is a League of Legends market.
+    cases = {
+        "lol-kcb-wd-2026-09-26": "League of Legends",
+        "Cs2 Major Bracket": "Counter-Strike 2",
+        "Valorant Champions Winner": "Valorant",
+        "Dota 2 International": "Dota 2",
+        # No "2" token in the title, so the label must not invent one: the
+        # sequel rule exists to separate OW2 markets, never to promote OW1.
+        "Overwatch League Finals": "Overwatch",
+        "Overwatch 2 world cup winner": "Overwatch 2",
+        "Rainbow Six Siege Invitational": "Rainbow Six Siege",
+        "Starcraft Ii Gsl Winner": "StarCraft II",
+        "Rocket League World Championship": "Rocket League",
+        "Apex Legends Global Winner": "Apex Legends",
+        "Ea Sports Fc Final Match": "EA Sports FC",
+        "Call Of Duty League Winner": "Call of Duty",
+        "Pubg Global Championship": "PUBG",
+        "Fortnite Champion Series": "Fortnite",
+        "Hearthstone Masters Tour": "Hearthstone",
+        "King Of Glory World Champion Cup": "Honor of Kings",
+        "League Of Legends Worlds Winner": "League of Legends",
+        "Counter Strike Global Offensive": "Counter-Strike",
+        "Tekken 8 World Tour Finals": "Tekken",
+        "Street Fighter 6 Capcom Cup": "Street Fighter",
+        "Super Smash Bros Ultimate Winner": "Super Smash Bros.",
+        "Chess World Championship Final": "Chess",
+    }
+    for slug, expected in cases.items():
+        assert mm.classify_display_category("", "", slug) == expected, slug
+
+
+def test_unnameable_esport_keeps_the_genre_label():
+    # A row that is plainly esports but names no game this resolver knows still
+    # has to group somewhere honest; it falls back to the genre, not a blank.
+    assert mm.classify_display_category(
+        "Esports Finals Winner", "", "esports-finals-winner") == "E-Sports"
+    assert mm.classify_display_category(
+        "Who wins the pro gaming title", "", "pro-gaming-title") == "E-Sports"
+
 
 
 def test_sports_map_to_their_real_name():
