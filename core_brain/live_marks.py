@@ -357,7 +357,17 @@ class LiveMarkWorker:
 
     def _run_venue(self) -> None:
         """Read-only socket with backoff; never imports order clients."""
-        import websocket  # local import: no venue work at module import time
+        try:
+            import websocket  # local import: no venue work at module import time
+        except ImportError as e:
+            # Loud, not silent: without the declared websocket-client
+            # dependency this thread used to die on startup with no log line,
+            # and every positions cell froze on its last quote mid.
+            log.error(
+                "live-marks venue feed disabled: missing 'websocket-client' "
+                "package (%s). Install requirements or run with the project "
+                "venv so live marks keep updating.", e)
+            return
 
         backoff = RECONNECT_MIN_SEC
         while not self._stop.is_set():
@@ -399,16 +409,29 @@ class LiveMarkWorker:
         return True
 
     def sync_subscription(self) -> bool:
-        """Push a drifted wanted set over the open socket; True when sent.
+        """Follow a drifted wanted set; True when a reconnect was kicked off.
 
         Thread-safe nudge for the serving path: holdings change on KPI
         polls while the socket stays up, so without this a newly opened
         leg would wait for the next venue blip before its marks arrive.
         A no-op unless the worker is connected and the set actually moved.
+
+        Implemented as close-and-redial, never as a second subscribe: the
+        venue honors exactly one subscription per connection and answers a
+        second subscribe on the open socket with INVALID OPERATION while
+        streaming nothing further. The reconnect loop dials again within
+        RECONNECT_MIN_SEC and on-open subscribes the current set on the
+        fresh connection; the loop's disconnect step emits the reset frame
+        browsers already handle, so cells briefly fall back to quote mids
+        and then track the new marks.
         """
         app = self._app
         if app is None:
             return False
         if self._sent_ids is not None and set(self._sent_ids) == self._cache.wanted():
             return False
-        return self._send_subscribe(app)
+        try:
+            app.close()
+        except Exception:
+            return False
+        return True

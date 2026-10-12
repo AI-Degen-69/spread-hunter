@@ -131,6 +131,13 @@ def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
     Offline: a stub WebSocketApp records what would leave the socket.
     Without the on-open subscribe the venue path connects but never hears
     a frame; without the sync a newly opened leg waits for the next blip.
+
+    The venue honors exactly one subscription per connection: a second
+    subscribe on the open socket answers INVALID OPERATION and streams
+    nothing (observed live 2026-10-12), while reporting success to the
+    sender. Sync therefore closes the drifted socket instead of
+    re-sending; the reconnect loop dials again and on-open subscribes the
+    current set on the fresh connection.
     """
     import json
     import time
@@ -138,21 +145,27 @@ def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
     import core_brain.live_marks as lm
 
     sent = []
-    holder = {}
+    apps = []
+    closed = {"closed": False}
 
     class FakeApp:
         def __init__(self, url, on_open=None, on_message=None, on_close=None):
             assert url == lm.MARK_WS_URL
             self.on_open = on_open
-            holder["app"] = self
+            self._closed = False
+            apps.append(self)
 
         def run_forever(self, **kwargs):
             self.on_open(self)
-            while not worker._stop.is_set():
+            while not self._closed and not worker._stop.is_set():
                 time.sleep(0.01)
 
         def send(self, msg):
             sent.append(json.loads(msg))
+
+        def close(self):
+            closed["closed"] = True
+            self._closed = True
 
     monkeypatch.setitem(__import__("sys").modules, "websocket",
                         type("WS", (), {"WebSocketApp": FakeApp}))
@@ -167,13 +180,21 @@ def test_venue_subscribes_on_open_and_resyncs_on_drift(monkeypatch):
             time.sleep(0.01)
         assert [m["assets_ids"] for m in sent] == [["tok-a"]]
         assert sent[0]["type"] == "market"
-        # Same set again: no duplicate subscribe.
+        # Same set again: no work.
         assert worker.sync_subscription() is False
         assert len(sent) == 1
-        # Holdings drift: the open socket gets the new set, no reconnect.
+        assert closed["closed"] is False
+        # Holdings drift: the drifted socket closes (a second subscribe on
+        # it would answer INVALID OPERATION) and the reconnect loop dials
+        # again; on-open subscribes the current set on the fresh socket.
         cache.update_wanted({"tok-a", "tok-b"})
         assert worker.sync_subscription() is True
-        assert sent[-1]["assets_ids"] == ["tok-a", "tok-b"]
+        assert closed["closed"] is True
+        deadline = time.time() + 8.0
+        while len(sent) < 2 and time.time() < deadline:
+            time.sleep(0.01)
+        assert [m["assets_ids"] for m in sent] == [["tok-a"], ["tok-a", "tok-b"]]
+        assert len(apps) == 2
     finally:
         worker.stop()
     assert not worker.running
@@ -188,3 +209,23 @@ def test_marks_since_returns_only_moved_marks():
     assert cache.marks_since(seq) == []
     assert [m["token_id"] for m in cache.marks_since(seq - 1)] == ["tok-v"]
     assert len(cache.marks_since("bogus")) == 2
+
+
+def test_missing_websocket_package_fails_loud_not_silent(monkeypatch, caplog):
+    """A dashboard without websocket-client must say so, not freeze marks.
+
+    The venue import sat outside the worker's try block, so on an interpreter
+    without the declared dependency the feed thread died on startup with no
+    log line at all -- and every positions cell silently froze on its last
+    quote mid. The worker must return cleanly and name the missing package.
+    """
+    import logging
+    import sys
+
+    from core_brain.live_marks import LiveMarkWorker
+
+    monkeypatch.setitem(sys.modules, "websocket", None)
+    worker = LiveMarkWorker(LiveMarkCache(), source="venue")
+    with caplog.at_level(logging.ERROR, logger="core_brain.live_marks"):
+        worker._run_venue()  # must not raise
+    assert "websocket-client" in caplog.text
