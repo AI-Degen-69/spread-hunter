@@ -2814,27 +2814,24 @@ def _production_reconcile_fn(emit_fn: Any) -> Any:
     return _reconcile
 
 
-def main(argv: Optional[list[str]] = None) -> int:
-    """The Trader loop entry point.
+def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """The Trader loop's CLI, separated from `main` so the interval contract
+    is testable without launching a loop (operator directive 2026-10-12).
 
-    LIVE by default: real orders are placed unless `--no-live` is passed.
-    `--once` runs a single rotation (the smoke-test path); without it the loop
-    runs until interrupted.
+    `--interval` defaults to `MAX_ROTATION_INTERVAL_SEC` (1.0s) and any
+    larger request is clamped to the ceiling by `cap_rotation_interval`.
+    Sub-second values (0.5, 0.25) pass through untouched.
     """
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    from core_brain.config import load
-    from core_brain.markets import full_book, recent_sell_flow
-    from core_brain.order_registry import DEFAULT_DB_PATH, OrderRegistry
-    from core_brain.quotes import decide_quotes
+    from core_brain.config import MAX_ROTATION_INTERVAL_SEC, cap_rotation_interval
 
     ap = argparse.ArgumentParser(
         description="LIVE fleet: decide -> submit -> reconcile across graduated markets.")
     ap.add_argument("--live", action=argparse.BooleanOptionalAction, default=True,
                     help="send to venue (default: True). Use --no-live for dry-run.")
-    ap.add_argument("--interval", type=float, default=5.0,
-                    help="rotation cadence in seconds (default: 5.0)")
+    ap.add_argument("--interval", type=float, default=MAX_ROTATION_INTERVAL_SEC,
+                    help=f"rotation cadence in seconds (default: "
+                         f"{MAX_ROTATION_INTERVAL_SEC}); the ceiling -- any larger "
+                         f"value is clamped, smaller values are kept")
     ap.add_argument("--once", action="store_true",
                     help="run one rotation and exit")
     ap.add_argument("--db", default=None,
@@ -2853,6 +2850,29 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="seconds between market-resolution sweeps on a "
                          "background, non-blocking thread (default: 600)")
     a = ap.parse_args(argv)
+    # The ceiling is enforced HERE, at the CLI boundary, so the loop body
+    # never sees a cadence above 1s -- not silently clamped mid-flight
+    # where the heartbeat would report one number and the loop run another.
+    a.interval = cap_rotation_interval(a.interval)
+    return a
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    """The Trader loop entry point.
+
+    LIVE by default: real orders are placed unless `--no-live` is passed.
+    `--once` runs a single rotation (the smoke-test path); without it the loop
+    runs until interrupted.
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    from core_brain.config import load
+    from core_brain.markets import full_book, recent_sell_flow
+    from core_brain.order_registry import DEFAULT_DB_PATH, OrderRegistry
+    from core_brain.quotes import decide_quotes
+
+    a = _parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO,

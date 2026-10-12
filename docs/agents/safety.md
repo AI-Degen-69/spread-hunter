@@ -52,7 +52,7 @@ Two cautions:
 
 ```powershell
 python -m dashboard.server --db data\04_shadow_24-09_test.db --port 8799   # terminal 1, read-only
-python -m core_brain.shadow_run --minutes 10 --interval 5 --db data\04_shadow_24-09_test.db --run-id shadow-04  # terminal 2
+python -m core_brain.shadow_run --minutes 10 --interval 1 --db data\04_shadow_24-09_test.db --run-id shadow-04  # terminal 2
 ```
 
 The page badges itself **SHADOW** with the store it is reading, and **START is refused**

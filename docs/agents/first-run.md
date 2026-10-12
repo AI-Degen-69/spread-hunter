@@ -81,7 +81,7 @@ below (`$StackCmds` in `scripts/spread-hunter-menu.ps1`).
 | --- | --- | --- | --- |
 | 1 | **Market Filter** (screener) | `python -m scripts.filter_loop` | `runtime/markets.json` (the Trader's universe) |
 | 2 | **Order Manager** (poll/reconcile) | `python -m core_brain.order_manager poll --interval 0.5` | `data/orders.db`, account sweep |
-| 3 | **Trader** (decide & execute) | `python -m core_brain.trader_loop --live --no-reconcile --no-sweep --interval 5` | rests REAL maker bids |
+| 3 | **Trader** (decide & execute) | `python -m core_brain.trader_loop --live --no-reconcile --no-sweep --interval 1` | rests REAL maker bids |
 | 4 | **Global Stop Loss** (guardrail) | `python -m scripts.global_stop_loss` | `runtime/global_stop_loss_heartbeat.json`, alerts log |
 | 5 | **Dashboard** | `python -m dashboard.server --port 8799` | serves http://127.0.0.1:8799 |
 
@@ -113,7 +113,7 @@ the account.
 Rotation loop: decide → submit → reconcile across the graduated universe.
 **`--live` defaults to True.**
 - `--live` / `--no-live` — venue vs dry-run
-- `--interval` — rotation cadence in seconds (default `5.0`)
+- `--interval` — rotation cadence in seconds (default `1.0`; values above 1.0 are clamped)
 - `--once` — one rotation, then exit
 - `--db` — registry (default `data/orders.db`)
 - `--max-markets N` — cap markets rotated (default: all)
@@ -175,7 +175,7 @@ Example: `python -m core_brain.shadow_run --minutes 5 --db data/04_shadow_24-09_
 The operations menu's `shadow-run` action selects and passes a unique per-run
 store automatically.
 - `--minutes` — time box (default `5.0`); the run stops on this wall clock
-- `--interval` — rotation cadence (default `5.0`)
+- `--interval` — rotation cadence (default `1.0`; values above 1.0 are clamped)
 - `--db` — required, explicit per-run shadow store (for example, `data/04_shadow_24-09_test.db`); `data/orders.db` is refused
 - `--max-markets N` — cap rotation universe
 - `--funder ADDR` — kept for compatibility; it does **not** set the shadow bankroll

@@ -931,7 +931,7 @@ class TestMain:
         ])
 
         assert a.minutes == 5.0
-        assert a.interval == 5.0
+        assert a.interval == 1.0
         assert a.db == "data/04_shadow_test.db"
         assert a.max_markets is None
         assert a.markets_path is None

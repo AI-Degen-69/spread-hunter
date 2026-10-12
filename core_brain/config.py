@@ -1722,3 +1722,46 @@ def derive_dynamic_caps(cfg: MakerConfig, portfolio_usd: float | None = None) ->
         "max_total_usd": total_val,
     }
 
+
+#: THE ROTATION CADENCE CEILING (operator directive 2026-10-12). The Trader
+#: and the shadow loop rotate at most once per second. In five seconds a live
+#: book can cross the pair cap, fill both legs adversely, or decide outright
+#: -- the 2026-10-12 fox1-jdg series moved 0.90 -> 0.75 -> 0.885 -> 0.999
+#: inside a ten-minute window -- so a 5s rotation quotes a market that no
+#: longer exists by the time the order rests. This is a CEILING, not the
+#: value: a caller asking for less (0.5s, 0.25s) keeps it, because a faster
+#: loop is the direction the directive points. Raising this number is a
+#: strategy decision to be made deliberately, never a convenience flag.
+MAX_ROTATION_INTERVAL_SEC = 1.0
+
+
+def cap_rotation_interval(interval: float) -> float:
+    """Clamp a requested rotation cadence to `MAX_ROTATION_INTERVAL_SEC`.
+
+    Returns the requested value when it fits under the ceiling, the ceiling
+    itself when it does not. A request above the ceiling logs a warning
+    naming both numbers, so an operator who typed `--interval 5` sees why
+    the loop is not running at 5s instead of silently believing a cadence
+    that is not in force. Sub-second values pass through untouched -- the
+    "circle back to an exact less-than-1s number" option this directive
+    reserves.
+
+    Lives here rather than in each entrypoint so the Trader and the shadow
+    loop cannot drift apart on the one number that decides how stale a
+    quote can be when it rests.
+    """
+    value = float(interval)
+    if not math.isfinite(value) or value <= 0:
+        logging.getLogger(__name__).warning(
+            "invalid rotation interval %r (must be a finite positive "
+            "number); using the %ss ceiling instead",
+            interval, MAX_ROTATION_INTERVAL_SEC)
+        return MAX_ROTATION_INTERVAL_SEC
+    if value > MAX_ROTATION_INTERVAL_SEC:
+        logging.getLogger(__name__).warning(
+            "rotation interval %ss exceeds the %ss ceiling; clamped to the "
+            "ceiling. Pass a SMALLER value to run faster -- a larger one is "
+            "refused by design.", value, MAX_ROTATION_INTERVAL_SEC)
+        return MAX_ROTATION_INTERVAL_SEC
+    return value
+
