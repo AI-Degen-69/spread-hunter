@@ -1,19 +1,19 @@
-/* Spread Hunter ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Dashboard Application Logic
+/* Spread Hunter — Dashboard Application Logic
  *
  * Consumes existing API endpoints:
- *   GET  /api/state            ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â order/fill state
- *   GET  /api/system/status    ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â service PIDs, bot state, starting capital
- *   POST /api/system/start     ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â start bot stack (atomic)
- *   POST /api/system/stop      ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â stop bot stack
- *   GET  /api/kpi              ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â all Tab 2 analytics (includes trade_analytics.sample_size_sufficiency)
- *   GET  /api/scan-state       ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â SCANNING/IDLE/STALLED
- *   GET  /api/pairs-activity   ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â auto-pairs counts
- *   GET  /api/guardrail-alerts ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â active violations
- *   GET  /api/guardrail-health ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â watcher liveness
- *   GET  /api/cycle-stream     ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â SSE event stream
- *   GET  /api/parameters       ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â strategy config (NEW)
- *   GET  /api/active-markets   ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â active markets (NEW)
- *   GET  /api/closed-markets   ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â closed markets (NEW)
+ *   GET  /api/state            — order/fill state
+ *   GET  /api/system/status    — service PIDs, bot state, starting capital
+ *   POST /api/system/start     — start bot stack (atomic)
+ *   POST /api/system/stop      — stop bot stack
+ *   GET  /api/kpi              — all Tab 2 analytics (includes trade_analytics.sample_size_sufficiency)
+ *   GET  /api/scan-state       — SCANNING/IDLE/STALLED
+ *   GET  /api/pairs-activity   — auto-pairs counts
+ *   GET  /api/guardrail-alerts — active violations
+ *   GET  /api/guardrail-health — watcher liveness
+ *   GET  /api/cycle-stream     — SSE event stream
+ *   GET  /api/parameters       — strategy config (NEW)
+ *   GET  /api/active-markets   — active markets (NEW)
+ *   GET  /api/closed-markets   — closed markets (NEW)
  *
  * Tab 3 (Market Filter) reads funnel data from /api/kpi's `funnel` field
  * and scan state from /api/scan-state. No new endpoints needed.
@@ -59,7 +59,7 @@ window.addEventListener('error', (event) => {
 const POLL_MS = 2000;
 let lastState = null;
 let lastKpi = null;
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Cached poll snapshots (Issue #264) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Cached poll snapshots (Issue #264) ─────────────────────────────
  * The last payload of every poll endpoint, so a tab switch can paint the
  * newly shown tab synchronously without waiting for the next 2s poll. */
 let lastStatus = null;
@@ -68,7 +68,7 @@ let lastTrialReadiness = null;
 let lastGuardHealth = null;
 let lastGuardAlerts = null;
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Held-read receipt times (Issue #348) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Held-read receipt times (Issue #348) ───────────────────────────────
  * When a poll read fails or times out, each pill keeps its last known-good
  * payload while the backend is still reachable, ageing it through the
  * existing ramps. These stamps record when each retained payload arrived so
@@ -77,7 +77,7 @@ let lastScanStateAtMs = null;
 let lastKpiAtMs = null;
 let lastStatusAtMs = null;
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Payload version (Issue #251) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Payload version (Issue #251) ─────────────────────────────────────
  * The static files and the Python backend are served by different processes,
  * so a page reload can outrun a backend restart: the frontend then reads
  * fields that do not exist yet, and "absent" is indistinguishable from
@@ -95,7 +95,7 @@ function payloadIsStale(kpi) {
   return v < EXPECTED_PAYLOAD_VERSION;
 }
 
-// Shows the amber "backend older than page" note and warns once ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â not on
+// Shows the amber "backend older than page" note and warns once — not on
 // every 2s poll, which would bury the message it is trying to deliver.
 function applyPayloadVersion(kpi) {
   const stale = payloadIsStale(kpi);
@@ -127,14 +127,14 @@ let isStarting = false;
 // result (#457).
 let masterLifecycleSeq = 0;
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Live-state language (DESIGN.md) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Live-state language (DESIGN.md) ──────────────────────────────────
  * Six states, one vocabulary, applied identically to every process, feed and
  * tile: RUNNING / DEGRADED / DOWN / STOPPED / UNKNOWN / STALE. Heartbeat age
- * is displayed, not implied: a live indicator ages green ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ amber ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ red on a
- * ramp calibrated to its own cadence (defaults: 5s loop ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ amber ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¥ 15s, red ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¥
+ * is displayed, not implied: a live indicator ages green → amber → red on a
+ * ramp calibrated to its own cadence (defaults: 5s loop → amber ≥ 15s, red ≥
  * 60s). */
 
-// Map (running, age_sec) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ state key. `running=false` with a known age means
+// Map (running, age_sec) → state key. `running=false` with a known age means
 // the process died mid-flight (DOWN); with no age at all it is the quiet,
 // intentional STOPPED. Registry unreadable / never seen is UNKNOWN.
 function stateKey(running, ageSec, thresholds) {
@@ -152,11 +152,11 @@ function stateKey(running, ageSec, thresholds) {
 }
 
 // Canonical pill markup: state class + heartbeat age (omitted when unknown or
-// when the state is STOPPED/UNKNOWN ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â a stopped service has no age to show).
+// when the state is STOPPED/UNKNOWN — a stopped service has no age to show).
 function statePillHtml(state, ageSec) {
   const known = ageSec !== null && ageSec !== undefined && isFinite(ageSec);
   const showAge = (state === 'running' || state === 'degraded' || state === 'down') && known;
-  const age = showAge ? ` ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${Math.max(0, Math.round(ageSec))}s` : '';
+  const age = showAge ? ` · ${Math.max(0, Math.round(ageSec))}s` : '';
   const label = state.toUpperCase();
   const dot = (state === 'running' || state === 'degraded' || state === 'down')
     ? `<span class="pulse-dot ${state === 'running' ? 'active' : ''}"></span>`
@@ -285,11 +285,11 @@ function renderMarketScanPill(status, kpi, opts) {
   const dot = (v.state === 'running') ? '<span class="pulse-dot active"></span>'
     : (v.state === 'degraded' || v.state === 'down') ? '<span class="pulse-dot"></span>'
     : '';
-  const age = (v.ageSec !== null && v.ageSec !== undefined) ? ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ' + fmtAge(v.ageSec) : '';
+  const age = (v.ageSec !== null && v.ageSec !== undefined) ? ' · ' + fmtAge(v.ageSec) : '';
   el.innerHTML = dot + esc(v.label + age);
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Backend-contact watchdog (DESIGN.md Risk 2) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Backend-contact watchdog (DESIGN.md Risk 2) ──
  * When the poll loop loses contact with the backend, the page must stop
  * pretending the last render is live. After 2 consecutive failed polls the
  * STALE banner appears with the last-seen time; a successful poll clears it.
@@ -337,7 +337,7 @@ function renderBackendContact(nowMs) {
   }
   const ageSec = Math.max(0, Math.round((at - backendLastSeenMs) / 1000));
   ageEl.textContent = 'last seen ' + fmtLocalTime(new Date(backendLastSeenMs).toISOString())
-    + ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ' + ageSec + 's ago';
+    + ' · ' + ageSec + 's ago';
 }
 
 // Heartbeat-age ramp for a cadence: amber at 3x, red at 12x.
@@ -347,7 +347,7 @@ function cadenceThresholds(cadenceSec) {
   return { degraded: Math.round(c * 3), down: Math.round(c * 12) };
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ XSS defense: escape before innerHTML ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── XSS defense: escape before innerHTML ── */
 function esc(v) {
   if (v === null || v === undefined) return '--';
   const s = String(v);
@@ -410,14 +410,14 @@ function fmtLocalTime(ts) {
 
 /* Format timestamp into DD/MM/YYYY, HH:mm (24 hour local time).
  * The one time a row was added to the table, whatever view it renders in:
- *   Active Markets ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the moment the latest quote was logged for the market.
- *   Open Orders    ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the moment the order was posted (`posted_ts`, ms).
- *   Positions      ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the moment the leg filled (latest fill `venue_ts`, ms).
- *   Closed Trades  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the moment the trade closed (settlement close `ts`, s;
+ *   Active Markets — the moment the latest quote was logged for the market.
+ *   Open Orders    — the moment the order was posted (`posted_ts`, ms).
+ *   Positions      — the moment the leg filled (latest fill `venue_ts`, ms).
+ *   Closed Trades  — the moment the trade closed (settlement close `ts`, s;
  *                      the resolution record is the fallback).
  * Second-resolution values are ms-vs-s ambiguous only below the registry's
- * first real timestamps, so `ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â 1000` is applied only to plainly-seconds
- * magnitudes ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the same heuristic the backend run rollup already uses. */
+ * first real timestamps, so `× 1000` is applied only to plainly-seconds
+ * magnitudes — the same heuristic the backend run rollup already uses. */
 function toMs(ts) {
   const n = Number(ts);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -440,10 +440,10 @@ function fmtTimestamp(ts) {
 /* When each stage's row entered the table, one accessor per view. Each
  * returns milliseconds (via `toMs`, so seconds and milliseconds sources mix
  * safely) or null when nothing measured:
- *   latestQuoteTs ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Active Markets: the latest quote logged for the market.
- *   latestFillTs  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Positions: the latest fill; a held market with quotes but
+ *   latestQuoteTs — Active Markets: the latest quote logged for the market.
+ *   latestFillTs  — Positions: the latest fill; a held market with quotes but
  *                    no fills shows `--`, not a quote time posing as a fill.
- *   closeTsOf     ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Closed Trades: the latest settlement close, with the
+ *   closeTsOf     — Closed Trades: the latest settlement close, with the
  *                    resolution record as fallback. Sort and render share it.
  * All three take the maximum of their own source only, so a later quote can
  * never replace a measured fill time or a booked close. */
@@ -518,15 +518,15 @@ function marketLink(m) {
   return esc(name);
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ controlFetch: CSRF-protected POST ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── controlFetch: CSRF-protected POST ── */
 function controlFetch(path, options = {}) {
   const headers = { 'X-Control-Token': CONTROL_TOKEN, ...(options.headers || {}) };
   return fetch(path, { method: 'POST', ...options, headers });
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Visible-tab rendering (Issue #264) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
- * One poll used to re-render every section on every 2s tick ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â both hidden
- * tabs plus the Monte Carlo / KDE / markout charts ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â a single long
+/* ── Visible-tab rendering (Issue #264) ─────────────────────────────
+ * One poll used to re-render every section on every 2s tick — both hidden
+ * tabs plus the Monte Carlo / KDE / markout charts — a single long
  * main-thread task that a tab click waited behind for 2-4s. Now each poll
  * repaints the cheap header pills plus only the visible tab; a hidden tab
  * repaints on switch from the cached snapshot. */
@@ -540,7 +540,7 @@ function tabVisible(el) {
  * sections and shows exactly one of them; the legacy `#tab-1..3` shells stay
  * in the document un-hidden (prototype.js unhides them after moving the
  * panels out), so after the rail mounts `tabVisible()` reports "visible" for
- * all three gates and every poll re-rendered ALL pages' content ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â multi-second
+ * all three gates and every poll re-rendered ALL pages' content — multi-second
  * main-thread freezes the operator felt as hover/click lag. A section paints
  * only when its own closest `#page-*` ancestor is the one the rail shows. */
 function railActivePage(doc) {
@@ -555,9 +555,9 @@ function railActivePage(doc) {
 }
 
 function paintable(section, target, doc) {
-  // Gate 1 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the legacy tab section the panel belongs to (fails closed).
+  // Gate 1 — the legacy tab section the panel belongs to (fails closed).
   if (!tabVisible(section)) return false;
-  // Gate 2 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the active rail page, once the sidebar layout has mounted.
+  // Gate 2 — the active rail page, once the sidebar layout has mounted.
   const active = railActivePage(doc);
   if (active === null) return true; // no rail in the document: tabs-era page
   let node = target;
@@ -570,7 +570,7 @@ function paintable(section, target, doc) {
 
 function deferPaint(fn) {
   // One frame later the click/tab paint wins over the heavy charts. Outside
-  // a browser (node test harness) there is no rAF ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â run synchronously there.
+  // a browser (node test harness) there is no rAF — run synchronously there.
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
   else fn();
 }
@@ -582,7 +582,7 @@ function deferPaint(fn) {
 // still visible.
 let analyticsPaintGeneration = 0;
 
-// Header pills stay live on every poll ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â cheap text updates, always painted.
+// Header pills stay live on every poll — cheap text updates, always painted.
 // They are deliberately NOT repainted on tab switch: reprinting them from
 // cache could show a frozen age as live.
 function renderCachedSections() {
@@ -592,8 +592,8 @@ function renderCachedSections() {
   // (Issue #266): after #140 moved the panels under `#page-*` sections, the
   // legacy tab shells all read visible and this repainted every page at once.
   const currentKpi = lastKpi;
-  // Tab 1: LIVE OPERATIONS (service cards ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ rail Trades page, orders & trades
-  // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ rail Dashboard page). The header status is global chrome on every page:
+  // Tab 1: LIVE OPERATIONS (service cards → rail Trades page, orders & trades
+  // → rail Dashboard page). The header status is global chrome on every page:
   // renderServiceCards paints it before the grid, so a page where the grid is
   // skipped still gets the header via renderServiceHeader.
   if (paintable(tab1, document.getElementById('service-cards'))) {
@@ -604,14 +604,14 @@ function renderCachedSections() {
   if (paintable(tab1, document.getElementById('orders-trades-body'))) {
     if (currentKpi) renderOrdersTrades(currentKpi, lastState);
   }
-  // Tab 2: PERFORMANCE & ANALYTICS (KPI tiles ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ rail Reports page)
+  // Tab 2: PERFORMANCE & ANALYTICS (KPI tiles → rail Reports page)
   if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
     renderPortfolioOverview(currentKpi, lastStatus, lastState);
   }
   if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
     renderKPIs(currentKpi, lastStatus);
   }
-  // Tab 3: MARKET FILTER (kanban ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ rail Data & Markets page). The readiness
+  // Tab 3: MARKET FILTER (kanban → rail Data & Markets page). The readiness
   // banner lives on this tab, so it refreshes with it; the poll loop still
   // calls it unconditionally (see pollStatus) so a dead endpoint hides the
   // trackers on every tick.
@@ -626,7 +626,7 @@ function renderCachedSections() {
   }
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Tab switching (DT7: localStorage persistence, 3 tabs) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Tab switching (DT7: localStorage persistence, 3 tabs) ── */
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tab1 = document.getElementById('tab-1');
 const tab2 = document.getElementById('tab-2');
@@ -671,7 +671,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Sync button (read-only venue refresh) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Sync button (read-only venue refresh) ── */
 const syncBtn = document.getElementById('btn-sync');
 if (syncBtn) {
   syncBtn.addEventListener('click', async () => {
@@ -679,7 +679,7 @@ if (syncBtn) {
     const prevText = syncBtn.textContent;
     syncBtn.disabled = true;
     syncBtn.classList.add('syncing');
-    syncBtn.textContent = 'SYNCINGÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦';
+    syncBtn.textContent = 'SYNCING…';
     // Optional: show a one-line ticker notice so the operator sees it worked even before the poll.
     const empty = tickerEl.querySelector('.empty-state');
     let syncOk = false;
@@ -702,23 +702,23 @@ if (syncBtn) {
       const lines = [];
       if (rec.ok) lines.push(`Orders: venue ${venueOpenDisp} open, ${fillsDisp} new fills, ${cancelledDisp} marked cancelled`);
       else if (rec.error) lines.push(`Orders sync: ${rec.error}`);
-      if (vs.ok) lines.push(`Venue: ${fmtUSD(vs.account_value_usd)} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${posDisp} positions ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${closesDisp} closes synced`);
+      if (vs.ok) lines.push(`Venue: ${fmtUSD(vs.account_value_usd)} · ${posDisp} positions · ${closesDisp} closes synced`);
       else if (vs.error) lines.push(`Account sync: ${vs.error}`);
       // Human-readable verdict when dashboard was stale
       if (typeof localOpen === 'number' && typeof venueOpen === 'number' && localOpen !== venueOpen) {
-        lines.push(`Fixed drift: dashboard had ${localOpen} open ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ now ${venueOpen} (venue truth)`);
+        lines.push(`Fixed drift: dashboard had ${localOpen} open → now ${venueOpen} (venue truth)`);
       }
       if (vs.venue_open_unmeasured) {
         lines.push('Positions unmeasured: prior exposure retained');
       } else if (vs.raw_open_rows === 0) {
-        lines.push('Positions: 0 on venue ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â dashboard exposure zeroed');
+        lines.push('Positions: 0 on venue — dashboard exposure zeroed');
       }
-      const msg = lines.join(' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ') || (data.ok ? 'Sync ok ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â dashboard now matches venue.' : 'Sync finished with warnings');
+      const msg = lines.join(' · ') || (data.ok ? 'Sync ok — dashboard now matches venue.' : 'Sync finished with warnings');
       // Reuse ticker as a transient banner; also trigger immediate re-poll.
       appendTickerEvent(`[SYNC] ${msg}`, 'Dashboard synced with Polymarket (read-only).', '');
     } catch (e) {
       syncOk = false;
-      appendTickerEvent(`[SYNC ERROR] ${e.message || String(e)}`, 'Sync failed ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â venue may be unreachable. Retrying on next poll.', '');
+      appendTickerEvent(`[SYNC ERROR] ${e.message || String(e)}`, 'Sync failed — venue may be unreachable. Retrying on next poll.', '');
     } finally {
       if (syncOk) syncBtn.textContent = 'SYNCED';
       else if (isWarning) syncBtn.textContent = 'SYNC WARNING';
@@ -730,7 +730,7 @@ if (syncBtn) {
   });
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Reset modal (typed confirm) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Reset modal (typed confirm) ── */
 const resetModal = document.getElementById('reset-modal');
 const resetInput = document.getElementById('reset-input');
 const resetConfirmBtn = document.getElementById('reset-modal-confirm');
@@ -781,7 +781,7 @@ resetConfirmBtn.addEventListener('click', async () => {
   }
 });
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Info bubbles (DT7: click-triggered) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Info bubbles (DT7: click-triggered) ── */
 document.addEventListener('click', (e) => {
   if (e.target.classList.contains('info-bubble')) {
     e.stopPropagation();
@@ -795,12 +795,12 @@ document.addEventListener('click', (e) => {
   }
 });
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ SSE Event Ticker (DT7: reconnect banner) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── SSE Event Ticker (DT7: reconnect banner) ── */
 let sseSource = null;
 const tickerEl = document.getElementById('event-ticker');
 const sseReconnect = document.getElementById('sse-reconnect');
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Event translation: plain English for every cycle event ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Event translation: plain English for every cycle event ── */
 const EVENT_TRANSLATIONS = {
   // Filter
   'filter|rerank_done': 'Finished scanning all Polymarket markets and updated the graduated list.',
@@ -808,7 +808,7 @@ const EVENT_TRANSLATIONS = {
   'screener|rerank_done': 'Finished scanning all Polymarket markets and updated the graduated list.',
   'screener|rerank_error': 'Market scan failed. The graduated list was not updated, so Decide & Execute keeps quoting the previous universe.',
 
-  // Query ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â reconciliation
+  // Query — reconciliation
   'query|reconcile_ok': 'Checked the venue for new fills on our orders. All synced up.',
   'query|reconcile_error': 'Failed to sync fills from the venue. Orders may be stale until the next query.',
   'query|reconcile_contended': 'Another process is reconciling fills right now. Waiting in line to avoid double-counting.',
@@ -816,7 +816,7 @@ const EVENT_TRANSLATIONS = {
   'engine|reconcile_error': 'Failed to sync fills from the venue. Orders may be stale until the next poll.',
   'engine|reconcile_contended': 'Another process is reconciling fills right now. Waiting in line to avoid double-counting.',
 
-  // Query ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â account sweep
+  // Query — account sweep
   'query|sweep_done': 'Read the live wallet balance and open positions from Polymarket. Dashboard tiles are now fresh.',
   'query|sweep_skipped': 'Skipped the wallet sweep: POLY_FUNDER is not set, so the account balance and float marks are not being read.',
   'query|sweep_error': 'Failed to read the wallet from Polymarket. Balance and exposure tiles may be stale.',
@@ -824,7 +824,7 @@ const EVENT_TRANSLATIONS = {
   'engine|sweep_skipped': 'Skipped the wallet sweep: POLY_FUNDER is not set, so the account balance and float marks are not being read.',
   'engine|sweep_error': 'Failed to read the wallet from Polymarket. Balance and exposure tiles may be stale.',
 
-  // Query ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â pairs management
+  // Query — pairs management
   'query|pairs_balanced': 'Checked a market pair: both YES and NO sides are matched. No action needed.',
   'query|pairs_hold': 'Holding a market pair open. The position is healthy and waiting for the market to resolve.',
   'query|pairs_would_exit': 'Considering closing a one-sided position to limit naked exposure. Pre-check passed, may exit soon.',
@@ -842,7 +842,7 @@ const EVENT_TRANSLATIONS = {
   'engine|pairs_completed': 'Redeemed a resolved market. Shares converted back to USDC, position closed.',
   'engine|pairs_error': 'Error managing a market pair. The position may need manual attention.',
 
-  // Decide & Execute ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â quoting
+  // Decide & Execute — quoting
   'decide|decide': 'Evaluated pricing for a market. Decided what orders to rest and at what price.',
   'decide|submit': 'Submitted maker orders to Polymarket for this market. Bids are now resting on the book.',
   'decide|market_error': 'Error quoting this market. The bot skipped it this cycle and will retry next time.',
@@ -854,7 +854,7 @@ const EVENT_TRANSLATIONS = {
   'guardrail|guardrail_alert': 'Risk limit triggered. The guardrail watchdog is blocking new quotes until the alert clears.',
 };
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Stream sentences: one plain-English line per event ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Stream sentences: one plain-English line per event ──
  * Every row reads as a sentence with local time and market name: no service
  * abbreviations, action codes, or raw slugs on the main line. Builders below
  * are keyed by action and read only `extra`; unknown actions fall back to a
@@ -862,7 +862,7 @@ const EVENT_TRANSLATIONS = {
 
 // Titles seen in table renders, keyed by condition id. The stream is
 // standalone (it works before any table polls), so this only ever upgrades
-// slug-words to a real name ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never the other way around.
+// slug-words to a real name — never the other way around.
 const streamTitleCache = Object.create(null);
 function noteStreamTitles(byMarket) {
   try {
@@ -962,7 +962,7 @@ function buildStreamSentence(ev, lookup) {
   const reason = (ev && ev.reason) || '';
   const market = streamMarketName(ev, lookup);
   const clock = streamTime(ev);
-  const when = clock ? `${clock} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ` : '';
+  const when = clock ? `${clock} — ` : '';
   const because = reason ? ` (${plainReason(reason)})` : '';
 
   if (action === 'fill_recorded') {
@@ -1006,7 +1006,7 @@ function buildStreamSentence(ev, lookup) {
     }
     return reason
       ? `${when}Skipped ${market} because ${reason}.`
-      : `${when}Skipped ${market} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no quote this cycle.`;
+      : `${when}Skipped ${market} — no quote this cycle.`;
   }
   if (action === 'submit') {
     const n = Number(ex.submitted || 0);
@@ -1158,7 +1158,7 @@ function connectSSE() {
       const svc = (ev.service || '').toUpperCase().slice(0,6);
       const action = ev.action || '';
       const slug = ev.market_slug || '';
-      const reason = ev.reason ? ` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${ev.reason}` : '';
+      const reason = ev.reason ? ` — ${ev.reason}` : '';
       const rawLine = `[${ts}] [${svc}] ${action} ${slug}${reason}`;
       const { translation, ctx } = translateEvent(ev);
       appendTickerEvent(rawLine, translation, ctx, ev.service, ev.action, ev.extra);
@@ -1186,7 +1186,7 @@ function connectSSE() {
 
 connectSSE();
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Render: Active registry (LIVE vs SHADOW) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Render: Active registry (LIVE vs SHADOW) ── */
 // Shadow-run stopwatch. The rehearsal is not in the supervised registry, so
 // its liveness arrives as `status.shadow_run` (from runtime/shadow_run.json),
 // already matched against the store this page is reading. While the run is
@@ -1222,7 +1222,7 @@ function renderShadowClock() {
   const headline = shadowRunAnchor.running
     ? `Shadow rehearsal ${shadowRunAnchor.runId || ''} running, ${shadowRunAnchor.minutes < 0 ? 'no time box (runs until stopped)' : `time box ${shadowRunAnchor.minutes ?? '--'} min`}`
     : 'This shadow rehearsal is no longer running.';
-  el.textContent = (shadowRunAnchor.running ? 'ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ' + elapsed : 'ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ' + elapsed + ' ended') + code.text;
+  el.textContent = (shadowRunAnchor.running ? '· ' + elapsed : '· ' + elapsed + ' ended') + code.text;
   // The code sentence is appended only when there is one, so a run that
   // recorded nothing keeps the exact title it had before this existed.
   el.title = code.title ? headline.replace(/\.$/, '') + '.' + code.title : headline;
@@ -1246,13 +1246,13 @@ function shadowCodeNote(anchor) {
   const label = anchor.codeLabel ? `code ${anchor.codeLabel}` : 'code unknown';
   if (anchor.codeStale) {
     return {
-      text: ` ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${label} (older than this tree)`,
+      text: ` · ${label} (older than this tree)`,
       title: ` It loaded ${label}, but core_brain/ or scoring/ has changed since it started, so its numbers describe code that is no longer here. Restart it to compare like with like.`,
     };
   }
   if (anchor.codeLabel) {
     return {
-      text: ` ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${label}`,
+      text: ` · ${label}`,
       title: ` It is holding ${label}; no decision code has changed since this run started.`,
     };
   }
@@ -1357,14 +1357,14 @@ async function renderRunSwitcher() {
     const age = formatHeartbeatAge(r.heartbeat_age_sec);
     const label = runSwitcherLabel(r);
     const portLink = r.dash_port
-      ? `<a href="http://${window.location.hostname}:${r.dash_port}" target="_blank" rel="noopener" class="db-run-port-link" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-left:6px;" title="Open dedicated dashboard for this arm on port ${r.dash_port}">:${r.dash_port} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â</a>`
+      ? `<a href="http://${window.location.hostname}:${r.dash_port}" target="_blank" rel="noopener" class="db-run-port-link" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-left:6px;" title="Open dedicated dashboard for this arm on port ${r.dash_port}">:${r.dash_port} ↗</a>`
       : '';
     const btn = isThis
       ? `<span class="db-run-current">THIS PAGE</span>`
       : `<button class="db-run-switch" data-db="${esc(r.db_path)}">SWITCH</button>`;
     return `<div class="db-run-row${isThis ? ' current' : ''}">
         <span class="db-run-name mono">${esc(label)}</span>${portLink}
-        <span class="db-run-state state-${r.running === true ? 'running' : 'stopped'}">${state}${age ? ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ' + age : ''}</span>
+        <span class="db-run-state state-${r.running === true ? 'running' : 'stopped'}">${state}${age ? ' · ' + age : ''}</span>
         ${btn}
       </div>`;
   });
@@ -1374,7 +1374,7 @@ async function renderRunSwitcher() {
   sw.querySelectorAll('.db-run-switch').forEach(b => {
     b.addEventListener('click', async () => {
       b.disabled = true;
-      b.textContent = 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦';
+      b.textContent = '…';
       try {
         const res = await controlFetch('/api/system/db?db=' + encodeURIComponent(b.dataset.db));
         // A refusal from `_authorize_control` is an HTTP error carrying
@@ -1437,15 +1437,15 @@ function renderDbMode(status) {
     // Not a cosmetic state. Every number on the page is a rehearsal, and START
     // is refused while this shows.
     el.className = 'pill mode-shadow mono' + (verdict.stale ? ' mode-stale' : '');
-    el.textContent = `DB: ${mode} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${path.split(/[\\/]/).pop()}`
-      + (verdict.stale ? ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· NO LIVE RUN' : '');
+    el.textContent = `DB: ${mode} · ${path.split(/[\\/]/).pop()}`
+      + (verdict.stale ? ' · NO LIVE RUN' : '');
     el.title = `Reading ${path}, not the production registry. `
       + (verdict.stale
         // The whole point: say what IS running, and where, instead of leaving
         // a red page to be read as a dead engine.
         ? `Nothing is writing this store, so every heartbeat on this page reads stale. `
           + `Still running elsewhere: ${verdict.liveElsewhere
-              .map(r => `${r.runId} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ ${(r.dbPath || '').split(/[\\/]/).pop()}`).join('; ')}. `
+              .map(r => `${r.runId} → ${(r.dbPath || '').split(/[\\/]/).pop()}`).join('; ')}. `
           + `Click to switch this page to one of them.`
         : `Orders, fills and PnL on this page are not live positions, and START is disabled.`);
   }
@@ -1471,7 +1471,7 @@ function renderDbMode(status) {
 }
 
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Render: Service Cards & Master Diagnostic HUD ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Render: Service Cards & Master Diagnostic HUD ── */
 const SERVICE_DEFS = [
   { key: 'guardrail', name: 'Guardrail Risk Watchdog', cmd: 'python -m scripts.global_stop_loss',
     tag: 'CIRCUIT BREAKER',
@@ -1551,7 +1551,7 @@ function renderServicesDropdown(status, guardrailHealth, guardrailAlerts, active
 }
 
 /* Open/close the services dropdown. A click anywhere else closes it, and Esc
- * closes it too ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the same contract as the run switcher beside it. */
+ * closes it too — the same contract as the run switcher beside it. */
 let servicesDropdownBound = false;
 function bindServicesDropdown() {
   if (servicesDropdownBound) return;
@@ -1670,7 +1670,7 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
   if (masterToggle) {
     if (isStarting || isStopping) {
       // Busy overrides status: no second click while a request is in flight.
-      const busyLabel = isStopping ? 'STOPPINGÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦' : 'STARTINGÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦';
+      const busyLabel = isStopping ? 'STOPPING…' : 'STARTING…';
       masterToggle.className = isStopping
         ? (isShadow ? 'btn-stop-run btn-stop-shadow' : 'btn-stop-run')
         : (isShadow ? 'btn-start-run btn-start-shadow' : 'btn-start-run');
@@ -1756,14 +1756,14 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
     const hasAlert = def.key === 'guardrail' && (guardrailAlerts?.alerts?.length > 0);
     const alertCls = hasAlert ? ' alert' : (running ? ' healthy' : '');
     // Live-state language (DESIGN.md): the pill carries the heartbeat age and
-    // ages green ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ amber ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ red on the service's own cadence ramp. The guardrail
+    // ages green → amber → red on the service's own cadence ramp. The guardrail
     // heartbeat is served by /api/guardrail-health's `age_s`; the stack
     // services are liveness-checked by PID here, so they render as plain
     // RUNNING/STOPPED with no age until a heartbeat payload exists for them.
     let pill;
     if (def.key === 'guardrail') {
       const age = typeof guardrailHealth?.age_s === 'number' ? guardrailHealth.age_s : null;
-      // A failed /api/guardrail-health read is UNKNOWN ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the watcher's state
+      // A failed /api/guardrail-health read is UNKNOWN — the watcher's state
       // is not known, which is not the same as deliberately stopped.
       const telemetryError = guardrailHealth?.telemetry_error;
       const healthKnown = guardrailHealth !== null && guardrailHealth !== undefined && !telemetryError;
@@ -1936,15 +1936,15 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
         for (const [name, svc] of Object.entries(data.services)) {
           const outcome = svc && svc.outcome;
           if (outcome && outcome !== 'stopped' && outcome !== 'not_running') {
-            const detail = svc.detail ? ` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${svc.detail}` : '';
+            const detail = svc.detail ? ` — ${svc.detail}` : '';
             lines.push(`${name}: ${outcome}${detail}`);
           }
         }
       }
       if (lines.length) {
         const tag = isShadow ? `[SHADOW ${action.toUpperCase()}]` : `[${action.toUpperCase()}]`;
-        appendTickerEvent(`${tag} ${lines.join(' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ')}`,
-          lines.join(' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· '), action === 'stop' ? 'stop' : 'start', 'control',
+        appendTickerEvent(`${tag} ${lines.join(' · ')}`,
+          lines.join(' · '), action === 'stop' ? 'stop' : 'start', 'control',
           action, {});
       }
       if (data && data.status) {
@@ -1964,7 +1964,7 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
   });
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Render: Strategy Parameters (Human-Readable) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Render: Strategy Parameters (Human-Readable) ── */
 const PARAM_HUMAN_NAMES = {
   'max_pair_cost': 'Pair Cost Entry Ceiling',
   'max_naked_usd': 'Single-Leg Unwind Cap',
@@ -2080,7 +2080,7 @@ if (paramGridBtn && paramTableBtn) {
 }
 
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Render: Exposure Bar (DT3) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Render: Exposure Bar (DT3) ── */
 function renderExposure(kpi) {
   const bar = document.getElementById('exposure-bar');
   const text = document.getElementById('exposure-text');
@@ -2111,7 +2111,7 @@ function renderExposure(kpi) {
   }
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Render: Run Profitability Banner ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Render: Run Profitability Banner ── */
 function renderRunProfitability(kpi) {
   const card = document.getElementById('run-profitability');
   const runEl = document.getElementById('rp-run-id');
@@ -2144,14 +2144,14 @@ function renderRunProfitability(kpi) {
       const mPct = split.pct?.maker_merged != null ? ` (${(split.pct.maker_merged * 100).toFixed(0)}%)` : '';
       const tPct = split.pct?.taker_completed != null ? ` (${(split.pct.taker_completed * 100).toFixed(0)}%)` : '';
       const rPct = split.pct?.single_buy_exit != null ? ` (${(split.pct.single_buy_exit * 100).toFixed(0)}%)` : '';
-      detParts.push(`paths: maker ${mPnl}${mPct} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· taker ${tPnl}${tPct} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· rescue ${rPnl}${rPct}`);
+      detParts.push(`paths: maker ${mPnl}${mPct} · taker ${tPnl}${tPct} · rescue ${rPnl}${rPct}`);
     }
-    detailsEl.textContent = detParts.join(' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ');
+    detailsEl.textContent = detParts.join(' · ');
   }
 }
 
- /* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Render: KPI Tiles (DT2: empty states) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Statistical Analytics Workstation & Chart Renderers ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+ /* ── Render: KPI Tiles (DT2: empty states) ── */
+/* ── Statistical Analytics Workstation & Chart Renderers ── */
 let currentMcCycles = 100;
 // Starting capital the hero rendered with, so the chart's baseline cannot
 // drift from the one the headline was measured against.
@@ -2250,15 +2250,15 @@ function renderBrokerPortfolioOverview(kpi, status, state) {
     if (elWallet) elWallet.textContent = fmtUSD(venueVal);
     if (elWalletNote) {
       elWalletNote.textContent = lastDbIsProduction
-        ? 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â gains not settled to the wallet yet'
-        : 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â simulated gains not settled';
+        ? '— gains not settled to the wallet yet'
+        : '— simulated gains not settled';
     }
   }
 
   // Aligned KPI Strip
   // Derived from the headline, never from the wallet mark: a cash figure on a
   // different basis than the equity above it cannot be reconciled by eye.
-  // #460: three-way allocation ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â dollars resting in open orders (local
+  // #460: three-way allocation — dollars resting in open orders (local
   // registry, exact, fresh each poll) plus dollars held in positions, with
   // cash as the remainder. An unread leg is unmeasured ('--'), never a
   // fabricated $0.00: cash computes only when all three inputs are numbers.
@@ -2268,7 +2268,7 @@ function renderBrokerPortfolioOverview(kpi, status, state) {
   const committedVal = _numOrNull(heldRaw);
   const cashVal = (restingVal !== null && committedVal !== null)
     // Held can be a venue market value rather than a cost, so the legs can
-    // sum past the headline ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â a negative remainder is not cash anyone holds.
+    // sum past the headline — a negative remainder is not cash anyone holds.
     ? Math.max(0, totalVal - restingVal - committedVal) : null;
   const _pctOf = (v) => (v === null || !(totalVal > 0))
     ? null : ((v / totalVal) * 100).toFixed(1);
@@ -2301,7 +2301,7 @@ function renderBrokerPortfolioOverview(kpi, status, state) {
 
   if (elCash) elCash.textContent = fmtUSD(cashVal);
   // Cash keeps its Liquid-USDC unit; an unmeasured remainder is '--', and a
-  // percent of an unknown is unknown ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never '0.0% Liquid USDC'.
+  // percent of an unknown is unknown — never '0.0% Liquid USDC'.
   if (elCashPct) elCashPct.textContent = cashPct === null ? '--' : `${cashPct}% Liquid USDC`;
   if (elCommitted) elCommitted.textContent = fmtUSD(committedVal);
   // The unit is part of the number: "42.6% Committed Risk" read as a risk
@@ -2326,7 +2326,7 @@ function renderBrokerPortfolioOverview(kpi, status, state) {
     elWins.textContent = `${wins == null ? '--' : wins} Wins / `
       + `${losses == null ? '--' : losses} Losses`;
   }
-  if (elPf) elPf.innerHTML = `${profitFactor} <span style="font-size:10px;color:var(--text-muted);font-weight:500">ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· SR ${sharpe}</span>`;
+  if (elPf) elPf.innerHTML = `${profitFactor} <span style="font-size:10px;color:var(--text-muted);font-weight:500">· SR ${sharpe}</span>`;
   if (elSharpe) elSharpe.textContent = `Sharpe: ${sharpe}`;
 
   // Bento progress bars & edge indicator
@@ -2399,7 +2399,7 @@ function buildBrokerEquitySeries(kpi, startingCap, totalVal, timeframe = 'ALL') 
   // Windowed frames (Issue #257): clip at the window edge instead of drawing a
   // Start-to-first-close ramp. The edge point carries the running equity at
   // that moment (last pre-window close, else the anchor), labelled by its
-  // real timestamp ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â never the word "Start".
+  // real timestamp — never the word "Start".
   const windowStart = latestTs - windowSec;
   const preWindow = allCloses.filter(entry => Number(entry.ts) < windowStart);
   const closes = allCloses.filter(entry => {
@@ -2553,7 +2553,7 @@ function renderBrokerPortfolioChart(kpi, timeframe = '1D') {
         return;
       }
 
-      // Closest point by real pixel x (Issue #257) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â index rounding would
+      // Closest point by real pixel x (Issue #257) — index rounding would
       // snap to the wrong close once spacing is time-proportional.
       let best = 0;
       let bestDist = Infinity;
@@ -2755,7 +2755,7 @@ function initSensitivitySimulator() {
     if (outCandidates) outCandidates.textContent = `${candidates} Markets`;
     if (outDaily) outDaily.textContent = `$${expectedDailyUsd.toFixed(2)} / day`;
     if (outApr) outApr.textContent = `${impliedApr.toFixed(1)}% APR`;
-    if (outEdge) outEdge.textContent = `${edgeCents.toFixed(2)}ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ / share`;
+    if (outEdge) outEdge.textContent = `${edgeCents.toFixed(2)}¢ / share`;
   }
 
   if (sliderCost) sliderCost.addEventListener('input', updateSim);
@@ -2811,12 +2811,12 @@ function renderPositionDistributionChart(stats) {
 
   if (posCount === 0) {
     if (container) {
-      container.innerHTML = `<div class="empty-state" style="padding:40px;text-align:center"><div class="empty-state-title" style="color:var(--text-muted)">No closed positions recorded</div><div class="empty-state-msg" style="font-size:12px;color:var(--text-muted);margin-top:4px">Trade history is clean ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Start run to accumulate execution data</div></div>`;
+      container.innerHTML = `<div class="empty-state" style="padding:40px;text-align:center"><div class="empty-state-title" style="color:var(--text-muted)">No closed positions recorded</div><div class="empty-state-msg" style="font-size:12px;color:var(--text-muted);margin-top:4px">Trade history is clean · Start run to accumulate execution data</div></div>`;
     }
     if (footer) {
       footer.innerHTML = `
-        <div class="chart-footer-item"><span>Sample Mean (ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼):</span> <b style="color:var(--text-muted)">unmeasured</b></div>
-        <div class="chart-footer-item"><span>Std Dev (ÃƒÆ’Ã‚ÂÃƒâ€ Ã¢â‚¬â„¢):</span> <b>unmeasured</b></div>
+        <div class="chart-footer-item"><span>Sample Mean (μ):</span> <b style="color:var(--text-muted)">unmeasured</b></div>
+        <div class="chart-footer-item"><span>Std Dev (σ):</span> <b>unmeasured</b></div>
         <div class="chart-footer-item"><span>Standard Error (SE):</span> <b>unmeasured</b></div>
         <div class="chart-footer-item"><span>${currentCiLevel}% Confidence Interval:</span> <b>unmeasured</b></div>
         <div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = 0 observations</b></div>
@@ -2825,19 +2825,19 @@ function renderPositionDistributionChart(stats) {
     }
     if (badge) {
       badge.className = 'badge-tag stopped';
-      badge.textContent = `${currentCiLevel}% CI: unmeasured ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· STANDBY`;
+      badge.textContent = `${currentCiLevel}% CI: unmeasured · STANDBY`;
     }
     if (banner) {
       banner.innerHTML = `
         <div class="dist-power-stat">
           <span class="label">Sample Universe:</span>
           <span class="val">0 Observations</span>
-          <span class="sub">(0 Merged ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 0 Unwind)</span>
+          <span class="sub">(0 Merged · 0 Unwind)</span>
         </div>
         <div class="dist-power-stat">
           <span class="label">Statistical Power Target:</span>
           <span class="val">0 / 120 Obs</span>
-          <span class="sub">(0% Power ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Sequential SPRT Active)</span>
+          <span class="sub">(0% Power · Sequential SPRT Active)</span>
         </div>
         <div class="dist-progress-wrap">
           <div class="dist-progress-bar">
@@ -2865,7 +2865,7 @@ function renderPositionDistributionChart(stats) {
     mean = pr.mean_pnl_pct != null ? pr.mean_pnl_pct : (rawValues.reduce((a,b)=>a+b,0)/rawValues.length);
     // NO INVENTED SPREAD. A sample of one has a mean and no deviation, and the
     // backend says so by omitting these. Substituting a constant here is how a
-    // single trade rendered as "90% CI [+5.10%, +5.43%] ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· EDGE CONFIRMED".
+    // single trade rendered as "90% CI [+5.10%, +5.43%] · EDGE CONFIRMED".
     stdev = pr.stdev_pnl_pct != null ? pr.stdev_pnl_pct : null;
     sem = pr.sem_pnl_pct != null ? pr.sem_pnl_pct : null;
     if (sem != null) {
@@ -2948,11 +2948,11 @@ function renderPositionDistributionChart(stats) {
   // drawing geometry from it.
   if (!rawValues.length || mean == null || !isFinite(mean)) {
     if (container) {
-      container.innerHTML = `<div class="empty-state" style="padding:40px;text-align:center"><div class="empty-state-title" style="color:var(--text-muted)">Metric unmeasured</div><div class="empty-state-msg" style="font-size:12px;color:var(--text-muted);margin-top:4px">${posCount} closed position${posCount === 1 ? '' : 's'} recorded ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· none carry this measurement</div></div>`;
+      container.innerHTML = `<div class="empty-state" style="padding:40px;text-align:center"><div class="empty-state-title" style="color:var(--text-muted)">Metric unmeasured</div><div class="empty-state-msg" style="font-size:12px;color:var(--text-muted);margin-top:4px">${posCount} closed position${posCount === 1 ? '' : 's'} recorded · none carry this measurement</div></div>`;
     }
     if (badge) {
       badge.className = 'badge-tag stopped';
-      badge.textContent = `${currentCiLevel}% CI: unmeasured ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· metric not recorded`;
+      badge.textContent = `${currentCiLevel}% CI: unmeasured · metric not recorded`;
     }
     if (footer) {
       footer.innerHTML = `<div class="chart-footer-item"><span>Metric:</span> <b style="color:var(--text-muted)">unmeasured on ${posCount} recorded close${posCount === 1 ? '' : 's'}</b></div>`;
@@ -2968,11 +2968,11 @@ function renderPositionDistributionChart(stats) {
       // One observation, or a metric the payload could not measure a spread
       // for. There is no interval to state and no edge to confirm.
       badge.className = 'badge-tag stopped';
-      badge.textContent = `${currentCiLevel}% CI: unmeasured ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· `
-        + `${posCount} observation${posCount === 1 ? '' : 's'} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· `
+      badge.textContent = `${currentCiLevel}% CI: unmeasured · `
+        + `${posCount} observation${posCount === 1 ? '' : 's'} · `
         + `NEEDS 2+ TO ESTIMATE SPREAD`;
     } else {
-      badge.textContent = `${currentCiLevel}% CI: [${formatVal(ciLower)}, ${formatVal(ciUpper)}] ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${isPos ? `LOWER BOUND POSITIVE (${formatVal(ciLower)} > 0) ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· EDGE CONFIRMED` : 'ZERO CROSSING'}`;
+      badge.textContent = `${currentCiLevel}% CI: [${formatVal(ciLower)}, ${formatVal(ciUpper)}] · ${isPos ? `LOWER BOUND POSITIVE (${formatVal(ciLower)} > 0) · EDGE CONFIRMED` : 'ZERO CROSSING'}`;
     }
   }
 
@@ -3054,7 +3054,7 @@ function renderPositionDistributionChart(stats) {
 
     dotsSvg += `
       <circle class="pos-scatter-dot" cx="${dotX.toFixed(1)}" cy="${jitterY}" r="4" fill="${fill}" stroke="${stroke}" stroke-width="1.2" style="cursor:pointer;transition:transform 0.1s" data-id="${esc(pos.id)}" data-market="${esc(pos.market)}" data-val="${formatVal(val)}" data-type="${esc(pos.type)}">
-        <title>${pos.id} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${pos.market} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${formatVal(val)} (${pos.type})</title>
+        <title>${pos.id} · ${pos.market} · ${formatVal(val)} (${pos.type})</title>
       </circle>
     `;
   });
@@ -3070,12 +3070,12 @@ function renderPositionDistributionChart(stats) {
       <div class="dist-power-stat">
         <span class="label">Sample Universe:</span>
         <span class="val">${posCount} Observations</span>
-        <span class="sub">(${mergedCount} Merged ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${unwindCount} Unwind)</span>
+        <span class="sub">(${mergedCount} Merged · ${unwindCount} Unwind)</span>
       </div>
       <div class="dist-power-stat">
         <span class="label">Statistical Power Target:</span>
         <span class="val ${posCount >= requiredObs ? 'positive' : ''}">${posCount} / ${requiredObs} Obs</span>
-        <span class="sub">(${powerPct}% Power ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Sequential SPRT Active)</span>
+        <span class="sub">(${powerPct}% Power · Sequential SPRT Active)</span>
       </div>
       <div class="dist-progress-wrap">
         <div class="dist-progress-bar">
@@ -3115,7 +3115,7 @@ function renderPositionDistributionChart(stats) {
         <text x="${zeroX}" y="${padT - 8}" fill="#f87171" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">0.00% BREAKEVEN</text>
       ` : ''}
 
-      <!-- Sample Mean Line (ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼) Anchored Directly in Middle -->
+      <!-- Sample Mean Line (μ) Anchored Directly in Middle -->
       <line x1="${meanX}" y1="${padT}" x2="${meanX}" y2="${padT + plotH}" stroke="#38bdf8" stroke-width="2.4"/>
 
       <!-- Individual Scatter Points for all closed positions -->
@@ -3127,7 +3127,7 @@ function renderPositionDistributionChart(stats) {
       <!-- Axis Labels (Symmetric around the center Mean) -->
       <text x="${padL}" y="${padT + plotH + 16}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">${formatVal(minDomain)}</text>
       <text x="${padL + plotW * 0.25}" y="${padT + plotH + 16}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">${formatVal(minDomain + span * 0.25)}</text>
-      <text x="${meanX}" y="${padT + plotH + 16}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼ ${formatVal(mean)}</text>
+      <text x="${meanX}" y="${padT + plotH + 16}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">μ ${formatVal(mean)}</text>
       <text x="${padL + plotW * 0.75}" y="${padT + plotH + 16}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">${formatVal(minDomain + span * 0.75)}</text>
       <text x="${w - padR}" y="${padT + plotH + 16}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="end">${formatVal(maxDomain)}</text>
     </svg>
@@ -3145,7 +3145,7 @@ function renderPositionDistributionChart(stats) {
       const val = dot.dataset.val;
       const type = dot.dataset.type;
       tooltip.innerHTML = `
-        <div style="color:var(--text-muted);font-size:9.5px">${esc(id)} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${esc(type)}</div>
+        <div style="color:var(--text-muted);font-size:9.5px">${esc(id)} · ${esc(type)}</div>
         <div style="font-weight:700;color:var(--text-primary);max-width:220px;white-space:normal">${esc(market)}</div>
         <div style="font-size:12px;font-weight:800;color:${val.startsWith('+') ? '#34d399' : '#f87171'}">Result: ${esc(val)}</div>
       `;
@@ -3162,12 +3162,12 @@ function renderPositionDistributionChart(stats) {
 
   if (footer) {
     footer.innerHTML = `
-      <div class="chart-footer-item"><span>Sample Mean (ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼):</span> <b style="color:#38bdf8">${formatVal(mean)}</b></div>
-      <div class="chart-footer-item"><span>Std Dev (ÃƒÆ’Ã‚ÂÃƒâ€ Ã¢â‚¬â„¢):</span> <b>${stdev == null ? 'unmeasured' : 'ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â±' + formatVal(stdev).replace('+', '')}</b></div>
+      <div class="chart-footer-item"><span>Sample Mean (μ):</span> <b style="color:#38bdf8">${formatVal(mean)}</b></div>
+      <div class="chart-footer-item"><span>Std Dev (σ):</span> <b>${stdev == null ? 'unmeasured' : '±' + formatVal(stdev).replace('+', '')}</b></div>
       <div class="chart-footer-item"><span>Standard Error (SE):</span> <b>${sem == null ? 'unmeasured' : formatVal(sem).replace('+', '')}</b></div>
       <div class="chart-footer-item"><span>${currentCiLevel}% Confidence Interval:</span> <b style="color:${sem == null ? 'var(--text-muted)' : '#34d399'}">${sem == null ? 'unmeasured' : `[${formatVal(ciLower)}, ${formatVal(ciUpper)}]`}</b></div>
       <div class="chart-footer-item"><span>Distribution Sample Universe:</span> <b>N = ${posCount} observations</b></div>
-      <div class="chart-footer-item"><span>Statistical Edge:</span> <b style="color:${sem == null ? 'var(--text-muted)' : 'var(--signal)'}">${sem == null ? 'ACCUMULATING (needs 2+ observations)' : 'HÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â: ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼ &gt; 0 CONFIRMED'}</b></div>
+      <div class="chart-footer-item"><span>Statistical Edge:</span> <b style="color:${sem == null ? 'var(--text-muted)' : 'var(--signal)'}">${sem == null ? 'ACCUMULATING (needs 2+ observations)' : 'H₁: μ &gt; 0 CONFIRMED'}</b></div>
     `;
   }
 }
@@ -3198,14 +3198,14 @@ function renderQuantRiskGrid(ta, p, stats) {
   const winRate = ta.win_rate != null && n > 0 ? `${(ta.win_rate * 100).toFixed(1)}%` : 'unmeasured';
   // `win_rate_ci95` is `{lower, upper}`, not a two-element array. Indexing it
   // gave `undefined * 100` on both ends, so the Wilson interval rendered as
-  // `[NaN%ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œNaN%]` -- an interval that exists in the report and was never once
+  // `[NaN%–NaN%]` -- an interval that exists in the report and was never once
   // displayed. The array form is still read, for any caller that sends one.
   const ciBounds = _ciBounds(ta.win_rate_ci95);
   const ci95 = ciBounds && n > 0
-    ? `[${(ciBounds[0] * 100).toFixed(0)}%ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ${(ciBounds[1] * 100).toFixed(0)}%]`
-    : '[0%ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ0%]';
+    ? `[${(ciBounds[0] * 100).toFixed(0)}%–${(ciBounds[1] * 100).toFixed(0)}%]`
+    : '[0%–0%]';
   // Issue #251: no metric in this grid fabricates a zero. A null field is
-  // unmeasured ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `$0.00` VaR reads as "no risk", a verdict the run never earned.
+  // unmeasured — `$0.00` VaR reads as "no risk", a verdict the run never earned.
   // A VaR/CVaR tail that happens to be profitable reports a negative
   // magnitude; the minus goes in front of the currency, never inside it.
   const fmtLoss = (v) => `${v < 0 ? '-' : ''}$${Math.abs(v).toFixed(2)}`;
@@ -3227,7 +3227,7 @@ function renderQuantRiskGrid(ta, p, stats) {
     <div class="quant-tile">
       <div class="quant-label">Mathematical Expectancy <span class="info-bubble" title="Why can $ and % disagree?">?</span><span class="info-tooltip">Dollars average $ per close over ALL closes; percents average % per close over measured closes only. A small trade with a big % loss can pull % negative while larger-$ wins keep $ positive.</span></div>
       <div class="quant-value ${n > 0 ? signClass(ta.expectancy_usd) : ''}">${esc(expectancy)}</div>
-      <div class="quant-sub">${esc(meanRet)} mean return / trade${dwRet != null ? ` ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${esc(dwRet)} dollar-weighted` : ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· dollar-weighted unmeasured'}${nMeas != null ? ` ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${nMeas}/${n} measured` : ''}</div>
+      <div class="quant-sub">${esc(meanRet)} mean return / trade${dwRet != null ? ` · ${esc(dwRet)} dollar-weighted` : ' · dollar-weighted unmeasured'}${nMeas != null ? ` · ${nMeas}/${n} measured` : ''}</div>
     </div>
     <div class="quant-tile">
       <div class="quant-label">95% Value at Risk (1D)</div>
@@ -3356,12 +3356,12 @@ function renderPairCostKdeChart(stats) {
 
       <!-- Center Mean Line Anchored at Middle -->
       <line x1="${meanX}" y1="${padT}" x2="${meanX}" y2="${padT + plotH}" stroke="#38bdf8" stroke-width="2"/>
-      <text x="${meanX}" y="${padT - 8}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">MEAN ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼ $${mean.toFixed(3)}</text>
+      <text x="${meanX}" y="${padT - 8}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">MEAN μ $${mean.toFixed(3)}</text>
 
       <!-- Axis Labels (Symmetric around center mean) -->
       <text x="${padL}" y="${padT + plotH + 16}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">$${minDomain.toFixed(3)}</text>
       <text x="${padL + plotW * 0.25}" y="${padT + plotH + 16}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">$${(minDomain + span * 0.25).toFixed(3)}</text>
-      <text x="${meanX}" y="${padT + plotH + 16}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼ $${mean.toFixed(3)}</text>
+      <text x="${meanX}" y="${padT + plotH + 16}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">μ $${mean.toFixed(3)}</text>
       <text x="${padL + plotW * 0.75}" y="${padT + plotH + 16}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5">$${(minDomain + span * 0.75).toFixed(3)}</text>
       <text x="${w - padR}" y="${padT + plotH + 16}" fill="var(--text-muted)" font-family="'JetBrains Mono', monospace" font-size="8.5" text-anchor="end">$${maxDomain.toFixed(3)}</text>
     </svg>
@@ -3369,8 +3369,8 @@ function renderPairCostKdeChart(stats) {
 
   if (footer) {
     footer.innerHTML = `
-      <div class="chart-footer-item"><span>Mean Cost (ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼):</span> <b style="color:#38bdf8">${mean == null ? 'unmeasured' : '$' + mean.toFixed(3)}</b></div>
-      <div class="chart-footer-item"><span>Std Dev (ÃƒÆ’Ã‚ÂÃƒâ€ Ã¢â‚¬â„¢):</span> <b>${stdev == null ? 'unmeasured' : 'ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â±$' + stdev.toFixed(3)}</b></div>
+      <div class="chart-footer-item"><span>Mean Cost (μ):</span> <b style="color:#38bdf8">${mean == null ? 'unmeasured' : '$' + mean.toFixed(3)}</b></div>
+      <div class="chart-footer-item"><span>Std Dev (σ):</span> <b>${stdev == null ? 'unmeasured' : '±$' + stdev.toFixed(3)}</b></div>
       <div class="chart-footer-item"><span>Min Observed:</span> <b>${pc.min_observed == null ? 'unmeasured' : '$' + pc.min_observed.toFixed(3)}</b></div>
       <div class="chart-footer-item"><span>Executed Pairs:</span> <b>${pc.samples_count == null ? 'unmeasured' : pc.samples_count + ' merged'}${Array.isArray(stats?.closed_positions) ? ` (${stats.closed_positions.length} closes)` : ''}</b></div>
     `;
@@ -3534,11 +3534,11 @@ function renderProbabilityBellChart(stats) {
     <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Implied Odds Bell Curve">
       <!-- Sweet Spot Shaded Background (15% to 85%) -->
       <rect x="${sweetLeft}" y="${padT}" width="${sweetRight - sweetLeft}" height="${plotH}" fill="rgba(56, 189, 248, 0.06)" rx="4"/>
-      <text x="${sweetLeft + 6}" y="${padT - 8}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700">SWEET SPOT (15%ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ85%)</text>
+      <text x="${sweetLeft + 6}" y="${padT - 8}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="700">SWEET SPOT (15%–85%)</text>
 
       <!-- Center 50% Fair Odds Line Anchored at Middle -->
       <line x1="${padL + plotW / 2}" y1="${padT}" x2="${padL + plotW / 2}" y2="${padT + plotH}" stroke="#38bdf8" stroke-width="2"/>
-      <text x="${padL + plotW / 2}" y="${padT - 8}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">FAIR ODDS ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼ 50%</text>
+      <text x="${padL + plotW / 2}" y="${padT - 8}" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" text-anchor="middle">FAIR ODDS μ 50%</text>
 
       <!-- Empirical Histogram Bars -->
       ${barsSvg}
@@ -3561,7 +3561,7 @@ function renderProbabilityBellChart(stats) {
   if (footer) {
     footer.innerHTML = `
       <div class="chart-footer-item"><span>Mean Probability:</span> <b>${pb.mean == null ? 'unmeasured' : (pb.mean * 100).toFixed(1) + '%'}</b></div>
-      <div class="chart-footer-item"><span>Std Deviation:</span> <b>${pb.stdev == null ? 'unmeasured' : 'ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â±' + (pb.stdev * 100).toFixed(1) + '%'}</b></div>
+      <div class="chart-footer-item"><span>Std Deviation:</span> <b>${pb.stdev == null ? 'unmeasured' : '±' + (pb.stdev * 100).toFixed(1) + '%'}</b></div>
       <div class="chart-footer-item"><span>Sweet Spot Concentration:</span> <b style="color:var(--signal)">${pb.sweet_spot_pct == null ? 'unmeasured' : pb.sweet_spot_pct.toFixed(1) + '%'}</b></div>
       <div class="chart-footer-item"><span>Executed Sample:</span> <b>${pb.samples_count == null ? 'unmeasured' : pb.samples_count + ' fills'}</b></div>
     `;
@@ -3809,13 +3809,13 @@ function decisionGatesRows(ta, stats, n, kpi) {
       name: 'Strategy Pricing Band',
       standard: 'Implied contract probability sweet-spot filter',
       threshold: '$0.15 &le; P &le; $0.85',
-      observed: sweetSpot != null ? `$0.15 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ $0.85 (${Number(sweetSpot).toFixed(1)}% in band)` : '$0.15 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ $0.85',
+      observed: sweetSpot != null ? `$0.15 – $0.85 (${Number(sweetSpot).toFixed(1)}% in band)` : '$0.15 – $0.85',
       measured: true,
       state: 'active',
     },
     {
       group: 'Accumulating gates',
-      name: `Edge Viability ${mathSpan('H_1: \\mu > 0', 'HÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â: ÃƒÆ’Ã…Â½Ãƒâ€šÃ‚Â¼ > 0')}`,
+      name: `Edge Viability ${mathSpan('H_1: \\mu > 0', 'H₁: μ > 0')}`,
       standard: '90% confidence lower bound of realised spread',
       threshold: '&gt; 0.00% (strictly positive)',
       observed: lower != null ? `${lower.toFixed(2)}%` : '',
@@ -3844,8 +3844,8 @@ function decisionGatesRows(ta, stats, n, kpi) {
       standard: 'Post-trade price drift across the matured horizon',
       threshold: '&ge; 25 matured fills, drift &ge; 0',
       observed: drift != null
-        ? `${markoutSamples} samples ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${(drift * 100).toFixed(2)}ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢/share`
-          + (excess != null ? ` (excess ${(excess * 100).toFixed(2)}ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢)` : '')
+        ? `${markoutSamples} samples · ${(drift * 100).toFixed(2)}¢/share`
+          + (excess != null ? ` (excess ${(excess * 100).toFixed(2)}¢)` : '')
         : `${markoutSamples} samples`,
       measured: markoutSamples != null && markoutSamples > 0,
       state: markoutState,
@@ -3905,7 +3905,7 @@ function renderPnlCiReadout(ta) {
     host.innerHTML = `
       <div class="pnl-ci-mean mono">${esc(mean === null ? '--' : fmtSignedUSD(mean))}</div>
       <div class="pnl-ci-sub">Mean realized PnL per close</div>
-      <div class="pnl-ci-verdict standby">NO BAND YET ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${n} ${n === 1 ? 'CLOSE' : 'CLOSES'}</div>
+      <div class="pnl-ci-verdict standby">NO BAND YET · ${n} ${n === 1 ? 'CLOSE' : 'CLOSES'}</div>
       <div class="pnl-ci-note">A confidence interval needs at least two closes. Nothing is being withheld; nothing has been measured.</div>
     `;
     return;
@@ -3928,7 +3928,7 @@ function renderPnlCiReadout(ta) {
   const widest = levels[levels.length - 1];
   const depth = widest.negative_depth_usd != null ? Number(widest.negative_depth_usd) : null;
   const verdictMap = {
-    positive: { cls: 'go', text: `BAND CLEAR OF ZERO ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· NO LOSS INCLUDED AT ${widest.level}%` },
+    positive: { cls: 'go', text: `BAND CLEAR OF ZERO · NO LOSS INCLUDED AT ${widest.level}%` },
     spans_zero: {
       cls: 'warn',
       text: `BAND INCLUDES A LOSS DOWN TO ${depth === null ? '--' : '-$' + depth.toFixed(3)} PER CLOSE`,
@@ -3977,7 +3977,7 @@ function renderPnlCiReadout(ta) {
   host.innerHTML = `
     <div class="pnl-ci-head-row">
       <div class="pnl-ci-mean mono ${mean === null ? '' : signClass(mean)}">${esc(mean === null ? '--' : fmtSignedUSD(mean))}</div>
-      <div class="pnl-ci-sub">Mean realized PnL per close ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${n} ${n === 1 ? 'close' : 'closes'}</div>
+      <div class="pnl-ci-sub">Mean realized PnL per close · ${n} ${n === 1 ? 'close' : 'closes'}</div>
     </div>
 
     <!-- Visual Scale Bar: ---|----------|--- -->
@@ -4229,11 +4229,11 @@ function renderExecutionFunnel(kpi) {
     const bridgeHtml = drop ? `
       <div class="funnel-bridge${isWorstFrom ? ' worst' : ''}">
         <div class="funnel-bridge-connector">
-          <div class="funnel-bridge-arrow">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ</div>
+          <div class="funnel-bridge-arrow">↓</div>
         </div>
         <div class="funnel-drop-note${isWorstFrom ? ' worst' : ''}">
           <span class="funnel-retained-badge mono">${esc(retained)}</span>
-          ${drop.lost > 0 ? `<span class="funnel-lost-badge mono"> ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· lost ${drop.lost}</span>` : ''}
+          ${drop.lost > 0 ? `<span class="funnel-lost-badge mono"> · lost ${drop.lost}</span>` : ''}
           ${isWorstFrom ? `<span class="funnel-worst-badge">WORST DROP</span>` : ''}
         </div>
       </div>
@@ -4246,7 +4246,7 @@ function renderExecutionFunnel(kpi) {
             <span class="funnel-stage-icon">${icon}</span>
             ${esc(st.label || st.key)}
           </span>
-          <span class="funnel-stage-count mono">${legs} ${legs === 1 ? 'leg' : 'legs'} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${markets} ${markets === 1 ? 'market' : 'markets'}</span>
+          <span class="funnel-stage-count mono">${legs} ${legs === 1 ? 'leg' : 'legs'} · ${markets} ${markets === 1 ? 'market' : 'markets'}</span>
         </div>
         <div class="funnel-bar-track">
           <div class="funnel-bar-fill" style="width:100%"></div>
@@ -4306,7 +4306,7 @@ function renderAnalyticsSurface(kpi, status) {
     <div class="kpi-tile">
       <div class="kpi-label">Mean Return Per Trade</div>
       ${fmtVal(ta.mean_return_pct != null && n > 0 ? fmtPct(ta.mean_return_pct) : '0.00%', n > 0 ? ' ' + signClass(ta.mean_return_pct) : '')}
-      <div class="hint">ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â± ${ta.stdev_return_pct != null && n > 0 ? Number(ta.stdev_return_pct).toFixed(2) + '%' : '0.00%'} (ÃƒÆ’Ã‚ÂÃƒâ€ Ã¢â‚¬â„¢)${dwRetKpi != null ? ` ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${dwRetKpi} dollar-weighted` : ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· dollar-weighted unmeasured'}</div>
+      <div class="hint">± ${ta.stdev_return_pct != null && n > 0 ? Number(ta.stdev_return_pct).toFixed(2) + '%' : '0.00%'} (σ)${dwRetKpi != null ? ` · ${dwRetKpi} dollar-weighted` : ' · dollar-weighted unmeasured'}</div>
     </div>
     <div class="kpi-tile">
       <div class="kpi-label">Annualized Sharpe Ratio</div>
@@ -4315,7 +4315,7 @@ function renderAnalyticsSurface(kpi, status) {
     </div>
     <div class="kpi-tile">
       <div class="kpi-label">Executed Sample Size</div>
-      ${fmtVal(`${n} Closes (${wins}W / ${losses}L)${nMeasKpi != null ? ` ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${nMeasKpi} measured` : ''}`)}
+      ${fmtVal(`${n} Closes (${wins}W / ${losses}L)${nMeasKpi != null ? ` · ${nMeasKpi} measured` : ''}`)}
       <div class="hint">Empirical Win Rate: ${n > 0 ? winRate.toFixed(1) + '%' : '0.0%'}</div>
     </div>
   `;
@@ -4345,14 +4345,14 @@ function renderAnalyticsSurface(kpi, status) {
 
   // Update sample count in sub-nav
   const samplePill = document.getElementById('stats-live-sample-count');
-  if (samplePill) samplePill.textContent = `${n} Closes ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Scanned Polymarket Candidates`;
+  if (samplePill) samplePill.textContent = `${n} Closes · Scanned Polymarket Candidates`;
 }
 
 /* Portfolio overview card + run pill (Issue #268): one paint for the card
  * the operator reads on every visit. #140 moved `#broker-portfolio-overview`
  * and `#run-profitability` onto the rail's Dashboard page while the KPI tiles
- * stayed on Reports; painting them from renderKPIs ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â which the poll gates
- * behind the Reports grid ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â froze the card at its pre-data standby on every
+ * stayed on Reports; painting them from renderKPIs — which the poll gates
+ * behind the Reports grid — froze the card at its pre-data standby on every
  * other page. They are their own paint now, gated by their own target. */
 function renderPortfolioOverview(kpi, status, state) {
   // Same contract as renderKPIs: a payload without a portfolio is malformed
@@ -4446,7 +4446,7 @@ function renderKPIs(kpi, status) {
   });
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Render: Market Table (expandable rows ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â click to inspect individual orders) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Render: Market Table (expandable rows — click to inspect individual orders) ── */
 const expandedMarkets = new Set(); // track which markets are expanded
 const showCancelledByMarket = new Set(); // track which markets show cancelled orders
 
@@ -4571,7 +4571,7 @@ function renderExpandedOrders(orders, fills, showCancelled, legOf) {
 
   // If showCancelled is false and there are active orders, show only active.
   // If all orders are cancelled and showCancelled is false, show a collapse
-  // banner instead of an empty table ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the operator needs to know they exist.
+  // banner instead of an empty table — the operator needs to know they exist.
   const displayOrders = showCancelled ? orders : activeOrders;
 
   if (displayOrders.length === 0 && !showCancelled) {
@@ -4607,7 +4607,7 @@ function renderExpandedOrders(orders, fills, showCancelled, legOf) {
     <th>Status</th>
   </tr></thead><tbody>`;
 
-  // Pair grouping ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â deterministic color per pair_id, orders together
+  // Pair grouping — deterministic color per pair_id, orders together
   function pairHue(pid) {
     if (!pid) return 200;
     let h = 0;
@@ -4667,7 +4667,7 @@ function renderExpandedOrders(orders, fills, showCancelled, legOf) {
       const knownLeg = sideLabel && !o.outcome;
       const isBuy = String(o.side || '').toUpperCase() === 'BUY';
       const label = o.outcome ? `${o.outcome} (${fmtSide(o.side)})`
-        : (knownLeg ? (isBuy ? sideLabel : `${sideLabel} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${fmtSide(o.side)}`)
+        : (knownLeg ? (isBuy ? sideLabel : `${sideLabel} · ${fmtSide(o.side)}`)
         : fmtSide(o.side));
       const isCancelled = isCancelledStatus(o.status);
       html += `<tr class="${isCancelled ? 'order-cancelled ' : ''}pair-row" style="--pair-hue:${hue}; background: hsla(${hue},72%,60%,0.06)">
@@ -4694,19 +4694,19 @@ function renderExpandedOrders(orders, fills, showCancelled, legOf) {
   return html;
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Orders & Trades: four views of the same run ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Orders & Trades: four views of the same run ───────────────────────────
  *
  * One table, four tabs, because they are four stages of the same object and
  * the operator reads them in that order:
  *
- *   ACTIVE MARKETS ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â graduated the Market Filter and currently quoted. What the
+ *   ACTIVE MARKETS — graduated the Market Filter and currently quoted. What the
  *                    is looking at. No share counts here: nothing is owned yet.
- *   Orders         ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â resting in the book. Size, price, what it would cost.
+ *   Orders         — resting in the book. Size, price, what it would cost.
  *                    No PnL here: an order in the book is not a position.
- *   OPEN POSITIONS ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â filled legs on a market that has NOT resolved. This is
+ *   OPEN POSITIONS — filled legs on a market that has NOT resolved. This is
  *                    where PnL exists, because this is the only stage where
  *                    the account is still exposed.
- *   CLOSED TRADES  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â settled trades that booked profit or loss, in the same
+ *   CLOSED TRADES  — settled trades that booked profit or loss, in the same
  *                    shape the Data & Markets table renders a finished
  *                    market. Nothing here can move any more.
  */
@@ -4756,7 +4756,7 @@ function normalizeLeg(side) {
   return null;
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Click-to-sort (issue #294) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Click-to-sort (issue #294) ──
  *
  * The sort unit is never the rendered <tr>. Orders and OPEN POSITIONS emit one
  * row per leg with the market name and every pair-level number in rowspan
@@ -4880,7 +4880,7 @@ function latestLegQuotes(market) {
  *
  * It is deliberately NOT the source of the pair cost on Active Markets. The
  * two legs of a binary market are anti-correlated -- UP mid and DOWN mid sum
- * to $1.00 by construction -- so an "edge" computed from mids reads 0.0ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ on
+ * to $1.00 by construction -- so an "edge" computed from mids reads 0.0¢ on
  * every row. The edge lives in the gap between the mids and what the bot is
  * willing to pay, which is the quoted price. */
 function latestLegMids(market) {
@@ -5070,7 +5070,7 @@ function paintLiveMarks() {
         if (!line) continue;
         const isLive = leg.leg === 'YES' ? !!legLive.up : !!legLive.dn;
         line.innerHTML = leg.leg + ' ' + fmtPrice(leg.mid)
-          + (isLive ? ' <span class="stitch-cur-live">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â</span>' : '');
+          + (isLive ? ' <span class="stitch-cur-live">●</span>' : '');
       }
       if (el.classList) el.classList.add('live');
       el.title = age;
@@ -5278,7 +5278,7 @@ function marketCell(market, conditionId, opts) {
   if (!cid) return '--';
   const fallbackCaption = wantCaption
     ? `<div class="caption-muted">${esc(marketCategory(market))}</div>` : '';
-  return `<span class="mono" title="${esc(cid)}">${esc(cid.slice(0, 10))}ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦</span>${fallbackCaption}`;
+  return `<span class="mono" title="${esc(cid)}">${esc(cid.slice(0, 10))}…</span>${fallbackCaption}`;
 }
 
 /* The market an open-order group belongs to: the KPI entry first, then the
@@ -5295,16 +5295,16 @@ function orderGroupMarket(group, conditionId, byMarket, state) {
   return { condition_id: conditionId };
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Pair status: one vocabulary for both tables ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+/* ── Pair status: one vocabulary for both tables ──
  *
  * A pair is two legs of the same market, and it is in exactly one of three
  * states whether you are looking at the book or at what filled:
  *
- *   Paired   ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â both legs present, same size. This is the only state that
+ *   Paired   — both legs present, same size. This is the only state that
  *              merges cleanly back into $1.00.
- *   Partial  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â both legs present, sizes do not match. The overlap merges; the
+ *   Partial  — both legs present, sizes do not match. The overlap merges; the
  *              remainder is exposed.
- *   Unpaired ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â one leg only. On the book that is a single buy waiting to
+ *   Unpaired — one leg only. On the book that is a single buy waiting to
  *              happen; filled, it already is one.
  *
  * Tone follows the state, not the money: good, warning, alert. `Pair Cost`
@@ -5392,7 +5392,7 @@ function otHeadHtml(view, sort) {
       const button = `<button type="button" class="ot-sort-btn" data-ot-sort="${i}">`
         + `<span class="ot-sort-label">${esc(label)}</span>`
         + (isActive
-          ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â²' : 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¼'}</span>`
+          ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>`
           : '')
         + `</button>`;
       // The width floor rides on the MARKET column, not on position 0: the
@@ -5406,7 +5406,7 @@ function otHeadHtml(view, sort) {
   return `<tr>${cells}</tr>`;
 }
 
-/* Every price ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â quotes, mids, pair cost, entry price ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â carries two decimals.
+/* Every price — quotes, mids, pair cost, entry price — carries two decimals.
  * A price is a dollar amount, so it reads like money ($0.95), not like a
  * three-place quote tick ($0.950). `fmtUSD` already formats dollars to two
  * places; this keeps prices in the same visual grammar. */
@@ -5437,12 +5437,12 @@ function signedUSD(v) {
 /* Per-market status vocabulary for the Active Markets tab (issue #272).
  *
  * The pill used to be derived purely from resting-order presence, so a market
- * being quoted live ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â but whose orders have not rested, or were
- * cancelled/filled ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â read IDLE, the same word the fleet-level scan banner
+ * being quoted live — but whose orders have not rested, or were
+ * cancelled/filled — read IDLE, the same word the fleet-level scan banner
  * uses for "no active-phase work". Three states, most specific first:
- *   RESTING ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â orders are resting on the book (a subset of QUOTING);
- *   QUOTING ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the engine is actively quoting this market (quotes_count > 0);
- *   IDLE    ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no quote activity. Reserved; must not appear in this tab, since
+ *   RESTING — orders are resting on the book (a subset of QUOTING);
+ *   QUOTING — the engine is actively quoting this market (quotes_count > 0);
+ *   IDLE    — no quote activity. Reserved; must not appear in this tab, since
  *             everything listed here graduated the filter and is being quoted.
  */
 function marketStatusPill(m, restingHere) {
@@ -5464,7 +5464,7 @@ function activeMarketsRows(kpi, state, sort) {
 
   if (!entries.length) return otEmptyRow('active-markets', 'No markets are being quoted.');
 
-  // One row per market, so a market IS the sort unit here ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the only question
+  // One row per market, so a market IS the sort unit here — the only question
   // is which of its own values the column stands for. Each accessor reads the
   // same derived number the cell below it renders.
   const rows = entries.map(([cid, m]) => {
@@ -5996,7 +5996,7 @@ function dualLegLine({ side, size, price, cost, emptyLabel, sizeSuffix }) {
 // `stitch-quote-box` inside one `<td>`, so the two tabs render the identical
 // two-leg block instead of each rolling its own markup. The caller passes the
 // two already-rendered leg lines (from `dualLegLine`) so this stays pure.
-//   opts.cellClass ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â optional extra class(es) on the `<td>` (e.g. Positions'
+//   opts.cellClass — optional extra class(es) on the `<td>` (e.g. Positions'
 //   'mono font-tabular'); omit for a bare `<td>` like Orders uses.
 function stitchDualLegCell(yesLine, noLine, opts) {
   const o = opts || {};
@@ -6027,7 +6027,7 @@ function stitchOpenOrdersHeadHtml(sort) {
     if (!isSortable) {
       return `<th${rightCls}>${esc(col.label)}</th>`;
     }
-    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â²' : 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¼'}</span>` : '';
+    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
     const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
     return `<th${ariaSort}${rightCls}>`
       + `<button type="button" class="ot-sort-btn" data-ot-sort="${col.sortIdx}">`
@@ -6104,7 +6104,7 @@ function stitchOpenOrdersRows(kpi, state, sort) {
     const ageSec = ages.length ? Math.max(...ages) : null;
 
     const title = (market && (market.title || market.name || market.slug))
-      || (first.condition_id ? first.condition_id.slice(0, 10) + 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦' : '--');
+      || (first.condition_id ? first.condition_id.slice(0, 10) + '…' : '--');
     const category = marketCategory(market);
     const marketUrl = market && market.slug ? `https://polymarket.com/market/${market.slug}` : '#';
 
@@ -6126,7 +6126,7 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         + `</span>`;
     } else {
       badgeHtml = `<span class="stitch-arb-badge is-unpaired">`
-        + `<span>ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â UNPAIRED</span><span class="badge-sep">|</span>`
+        + `<span>⚠️ UNPAIRED</span><span class="badge-sep">|</span>`
         + `<span>Single Leg Waiting Hedge</span>`
         + `</span>`;
     }
@@ -6144,7 +6144,7 @@ function stitchOpenOrdersRows(kpi, state, sort) {
             </div>
             <div class="stitch-market-meta">
               <span class="stitch-meta-category">${esc(category)}</span>
-              <span class="stitch-meta-sep">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢</span>
+              <span class="stitch-meta-sep">•</span>
               <span class="stitch-meta-tag">${isPaired ? 'Paired Arb' : 'Resting'}</span>
               ${badgeHtml}
             </div>
@@ -6192,8 +6192,8 @@ function stitchActiveMarketsHeadHtml(sort) {
   // Column hierarchy per the UX spec: Market anchors the far left, the age/timestamp
   // lives at the far right (before any actions), Category is no longer a standalone
   // column (it is a badge under the market name), and 24h Volume + Resolves are
-  // stacked into one cell. `sortIdx` is a STABLE logical key ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the body's sort switch
-  // keys on it ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â so reordering these visual columns never touches the sort logic.
+  // stacked into one cell. `sortIdx` is a STABLE logical key — the body's sort switch
+  // keys on it — so reordering these visual columns never touches the sort logic.
   const cols = [
     { label: 'MARKET & CATEGORY', sortIdx: 1, left: true },
     { label: 'YES PRICE', sortIdx: 3 },
@@ -6206,7 +6206,7 @@ function stitchActiveMarketsHeadHtml(sort) {
   const cells = cols.map((col) => {
     const isActive = Boolean(active && active.col === col.sortIdx);
     const dir = isActive ? active.dir : null;
-    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â²' : 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¼'}</span>` : '';
+    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
     const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
     const cls = col.left ? ' class="ot-head-left"' : '';
     return `<th${ariaSort}${cls}>`
@@ -6274,7 +6274,7 @@ function stitchActiveMarketsRows(kpi, state, sort) {
   }
 
   return sorted.map(({ cid, m, upPrice, dnPrice, upBid, dnBid, pairCost, edge, edgePct, restingHere, ts }) => {
-    const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦' : '--');
+    const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const category = marketCategory(m);
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
 
@@ -6306,13 +6306,13 @@ function stitchActiveMarketsRows(kpi, state, sort) {
         </div>`}
       </td>
 
-      <!-- Col 2: YES PRICE ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the venue's ask (what buying YES costs now) + bid subtext -->
+      <!-- Col 2: YES PRICE — the venue's ask (what buying YES costs now) + bid subtext -->
       <td class="mono font-tabular">
         <div class="stitch-quote-up">${fmtPrice(upPrice)}</div>
         ${upBid !== null ? `<div class="stitch-mid-sub">bid ${fmtPrice(upBid)}</div>` : ''}
       </td>
 
-      <!-- Col 3: NO PRICE ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the venue's ask + bid subtext -->
+      <!-- Col 3: NO PRICE — the venue's ask + bid subtext -->
       <td class="mono font-tabular">
         <div class="stitch-quote-down">${fmtPrice(dnPrice)}</div>
         ${dnBid !== null ? `<div class="stitch-mid-sub">bid ${fmtPrice(dnBid)}</div>` : ''}
@@ -6360,7 +6360,7 @@ function stitchPositionsHeadHtml(sort) {
   const cells = cols.map((col) => {
     const isActive = Boolean(active && active.col === col.sortIdx);
     const dir = isActive ? active.dir : null;
-    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â²' : 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¼'}</span>` : '';
+    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
     const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
     const cls = col.left ? ' class="ot-head-left"' : '';
     return `<th${ariaSort}${cls}>`
@@ -6469,7 +6469,7 @@ function stitchPositionsRows(kpi, state, sort) {
     mark, unrealized, unrealizedPct, legMarks, curSort,
     status, ts, category, live, liveAgeMs
   }) => {
-    const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦' : '--');
+    const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
     const marketUrl = m.slug ? `https://polymarket.com/market/${m.slug}` : (m.url || '#');
     const classification = m.event_title || m.subtitle || m.category || 'Polymarket Position';
 
@@ -6486,7 +6486,7 @@ function stitchPositionsRows(kpi, state, sort) {
     } else if (status === 'partial') {
       statusBadge = `<span class="stitch-status-badge resting"><span class="stitch-status-dot resting"></span>PARTIAL</span>`;
     } else {
-      statusBadge = `<span class="stitch-status-badge idle" style="border-color:rgba(244,63,94,0.3);background:rgba(244,63,94,0.1);color:#fb7185;"><span class="stitch-status-dot idle" style="background:#fb7185;"></span>ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â UNPAIRED</span>`;
+      statusBadge = `<span class="stitch-status-badge idle" style="border-color:rgba(244,63,94,0.3);background:rgba(244,63,94,0.1);color:#fb7185;"><span class="stitch-status-dot idle" style="background:#fb7185;"></span>⚠️ UNPAIRED</span>`;
     }
 
     // PnL state per leg; the pair total carries the row's tone.
@@ -6503,7 +6503,7 @@ function stitchPositionsRows(kpi, state, sort) {
     // The live dot sits on exactly the legs with a fresh mark, never on a
     // quote-mid fallback line.
     const curPriceLines = legMarks.length ? legMarks.map((e) => `
-          <div class="stitch-cur-${e.leg === 'YES' ? 'up' : 'down'}" data-leg="${e.leg}">${e.leg} ${fmtPrice(e.mid)}${e.live ? ' <span class="stitch-cur-live">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â</span>' : ''}</div>`).join('')
+          <div class="stitch-cur-${e.leg === 'YES' ? 'up' : 'down'}" data-leg="${e.leg}">${e.leg} ${fmtPrice(e.mid)}${e.live ? ' <span class="stitch-cur-live">●</span>' : ''}</div>`).join('')
       : `<span style="color:#64748b;font-size:11px;">--</span>`;
 
     return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
@@ -6540,7 +6540,7 @@ function stitchPositionsRows(kpi, state, sort) {
       <!-- Col 4: MARK VALUE -->
       <td class="mono font-tabular"${liveTitle} data-cid="${esc(cid)}" data-cell="value">
         <div class="stitch-mark-val">${mark === null ? '--' : fmtUSD(mark)}</div>
-        ${live ? `<div class="stitch-mid-sub" style="color:#34d399;">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â live mark</div>` : ''}
+        ${live ? `<div class="stitch-mid-sub" style="color:#34d399;">● live mark</div>` : ''}
       </td>
 
       <!-- Col 5: UNREALIZED P&L, one line per held leg plus the total -->
@@ -6589,7 +6589,7 @@ function stitchClosedTradesHeadHtml(sort) {
   const cells = cols.map(col => {
     const isActive = col.sortIdx !== null && active && active.col === col.sortIdx;
     const dir = isActive ? active.dir : null;
-    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â²' : 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¼'}</span>` : '';
+    const arrow = isActive ? `<span class="ot-sort-arrow" aria-hidden="true">${dir === 'asc' ? '▲' : '▼'}</span>` : '';
     const ariaSort = isActive ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '';
     const cls = col.left ? ' class="ot-head-left"' : '';
     // LEDGER is a toggle, not a sort key: plain label, no dead sort button.
@@ -6835,7 +6835,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
     let winnerHtml = '';
     if (m.resolution && m.resolution.winner) {
       const resAgo = m.resolution.resolved_ts ? fmtAgo(m.resolution.resolved_ts) : '';
-      winnerHtml = `<span class="stitch-winner-badge">ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ Winner: ${esc(m.resolution.winner)}${resAgo ? ` ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${resAgo}` : ''}</span>`;
+      winnerHtml = `<span class="stitch-winner-badge">✓ Winner: ${esc(m.resolution.winner)}${resAgo ? ` · ${resAgo}` : ''}</span>`;
     }
 
     // Reason chip
@@ -6888,9 +6888,9 @@ function stitchClosedTradesRows(kpi, state, sort) {
       <!-- Col 2: OUTCOME BREAKDOWN (summary counts) -->
       <td>
         <div class="stitch-breakdown-pills">
-          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â ${mergedCount} Merged</span>` : ''}
-          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â ${stopLossCount} Stop</span>` : ''}
-          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â± ${graceExpiredCount} Expired</span>` : ''}
+          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
+          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">⚠️ ${stopLossCount} Stop</span>` : ''}
+          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">⏱ ${graceExpiredCount} Expired</span>` : ''}
           ${(mergedCount === 0 && stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-pill-count neutral">${settledCount > 0 ? `${settledCount} Settled` : `${executionItemsCount} Closed`}</span>` : ''}
         </div>
       </td>
@@ -6905,7 +6905,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
       <!-- Col 5: LEDGER toggle (far right) -->
       <td>
         <button type="button" class="stitch-ledger-toggle-btn" data-cid="${esc(cid)}" aria-expanded="${isExpanded}">
-          ${isExpanded ? 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â² Hide Ledger' : 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¼ View Ledger'} (${executionItemsCount})
+          ${isExpanded ? '▲ Hide Ledger' : '▼ View Ledger'} (${executionItemsCount})
         </button>
       </td>
     </tr>`;
@@ -6923,10 +6923,10 @@ function stitchClosedTradesRows(kpi, state, sort) {
                 <span class="stitch-strip-metric">Net Realized: <b class="${pnlCls}">${realizedPnl >= 0 ? '+' : ''}${fmtUSD(realizedPnl)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</b></span>
               </div>
               <div class="stitch-strip-badges">
-                <span class="stitch-badge-outcome merged">ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬ÂÃƒâ€šÃ‚Â ${mergedCount} Merged Pair${mergedCount !== 1 ? 's' : ''}</span>
-                ${stopLossCount > 0 ? `<span class="stitch-badge-outcome stop-loss">ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â ${stopLossCount} Stop Loss</span>` : ''}
-                ${graceExpiredCount > 0 ? `<span class="stitch-badge-outcome grace-expired">ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â± ${graceExpiredCount} Grace Expired</span>` : ''}
-                ${(stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-badge-outcome clean">ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ 0 Orphan / 0 Stops</span>` : ''}
+                <span class="stitch-badge-outcome merged">● ${mergedCount} Merged Pair${mergedCount !== 1 ? 's' : ''}</span>
+                ${stopLossCount > 0 ? `<span class="stitch-badge-outcome stop-loss">⚠️ ${stopLossCount} Stop Loss</span>` : ''}
+                ${graceExpiredCount > 0 ? `<span class="stitch-badge-outcome grace-expired">⏱ ${graceExpiredCount} Grace Expired</span>` : ''}
+                ${(stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-badge-outcome clean">✓ 0 Orphan / 0 Stops</span>` : ''}
               </div>
             </div>
 
@@ -7147,7 +7147,7 @@ function closeReasonIsExit(info) {
 
 function closeReasonBadgeLabel(reason, isExit) {
   const words = closeReasonLabel(reason);
-  return isExit ? `EXIT ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${words}` : words;
+  return isExit ? `EXIT · ${words}` : words;
 }
 
 function closeReasonLabel(reason) {
@@ -7189,7 +7189,7 @@ function closeReasonTitle(info) {
   parts.push(info.namedCount === 1
     ? 'the one close that names a reason'
     : `${info.namedCount} of ${info.closeCount} closes name a reason`);
-  return parts.join(' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ');
+  return parts.join(' · ');
 }/* The state of the positions under a MARKET, rolled up.
  *
  * The column used to read `min(up, down) / max(up, down)` and answer
@@ -7296,7 +7296,7 @@ function marketRowPairHtml(cid, m, opts) {
     || (m.days_to_resolve !== null && m.days_to_resolve < 0)
     || (hasFunnel && !graduatedCids.has(cid) && hasOrders);
 
-  // Badge: per-status pills same size/style as order pills ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â OPEN blue, FILLED green, 0 ACTIVE gray
+  // Badge: per-status pills same size/style as order pills — OPEN blue, FILLED green, 0 ACTIVE gray
   // cancelled-count retained as string for test_dashboard_server.py (header no longer shows cancelled per UX)
   let badgeHtml = '';
   if (hasOrders) {
@@ -7321,9 +7321,9 @@ function marketRowPairHtml(cid, m, opts) {
         badgeHtml += `<span class="pill ${cls}" style="font-size:10px; padding:2px 8px; margin-left:4px">${cnt} ${k}</span>`;
       }
     }
-    // cancelled-count ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â header no longer shows cancelled per UX, kept for expanded toggle only
+    // cancelled-count — header no longer shows cancelled per UX, kept for expanded toggle only
   }
-  // Main row ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â clickable to expand. The Timestamp is when the trade closed:
+  // Main row — clickable to expand. The Timestamp is when the trade closed:
   // the latest settlement close, with the resolution record as the fallback.
   // `closeTsOf` is the same accessor the column-0 sort reads, so what the
   // operator sees ordered is exactly what is displayed.
@@ -7343,7 +7343,7 @@ function marketRowPairHtml(cid, m, opts) {
   let html = `<tr class="market-row${isExpanded ? ' expanded' : ''}" data-cid="${esc(cid)}" tabindex="0" role="button" aria-expanded="${isExpanded}" aria-label="${isExpanded ? 'Collapse' : 'Expand'} market orders for ${esc(m.title || m.slug || cid.slice(0,10))}">
     ${tsHtml}
     <td>
-      <span class="expand-chevron${isExpanded ? ' expanded' : ''}" aria-hidden="true">${hasOrders ? 'ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¶' : ''}</span>
+      <span class="expand-chevron${isExpanded ? ' expanded' : ''}" aria-hidden="true">${hasOrders ? '▶' : ''}</span>
       ${marketLink(m)}
       ${categoryHtml}
       ${badgeHtml}
@@ -7356,7 +7356,7 @@ function marketRowPairHtml(cid, m, opts) {
       ${isFinished
         ? '<span class="pill finished">FINISHED</span>'
         : marketStatusPill(m, (allOrders || []).some(o => isRestingOrder(o)))}
-      ${m.resolution ? `<div class="caption-muted" title="resolved ${new Date(m.resolution.resolved_ts * 1000).toLocaleString()}">${m.resolution.winner ? ('Winner: ' + esc(m.resolution.winner)) : 'Resolved'} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${fmtAgo(m.resolution.resolved_ts)}</div>` : ''}
+      ${m.resolution ? `<div class="caption-muted" title="resolved ${new Date(m.resolution.resolved_ts * 1000).toLocaleString()}">${m.resolution.winner ? ('Winner: ' + esc(m.resolution.winner)) : 'Resolved'} · ${fmtAgo(m.resolution.resolved_ts)}</div>` : ''}
     </td>
   </tr>`;
 
@@ -7429,7 +7429,7 @@ function wireMarketRowExpansion(body, ordersByMarket, rerender) {
   });
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Render: Market Filter Kanban Board (Tab 3) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Render: Market Filter Kanban Board (Tab 3) ── */
 const BUCKET_DEFS = [
   { key: 'raw', name: '1. Ingestion / Universe', cls: 'raw' },
   { key: 'identity', name: '2. Identity Gate', cls: 'rejected' },
@@ -7495,7 +7495,7 @@ function renderFilterUptime() {
     return;
   }
   const drift = (monotonicMs() - filterUptimeAnchor.receivedAtMs) / 1000;
-  el.textContent = ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ' + fmtUptime(filterUptimeAnchor.uptimeSec + drift);
+  el.textContent = ' · ' + fmtUptime(filterUptimeAnchor.uptimeSec + drift);
 }
 
 function setFilterUptime(status) {
@@ -7564,37 +7564,37 @@ function getStageHero(key, funnel) {
     case 'identity':
       return {
         param: 'TEST: CONTRACT & KEYWORDS',
-        value: 'Binary ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Mid [0.15, 0.85]',
+        value: 'Binary · Mid [0.15, 0.85]',
       };
     case 'movement':
       return {
         param: 'TEST: RECENT TRADED NOTIONAL',
-        value: `ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¥ $200 / 30m on the tape`,
+        value: `≥ $200 / 30m on the tape`,
       };
     case 'volume':
       return {
         param: 'TEST: 24H TRADING VOLUME',
-        value: `ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¥ $${Number(volGate).toLocaleString()} / 24h`,
+        value: `≥ $${Number(volGate).toLocaleString()} / 24h`,
       };
     case 'depth':
       return {
         param: 'TEST: TOP-3 BID DEPTH',
-        value: `ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¥ $${Number(depthGate).toLocaleString()} each (YES & NO)`,
+        value: `≥ $${Number(depthGate).toLocaleString()} each (YES & NO)`,
       };
     case 'spread':
       return {
         param: 'TEST: MAX BOOK SPREAD',
-        value: `ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¤ ${Number(spreadGate).toFixed(4)} (${(Number(spreadGate) * 100).toFixed(2)}%)`,
+        value: `≤ ${Number(spreadGate).toFixed(4)} (${(Number(spreadGate) * 100).toFixed(2)}%)`,
       };
     case 'horizon':
       return {
         param: 'TEST: HORIZON',
-        value: `ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°Ãƒâ€šÃ‚Â¤ ${Number(horizonDays).toFixed(1)} days`,
+        value: `≤ ${Number(horizonDays).toFixed(1)} days`,
       };
     case 'passed':
       return {
         param: 'QUALIFIED FLEET',
-        value: 'Passed all screening gates ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Quoting on venue',
+        value: 'Passed all screening gates · Quoting on venue',
       };
     default:
       return { param: 'GATE TEST', value: '--' };
@@ -7605,7 +7605,7 @@ function getStageHero(key, funnel) {
 // are consistent enough to license a controlled loosening.
 //
 // Only the verdict is on screen. The per-gate progress cards ("DEPTH gathering
-// 8.7d/14 ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 3/8 markets ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 41% stable") were four numbers nobody acted on
+// 8.7d/14 · 3/8 markets · 41% stable") were four numbers nobody acted on
 // between the day the run started and the day it turned ready; the ready
 // banner is the moment a decision exists. /api/trial-readiness still carries
 // the full detail for anyone who wants to read it.
@@ -7621,7 +7621,7 @@ function renderTrialReadiness(readiness) {
   banner.className = 'pill filled mono';
   banner.textContent = 'TRIAL READY: ' + gates.join(' + ').toUpperCase();
   banner.title = 'The near-miss evidence for this gate meets every readiness '
-    + 'threshold. Readiness is not profitability ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the trial measures that.';
+    + 'threshold. Readiness is not profitability — the trial measures that.';
 }
 
 function engineReasonText(reason) {
@@ -7669,7 +7669,7 @@ function renderScanStatePill(scanState, opts) {
   if (!stateText) return;
   const elsewhereTag = document.getElementById('scan-engine-elsewhere');
 
-  // Render scan state pill ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â canonical live-state vocabulary (DESIGN.md).
+  // Render scan state pill — canonical live-state vocabulary (DESIGN.md).
   // The server's STALLED verdict stays authoritative for DOWN; a SCANNING
   // heartbeat ages through the ramp on the filter's ~5s cadence thresholds.
   // This element IS the pill, so it takes the state class and the inner dot
@@ -7692,7 +7692,7 @@ function renderScanStatePill(scanState, opts) {
       : '';
     const formattedAge = formatHeartbeatAge(effHbAge);
     const age = (state !== 'stopped' && state !== 'unknown' && formattedAge)
-      ? ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ' + formattedAge : '';
+      ? ' · ' + formattedAge : '';
     // Write the verdict into the inner state span only: overwriting the pill's
     // own innerHTML would erase the ENGINE label that names this measurement.
     stateText.innerHTML = dot + esc(state.toUpperCase() + age);
@@ -7705,13 +7705,13 @@ function renderScanStatePill(scanState, opts) {
       if (raw === 'STALLED') {
         const rText = engineReasonText(scanState.stall_reason);
         if (scanState.stall_reason === 'process_gone' && scanState.heartbeat_source?.pid) {
-          verdict = `STALLED ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â process gone (pid ${scanState.heartbeat_source.pid} not running)`;
+          verdict = `STALLED — process gone (pid ${scanState.heartbeat_source.pid} not running)`;
         } else if (scanState.stall_reason === 'heartbeat_stale' && scanState.stale_threshold_sec) {
-          verdict = `STALLED ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â heartbeat aged past ${Math.round(scanState.stale_threshold_sec)}s threshold`;
+          verdict = `STALLED — heartbeat aged past ${Math.round(scanState.stale_threshold_sec)}s threshold`;
         } else if (scanState.stall_reason === 'no_heartbeat') {
-          verdict = `STALLED ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no heartbeat file: no shadow run for this store and runtime/live_poll_heartbeat.json not found`;
+          verdict = `STALLED — no heartbeat file: no shadow run for this store and runtime/live_poll_heartbeat.json not found`;
         } else if (rText) {
-          verdict = `STALLED ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${rText}`;
+          verdict = `STALLED — ${rText}`;
         }
         if (rawSec !== null && scanState.stall_reason !== 'heartbeat_stale' && scanState.stall_reason !== 'no_heartbeat') {
           verdict += `, last heartbeat ${formatHeartbeatAge(hbAge)}`;
@@ -7719,7 +7719,7 @@ function renderScanStatePill(scanState, opts) {
       } else if (rawSec !== null) {
         verdict = `${raw.toUpperCase()} (${rawSec}s ago)`;
       }
-      headerPill.title = `Quote engine heartbeat: ${verdict} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Source: ${prov}`;
+      headerPill.title = `Quote engine heartbeat: ${verdict} · Source: ${prov}`;
       if (readFailed) {
         headerPill.title += (ageOffsetSec > 0.5)
           ? ` Current read did not land; showing last reading from ${fmtAge(ageOffsetSec)}.`
@@ -7735,7 +7735,7 @@ function renderScanStatePill(scanState, opts) {
         const countText = otherRuns.length === 1 ? '1 RUN LIVE ON ANOTHER STORE' : `${otherRuns.length} RUNS LIVE ON ANOTHER STORE`;
         elsewhereTag.textContent = countText;
         const details = otherRuns.map(r => `${r.run_id || 'unnamed'} (${r.db_path || 'unknown store'}, ${r.heartbeat_file || 'unknown file'})`).join('; ');
-        elsewhereTag.title = `${details} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â its numbers are not shown on this page`;
+        elsewhereTag.title = `${details} — its numbers are not shown on this page`;
       } else {
         elsewhereTag.style.display = 'none';
       }
@@ -7767,10 +7767,10 @@ function renderScreener(kpi, scanState, status, engineOpts) {
 
   const funnel = kpi?.funnel;
 
-  // Snapshot age and census ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â must run on EVERY call (CodeRabbit round on
+  // Snapshot age and census — must run on EVERY call (CodeRabbit round on
   // #271): the heartbeat branch above rewrites this same header each poll,
   // so an unchanged-board early return below would freeze the header on
-  // 'heartbeat: ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦' text with a stale snapshot color. Two cheap property
+  // 'heartbeat: …' text with a stale snapshot color. Two cheap property
   // writes; only the board rebuild is expensive enough to guard.
   // The screener re-ranks the universe every ~10 min (SH_FILTER_INTERVAL_SEC,
   // default 600 -- scripts/filter_loop.py), and one failed cycle (e.g. a
@@ -7780,7 +7780,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   if (funnel && headerAge) {
     const age = funnel.snapshot_age;
     const SCAN_INTERVAL_SEC = scanIntervalSec(status);
-    headerAge.textContent = 'last scan: ' + fmtAge(age) + ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ~' + Math.round(SCAN_INTERVAL_SEC / 60) + 'm cycle';
+    headerAge.textContent = 'last scan: ' + fmtAge(age) + ' · ~' + Math.round(SCAN_INTERVAL_SEC / 60) + 'm cycle';
     if (age !== null && age !== undefined && age > SCAN_INTERVAL_SEC) {
       // Past one full cycle: amber. Past two (a missed retry): red.
       headerAge.style.color = age > SCAN_INTERVAL_SEC * 2 ? 'var(--error, #e5484d)' : 'var(--warn)';
@@ -7790,8 +7790,8 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   }
 
   // Skip-if-unchanged guard (#270): the kanban is the heaviest paint on the
-  // page (8 stages ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â example cards). Idling on Data & Markets re-rendered it
-  // every 2s poll even when the funnel data was byte-identical ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ~800ms of
+  // page (8 stages × example cards). Idling on Data & Markets re-rendered it
+  // every 2s poll even when the funnel data was byte-identical — ~800ms of
   // main-thread work per poll that every click queued behind. Only the board
   // rebuild skips; the pills/heartbeat/header above update every call.
   const boardFingerprint = JSON.stringify([funnel]);
@@ -7799,7 +7799,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   renderScreener.__lastFingerprint = boardFingerprint;
 
   if (!funnel) {
-    // No pipeline data ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â show empty state
+    // No pipeline data — show empty state
     board.innerHTML = `<div class="kanban-empty" style="flex:1">
       <div class="empty-state-title">No Market Filter data yet</div>
       <div class="empty-state-msg">The Market Filter writes runtime/pipeline.json on each scan cycle. Data appears here once it runs.</div>
@@ -7870,7 +7870,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
       countBadge = `<span class="bucket-count-badge info">${totalRaw} TOTAL</span>`;
       flowHtml = `<div class="kanban-header-flow">
         <span>Discovery</span>
-        <span class="flow-passed">${totalRaw} to evaluate ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¾ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â</span>
+        <span class="flow-passed">${totalRaw} to evaluate ➔</span>
       </div>`;
 
       // Render raw examples if available
@@ -7910,13 +7910,13 @@ function renderScreener(kpi, scanState, status, engineOpts) {
       if (disc) {
         const cheap = Object.entries(disc.cheap_rejects || {})
           .sort((a, b) => b[1] - a[1])
-          .map(([k, v]) => `${k}: ${v}`).join(' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ');
+          .map(([k, v]) => `${k}: ${v}`).join(' · ');
         const trunc = disc.truncated
-          ? ' (bounded scan ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â stopped past the volume floor, not exhaustion)'
+          ? ' (bounded scan — stopped past the volume floor, not exhaustion)'
           : ' (full listing exhausted)';
         footerHtml += `<div class="kanban-bucket-footer" style="display:block">`
-          + `discovery: ${disc.pages_fetched ?? '--'} pages ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${disc.rows_scanned ?? '--'} rows scanned${trunc}`
-          + (cheap ? `<br>pre-score filters ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${esc(cheap)}` : '')
+          + `discovery: ${disc.pages_fetched ?? '--'} pages · ${disc.rows_scanned ?? '--'} rows scanned${trunc}`
+          + (cheap ? `<br>pre-score filters — ${esc(cheap)}` : '')
           + `</div>`;
       } else {
         footerHtml = `<div class="kanban-bucket-footer">${spreadN} Spread candidates</div>`;
@@ -7965,7 +7965,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
               <span class="card-metric">${esc(el.source || 'spread')}</span>
             </div>
             <div class="card-title" title="${esc(el.title || '')}">${marketLink(el)}</div>
-            <div class="card-metric">Vol: ${fmtUSD(el.volume || 0)}${el.days_to_resolve ? ' ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ' + esc(el.days_to_resolve) + 'd' : ''}</div>
+            <div class="card-metric">Vol: ${fmtUSD(el.volume || 0)}${el.days_to_resolve ? ' · ' + esc(el.days_to_resolve) + 'd' : ''}</div>
           </div>`;
         }
       }
@@ -7986,7 +7986,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
 
       if (droppedCount === 0) {
         cardsHtml = `<div class="kanban-empty all-pass">
-          <strong>ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ No rejections</strong>
+          <strong>✓ No rejections</strong>
           <div style="margin-top:6px;color:var(--text-secondary)">No market that reached this gate was refused by it.</div>
         </div>`;
       } else {
@@ -8038,7 +8038,7 @@ function renderScreener(kpi, scanState, status, engineOpts) {
   requestAnimationFrame(updateKanbanNavButtons);
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Kanban Carousel Navigation ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Kanban Carousel Navigation ── */
 function scrollKanban(direction) {
   const board = document.getElementById('kanban-board');
   if (!board) return;
@@ -8116,7 +8116,7 @@ function initKanbanCarousel() {
   window.addEventListener('resize', updateKanbanNavButtons, { passive: true });
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Issue #278: status-strip scroll cue ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Issue #278: status-strip scroll cue ── */
 // Adds .is-scrollable to .top-meta exactly when the desktop row overflows
 // (drives the edge cue in styles.css) and .is-end once scrolled fully
 // right so the cue retires at the end. No-ops on mobile, where the strip
@@ -8138,7 +8138,7 @@ function initTopMetaScrollCue() {
   window.addEventListener('resize', updateTopMetaScrollCue, { passive: true });
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Helper: Safe JSON fetch with timeout ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Helper: Safe JSON fetch with timeout ── */
 async function safeJsonFetch(url, timeoutMs = 8000) {
   try {
     const controller = new AbortController();
@@ -8152,7 +8152,7 @@ async function safeJsonFetch(url, timeoutMs = 8000) {
   }
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Poll loop ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Poll loop ── */
 let isPolling = false;
 async function pollStatus() {
   if (isPolling) return;
@@ -8180,7 +8180,7 @@ async function pollStatus() {
     if (state) lastState = state;
     if (kpi) lastKpi = kpi;
     // Snapshots for switchTab, which repaints the newly shown tab from cache.
-    // A failed fetch (null) keeps the last good copy ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â except readiness: a
+    // A failed fetch (null) keeps the last good copy — except readiness: a
     // dead endpoint must hide the trackers, not replay a stale READY claim.
     if (status) lastStatus = status;
     if (scanState) lastScanState = scanState;
@@ -8193,7 +8193,7 @@ async function pollStatus() {
     if (guardHealth) lastGuardHealth = guardHealth;
     if (guardAlerts) lastGuardAlerts = guardAlerts;
 
-    // Issue #251: only a successful read can judge the backend's age ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â a failed
+    // Issue #251: only a successful read can judge the backend's age — a failed
     // poll must not flash the stale note for a process that never answered.
     if (kpi) applyPayloadVersion(kpi);
 
@@ -8218,16 +8218,16 @@ async function pollStatus() {
     if (status) setFilterUptime(status);
 
     // Issue #264: each section below repaints only while its tab is visible.
-    // A poll used to re-render every section on every tick ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â both hidden tabs
-    // plus the heavy charts ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â one long main-thread task that a tab click
+    // A poll used to re-render every section on every tick — both hidden tabs
+    // plus the heavy charts — one long main-thread task that a tab click
     // waited behind for 2-4s. Issue #266: "visible" must mean the section's
-    // rail page is the one showing ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â after #140 moved the panels under
+    // rail page is the one showing — after #140 moved the panels under
     // `#page-*` sections, the un-hidden legacy tab shells made every gate
     // read visible and put the whole render chain back on every poll.
 
     // Top-nav status (stack pill, ENGINE/WATCHDOG pills, START/STOP buttons)
     // is global chrome: renderServiceCards paints it before the card grid, so
-    // on any page but Trades the poll paints just the header ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â and on Trades
+    // on any page but Trades the poll paints just the header — and on Trades
     // one renderServiceCards call covers both.
     // A master-control click in flight owns the button right now: this poll's
     // status is older than the click, so repainting here would flash the old
@@ -8240,29 +8240,29 @@ async function pollStatus() {
       }
     }
 
-    // Render exposure bar (DT3) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â header element, page-independent, cheap.
+    // Render exposure bar (DT3) — header element, page-independent, cheap.
     if (kpi || lastKpi) renderExposure(kpi || lastKpi);
 
     const currentKpi = kpi || lastKpi;
 
-    // Render Orders & Trades (Tab 1 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ rail Dashboard page)
+    // Render Orders & Trades (Tab 1 → rail Dashboard page)
     if (paintable(tab1, document.getElementById('orders-trades-body')) && currentKpi) {
       renderOrdersTrades(currentKpi, lastState);
     }
 
-    // Portfolio overview + run pill (Tab 2 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ rail Dashboard page) get their
+    // Portfolio overview + run pill (Tab 2 → rail Dashboard page) get their
     // own gate: the card lives on page-home since #140, and painting it only
     // behind the Reports grid froze it at standby on every other page (#268).
     if (paintable(tab2, document.getElementById('broker-hero-equity')) && currentKpi) {
       renderPortfolioOverview(currentKpi, status, lastState);
     }
 
-    // Render KPIs (Tab 2 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ rail Reports page)
+    // Render KPIs (Tab 2 → rail Reports page)
     if (paintable(tab2, document.getElementById('kpi-grid')) && currentKpi) {
       renderKPIs(currentKpi, status);
     }
 
-    // Render the Market Filter kanban (Tab 3 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ rail Data & Markets page)
+    // Render the Market Filter kanban (Tab 3 → rail Data & Markets page)
     if (paintable(tab3, document.getElementById('kanban-board')) && currentKpi) {
       renderScreener(currentKpi, engineHeld.payload, statusHeld.payload,
         { ageOffsetSec: engineHeld.ageOffsetSec, readFailed: engineHeld.readFailed });
@@ -8274,7 +8274,7 @@ async function pollStatus() {
     // last reading on screen as if it were current.
     renderTrialReadiness(trialReadiness);
   } catch (e) {
-    // Non-fatal transient error swallowed gracefully ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â but the watchdog still
+    // Non-fatal transient error swallowed gracefully — but the watchdog still
     // counts it: a throw here means the batch never answered.
     setBackendContact(false);
   } finally {
@@ -8282,7 +8282,7 @@ async function pollStatus() {
   }
 }
 
-/* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Start ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ */
+/* ── Start ── */
 // Skipped only when this file is loaded as a CommonJS module, which is how the
 // test harness reaches the handlers. A browser has no `module`, so the page
 // bootstraps exactly as it always has -- and a harness never starts the poll
