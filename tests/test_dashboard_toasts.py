@@ -170,6 +170,24 @@ def test_master_partial_stop_warns_and_names_the_service():
     assert "decide" in warns[0]["text"] and "forced" in warns[0]["text"]
 
 
+# -- Shadow rehearsal button (same master toggle, dataset.mode='shadow') -----
+
+def test_shadow_start_shows_sent_then_ok_via_shadow_endpoint():
+    out = _run()["shadowStart"]
+    assert any("/api/system/shadow/start" in u for u in out["posts"])
+    texts = [(t["cls"], t["text"]) for t in out["toasts"]]
+    assert ("toast toast-neutral", "Start request sent") in texts
+    assert ("toast toast-ok", "Shadow rehearsal started") in texts
+
+
+def test_shadow_stop_refused_reads_as_an_error():
+    out = _run()["shadowStopError"]
+    assert any("/api/system/shadow/stop" in u for u in out["posts"])
+    errors = [t for t in out["toasts"] if t["cls"] == "toast toast-error"]
+    assert len(errors) == 1
+    assert "No shadow rehearsal running" in errors[0]["text"]
+
+
 # -- Reset modal -------------------------------------------------------------
 
 def test_reset_cancel_via_close_says_nothing_changed():

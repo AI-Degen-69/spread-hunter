@@ -252,6 +252,22 @@ function stoppedStatus() {
     },
   };
 }
+function shadowStatus(running) {
+  return {
+    bot_state: running ? 'RUNNING' : 'STOPPED', db_mode: 'SHADOW',
+    db_is_production: false, db_path: 'data/shadow.db',
+    services: {
+      filter: { running: false }, query: { running: false },
+      decide: { running: false }, dash: { running: true },
+    },
+    shadow_run: running
+      ? { running: true, ended: false, run_id: 'harness-shadow' }
+      : { running: false, ended: true, run_id: 'harness-shadow' },
+  };
+}
+function postUrls() {
+  return fetchLog.filter((f) => f.method === 'POST').map((f) => f.url);
+}
 
 (async () => {
   const out = {};
@@ -402,6 +418,32 @@ function stoppedStatus() {
   await master.click();
   await flush();
   out.masterWarn = { toasts: snapToasts() };
+
+  /* 8e. START SHADOW: same sent/result toasts via the shadow endpoint */
+  resetHarness();
+  master.dataset.action = 'start';
+  master.dataset.mode = 'shadow';
+  master.disabled = false;
+  postImpl = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, message: 'Shadow rehearsal started', status: shadowStatus(true), services: {} }),
+  });
+  await master.click();
+  await flush();
+  out.shadowStart = { toasts: snapToasts(), posts: postUrls() };
+
+  /* 8f. STOP SHADOW refused: error toast via the shadow endpoint */
+  resetHarness();
+  master.dataset.action = 'stop';
+  master.dataset.mode = 'shadow';
+  master.disabled = false;
+  postImpl = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: false, message: 'No shadow rehearsal running for this database' }),
+  });
+  await master.click();
+  await flush();
+  out.shadowStopError = { toasts: snapToasts(), posts: postUrls() };
 
   /* 9a. Reset cancelled via Close button */
   resetHarness();

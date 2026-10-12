@@ -2072,10 +2072,17 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
       } else {
         if (action === 'start') {
           const isRunning = data.status?.bot_state === 'RUNNING';
-          const msg = isRunning ? 'Bot is running.' : (data.message || 'Start request accepted.');
+          // Shadow mode runs a rehearsal, not the live bot: saying "Bot is
+          // running" would read as live exposure. Prefer the server's words.
+          const msg = isShadow
+            ? (data.message || 'Shadow rehearsal started.')
+            : (isRunning ? 'Bot is running.' : (data.message || 'Start request accepted.'));
           showToast(msg, { tone: 'ok' });
         } else {
-          showToast(data.message || 'Bot stopped.', { tone: 'ok' });
+          const msg = isShadow
+            ? (data.message || 'Shadow rehearsal stopped.')
+            : (data.message || 'Bot stopped.');
+          showToast(msg, { tone: 'ok' });
         }
       }
 
