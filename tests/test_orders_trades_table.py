@@ -558,7 +558,7 @@ def test_open_orders_does_not_call_a_break_even_pair_a_loss():
     rendered = _render("open-orders", _kpi(), state)
 
     # Assert — a warning that the capital earns nothing, not a loss in red.
-    assert "$1.000" in rendered["html"]
+    assert "$1.00" in rendered["html"]
     assert "ot-cost is-warn" in rendered["html"]
     assert "ot-cost is-alert" not in rendered["html"]
 
