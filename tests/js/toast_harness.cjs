@@ -540,6 +540,21 @@ function postUrls() {
   await flush();
   out.resetInFlightEscape = { inFlightToasts, finalToasts: snapToasts() };
 
+  /* 9f. Escape after a successful confirm is not a cancellation */
+  resetHarness();
+  await el('btn-reset').click();
+  el('reset-input').value = 'RESET';
+  postImpl = async () => ({
+    ok: true, status: 200, json: async () => ({ ok: true, steps: ['halted'] }),
+  });
+  await el('reset-modal-confirm').click();
+  await flush(2);
+  for (const fn of docListeners.keydown || []) await fn({ key: 'Escape' });
+  out.resetEscapeAfterSuccess = {
+    toasts: snapToasts(),
+    modalOpen: el('reset-modal').classList.contains('show'),
+  };
+
   process.stdout.write(JSON.stringify(out));
 })().catch((e) => {
   process.stderr.write('harness failed: ' + (e && e.stack || e));

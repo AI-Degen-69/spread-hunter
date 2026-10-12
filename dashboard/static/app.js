@@ -743,9 +743,13 @@ function showToast(message, opts = {}) {
 
 // Reset modal state & dismissal handling (#478)
 let resetInFlight = false;
+let resetCompleted = false;
 function dismissResetModal() {
   if (!resetModal || !resetModal.classList.contains('show')) return;
   resetModal.classList.remove('show');
+  // A confirmed reset already toasted success: hiding the modal in its 2s
+  // success window is not a cancellation, so stay silent here.
+  if (resetCompleted) return;
   if (!resetInFlight) {
     showToast('Reset cancelled. Nothing was changed.', { tone: 'neutral' });
   } else {
@@ -841,6 +845,7 @@ resetBtn.addEventListener('click', () => {
   resetInput.value = '';
   resetConfirmBtn.disabled = true;
   resetProgress.style.display = 'none';
+  resetCompleted = false;
   resetModal.classList.add('show');
   resetInput.focus();
 });
@@ -864,6 +869,7 @@ resetConfirmBtn.addEventListener('click', async () => {
     if (data.ok) {
       resetProgress.textContent = (data.steps || []).join('\n');
       resetConfirmBtn.textContent = 'Done';
+      resetCompleted = true;
       showToast('Reset finished. Check the reset steps for warnings.', { tone: 'ok' });
       setTimeout(() => {
         resetModal.classList.remove('show');
@@ -2144,7 +2150,7 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
             const dbPath = sr.db_path || (lastStatus && lastStatus.db_path) || '';
             const dbName = String(dbPath).split(/[\\/]/).pop() || 'this store';
             const minutes = (sr.minutes !== null && sr.minutes !== undefined) ? sr.minutes : null;
-            const pid = (data && data.pid !== null && data && data.pid !== undefined) ? data.pid : sr.pid;
+            const pid = (data && data.pid !== null && data.pid !== undefined) ? data.pid : sr.pid;
             noteShadowStartLaunched({ runId, dbName, minutes, pid });
             const dur = (minutes !== null) ? ` for ${minutes} min` : '';
             const who = (pid !== null && pid !== undefined) ? ` (PID ${pid})` : '';

@@ -259,6 +259,14 @@ def test_escape_mid_reset_says_the_run_continues():
     assert _by_text(out["inFlightToasts"], "Dialog closed. The reset is still running.")
 
 
+def test_escape_after_a_successful_reset_is_not_a_cancel():
+    out = _run()["resetEscapeAfterSuccess"]
+    assert out["modalOpen"] is False
+    # Only the success toast: no "Reset cancelled. Nothing was changed."
+    assert len(out["toasts"]) == 1
+    assert out["toasts"][0]["cls"] == "toast toast-ok"
+
+
 # -- Static contracts (no browser needed) ------------------------------------
 
 def test_toast_container_mounts_before_the_reset_modal():
