@@ -728,6 +728,11 @@ def run(
     # Last lifecycle-stop code per market for on-change-only rows (#402). A
     # quote clears the entry, so the next stop is news again.
     stop_memory: dict[str, str] = {}
+    # Last steady-state tail signature per (market, line-kind) for the quiet
+    # terminal (`_tail_note`): repeats stay at DEBUG so idle rotations do not
+    # scroll the screen. A restart resets it (safe direction: a fresh loop
+    # announces state once, then goes quiet).
+    tail_memory: dict[tuple, str] = {}
     shutdown_reason = "once" if once else "stopped"
     registry = seam.registry
 
@@ -843,6 +848,7 @@ def run(
                     emit_fn=emit_fn,
                     refused_streak=refused_streaks.get(cid, 0),
                     stop_memory=stop_memory,
+                    tail_memory=tail_memory,
                 )
                 if res.status == "ERROR" and "book fetch error" in (res.error or ""):
                     rotation_suspects.add(cid)
@@ -1711,6 +1717,30 @@ def _lifecycle_quote_context(
     )
 
 
+def _tail_note(mem: Optional[dict], cid: str, kind: str, sig: str,
+               msg: str, *args) -> None:
+    """Steady-state terminal lines: INFO once per change, DEBUG while unchanged.
+
+    A rotation that rests unchanged orders (or re-reports the same skip
+    reason) is not news, but the first time it happens is -- so the first
+    visit logs at INFO and repeats drop to DEBUG. Every INFO line is followed
+    by a blank line, so a decision stands apart from the idle around
+    it. Action lines (orders posted or cancelled) are NOT routed here: an
+    action is news every time it happens.
+
+    `mem` is the loop's per-market memory, owned by `run` and passed down as
+    `tail_memory`. None keeps the old always-INFO behaviour for direct
+    callers (tests, one-shot scripts) that own no loop.
+    """
+    if mem is not None:
+        key = (cid, kind)
+        if mem.get(key) == sig:
+            log.debug(msg, *args)
+            return
+        mem[key] = sig
+    log.info(msg + "\n", *args)
+
+
 def _visit_one(
     seam: VenueSeam,
     spec,
@@ -1720,6 +1750,7 @@ def _visit_one(
     plan_fn: Optional[Callable] = None,
     refused_streak: int = 0,
     stop_memory: Optional[dict] = None,
+    tail_memory: Optional[dict] = None,
 ) -> LiveFleetResult:
     """One poll of one market: fetch -> decide -> plan -> submit/cancel.
 
@@ -1729,6 +1760,9 @@ def _visit_one(
     a market that never comes back is dead, not flickering (#390).
     `stop_memory` is the loop's condition-id -> last-stop-code map for
     on-change-only `lifecycle_stop` rows; None behaves as an empty map.
+    `tail_memory` is the loop's (condition-id, line-kind) -> last-signature
+    map for the quiet terminal tail (`_tail_note`); None keeps the old
+    always-INFO tail for callers that own no loop.
     """
     cid = _cid(spec)
     if emit_fn is None:
@@ -1988,11 +2022,13 @@ def _visit_one(
     if not live:
         if intents:
             orders_desc = ", ".join(f"{i.side} {i.size}sh @ ${i.price:.3f}" for i in intents)
-            log.info("[DRY RUN QUOTE] %s | Planned %d orders: %s", title, len(intents), orders_desc)
+            log.info("[DRY RUN QUOTE] %s | Planned %d orders: %s\n", title, len(intents), orders_desc)
         elif why:
-            log.info("[DRY RUN SKIPPED] %s | %s", title, why)
+            _tail_note(tail_memory, cid, "dry-skipped", why,
+                       "[DRY RUN SKIPPED] %s | %s", title, why)
         else:
-            log.info("[DRY RUN IDLE] %s | No quote action needed", title)
+            _tail_note(tail_memory, cid, "dry-idle", "idle",
+                       "[DRY RUN IDLE] %s | No quote action needed", title)
         if queue_why:
             # The dry run is where this gate is watched before it is enforced:
             # how many new placements would go out, and why the rest were
@@ -2114,19 +2150,23 @@ def _visit_one(
         and not to_cancel and not to_submit and bool(open_orders)
     )
     if queue_why:
-        log.info("[QUEUE] %s | %s", title, queue_why)
+        _tail_note(tail_memory, cid, "queue", queue_why,
+                   "[QUEUE] %s | %s", title, queue_why)
     if submitted > 0:
         orders_desc = ", ".join(f"{i.side} {i.size}sh @ ${i.price:.3f}" for i in to_submit)
-        log.info("[QUOTING] %s | Posted %d orders: %s", title, submitted, orders_desc)
+        log.info("[QUOTING] %s | Posted %d orders: %s\n", title, submitted, orders_desc)
     elif cancelled > 0:
-        log.info("[REQUOTE] %s | Cancelled %d stale order(s)", title, cancelled)
+        log.info("[REQUOTE] %s | Cancelled %d stale order(s)\n", title, cancelled)
     elif held:
-        log.info("[HOLDING] %s | %d quote(s) held through transient refusal: %s",
-                 title, len(open_orders), why)
+        _tail_note(tail_memory, cid, "holding", f"{len(open_orders)}|{why}",
+                   "[HOLDING] %s | %d quote(s) held through transient refusal: %s",
+                   title, len(open_orders), why)
     elif open_orders:
-        log.info("[RESTING] %s | %d quote(s) resting at target spread", title, len(open_orders))
+        _tail_note(tail_memory, cid, "resting", str(len(open_orders)),
+                   "[RESTING] %s | %d quote(s) resting at target spread", title, len(open_orders))
     elif why:
-        log.info("[SKIPPED] %s | %s", title, why)
+        _tail_note(tail_memory, cid, "skipped", why,
+                   "[SKIPPED] %s | %s", title, why)
 
     return LiveFleetResult(
         status="QUOTED" if intents else "DECLINED",

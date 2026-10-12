@@ -712,6 +712,61 @@ class TestProgressLog:
         assert "uma_resolution_proposed" in line
         assert "cancelled=2" in line
 
+    def test_repeated_identical_decision_goes_quiet_after_the_first(
+            self, tmp_path, caplog):
+        """Idle cycles must not scroll the terminal.
+
+        The same decision (same count, reason and position) logs once at
+        INFO; repeats drop to DEBUG so the terminal only moves when the
+        decision changes. Telemetry still receives every event.
+        """
+        import logging
+
+        emit = self._emit(tmp_path)
+        kwargs = dict(market_slug="dota-2026", reason="pair cost 0.985",
+                      extra={"intent_count": 2})
+        with caplog.at_level(logging.DEBUG, logger="shadow_run"):
+            emit(7, "quoting", "decide", **kwargs)
+            emit(8, "quoting", "decide", **kwargs)
+
+        infos = [r for r in caplog.records
+                 if r.levelno == logging.INFO and "intents=2" in r.getMessage()]
+        debugs = [r for r in caplog.records
+                  if r.levelno == logging.DEBUG and "intents=2" in r.getMessage()]
+        assert len(infos) == 1
+        assert len(debugs) == 1
+
+    def test_changed_reason_logs_again_at_info(self, tmp_path, caplog):
+        """A new rationale is a new decision: it must reach the terminal."""
+        import logging
+
+        emit = self._emit(tmp_path)
+        with caplog.at_level(logging.DEBUG, logger="shadow_run"):
+            emit(7, "quoting", "decide", market_slug="dota-2026",
+                 reason="pair cost 0.985", extra={"intent_count": 2})
+            emit(8, "quoting", "decide", market_slug="dota-2026",
+                 reason="pair cost 0.975", extra={"intent_count": 2})
+
+        infos = [r for r in caplog.records
+                 if r.levelno == logging.INFO and "intents=2" in r.getMessage()]
+        assert len(infos) == 2
+
+    def test_each_decision_is_followed_by_a_blank_separator_line(
+            self, tmp_path, caplog):
+        """A blank line after each decision so an action stands apart from
+        the idle cycles around it, with the timestamp kept on its own line."""
+        import logging
+
+        emit = self._emit(tmp_path)
+        with caplog.at_level(logging.INFO, logger="shadow_run"):
+            emit(7, "quoting", "decide", market_slug="dota-2026",
+                 reason="pair cost 0.985", extra={"intent_count": 2})
+
+        rec = next(r for r in caplog.records
+                   if "intents=2" in r.getMessage())
+        assert rec.levelno == logging.INFO
+        assert rec.getMessage().endswith("\n")
+
 
 class TestUmaGateShadowBuilder:
     """Both UMA ports are set on the shadow seam (#408)."""
