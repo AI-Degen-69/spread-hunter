@@ -35,6 +35,8 @@ from core_brain.shadow_guard import assert_not_production_registry
 from core_brain.shadow_run import (
     build_tournament_db_path,
     build_tournament_db_path_v2,
+    build_tournament_log_path,
+    build_tournament_log_path_v2,
     build_tournament_run_id,
     build_tournament_run_id_v2,
 )
@@ -92,6 +94,7 @@ class TournamentPlan:
     dashboards: bool
     record_path: Path
     results_path: Path
+    log_path: Optional[Path] = None
     markets_path: Optional[str] = None
     arms: list[ArmPlan] = field(default_factory=list)
     run_number: Optional[int] = None
@@ -107,6 +110,7 @@ class TournamentPlan:
             "dashboards": self.dashboards,
             "record_path": str(self.record_path),
             "results_path": str(self.results_path),
+            "log_path": str(self.log_path) if self.log_path is not None else None,
             "markets_path": self.markets_path,
             "arms": [a.to_dict() for a in self.arms],
         }
@@ -392,9 +396,11 @@ def build_tournament_plan(
         results_path = (
             Path("reports") / "tournaments" / f"i{issue}_tournament-{int(run_number)}_results.json"
         )
+        log_path = build_tournament_log_path_v2(issue=issue, run_number=int(run_number))
     else:
         record_path = Path("runtime") / "tournaments" / f"{issue}_{stamp}.json"
         results_path = Path("reports") / "tournaments" / f"{issue}_{stamp}_results.json"
+        log_path = build_tournament_log_path(issue=issue, stamp=stamp)
     return TournamentPlan(
         issue=issue,
         stamp=stamp,
@@ -405,6 +411,7 @@ def build_tournament_plan(
         dashboards=dashboards,
         record_path=record_path,
         results_path=results_path,
+        log_path=log_path,
         markets_path=str(markets_path) if markets_path is not None else None,
         arms=arm_plans,
     )
@@ -545,9 +552,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--stamp", type=str, default=None, help="Explicit timestamp identifier override")
     parser.add_argument("--run-number", type=int, default=None, help="Run-number naming scheme: slugs become <base>-<run>, DBs i<issue>_tournament-<run>_<slug>.db, no stamps (default: legacy scheme)")
     parser.add_argument("--base-dir", type=str, default="data", help="Target database directory (default: data)")
+    parser.add_argument("--log-file", type=str, default=None, help="Override detached-launch stdout redirect (default: canonical runtime/tournaments/i<issue>_tournament-<run>.log)")
     parser.add_argument("--no-port-check", action="store_true", help="Skip TCP socket availability check")
 
     args = parser.parse_args(argv)
+
+    # The launcher's own startup lines previously went nowhere: this module
+    # never configured logging, so log.info calls were silently dropped and
+    # detached-launch logs contained only child output. Configure once here
+    # (stderr only -- stdout stays pure plan JSON on --dry-run).
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
     arms = None
     if args.arms_file:
@@ -568,10 +582,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         check_ports=(args.dashboards and not args.no_port_check) if not args.dry_run else False,
     )
 
+    if args.log_file:
+        plan.log_path = Path(args.log_file)
+
     if args.dry_run:
+        log.info(
+            "Tournament dry-run: issue=%s run_number=%s arms=%d log=%s (nothing started)",
+            plan.issue, plan.run_number, len(plan.arms), plan.log_path,
+        )
         print(json.dumps(plan.to_dict(), indent=2))
         return 0
 
+    if plan.log_path is not None:
+        log.info("Detached-launch redirect target: %s", plan.log_path)
     return launch_tournament(plan)
 
 

@@ -455,6 +455,33 @@ def test_write_tournament_results_file(tmp_path: Path):
     assert "stat gate decides" in data["note"]
 
 
+def test_dry_run_logs_to_stderr_and_keeps_stdout_pure_json(tmp_path: Path):
+    """The launcher's own startup lines must reach stderr (basicConfig).
+
+    Regression: main() never configured logging, so all launcher log.info
+    calls were silently dropped. Subprocess-based so pytest's own log
+    handlers cannot mask the absence. stdout must stay pure plan JSON.
+    """
+    import subprocess
+    import sys
+
+    from scripts.shadow_tournament import ROOT
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "scripts.shadow_tournament",
+            "--dry-run", "--issue", "999", "--run-number", "9",
+            "--base-dir", str(tmp_path), "--no-port-check",
+        ],
+        capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "Tournament dry-run" in proc.stderr
+    data = json.loads(proc.stdout)
+    assert len(data["arms"]) == 5
+    assert data["log_path"].endswith("i999_tournament-9.log")
+
+
 def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
     from scripts.shadow_tournament import ROOT, main
 

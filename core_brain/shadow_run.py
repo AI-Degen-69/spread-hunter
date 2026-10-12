@@ -198,6 +198,31 @@ def build_tournament_db_path_v2(
     return Path(base_dir) / filename
 
 
+def build_tournament_log_path_v2(
+    issue: int | str,
+    run_number: int = 1,
+    base_dir: str | Path = "runtime/tournaments",
+) -> Path:
+    """Run-number launcher log: runtime/tournaments/i<issue>_tournament-<run>.log.
+
+    Same stem as the plan record (i<issue>_tournament-<run>.json) so the
+    detached-launch stdout redirect sits next to the plan it executed.
+    Process logs live under runtime/ per docs/agents/architecture.md -- never
+    logs/ (which does not exist in this repo).
+    """
+    run = int(run_number)
+    return Path(base_dir) / f"i{issue}_tournament-{run}.log"
+
+
+def build_tournament_log_path(
+    issue: int | str,
+    stamp: str,
+    base_dir: str | Path = "runtime/tournaments",
+) -> Path:
+    """Legacy launcher log: runtime/tournaments/<issue>_<stamp>.log."""
+    return Path(base_dir) / f"{issue}_{stamp}.log"
+
+
 def build_tournament_run_id_v2(
     issue: int | str,
     arm: str,

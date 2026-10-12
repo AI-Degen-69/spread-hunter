@@ -12,6 +12,8 @@ from pathlib import Path
 
 from core_brain.shadow_run import (
     build_tournament_db_path_v2,
+    build_tournament_log_path,
+    build_tournament_log_path_v2,
     build_tournament_run_id_v2,
     parse_tournament_db_path,
 )
@@ -24,6 +26,20 @@ def test_v2_db_path_shape():
     assert build_tournament_db_path_v2(
         issue=492, arm="deadband-tight-1", run_number=2, base_dir="data"
     ) == Path("data/i492_tournament-2_deadband-tight-1.db")
+
+
+def test_v2_log_path_shape():
+    # Detached-launch stdout redirect lives next to the plan record under
+    # runtime/tournaments/ -- never logs/ (which does not exist in this repo).
+    assert build_tournament_log_path_v2(issue=492, run_number=1) == Path(
+        "runtime/tournaments/i492_tournament-1.log"
+    )
+    assert build_tournament_log_path_v2(issue=492, run_number=2) == Path(
+        "runtime/tournaments/i492_tournament-2.log"
+    )
+    assert build_tournament_log_path(
+        issue=371, stamp="20261005-032000"
+    ) == Path("runtime/tournaments/371_20261005-032000.log")
 
 
 def test_v2_run_id_shape():
@@ -81,6 +97,10 @@ def test_build_plan_run_number_scheme(tmp_path: Path):
     assert "tournament-1" in plan.record_path.name
     assert plan.record_path.name == "i492_tournament-1.json"
     assert plan.results_path.name == "i492_tournament-1_results.json"
+    assert plan.log_path is not None
+    assert plan.log_path.name == "i492_tournament-1.log"
+    assert plan.log_path.parent.name == "tournaments"
+    assert plan.to_dict()["log_path"] == str(plan.log_path)
     assert "stamp" not in plan.arms[0].db_path.name
     # Base name still drives the preset selector, not the suffixed slug.
     assert plan.arms[0].env["HUNTER_TOURNAMENT_PRESET"] == "control"
@@ -100,6 +120,8 @@ def test_build_plan_run_number_two(tmp_path: Path):
     assert plan.arms[0].name == "snapstop-2"
     assert plan.arms[0].db_path.name == "i492_tournament-2_snapstop-2.db"
     assert plan.record_path.name == "i492_tournament-2.json"
+    assert plan.log_path is not None
+    assert plan.log_path.name == "i492_tournament-2.log"
 
 
 def test_build_plan_legacy_default_unchanged(tmp_path: Path):
