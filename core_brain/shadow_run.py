@@ -874,7 +874,7 @@ def run_shadow(
     flow_fn: Optional[Callable[[str, float], Any]] = None,
     fetch_uma_status: Optional[Callable[[str], Any]] = None,
     record_market_event: Optional[Callable[[Any], None]] = None,
-    interval: float = 5.0,
+    interval: float = 1.0,
     funder: Optional[str] = None,
     run_id: Optional[str] = None,
     sleep_fn: Optional[Callable[[float], None]] = None,
@@ -1488,13 +1488,17 @@ def _lookup_fetch_market(markets_source: Any) -> Callable[[str], Any]:
 
 
 def _parse_args(argv: Optional[list[str]] = None):
+    from core_brain.config import MAX_ROTATION_INTERVAL_SEC, cap_rotation_interval
+
     ap = argparse.ArgumentParser(
         description="SHADOW fleet: the full loop against the live book, "
                     "spending nothing. No signer is loaded.")
     ap.add_argument("--minutes", type=float, default=5.0,
                     help="time box in minutes (default: 5.0; negative runs until stopped)")
-    ap.add_argument("--interval", type=float, default=5.0,
-                    help="rotation cadence in seconds (default: 5.0)")
+    ap.add_argument("--interval", type=float, default=MAX_ROTATION_INTERVAL_SEC,
+                    help="rotation cadence in seconds (default: "
+                         f"{MAX_ROTATION_INTERVAL_SEC}); the ceiling -- any larger "
+                         "value is clamped, smaller values are kept")
     ap.add_argument("--db", required=True,
                     help="required per-run shadow store path; data/orders.db is refused")
     ap.add_argument("--run-id", default=None,
@@ -1531,7 +1535,11 @@ def _parse_args(argv: Optional[list[str]] = None):
                     help="stop rehearsal early when total merged pairs reaches this count")
     ap.add_argument("--finish-line-reliable", "--target-reliable", action="store_true", default=False,
                     help="stop rehearsal early as soon as all reliability action thresholds are satisfied")
-    return ap.parse_args(argv)
+    a = ap.parse_args(argv)
+    # Same ceiling as the Trader loop, enforced at the same boundary: the
+    # run body never sees a cadence above 1s.
+    a.interval = cap_rotation_interval(a.interval)
+    return a
 
 
 def main(
