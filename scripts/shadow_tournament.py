@@ -34,7 +34,9 @@ from core_brain.kpi import MERGE_METHODS, NON_TRADE_CLOSE_METHODS
 from core_brain.shadow_guard import assert_not_production_registry
 from core_brain.shadow_run import (
     build_tournament_db_path,
+    build_tournament_db_path_v2,
     build_tournament_run_id,
+    build_tournament_run_id_v2,
 )
 
 # The Market Filter (`scripts.filter_loop`) refreshes the shared market feed
@@ -92,11 +94,13 @@ class TournamentPlan:
     results_path: Path
     markets_path: Optional[str] = None
     arms: list[ArmPlan] = field(default_factory=list)
+    run_number: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "issue": self.issue,
             "stamp": self.stamp,
+            "run_number": self.run_number,
             "base_port": self.base_port,
             "minutes": self.minutes,
             "interval": self.interval,
@@ -238,8 +242,15 @@ def build_tournament_plan(
     base_dir: str | Path = "data",
     check_ports: bool = True,
     python_executable: str = sys.executable,
+    run_number: Optional[int] = None,
 ) -> TournamentPlan:
-    """Build a validated, isolated tournament execution plan."""
+    """Build a validated, isolated tournament execution plan.
+
+    run_number selects the stamp-less naming scheme (Issue #492): arm slugs
+    become <base>-<run>, DBs become data/i<issue>_tournament-<run>_<slug>.db,
+    and the plan/results files drop the stamp. None keeps the legacy scheme
+    byte-identical.
+    """
     if stamp is None:
         stamp = time.strftime("%Y%m%d-%H%M%S")
 
@@ -268,6 +279,10 @@ def build_tournament_plan(
             raise ValueError(f"Duplicate arm name: {name}")
         seen_names.add(name)
 
+        # Run-number scheme: the slug carries the run (<base>-<run>); preset
+        # and env lookups below keep using the BASE name.
+        slug = f"{name}-{int(run_number)}" if run_number is not None else name
+
         # Environment variable overrides
         arm_env = _preset_to_env(arm_def)
         custom_env = arm_def.get("env")
@@ -294,23 +309,38 @@ def build_tournament_plan(
             raise ValueError(f"Port {dash_port} is already in use or unavailable")
 
         # Database path & safety
-        db_path = build_tournament_db_path(
-            issue=issue,
-            index=idx,
-            arm=name,
-            stamp=stamp,
-            base_dir=base_dir_path,
-        )
+        if run_number is not None:
+            db_path = build_tournament_db_path_v2(
+                issue=issue,
+                arm=slug,
+                run_number=int(run_number),
+                base_dir=base_dir_path,
+            )
+        else:
+            db_path = build_tournament_db_path(
+                issue=issue,
+                index=idx,
+                arm=name,
+                stamp=stamp,
+                base_dir=base_dir_path,
+            )
         assert_not_production_registry(db_path)
         if db_path.exists():
             raise ValueError(f"Tournament database already exists: {db_path}")
 
-        run_id = build_tournament_run_id(
-            issue=issue,
-            index=idx,
-            arm=name,
-            stamp=stamp,
-        )
+        if run_number is not None:
+            run_id = build_tournament_run_id_v2(
+                issue=issue,
+                arm=slug,
+                run_number=int(run_number),
+            )
+        else:
+            run_id = build_tournament_run_id(
+                issue=issue,
+                index=idx,
+                arm=name,
+                stamp=stamp,
+            )
 
         shadow_argv = [
             python_executable,
@@ -345,7 +375,7 @@ def build_tournament_plan(
         arm_plans.append(
             ArmPlan(
                 index=idx,
-                name=name,
+                name=slug,
                 db_path=db_path,
                 run_id=run_id,
                 dash_port=dash_port,
@@ -355,11 +385,20 @@ def build_tournament_plan(
             )
         )
 
-    record_path = Path("runtime") / "tournaments" / f"{issue}_{stamp}.json"
-    results_path = Path("reports") / "tournaments" / f"{issue}_{stamp}_results.json"
+    if run_number is not None:
+        record_path = (
+            Path("runtime") / "tournaments" / f"i{issue}_tournament-{int(run_number)}.json"
+        )
+        results_path = (
+            Path("reports") / "tournaments" / f"i{issue}_tournament-{int(run_number)}_results.json"
+        )
+    else:
+        record_path = Path("runtime") / "tournaments" / f"{issue}_{stamp}.json"
+        results_path = Path("reports") / "tournaments" / f"{issue}_{stamp}_results.json"
     return TournamentPlan(
         issue=issue,
         stamp=stamp,
+        run_number=(int(run_number) if run_number is not None else None),
         base_port=base_port,
         minutes=minutes,
         interval=interval,
@@ -504,6 +543,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--markets-path", type=str, default=None, help="Path to trial universe feed")
     parser.add_argument("--dry-run", action="store_true", help="Print tournament plan JSON and exit")
     parser.add_argument("--stamp", type=str, default=None, help="Explicit timestamp identifier override")
+    parser.add_argument("--run-number", type=int, default=None, help="Run-number naming scheme: slugs become <base>-<run>, DBs i<issue>_tournament-<run>_<slug>.db, no stamps (default: legacy scheme)")
     parser.add_argument("--base-dir", type=str, default="data", help="Target database directory (default: data)")
     parser.add_argument("--no-port-check", action="store_true", help="Skip TCP socket availability check")
 
@@ -520,6 +560,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         minutes=args.minutes,
         interval=args.interval,
         dashboards=args.dashboards,
+        run_number=args.run_number,
         max_markets=args.max_markets,
         markets_path=args.markets_path,
         stamp=args.stamp,

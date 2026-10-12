@@ -105,28 +105,49 @@ TOURNAMENT_DB_PATTERN = re.compile(
     r"^(?:.*[\\/])?(?P<issue>\d+)_tournament_(?P<index>\d+)_(?P<arm>[a-z0-9-]+)_(?P<stamp>\d{8}-\d{6})\.db$"
 )
 
+# Run-number scheme (Issue #492): i<issue>_tournament-<run>_<arm>-<run>.db --
+# no index prefix, no stamp. The arm slug already carries the run suffix.
+TOURNAMENT_DB_RUN_PATTERN = re.compile(
+    r"^(?:.*[\\/])?i(?P<issue>\d+)_tournament-(?P<run>\d+)_(?P<arm>[a-z0-9-]+)\.db$"
+)
+
 
 def parse_tournament_db_path(path: str | Path | None) -> dict | None:
     """Parse a tournament scratch DB filename into its constituent parts.
 
-    Returns {'issue': int, 'index': int, 'arm': str, 'stamp': str} if matched,
-    otherwise None. Specifically rejects non-tournament names and NN_shadow_*.db.
+    Legacy shape returns {'issue': int, 'index': int, 'arm': str, 'stamp': str}.
+    Run-number shape returns {'issue': int, 'arm': str, 'run_number': int,
+    'index': None, 'stamp': None} -- consumers key off issue/arm and tolerate
+    the Nones (dashboard clustering falls back to per-issue grouping).
+    Otherwise None. Specifically rejects non-tournament names and NN_shadow_*.db.
     """
     if not path:
         return None
     raw = str(path).strip()
     m = TOURNAMENT_DB_PATTERN.match(raw)
-    if not m:
-        return None
-    try:
-        return {
-            "issue": int(m.group("issue")),
-            "index": int(m.group("index")),
-            "arm": m.group("arm"),
-            "stamp": m.group("stamp"),
-        }
-    except (ValueError, TypeError):
-        return None
+    if m:
+        try:
+            return {
+                "issue": int(m.group("issue")),
+                "index": int(m.group("index")),
+                "arm": m.group("arm"),
+                "stamp": m.group("stamp"),
+            }
+        except (ValueError, TypeError):
+            return None
+    m2 = TOURNAMENT_DB_RUN_PATTERN.match(raw)
+    if m2:
+        try:
+            return {
+                "issue": int(m2.group("issue")),
+                "arm": m2.group("arm"),
+                "run_number": int(m2.group("run")),
+                "index": None,
+                "stamp": None,
+            }
+        except (ValueError, TypeError):
+            return None
+    return None
 
 
 def build_tournament_db_path(
@@ -153,6 +174,39 @@ def build_tournament_run_id(
     clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
     idx_str = f"{int(index):02d}"
     token = f"shadow-{issue}-t{idx_str}-{clean_arm}-{stamp}"
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", token).strip("-.")[:64]
+
+
+def _clean_tournament_slug(arm: str) -> str:
+    return re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
+
+
+def build_tournament_db_path_v2(
+    issue: int | str,
+    arm: str,
+    run_number: int = 1,
+    base_dir: str | Path = "data",
+) -> Path:
+    """Run-number DB path: data/i<issue>_tournament-<run>_<arm>-<run>.db.
+
+    No index prefix, no stamp. The arm slug is expected to already carry the
+    run suffix (e.g. 'conservative-1'); the builder only cleans it.
+    """
+    run = int(run_number)
+    clean_arm = _clean_tournament_slug(arm)
+    filename = f"i{issue}_tournament-{run}_{clean_arm}.db"
+    return Path(base_dir) / filename
+
+
+def build_tournament_run_id_v2(
+    issue: int | str,
+    arm: str,
+    run_number: int = 1,
+) -> str:
+    """Run-number run id: shadow-<issue>-tournament-<run>-<arm> (<= 64 chars)."""
+    run = int(run_number)
+    clean_arm = _clean_tournament_slug(arm)
+    token = f"shadow-{issue}-tournament-{run}-{clean_arm}"
     return re.sub(r"[^A-Za-z0-9_.-]", "-", token).strip("-.")[:64]
 
 
