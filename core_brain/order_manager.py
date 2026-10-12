@@ -876,21 +876,34 @@ def _resolve_merge_unit_costs(conn, condition_id: str,
                 dn_unit_cost = ucost
                 assigned.add(tid)
 
-    # Last resort for tokens with no quote row (venue-adopted fills that
-    # never passed through quoting): old positional order, said out loud.
+    # Middle layer: token-id substrings, for human-readable ids in older
+    # stores and tests. Never fires on numeric venue ids (digits only), so
+    # production behavior is unchanged; it only outranks the positional
+    # guess below.
+    for tid, ucost in tok_map.items():
+        if tid in assigned:
+            continue
+        tid_s = tid.lower()
+        if "up" in tid_s or "yes" in tid_s or "long" in tid_s:
+            if up_unit_cost is None:
+                up_unit_cost = ucost
+                assigned.add(tid)
+        elif "dn" in tid_s or "down" in tid_s or "no" in tid_s or "short" in tid_s:
+            if dn_unit_cost is None:
+                dn_unit_cost = ucost
+                assigned.add(tid)
+
+    # Last resort for tokens with no usable side signal: old positional
+    # order, said out loud.
     leftovers = [t for t in tok_map if t not in assigned]
     if leftovers and (up_unit_cost is None or dn_unit_cost is None):
         print(f"  WARNING: merge on {condition_id}: "
-              f"{len(leftovers)} token(s) have no quote side; "
+              f"{len(leftovers)} token(s) have no usable quote side; "
               f"attributing positionally")
     if up_unit_cost is None and leftovers:
         up_unit_cost = tok_map[leftovers.pop(0)]
     if dn_unit_cost is None and leftovers:
         dn_unit_cost = tok_map[leftovers.pop(0)]
-    if dn_unit_cost is None and up_unit_cost is not None and tok_map:
-        only = next(iter(tok_map))
-        if up_unit_cost != tok_map[only]:
-            dn_unit_cost = tok_map[only]
 
     # Invented costs, said out loud. A merge with no measurable fills should
     # never book silently: 0.49/0.49 asserts a $0.98 pair nobody observed.
