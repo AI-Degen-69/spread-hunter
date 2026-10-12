@@ -1,7 +1,8 @@
 """Tournament Analytics & Decision Cockpit Server.
 
 Interactive real-time visualization and statistical analysis cockpit for
-Spread Hunter multi-arm shadow tournaments (Issue #484 and Issue #485).
+Spread Hunter multi-arm shadow tournaments (fresh Round 1: Issue #492;
+archive: #484/#485; held Round 2: #487).
 Computes risk, expectancy (EV), standard deviation, max drawdown,
 Monte Carlo projections, and Live Readiness Scoring.
 
@@ -18,6 +19,7 @@ import math
 import os
 from pathlib import Path
 import random
+import re
 import socket
 import socketserver
 import sqlite3
@@ -181,7 +183,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "control-2",
         "label": "Control (#2)",
-        "port": 8811,
+        "port": 8801,
         "db": "data/i487_tournament_control-2.db",
         "run_id": "i487_tournament_control-2",
         "color": "#00e676",
@@ -195,7 +197,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "conservative-2",
         "label": "Conservative (#2)",
-        "port": 8812,
+        "port": 8802,
         "db": "data/i487_tournament_conservative-2.db",
         "run_id": "i487_tournament_conservative-2",
         "color": "#00b0ff",
@@ -209,7 +211,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "balanced-2",
         "label": "Balanced (#2)",
-        "port": 8813,
+        "port": 8803,
         "db": "data/i487_tournament_balanced-2.db",
         "run_id": "i487_tournament_balanced-2",
         "color": "#e040fb",
@@ -223,7 +225,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "aggressive-2",
         "label": "Aggressive (#2)",
-        "port": 8814,
+        "port": 8804,
         "db": "data/i487_tournament_aggressive-2.db",
         "run_id": "i487_tournament_aggressive-2",
         "color": "#ffd600",
@@ -237,7 +239,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "prudent-2",
         "label": "Prudent (#2)",
-        "port": 8815,
+        "port": 8805,
         "db": "data/i487_tournament_prudent-2.db",
         "run_id": "i487_tournament_prudent-2",
         "color": "#ff6d00",
@@ -251,7 +253,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "stickhold-2",
         "label": "Stick-Hold (#2)",
-        "port": 8816,
+        "port": 8806,
         "db": "data/i487_tournament_stickhold-2.db",
         "run_id": "i487_tournament_stickhold-2",
         "color": "#69f0ae",
@@ -265,7 +267,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "queuehug-2",
         "label": "Queue-Hug (#2)",
-        "port": 8817,
+        "port": 8807,
         "db": "data/i487_tournament_queuehug-2.db",
         "run_id": "i487_tournament_queuehug-2",
         "color": "#ff5252",
@@ -279,7 +281,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "deadband-tight-2",
         "label": "Deadband-Tight (#2)",
-        "port": 8818,
+        "port": 8808,
         "db": "data/i487_tournament_deadband-tight-2.db",
         "run_id": "i487_tournament_deadband-tight-2",
         "color": "#ff4081",
@@ -293,7 +295,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "deadband-wide-2",
         "label": "Deadband-Wide (#2)",
-        "port": 8819,
+        "port": 8809,
         "db": "data/i487_tournament_deadband-wide-2.db",
         "run_id": "i487_tournament_deadband-wide-2",
         "color": "#76ff03",
@@ -307,7 +309,7 @@ ARMS_CONFIG_487 = [
         "issue": 487,
         "name": "snapstop-2",
         "label": "Snap-Stop (#2)",
-        "port": 8820,
+        "port": 8810,
         "db": "data/i487_tournament_snapstop-2.db",
         "run_id": "i487_tournament_snapstop-2",
         "color": "#b388ff",
@@ -319,20 +321,183 @@ ARMS_CONFIG_487 = [
     },
 ]
 
+ARMS_CONFIG_492 = [
+    # Issue #492: fresh Round 1 baseline re-run on fixed code (no #487 tweaks).
+    # Worst-catalyst columns stay EMPTY until this run produces results -- the
+    # old #484/#485 hypotheses described buggy-code artifacts, not real
+    # behavior, and must not anchor the new read. Static db/run_id values are
+    # placeholders (real paths land via runtime/tournaments/492_<stamp>.json
+    # once the run launches); missing files report as NO_DATA, which is the
+    # honest fresh state.
+    {
+        "issue": 492,
+        "name": "control-1",
+        "label": "Control (#1)",
+        "port": 8801,
+        "db": "data/i492_tournament-1_control-1.db",
+        "run_id": "shadow-492-tournament-1-control-1",
+        "color": "#00e676",
+        "desc": "Baseline fixed 2c offset, $0.045 single-buy loss stop",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "conservative-1",
+        "label": "Conservative (#1)",
+        "port": 8802,
+        "db": "data/i492_tournament-1_conservative-1.db",
+        "run_id": "shadow-492-tournament-1-conservative-1",
+        "color": "#00b0ff",
+        "desc": "Dynamic offset 0.75x (2-5c), tighter $0.030 single-buy stop",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "balanced-1",
+        "label": "Balanced (#1)",
+        "port": 8803,
+        "db": "data/i492_tournament-1_balanced-1.db",
+        "run_id": "shadow-492-tournament-1-balanced-1",
+        "color": "#e040fb",
+        "desc": "Dynamic offset 0.50x (2-4c), standard $0.045 single-buy stop",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "aggressive-1",
+        "label": "Aggressive (#1)",
+        "port": 8804,
+        "db": "data/i492_tournament-1_aggressive-1.db",
+        "run_id": "shadow-492-tournament-1-aggressive-1",
+        "color": "#ffd600",
+        "desc": "Dynamic offset 0.25x (2-3c), wider $0.060 single-buy stop",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "prudent-1",
+        "label": "Prudent (#1)",
+        "port": 8805,
+        "db": "data/i492_tournament-1_prudent-1.db",
+        "run_id": "shadow-492-tournament-1-prudent-1",
+        "color": "#ff6d00",
+        "desc": "Fixed 3c offset, conservative $0.035 single-buy stop",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "stickhold-1",
+        "label": "Stick-Hold (#1)",
+        "port": 8806,
+        "db": "data/i492_tournament-1_stickhold-1.db",
+        "run_id": "shadow-492-tournament-1-stickhold-1",
+        "color": "#69f0ae",
+        "desc": "Dynamic offset 0.25x, 45s single grace, $0.065 loss cap",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "queuehug-1",
+        "label": "Queue-Hug (#1)",
+        "port": 8807,
+        "db": "data/i492_tournament-1_queuehug-1.db",
+        "run_id": "shadow-492-tournament-1-queuehug-1",
+        "color": "#ff4081",
+        "desc": "Requote hold below 100 shares, queue hold 150 shares",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "deadband-tight-1",
+        "label": "Deadband-Tight (#1)",
+        "port": 8808,
+        "db": "data/i492_tournament-1_deadband-tight-1.db",
+        "run_id": "shadow-492-tournament-1-deadband-tight-1",
+        "color": "#ff5252",
+        "desc": "Strict 1c requote deadband, frequent requoting",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "deadband-wide-1",
+        "label": "Deadband-Wide (#1)",
+        "port": 8809,
+        "db": "data/i492_tournament-1_deadband-wide-1.db",
+        "run_id": "shadow-492-tournament-1-deadband-wide-1",
+        "color": "#76ff03",
+        "desc": "Wide 2c requote deadband, reduces unnecessary churn",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+    {
+        "issue": 492,
+        "name": "snapstop-1",
+        "label": "Snap-Stop (#1)",
+        "port": 8810,
+        "db": "data/i492_tournament-1_snapstop-1.db",
+        "run_id": "shadow-492-tournament-1-snapstop-1",
+        "color": "#b388ff",
+        "desc": "Fast 30s single buy grace, tight $0.040 loss cap",
+        "worst_catalyst": "",
+        "worst_catalyst_desc": "",
+        "hypothesized_tweak": "",
+        "tweak_rationale": "",
+    },
+]
+
 # Active Default / Backwards Compatibility Pointer
-ARMS_CONFIG = ARMS_CONFIG_484
+ARMS_CONFIG = ARMS_CONFIG_492
 
 TOURNAMENTS = {
+    "492": {
+        "id": "492",
+        "title": "Issue #492 Baseline Re-run (Fixed Code)",
+        "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Original 10 arms, byte-identical env, no #487 tweaks",
+        "badge": "R1 FRESH",
+        "badge_cls": "badge-amber",
+        "description": "Fresh Round 1 baseline on fixed code. Catalyst columns stay empty until this run reports; Round 2 (#487) is held until then.",
+        "arms": ARMS_CONFIG_492,
+        "page_url": "/",
+        "static_filename": "tournament_cockpit_492.html",
+        "issue_primary": 492,
+        "issue_secondary": 492,
+    },
     "484": {
         "id": "484",
-        "title": "Issue #484 / #485 Baseline Tournament",
+        "title": "Issue #484 / #485 Baseline Tournament (Archive)",
         "subtitle": "12-Hour Multi-Arm Live Shadow Evaluation | Issue #484 (Strategy Profiles) & Issue #485 (Execution Mechanics)",
-        "badge": "ROUND 1 BASELINE",
+        "badge": "R1 ARCHIVE",
         "badge_cls": "badge-amber",
-        "description": "Baseline parameters evaluation across 10 arms measuring initial parameter performance and identifying failure mode catalysts.",
+        "description": "Archived baseline built on buggy code (see #492); kept for history, not for decisions.",
         "arms": ARMS_CONFIG_484,
-        "page_url": "/",
-        "static_filename": "tournament_cockpit.html",
+        "page_url": "/484",
+        "static_filename": "tournament_cockpit_484.html",
         "issue_primary": 484,
         "issue_secondary": 485,
     },
@@ -350,6 +515,61 @@ TOURNAMENTS = {
         "issue_secondary": 487,
     },
 }
+
+
+def _strip_round_suffix(name: str) -> str:
+    """Drop a trailing -<digit> round suffix so plan files match presets."""
+    return re.sub(r"-\d+$", "", str(name or ""))
+
+
+def resolve_tournament_arms(tourney_key: str = "492") -> list[dict[str, Any]]:
+    """Dynamically resolve tournament arms from active plan file or fall back to static presets."""
+    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS["492"])
+    default_arms = meta["arms"]
+    # #484 stays fully static (archive); live keys resolve their plan file.
+    if tourney_key not in ("487", "492"):
+        return default_arms
+
+    tourn_dir = ROOT / "runtime" / "tournaments"
+    latest_plan = None
+    if tourney_key == "492":
+        # Run-number scheme: i492_tournament-<run>.json, highest run wins.
+        run_pattern = re.compile(rf"^i{tourney_key}_tournament-(?P<run>\d+)\.json$")
+        best = None
+        for p in tourn_dir.glob(f"i{tourney_key}_tournament-*.json"):
+            m = run_pattern.match(p.name)
+            if m and (best is None or int(m.group("run")) > best[0]):
+                best = (int(m.group("run")), p)
+        latest_plan = best[1] if best else None
+    else:
+        pattern = re.compile(rf"{tourney_key}_\d{{8}}-\d{{6}}\.json$")
+        plan_files = sorted([p for p in tourn_dir.glob(f"{tourney_key}_*.json") if pattern.search(p.name)])
+        latest_plan = plan_files[-1] if plan_files else None
+    if latest_plan is None:
+        return default_arms
+    try:
+        with open(latest_plan, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        plan_arms: dict[str, Any] = {}
+        for a in data.get("arms", []):
+            plan_arms[a.get("name")] = a
+            plan_arms[_strip_round_suffix(a.get("name", ""))] = a
+        merged = []
+        for base in default_arms:
+            name = base["name"]
+            pa = plan_arms.get(name, plan_arms.get(_strip_round_suffix(name)))
+            if pa is not None:
+                merged.append({
+                    **base,
+                    "db": pa.get("db_path", base["db"]),
+                    "run_id": pa.get("run_id", base["run_id"]),
+                    "port": pa.get("dash_port", base["port"]),
+                })
+            else:
+                merged.append(base)
+        return merged
+    except Exception:
+        return default_arms
 
 
 def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> dict[str, Any]:
@@ -371,13 +591,25 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
         ) as conn:
             c = conn.cursor()
 
-            # Check time window
+            # Check time window from queue_marks or quotes
+            first_ts = 0.0
+            last_ts = 0.0
             ts_row = c.execute(
                 "SELECT min(ts), max(ts) FROM queue_marks WHERE run_id = ?",
                 (cfg["run_id"],),
             ).fetchone()
-            first_ts = ts_row[0] or 0.0
-            last_ts = ts_row[1] or first_ts
+            if ts_row and ts_row[0]:
+                first_ts = ts_row[0]
+                last_ts = ts_row[1] or first_ts
+            else:
+                q_row = c.execute(
+                    "SELECT min(ts), max(ts) FROM quotes WHERE run_id = ?",
+                    (cfg["run_id"],),
+                ).fetchone()
+                if q_row and q_row[0]:
+                    first_ts = q_row[0]
+                    last_ts = q_row[1] or first_ts
+
             elapsed_min = (last_ts - first_ts) / 60.0 if first_ts else 0.0
             rem_min = max(0.0, target_minutes - elapsed_min)
 
@@ -416,12 +648,24 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
             "status": "no_trades",
             "elapsed_min": elapsed_min,
             "rem_min": rem_min,
+            "progress_pct": min(100.0, round((elapsed_min / target_minutes) * 100.0, 1)),
             "fills_cnt": fills_cnt,
             "orders_cnt": orders_cnt,
             "trades_count": 0,
+            "merges_count": 0,
+            "exits_count": 0,
             "total_pnl": 0.0,
+            "mean_pnl": 0.0,
+            "std_pnl": 0.0,
+            "win_rate": 0.0,
+            "merge_rate": 0.0,
+            "exit_rate": 0.0,
+            "profit_factor": 0.0,
+            "max_drawdown": 0.0,
             "score": 0,
-            "readiness": "NO_TRADES"
+            "readiness": "EVALUATING",
+            "badge_cls": "badge-amber",
+            "series": [],
         }
 
     wins = [p for p in pnls if p > 0.0]
@@ -544,10 +788,10 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
     }
 
 
-def collect_all_stats(tourney_key: str = "484") -> dict[str, Any]:
+def collect_all_stats(tourney_key: str = "492") -> dict[str, Any]:
     """Analyze all tournament arms for the selected tournament and compile overall metrics."""
-    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS["484"])
-    arms_config = meta["arms"]
+    meta = TOURNAMENTS.get(tourney_key, TOURNAMENTS["492"])
+    arms_config = resolve_tournament_arms(tourney_key)
     arms_data = [analyze_arm_database(cfg) for cfg in arms_config]
     
     # Sort by Total PnL descending for leaderboard
@@ -579,12 +823,13 @@ def collect_all_stats(tourney_key: str = "484") -> dict[str, Any]:
         l1_title = "#484 Strategy Leader"
         l2_title = "#485 Execution Leader"
     else:
-        # Issue 487 Tweaked Arms
+        # Fresh round (held #487, live #492): top two by PnL.
         if sorted_arms:
             leader_1 = sorted_arms[0]
             leader_2 = sorted_arms[1] if len(sorted_arms) > 1 else sorted_arms[0]
-        l1_title = "#487 Top Performer"
-        l2_title = "#487 Runner-Up"
+        _tag = meta.get("issue_primary", tourney_key)
+        l1_title = f"#{_tag} Top Performer"
+        l2_title = f"#{_tag} Runner-Up"
 
     top_arm = sorted_arms[0] if sorted_arms else {}
 
@@ -911,15 +1156,15 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
 <!-- Tournament Navigation Switcher -->
 <div class="tourney-nav">
   <span class="tourney-nav-label">Select Tournament Evaluation:</span>
-  <a href="/" class="tourney-pill {'active-amber' if initial_data.get('tourney_key') == '484' else ''}">
+  <a href="/" class="tourney-pill {'active-amber' if initial_data.get('tourney_key') == '492' else ''}">
     <span>🏛️</span>
-    <span>#484 Baseline (10 Arms)</span>
-    <span class="badge badge-amber" style="font-size: 9px; padding: 1px 5px;">R1 BASELINE</span>
+    <span>#492 Baseline Re-run (10 Arms)</span>
+    <span class="badge badge-amber" style="font-size: 9px; padding: 1px 5px;">R1 FRESH</span>
   </a>
-  <a href="/487" class="tourney-pill {'active' if initial_data.get('tourney_key') == '487' else ''}">
-    <span>⚡</span>
-    <span>#487 Tweaked Catalysts (10 Arms)</span>
-    <span class="badge badge-green" style="font-size: 9px; padding: 1px 5px;">R2 TWEAKED</span>
+  <a href="/484" class="tourney-pill {'active-amber' if initial_data.get('tourney_key') == '484' else ''}">
+    <span>🗄️</span>
+    <span>#484 Baseline Archive (10 Arms)</span>
+    <span class="badge badge-amber" style="font-size: 9px; padding: 1px 5px;">R1 ARCHIVE</span>
   </a>
 </div>
 
@@ -931,11 +1176,11 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
   <div class="header-controls">
     <div class="progress-card">
       <div style="font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between;">
-        <span>Progress: <strong id="progress-text" class="tabular">10.5h / 12.0h</strong></span>
-        <span id="rem-text" class="tabular">~1.5h rem</span>
+        <span>Progress: <strong id="progress-text" class="tabular">{initial_data.get('elapsed_hours', 0.0):.1f}h / 12.0h</strong></span>
+        <span id="rem-text" class="tabular">~{initial_data.get('rem_hours', 12.0):.1f}h rem</span>
       </div>
       <div class="progress-bar-bg">
-        <div id="progress-bar" class="progress-bar-fill" style="width: 87.5%;"></div>
+        <div id="progress-bar" class="progress-bar-fill" style="width: {initial_data.get('progress_pct', 0.0):.1f}%;"></div>
       </div>
     </div>
     <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
@@ -1260,9 +1505,12 @@ function switchTab(name, btn) {{
 
 function renderAll() {{
   // Header metrics
-  document.getElementById('progress-text').innerText = state.elapsed_hours + 'h / 12.0h';
-  document.getElementById('rem-text').innerText = '~' + state.rem_hours + 'h rem';
-  document.getElementById('progress-bar').style.width = state.progress_pct + '%';
+  const elapsedH = (state.elapsed_hours != null ? Number(state.elapsed_hours) : 0).toFixed(1);
+  const remH = (state.rem_hours != null ? Number(state.rem_hours) : 12.0).toFixed(1);
+  const pct = Math.min(100, Math.max(0, state.progress_pct || 0)).toFixed(1);
+  document.getElementById('progress-text').innerText = elapsedH + 'h / 12.0h';
+  document.getElementById('rem-text').innerText = '~' + remH + 'h rem';
+  document.getElementById('progress-bar').style.width = pct + '%';
   document.getElementById('m-leader-484').innerText = state.leader_484_label || state.leader_484;
   document.getElementById('m-leader-484-pnl').innerText = 'PnL: ' + (state.leader_484_pnl >= 0 ? '+$' : '-$') + Math.abs(state.leader_484_pnl).toFixed(2);
   document.getElementById('m-leader-485').innerText = state.leader_485_label || state.leader_485;
@@ -1535,7 +1783,7 @@ let lastUpdateTime = new Date().toLocaleTimeString();
 
 function fetchLiveStats() {{
   const statusEl = document.getElementById('refresh-status');
-  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '484';
+  const tourneyKey = (state && state.tourney_key) ? state.tourney_key : '492';
   fetch('/api/stats?tourney=' + tourneyKey)
     .then(r => {{
       if (!r.ok) {{
@@ -1564,7 +1812,7 @@ function fetchLiveStats() {{
 // Initial render
 renderAll();
 // Polling interval
-setInterval(fetchLiveStats, 10000);
+setInterval(fetchLiveStats, 5000);
 </script>
 </body>
 </html>
@@ -1577,7 +1825,7 @@ _STATS_CACHE_LOCK = threading.Lock()
 _STATS_CACHE_TTL_SEC: float = 3.0
 
 
-def get_cached_stats(tourney_key: str = "484") -> dict[str, Any]:
+def get_cached_stats(tourney_key: str = "492") -> dict[str, Any]:
     global _STATS_CACHE, _STATS_CACHE_TIME
     with _STATS_CACHE_LOCK:
         now = time.time()
@@ -1598,8 +1846,18 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
         clean_path = self.path.split("?")[0].rstrip("/")
         query = self.path.split("?")[1] if "?" in self.path else ""
 
-        # Route 1: Baseline Round 1 (/ or /index.html)
-        if clean_path in ("", "/index.html", "/484"):
+        # Route 1: Fresh Round 1 re-run (/ or /492) -- the main page.
+        if clean_path in ("", "/index.html", "/492"):
+            stats = get_cached_stats("492")
+            html = generate_cockpit_html(stats)
+            data = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        # Route 1b: Archived Round 1 baseline (/484, history only).
+        elif clean_path in ("/484", "/484.html"):
             stats = get_cached_stats("484")
             html = generate_cockpit_html(stats)
             data = html.encode("utf-8")
@@ -1608,7 +1866,8 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        # Route 2: Tweaked Catalysts Round 2 (/487 or /487.html)
+        # Route 2: Tweaked Catalysts Round 2 (/487) -- HELD until R1 reports.
+        # Route stays alive; it is just unlinked from the nav meanwhile.
         elif clean_path in ("/487", "/487.html", "/cockpit_487"):
             stats = get_cached_stats("487")
             html = generate_cockpit_html(stats)
@@ -1618,14 +1877,14 @@ class CockpitHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        # Route 3: JSON API (/api/stats or /api/stats?tourney=487)
+        # Route 3: JSON API (/api/stats or /api/stats?tourney=484)
         elif clean_path == "/api/stats":
-            tourney = "484"
+            tourney = "492"
             for param in query.split("&"):
                 if param.startswith("tourney="):
                     tourney = param.split("=")[1].strip()
             if tourney not in TOURNAMENTS:
-                tourney = "484"
+                tourney = "492"
             stats = get_cached_stats(tourney)
             data = json.dumps(stats).encode("utf-8")
             self.send_response(200)
@@ -1642,26 +1901,32 @@ def run_cockpit_server(port: int = 8800) -> None:
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Export standalone static copy for Issue #484 baseline
+    # 1. Export standalone static copies for the fresh Issue #492 re-run.
+    #    tournament_cockpit.html stays the main snapshot (now fresh, not #484).
+    stats_492 = collect_all_stats("492")
+    static_492 = generate_cockpit_html(stats_492)
+    out_file_main = reports_dir / "tournament_cockpit.html"
+    out_file_main.write_text(static_492, encoding="utf-8")
+    print(f"Static Cockpit (#492 fresh) generated at: {out_file_main}")
+    out_file_492 = reports_dir / "tournament_cockpit_492.html"
+    out_file_492.write_text(static_492, encoding="utf-8")
+    print(f"Static Cockpit (#492 fresh) generated at: {out_file_492}")
+
+    # 2. Archive snapshot of the old #484/#485 baseline (history only).
     stats_484 = collect_all_stats("484")
     static_484 = generate_cockpit_html(stats_484)
-    out_file_484 = reports_dir / "tournament_cockpit.html"
+    out_file_484 = reports_dir / "tournament_cockpit_484.html"
     out_file_484.write_text(static_484, encoding="utf-8")
-    print(f"Static Cockpit (#484) generated at: {out_file_484}")
+    print(f"Static Cockpit (#484 archive) generated at: {out_file_484}")
 
-    # 2. Export standalone static copy for Issue #487 tweaked catalysts
-    stats_487 = collect_all_stats("487")
-    static_487 = generate_cockpit_html(stats_487)
-    out_file_487 = reports_dir / "tournament_cockpit_487.html"
-    out_file_487.write_text(static_487, encoding="utf-8")
-    print(f"Static Cockpit (#487) generated at: {out_file_487}")
+    # 3. Issue #487 is HELD until R1 reports -- no fresh static export.
 
     class ThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         allow_reuse_address = True
 
     server = ThreadedServer(("127.0.0.1", port), CockpitHandler)
-    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / and /487)")
+    print(f"Tournament Cockpit server running at http://127.0.0.1:{port} (pages: / [= #492 fresh], /484 [archive], /487 [held])")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

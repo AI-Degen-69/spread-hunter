@@ -58,6 +58,11 @@ DEFAULT_PAIRS_WINDOW_SEC = 900.0
 # lifecycle string and the older alias route here.
 HARD_STOP_SELL_REASONS = frozenset({"hard_stop", "lifecycle_hard_stop"})
 
+# A `queue_marks` snapshot is the PRIOR rotation's pre-decision book -- seconds
+# old. Older than this it cannot be the book the exit decision was made
+# against (an aged-out leg's fill-time mark), so it must never price the exit.
+MAX_SNAPSHOT_AGE_SEC = 60.0
+
 
 class ShadowOrderRefused(RuntimeError):
     """A simulated order broke a live cap and was not written."""
@@ -976,7 +981,11 @@ class ShadowExecutionClient:
         With `fresh=True` (hard-stop exits only) the snapshot is skipped and
         the fill comes from the book read inside the exit call -- a stop must
         sell *now*, and pricing it off a stale snapshot books exits the venue
-        never gave. Every other caller keeps the default: the PRIOR
+        never gave. A snapshot older than `MAX_SNAPSHOT_AGE_SEC` is likewise
+        treated as absent: it is not the prior rotation's pre-decision book
+        but an aged-out leg's fill-time mark, and pricing the exit off it
+        repeats the stale-snapshot pathology. Every other caller keeps the
+        default: the PRIOR
         read at post time. Seconds pass between the sweep's decision and the
         taker SELL landing, and the fills we get live are precisely the
         adversely-selected ones -- shadow-01 showed h1 markout drift of -17c
@@ -1015,6 +1024,13 @@ class ShadowExecutionClient:
             except sqlite3.Error as e:
                 _log.warning("exit snapshot read failed for %s: %s",
                              str(token_id)[:12], e)
+                snap = None
+        if snap is not None and snap.get("best_bid") is not None:
+            try:
+                snap_age = float(self._now_fn()) - float(snap.get("ts"))
+            except (TypeError, ValueError):
+                snap_age = 0.0
+            if snap_age > MAX_SNAPSHOT_AGE_SEC:
                 snap = None
         if snap is not None and snap.get("best_bid") is not None:
             best_bid = float(snap["best_bid"])

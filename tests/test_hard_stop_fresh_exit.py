@@ -6,6 +6,8 @@ while the rehearsed SELL fills against the ~13-min-stale `queue_marks`
 snapshot. A stop must sell *now*, into the book read inside the exit call.
 Other routes keep the pre-decision snapshot (adverse-selection protection).
 """
+import time
+
 import pytest
 
 from core_brain.order_registry import CloseRecord, OrderRegistry, init_db
@@ -36,7 +38,7 @@ def _stale_snapshot(registry, best_bid, best_bid_size):
     reg, db = registry
     ensure_shadow_tables(db)
     write_queue_mark(
-        db, ts=1_000.0, condition_id="0xabc", market_slug="fake-market",
+        db, ts=time.time(), condition_id="0xabc", market_slug="fake-market",
         token_id="tok-dn", price=0.51, level_size=10.0, traded=0.0,
         cancel_decay=None, queue_minutes=None, run_id=reg._run_id(),
         best_bid=best_bid, best_bid_size=best_bid_size,
