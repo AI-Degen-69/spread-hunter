@@ -4969,13 +4969,16 @@ function clearLiveMarks() {
 
 /* Quote mids with live marks overlaid: each quoted token's leg reads the
  * live mid when one is fresh, the quote mid otherwise. Returns the mids plus
- * whether any leg is live (the cell affordance) and the youngest mark age.
- * `positionMarkValue` keeps its signature -- this is the `mids` it takes. */
+ * whether any leg is live (the cell affordance), the youngest mark age, and
+ * per-leg liveness so a cell can say exactly which line is live rather than
+ * labelling the whole cell. `positionMarkValue` keeps its signature -- this
+ * is the `mids` it takes. */
 function liveLegMids(market, nowMs) {
   const mids = latestLegMids(market);
   const now = (nowMs === undefined) ? Date.now() : Number(nowMs);
   let live = false;
   let ageMs = null;
+  const liveLegs = { up: false, dn: false };
   for (const q of (market && market.quotes) || []) {
     if (!q || q.token_id === null || q.token_id === undefined) continue;
     const leg = normalizeLeg(q.side);
@@ -4984,10 +4987,11 @@ function liveLegMids(market, nowMs) {
     if (mid === null) continue;
     mids[leg.toLowerCase()] = mid;
     live = true;
+    liveLegs[leg.toLowerCase()] = true;
     const age = now - liveMarks.get(String(q.token_id)).tsMs;
     if (ageMs === null || age < ageMs) ageMs = age;
   }
-  return { mids, live, ageMs };
+  return { mids, live, ageMs, liveLegs };
 }
 
 /* One rAF-merged pass per burst of mark frames: visible positions cells are
@@ -5039,10 +5043,14 @@ function paintLiveMarks() {
     for (const el of body.querySelectorAll('td[data-cell="cur-price"]')) {
       if (el.getAttribute && el.getAttribute('data-cid') !== cid) continue;
       const legs = stitchHeldLegMarks(m, overlay.mids);
+      const legLive = overlay.liveLegs || { up: false, dn: false };
       for (const leg of legs) {
         const line = el.querySelector
           ? el.querySelector('[data-leg="' + leg.leg + '"]') : null;
-        if (line) line.textContent = leg.leg + ' ' + fmtPrice(leg.mid);
+        if (!line) continue;
+        const isLive = leg.leg === 'YES' ? !!legLive.up : !!legLive.dn;
+        line.innerHTML = leg.leg + ' ' + fmtPrice(leg.mid)
+          + (isLive ? ' <span class="stitch-cur-live">●</span>' : '');
       }
       if (el.classList) el.classList.add('live');
       el.title = age;
@@ -5073,8 +5081,8 @@ function paintLiveMarks() {
         }
         const totalEl = pnlCell.querySelector('.stitch-pnl-total');
         if (totalEl) {
-          const total = legs.every((e) => e.pnl !== null)
-            ? legs.reduce((sum, e) => sum + e.pnl, 0) : null;
+          // Par-based pair total, the same valuation as MARK VALUE.
+          const total = mark === null ? null : mark - cost;
           const totalPct = (total !== null && cost > 0) ? (total / cost) * 100 : null;
           const totalCls = total > 0 ? 'pos' : (total < 0 ? 'neg' : 'flat');
           totalEl.className = 'stitch-pnl-total ' + totalCls;
@@ -6394,17 +6402,23 @@ function stitchPositionsRows(kpi, state, sort) {
     const unrealizedPct = (cost > 0 && unrealized !== null) ? ((unrealized / cost) * 100) : null;
     // Per-leg economics for the CURRENT PRICE and UNREALIZED cells: each held
     // leg prices at its own current mid, YES first and NO below. The leg
-    // lines sum to legTotal; for a lone leg that is the whole story, for a
-    // pair it is the executable split behind the par-based pair total.
+    // lines are the executable split; the pair TOTAL below them uses the
+    // same par-based valuation as MARK VALUE (mark - cost), because leg mids
+    // need not sum to $1.00 and a mid-based total can read profit while the
+    // pair is down. Sort key for CURRENT PRICE is a price, not a value:
+    // the YES mid first, else the NO mid, so share count never outranks it.
     const legMarks = stitchHeldLegMarks(m, overlay.mids);
-    const legTotal = legMarks.every((e) => e.pnl !== null)
-      ? legMarks.reduce((sum, e) => sum + e.pnl, 0) : null;
-    const legTotalPct = (legTotal !== null && cost > 0) ? (legTotal / cost) * 100 : null;
+    const legLive = overlay.liveLegs || { up: false, dn: false };
+    for (const e of legMarks) {
+      e.live = e.leg === 'YES' ? !!legLive.up : !!legLive.dn;
+    }
+    const curSort = (upSh > 0 ? overlay.mids.up : null)
+      ?? (dnSh > 0 ? overlay.mids.dn : null) ?? null;
     const ts = latestFillTs(m);
     const category = marketCategory(m);
     return {
       cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost: cost, totalSh,
-      mark, unrealized, unrealizedPct, legMarks, legTotal, legTotalPct,
+      mark, unrealized, unrealizedPct, legMarks, curSort,
       status, ts, category,
       live: overlay.live, liveAgeMs: overlay.ageMs,
     };
@@ -6419,9 +6433,9 @@ function stitchPositionsRows(kpi, state, sort) {
       case 4: return otNum(r.dnSh);
       case 5: return otNum(r.totalCost);
       case 6: return otNum(r.mark);
-      case 7: return otNum(r.legTotal !== null && r.legTotal !== undefined ? r.legTotal : r.unrealized);
+      case 7: return otNum(r.unrealized);
       case 8: return r.status;
-      case 9: return otNum(r.mark);
+      case 9: return otNum(r.curSort);
       default: return null;
     }
   }) : rows;
@@ -6434,7 +6448,7 @@ function stitchPositionsRows(kpi, state, sort) {
 
   return sorted.map(({
     cid, m, upSh, upCost, upAvg, dnSh, dnCost, dnAvg, totalCost, totalSh,
-    mark, unrealized, unrealizedPct, legMarks, legTotal, legTotalPct,
+    mark, unrealized, unrealizedPct, legMarks, curSort,
     status, ts, category, live, liveAgeMs
   }) => {
     const title = m.title || m.name || m.slug || (cid ? cid.slice(0, 10) + '…' : '--');
@@ -6458,7 +6472,7 @@ function stitchPositionsRows(kpi, state, sort) {
     }
 
     // PnL state per leg; the pair total carries the row's tone.
-    const totalCls = legTotal > 0 ? 'pos' : (legTotal < 0 ? 'neg' : 'flat');
+    const totalCls = unrealized > 0 ? 'pos' : (unrealized < 0 ? 'neg' : 'flat');
     const legPnlCls = (pnl) => (pnl > 0 ? 'pos' : (pnl < 0 ? 'neg' : 'flat'));
 
     // Live tooltip
@@ -6468,8 +6482,10 @@ function stitchPositionsRows(kpi, state, sort) {
     // Col 6 (new): CURRENT PRICE -- one line per held leg, YES first and NO
     // below, mirroring the YES/NO HELD cells. Each leg prices at its own
     // current mid so the row always answers "what is it worth right now".
+    // The live dot sits on exactly the legs with a fresh mark, never on a
+    // quote-mid fallback line.
     const curPriceLines = legMarks.length ? legMarks.map((e) => `
-          <div class="stitch-cur-${e.leg === 'YES' ? 'up' : 'down'}" data-leg="${e.leg}">${e.leg} ${fmtPrice(e.mid)}</div>`).join('')
+          <div class="stitch-cur-${e.leg === 'YES' ? 'up' : 'down'}" data-leg="${e.leg}">${e.leg} ${fmtPrice(e.mid)}${e.live ? ' <span class="stitch-cur-live">●</span>' : ''}</div>`).join('')
       : `<span style="color:#64748b;font-size:11px;">--</span>`;
 
     return `<tr class="stitch-ot-row" data-cid="${esc(cid)}">
@@ -6519,7 +6535,6 @@ function stitchPositionsRows(kpi, state, sort) {
       <!-- Col 6 (new): CURRENT PRICE, one line per held leg -->
       <td class="mono font-tabular${liveCls}"${liveTitle} data-cid="${esc(cid)}" data-cell="cur-price">
         ${curPriceLines}
-        ${live ? `<div class="stitch-mid-sub" style="color:#34d399;">● live mark</div>` : ''}
       </td>
 
       <!-- Col 7: MARK VALUE (pair total at par) -->
@@ -6538,8 +6553,8 @@ function stitchPositionsRows(kpi, state, sort) {
           </div>`).join('')}
           ${legMarks.length > 1 ? `
           <div class="stitch-pnl-total ${totalCls}">
-            <span class="stitch-pnl-val">Total ${legTotal === null ? '--' : signedUSD(legTotal)}</span>
-            <span class="stitch-pnl-pct">${legTotalPct === null ? '' : `(${legTotalPct >= 0 ? '+' : ''}${legTotalPct.toFixed(1)}%)`}</span>
+            <span class="stitch-pnl-val">Total ${unrealized === null ? '--' : signedUSD(unrealized)}</span>
+            <span class="stitch-pnl-pct">${unrealizedPct === null ? '' : `(${unrealizedPct >= 0 ? '+' : ''}${unrealizedPct.toFixed(1)}%)`}</span>
           </div>` : ''}
         </div>
       </td>

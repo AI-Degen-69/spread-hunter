@@ -136,3 +136,90 @@ def test_live_overlay_moves_the_per_leg_lines():
     assert "YES $0.765" in html
     assert "-$0.35" in html
     assert "live mark" in html
+
+
+@requires_node
+def test_live_dot_sits_only_on_the_fresh_leg():
+    # Only the YES token has a fresh mark: its line carries the dot, the NO
+    # quote-mid fallback line must not claim to be live.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi(dn_sh=10.0, dn_cost=1.40, dn_mid=0.24))};
+    const nowMs = Date.now();
+    app.applyLiveMarks(
+        {{marks: [{{token_id: 'tok-up', bid: 0.76, ask: 0.77, mid: 0.765,
+                   ts: nowMs, seq: 2}}], snapshot: true}}, nowMs);
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
+    }}));
+    """))
+    html = res["html"]
+    yes_line = html[html.index('data-leg="YES"'):html.index('data-leg="NO"')]
+    no_line = html[html.index('data-leg="NO"'):]
+    assert "stitch-cur-live" in yes_line
+    assert "stitch-cur-live" not in no_line.split("</div>")[0]
+
+
+@requires_node
+def test_paired_total_uses_par_valuation_like_mark_value():
+    # Leg mids 0.70/0.60 sum past $1.00: the leg lines may read profit while
+    # the pair at par ($10.00 on $11.00 cost) is down $1.00. The total must
+    # agree with MARK VALUE, never with the summed mids.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_kpi(up_sh=10.0, up_cost=5.50, up_mid=0.70,
+                                 dn_sh=10.0, dn_cost=5.50, dn_mid=0.60))};
+    console.log(JSON.stringify({{
+        html: app.stitchPositionsRows(kpi, {{orders: []}}, null)
+    }}));
+    """))
+    html = res["html"]
+    assert "+$1.50" in html  # YES leg line stays mid-based
+    assert "+$0.50" in html  # NO leg line stays mid-based
+    total_at = html.index("Total")
+    assert "-$1.00" in html[total_at:]
+
+
+def _two_market_kpi(mid_a, mid_b):
+    # 0xabc holds 100 sh (big value, low price); 0xdef holds 10 sh.
+    # Descending by price puts 0xdef first; descending by position value
+    # would put 0xabc first -- the test tells the two sort keys apart.
+    base_a = _kpi(up_sh=100.0, up_cost=40.0, up_mid=mid_a)["by_market"]["0xabc"]
+    base_b = {**base_a, "condition_id": "0xdef", "title": "Other market",
+              "slug": "other", "up_sh": 10.0, "up_cost": 8.0,
+              "total_cost": 8.0, "total_sh": 10.0,
+              "quotes": [{"side": "UP", "price": 0.80, "mid": mid_b,
+                          "token_id": "tok-up-b", "ts": 1700000000000}]}
+    return {"by_market": {"0xabc": base_a, "0xdef": base_b}}
+
+
+@requires_node
+def test_current_price_sorts_by_price_not_position_value():
+    # 100 sh @ $0.40 (value $40) vs 10 sh @ $0.80 (value $8): descending
+    # price puts the $0.80 row first even though its position is smaller.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_two_market_kpi(0.40, 0.80))};
+    const html = app.stitchPositionsRows(kpi, {{orders: []}},
+                                         {{col: 9, dir: 'desc'}});
+    console.log(JSON.stringify({{html}}));
+    """))
+    html = res["html"]
+    assert html.index("0xdef") < html.index("0xabc")
+
+
+@requires_node
+def test_current_price_sort_follows_a_mark_update():
+    # A fresh mark moves 0xabc from $0.40 to $0.90: the next sorted render
+    # must flip the row order without any other change.
+    res = json.loads(_eval_js(f"""
+    const kpi = {json.dumps(_two_market_kpi(0.40, 0.80))};
+    const before = app.stitchPositionsRows(kpi, {{orders: []}},
+                                           {{col: 9, dir: 'desc'}});
+    const nowMs = Date.now();
+    app.applyLiveMarks(
+        {{marks: [{{token_id: 'tok-up', bid: 0.89, ask: 0.91, mid: 0.90,
+                   ts: nowMs, seq: 2}}], snapshot: true}}, nowMs);
+    const after = app.stitchPositionsRows(kpi, {{orders: []}},
+                                          {{col: 9, dir: 'desc'}});
+    console.log(JSON.stringify({{before, after}}));
+    """))
+    assert res["before"].index("0xdef") < res["before"].index("0xabc")
+    assert res["after"].index("0xabc") < res["after"].index("0xdef")
