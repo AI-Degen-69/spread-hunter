@@ -646,7 +646,9 @@ def _exit_fill_size(resp, requested_size: float) -> float:
 def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
                        heavy_side: str, size: float, sell_price: float,
                        reason: Optional[str] = None,
-                       method: str = "single_buy_exit") -> None:
+                       method: str = "single_buy_exit",
+                       trigger_bid: Optional[float] = None,
+                       fresh_bid: Optional[float] = None) -> None:
     """Ledger a completed exit: the sold leg leaves the registry for good.
 
     Written AFTER the market order succeeds, mirroring the paper run's sweep (which
@@ -702,6 +704,8 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
         dn_cost_removed=dn_removed,
         run_id=close_run_id,
         reason=reason,
+        trigger_bid=trigger_bid,
+        fresh_bid=fresh_bid,
     ))
 
 
@@ -733,6 +737,7 @@ def exit_single_buy(
     method: str = "single_buy_exit",
     *,
     force: bool = False,
+    trigger_bid: Optional[float] = None,
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
 
@@ -915,10 +920,17 @@ def exit_single_buy(
 
     # `amount` is the maker amount: shares on a SELL. `price` is the worst
     # fill we accept, tick-aligned so the venue does not reject it outright.
-    resp = client.create_and_post_market_order(
-        MarketOrderArgsV2(token_id=heavy_token, amount=size, side="SELL",
-                          price=min_price)
-    )
+    # The shadow rehearsal client accepts the exit reason and sells hard-stop
+    # exits into the fresh book instead of the pre-decision snapshot; the live
+    # SDK client takes no reason, so it keeps the bare call. Gated on the
+    # shadow-only ladder walk rather than a try/except so a real TypeError
+    # inside either post still surfaces.
+    order_args = MarketOrderArgsV2(token_id=heavy_token, amount=size,
+                                   side="SELL", price=min_price)
+    if hasattr(client, "_sell_into_bids"):
+        resp = client.create_and_post_market_order(order_args, reason=reason)
+    else:
+        resp = client.create_and_post_market_order(order_args)
 
     # 4. Record the exit BEFORE returning. A sell that exists only on the
     #    venue is invisible to the registry -- reconcile adopts fills only
@@ -930,7 +942,8 @@ def exit_single_buy(
     sold = _exit_fill_size(resp, size)
     fill_price = _exit_fill_price(resp, min_price)
     _record_exit_close(registry, after, heavy_token, heavy_side, sold,
-                       fill_price, reason=reason, method=method)
+                       fill_price, reason=reason, method=method,
+                       trigger_bid=trigger_bid, fresh_bid=bid)
 
     return {
         "action": "exited",
@@ -943,6 +956,8 @@ def exit_single_buy(
         "bid": bid,
         "fill_price": fill_price,
         "min_price": min_price,
+        "trigger_bid": trigger_bid,
+        "fresh_bid": bid,
         "cancelled": cancelled,
         "venue_light_matched": venue_light_matched,
         "positions_checked": positions_checked,
@@ -1683,6 +1698,7 @@ def manage_single_leg_positions(
                     client, registry, pair_id, max_pair_cost,
                     live=live, venue_positions=venue_positions,
                     reason="lifecycle_hard_stop", force=True,
+                    trigger_bid=held_bid,
                 )
                 result.update(
                     route="hard_stop", lifecycle_state=decision.state.value,
