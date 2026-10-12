@@ -226,6 +226,21 @@ def test_report_opens_the_store_read_only(tmp_path):
         conn.close()
 
 
+def test_single_leg_exits_are_labelled_mark_to_exit_not_pnl(tmp_path):
+    # A lone leg never prints: proceeds is the best-bid mark at the exit.
+    # Labelling it `pnl` reads as a fill that never happened.
+    db = _store(tmp_path, [("m", "UP", 5.0), ("m", "DOWN", 0.0)],
+                fills=[5.0],
+                closes=[("m", "single_buy_exit", 5.0, 2.4, 1.75, -0.65)])
+
+    text = rpt.report(db)
+
+    assert "mark-to-exit" in text
+    exit_line = next(l for l in text.splitlines() if "5sh" in l)
+    assert "mark-to-exit" in exit_line
+    assert "pnl $" not in exit_line
+
+
 def test_report_refuses_a_path_that_does_not_exist(tmp_path):
     # Read-write SQLite would silently CREATE an empty database here, and a
     # mistyped --db would read as a run that recorded nothing.

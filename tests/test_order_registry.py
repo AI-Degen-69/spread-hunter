@@ -27,6 +27,8 @@ from core_brain.order_registry import (
     OrderRegistry,
     OrderRecord,
     FillRecord,
+    CloseRecord,
+    QuoteRecord,
     LifecycleStateRecord,
     get_connection,
     init_db,
@@ -1471,3 +1473,39 @@ def test_lifecycle_schema_adds_to_old_database_without_changing_orders_or_fills(
     assert orders_after == orders_before
     assert fills_after == fills_before
     assert lifecycle_table == ("single_leg_lifecycle",)
+
+
+def test_log_close_resolves_a_missing_slug_from_quotes(registry: OrderRegistry):
+    """Shadow writers never carried the slug, so closes read as market None."""
+    registry.log_quote(QuoteRecord(
+        ts=100.0, condition_id="0xabc", token_id="tok-up", side="UP",
+        price=0.62, size=7.0, market_slug="por-aro-ama-2026-10-11-aro",
+        run_id="run-1"))
+    registry.log_close(CloseRecord(
+        ts=101.0, condition_id="0xabc", method="shadow_merge", shares=7.0,
+        cost_basis=6.65, proceeds=7.0, realized_pnl=0.35, run_id="run-1"))
+
+    closes = registry.get_all_closes()
+
+    assert len(closes) == 1
+    assert closes[0]["market_slug"] == "por-aro-ama-2026-10-11-aro"
+
+
+def test_log_close_keeps_an_explicit_slug_and_a_missing_one(registry: OrderRegistry):
+    """An explicit slug is never overwritten; with no quotes it stays NULL."""
+    registry.log_quote(QuoteRecord(
+        ts=100.0, condition_id="0xabc", token_id="tok-up", side="UP",
+        price=0.62, size=7.0, market_slug="quoted-slug", run_id="run-1"))
+    registry.log_close(CloseRecord(
+        ts=101.0, condition_id="0xabc", method="shadow_merge", shares=7.0,
+        market_slug="explicit-slug", cost_basis=6.65, proceeds=7.0,
+        realized_pnl=0.35, run_id="run-1"))
+    registry.log_close(CloseRecord(
+        ts=102.0, condition_id="0xunknown", method="single_buy_exit",
+        shares=5.0, cost_basis=2.4, proceeds=1.75, realized_pnl=-0.65,
+        run_id="run-1"))
+
+    by_ts = {c["ts"]: c for c in registry.get_all_closes()}
+
+    assert by_ts[101.0]["market_slug"] == "explicit-slug"
+    assert by_ts[102.0]["market_slug"] is None
