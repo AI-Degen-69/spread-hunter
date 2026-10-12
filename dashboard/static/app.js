@@ -6050,7 +6050,7 @@ function stitchOpenOrdersRows(kpi, state, sort) {
     const first = g.orders[0];
     const market = orderGroupMarket(g, first.condition_id, byMarket, state);
     switch (col) {
-      case 0: return otExtreme(g.orders.map(o => Number(o.posted_ts) || 0), dir);
+      case 0: return otExtreme(g.orders.map(o => Number(o.posted_ts) || 0), 'asc');
       case 1: return String((market && (market.title || market.name || market.slug)) || '');
       case 2: return legForOrder(first, legs, byMarket) || '';
       case 3: return otExtreme(g.orders.map(o => o.price), dir);
@@ -6512,9 +6512,9 @@ function stitchPositionsRows(kpi, state, sort) {
         <div class="stitch-market-title">
           <a href="${esc(marketUrl)}" target="_blank" rel="noopener">${esc(title)}</a>
         </div>
-        <div class="stitch-market-meta" style="margin-top:2px;">
+        ${(!category || category === 'Uncategorized') ? '' : `<div class="stitch-market-meta" style="margin-top:2px;">
           <span class="stitch-category-pill">${esc(category)}</span>
-        </div>
+        </div>`}
         <div class="stitch-market-meta" style="margin-top:2px;">
           <span style="font-size:11px;color:#94a3b8;">${esc(classification)}</span>
         </div>
@@ -6774,7 +6774,7 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
 function stitchClosedTradesRows(kpi, state, sort) {
   const entries = closedTradesEntries(kpi, state);
   if (!entries.length) {
-    return `<tr><td colspan="8" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No closed trades yet: nothing has settled with a booked profit or loss.</td></tr>`;
+    return `<tr><td colspan="6" style="text-align:center;color:#64748b;padding:32px;font-family:'JetBrains Mono',monospace;font-size:12px;">No closed trades yet: nothing has settled with a booked profit or loss.</td></tr>`;
   }
 
   const ordersByMarket = groupOrdersByMarket(state && state.orders);
@@ -6861,7 +6861,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
           ${winnerHtml}
         </div>
         <div class="stitch-market-meta" style="margin-top:3px;gap:6px;">
-          <span class="stitch-category-pill">${esc(category)}</span>
+          ${(!category || category === 'Uncategorized') ? '' : `<span class="stitch-category-pill">${esc(category)}</span>`}
           ${reasonChipHtml}
           <span style="font-size:11px;color:#64748b;">· ${fillsCount} fill${fillsCount !== 1 ? 's' : ''}</span>
         </div>
@@ -6873,6 +6873,16 @@ function stitchClosedTradesRows(kpi, state, sort) {
         <div class="stitch-mid-sub">${Number(m.total_sh || 0) > 0 ? `${fmtShares(m.total_sh)} sh` : `${executionItemsCount} items`}</div>
       </td>
 
+      <!-- Col 2: OUTCOME BREAKDOWN (summary counts) -->
+      <td>
+        <div class="stitch-breakdown-pills">
+          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
+          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">⚠️ ${stopLossCount} Stop</span>` : ''}
+          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">⏱ ${graceExpiredCount} Expired</span>` : ''}
+          ${(mergedCount === 0 && stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-pill-count neutral">${settledCount > 0 ? `${settledCount} Settled` : `${executionItemsCount} Closed`}</span>` : ''}
+        </div>
+      </td>
+
       <!-- Col 3: REALIZED P&L ($ and %) -->
       <td class="mono font-tabular">
         <div class="stitch-pnl-cell">
@@ -6882,16 +6892,6 @@ function stitchClosedTradesRows(kpi, state, sort) {
           <div class="stitch-pnl-pct ${pnlCls}">
             (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)
           </div>
-        </div>
-      </td>
-
-      <!-- Col 2: OUTCOME BREAKDOWN (summary counts) -->
-      <td>
-        <div class="stitch-breakdown-pills">
-          ${mergedCount > 0 ? `<span class="stitch-pill-count merged" title="${mergedCount} merged pairs">● ${mergedCount} Merged</span>` : ''}
-          ${stopLossCount > 0 ? `<span class="stitch-pill-count stop-loss" title="${stopLossCount} exited at stop loss">⚠️ ${stopLossCount} Stop</span>` : ''}
-          ${graceExpiredCount > 0 ? `<span class="stitch-pill-count grace-expired" title="${graceExpiredCount} grace period expired">⏱ ${graceExpiredCount} Expired</span>` : ''}
-          ${(mergedCount === 0 && stopLossCount === 0 && graceExpiredCount === 0) ? `<span class="stitch-pill-count neutral">${settledCount > 0 ? `${settledCount} Settled` : `${executionItemsCount} Closed`}</span>` : ''}
         </div>
       </td>
 

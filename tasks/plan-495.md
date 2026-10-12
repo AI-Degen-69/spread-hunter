@@ -273,8 +273,8 @@ consistency defects instead. Post `@coderabbitai review` after opening.
 
 1. `.\scripts\spread-hunter-menu.ps1 start`, then open `http://127.0.0.1:8799`.
 2. Click through all four tabs of Orders & Trades.
-3. The Time column is **first** in all four, with the counting timer over the absolute date, and
-   the same header word in all four.
+3. The Time column is **last** (before Actions) in all four, with the counting timer over
+   the absolute date, and the same header word in all four.
 4. Where two tabs show money committed, it reads the same label and the same number format.
 5. On Positions and Closed Trades, P&L shows the dollar and the percentage together in the same
    two-line shape.
