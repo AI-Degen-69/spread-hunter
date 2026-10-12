@@ -45,25 +45,25 @@ class TestPriceRiskWidenOverride:
         with mock.patch.dict(os.environ, {"HUNTER_PRICE_RISK_WIDEN": ""}):
             assert load().price_risk_widen == 0.010
 
-    def test_both_overrides_together_rest_at_the_touch(self):
-        """The exact configuration the rehearsal runs under.
+    def test_overrides_now_floor_to_the_cent(self):
+        """Touch-reach is gone; quotes floor to the standard 1-cent grid.
 
-        Neither override alone reaches the best bid: the offset alone leaves
-        band risk in place (~15 ticks), and zeroing band risk alone leaves the
-        shipped 0.020 offset. Pinned together because that pairing, not either
-        half, is what the run is testing.
+        The retired HUNTER_REWARD_OFFSET forced a quote to 0.495 on a
+        0.495/0.505 book. That sub-cent placement is purged: even with band
+        risk zeroed, the resting quote now floors to a whole cent at or below
+        the touch (0.49), never a half-cent price the venue would reject.
         """
         from core_brain.quotes import Inventory, quote_resting_price
 
         book = {"best_bid": 0.495, "best_ask": 0.505}   # mid 0.500, 10 ticks
-        with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": "0.005",
-                                          "HUNTER_PRICE_RISK_WIDEN": "0"}):
+        with mock.patch.dict(os.environ, {"HUNTER_PRICE_RISK_WIDEN": "0"}):
             cfg = load()
-        assert cfg.reward_offset == 0.005
         assert cfg.price_risk_widen == 0.0
         price, _, band, _ = quote_resting_price(cfg, Inventory(), "UP", book)
         assert band.extra_offset == 0.0
-        assert price == pytest.approx(0.495), "resting at the best bid"
+        # Whole-cent, floored -- never 0.495.
+        assert abs(price * 100 - round(price * 100)) < 1e-9
+        assert price <= 0.49 + 1e-9
 
     def test_zeroing_the_widen_does_not_disable_the_size_cut(self):
         # The coin-flip SIZE treatment is a separate term with its own knob.

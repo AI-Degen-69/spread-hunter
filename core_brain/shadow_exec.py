@@ -289,14 +289,32 @@ def record_submit(
             f"MAX_TOTAL_USD ${MAX_TOTAL_USD:.2f}")
 
     now_ms = int(now_fn() * 1000)
-    pair_id = f"pair-{uuid.uuid4().hex[:12]}"
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
 
-    # Same carry `trader_loop._submit_intents` applies: a replacement leg
-    # carrying a stamped pair_id (ladder `make_ladder_decide` or the
-    # lifecycle-escalation path -- never `plan_orders`, which only reads the
-    # carry) joins the pair whose complement still rests, so a rehearsal
-    # splits no pairs the live loop would no longer split (#397).
+    # STABLE PAIR IDENTITY (operator directive 2026-10-12). A market re-quoted
+    # across rotations must NOT split one economic pair across two pair_ids --
+    # that is what produced split dashboard rows and a merge that never fired.
+    # Rule (mirrors live's `carried` semantics): if a resting complement already
+    # exists on this condition under the OTHER token, the new leg JOINS that
+    # pair_id; mint fresh only when no complement rests (both legs gone / brand
+    # new pair). Resolved per condition, not per call, so UP and DOWN of one
+    # pair converge on a single id across rotations.
+    intent_tokens = {str(i.token_id) for i in intents}
+    resting = [o for o in registry.get_active_orders()
+               if o.condition_id == market.condition_id
+               and o.status in ("open", "partial", "pending")
+               and str(o.token_id) not in intent_tokens
+               and o.pair_id]
+    pair_id = None
+    if resting:
+        # Complement rests under a different token: adopt its pair_id so this
+        # re-quote welds onto the existing pair instead of orphaning a new one.
+        pair_id = resting[0].pair_id
+    if pair_id is None:
+        pair_id = f"pair-{uuid.uuid4().hex[:12]}"
+
+    # Explicit carry still wins: a replacement leg stamped by the ladder or
+    # lifecycle-escalation path joins the pair it names (#397).
     carried = {getattr(i, "pair_id", None) for i in intents} - {None}
     if len(carried) == 1:
         pair_id = carried.pop()

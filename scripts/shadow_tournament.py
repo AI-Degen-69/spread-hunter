@@ -226,10 +226,21 @@ def _preset_to_env(preset: dict[str, Any]) -> dict[str, str]:
         env["HUNTER_DYNAMIC_OFFSET_MIN_CENTS"] = str(int(preset["dynamic_offset_min_cents"]))
     if "dynamic_offset_max_cents" in preset:
         env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"] = str(int(preset["dynamic_offset_max_cents"]))
-    if "reward_offset" in preset:
-        env["HUNTER_REWARD_OFFSET"] = str(preset["reward_offset"])
+    # HUNTER_REWARD_OFFSET wiring removed 2026-10-12: the override was purged
+    # (synthetic sub-cent touch-reach). No preset sets reward_offset any more.
     if "single_buy_max_loss_usd" in preset:
         env["HUNTER_SINGLE_BUY_MAX_LOSS_USD"] = str(preset["single_buy_max_loss_usd"])
+    # Loose-baseline knobs. These three let an arm quote the raw dynamic
+    # offset with no upper clamp and no WIDENED snap-back, without touching
+    # the shipped defaults or any other arm.
+    if "max_spread_from_mid" in preset:
+        env["HUNTER_MAX_SPREAD"] = str(int(round(float(preset["max_spread_from_mid"]) * 100.0)))
+    if "apply_widen_gate" in preset:
+        env["HUNTER_APPLY_WIDEN_GATE"] = "1" if preset["apply_widen_gate"] else "0"
+    if "dynamic_offset_min_cents" in preset:
+        env["HUNTER_DYNAMIC_OFFSET_MIN_CENTS"] = str(int(preset["dynamic_offset_min_cents"]))
+    if "dynamic_offset_max_cents" in preset:
+        env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"] = str(int(preset["dynamic_offset_max_cents"]))
     return env
 
 
@@ -258,9 +269,12 @@ def build_tournament_plan(
     if stamp is None:
         stamp = time.strftime("%Y%m%d-%H%M%S")
 
-    # If arms not provided, default to TOURNAMENT_PRESETS in balanced order
+    # If arms not provided, default to TOURNAMENT_PRESETS in balanced order.
+    # The legacy "control" arm was purged 2026-10-12 (broken capped logic); the
+    # system baseline IS the loose MakerConfig default, so the default order now
+    # leads with the loosest diverging preset and no longer includes a control.
     if arms is None:
-        default_order = ["control", "conservative", "balanced", "aggressive", "prudent"]
+        default_order = ["conservative", "balanced", "aggressive", "prudent"]
         arms = []
         for name in default_order:
             if name in TOURNAMENT_PRESETS:

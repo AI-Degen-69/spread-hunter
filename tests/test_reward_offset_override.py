@@ -1,17 +1,13 @@
-"""`reward_offset` must be settable for one run without editing the default.
+"""`HUNTER_REWARD_OFFSET` was PURGED 2026-10-12 (operator directive).
 
-The measured reason: over 24 hours across the four markets in the recorded
-slate, the book spread is exactly 10 ticks on every two-sided token, so the
-best bid sits at `mid - 5 ticks`. 35% of all below-mid volume prints at exactly
-that price and almost none prints past it -- on the two MLB markets, 98% and
-100% of their below-mid volume was at the touch and nothing beyond it. Resting
-at `mid - 0.005` reaches 18.0% of all traded volume; resting at the shipped
-`reward_offset = 0.020` reaches 1.4%.
+It was a synthetic sub-cent override (0.005) that forced touch-reach quotes at
+0.495 -- artificial placement on a book that runs a standard 1-cent grid. It
+produced off-grid resting orders the venue rejects and false test signal. The
+offset is now driven solely by the dynamic range system; there is no per-run
+reward-offset knob.
 
-Testing that is one variable on one rehearsal, so it belongs in the
-environment, not in the default. `reward_offset` stays 0.020 in code: this
-override exists so a shadow run can answer whether tape at the touch turns
-into fills without a commit that would also move live behaviour.
+These tests pin the purge: the env var is ignored, the offset follows the
+dynamic system, and every resting quote floors to a clean whole cent.
 """
 from __future__ import annotations
 
@@ -21,93 +17,61 @@ from unittest import mock
 import pytest
 
 from core_brain.config import MakerConfig, load
+from core_brain.quotes import Inventory, quote_resting_price
 
 
-class TestRewardOffsetOverride:
-    def test_the_shipped_default_is_unchanged(self):
-        # The override must not become a silent way to move live quoting.
-        assert MakerConfig().reward_offset == 0.020
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("HUNTER_REWARD_OFFSET", None)
-            assert load().reward_offset == 0.020
-
-    def test_the_environment_can_set_it_to_the_touch(self):
-        with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": "0.005"}):
-            assert load().reward_offset == 0.005
-
-    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "-0.01", "1.5",
-                                     "abc", ""])
-    def test_a_non_finite_negative_or_oversized_offset_is_refused(self, bad):
-        # An unparseable or non-finite offset must not read as "no override".
-        # `float('nan')` would sail through every comparison downstream and
-        # quote at a price nothing can be said about.
-        if bad == "":
-            with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": bad}):
-                assert load().reward_offset == 0.020
-            return
-        with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": bad}):
-            with pytest.raises(ValueError, match="HUNTER_REWARD_OFFSET"):
-                load()
-
-    def test_both_ends_of_the_bound_are_accepted(self):
-        for raw, want in (("0", 0.0), ("1.0", 1.0)):
-            with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": raw}):
-                assert load().reward_offset == want
-
-    def test_the_floor_still_wins_over_a_smaller_override(self):
-        # `quote_resting_price` clamps to `min_reward_offset`, and that floor
-        # is NOT overridable here. Band risk is zeroed so the clamp is the only
-        # thing under test.
-        from dataclasses import replace
-
-        from core_brain.quotes import Inventory, quote_resting_price
-
-        book = {"best_bid": 0.495, "best_ask": 0.505}
-        with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": "0.001"}):
-            cfg = replace(load(), price_risk_widen=0.0, coinflip_halfwidth=0.0)
-        assert cfg.reward_offset == 0.001
-        price, _, _, _ = quote_resting_price(cfg, Inventory(), "UP", book)
-        assert price == pytest.approx(0.495), (
-            "the floor, not the override, must set the nearest legal price")
-
-    def test_the_override_alone_does_NOT_reach_the_touch(self):
-        """The trap this test exists to mark.
-
-        `quote_resting_price` does not rest at `mid - reward_offset`. It rests
-        at `mid - (reward_offset + skew + band_risk.extra_offset)`, and
-        `risk.band_risk_factor` adds `price_risk_widen * (w + price)` -- about
-        15 ticks anywhere near 0.50. Setting the offset to the touch and
-        expecting to quote at the best bid is therefore wrong, and it is wrong
-        silently: the run completes and measures a price nobody chose.
-
-        Reaching the touch needs `price_risk_widen` as well, which is a risk
-        control rather than a tuning knob. Pinning the arithmetic here so the
-        next person to try this reads it before spending a rehearsal on it.
-        """
-        from core_brain.quotes import Inventory, quote_resting_price
-
-        book = {"best_bid": 0.495, "best_ask": 0.505}   # mid 0.500
+class TestRewardOffsetPurged:
+    def test_the_env_var_is_ignored(self):
+        # Setting the retired override must not move the offset any more.
         with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": "0.005"}):
             cfg = load()
-        price, provisional, band, _ = quote_resting_price(
-            cfg, Inventory(), "UP", book)
+        assert cfg.reward_offset == 0.020  # shipped default, override ignored
 
-        assert provisional == pytest.approx(0.495), "provisional IS mid-offset"
-        assert band.extra_offset > 0.010, "band risk dominates a 5-tick offset"
-        assert price == pytest.approx(0.480)
-        assert price < book["best_bid"], (
-            "still well behind the touch despite a touch-sized offset")
+    def test_a_garbage_value_is_ignored_not_raised(self):
+        # The parse block is gone, so a bad value is simply not read.
+        for bad in ("nan", "inf", "abc", "1.5"):
+            with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": bad}):
+                assert load().reward_offset == 0.020
 
-    def test_zeroing_band_risk_is_what_reaches_the_touch(self):
-        # The scenario a touch-resting rehearsal actually needs. Kept beside
-        # the test above so the pair reads as one statement: the offset is
-        # necessary and not sufficient.
+    def test_shipped_default_is_unchanged(self):
+        assert MakerConfig().reward_offset == 0.020
+
+
+class TestQuotesFloorToWholeCent:
+    """Every resting quote lands on the standard 1-cent grid, floored down."""
+
+    def test_a_sub_cent_target_floors_to_the_cent(self):
+        # mid 0.545, dynamic offset + band -> raw 0.4xxx; must floor to a cent.
+        cfg = MakerConfig(
+            dynamic_offset_enabled=True, dynamic_offset_multiplier=0.5,
+            dynamic_offset_min_cents=1, dynamic_offset_max_cents=20,
+            range_cents=15.66, velocity_measured_at=None, price_tick=0.01,
+            max_spread_from_mid=0.15,
+        )
+        book = {"best_bid": 0.54, "best_ask": 0.55}
+        price, provisional, *_ = quote_resting_price(cfg, Inventory(), "UP", book)
+        # Whole-cent, and never above the provisional target.
+        assert abs(price * 100 - round(price * 100)) < 1e-9
+        assert price <= provisional + 1e-9
+
+    def test_no_touch_reach_at_a_sub_cent_bid(self):
+        # The old override forced a quote to 0.495 on a 0.495/0.505 book. That
+        # is gone: even with band risk zeroed, the quote floors to the cent and
+        # cannot rest at a half-cent touch.
         from dataclasses import replace
-
-        from core_brain.quotes import Inventory, quote_resting_price
-
         book = {"best_bid": 0.495, "best_ask": 0.505}
-        with mock.patch.dict(os.environ, {"HUNTER_REWARD_OFFSET": "0.005"}):
-            cfg = replace(load(), price_risk_widen=0.0)
-        price, _, _, _ = quote_resting_price(cfg, Inventory(), "UP", book)
-        assert price == pytest.approx(book["best_bid"])
+        cfg = replace(MakerConfig(price_tick=0.01, price_risk_widen=0.0),
+                      reward_offset=0.005, dynamic_offset_enabled=False)
+        price, *_ = quote_resting_price(cfg, Inventory(), "UP", book)
+        # Floored to a whole cent at or below the touch -- never 0.495.
+        assert abs(price * 100 - round(price * 100)) < 1e-9
+        assert price <= 0.49 + 1e-9
+
+    def test_zero_offset_still_floors_to_the_grid(self):
+        cfg = MakerConfig(
+            dynamic_offset_enabled=False, reward_offset=0.0,
+            min_reward_offset=0.0, price_risk_widen=0.0, price_tick=0.01,
+        )
+        book = {"best_bid": 0.495, "best_ask": 0.505}
+        price, *_ = quote_resting_price(cfg, Inventory(), "UP", book)
+        assert abs(price * 100 - round(price * 100)) < 1e-9

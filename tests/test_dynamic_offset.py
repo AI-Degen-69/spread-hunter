@@ -23,11 +23,17 @@ from core_brain.quotes import (
 NOW = 1_788_000_000.0
 
 
-def test_dynamic_offset_disabled_by_default():
+def test_dynamic_offset_enabled_by_default():
+    """The loose system baseline has dynamic offset ON by default (2026-10-12).
+
+    With no range telemetry yet it still falls back to the static reward_offset
+    and tags 'static_missing_range' -- the mechanism is unchanged, only the
+    default enable flag flipped to True.
+    """
     cfg = MakerConfig()
     offset, tag = dynamic_offset_for(cfg, now=NOW)
     assert offset == cfg.reward_offset
-    assert tag == "static"
+    assert tag == "static_missing_range"
 
 
 def test_dynamic_offset_handles_missing_range_telemetry():
@@ -128,12 +134,12 @@ def test_decide_quotes_refuses_when_dynamic_pair_sum_exceeds_dollar():
 
 
 def test_tournament_presets_registry_contents():
-    expected_presets = {"control", "conservative", "balanced", "aggressive", "prudent", "hybrid"}
+    expected_presets = {"conservative", "balanced", "aggressive", "prudent", "hybrid", "baseline"}
     assert set(TOURNAMENT_PRESETS.keys()) == expected_presets
 
-    control = TOURNAMENT_PRESETS["control"]
-    assert not control["dynamic_offset_enabled"]
-    assert control["reward_offset"] == 0.020
+    # The legacy capped "control" arm was purged (broken 4.5c cap + widen
+    # snap-back). It must not be reintroduced.
+    assert "control" not in TOURNAMENT_PRESETS
 
     aggressive = TOURNAMENT_PRESETS["aggressive"]
     assert aggressive["dynamic_offset_enabled"]
@@ -192,11 +198,6 @@ def test_apply_tournament_preset():
     assert pru.requote_hold_queue_shares == 500.0
     assert pru.requote_hold_below_target == 0.08
 
-    ctrl = apply_tournament_preset(agg, "control")
-    assert ctrl.dynamic_offset_enabled is False
-    assert ctrl.requote_hold_queue_shares == 500.0
-    assert ctrl.requote_hold_below_target == 0.08
-
     with pytest.raises(ValueError, match="Unknown tournament preset"):
         apply_tournament_preset(base, "yolo")
 
@@ -208,12 +209,13 @@ def test_tournament_presets_distinct_stop_loss_usd():
     tighter dollar stop; a tight-offset arm fills near the touch and needs room
     before the pair can complete. Asserting order locks that rationale.
     """
-    # The 5 original tournament arms have distinct stops ordered by fill patience:
-    tournament_arms = ["control", "conservative", "balanced", "aggressive", "prudent"]
+    # The tournament arms (control purged 2026-10-12) carry distinct stops
+    # ordered by fill patience:
+    tournament_arms = ["conservative", "balanced", "aggressive", "prudent"]
     stops = {name: TOURNAMENT_PRESETS[name]["single_buy_max_loss_usd"]
              for name in tournament_arms}
     assert set(stops.values()).__len__() == len(stops)  # all distinct
-    assert stops["conservative"] < stops["prudent"] < stops["control"] < stops["balanced"] < stops["aggressive"]
+    assert stops["conservative"] < stops["prudent"] < stops["balanced"] < stops["aggressive"]
     # none disable the rule (0 disables) and none exceed a sensible bound
     for name, v in stops.items():
         assert 0.0 < v < 1.0, name

@@ -511,6 +511,14 @@ class MakerConfig:
     # HUNTER_MIN_MOVEMENT_USD.
     select_min_movement_usd: float = 200.0
     select_velocity_gate_enabled: bool = True
+    # RELATIVE ACTIVITY RATIO GATE (loose baseline). Absolute 24h volume is
+    # misleading: a flat $1M politics market and an active $10k live sports game
+    # both clear a volume floor, but only one is actually trading. This gate
+    # measures RECENT tape against total size: movement_usd (last movement
+    # window) / volume_24h >= threshold. Loose initial threshold (0.0 = off by
+    # default) so the baseline run observes a wide pool before we tighten it.
+    # Operator-tunable via HUNTER_MIN_ACTIVITY_RATIO. 0.0 disables the gate.
+    select_min_activity_ratio: float = 0.0
     # Volatility / range gate (#416, #434). 2.0c minimum swing over the volatility
     # window (default 2h) refuses flat markets while active live sports/eSports
     # are exempted and prioritized. Operator-tunable via HUNTER_MIN_RANGE_CENTS.
@@ -637,11 +645,10 @@ class MakerConfig:
     # Deeper = better price but far lower fill probability.
     ticks_below_ask: int = 1
     tick_size: float = 0.01
-    # The venue's real minimum tick, from Gamma: orderPriceMinTickSize = 0.001.
-    # The 1c book spread is therefore TEN ticks, not one -- `tick_size` above is
-    # a spread-width proxy the "pair" objective used, not the venue tick. Reward
-    # prices round to this so we can sit at a genuine price level.
-    price_tick: float = 0.001
+    # THE HARD PRICE GRID (operator directive 2026-10-12): 1-cent grid, no
+    # sub-penny. Retired the 0.001 venue-tick default that produced off-grid
+    # orders and 4-decimal displays. See core_brain.config for the full note.
+    price_tick: float = 0.01
 
     # Rebate qualification (research/btc_5min_market_spec.md):
     #   rewardsMinSize = 50 shares, rewardsMaxSpread = 4.5c from mid.
@@ -1008,6 +1015,26 @@ def load() -> MakerConfig:
     vtri = os.environ.get("HUNTER_VOLUME_TRIAL_USD") or ""
     if vtri.strip():
         kw["select_min_volume_24h_usd_trial"] = float(vtri)
+    # RELATIVE ACTIVITY RATIO GATE (loose baseline). movement_usd / volume_24h.
+    # 0.0 (shipped default) disables it. Loose-baseline runs lower the absolute
+    # volume floor AND turn this on, so relative recent activity -- not raw 24h
+    # size -- is what admits a market.
+    aratio = os.environ.get("HUNTER_MIN_ACTIVITY_RATIO") or ""
+    if aratio.strip():
+        try:
+            ratio = float(aratio)
+        except ValueError:
+            ratio = 0.0
+        if math.isfinite(ratio) and ratio >= 0:
+            kw["select_min_activity_ratio"] = ratio
+    vol = os.environ.get("HUNTER_MIN_VOLUME_24H_USD") or ""
+    if vol.strip():
+        try:
+            v = float(vol)
+        except ValueError:
+            v = 0.0
+        if math.isfinite(v) and v >= 0:
+            kw["select_min_volume_24h_usd"] = v
     pr = os.environ.get("HUNTER_PAIRS_RULE") or ""
     if pr.strip():
         kw["enable_pairs_rule"] = pr.strip().lower() not in ("0", "false", "off")

@@ -834,9 +834,56 @@ def build_shadow_seam(
     def shadow_submit(client, reg, market, intents, cfg_in) -> int:
         for qi in intents:
             intents_sink.append(ShadowIntent.from_quote(qi, market.condition_id))
+        _run_pair_manager(reg, market, cfg_in)
         return record_submit(client, reg, market, intents, cfg_in,
                              db_path=db_path, book_fn=shadow_fetch_books,
                              clob_host=clob_host)
+
+    def _run_pair_manager(reg, market, cfg_in) -> None:
+        """Resolve orphaned resting legs BEFORE new quotes land (directive
+        2026-10-12). Adopt completing pairs under one pair_id, cancel hopeless
+        strays, and leave the condition for a fresh re-quote. Registry-only:
+        no venue call. Reads the live book for every completion decision.
+        """
+        from core_brain.shadow_pairs import plan_pairs
+        cond = market.condition_id
+        working = [o for o in reg.get_active_orders()
+                   if o.condition_id == cond]
+        if not working:
+            return
+        # The two tokens resting on this condition define the opposing pair.
+        toks = []
+        for o in working:
+            t = str(o.token_id)
+            if t and t not in toks:
+                toks.append(t)
+        if len(toks) < 2:
+            return  # only one leg present; nothing to pair/manage yet
+        market_tokens = {cond: (toks[0], toks[1])}
+        books = {}
+        for t in toks:
+            try:
+                books[t] = shadow_fetch_books(clob_host, t)
+            except (OSError, ValueError):
+                books[t] = {}
+        max_pair_cost = float(getattr(cfg_in, "max_pair_cost", 0.99))
+        plan = plan_pairs(cond, working, books, market_tokens, max_pair_cost,
+                          lambda: f"pair-{__import__('uuid').uuid4().hex[:12]}")
+        if not (plan.adopt or plan.cancel):
+            return
+        for leg1, leg2, shared in plan.adopt:
+            try:
+                reg.adopt_orders_into_pair([leg1, leg2], shared)
+            except Exception as e:  # noqa: BLE001 - degrade, never block quoting
+                log.warning("pair-manager adopt failed on %s: %s", cond[:12], e)
+        for lid in plan.cancel:
+            try:
+                reg.update_order_status(lid, status="cancelled",
+                                        cancel_reason="orphan_no_pair")
+            except Exception as e:  # noqa: BLE001
+                log.warning("pair-manager cancel failed on %s: %s", lid[:8], e)
+        for line in plan.reason:
+            log.info("pair-manager %s: %s", cond[:12], line)
 
     def record_cancel(_client, reg, orders) -> int:
         """Mark each named row cancelled and report how many were handled.
@@ -1160,17 +1207,28 @@ def run_shadow(
     # see the same shape of numbers they would live.
     seam.fleet_state_fn = lambda r: _fleet_state(r, cfg)
 
-    def shadow_sweep() -> None:
-        """Run the production lifecycle policy against the isolated shadow store."""
+    def _shadow_lifecycle_pass() -> None:
+        """Run ONLY the venue-mutating single-leg lifecycle against the shadow store.
+
+        Extracted from `shadow_sweep` so the <=1 Hz risk-guardian thread can
+        run defense (hard-stop detection / exit / completion) on its own tight
+        cadence WITHOUT also re-running merges, markouts, and resolution on a
+        second thread. Those stages are NOT under the lifecycle lock, so
+        running them from two executors was the source of the double-execution
+        corruption: merges double-booked, markouts double-sampled, and the
+        exit priced off a book the other thread had already moved. The
+        lifecycle pass itself is guarded by `lifecycle_mutation_guard` in
+        `manage_single_leg_positions`, so it is safe on either thread; the
+        rest of the sweep stays on the rotation thread alone.
+        """
         from core_brain.shadow_exec import (
-            ShadowExecutionClient, record_shadow_merges, shadow_positions,
+            ShadowExecutionClient, shadow_positions,
         )
         from core_brain.single_buy_saver import (
             SINGLE_LEG_QUIET_ACTIONS, manage_single_leg_positions,
         )
         from core_brain.market_lifecycle import resolved_condition_ids
 
-        # Resolved conditions are skipped before books or simulated orders.
         cycle_resolved = resolved_condition_ids(seam.registry)
         exec_client = ShadowExecutionClient(
             seam.registry, db_path, book_fn=seam.fetch_books,
@@ -1192,6 +1250,15 @@ def run_shadow(
                                 pr.get("error"))
                 elif action not in SINGLE_LEG_QUIET_ACTIONS:
                     log.info("lifecycle %s %s", pair_id, action)
+        except (sqlite3.Error, OSError, ValueError) as e:
+            log.warning("shadow lifecycle pass failed: %s", e)
+
+    def shadow_sweep() -> None:
+        """Run the production lifecycle policy against the isolated shadow store."""
+        from core_brain.shadow_exec import record_shadow_merges
+
+        _shadow_lifecycle_pass()
+        try:
             for pair_id in record_shadow_merges(seam.registry, db_path):
                 log.info("merged %s at $1.00 a share", pair_id)
         except (sqlite3.Error, OSError, ValueError) as e:
@@ -1315,7 +1382,18 @@ def run_shadow(
             cfg=cfg,
             interval=1.0,
             live=False,
-            single_buy_saver_fn=lambda c, r, config, live=False: [shadow_sweep()],
+            # DEFENSE ONLY. The guardian runs the venue-mutating single-leg
+            # lifecycle pass (hard-stop detection / exit / completion) on its
+            # tight <=1 Hz cadence -- NOT the full rotation sweep. Wiring it to
+            # `shadow_sweep` re-ran merges, markouts, and resolution on this
+            # second thread too; those stages are not under the lifecycle lock,
+            # so two executors double-booked merges and priced exits off a book
+            # the rotation thread had already moved -- the double-execution
+            # corruption. `_shadow_lifecycle_pass` is guarded by
+            # `lifecycle_mutation_guard` in `manage_single_leg_positions`, so it
+            # is safe to run here, and the rest of the sweep stays on the
+            # rotation thread alone.
+            single_buy_saver_fn=lambda c, r, config, live=False: [_shadow_lifecycle_pass()],
             stop_event=stop_bg,
         )
         log.info("shadow risk guardian sentry engaged (every 1.0s, background)")

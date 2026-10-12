@@ -80,7 +80,7 @@ def test_legacy_shape_still_parses():
 def test_build_plan_run_number_scheme(tmp_path: Path):
     from scripts.shadow_tournament import build_tournament_plan
 
-    arms = [{"name": "control"}, {"name": "conservative"}]
+    arms = [{"name": "baseline"}, {"name": "conservative"}]
     plan = build_tournament_plan(
         issue=492,
         arms=arms,
@@ -90,9 +90,9 @@ def test_build_plan_run_number_scheme(tmp_path: Path):
         run_number=1,
     )
     assert plan.run_number == 1
-    assert [a.name for a in plan.arms] == ["control-1", "conservative-1"]
-    assert plan.arms[0].db_path.name == "i492_tournament-1_control-1.db"
-    assert plan.arms[0].run_id == "shadow-492-tournament-1-control-1"
+    assert [a.name for a in plan.arms] == ["baseline-1", "conservative-1"]
+    assert plan.arms[0].db_path.name == "i492_tournament-1_baseline-1.db"
+    assert plan.arms[0].run_id == "shadow-492-tournament-1-baseline-1"
     assert plan.arms[1].db_path.name == "i492_tournament-1_conservative-1.db"
     assert "tournament-1" in plan.record_path.name
     assert plan.record_path.name == "i492_tournament-1.json"
@@ -103,7 +103,7 @@ def test_build_plan_run_number_scheme(tmp_path: Path):
     assert plan.to_dict()["log_path"] == str(plan.log_path)
     assert "stamp" not in plan.arms[0].db_path.name
     # Base name still drives the preset selector, not the suffixed slug.
-    assert plan.arms[0].env["HUNTER_TOURNAMENT_PRESET"] == "control"
+    assert plan.arms[0].env["HUNTER_TOURNAMENT_PRESET"] == "baseline"
 
 
 def test_build_plan_run_number_two(tmp_path: Path):
@@ -135,6 +135,6 @@ def test_build_plan_legacy_default_unchanged(tmp_path: Path):
         check_ports=False,
     )
     assert plan.run_number is None
-    assert [a.name for a in plan.arms][:2] == ["control", "conservative"]
+    assert [a.name for a in plan.arms][:2] == ["conservative", "balanced"]
     assert plan.arms[0].db_path.name.startswith("371_tournament_01_")
     assert "20261005-032000" in plan.arms[0].db_path.name

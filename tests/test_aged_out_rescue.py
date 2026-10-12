@@ -192,7 +192,7 @@ def test_no_existing_default_moved():
     assert cfg.pairs_exit_window_sec == 900.0
     assert cfg.max_pair_cost == 0.99
     assert cfg.single_buy_max_loss_pct == 0.10
-    assert cfg.single_buy_max_loss_usd == 0.045
+    assert cfg.single_buy_max_loss_usd == 0.04
     assert cfg.single_buy_grace_sec == 0.0
     assert cfg.enable_pairs_rule is True
 

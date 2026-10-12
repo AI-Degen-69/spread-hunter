@@ -107,6 +107,7 @@ MAX_BOOK_SPREAD = _CFG.select_max_book_spread
 MIN_RANGE_CENTS = getattr(_CFG, "select_min_range_cents", 2.0)
 VOLATILITY_WINDOW_SEC = getattr(_CFG, "select_volatility_window_sec", 7200.0)
 VELOCITY_GATE_ENABLED = getattr(_CFG, "select_velocity_gate_enabled", True)
+MIN_ACTIVITY_RATIO = getattr(_CFG, "select_min_activity_ratio", 0.0)
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
 # The live set. `live=true` is a genuine server-side filter; `closed=false` is
@@ -592,6 +593,43 @@ def movement_reject(movement_usd: Optional[float],
     minutes = int(round(window_sec / 60.0))
     return True, (f"no movement: ${movement_usd:,.0f} traded in last "
                   f"{minutes}m under ${bar:,.0f} (flat)")
+
+
+def activity_ratio_reject(
+    movement_usd: Optional[float],
+    volume_24h: Optional[float],
+    min_ratio: float = 0.0,
+    window_sec: float = MOVEMENT_WINDOW_SEC,
+) -> tuple[bool, str]:
+    """Refuse a market whose recent tape is small relative to its total size.
+
+    The loose-baseline companion to `movement_reject`. Absolute 24h volume
+    cannot tell an active market from a dormant one: a flat $1M politics market
+    and an active $10k live sports game both clear a volume floor, but only one
+    is trading now. `movement_usd / volume_24h` measures exactly that -- the
+    fraction of the day's total size that moved inside the recent window.
+
+    Fail-open on every unmeasured input (None movement, None/zero volume), the
+    same convention `movement_reject` uses: a missing number must never empty
+    the universe. `min_ratio <= 0` disables the gate (shipped default).
+    """
+    if not min_ratio or min_ratio <= 0:
+        return False, ""
+    if movement_usd is None or volume_24h is None:
+        return False, ""
+    if volume_24h <= 0:
+        # A zero-size market has no denominator. Nothing to measure against, so
+        # the gate stays out of it rather than refusing on a divide-by-zero.
+        return False, ""
+    ratio = movement_usd / volume_24h
+    if ratio >= min_ratio:
+        return False, ""
+    minutes = int(round(window_sec / 60.0))
+    return True, (
+        f"low activity ratio: {ratio * 100:.3f}% of 24h volume traded in last "
+        f"{minutes}m under {min_ratio * 100:.3f}% "
+        f"(${movement_usd:,.0f} / ${volume_24h:,.0f})"
+    )
 
 
 # RANKING: LIVE-FIRST (#392). Named bars, not magic. A live competitive market
@@ -1633,6 +1671,23 @@ def evaluate(session: requests.Session, rate: float, m: dict,
         window_sec=MOVEMENT_WINDOW_SEC)
     if flat:
         return _reject_row(source, flat_reason, m, volume_24h,
+                           movement_usd=movement_usd,
+                           movement_window_sec=MOVEMENT_WINDOW_SEC,
+                           range_cents=range_cents,
+                           velocity_measured_at=vel_measured_at,
+                           trade_count=trade_count,
+                           volatility_exempt=is_volatility_exempt)
+
+    # RELATIVE ACTIVITY RATIO GATE (loose baseline). Sits right after the
+    # absolute movement floor: a market must have BOTH enough recent notional
+    # AND enough of it relative to its total size. This is what separates an
+    # active live game from a flat high-volume politics book. Inert at the
+    # shipped 0.0 threshold; fail-open on any unmeasured input.
+    ratio_rej, ratio_reason = activity_ratio_reject(
+        movement_usd, volume_24h, min_ratio=MIN_ACTIVITY_RATIO,
+        window_sec=MOVEMENT_WINDOW_SEC)
+    if ratio_rej:
+        return _reject_row(source, ratio_reason, m, volume_24h,
                            movement_usd=movement_usd,
                            movement_window_sec=MOVEMENT_WINDOW_SEC,
                            range_cents=range_cents,

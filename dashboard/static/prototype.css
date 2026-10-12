@@ -1044,12 +1044,58 @@
   font-size: 11px;
 }
 
-/* Total Committed */
+/* Tab 2: Side & Resting Quote — active BUY tags (green YES / red NO) */
+.proto-body .stitch-buy-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.proto-body .stitch-buy-tag.yes {
+  background: rgba(16, 185, 129, 0.18);
+  border: 1px solid rgba(74, 222, 128, 0.55);
+  color: #4ade80;
+  text-shadow: 0 0 10px rgba(74, 222, 128, 0.5);
+}
+
+.proto-body .stitch-buy-tag.no {
+  background: rgba(244, 63, 94, 0.18);
+  border: 1px solid rgba(251, 113, 133, 0.55);
+  color: #fb7185;
+  text-shadow: 0 0 10px rgba(251, 113, 133, 0.4);
+}
+
+/* Tab 2: Pair Target — the counter-quote still needed under the cap */
+.proto-body .stitch-target-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #e2e8f0;
+  white-space: nowrap;
+}
+
+.proto-body .stitch-target-val.is-noroom {
+  color: #fb7185;
+}
+
+.proto-body .stitch-target-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+/* Committed Capital (amber: dollars at risk) */
 .proto-body .stitch-commit-val {
   font-family: 'JetBrains Mono', monospace;
   font-size: 13.5px;
   font-weight: 700;
-  color: #ffffff;
+  color: #fbbf24;
 }
 
 .proto-body .stitch-commit-val.is-unhedged {
@@ -1218,6 +1264,27 @@
   font-family: 'JetBrains Mono', monospace;
   font-size: 12.5px;
   font-weight: 700;
+}
+
+.proto-body .stitch-edge-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.proto-body .stitch-vol-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.proto-body .stitch-vol-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
 }
 
 .proto-body .stitch-status-badge {

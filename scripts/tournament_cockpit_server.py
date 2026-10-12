@@ -628,6 +628,17 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
                 "ORDER BY ts ASC",
                 (cfg["run_id"],)
             ).fetchall()
+
+            # Order lifecycle funnel:
+            #   quoted  -> every quote row placed (one per leg per requote cycle)
+            #   filled  -> distinct orders that got at least one fill (legs, singular)
+            #   merged  -> pairs completed via merge/shadow_merge; a merge counts
+            #              as TWO singular filled orders (one UP + one DOWN leg)
+            #   stop-loss -> single legs closed by the stop-loss family
+            #                (single_buy_exit / naked_exit / ladder_exit)
+            quoted_cnt = c.execute(
+                "SELECT count(*) FROM quotes WHERE run_id = ?", (cfg["run_id"],)
+            ).fetchone()[0]
     except sqlite3.Error as exc:
         return {
             **cfg,
@@ -651,9 +662,19 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
             "progress_pct": min(100.0, round((elapsed_min / target_minutes) * 100.0, 1)),
             "fills_cnt": fills_cnt,
             "orders_cnt": orders_cnt,
+            "quoted_cnt": quoted_cnt,
+            "funnel": {
+                "quoted": quoted_cnt,
+                "filled": orders_cnt,
+                "merged": 0,
+                "merged_legs": 0,
+                "stop_loss": 0,
+            },
             "trades_count": 0,
             "merges_count": 0,
             "exits_count": 0,
+            "stop_loss_exits_count": 0,
+            "paired_completions_count": 0,
             "total_pnl": 0.0,
             "mean_pnl": 0.0,
             "std_pnl": 0.0,
@@ -670,8 +691,12 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
 
     wins = [p for p in pnls if p > 0.0]
     losses = [p for p in pnls if p < 0.0]
-    merges = [r for r in rows if r[1] == "shadow_merge"]
+    merge_methods = ("merge", "shadow_merge")
+    stop_loss_methods = ("single_buy_exit", "naked_exit", "ladder_exit")
+    merges = [r for r in rows if r[1] in merge_methods]
+    stops = [r for r in rows if r[1] in stop_loss_methods]
     single_exits = n - len(merges)
+    paired_completions = len(merges)
 
     tot_pnl = sum(pnls)
     mean_pnl = tot_pnl / n
@@ -760,9 +785,19 @@ def analyze_arm_database(cfg: dict[str, Any], target_minutes: float = 720.0) -> 
         "progress_pct": min(100.0, round((elapsed_min / target_minutes) * 100.0, 1)),
         "fills_cnt": fills_cnt,
         "orders_cnt": orders_cnt,
+        "quoted_cnt": quoted_cnt,
+        "funnel": {
+            "quoted": quoted_cnt,
+            "filled": orders_cnt,
+            "merged": len(merges),
+            "merged_legs": len(merges) * 2,
+            "stop_loss": len(stops),
+        },
         "trades_count": n,
         "merges_count": len(merges),
         "exits_count": single_exits,
+        "stop_loss_exits_count": len(stops),
+        "paired_completions_count": paired_completions,
         "total_pnl": round(tot_pnl, 4),
         "mean_pnl": round(mean_pnl, 4),
         "std_pnl": round(std_pnl, 4),
@@ -800,6 +835,18 @@ def collect_all_stats(tourney_key: str = "492") -> dict[str, Any]:
     total_trades = sum(a.get("trades_count", 0) for a in arms_data)
     total_merges = sum(a.get("merges_count", 0) for a in arms_data)
     total_fills = sum(a.get("fills_cnt", 0) for a in arms_data)
+    total_quoted = sum(
+        int((a.get("funnel") or {}).get("quoted", 0) or 0) for a in arms_data
+    )
+    total_filled_orders = sum(
+        int((a.get("funnel") or {}).get("filled", 0) or 0) for a in arms_data
+    )
+    total_merged_legs = sum(
+        int((a.get("funnel") or {}).get("merged_legs", 0) or 0) for a in arms_data
+    )
+    total_stop_loss_exits = sum(
+        int((a.get("funnel") or {}).get("stop_loss", 0) or 0) for a in arms_data
+    )
     
     # Global tournament progress
     max_elapsed = max((a.get("elapsed_min", 0.0) for a in arms_data), default=0.0)
@@ -840,6 +887,10 @@ def collect_all_stats(tourney_key: str = "492") -> dict[str, Any]:
         "total_trades": total_trades,
         "total_merges": total_merges,
         "total_fills": total_fills,
+        "total_quoted": total_quoted,
+        "total_filled_orders": total_filled_orders,
+        "total_merged_legs": total_merged_legs,
+        "total_stop_loss_exits": total_stop_loss_exits,
         "max_elapsed_min": round(max_elapsed, 1),
         "elapsed_hours": round(max_elapsed / 60.0, 2),
         "rem_hours": round(time_rem_min / 60.0, 2),
@@ -1208,9 +1259,9 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
     <div class="m-sub" id="m-merges-sub">Across all 10 tournament arms</div>
   </div>
   <div class="m-card">
-    <div class="m-label">Total Venue Fills</div>
-    <div class="m-val tabular" id="m-fills">{initial_data.get('total_fills', 0):,}</div>
-    <div class="m-sub">Sample size for statistical significance</div>
+    <div class="m-label">Total Quoted Orders</div>
+    <div class="m-val tabular" id="m-fills">{initial_data.get('total_quoted', 0):,}</div>
+    <div class="m-sub">Funnel entry: every quote placed across all arms</div>
   </div>
   <div class="m-card">
     <div class="m-label">Top Live Candidate Score</div>
@@ -1237,11 +1288,10 @@ def generate_cockpit_html(initial_data: dict[str, Any]) -> str:
       <thead>
         <tr>
           <th>Rank &amp; Arm</th>
-          <th>Issue</th>
-          <th>Port</th>
-          <th>Fills</th>
-          <th>Merges</th>
-          <th>Single Exits</th>
+          <th>Quoted Orders</th>
+          <th>Filled Orders</th>
+          <th>Merged (legs ×2)</th>
+          <th>Stop-Loss Exits</th>
           <th>Merge %</th>
           <th>Total PnL</th>
           <th>EV / Trade</th>
@@ -1516,7 +1566,7 @@ function renderAll() {{
   document.getElementById('m-leader-485').innerText = state.leader_485_label || state.leader_485;
   document.getElementById('m-leader-485-pnl').innerText = 'PnL: ' + (state.leader_485_pnl >= 0 ? '+$' : '-$') + Math.abs(state.leader_485_pnl).toFixed(2);
   document.getElementById('m-merges').innerText = state.total_merges.toLocaleString();
-  document.getElementById('m-fills').innerText = state.total_fills.toLocaleString();
+  document.getElementById('m-fills').innerText = (state.total_quoted || 0).toLocaleString();
 
   // Table
   const tbody = document.getElementById('leaderboard-tbody');
@@ -1525,13 +1575,13 @@ function renderAll() {{
     const tr = document.createElement('tr');
     const pnlClass = arm.total_pnl >= 0 ? 'positive' : 'negative';
     const pnlPrefix = arm.total_pnl >= 0 ? '+$' : '-$';
+    const funnel = arm.funnel || {{}};
     tr.innerHTML = `
       <td><strong>#${{idx+1}}</strong> <span style="color: ${{arm.color}}">●</span> <strong>${{arm.label}}</strong></td>
-      <td>#${{arm.issue}}</td>
-      <td class="tabular">${{arm.port}}</td>
-      <td class="tabular">${{arm.fills_cnt || 0}}</td>
-      <td class="tabular">${{arm.merges_count || 0}}</td>
-      <td class="tabular">${{arm.exits_count || 0}}</td>
+      <td class="tabular">${{funnel.quoted || 0}}</td>
+      <td class="tabular">${{funnel.filled || arm.orders_cnt || 0}}</td>
+      <td class="tabular">${{funnel.merged_legs || 0}} <span style="color: var(--text-muted);">(${{funnel.merged || 0}} pairs ×2)</span></td>
+      <td class="tabular">${{arm.stop_loss_exits_count || 0}}</td>
       <td class="tabular">${{arm.merge_rate || 0}}%</td>
       <td class="tabular ${{pnlClass}}"><strong>${{pnlPrefix}}${{Math.abs(arm.total_pnl || 0).toFixed(2)}}</strong></td>
       <td class="tabular">${{(arm.mean_pnl || 0).toFixed(3)}}</td>
