@@ -1721,13 +1721,21 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       masterIndicator.textContent = stopText;
       masterIndicator.setAttribute('aria-label', stopText);
     } else if (isShadow) {
-      const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
-      const shadowState = shadowRunning ? 'running' : 'stopped';
-      const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
-      masterIndicator.className = `pill state-${shadowState} font-display`;
-      masterIndicator.innerHTML = (shadowState === 'running' ? '<span class="pulse-dot active"></span>' : '')
-        + esc(shadowLabel);
-      masterIndicator.setAttribute('aria-label', shadowLabel);
+      if (isShadowStartPending()) {
+        // A launch was accepted but the run has not reported back yet: say
+        // STARTING, not STOPPED, so the operator can tell booting from dead.
+        masterIndicator.className = 'pill state-degraded font-display';
+        masterIndicator.textContent = 'SHADOW STARTING';
+        masterIndicator.setAttribute('aria-label', 'SHADOW STARTING');
+      } else {
+        const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+        const shadowState = shadowRunning ? 'running' : 'stopped';
+        const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
+        masterIndicator.className = `pill state-${shadowState} font-display`;
+        masterIndicator.innerHTML = (shadowState === 'running' ? '<span class="pulse-dot active"></span>' : '')
+          + esc(shadowLabel);
+        masterIndicator.setAttribute('aria-label', shadowLabel);
+      }
     } else {
       // Canonical live-state vocabulary (DESIGN.md): the stack pill carries
       // the blinking liveness dot rather than unicode glyphs. textContent is
@@ -1775,7 +1783,10 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       ? 'telemetry unavailable' : `${alertsTotal} alerts`;
   }
   if (masterToggle) {
-    if (isStarting || isStopping) {
+    // A latched shadow launch holds the busy look past the HTTP round-trip,
+    // until the run reports back (or the boot window lapses).
+    const shadowPending = isShadow && isShadowStartPending();
+    if (isStarting || isStopping || shadowPending) {
       // Busy overrides status: no second click while a request is in flight.
       const busyLabel = isStopping ? 'STOPPING…' : 'STARTING…';
       masterToggle.className = isStopping
@@ -1972,6 +1983,58 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
 // dataset.action ('start' | 'stop') and dataset.mode ('live' | 'shadow') are
 // painted by renderServiceHeader from the live status, so the click never
 // guesses what the backend will accept.
+
+/* ── Pending shadow start (#478 follow-up) ──
+ * Popen returns instantly but the rehearsal needs ~a minute to boot and
+ * write its first heartbeat. Until the status feed shows the run up, the
+ * button holds STARTING… and the master pill reads SHADOW STARTING; the
+ * poll loop resolves the latch when the run appears (or the boot window
+ * lapses). Without this the button flips back to START SHADOW one poll
+ * after a successful launch and every pill stays red — indistinguishable
+ * from a dead start. */
+const SHADOW_START_TIMEOUT_MS = 180000;
+let pendingShadowStart = null; // { runId, dbName, minutes, pid, startedAt }
+
+function noteShadowStartLaunched(info) {
+  const i = info || {};
+  pendingShadowStart = {
+    runId: i.runId || null,
+    dbName: i.dbName || null,
+    minutes: (i.minutes !== null && i.minutes !== undefined) ? i.minutes : null,
+    pid: (i.pid !== null && i.pid !== undefined) ? i.pid : null,
+    startedAt: i.startedAt || Date.now(),
+  };
+}
+function clearPendingShadowStart() { pendingShadowStart = null; }
+function isShadowStartPending(nowMs) {
+  if (!pendingShadowStart) return false;
+  const now = (nowMs !== undefined && nowMs !== null) ? nowMs : Date.now();
+  return (now - pendingShadowStart.startedAt) < SHADOW_START_TIMEOUT_MS;
+}
+/* Poll-loop seam: resolves the latch against fresh status. Returns
+ * 'running' | 'timeout' | 'waiting' so the harness can assert each path. */
+function checkPendingShadowStart(status, nowMs) {
+  if (!pendingShadowStart) return 'waiting';
+  const now = (nowMs !== undefined && nowMs !== null) ? nowMs : Date.now();
+  const run = status && status.shadow_run;
+  const sameRun = Boolean(run && run.running && !run.ended
+    && (!pendingShadowStart.runId || run.run_id === pendingShadowStart.runId));
+  if (sameRun) {
+    const label = pendingShadowStart.runId || run.run_id || 'shadow rehearsal';
+    const where = pendingShadowStart.dbName ? ` on ${pendingShadowStart.dbName}` : '';
+    pendingShadowStart = null;
+    showToast(`Shadow rehearsal ${label} is now running${where}.`, { tone: 'ok' });
+    return 'running';
+  }
+  if ((now - pendingShadowStart.startedAt) >= SHADOW_START_TIMEOUT_MS) {
+    const label = pendingShadowStart.runId || 'shadow rehearsal';
+    pendingShadowStart = null;
+    showToast(`Shadow rehearsal ${label} never reported back within 3 min — `
+      + 'it may have crashed on boot. Press START SHADOW to retry.', { tone: 'error' });
+    return 'timeout';
+  }
+  return 'waiting';
+}
 const masterToggleBtn = document.getElementById('btn-master-toggle');
 if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
   masterToggleBtn.dataset.wired = 'true';
@@ -2071,14 +2134,29 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
         showToast(lineText, { tone: 'warn' });
       } else {
         if (action === 'start') {
-          const isRunning = data.status?.bot_state === 'RUNNING';
-          // Shadow mode runs a rehearsal, not the live bot: saying "Bot is
-          // running" would read as live exposure. Prefer the server's words.
-          const msg = isShadow
-            ? (data.message || 'Shadow rehearsal started.')
-            : (isRunning ? 'Bot is running.' : (data.message || 'Start request accepted.'));
-          showToast(msg, { tone: 'ok' });
+          if (isShadow) {
+            // Shadow mode runs a rehearsal, not the live bot: saying "Bot is
+            // running" would read as live exposure. Name the run, the store,
+            // the budget and the PID, then latch STARTING… until the run
+            // reports back (see checkPendingShadowStart).
+            const sr = (data && data.status && data.status.shadow_run) || {};
+            const runId = (data && data.run_id) || sr.run_id || null;
+            const dbPath = sr.db_path || (lastStatus && lastStatus.db_path) || '';
+            const dbName = String(dbPath).split(/[\\/]/).pop() || 'this store';
+            const minutes = (sr.minutes !== null && sr.minutes !== undefined) ? sr.minutes : null;
+            const pid = (data && data.pid !== null && data && data.pid !== undefined) ? data.pid : sr.pid;
+            noteShadowStartLaunched({ runId, dbName, minutes, pid });
+            const dur = (minutes !== null) ? ` for ${minutes} min` : '';
+            const who = (pid !== null && pid !== undefined) ? ` (PID ${pid})` : '';
+            showToast(`Shadow rehearsal ${runId || 'rehearsal'} launched on ${dbName}${dur}${who}. `
+              + 'Warming up — the pills turn green on the first heartbeat.', { tone: 'ok' });
+          } else {
+            const isRunning = data.status?.bot_state === 'RUNNING';
+            const msg = isRunning ? 'Bot is running.' : (data.message || 'Start request accepted.');
+            showToast(msg, { tone: 'ok' });
+          }
         } else {
+          if (isShadow) clearPendingShadowStart();
           const msg = isShadow
             ? (data.message || 'Shadow rehearsal stopped.')
             : (data.message || 'Bot stopped.');
@@ -8381,6 +8459,11 @@ async function pollStatus() {
       }
     }
 
+    // A latched shadow launch resolves here: the run appeared (→ "now
+    // running" toast) or the boot window lapsed (→ retry toast). One-shot:
+    // the latch clears on either outcome, so a 2s poll never double-toasts.
+    if (status) checkPendingShadowStart(status);
+
     // Render exposure bar (DT3) — header element, page-independent, cheap.
     if (kpi || lastKpi) renderExposure(kpi || lastKpi);
 
@@ -8446,7 +8529,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState,
@@ -8487,5 +8570,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchOpenOrdersRows, stitchOpenOrdersHeadHtml,
     stitchPositionsRows, stitchPositionsHeadHtml, stitchHeldLegMarks,
     stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
-    showToast, dismissResetModal };
+    showToast, dismissResetModal,
+    noteShadowStartLaunched, clearPendingShadowStart,
+    isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS };
 }

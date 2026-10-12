@@ -218,6 +218,7 @@ function resetHarness() {
   while (c.children.length) c.removeChild(c.children[0]);
   pendingTimers = new Map();
   fetchLog.length = 0;
+  app.clearPendingShadowStart();
   const sync = el('btn-sync');
   sync.disabled = false;
   sync.textContent = 'SYNC';
@@ -261,8 +262,8 @@ function shadowStatus(running) {
       decide: { running: false }, dash: { running: true },
     },
     shadow_run: running
-      ? { running: true, ended: false, run_id: 'harness-shadow' }
-      : { running: false, ended: true, run_id: 'harness-shadow' },
+      ? { running: true, ended: false, run_id: 'harness-shadow', minutes: 10, db_path: 'data/shadow.db' }
+      : { running: false, ended: true, run_id: 'harness-shadow', minutes: 10, db_path: 'data/shadow.db' },
   };
 }
 function postUrls() {
@@ -426,7 +427,7 @@ function postUrls() {
   master.disabled = false;
   postImpl = async () => ({
     ok: true, status: 200,
-    json: async () => ({ ok: true, message: 'Shadow rehearsal started', status: shadowStatus(true), services: {} }),
+    json: async () => ({ ok: true, message: 'Shadow rehearsal started', pid: 4242, status: shadowStatus(true), services: {} }),
   });
   await master.click();
   await flush();
@@ -444,6 +445,46 @@ function postUrls() {
   await master.click();
   await flush();
   out.shadowStopError = { toasts: snapToasts(), posts: postUrls() };
+
+  /* 8g. Latched launch: button holds STARTING… and the pill reads STARTING */
+  resetHarness();
+  app.noteShadowStartLaunched({ runId: 'harness-shadow', dbName: 'shadow.db', minutes: 10, pid: 4242 });
+  app.renderServiceHeader(shadowStatus(false), null, null);
+  const latchBtn = el('btn-master-toggle');
+  const latchPill = el('master-status-indicator');
+  out.shadowLatch = {
+    btnHtml: latchBtn.innerHTML,
+    btnDisabled: latchBtn.disabled,
+    btnBusy: latchBtn.getAttribute('aria-busy'),
+    pillText: latchPill.textContent,
+    pillClass: latchPill.className,
+    pending: app.isShadowStartPending(),
+  };
+
+  /* 8h. The run reports back: latch clears with a "now running" toast, once */
+  resetHarness();
+  app.noteShadowStartLaunched({ runId: 'harness-shadow', dbName: 'shadow.db', minutes: 10, pid: 4242 });
+  const resolveResult = app.checkPendingShadowStart(shadowStatus(true));
+  out.shadowResolve = {
+    result: resolveResult,
+    toasts: snapToasts(),
+    pendingAfter: app.isShadowStartPending(),
+    secondCall: app.checkPendingShadowStart(shadowStatus(true)),
+    toastsAfterSecondCall: snapToasts().length,
+  };
+
+  /* 8i. Boot window lapses with no run: error toast, latch clears */
+  resetHarness();
+  app.noteShadowStartLaunched({
+    runId: 'harness-shadow', dbName: 'shadow.db', minutes: 10, pid: 4242,
+    startedAt: Date.now() - 200000,
+  });
+  const timeoutResult = app.checkPendingShadowStart(shadowStatus(false));
+  out.shadowTimeout = {
+    result: timeoutResult,
+    toasts: snapToasts(),
+    pendingAfter: app.isShadowStartPending(),
+  };
 
   /* 9a. Reset cancelled via Close button */
   resetHarness();

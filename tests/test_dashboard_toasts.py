@@ -177,7 +177,14 @@ def test_shadow_start_shows_sent_then_ok_via_shadow_endpoint():
     assert any("/api/system/shadow/start" in u for u in out["posts"])
     texts = [(t["cls"], t["text"]) for t in out["toasts"]]
     assert ("toast toast-neutral", "Start request sent") in texts
-    assert ("toast toast-ok", "Shadow rehearsal started") in texts
+    launched = [t for t in out["toasts"] if t["cls"] == "toast toast-ok"]
+    assert len(launched) == 1
+    assert launched[0]["text"] == (
+        "Shadow rehearsal harness-shadow launched on shadow.db"
+        " for 10 min (PID 4242)."
+        " Warming up — the pills turn green on the first heartbeat."
+    )
+    assert "Bot is running" not in launched[0]["text"]
 
 
 def test_shadow_stop_refused_reads_as_an_error():
@@ -186,6 +193,38 @@ def test_shadow_stop_refused_reads_as_an_error():
     errors = [t for t in out["toasts"] if t["cls"] == "toast toast-error"]
     assert len(errors) == 1
     assert "No shadow rehearsal running" in errors[0]["text"]
+
+
+def test_latched_shadow_launch_holds_starting_on_button_and_pill():
+    out = _run()["shadowLatch"]
+    assert out["pending"] is True
+    assert "STARTING" in out["btnHtml"]
+    assert out["btnDisabled"] is True
+    assert out["btnBusy"] == "true"
+    assert out["pillText"] == "SHADOW STARTING"
+    assert "state-degraded" in out["pillClass"]
+
+
+def test_reported_shadow_run_clears_latch_with_one_running_toast():
+    out = _run()["shadowResolve"]
+    assert out["result"] == "running"
+    assert out["pendingAfter"] is False
+    ok = [t for t in out["toasts"] if t["cls"] == "toast toast-ok"]
+    assert len(ok) == 1
+    assert ok[0]["text"] == "Shadow rehearsal harness-shadow is now running on shadow.db."
+    # One-shot: a second poll with the same status must not double-toast.
+    assert out["secondCall"] == "waiting"
+    assert out["toastsAfterSecondCall"] == 1
+
+
+def test_shadow_boot_timeout_clears_latch_with_a_retry_toast():
+    out = _run()["shadowTimeout"]
+    assert out["result"] == "timeout"
+    assert out["pendingAfter"] is False
+    errors = [t for t in out["toasts"] if t["cls"] == "toast toast-error"]
+    assert len(errors) == 1
+    assert "harness-shadow" in errors[0]["text"]
+    assert "Press START SHADOW to retry" in errors[0]["text"]
 
 
 # -- Reset modal -------------------------------------------------------------
