@@ -664,10 +664,103 @@ tabBtns.forEach(b => {
 const savedTab = parseInt(localStorage.getItem('sh-active-tab') || '1', 10);
 switchTab(savedTab === 2 ? 2 : (savedTab === 3 ? 3 : 1));
 
+/* ── Toast Notifications (#478) ── */
+const MAX_TOASTS = 4;
+function showToast(message, opts = {}) {
+  const container = document.getElementById('toast-container');
+  if (!container) return { dismiss: () => {} };
+
+  const tone = opts.tone || 'neutral';
+  const timeoutMs = typeof opts.timeout === 'number' ? opts.timeout : 4000;
+
+  // Cap visible toasts: remove oldest when at or above MAX_TOASTS
+  const children = Array.from(container.children || container.childNodes || []);
+  if (children.length >= MAX_TOASTS) {
+    const overflowCount = children.length - MAX_TOASTS + 1;
+    for (let i = 0; i < overflowCount; i++) {
+      const child = children[i];
+      if (child) {
+        if (child.parentNode === container && typeof container.removeChild === 'function') {
+          container.removeChild(child);
+        } else if (typeof child.remove === 'function') {
+          child.remove();
+        }
+      }
+    }
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${tone}`;
+  toast.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+
+  const body = document.createElement('div');
+  body.className = 'toast-body';
+
+  const text = document.createElement('span');
+  text.className = 'toast-text';
+  text.textContent = String(message || '');
+  body.appendChild(text);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'toast-close';
+  closeBtn.setAttribute('aria-label', 'Dismiss notification');
+  closeBtn.textContent = '×';
+
+  toast.appendChild(body);
+  toast.appendChild(closeBtn);
+
+  let dismissed = false;
+  let timerId = null;
+
+  function dismiss() {
+    if (dismissed) return;
+    dismissed = true;
+    if (timerId !== null) {
+      clearTimeout(timerId);
+      timerId = null;
+    }
+    if (toast.parentNode === container && typeof container.removeChild === 'function') {
+      container.removeChild(toast);
+    } else if (typeof toast.remove === 'function') {
+      toast.remove();
+    }
+  }
+
+  closeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dismiss();
+  });
+
+  container.appendChild(toast);
+
+  if (timeoutMs > 0) {
+    timerId = setTimeout(dismiss, timeoutMs);
+  }
+
+  return { dismiss };
+}
+
+// Reset modal state & dismissal handling (#478)
+let resetInFlight = false;
+let resetCompleted = false;
+function dismissResetModal() {
+  if (!resetModal || !resetModal.classList.contains('show')) return;
+  resetModal.classList.remove('show');
+  // A confirmed reset already toasted success: hiding the modal in its 2s
+  // success window is not a cancellation, so stay silent here.
+  if (resetCompleted) return;
+  if (!resetInFlight) {
+    showToast('Reset cancelled. Nothing was changed.', { tone: 'neutral' });
+  } else {
+    showToast('Dialog closed. The reset is still running.', { tone: 'neutral' });
+  }
+}
+
 // Escape key closes the reset modal.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && resetModal.classList.contains('show')) {
-    resetModal.classList.remove('show');
+  if (e.key === 'Escape') {
+    dismissResetModal();
   }
 });
 
@@ -680,10 +773,10 @@ if (syncBtn) {
     syncBtn.disabled = true;
     syncBtn.classList.add('syncing');
     syncBtn.textContent = 'SYNCING…';
-    // Optional: show a one-line ticker notice so the operator sees it worked even before the poll.
-    const empty = tickerEl.querySelector('.empty-state');
+    const startToast = showToast('Venue sync started', { tone: 'neutral' });
     let syncOk = false;
     let isWarning = false;
+    let toastMsg = '';
     try {
       const res = await controlFetch('/api/system/sync');
       const data = await res.json().catch(() => ({}));
@@ -714,15 +807,25 @@ if (syncBtn) {
         lines.push('Positions: 0 on venue — dashboard exposure zeroed');
       }
       const msg = lines.join(' · ') || (data.ok ? 'Sync ok — dashboard now matches venue.' : 'Sync finished with warnings');
+      toastMsg = msg;
       // Reuse ticker as a transient banner; also trigger immediate re-poll.
       appendTickerEvent(`[SYNC] ${msg}`, 'Dashboard synced with Polymarket (read-only).', '');
     } catch (e) {
       syncOk = false;
+      toastMsg = `Sync failed — ${e.message || String(e)}`;
       appendTickerEvent(`[SYNC ERROR] ${e.message || String(e)}`, 'Sync failed — venue may be unreachable. Retrying on next poll.', '');
     } finally {
-      if (syncOk) syncBtn.textContent = 'SYNCED';
-      else if (isWarning) syncBtn.textContent = 'SYNC WARNING';
-      else syncBtn.textContent = 'SYNC FAILED';
+      startToast.dismiss();
+      if (syncOk && !isWarning) {
+        syncBtn.textContent = 'SYNCED';
+        showToast('Dashboard synced with Polymarket (read-only).', { tone: 'ok' });
+      } else if (isWarning) {
+        syncBtn.textContent = 'SYNC WARNING';
+        showToast(toastMsg || 'Sync finished with warnings.', { tone: 'warn' });
+      } else {
+        syncBtn.textContent = 'SYNC FAILED';
+        showToast(toastMsg || 'Sync failed — venue may be unreachable. Retrying on next poll.', { tone: 'error' });
+      }
       setTimeout(() => { syncBtn.textContent = prevText; syncBtn.disabled = false; syncBtn.classList.remove('syncing'); }, 1800);
       // Immediately refresh all tiles without waiting for the 2s poll.
       pollStatus();
@@ -742,11 +845,12 @@ resetBtn.addEventListener('click', () => {
   resetInput.value = '';
   resetConfirmBtn.disabled = true;
   resetProgress.style.display = 'none';
+  resetCompleted = false;
   resetModal.classList.add('show');
   resetInput.focus();
 });
 
-resetCloseBtn.addEventListener('click', () => resetModal.classList.remove('show'));
+resetCloseBtn.addEventListener('click', () => dismissResetModal());
 
 resetInput.addEventListener('input', () => {
   resetConfirmBtn.disabled = (resetInput.value.trim().toUpperCase() !== 'RESET');
@@ -758,26 +862,35 @@ resetConfirmBtn.addEventListener('click', async () => {
   resetConfirmBtn.textContent = 'Resetting...';
   resetProgress.style.display = 'block';
   resetProgress.textContent = 'Halting bot...';
+  resetInFlight = true;
   try {
     const res = await controlFetch('/api/system/reset');
     const data = await res.json();
     if (data.ok) {
       resetProgress.textContent = (data.steps || []).join('\n');
       resetConfirmBtn.textContent = 'Done';
+      resetCompleted = true;
+      showToast('Reset finished. Check the reset steps for warnings.', { tone: 'ok' });
       setTimeout(() => {
         resetModal.classList.remove('show');
         resetConfirmBtn.textContent = 'Confirm Reset';
         pollStatus();
       }, 2000);
     } else {
-      resetProgress.textContent = 'Failed: ' + (data.message || 'error');
+      const errMsg = 'Failed: ' + (data.message || 'error');
+      resetProgress.textContent = errMsg;
       resetConfirmBtn.textContent = 'Failed';
+      showToast(errMsg, { tone: 'error' });
       setTimeout(() => { resetConfirmBtn.textContent = 'Confirm Reset'; resetConfirmBtn.disabled = false; }, 3000);
     }
   } catch (e) {
-    resetProgress.textContent = 'Error: ' + e.message;
+    const errMsg = 'Error: ' + e.message;
+    resetProgress.textContent = errMsg;
     resetConfirmBtn.textContent = 'Error';
+    showToast(errMsg, { tone: 'error' });
     setTimeout(() => { resetConfirmBtn.textContent = 'Confirm Reset'; resetConfirmBtn.disabled = false; }, 3000);
+  } finally {
+    resetInFlight = false;
   }
 });
 
@@ -1614,13 +1727,21 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       masterIndicator.textContent = stopText;
       masterIndicator.setAttribute('aria-label', stopText);
     } else if (isShadow) {
-      const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
-      const shadowState = shadowRunning ? 'running' : 'stopped';
-      const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
-      masterIndicator.className = `pill state-${shadowState} font-display`;
-      masterIndicator.innerHTML = (shadowState === 'running' ? '<span class="pulse-dot active"></span>' : '')
-        + esc(shadowLabel);
-      masterIndicator.setAttribute('aria-label', shadowLabel);
+      if (isShadowStartPending()) {
+        // A launch was accepted but the run has not reported back yet: say
+        // STARTING, not STOPPED, so the operator can tell booting from dead.
+        masterIndicator.className = 'pill state-degraded font-display';
+        masterIndicator.textContent = 'SHADOW STARTING';
+        masterIndicator.setAttribute('aria-label', 'SHADOW STARTING');
+      } else {
+        const shadowRunning = Boolean(status?.shadow_run?.running && !status?.shadow_run?.ended);
+        const shadowState = shadowRunning ? 'running' : 'stopped';
+        const shadowLabel = 'SHADOW ' + shadowState.toUpperCase();
+        masterIndicator.className = `pill state-${shadowState} font-display`;
+        masterIndicator.innerHTML = (shadowState === 'running' ? '<span class="pulse-dot active"></span>' : '')
+          + esc(shadowLabel);
+        masterIndicator.setAttribute('aria-label', shadowLabel);
+      }
     } else {
       // Canonical live-state vocabulary (DESIGN.md): the stack pill carries
       // the blinking liveness dot rather than unicode glyphs. textContent is
@@ -1668,7 +1789,10 @@ function renderServiceHeader(status, guardrailHealth, guardrailAlerts) {
       ? 'telemetry unavailable' : `${alertsTotal} alerts`;
   }
   if (masterToggle) {
-    if (isStarting || isStopping) {
+    // A latched shadow launch holds the busy look past the HTTP round-trip,
+    // until the run reports back (or the boot window lapses).
+    const shadowPending = isShadow && isShadowStartPending();
+    if (isStarting || isStopping || shadowPending) {
       // Busy overrides status: no second click while a request is in flight.
       const busyLabel = isStopping ? 'STOPPING…' : 'STARTING…';
       masterToggle.className = isStopping
@@ -1865,6 +1989,58 @@ function renderServiceCards(status, guardrailHealth, guardrailAlerts) {
 // dataset.action ('start' | 'stop') and dataset.mode ('live' | 'shadow') are
 // painted by renderServiceHeader from the live status, so the click never
 // guesses what the backend will accept.
+
+/* ── Pending shadow start (#478 follow-up) ──
+ * Popen returns instantly but the rehearsal needs ~a minute to boot and
+ * write its first heartbeat. Until the status feed shows the run up, the
+ * button holds STARTING… and the master pill reads SHADOW STARTING; the
+ * poll loop resolves the latch when the run appears (or the boot window
+ * lapses). Without this the button flips back to START SHADOW one poll
+ * after a successful launch and every pill stays red — indistinguishable
+ * from a dead start. */
+const SHADOW_START_TIMEOUT_MS = 180000;
+let pendingShadowStart = null; // { runId, dbName, minutes, pid, startedAt }
+
+function noteShadowStartLaunched(info) {
+  const i = info || {};
+  pendingShadowStart = {
+    runId: i.runId || null,
+    dbName: i.dbName || null,
+    minutes: (i.minutes !== null && i.minutes !== undefined) ? i.minutes : null,
+    pid: (i.pid !== null && i.pid !== undefined) ? i.pid : null,
+    startedAt: i.startedAt || Date.now(),
+  };
+}
+function clearPendingShadowStart() { pendingShadowStart = null; }
+function isShadowStartPending(nowMs) {
+  if (!pendingShadowStart) return false;
+  const now = (nowMs !== undefined && nowMs !== null) ? nowMs : Date.now();
+  return (now - pendingShadowStart.startedAt) < SHADOW_START_TIMEOUT_MS;
+}
+/* Poll-loop seam: resolves the latch against fresh status. Returns
+ * 'running' | 'timeout' | 'waiting' so the harness can assert each path. */
+function checkPendingShadowStart(status, nowMs) {
+  if (!pendingShadowStart) return 'waiting';
+  const now = (nowMs !== undefined && nowMs !== null) ? nowMs : Date.now();
+  const run = status && status.shadow_run;
+  const sameRun = Boolean(run && run.running && !run.ended
+    && (!pendingShadowStart.runId || run.run_id === pendingShadowStart.runId));
+  if (sameRun) {
+    const label = pendingShadowStart.runId || run.run_id || 'shadow rehearsal';
+    const where = pendingShadowStart.dbName ? ` on ${pendingShadowStart.dbName}` : '';
+    pendingShadowStart = null;
+    showToast(`Shadow rehearsal ${label} is now running${where}.`, { tone: 'ok' });
+    return 'running';
+  }
+  if ((now - pendingShadowStart.startedAt) >= SHADOW_START_TIMEOUT_MS) {
+    const label = pendingShadowStart.runId || 'shadow rehearsal';
+    pendingShadowStart = null;
+    showToast(`Shadow rehearsal ${label} never reported back within 3 min — `
+      + 'it may have crashed on boot. Press START SHADOW to retry.', { tone: 'error' });
+    return 'timeout';
+  }
+  return 'waiting';
+}
 const masterToggleBtn = document.getElementById('btn-master-toggle');
 if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
   masterToggleBtn.dataset.wired = 'true';
@@ -1898,6 +2074,10 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
 
     if (action === 'stop') {
       isStopping = true;
+      // A stop supersedes any pending start expectation, even if this
+      // request fails or comes back with notes: the boot-resolution toast
+      // must never fire for a run the operator already tried to stop.
+      if (isShadow) clearPendingShadowStart();
       const pill = document.getElementById('master-status-indicator');
       if (pill) {
         pill.className = 'pill state-degraded font-display';
@@ -1910,6 +2090,11 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
     }
     masterLifecycleSeq++;
     renderServiceHeader(lastStatus, lastGuardHealth, lastGuardAlerts);
+    if (action === 'stop') {
+      showToast('Stop request sent. Waiting for services to shut down.', { tone: 'neutral' });
+    } else {
+      showToast('Start request sent', { tone: 'neutral' });
+    }
     try {
       let endpoint = `/api/system/${action}`;
       if (isShadow) {
@@ -1932,12 +2117,14 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
         lines.push(data.message);
       }
       // Per-service outcomes the operator must see, not just "ok".
+      let hasServiceNotes = false;
       if (data && data.services) {
         for (const [name, svc] of Object.entries(data.services)) {
           const outcome = svc && svc.outcome;
           if (outcome && outcome !== 'stopped' && outcome !== 'not_running') {
             const detail = svc.detail ? ` — ${svc.detail}` : '';
             lines.push(`${name}: ${outcome}${detail}`);
+            hasServiceNotes = true;
           }
         }
       }
@@ -1947,13 +2134,54 @@ if (masterToggleBtn && !masterToggleBtn.dataset.wired) {
           lines.join(' · '), action === 'stop' ? 'stop' : 'start', 'control',
           action, {});
       }
+
+      // Toast notification for result (#478)
+      if (!res.ok || !data || data.ok !== true) {
+        const msg = (data && data.message) ? data.message : `Request failed (HTTP ${res.status}).`;
+        showToast(msg, { tone: 'error' });
+      } else if (hasServiceNotes) {
+        const lineText = lines.join(' · ') || (action === 'stop' ? 'Stopped with warnings' : 'Started with warnings');
+        showToast(lineText, { tone: 'warn' });
+      } else {
+        if (action === 'start') {
+          if (isShadow) {
+            // Shadow mode runs a rehearsal, not the live bot: saying "Bot is
+            // running" would read as live exposure. Name the run, the store,
+            // the budget and the PID, then latch STARTING… until the run
+            // reports back (see checkPendingShadowStart).
+            const sr = (data && data.status && data.status.shadow_run) || {};
+            const runId = (data && data.run_id) || sr.run_id || null;
+            const dbPath = sr.db_path || (lastStatus && lastStatus.db_path) || '';
+            const dbName = String(dbPath).split(/[\\/]/).pop() || 'this store';
+            const minutes = (sr.minutes !== null && sr.minutes !== undefined) ? sr.minutes : null;
+            const pid = (data && data.pid !== null && data.pid !== undefined) ? data.pid : sr.pid;
+            noteShadowStartLaunched({ runId, dbName, minutes, pid });
+            const dur = (minutes !== null) ? ` for ${minutes} min` : '';
+            const who = (pid !== null && pid !== undefined) ? ` (PID ${pid})` : '';
+            showToast(`Shadow rehearsal ${runId || 'rehearsal'} launched on ${dbName}${dur}${who}. `
+              + 'Warming up — the pills turn green on the first heartbeat.', { tone: 'ok' });
+          } else {
+            const isRunning = data.status?.bot_state === 'RUNNING';
+            const msg = isRunning ? 'Bot is running.' : (data.message || 'Start request accepted.');
+            showToast(msg, { tone: 'ok' });
+          }
+        } else {
+          const msg = isShadow
+            ? (data.message || 'Shadow rehearsal stopped.')
+            : (data.message || 'Bot stopped.');
+          showToast(msg, { tone: 'ok' });
+        }
+      }
+
       if (data && data.status) {
         lastStatus = data.status;
       }
     } catch (e) {
       const errTag = isShadow ? `[SHADOW ${action.toUpperCase()} ERROR]` : `[${action.toUpperCase()} ERROR]`;
-      appendTickerEvent(`${errTag} ${e.message || String(e)}`,
-        e.message || String(e), 'start', 'control', action, {});
+      const errMsg = e.message || String(e);
+      appendTickerEvent(`${errTag} ${errMsg}`,
+        errMsg, 'start', 'control', action, {});
+      showToast(`[${action.toUpperCase()} ERROR] ${errMsg}`, { tone: 'error' });
     } finally {
       isStarting = false;
       isStopping = false;
@@ -8240,6 +8468,11 @@ async function pollStatus() {
       }
     }
 
+    // A latched shadow launch resolves here: the run appeared (→ "now
+    // running" toast) or the boot window lapsed (→ retry toast). One-shot:
+    // the latch clears on either outcome, so a 2s poll never double-toasts.
+    if (status) checkPendingShadowStart(status);
+
     // Render exposure bar (DT3) — header element, page-independent, cheap.
     if (kpi || lastKpi) renderExposure(kpi || lastKpi);
 
@@ -8305,7 +8538,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState,
@@ -8345,5 +8578,8 @@ if (typeof module !== 'undefined' && module.exports) {
     stitchClosedTradesRows, stitchClosedTradesHeadHtml,
     stitchOpenOrdersRows, stitchOpenOrdersHeadHtml,
     stitchPositionsRows, stitchPositionsHeadHtml, stitchHeldLegMarks,
-    stitchActiveMarketsRows, stitchActiveMarketsHeadHtml };
+    stitchActiveMarketsRows, stitchActiveMarketsHeadHtml,
+    showToast, dismissResetModal,
+    noteShadowStartLaunched, clearPendingShadowStart,
+    isShadowStartPending, checkPendingShadowStart, SHADOW_START_TIMEOUT_MS };
 }
