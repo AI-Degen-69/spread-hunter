@@ -4538,6 +4538,21 @@ function renderFillPathEdge(stats) {
     ? 'unmeasured' : (figure(value) * 100).toFixed(1) + '%';
   const closesN = (value) => `${count(value)} ${count(value) === 1 ? 'close' : 'closes'}`;
 
+  /* The band chip, the same one the rescue friction card uses: the server
+   * computes the band from the thresholds, the renderer only maps its name to
+   * a colour and holds no threshold of its own. A payload served before the
+   * bands key existed (or a hand-built one) renders no chips at all rather
+   * than inventing a verdict. */
+  const BAND_CHIP = { good: 'live', average: 'warn', bad: 'bad' };
+  const bands = edge.bands || null;
+  const chip = (metric) => {
+    if (!bands) return '';
+    const band = String(bands[metric] || 'unmeasured');
+    const modifier = BAND_CHIP[band] ? ' ' + BAND_CHIP[band] : '';
+    return `<div><span class="analytics-chip${modifier}" style="margin-top:6px">`
+         + `${esc(band.toUpperCase())}</span></div>`;
+  };
+
   const mergeN = count(edge.merge_count);
   const rescueN = count(edge.rescue_count);
   const resolved = mergeN + rescueN;
@@ -4553,10 +4568,11 @@ function renderFillPathEdge(stats) {
                        : 'unmeasured — one path has no closes');
   const hasThreshold = figure(edge.break_even_rescue_rate) !== null;
 
-  const tile = (label, value, cls, hint) => `
+  const tile = (label, value, cls, metric, hint) => `
     <div class="kpi-tile">
       <div class="kpi-label">${esc(label)}</div>
       ${fmtVal(value, cls)}
+      ${chip(metric)}
       <div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(hint)}</div>
     </div>`;
 
@@ -4564,17 +4580,22 @@ function renderFillPathEdge(stats) {
     <div class="kpi-grid">
       ${tile('Merge Expectancy', perClose(edge.merge_expectancy_usd),
              mergeN > 0 ? signClass(figure(edge.merge_expectancy_usd)) : '',
+             'merge_expectancy',
              `per close · ${closesN(edge.merge_count)}`)}
       ${tile('Rescue Expectancy', perClose(edge.rescue_expectancy_usd),
              rescueN > 0 ? signClass(figure(edge.rescue_expectancy_usd)) : '',
+             'rescue_expectancy',
              `per close · ${closesN(edge.rescue_count)}`)}
       ${tile('Rescue Rate', pct(edge.rescue_rate), '',
+             'rescue_rate',
              `${rescueN} of ${resolved} completed closes`)}
       ${tile('Break-Even Rescue Rate', hasThreshold ? pct(edge.break_even_rescue_rate) : thresholdWords,
              hasThreshold ? '' : 'null',
+             'break_even_rescue_rate',
              'the rescue rate that nets to zero')}
       ${tile('Net Expectancy', perClose(edge.net_expectancy_usd),
              figure(edge.net_expectancy_usd) !== null ? signClass(figure(edge.net_expectancy_usd)) : '',
+             'net_expectancy',
              'per close · both paths')}
     </div>
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
