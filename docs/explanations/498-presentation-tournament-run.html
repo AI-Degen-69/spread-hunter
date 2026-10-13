@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Try new trading ideas safely, then keep the winner</title>
+<style>
+  :root { --bg: #0b1117; --ink: #eaf1f6; --muted: #93a1b3; --accent: #82AAFF;
+          --card: #131c26; --line: #263445; --good: #4ade80; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 17px/1.6 -apple-system, "Segoe UI", Arial, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: clamp(26px, 4vw, 40px); line-height: 1.2; margin: 0 0 8px; }
+  h1 span { color: var(--accent); }
+  .lede { color: var(--muted); font-size: 19px; max-width: 640px; }
+  .stage { background: var(--card); border: 1px solid var(--line);
+           border-radius: 14px; padding: 24px; margin-top: 28px; }
+  .flow { display: flex; flex-wrap: wrap; gap: 0; align-items: stretch; margin: 18px 0 6px; }
+  .phase { flex: 1 1 140px; border: 2px solid var(--line); border-radius: 12px;
+           padding: 14px 12px; text-align: center; background: #0e1620;
+           transition: border-color .2s, transform .2s; min-width: 140px; }
+  .phase b { display: block; font-size: 15px; margin-bottom: 4px; }
+  .phase small { color: var(--muted); font-size: 13px; line-height: 1.4; display: block; }
+  .phase.on { border-color: var(--accent); transform: translateY(-3px); }
+  .phase .n { display: inline-block; width: 26px; height: 26px; line-height: 26px;
+              border-radius: 50%; background: var(--line); font-size: 14px; margin-bottom: 8px; }
+  .phase.on .n { background: var(--accent); color: #0b1117; font-weight: 700; }
+  .arrow { align-self: center; color: var(--muted); font-size: 22px; padding: 0 6px; }
+  .controls { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+  button { background: var(--accent); color: #0b1117; border: 0; border-radius: 9px;
+           padding: 10px 20px; font-size: 16px; font-weight: 700; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent);
+                 border: 1px solid var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  .readout { color: var(--muted); font-size: 15px; }
+  .detail { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px;
+            margin-top: 14px; min-height: 56px; font-size: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } .arrow { display: none; } }
+  .card { background: #0e1620; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; color: var(--accent); }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .try { margin-top: 16px; }
+  .try a { color: var(--accent); }
+  .foot { margin-top: 28px; color: var(--muted); font-size: 14px; }
+  .foot a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Try new trading ideas safely, <span>then keep the winner</span></h1>
+  <p class="lede">Before, there was one live setup and changing it was a leap of faith.
+    Now you can run several versions side by side on practice money, watch them live,
+    compare, and promote the winner to the new default.</p>
+
+  <section class="stage" aria-label="How a tournament run works">
+    <div class="flow" id="flow">
+      <div class="phase" data-i="0"><span class="n">1</span><b>Plan</b><small>Pick the versions to test</small></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="phase" data-i="1"><span class="n">2</span><b>Launch</b><small>Each version runs alone, practice money only</small></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="phase" data-i="2"><span class="n">3</span><b>Watch</b><small>Live view of every run</small></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="phase" data-i="3"><span class="n">4</span><b>Compare</b><small>One scoreboard, same market</small></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="phase" data-i="4"><span class="n">5</span><b>Promote</b><small>The winner becomes the default</small></div>
+    </div>
+    <div class="controls">
+      <button id="stepBtn" type="button">Step</button>
+      <button id="playBtn" type="button">Play</button>
+      <button id="resetBtn" type="button" class="ghost">Reset</button>
+      <span class="readout" id="readout">Step 1 of 5</span>
+    </div>
+    <p class="detail" id="detail"></p>
+  </section>
+
+  <section class="stage">
+    <div class="grid2">
+      <div class="card">
+        <h3>Pairs stay together</h3>
+        <p>Every trade is two halves bought for less than $1 combined. The system now
+          welds the halves under one ID, cancels hopeless strays, and never runs the
+          same job twice — so no half-trade is left behind silently.</p>
+      </div>
+      <div class="card">
+        <h3>Honest labels</h3>
+        <p>A missing half now says exactly what happened: green when the other half
+          already paid out, requoting when it was cancelled, waiting when nothing
+          happened yet. No more guessing from a blank cell.</p>
+      </div>
+    </div>
+    <p class="try"><b>Try it yourself:</b> open the dashboard at
+      <a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a> → Tournament Hub →
+      press launch on a run → open its cockpit and watch it trade practice money live.</p>
+  </section>
+
+  <p class="foot">Change put live: tournament runs + pair safety (merged).
+    <a href="https://github.com/AI-Degen-69/spread-hunter/pull/498">Update #498</a></p>
+</main>
+<script>
+(function () {
+  "use strict";
+  var details = [
+    "You describe the versions to test — for example cautious vs normal vs bold. Nothing trades yet.",
+    "Each version starts in its own sandbox with its own log. Real money is never touched.",
+    "A live cockpit per run: prices, pairs, profit as it happens. One click from the hub.",
+    "The hub lines the runs up on the same market and period, so the comparison is fair.",
+    "One press makes the winner the new default setup. The loser is kept for reference."
+  ];
+  var phases = Array.prototype.slice.call(document.querySelectorAll(".phase"));
+  var detail = document.getElementById("detail");
+  var readout = document.getElementById("readout");
+  var stepBtn = document.getElementById("stepBtn");
+  var playBtn = document.getElementById("playBtn");
+  var resetBtn = document.getElementById("resetBtn");
+  var idx = -1, timer = null;
+  var reduceMotion = window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function show(i) {
+    idx = i;
+    phases.forEach(function (p, k) {
+      p.classList.toggle("on", k === idx);
+    });
+    detail.textContent = details[idx];
+    readout.textContent = "Step " + (idx + 1) + " of " + phases.length;
+  }
+  function step() {
+    stop();
+    show((idx + 1) % phases.length);
+  }
+  function stop() {
+    if (timer) { clearInterval(timer); timer = null; playBtn.textContent = "Play"; }
+  }
+  stepBtn.addEventListener("click", step);
+  resetBtn.addEventListener("click", function () { stop(); show(0); });
+  playBtn.addEventListener("click", function () {
+    if (timer) { stop(); return; }
+    if (reduceMotion) { show((idx + 1) % phases.length); return; }
+    playBtn.textContent = "Pause";
+    timer = setInterval(function () { show((idx + 1) % phases.length); }, 2200);
+  });
+  show(0);
+})();
+</script>
+</body>
+</html>
