@@ -8,8 +8,9 @@ replaced is branch-scoped by its own header line and stays readable in git histo
 The Owner asked why #515 had no readout when #513 and #514 both shipped a card on the
 Performance & Analytics tab, and chose: **card now, latency live and depth pending.** The
 issue's "no DB or tape ingestion" decision is therefore lifted for exactly one thing —
-building `ClearedFill` rows from `quotes` + `fills` — and nothing else. Two guardrails below
-are amended by that decision and are marked so; every other line still stands.
+building `ClearedFill` rows from `quotes` + `fills` — and nothing else. Every guardrail below
+that the decision amends is marked **AMENDED** and names the decision it answers; every
+unmarked line still stands.
 
 ## Scope & File Boundaries
 
@@ -101,7 +102,11 @@ are amended by that decision and are marked so; every other line still stands.
   `filled_ts` converts milliseconds to seconds here, once. `clearing_price` is `None` on
   every record this branch can build, because no writer stores it yet.
 - `build()` gains exactly one additive key, `queue_realism`, always present:
-  `{cleared_fill_count, trade_through_depth{...}, fill_latency{...}}`.
+  `{cleared_fill_count, trade_through_depth{...}, fill_latency{...}}`. The ticket's settled
+  quantity names — `trade_through_depth_cents` and `fill_latency_sec` — reach that payload as
+  the percentile-suffixed keys defined above (`median_cents` / `p75_cents`,
+  `median_sec` / `p90_sec`), because each metric reports two readings and one unsuffixed key
+  would have to silently drop the other.
 
 ## Traffic-light freeze
 
@@ -123,6 +128,10 @@ may be hardcoded in a renderer, a script, a test fixture's expectation copy, or 
 - No test is skipped, deleted, or weakened to reach green; no new `pytest.mark.skip` /
   `xfail`, no swallowed exceptions, no `# type: ignore`, no narrowed assertion to fit output.
 - No new external dependency: standard library only, plus the module's existing `_finite`.
-- No change to any existing function's return shape, and no change to `build()`'s keys.
-- No new config, flag, CLI argument, dashboard element, or report script.
+- No change to any existing function's return shape. **AMENDED:** `build()` gains the one
+  additive `queue_realism` key and one optional trailing parameter (`quotes`) in the Metric
+  contract freeze above — the operator-approved scope change at the top of this file. It keeps
+  every key and value it had.
+- No new config, flag, CLI argument, report script, or CSS. **AMENDED:** one new dashboard
+  element, the `#queue-realism-readout` card and its renderer, per the same scope change.
 - A test that passes both with and without the change is not a test for this ticket.
