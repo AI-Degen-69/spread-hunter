@@ -31,7 +31,7 @@ T1 (prove commands) → T2 (docs edits; needs the proven command text) → T3 (g
 ## Tasks
 - [x] T1 (XS, [Docs]): re-run old + flagged tsc commands — DONE: old exits 2 (TS1343 @251,111), flagged exits 0 with 0 output bytes, no emitted files, record exit evidence. Depends on: none. Verify: `npx tsc --noEmit server.ts` shows TS1343 @251; flagged form silent exit 0, no emitted files (`git status --porcelain` clean of js/cjs artifacts). Skill: none.
 - [x] T2 (S, [Docs]): add one bridge type-check line — DONE: gate line in verifying.md §1, N1 resolution note appended (row verbatim) + one-sentence why to `docs/agents/verifying.md` §1; append N1 resolution note under the N1 row in `docs/issues/478-noticed-but-not-touching.md` (row text untouched). Depends on: T1. Verify: `grep -F "$GATE_CMD" docs/agents/verifying.md`. Skill: `documentation-and-adrs`.
-- [ ] T3 (S, [Code]): new `tests/test_tsc_gate_config.py` per contract above. Depends on: T2. Verify: `python -m pytest -q tests/test_tsc_gate_config.py` green; RED check: test fails on pre-change tree (verifying.md without the line). Skill: `test-driven-development`.
+- [x] T3 (S, [Code]): new `tests/test_tsc_gate_config.py` per contract above — DONE: RED shown via stash (1 failed), GREEN 4 passed; committed. Depends on: T2. Verify: `python -m pytest -q tests/test_tsc_gate_config.py` green; RED check: test fails on pre-change tree (verifying.md without the line). Skill: `test-driven-development`.
 Checkpoint after T1: command evidence recorded. Checkpoint after T3: docs + guard green.
 
 ## Open questions resolved from code
