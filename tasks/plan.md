@@ -87,7 +87,7 @@ Files that must NOT change: `core_brain/kpi.py`, `statistical_validation_run/art
 RESCUE_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")  # mirrors kpi.SINGLE_BUY_EXIT_METHODS, artifacts.EXIT_METHODS
 EXCLUDED_METHODS = ("venue_sync",)                                 # mirrors kpi.NON_TRADE_CLOSE_METHODS
 
-def fill_path_edge(closes: Sequence[dict] | Sequence[CloseRecord]) -> dict[str, Any]: ...
+def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]: ...  # shipped: dual-shape input read via _close_field; no registry import
 def break_even_rescue_rate(merge_mean: Optional[float],
                            rescue_mean: Optional[float]) -> tuple[Optional[float], str]: ...
 ```

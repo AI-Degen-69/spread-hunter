@@ -14,6 +14,13 @@ operator cannot tell which is happening. It summarises closes rather than
 drawing them, and it discloses the closes that fall outside both paths instead
 of folding them in.
 
+The omission rule below governs the charts, not that summary. A chart with no
+input draws nothing honest, so it is left out. `fill_path_edge` is always
+present, reporting zeroes and `None` for a run with no closes, because it is a
+summary a caller reads rather than a distribution a chart plots -- a caller must
+never have to branch on whether the key is there. Its zeroes say "no closes",
+never "no such measurement".
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -251,6 +258,12 @@ def break_even_rescue_rate(merge_mean: Optional[float],
 
 def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
     """Merge expectancy against rescue expectancy, in dollars per close.
+
+    `closes` is loosely typed on purpose: `kpi.report` passes the registry's
+    close dicts, while a test or a repair script may hold `CloseRecord` objects,
+    and `_close_field` reads whichever shape it gets. Naming the registry type
+    here would buy nothing at runtime and would make this module import the
+    registry. Both shapes measure identically.
 
     One close record is one equal observation. `other` (a leg held to
     settlement, a generic sell) and `excluded` (bookkeeping rows) are counted
