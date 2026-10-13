@@ -438,6 +438,7 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
         "position_returns": returns,
         "closed_positions": returns["positions"],
         "pair_costs": pair_costs(closes),
+        "fill_path_edge": fill_path_edge(closes),
         "probability_bell": probability_bell(fills),
         "markout": markout(markouts),
     }
