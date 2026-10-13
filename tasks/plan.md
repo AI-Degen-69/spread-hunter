@@ -1,71 +1,40 @@
-# Plan — #493 [FIX] Sentry and offense loops each price what they inspect from their own book read
+# Plan — #506 [CONFIGURE] tsc type-check gate fails for lack of module config
 
-Branch: i493/sentry-and-offense-loops-each-price-what-they-insp | Issue: #493
-Size: Standard | Type: Debug + Code [Backend/Logic]
-Stack: Python, pytest, SQLite
-Labels: bug, ready-for-agent
-Note: supersedes the #488 plan below in this file's history (kept in git); CodeRabbit plan reply: none arrived (only our request comment of 03:13Z).
+Branch: i506/tsc-type-check-gate-fails-for-lack-of-module-config | Issue: #506
+Size: Small | Type: Docs + Code(test) [Docs]
+Stack: Node (server.ts bridge) + pytest | Labels: ready-for-agent
+Note: supersedes the #493 plan below in this file's history (kept in git); CodeRabbit plan reply: adopted in part, see intake note.
 
 ## CodeRabbit intake note
-What was adopted: nothing (no reply). Rejected: n/a. [UNVERIFIED]: nothing — all seams below verified verbatim in the tree.
+Adopted: nodenext flags on the command line (tsc ignores tsconfig.json when a file is named); keep history docs verbatim + resolution note; static guard test; no server.ts edits; new type errors beyond the module setting become follow-ups.
+Rejected: editing `CONSTRAINTS.md:25` and `tasks/plan.md:96` — neither file contains the gate (verified: `tsc --noEmit` appears nowhere in either; the only repo hit is the historical N1 row in `docs/issues/478-noticed-but-not-touching.md:8`). Editing those lines would invent content.
+[UNVERIFIED]: nothing — every seam below verified verbatim in the tree.
 
-## Improvement proposal (adopted, simplification/hardening)
-Pure-fresh-for-sentry would drop the shadow-01 adverse-selection guard the
-snapshot was built for. Evidence, verbatim from
-`core_brain/shadow_exec.py:970` docstring: "shadow-01 showed h1 markout drift
-of -17c to -37c on 4 of 12 exits." Adopted instead: age-bound snapshot —
-fresh snapshots (seconds old) keep the guard, stale ones (>60s) fall back to
-the fresh book. One condition, both biases dead.
+## Spec (embedded; Small tier, no SPEC.md)
+Goal: future plans copy a bridge type-check gate that exits 0 instead of inheriting TS1343.
+- The gate command is `npx tsc --noEmit --module nodenext --moduleResolution nodenext server.ts`.
+- Why flags, not tsconfig: tsc ignores `tsconfig.json` when a file is named on the command line, so the module setting must ride on the invocation. `nodenext` follows Node's own rules and reads `"type": "module"` from `package.json` (verified present).
+- Out of scope (issue text): fixing non-module type errors (follow-ups if real); `dashboard/server.py`, `data/orders.db`, `core_brain/*`; no `tsconfig.json` added; no runtime change to `server.ts`.
+- Files that must NOT change: `server.ts`, `package.json`, CI workflow, `CONSTRAINTS.md` gate sections (no gate there to fix), historical N1 row text.
+
+## Improvement proposal (adopted, simplification)
+Do not touch per-issue `tasks/plan.md` as a gate source — it is scratch owned by whatever issue is active (currently `#493`, 71 lines, no tsc text). Evidence, verbatim: `# Plan — #493 [FIX] Sentry and offense loops...` vs CodeRabbit's `Update tasks/plan.md:96 with the same command`. The single shared source is `docs/agents/verifying.md`; the plan pins the gate there only.
 
 ## Interface contracts
-- `ShadowExecutionClient._sell_into_bids(token_id, shares, *, floor, fresh=False)`
-  signature unchanged by this round (keeps the `fresh` flag from #491;
-  hard-stop exits keep calling with `fresh=True` -- see
-  `tests/test_hard_stop_fresh_exit.py`); behavior gains: snapshot older than
-  `MAX_SNAPSHOT_AGE_SEC = 60.0` is treated as absent (fresh-book path).
-- `read_last_token_snapshot` unchanged (still returns newest row for run).
-- `queue_marks.ts` is epoch seconds; age = `self._now_fn() - snap["ts"]`.
-- Files that must NOT change: `order_manager.py`, `order_registry.py`,
-  `trader_loop.py`, `single_buy_saver.py`, `data/orders.db`.
+No runtime interfaces. Test contract for `tests/test_tsc_gate_config.py`:
+- `GATE_CMD = "npx tsc --noEmit --module nodenext --moduleResolution nodenext server.ts"` (single source in the test; docs must contain it verbatim).
+- Asserts: gate text in `docs/agents/verifying.md`; bare `npx tsc --noEmit server.ts` NOT documented as a gate (regex excludes the flagged form); `package.json` `"type" == "module"`; `server.ts` contains `import.meta` (the reason flags exist).
 
 ## Dependency graph
-- Task 1 (RED test) — unblocks Task 2.
-- Task 2 (age-bound fix) — depends on Task 1.
-- Task 3 (existing snapshot-case ts updates + full focused regression) — depends on Task 2.
-- Task 4 (commit, push, PR) — depends on Task 3.
+T1 (prove commands) → T2 (docs edits; needs the proven command text) → T3 (guard test; needs the exact text T2 writes). Linear.
 
 ## Tasks
+- [x] T1 (XS, [Docs]): re-run old + flagged tsc commands — DONE: old exits 2 (TS1343 @251,111), flagged exits 0 with 0 output bytes, no emitted files, record exit evidence. Depends on: none. Verify: `npx tsc --noEmit server.ts` shows TS1343 @251; flagged form silent exit 0, no emitted files (`git status --porcelain` clean of js/cjs artifacts). Skill: none.
+- [x] T2 (S, [Docs]): add one bridge type-check line — DONE: gate line in verifying.md §1, N1 resolution note appended (row verbatim) + one-sentence why to `docs/agents/verifying.md` §1; append N1 resolution note under the N1 row in `docs/issues/478-noticed-but-not-touching.md` (row text untouched). Depends on: T1. Verify: `grep -F "$GATE_CMD" docs/agents/verifying.md`. Skill: `documentation-and-adrs`.
+- [ ] T3 (S, [Code]): new `tests/test_tsc_gate_config.py` per contract above. Depends on: T2. Verify: `python -m pytest -q tests/test_tsc_gate_config.py` green; RED check: test fails on pre-change tree (verifying.md without the line). Skill: `test-driven-development`.
+Checkpoint after T1: command evidence recorded. Checkpoint after T3: docs + guard green.
 
-### [x] Task 1 — RED: stale-snapshot test fails [Size: S] (done: 901-second case in `tests/test_exit_price_realism.py`)
-- Domain: [Backend/Logic]. Skill: test-driven-development.
-- File: `tests/test_exit_price_realism.py`.
-- Add `test_rehearsed_sell_ignores_a_stale_snapshot_and_uses_the_fresh_book`:
-  `write_queue_mark` with `ts=time.time() - 901`, `best_bid=0.54`,
-  `best_bid_size=8.0`; fresh book bids `{0.33: 20.0}`; floor `0.31`;
-  assert `filled == 5.0`, `avg == 0.33` (mirrors the i492 NBA leg).
-- Verify it FAILS on the current tree (books 0.54).
-- Depends on: nothing.
-
-### [x] Task 2 — GREEN: age-bound snapshot in `_sell_into_bids` [Size: S] (done: `MAX_SNAPSHOT_AGE_SEC = 60.0` + docstring)
-- Domain: [Backend/Logic].
-- File: `core_brain/shadow_exec.py:59` (constant), `:970` (method + docstring).
-- Add `MAX_SNAPSHOT_AGE_SEC = 60.0` next to `HARD_STOP_SELL_REASONS`;
-  in `_sell_into_bids`, skip the snapshot ladder when
-  `self._now_fn() - float(snap["ts"]) > MAX_SNAPSHOT_AGE_SEC`;
-  update the docstring (snapshot = prior rotation, seconds old).
-- Depends on: Task 1.
-
-### [x] Task 3 — Existing snapshot cases go now-relative + regression [Size: S] (done: suites green)
-- Domain: [Backend/Logic].
-- File: `tests/test_exit_price_realism.py` (`ts=1_000.0` -> `ts=time.time()`
-  in the four snapshot tests; price/size assertions UNCHANGED).
-- Run: `python -m pytest -q tests/test_exit_price_realism.py tests/test_hard_stop_fresh_exit.py tests/test_aged_out_rescue.py tests/test_risk_guardian.py tests/test_settlement_sweeper.py tests/test_shadow_exec.py` — all green.
-- Depends on: Task 2.
-
-### [ ] Task 4 — Commit, push, open PR [Size: XS] (superseded: #493 work folds into #498, no separate PR)
-- One commit on `i493/...`, push, `gh pr create` for #493. No merge (Station IV).
-- Depends on: Task 3.
-
-## Checkpoints
-- After Task 2: RED test flips GREEN; focused file green.
-- After Task 3: all six suites green.
+## Open questions resolved from code
+- `needs-answers`: none on this issue. No operator questions.
+- typescript/@types/node present in devDependencies and installed (`node_modules/.bin/tsc` exists) — no install, no lockfile change.
+- No `tsconfig.json` in root (verified absent) — none added per scope.
