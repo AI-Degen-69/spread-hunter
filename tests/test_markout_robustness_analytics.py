@@ -156,7 +156,7 @@ def test_a_buy_that_ran_in_our_favour_reads_positive_cents_and_good():
     out = signed_markout([_row(mid_h0=0.51)])
 
     interval = _only(out)
-    assert interval == {"horizon": "5m", "markout_cents": 2.0, "samples": 1,
+    assert interval == {"horizon": "5m", "markout_cents": 1.0, "samples": 1,
                         "band": "good", "meaning": MARKOUT_BAND_WORDS["good"]}
 
 
@@ -170,28 +170,49 @@ def test_a_flat_mid_after_the_fill_reads_zero_and_still_good():
 def test_a_buy_the_tape_ran_away_from_reads_negative_cents_and_bad():
     interval = _only(signed_markout([_row(mid_h0=0.49)]))
 
-    assert interval["markout_cents"] == -2.0
+    assert interval["markout_cents"] == -1.0
     assert interval["band"] == "bad"
     assert interval["meaning"] == MARKOUT_BAND_WORDS["bad"]
 
 
 def test_a_sell_is_signed_the_other_way_round():
     # A seller is hurt by the mid RISING and helped by it falling.
-    assert _only(signed_markout([_row(side="SELL", mid_h0=0.51)]))["markout_cents"] == -2.0
-    assert _only(signed_markout([_row(side="SELL", mid_h0=0.49)]))["markout_cents"] == 2.0
+    assert _only(signed_markout([_row(side="SELL", mid_h0=0.51)]))["markout_cents"] == -1.0
+    assert _only(signed_markout([_row(side="SELL", mid_h0=0.49)]))["markout_cents"] == 1.0
+
+
+def test_cents_are_cents_of_price_not_a_percent_of_what_we_paid():
+    """A 1c move reads 1.0 whichever price we filled at; the chart's bps figure does not.
+
+    The two units are not interchangeable. `bps / 100` is the PERCENT move of the fill price, so
+    reading it as cents would call a 1c drift on a 25c fill `4.0` and score it `bad` against the
+    ticket's cent bands, while the same drift on a 75c fill would read `1.33`. This is the pin
+    that each reader names its own unit off the raw dollar displacement it is handed.
+    """
+    # One cent our way, on a cheap fill and on a dear one: the same cent either time.
+    assert _only(signed_markout([_row(fill_price=0.25, mid_h0=0.26)]))["markout_cents"] == 1.0
+    assert _only(signed_markout([_row(fill_price=0.75, mid_h0=0.76)]))["markout_cents"] == 1.0
+    # The chart answers the other question about the very same row: 400bps of a 25c fill.
+    assert _only(markout([_row(fill_price=0.25, mid_h0=0.26)]))["displacement_bps"] == 400.0
+
+    # 0.6c against us is `average` (mild adverse selection), not the `bad` a percent-scale
+    # figure would report -- the whole point of the ticket's band boundaries.
+    adverse = _only(signed_markout([_row(fill_price=0.25, mid_h0=0.244)]))
+    assert adverse["markout_cents"] == pytest.approx(-0.6)
+    assert adverse["band"] == "average"
 
 
 def test_the_figure_is_the_median_across_fills_not_a_size_weighted_mean():
     """The ticket's band rides on the MEDIAN; size carries no weight here.
 
-    +2.0c on 10 shares and -2.0c on 30 shares: the weighted mean the chart above reports is
-    -1.0c, and the median is 0.0c. Two different numbers, two different questions.
+    +1.0c on 10 shares and +3.0c on 30 shares: the weighted mean the chart above reports is
+    2.5c, and the median is 2.0c. Two different numbers, two different questions.
     """
-    out = signed_markout([_row(size=10.0, mid_h0=0.51), _row(size=30.0, mid_h0=0.49)])
+    out = signed_markout([_row(size=10.0, mid_h0=0.51), _row(size=30.0, mid_h0=0.53)])
 
     interval = _only(out)
-    assert interval["markout_cents"] == 0.0
-    assert interval["markout_cents"] != -1.0
+    assert interval["markout_cents"] == 2.0
+    assert interval["markout_cents"] != 2.5
     assert interval["samples"] == 2
 
 
@@ -211,7 +232,7 @@ def test_the_caller_can_narrow_the_horizons():
 
     interval = _only(out)
     assert interval["horizon"] == "1h"
-    assert interval["markout_cents"] == 10.0
+    assert interval["markout_cents"] == 5.0
 
 
 def test_rows_with_no_usable_fill_or_mark_are_dropped():
@@ -266,7 +287,7 @@ def test_the_unsigned_chart_reading_is_unchanged():
     assert chart["displacement_bps"] == 200.0
     assert chart["samples"] == 1
     assert "markout_cents" not in chart
-    assert signed_markout([row])["intervals"][0]["markout_cents"] == -2.0
+    assert signed_markout([row])["intervals"][0]["markout_cents"] == -1.0
 
 
 def test_the_shared_loop_reports_every_matured_horizon_in_chart_order():
@@ -614,7 +635,7 @@ def test_the_markout_and_mae_halves_read_the_rows_they_are_handed():
 
     interval = out["markout"]["intervals"][0]
     assert interval["horizon"] == "5m"
-    assert interval["markout_cents"] == -2.0
+    assert interval["markout_cents"] == -1.0
     assert interval["band"] == "bad"
     assert interval["samples"] == 3
     assert out["mae"]["measured"] == 3
@@ -642,7 +663,7 @@ def test_a_run_with_rows_moves_only_the_section_that_reads_them():
 
     # The new section reads those rows...
     assert loaded["robustness"]["mae"]["measured"] == 1
-    assert loaded["robustness"]["markout"]["intervals"][0]["markout_cents"] == -2.0
+    assert loaded["robustness"]["markout"]["intervals"][0]["markout_cents"] == -1.0
     # ...and an empty run still carries it, saying unmeasured rather than zero.
     assert bare["robustness"]["mae"]["median_cents"] is None
     assert bare["robustness"]["markout"]["intervals"] == []

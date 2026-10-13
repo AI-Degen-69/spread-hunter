@@ -318,14 +318,22 @@ Status (the plan is the source of truth for completion):
   `markout_cents_band()`, `MARKOUT_BAND_WORDS` and `signed_markout()`. Median of per-fill signed
   cents, `band` + `meaning` per interval, unmatured horizons omitted.
 - Verification (automated): each row `fill_price 0.50`, `size 10.0` unless stated —
-  BUY `mid_h0 0.51` → `markout_cents == 2.0`, `band == "good"`; BUY `0.50` → `0.0` / `good`;
-  BUY `0.49` → `-2.0` / `bad`; SELL `0.51` → `-2.0`, SELL `0.49` → `2.0`; BUY at `0.51` and `0.49`
-  (different sizes) → median `0.0`, `samples == 2`, and the mean would have been a different
-  number (the pin that this is a median); unknown side `"HOLD"` only → `intervals == []`;
+  BUY `mid_h0 0.51` → `markout_cents == 1.0`, `band == "good"`; BUY `0.50` → `0.0` / `good`;
+  BUY `0.49` → `-1.0` / `bad`; SELL `0.51` → `-1.0`, SELL `0.49` → `1.0`; BUY at `0.51` and `0.53`
+  (different sizes) → median `2.0`, `samples == 2`, and the weighted mean would have been `2.5`
+  (the pin that this is a median); unknown side `"HOLD"` only → `intervals == []`;
   `mid_h0` set with `mid_h3 None` → only the 5m interval; `horizons=(("mid_h1", "1h"),)` → only 1h;
   band edges `0.0` → `good`, `-0.4` → `average`, `-1.0` → `bad`, `None` → `unmeasured` (never
   `bad`); unchanged sibling — `markout([<SELL row, mid_h0 0.51>])["intervals"][0]["displacement_bps"]
   == 200.0`.
+  **Corrected during Station V (CodeRabbit, `core_brain/statistical_analytics.py`):** these
+  expectations were first written as `2.0` / `-2.0` / `10.0`, which is `bps / 100` — the PERCENT
+  move of the fill price, not cents of price. The two agree only on a $1.00 fill, so the figures
+  were inflated by `1 / fill` and the ticket's cent bands were being scored against a percentage.
+  The shared loop now returns the raw dollar displacement (`(later - fill) * direction`) and each
+  reader names its own unit: `markout()` in bps, `signed_markout()` in `delta * 100`. T2 also
+  carries a dedicated pin — a 1c move reads `1.0` on both a 25c and a 75c fill, and a 0.6c
+drift on a cheap fill is `average`, not `bad`.
 - RED expectation: `ImportError: cannot import name 'markout_cents_band'` (or `signed_markout`).
 
 ### T3 — Maximum adverse excursion over the holding window, and SQN · size M · `[Backend/Logic]`

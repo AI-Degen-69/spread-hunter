@@ -1137,12 +1137,19 @@ def _markout_direction(row: Any) -> Optional[float]:
 
 def _markout_samples(rows: Sequence[Any], horizons: Sequence[tuple[str, str]],
                      direction_for: Callable[[Any], Optional[float]],
-                     ) -> dict[str, list[tuple[float, float]]]:
-    """Per matured horizon, one `(signed displacement in bps, size)` pair per usable fill.
+                     ) -> dict[str, list[tuple[float, float, float]]]:
+    """Per matured horizon, one `(signed displacement, fill price, size)` triple per usable fill.
 
     Shared by `markout()` (the size-weighted mean of that displacement, unsigned, bps) and
     `signed_markout()` (the median of it, signed by side, cents), so the two readers cannot
     disagree about which rows count or how one displacement is derived.
+
+    The displacement is the RAW price difference in DOLLARS, and no unit is applied here on
+    purpose. Each reader names its own from the raw triple -- bps (`delta / fill * 10_000`) for
+    the chart, cents of price (`delta * 100`) for the gates -- because a unit baked into the
+    shared helper is precisely how two readers end up publishing different quantities under one
+    word. The sibling conversion is not interchangeable: bps/100 is the PERCENT move of the fill
+    price, which equals cents only when the fill happened at $1.00.
 
     A row is skipped when `direction_for` refuses it, when the horizon's mark or the fill price
     is missing or non-finite, when the fill price is not positive (the divisor), or when the
@@ -1165,8 +1172,8 @@ def _markout_samples(rows: Sequence[Any], horizons: Sequence[tuple[str, str]],
             size = _finite(_close_field(row, "size")) or 1.0
             if size <= 0:
                 continue
-            # bps of the fill price: a 1c move on a 50c fill is 200bps.
-            collected.append((((later - fill) / fill) * 10_000.0 * direction, size))
+            # Raw and signed, in dollars, with the fill it happened against and the weight.
+            collected.append(((later - fill) * direction, fill, size))
         if collected:
             samples[label] = collected
     return samples
@@ -1181,6 +1188,11 @@ def signed_markout(rows: Sequence[Any],
     than shown at zero, and a row whose side is neither BUY nor SELL is skipped: its sign cannot
     be derived, and a guessed sign would put a fabricated number under a colour.
 
+    Cents of PRICE, the absolute move -- a 1c drift on a 50c fill reads `1.0` here and `200.0` on
+    the chart's bps scale, so the ticket's cent bands score the same quantity the MAE half
+    reports. Units are named outright because "a full cent against us" means a cent of price,
+    not a percent of what we paid.
+
     The MEDIAN across fills, deliberately, not the size-weighted mean: one whale fill must not
     move the figure the traffic-light band is computed from. `markout()` above is the
     size-weighted mean in bps, and the two are different questions about the same rows.
@@ -1190,8 +1202,11 @@ def signed_markout(rows: Sequence[Any],
     """
     intervals = []
     for label, samples in _markout_samples(rows, horizons, _markout_direction).items():
-        # bps -> cents of the fill price, linearly interpolated, so p50 IS the median.
-        median = _percentile([value / 100.0 for value, _ in samples], 0.50)
+        # Dollars -> cents of PRICE (`delta * 100`), linearly interpolated, so p50 IS the median.
+        # Going via the chart's bps figure instead would report the move as a percent of what we
+        # paid -- 2.0 for a 1c move on a 50c fill -- and would score the ticket's cents bands
+        # against that percent, flagging a 0.6c drift on a cheap fill as `bad`.
+        median = _percentile([delta * 100.0 for delta, _, _ in samples], 0.50)
         rounded = None if median is None else round(median, 4)
         band = markout_cents_band(rounded)
         intervals.append({
@@ -1575,8 +1590,9 @@ def markout(markouts: Sequence[dict]) -> dict[str, Any]:
     intervals = []
     for label, samples in _markout_samples(markouts, MARKOUT_HORIZONS,
                                            lambda row: 1.0).items():
-        weighted = sum(value * size for value, size in samples)
-        weight = sum(size for _, size in samples)
+        # The chart's unit, named here: bps of the fill price. A 1c move on a 50c fill is 200bps.
+        weighted = sum((delta / fill) * 10_000.0 * size for delta, fill, size in samples)
+        weight = sum(size for _, _, size in samples)
         intervals.append({
             "horizon": label,
             "displacement_bps": round(weighted / weight, 4),
