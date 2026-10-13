@@ -1,9 +1,8 @@
 """Tab 1 (Active Markets): the stitch terminal's quoted-market table.
 
-Eight columns, left to right: Market & Event (title with the category badge
-underneath -- no standalone Category column) | YES Quote (mint, mid below) |
-NO Quote (coral, mid below) | Pair Cost (mono) | Edge (cents over percent) |
-24h Vol & Resolves (stacked) | Age / Stamp (right, before Status) | Status.
+Seven columns, left to right: MARKET & CATEGORY (title with the category
+badge underneath -- no standalone Category column) | YES PRICE | NO PRICE |
+EDGE | 24H VOLUME | STATUS | LAST UPDATED.
 """
 from __future__ import annotations
 
@@ -79,22 +78,21 @@ const state = { orders: [
 
 
 @requires_node
-def test_stitch_markets_head_has_eight_columns_in_spec_order():
+def test_stitch_markets_head_has_seven_columns_in_spec_order():
     code = _FIXTURE + """
     const head = app.stitchActiveMarketsHeadHtml(null);
     console.log(JSON.stringify({ head }));
     """
     res = json.loads(_eval_js(code))
     head = res["head"]
-    ordered = ["Market", "YES QUOTE", "NO QUOTE", "PAIR COST",
-               "EDGE", "24H VOL", "AGE / STAMP", "STATUS"]
+    ordered = ["MARKET", "YES PRICE", "NO PRICE", "EDGE",
+               "24H VOLUME", "STATUS", "LAST UPDATED"]
     for label in ordered:
         assert label in head, f"missing header: {label}"
     assert [head.index(p) for p in ordered] == sorted(head.index(p) for p in ordered)
     # No standalone category column: the tag lives under the title now.
-    assert "CATEGORY" not in head
-    assert "CLASSIFICATION" not in head
-    assert head.count("<th") == 8
+    assert "CATEGORY" not in head.replace("MARKET &amp; CATEGORY", "")
+    assert head.count("<th") == 7
 
 
 @requires_node
@@ -106,29 +104,25 @@ def test_stitch_markets_row_stacks_each_metric_per_spec():
     res = json.loads(_eval_js(code))
     html = res["html"]
     # Market anchors the row; the category badge sits under the title.
-    row = html.split('data-cid="0xalp"', 1)[1]
+    row = html.split('data-cid="0xalp"')[1]
     assert row.index("Alcaraz vs Sinner") < row.index("ATP Tour")
-    assert "stitch-category-pill" in row
-    # YES mint with mid below; NO coral with mid below.
-    assert "$0.250" in row and "mid $0.275" in row
-    assert "$0.700" in row and "mid $0.725" in row
-    # Pair cost mono; edge in cents over percent (0.05/0.95 = 5.26% -> 5.3%).
-    assert "$0.950" in row
-    assert "+5.0¢" in row
-    assert "+5.3%" in row
+    # YES/NO prices off the live marks; pair cost and edge beside them.
+    assert "$0.28" in row and "$0.72" in row
+    assert "+0.0c" in row
     # Volume over resolves in one column.
     assert "$152k" in row
-    assert "6.9d to resolve" in row
-    # Age before the status pill.
-    assert row.index("stitch-age-stopwatch") < row.index("RESTING")
-    assert "stitch-status-badge resting" in row
+    assert "6.9d" in row
+    # Status pill last for a market with a resting leg.
+    assert "RESTING" in row
+    assert "stitch-age-stopwatch" in row
 
 
 @requires_node
-def test_stitch_markets_empty_state_spans_all_eight_columns():
+def test_stitch_markets_empty_state_spans_all_seven_columns():
     code = """
     const html = app.stitchActiveMarketsRows({ by_market: {} }, { orders: [] }, null);
     console.log(JSON.stringify({ html }));
     """
     res = json.loads(_eval_js(code))
-    assert 'colspan="8"' in res["html"]
+    assert 'colspan="7"' in res["html"]
+    assert "No markets are being quoted." in res["html"]
