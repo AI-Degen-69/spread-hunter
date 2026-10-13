@@ -42,6 +42,15 @@ planned alongside them are gone on purpose, not deferred: under this fill rule t
 measure a tautology or an unverifiable guess, and `queue_ahead` stays descriptive
 telemetry that gates nothing.
 
+The fourth section also is not a chart, and it asks the question a profitable-looking run
+raises: was that the tape or the strategy. `robustness` (#516) reads the markout rows and the
+closes side by side and reports four readings -- the signed post-fill displacement as a median
+across fills, in cents, with the ticket's bands; the maximum adverse excursion over a holding
+window, descriptive and deliberately unbanded; the 95% band on mean close PnL; and the system
+quality number. The last two look like the same question from different angles, and they are
+not merged into one verdict: a run can have a proven positive mean on too few trades to call
+the edge stable, and a single combined word would hide which half said so.
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -1137,8 +1146,10 @@ def _markout_samples(rows: Sequence[Any], horizons: Sequence[tuple[str, str]],
 
     A row is skipped when `direction_for` refuses it, when the horizon's mark or the fill price
     is missing or non-finite, when the fill price is not positive (the divisor), or when the
-    size is zero or negative. A horizon nothing matured into is absent from the mapping, which
-    is how an unmatured fill avoids being read as a flat one.
+    size is NEGATIVE. A missing or zero size takes unit weight instead of dropping the row,
+    mirroring `markout()`'s long-standing `_finite(size) or 1.0` -- the two readers share this
+    helper precisely so they cannot diverge on which rows count. A horizon nothing matured into
+    is absent from the mapping, which is how an unmatured fill avoids being read as a flat one.
     """
     samples: dict[str, list[tuple[float, float]]] = {}
     for column, label in horizons:

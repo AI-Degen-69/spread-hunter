@@ -1,0 +1,18 @@
+# Noticed-but-not-touching — Issue #516 (Station IV)
+
+Issue #516 adds the four robustness readings (`signed_markout`, `excursion_summary`,
+`mean_pnl_ci` reuse, `system_quality_number`), the always-present `robustness` payload
+section, and the `#robustness-readout` card on the Reports & Analytics page. It changes no
+writer, no sampler and no fill-model logic, so the two candidates below were recorded rather
+than fixed here. N2 is the one worth the operator's attention: two screens in this repo can
+report different confidence bands over the same closes.
+
+| ID | Candidate | Discovering station | Evidence | Status | Resolution |
+|----|-----------|---------------------|----------|--------|------------|
+| N1 | **The payload's key names are namespaced, while the issue's settled vocabulary is flat.** The issue's operator decision reads: *"**Field vocabulary:** new fields named `markout_cents` (per horizon), `mae_cents`, `mean_pnl_ci_lower_cents` / `mean_pnl_ci_upper_cents`, `sqn`; reuse existing markout and CI helper names where they exist."* The shipped payload carries `markout_cents` and `sqn` verbatim, but nests the other two: `robustness.mae.median_cents` / `p90_cents` and `robustness.mean_pnl_ci.lower_cents` / `upper_cents`. | IV | Issue #516 §Operator decisions (field vocabulary) vs `core_brain/statistical_analytics.py::robustness` (`{"markout", "mae", "mean_pnl_ci", "sqn"}`) and `mean_pnl_ci`'s own `levels[].lower` / `.upper` | dismissed | The flat names could not carry this section's information: the issue's singular `mae_cents` cannot name both the median and the p90 that the same decision requires ("MAE (median, p90)"), and `mean_pnl_ci_lower_cents` duplicates a figure `mean_pnl_ci` already returns as `levels[].lower`. The namespaced keys are unambiguous, and `mae_cents` itself is kept on the pure function's return (`max_adverse_excursion`) so the vocabulary is still present. Ratified by the Station II frozen contract; no reader yet consumes these names besides the card. |
+| N2 | **The dashboard's own confidence bands use a normal multiplier while the payload uses Student-t, so the chart and the robustness card can disagree over the same closes.** The chart code hard-codes `const z = currentCiLevel === 95 ? 1.96 : 1.645` and pairs it with `stdev / Math.sqrt(samples)`, whereas `kpi.py`'s helper switches to the t table below 30 degrees of freedom (its own comment: on two closes the normal band reads `+$0.04 to +$3.96`, "a confident 'profitable' verdict drawn from two observations", while "the t band on the same two closes spans zero, which is the truth"). The new card reads the t-based figure, so on a small sample the two screens draw different intervals. | IV | `dashboard/static/app.js:3100`, `:3120`, `:3138`, `:3156` (`z = 1.96 / 1.645`) and `:3136` (`stdev / Math.sqrt(pc.samples_count)`) vs `core_brain/kpi.py` `_CI_T_BY_DF` / `_ci_critical_value` and `statistical_analytics.ci_critical_value` | open | Out of #516's scope, and recorded in `tasks/plan.md` as deliberately not reconciled. Fixing it means changing a shipped chart's contract (or threading the payload's band into the chart), which belongs in its own issue rather than in the branch that added a second reader. |
+
+Nothing else the review touched needed a change on this branch: the renderer holds no
+threshold of its own (every band arrives as data), MAE carries no chip by design, and the
+`analytics-chip` modifiers reuse the theme's existing `live` / `warn` / `bad` vocabulary
+rather than minting a new one.
