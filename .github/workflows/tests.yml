@@ -46,3 +46,22 @@ jobs:
       - name: Run tests
         shell: bash
         run: python -m pytest -q $(python scripts/ci/pytest_shard.py --shard "${{ matrix.shard }}" --of 6)
+
+  static-versions:
+    # Cosmetic changes must stay visible: a dashboard static asset changed
+    # without its ?v= bump ships invisibly to every cached browser.
+    # Unit-tested in tests/test_static_versions.py; ~30s, no dependencies.
+    name: static asset versions
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check ?v= bumps
+        shell: bash
+        run: python scripts/ci/check_static_versions.py --base "${{ github.event.pull_request.base.sha || github.event.before }}" --head "${{ github.sha }}"
