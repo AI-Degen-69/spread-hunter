@@ -36,7 +36,7 @@ Supersedes the #513 `fill_path_edge` spec in this file's history (kept in git).
 
 | Case | Expected |
 | --- | --- |
-| `trigger_bid` and `fresh_bid` both recorded, exit at the trigger (zero slippage) | timeline 0, execution 0, SLED 0, overshoot 0 |
+| `trigger_bid` and `fresh_bid` both recorded, exit at the trigger (zero slippage) | latency 0, execution 0, SLED 0, overshoot 0 |
 | Adverse slippage with a large taker fee | both hops measured, SLED = their exact sum, overshoot = SLED / planned risk, TCDR = fee / \|payoff\| |
 | Price improvement (exit above the trigger) | negative SLED and hops kept (not clipped), bands read good |
 | `trigger_bid` absent, `fresh_bid` present | reference = `entry - 0.04`, source `assumed_offset`; latency `None`; SLED still reported against the assumed reference |
@@ -44,7 +44,7 @@ Supersedes the #513 `fill_path_edge` spec in this file's history (kept in git).
 | `planned_risk <= 0` (trigger at or above entry) | overshoot `None` + status, never `ZeroDivisionError` |
 | `realized_pnl` 0 or missing | TCDR `None`, never `ZeroDivisionError` |
 | `fee` `NULL` | `fee_measured` false, TCDR `None` — "not measured", never 0 |
-| No shares, or shares `<= 0` | every per-close metric `None` |
+| No shares, or shares `<= 0` | the figures that need a share count are `None`: entry price, the `proceeds / shares` exit fallback, and therefore the assumed reference and the overshoot. The drag still measures off a recorded leg price and a recorded `trigger_bid`, and TCDR still measures off a recorded fee and payoff — a per-share price and a ratio do not need the share count. (Corrected during the build: the row first said "every per-close metric", which would have made the code require an input it does not use.) |
 | No rescue closes at all | summary present with zero counts and `None` means, all bands `unmeasured` |
 | Merge / venue-sync / other closes in the list | excluded from the summary population, counted as `non_rescue_count` |
 | Input given as `CloseRecord` objects instead of dicts | identical output |
