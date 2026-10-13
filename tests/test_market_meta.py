@@ -41,7 +41,7 @@ def test_slug_only_lol_market_resolves_to_esports(tmp_path):
         root=tmp_path)
 
     assert meta["title"] == "Lol Kcb Wd 2026 09 26"
-    assert meta["category"] == "E-Sports"
+    assert meta["category"] == "League of Legends"
     assert meta["url"] == f"https://polymarket.com/market/{LOL_SLUG}"
 
 
@@ -142,12 +142,97 @@ def test_non_string_feed_fields_never_raise(tmp_path):
 
 
 def test_esports_checked_before_politics():
+    # The blanket label survives only for a game this resolver cannot name.
     assert mm.classify_display_category(
-        "Will he win the Dota election", "", "dota-election") == "E-Sports"
+        "Will he win the Dota election", "", "dota-election") == "Dota 2"
     assert mm.classify_display_category(
         "Senate race outcome", "", "senate-race") == "Politics"
     assert mm.classify_display_category(
         "Market A resolves up?", "", "market-a") is None
+
+
+def test_esports_label_the_game_not_the_genre():
+    # "E-Sports" names the genre and nothing else, the same way "Uncategorized"
+    # named no category at all. A LoL market is a League of Legends market.
+    cases = {
+        "lol-kcb-wd-2026-09-26": "League of Legends",
+        "Cs2 Major Bracket": "Counter-Strike 2",
+        "Valorant Champions Winner": "Valorant",
+        "Dota 2 International": "Dota 2",
+        # No "2" token in the title, so the label must not invent one: the
+        # sequel rule exists to separate OW2 markets, never to promote OW1.
+        "Overwatch League Finals": "Overwatch",
+        "Overwatch 2 world cup winner": "Overwatch 2",
+        "Rainbow Six Siege Invitational": "Rainbow Six Siege",
+        "Starcraft Ii Gsl Winner": "StarCraft II",
+        "Rocket League World Championship": "Rocket League",
+        "Apex Legends Global Winner": "Apex Legends",
+        "Ea Sports Fc Final Match": "EA Sports FC",
+        "Call Of Duty League Winner": "Call of Duty",
+        "Pubg Global Championship": "PUBG",
+        "Fortnite Champion Series": "Fortnite",
+        "Hearthstone Masters Tour": "Hearthstone",
+        "King Of Glory World Champion Cup": "Honor of Kings",
+        "League Of Legends Worlds Winner": "League of Legends",
+        "Counter Strike Global Offensive": "Counter-Strike",
+        "Tekken 8 World Tour Finals": "Tekken",
+        "Street Fighter 6 Capcom Cup": "Street Fighter",
+        "Super Smash Bros Ultimate Winner": "Super Smash Bros.",
+        "Chess World Championship Final": "Chess",
+    }
+    for slug, expected in cases.items():
+        assert mm.classify_display_category("", "", slug) == expected, slug
+
+
+def test_unnameable_esport_keeps_the_genre_label():
+    # A row that is plainly esports but names no game this resolver knows still
+    # has to group somewhere honest; it falls back to the genre, not a blank.
+    assert mm.classify_display_category(
+        "Esports Finals Winner", "", "esports-finals-winner") == "E-Sports"
+    assert mm.classify_display_category(
+        "Who wins the pro gaming title", "", "pro-gaming-title") == "E-Sports"
+
+
+
+def test_sports_map_to_their_real_name():
+    # A detection token becomes the sport's real name, not the league acronym:
+    # ATP/WTA are tennis circuits, not a sport of their own (#501).
+    cases = {
+        "Atp Cuenin Valient 2026 10 12": "Tennis",
+        "Wta Mcnally Starodu 2026 10 12": "Tennis",
+        "Will the Lakers win the NBA finals?": "Basketball",
+        "Chiefs vs 49ers super bowl winner": "Football",
+        "Football game tonight": "Football",
+        "Yankees world series 2026": "Baseball",
+        "Stanley cup favorite 2026": "Hockey",
+        "Premier League title race": "Soccer",
+        "FIFA world cup winner 2026": "Soccer",
+        "PGA masters champion": "Golf",
+        "F1 drivers champion 2026": "Racing",
+        "Nascar daytona 500 winner": "Racing",
+        "UFC 300 main event winner": "MMA",
+        "Canelo boxing title fight": "Boxing",
+        "Muay Thai championship bout": "Muay Thai",
+        "IPL cricket final": "Cricket",
+        "Six nations rugby winner": "Rugby",
+    }
+    for title, expected in cases.items():
+        assert mm.classify_display_category(title, "", "") == expected, title
+
+
+def test_sports_never_mislabel_non_sports():
+    # Politics and crypto stay politics/crypto; a sport regex must not swallow
+    # them just because a generic word appears.
+    assert mm.classify_display_category("US-Iran ceasefire continues", "", "") is None
+    assert mm.classify_display_category("Bitcoin above 100k by december", "", "") is None
+    assert mm.classify_display_category("Presidential election 2028", "", "") == "Politics"
+
+
+def test_muay_thai_wins_over_generic_combat():
+    # Muay Thai is checked before MMA/Boxing so a Thai-boxing market keeps its
+    # own label instead of collapsing into "MMA".
+    assert mm.classify_display_category("Muay Thai title fight", "", "") == "Muay Thai"
+    assert mm.classify_display_category("Thai boxing grand prix", "", "") == "Muay Thai"
 
 
 def test_feed_reads_cached_across_many_cids(tmp_path, monkeypatch):

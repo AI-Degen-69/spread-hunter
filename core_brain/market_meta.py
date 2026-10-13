@@ -26,25 +26,129 @@ UNCATEGORIZED = "Uncategorized"
 ESPORTS_LABEL = "E-Sports"
 POLITICS_LABEL = "Politics"
 
-# Display-only vocabulary, seeded from the selection lists in
-# scoring/selector.py (`_SPORTS_SERIES_RE` / `_MACRO_RE`) and kept local on
-# purpose: importing the private selection regexes would couple a descriptive
-# label to the screening rules it must never influence.
-_ESPORTS_RE = re.compile(
-    r"\b(?:esports?|lol|league\s*of\s*legends|dota|"
-    r"counter[- ]strike|cs2|valorant)\b",
+# Display-only esports vocabulary (#501). "E-Sports" names the genre and
+# nothing else -- the same way "Uncategorized" named no category at all. A LoL
+# market is a League of Legends market, so the detection token maps to the game
+# itself and the genre survives only as a fallback for a game this table cannot
+# name. Ordered so the more specific franchise wins: Counter-Strike 2 is checked
+# before the generic Counter-Strike, and Overwatch 2 before Overwatch.
+# Kept local like the sport rules on purpose: descriptive labels that must never
+# influence selection or ranking.
+_ESPORTS_GAME_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(?:lol|league\s*of\s*legends)\b", re.IGNORECASE),
+     "League of Legends"),
+    (re.compile(r"\b(?:cs2|counter[- ]strike\s*2)\b", re.IGNORECASE),
+     "Counter-Strike 2"),
+    (re.compile(r"\b(?:counter[- ]strike|csgo|cs:go)\b", re.IGNORECASE),
+     "Counter-Strike"),
+    (re.compile(r"\bvalorant\b", re.IGNORECASE), "Valorant"),
+    (re.compile(r"\bdota\s*2?\b", re.IGNORECASE), "Dota 2"),
+    (re.compile(r"\boverwatch\s*2\b", re.IGNORECASE), "Overwatch 2"),
+    (re.compile(r"\boverwatch\b", re.IGNORECASE), "Overwatch"),
+    (re.compile(r"\brainbow\s*six\b", re.IGNORECASE), "Rainbow Six Siege"),
+    (re.compile(r"\b(?:starcraft|sc2)\b", re.IGNORECASE), "StarCraft II"),
+    (re.compile(r"\brocket\s*league\b", re.IGNORECASE), "Rocket League"),
+    (re.compile(r"\bapex\s*legends\b", re.IGNORECASE), "Apex Legends"),
+    # `fifa` alone is deliberately NOT a token: the FIFA World Cup is football,
+    # not the video game. Only the explicit EA Sports FC naming counts.
+    (re.compile(r"\b(?:ea\s*sports\s*fc|ea\s*fc|fc\s*24|fc\s*25|fc\s*26)\b",
+                re.IGNORECASE), "EA Sports FC"),
+    (re.compile(r"\b(?:call\s*of\s*duty|cod)\b", re.IGNORECASE), "Call of Duty"),
+    (re.compile(r"\bpubg\b", re.IGNORECASE), "PUBG"),
+    (re.compile(r"\bfortnite\b", re.IGNORECASE), "Fortnite"),
+    (re.compile(r"\bhearthstone\b", re.IGNORECASE), "Hearthstone"),
+    (re.compile(r"\b(?:king\s*of\s*glory|honor\s*of\s*kings)\b", re.IGNORECASE),
+     "Honor of Kings"),
+    (re.compile(r"\b(?:arena\s*of\s*valor|mobile\s*legends)\b", re.IGNORECASE),
+     "Mobile Legends"),
+    (re.compile(r"\btekken\b", re.IGNORECASE), "Tekken"),
+    (re.compile(r"\b(?:street\s*fighter|sf6)\b", re.IGNORECASE), "Street Fighter"),
+    (re.compile(r"\bsmash\s*bros\.?\b", re.IGNORECASE), "Super Smash Bros."),
+    (re.compile(r"\b(?:chess|magnus)\b", re.IGNORECASE), "Chess"),
+    (re.compile(r"\b(?:speedrun|fighting\s*games?|battle\s*royale)\b",
+                re.IGNORECASE), ESPORTS_LABEL),
+]
+
+# The genre catch-all: a row that is plainly esports but names no game above
+# still has to group somewhere honest rather than fall through to a keyword
+# sweep that would misfile it. Keeps the detection tokens the venue has always
+# written (`lol`, `dota`, `valorant`, ...) so this stays a superset of the old
+# `_ESPORTS_RE` rather than a narrower one.
+_ESPORTS_GENRE_RE = re.compile(
+    r"\b(?:esports?|e-sports|pro\s*gaming|gaming\s*title|"
+    r"pro\s*players?|twitch|speedrunning|"
+    r"lol|league\s*of\s*legends|dota|counter[- ]strike|cs2|valorant)\b",
     re.IGNORECASE,
 )
+
+# Politics vocabulary. Distinct from the sport rules: a title mentioning a
+# country or a politician is a political market even when no sport appears.
 _POLITICS_RE = re.compile(
     r"\b(?:politics?|political|election|president(?:ial)?|"
     r"senate|congress|governor|prime\s*minister)\b",
     re.IGNORECASE,
 )
 
+# Display-only sport labels (#501). A detection token maps to the sport's real
+# name, not the league acronym: ATP/WTA are tennis circuits, not their own
+# sport. Ordered so the first regex that hits wins -- Muay Thai is checked
+# before the generic MMA/Boxing rules, and explicit league codes come before
+# bare generic words. Kept local like the regexes above on purpose: these are
+# descriptive labels and must never influence selection or ranking.
+_SPORT_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(?:atp|wta|itf|tennis|wimbledon|roland[- ]garros|"
+                r"australian open)\b", re.IGNORECASE), "Tennis"),
+    (re.compile(r"\b(?:nba|wnba|basketball|euroleague|march madness)\b",
+                re.IGNORECASE), "Basketball"),
+    # "Football" is the hand-egg (oval) sport; a bare "football" lands here.
+    (re.compile(r"\b(?:nfl|super bowl|ncaa football|cfb|american football|"
+                r"football)\b", re.IGNORECASE), "Football"),
+    (re.compile(r"\b(?:mlb|baseball|world series)\b", re.IGNORECASE), "Baseball"),
+    (re.compile(r"\b(?:nhl|hockey|stanley cup)\b", re.IGNORECASE), "Hockey"),
+    # "Soccer" is the leg-kicking sport.
+    (re.compile(r"\b(?:fifa|premier league|epl|la liga|serie a|bundesliga|"
+                r"ligue 1|champions league|mls|soccer|world cup|euros|"
+                r"europa league)\b", re.IGNORECASE), "Soccer"),
+    (re.compile(r"\b(?:pga|lpga|golf|masters|ryder cup)\b", re.IGNORECASE), "Golf"),
+    (re.compile(r"\b(?:f1|formula 1|formula e|nascar|indycar|motogp|le mans|"
+                r"rally|racing)\b", re.IGNORECASE), "Racing"),
+    (re.compile(r"\b(?:muay thai|thai boxing|thai[- ]box)\b", re.IGNORECASE),
+     "Muay Thai"),
+    (re.compile(r"\b(?:ufc|mma|bellator|pfl|one championship|pride fc)\b",
+                re.IGNORECASE), "MMA"),
+    (re.compile(r"\b(?:boxing|wba|wbc|ibf|wbo|title fight|heavyweight)\b",
+                re.IGNORECASE), "Boxing"),
+    (re.compile(r"\b(?:ipl|cricket|test match|ashes)\b", re.IGNORECASE), "Cricket"),
+    (re.compile(r"\b(?:rugby|six nations)\b", re.IGNORECASE), "Rugby"),
+]
+
+
+def _classify_sport(text: str) -> Optional[str]:
+    """The sport's real name for a detection token, or None."""
+    for pattern, label in _SPORT_RULES:
+        if pattern.search(text):
+            return label
+    return None
+
+
+def _classify_esports_game(text: str) -> Optional[str]:
+    """The game's real name for a detection token, or None.
+
+    Only reached when the text is already known to be esports, so a game the
+    table cannot name falls through to the genre label by returning None.
+    """
+    for pattern, label in _ESPORTS_GAME_RULES:
+        if pattern.search(text):
+            return label
+    return None
+
 
 def classify_display_category(title: Any, event_title: Any,
                               slug: Any) -> Optional[str]:
-    """E-Sports, Politics, or None -- pure word-boundary match, no venue I/O."""
+    """E-Sports, a sport's real name, Politics, or None.
+
+    Pure word-boundary match, no venue I/O. Display-only.
+    """
     text = " ".join((
         str(title or ""),
         str(event_title or ""),
@@ -52,8 +156,13 @@ def classify_display_category(title: Any, event_title: Any,
     )).lower()
     if not text.strip():
         return None
-    if _ESPORTS_RE.search(text):
-        return ESPORTS_LABEL
+    if _ESPORTS_GENRE_RE.search(text) or _classify_esports_game(text) is not None:
+        # The genre keyword proves it is esports; the named game is the label.
+        # A game this table cannot name keeps the genre, never a keyword guess.
+        return _classify_esports_game(text) or ESPORTS_LABEL
+    sport = _classify_sport(text)
+    if sport is not None:
+        return sport
     if _POLITICS_RE.search(text):
         return POLITICS_LABEL
     return None

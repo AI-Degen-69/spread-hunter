@@ -1704,7 +1704,7 @@ def test_kpi_report_resolves_operator_slugs_without_a_feed(tmp_path, monkeypatch
 
     data = report(db_path=db_file, run_id=run)
 
-    assert data["by_market"]["0xlol"]["category"] == "E-Sports"
+    assert data["by_market"]["0xlol"]["category"] == "League of Legends"
     assert data["by_market"]["0xlula"]["category"] == "Politics"
 
 
