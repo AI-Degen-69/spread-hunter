@@ -161,7 +161,15 @@ everything else in this file):
 - [x] T1 — SLED decomposition with its tests
 - [x] T2 — TCDR, overshoot, bands and the summary
 - [ ] T3 — wire the payload
-- [ ] T4 — dashboard readout with traffic-light bands
+- [x] T4 — dashboard readout with traffic-light bands
+
+All four tasks committed locally on this branch. Built as planned, with two recorded
+deviations: (1) `SPEC.md`'s "no shares" edge-case row was corrected to say which metrics
+need a share count (the drag metrics read recorded prices, so they do not) — the code does
+not require a share count for a per-share figure; (2) the latency-drag band was implemented
+literally from the ticket's table even though that row contradicts the ticket's own
+definition of the metric — recorded as N1 in `docs/issues/514-noticed-but-not-touching.md`
+for the operator's call.
 
 ### T1 — SLED decomposition with its tests · S · `[Backend/Logic]`
 - Files: `core_brain/statistical_analytics.py`,
