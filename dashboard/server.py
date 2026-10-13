@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import math
 import os
 import logging
+import re
 import secrets
 import sqlite3
 import sys
@@ -3891,6 +3893,32 @@ def _load_page_html() -> str:
 # request so file edits are picked up without restart.
 PAGE_HTML = _load_page_html()
 
+_STATIC_ASSET_RE = re.compile(r"/static/([A-Za-z0-9_.\-]+)(?:\?v=[A-Za-z0-9]+)?")
+
+
+def _static_fingerprint(name: str, static_dir: Path) -> str | None:
+    """Short content hash for a static asset, or None when unreadable."""
+    try:
+        digest = hashlib.sha1((static_dir / name).read_bytes()).hexdigest()
+    except OSError:
+        return None
+    return digest[:12]
+
+
+def _fingerprint_static_refs(html: str, static_dir: Path = _STATIC_DIR) -> str:
+    """Rewrite /static/ refs to content-hash ?v= so browsers refetch on change.
+
+    A manual ?v= number is replaced; an unversioned ref gains one. The
+    version tracks the bytes, so no author ever has to remember a bump.
+    Refs to missing files stay untouched.
+    """
+    def _replace(match: re.Match[str]) -> str:
+        fingerprint = _static_fingerprint(match.group(1), static_dir)
+        if fingerprint is None:
+            return match.group(0)
+        return f"/static/{match.group(1)}?v={fingerprint}"
+    return _STATIC_ASSET_RE.sub(_replace, html)
+
 
 @app.get("/prototype", response_class=HTMLResponse)
 def prototype_page():
@@ -3910,7 +3938,8 @@ def prototype_page():
     if not html:
         raise HTTPException(status_code=404, detail="dashboard page not built")
     return HTMLResponse(
-        html.replace(CONTROL_TOKEN_PLACEHOLDER, CONTROL_TOKEN),
+        _fingerprint_static_refs(
+            html.replace(CONTROL_TOKEN_PLACEHOLDER, CONTROL_TOKEN)),
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
@@ -3930,7 +3959,8 @@ def index():
     """
     html = _load_page_html()
     return HTMLResponse(
-        html.replace(CONTROL_TOKEN_PLACEHOLDER, CONTROL_TOKEN),
+        _fingerprint_static_refs(
+            html.replace(CONTROL_TOKEN_PLACEHOLDER, CONTROL_TOKEN)),
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
