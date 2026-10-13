@@ -6389,8 +6389,6 @@ function stitchOpenOrdersRows(kpi, state, sort) {
     const dnPrice = dnOrder ? Number(dnOrder.price) || 0 : 0;
     const dnCost = dnSize * dnPrice;
 
-    const totalCost = upCost + dnCost;
-    const totalShares = upSize + dnSize;
 
     const postedTimestamps = group.orders.map(o => Number(o.posted_ts)).filter(Number.isFinite);
     const postedTs = postedTimestamps.length ? Math.min(...postedTimestamps) : null;
@@ -6441,6 +6439,32 @@ function stitchOpenOrdersRows(kpi, state, sort) {
     const dotClass = isPaired ? 'is-paired' : isHedgePending ? 'is-hedge-pending' : 'is-unpaired';
     const metaTag = isPaired ? 'Paired Arb' : isHedgePending ? 'Hedge Pending' : 'Resting';
 
+    // Break-even max for the missing side: the pair cap minus the resting
+    // price. Green while completion can still land under the cap, red once
+    // even a free fill would book over-cap. The cap itself is never stated.
+    // Same two-rung shape as the Dual-Leg cell, so the value sits on the
+    // same line as the resting (unfilled) leg at the same font size.
+    const pairCap = (() => {
+      const pairs = (state && state.pairs) || [];
+      const hit = pairs.find(p => p.pair_id && p.pair_id === group.key);
+      const posted = hit ? Number(hit.max_pair_cost_at_post) : NaN;
+      return (Number.isFinite(posted) && posted > 0) ? posted : 0.99;
+    })();
+    const oneSideRests = (!!upOrder) !== (!!dnOrder);
+    let roomLine = '';
+    if (oneSideRests) {
+      const restingPrice = upOrder ? upPrice : dnPrice;
+      const threshold = pairCap - restingPrice;
+      const tColor = threshold > 0 ? '#4ade80' : '#f87171';
+      const shownThreshold = threshold > 0
+        ? Math.floor(threshold * 100 + 1e-9) / 100
+        : threshold;
+      const tVal = (shownThreshold < 0 ? '-$' : '$') + Math.abs(shownThreshold).toFixed(2);
+      roomLine = '<span class="stitch-commit-sub" style="color:' + tColor + ';font-size:11.5px;">≤ ' + tVal + '</span>';
+    }
+    const roomYes = (oneSideRests && !!upOrder) ? roomLine : '<span>&nbsp;</span>';
+    const roomNo = (oneSideRests && !!dnOrder) ? roomLine : '<span>&nbsp;</span>';
+
     return `<tr class="${rowBgClass}" data-pair="${esc(group.key)}">
       <!-- Col 1: Market & Arbitrage Status -->
       <td class="stitch-market-cell">
@@ -6466,13 +6490,11 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         dualLegLine({ side: 'NO', size: dnOrder ? dnSize : null, price: dnPrice, cost: dnCost, emptyLabel: '[Awaiting NO Quote]', counterpart: dnOrder ? null : dnFilled ? { state: 'filled', order: dnFilled } : dnCancelled ? { state: 'cancelled' } : null }),
         {})}
 
-      <!-- Col 3: Total Committed -->
+      <!-- Col 3: Break-even max the other side may cost (cap minus resting price) -->
       <td>
-        <div class="stitch-commit-val ${isUnpaired ? 'is-unhedged' : ''}">${fmtUSD(totalCost)}</div>
-        <div class="stitch-commit-sub ${isUnpaired ? 'is-unhedged' : ''}">
-          ${isHedgePending ? 'Single-Fill (Hedge Active)'
-            : isUnpaired ? 'Unhedged Risk'
-            : `${fmtShares(totalShares)} shares total`}
+        <div class="stitch-quote-box">
+          <div class="stitch-quote-rung">${roomYes}</div>
+          <div class="stitch-quote-rung">${roomNo}</div>
         </div>
       </td>
 
