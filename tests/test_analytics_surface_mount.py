@@ -18,6 +18,7 @@ Journeys under test:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -25,6 +26,18 @@ from pathlib import Path
 import pytest
 
 HARNESS = Path(__file__).resolve().parent / "js" / "analytics_surface_harness.cjs"
+
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _visible(html: str) -> str:
+    """What the operator actually reads.
+
+    Assertions about copy belong on the rendered text, not on the markup around
+    it: the figure spans carry `class="kpi-value null"` for an unmeasured value,
+    which is the repo's own idiom and not a leak of the word "null" to a reader.
+    """
+    return _TAG.sub(" ", html)
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node is not installed on this host")
@@ -285,5 +298,87 @@ def test_sample_sufficiency_renders_segmented_statuses():
     assert "385" in html
     assert "undefined" not in html
     assert "NaN" not in html
+
+
+# -- Merge edge vs rescue bleed (#513) ---------------------------------------
+
+# The mixed case from `tests/test_fill_path_analytics.py`: three merges at
+# +$0.30, one rescue at -$0.60, one settlement, one sync row.
+FILL_PATH_EDGE = {
+    "merge_count": 3, "merge_pnl_usd": 0.90, "merge_expectancy_usd": 0.30,
+    "rescue_count": 1, "rescue_pnl_usd": -0.60, "rescue_expectancy_usd": -0.60,
+    "rescue_rate": 0.25, "net_expectancy_usd": 0.075,
+    "break_even_rescue_rate": 0.333333, "break_even_status": "measured",
+    "other_count": 1, "other_pnl_usd": 1.0,
+    "excluded_count": 1, "skipped_count": 0, "units": "usd_per_close",
+}
+
+
+def _stats(edge) -> dict:
+    """A payload carrying the edge, or one from before the key existed."""
+    return {"statistical_analytics": {} if edge is None else {"fill_path_edge": edge}}
+
+
+def test_the_fill_path_readout_shows_both_paths_and_the_threshold():
+    # Act
+    out = _mount(_stats(FILL_PATH_EDGE))
+
+    # Assert -- both expectancies per close, the measured rescue rate, and the
+    # rate at which the two paths cancel out.
+    assert out["errors"] == []
+    text = _visible(out["fill_path_edge_html"])
+    assert "per close" in text
+    assert "0.30" in text       # merge expectancy, +$0.30
+    assert "0.60" in text       # rescue expectancy, -$0.60
+    assert "25.0%" in text      # rescue rate, 1 of 4 completed closes
+    assert "33.3%" in text      # break-even rescue rate
+    assert "1 of 4 completed closes" in text
+
+
+def test_the_fill_path_readout_counts_closes_in_the_singular():
+    # Arrange -- one close on a path reads as "1 close", not "1 closes".
+    edge = dict(FILL_PATH_EDGE, merge_count=1, rescue_count=2)
+
+    # Act
+    out = _mount(_stats(edge))
+
+    # Assert
+    assert out["errors"] == []
+    text = _visible(out["fill_path_edge_html"])
+    assert "per close · 1 close" in text
+    assert "per close · 2 closes" in text
+    assert "1 closes" not in text
+
+
+def test_the_fill_path_readout_says_unmeasured_rather_than_zero():
+    # Arrange -- an empty run, and a payload served before the key existed.
+    for edge in (None, {}):
+        # Act
+        out = _mount(_stats(edge))
+
+        # Assert -- a value nobody could compute reads as unmeasured, and the
+        # operator never sees a raw `undefined` or `NaN` on the card.
+        assert out["errors"] == []
+        text = _visible(out["fill_path_edge_html"])
+        assert "unmeasured" in text
+        for leak in ("NaN", "undefined", "null"):
+            assert leak not in text
+
+
+def test_the_fill_path_readout_names_why_a_threshold_is_missing():
+    # Arrange -- merges that lose cannot be balanced by any rescue rate, so the
+    # card says so in words instead of printing a number.
+    edge = {**FILL_PATH_EDGE, "merge_expectancy_usd": -0.10,
+            "break_even_rescue_rate": None,
+            "break_even_status": "merge_not_profitable"}
+
+    # Act
+    out = _mount(_stats(edge))
+
+    # Assert
+    assert out["errors"] == []
+    text = _visible(out["fill_path_edge_html"])
+    assert "no rescue rate breaks even while merges lose" in text
+    assert "33.3%" not in text
 
 

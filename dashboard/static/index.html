@@ -474,6 +474,20 @@
         </div>
       </div>
 
+      <!-- Merge edge vs rescue bleed, measured apart (#513). Not a Tier-1
+           reading and not one of the drill-down charts: it explains WHY the
+           average close above is what it is, so it sits under that row and
+           above the decks. Deliberately not `.stats-chart-card` -- that class
+           takes part in the sub-view filter, and a reading that explains the
+           headline must not blank when a chart deck is selected. -->
+      <div class="card" style="margin-top:16px">
+        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">FILL-PATH EDGE — MERGE VS RESCUE</div>
+          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Close · Accounting View</div>
+        </div>
+        <div id="fill-path-edge-readout" class="fill-path-edge-readout"><!-- Rendered by JS --></div>
+      </div>
+
       <!-- Statistical Power & Distribution Chips -->
       <div id="kpi-grid" class="kpi-grid analytics-squares"></div>
 

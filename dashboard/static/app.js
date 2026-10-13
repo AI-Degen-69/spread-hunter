@@ -4503,6 +4503,80 @@ function renderExecutionFunnel(kpi) {
   `;
 }
 
+/* Merge edge against rescue bleed, measured apart (#513).
+ *
+ * One number cannot say which resolution path drives a run: a healthy merge
+ * edge and a rescue bleed cancel inside the same total. This shows both means
+ * side by side, the rescue rate against the rate at which the two paths net to
+ * zero, and the closes that fall outside both paths -- so the split is never
+ * mistaken for the run's own PnL.
+ *
+ * A `null` reads as "unmeasured", never as `0`: a path with no closes has no
+ * mean, and `$0.00` there would say a rescue costs nothing. */
+function renderFillPathEdge(stats) {
+  const host = document.getElementById('fill-path-edge-readout');
+  if (!host) return;
+
+  const edge = (stats || {}).fill_path_edge || {};
+  const figure = (value) => {
+    const n = Number(value);
+    return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
+  };
+  const count = (value) => figure(value) || 0;
+  const usd = (value) => figure(value) === null ? 'unmeasured' : fmtSignedUSD(figure(value));
+  const pct = (value) => figure(value) === null
+    ? 'unmeasured' : (figure(value) * 100).toFixed(1) + '%';
+  const closesN = (value) => `${count(value)} ${count(value) === 1 ? 'close' : 'closes'}`;
+
+  const mergeN = count(edge.merge_count);
+  const rescueN = count(edge.rescue_count);
+  const resolved = mergeN + rescueN;
+
+  // Why the threshold has no number, in words rather than as a code. A run
+  // with no completions at all is a different fact from one where only one
+  // path ever resolved.
+  const thresholdWords = {
+    merge_not_profitable: 'no rescue rate breaks even while merges lose',
+    rescue_not_losing: 'no rescue rate breaks even while rescues do not lose',
+  }[edge.break_even_status]
+    || (resolved === 0 ? 'unmeasured — no completed closes'
+                       : 'unmeasured — one path has no closes');
+  const hasThreshold = figure(edge.break_even_rescue_rate) !== null;
+
+  const tile = (label, value, cls, hint) => `
+    <div class="kpi-tile">
+      <div class="kpi-label">${esc(label)}</div>
+      ${fmtVal(value, cls)}
+      <div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(hint)}</div>
+    </div>`;
+
+  host.innerHTML = `
+    <div class="kpi-grid">
+      ${tile('Merge Expectancy', usd(edge.merge_expectancy_usd),
+             mergeN > 0 ? signClass(figure(edge.merge_expectancy_usd)) : '',
+             `per close · ${closesN(edge.merge_count)}`)}
+      ${tile('Rescue Expectancy', usd(edge.rescue_expectancy_usd),
+             rescueN > 0 ? signClass(figure(edge.rescue_expectancy_usd)) : '',
+             `per close · ${closesN(edge.rescue_count)}`)}
+      ${tile('Rescue Rate', pct(edge.rescue_rate), '',
+             `${rescueN} of ${resolved} completed closes`)}
+      ${tile('Break-Even Rescue Rate', hasThreshold ? pct(edge.break_even_rescue_rate) : thresholdWords,
+             hasThreshold ? '' : 'null',
+             'the rescue rate that nets to zero')}
+      ${tile('Net Expectancy', usd(edge.net_expectancy_usd),
+             figure(edge.net_expectancy_usd) !== null ? signClass(figure(edge.net_expectancy_usd)) : '',
+             'per close · both paths')}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
+      Other ${count(edge.other_count)} (${usd(edge.other_pnl_usd)}) ·
+      Excluded ${count(edge.excluded_count)} ·
+      Skipped ${count(edge.skipped_count)}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:4px">
+      Merge vs rescue closes — accounting view, not maker/taker attribution.
+    </div>`;
+}
+
 function renderAnalyticsSurface(kpi, status) {
   const grid = document.getElementById('kpi-grid');
   const gates = document.getElementById('analytics-gates');
@@ -4553,6 +4627,7 @@ function renderAnalyticsSurface(kpi, status) {
   try { renderPnlCiReadout(ta); } catch (e) { console.error('Error rendering PnL CI readout', e); }
   try { renderExecutionFunnel(kpi); } catch (e) { console.error('Error rendering execution funnel', e); }
   try { renderSampleSufficiency(ta); } catch (e) { console.error('Error rendering sample sufficiency', e); }
+  try { renderFillPathEdge(stats); } catch (e) { console.error('Error rendering fill-path edge', e); }
 
   // Render Quant Grid
   renderQuantRiskGrid(ta, p, stats);
@@ -8642,7 +8717,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState,

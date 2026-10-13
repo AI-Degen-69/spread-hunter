@@ -148,7 +148,10 @@ other; T2 first because it is the ticket's own acceptance criterion.
 
 ## Tasks
 
-- [ ] **T1 (M, [Backend/Logic])** — `core_brain/statistical_analytics.py` + new
+- [x] **T1 (M, [Backend/Logic])** — DONE: RED = `ImportError: cannot import name 'EXCLUDED_METHODS'`
+  (exit 2, collection error); GREEN = 25 passed; 116 passed across the six sibling suites;
+  committed `feat(core_brain): merge-vs-rescue fill-path expectancy metrics (#513)`.
+  `core_brain/statistical_analytics.py` + new
   `tests/test_fill_path_analytics.py`. Adds `RESCUE_METHODS`, `EXCLUDED_METHODS`,
   `fill_path_edge()`, `break_even_rescue_rate()` per the contracts above; reuses the existing
   `MERGE_METHODS` (`:35`) and `_finite` (`:59`); extends the module docstring so it no longer
@@ -158,7 +161,11 @@ other; T2 first because it is the ticket's own acceptance criterion.
   exit fill. Depends on: none. Verify: `python -m pytest -q tests/test_fill_path_analytics.py`
   (RED first: import error before the change).
   Skill: `test-driven-development`.
-- [ ] **T2 (S, [Backend/Logic])** — `build()` (`:299`) gains
+- [x] **T2 (S, [Backend/Logic])** — DONE: RED = `KeyError: 'fill_path_edge'` (2 failed);
+  GREEN = 76 passed across the three suites; real-store check through `kpi.report` on a copy of
+  `data/02_shadow_prudent_13-10_03-01.db` returns the key with `break_even_status: "measured"`.
+  Committed `feat(core_brain): expose fill-path edge metrics in the analytics payload (#513)`.
+  `build()` (`:299`) gains
   `"fill_path_edge": fill_path_edge(closes)`; extend the populated and empty `build()` tests in
   `tests/test_statistical_analytics.py` (currently RED with a `KeyError`). Depends on: T1.
   Verify: `python -m pytest -q tests/test_fill_path_analytics.py tests/test_statistical_analytics.py`.
