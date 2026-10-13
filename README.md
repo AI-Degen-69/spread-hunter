@@ -7,7 +7,7 @@ A dedicated **real-money execution engine and operations dashboard** for the Pol
 back to collateral.
 
 This repo is the live trading side of the spread hunter project — not a simulation, not a
-paper trader. Every command reaches the venue by default (see [Safety Rails](#safety-rails)).
+paper trader. Every command reaches the venue by default (see [Safety rails](#safety-rails)).
 
 ## The strategy
 
@@ -20,49 +20,58 @@ back into $1.00 of USDC. The income is the difference:
 profit per pair = 1.00 - (avg UP price + avg DOWN price)
 ```
 
-Measured over the paper run: **476 merge closes returned +$1,172.35** at an average pair cost
-of **$0.96006** — roughly 4c per pair. `max_pair_cost = 0.99` is the profit condition: the
-merge is the exit and the P&L event.
+`max_pair_cost = 0.99` is the profit condition: the merge is the exit and the P&L event.
+Maker rebates are a side accrual, never blended into trading PnL.
 
-- **Maker rebates are extra, not the income.** Over the same run they accrued about
-  $0.22/day against $566 committed — four hundredths of a percent. This is a pair-assembly
-  arbitrage that happens to earn rebates while it waits, not a rebate farm.
-- **The universe is not BTC 5-minute binaries.** The Market Filter's funnel (24h volume,
-  top-3 bid depth on both sides, book spread, horizon ≤ 30 days) writes survivors to
-  `runtime/markets.json`, and the Trader quotes *only* that list. Whatever clears the funnel
-  is in scope; in the measured run the survivors were mostly tennis, baseball and esports,
-  but the filter decides, not the category. The 5-minute BTC series was measured dead on
-  adverse selection and survives only as a legacy field.
-- **Spread capture pricing mode.** `objective = "spread_capture"` (formerly `"rewards"`)
-  selects the from-mid pricing path that assembles the pair at `≈ 1.00 - 2*offset` — the
-  mechanism that makes the strategy work. See [AGENTS.md](AGENTS.md) for the full statement.
+The two failure modes everything else exists to prevent: a pair assembled **over $1.00**
+is a booked loss, and a **single buy** (one leg filled, one not) is a directional bet
+nobody decided to take. The single-leg lifecycle (`DUAL_RESTING` → `PATIENT_WAIT` →
+`ESCALATED_HEDGE` / `HARD_STOP` → `PAIR_LOCKED`) manages the one-sided position; it does
+not taker-complete during ordinary management.
+
+Full statement: [docs/agents/strategy.md](docs/agents/strategy.md).
 
 ## Features
 
 **Core brain** (`core_brain/`)
 - `quotes.py` — the decision layer: where to rest both legs, and why not to
 - `risk.py` — sizing ladder, inventory skew, dollar caps, hard blocks
-- `unhedged_stop_loss.py` — per-market markout state machine + trader posture (HALTED etc.)
-- `trader_loop.py` — multi-market rotation: decide → plan → submit/cancel (5s cadence)
-- `order_manager.py` — CLI: `status`, `balance`, `decide`, `quote`, `poll`, `merge`, `redeem`,
-  `complete`, `exit`, `cancel`, `cancel-market`, `cancel-all`, `pairs`, `kpi`, `audit`
-- `single_buy_saver.py` — single-buy rescue: complete the pair, or exit the buy
+- `single_leg_lifecycle.py` — the persisted per-pair policy for one-sided fills (#413)
+- `single_buy_saver.py` — guarded completion and exit execution (not a second policy)
+- `trader_loop.py` — multi-market rotation: decide → plan → submit/cancel
+- `order_manager.py` — CLI: `status`, `balance`, `quote`, `poll`, `probe`, `merge`,
+  `redeem`, `complete`, `exit`, `pairs`, `decide`, `audit`, `kpi`, `stray-guard`,
+  `account-sweep`, `api-creds`, `cancel`, `cancel-market`, `cancel-all`
+- `shadow_run.py` (+ `shadow_exec.py`, `shadow_pairs.py`, `shadow_fills.py`,
+  `paired_shadow.py`) — isolated full-loop rehearsal against the live book; no signer,
+  spends nothing
 - `merge_pairs.py` — gasless merge & redemption (ABI, alt-bn128, EIP-712)
-- `order_registry.py` — SQLite order/fill tracking + reconcile (`data/orders.db`)
-- `audit.py`, `kpi.py`, `account.py`, `cycle_stream.py`, `market_feed.py`, `markets.py`
+- `order_registry.py` (+ `registry_state.py`) — SQLite order/fill tracking + reconcile
+  (`data/orders.db`)
+- `market_feed.py` / `markets.py` / `market_meta.py` / `live_marks.py` — graduated
+  universe feed, venue lookup, market metadata, live marks
+- `pair_scanner.py`, `markout.py`, `unhedged_stop_loss.py` — scan state, post-fill
+  mark-to-market, per-market markout gate
+- `kpi.py`, `audit.py`, `account.py`, `cycle_stream.py` — live metrics, 3-way
+  reconciliation, wallet balance, append-only cycle telemetry
+- `statistics_*` / `statistical_analytics.py` — per-run statistics stores and reports
+- `data_retention.py` — storage audit and pruning (`data/`, `runtime/`, `reports/`)
+- `config.py` — live tuning configuration (dynamic caps scale with account value)
 
 **Operations dashboard** (`dashboard/`)
-- `server.py` — ops dashboard on `:8799` with a browser SPA (`dashboard/static/`)
-- System start/stop endpoints drive the bot stack through
-  the same code path as the dashboard buttons (Market Filter + Order Manager + Trader)
-- Service cards, guardrail health, cycle telemetry ring, account/exposure tiles
+- `server.py` — ops dashboard on `:8799` (FastAPI + uvicorn) with a browser SPA
+  (`dashboard/static/`); master START/STOP drives the bot stack, per-service controls,
+  run switcher across live and shadow stores
 
 **Ops tooling** (`scripts/`)
 - `filter_markets.py` — the filter funnel that graduates the universe
 - `filter_loop.py` — continuous market filter loop feeding `runtime/markets.json`
 - `global_stop_loss.py` — watchdog: over-cap pairs & repeat single-buy exits
-- `spread-hunter-menu.ps1` — PowerShell control center: start/stop/status for the
-  dashboard + bot stack, with a themed, color-coded status view
+- `audit_settlement.py` — settlement & balance verification
+- `shadow_tournament.py` / `tournament_cockpit_server.py` / `tournament_hub.py` —
+  paired rehearsal tournaments and cockpit
+- `spread-hunter-menu.ps1` — PowerShell control center for the dashboard + bot stack
+  (live, shadow, clean, status, statistical run, tournament cockpit)
 
 ## Repository layout
 
@@ -70,11 +79,18 @@ merge is the exit and the P&L event.
 spread-hunter/
   core_brain/             Core trading & execution engine
   dashboard/              Operations dashboard (:8799) + SPA
-  scripts/                Market Filter, filter loop, watchdog, PowerShell control center
+  scripts/                Market Filter, filter loop, watchdog, tournaments, PowerShell control center
   scoring/                Scoring, allocation and selection rules the Market Filter uses
   strategy/               Signal and sizing logic
-  data/                   Order registry (orders.db — not committed)
-  runtime/                Market universe, process file, logs and cycle telemetry (not committed)
+  server.ts               TS dashboard bridge (:8800, read-only reverse proxy)
+  configs/                Runner / preset configuration
+  data/                   Order registry (orders.db — not committed) + per-run stores
+  runtime/                Market universe, process registry, logs, cycle telemetry (not committed)
+  reports/                Generated statistics reports (not committed)
+  docs/agents/            Live agent contracts (safety, architecture, strategy, first-run, ...)
+  docs/issues/            Issue showcases (<id>-presentation-<slug>.html)
+  docs/runs/              Run notes and experiment records
+  tasks/                  Implementation plans
   tests/                  Full hermetic unit & integration test suite
 ```
 
@@ -91,35 +107,31 @@ cp .env.example .env
 
 # 3. Check wallet and account status (read-only)
 python -m core_brain.order_manager status
-python -m core_brain.order_manager balance
 
 # 4. Run the operations dashboard
 python -m dashboard.server          # http://127.0.0.1:8799
 
-# 5. Tests
-pytest -q
+# 5. Rehearse the full loop without spending (needs a fresh, unique store every run)
+python -m core_brain.shadow_run --minutes 5 --db data/NN_shadow_<stamp>.db
 ```
 
-## TS Dashboard Bridge
+Windows operators use the control center instead (`.\scripts\spread-hunter-menu.ps1 status`
+to inspect, `start` / `shadow-run` to launch). Full run anatomy, every command and its
+arguments: [docs/agents/first-run.md](docs/agents/first-run.md).
 
-The TypeScript dashboard (`server.ts`) serves the AI Studio frontend from
-`dashboard/static/` on **http://127.0.0.1:8800** and reverse-proxies `/api/*`
-to the live Python backend on **:8799** — real data only, no mocks.
+## TS dashboard bridge
 
-- Start: `\scripts\spread-hunter-menu.ps1 statistical-run -Hours 24` starts the
-  bridge alongside the Python stack (recorded as `ts_bridge` in
-  `runtime/shadow-session.json`; visible as `TS Bridge` in `status`).
-- Stop: `\scripts\spread-hunter-menu.ps1 stop-shadow` tears the bridge down
-  with the rest of the shadow session.
-- Read-only by default: POST control actions return 501 unless the bridge is
-  started with `BRIDGE_CONTROL=1`. Do not enable this during shadow runs.
-- Manual run: `PORT=8800 node server.ts` (Node ≥ 24, no npm install;
-  `PY_DASH_URL` overrides the upstream, default `http://127.0.0.1:8799`).
-- The bridge injects the live control token into the HTML it serves — the same
-  token Python bakes in — so the frontend's control buttons carry a token the
-  engine will accept once control forwarding is enabled.
+`server.ts` serves the dashboard frontend on **http://127.0.0.1:8800** and reverse-proxies
+`GET /api/*` to the live Python backend on **:8799** — real data only, no mocks.
 
-TS bridge tests: `node --test tests/bridge/token-inject.test.ts tests/bridge/control-gate.test.ts`
+- Read-only by default: control actions return 501 unless the bridge is started with
+  `BRIDGE_CONTROL=1`. Do not enable this during shadow runs.
+- Manual run: `PORT=8800 node server.ts` (Node ≥ 24; `PY_DASH_URL` overrides the
+  upstream, default `http://127.0.0.1:8799`).
+- The menu's `statistical-run` action and `status` view manage and show the bridge
+  (`TS Bridge`); `stop-shadow` stops the shadow session.
+
+Bridge tests: `node --test tests/bridge/token-inject.test.ts tests/bridge/control-gate.test.ts`
 
 ## Operating guide
 
@@ -128,59 +140,57 @@ dry-run preview.
 
 | Command | Purpose |
 | --- | --- |
-| `status` / `balance` | Account state, wallet balance |
+| `status` / `balance` | Account state, wallet balance (read-only) |
 | `decide` | Read-only quote decision for graduated markets |
 | `quote <condition_id> --price P --size N` | Rest a maker bid (opening command) |
 | `poll --interval 0.5` | Reconcile fills from the venue into `data/orders.db` |
+| `probe` | Live latency probe across series windows |
 | `merge <condition_id> --amount N` | Merge UP+DOWN pairs back to USDC (the exit) |
 | `redeem <condition_id>` | Gasless redemption of resolved positions |
-| `complete <pair_id>` | Cross the book to complete a one-sided pair (spends -- opening command) |
-| `exit <pair_id>` | Stop-loss exit of a single buy |
+| `complete <pair_id>` | Cross the book to complete a one-sided pair (spends — opening command) |
+| `exit <pair_id>` | Guarded stop-loss exit of a single buy |
+| `pairs` / `kpi` / `audit` | Pair inventory, live performance report, 3-way reconciliation (read-only) |
+| `stray-guard` / `account-sweep` | Adopt detached pairs / cancel strays; balance sync |
 | `cancel` / `cancel-market` / `cancel-all` | Pull resting orders |
 
-**Bot stack** — one state-driven master button (or the PowerShell menu) controls the
-Market Filter (`filter`), Query Polymarket (`query`) and Decide & Execute (`decide`).
-The button shows **START RUN** when the stack is stopped and **STOP RUN** when any
-service runs, and every start/stop refusal, outcome, or error is reported on screen
-(never console-only). Decide & Execute rests real maker bids: verify dashboard state
-before starting.
+**Bot stack** — a live run is the dashboard plus four processes: Market Filter
+(`scripts/filter_loop.py` → `runtime/markets.json`), Order Manager poll
+(`order_manager poll`), Trader (`trader_loop --live`, rests REAL maker bids), and the
+Global Stop Loss watchdog (`scripts/global_stop_loss.py`). The dashboard's master
+START/STOP button (or the PowerShell menu) drives the stack; START refuses a duplicate
+stack and preserves the captured `starting_account_value`.
 
-- **START** fills only the missing services: a partial stack is completed, not
-  refused, and only a complete duplicate stack (all three alive) is rejected. It
-  preserves the already-captured `starting_account_value` instead of re-snapshotting
-  capital.
-- **STOP** asks politely (SIGTERM / `taskkill /T`), waits a bounded grace period,
-  escalates to force (SIGKILL / `taskkill /F /T`), verifies each service is down, and
-  reports a per-service outcome (`stopped` / `forced` / `still_running`). The registry
-  is rewritten rather than deleted, so `starting_account_value` and any survivor's
-  entry survive for a retry. A survivor is reported honestly, not as a clean stop.
-
-Known acceptance gaps: whole-tree stop is complete only on Linux/macOS for services
-launched by the dashboard's START (they own a new process group); on Windows the
-down-check confirms only the root process; legacy and service-card launches signal
-only the root, so their children can survive as orphans; and STOP does not cancel
-resting venue orders.
-
-**PowerShell control center** — `.\scripts\spread-hunter-menu.ps1` offers
-`start` / `stop` / `status` / `open`. The `status` view shows the dashboard, every stack
-process (with PID and module path), the Global Stop Loss watchdog, the universe feed, and checkout
-identity in one aligned, color-coded report.
+**PowerShell control center** — `.\scripts\spread-hunter-menu.ps1` with
+`start` / `stop` / `host` (`open`) / `shadow-run` / `stop-shadow` / `open-shadow` /
+`clean` / `status` / `statistical-run` / `tournament-cockpit`. See
+[docs/agents/first-run.md](docs/agents/first-run.md) for what each option covers.
 
 ## Safety rails
 
 1. **LIVE is the default.** This is the real-money execution repo. Every subcommand reaches
-   the venue by default. Use `--no-live` for dry-run preview.
+   the venue by default. Use `--no-live` for dry-run preview; use `shadow_run` (no signer,
+   explicit per-run store, `data/orders.db` refused) for full-loop rehearsal.
 2. **Closing commands are pre-approved:** `exit`, `merge`, `redeem`, `cancel`,
-   `cancel-market`, `cancel-all` reduce exposure. Cancelling pulls resting orders only --
+   `cancel-market`, `cancel-all` reduce exposure. Cancelling pulls resting orders only —
    a leg that already filled is still open exposure.
 3. **Opening commands require explicit supervision:** `quote`, `complete`, the Trader loop
    and the dashboard's START button all rest or spend real funds. `complete` buys the
    missing side: it removes the risk of a single buy, but it does so by spending, so it is
    an opening command and not a closing one.
-4. **Dynamic Caps:** `order_risk_pct = 25%` ($25.0 baseline), `naked_risk_pct = 6%` ($6.0 baseline), `bankroll_ceiling_pct = 90%` ($90.0 baseline), `max_pair_cost = 0.99` (`core_brain/config.py`).
+4. **Dynamic caps** (`core_brain/config.py`): `order_risk_pct = 25%` ($25.00 at $100
+   baseline), `naked_risk_pct = 6%` ($6.00 at $100 baseline),
+   `bankroll_ceiling_pct = 90%` ($90.00 at $100 baseline), `max_pair_cost = 0.99`.
+   Caps scale with the live account mark.
+5. **`data/orders.db` is the production registry.** Read it; never rewrite or delete it.
+
+Full rules: [docs/agents/safety.md](docs/agents/safety.md).
 
 ## Docs
 
-- [AGENTS.md](AGENTS.md) — the objective, universe rules, and design history
-- [Dashboard redesign spec](docs/superpowers/specs/2026-08-21-dashboard-redesign-design.md)
-- [Screener kanban spec](docs/superpowers/specs/2026-08-21-screener-kanban-tab.md)
+- [AGENTS.md](AGENTS.md) — operating rules, commands, verification and merge discipline
+- [docs/agents/safety.md](docs/agents/safety.md) — safety rails, shadow-run contract
+- [docs/agents/strategy.md](docs/agents/strategy.md) — the strategy, universe, pricing, lifecycle
+- [docs/agents/architecture.md](docs/agents/architecture.md) — module layout, lifecycle, retention
+- [docs/agents/first-run.md](docs/agents/first-run.md) — run anatomy, every command and argument
+- [docs/agents/verifying.md](docs/agents/verifying.md) — what "done" means
+- [docs/agents/git-workflow.md](docs/agents/git-workflow.md) — branching, PRs, review rounds
