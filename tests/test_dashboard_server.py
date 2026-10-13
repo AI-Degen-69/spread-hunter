@@ -131,6 +131,41 @@ def test_api_and_html_endpoints(client, temp_db):
     assert "pairs" in data
 
 
+def test_served_html_fingerprints_static_assets(client):
+    """`/` rewrites ?v= to the asset bytes: no author bump to remember."""
+    import hashlib
+    from pathlib import Path
+
+    from dashboard import server as srv
+
+    res = client.get("/")
+    assert res.status_code == 200
+    expected = hashlib.sha1(
+        (Path(srv.__file__).resolve().parent / "static" / "app.js")
+        .read_bytes()).hexdigest()[:12]
+    assert f"/static/app.js?v={expected}" in res.text
+    assert "?v=9" not in res.text
+
+
+def test_fingerprint_tracks_bytes_and_skips_missing(tmp_path):
+    """A changed file changes the version; a missing file stays untouched."""
+    from dashboard.server import _fingerprint_static_refs
+
+    (tmp_path / "a.js").write_text("v1", encoding="utf-8")
+    html = ('<script src="/static/a.js?v=3"></script>'
+            '<script src="/static/gone.js?v=3"></script>'
+            '<script src="/static/b.js"></script>')
+    (tmp_path / "b.js").write_text("b", encoding="utf-8")
+
+    first = _fingerprint_static_refs(html, tmp_path)
+    assert "/static/a.js?v=3" not in first
+    assert "/static/gone.js?v=3" in first
+    assert "/static/b.js?v=" in first
+
+    (tmp_path / "a.js").write_text("v2", encoding="utf-8")
+    assert _fingerprint_static_refs(html, tmp_path) != first
+
+
 def test_pairs_activity_endpoint_aggregates_ring(client, tmp_path):
     """/api/pairs-activity counts pairs_* ring actions per cycle and per pair,
     ignoring non-pairs events and keeping each pair's most recent action.
