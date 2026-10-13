@@ -22,8 +22,13 @@ from __future__ import annotations
 import pytest
 
 from core_brain.statistical_analytics import (
+    FRICTION_BAND_METRICS,
     STOP_OFFSET_FALLBACK,
+    friction_band,
+    overshoot_ratio,
     rescue_drag,
+    rescue_friction_summary,
+    taker_cost_drag_ratio,
 )
 
 
@@ -47,7 +52,7 @@ def _close(shares: float = 5.0, cost_basis: float = 3.0, proceeds: float = 0.75,
 # C: price improvement: the book drifted toward us between trigger and decision.
 # D: the ordinary case for a non-hard-stop rescue -- no `trigger_bid` on the row.
 # E: the stale mark this work exists to measure: the stop fired at 0.83, we got 0.15.
-A = _close()
+A = _close(fee=0.0)
 B = _close(shares=10.0, cost_basis=6.0, proceeds=1.2, realized_pnl=-4.8, fee=0.30,
            trigger_bid=0.20, fresh_bid=0.15, dn_price=0.12)
 C = _close(shares=10.0, cost_basis=6.0, proceeds=2.30, realized_pnl=-3.70, fee=0.0,
@@ -216,6 +221,305 @@ def test_a_close_with_no_shares_and_no_reference_measures_nothing():
     assert out["reference_source"] is None
     assert out["latency_drag_cents"] is None
     assert out["sled_cents"] is None
+
+
+# --- taker cost drag ratio --------------------------------------------------
+
+def test_the_fee_share_of_the_booked_loss_is_measured_against_the_payoff():
+    # Arrange -- B: a $0.30 taker fee against a $4.80 booked loss.
+    # Act
+    out = taker_cost_drag_ratio(B)
+
+    # Assert
+    assert out["fee_usd"] == pytest.approx(0.30)
+    assert out["fee_measured"] is True
+    assert out["realized_pnl_usd"] == pytest.approx(-4.8)
+    assert out["tcdr"] == pytest.approx(0.0625)
+
+
+def test_a_null_fee_is_unmeasured_not_zero():
+    # Arrange -- D: the rescue writer leaves `fee` empty. A zero would claim the venue
+    # charged nothing; nobody measured whether it did.
+    # Act
+    out = taker_cost_drag_ratio(D)
+
+    # Assert
+    assert out["fee_usd"] is None
+    assert out["fee_measured"] is False
+    assert out["tcdr"] is None
+
+
+def test_a_zero_loss_payoff_has_no_fee_share():
+    # Arrange -- a close that broke exactly even: the ratio's denominator is zero, and
+    # the question has no answer. Returning 0.0 here would read as "fees ate nothing".
+    row = _close(fee=0.30, realized_pnl=0.0)
+
+    # Act
+    out = taker_cost_drag_ratio(row)
+
+    # Assert
+    assert out["tcdr"] is None
+    assert out["fee_usd"] == pytest.approx(0.30)
+    assert out["fee_measured"] is True
+
+
+def test_a_close_with_no_payoff_measures_no_fee_share():
+    # Arrange / Act
+    out = taker_cost_drag_ratio(_close(fee=0.30, realized_pnl=None))
+
+    # Assert
+    assert out["realized_pnl_usd"] is None
+    assert out["tcdr"] is None
+
+
+# --- overshoot ratio --------------------------------------------------------
+
+def test_overshoot_is_the_drag_in_units_of_the_risk_the_stop_capped():
+    # Arrange -- B: 8c of drag against the 40c the stop intended to risk, so 0.2x.
+    # Act
+    out = overshoot_ratio(B)
+
+    # Assert
+    assert out["planned_risk_cents"] == pytest.approx(40.0)
+    assert out["overshoot_ratio"] == pytest.approx(0.2)
+    assert out["status"] == "measured"
+    assert out["reference_source"] == "recorded"
+
+
+def test_a_stop_that_held_the_loss_is_not_overshot():
+    # Arrange -- A: the exit filled at the trigger, so no loss escaped the stop.
+    # Act
+    out = overshoot_ratio(A)
+
+    # Assert
+    assert out["overshoot_ratio"] == pytest.approx(0.0)
+    assert out["status"] == "measured"
+
+
+def test_price_improvement_reads_as_a_negative_overshoot():
+    # Arrange -- C: the book moved our way, so the stop captured less loss than planned.
+    # Act
+    out = overshoot_ratio(C)
+
+    # Assert
+    assert out["overshoot_ratio"] == pytest.approx(-0.075)
+    assert friction_band("overshoot", out["overshoot_ratio"]) == "good"
+
+
+def test_a_drag_past_the_whole_planned_risk_is_a_failed_stop():
+    # Arrange -- D: 6c of drag against 4c of planned risk, so the stop let more than it
+    # meant to risk escape. This is the reading the metric exists to surface.
+    # Act
+    out = overshoot_ratio(D)
+
+    # Assert
+    assert out["planned_risk_cents"] == pytest.approx(4.0)
+    assert out["overshoot_ratio"] == pytest.approx(1.5)
+    assert friction_band("overshoot", out["overshoot_ratio"]) == "bad"
+
+
+def test_a_trigger_at_or_above_entry_has_no_planned_risk_to_overshoot():
+    # Arrange -- E: the recorded trigger (0.83) sits above the entry (0.54), so the
+    # planned risk is negative and the ratio has no denominator. The guard is what keeps
+    # this from being a negative "overshoot", which would read as a stop that did well.
+    # Act
+    out = overshoot_ratio(E)
+
+    # Assert
+    assert out["planned_risk_cents"] == pytest.approx(-29.0)
+    assert out["overshoot_ratio"] is None
+    assert out["status"] == "no_planned_risk"
+
+
+def test_a_close_with_no_measurable_drag_has_no_overshoot():
+    # Arrange / Act
+    out = overshoot_ratio(_close(dn_price=None, up_price=None, proceeds=None))
+
+    # Assert
+    assert out["overshoot_ratio"] is None
+    assert out["status"] == "unmeasured"
+
+
+# --- traffic-light bands ----------------------------------------------------
+
+@pytest.mark.parametrize("metric,value,expected", [
+    ("sled", None, "unmeasured"),
+    ("sled", 0.0, "good"),
+    ("sled", -3.0, "good"),
+    ("sled", 2.0, "average"),
+    ("sled", 2.01, "bad"),
+    ("latency", 0.0, "good"),
+    ("latency", 5.0, "good"),
+    ("latency", -1.99, "average"),
+    ("latency", -2.0, "bad"),
+    ("execution", 0.0, "good"),
+    ("execution", 2.0, "good"),
+    ("execution", 2.01, "average"),
+    ("execution", 5.0, "average"),
+    ("execution", 5.01, "bad"),
+    ("tcdr", 0.0, "good"),
+    ("tcdr", 0.0625, "average"),
+    ("tcdr", 0.0999, "average"),
+    ("tcdr", 0.10, "bad"),
+    ("overshoot", 0.0, "good"),
+    ("overshoot", -0.075, "good"),
+    ("overshoot", 1.0, "average"),
+    ("overshoot", 1.5, "bad"),
+])
+def test_each_metric_is_banded_on_the_tickets_own_edges(metric, value, expected):
+    # Act / Assert
+    assert friction_band(metric, value) == expected
+
+
+def test_a_band_name_that_does_not_exist_is_a_bug_not_a_measurement():
+    # Arrange -- an unknown name returning "unmeasured" would read as missing data and
+    # hide the typo behind a plausible-looking reading.
+    # Act / Assert
+    with pytest.raises(ValueError):
+        friction_band("sledd", 1.0)
+
+
+def test_the_banded_metric_names_are_the_five_the_ticket_names():
+    # Act / Assert
+    assert FRICTION_BAND_METRICS == ("sled", "latency", "execution", "tcdr", "overshoot")
+
+
+# --- the summary -----------------------------------------------------------
+
+MIXED = [A, B, C, D, E,
+         _close(method="shadow_merge"),
+         _close(method="venue_sync"),
+         _close(method="sell")]
+
+
+def test_the_summary_averages_each_metric_over_its_own_measured_subset():
+    # Arrange -- five rescue closes. The latency hop is measurable on four of them (D has
+    # no recorded trigger), and the fee ratio on four (D's fee is NULL). Each mean uses
+    # the closes that carry it, so one unmeasured row cannot dilute a measurement.
+    # Act
+    out = rescue_friction_summary([A, B, C, D, E])
+
+    # Assert
+    assert out["rescue_count"] == 5
+    assert out["measured_count"] == 5
+    assert out["mean_sled_cents"] == pytest.approx(15.8)
+    assert out["mean_latency_drag_cents"] == pytest.approx(71.0 / 4.0)   # 0, 5, -2, 68
+    assert out["mean_execution_drag_cents"] == pytest.approx(0.4)
+    assert out["mean_tcdr"] == pytest.approx(0.015625)
+    assert out["mean_overshoot_ratio"] == pytest.approx(0.40625)
+    assert out["units"] == "cents_per_share"
+
+
+def test_the_summary_discloses_how_the_reference_was_arrived_at():
+    # Arrange -- four of the five rescue closes recorded a trigger bid; one fell back to
+    # the named offset. The count is the reader's only way to tell which figures rest on
+    # an assumption.
+    # Act
+    out = rescue_friction_summary([A, B, C, D, E])
+
+    # Assert
+    assert out["recorded_reference_count"] == 4
+    assert out["assumed_reference_count"] == 1
+    assert out["fee_measured_count"] == 4
+
+
+def test_the_summary_bands_the_means_it_reports():
+    # Arrange -- the band is a function of the value, never a static label.
+    # Act
+    out = rescue_friction_summary([A, B, C, D, E])
+
+    # Assert
+    assert set(out["bands"]) == set(FRICTION_BAND_METRICS)
+    assert out["bands"]["sled"] == "bad"                # 15.8c mean, worst close 68c
+    assert out["bands"]["latency"] == "good"           # 17.75c mean, none of it favourable
+    assert out["bands"]["execution"] == "good"         # 0.4c mean
+    assert out["bands"]["tcdr"] == "average"           # 1.6% of the booked loss
+    assert out["bands"]["overshoot"] == "average"      # 0.41x the planned risk
+
+
+def test_the_summary_leaves_non_rescue_closes_out_of_every_measurement():
+    # Arrange -- a merge and a bookkeeping row are not bailouts, and a generic sell is
+    # neither path. They are counted and disclosed, never averaged in.
+    # Act
+    out = rescue_friction_summary(MIXED)
+
+    # Assert
+    assert out["rescue_count"] == 5
+    assert out["non_rescue_count"] == 3
+    assert out["mean_sled_cents"] == pytest.approx(15.8)
+
+
+def test_a_method_recorded_with_stray_case_still_counts_as_a_rescue():
+    # Arrange -- `method` is a free-form recorded string.
+    # Act
+    out = rescue_friction_summary([_close(method=" Single_Buy_Exit ")])
+
+    # Assert
+    assert out["rescue_count"] == 1
+    assert out["measured_count"] == 1
+
+
+def test_a_run_with_no_rescue_closes_reports_unmeasured_not_zero():
+    # Arrange / Act -- the section is always present, like `fill_path_edge`, so a caller
+    # never branches on whether the key exists. `0.0` here would claim bailouts cost
+    # nothing.
+    out = rescue_friction_summary([_close(method="shadow_merge")])
+
+    # Assert
+    assert out["rescue_count"] == 0
+    assert out["measured_count"] == 0
+    assert out["mean_sled_cents"] is None
+    assert out["mean_tcdr"] is None
+    assert out["mean_overshoot_ratio"] is None
+    assert out["bands"]["sled"] == "unmeasured"
+    assert all(band == "unmeasured" for band in out["bands"].values())
+
+
+def test_the_summary_of_nothing_is_the_same_shape():
+    # Arrange / Act
+    out = rescue_friction_summary([])
+
+    # Assert
+    assert out["rescue_count"] == 0
+    assert out["non_rescue_count"] == 0
+    assert out["recorded_reference_count"] == 0
+    assert out["assumed_reference_count"] == 0
+    assert out["fee_measured_count"] == 0
+    assert out["mean_latency_drag_cents"] is None
+    assert out["mean_execution_drag_cents"] is None
+
+
+def test_the_summary_is_strict_json_on_every_shape():
+    # Arrange / Act / Assert -- `inf` or `nan` in the payload would break the strict-JSON
+    # promise `build()` makes to its callers.
+    import json
+
+    for rows in ([], MIXED, [_close(realized_pnl=0.0, shares=0.0, cost_basis=None)]):
+        json.dumps(rescue_friction_summary(rows), allow_nan=False)
+
+
+def test_the_summary_never_mutates_the_closes_it_reads():
+    # Arrange
+    rows = [dict(row) for row in MIXED]
+    before = [dict(row) for row in rows]
+
+    # Act
+    rescue_friction_summary(rows)
+
+    # Assert
+    assert rows == before
+
+
+def test_a_summary_of_records_measures_like_a_summary_of_dicts():
+    # Arrange -- the registry's frozen record type carries the same prices.
+    from core_brain.order_registry import CloseRecord
+
+    record = CloseRecord(ts=1.0, condition_id="0xm", method="single_buy_exit",
+                         shares=10.0, dn_price=0.12, cost_basis=6.0, proceeds=1.2,
+                         realized_pnl=-4.8, fee=0.30, trigger_bid=0.20, fresh_bid=0.15)
+
+    # Act / Assert
+    assert rescue_friction_summary([record]) == rescue_friction_summary([B])
 
 
 def test_a_close_that_is_not_a_dict_is_read_the_same_way():

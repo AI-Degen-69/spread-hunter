@@ -159,7 +159,7 @@ Completion state (marked here as each task lands — Station III owns this, Stat
 everything else in this file):
 
 - [x] T1 — SLED decomposition with its tests
-- [ ] T2 — TCDR, overshoot, bands and the summary
+- [x] T2 — TCDR, overshoot, bands and the summary
 - [ ] T3 — wire the payload
 - [ ] T4 — dashboard readout with traffic-light bands
 

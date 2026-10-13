@@ -71,6 +71,23 @@ RESCUE_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
 # `kpi.NON_TRADE_CLOSE_METHODS`.
 EXCLUDED_METHODS = ("venue_sync",)
 
+# Zero-loss guard for the ratio denominators, mirroring `kpi.pnl_by_fill_path`. A booked
+# loss a hair away from zero has no share to divide into, and the float noise around a
+# break-even close must not read as a denominator.
+_LOSS_EPSILON = 1e-9
+
+# The traffic-light bands `rescue_friction_summary` reports for its means, in the order a
+# reader meets them. The band is a function of the value, never a static label.
+FRICTION_BAND_METRICS = ("sled", "latency", "execution", "tcdr", "overshoot")
+
+# The ticket writes the drag bands in price dollars -- 0.02 is about one book spread, 0.05
+# the adverse-drift trigger the fleet already acts on -- while the drags are displayed in
+# cents, so the same edges read 2.0 and 5.0 here.
+SPREAD_CENTS = 2.0
+DRIFT_CENTS = 5.0
+TCDR_BAD_AT_OR_ABOVE = 0.10
+OVERSHOOT_BAD_ABOVE = 1.0
+
 # The assumed stop reference for a rescue close that recorded no `trigger_bid`. It is an
 # ASSUMPTION, not an observed price: it equals the system default in `core_brain/config.py`
 # (`single_buy_max_loss_usd = 0.04`, promoted 2026-10-12), a per-share loss limit that
@@ -452,6 +469,177 @@ def rescue_drag(close: Any) -> dict[str, Any]:
         "reference_bid": shape(reference),
         "reference_source": source,
         "exit_price": shape(exit_price),
+    }
+
+
+def taker_cost_drag_ratio(close: Any) -> dict[str, Any]:
+    """The share of a booked bailout loss that is pure fee: `fee / |realized_pnl|`.
+
+    A taker SELL is the only order this strategy sends that can pay the venue anything
+    (the venue's graduated spread markets carry no maker fee and a merged pair pays none),
+    so this is where the whole fee bill, if there is one, has to appear. The denominator
+    is the payoff the close booked, so the ratio answers "how much of this loss was the
+    fee" in the units the operator already reads.
+
+    A `NULL` fee is unmeasured, not zero: `fee_measured` says which claim the ratio rests
+    on. The rescue writer leaves the column empty, so on today's rows this metric is
+    `None` -- and `0.0` there would have said the venue charged nothing, which nobody
+    measured. A break-even close has no denominator and is `None` for the same reason.
+    """
+    fee = _finite(_close_field(close, "fee"))
+    pnl = _finite(_close_field(close, "realized_pnl"))
+    tcdr = None
+    if fee is not None and pnl is not None and abs(pnl) > _LOSS_EPSILON:
+        tcdr = fee / abs(pnl)
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    return {
+        "tcdr": shape(tcdr),
+        "fee_usd": shape(fee),
+        "fee_measured": fee is not None,
+        "realized_pnl_usd": shape(pnl),
+    }
+
+
+def overshoot_ratio(close: Any) -> dict[str, Any]:
+    """The drag in units of the risk the stop meant to cap, not a separate loss figure.
+
+    `planned_risk` is `entry - reference_bid`: the distance the stop was willing to lose
+    before it fired. Dividing the drag by it says whether the stop contained the loss it
+    promised to (`<= 1x`) or let more escape than it was ever risking (`> 1x`). A negative
+    ratio is price improvement, and it is kept rather than clipped.
+
+    There is deliberately no `theoretical_usd` or `degradation_usd` companion. Degradation
+    measured against the same reference is mathematically `-SLED` -- the entry term
+    cancels -- so it would be a second name for the number `rescue_drag` already returns.
+
+    `status` carries the reason a ratio is absent: `unmeasured` (no drag, or no reference
+    to plan from) or `no_planned_risk` (the trigger sat at or above entry, so the stop was
+    risking nothing and no overshoot can be expressed as a fraction of it).
+    """
+    drag = rescue_drag(close)
+    entry = _entry_price(close)
+    reference = drag["reference_bid"]
+    planned = (None if entry is None or reference is None
+               else round((entry - reference) * 100.0, 6))
+    ratio = None
+    status = "unmeasured"
+    if drag["sled_cents"] is not None and planned is not None:
+        if planned <= 0:
+            status = "no_planned_risk"
+        else:
+            ratio = round(drag["sled_cents"] / planned, 6)
+            status = "measured"
+
+    return {
+        "overshoot_ratio": ratio,
+        "sled_cents": drag["sled_cents"],
+        "planned_risk_cents": planned,
+        "reference_source": drag["reference_source"],
+        "status": status,
+    }
+
+
+def friction_band(metric: str, value: Optional[float]) -> str:
+    """The traffic-light band for one metric's displayed value: good/average/bad.
+
+    The thresholds live here and reach the dashboard as data, so the renderer maps a band
+    name to a colour and holds no threshold of its own -- a renderer that carried its own
+    copy is how a screen starts disagreeing with the payload it is drawing.
+
+    The drag metrics are banded in cents (see `SPREAD_CENTS` / `DRIFT_CENTS`); `tcdr` and
+    `overshoot` are unitless ratios. `None` and anything non-finite read `unmeasured`: a
+    number nobody recorded is not a bad number. A name outside `FRICTION_BAND_METRICS`
+    raises, because a typo returning `unmeasured` would hide behind a plausible reading.
+    """
+    if metric not in FRICTION_BAND_METRICS:
+        raise ValueError(f"unknown friction metric: {metric!r}")
+    number = _finite(value)
+    if number is None:
+        return "unmeasured"
+
+    if metric == "sled":
+        if number <= 0:
+            return "good"
+        return "average" if number <= SPREAD_CENTS else "bad"
+    if metric == "latency":
+        # Signed: the book drifting toward us between trigger and decision is good news.
+        if number >= 0:
+            return "good"
+        return "average" if number > -SPREAD_CENTS else "bad"
+    if metric == "execution":
+        if number <= SPREAD_CENTS:
+            return "good"
+        return "average" if number <= DRIFT_CENTS else "bad"
+    if metric == "tcdr":
+        if number <= 0:
+            return "good"
+        return "average" if number < TCDR_BAD_AT_OR_ABOVE else "bad"
+    # overshoot: a negative ratio is a stop that lost less than it planned to.
+    if number <= 0:
+        return "good"
+    return "average" if number <= OVERSHOOT_BAD_ABOVE else "bad"
+
+
+def rescue_friction_summary(closes: Sequence[Any]) -> dict[str, Any]:
+    """Every rescue close's friction, in five means with their bands.
+
+    Always present, like `fill_path_edge`, and for the same reason: a caller must never
+    have to branch on whether the key exists. A run with no bailouts reports zero counts
+    and `None` means, which say "nothing to measure", never "nothing was lost".
+
+    The population is the rescue methods -- the leg whose partner never filled, sold back
+    through the book. It is deliberately not narrowed to stop hits: the same routes serve
+    the timed exits, and narrowing by `reason` would drop the rows this measurement most
+    needs. `non_rescue_count` discloses what was left out rather than folding it in.
+
+    Each mean uses the closes that carry its own metric (`latency` needs a recorded
+    trigger, the fee ratio needs a measured fee), so one unrecorded field cannot drag a
+    mean toward zero while looking like a measurement. The reference counts say how many
+    of the drag figures rest on the named offset assumption rather than a recorded bid.
+    """
+    rows = [row for row in closes or []
+            if str(_close_field(row, "method") or "").strip().lower() in RESCUE_METHODS]
+    by_metric: dict[str, list[float]] = {metric: [] for metric in FRICTION_BAND_METRICS}
+    recorded = assumed = fee_measured = 0
+
+    for row in rows:
+        drag = rescue_drag(row)
+        cost = taker_cost_drag_ratio(row)
+        over = overshoot_ratio(row)
+        if drag["reference_source"] == "recorded":
+            recorded += 1
+        elif drag["reference_source"] == "assumed_offset":
+            assumed += 1
+        if cost["fee_measured"]:
+            fee_measured += 1
+        for metric, value in (("sled", drag["sled_cents"]),
+                              ("latency", drag["latency_drag_cents"]),
+                              ("execution", drag["execution_drag_cents"]),
+                              ("tcdr", cost["tcdr"]),
+                              ("overshoot", over["overshoot_ratio"])):
+            if value is not None:
+                by_metric[metric].append(value)
+
+    means = {metric: (round(statistics.fmean(values), 6) if values else None)
+             for metric, values in by_metric.items()}
+    return {
+        "rescue_count": len(rows),
+        "measured_count": len(by_metric["sled"]),
+        "recorded_reference_count": recorded,
+        "assumed_reference_count": assumed,
+        "fee_measured_count": fee_measured,
+        "non_rescue_count": len(closes or []) - len(rows),
+        "mean_sled_cents": means["sled"],
+        "mean_latency_drag_cents": means["latency"],
+        "mean_execution_drag_cents": means["execution"],
+        "mean_tcdr": means["tcdr"],
+        "mean_overshoot_ratio": means["overshoot"],
+        "bands": {metric: friction_band(metric, value)
+                  for metric, value in means.items()},
+        "units": "cents_per_share",
     }
 
 
