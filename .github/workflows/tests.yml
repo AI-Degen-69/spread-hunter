@@ -15,26 +15,16 @@ permissions:
 
 jobs:
   pytest:
-    # Ubuntu runs the full suite (fast runner); Windows splits into 4
-    # duration-balanced shards (slow runner). Union of the shards is the
-    # full suite -- scripts/ci/pytest_shard.py globs tests/ at runtime,
-    # so new test files are always assigned somewhere.
-    name: pytest (${{ matrix.os }} shard ${{ matrix.shard }})
-    runs-on: ${{ matrix.os }}
+    # Windows-only gate: the bot runs on Windows, so the suite runs where
+    # the bugs live. Six duration-balanced shards keep the gate at roughly
+    # 3-4 minutes. scripts/ci/pytest_shard.py globs tests/ at runtime, so
+    # new test files are always assigned somewhere.
+    name: pytest (windows shard ${{ matrix.shard }}/6)
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            shard: all
-          - os: windows-latest
-            shard: 1
-          - os: windows-latest
-            shard: 2
-          - os: windows-latest
-            shard: 3
-          - os: windows-latest
-            shard: 4
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - uses: actions/checkout@v4
@@ -55,4 +45,4 @@ jobs:
       # `shell: bash` keeps word-splitting identical on both OSes.
       - name: Run tests
         shell: bash
-        run: python -m pytest -q $(python scripts/ci/pytest_shard.py --shard "${{ matrix.shard }}" --of 4)
+        run: python -m pytest -q $(python scripts/ci/pytest_shard.py --shard "${{ matrix.shard }}" --of 6)
