@@ -197,8 +197,15 @@ def quote_resting_price(
     if mid is None:
         return None, None, None, 1.0
     base_offset, _ = dynamic_offset_for(cfg, now=now)
-    base = unhedged_stop_loss.offset_for(getattr(cfg, "gate_state", unhedged_stop_loss.NORMAL),
-                           base_offset, cfg.widen_offset)
+    if getattr(cfg, "apply_widen_gate", True):
+        base = unhedged_stop_loss.offset_for(
+            getattr(cfg, "gate_state", unhedged_stop_loss.NORMAL),
+            base_offset, cfg.widen_offset)
+    else:
+        # WIDENED-gate kill switch (loose baseline preset): quote the raw
+        # dynamic offset with no snap-back to the tight widen_offset. A
+        # WIDENED market must not pull the quote TIGHTER than the base offset.
+        base = base_offset
     provisional = round(mid - base, 4)
     skew = risk.skew_offset(cfg, inv, side)
     band = risk.band_risk_factor(cfg, provisional)
@@ -208,11 +215,25 @@ def quote_resting_price(
     if desired > offset > 0:
         truncated = offset / desired
     price = round(mid - offset, 4)
-    price = round(round(price / cfg.price_tick) * cfg.price_tick, 4)
+    # HARD PENNY FLOOR (operator directive 2026-10-12). Resting orders sit on a
+    # standard 1-cent grid. floor -- never round-to-nearest -- so the offset is
+    # never tightened and a fractional target can never round UP a cent toward
+    # the ask. Hard-coded to the cent, independent of cfg.price_tick, so no
+    # override can reintroduce a sub-penny resting price. 0.4439 -> 0.44.
+    price = math.floor(price * 100.0 + 1e-9) / 100.0
+    # VALID PRICE BAND. A wide dynamic offset on a low-mid leg (e.g. 0.15 mid
+    # minus a 20c offset) floors BELOW zero -- an impossible resting price the
+    # venue rejects. Clamp to [one tick, one tick under the ask]: never negative,
+    # never zero, never crossing. This is the last line of defense after the
+    # offset arithmetic; the offset itself is already capped by max_spread_from_mid.
+    tick = cfg.price_tick if cfg.price_tick and cfg.price_tick > 0 else 0.01
+    min_price = round(tick, 10)
+    if price < min_price:
+        price = min_price
     if ba is not None and price >= ba:
-        price = round(ba - cfg.price_tick, 4)
+        price = math.floor((ba - tick) * 100.0 + 1e-9) / 100.0
     if bb is not None:
-        cap_price = round(bb + cfg.price_tick, 4)
+        cap_price = math.floor((bb + tick) * 100.0 + 1e-9) / 100.0
         if price > cap_price:
             price = cap_price
     return price, provisional, band, truncated

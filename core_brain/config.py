@@ -659,16 +659,35 @@ class MakerConfig:
     # Deeper = better price but far lower fill probability.
     ticks_below_ask: int = 1
     tick_size: float = 0.01
-    # The venue's real minimum tick, from Gamma: orderPriceMinTickSize = 0.001.
-    # The 1c book spread is therefore TEN ticks, not one -- `tick_size` above is
-    # a spread-width proxy the "pair" objective used, not the venue tick. Reward
-    # prices round to this so we can sit at a genuine price level.
-    price_tick: float = 0.001
+    # THE HARD PRICE GRID (operator directive 2026-10-12): Polymarket resting
+    # orders sit on a standard 1-cent grid. 0.001 sub-penny math is retired
+    # everywhere -- it produced off-grid orders the venue rejects and 4-decimal
+    # displays (0.4520) that read as real prices. price_tick is the single
+    # source of truth for the grid; every quote floors to it. Do not reintroduce
+    # a 0.001 venue-tick default.
+    price_tick: float = 0.01
 
     # Venue minimum size floor (5 shares on graduated markets).
     # Replaces the stale 50-share rewards-scoring floor.
     min_quote_shares: int = 5
-    max_spread_from_mid: float = 0.045
+    # THE WIDE CEILING on how far below mid a leg may rest. THE SYSTEM BASELINE
+    # (promoted 2026-10-12): the old 4.5c hard cap and the backwards 3.5c widen
+    # snap-back were broken logic and are retired repo-wide. This ceiling is the
+    # single absolute safety bound and is also the score-window width `v`
+    # (`order_score` returns 0 outside [0, v]), so it is never 0/None -- a 0
+    # would zero every quote's score. It stays high (15c) rather than infinite
+    # because the scorer needs a finite window; the dynamic offset (floor 1c,
+    # 0.5x range, ceiling 20c) drives the quote well under this in practice, so
+    # nothing normally clamps here. Every arm inherits this; any arm that wants
+    # the retired tight behaviour must set it explicitly.
+    max_spread_from_mid: float = 0.15
+    # WIDENED-GATE KILL SWITCH. THE SYSTEM BASELINE (promoted 2026-10-12):
+    # False repo-wide. `quote_resting_price` skips `offset_for` entirely and
+    # quotes the raw dynamic offset, so a WIDENED market never snaps the quote
+    # BACK to the tight widen_offset -- the old default (True) pulled a quote
+    # TIGHTER than the base offset exactly when a market started picking us
+    # off, which is backwards. Quotes now follow range volatility only.
+    apply_widen_gate: bool = False
 
     # HOW a funded market is sized. "shares" is the paper run's behaviour --
     # `quote_shares` shares per leg. "dollars" sizes each leg from the Owner's
@@ -1027,7 +1046,11 @@ class MakerConfig:
     # Max seconds to wait for a maker quote before forcing stop-loss exit on stranded legs.
     stranded_max_wait_sec: float = 300.0
 
-    single_buy_max_loss_usd: float = 0.045
+    # Single-leg stop: max dollar loss per share before the naked leg is
+    # force-exited. THE SYSTEM DEFAULT (promoted 2026-10-12): $0.04 flat (4c).
+    # The legacy $0.045 carried a fractional half-cent that made no sense on a
+    # whole-cent book and caused precision drift in the trigger comparison.
+    single_buy_max_loss_usd: float = 0.04
     # Optional sizing ceiling per quote (None for standard mode; set via .env / CLI)
     max_quote_shares: float | None = None
 
@@ -1151,27 +1174,29 @@ class MakerConfig:
     market_daily_rate: float = 0.0
 
     # DYNAMIC OFFSET & VOLATILITY TELEMETRY (#370)
-    # Opt-in dynamic offset scaled by measured tape volatility/range in cents.
-    # Offsets round strictly to integer cents (0.01 tick) clamped between
-    # dynamic_offset_min_cents and dynamic_offset_max_cents.
-    dynamic_offset_enabled: bool = False
+    # THE SYSTEM BASELINE (promoted 2026-10-12): dynamic quoting is ON repo-wide
+    # and loose. Offsets = multiplier x measured range_cents, floored at 1c and
+    # capped at 20c (effectively uncapped for any book that has been measured).
+    # The retired default was OFF with a 2c-4c clamp; the clamp plus the 4.5c
+    # spread cap meant a measured 6c+ offset never reached the book. Floor 1c,
+    # ceiling 20c, 0.5x multiplier. max_spread_from_mid (15c) is the outer bound.
+    dynamic_offset_enabled: bool = True
     dynamic_offset_multiplier: float = 0.50
-    dynamic_offset_min_cents: int = 2
-    dynamic_offset_max_cents: int = 4
+    dynamic_offset_min_cents: int = 1
+    dynamic_offset_max_cents: int = 20
     dynamic_offset_max_age_sec: float = 900.0   # 15 minutes max age of range telemetry
     range_cents: float | None = None
     velocity_measured_at: float | None = None
 
 
 TOURNAMENT_PRESETS: dict[str, dict] = {
-    "control": {
-        "dynamic_offset_enabled": False,
-        "reward_offset": 0.020,
-        "requote_hold_queue_shares": 500.0,
-        "requote_hold_below_target": 0.08,
-        "single_buy_max_loss_usd": 0.045,
-        "description": "Static 2¢ offset baseline control arm with queue hold; stop $0.045",
-    },
+    # NOTE: the legacy "control" arm (static 2c offset, 4.5c cap, widen
+    # snap-back) was PURGED 2026-10-12. That behaviour was broken logic -- the
+    # 4.5c cap clipped every measured offset above it and the widen snap-back
+    # pulled quotes TIGHTER into markets that were picking us off. The system
+    # baseline is now the loose defaults directly on MakerConfig (dynamic ON,
+    # 1c floor / 20c ceiling / 0.5x, no widen gate, 15c ceiling). Every arm
+    # below diverges from THAT foundation. Do not reintroduce a capped control.
     "conservative": {
         "dynamic_offset_enabled": True,
         "dynamic_offset_multiplier": 0.75,
@@ -1214,13 +1239,34 @@ TOURNAMENT_PRESETS: dict[str, dict] = {
     },
     "hybrid": {
         "dynamic_offset_enabled": False,
-        "reward_offset": 0.020,
         "requote_dead_band": 0.060,
         "requote_hold_queue_shares": 500.0,
         "requote_hold_below_target": 0.08,
         "single_buy_grace_sec": 45.0,
         "single_buy_max_loss_usd": 0.045,
-        "description": "Empirical Winner Hybrid: Control edge (2¢ offset, $0.045 stop) + Deadband-Wide queue stability (6¢ deadband, 45s grace)",
+        "description": "Empirical Winner Hybrid: control edge + Deadband-Wide queue stability (6c deadband, 45s grace)",
+    },
+    # THE LOOSE BASELINE. The wide, unconstrained benchmark we observe first and
+    # tighten in later iterations. Quoting follows the raw dynamic offset with
+    # NO upper clamp and NO WIDENED snap-back: floor 1¢, ceiling 20¢ (effectively
+    # uncapped for any measured book), max_spread_from_mid raised to 15¢ so the
+    # scorer's window is wide enough to hold the quote, and the WIDENED gate
+    # neutralised so a bad market never pulls the quote TIGHTER than the base
+    # offset. max_spread_from_mid is never set to 0/None: it is the score window
+    # `v` (order_score returns 0 outside it), so 0 would zero every quote's
+    # score. Selection (the shared filter) is loosened globally for the run,
+    # not per-arm, so every arm still sees the same universe.
+    "baseline": {
+        "dynamic_offset_enabled": True,
+        "dynamic_offset_multiplier": 0.50,
+        "dynamic_offset_min_cents": 1,
+        "dynamic_offset_max_cents": 20,
+        "max_spread_from_mid": 0.15,
+        "apply_widen_gate": False,
+        "requote_hold_queue_shares": 500.0,
+        "requote_hold_below_target": 0.08,
+        "single_buy_max_loss_usd": 0.045,
+        "description": "Loose baseline: raw dynamic offset (0.5x range), 1c floor, 20c ceiling, no widen snap-back, 15c score window; stop $0.045",
     },
 }
 
@@ -1393,6 +1439,24 @@ def load(*, for_display: bool = False) -> MakerConfig:
         tk = os.environ.get("HUNTER_TICK")
         if tk:
             kw["price_tick"] = float(tk)
+    # GENERAL-PATH spread ceiling + widen-gate kill switch. Parsed OUTSIDE the
+    # HUNTER_MARKET block so a tournament preset (via _preset_to_env ->
+    # HUNTER_MAX_SPREAD / HUNTER_APPLY_WIDEN_GATE) reaches load() on the normal
+    # path. Read before the wide-book trial below so the trial's max() widens a
+    # preset window rather than replacing it. max_spread_from_mid is the score
+    # window `v` too, so it is never set to 0 here -- a 0 would zero every
+    # quote's score.
+    sp_general = os.environ.get("HUNTER_MAX_SPREAD") or ""
+    if sp_general.strip():
+        try:
+            cents = float(sp_general)
+        except ValueError:
+            cents = 0.0
+        if cents > 0:
+            kw["max_spread_from_mid"] = cents / 100.0
+    awg = os.environ.get("HUNTER_APPLY_WIDEN_GATE") or ""
+    if awg.strip():
+        kw["apply_widen_gate"] = awg.strip().lower() not in ("0", "false", "off", "no")
     wide = resolve_wide_book_trial(
         os.environ.get("HUNTER_WIDE_BOOK_TRIAL") or "", for_display=for_display)
     if wide is not None and wide > 0:
@@ -1510,20 +1574,11 @@ def load(*, for_display: bool = False) -> MakerConfig:
         # remaining life, and a bar nobody can be behind is not a bar.
         kw["max_queue_clear_minutes"] = _bounded_float(
             "HUNTER_MAX_QUEUE_CLEAR_MIN", qcm, 0.1, 1440.0)
-    rwo = os.environ.get("HUNTER_REWARD_OFFSET") or ""
-    if rwo.strip():
-        # How far below mid to rest, for ONE run, without moving the shipped
-        # default. Measured over 24h on the recorded slate: every two-sided
-        # token quotes a 10-tick spread, so the best bid is `mid - 5 ticks`,
-        # and 35% of all below-mid volume prints at exactly that price while
-        # almost none prints past it -- 98% and 100% of the two MLB markets'
-        # below-mid volume was at the touch with nothing beyond. Resting at
-        # 0.005 reaches 18.0% of traded volume against 1.4% at the shipped
-        # 0.020, and the only way to learn whether that becomes fills is to
-        # rehearse it. `min_reward_offset` still floors the result in
-        # `quotes.quote_resting_price`; this cannot quote nearer than that.
-        kw["reward_offset"] = _bounded_float(
-            "HUNTER_REWARD_OFFSET", rwo, 0.0, 1.0)
+    # HUNTER_REWARD_OFFSET was PURGED 2026-10-12 (operator directive). It was a
+    # synthetic sub-cent override (0.005) that forced touch-reach quotes at
+    # 0.495 -- artificial placement that produced off-grid orders and false
+    # test signal. The offset is now driven solely by the dynamic range system;
+    # there is no per-run reward-offset knob. Do not reintroduce it.
     prw = os.environ.get("HUNTER_PRICE_RISK_WIDEN") or ""
     if prw.strip():
         # A RISK CONTROL, overridable only because it is also the term that

@@ -77,11 +77,27 @@
     startingServices.add(name);
     updateDot(name, { name, state: 'starting', data_available: false });
 
-    // Pre-open a blank tab during the direct user gesture to avoid popup blockers
+    // Pre-open a tab during the direct user gesture to avoid popup blockers
     let tab = null;
+    const titleName = name === 'hub' ? 'Tournament Hub' : 'Tournament Cockpit';
+    const portNum = name === 'hub' ? '8798' : '8800';
     try {
-      tab = window.open('about:blank', '_blank');
-      if (tab) tab.opener = null;
+      tab = window.open('', '_blank');
+      if (tab && !tab.closed) {
+        try {
+          tab.document.title = `Starting ${titleName}...`;
+          tab.document.body.innerHTML = `
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f3f4f6; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0;">
+              <div style="width: 28px; height: 28px; border: 3px solid rgba(88, 166, 255, 0.2); border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 16px;"></div>
+              <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+              <div style="font-size: 18px; font-weight: 600; margin-bottom: 6px;">Opening ${titleName}...</div>
+              <div style="font-size: 13px; color: #9ca3af;">Initializing service on port ${portNum}. Redirecting automatically...</div>
+            </div>
+          `;
+        } catch (e) {
+          // Fallback if document writing fails
+        }
+      }
     } catch (e) {
       tab = null;
     }
@@ -95,9 +111,20 @@
       .then(res => {
         if (res.status === 409) {
           return res.json().then(data => {
-            if (tab && !tab.closed) tab.close();
+            if (tab && !tab.closed) {
+              try {
+                tab.document.body.innerHTML = `
+                  <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f3f4f6; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0;">
+                    <div style="font-size: 18px; font-weight: 600; color: #fbbf24; margin-bottom: 6px;">Port Conflict (${portNum})</div>
+                    <div style="font-size: 13px; color: #9ca3af; margin-bottom: 16px;">Port ${portNum} is in use by another program.</div>
+                    <a href="${destUrl || targetUrl}" style="background: #2563eb; color: #fff; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-size: 13px;">Open Port ${portNum} Directly</a>
+                  </div>
+                `;
+              } catch (err) {
+                tab.close();
+              }
+            }
             updateDot(name, { name, state: 'conflict', detail: data.message });
-            alert(data.message || `Port conflict: another program is running on ${name} port.`);
             throw new Error('Conflict');
           });
         }
@@ -121,7 +148,11 @@
             if (status.state === 'running') {
               startingServices.delete(name);
               if (tab && !tab.closed) {
-                tab.location.href = destUrl;
+                try {
+                  tab.location.href = destUrl;
+                } catch (err) {
+                  window.open(destUrl, '_blank');
+                }
               } else {
                 window.open(destUrl, '_blank');
               }
@@ -129,7 +160,19 @@
               setTimeout(check, START_POLL_INTERVAL_MS);
             } else {
               startingServices.delete(name);
-              if (tab && !tab.closed) tab.close();
+              if (tab && !tab.closed) {
+                try {
+                  tab.document.body.innerHTML = `
+                    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f3f4f6; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0;">
+                      <div style="font-size: 18px; font-weight: 600; color: #f87171; margin-bottom: 6px;">Timed Out Starting ${titleName}</div>
+                      <div style="font-size: 13px; color: #9ca3af; margin-bottom: 16px;">Service did not respond in time on port ${portNum}.</div>
+                      <a href="${destUrl}" style="background: #2563eb; color: #fff; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-size: 13px;">Try Opening Anyway</a>
+                    </div>
+                  `;
+                } catch (err) {
+                  tab.close();
+                }
+              }
               updateDot(name, { name, state: 'failed', detail: 'Timed out waiting for service to start' });
             }
           });

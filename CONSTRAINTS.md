@@ -1,32 +1,41 @@
-# CONSTRAINTS — #478 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #493 (locked by Station II, enforced through Station V)
 
-Governs the `i478/toast-notifications-for-operator-actions` branch only.
+Governs the `i493/sentry-and-offense-loops-each-price-what-they-insp` branch only.
 
 ## Scope & File Boundaries
 
 - Target files for modification:
-  - `dashboard/static/index.html` (mount `#toast-container`)
-  - `dashboard/static/styles.css` (toast container and toast styles using existing tokens)
-  - `dashboard/static/app.js` (implement `showToast`, export `showToast`, wire into Sync, Master Toggle, Reset)
-  - `tests/js/toast_harness.cjs` (NEW - Node stub harness)
-  - `tests/test_dashboard_toasts.py` (NEW - pytest wrapper)
-  - `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
+  - `core_brain/shadow_exec.py` (`_sell_into_bids` age-bound snapshot only — nothing else).
+  - `tests/test_exit_price_realism.py` (new stale-snapshot case; now-relative `ts` in existing snapshot cases).
+  - `CONSTRAINTS.md`, `SPEC.md`, `tasks/plan.md`, `tasks/todo.md`.
 - Files that must NOT be modified:
-  - `dashboard/server.py`, `server.ts`, `data/orders.db`, `core_brain/*`, `scripts/*`.
-- Dependencies: Zero new dependencies (vanilla JS/CSS).
-- Accessibility: `role="alert"` for error toasts, `role="status"` for ok/warn/neutral. Focus must never be trapped or moved by a toast.
-- Sanitization: Toast text must use `textContent`, never `innerHTML`.
+  - `core_brain/order_manager.py`, `core_brain/order_registry.py`, `core_brain/trader_loop.py`, `core_brain/single_buy_saver.py` (live money path untouched — shadow rehearsal pricing only).
+  - `data/orders.db` and any production database (never touched).
 
 ## Zero regressions
 
 - Focused suites that must pass:
-  `tests/test_dashboard_toasts.py`
-  `tests/ -k "live_state or input_lag or analytics_surface or start_toggle or dashboard"`
-- Type check: `npx tsc --noEmit server.ts`
+  `tests/test_exit_price_realism.py`
+  `tests/test_hard_stop_fresh_exit.py`
+  `tests/test_aged_out_rescue.py`
+  `tests/test_risk_guardian.py`
+  `tests/test_settlement_sweeper.py`
+  `tests/test_shadow_exec.py`
+
+## Anti-cheat
+
+- No skipped/disabled tests, no deleted assertions, no new lint suppressions.
+- Existing snapshot-case `ts` updates keep identical price/size assertions; only the clock anchor moves to match the new documented contract (snapshot = prior rotation, i.e. seconds old).
+
+## Performance
+
+- None: one timestamp subtraction per rehearsed exit.
 
 ---
 
 # CONSTRAINTS — #485 (history)
+
+Governs the `i485/tournament-hub-cockpit-launcher` branch only.
 
 ## Scope & File Boundaries
 

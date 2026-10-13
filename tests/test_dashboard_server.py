@@ -2765,6 +2765,41 @@ def test_reporting_services_probe_paths():
     from dashboard.server import _REPORTING_SERVICES
     assert _REPORTING_SERVICES["hub"]["probe_path"] == "/hub/api/state"
     assert _REPORTING_SERVICES["cockpit"]["probe_path"] == "/api/stats"
+    assert _REPORTING_SERVICES["hub"]["timeout"] == 2.0
+    assert _REPORTING_SERVICES["cockpit"]["timeout"] == 2.0
+
+
+def test_tournament_hub_concurrent_ports_reachable(monkeypatch):
+    import threading
+    import time
+
+    from scripts.tournament_hub import _ports_reachable, build_arm_view
+
+    ports = [8701, 8702, 8703]
+    fake_reachable = {8701: True, 8702: False, 8703: True}
+    barrier = threading.Barrier(len(ports), timeout=10)
+
+    def fake_port_open(p, *args, **kwargs):
+        # A sequential implementation deadlocks here: the first check waits
+        # for checks that never start. Overlap trips the barrier at once.
+        barrier.wait()
+        time.sleep(0.01)
+        return fake_reachable.get(p, False)
+
+    monkeypatch.setattr("scripts.tournament_hub._port_open", fake_port_open)
+
+    res = _ports_reachable(ports)
+    assert res == fake_reachable
+    assert barrier.broken is False
+
+    plan = {"minutes": 10}
+    arm = {"name": "test", "dash_port": 8701, "db_path": "data/test.db"}
+    view = build_arm_view(plan, arm, reachable_map=res)
+    assert view["dashboard_reachable"] is True
+
+    arm_offline = {"name": "test2", "dash_port": 8702, "db_path": "data/test2.db"}
+    view_offline = build_arm_view(plan, arm_offline, reachable_map=res)
+    assert view_offline["dashboard_reachable"] is False
 
 
 def test_reporting_fetch_json_contracts(monkeypatch):

@@ -1,96 +1,71 @@
-# Plan — #478 [IMPROVE] Toast notifications for operator actions
+# Plan — #493 [FIX] Sentry and offense loops each price what they inspect from their own book read
 
-Branch: i478/toast-notifications-for-operator-actions | Issue: #478
-Size: Standard | Type: Code + Design/UI (Frontend Component & Harness TDD)
-Stack: JavaScript / HTML / CSS / Python (Node harness + pytest wrapper)
-Labels: ready-for-agent
+Branch: i493/sentry-and-offense-loops-each-price-what-they-insp | Issue: #493
+Size: Standard | Type: Debug + Code [Backend/Logic]
+Stack: Python, pytest, SQLite
+Labels: bug, ready-for-agent
+Note: supersedes the #488 plan below in this file's history (kept in git); CodeRabbit plan reply: none arrived (only our request comment of 03:13Z).
 
-## Overview
-Add a toast notification system so every operator action (sync, start/stop, reset, errors) gets visible feedback instead of silence.
-Toasts auto-dismiss after a configurable timeout, stack vertically in the bottom-right corner, feature a 44px accessible dismiss button, respect `prefers-reduced-motion`, and map to the existing semantic CSS variables (`ok` -> green, `warn` -> amber, `error` -> red, `neutral` -> surface raised).
+## CodeRabbit intake note
+What was adopted: nothing (no reply). Rejected: n/a. [UNVERIFIED]: nothing — all seams below verified verbatim in the tree.
 
-## Locked Constraints (CONSTRAINTS.md)
-- Target files for modification:
-  - `dashboard/static/index.html` (mount `#toast-container`)
-  - `dashboard/static/styles.css` (toast container and toast styles using existing tokens)
-  - `dashboard/static/app.js` (implement `showToast`, export `showToast`, wire into Sync, Master Toggle, Reset)
-  - `tests/js/toast_harness.cjs` (NEW - Node stub harness)
-  - `tests/test_dashboard_toasts.py` (NEW - pytest wrapper)
-- Files that must NOT be modified:
-  - `dashboard/server.py`, `server.ts`, `data/orders.db`, `core_brain/*`, `scripts/*`.
-- Dependencies: Zero new dependencies (vanilla JS/CSS).
-- Accessibility: `role="alert"` for error toasts, `role="status"` for ok/warn/neutral. Focus must never be trapped or moved by a toast.
-- Sanitization: Toast text must use `textContent`, never `innerHTML`.
+## Improvement proposal (adopted, simplification/hardening)
+Pure-fresh-for-sentry would drop the shadow-01 adverse-selection guard the
+snapshot was built for. Evidence, verbatim from
+`core_brain/shadow_exec.py:970` docstring: "shadow-01 showed h1 markout drift
+of -17c to -37c on 4 of 12 exits." Adopted instead: age-bound snapshot —
+fresh snapshots (seconds old) keep the guard, stale ones (>60s) fall back to
+the fresh book. One condition, both biases dead.
 
-## Dependency Graph
-- Task 1 (Core Toast Component & Action Wiring in dashboard) — unblocks Task 2.
-- Task 2 (Node Stub Harness, Pytest Test Suite & Verification) — depends on: Task 1.
+## Interface contracts
+- `ShadowExecutionClient._sell_into_bids(token_id, shares, *, floor, fresh=False)`
+  signature unchanged by this round (keeps the `fresh` flag from #491;
+  hard-stop exits keep calling with `fresh=True` -- see
+  `tests/test_hard_stop_fresh_exit.py`); behavior gains: snapshot older than
+  `MAX_SNAPSHOT_AGE_SEC = 60.0` is treated as absent (fresh-book path).
+- `read_last_token_snapshot` unchanged (still returns newest row for run).
+- `queue_marks.ts` is epoch seconds; age = `self._now_fn() - snap["ts"]`.
+- Files that must NOT change: `order_manager.py`, `order_registry.py`,
+  `trader_loop.py`, `single_buy_saver.py`, `data/orders.db`.
+
+## Dependency graph
+- Task 1 (RED test) — unblocks Task 2.
+- Task 2 (age-bound fix) — depends on Task 1.
+- Task 3 (existing snapshot-case ts updates + full focused regression) — depends on Task 2.
+- Task 4 (commit, push, PR) — depends on Task 3.
 
 ## Tasks
 
-### [x] Task 1 — Implement Toast Container, Styling & Button Wiring (`dashboard/static/index.html`, `styles.css`, `app.js`) [Size: M]
-- Domain: Design/UI + Frontend Engineering.
-- In `dashboard/static/index.html`:
-  - Add `<div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>` before `#reset-modal`.
-- In `dashboard/static/styles.css`:
-  - Add `.toast-container`: fixed at bottom 24px, right 24px, max-width calc(100vw - 32px), z-index 1100, pointer-events: none, flex column, gap 8px.
-  - Add `.toast`: pointer-events: auto, display flex, align-items center, justify-content space-between, gap 12px, padding 10px 14px, border-radius 6px, font-family JetBrains Mono / IBM Plex Sans, font-size 12px, border 1px solid, background surface raised tint, opacity & transform transitions (disabled under `@media (prefers-reduced-motion: reduce)`).
-  - Tones:
-    - `.toast-ok`: border `var(--green-border)`, bg `var(--green-bg)`, text `var(--text-primary)`, accent `var(--green-ok)`.
-    - `.toast-warn`: border `var(--amber-border)`, bg `var(--amber-bg)`, text `var(--text-primary)`, accent `var(--amber-warn)`.
-    - `.toast-error`: border `var(--red-border)`, bg `var(--red-bg)`, text `var(--text-primary)`, accent `var(--red-alert)`.
-    - `.toast-neutral`: border `var(--border-strong)`, bg `var(--bg-surface-raised)`, text `var(--text-primary)`.
-  - Add `.toast-close`: min 44px x 44px tap target, border none, background transparent, cursor pointer, color `var(--text-secondary)`, hover color `var(--text-primary)`, focus outline.
-- In `dashboard/static/app.js`:
-  - Implement `showToast(message, opts = {})`:
-    - `opts`: `{ tone = 'neutral', timeout = 4000 }` (tone: 'ok' | 'warn' | 'error' | 'neutral').
-    - Container capped at 4 toasts max (remove oldest when 5th arrives).
-    - `div.toast`: role='alert' if tone === 'error' else role='status'.
-    - Message in `span.toast-text` via `textContent` (safe against HTML/XSS).
-    - Close button with `aria-label="Dismiss notification"`.
-    - Timeout: `setTimeout` calls `dismiss()`, returns handle `{ dismiss() }`. `timeout: 0` disables auto-dismiss.
-    - Export `showToast` in `module.exports`.
-  - Wire SYNC (`syncBtn` click):
-    - When clicked, show neutral toast "Venue sync started" and keep handle.
-    - In `finally`: dismiss started toast, then show result toast:
-      - `ok` when `syncOk` and `!isWarning`: "Dashboard synced with Polymarket (read-only)."
-      - `warn` when `isWarning`: with message / summary text.
-      - `error` when failed / caught: "Sync failed — venue may be unreachable. Retrying on next poll."
-  - Wire MASTER TOGGLE (`masterToggleBtn` click):
-    - Before `controlFetch()`: show neutral toast "Start request sent" or "Stop request sent. Waiting for services to shut down."
-    - On result:
-      - `error` for `!res.ok`, no JSON, or `data.ok !== true`.
-      - `warn` for success with notes (e.g. `forced`).
-      - `ok` for clean success (START says running if `data.status?.bot_state === 'RUNNING'` else accepted; STOP says stopped).
-      - In `catch`: show `error` toast with existing error message.
-  - Wire RESET modal & Escape:
-    - Track `resetInFlight` flag.
-    - On `data.ok`: show `ok` toast: "Reset finished. Check the reset steps for warnings."
-    - On failure/catch: show `error` toast with "Failed: ..." or "Error: ...".
-    - User dismissal function called from Close click and Escape key:
-      - If modal was open:
-        - if `!resetInFlight`: neutral "Reset cancelled. Nothing was changed."
-        - if `resetInFlight`: neutral "Dialog closed. The reset is still running."
-        - No cancel toast on 2s success auto-close.
-- Verify: Syntax and export check in node.
+### [x] Task 1 — RED: stale-snapshot test fails [Size: S] (done: 901-second case in `tests/test_exit_price_realism.py`)
+- Domain: [Backend/Logic]. Skill: test-driven-development.
+- File: `tests/test_exit_price_realism.py`.
+- Add `test_rehearsed_sell_ignores_a_stale_snapshot_and_uses_the_fresh_book`:
+  `write_queue_mark` with `ts=time.time() - 901`, `best_bid=0.54`,
+  `best_bid_size=8.0`; fresh book bids `{0.33: 20.0}`; floor `0.31`;
+  assert `filled == 5.0`, `avg == 0.33` (mirrors the i492 NBA leg).
+- Verify it FAILS on the current tree (books 0.54).
+- Depends on: nothing.
 
-### [x] Task 2 — Test Harness, Pytest Suite & Regression Verification [Size: M]
-- Domain: Testing/TDD.
-- Create `tests/js/toast_harness.cjs`:
-  - Extend DOM stub for `#toast-container`, child appending/removal, fake timers, `focus()` tracking.
-  - Simulate clicks on Sync, Master Toggle, Reset Modal buttons & Escape key.
-  - Execute scenarios and print JSON verdicts.
-- Create `tests/test_dashboard_toasts.py`:
-  - Test roles & tones: `ok`, `warn`, `neutral` get `role="status"`; `error` gets `role="alert"`.
-  - Test toast stack & cap: maximum 4 visible toasts, oldest removed on 5th.
-  - Test close button: dismisses toast, idempotent dismiss.
-  - Test auto dismiss: timer triggers dismissal; `timeout: 0` does not auto-dismiss.
-  - Test focus preservation: focus is never moved to toast.
-  - Test text sanitization: HTML tags rendered as textContent, no innerHTML.
-  - Test SYNC action toasts: started -> success/warn/error.
-  - Test Master Toggle toasts: sent -> running/stopped/error.
-  - Test Reset modal toasts: confirm ok/error, cancel via close / Escape.
-- Run tests:
-  - `python -m pytest -q tests/test_dashboard_toasts.py`
-  - `python -m pytest tests/ -k "live_state or input_lag or analytics_surface or start_toggle or dashboard" -q`
-  - `npx tsc --noEmit server.ts`
+### [x] Task 2 — GREEN: age-bound snapshot in `_sell_into_bids` [Size: S] (done: `MAX_SNAPSHOT_AGE_SEC = 60.0` + docstring)
+- Domain: [Backend/Logic].
+- File: `core_brain/shadow_exec.py:59` (constant), `:970` (method + docstring).
+- Add `MAX_SNAPSHOT_AGE_SEC = 60.0` next to `HARD_STOP_SELL_REASONS`;
+  in `_sell_into_bids`, skip the snapshot ladder when
+  `self._now_fn() - float(snap["ts"]) > MAX_SNAPSHOT_AGE_SEC`;
+  update the docstring (snapshot = prior rotation, seconds old).
+- Depends on: Task 1.
+
+### [x] Task 3 — Existing snapshot cases go now-relative + regression [Size: S] (done: suites green)
+- Domain: [Backend/Logic].
+- File: `tests/test_exit_price_realism.py` (`ts=1_000.0` -> `ts=time.time()`
+  in the four snapshot tests; price/size assertions UNCHANGED).
+- Run: `python -m pytest -q tests/test_exit_price_realism.py tests/test_hard_stop_fresh_exit.py tests/test_aged_out_rescue.py tests/test_risk_guardian.py tests/test_settlement_sweeper.py tests/test_shadow_exec.py` — all green.
+- Depends on: Task 2.
+
+### [ ] Task 4 — Commit, push, open PR [Size: XS] (superseded: #493 work folds into #498, no separate PR)
+- One commit on `i493/...`, push, `gh pr create` for #493. No merge (Station IV).
+- Depends on: Task 3.
+
+## Checkpoints
+- After Task 2: RED test flips GREEN; focused file green.
+- After Task 3: all six suites green.

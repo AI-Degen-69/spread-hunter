@@ -96,6 +96,32 @@ def test_list_shadow_runs_discovers_tournament_and_dash_port(tmp_path, monkeypat
     assert t_runs[1]["dash_port"] == 8802
 
 
+def test_run_number_arms_order_by_dash_port_not_file_order(tmp_path, monkeypatch):
+    """Run-number DBs parse to index=None, so the switcher must order the
+    cluster by dashboard port (cockpit table order), not heartbeat filename.
+
+    Heartbeat files are discovered in alphabetical glob order; the fixture
+    names them so that order disagrees with port order on purpose.
+    """
+    runtime = _wire_runtime(tmp_path, monkeypatch)
+
+    db_a = _make_db(tmp_path, "i492_tournament-1_stickhold-1.db")
+    db_b = _make_db(tmp_path, "i492_tournament-1_control-1.db")
+    db_c = _make_db(tmp_path, "i492_tournament-1_queuehug-1.db")
+
+    _write_hb(runtime, "shadow_run_a.json", db_a,
+              "shadow-492-tournament-1-stickhold-1", age=2.0, dash_port=8806)
+    _write_hb(runtime, "shadow_run_b.json", db_b,
+              "shadow-492-tournament-1-control-1", age=2.0, dash_port=8801)
+    _write_hb(runtime, "shadow_run_c.json", db_c,
+              "shadow-492-tournament-1-queuehug-1", age=2.0, dash_port=8807)
+
+    runs = srv.list_shadow_runs()
+    t_runs = [r for r in runs
+              if r.get("tournament") and r["tournament"].get("issue") == 492]
+    assert [r["dash_port"] for r in t_runs] == [8801, 8806, 8807]
+
+
 def test_switch_active_db_and_status_update(tmp_path, monkeypatch):
     _wire_runtime(tmp_path, monkeypatch)
     db1 = _make_db(tmp_path, "store1.db")

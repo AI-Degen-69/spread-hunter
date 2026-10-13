@@ -1142,6 +1142,11 @@ SHADOW_RUN_LIST_WINDOW_S = 6 * 3600.0
 SHADOW_RUN_LIST_LIMIT = 12
 
 
+#: Sort sentinel for runs with no dashboard port (or no parsed arm index):
+#: they sink below ported arms inside their group instead of tying at 0.
+_NO_DASH_PORT: float = float("inf")
+
+
 def list_shadow_runs(active_db_path: str | None = None,
                      now: float | None = None,
                      limit: int = SHADOW_RUN_LIST_LIMIT) -> list[dict]:
@@ -1173,7 +1178,9 @@ def list_shadow_runs(active_db_path: str | None = None,
     # Live first, then freshest: the switcher exists to answer "what is running",
     # and alphabetical file order answers it worst. Within each group (running vs ended),
     # tournament arms sharing the same (issue, stamp) cluster stay grouped together
-    # ordered by arm index.
+    # ordered by dashboard port -- the cockpit table's order, and the only
+    # per-arm sequence the run-number scheme records (its parsed index is None,
+    # which would tie every arm and silently fall back to filename order).
     cluster_ages: dict[tuple, float] = {}
     for r in runs:
         t = r.get("tournament")
@@ -1186,8 +1193,14 @@ def list_shadow_runs(active_db_path: str | None = None,
         t = r.get("tournament")
         if t and "issue" in t and "stamp" in t:
             c_age = cluster_ages.get((t["issue"], t["stamp"]), r["heartbeat_age_sec"])
-            return (is_running, c_age, t["issue"], t["stamp"], t.get("index", 0))
-        return (is_running, r.get("heartbeat_age_sec", 0.0), 0, "", 0)
+            port = r.get("dash_port")
+            port_key = port if isinstance(port, int) and not isinstance(port, bool) else _NO_DASH_PORT
+            idx = t.get("index")
+            idx_key = idx if isinstance(idx, int) and not isinstance(idx, bool) else _NO_DASH_PORT
+            return (is_running, c_age, t["issue"], t["stamp"] or "",
+                    port_key, idx_key, str(t.get("arm") or ""))
+        return (is_running, r.get("heartbeat_age_sec", 0.0), 0, "",
+                _NO_DASH_PORT, _NO_DASH_PORT, "")
 
     runs.sort(key=_sort_key)
     return runs[:limit]
@@ -2473,11 +2486,13 @@ _REPORTING_SERVICES: dict[str, dict[str, Any]] = {
         "port": 8798,
         "module": "scripts.tournament_hub",
         "probe_path": "/hub/api/state",
+        "timeout": 2.0,
     },
     "cockpit": {
         "port": 8800,
         "module": "scripts.tournament_cockpit_server",
         "probe_path": "/api/stats",
+        "timeout": 2.0,
     },
 }
 _reporting_processes: dict[str, Any] = {}
@@ -2502,7 +2517,7 @@ def _reporting_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.
             return False
 
 
-def _reporting_fetch_json(port: int, path: str = "", host: str = "127.0.0.1", timeout: float = 0.5) -> dict | None:
+def _reporting_fetch_json(port: int, path: str = "", host: str = "127.0.0.1", timeout: float = 2.0) -> dict | None:
     try:
         url = f"http://{host}:{port}{path}"
         req = urllib.request.Request(url, headers={"User-Agent": "SpreadHunterDashboard/1.0"})
@@ -2538,7 +2553,7 @@ def _probe_service_status(name: str) -> dict:
 
     is_open = _reporting_port_open(port)
     if is_open:
-        payload = _reporting_fetch_json(port, svc.get("probe_path", ""))
+        payload = _reporting_fetch_json(port, svc.get("probe_path", ""), timeout=svc.get("timeout", 2.0))
         data_available = False
         if payload is not None and isinstance(payload, dict):
             if name == "hub":

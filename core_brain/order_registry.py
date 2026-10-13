@@ -299,7 +299,9 @@ CREATE TABLE IF NOT EXISTS closes (
     up_cost_removed REAL,
     dn_cost_removed REAL,
     tx_hash TEXT,
-    run_id TEXT NOT NULL
+    run_id TEXT NOT NULL,
+    trigger_bid REAL,
+    fresh_bid REAL
 );
 
 CREATE TABLE IF NOT EXISTS float_marks (
@@ -504,6 +506,10 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE closes ADD COLUMN run_id TEXT")
         if "reason" not in cols:
             conn.execute("ALTER TABLE closes ADD COLUMN reason TEXT")
+        if "trigger_bid" not in cols:
+            conn.execute("ALTER TABLE closes ADD COLUMN trigger_bid REAL")
+        if "fresh_bid" not in cols:
+            conn.execute("ALTER TABLE closes ADD COLUMN fresh_bid REAL")
 
     # Check columns in resolutions. `winning_token` is the label the operator
     # reads ("Up", a team name); `winning_token_id` is the venue token id, and
@@ -771,6 +777,11 @@ class CloseRecord:
     # single-buy exit writes it, and only after the venue sale succeeded --
     # recorded data beats reconstructing the trigger from bid marks later.
     reason: Optional[str] = None
+    # Hard-stop audit pair: the bid that fired the stop (`trigger_bid`) and
+    # the bid the exit actually priced off (`fresh_bid`). Recorded so a
+    # future audit can replay booked-vs-true without reconstructing books.
+    trigger_bid: Optional[float] = None
+    fresh_bid: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -1546,19 +1557,41 @@ class OrderRegistry:
         r_id = close.run_id or self._run_id()
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            slug = close.market_slug
+            if slug is None:
+                # Shadow writers (merge sweep, rescue exits) never carried the
+                # slug, so every close read as market `None` while `quotes`
+                # knew it all along. Resolve from this run's quotes first,
+                # then any quote for the condition -- a missing slug stays
+                # NULL rather than becoming a guessed one.
+                row = conn.execute(
+                    "SELECT market_slug FROM quotes "
+                    "WHERE condition_id = ? AND market_slug IS NOT NULL "
+                    "AND run_id = ? ORDER BY ts DESC LIMIT 1",
+                    (close.condition_id, r_id),
+                ).fetchone()
+                if row is None:
+                    row = conn.execute(
+                        "SELECT market_slug FROM quotes "
+                        "WHERE condition_id = ? AND market_slug IS NOT NULL "
+                        "ORDER BY ts DESC LIMIT 1",
+                        (close.condition_id,),
+                    ).fetchone()
+                if row is not None:
+                    slug = row[0]
             conn.execute(
                 """
                 INSERT INTO closes (
                     ts, condition_id, market_slug, method, gas, shares,
                     up_price, dn_price, cost_basis, proceeds, fee, realized_pnl,
                     forgone_vs_settlement, up_cost_removed, dn_cost_removed,
-                    tx_hash, run_id, reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tx_hash, run_id, reason, trigger_bid, fresh_bid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     close.ts,
                     close.condition_id,
-                    close.market_slug,
+                    slug,
                     close.method,
                     close.gas,
                     close.shares,
@@ -1574,6 +1607,8 @@ class OrderRegistry:
                     close.tx_hash,
                     r_id,
                     close.reason,
+                    close.trigger_bid,
+                    close.fresh_bid,
                 ),
             )
             conn.commit()

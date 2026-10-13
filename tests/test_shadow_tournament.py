@@ -132,10 +132,10 @@ def test_build_tournament_plan_defaults(tmp_path: Path):
     )
     assert plan.issue == 371
     assert plan.stamp == "20261005-032000"
-    assert len(plan.arms) == 5
-    # Default order: control, conservative, balanced, aggressive, prudent
+    assert len(plan.arms) == 4
+    # Default order (control purged 2026-10-12): conservative, balanced, aggressive, prudent
     arm_names = [a.name for a in plan.arms]
-    assert arm_names == ["control", "conservative", "balanced", "aggressive", "prudent"]
+    assert arm_names == ["conservative", "balanced", "aggressive", "prudent"]
 
     # Check first arm details
     first = plan.arms[0]
@@ -229,7 +229,7 @@ def test_dry_run_cli_output(capsys, tmp_path: Path):
     data = json.loads(captured.out)
     assert data["issue"] == 371
     assert data["stamp"] == "20261005-032000"
-    assert len(data["arms"]) == 5
+    assert len(data["arms"]) == 4
 
 
 def test_default_arms_set_preset_selector(tmp_path: Path):
@@ -269,7 +269,10 @@ def test_default_arm_offsets_agree_with_presets(tmp_path: Path):
     by_name = {a.name: a for a in plan.arms}
     assert float(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MULT"]) == 0.60
     assert int(by_name["prudent"].env["HUNTER_DYNAMIC_OFFSET_MAX_CENTS"]) == 4
-    assert by_name["control"].env["HUNTER_DYNAMIC_OFFSET"] == "0"
+    # The legacy capped control arm was purged; every surviving arm runs
+    # dynamic offset ON (the loose system baseline).
+    for name in ("conservative", "balanced", "aggressive", "prudent"):
+        assert by_name[name].env.get("HUNTER_DYNAMIC_OFFSET") == "1"
 
 
 def test_default_arm_ports_and_paths(tmp_path: Path):
@@ -282,11 +285,11 @@ def test_default_arm_ports_and_paths(tmp_path: Path):
         stamp="20261005-032000",
         check_ports=False,
     )
-    assert [a.dash_port for a in plan.arms] == [8801, 8802, 8803, 8804, 8805]
+    assert [a.dash_port for a in plan.arms] == [8801, 8802, 8803, 8804]
     db_names = [a.db_path.name for a in plan.arms]
-    assert len(set(db_names)) == 5
+    assert len(set(db_names)) == 4
     run_ids = [a.run_id for a in plan.arms]
-    assert len(set(run_ids)) == 5
+    assert len(set(run_ids)) == 4
     for arm in plan.arms:
         assert f"_tournament_{arm.index:02d}_{arm.name}_" in arm.db_path.name
 
@@ -448,11 +451,38 @@ def test_write_tournament_results_file(tmp_path: Path):
         check_ports=False,
     )
     plan.results_path = tmp_path / "371_20261005-032000_results.json"
-    out = write_tournament_results(plan, [0, 1, 0, 0, 0])
+    out = write_tournament_results(plan, [0, 1, 0, 0])
     data = json.loads(Path(out).read_text(encoding="utf-8"))
-    assert len(data["arms"]) == 5
-    assert [a["exit_code"] for a in data["arms"]] == [0, 1, 0, 0, 0]
+    assert len(data["arms"]) == 4
+    assert [a["exit_code"] for a in data["arms"]] == [0, 1, 0, 0]
     assert "stat gate decides" in data["note"]
+
+
+def test_dry_run_logs_to_stderr_and_keeps_stdout_pure_json(tmp_path: Path):
+    """The launcher's own startup lines must reach stderr (basicConfig).
+
+    Regression: main() never configured logging, so all launcher log.info
+    calls were silently dropped. Subprocess-based so pytest's own log
+    handlers cannot mask the absence. stdout must stay pure plan JSON.
+    """
+    import subprocess
+    import sys
+
+    from scripts.shadow_tournament import ROOT
+
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "scripts.shadow_tournament",
+            "--dry-run", "--issue", "999", "--run-number", "9",
+            "--base-dir", str(tmp_path), "--no-port-check",
+        ],
+        capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "Tournament dry-run" in proc.stderr
+    data = json.loads(proc.stdout)
+    assert len(data["arms"]) == 4
+    assert data["log_path"].endswith("i999_tournament-9.log")
 
 
 def test_dry_run_shows_results_path_and_writes_nothing(tmp_path: Path, capsys):
@@ -561,12 +591,15 @@ def test_hybrid_preset_configuration():
     assert "hybrid" in TOURNAMENT_PRESETS
     preset = TOURNAMENT_PRESETS["hybrid"]
     assert preset["dynamic_offset_enabled"] is False
-    assert preset["reward_offset"] == 0.020
+    # reward_offset was purged from the preset (HUNTER_REWARD_OFFSET retired).
+    assert "reward_offset" not in preset
     assert preset["requote_dead_band"] == 0.060
     assert preset["single_buy_max_loss_usd"] == 0.045
     assert preset["single_buy_grace_sec"] == 45.0
 
     cfg = apply_tournament_preset(MakerConfig(), "hybrid")
+    # reward_offset keeps the shipped class default (0.020); the preset no
+    # longer touches it.
     assert cfg.reward_offset == 0.020
     assert cfg.requote_dead_band == 0.060
     assert cfg.single_buy_max_loss_usd == 0.045

@@ -151,7 +151,9 @@ def test_decide_quotes_dollars_mode_characterisation():
     dn_qi = [i for i in intents if i.side == "DOWN"][0]
 
     assert up_qi.price == 0.480
-    assert dn_qi.price == 0.452
+    # DOWN leg floors to the whole cent (directive 2026-10-12): the sub-penny
+    # target 0.452 -> 0.45, never rounded up.
+    assert dn_qi.price == 0.45
     assert up_qi.size == 5
     assert dn_qi.size == 5
     assert "price-risk taper x0.46 waived: 2sh is under the 5sh venue floor" in up_qi.reason
@@ -170,8 +172,10 @@ def test_decide_quotes_dollars_mode_characterisation():
     )
     intents_short, why_short = decide_quotes(cfg_shortfall, up_book, down_book, inv, 1e9, None)
     assert len(intents_short) == 0
-    assert "$2.00 couple allocation at pair price 0.932 buys 2sh, below the venue minimum of 5sh" in why_short
-    assert "needs $4.66, shortfall $2.66" in why_short
+    # Pair price floors to the whole cent (0.932 -> 0.930), so the derived
+    # needs/shortfall figures shift with it.
+    assert "$2.00 couple allocation at pair price 0.930 buys 2sh, below the venue minimum of 5sh" in why_short
+    assert "needs $4.65, shortfall $2.65" in why_short
 
 
 def test_decide_quotes_dollars_mode_defunded():
@@ -418,8 +422,10 @@ def test_lifecycle_escalation_bypasses_only_spread_distance_and_keeps_pair_id():
 
 
 def test_lifecycle_escalation_uses_the_venue_price_tick():
-    cfg, up, down, inventory, override = _lifecycle_quote_case(price=0.505)
-    override = replace(override, held_average_price=0.485)
+    # Cent-aligned: held_avg 0.49, cap 0.99 -> max profitable hedge bid 0.50,
+    # a whole cent on the 1c grid. The override price must match exactly.
+    cfg, up, down, inventory, override = _lifecycle_quote_case(price=0.50)
+    override = replace(override, held_average_price=0.49)
 
     intents, why = decide_quotes(
         cfg, up, down, inventory, 1e9, None,
@@ -428,7 +434,7 @@ def test_lifecycle_escalation_uses_the_venue_price_tick():
 
     assert why == ""
     assert len(intents) == 1
-    assert intents[0].price == pytest.approx(0.505)
+    assert intents[0].price == pytest.approx(0.50)
 
 
 def test_lifecycle_override_rejects_pair_cost_above_ninety_nine_cents():

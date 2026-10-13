@@ -51,6 +51,18 @@ MAX_BUY_SLIPPAGE = 0.02
 # passes its own configured value in.
 DEFAULT_PAIRS_WINDOW_SEC = 900.0
 
+# Reasons that must sell NOW into the book read inside the exit call. Every
+# other route fills against the prior rotation's `queue_marks` snapshot (the
+# pre-decision book, adverse-selection protection); a stop-loss priced off a
+# stale snapshot books exits the venue never gave (H1/H2). Both the current
+# lifecycle string and the older alias route here.
+HARD_STOP_SELL_REASONS = frozenset({"hard_stop", "lifecycle_hard_stop"})
+
+# A `queue_marks` snapshot is the PRIOR rotation's pre-decision book -- seconds
+# old. Older than this it cannot be the book the exit decision was made
+# against (an aged-out leg's fill-time mark), so it must never price the exit.
+MAX_SNAPSHOT_AGE_SEC = 60.0
+
 
 class ShadowOrderRefused(RuntimeError):
     """A simulated order broke a live cap and was not written."""
@@ -277,14 +289,32 @@ def record_submit(
             f"MAX_TOTAL_USD ${MAX_TOTAL_USD:.2f}")
 
     now_ms = int(now_fn() * 1000)
-    pair_id = f"pair-{uuid.uuid4().hex[:12]}"
     max_pair_cost = float(getattr(cfg, "max_pair_cost", 0.995))
 
-    # Same carry `trader_loop._submit_intents` applies: a replacement leg
-    # carrying a stamped pair_id (ladder `make_ladder_decide` or the
-    # lifecycle-escalation path -- never `plan_orders`, which only reads the
-    # carry) joins the pair whose complement still rests, so a rehearsal
-    # splits no pairs the live loop would no longer split (#397).
+    # STABLE PAIR IDENTITY (operator directive 2026-10-12). A market re-quoted
+    # across rotations must NOT split one economic pair across two pair_ids --
+    # that is what produced split dashboard rows and a merge that never fired.
+    # Rule (mirrors live's `carried` semantics): if a resting complement already
+    # exists on this condition under the OTHER token, the new leg JOINS that
+    # pair_id; mint fresh only when no complement rests (both legs gone / brand
+    # new pair). Resolved per condition, not per call, so UP and DOWN of one
+    # pair converge on a single id across rotations.
+    intent_tokens = {str(i.token_id) for i in intents}
+    resting = [o for o in registry.get_active_orders()
+               if o.condition_id == market.condition_id
+               and o.status in ("open", "partial", "pending")
+               and str(o.token_id) not in intent_tokens
+               and o.pair_id]
+    pair_id = None
+    if resting:
+        # Complement rests under a different token: adopt its pair_id so this
+        # re-quote welds onto the existing pair instead of orphaning a new one.
+        pair_id = resting[0].pair_id
+    if pair_id is None:
+        pair_id = f"pair-{uuid.uuid4().hex[:12]}"
+
+    # Explicit carry still wins: a replacement leg stamped by the ladder or
+    # lifecycle-escalation path joins the pair it names (#397).
     carried = {getattr(i, "pair_id", None) for i in intents} - {None}
     if len(carried) == 1:
         pair_id = carried.pop()
@@ -961,12 +991,19 @@ class ShadowExecutionClient:
         return str(cid), pid
 
     def _sell_into_bids(self, token_id: str, shares: float,
-                        *, floor: float) -> tuple[float, float]:
+                        *, floor: float, fresh: bool = False) -> tuple[float, float]:
         """Rest a market SELL against the pre-decision bid ladder.
 
         Returns `(shares_filled, weighted_average_price)`.
 
-        The book filled against is the PRIOR ROTATION's snapshot, not a fresh
+        With `fresh=True` (hard-stop exits only) the snapshot is skipped and
+        the fill comes from the book read inside the exit call -- a stop must
+        sell *now*, and pricing it off a stale snapshot books exits the venue
+        never gave. A snapshot older than `MAX_SNAPSHOT_AGE_SEC` is likewise
+        treated as absent: it is not the prior rotation's pre-decision book
+        but an aged-out leg's fill-time mark, and pricing the exit off it
+        repeats the stale-snapshot pathology. Every other caller keeps the
+        default: the PRIOR
         read at post time. Seconds pass between the sweep's decision and the
         taker SELL landing, and the fills we get live are precisely the
         adversely-selected ones -- shadow-01 showed h1 markout drift of -17c
@@ -997,13 +1034,22 @@ class ShadowExecutionClient:
         than the floor, and the old conservative answer stands.
         """
         snapshot_ladder: list[tuple[float, float]] = []
-        try:
-            snap = read_last_token_snapshot(
-                self._db_path, str(token_id), run_id=self._registry._run_id())
-        except sqlite3.Error as e:
-            _log.warning("exit snapshot read failed for %s: %s",
-                         str(token_id)[:12], e)
-            snap = None
+        snap = None
+        if not fresh:
+            try:
+                snap = read_last_token_snapshot(
+                    self._db_path, str(token_id), run_id=self._registry._run_id())
+            except sqlite3.Error as e:
+                _log.warning("exit snapshot read failed for %s: %s",
+                             str(token_id)[:12], e)
+                snap = None
+        if snap is not None and snap.get("best_bid") is not None:
+            try:
+                snap_age = float(self._now_fn()) - float(snap.get("ts"))
+            except (TypeError, ValueError):
+                snap_age = 0.0
+            if snap_age > MAX_SNAPSHOT_AGE_SEC:
+                snap = None
         if snap is not None and snap.get("best_bid") is not None:
             best_bid = float(snap["best_bid"])
             depth = float(snap.get("best_bid_size") or 0.0)
@@ -1085,7 +1131,7 @@ class ShadowExecutionClient:
             return float(amount) / float(price), float(price)
         return taken, notional / taken
 
-    def create_and_post_market_order(self, order_args) -> dict:
+    def create_and_post_market_order(self, order_args, *, reason=None) -> dict:
         """Cross the book in the rehearsal: called with one positional
         `MarketOrderArgsV2(token_id=..., amount=..., side=..., price=...)`.
 
@@ -1117,7 +1163,10 @@ class ShadowExecutionClient:
                 f"missing token, amount or price")
 
         if side == "SELL":
-            filled, avg = self._sell_into_bids(token_id, amount, floor=price)
+            filled, avg = self._sell_into_bids(
+                token_id, amount, floor=price,
+                fresh=str(reason) in HARD_STOP_SELL_REASONS,
+            )
             return {
                 "success": True,
                 "orderID": f"{SHADOW_ORDER_PREFIX}{uuid.uuid4().hex[:12]}",

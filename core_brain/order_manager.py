@@ -800,6 +800,130 @@ def _merge_size_from_call_data(call_data: str | None) -> float | None:
     return None
 
 
+def _resolve_merge_unit_costs(conn, condition_id: str,
+                               run_id: str | None = None) -> tuple[float, float]:
+    """Per-leg unit costs for a live merge close, as (up_unit_cost, dn_unit_cost).
+
+    Costs come from the fills behind this condition's orders. Attribution is
+    by quoted side from the quotes table -- the only record of which token
+    was bought as UP and which as DOWN. Token-id substring guessing never
+    matched production venue ids (numeric strings, digits only) and silently
+    degraded to positional GROUP BY order, exchanging the legs on any market
+    whose DOWN token sorts first.
+    """
+    # Run-scoped with a history fallback, mirroring kpi.report's convention
+    # (prefer the active run; fall through to history when it has no fills).
+    # A re-traded condition must not blend a fully-closed prior round's
+    # fills -- but a restart mid-position orphans fills under a defunct run
+    # id, and legacy rows predating the column carry NULL. A token with no
+    # fills under this run falls back to its all-history average, said out
+    # loud: stale-but-real costs beat invented 0.49s on a real merge.
+    # Unscoped (run_id=None) keeps the old history average for tests and
+    # one-off scripts.
+    def _averages(predicate, params):
+        out = {}
+        for r in conn.execute(
+            "SELECT o.token_id, "
+            "COALESCE(SUM(f.size * f.price), 0.0) AS cost, "
+            "COALESCE(SUM(f.size), 0.0) AS shares "
+            "FROM fills f JOIN orders o ON f.order_uuid = o.id "
+            f"WHERE {predicate} GROUP BY o.token_id",
+            params,
+        ).fetchall():
+            s = float(r["shares"])
+            if s > 0:
+                out[str(r["token_id"])] = float(r["cost"]) / s
+        return out
+
+    full = _averages("o.condition_id = ?", (condition_id,))
+    if run_id is None:
+        tok_map = full
+    else:
+        scoped = _averages(
+            "o.condition_id = ? AND (f.run_id = ? OR f.run_id IS NULL)",
+            (condition_id, run_id))
+        tok_map = dict(full)
+        tok_map.update(scoped)
+        fell_back = [t for t in full if t not in scoped]
+        if fell_back:
+            print(f"  WARNING: merge on {condition_id}: "
+                  f"{len(fell_back)} token(s) have no fills under run "
+                  f"{run_id}; pricing those legs from history")
+
+    # Side comes from the quotes table, which records which token was
+    # bought as UP and which as DOWN. Token-id substring guessing never
+    # matched production venue ids, and positional GROUP BY order is not
+    # a side -- see the module docstring of the test.
+    side_of: dict[str, str] = {}
+    for q in conn.execute(
+        "SELECT token_id, side FROM quotes "
+        "WHERE condition_id = ? AND token_id IS NOT NULL AND side IS NOT NULL",
+        (condition_id,),
+    ).fetchall():
+        side_of.setdefault(str(q["token_id"]), str(q["side"]).upper())
+
+    up_unit_cost = None
+    dn_unit_cost = None
+    assigned: set[str] = set()
+    for tid, ucost in tok_map.items():
+        side = side_of.get(tid, "")
+        if side in ("UP", "YES", "LONG"):
+            if up_unit_cost is None:
+                up_unit_cost = ucost
+                assigned.add(tid)
+        elif side in ("DOWN", "DN", "NO", "SHORT"):
+            if dn_unit_cost is None:
+                dn_unit_cost = ucost
+                assigned.add(tid)
+
+    # Middle layer: token-id substrings, for human-readable ids in older
+    # stores and tests. Never fires on numeric venue ids (digits only), so
+    # production behavior is unchanged; it only outranks the positional
+    # guess below.
+    for tid, ucost in tok_map.items():
+        if tid in assigned:
+            continue
+        tid_s = tid.lower()
+        if "up" in tid_s or "yes" in tid_s or "long" in tid_s:
+            if up_unit_cost is None:
+                up_unit_cost = ucost
+                assigned.add(tid)
+        elif "dn" in tid_s or "down" in tid_s or "no" in tid_s or "short" in tid_s:
+            if dn_unit_cost is None:
+                dn_unit_cost = ucost
+                assigned.add(tid)
+
+    # Last resort for tokens with no usable side signal: old positional
+    # order, said out loud.
+    leftovers = [t for t in tok_map if t not in assigned]
+    if leftovers and (up_unit_cost is None or dn_unit_cost is None):
+        print(f"  WARNING: merge on {condition_id}: "
+              f"{len(leftovers)} token(s) have no usable quote side; "
+              f"attributing positionally")
+    if up_unit_cost is None and leftovers:
+        up_unit_cost = tok_map[leftovers.pop(0)]
+    if dn_unit_cost is None and leftovers:
+        dn_unit_cost = tok_map[leftovers.pop(0)]
+
+    # Invented costs, said out loud. A merge with no measurable fills should
+    # never book silently: 0.49/0.49 asserts a $0.98 pair nobody observed.
+    if up_unit_cost is None and dn_unit_cost is None:
+        print(f"  WARNING: merge on {condition_id}: no fills to price "
+              f"either leg; booking invented 0.49/0.49 costs")
+        up_unit_cost = 0.49
+        dn_unit_cost = 0.49
+    elif up_unit_cost is None:
+        print(f"  WARNING: merge on {condition_id}: no fills to price "
+              f"the UP leg; booking complement guess")
+        up_unit_cost = max(0.01, 0.98 - dn_unit_cost)
+    elif dn_unit_cost is None:
+        print(f"  WARNING: merge on {condition_id}: no fills to price "
+              f"the DOWN leg; booking complement guess")
+        dn_unit_cost = max(0.01, 0.98 - up_unit_cost)
+
+    return up_unit_cost, dn_unit_cost
+
+
 def _submit_and_log(
     action: str,
     condition_id: str,
@@ -1021,52 +1145,8 @@ def _submit_and_log(
                 amt = int(amount_hex, 16) / 10**6
             
             with registry._conn() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT o.token_id,
-                           COALESCE(SUM(f.size * f.price), 0.0) AS cost,
-                           COALESCE(SUM(f.size), 0.0) AS shares
-                    FROM fills f
-                    JOIN orders o ON f.order_uuid = o.id
-                    WHERE o.condition_id = ?
-                    GROUP BY o.token_id
-                    """,
-                    (condition_id,),
-                ).fetchall()
-                
-                tok_map = {}
-                for r in rows:
-                    s = float(r["shares"])
-                    c = float(r["cost"])
-                    if s > 0:
-                        tok_map[r["token_id"]] = c / s
-
-                up_unit_cost = None
-                dn_unit_cost = None
-                for tid, ucost in tok_map.items():
-                    tid_s = str(tid).lower()
-                    if "up" in tid_s or "yes" in tid_s or "long" in tid_s:
-                        up_unit_cost = ucost
-                    elif "dn" in tid_s or "down" in tid_s or "no" in tid_s or "short" in tid_s:
-                        dn_unit_cost = ucost
-
-                tok_keys = list(tok_map.keys())
-                if up_unit_cost is None and tok_keys:
-                    up_unit_cost = tok_map[tok_keys[0]]
-                if dn_unit_cost is None:
-                    if len(tok_keys) > 1 and tok_keys[1] != tok_keys[0]:
-                        dn_unit_cost = tok_map[tok_keys[1]]
-                    elif len(tok_keys) > 0 and up_unit_cost != tok_map[tok_keys[0]]:
-                        dn_unit_cost = tok_map[tok_keys[0]]
-
-                if up_unit_cost is None and dn_unit_cost is None:
-                    up_unit_cost = 0.49
-                    dn_unit_cost = 0.49
-                elif up_unit_cost is None:
-                    up_unit_cost = max(0.01, 0.98 - dn_unit_cost)
-                elif dn_unit_cost is None:
-                    dn_unit_cost = max(0.01, 0.98 - up_unit_cost)
-
+                up_unit_cost, dn_unit_cost = _resolve_merge_unit_costs(
+                    conn, condition_id, run_id=get_run_id())
                 avg_pair_cost = up_unit_cost + dn_unit_cost
 
             cost_basis = float(amt) * avg_pair_cost

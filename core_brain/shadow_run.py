@@ -105,28 +105,49 @@ TOURNAMENT_DB_PATTERN = re.compile(
     r"^(?:.*[\\/])?(?P<issue>\d+)_tournament_(?P<index>\d+)_(?P<arm>[a-z0-9-]+)_(?P<stamp>\d{8}-\d{6})\.db$"
 )
 
+# Run-number scheme (Issue #492): i<issue>_tournament-<run>_<arm>-<run>.db --
+# no index prefix, no stamp. The arm slug already carries the run suffix.
+TOURNAMENT_DB_RUN_PATTERN = re.compile(
+    r"^(?:.*[\\/])?i(?P<issue>\d+)_tournament-(?P<run>\d+)_(?P<arm>[a-z0-9-]+)\.db$"
+)
+
 
 def parse_tournament_db_path(path: str | Path | None) -> dict | None:
     """Parse a tournament scratch DB filename into its constituent parts.
 
-    Returns {'issue': int, 'index': int, 'arm': str, 'stamp': str} if matched,
-    otherwise None. Specifically rejects non-tournament names and NN_shadow_*.db.
+    Legacy shape returns {'issue': int, 'index': int, 'arm': str, 'stamp': str}.
+    Run-number shape returns {'issue': int, 'arm': str, 'run_number': int,
+    'index': None, 'stamp': None} -- consumers key off issue/arm and tolerate
+    the Nones (dashboard clustering falls back to per-issue grouping).
+    Otherwise None. Specifically rejects non-tournament names and NN_shadow_*.db.
     """
     if not path:
         return None
     raw = str(path).strip()
     m = TOURNAMENT_DB_PATTERN.match(raw)
-    if not m:
-        return None
-    try:
-        return {
-            "issue": int(m.group("issue")),
-            "index": int(m.group("index")),
-            "arm": m.group("arm"),
-            "stamp": m.group("stamp"),
-        }
-    except (ValueError, TypeError):
-        return None
+    if m:
+        try:
+            return {
+                "issue": int(m.group("issue")),
+                "index": int(m.group("index")),
+                "arm": m.group("arm"),
+                "stamp": m.group("stamp"),
+            }
+        except (ValueError, TypeError):
+            return None
+    m2 = TOURNAMENT_DB_RUN_PATTERN.match(raw)
+    if m2:
+        try:
+            return {
+                "issue": int(m2.group("issue")),
+                "arm": m2.group("arm"),
+                "run_number": int(m2.group("run")),
+                "index": None,
+                "stamp": None,
+            }
+        except (ValueError, TypeError):
+            return None
+    return None
 
 
 def build_tournament_db_path(
@@ -153,6 +174,64 @@ def build_tournament_run_id(
     clean_arm = re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
     idx_str = f"{int(index):02d}"
     token = f"shadow-{issue}-t{idx_str}-{clean_arm}-{stamp}"
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", token).strip("-.")[:64]
+
+
+def _clean_tournament_slug(arm: str) -> str:
+    return re.sub(r"[^a-z0-9-]", "-", str(arm).lower()).strip("-")[:24] or "arm"
+
+
+def build_tournament_db_path_v2(
+    issue: int | str,
+    arm: str,
+    run_number: int = 1,
+    base_dir: str | Path = "data",
+) -> Path:
+    """Run-number DB path: data/i<issue>_tournament-<run>_<arm>-<run>.db.
+
+    No index prefix, no stamp. The arm slug is expected to already carry the
+    run suffix (e.g. 'conservative-1'); the builder only cleans it.
+    """
+    run = int(run_number)
+    clean_arm = _clean_tournament_slug(arm)
+    filename = f"i{issue}_tournament-{run}_{clean_arm}.db"
+    return Path(base_dir) / filename
+
+
+def build_tournament_log_path_v2(
+    issue: int | str,
+    run_number: int = 1,
+    base_dir: str | Path = "runtime/tournaments",
+) -> Path:
+    """Run-number launcher log: runtime/tournaments/i<issue>_tournament-<run>.log.
+
+    Same stem as the plan record (i<issue>_tournament-<run>.json) so the
+    detached-launch stdout redirect sits next to the plan it executed.
+    Process logs live under runtime/ per docs/agents/architecture.md -- never
+    logs/ (which does not exist in this repo).
+    """
+    run = int(run_number)
+    return Path(base_dir) / f"i{issue}_tournament-{run}.log"
+
+
+def build_tournament_log_path(
+    issue: int | str,
+    stamp: str,
+    base_dir: str | Path = "runtime/tournaments",
+) -> Path:
+    """Legacy launcher log: runtime/tournaments/<issue>_<stamp>.log."""
+    return Path(base_dir) / f"{issue}_{stamp}.log"
+
+
+def build_tournament_run_id_v2(
+    issue: int | str,
+    arm: str,
+    run_number: int = 1,
+) -> str:
+    """Run-number run id: shadow-<issue>-tournament-<run>-<arm> (<= 64 chars)."""
+    run = int(run_number)
+    clean_arm = _clean_tournament_slug(arm)
+    token = f"shadow-{issue}-tournament-{run}-{clean_arm}"
     return re.sub(r"[^A-Za-z0-9_.-]", "-", token).strip("-.")[:64]
 
 
@@ -755,9 +834,58 @@ def build_shadow_seam(
     def shadow_submit(client, reg, market, intents, cfg_in) -> int:
         for qi in intents:
             intents_sink.append(ShadowIntent.from_quote(qi, market.condition_id))
+        _run_pair_manager(reg, market, cfg_in)
         return record_submit(client, reg, market, intents, cfg_in,
                              db_path=db_path, book_fn=shadow_fetch_books,
                              clob_host=clob_host)
+
+    def _run_pair_manager(reg, market, cfg_in) -> None:
+        """Resolve orphaned resting legs BEFORE new quotes land (directive
+        2026-10-12). Adopt completing pairs under one pair_id, cancel hopeless
+        strays, and leave the condition for a fresh re-quote. Registry-only:
+        no venue call. Reads the live book for every completion decision.
+        """
+        from core_brain.shadow_pairs import plan_pairs
+        cond = market.condition_id
+        working = [o for o in reg.get_active_orders()
+                   if o.condition_id == cond]
+        if not working:
+            return
+        # The two tokens resting on this condition define the opposing pair.
+        toks = []
+        for o in working:
+            t = str(o.token_id)
+            if t and t not in toks:
+                toks.append(t)
+        if len(toks) < 2:
+            return  # only one leg present; nothing to pair/manage yet
+        market_tokens = {cond: (toks[0], toks[1])}
+        books = {}
+        for t in toks:
+            try:
+                books[t] = shadow_fetch_books(clob_host, t)
+            except (OSError, ValueError):
+                # Unknown, not empty: plan_pairs defers legs waiting on a
+                # failed read instead of cancelling them on no evidence.
+                books[t] = None
+        max_pair_cost = float(getattr(cfg_in, "max_pair_cost", 0.99))
+        plan = plan_pairs(cond, working, books, market_tokens, max_pair_cost,
+                          lambda: f"pair-{__import__('uuid').uuid4().hex[:12]}")
+        if not (plan.adopt or plan.cancel):
+            return
+        for leg1, leg2, shared in plan.adopt:
+            try:
+                reg.adopt_orders_into_pair([leg1, leg2], shared)
+            except Exception as e:  # noqa: BLE001 - degrade, never block quoting
+                log.warning("pair-manager adopt failed on %s: %s", cond[:12], e)
+        for lid in plan.cancel:
+            try:
+                reg.update_order_status(lid, status="cancelled",
+                                        cancel_reason="orphan_no_pair")
+            except Exception as e:  # noqa: BLE001
+                log.warning("pair-manager cancel failed on %s: %s", lid[:8], e)
+        for line in plan.reason:
+            log.info("pair-manager %s: %s", cond[:12], line)
 
     def record_cancel(_client, reg, orders) -> int:
         """Mark each named row cancelled and report how many were handled.
@@ -1081,17 +1209,28 @@ def run_shadow(
     # see the same shape of numbers they would live.
     seam.fleet_state_fn = lambda r: _fleet_state(r, cfg)
 
-    def shadow_sweep() -> None:
-        """Run the production lifecycle policy against the isolated shadow store."""
+    def _shadow_lifecycle_pass() -> None:
+        """Run ONLY the venue-mutating single-leg lifecycle against the shadow store.
+
+        Extracted from `shadow_sweep` so the <=1 Hz risk-guardian thread can
+        run defense (hard-stop detection / exit / completion) on its own tight
+        cadence WITHOUT also re-running merges, markouts, and resolution on a
+        second thread. Those stages are NOT under the lifecycle lock, so
+        running them from two executors was the source of the double-execution
+        corruption: merges double-booked, markouts double-sampled, and the
+        exit priced off a book the other thread had already moved. The
+        lifecycle pass itself is guarded by `lifecycle_mutation_guard` in
+        `manage_single_leg_positions`, so it is safe on either thread; the
+        rest of the sweep stays on the rotation thread alone.
+        """
         from core_brain.shadow_exec import (
-            ShadowExecutionClient, record_shadow_merges, shadow_positions,
+            ShadowExecutionClient, shadow_positions,
         )
         from core_brain.single_buy_saver import (
             SINGLE_LEG_QUIET_ACTIONS, manage_single_leg_positions,
         )
         from core_brain.market_lifecycle import resolved_condition_ids
 
-        # Resolved conditions are skipped before books or simulated orders.
         cycle_resolved = resolved_condition_ids(seam.registry)
         exec_client = ShadowExecutionClient(
             seam.registry, db_path, book_fn=seam.fetch_books,
@@ -1113,6 +1252,15 @@ def run_shadow(
                                 pr.get("error"))
                 elif action not in SINGLE_LEG_QUIET_ACTIONS:
                     log.info("lifecycle %s %s", pair_id, action)
+        except (sqlite3.Error, OSError, ValueError) as e:
+            log.warning("shadow lifecycle pass failed: %s", e)
+
+    def shadow_sweep() -> None:
+        """Run the production lifecycle policy against the isolated shadow store."""
+        from core_brain.shadow_exec import record_shadow_merges
+
+        _shadow_lifecycle_pass()
+        try:
             for pair_id in record_shadow_merges(seam.registry, db_path):
                 log.info("merged %s at $1.00 a share", pair_id)
         except (sqlite3.Error, OSError, ValueError) as e:
@@ -1236,7 +1384,18 @@ def run_shadow(
             cfg=cfg,
             interval=1.0,
             live=False,
-            single_buy_saver_fn=lambda c, r, config, live=False: [shadow_sweep()],
+            # DEFENSE ONLY. The guardian runs the venue-mutating single-leg
+            # lifecycle pass (hard-stop detection / exit / completion) on its
+            # tight <=1 Hz cadence -- NOT the full rotation sweep. Wiring it to
+            # `shadow_sweep` re-ran merges, markouts, and resolution on this
+            # second thread too; those stages are not under the lifecycle lock,
+            # so two executors double-booked merges and priced exits off a book
+            # the rotation thread had already moved -- the double-execution
+            # corruption. `_shadow_lifecycle_pass` is guarded by
+            # `lifecycle_mutation_guard` in `manage_single_leg_positions`, so it
+            # is safe to run here, and the rest of the sweep stays on the
+            # rotation thread alone.
+            single_buy_saver_fn=lambda c, r, config, live=False: [_shadow_lifecycle_pass()],
             stop_event=stop_bg,
         )
         log.info("shadow risk guardian sentry engaged (every 1.0s, background)")

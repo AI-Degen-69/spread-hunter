@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import threading
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -80,6 +81,53 @@ DEFAULT_TICK_SIZE: float = 0.01
 
 # Page size for the Data API positions read.
 POSITIONS_PAGE_SIZE: int = 500
+
+# The one invariant that makes a single logical owner real: the whole
+# venue-mutating lifecycle -- decide -> cancel -> re-read -> sell/complete --
+# runs under exactly one process-wide lock, so two executors (the rotation
+# sweep thread and the <=1 Hz risk-guardian thread, both wired to
+# `manage_single_leg_positions`) can NEVER overlap on the same pair.
+#
+# RLock, not Lock: the guardian is often the OUTER caller and the rotation
+# sweep the inner one, or vice versa, and a nested acquire on a plain Lock
+# would dead-lock the second holder against itself. Reentrancy lets a single
+# logical pass run start to finish while any other executor blocks at the
+# first acquire until the pass is done -- which is the whole guarantee.
+#
+# This is a backstop, not a substitute for the defense-only scoping in #488:
+# the lock makes overlap IMPOSSIBLE by construction, so a future mis-wiring
+# that hands the full sweep to a second thread degrades to serialised
+# one-at-a-time execution instead of the double cancel/exit/sell corruption.
+_LIFECYCLE_LOCK = threading.RLock()
+
+
+def hold_lifecycle_lock() -> bool:
+    """Whether the caller already holds the lifecycle lock.
+
+    Used to distinguish a genuine double-executor overlap (two independent
+    holders) from a legitimate nested call by the same logical pass. A nested
+    call re-acquires a reentrant lock, so the pass runs end to end; only a
+    separate owner contends here.
+    """
+    acquired = _LIFECYCLE_LOCK.acquire(blocking=False)
+    if acquired:
+        _LIFECYCLE_LOCK.release()
+    return not acquired
+
+
+@contextmanager
+def lifecycle_mutation_guard():
+    """Serialise every venue-mutating lifecycle pass, process-wide.
+
+    Held for the whole of `manage_single_leg_positions` so the decide ->
+    cancel -> re-read-venue -> sell/complete sequence is atomic against any
+    other executor of the same registry. Without it the rotation thread and
+    the guardian thread each read the book at a different instant and one
+    prices an exit the other already moved -- the double-execution corruption
+    this lock exists to make impossible.
+    """
+    with _LIFECYCLE_LOCK:
+        yield
 
 
 class PairExitRefused(RuntimeError):
@@ -646,7 +694,9 @@ def _exit_fill_size(resp, requested_size: float) -> float:
 def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
                        heavy_side: str, size: float, sell_price: float,
                        reason: Optional[str] = None,
-                       method: str = "single_buy_exit") -> None:
+                       method: str = "single_buy_exit",
+                       trigger_bid: Optional[float] = None,
+                       fresh_bid: Optional[float] = None) -> None:
     """Ledger a completed exit: the sold leg leaves the registry for good.
 
     Written AFTER the market order succeeds, mirroring the paper run's sweep (which
@@ -702,6 +752,8 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
         dn_cost_removed=dn_removed,
         run_id=close_run_id,
         reason=reason,
+        trigger_bid=trigger_bid,
+        fresh_bid=fresh_bid,
     ))
 
 
@@ -733,6 +785,7 @@ def exit_single_buy(
     method: str = "single_buy_exit",
     *,
     force: bool = False,
+    trigger_bid: Optional[float] = None,
 ) -> dict:
     """Close a single-sided fill: cancel resting opposite leg, then sell filled inventory.
 
@@ -915,10 +968,17 @@ def exit_single_buy(
 
     # `amount` is the maker amount: shares on a SELL. `price` is the worst
     # fill we accept, tick-aligned so the venue does not reject it outright.
-    resp = client.create_and_post_market_order(
-        MarketOrderArgsV2(token_id=heavy_token, amount=size, side="SELL",
-                          price=min_price)
-    )
+    # The shadow rehearsal client accepts the exit reason and sells hard-stop
+    # exits into the fresh book instead of the pre-decision snapshot; the live
+    # SDK client takes no reason, so it keeps the bare call. Gated on the
+    # shadow-only ladder walk rather than a try/except so a real TypeError
+    # inside either post still surfaces.
+    order_args = MarketOrderArgsV2(token_id=heavy_token, amount=size,
+                                   side="SELL", price=min_price)
+    if hasattr(client, "_sell_into_bids"):
+        resp = client.create_and_post_market_order(order_args, reason=reason)
+    else:
+        resp = client.create_and_post_market_order(order_args)
 
     # 4. Record the exit BEFORE returning. A sell that exists only on the
     #    venue is invisible to the registry -- reconcile adopts fills only
@@ -930,7 +990,8 @@ def exit_single_buy(
     sold = _exit_fill_size(resp, size)
     fill_price = _exit_fill_price(resp, min_price)
     _record_exit_close(registry, after, heavy_token, heavy_side, sold,
-                       fill_price, reason=reason, method=method)
+                       fill_price, reason=reason, method=method,
+                       trigger_bid=trigger_bid, fresh_bid=bid)
 
     return {
         "action": "exited",
@@ -943,6 +1004,8 @@ def exit_single_buy(
         "bid": bid,
         "fill_price": fill_price,
         "min_price": min_price,
+        "trigger_bid": trigger_bid,
+        "fresh_bid": bid,
         "cancelled": cancelled,
         "venue_light_matched": venue_light_matched,
         "positions_checked": positions_checked,
@@ -1512,6 +1575,45 @@ def manage_single_leg_positions(
     if not pairs_enabled and not aged_out_enabled:
         return []
 
+    # Single-executor guarantee. The whole venue-mutating pass runs under one
+    # process-wide lock so the rotation sweep thread and the <=1 Hz guardian
+    # thread can never decide/cancel/sell the same pair concurrently. A nested
+    # call by the same logical pass re-acquires the RLock harmlessly; only a
+    # separate owner contends, and it now waits its turn instead of racing.
+    if hold_lifecycle_lock():
+        log.info(
+            "single-leg lifecycle pass deferred: another executor is already "
+            "mutating this registry (rotation sweep vs guardian overlap)"
+        )
+    with lifecycle_mutation_guard():
+        return _manage_single_leg_positions_locked(
+            client, registry, cfg,
+            live=live, now=now, venue_positions=venue_positions,
+            funder=funder, market_state_fn=market_state_fn,
+            state_cache=state_cache, gamma_host=gamma_host,
+            resolved_cids=resolved_cids,
+        )
+
+
+def _manage_single_leg_positions_locked(
+    client,
+    registry: OrderRegistry,
+    cfg,
+    *,
+    live: bool = True,
+    now: Optional[float] = None,
+    venue_positions: Optional[dict[str, float]] = None,
+    funder: Optional[str] = None,
+    market_state_fn=None,
+    state_cache: Optional[AgedOutMarketStateCache] = None,
+    gamma_host: Optional[str] = None,
+    resolved_cids: Optional[set[str]] = None,
+) -> list[dict]:
+    """The mutation pass, called under `lifecycle_mutation_guard`."""
+
+    pairs_enabled = bool(getattr(cfg, "enable_pairs_rule", True))
+    aged_out_enabled = bool(getattr(cfg, "enable_aged_out_rescue", True))
+
     from core_brain.quotes import dynamic_offset_for
     from core_brain.single_leg_lifecycle import (
         LegState, SingleLegPosition, evaluate, max_profitable_hedge_bid,
@@ -1683,6 +1785,7 @@ def manage_single_leg_positions(
                     client, registry, pair_id, max_pair_cost,
                     live=live, venue_positions=venue_positions,
                     reason="lifecycle_hard_stop", force=True,
+                    trigger_bid=held_bid,
                 )
                 result.update(
                     route="hard_stop", lifecycle_state=decision.state.value,
@@ -1930,7 +2033,7 @@ def _route_pair(client, registry, pair, max_pair_cost, live,
         grace_sec = min(float(getattr(cfg, "ladder_exit_sec", 60.0)),
                         window_sec)
     max_loss_pct = float(getattr(cfg, "single_buy_max_loss_pct", 0.10) if cfg else 0.10)
-    max_loss_usd = float(getattr(cfg, "single_buy_max_loss_usd", 0.045) if cfg else 0.045)
+    max_loss_usd = float(getattr(cfg, "single_buy_max_loss_usd", 0.04) if cfg else 0.04)
 
     age_s = max(0.0, now_s - (last_ms / 1000.0)) if (last_ms > 0 and now_s > 0) else 0.0
 

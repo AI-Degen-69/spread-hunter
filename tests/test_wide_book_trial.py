@@ -145,20 +145,26 @@ def test_load_leaves_the_ceilings_alone_when_unset(mod, monkeypatch):
     assert cfg.wide_book_trial is None
     assert cfg.max_book_spread == 0.06
     assert cfg.select_max_book_spread == 0.0205
-    assert cfg.max_spread_from_mid == 0.045
+    # Two different concepts share this field name. core_brain's is our
+    # resting-offset ceiling, promoted to 0.15 (loose baseline, 2026-10-12).
+    # scoring's is the venue REBATE-qualification window (rewardsMaxSpread =
+    # 4.5c) -- a venue program fact, not our policy, so it stays 0.045.
+    expected = 0.15 if mod is core_config else 0.045
+    assert cfg.max_spread_from_mid == expected
 
 
 @BOTH
 def test_a_narrow_trial_never_tightens_the_reward_window(mod, monkeypatch):
     # The window is widened only if the trial is wider than it already is. A
-    # trial NARROWER than 4.5c is a narrower BOOK ceiling, and must not
-    # quietly shrink where we are allowed to quote.
+    # trial NARROWER than the shipped ceiling is a narrower BOOK ceiling, and
+    # must not quietly shrink where we are allowed to quote.
     rehearsal.declare_rehearsal()
 
     cfg = _load_with(mod, monkeypatch, HUNTER_WIDE_BOOK_TRIAL="0.02")
 
     assert cfg.max_book_spread == 0.02
-    assert cfg.max_spread_from_mid == 0.045
+    expected = 0.15 if mod is core_config else 0.045
+    assert cfg.max_spread_from_mid == expected
 
 
 @BOTH
