@@ -1,8 +1,10 @@
 # Noticed-but-not-touching — Issue #515 (Station III)
 
-#515 adds two pure functions and their tests. It changes no writer, no reader and no
-payload, so nothing below was fixed here. The first entry is the one worth the operator's
-attention: it decides whether these metrics can ever stop being hand-fed.
+Issue #515 adds two pure functions and their tests, plus the `queue_realism` payload key and
+the `#queue-realism-readout` card on the Performance & Analytics tab. It changes no writer
+and no separate reader in the registry-ingestion path, so the missing writer described below
+was not fixed here. The first entry is the one worth the operator's attention: it decides
+whether these metrics can ever stop being hand-fed.
 
 | ID | Candidate | Discovering station | Evidence | Status | Resolution |
 |----|-----------|---------------------|----------|--------|------------|

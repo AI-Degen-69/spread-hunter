@@ -756,9 +756,9 @@ class ClearedFill:
 
     * `order_price`    -- our resting price in DOLLARS (`orders.price` / `quotes.price`).
     * `clearing_price` -- the closest tape print STRICTLY below `order_price` that credited
-      the fill, in DOLLARS. `shadow_fills.credit_fills` sees this print and drops it, so
-      nothing populates this field in production yet -- the follow-up is recorded in
-      `docs/issues/515-noticed-but-not-touching.md`.
+      the fill, in DOLLARS. The crediting path sees this print and drops it, so nothing
+      populates this field in production yet -- the follow-up, with the exact call sites, is
+      recorded in `docs/issues/515-noticed-but-not-touching.md`.
     * `placed_ts`      -- `quotes.ts`, in SECONDS.
     * `filled_ts`      -- the credited fill's time in SECONDS. `quotes.fill_ts` and
       `fills.venue_ts` are MILLISECONDS (`order_registry._attribute_fill_to_quote` builds
@@ -933,9 +933,9 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
     * `order_price` -- `quotes.price`, in dollars.
     * `clearing_price` -- `None`, and that is the honest state rather than a placeholder.
       The trade-through rule proves the level cleared by a print strictly below our price;
-      `shadow_fills.credit_fills` sees that print and drops it, and no writer stores it. So
-      every depth figure reads `missing` until one does -- a measurement nobody took, which
-      is not the same as a depth of zero.
+      the crediting path sees that print and drops it, and no writer stores it. So every
+      depth figure reads `missing` until one does -- a measurement nobody took, which is
+      not the same as a depth of zero.
 
     A quote that never filled is left out instead of carried as an unmeasurable wait: it did
     not wait for a fill, it was cancelled or expired, and counting it in `excluded` would

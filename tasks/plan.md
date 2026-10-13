@@ -210,13 +210,17 @@ convention, so no suppression and no repo-wide reformat was applied.
 
 ## How to verify (operator — hands-on; no pytest anywhere in this list)
 
-There is deliberately no dashboard card and no report file in this change: the registry records no clearing print yet (contradiction 1), so anything wired today would read `unmeasured` forever. What you can touch is the two public functions, through the interface the follow-up ticket will use.
+The operator-approved scope change above added a card, so this block now covers both
+surfaces. `#queue-realism-readout` sits on the Performance & Analytics tab: its two latency
+tiles show real waits read from the registry, while the depth tile reads `unmeasured` because
+no writer records the clearing print yet (contradiction 1). The two public functions remain
+the sharpest thing to touch, and the card is what you will actually see.
 
 1. In the repo root, run:
    `python -c "from core_brain.statistical_analytics import ClearedFill, trade_through_depth, fill_latency; rows=[ClearedFill('a',0.50,0.48,1000.0,1005.0),ClearedFill('b',0.50,0.47,1000.0,1015.0),ClearedFill('c',0.50,None,None,None)]; print(trade_through_depth(rows)); print(fill_latency(rows))"`
    Expect `count=2`, `missing=1`, `not_trade_through=0`, `median_cents=2.5`, `p75_cents=2.75`, `band="average"` for the depth, and `count=2`, `excluded=1`, `median_sec=10.0`, `p90_sec=14.0` for the latency. Any `0` where the third row is missing, or a `band` key inside the latency dict, is the failure signal.
 2. Flip the same call to a deep trade-through — `ClearedFill('d', 0.50, 0.35, 1000.0, 1005.0)` (15¢ below) — and expect `band="bad"`; at `0.4999` expect `band="good"`. The colour must follow the number, never a hardcoded label.
-3. Confirm nothing else in the running stack moved: `python -m core_brain.shadow_run --minutes 5 --db data/515_shadow_<stamp>.db` behaves exactly as before (identical payload, no new report, no new card) — this change measures, it does not alter any fill, sizing or quoting behaviour.
+3. Confirm the rest of the running stack is unmoved: `python -m core_brain.shadow_run --minutes 5 --db data/515_shadow_<stamp>.db` runs as before. Expect the new `queue_realism` key in the payload and the new card on the tab; every other key, report and card reads exactly as it did, and no fill, sizing or quoting behaviour moves — this change measures, it does not trade differently.
 4. Read `docs/issues/515-noticed-but-not-touching.md` for the one thing that needs your call later: capturing the clearing print price at credit time so these numbers stop being hand-fed.
 
 No money is at risk in any of these steps: nothing here reaches the venue, signs, or places an order, so there is no undo action.
