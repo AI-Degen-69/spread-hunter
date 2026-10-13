@@ -303,6 +303,21 @@ def test_stitch_orders_no_room_threshold_turns_red():
 
 
 @requires_node
+def test_stitch_orders_fractional_price_threshold_floors_to_cents():
+    # Ladder prices can carry fractional cents: $0.99 - $0.244 = $0.746
+    # must show $0.74, never the rounded-up $0.75.
+    code = _FIXTURE + """
+    const fracUP = Object.assign({}, restingUP, { price: 0.244 });
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [fracUP] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    sub = res["html"].split('stitch-commit-sub"')[1].split("</span>")[0]
+    assert "0.74" in sub
+    assert "0.75" not in sub
+
+
+@requires_node
 def test_stitch_orders_paired_row_carries_no_threshold():
     # Nothing missing and nothing filled: no break-even line, and the old
     # committed total is gone — the column shows the max only.

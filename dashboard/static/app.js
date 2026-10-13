@@ -6456,7 +6456,10 @@ function stitchOpenOrdersRows(kpi, state, sort) {
       const restingPrice = upOrder ? upPrice : dnPrice;
       const threshold = pairCap - restingPrice;
       const tColor = threshold > 0 ? '#4ade80' : '#f87171';
-      const tVal = (threshold < 0 ? '-$' : '$') + Math.abs(threshold).toFixed(2);
+      const shownThreshold = threshold > 0
+        ? Math.floor(threshold * 100 + 1e-9) / 100
+        : threshold;
+      const tVal = (shownThreshold < 0 ? '-$' : '$') + Math.abs(shownThreshold).toFixed(2);
       roomLine = '<span class="stitch-commit-sub" style="color:' + tColor + ';font-size:11.5px;">≤ ' + tVal + '</span>';
     }
     const roomYes = (oneSideRests && !!upOrder) ? roomLine : '<span>&nbsp;</span>';
