@@ -2770,14 +2770,27 @@ def test_reporting_services_probe_paths():
 
 
 def test_tournament_hub_concurrent_ports_reachable(monkeypatch):
+    import threading
+    import time
+
     from scripts.tournament_hub import _ports_reachable, build_arm_view
 
     ports = [8701, 8702, 8703]
     fake_reachable = {8701: True, 8702: False, 8703: True}
-    monkeypatch.setattr("scripts.tournament_hub._port_open", lambda p, *args, **kwargs: fake_reachable.get(p, False))
+    barrier = threading.Barrier(len(ports), timeout=10)
+
+    def fake_port_open(p, *args, **kwargs):
+        # A sequential implementation deadlocks here: the first check waits
+        # for checks that never start. Overlap trips the barrier at once.
+        barrier.wait()
+        time.sleep(0.01)
+        return fake_reachable.get(p, False)
+
+    monkeypatch.setattr("scripts.tournament_hub._port_open", fake_port_open)
 
     res = _ports_reachable(ports)
     assert res == fake_reachable
+    assert barrier.broken is False
 
     plan = {"minutes": 10}
     arm = {"name": "test", "dash_port": 8701, "db_path": "data/test.db"}

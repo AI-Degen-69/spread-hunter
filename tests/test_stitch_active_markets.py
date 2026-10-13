@@ -106,8 +106,10 @@ def test_stitch_markets_row_stacks_each_metric_per_spec():
     # Market anchors the row; the category badge sits under the title.
     row = html.split('data-cid="0xalp"')[1]
     assert row.index("Alcaraz vs Sinner") < row.index("ATP Tour")
-    # YES/NO prices off the live marks; pair cost and edge beside them.
-    assert "$0.28" in row and "$0.72" in row
+    # Prices fall back to the quote mids here (no live-mark worker in the
+    # harness): 0.275/0.725 render as $0.28/$0.72; pair cost and edge beside.
+    assert "$0.28" in row
+    assert "$0.72" in row
     assert "+0.0c" in row
     # Volume over resolves in one column.
     assert "$152k" in row

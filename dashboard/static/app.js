@@ -6343,10 +6343,20 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         const oLeg = legForOrder(o, legs, byMarket);
         const legMatch = missingLeg === 'UP' ? oLeg === 'UP' : (oLeg === 'DN' || oLeg === 'DOWN');
         if (pairId && o.pair_id) return o.pair_id === pairId && legMatch;
+        // A paired resting leg only trusts same-pair history: pair-less
+        // history belongs to an earlier trade in this market, not this pair.
+        if (pairId) return false;
         return o.condition_id === cid && legMatch;
       });
       if (!candidates.length) return null;
-      return candidates.reduce((best, o) =>
+      // Shares held beat requotes: a fill survives any later cancellation,
+      // so the held-position warning cannot be hidden by a newer cancel.
+      const fills = candidates.filter(o => {
+        const s = (o.status || '').toLowerCase();
+        return s === 'filled' || s === 'matched';
+      });
+      const pool = fills.length ? fills : candidates;
+      return pool.reduce((best, o) =>
         (Number(o.posted_ts) || 0) > (Number(best.posted_ts) || 0) ? o : best
       );
     }
@@ -6416,9 +6426,12 @@ function stitchOpenOrdersRows(kpi, state, sort) {
         + `<span class="badge-val">Pair Cost: ${fmtPrice(pairCost)}</span>`
         + `</span>`;
     } else {
+      // A partially matched resting leg still holds shares: never claim
+      // "No Position" while matched size exists on this pair.
+      const matchedHeld = group.orders.some(o => Number(o.size_matched) > 0);
       badgeHtml = `<span class="stitch-arb-badge is-unpaired">`
         + `<span>⚠️ UNPAIRED</span><span class="badge-sep">|</span>`
-        + `<span>Missing Leg — No Position</span>`
+        + `<span>Missing Leg — ${matchedHeld ? 'Partial Fill Held' : 'No Position'}</span>`
         + `</span>`;
     }
 

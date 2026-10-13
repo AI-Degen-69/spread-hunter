@@ -99,6 +99,18 @@ const pairedDN = { order_id: 'ord-p-dn', condition_id: '0xswi', token_id: 'tok-p
   pair_id: 'pair-p1', side: 'BUY', price: 0.53, original_size: 10.0,
   size_matched: 0.0, size_remaining: 10.0, status: 'open',
   posted_ts: 1700000201, age_sec: 119.0 };
+// A fill from an EARLIER trade in the same market: same condition, DN leg,
+// but no pair_id (it settled before pairs were tracked). It must never
+// classify the current pair as hedge-pending.
+const stalePairFillDN = { order_id: 'ord-old', condition_id: '0xalp', token_id: 'tok-d',
+  pair_id: null, side: 'BUY', price: 0.65, original_size: 5.0,
+  filled_size: 5.0, size_matched: 5.0, size_remaining: 0.0, status: 'filled',
+  posted_ts: 1700000000, age_sec: 200.0 };
+// A cancellation posted AFTER the pair's fill: the held position survives it.
+const lateCancelDN = { order_id: 'ord-d8', condition_id: '0xalp', token_id: 'tok-d',
+  pair_id: 'pair-u1', side: 'BUY', price: 0.71, original_size: 5.0,
+  size_matched: 0.0, size_remaining: 5.0, status: 'cancelled',
+  posted_ts: 1700000300, age_sec: 10.0 };
 """
 
 
@@ -163,6 +175,44 @@ def test_stitch_orders_cancelled_counterpart_requotes():
     html = res["html"]
     assert "NO" in html and "[Cancelled / Requoting]" in html
     assert "Position Held" not in html
+
+
+@requires_node
+def test_stitch_orders_earlier_pair_fill_does_not_classify_current_row():
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [restingUP, stalePairFillDN] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "HEDGE PENDING" not in html
+    assert "Position Held" not in html
+    assert "[Awaiting NO Quote]" in html
+
+
+@requires_node
+def test_stitch_orders_late_cancel_does_not_hide_earlier_fill():
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [restingUP, filledDN, lateCancelDN] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "HEDGE PENDING" in html
+    assert "Position Held" in html
+
+
+@requires_node
+def test_stitch_orders_partially_matched_leg_never_claims_no_position():
+    code = _FIXTURE + """
+    const partial = Object.assign({}, restingUP, { size_matched: 4.0, size_remaining: 6.0 });
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [partial] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "No Position" not in html
+    assert "Partial Fill Held" in html
 
 
 @requires_node

@@ -84,6 +84,8 @@ def plan_pairs(
     """Decide adopt/cancel for one condition's working orders.
 
     `orders`: working OrderRecords on this condition. `books`: token_id -> book.
+    A None book means that token's read failed: unknown, not hopeless, so a
+    leg waiting on it is deferred, never cancelled on missing evidence.
     `market_tokens`: condition -> (token_a, token_b) so we know the opposing leg.
     `mint_pair_id`: callable returning a fresh `pair-...` id (kept injectable for
     tests). Reads only these inputs; performs no writes.
@@ -141,6 +143,12 @@ def plan_pairs(
             continue
         opp_tok = opposing.get(str(o.token_id))
         opp_book = books.get(opp_tok) if opp_tok else None
+        if opp_tok is not None and opp_book is None and opp_tok in books:
+            # Opposing book read failed: unknown, not hopeless. Defer the
+            # decision to the next rotation instead of cancelling on no ask.
+            plan.reason.append(
+                f"defer {o.id[:8]}: opposing book unavailable")
+            continue
         ask = _best_ask(opp_book)
         # No partner resting on the other token for this leg's own pair:
         partner_rests = any(

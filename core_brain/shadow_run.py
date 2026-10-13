@@ -865,7 +865,9 @@ def build_shadow_seam(
             try:
                 books[t] = shadow_fetch_books(clob_host, t)
             except (OSError, ValueError):
-                books[t] = {}
+                # Unknown, not empty: plan_pairs defers legs waiting on a
+                # failed read instead of cancelling them on no evidence.
+                books[t] = None
         max_pair_cost = float(getattr(cfg_in, "max_pair_cost", 0.99))
         plan = plan_pairs(cond, working, books, market_tokens, max_pair_cost,
                           lambda: f"pair-{__import__('uuid').uuid4().hex[:12]}")

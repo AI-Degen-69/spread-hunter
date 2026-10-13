@@ -74,6 +74,17 @@ def test_cancel_orphan_when_no_opposing_book():
     assert "idA" in plan.cancel
 
 
+def test_unavailable_opposing_book_defers_instead_of_cancelling():
+    # The DOWN book read failed (None): unknown, not hopeless. Defer the
+    # decision to the next rotation instead of cancelling on no evidence.
+    a = _order("idA", "tokUP", 0.60)
+    books = {"tokDN": None}
+    plan = plan_pairs("0xcond", [a], books, {"0xcond": ("tokUP", "tokDN")},
+                      max_pair_cost=0.98, mint_pair_id=lambda: "pair-x")
+    assert "idA" not in plan.cancel
+    assert not plan.adopt
+
+
 def test_completable_orphan_is_left_for_the_pairs_pass():
     # UP rests alone but opposing ask is cheap enough to complete -> do NOT
     # cancel; the pairs pass crosses to complete.

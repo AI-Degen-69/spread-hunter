@@ -36,7 +36,7 @@ the fresh book. One condition, both biases dead.
 
 ## Tasks
 
-### [ ] Task 1 — RED: stale-snapshot test fails [Size: S]
+### [x] Task 1 — RED: stale-snapshot test fails [Size: S] (done: 901-second case in `tests/test_exit_price_realism.py`)
 - Domain: [Backend/Logic]. Skill: test-driven-development.
 - File: `tests/test_exit_price_realism.py`.
 - Add `test_rehearsed_sell_ignores_a_stale_snapshot_and_uses_the_fresh_book`:
@@ -46,7 +46,7 @@ the fresh book. One condition, both biases dead.
 - Verify it FAILS on the current tree (books 0.54).
 - Depends on: nothing.
 
-### [ ] Task 2 — GREEN: age-bound snapshot in `_sell_into_bids` [Size: S]
+### [x] Task 2 — GREEN: age-bound snapshot in `_sell_into_bids` [Size: S] (done: `MAX_SNAPSHOT_AGE_SEC = 60.0` + docstring)
 - Domain: [Backend/Logic].
 - File: `core_brain/shadow_exec.py:59` (constant), `:970` (method + docstring).
 - Add `MAX_SNAPSHOT_AGE_SEC = 60.0` next to `HARD_STOP_SELL_REASONS`;
@@ -55,14 +55,14 @@ the fresh book. One condition, both biases dead.
   update the docstring (snapshot = prior rotation, seconds old).
 - Depends on: Task 1.
 
-### [ ] Task 3 — Existing snapshot cases go now-relative + regression [Size: S]
+### [x] Task 3 — Existing snapshot cases go now-relative + regression [Size: S] (done: suites green)
 - Domain: [Backend/Logic].
 - File: `tests/test_exit_price_realism.py` (`ts=1_000.0` -> `ts=time.time()`
   in the four snapshot tests; price/size assertions UNCHANGED).
 - Run: `python -m pytest -q tests/test_exit_price_realism.py tests/test_hard_stop_fresh_exit.py tests/test_aged_out_rescue.py tests/test_risk_guardian.py tests/test_settlement_sweeper.py tests/test_shadow_exec.py` — all green.
 - Depends on: Task 2.
 
-### [ ] Task 4 — Commit, push, open PR [Size: XS]
+### [ ] Task 4 — Commit, push, open PR [Size: XS] (superseded: #493 work folds into #498, no separate PR)
 - One commit on `i493/...`, push, `gh pr create` for #493. No merge (Station IV).
 - Depends on: Task 3.
 
