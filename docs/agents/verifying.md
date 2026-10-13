@@ -23,6 +23,8 @@ regression suite runs in GitHub CI on Ubuntu and Windows and is the merge gate; 
 that full suite locally during the review/PR stations. **The agent runs these checks internally
 and reports the result; it must never prompt or suggest the operator to run the test suite.**
 
+Bridge type-check (the Node ESM `server.ts`): `npx tsc --noEmit --module nodenext --moduleResolution nodenext server.ts` — the flags ride on the command because tsc ignores `tsconfig.json` when a file is named; `nodenext` follows Node's own loader and `package.json` `"type": "module"`.
+
 Sizing, fill attribution, and merge paths always land with a test.
 
 There is no coverage gate in this repo, and no coverage tooling is installed. The bar is
