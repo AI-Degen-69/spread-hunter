@@ -21,6 +21,15 @@ summary a caller reads rather than a distribution a chart plots -- a caller must
 never have to branch on whether the key is there. Its zeroes say "no closes",
 never "no such measurement".
 
+The same rule governs the rescue friction section (#514). `fill_path_edge` says
+what a rescue cost in dollars; `rescue_friction_summary` says how much of that a
+bailout lost to friction rather than to the price move the stop was protecting.
+It reads the three prices the rescue writer already books -- the bid that fired
+the stop, the fresh bid the exit priced off, and the price the venue gave -- and
+every figure it cannot read off them is `None` with the reason attached, because
+a zero there would read as "this stop cost nothing" rather than "nobody
+recorded it".
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -61,6 +70,13 @@ RESCUE_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
 # and no position was lost, so they belong to no path. Mirrors
 # `kpi.NON_TRADE_CLOSE_METHODS`.
 EXCLUDED_METHODS = ("venue_sync",)
+
+# The assumed stop reference for a rescue close that recorded no `trigger_bid`. It is an
+# ASSUMPTION, not an observed price: it equals the system default in `core_brain/config.py`
+# (`single_buy_max_loss_usd = 0.04`, promoted 2026-10-12), a per-share loss limit that
+# profile presets move (0.030-0.065). Every figure derived from it is tagged
+# `assumed_offset` and counted apart from the recorded ones.
+STOP_OFFSET_FALLBACK = 0.04
 
 # The venue pays exactly $1.00 for a merged pair, so pair cost lives just under
 # it. These bounds frame the density chart around the only region that matters.
@@ -328,6 +344,114 @@ def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
         "excluded_count": excluded,
         "skipped_count": skipped,
         "units": "usd_per_close",
+    }
+
+
+def _entry_price(close: Any) -> Optional[float]:
+    """Cost per share of the leg that was sold -- what the stop was protecting."""
+    cost = _finite(_close_field(close, "cost_basis"))
+    shares = _finite(_close_field(close, "shares"))
+    if cost is None or shares is None or shares <= 0:
+        return None
+    return cost / shares
+
+
+def _exit_price(close: Any) -> Optional[float]:
+    """What the venue gave per share, in the price chain's own order.
+
+    The recorded leg price first: a rescue sells exactly one leg, and
+    `single_buy_saver._record_exit_close` writes the price the venue reported as
+    `dn_price` or `up_price` depending on the side sold. When no leg price was written,
+    `proceeds / shares` is the same number by construction.
+    """
+    dn = _finite(_close_field(close, "dn_price"))
+    up = _finite(_close_field(close, "up_price"))
+    leg = dn if dn is not None else up
+    if leg is not None:
+        return leg
+    proceeds = _finite(_close_field(close, "proceeds"))
+    shares = _finite(_close_field(close, "shares"))
+    if proceeds is None or shares is None or shares <= 0:
+        return None
+    return proceeds / shares
+
+
+def _stop_reference(close: Any, entry: Optional[float],
+                    ) -> tuple[Optional[float], Optional[str]]:
+    """The bid the stop intended to exit at, and where that bid came from.
+
+    `trigger_bid` is the recorded bid that fired the stop. Only the lifecycle hard stop
+    writes it, so the other rescue routes fall back to `entry - STOP_OFFSET_FALLBACK`,
+    which is an assumption and is tagged as one.
+
+    `fresh_bid` is never the reference. It is the bid the exit priced off, and measuring
+    the exit against it would hide the gap between the mark that fired the stop and the
+    live book -- which is one of the two things this section exists to measure.
+    """
+    trigger = _finite(_close_field(close, "trigger_bid"))
+    if trigger is not None:
+        return trigger, "recorded"
+    if entry is not None:
+        return entry - STOP_OFFSET_FALLBACK, "assumed_offset"
+    return None, None
+
+
+def rescue_drag(close: Any) -> dict[str, Any]:
+    r"""SLED -- stop-loss execution drag -- split into its two exact hops, in cents.
+
+    The strategy's maker entries and its merged pairs pay the venue nothing, so every
+    cent of slippage and fee in a run concentrates on the take-profit-less bailout of a
+    leg whose partner never filled. `_record_exit_close` books the three prices that make
+    the split measurable:
+
+    ```
+    SLED = (trigger_bid - fresh_bid) + (fresh_bid - exit_price)
+            \__ latency drag __/       \__ execution drag __/
+    ```
+
+    * **Latency drag** is what the book did between the mark that fired the stop and the
+      live bid the exit priced off. It is signed: the book can drift toward us while the
+      decision is made, and a clipped zero would erase exactly that case.
+    * **Execution drag** is the taker fill's own slippage off the live book. A SELL walks
+      the bid ladder down, so it is non-negative in theory -- but it is still reported
+      unclipped, because a capped number would be an invented one and this module's rule
+      is that a measurement is either recorded or absent.
+
+    `sled_cents` is the SUM of the two returned hops whenever both were measured, never a
+    second derivation from `trigger_bid`: the ledger entry and its parts cannot then
+    disagree. When only one hop is measurable (no recorded trigger, or no fresh bid), the
+    total is still measured against the reference with its `reference_source` disclosed,
+    and the hop that could not be measured is `None`.
+
+    Every value is `None` when its own inputs are missing or non-finite. Nothing here is
+    a share count scaled by a price: these are per-share cents, so a row is usable
+    without a dollar figure.
+    """
+    trigger = _finite(_close_field(close, "trigger_bid"))
+    fresh = _finite(_close_field(close, "fresh_bid"))
+    exit_price = _exit_price(close)
+    reference, source = _stop_reference(close, _entry_price(close))
+
+    latency = None if trigger is None or fresh is None else (trigger - fresh) * 100.0
+    execution = (None if fresh is None or exit_price is None
+                 else (fresh - exit_price) * 100.0)
+    if latency is not None and execution is not None:
+        sled = latency + execution
+    elif reference is not None and exit_price is not None:
+        sled = (reference - exit_price) * 100.0
+    else:
+        sled = None
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    return {
+        "sled_cents": shape(sled),
+        "latency_drag_cents": shape(latency),
+        "execution_drag_cents": shape(execution),
+        "reference_bid": shape(reference),
+        "reference_source": source,
+        "exit_price": shape(exit_price),
     }
 
 

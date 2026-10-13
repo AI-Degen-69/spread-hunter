@@ -158,7 +158,7 @@ decomposition and the reference fallback carry the real uncertainty, so T1 lands
 Completion state (marked here as each task lands — Station III owns this, Station II owns
 everything else in this file):
 
-- [ ] T1 — SLED decomposition with its tests
+- [x] T1 — SLED decomposition with its tests
 - [ ] T2 — TCDR, overshoot, bands and the summary
 - [ ] T3 — wire the payload
 - [ ] T4 — dashboard readout with traffic-light bands
