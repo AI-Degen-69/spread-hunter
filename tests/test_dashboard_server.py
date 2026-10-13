@@ -144,7 +144,9 @@ def test_served_html_fingerprints_static_assets(client):
         (Path(srv.__file__).resolve().parent / "static" / "app.js")
         .read_bytes()).hexdigest()[:12]
     assert f"/static/app.js?v={expected}" in res.text
-    assert "?v=9" not in res.text
+    # Token match (closing quote): a content hash starting with 9 must not
+    # trip this — only the literal manual ?v=9 counts as leftover.
+    assert '?v=9"' not in res.text
 
 
 def test_fingerprint_tracks_bytes_and_skips_missing(tmp_path):
