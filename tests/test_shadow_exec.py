@@ -468,28 +468,29 @@ def test_stale_tape_does_not_credit_to_fresh_orders(registry):
 
     def tape_feed(cid, seen):
         tape_history["call"] += 1
-        # First call (no orders resting): return stale 50 units
-        # Second call (order now resting): return only fresh 10 units
+        # First call (no orders resting): return a stale 50-unit print
+        # Second call (order now resting): return no fresh print
         if tape_history["call"] == 1:
             return {"tok-up": {0.46: 50.0}}
         else:
-            return {"tok-up": {0.46: 10.0}}
+            return {}
 
     seen = set()
 
-    # First settle with no resting orders — seen is updated with the 50 units
+    # First settle with no resting orders — the 50-unit print predates the
+    # order and must not be reused to fill it later.
     settle_market(reg, FakeMarket(), db_path=db, seen=seen, traded_fn=tape_feed)
 
     # Record a new order
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
 
-    # Second settle with the order now resting — only 10 units are available
-    # because the earlier 50 units were already in `seen`
+    # Second settle with the order now resting — no fresh print is available,
+    # and the stale first print must not be reused.
     settle_market(reg, FakeMarket(), db_path=db, seen=seen, traded_fn=tape_feed)
 
     inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
-    assert inv.up_shares == 20.0
+    assert inv.up_shares == 0.0
 
 
 def test_a_single_buy_waits_without_crossing_in_the_shadow_store(registry):
