@@ -3,17 +3,22 @@
 Branch: `i515/add-queue-realism-analytics` | Issue: #515
 Plan: `tasks/plan.md` · Guardrails: `CONSTRAINTS.md`
 
-- [ ] T1: `core_brain/statistical_analytics.py` — `ClearedFill`,
+- [x] T1: `core_brain/statistical_analytics.py` — `ClearedFill`,
       `TRADE_THROUGH_GOOD_BELOW_CENTS`, `TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS`,
       `_percentile`, `trade_through_depth_band()`, `trade_through_depth()`; new
-      `tests/test_queue_realism_analytics.py` with the cleared / missing / not-trade-through /
-      empty / single / determinism / no-mutation cases
-- [ ] T2: same files — `fill_latency()`; wait, missing-timestamp, clock-skew, equal-timestamp,
-      independence, partition, determinism, no-mutation and strict-JSON cases
-- [ ] CHKPT 1: both metrics measured; focused suite green; nothing outside the two files touched
-- [ ] T3: `docs/issues/515-noticed-but-not-touching.md` (missing clearing-print data path,
-      recognition-time caveat, no-clamp divergence, ms→s follow-up) and the focused runs over
-      `test_statistical_analytics.py`, `test_fill_path_analytics.py`,
-      `test_rescue_friction_analytics.py`, `test_shadow_fills.py`
-- [ ] CHKPT 2: focused suites green; operator verify block posted (direct-call steps, no pytest)
+      `tests/test_queue_realism_analytics.py` (RED: `ImportError: cannot import name
+      'ClearedFill'`; GREEN: 20 passed). Deviation: the plan's `p75` expectation was
+      corrected `4.75 -> 4.25` in the test before implementing.
+- [x] T2: same files — `fill_latency()` (RED: `ImportError: cannot import name
+      'fill_latency'`, pytest exit 2; GREEN: 32 passed with the T1 cases)
+- [x] CHKPT 1: both metrics measured; `git status --short` limited to the module and the new
+      test file; no other file touched
+- [x] T3: `docs/issues/515-noticed-but-not-touching.md` (N1 missing clearing-print data path,
+      N2 recognition-time caveat, N3 no-clamp divergence, N4 ms→s conversion for the follow-up)
+- [x] CHKPT 2: focused suites green — 179 passed across
+      `tests/test_queue_realism_analytics.py`, `tests/test_statistical_analytics.py`,
+      `tests/test_fill_path_analytics.py`, `tests/test_rescue_friction_analytics.py`,
+      `tests/test_shadow_fills.py`; the operator block's exact command run and its printed
+      values matched the plan (`median_cents 2.5`, `p75_cents 2.75`, `band average`,
+      `median_sec 10.0`, `p90_sec 14.0`; `bad` at 15c, `good` at 0.01c)
 - [ ] Handoff to `/iv-review-build-and-pr`

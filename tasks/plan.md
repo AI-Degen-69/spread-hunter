@@ -122,9 +122,17 @@ T2 depends on T1 (reuses `ClearedFill` and `_percentile`). T3 depends on T1 + T2
 
 Completion state (Station III owns the `[x]` marks):
 
-- [ ] T1 — record, percentile helper, depth + band, with their tests
-- [ ] T2 — fill latency, with its tests
-- [ ] T3 — decision record and the focused regression runs
+- [x] T1 — record, percentile helper, depth + band, with their tests
+- [x] T2 — fill latency, with its tests
+- [x] T3 — decision record and the focused regression runs
+
+Built as planned, on three commits (plan artifacts, T1, T2, T3), with one recorded
+deviation: T1's `p75` expectation was corrected from `4.75` to `4.25` at build time (the
+plan's blend weight was wrong; the arithmetic was re-derived in the test before the
+implementation existed). Nothing outside `core_brain/statistical_analytics.py`,
+`tests/test_queue_realism_analytics.py` and the two documentation files was touched, and
+`build()` keeps every key it had. Focused runs at T3: 179 passed across the five files
+named in `CONSTRAINTS.md`.
 
 ### T1 — `ClearedFill`, `_percentile`, `trade_through_depth` + band · S · `[Backend/Logic]`
 - Files: `core_brain/statistical_analytics.py`, `tests/test_queue_realism_analytics.py` (NEW).
