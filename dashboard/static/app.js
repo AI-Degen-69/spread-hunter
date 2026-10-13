@@ -4524,6 +4524,16 @@ function renderFillPathEdge(stats) {
   };
   const count = (value) => figure(value) || 0;
   const usd = (value) => figure(value) === null ? 'unmeasured' : fmtSignedUSD(figure(value));
+  /* Per-close figures live in cents and below: the two-path edge on the real
+   * shadow store is about -$0.01/close, and the sibling "Average Profit Per
+   * Close" tile already renders three decimals. At two decimals a measured
+   * +$0.004 edge prints as `+$0.00` -- a real edge reading as nothing. Totals
+   * like `other_pnl_usd` stay with `usd`: they are whole dollars, not rates. */
+  const perClose = (value) => {
+    const n = figure(value);
+    if (n === null) return 'unmeasured';
+    return (n > 0 ? '+' : n < 0 ? '-' : '') + '$' + Math.abs(n).toFixed(3);
+  };
   const pct = (value) => figure(value) === null
     ? 'unmeasured' : (figure(value) * 100).toFixed(1) + '%';
   const closesN = (value) => `${count(value)} ${count(value) === 1 ? 'close' : 'closes'}`;
@@ -4552,10 +4562,10 @@ function renderFillPathEdge(stats) {
 
   host.innerHTML = `
     <div class="kpi-grid">
-      ${tile('Merge Expectancy', usd(edge.merge_expectancy_usd),
+      ${tile('Merge Expectancy', perClose(edge.merge_expectancy_usd),
              mergeN > 0 ? signClass(figure(edge.merge_expectancy_usd)) : '',
              `per close · ${closesN(edge.merge_count)}`)}
-      ${tile('Rescue Expectancy', usd(edge.rescue_expectancy_usd),
+      ${tile('Rescue Expectancy', perClose(edge.rescue_expectancy_usd),
              rescueN > 0 ? signClass(figure(edge.rescue_expectancy_usd)) : '',
              `per close · ${closesN(edge.rescue_count)}`)}
       ${tile('Rescue Rate', pct(edge.rescue_rate), '',
@@ -4563,7 +4573,7 @@ function renderFillPathEdge(stats) {
       ${tile('Break-Even Rescue Rate', hasThreshold ? pct(edge.break_even_rescue_rate) : thresholdWords,
              hasThreshold ? '' : 'null',
              'the rescue rate that nets to zero')}
-      ${tile('Net Expectancy', usd(edge.net_expectancy_usd),
+      ${tile('Net Expectancy', perClose(edge.net_expectancy_usd),
              figure(edge.net_expectancy_usd) !== null ? signClass(figure(edge.net_expectancy_usd)) : '',
              'per close · both paths')}
     </div>

@@ -117,13 +117,15 @@ Contract rules:
    stay two observations.
 2. Bucket order is merge → rescue → excluded → other; the three tuples are disjoint.
 3. A row with a non-finite `realized_pnl` is skipped and counted in `skipped_count`; it enters
-   no bucket, no sum and no denominator.
+   no bucket, no sum and no denominator. A row whose value is finite but would push its aggregate
+   past the float ceiling is skipped the same way, so every emitted figure stays `allow_nan=False`-safe.
 4. Only `merge` and `rescue` enter `rescue_rate` and `net_expectancy_usd`. `other`, `excluded`
    and `skipped` never do.
 5. Values are computed from raw figures and rounded to 6 decimals at output only.
 6. `break_even_rescue_rate` = `merge_mean / (merge_mean - rescue_mean)` when both means exist,
-   `merge_mean > 0` and `rescue_mean < 0` (the divisor is then always positive, and the result
-   is always < 1.0 — an all-rescue run is therefore always below its own break-even).
+   `merge_mean > 0` and `rescue_mean < 0` (the divisor is then always positive, so a measured
+   threshold is always < 1.0). An all-rescue run is not a case of being below that threshold —
+   it has no merge mean, so it reports `unmeasured` and has no threshold at all.
    `None`/no closes → `(None, "unmeasured")`; `merge_mean <= 0` → `(None, "merge_not_profitable")`;
    `rescue_mean >= 0` → `(None, "rescue_not_losing")`. Evaluated in that order, so
    `(0.0, 0.0)` reports `merge_not_profitable`.

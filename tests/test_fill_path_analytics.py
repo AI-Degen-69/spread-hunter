@@ -298,6 +298,27 @@ def test_the_payload_is_safe_to_serialise_as_strict_json(closes):
     json.dumps(fill_path_edge(closes), allow_nan=False)
 
 
+def test_finite_rows_that_overflow_their_aggregate_are_skipped_not_emitted():
+    # Arrange -- each record is finite on its own, but the running total is not:
+    # two closes of 1e308 sum to `inf`. An overflowed aggregate is not a
+    # measurement, so the row that would produce it is skipped like a NaN one.
+    # The per-row guard alone cannot catch this -- the overflow happens in the
+    # sum -- so the payload would otherwise carry `Infinity` and fail strict
+    # JSON, which is the very contract the guard exists to keep.
+    closes = [_close(1e308, "merge"), _close(1e308, "merge")]
+
+    # Act
+    out = fill_path_edge(closes)
+
+    # Assert
+    assert out["merge_count"] == 1
+    assert out["skipped_count"] == 1
+    assert math.isfinite(out["merge_pnl_usd"])
+    assert math.isfinite(out["merge_expectancy_usd"])
+    assert math.isfinite(out["net_expectancy_usd"])
+    json.dumps(out, allow_nan=False)
+
+
 # --- The classifier is pinned to the repo's own constants -------------------
 
 def test_the_method_sets_match_their_canonical_homes():

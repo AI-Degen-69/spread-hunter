@@ -350,6 +350,24 @@ def test_the_fill_path_readout_counts_closes_in_the_singular():
     assert "1 closes" not in text
 
 
+def test_the_fill_path_readout_keeps_sub_cent_expectancies_distinguishable():
+    # Arrange -- a real per-close edge lives below one cent: the two-path edge
+    # on the real shadow store is about -$0.01/close. At two decimals a measured
+    # +$0.004 edge would print as `+$0.00`, an edge reading as no edge.
+    edge = dict(FILL_PATH_EDGE, merge_expectancy_usd=0.004,
+                rescue_expectancy_usd=-0.002, net_expectancy_usd=0.001)
+
+    # Act
+    out = _mount(_stats(edge))
+
+    # Assert
+    assert out["errors"] == []
+    text = _visible(out["fill_path_edge_html"])
+    assert "+$0.004" in text
+    assert "-$0.002" in text
+    assert "+$0.001" in text
+
+
 def test_the_fill_path_readout_says_unmeasured_rather_than_zero():
     # Arrange -- an empty run, and a payload served before the key existed.
     for edge in (None, {}):

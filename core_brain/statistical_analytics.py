@@ -270,9 +270,12 @@ def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
     and disclosed, but enter no mean, no sum and no denominator -- only the two
     paths the strategy actually chose between. A row with no usable
     `realized_pnl` is skipped and counted, so one malformed record cannot drag a
-    mean toward zero while looking like a measurement.
+    mean toward zero while looking like a measurement. A row that would push its
+    aggregate past the float ceiling is skipped the same way, which keeps every
+    figure here finite for `json.dumps(..., allow_nan=False)`.
     """
     by_path: dict[str, list[float]] = {"merge": [], "rescue": [], "other": []}
+    totals = {"merge": 0.0, "rescue": 0.0, "other": 0.0}
     excluded = skipped = 0
     for row in closes or []:
         bucket = _fill_path(_close_field(row, "method"))
@@ -283,11 +286,21 @@ def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
         if pnl is None:
             skipped += 1
             continue
+        # Finite rows can still overflow the running total -- two closes of
+        # 1e308 sum to `inf`. Such a row is skipped like a non-finite one: an
+        # overflowed total is not a measurement, and `inf` in the payload would
+        # break the strict-JSON promise this module makes to its callers. The
+        # guard is per aggregate, because that is where the overflow happens.
+        total = totals[bucket] + pnl
+        if not math.isfinite(total):
+            skipped += 1
+            continue
+        totals[bucket] = total
         by_path[bucket].append(pnl)
 
     merge_count, rescue_count = len(by_path["merge"]), len(by_path["rescue"])
-    merge_pnl = float(sum(by_path["merge"]))
-    rescue_pnl = float(sum(by_path["rescue"]))
+    merge_pnl = totals["merge"]
+    rescue_pnl = totals["rescue"]
     resolved = merge_count + rescue_count
     merge_mean = (merge_pnl / merge_count) if merge_count else None
     rescue_mean = (rescue_pnl / rescue_count) if rescue_count else None
@@ -311,7 +324,7 @@ def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
         "break_even_rescue_rate": shape(break_even),
         "break_even_status": status,
         "other_count": len(by_path["other"]),
-        "other_pnl_usd": round(float(sum(by_path["other"])), 6),
+        "other_pnl_usd": round(totals["other"], 6),
         "excluded_count": excluded,
         "skipped_count": skipped,
         "units": "usd_per_close",
