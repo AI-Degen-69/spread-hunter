@@ -914,6 +914,69 @@ def fill_latency(fills: Sequence[ClearedFill]) -> dict[str, Any]:
     }
 
 
+def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFill]:
+    """The records the two metrics read, built from rows the registry already holds.
+
+    Pure over supplied rows, like every other section here: `quotes` is
+    `get_all_quotes()` and `fills` is `get_all_fills()`, joined on
+    `fills.order_uuid == quotes.local_id` -- the identifier `record_fill`,
+    `_attribute_fill_to_quote` and `kpi.py:1443-1449` all join on.
+
+    One record per quote that a fill credits:
+
+    * `placed_ts`  -- `quotes.ts`, already in SECONDS.
+    * `filled_ts`  -- the EARLIEST fill's `venue_ts` (falling back to `recorded_ts`, which a
+      shadow fill sets to the same instant) in MILLISECONDS, divided by 1000 here, once, so
+      no second reader has to re-derive the factor. `quotes.fill_ts` carries that same
+      millisecond number. The earliest fill is the one the wait is measured to: averaging
+      the last partial in would shorten every reading.
+    * `order_price` -- `quotes.price`, in dollars.
+    * `clearing_price` -- `None`, and that is the honest state rather than a placeholder.
+      The trade-through rule proves the level cleared by a print strictly below our price;
+      `shadow_fills.credit_fills` sees that print and drops it, and no writer stores it. So
+      every depth figure reads `missing` until one does -- a measurement nobody took, which
+      is not the same as a depth of zero.
+
+    A quote that never filled is left out instead of carried as an unmeasurable wait: it did
+    not wait for a fill, it was cancelled or expired, and counting it in `excluded` would
+    report a missing measurement where there is nothing to measure. A fill whose timestamp
+    nobody recorded is the opposite case and is KEPT, with `filled_ts` left `None`: a fill
+    that happened is a real row, and dropping it would hide it from the count instead of
+    reporting the wait as unmeasurable.
+    """
+    credited: set[str] = set()
+    first_fill_ms: dict[str, float] = {}
+    for fill in fills or []:
+        order_uuid = _close_field(fill, "order_uuid")
+        if order_uuid is None:
+            continue
+        key = str(order_uuid)
+        credited.add(key)
+        stamp = _finite(_close_field(fill, "venue_ts"))
+        if stamp is None:
+            stamp = _finite(_close_field(fill, "recorded_ts"))
+        if stamp is not None:
+            first_fill_ms[key] = min(stamp, first_fill_ms.get(key, stamp))
+
+    records: list[ClearedFill] = []
+    for quote in quotes or []:
+        local_id = _close_field(quote, "local_id")
+        if local_id is None:
+            continue
+        key = str(local_id)
+        if key not in credited:
+            continue
+        stamp = first_fill_ms.get(key)
+        records.append(ClearedFill(
+            order_id=key,
+            order_price=_finite(_close_field(quote, "price")),
+            clearing_price=None,
+            placed_ts=_finite(_close_field(quote, "ts")),
+            filled_ts=None if stamp is None else stamp / 1000.0,
+        ))
+    return records
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
@@ -1040,20 +1103,33 @@ def monte_carlo(returns_usd: Sequence[float], starting_capital: float,
 
 
 def build(closes: Sequence[dict], fills: Sequence[dict],
-          markouts: Sequence[dict], starting_capital: float) -> dict[str, Any]:
+          markouts: Sequence[dict], starting_capital: float,
+          quotes: Optional[Sequence[Any]] = None) -> dict[str, Any]:
     """The whole `statistical_analytics` payload the analytics tab reads.
 
-    The charts come and go with their input; `fill_path_edge` and `rescue_friction` are
-    always present, because both summarise the closes this call already holds and a
-    caller must never have to branch on whether a reading exists.
+    The charts come and go with their input; `fill_path_edge`, `rescue_friction` and
+    `queue_realism` are always present, because they summarise the closes, the fills and the
+    quotes this call already holds and a caller must never have to branch on whether a
+    reading exists.
+
+    `quotes` is optional and additive. The queue-realism section reads the placement price
+    and timestamp a close never carries, so a caller without quotes gets that section at
+    zero counts rather than a missing key -- and a caller with them gets the one part of it
+    the registry can answer today, the wait between placement and the first credited fill.
     """
     returns = position_returns(closes)
+    records = cleared_fills(quotes or [], fills)
     payload: dict[str, Any] = {
         "position_returns": returns,
         "closed_positions": returns["positions"],
         "pair_costs": pair_costs(closes),
         "fill_path_edge": fill_path_edge(closes),
         "rescue_friction": rescue_friction_summary(closes),
+        "queue_realism": {
+            "cleared_fill_count": len(records),
+            "trade_through_depth": trade_through_depth(records),
+            "fill_latency": fill_latency(records),
+        },
         "probability_bell": probability_bell(fills),
         "markout": markout(markouts),
     }

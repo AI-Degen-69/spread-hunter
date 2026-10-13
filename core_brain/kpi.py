@@ -2367,7 +2367,7 @@ def report(db_path: Path | str | None = None, run_id: Optional[str] = None) -> d
         # so a chart says "unmeasured" instead of drawing a curve through
         # nothing. See core_brain/statistical_analytics.py.
         "statistical_analytics": build_statistical_analytics(
-            closes, fills, markouts, starting_capital),
+            closes, fills, markouts, starting_capital, quotes),
 
         # Adverse selection & rebate
         "adverse_selection": adverse_selection,

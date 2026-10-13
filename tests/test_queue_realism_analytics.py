@@ -25,6 +25,7 @@ import pytest
 
 from core_brain.statistical_analytics import (
     ClearedFill,
+    cleared_fills,
     fill_latency,
     trade_through_depth,
     trade_through_depth_band,
@@ -303,3 +304,78 @@ def test_latency_result_is_strict_json():
     payload = json.dumps(fill_latency([_fill()]), allow_nan=False)
 
     assert "NaN" not in payload and "Infinity" not in payload
+
+
+# --- T3: records built from the rows the registry already holds -------------
+
+
+def _quote(local_id: str = "q1", ts: float | None = 1000.0,
+           price: float | None = 0.50) -> dict:
+    """One `quotes` row, in the shape `get_all_quotes()` returns."""
+    return {"id": 1, "ts": ts, "local_id": local_id, "price": price,
+            "side": "BUY", "filled": 0.0, "fill_ts": None, "cancelled": 0}
+
+
+def _fill_row(order_uuid: str = "q1", venue_ts: int | None = 1_005_000,
+              recorded_ts: int | None = 1_005_000, size: float = 5.0) -> dict:
+    """One `fills` row, in the shape `get_all_fills()` returns."""
+    return {"trade_id": "t", "order_uuid": order_uuid, "size": size,
+            "price": 0.50, "venue_ts": venue_ts, "recorded_ts": recorded_ts}
+
+
+def test_cleared_fills_joins_a_quote_to_its_earliest_fill_in_seconds():
+    records = cleared_fills([_quote("q1", ts=1000.0)],
+                            [_fill_row("q1", venue_ts=1_015_000),
+                             _fill_row("q1", venue_ts=1_005_000, size=2.0)])
+
+    assert len(records) == 1
+    assert records[0].order_id == "q1"
+    assert records[0].order_price == 0.50
+    assert records[0].placed_ts == 1000.0
+    # Earliest fill, milliseconds -> seconds: the wait is measured from placement to the
+    # first credit, and averaging the last partial in would shorten every reading.
+    assert records[0].filled_ts == 1005.0
+    # Nothing records the print that cleared the level, so no builder can supply it.
+    assert records[0].clearing_price is None
+
+
+def test_cleared_fills_leaves_out_a_quote_that_never_filled():
+    records = cleared_fills([_quote("q1"), _quote("q2")], [_fill_row("q1")])
+
+    assert [r.order_id for r in records] == ["q1"]
+
+
+def test_cleared_fills_falls_back_to_recorded_ts_when_the_venue_sent_none():
+    records = cleared_fills([_quote("q1")],
+                            [_fill_row("q1", venue_ts=None, recorded_ts=1_007_000)])
+
+    assert records[0].filled_ts == 1007.0
+
+
+def test_cleared_fills_keeps_a_missing_timestamp_missing():
+    records = cleared_fills([_quote("q1", ts=None)],
+                            [_fill_row("q1", venue_ts=None, recorded_ts=None)])
+
+    assert records[0].placed_ts is None
+    assert records[0].filled_ts is None
+    assert fill_latency(records) == {"count": 0, "excluded": 1,
+                                     "median_sec": None, "p90_sec": None}
+
+
+def test_cleared_fills_empty_inputs_build_nothing():
+    assert cleared_fills([], []) == []
+    assert cleared_fills([_quote("q1")], []) == []
+
+
+def test_cleared_fills_feeds_the_latency_metric_and_leaves_depth_unmeasured():
+    quotes = [_quote("q1", ts=1000.0), _quote("q2", ts=1000.0)]
+    fills = [_fill_row("q1", venue_ts=1_005_000), _fill_row("q2", venue_ts=1_015_000)]
+
+    records = cleared_fills(quotes, fills)
+
+    assert fill_latency(records)["median_sec"] == 10.0
+    depth = trade_through_depth(records)
+    assert depth["count"] == 0
+    assert depth["missing"] == 2
+    assert depth["median_cents"] is None
+    assert depth["band"] == "unmeasured"
