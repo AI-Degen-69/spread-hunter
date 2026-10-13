@@ -64,7 +64,8 @@ It is a separate measurement and is not combined with this ticket's 4-order stor
   enforcement would leak rehearsal policy into live selection.
 - **Future isolated path** (no shared-ranker touch): a ranker run with `--out-dir` and an explicit
   measurement callback → `shadow_run --markets-path` reading that output → a separate shadow DB.
-  See `docs/superpowers/specs/2026-08-25-maker-queue-selection-bar.md`.
+  Superseded 2026-10-13: the trade-through fill fix rewrote `credit_fills` to credit only on tape
+  trade-through, which made the isolated queue-bar path moot (see #515, reshaped).
 
 ## Addendum (2026-10-03): the 3-day stall on the sibling store — NOT zero-fill
 
