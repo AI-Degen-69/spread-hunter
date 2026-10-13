@@ -400,3 +400,131 @@ def test_the_fill_path_readout_names_why_a_threshold_is_missing():
     assert "33.3%" not in text
 
 
+# -- Rescue friction: what a bailout cost to execute (#514) -------------------
+
+# The five rescue closes from `tests/test_rescue_friction_analytics.py`, averaged:
+# a 15.8c mean SLED that is mostly one 68c stale-mark exit, 17.75c of latency drag,
+# 0.4c of execution drag, 1.6% of the booked loss in fees, and 0.41x the planned risk.
+RESCUE_FRICTION = {
+    "rescue_count": 5, "measured_count": 5,
+    "recorded_reference_count": 4, "assumed_reference_count": 1,
+    "fee_measured_count": 4, "non_rescue_count": 3,
+    "mean_sled_cents": 15.8, "mean_latency_drag_cents": 17.75,
+    "mean_execution_drag_cents": 0.4, "mean_tcdr": 0.015625,
+    "mean_overshoot_ratio": 0.40625,
+    "bands": {"sled": "bad", "latency": "good", "execution": "good",
+              "tcdr": "average", "overshoot": "average"},
+    "assumed_stop_offset": 0.03,
+    "units": "cents_per_share",
+}
+
+
+def _friction(payload) -> dict:
+    """A payload carrying the friction summary, or one from before it existed."""
+    return {"statistical_analytics": {} if payload is None else {"rescue_friction": payload}}
+
+
+def test_the_rescue_friction_readout_shows_each_metric_in_its_own_unit():
+    # Act
+    out = _mount(_friction(RESCUE_FRICTION))
+
+    # Assert -- cents for the three drags, a share of the loss for the fee ratio, a
+    # multiple of the planned risk for the overshoot.
+    assert out["errors"] == []
+    text = _visible(out["rescue_friction_html"])
+    assert "SLED (¢)" in text
+    assert "15.80" in text       # mean sled, in cents
+    assert "17.75" in text       # latency drag
+    assert "0.40" in text        # execution drag
+    assert "1.6%" in text        # fee share of the booked loss
+    assert "0.41x" in text       # drag against the planned risk
+
+
+def test_the_readout_discloses_where_the_numbers_came_from():
+    # Arrange -- the operator has to know how much of the drag rests on the named
+    # offset rather than a recorded bid, and that non-rescue closes stayed out.
+    # Act
+    out = _mount(_friction(RESCUE_FRICTION))
+
+    # Assert
+    text = _visible(out["rescue_friction_html"])
+    assert "Measured 5 of 5 rescue closes" in text
+    assert "triggers recorded 4" in text
+    # The offset is the payload's own number, not a copy the card carries: this store
+    # assumes 0.03, so the card has to say 0.03.
+    assert "assumed 0.03 offset 1" in text
+    assert "fees measured 4" in text
+    assert "3 other closes left out of every mean" in text
+
+
+def test_each_metric_carries_the_colour_the_payload_computed():
+    # Arrange -- the band arrives as data; the renderer only names a colour for it.
+    # `live` is this theme's green chip, `warn` its amber, `bad` its red.
+    # Act
+    out = _mount(_friction(RESCUE_FRICTION))
+
+    # Assert
+    html = out["rescue_friction_html"]
+    assert "analytics-chip bad" in html        # sled: 15.8c mean
+    assert "analytics-chip live" in html       # latency + execution
+    assert "analytics-chip warn" in html       # tcdr + overshoot
+    text = _visible(html)
+    assert "BAD" in text and "GOOD" in text and "AVERAGE" in text
+
+
+def test_the_colour_follows_the_value_not_a_static_label():
+    # Arrange -- the same card with a stop that paid nothing: the sled band is good.
+    payload = {**RESCUE_FRICTION, "mean_sled_cents": -0.5,
+               "bands": {**RESCUE_FRICTION["bands"], "sled": "good"}}
+
+    # Act
+    out = _mount(_friction(payload))
+
+    # Assert
+    html = out["rescue_friction_html"]
+    assert "analytics-chip bad" not in html
+    text = _visible(html)
+    assert "BAD" not in text
+    assert "-0.50" in text      # price improvement still shown, in cents
+
+
+def test_an_unmeasured_run_says_unmeasured_not_zero():
+    # Arrange -- a store whose rescue closes carry none of the three prices.
+    # Act
+    out = _mount(_friction({
+        "rescue_count": 2, "measured_count": 0,
+        "recorded_reference_count": 0, "assumed_reference_count": 0,
+        "fee_measured_count": 0, "non_rescue_count": 1,
+        "mean_sled_cents": None, "mean_latency_drag_cents": None,
+        "mean_execution_drag_cents": None, "mean_tcdr": None,
+        "mean_overshoot_ratio": None,
+        "bands": {name: "unmeasured" for name in
+                  ("sled", "latency", "execution", "tcdr", "overshoot")},
+        "units": "cents_per_share",
+    }))
+
+    # Assert -- every tile says unmeasured; `0.00` would read as a measured flat cost.
+    assert out["errors"] == []
+    text = _visible(out["rescue_friction_html"])
+    assert text.count("unmeasured") >= 5
+    assert "0.00" not in text
+    # The population is still disclosed: two closes came through, none measurable.
+    assert "Measured 0 of 2 rescue closes" in text
+    for leak in ("NaN", "undefined", "null"):
+        assert leak not in text
+
+
+def test_a_store_from_before_this_section_reads_as_unmeasured():
+    # Arrange / Act -- a payload with no `rescue_friction` key at all, which is what
+    # every store written before this change looks like.
+    for payload in (None, {}):
+        out = _mount(_friction(payload))
+
+        # Assert
+        assert out["errors"] == []
+        text = _visible(out["rescue_friction_html"])
+        assert "unmeasured" in text
+        for leak in ("NaN", "undefined", "null"):
+            assert leak not in text
+
+

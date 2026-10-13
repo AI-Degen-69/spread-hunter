@@ -274,6 +274,14 @@ def test_build_populates_every_section_it_has_input_for():
     # The fill-path split is always present: it is derived from the closes the
     # payload already holds, not from a sample large enough to draw.
     assert payload["fill_path_edge"]["merge_count"] >= 1
+    # The friction section reads those same closes (#514). This run's only close is a
+    # merge, so its rescue population is empty and every mean says so. `0.0` here would
+    # claim a bailout cost nothing.
+    friction = payload["rescue_friction"]
+    assert friction["rescue_count"] == 0
+    assert friction["non_rescue_count"] == 1
+    assert friction["mean_sled_cents"] is None
+    assert friction["bands"]["sled"] == "unmeasured"
 
 
 def test_build_on_an_empty_run_synthesises_nothing():
@@ -292,6 +300,12 @@ def test_build_on_an_empty_run_synthesises_nothing():
     assert edge["merge_expectancy_usd"] is None
     assert edge["rescue_rate"] is None
     assert edge["net_expectancy_usd"] is None
+    # Same rule for the friction means: the section is present and says unmeasured.
+    friction = payload["rescue_friction"]
+    assert friction["rescue_count"] == 0
+    assert friction["mean_sled_cents"] is None
+    assert friction["mean_tcdr"] is None
+    assert all(band == "unmeasured" for band in friction["bands"].values())
 
 
 def test_closed_positions_mirrors_the_distribution_sample():

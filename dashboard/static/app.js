@@ -4587,6 +4587,91 @@ function renderFillPathEdge(stats) {
     </div>`;
 }
 
+/* What a bailout cost to execute, separately from the price risk the stop planned (#514).
+ *
+ * Every fee and every cent of slippage in this strategy lands on the rescue path: the
+ * maker entries and the merged pairs pay the venue nothing. So a rescue loss has two
+ * parts -- the price distance the stop meant to risk, and the friction of getting out --
+ * and only the second one is fixable from this screen.
+ *
+ * The colour of each value is NOT decided here. The band arrives in the payload
+ * (`bands`), computed beside the metric itself, and this renderer only names the theme's
+ * chip for it: this theme's green is `.live`. A renderer holding its own copy of the
+ * thresholds is how a screen starts disagreeing with the number it is drawing.
+ *
+ * A `null` mean reads `unmeasured`, never `0.00` and never `NaN`: the rescue writer
+ * leaves `fee` empty, so a fee ratio of zero would be a claim nobody measured. */
+function renderRescueFriction(stats) {
+  const host = document.getElementById('rescue-friction-readout');
+  if (!host) return;
+
+  const friction = (stats || {}).rescue_friction || {};
+  const bands = friction.bands || {};
+  const figure = (value) => {
+    const n = Number(value);
+    return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
+  };
+  const count = (value) => figure(value) || 0;
+  /* The sign in front of the number, the way `fmtSignedUSD` puts one in front of a
+   * dollar: `+15.80`, never `15.80+`. Three cases, written as three returns rather than
+   * a nested ternary. */
+  const signOf = (n) => { if (n > 0) return '+'; if (n < 0) return '-'; return ''; };
+  /* Cents, signed: a drag that improved on the trigger is a real reading and must not
+   * print as `0.00`. Two decimals is all a cent-based metric can carry. */
+  const cents = (value) => {
+    const n = figure(value);
+    if (n === null) return 'unmeasured';
+    return signOf(n) + Math.abs(n).toFixed(2);
+  };
+  /* A price, to the cent. `--` when the payload does not carry one: an offset nobody
+   * reported is not `0.00`. */
+  const price = (value) => {
+    const n = figure(value);
+    return n === null ? '—' : n.toFixed(2);
+  };
+  const multiple = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : n.toFixed(2) + 'x';
+  };
+  const shareOfLoss = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : (n * 100).toFixed(1) + '%';
+  };
+  const BAND_CHIP = { good: 'live', average: 'warn', bad: 'bad' };
+  const chip = (metric) => {
+    const band = String(bands[metric] || 'unmeasured');
+    const modifier = BAND_CHIP[band] ? ' ' + BAND_CHIP[band] : '';
+    return `<span class="analytics-chip${modifier}" style="margin-top:6px">`
+         + `${esc(band.toUpperCase())}</span>`;
+  };
+  const tile = (label, value, metric, hint) => `
+    <div class="kpi-tile">
+      <div class="kpi-label">${esc(label)}</div>
+      ${fmtVal(value, value === 'unmeasured' ? ' null' : '')}
+      <div>${chip(metric)}</div>
+      <div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(hint)}</div>
+    </div>`;
+
+  host.innerHTML = `
+    <div class="kpi-grid">
+      ${tile('SLED (¢)', cents(friction.mean_sled_cents), 'sled', 'trigger → what we got')}
+      ${tile('Latency Drag (¢)', cents(friction.mean_latency_drag_cents), 'latency', 'trigger → decision')}
+      ${tile('Execution Drag (¢)', cents(friction.mean_execution_drag_cents), 'execution', 'decision → fill')}
+      ${tile('Taker Cost Ratio', shareOfLoss(friction.mean_tcdr), 'tcdr', 'fee ÷ booked loss')}
+      ${tile('Overshoot', multiple(friction.mean_overshoot_ratio), 'overshoot', 'drag ÷ planned risk')}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
+      Measured ${count(friction.measured_count)} of ${count(friction.rescue_count)} rescue closes ·
+      triggers recorded ${count(friction.recorded_reference_count)} ·
+      assumed ${price(friction.assumed_stop_offset)} offset ${count(friction.assumed_reference_count)} ·
+      fees measured ${count(friction.fee_measured_count)}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:4px">
+      Every rescue method, the timed exits included — not only stop hits ·
+      ${count(friction.non_rescue_count)} other closes left out of every mean.
+    </div>`;
+}
+
 function renderAnalyticsSurface(kpi, status) {
   const grid = document.getElementById('kpi-grid');
   const gates = document.getElementById('analytics-gates');
@@ -4638,6 +4723,7 @@ function renderAnalyticsSurface(kpi, status) {
   try { renderExecutionFunnel(kpi); } catch (e) { console.error('Error rendering execution funnel', e); }
   try { renderSampleSufficiency(ta); } catch (e) { console.error('Error rendering sample sufficiency', e); }
   try { renderFillPathEdge(stats); } catch (e) { console.error('Error rendering fill-path edge', e); }
+  try { renderRescueFriction(stats); } catch (e) { console.error('Error rendering rescue friction', e); }
 
   // Render Quant Grid
   renderQuantRiskGrid(ta, p, stats);
@@ -8727,7 +8813,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState,

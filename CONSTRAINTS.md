@@ -1,42 +1,47 @@
-# CONSTRAINTS — #513 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #514 (locked by Station II, enforced through Station V)
 
-Governs the `i513/add-fill-path-edge-metrics-for-merge-vs-rescue` branch only.
+Governs the `i514/add-rescue-friction-analytics-for-stop-loss-drag` branch only.
 
 ## Scope & File Boundaries
 
 - Target files for modification:
-  - `core_brain/statistical_analytics.py` (new constants `RESCUE_METHODS` /
-    `EXCLUDED_METHODS`, new `fill_path_edge()` and `break_even_rescue_rate()`, module
-    docstring, and the single new key inside `build()` — nothing else on that module).
-  - `tests/test_fill_path_analytics.py` (NEW — the ticket's required focused file).
+  - `core_brain/statistical_analytics.py` (new `STOP_OFFSET_FALLBACK`, `FRICTION_BAND_METRICS`
+    constants, new `rescue_drag()` / `taker_cost_drag_ratio()` / `overshoot_ratio()` /
+    `friction_band()` / `rescue_friction_summary()` functions, module docstring paragraph, and
+    the single new key inside `build()` — nothing else on that module).
+  - `tests/test_rescue_friction_analytics.py` (NEW — the ticket's required focused file).
   - `tests/test_statistical_analytics.py` (extend the populated and empty `build()` tests only).
-  - `dashboard/static/index.html` (one new `#fill-path-edge-readout` element above `#kpi-grid`).
-  - `dashboard/static/app.js` (`renderFillPathEdge`, its call inside `renderAnalyticsSurface`,
-    and its entry in the `module.exports` object — nothing else).
+  - `dashboard/static/index.html` (one new `#rescue-friction-readout` card after the
+    `#fill-path-edge-readout` card).
+  - `dashboard/static/app.js` (`renderRescueFriction`, its call inside
+    `renderAnalyticsSurface`, and its entry in the `module.exports` object — nothing else).
   - `tests/js/analytics_surface_harness.cjs` (stub id, direct render call, printed HTML).
   - `tests/test_analytics_surface_mount.py` (new cases for the readout).
   - `CONSTRAINTS.md`, `SPEC.md`, `tasks/plan.md`, `tasks/todo.md`.
 - Files that must NOT be modified:
-  - `core_brain/kpi.py` (including `evaluate_stat_gate()` and `_pnl_by_fill_path`),
-    `statistical_validation_run/artifacts.py` (including `rescue_stats()`, `build_gate_rows()`,
-    `resolve_verdict()`, `render_report_md()`), `core_brain/registry_state.py`,
-    `core_brain/order_registry.py`, `core_brain/config.py`, `core_brain/ladder.py`.
+  - `core_brain/kpi.py`, `core_brain/order_registry.py` (the `closes` schema and `CloseRecord`
+    already carry `trigger_bid` / `fresh_bid` / `fee` — nothing to add), `core_brain/config.py`,
+    `core_brain/unhedged_stop_loss.py`, `core_brain/venue_fees.py`,
+    `core_brain/pnl_crosscheck.py`, `core_brain/registry_state.py`,
+    `statistical_validation_run/artifacts.py` (`report.json` picks the new key up for free),
+    `scripts/rescue_exit_report.py`.
   - Live execution: `core_brain/order_manager.py`, `core_brain/trader_loop.py`,
-    `core_brain/single_buy_saver.py`, `core_brain/single_leg_lifecycle.py`,
+    `core_brain/single_buy_saver.py`, `core_brain/single_leg_lifecycle.py`, `core_brain/ladder.py`,
     `core_brain/shadow_exec.py`, `core_brain/shadow_fills.py`, `core_brain/market_resolution.py`.
-  - `dashboard/server.py`, `core_brain/statistics_report.py`, `scripts/rescue_exit_report.py`.
+  - `dashboard/server.py`, `core_brain/statistics_report.py`, `dashboard/static/styles.css`
+    (the traffic-light palette already exists — see below).
   - `data/orders.db` and every production store (read-only at all times).
 
 ## Zero regressions
 
 - Focused suites that must pass:
-  `tests/test_fill_path_analytics.py`
+  `tests/test_rescue_friction_analytics.py`
   `tests/test_statistical_analytics.py`
+  `tests/test_fill_path_analytics.py`
   `tests/test_analytics_surface_mount.py`
-  `tests/test_mean_pnl_ci.py`
-  `tests/test_trade_analytics.py`
+  `tests/test_dashboard_server.py`
+  `tests/test_hard_stop_fresh_exit.py`
   `tests/test_pnl_by_fill_path.py`
-  `tests/test_analytics_api.py`
   `tests/test_stat_validation_artifacts.py`
 - Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
 - Every new behavior needs a test that fails without the change (RED first, per
@@ -44,775 +49,54 @@ Governs the `i513/add-fill-path-edge-metrics-for-merge-vs-rescue` branch only.
 
 ## Metric contract freeze
 
-- The bucket sets are `merge` = `merge`/`shadow_merge`; `rescue` =
-  `single_buy_exit`/`naked_exit`/`ladder_exit`; `excluded` = `venue_sync`; everything else is
-  `other` and is disclosed, never folded in.
-- `rescue_rate` and `net_expectancy_usd` use the same denominator — merges + rescue closes —
-  and that denominator is `rescue_stats`-compatible. `other`, `excluded` and `skipped` never
-  enter it.
-- Every unmeasurable value is `None` with a `break_even_status` reason. A missing value is never
-  rendered or serialised as `0` / `NaN` / `Infinity`.
-- No stop-offset constant anywhere: the break-even comes from realized close dollars.
+- Population: closes whose `method` (lowercased, stripped) is in the existing
+  `statistical_analytics.RESCUE_METHODS` — `single_buy_exit` / `naked_exit` / `ladder_exit`.
+  Filter by `method` only, never by `reason` (settled operator decision).
+- Five metrics, in cents and ratios only. Percent/bps forms are NOT built (the ticket shows
+  them "where shown", and no readout shows them).
+  - `sled_cents` = `trigger_bid - exit_price`, in cents. Unclipped sign.
+  - `latency_drag_cents` = `trigger_bid - fresh_bid`, in cents. Unclipped sign. Measured only
+    when BOTH bids are recorded.
+  - `execution_drag_cents` = `fresh_bid - exit_price`, in cents. Unclipped (the ladder walk
+    makes it non-negative in theory, but a clipped number would be invented data).
+  - `tcdr` = `fee / |realized_pnl|`. Denominator is the recorded payoff, not a fee-adjusted net.
+  - `overshoot_ratio` = `sled_cents / planned_risk_cents`, `planned_risk_cents =
+    (entry_price - reference_bid) * 100`.
+- Additivity: `sled_cents` is literally the sum of the two returned hops when both are
+  measured, so the identity holds exactly on the returned values.
+- Reference price: recorded `trigger_bid` (source `recorded`); when absent,
+  `entry_price - STOP_OFFSET_FALLBACK` (0.04) with source `assumed_offset`. `fresh_bid` is
+  NEVER used as the stop reference.
+- Every unmeasurable value is `None`, with a reason string where one exists (`overshoot_ratio`
+  returns a `status`; the summary returns `unmeasured` bands). Missing is never `0`, `NaN` or
+  `Infinity`; output is `json.dumps(..., allow_nan=False)`-safe.
+- No function mutates its input. `dict` closes and `CloseRecord` objects measure identically.
+- No fee recovery from `venue_fees.recover_fee`: the `closes` table has no `usdcSize`, so a
+  recovered fee would be fabricated. A `NULL` fee stays unmeasured.
 - `build()` keeps every one of its existing keys and values; the new key is additive.
 - No classification, quoting, sizing, stop-trigger or GO-gate change. Analytics only.
 
-## Anti-cheat
+## Traffic-light freeze
 
-- No skipped/disabled tests, no deleted assertions, no new lint/type suppressions.
-- No new external dependencies, and no new module: the code lives in the module that already
-  owns this payload.
-- Never weaken or re-tune the frozen bucket sets to make an assertion pass — a drift-guard test
-  pins them to their canonical homes instead.
-- No live orders; no `quote`, `complete`, Trader loop, dashboard START, merge or cancel. Tests
-  are offline; the production store is read-only.
-
----
-
-# CONSTRAINTS — #493 (history)
-
-Governs the `i493/sentry-and-offense-loops-each-price-what-they-insp` branch only.
-
-## Scope & File Boundaries
-
-- Target files for modification:
-  - `core_brain/shadow_exec.py` (`_sell_into_bids` age-bound snapshot only — nothing else).
-  - `tests/test_exit_price_realism.py` (new stale-snapshot case; now-relative `ts` in existing snapshot cases).
-  - `CONSTRAINTS.md`, `SPEC.md`, `tasks/plan.md`, `tasks/todo.md`.
-- Files that must NOT be modified:
-  - `core_brain/order_manager.py`, `core_brain/order_registry.py`, `core_brain/trader_loop.py`, `core_brain/single_buy_saver.py` (live money path untouched — shadow rehearsal pricing only).
-  - `data/orders.db` and any production database (never touched).
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_exit_price_realism.py`
-  `tests/test_hard_stop_fresh_exit.py`
-  `tests/test_aged_out_rescue.py`
-  `tests/test_risk_guardian.py`
-  `tests/test_settlement_sweeper.py`
-  `tests/test_shadow_exec.py`
+- Band thresholds live in Python, in `friction_band()`, and reach the dashboard as data
+  (`bands` map in the payload). The renderer holds no threshold numerals.
+- Bands are exactly the ticket's table: SLED `<= 0` / `(0, 0.02]` / `> 0.02`; latency `>= 0` /
+  `(-0.02, 0)` / `<= -0.02`; execution `<= 0.02` / `(0.02, 0.05]` / `> 0.05`; TCDR `= 0` /
+  `(0, 0.10)` / `>= 0.10`; overshoot `= 0` / `(0, 1.0]` / `> 1.0`. `None` → `unmeasured`.
+- Colors come from the theme's existing status palette only: `.analytics-chip.live` (green),
+  `.analytics-chip.warn` (amber), `.analytics-chip.bad` (red), neutral chip for `unmeasured`.
+  No new CSS hue, no new class family.
 
 ## Anti-cheat
 
-- No skipped/disabled tests, no deleted assertions, no new lint suppressions.
-- Existing snapshot-case `ts` updates keep identical price/size assertions; only the clock anchor moves to match the new documented contract (snapshot = prior rotation, i.e. seconds old).
-
-## Performance
-
-- None: one timestamp subtraction per rehearsed exit.
-
----
-
-# CONSTRAINTS — #485 (history)
-
-Governs the `i485/tournament-hub-cockpit-launcher` branch only.
-
-## Scope & File Boundaries
-
-- Target files for modification:
-  - `dashboard/server.py` (Add `/api/services/{name}/status` and `/api/services/{name}/start` routes and service runner logic).
-  - `dashboard/static/prototype.js` (Add Tournament Hub to `RAIL_LINKS`, add `data-launcher` attributes and dot element in `buildRailLinks`).
-  - `dashboard/static/prototype.css` (Status dot styling for running, starting, stopped, failed, conflict).
-  - `dashboard/static/reporting_launcher.js` (NEW — client-side launcher interactions, polling status, starting services, opening tabs).
-  - `dashboard/static/index.html` (Include `reporting_launcher.js` script tag after `prototype.js`).
-  - `tests/test_dashboard_server.py` (Unit and integration tests for service status & start endpoints).
-  - `tests/test_sidebar_prototype.py` (Tests for rail links, launcher attributes, and click handling).
-  - `tests/test_ts_frontend_contract.py` (Verify frontend api endpoints match python server routes).
-  - `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
-- Files that must NOT be modified:
-  - `core_brain/order_manager.py`, `core_brain/order_registry.py`, `core_brain/trader_loop.py` (live trading execution engine is strictly untouched).
-  - `scripts/filter_markets.py`, `scripts/filter_loop.py`.
-  - `data/orders.db` (production database is never touched).
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_dashboard_server.py`
-  `tests/test_sidebar_prototype.py`
-  `tests/test_ts_frontend_contract.py`
-- Architectural rule: `prototype.js` must contain NO `fetch(` or `/api/` calls (all networking stays in `reporting_launcher.js`).
-- Control security: `POST /api/services/{name}/start` must enforce `_authorize_control(request)`.
-
----
-
-# CONSTRAINTS — #475 (history)
-
-Governs the `i475/rework-control-center-menu-navigation-and-retire-depth-trial`
-branch only.
-
-## Scope & File Boundaries
-
-- Target files for modification:
-  - `scripts/spread-hunter-menu.ps1` (menu surface ONLY: usage header, `$TrialDepth`
-    param, `Start-ShadowTrial`, `Show-MenuGrid` rows, `Invoke-LiveAction` switch,
-    `Read-MenuChoice`, the action map, the allow-list, the entry point — and the new
-    `Invoke-InteractiveMenu` loop).
-  - `tests/test_menu_shadow_trial.py` (delete the six launcher tests; keep the three
-    resume/manifest tests; add `test_depth_bar_trial_launcher_is_gone` and
-    `test_trial_aliases_are_unknown_actions`).
-  - `tests/test_menu_resume_action.py` (remove `"Start-ShadowTrial"` from the tuple in
-    `test_every_shadow_launcher_disables_timeouts_only_for_unlimited_runs`; nothing else).
-  - `tests/test_menu_navigation.py` (NEW — key-set, header, storage-word, branch-coverage,
-    `Read-MenuChoice`, and `pwsh` interactive-loop tests).
-  - `tests/test_menu_extra_words.py` (must stay green; expected unchanged).
-  - `docs/agents/architecture.md` §"Trial feeds (shadow-03, #291)" — state the launcher is
-    retired; keep the manifest-replay / shared-feed / not-global-filter / `--out-dir` /
-    `--markets-path` claims; point paired runs at
-    `docs/runs/2026-09-28-paired-depth-experiment.md`.
-  - `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
-- Files that must NOT be modified:
-  - `scripts/filter_markets.py`, `scripts/filter_loop.py`, `core_brain/config.py`
-    (ranker/engine/config behaviour — trial fields stay exactly as they are).
-  - The `Resume-ShadowRun` function body (old trial stores must keep resuming from their
-    `data/<store>.trial.json` manifest) and `Invoke-WithRehearsalTrialEnv`.
-  - All other existing action bodies (`Reset-Environment`, `Start-NewShadowRun`,
-    `Stop-*`, `Open-Dashboard`, stop helpers, generic session readers) and every
-    confirmation prompt.
-  - `data/orders.db`.
-
-## Zero regressions
-
-- Focused suites that must pass (run locally after every task):
-  `tests/test_menu_shadow_trial.py`, `tests/test_menu_extra_words.py`,
-  `tests/test_menu_resume_action.py`, `tests/test_menu_navigation.py`.
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the four
-  focused suites (per the CodeRabbit plan and the repo's verifying rules).
-- Every new behaviour needs a test that fails without the change (RED first).
-
-## Menu behaviour freeze
-
-- Single-shot CLI mode is unchanged: `.\scripts\spread-hunter-menu.ps1 <action>` maps the
-  alias, checks `-Yes` for key `1`, calls `Invoke-LiveAction $key`, then `exit 0`. The
-  unknown-action path keeps `exit 1`.
-- After the key-set unification the one key list is `1`–`9`, `r`, `a`, `p`, `q`; the grid,
-  the `Select [...]` prompt, the invalid-selection message, the CLI allow-list and the
-  usage header all name that identical set. `audit`/`storage-audit`/`retention` → `a`,
-  `prune`/`storage-prune` → `p` on the CLI.
-- Interactive mode loops until `q`, Ctrl+C, or end of input; a thrown action error is shown
-  and the menu returns. Per-action inputs (`Minutes`, `Hours`, `Watch`, `ResumeDb`,
-  `ShadowPreset`) reset each pass.
-- No depth-bar trial remains: no `t` row, no `"t"` branch, no `Start-ShadowTrial`, no
-  `$TrialDepth`, no `shadow-trial`/`trial-shadow` alias.
-- Do not change what keys 5 and 6 DO — only their labels ("Stop Shadow Run" /
-  "Open Shadow Dashboard").
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions (the six trial launcher assertions are
-  deliberately replaced by launcher-is-gone assertions, not silently dropped), no suppressing
-  lint/type checks.
-- No new external dependencies without explicit approval.
-- Never run key `1`, `start`, or any live action while doing this work. Tests use copied
-  functions and stubs only; never dot-source or load the whole menu script in a test (it takes
-  over the console).
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
----
-
-# CONSTRAINTS — #473 (history; merged as #480)
-
-Governed the `i473/base-shadow-rehearsal` branch only.
-
----
-
-# CONSTRAINTS — #459 (history; merged as #466)
-
-Governs the `i459/fix-live-stream-trades-tab-shows-no-trades-and-ro` branch only.
-
----
-
-# CONSTRAINTS — #460 (history; merged as #467)
-
-Governs the `i460` branch only; #461 constraints stay as history below.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_cycle_stream.py`
-  `tests/test_dashboard_server.py`
-  `tests/test_order_registry.py`
-  `tests/test_order_manager.py`
-  `tests/test_trader_loop.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Scope & File Boundaries
-
-- Target files for modification:
-  `core_brain/cycle_stream.py` (new pure helpers only — `emit()` body, `cycle_intent` writes, rotation untouched)
-  `core_brain/order_registry.py` (optional `on_fill_recorded` callback only — `record_fill()`, trade ids, dedup, markout, status transitions untouched)
-  `core_brain/order_manager.py` (observer wiring, lifecycle `extra`, relayer outcome events — relayer mapping, audit rows, idempotency, close-writing untouched)
-  `core_brain/trader_loop.py` (production reconcile wiring, decide `extra` — reconcile port signature untouched)
-  `dashboard/static/app.js` (sentence builders, `trades` filter, two-line rows, details toggle — EventSource open/close, `mark` listener, reconnect, start/stop controls, KPIs untouched)
-  `dashboard/static/index.html` (TRADES `data-filter`, SHOW DETAILS button, empty-state text)
-  `dashboard/static/styles.css` (row/toggle styling with existing variables, no animation)
-  `SPEC.md`
-  `CONSTRAINTS.md`
-  `tasks/plan.md`
-  `tasks/todo.md`
-  And test files under `tests/` (including new `tests/js/event_stream_harness.cjs`).
-- Files that must NOT be modified:
-  `dashboard/server.py` (stream transport and replay)
-  `core_brain/single_buy_saver.py`
-  `core_brain/market_meta.py`
-  `core_brain/market_feed.py`
-  `core_brain/quotes.py`
-  `core_brain/live_fill_engine.py`
-  `core_brain/shadow_run.py`
-  `scripts/global_stop_loss.py`
-  `scripts/filter_loop.py`
-  `data/orders.db`
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks
-  (existing assertions stay, except the two named source-presence checks if the
-  filter rename breaks them).
-- No new external dependencies without explicit approval.
-- Narrow `except` clauses; a broad `except` is acceptable only around the telemetry callback.
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-- Inspect code statically only; stub all relayer HTTP, signing, and balance calls in tests.
-- Never infer a trade from inventory changes or order counts.
-
----
-
-# CONSTRAINTS — #460 (history; merged as #467): scope tail & rules
-  `dashboard/static/index.html`
-  `dashboard/static/app.js`
-  `tests/js/portfolio_card_harness.cjs`
-  `tests/test_portfolio_card_basis.py`
-  `tests/test_dashboard_server.py`
-  `tests/test_account_kpi.py`
-  `CONSTRAINTS.md`
-  `tasks/plan.md`
-  `tasks/todo.md`
-- Behavior-frozen (call but do not change):
-  `core_brain/registry_state.py` resting/filled/total committed math (`:232-304`, `:439-450`)
-  `core_brain/kpi.py` `open_committed_usd` (`:1993-1995`), account block (`:2094-2115`), hero equity / bankroll / realized-gain pill
-- Files that must NOT be modified:
-  `core_brain/*` (no backend change; `resting_committed` read as-is)
-  `data/orders.db`
-- No new endpoints; wire through the existing `/api/state` capital + `/api/kpi` portfolio/account poll path only.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit approval.
-- Tests stay offline (temp DBs, node harness with stub DOM).
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
----
-
-
-
-Governs the `i461` branch only; #453 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_unified_universe.py`
-  `tests/test_in_play_gate.py`
-  `tests/test_pre_start_gate.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Scope & File Boundaries
-
-- Target files for modification:
-  `scripts/filter_markets.py`
-  `tests/test_unified_universe.py`
-  `CONSTRAINTS.md`
-  `tasks/plan.md`
-  `tasks/todo.md`
-- Behavior-frozen (call but do not change):
-  `resolve_state`, `days_to_resolve`, `tradable`, `_cause`, `now_iso` handling.
-- Files that must NOT be modified:
-  `scripts/filter_loop.py`
-  `scripts/family_probe.py`
-  `core_brain/*`
-  `data/orders.db`
-- The EXPIRY GATE refusal stays before the UMA gate and before any queue, tape, or book fetch: no new network reads inside the gate.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit approval.
-- Tests stay offline (fake sessions: `_ExplodingSessionForExpired`, `_FakeSession`).
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
----
-
-# CONSTRAINTS — #453 (locked by Station II, enforced through Station V)
-
-Governs the `i453` branch only; #448 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_single_leg_lifecycle.py`
-  `tests/test_single_buy_saver.py`
-  `tests/test_stray_guard.py`
-  `tests/test_trader_loop.py`
-  `tests/test_plan_orders_asymmetric_hold.py`
-  `tests/test_plan_orders_mid_hold.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Scope & File Boundaries
-
-- Target files for modification:
-  `core_brain/single_leg_lifecycle.py`
-  `core_brain/single_buy_saver.py`
-  `core_brain/stray_guard.py`
-  `core_brain/trader_loop.py`
-  `core_brain/config.py`
-  `SPEC.md`
-  `CONSTRAINTS.md`
-  `tasks/plan.md`
-  `tasks/todo.md`
-  And test files under `tests/`.
-- Files that must NOT be modified:
-  `core_brain/risk.py`
-  `core_brain/shadow_exec.py` (and shadow client files)
-  `core_brain/order_registry.py`
-  `data/orders.db`
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit approval.
-- Pure exposure logic uses `SIZE_EPS` for all float comparisons.
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
----
-
-# CONSTRAINTS — #448 (history)
-
-Governs the `i448` branch only; #443 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_kpi.py`
-  `tests/test_statistical_analytics.py`
-  `tests/test_mean_pnl_ci.py`
-  `tests/test_trade_analytics.py`
-  `tests/test_analytics_api.py`
-  `tests/test_analytics_surface_mount.py`
-  `tests/test_analytics_impact_tiers.py`
-  `tests/test_negative_values_read_as_losses.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Scope & File Boundaries
-
-- Target files for modification:
-  `core_brain/kpi.py`
-  `dashboard/static/app.js`
-  `dashboard/static/styles.css`
-  `tests/js/analytics_surface_harness.cjs`
-  `tests/test_kpi.py`
-  `tests/test_analytics_api.py`
-  `tests/test_analytics_surface_mount.py`
-  `tests/test_negative_values_read_as_losses.py`
-  `SPEC.md`
-  `CONSTRAINTS.md`
-  `tasks/plan.md`
-  `tasks/todo.md`
-- No modification permitted to live execution or live order pricing logic:
-  `core_brain/config.py`
-  `core_brain/order_manager.py`
-  `core_brain/order_registry.py`
-  `data/orders.db`
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies.
-
----
-
-# CONSTRAINTS — #443 (history)
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_kpi.py`
-  `tests/test_trade_analytics.py`
-  `tests/test_mean_pnl_ci.py`
-  `tests/test_stat_gate.py`
-  `tests/test_analytics_api.py`
-  `tests/test_analytics_surface_mount.py`
-  `tests/test_analytics_impact_tiers.py`
-  `tests/test_negative_values_read_as_losses.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Scope & File Boundaries
-
-- Target files for modification:
-  `core_brain/kpi.py`
-  `dashboard/static/index.html`
-  `dashboard/static/app.js`
-  `dashboard/static/styles.css`
-  `tests/js/analytics_surface_harness.cjs`
-  `tests/test_kpi.py` (new)
-  `tests/test_analytics_api.py`
-  `tests/test_analytics_surface_mount.py`
-  `tests/test_analytics_impact_tiers.py`
-  `tests/test_negative_values_read_as_losses.py`
-  `SPEC.md`
-  `CONSTRAINTS.md`
-  `tasks/plan.md`
-  `tasks/todo.md`
-- No modification permitted to core trading/orders or other modules:
-  `core_brain/config.py`
-  `core_brain/order_manager.py`
-  `core_brain/order_registry.py`
-  `data/orders.db`
-  `dashboard/server.py`
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies.
-
----
-
-# CONSTRAINTS — #441 (history)
-
----
-
-# CONSTRAINTS — #435 (history)
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_redesigned_filter_pipeline.py`
-  `tests/test_pipeline_snapshot_gates.py`
-  `tests/test_unified_universe.py`
-  `tests/test_velocity_gate.py`
-  `tests/test_in_play_gate.py`
-  `tests/test_rank_score.py`
-  `tests/test_order_manager_decide.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Scope & File Boundaries
-
-- New test file: `tests/test_redesigned_filter_pipeline.py`.
-- No modification permitted to production logic or schemas:
-  `scripts/filter_markets.py`
-  `scoring/selector.py`
-  `scoring/config.py`
-  `core_brain/order_manager.py`
-  `core_brain/order_registry.py`
-  `core_brain/markets.py`
-  `core_brain/market_feed.py`
-  `core_brain/quotes.py`
-  `data/orders.db`
-  `tests/conftest.py`
-- Tests must be strictly offline:
-  - Stub HTTP calls via fake sessions/responses (`_FakeSession`, `_Resp`).
-  - Capture request order in a log to prove fail-fast behavior.
-  - Temporary files (`tmp_path`) for SQLite databases and feed files.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies.
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
----
-
-# CONSTRAINTS — #434 (locked by Station II, enforced through Station V)
-
-Governs the `i434` branch only; #433 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_velocity_gate.py`
-  `tests/scoring/test_markets.py`
-  `tests/test_unified_universe.py`
-  `tests/test_live_quotes.py`
-  `tests/test_trader_loop.py`
-  `tests/test_market_selection_bars.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Volatility Gate Parameters & Exemptions
-
-- Lookback window: 2 hours (`7200.0` seconds), configurable via `select_volatility_window_sec` in `scoring/config.py` (env `HUNTER_VOLATILITY_WINDOW_SEC`, default `7200.0`). Traded volume movement window remains strictly 30m (`1800.0` seconds).
-- Minimum range/swing bar: strictly `2.0c` (`$0.02`), configured via `select_min_range_cents = 2.0` (env `HUNTER_MIN_RANGE_CENTS`, default `2.0`).
-- Rejection reason: exact format `flat market: price swing {r_str} in last {minutes_or_hours} < {min_range_cents:.2f}c` (e.g. `flat market: price swing 0.50c in last 2h < 2.00c`).
-- Sports & eSports live exemption:
-  - Reusable helper `is_sports_or_esports` in `scoring/selector.py` matching sports/esports keywords (`sports_market_type` or `_SPORTS_SERIES_RE` across title, slug, series, category).
-  - When market has active live event signal (`_live_event` or `live_event: true`) AND `is_sports_or_esports(...)`:
-    - Range/swing gate is skipped (`range_exempt=True` in `velocity_gate_reject`).
-    - Market row receives `volatility_exempt = True`.
-    - Note: trade count and last trade latency checks in `velocity_gate_reject` are NOT skipped.
-- Sorting priority:
-  - In `sort_eligible` (`scripts/filter_markets.py`), eligible markets sort primarily by `volatility_exempt` (exempt/live sports first: `not r.get("volatility_exempt")`), and secondarily by `-rank_score(r)`.
-- Boundary freezes:
-  - Book depth gate ($500), 24h volume gate ($125k / $10k live), max spread gate (0.0205), and decided mid band [0.15, 0.85] remain strictly untouched.
-  - Zero live venue orders, zero edits to `data/orders.db`.
-
-## Stores are evidence, not scratch
-
-- `data/orders.db` is the production registry: read it, never rewrite it.
-- No schema migration; tests use temporary state or fakes.
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit operator approval.
-- Tests stay isolated from the real network (stub HTTP with `_TapeSession` / `_FakeResponse`).
-
----
-
-# CONSTRAINTS — #433 (locked by Station II, enforced through Station V)
-
-Governs the `i433` branch only; #432 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_research_market_metrics.py`
-  `tests/test_live_events_probe.py`
-  `tests/scoring/test_markets.py`
-  `tests/test_market_selection_bars.py`
-  `tests/test_data_retention.py`
-  `tests/test_report_destination_is_root_anchored.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Read-only Research Scope & Isolation
-
-- Standalone telemetry script: `scripts/research_market_metrics.py` only collects empirical distributions.
-- Zero venue state alteration: no orders, no cancellations, no writes to `data/orders.db` or `runtime/`.
-- Zero changes to production screening thresholds, gates, or order managers (`core_brain/config.py`, `scoring/config.py`, `core_brain/quotes.py`, `scripts/filter_markets.py` remain untouched).
-- Reuses existing domain helpers without side effects: `scoring.selector.top_depth_usd`, `scoring.markets.full_book`, `scripts.live_events_probe._event_list`.
-
-## Stores are evidence, not scratch
-
-- `data/orders.db` is the production registry: read it, never rewrite it.
-- No schema migration; tests use temporary state or fakes.
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit operator approval; `requests` is already declared in `requirements.txt`.
-- Tests stay isolated from the real network (stub HTTP with `_FakeResponse` / `_FakeSession`).
-
----
-
-# CONSTRAINTS — #432 (locked by Station II, enforced through Station V)
-
-Governs the `i432` branch only; #431 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_live_quotes.py`
-  `tests/test_trader_loop.py`
-  `tests/test_unified_universe.py`
-  `tests/test_wide_book_trial.py`
-  `tests/test_live_event_discovery.py`
-  `tests/test_market_selection_bars.py`
-  `tests/test_pipeline_snapshot_gates.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Gate Parameter Freezes & Boundaries
-
-- Price band gate: strictly set to `[0.15, 0.85]` across quoting (`core_brain/quotes.py`) and screening (`scripts/filter_markets.py`). Refusal messages explicitly specify `outside [0.15, 0.85]`.
-- Max book spread gate: strictly set to `0.0205` in `core_brain/config.py`, `scoring/config.py`, `scoring/selector.py`, and `scripts/filter_markets.py`.
-- Float precision guard: in `scoring/selector.py:book_allowed`, spread must be rounded to 6 decimal places before checking `spread > max_spread` so `0.5105 - 0.49` is not rejected.
-- Out of scope & frozen: volume gates (`MIN_VOLUME_24H`), depth gates (`MIN_TOP3_DEPTH_USD`), velocity gates (`select_min_range_cents`, `select_min_movement_usd`), horizon gate (30 days), and runtime book health spread (`max_book_spread = 0.06`).
-- `HUNTER_WIDE_BOOK_TRIAL` parser and trial mechanisms remain untouched.
-
-## Stores are evidence, not scratch
-
-- `data/orders.db` is the production registry: read it, never rewrite it.
-- No schema migration; tests use temporary DBs or isolated state.
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit operator approval.
-- Tests stay isolated from the real network (stub HTTP).
-
----
-
-# CONSTRAINTS — #431 (locked by Station II, enforced through Station V)
-
-Governs the `i431` branch only; #427 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass:
-  `tests/test_pipeline_snapshot_gates.py`
-  `tests/test_order_manager.py`
-  `tests/scoring/test_markets.py`
-  `tests/test_unified_universe.py`
-  `tests/test_single_buy_saver.py`
-  `tests/test_pre_start_gate.py`
-  `tests/test_dashboard_server.py`
-  `tests/test_live_funnel.py`
-  `tests/test_market_quote.py`
-  `tests/test_markout_maturity.py`
-  `tests/test_milestone7_telemetry.py`
-  `tests/test_shadow_markouts.py`
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
-- Every new behavior needs a test that fails without the change (RED first, per `test-driven-development`).
-
-## Horizon and Trading Gate Safety Freeze
-
-- The resolution horizon gate (events closing within 30 days / `MAX_DAYS_TO_RESOLVE`) remains active, unchanged, and strictly enforced.
-- Spread calculation, depth gates, velocity gates, and dynamic risk caps remain untouched.
-- Quote pricing (`core_brain/quotes.py`) and order execution remain untouched.
-- `tradable()` and scoring geometry remain untouched.
-
-## Stores are evidence, not scratch
-
-- `data/orders.db` is the production registry: read it, never rewrite it.
-- No schema migration; tests use temporary DBs or isolated state.
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit operator approval.
-- Tests stay isolated from the real network (stub HTTP).
-
----
-
-# CONSTRAINTS — #427 (locked by Station II, enforced through Station V)
-
-Governs the `i427` branch only; #398 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass: `tests/test_live_marks.py` (new),
-  `tests/test_dashboard_server.py`, `tests/test_positions_live_marks.py` (new),
-  `tests/test_dashboard_poll_budgets.py`.
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only
-  the focused suites.
-- Every new test must fail without the change (RED first). Browser harness
-  tests run via the repo's existing node harness pattern.
-
-## Feed-budget freeze
-
-- Wanted-set path adds no `full_book()` calls, no KPI rebuilds, no feed reads
-  — `tests/test_dashboard_poll_budgets.py` is the contract.
-- No venue work at import time or in stream generators; worker starts only in
-  the CLI startup path. Tests and `TestClient` sessions stay offline.
-- No `decide_quotes`, pricing, routing, registry, or pair-merging changes.
-- `core_brain/kpi.py`, `core_brain/registry_state.py`: untouched (cost basis
-  already flows through `by_market`).
-
-## Stores are evidence, not scratch
-
-- `data/orders.db` is the production registry: read it, never rewrite it.
-- No schema migration; tests use temporary DBs.
-- No live orders; no `quote`, `complete`, Trader loop, dashboard START, merge,
-  or other trading action — including during hands-on `sim` verification.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit operator approval
-  (`websocket-client` is already required).
-
----
-
-# CONSTRAINTS — #398 (locked by Station II, enforced through Station V)
-
-Governs the `i398` branch only; #422 constraints below stay as history.
-
-## Zero regressions
-
-- Focused suites that must pass: `tests/test_maker_queue_bar.py`,
-  `tests/test_queue_clear_gate.py`.
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only
-  the focused suites.
-- Every new assertion needs a reason to fail (pins the documented contract).
-
-## Bar-value freeze
-
-- `select_max_queue_minutes`, `max_queue_clear_minutes`,
-  `queue_flow_window_sec`: values untouched. No retuning.
-- `enforce_max_queue_minutes`, `enforce_queue_clear_gate`: flags untouched.
-  Both ship record-only; flipping either is its own operator decision.
-- No pricing, routing, registry, or shadow-seam changes — comments, record,
-  and test pins only.
-
-## Stores are evidence, not scratch
-
-- `data/orders.db` is the production registry: read it, never rewrite it.
-- No schema migration; tests use temporary DBs.
-- No live orders; no `quote`, `complete`, Trader loop, or dashboard START.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit operator approval.
-
----
-
-# CONSTRAINTS — #422 (locked by Station II, enforced through Station V)
-
-Supersedes the previous issue plan constraints for this branch only.
-
-## Zero regressions
-
-- Focused suites that must pass for the touched behavior:
-  `tests/test_shadow_run.py` (plus `tests/test_shadow_run_run_id.py` style
-  coverage if the CLI test lands there).
-- Existing paired tests stay unchanged in meaning, including
-  `test_admission_arm_requires_markets_path_and_bankroll`.
-- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only
-  the focused suites.
-- Every behavior change needs a test that fails without the change
-  (RED first, per `test-driven-development`) — notably a test that fails
-  if the live balance read returns.
-
-## Bankroll-source freeze
-
-- `core_brain/config.py`: bankroll default (line 41), env overrides
-  (1521-1528), and bounds: untouched.
-- `derive_dynamic_caps` and `trader_loop._fleet_state`: untouched —
-  no live trading path changes.
-- Early paired checks (`shadow_run.py:902-911`, mutual exclusion +
-  markets-path + explicit-bankroll requirements): unchanged.
-- Paired consumption (`shadow_run.py:1013-1034`, `record_paired_run_start` /
-  `record_paired_equity_mark`): unchanged.
-- Validation error text must still contain "bankroll" so existing
-  test matches keep passing.
-
-## Stores are evidence, not scratch
-
-- `data/orders.db` is the production registry: read it, never rewrite it.
-- No schema migration, no database rewriting; tests use temporary DBs.
-- Shadow rehearsals use a fresh unique store per run
-  (`data/NN_shadow_<stamp>.db`); `data/orders.db` is refused as a store.
-- No live orders are opened; no `quote`, `complete`, Trader loop,
-  or dashboard START.
-
-## Anti-cheat
-
-- No skipping/disabling tests, no deleting assertions, no suppressing lint or type checks.
-- No new external dependencies without explicit operator approval.
-- `statistical_validation_run/run.py` and `scripts/shadow_tournament.py`:
-  untouched (verified out of scope, see SPEC.md).
-
-## #506 — tsc gate config (docs + guard test only)
-
-- No runtime files modified (`server.ts`, `package.json`, CI workflow untouched).
-- No `tsconfig.json` added; no new dependencies, no lockfile changes.
-- Historical N1 row text in `docs/issues/478-noticed-but-not-touching.md` stays verbatim; only a resolution note is appended.
-- Guard test asserts documented text, never runs tsc as a subprocess.
+- No test may be deleted, skipped, `xfail`ed or weakened to reach green.
+- No assertion may be loosened to `is not None` where an exact value is known.
+- No `# type: ignore`, `# noqa`, or lint suppression may be added.
+- No `pytest.mark.skipif` beyond the repo's existing `requires_node` marker idiom.
+- A guard branch (`planned_risk <= 0`, `|realized_pnl| <= 1e-9`) must be covered by a test that
+  would fail if the guard were removed (i.e. the case must raise `ZeroDivisionError` without it).
+
+## Dependencies
+
+- No new external dependency. Standard library only (`math`, `statistics`, `typing` — all
+  already imported in the target module).

@@ -1,331 +1,294 @@
-# Plan — #513 [ADD] Fill-path edge metrics for merge vs rescue expectancy
+# Plan — #514 [ADD] Rescue friction analytics for stop-loss drag and taker costs
 
-Branch: i513/add-fill-path-edge-metrics-for-merge-vs-rescue | Issue: #513
-Size: Standard | Type: Code + Design/UI | Stack: Python 3.12 + pytest, vanilla JS dashboard
-Labels: `enhancement`, `ready-for-agent`
-Note: supersedes the #506 tsc-gate plan in this file's history (kept in git). CodeRabbit
-plan reply: adopted in part — see intake note.
+Branch: i514/add-rescue-friction-analytics-for-stop-loss-drag | Issue: #514
+Size: Standard | Type: Code + UX/Copy (readout) | Stack: Python 3.12 + pytest, vanilla JS dashboard
+Labels: `enhancement`, `ready-for-agent`, `family:execution-telemetry`
+Note: supersedes the #513 `fill_path_edge` plan in this file's history (kept in git).
+
+Spec: `SPEC.md` (this branch) · Guardrails: `CONSTRAINTS.md` (this branch).
 
 ## CodeRabbit intake note
 
-Read once (rendered copy only; the byte-identical `<!-- <rawResChunk> -->` echo was skipped).
+Read once (rendered copy only; the byte-identical `<!-- <rawResChunk><planningResult> -->` echo
+was skipped).
 
 **Adopted**
-- Bucket design: merge = `merge`/`shadow_merge`; rescue = the three named single-buy exits;
-  `venue_sync` excluded; everything else (including `shadow_settlement`) disclosed as "other".
-  Verified against `statistical_validation_run/artifacts.py:74 rescue_stats`, which uses the
-  identical denominator (merges + exits) — so the analytics tab and the run report's rescue
-  block will finally agree. Its claim that this precedent exists is **correct**.
-- No stop-offset constant; break-even from realized close dollars. Verified: the issue's
-  `entry_price - 0.04` assumption is false — `core_brain/config.py:1053
-  single_buy_max_loss_usd: float = 0.04` is a per-share loss limit that profile presets move
-  (0.030–0.065), and `core_brain/single_leg_lifecycle.py:237 hard_stop_bid: float = 0.15` is
-  an absolute bid floor.
-- `None` + a status string for every missing or zero-division case; strict-JSON-safe output.
-- Always-present `fill_path_edge` key in `build()`; `core_brain/kpi.py` untouched. Verified:
-  `kpi.py:1417` drops venue-sync closes by run_id sentinel, so the excluded bucket never
-  fires through the real kpi path — the guard still protects direct callers and tests.
-- Drift-guard test tying the method tuples to their canonical homes.
-- Dashboard readout **escalated to the operator as a scope expansion** (Step 5) and approved;
-  it is now T3, not an assumption.
+- The per-close function split, the unit set (cents / ratios), the "missing stays missing" rule.
+- The named fallback constant for the stop reference, and the `recorded` / `assumed_offset`
+  source tag; "never use `fresh_bid` as the stop reference".
+- Its four test inputs (zero slippage, adverse + large fee, price improvement, missing
+  `trigger_bid` + `NULL` fee) and the zero-denominator and no-mutation cases. All four are used,
+  with the arithmetic re-derived independently (see the fixtures below).
+- "Do not recover fees from `venue_fees.recover_fee`" — verified: the `closes` schema
+  (`core_brain/order_registry.py:284-305`) has no `usdcSize`, so a recovered fee would be
+  invented.
 
 **Rejected**
-- **New module `core_brain/fill_path_analytics.py`.** `statistical_analytics.py` already
-  declares `MERGE_METHODS` (`:35`) and `_finite` (`:59`), and every other section of the
-  payload its `build()` returns; its docstring calls `build()` "the whole
-  `statistical_analytics` payload", and its siblings `position_returns` (`:69`) and
-  `pair_costs` (`:113`) already split closes by merge method. A sibling file would split one
-  payload across two files **and** add a fifth copy of `("merge", "shadow_merge")` — already
-  at `registry_state.py:41`, `kpi.py:879`, `statistical_analytics.py:35`,
-  `statistical_validation_run/artifacts.py:59`. Its circular-import worry disappears entirely
-  when there is no new module.
-- **`FillPathEdge` frozen dataclass + `to_dict()`.** No function in that module returns a
-  dataclass: `position_returns`, `pair_costs`, `probability_bell`, `markout` and `monte_carlo`
-  all return plain dicts of numbers/`None`. `run_scorer.to_dict()` is a *different* module's
-  pattern. Matching the local module beats matching a remote one, and a plain dict is
-  directly strict-JSON-assertable.
-- CodeRabbit's "reachable `report.json` through `artifacts.py`" — **verified true, by a
-  different mechanism than implied**: `artifacts.py:609` does `report = dict(kpi)` and dumps it
-  at `:634`, so the whole kpi payload (including `statistical_analytics`) lands in
-  `report.json` with no edit there. `artifacts.py` must NOT be modified.
-- Its "keep it simple: 100 lines not 1000" is honoured — 3 tasks, one new test file.
+- **New module `core_brain/rescue_friction.py`.** Its stated reason was "avoids edit clashes with
+  #513, which will likely change `statistical_analytics.py`" — #513 is merged and closed
+  (`f893ec0`), so the reason is gone. Against it: `statistical_analytics.py` already declares
+  `RESCUE_METHODS` (`:58`) and the `_finite` helper (`:87`) this work needs, and its `build()`
+  already returns every other section of the same payload from the same `closes` list. A sibling
+  file would need a **fifth** copy of `("single_buy_exit", "naked_exit", "ladder_exit")`, and the
+  #513 plan rejected exactly that shape for exactly that reason (see this file's history).
+  The ticket leaves the location open. **Decision: extend `statistical_analytics.py`.**
+- **`PRECISION = 6` constant.** The module rounds inline (`round(x, 6)`) in every section; a
+  named constant for a literal used the same way adds a name to learn, not a rule to hold.
+- **`mark_delta(close)` as a separate function.** It is `trigger_bid - fresh_bid` — the latency
+  hop, with the same "both recorded or `None`" rule. A second name for the same number is the
+  redundancy the ticket already banned for degradation/overshoot.
+- **`payoff_degradation(close)`.** The ticket's settled decision: overshoot replaces degradation,
+  because degradation was mathematically `-SLED` (the `entry` term cancels) — a duplicate. Its
+  `theoretical_usd = shares * reference - cost_basis` is that same number.
+- **`taker_cost_drag` with `friction_usd = drag_usd + fee` and a net-loss denominator.** The
+  ticket defines TCDR as `fee_total / |realized_payoff|`; folding drag into the numerator and
+  subtracting the fee from the denominator measures a different quantity, and the ticket's TCDR
+  is the one with a traffic-light band.
+- **`drag_usd` / `drag_pct` dollar and percent forms.** The ticket displays cents for the drags
+  and says bps/percent forms apply only "where shown" — nothing shows them. Extra numbers with
+  no reader are numbers that drift.
+- **A new CSS hue or band class family.** `dashboard/static/styles.css:614-616` already defines
+  `.analytics-chip.live` / `.warn` / `.bad` (green / amber / red) — the theme's shared status
+  palette, currently defined and unused. The readout uses them; no CSS edit at all.
 
-**[UNVERIFIED] remaining:** none. Every seam below was read in the tree at planning time. One
-documented repo contradiction is recorded under Contradictions and deliberately not fixed here.
+**Corrections to its claims (verified in the tree, this session)**
+- "No #513 classifier exists in the tree" — **false now**.  `statistical_analytics._fill_path` (`:213`) and `RESCUE_METHODS` (`:58`) exist on `main`; #513 merged before this plan.
+- "The design document does not exist" — it does:
+  `docs/superpowers/specs/2026-10-12-hard-stop-fresh-poll-design.md`. The ticket says not to
+  create one; none is created. It is cited as background only.
+- "The code has no `entry_price - 0.04` fallback" — correct, which is why the fallback ships as
+  a tagged assumption (`STOP_OFFSET_FALLBACK`), never as an observed price.
 
-## Spec (embedded — Standard tier)
+**[UNVERIFIED] remaining:** none. Every seam below was read in the tree at planning time.
 
-Goal: the operator can judge whether quoting pays **by itself**, separately from single-buy
-bailout losses — because one healthy merge edge can hide a rescue bleed, and vice versa.
+## Frozen interface contract
 
-Adds to `core_brain/statistical_analytics.py` (the module whose payload the analytics tab and
-`report.json` already read):
-
-- `RESCUE_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")`
-- `EXCLUDED_METHODS = ("venue_sync",)`
-- `fill_path_edge(closes) -> dict[str, Any]` — pure, no I/O, no writes, no network.
-- `break_even_rescue_rate(merge_mean, rescue_mean) -> tuple[Optional[float], str]`
-- `build()` gains one key: `"fill_path_edge": fill_path_edge(closes)`.
-- Plus a rendered readout on the dashboard's Performance & Analytics tab (T3, approved).
-
-Out of scope (issue text, all verified present and untouched): `shadow_fills.credit_fills`, the
-GO gate (`kpi.evaluate_stat_gate`, `artifacts.build_gate_rows`/`resolve_verdict`), the fill
-validation ladder (#470/#471/#474), live-vs-simulated comparison, quoting/sizing/stop-trigger
-behaviour, parts 2–4 of the telemetry suite (#514–#517), and a Markdown section in
-`artifacts.render_report_md()`.
-
-Files that must NOT change: `core_brain/kpi.py`, `statistical_validation_run/artifacts.py`,
-`core_brain/order_registry.py`, `core_brain/registry_state.py`, `core_brain/config.py`,
-`core_brain/single_leg_lifecycle.py`, `core_brain/single_buy_saver.py`,
-`core_brain/shadow_fills.py`, `core_brain/shadow_exec.py`, `core_brain/order_manager.py`,
-`core_brain/market_resolution.py`, `core_brain/statistics_report.py`, `dashboard/server.py`,
-`scripts/rescue_exit_report.py`, `data/orders.db`.
-
-## Interface contracts (Step 4)
+All functions are pure readers over one close, which is either the `dict` that
+`OrderRegistry.get_all_closes()` returns (`SELECT * FROM closes`) or a `CloseRecord`; rows are
+read through the module's existing `_close_field`. Returns are plain dicts of `float | None` and
+`str | None` — never a dataclass, never `NaN`/`Infinity`, `allow_nan=False`-safe, rounded to 6
+decimals. Inputs are never mutated.
 
 ```python
-RESCUE_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")  # mirrors kpi.SINGLE_BUY_EXIT_METHODS, artifacts.EXIT_METHODS
-EXCLUDED_METHODS = ("venue_sync",)                                 # mirrors kpi.NON_TRADE_CLOSE_METHODS
+STOP_OFFSET_FALLBACK = 0.04   # ASSUMED reference, not observed: equals the system default
+                              # `config.single_buy_max_loss_usd` (profile presets move it
+                              # to 0.030-0.065), so every value derived from it is tagged.
+FRICTION_BAND_METRICS = ("sled", "latency", "execution", "tcdr", "overshoot")
+_LOSS_EPSILON = 1e-9          # private; mirrors kpi.pnl_by_fill_path's zero-loss guard
 
-def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]: ...  # shipped: dual-shape input read via _close_field; no registry import
-def break_even_rescue_rate(merge_mean: Optional[float],
-                           rescue_mean: Optional[float]) -> tuple[Optional[float], str]: ...
+def rescue_drag(close) -> dict:
+    """SLED and its two exact hops, in cents.
+    exit_price     = the recorded leg price (`dn_price`, else `up_price`); when the leg
+                     price is absent or ambiguous, `proceeds / shares`.
+    reference_bid  = `trigger_bid` (source "recorded"), else `entry - STOP_OFFSET_FALLBACK`
+                     (source "assumed_offset"). `fresh_bid` is never the reference.
+    latency_drag_cents   = (trigger_bid - fresh_bid) * 100   -> only when BOTH recorded
+    execution_drag_cents = (fresh_bid - exit_price) * 100    -> only when fresh_bid + exit
+    sled_cents           = latency + execution when both hops measured (exact by
+                           construction); else (reference_bid - exit_price) * 100
+    Signs unclipped. Every value `None` when its own inputs are missing."""
+
+def taker_cost_drag_ratio(close) -> dict:
+    """TCDR in the ticket's own definition: fee / |realized_pnl|.
+    fee_usd, fee_measured (bool), realized_pnl_usd, tcdr.
+    tcdr is None when the fee is unmeasured or |realized_pnl| <= _LOSS_EPSILON."""
+
+def overshoot_ratio(close) -> dict:
+    """SLED in units of the risk the stop intended to cap.
+    planned_risk_cents = (entry_price - reference_bid) * 100
+    overshoot_ratio    = sled_cents / planned_risk_cents
+    status: "measured" | "unmeasured" | "no_planned_risk"."""
+
+def friction_band(metric: str, value: Optional[float]) -> str:
+    """The ticket's traffic-light band for one metric's DISPLAYED value.
+    "good" | "average" | "bad" | "unmeasured". Unknown `metric` -> ValueError (a typo must
+    not render as `unmeasured`, which is a data statement, not a typo statement).
+    Drag metrics arrive in cents; the ticket's thresholds are price dollars (its own
+    threshold-basis note: 0.02 ~= one book spread), so the band converts cents -> dollars.
+    Overshoot/TCDR are unitless ratios. Signed extension, documented in the docstring:
+    a negative overshoot (price improvement) reads "good", extending the table's `= 0`."""
+
+def rescue_friction_summary(closes) -> dict:
+    """Always present, like `fill_path_edge`. Population = `method` in RESCUE_METHODS
+    (lowercased/stripped), never narrowed by `reason`.
+    Counts:  rescue_count, measured_count (SLED measurable), recorded_reference_count,
+             assumed_reference_count, assumed_stop_offset (the offset itself, so a readout
+             prints the number the computation used), fee_measured_count, non_rescue_count
+    Means (each over its own measured subset, None when empty):
+             mean_sled_cents, mean_latency_drag_cents, mean_execution_drag_cents,
+             mean_tcdr, mean_overshoot_ratio
+    bands:   {metric: friction_band(metric, mean)} for the five FRICTION_BAND_METRICS
+    units:   "cents_per_share" (the drag means; tcdr and overshoot are ratios)"""
 ```
 
-`fill_path_edge` returns exactly these 15 keys, so the JSON schema is frozen for Stations III–V:
+`build()` gains one additive key: `"rescue_friction": rescue_friction_summary(closes)`.
 
-| key | type | meaning |
-| --- | --- | --- |
-| `merge_count` | int | closes classified as a merge path |
-| `merge_pnl_usd` | float | summed realized dollars over those closes |
-| `merge_expectancy_usd` | float \| None | `merge_pnl_usd / merge_count`; `None` when count is 0 |
-| `rescue_count` | int | closes classified as rescue |
-| `rescue_pnl_usd` | float | summed realized dollars over those closes |
-| `rescue_expectancy_usd` | float \| None | `rescue_pnl_usd / rescue_count`; `None` when count is 0 |
-| `rescue_rate` | float \| None | `rescue_count / (merge_count + rescue_count)`; `None` when the divisor is 0 |
-| `net_expectancy_usd` | float \| None | `(merge_pnl_usd + rescue_pnl_usd) / (merge_count + rescue_count)`; `None` when the divisor is 0 |
-| `break_even_rescue_rate` | float \| None | the rescue rate at which net expectancy is exactly 0 |
-| `break_even_status` | str | `"measured"` \| `"unmeasured"` \| `"merge_not_profitable"` \| `"rescue_not_losing"` |
-| `other_count` | int | closes in neither path (e.g. `shadow_settlement`, `sell`) |
-| `other_pnl_usd` | float | their summed realized dollars |
-| `excluded_count` | int | bookkeeping rows (`venue_sync`) — not trades, not counted anywhere else |
-| `skipped_count` | int | rows whose `realized_pnl` is missing, non-numeric, NaN or infinite |
-| `units` | str | always `"usd_per_close"` |
+Band thresholds, as frozen (value first, in the metric's own unit):
 
-Contract rules:
-1. One close record is one equal observation, in dollars per close. Two partial-close records
-   stay two observations.
-2. Bucket order is merge → rescue → excluded → other; the three tuples are disjoint.
-3. A row with a non-finite `realized_pnl` is skipped and counted in `skipped_count`; it enters
-   no bucket, no sum and no denominator. A row whose value is finite but would push its aggregate
-   past the float ceiling is skipped the same way, so every emitted figure stays `allow_nan=False`-safe.
-4. Only `merge` and `rescue` enter `rescue_rate` and `net_expectancy_usd`. `other`, `excluded`
-   and `skipped` never do.
-5. Values are computed from raw figures and rounded to 6 decimals at output only.
-6. `break_even_rescue_rate` = `merge_mean / (merge_mean - rescue_mean)` when both means exist,
-   `merge_mean > 0` and `rescue_mean < 0` (the divisor is then always positive, so a measured
-   threshold is always < 1.0). An all-rescue run is not a case of being below that threshold —
-   it has no merge mean, so it reports `unmeasured` and has no threshold at all.
-   `None`/no closes → `(None, "unmeasured")`; `merge_mean <= 0` → `(None, "merge_not_profitable")`;
-   `rescue_mean >= 0` → `(None, "rescue_not_losing")`. Evaluated in that order, so
-   `(0.0, 0.0)` reports `merge_not_profitable`.
-7. Each record's `method` is read as `str(... or "").strip().lower()` and classified by exact
-   match. `strip()` is deliberate: the registry writes literal strings, and a hand-seeded row
-   (`scripts/seed_preview_fixture.py`) must not land in `other` over a stray space.
-8. `build()`'s existing keys and their values are unchanged; the new key is additive.
-9. JS: `renderFillPathEdge(stats)` takes the `statistical_analytics` object, writes
-   `#fill-path-edge-readout`, returns `undefined`, and never throws on a missing, empty or
-   partial payload. It reads `stats.fill_path_edge` only.
-10. `renderFillPathEdge` must be added to the `module.exports` object at
-    `dashboard/static/app.js:8645+` — the node harness reaches renderers through it.
-
-## Dependency graph
-
-```
-T1 (module + focused tests)  ──►  T2 (payload wiring)
-                             └─►  T3 (dashboard readout; consumes T1's schema)
-```
-T1 is riskiest (classification + math), so it runs first. T2 and T3 are independent of each
-other; T2 first because it is the ticket's own acceptance criterion.
-
-## Tasks
-
-- [x] **T1 (M, [Backend/Logic])** — DONE: RED = `ImportError: cannot import name 'EXCLUDED_METHODS'`
-  (exit 2, collection error); GREEN = 25 passed; 116 passed across the six sibling suites;
-  committed `feat(core_brain): merge-vs-rescue fill-path expectancy metrics (#513)`.
-  `core_brain/statistical_analytics.py` + new
-  `tests/test_fill_path_analytics.py`. Adds `RESCUE_METHODS`, `EXCLUDED_METHODS`,
-  `fill_path_edge()`, `break_even_rescue_rate()` per the contracts above; reuses the existing
-  `MERGE_METHODS` (`:35`) and `_finite` (`:59`); extends the module docstring so it no longer
-  claims the payload is only the five charts. Docstring and comments record that the buckets
-  are an **accounting proxy**, not literal `PAIRED_MERGE`/`RESCUE_STOP` execution labels, and
-  that no stop-offset constant exists because realized close dollars already contain the real
-  exit fill. Depends on: none. Verify: `python -m pytest -q tests/test_fill_path_analytics.py`
-  (RED first: import error before the change).
-  Skill: `test-driven-development`.
-- [x] **T2 (S, [Backend/Logic])** — DONE: RED = `KeyError: 'fill_path_edge'` (2 failed);
-  GREEN = 76 passed across the three suites; real-store check through `kpi.report` on a copy of
-  `data/02_shadow_prudent_13-10_03-01.db` returns the key with `break_even_status: "measured"`.
-  Committed `feat(core_brain): expose fill-path edge metrics in the analytics payload (#513)`.
-  `build()` (`:299`) gains
-  `"fill_path_edge": fill_path_edge(closes)`; extend the populated and empty `build()` tests in
-  `tests/test_statistical_analytics.py` (currently RED with a `KeyError`). Depends on: T1.
-  Verify: `python -m pytest -q tests/test_fill_path_analytics.py tests/test_statistical_analytics.py`.
-  Skill: `test-driven-development`.
-- [x] **T3 (M, [Design/UI])** — DONE: card renders on the live dashboard against `data/02_shadow_prudent_13-10_03-01.db`
-  (copy) with `+$0.10` / `-$1.25` / `50.0%` / `7.4%` / `-$0.57`, survives a sub-view switch, and the
-  singular-count fix (`1 close`, not `1 closes`) went RED→GREEN with the tree restored byte-identically
-  (md5 `a41c2b5e` before and after). Committed
-  `feat(dashboard): show fill-path edge beside the average close (#513)`.
-  The readout card. `dashboard/static/index.html`: new
-  `<div id="fill-path-edge-readout">` inserted between the Tier-1 row's closing tag (after
-  `:476`) and the `<!-- Statistical Power & Distribution Chips -->` comment at `:477`, i.e.
-  immediately above `#kpi-grid` at `:478`. It must **not** carry `.stats-chart-card`: that class
-  participates in the sub-view filter (`app.js:2883-2885`, `:2909`) and every analytics
-  sub-view would blank it. `dashboard/static/app.js`: standalone `renderFillPathEdge(stats)`
-  following the `renderSampleSufficiency` shape (`:4271` — `const host =
-  document.getElementById(...); if (!host) return;` then `host.innerHTML = ...`), called from
-  `renderAnalyticsSurface` (`:4506`) in its own `try/catch` beside the other isolated
-  renderers, and added to `module.exports`. Depends on: T1. Verify: browser preview + the node
-  harness. Skill: `frontend-ui-engineering`.
-
-Checkpoint after T1: module green, RED demonstrated, real-store numbers reproduced from a
-scratch script. Checkpoint after T2: payload key present and empty-safe. Checkpoint after T3:
-the card renders on the dashboard with real store data and never prints `NaN`/`undefined`.
-
-## T1 test cases (the ticket's required file)
-
-Dictionary fixture in the style of `_close` in `tests/test_statistical_analytics.py`; asserts on
-rendered copy of the payload, with `pytest.approx` where rounding applies.
-
-- **All-merge** (`merge` +0.30, `shadow_merge` +0.10): `merge_expectancy_usd == 0.20`,
-  `rescue_count == 0`, `rescue_expectancy_usd is None`, `rescue_rate == 0.0`,
-  `net_expectancy_usd == 0.20`, `break_even_status == "unmeasured"`.
-- **All-rescue** (`single_buy_exit` −0.40, `ladder_exit` −0.20): `rescue_expectancy_usd == -0.30`,
-  `merge_expectancy_usd is None`, `rescue_rate == 1.0`, `net_expectancy_usd == -0.30`,
-  `break_even_status == "unmeasured"`.
-- **Mixed** (three `merge` +0.30; one `naked_exit` −0.60; one `shadow_settlement` +1.00; one
-  `venue_sync` +5.00): `merge_expectancy_usd == 0.30`, `rescue_expectancy_usd == -0.60`,
-  `rescue_rate == 0.25`, `net_expectancy_usd == 0.075`, `break_even_rescue_rate == 0.333333`,
-  `break_even_status == "measured"`, `other_count == 1`, `other_pnl_usd == 1.0`,
-  `excluded_count == 1` — and that net expectancy equals `0.75*0.30 + 0.25*(-0.60)`. The
-  `venue_sync` row's +5.00 must move **no** mean, which is the assertion that actually bites.
-- **Empty input**: every count 0, every mean/rate/net/threshold `None`,
-  `break_even_status == "unmeasured"`.
-- **Zero division**: a single `shadow_settlement` close → `rescue_rate is None`,
-  `net_expectancy_usd is None`, `other_count == 1`. Plus the three
-  `break_even_rescue_rate` refusals: `(0.0, 0.0)` and `(-0.10, -0.50)` both
-  `(None, "merge_not_profitable")`; `(0.20, 0.0)` → `(None, "rescue_not_losing")`.
-- **Classification**: `" Shadow_Merge "` counts as merge (rule 7); `sell` counts as `other`.
-- **Bad numbers**: NaN, `inf`, missing and `"abc"` `realized_pnl` values → `skipped_count == 4`,
-  and no mean changes.
-- **Partial closes**: two `single_buy_exit` records on one `condition_id` → `rescue_count == 2`.
-- **Input types**: a list of `CloseRecord` objects (`core_brain/order_registry.py:759`) returns
-  the same dict as the matching dictionary list.
-- **Purity**: two calls return equal results, and the input list still equals a deep copy taken
-  before the call.
-- **Strict JSON**: `json.dumps(payload, allow_nan=False)` succeeds for the empty, mixed and
-  bad-number cases.
-- **Drift guard**: `set(MERGE_METHODS) == set(registry_state.MERGE_CLOSE_METHODS)`,
-  `set(RESCUE_METHODS) == set(artifacts.EXIT_METHODS)` and
-  `set(RESCUE_METHODS) == set(kpi.SINGLE_BUY_EXIT_METHODS)`. Importing `kpi` and the
-  validation-run layer is safe **in a test**; the module itself must not import either
-  (`kpi` imports `statistical_analytics`, so that direction is a real cycle).
-
-## T3 readout contract
-
-Card title `FILL-PATH EDGE — MERGE VS RESCUE` (Title Case tag), values as:
-
-- Merge: `fmtSignedUSD(merge_expectancy_usd)` + ` per close` + close count; `unmeasured` when `None`.
-- Rescue: same shape.
-- Rescue rate: `(rescue_rate*100).toFixed(1) + '%'` with its divisor shown (`n of m completions`).
-- Break-even: `(break_even_rescue_rate*100).toFixed(1) + '%'`, else the status in plain words.
-  **Shipped wording, reconciled here (T3):** `merge_not_profitable` → "no rescue rate breaks even
-  while merges lose"; `rescue_not_losing` → "no rescue rate breaks even while rescues do not lose";
-  `unmeasured` → "unmeasured — no completed closes" (only when *both* paths are empty) or
-  "unmeasured — one path has no closes". The planning-time strings above were replaced because
-  they answer a precondition ("must be profitable first") where the slot's job is to answer
-  *why no number exists*, and because one `unmeasured` string could not tell a run with no
-  completions at all from one where a single path never resolved.
-- Net expectancy: `fmtSignedUSD(net_expectancy_usd)` + ` per close`.
-- Disclosed counts: other (count + `fmtSignedUSD(other_pnl_usd)`), excluded, skipped.
-- Caption, sentence case with a full stop (`docs/agents/glossary.md`, "Dashboard copy"):
-  "Merge vs rescue closes — accounting view, not maker/taker attribution."
-- Negative values go through `signClass` so they read as losses; a `None` never becomes `0`.
-
-`tests/js/analytics_surface_harness.cjs` must register `fill-path-edge-readout` in its stub-id
-list, call `app.renderFillPathEdge(kpi.statistical_analytics || {})` inside a `try/catch` that
-pushes to `errors` (a direct call, so a throw is reported rather than swallowed by the in-app
-guard), and add `fill_path_edge_html` to the JSON it prints.
-`tests/test_analytics_surface_mount.py` gains: populated payload → text contains `per close`,
-`0.30`, `0.60`, `25.0%`, `33.3%`; empty payload **and** a payload with no `fill_path_edge` key →
-text contains `unmeasured` and contains none of `NaN`, `undefined`, `null`; status
-`merge_not_profitable` → the plain-words reason, not a number.
-
-## Real data this was designed against (read-only, production stores untouched)
-
-`data/02_shadow_prudent_13-10_03-01.db` — 170 closes, three methods:
-
-| method | n | total | mean |
+| metric | 🟢 good | 🟡 average | 🔴 bad |
 | --- | --- | --- | --- |
-| `shadow_merge` | 89 | +$20.71 | +$0.2327 |
-| `single_buy_exit` | 65 | −$22.21 | −$0.3417 |
-| `shadow_settlement` | 16 | +$31.59 | +$1.9745 |
+| sled (¢) | `<= 0` | `(0, 2.0]` | `> 2.0` |
+| latency (¢) | `>= 0` | `(-2.0, 0)` | `<= -2.0` |
+| execution (¢) | `<= 2.0` | `(2.0, 5.0]` | `> 5.0` |
+| tcdr (ratio) | `<= 0` | `(0, 0.10)` | `>= 0.10` |
+| overshoot (ratio) | `<= 0` | `(0, 1.0]` | `> 1.0` |
 
-Derived: `rescue_rate = 65/154 = 0.4221`; `break_even_rescue_rate = 0.2327/(0.2327+0.3417) =
-0.4052`; `net_expectancy_usd = -1.50/154 = -$0.0097/close`. So the rescue rate sits **above** its
-break-even and the two-path edge is slightly negative, while the run's actual total is **+$30.09**
-— all of it in the 16 `shadow_settlement` closes that the merge-vs-rescue split cannot see.
-This is exactly why `other_count`/`other_pnl_usd` must be rendered next to the headline and why
-the readout (T3) carries them rather than leaving them in JSON. `venue_sync` count in this store
-is 0, so `excluded_count` reads 0 — the operator should expect 0, not treat it as a bug.
+(Cents = the ticket's 0.02 / 0.05 dollars. `unmeasured` when the value is `None`.)
 
-## Issue vs repository contradictions (the plan follows the code)
+## Test fixtures (arithmetic re-derived, not copied)
 
-1. **`PAIRED_MERGE` / `RESCUE_STOP` are not recorded values.** `CloseRecord.method` is a free-form
-   string. `merge`/`shadow_merge` are merge; the three named exits are rescue. Documented in code.
-2. **The issue's default "every other method is rescue" is wrong.** `shadow_settlement`
-   (hold-to-resolution), `venue_sync` (wallet reconciliation) and fixture `sell` rows are not
-   rescue exits, and `shadow_settlement` is not a taker stop-loss — which is the issue's own
-   definition of `RESCUE_STOP`. Repo-wide, `("single_buy_exit","naked_exit","ladder_exit")` is
-   the single-buy-exit set in ~12 places plus four named constants
-   (`kpi.py:884`, `ladder.py:19`, `artifacts.py:60`, `scripts/ladder_shadow_rehearsal.py:233`);
-   `shadow_settlement` appears in none of them.
-3. **Documented divergence, not fixed here:** `scripts/rescue_exit_report.py:44` defines
-   `RESCUE_METHODS = ("single_buy_exit", "shadow_settlement")` — the only place that pairs a
-   settlement row with a rescue. It is out of scope and on the do-not-touch list; recorded so a
-   future session resolves it deliberately.
-4. **No 4-cent stop offset exists.** `0.04` is `single_buy_max_loss_usd`; the live stop is
-   `hard_stop_bid = 0.15` absolute. Hence the break-even comes from realized dollars.
-5. **`reason`** (`adverse_drift` / `grace_expired`) is recorded only on single-buy exits and is
-   not used: classification is by `method`.
-6. **The issue's `merge_pairs.py:41` pointer is not needed** — nothing in this change touches
-   `merge_pairs`. Its `statistical_analytics.MERGE_METHODS` at ":35" is **correct** (verified).
+| # | Input (`shares`, `cost_basis`, `proceeds`, `realized_pnl`, `fee`, `trigger_bid`, `fresh_bid`, `dn_price`) | Expected |
+| --- | --- | --- |
+| A zero slippage (the H2 exhibit's fresh-book close) | `5.0, 3.0, 0.75, -2.25, 0.0, 0.15, 0.15, 0.15` | entry 0.60, exit 0.15; latency `0.0`, execution `0.0`, sled `0.0`, planned risk `45.0`, overshoot `0.0`, tcdr `0.0`; all bands good |
+| B adverse + large fee | `10.0, 6.0, 1.2, -4.8, 0.30, 0.20, 0.15, 0.12` | exit 0.12; latency `5.0`, execution `3.0`, sled `8.0` (= 5 + 3 exactly), planned risk `40.0`, overshoot `0.2`, tcdr `0.0625`; bands good / average / bad / average / average |
+| C price improvement | `10.0, 6.0, 2.30, -3.70, 0.0, 0.20, 0.22, 0.23` | latency `-2.0`, execution `-1.0`, sled `-3.0`, overshoot `-0.075`; signs kept, bands bad / good / good |
+| D missing `trigger_bid` + `NULL` fee | `5.0, 3.0, 2.50, -0.50, None, None, 0.50, 0.50` | reference `0.56` source `assumed_offset`; latency `None`, execution `0.0`, sled `6.0`, planned risk `4.0`, overshoot `1.5` (bad), tcdr `None`, `fee_measured` false |
+| E stale-mark drag (the reason this work exists) | `5.0, 2.70, 0.75, -1.95, 0.0, 0.83, 0.15, 0.15` | latency `68.0`, execution `0.0`, sled `68.0`; planned risk negative (trigger above entry) -> overshoot `None`, status `no_planned_risk` |
 
-## Improvement proposal (Step 5 — scope expansion, operator-approved this session)
+## Dependency graph & tasks
 
-One proposal, grounded in verbatim evidence: the ticket wires the metrics into the analytics
-*payload* ("Wiring the new metrics into the existing statistical analytics surface where it
-reads closes"), which reaches `/api/kpi` and `report.json` but **no screen**. The real store above
-shows why that is not enough: net expectancy reads −$0.0097/close next to a +$30.09 run total, and
-the +$31.59 of excluded `shadow_settlement` closes is what reconciles them — a number that must be
-visible beside the headline, not buried in JSON. Presented as a question before planning; the
-operator chose **"Yes — add the readout card"**, so T3 is in scope. Had it been declined, T3 would
-have been recorded here as rejected-out-of-scope with this same evidence.
+```
+T1 (drag decomposition) ─┬─> T3 (build() key) ──> T4 (dashboard readout)
+T2 (tcdr/overshoot/bands)┘            ^
+        ^                              |
+        └── depends on T1 (reuses rescue_drag) ──┘
+```
+T2 depends on T1 · T3 depends on T1 + T2 · T4 depends on T3. Risk-first: the drag
+decomposition and the reference fallback carry the real uncertainty, so T1 lands first.
 
-## Interface / dependency notes
+Completion state (marked here as each task lands — Station III owns this, Station II owns
+everything else in this file):
 
-- No new external dependencies. No new module. No network, signer or database write anywhere in
-  this change.
-- `build()` has exactly one production caller: `kpi.py:2369`. `report.json` picks the key up for
-  free via `artifacts.py:609 report = dict(kpi)`.
-- Circular-import direction to respect: `kpi` → `statistical_analytics`. Never the reverse.
+- [x] T1 — SLED decomposition with its tests
+- [x] T2 — TCDR, overshoot, bands and the summary
+- [x] T3 — wire the payload
+- [x] T4 — dashboard readout with traffic-light bands
 
-## Open questions resolved from code (no operator questions outstanding)
+All four tasks committed locally on this branch. Built as planned, with two recorded
+deviations: (1) `SPEC.md`'s "no shares" edge-case row was corrected to say which metrics
+need a share count (the drag metrics read recorded prices, so they do not) — the code does
+not require a share count for a per-share figure; (2) the latency-drag band was implemented
+literally from the ticket's table even though that row contradicts the ticket's own
+definition of the metric — recorded as N1 in `docs/issues/514-noticed-but-not-touching.md`
+for the operator's call.
 
-- **Classification** (issue open question 1): resolved — merge = `merge`/`shadow_merge`;
-  rescue = `single_buy_exit`/`naked_exit`/`ladder_exit`; `venue_sync` excluded;
-  `shadow_settlement` and everything else disclosed as `other`. See Contradictions 2 and 3.
-- **Stop offset** (issue open question 2): resolved — no constant. `hard_stop_bid` is an
-  absolute 0.15 floor and `single_buy_max_loss_usd` is dynamic, so the break-even is derived
-  from realized close dollars and cannot drift from execution.
+### T1 — SLED decomposition with its tests · S · `[Backend/Logic]`
+- Files: `core_brain/statistical_analytics.py`,
+  `tests/test_rescue_friction_analytics.py` (new).
+- Builds: `STOP_OFFSET_FALLBACK`, `_LOSS_EPSILON`, `_entry_price`, `_exit_price`,
+  `_stop_reference`, `rescue_drag()`. Test file opens with a docstring naming #514 and the
+  scenarios, a `_close(...)` helper (defaulting `method="single_buy_exit"`, following
+  `tests/test_statistical_analytics.py`), and fixtures A, B, C, D, E.
+- Depends on: —
+- Verify: `python -m pytest -q tests/test_rescue_friction_analytics.py` (RED first: ImportError),
+  including exact additivity for B, unclipped signs for C, and the fallback tag for D.
+
+### T2 — TCDR, overshoot, bands and the summary · S · `[Backend/Logic]`
+- Files: `core_brain/statistical_analytics.py`, `tests/test_rescue_friction_analytics.py`.
+- Builds: `taker_cost_drag_ratio()`, `overshoot_ratio()`, `FRICTION_BAND_METRICS`,
+  `friction_band()`, `rescue_friction_summary()`. Tests: the boundary values in the band table
+  (0 / 2.0 / 2.01 cents sled, ±2.0 latency, 5.0 / 5.01 execution, 0.10 tcdr, 1.0 / 1.0001
+  overshoot), the two zero-division guards (asserting `ZeroDivisionError` would occur without
+  them), the empty dataset, a mixed list carrying `shadow_merge` + `venue_sync` rows
+  (`non_rescue_count`), dict vs `CloseRecord` equivalence, `json.dumps(..., allow_nan=False)`,
+  and a no-mutation assertion on the input copy.
+- Depends on: T1
+- Verify: `python -m pytest -q tests/test_rescue_friction_analytics.py`
+
+### T3 — wire the payload · XS · `[Backend/Logic]`
+- Files: `core_brain/statistical_analytics.py` (`build()` + its docstring), plus the populated
+  and empty `build()` tests in `tests/test_statistical_analytics.py`.
+- Builds: the additive `rescue_friction` key, always present, `None` means + `unmeasured` bands
+  on a run with no closes.
+- Depends on: T1, T2
+- Verify: `python -m pytest -q tests/test_statistical_analytics.py tests/test_fill_path_analytics.py`
+
+### T4 — dashboard readout with traffic-light bands · S · `[UX/Copy]` + `[Design/UI]`
+- Files: `dashboard/static/index.html` (new `#rescue-friction-readout` card, after the
+  fill-path card, deliberately not `.stats-chart-card` so the sub-view filter cannot blank it),
+  `dashboard/static/app.js` (`renderRescueFriction`, its call inside `renderAnalyticsSurface`,
+  its `module.exports` entry), `tests/js/analytics_surface_harness.cjs` (stub id + call +
+  printed HTML), `tests/test_analytics_surface_mount.py` (new cases).
+- Builds: five tiles — SLED, latency drag, execution drag, TCDR, overshoot ratio — each showing
+  the mean with a band chip (`analytics-chip` + `live`/`warn`/`bad`, neutral for `unmeasured`),
+  a counts footnote (measured / assumed-reference / fee-measured / non-rescue), and one line of
+  copy stating this is an accounting view of rescue closes that includes timed exits.
+  A `null` mean renders the word `unmeasured` — never `0.00`.
+- Depends on: T3
+- Verify: `python -m pytest -q tests/test_analytics_surface_mount.py`; then the operator's
+  hands-on check (below).
+
+**Checkpoints:** after T2 — every metric measured, focused suite green, nothing else touched.
+After T4 — the card renders on the analytics tab with a real store.
+
+**Sub-issues:** skipped, and recorded rather than invented: sub-issue mapping is the
+`wayfinder:map` flow (`create-issue/references/wayfinding-operations.md`), and #514 carries no
+`wayfinder:map` parent (labels: `enhancement`, `ready-for-agent`, `family:execution-telemetry`).
+The dependency graph above is the tracker for this session.
+
+**Persona skips (recorded, not simulated):** `type-design-analyzer` — the contract introduces no
+new types to encapsulate; it returns plain dicts of floats/`None`, matching every sibling
+function in the module. `code-explorer` — this is Standard-tier work whose seams were read
+directly (`order_registry.CloseRecord`/`closes` schema, `single_buy_saver._record_exit_close`,
+`statistical_analytics.build`, `app.js` renderers); no legacy path needed tracing.
+
+## Step 5 — one improvement proposal (adopt-by-default: simplification)
+
+Evidence, verbatim from the ticket's acceptance criteria: *"Each metric's dashboard/readout
+display applies the traffic-light color band (green/yellow/red) to its current value per the
+spec table."* The renderer is otherwise free to hardcode the thresholds — and this repo has
+already been burned there: `tests/test_statistical_analytics.py` carries renderer tests whose
+whole purpose is to catch invented constants in `app.js` ("invented statistic back in app.js").
+
+**Proposal:** compute the band in Python and ship it in the payload (`bands`), so `app.js` maps
+a band name to a class and holds no threshold numeral. Classification: **simplification /
+hardening — adopted by default**, folded into T2 and T4 above. Rejected at review time means
+moving five thresholds into the renderer and losing the Python boundary tests.
+
+## Contradictions & risks (verified this session)
+
+- **The ticket's band numbers are price dollars; the displayed drag values are cents.** Its
+  threshold-basis note ("0.02 ≈ one book spread") is dollars, while "SLED is displayed in
+  cents". `friction_band` converts cents → dollars so the frozen table above matches the
+  ticket. Interpretation recorded here because it is the one place the ticket's units collide.
+- **Today's rescue rows carry no fee.** `single_buy_saver._record_exit_close` never passes
+  `fee`, so the column is `NULL`; the only writers of `fee=0.0` are the merge paths
+  (`shadow_exec.py:1531` `shadow_merge`, `order_manager.py:1184` `merge`), both outside the
+  rescue population. So TCDR reads **`unmeasured`, not 🟢** today — the ticket's "currently
+  always 0, so reads 🟢" assumed a recorded zero fee. Missing stays missing; no zero is invented.
+- **Only the saver records the audit pair.** `grep trigger_bid|fresh_bid` finds no hits in
+  `ladder.py`, `market_resolution.py` or `shadow_exec.py`, so `naked_exit` / `ladder_exit` rows
+  will use the assumed 0.04 reference. They are counted separately
+  (`assumed_reference_count`) and the metric is not narrowed by `reason` — per the ticket.
+- **`0.04` equals the system default only.** `config.single_buy_max_loss_usd = 0.04` is the
+  promoted default; profile presets move it (0.030–0.065). The assumed reference is therefore
+  a tagged approximation, and the readout says so.
+- **The booked exit price can be a floor, not a fill.** `single_buy_saver.py:75`
+  `MAX_SELL_SLIPPAGE = 0.02` and `:949`
+  `min_price = _floor_to_tick(max(bid - MAX_SELL_SLIPPAGE, tick), tick)` mean a live rescue
+  with no reported fill price records the floor. Live execution drag can therefore carry up to
+  ~2c of floor effect. Documented, not fixed here — this work measures, it does not change
+  execution.
+- **Rescue methods include timed exits** (`grace_expired`, ladder timers), not only stop hits.
+  The ticket settles the filter as `method`-only, so the readout copy discloses the population
+  instead of pretending it is all stops.
+- **`overshoot` for a trigger above entry** is `no_planned_risk` (`None`), not `0` or a negative
+  ratio: the stop's intended risk was zero or negative, so the question has no answer. Fixture E
+  pins it.
+
+## How to verify (operator — hands-on, no pytest)
+
+1. Launch the stack: `.\scripts\spread-hunter-menu.ps1 start` (or `python -m dashboard.server`),
+   then open `http://127.0.0.1:8799`.
+2. Open the **Performance & Analytics** tab and scroll to the new **RESCUE FRICTION** card,
+   directly under **FILL-PATH EDGE**.
+3. Read the five tiles: SLED (¢), Latency Drag (¢), Execution Drag (¢), Taker Cost Drag Ratio,
+   Overshoot. Each value carries a green / amber / red chip that changes with the value, and
+   `unmeasured` where the closes do not carry the price (with no `NaN`, `undefined` or `0.00`
+   standing in for a missing number).
+4. Compare against the ticket's table on the issue: a SLED above 2¢ on a rescue close should
+   read red; a drag at or below zero should read green; overshoot above 1.0× should read red.
+5. Rehearse a run that produces rescue closes (`python -m core_brain.shadow_run --minutes 5
+   --db data/514_shadow_<stamp>.db`) and reopen the tab: the counts footnote
+   (measured / assumed-reference / fee-measured) should move, and a rescue row with no recorded
+   `trigger_bid` should raise the assumed-reference count rather than invent a value.

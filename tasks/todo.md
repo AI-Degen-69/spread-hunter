@@ -1,13 +1,19 @@
-# Todo — #513 fill-path edge metrics (merge vs rescue)
+# Todo — #514 rescue friction analytics (SLED, hops, TCDR, overshoot)
 
-Branch: `i513/add-fill-path-edge-metrics-for-merge-vs-rescue`
+Branch: `i514/add-rescue-friction-analytics-for-stop-loss-drag` | Issue: #514
+Plan: `tasks/plan.md` · Spec: `SPEC.md` · Guardrails: `CONSTRAINTS.md`
 
-- [ ] T1: `core_brain/statistical_analytics.py` — `RESCUE_METHODS`, `EXCLUDED_METHODS`,
-      `fill_path_edge()`, `break_even_rescue_rate()`; new `tests/test_fill_path_analytics.py`
-      (RED first: import error)
-- [ ] T2: `build()` gains the `fill_path_edge` key; extend populated/empty `build()` tests in
-      `tests/test_statistical_analytics.py` (RED first: `KeyError`)
-- [ ] T3: `#fill-path-edge-readout` card (`index.html`), `renderFillPathEdge` (`app.js` +
-      `module.exports`), harness call, mount-test cases
-- [ ] Focused suites green (nothing else in the tree touched)
-- [ ] Handoff to `/iii-build-plan auto`
+- [x] T1: `core_brain/statistical_analytics.py` — `STOP_OFFSET_FALLBACK`, `_LOSS_EPSILON`,
+      `_entry_price`, `_exit_price`, `_stop_reference`, `rescue_drag()`; new
+      `tests/test_rescue_friction_analytics.py` with fixtures A–E
+- [x] T2: same files — `taker_cost_drag_ratio()`, `overshoot_ratio()`, `FRICTION_BAND_METRICS`,
+      `friction_band()`, `rescue_friction_summary()`; band-boundary, zero-division,
+      empty-dataset, non-rescue, `CloseRecord`, strict-JSON and no-mutation tests
+- [x] CHKPT 1: every metric measured; focused suite green; nothing outside the two files touched
+- [x] T3: `build()` gains the always-present `rescue_friction` key; extended the populated and
+      empty `build()` tests in `tests/test_statistical_analytics.py`
+- [x] T4: `#rescue-friction-readout` card (`index.html`), `renderRescueFriction` (`app.js` +
+      `module.exports`), harness call (`tests/js/analytics_surface_harness.cjs`), mount cases
+- [x] CHKPT 2: focused suites green; the card verified live against a seeded store on
+      `http://127.0.0.1:8801`
+- [ ] Handoff to `/iv-review-build-and-pr`
