@@ -129,6 +129,41 @@ def test_venue_category_wins_over_market_category(tmp_path):
     assert meta["category"] == "E-Sports"
 
 
+def test_venue_shorthand_canonicalizes_to_the_game(tmp_path):
+    # The venue names the shelf ("ATP Tour", "CS2", "LoL"); the dashboard
+    # must show the game itself ("Tennis", "Counter-Strike 2",
+    # "League of Legends") so one game always reads as one category.
+    cases = {
+        "0xatp1": ("ATP Tour", "Tennis"),
+        "0xcs1": ("CS2", "Counter-Strike 2"),
+        "0xcanonical-lol": ("LoL", "League of Legends"),
+    }
+    # One feed write for all rows: the feed cache keys on file mtime, so
+    # rapid successive rewrites can read back stale rows.
+    _write_feed(tmp_path, [{
+        "cid": cid, "slug": f"match-{cid}",
+        "title": f"Some match {cid}", "category": "",
+        "venue_category": venue, "series_title": "", "market_group": "",
+        "tags": [], "volume_24h": 1.0,
+    } for cid, (venue, _) in cases.items()])
+    for cid, (_, want) in cases.items():
+        meta = mm.resolve_market_meta(cid, [], [], root=tmp_path)
+
+        assert meta["category"] == want
+
+
+def test_unmapped_venue_label_passes_through_verbatim(tmp_path):
+    _write_feed(tmp_path, [{
+        "cid": CID_CRYPTO, "slug": "btc-up-day",
+        "title": "BTC up day", "category": "", "venue_category": "Crypto",
+        "series_title": "", "market_group": "",
+        "tags": [], "volume_24h": 1.0,
+    }])
+    meta = mm.resolve_market_meta(CID_CRYPTO, [], [], root=tmp_path)
+
+    assert meta["category"] == "Crypto"
+
+
 def test_non_string_feed_fields_never_raise(tmp_path):
     _write_feed(tmp_path, [{
         "cid": CID_BLANK, "slug": "weird-match",
