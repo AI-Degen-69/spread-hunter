@@ -25,4 +25,12 @@ was re-run after the repair.
       `tests/test_shadow_fills.py`; the operator block's exact command run and its printed
       values matched the plan (`median_cents 2.5`, `p75_cents 2.75`, `band average`,
       `median_sec 10.0`, `p90_sec 14.0`; `bad` at 15c, `good` at 0.01c)
+- [x] T4 (scope change, operator-approved): `cleared_fills()` builder + `queue_realism`
+      payload key + `kpi.report` passing `quotes`; `#queue-realism-readout` card,
+      `renderQueueRealism`, harness call and six mount cases. RED: `ImportError: cannot
+      import name 'cleared_fills'` (exit 2) then `39 passed`; mount suite `34 passed`.
+      One cause-fix during T4: the builder dropped a fill whose timestamp was missing
+      instead of keeping the row as an unmeasurable wait.
+- [x] T5: `CONSTRAINTS.md` amended for the scope change; this file and `tasks/plan.md`
+      updated; `docs/issues/515-noticed-but-not-touching.md` N1 restated
 - [ ] Handoff to `/iv-review-build-and-pr`

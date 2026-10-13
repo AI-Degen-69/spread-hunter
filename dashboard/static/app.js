@@ -4693,6 +4693,78 @@ function renderRescueFriction(stats) {
     </div>`;
 }
 
+/* The tape behind a fill, rather than the close it became (#515): how far below our own
+ * price the tape had to print to clear the level, and how long the quote waited for it.
+ *
+ * The depth carries a band chip computed by the server, like the two cards above. The wait
+ * carries none -- deliberately, and not because a band is missing: no market reference
+ * exists for a wait, so any colour there would be a verdict wearing a measurement's
+ * clothes. `app.js` holds no threshold from either table.
+ *
+ * A `null` figure reads `unmeasured`, never `0.00` and never `NaN`: on every store today
+ * the depth is unmeasured, because the credit path drops the print that cleared our level,
+ * and a `0.00` there would claim the tape sat exactly on our price. */
+function renderQueueRealism(stats) {
+  const host = document.getElementById('queue-realism-readout');
+  if (!host) return;
+
+  const section = (stats || {}).queue_realism || {};
+  const depth = section.trade_through_depth || {};
+  const wait = section.fill_latency || {};
+  const figure = (value) => {
+    const n = Number(value);
+    return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
+  };
+  const count = (value) => figure(value) || 0;
+  /* Two decimals: a depth is quoted in cents, and the whole table turns on whether the
+   * tape cleared within one of them. */
+  const cents = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : n.toFixed(2);
+  };
+  /* One decimal, with the unit attached: a wait without its unit is a number nobody can
+   * read against anything. */
+  const seconds = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : n.toFixed(1) + 's';
+  };
+  const BAND_CHIP = { good: 'live', average: 'warn', bad: 'bad' };
+  const band = String(depth.band || 'unmeasured');
+  const modifier = BAND_CHIP[band] ? ' ' + BAND_CHIP[band] : '';
+  const chip = `<div><span class="analytics-chip${modifier}" style="margin-top:6px">`
+             + `${esc(band.toUpperCase())}</span></div>`;
+  const tile = (label, value, hint, extra = '') => `
+    <div class="kpi-tile">
+      <div class="kpi-label">${esc(label)}</div>
+      ${fmtVal(value, value === 'unmeasured' ? ' null' : '')}
+      ${extra}
+      <div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(hint)}</div>
+    </div>`;
+
+  host.innerHTML = `
+    <div class="kpi-grid">
+      ${tile('Trade-Through Depth (¢)', cents(depth.median_cents),
+             'print that cleared our price', chip)}
+      ${tile('Depth p75 (¢)', cents(depth.p75_cents),
+             '75th percentile · descriptive')}
+      ${tile('Fill Latency (median)', seconds(wait.median_sec),
+             'placement → first fill')}
+      ${tile('Fill Latency p90', seconds(wait.p90_sec),
+             '90th percentile · no band: a wait has no market reference')}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
+      ${count(section.cleared_fill_count)} cleared fills ·
+      depth measured ${count(depth.count)} · prints not recorded ${count(depth.missing)} ·
+      not a trade-through ${count(depth.not_trade_through)} ·
+      waits measured ${count(wait.count)} · timestamps unusable ${count(wait.excluded)}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:4px">
+      Depth needs the print that cleared our level, which nothing records yet, so it reads
+      unmeasured until that writer lands. Latency reads the quote and fill timestamps the
+      registry already holds.
+    </div>`;
+}
+
 function renderAnalyticsSurface(kpi, status) {
   const grid = document.getElementById('kpi-grid');
   const gates = document.getElementById('analytics-gates');
@@ -4745,6 +4817,7 @@ function renderAnalyticsSurface(kpi, status) {
   try { renderSampleSufficiency(ta); } catch (e) { console.error('Error rendering sample sufficiency', e); }
   try { renderFillPathEdge(stats); } catch (e) { console.error('Error rendering fill-path edge', e); }
   try { renderRescueFriction(stats); } catch (e) { console.error('Error rendering rescue friction', e); }
+  try { renderQueueRealism(stats); } catch (e) { console.error('Error rendering queue realism', e); }
 
   // Render Quant Grid
   renderQuantRiskGrid(ta, p, stats);
@@ -8834,7 +8907,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderQueueRealism, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState,

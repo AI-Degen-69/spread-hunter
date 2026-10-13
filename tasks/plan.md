@@ -126,10 +126,47 @@ Completion state (Station III owns the `[x]` marks):
 - [x] T2 — fill latency, with its tests
 - [x] T3 — decision record and the focused regression runs
 
-Built as planned, on three commits (plan artifacts, T1, T2, T3), with one recorded
+- [x] T4 — SCOPE CHANGE (operator-approved, see below): `cleared_fills` builder, the
+      `queue_realism` payload key, the `#queue-realism-readout` card and its tests
+- [x] T5 — amendments: `CONSTRAINTS.md`, this plan, the noticed-but-not-touching record
+
+Built as planned, plus the operator-approved scope change below, with one recorded
 deviation: T1's `p75` expectation was corrected from `4.75` to `4.25` at build time (the
 plan's blend weight was wrong; the arithmetic was re-derived in the test before the
-implementation existed). Nothing outside `core_brain/statistical_analytics.py`,
+implementation existed).
+
+## Scope change — the readout (operator-approved 2026-10-14)
+
+**What was asked:** "Haven't you added the metrics in the UI, in the Reports and Analytics
+tab, like the two prior issues before that?" #513 shipped `#fill-path-edge-readout` and #514
+shipped `#rescue-friction-readout`, both with mount tests, and #514's AC says outright that
+"each metric's dashboard/readout display applies the traffic-light color band". #515 shipped
+none, because the planning question offered "pure functions + tests only" and it was chosen.
+
+**What that question under-sold, and why the answer changed:** the reasoning behind
+"no card" was that nothing can feed the metrics. That is true of the DEPTH and false of the
+LATENCY: `fill_latency` needs only `quotes.ts` and `fills.venue_ts`, which the registry
+already holds — the same pair `kpi.median_seconds_to_fill` reads. So the operator chose:
+**card now, latency live and depth pending.**
+
+**Amended contract:**
+
+* `cleared_fills(quotes, fills)` (pure, row-in/rows-out) joins on
+  `fills.order_uuid == quotes.local_id`, keeps one record per quote a fill credits, converts
+  the earliest fill's milliseconds to seconds once, and leaves `clearing_price` as `None`
+  because no writer stores it yet.
+* `build()` gains one additive key — `queue_realism` =
+  `{cleared_fill_count, trade_through_depth, fill_latency}` — always present, plus an
+  optional trailing `quotes` parameter. `kpi.report` passes its existing `quotes`.
+* `#queue-realism-readout` renders four tiles (depth median with the server-computed band
+  chip, depth p75, latency median, latency p90) and a counts footnote. The latency tiles
+  carry **no** chip, deliberately.
+* The two guardrails this re-opens (`core_brain/kpi.py` and `dashboard/**` were must-not-touch;
+  `build()` was must-not-gain-a-key) are amended in `CONSTRAINTS.md`, not ignored.
+
+**Still out of scope, unchanged:** recording the clearing print (`shadow_fills` /
+`shadow_exec` stay untouched), and with it any depth figure beyond `unmeasured` on a real
+store — recorded as N1 in `docs/issues/515-noticed-but-not-touching.md`. Nothing outside `core_brain/statistical_analytics.py`,
 `tests/test_queue_realism_analytics.py` and the two documentation files was touched, and
 `build()` keeps every key it had. Focused runs at T3: 180 passed across the five files
 named in `CONSTRAINTS.md`.

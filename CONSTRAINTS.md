@@ -3,28 +3,48 @@
 Governs the `i515/add-queue-realism-analytics` branch only. The #514 contract this file
 replaced is branch-scoped by its own header line and stays readable in git history.
 
+## Scope change — operator-approved 2026-10-14, after the three tasks landed
+
+The Owner asked why #515 had no readout when #513 and #514 both shipped a card on the
+Performance & Analytics tab, and chose: **card now, latency live and depth pending.** The
+issue's "no DB or tape ingestion" decision is therefore lifted for exactly one thing —
+building `ClearedFill` rows from `quotes` + `fills` — and nothing else. Two guardrails below
+are amended by that decision and are marked so; every other line still stands.
+
 ## Scope & File Boundaries
 
 - Target files for modification:
   - `core_brain/statistical_analytics.py` — new `ClearedFill` dataclass, new
     `TRADE_THROUGH_GOOD_BELOW_CENTS` / `TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS` constants,
-    new `_percentile` / `trade_through_depth_band` / `trade_through_depth` / `fill_latency`
-    functions, one new module-docstring paragraph, and the `dataclasses` import — nothing else
-    in that module. **`build()` keeps every key and value it has today; no key is added.**
+    new `_percentile` / `trade_through_depth_band` / `trade_through_depth` / `fill_latency` /
+    `cleared_fills` functions, one new module-docstring paragraph, and the `dataclasses`
+    import. **AMENDED:** `build()` keeps every key and value it has and gains exactly one
+    additive key (`queue_realism`) plus one optional trailing parameter (`quotes`).
+  - `core_brain/kpi.py` — **AMENDED:** one call site, `build_statistical_analytics(...)`
+    gains `quotes`. No other line of that module changes, and no payload key other than
+    `statistical_analytics.queue_realism` is added.
+  - `dashboard/static/index.html` — one new `#queue-realism-readout` card after the
+    `#rescue-friction-readout` card.
+  - `dashboard/static/app.js` — `renderQueueRealism`, its call inside
+    `renderAnalyticsSurface`, and its entry in the `module.exports` object. Nothing else.
+  - `tests/js/analytics_surface_harness.cjs` — stub id, direct render call, printed HTML.
+  - `tests/test_analytics_surface_mount.py` — new cases for the readout.
   - `tests/test_queue_realism_analytics.py` (NEW — the ticket's required focused file).
+  - `tests/test_statistical_analytics.py` — the populated and empty `build()` tests only.
   - `docs/issues/515-noticed-but-not-touching.md` (NEW — the recorded follow-up).
   - `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
 - Files that must NOT be modified:
   - Fill logic and the crediting path: `core_brain/shadow_fills.py`,
-    `core_brain/shadow_exec.py`, `core_brain/live_fill_engine.py`.
+    `core_brain/shadow_exec.py`, `core_brain/live_fill_engine.py`. Nothing records the
+    clearing print in this branch — that stays the recorded follow-up, not a smuggled change.
   - Readers and payloads that must keep reading exactly as they do now:
-    `core_brain/kpi.py`, `core_brain/order_registry.py`, `core_brain/statistics_report.py`,
+    `core_brain/order_registry.py`, `core_brain/statistics_report.py`,
     `core_brain/markout.py`, `core_brain/cancel_report.py`, `scripts/queue_report.py`,
     `scripts/booktape_report.py`, `scripts/family_probe_report.py`,
     `statistical_validation_run/artifacts.py`.
-  - The dashboard and the API in front of it: `dashboard/` (including `static/app.js`,
-    `static/index.html`, `static/styles.css`), `dashboard/server.py`, `server/`, `server.ts`.
-    This ticket has no readout and no card.
+  - The dashboard's other surfaces: `dashboard/server.py`, `dashboard/static/styles.css`,
+    `server/`, `server.ts`. The traffic-light palette already exists in the theme; no CSS is
+    added, and no server route changes.
   - LIVE execution: `core_brain/order_manager.py`, `core_brain/trader_loop.py`,
     `core_brain/single_buy_saver.py`, `core_brain/ladder.py`, `core_brain/risk.py`,
     `core_brain/single_leg_lifecycle.py`, `core_brain/market_resolution.py`,
@@ -42,6 +62,9 @@ replaced is branch-scoped by its own header line and stays readable in git histo
   `tests/test_fill_path_analytics.py`
   `tests/test_rescue_friction_analytics.py`
   `tests/test_shadow_fills.py`
+  `tests/test_analytics_surface_mount.py`
+  `tests/test_kpi.py`
+  `tests/test_dashboard_server.py`
 - Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
 - Every new behavior needs a test that fails without the change (RED first, per
   `test-driven-development`). Each task's tests are written before its implementation and the
@@ -71,6 +94,14 @@ replaced is branch-scoped by its own header line and stays readable in git histo
 - No function mutates its input.
 - The two metrics are independent: prices present without timestamps still measure for depth
   and are `excluded` from latency, and the reverse.
+- `cleared_fills(quotes, fills)` is pure over supplied rows and joins on
+  `fills.order_uuid == quotes.local_id`. One record per quote a fill credits: a quote that
+  never filled is left out (there is nothing to measure), while a fill with no recorded
+  timestamp is KEPT with `filled_ts = None` (a fill that happened must not vanish).
+  `filled_ts` converts milliseconds to seconds here, once. `clearing_price` is `None` on
+  every record this branch can build, because no writer stores it yet.
+- `build()` gains exactly one additive key, `queue_realism`, always present:
+  `{cleared_fill_count, trade_through_depth{...}, fill_latency{...}}`.
 
 ## Traffic-light freeze
 
