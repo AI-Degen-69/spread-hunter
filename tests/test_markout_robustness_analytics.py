@@ -22,6 +22,27 @@ import pytest
 
 from core_brain import kpi
 from core_brain import statistical_analytics as sa
+from core_brain.statistical_analytics import (
+    MARKOUT_BAND_WORDS,
+    MARKOUT_HORIZONS,
+    markout,
+    markout_cents_band,
+    signed_markout,
+)
+
+
+def _row(fill_price: float = 0.50, size: float = 10.0, side: str = "BUY",
+         **horizons) -> dict:
+    """One fill's markout row, shaped like a `markouts` row the registry hands over."""
+    row = {"fill_price": fill_price, "size": size, "side": side}
+    row.update(horizons)
+    return row
+
+
+def _only(out: dict) -> dict:
+    intervals = out["intervals"]
+    assert len(intervals) == 1, intervals
+    return intervals[0]
 
 
 def _ci95(out: dict) -> dict:
@@ -116,6 +137,132 @@ def test_the_widest_band_is_the_95_one():
 
 def test_there_is_one_definition_of_the_band_not_two():
     assert kpi._mean_pnl_ci is sa.mean_pnl_ci
+
+
+# --- T2: signed post-fill markout, in cents ------------------------------------
+
+
+def test_a_buy_that_ran_in_our_favour_reads_positive_cents_and_good():
+    out = signed_markout([_row(mid_h0=0.51)])
+
+    interval = _only(out)
+    assert interval == {"horizon": "5m", "markout_cents": 2.0, "samples": 1,
+                        "band": "good", "meaning": MARKOUT_BAND_WORDS["good"]}
+
+
+def test_a_flat_mid_after_the_fill_reads_zero_and_still_good():
+    interval = _only(signed_markout([_row(mid_h0=0.50)]))
+
+    assert interval["markout_cents"] == 0.0
+    assert interval["band"] == "good"
+
+
+def test_a_buy_the_tape_ran_away_from_reads_negative_cents_and_bad():
+    interval = _only(signed_markout([_row(mid_h0=0.49)]))
+
+    assert interval["markout_cents"] == -2.0
+    assert interval["band"] == "bad"
+    assert interval["meaning"] == MARKOUT_BAND_WORDS["bad"]
+
+
+def test_a_sell_is_signed_the_other_way_round():
+    # A seller is hurt by the mid RISING and helped by it falling.
+    assert _only(signed_markout([_row(side="SELL", mid_h0=0.51)]))["markout_cents"] == -2.0
+    assert _only(signed_markout([_row(side="SELL", mid_h0=0.49)]))["markout_cents"] == 2.0
+
+
+def test_the_figure_is_the_median_across_fills_not_a_size_weighted_mean():
+    """The ticket's band rides on the MEDIAN; size carries no weight here.
+
+    +2.0c on 10 shares and -2.0c on 30 shares: the weighted mean the chart above reports is
+    -1.0c, and the median is 0.0c. Two different numbers, two different questions.
+    """
+    out = signed_markout([_row(size=10.0, mid_h0=0.51), _row(size=30.0, mid_h0=0.49)])
+
+    interval = _only(out)
+    assert interval["markout_cents"] == 0.0
+    assert interval["markout_cents"] != -1.0
+    assert interval["samples"] == 2
+
+
+def test_a_row_whose_side_cannot_be_signed_is_skipped():
+    assert signed_markout([_row(side="HOLD", mid_h0=0.51)])["intervals"] == []
+
+
+def test_a_horizon_that_has_not_matured_is_omitted_not_zeroed():
+    out = signed_markout([_row(mid_h0=0.51, mid_h3=None)])
+
+    assert [i["horizon"] for i in out["intervals"]] == ["5m"]
+
+
+def test_the_caller_can_narrow_the_horizons():
+    out = signed_markout([_row(mid_h0=0.51, mid_h1=0.55)],
+                         horizons=(("mid_h1", "1h"),))
+
+    interval = _only(out)
+    assert interval["horizon"] == "1h"
+    assert interval["markout_cents"] == 10.0
+
+
+def test_rows_with_no_usable_fill_or_mark_are_dropped():
+    rows = [
+        _row(mid_h0=None),                      # unmatured at this horizon
+        _row(fill_price=None, mid_h0=0.51),     # no entry price to measure against
+        _row(fill_price=0.0, mid_h0=0.51),      # dividing by zero would be invented
+        _row(size=-5.0, mid_h0=0.51),           # a negative size is not a fill
+        _row(mid_h0=float("nan")),              # non-finite is not a measurement
+        _row(mid_h0=0.51),                      # the only usable row
+    ]
+
+    interval = _only(signed_markout(rows))
+    assert interval["samples"] == 1
+
+
+def test_a_row_with_no_recorded_size_still_counts_once():
+    """`size = _finite(size) or 1.0` is the sibling chart's own rule, kept here.
+
+    A zero or missing size takes unit weight rather than being dropped -- it is an unrecorded
+    field, not a zero-size fill. Only a NEGATIVE size is skipped. For a median the weight is
+    irrelevant, so this pins the row COUNT and nothing else.
+    """
+    assert _only(signed_markout([_row(size=0.0, mid_h0=0.51)]))["samples"] == 1
+    assert _only(signed_markout([_row(size=None, mid_h0=0.51)]))["samples"] == 1
+
+
+def test_the_band_edges_are_the_ticket_table():
+    assert markout_cents_band(0.0) == "good"
+    assert markout_cents_band(0.01) == "good"
+    assert markout_cents_band(-0.4) == "average"
+    assert markout_cents_band(-1.0) == "bad"
+    assert markout_cents_band(-4.0) == "bad"
+    # An unmeasured figure is not a bad one.
+    assert markout_cents_band(None) == "unmeasured"
+    assert markout_cents_band(float("nan")) == "unmeasured"
+
+
+def test_a_store_with_no_rows_reads_unmeasured_rather_than_flat():
+    assert signed_markout([]) == {"intervals": []}
+
+
+def test_the_unsigned_chart_reading_is_unchanged():
+    """`markout()` still reports the size-weighted unsigned displacement in bps.
+
+    The two readers share a loop now, so this is the pin that the older one did not move: a
+    SELL row's raw displacement is reported unsigned here and signed in `signed_markout`.
+    """
+    row = _row(side="SELL", mid_h0=0.51)
+
+    chart = _only(markout([row]))
+    assert chart["displacement_bps"] == 200.0
+    assert chart["samples"] == 1
+    assert "markout_cents" not in chart
+    assert signed_markout([row])["intervals"][0]["markout_cents"] == -2.0
+
+
+def test_the_shared_loop_reports_every_matured_horizon_in_chart_order():
+    out = signed_markout([_row(mid_h0=0.51, mid_h3=0.52, mid_h1=0.53, mid_h2=0.54)])
+
+    assert [i["horizon"] for i in out["intervals"]] == [label for _, label in MARKOUT_HORIZONS]
 
 
 def test_importing_this_module_pulls_in_neither_the_registry_nor_kpi():

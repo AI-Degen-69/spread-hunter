@@ -203,9 +203,11 @@ def markout_cents_band(median_cents: Optional[float]) -> str    # good/average/b
 def signed_markout(rows: Sequence[Any],
                    horizons: Sequence[tuple[str, str]] = MARKOUT_HORIZONS) -> dict
 #   rows: markout dicts/records (fill_price, size, side, mid_h*) -> {"intervals": [...]}
-#   BUY +1, SELL -1 (matching peer_markout); unknown side skipped; a row with size <= 0 is
-#   skipped (mirroring markout()); size carries NO weight, because the reported figure is a
-#   median across fills, not a size-weighted mean; non-finite/None marks skipped.
+#   BUY +1, SELL -1 (matching peer_markout); unknown side skipped; a NEGATIVE size is skipped and
+#   a missing/zero size takes unit weight, mirroring markout()'s `_finite(size) or 1.0` (corrected
+#   during T2: the plan first said "size <= 0 is skipped", which the sibling never did); size
+#   carries no WEIGHT in the figure itself, because it is a median across fills, not a
+#   size-weighted mean; non-finite/None marks skipped.
 #   Per horizon: the MEDIAN of the per-fill signed displacement in cents, linearly interpolated
 #   (so p50 IS statistics.median). Unmatured horizons omitted.
 #   -> [{"horizon", "samples", "markout_cents", "band", "meaning"}]
@@ -275,7 +277,7 @@ serialised because they write the same file.
 Status (the plan is the source of truth for completion):
 
 - [x] **T1** — Share the confidence interval helper, in the pure module · S · `[Backend/Logic]`
-- [ ] **T2** — Signed post-fill markout, in cents, with the ticket's band · M · `[Backend/Logic]`
+- [x] **T2** — Signed post-fill markout, in cents, with the ticket's band · M · `[Backend/Logic]`
 - [ ] **T3** — Maximum adverse excursion over the holding window, and SQN · M · `[Backend/Logic]`
 - [ ] **T4** — Payload section, the readout card, and the operator's demo store · L · `[Backend/Logic]` + `[Design/UI]`
 

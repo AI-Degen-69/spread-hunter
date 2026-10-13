@@ -63,7 +63,7 @@ import math
 import random
 import statistics
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 # Merge methods, mirroring `registry_state.MERGE_CLOSE_METHODS`. A merged pair
 # is the strategy's own exit; anything else unwound some other way, and the
@@ -1073,6 +1073,120 @@ def mean_pnl_ci(pnls: Sequence[float]) -> dict[str, Any]:
     return {"mean_usd": mean_usd, "n": n, "levels": levels, "verdict": verdict}
 
 
+# The ticket's settled markout bands, on the MEDIAN signed post-fill displacement in cents:
+# `good` is the tape holding or moving our way after the fill, `average` a drift against us of
+# less than a tick, `bad` a full cent or more the wrong way -- we were filled, then it dropped.
+MARKOUT_GOOD_AT_OR_ABOVE_CENTS = 0.0
+MARKOUT_AVERAGE_ABOVE_CENTS = -1.0
+
+# What each band MEANS, shipped beside it as data. The renderer names a colour for the band and
+# prints these words; no threshold, and no verdict of its own, lives in the JavaScript.
+MARKOUT_BAND_WORDS = {
+    "good": "mid held or moved in our favour after the fill",
+    "average": "mid drifted against us by less than a tick",
+    "bad": "the tape moved a full cent or more against us after the fill",
+    "unmeasured": "no matured post-fill mark to measure",
+}
+
+
+def markout_cents_band(median_cents: Optional[float]) -> str:
+    """The traffic-light band for a median post-fill displacement in cents.
+
+    The ticket's table: `[0, inf)` good, `(-1.0, 0)` average, `(-inf, -1.0]` bad. `None` and
+    anything non-finite read `unmeasured` -- a figure nobody measured is not a bad figure.
+
+    The thresholds live here and reach the dashboard as data, following `friction_band`: a
+    renderer maps a band name to a colour and holds no numeral of its own.
+    """
+    number = _finite(median_cents)
+    if number is None:
+        return "unmeasured"
+    if number >= MARKOUT_GOOD_AT_OR_ABOVE_CENTS:
+        return "good"
+    return "average" if number > MARKOUT_AVERAGE_ABOVE_CENTS else "bad"
+
+
+def _markout_direction(row: Any) -> Optional[float]:
+    """+1 for a BUY fill, -1 for a SELL, `None` for a side that cannot be signed.
+
+    The same convention `core_brain.markout.peer_markout` takes as its `direction`: a buyer is
+    hurt by the mid falling, a seller by it rising.
+    """
+    side = str(_close_field(row, "side") or "").strip().upper()
+    if side == "BUY":
+        return 1.0
+    if side == "SELL":
+        return -1.0
+    return None
+
+
+def _markout_samples(rows: Sequence[Any], horizons: Sequence[tuple[str, str]],
+                     direction_for: Callable[[Any], Optional[float]],
+                     ) -> dict[str, list[tuple[float, float]]]:
+    """Per matured horizon, one `(signed displacement in bps, size)` pair per usable fill.
+
+    Shared by `markout()` (the size-weighted mean of that displacement, unsigned, bps) and
+    `signed_markout()` (the median of it, signed by side, cents), so the two readers cannot
+    disagree about which rows count or how one displacement is derived.
+
+    A row is skipped when `direction_for` refuses it, when the horizon's mark or the fill price
+    is missing or non-finite, when the fill price is not positive (the divisor), or when the
+    size is zero or negative. A horizon nothing matured into is absent from the mapping, which
+    is how an unmatured fill avoids being read as a flat one.
+    """
+    samples: dict[str, list[tuple[float, float]]] = {}
+    for column, label in horizons:
+        collected: list[tuple[float, float]] = []
+        for row in rows or []:
+            direction = direction_for(row)
+            if direction is None:
+                continue
+            later = _finite(_close_field(row, column))
+            fill = _finite(_close_field(row, "fill_price"))
+            if later is None or fill is None or fill <= 0:
+                continue
+            size = _finite(_close_field(row, "size")) or 1.0
+            if size <= 0:
+                continue
+            # bps of the fill price: a 1c move on a 50c fill is 200bps.
+            collected.append((((later - fill) / fill) * 10_000.0 * direction, size))
+        if collected:
+            samples[label] = collected
+    return samples
+
+
+def signed_markout(rows: Sequence[Any],
+                   horizons: Sequence[tuple[str, str]] = MARKOUT_HORIZONS) -> dict[str, Any]:
+    """Post-fill mid displacement, signed for the side we traded, as a median in CENTS.
+
+    Positive means the tape moved our way after the fill -- spread capture. Negative means it
+    moved against us -- the fill we got was toxic flow. An unmatured horizon is omitted rather
+    than shown at zero, and a row whose side is neither BUY nor SELL is skipped: its sign cannot
+    be derived, and a guessed sign would put a fabricated number under a colour.
+
+    The MEDIAN across fills, deliberately, not the size-weighted mean: one whale fill must not
+    move the figure the traffic-light band is computed from. `markout()` above is the
+    size-weighted mean in bps, and the two are different questions about the same rows.
+
+    `band` scores the rounded `markout_cents` a reader sees, so the number and its colour cannot
+    disagree.
+    """
+    intervals = []
+    for label, samples in _markout_samples(rows, horizons, _markout_direction).items():
+        # bps -> cents of the fill price, linearly interpolated, so p50 IS the median.
+        median = _percentile([value / 100.0 for value, _ in samples], 0.50)
+        rounded = None if median is None else round(median, 4)
+        band = markout_cents_band(rounded)
+        intervals.append({
+            "horizon": label,
+            "markout_cents": rounded,
+            "samples": len(samples),
+            "band": band,
+            "meaning": MARKOUT_BAND_WORDS[band],
+        })
+    return {"intervals": intervals}
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
@@ -1126,30 +1240,22 @@ def markout(markouts: Sequence[dict]) -> dict[str, Any]:
     entering it as 0 bps would report "no adverse selection" for a measurement
     that has not happened. A horizon nobody has matured into is omitted rather
     than shown at zero.
+
+    Unsigned, mean, in bps -- this is the chart's reading, and it counts every row whatever the
+    side. Its signed, median, banded counterpart is `signed_markout()`; the two share a loop so
+    they cannot disagree about which fills count, and they answer different questions about the
+    same rows. `tests/test_markout_robustness_analytics.py` pins that this output did not move
+    when the loop was shared.
     """
     intervals = []
-    for column, label in MARKOUT_HORIZONS:
-        weighted = 0.0
-        weight = 0.0
-        samples = 0
-        for row in markouts or []:
-            later = _finite(row.get(column))
-            fill = _finite(row.get("fill_price"))
-            if later is None or fill is None or fill <= 0:
-                continue
-            size = _finite(row.get("size")) or 1.0
-            if size <= 0:
-                continue
-            # bps of the fill price: a 1c move on a 50c fill is 200bps.
-            weighted += ((later - fill) / fill) * 10_000.0 * size
-            weight += size
-            samples += 1
-        if samples == 0:
-            continue
+    for label, samples in _markout_samples(markouts, MARKOUT_HORIZONS,
+                                           lambda row: 1.0).items():
+        weighted = sum(value * size for value, size in samples)
+        weight = sum(size for _, size in samples)
         intervals.append({
             "horizon": label,
             "displacement_bps": round(weighted / weight, 4),
-            "samples": samples,
+            "samples": len(samples),
         })
     return {"intervals": intervals}
 
