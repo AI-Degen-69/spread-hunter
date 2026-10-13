@@ -872,6 +872,48 @@ def trade_through_depth(fills: Sequence[ClearedFill]) -> dict[str, Any]:
     }
 
 
+def fill_latency(fills: Sequence[ClearedFill]) -> dict[str, Any]:
+    """How long a resting quote waited for its first credited fill, in seconds.
+
+    Descriptive only, and deliberately without a band. How far the tape had to move below
+    our price can be judged against the price itself -- that is what the depth table does.
+    A wait cannot: two seconds is neither good nor bad without a reference for how fast
+    THIS market fills, and a band invented here would be a verdict wearing a measurement's
+    clothes. The same rule leaves the queue-depth distribution unbanded.
+
+    The population is every fill whose placement and fill times were both recorded. A
+    negative wait is EXCLUDED and counted rather than clamped to `0.0`, which is where this
+    reader parts company with `kpi.median_seconds_to_fill` (`kpi.py:1449` clamps with
+    `max(0.0, ...)`): under a shadow run the fill's timestamp is the cycle that recognised
+    the trade-through, so the row whose fill appears to precede its placement is measuring
+    a settlement artefact, and reporting it as an instant fill would be a claim nobody
+    measured. `count + excluded == len(fills)`.
+
+    Independent of `trade_through_depth` on purpose: a record carrying prices but no
+    timestamps still measures for depth (and is `excluded` here), and the reverse. One
+    unrecorded field must not silently zero the other metric.
+    """
+    waits: list[float] = []
+    excluded = 0
+    for row in fills or []:
+        placed = _finite(row.placed_ts)
+        filled = _finite(row.filled_ts)
+        if placed is None or filled is None or filled < placed:
+            excluded += 1
+        else:
+            waits.append(filled - placed)
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    return {
+        "count": len(waits),
+        "excluded": excluded,
+        "median_sec": shape(_percentile(waits, 0.50)),
+        "p90_sec": shape(_percentile(waits, 0.90)),
+    }
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
