@@ -73,7 +73,7 @@ def test_a_credited_shadow_fill_writes_a_markout_row(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
 
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     rows = _markout_rows(db)
     assert len(rows) == 1, "one credited fill must leave one markout row"
@@ -108,7 +108,7 @@ def test_the_markout_row_carries_the_market_slug(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
 
     settle_market(reg, SpecMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     assert _markout_rows(db)[0]["market_slug"] == "atp-borges-tien-2026-08-30"
 
@@ -125,7 +125,7 @@ def test_the_markout_row_carries_the_run_that_filled(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
 
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     row = _markout_rows(db)[0]
     assert row["run_id"] == reg._run_id()
@@ -144,7 +144,7 @@ def test_a_duplicate_trade_does_not_write_a_second_markout(registry):
 
     seen: set = set()
     settle_market(reg, FakeMarket(), db_path=db, seen=seen,
-                  traded_fn=lambda cid, s: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, s: {"tok-up": {0.46: 20.0}})
     # A second rotation that sees no new tape must not re-credit anything.
     settle_market(reg, FakeMarket(), db_path=db, seen=seen,
                   traded_fn=lambda cid, s: {})
@@ -164,7 +164,7 @@ def test_a_matured_horizon_is_sampled_into_the_row(registry):
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     row_ts = float(_markout_rows(db)[0]["ts"])
 

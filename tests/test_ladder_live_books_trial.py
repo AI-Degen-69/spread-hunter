@@ -95,7 +95,7 @@ def test_offline_trial_reports_placements_and_clean_conservation(
 
 def test_fills_conserve_oldest_first_with_resting(tmp_path, monkeypatch):
     """Tape volume at the oldest rung: filled == accounted + resting."""
-    vol = {"tok-live-up": {0.47: 110.0}}
+    vol = {"tok-live-up": {0.45: 110.0}}
     report, _ = _trial(tmp_path, monkeypatch, markets=[_market()],
                        traded=lambda cid, seen: dict(vol), rotations=6)
     cons = report["conservation"]

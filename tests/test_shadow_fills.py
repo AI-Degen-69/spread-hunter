@@ -1,9 +1,12 @@
-"""The shadow fill model: what a resting order would have got, and nothing more.
+"""The shadow fill model: trade-through only, queue position, nothing else.
 
-Conservative by construction. Only volume the tape confirms at the order's own
-price can credit a fill; the book-only rule ("level emptied, credit the
-remainder") reported a 50% fill rate against a tape-confirmed 3% in the paper
-run -- see `core_brain/markets.py:recent_trades`.
+Conservative by construction. A resting order fills ONLY when the tape prints
+strictly below its price -- a trade-through proving the level was cleared. The
+old exact-price path (consume the queue ahead, then credit the remainder from
+volume at our own price) is removed: queue position cannot be measured from the
+public book, so crediting fills from it guessed at a number nobody can verify.
+Trade-through fills only on evidence we can see, under-filling rather than
+over-filling. `queue_ahead` stays as descriptive telemetry and gates nothing.
 """
 from __future__ import annotations
 
@@ -22,6 +25,8 @@ def _order(**kw):
     return ShadowRestingOrder(**base)
 
 
+# --- queue_ahead_at: descriptive depth at our own price (telemetry only) ---
+
 def test_queue_ahead_is_the_size_resting_at_our_own_price():
     book = {"bids": {0.48: 500.0, 0.47: 250.0, 0.46: 10.0}, "asks": {}}
     assert queue_ahead_at(book, 0.47) == 250.0
@@ -32,42 +37,7 @@ def test_queue_ahead_is_zero_when_no_one_rests_at_our_price():
     assert queue_ahead_at(book, 0.47) == 0.0
 
 
-def test_traded_volume_fills_the_queue_before_it_fills_us():
-    orders = [_order(queue_ahead=60.0)]
-    fills, queues = credit_fills(orders, {"tok-up": {0.47: 100.0}})
-
-    assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 40.0)]
-    assert queues["ord-1"] == 0.0
-
-
-def test_volume_smaller_than_the_queue_credits_nothing():
-    orders = [_order(queue_ahead=60.0)]
-    fills, queues = credit_fills(orders, {"tok-up": {0.47: 25.0}})
-
-    assert fills == []
-    assert queues["ord-1"] == 35.0
-
-
-def test_a_fill_never_exceeds_what_is_left_of_the_order():
-    orders = [_order(size=100.0, filled=90.0)]
-    fills, _ = credit_fills(orders, {"tok-up": {0.47: 500.0}})
-
-    assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 10.0)]
-
-
-def test_volume_at_another_token_credits_nothing():
-    orders = [_order()]
-    fills, _ = credit_fills(orders, {"tok-dn": {0.46: 999.0, 0.47: 999.0}})
-
-    assert fills == []
-
-
-def test_volume_above_our_price_credits_nothing():
-    orders = [_order()]
-    fills, _ = credit_fills(orders, {"tok-up": {0.48: 999.0}})
-
-    assert fills == []
-
+# --- trade-through: the only fill path ---
 
 def test_sell_print_below_our_bid_clears_queue_and_fills_remainder():
     orders = [_order(queue_ahead=500.0)]
@@ -109,27 +79,61 @@ def test_lower_print_fills_only_orders_above_it():
     fills, queues = credit_fills(orders, {"tok-up": {0.46: 1.0}})
 
     assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 100.0)]
-    assert queues["ord-2"] == 10.0
+    assert "ord-2" not in queues  # 0.46 is not below 0.45, so ord-2 untouched
 
 
 def test_sweep_evidence_survives_regardless_of_order_sequence():
-    """Evidence is snapshotted: an order resting at the print price must not
-    consume the proof a higher order needs, whichever comes first."""
+    """An order resting AT the print price gets nothing (no print strictly
+    below it); the higher order still trades through, whichever comes first."""
     orders = [_order(local_id="ord-lo", price=0.46),
               _order(local_id="ord-hi", price=0.47, queue_ahead=200.0)]
     fills, queues = credit_fills(orders, {"tok-up": {0.46: 1.0}})
 
-    assert fills == [ShadowFill("ord-lo", "tok-up", 0.46, 1.0),
-                     ShadowFill("ord-hi", "tok-up", 0.47, 100.0)]
-    assert queues["ord-hi"] == 0.0
+    assert fills == [ShadowFill("ord-hi", "tok-up", 0.47, 100.0)]
+    assert "ord-lo" not in queues
+
+
+# --- no fill without a strictly-lower print ---
+
+def test_exact_price_print_credits_no_fill():
+    """A print AT our own price is not a trade-through: no fill, queue
+    unchanged. This is the whole point of removing the exact-price path."""
+    orders = [_order(queue_ahead=60.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.47: 100.0}})
+
+    assert fills == []
+    assert "ord-1" not in queues
+
+
+def test_volume_above_our_price_credits_nothing():
+    orders = [_order()]
+    fills, _ = credit_fills(orders, {"tok-up": {0.48: 999.0}})
+
+    assert fills == []
+
+
+def test_volume_at_another_token_credits_nothing():
+    orders = [_order()]
+    fills, _ = credit_fills(orders, {"tok-dn": {0.46: 999.0, 0.47: 999.0}})
+
+    assert fills == []
+
+
+def test_print_rounding_to_our_level_is_not_a_trade_through():
+    """0.46999 rounds to 0.47 == our level, so it is not strictly below."""
+    orders = [_order(queue_ahead=60.0)]
+    fills, queues = credit_fills(orders, {"tok-up": {0.46999: 25.0}})
+
+    assert fills == []
+    assert "ord-1" not in queues
 
 
 def test_zero_volume_below_our_price_is_not_a_sweep():
     orders = [_order(queue_ahead=60.0)]
     fills, queues = credit_fills(orders, {"tok-up": {0.46: 0.0, 0.47: 100.0}})
 
-    assert fills == [ShadowFill("ord-1", "tok-up", 0.47, 40.0)]
-    assert queues["ord-1"] == 0.0
+    assert fills == []
+    assert "ord-1" not in queues
 
 
 def test_non_finite_volume_below_our_price_is_not_a_sweep():
@@ -137,16 +141,10 @@ def test_non_finite_volume_below_our_price_is_not_a_sweep():
     fills, queues = credit_fills(orders, {"tok-up": {0.46: float("inf")}})
 
     assert fills == []
-    assert queues["ord-1"] == 60.0
+    assert "ord-1" not in queues
 
 
-def test_price_that_rounds_to_our_level_uses_the_exact_price_rule():
-    orders = [_order(queue_ahead=60.0)]
-    fills, queues = credit_fills(orders, {"tok-up": {0.46999: 25.0}})
-
-    assert fills == []
-    assert queues["ord-1"] == 35.0
-
+# --- queue_multiple: descriptive, unchanged ---
 
 def test_queue_multiple_is_queue_over_size():
     assert queue_multiple(100.0, 5.0) == 20.0
@@ -180,26 +178,3 @@ def test_queue_multiple_matches_the_zero_fill_evidence_queues():
     assert all(m is not None for m in multiples)
     assert min(multiples) == pytest.approx(420.0, abs=5.0)
     assert max(multiples) == pytest.approx(7741.0, abs=5.0)
-
-
-def test_queue_multiple_explains_why_deep_queues_never_fill():
-    """A multiple of M needs tape volume above the queue ahead, not above M x size."""
-    multiple = queue_multiple(60.0, 5.0)
-    assert multiple == pytest.approx(12.0)
-    shallow, _ = credit_fills([_order(size=5.0, queue_ahead=60.0)],
-                              {"tok-up": {0.47: 60.0}})
-    assert shallow == []
-    deep, _ = credit_fills([_order(size=5.0, queue_ahead=60.0)],
-                            {"tok-up": {0.47: 61.0}})
-    assert deep == [ShadowFill("ord-1", "tok-up", 0.47, 1.0)]
-
-
-def test_two_orders_at_one_price_share_the_volume_in_post_order():
-    """Earlier order is earlier in the queue. Splitting evenly would credit the
-    younger order volume the older one stood in front of."""
-    orders = [_order(local_id="old", size=50.0),
-              _order(local_id="new", size=50.0)]
-    fills, _ = credit_fills(orders, {"tok-up": {0.47: 70.0}})
-
-    assert fills == [ShadowFill("old", "tok-up", 0.47, 50.0),
-                     ShadowFill("new", "tok-up", 0.47, 20.0)]
