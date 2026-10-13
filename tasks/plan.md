@@ -188,9 +188,13 @@ SQN_BAND_WORDS = {"good": "stable edge -- signal dominates noise",
                   "bad": "noise -- the results could be luck",
                   "unmeasured": "fewer than two closes, or no spread to measure"}
 CI_BAND_WORDS = {"good": "zero is outside the band -- the edge is statistically proven",
-                 "average": "the mean is positive but zero is still inside the band",
+                 "average": "zero is inside the band -- suggestive, not proven",
                  "bad": "zero is outside the band on the wrong side -- the edge is negative",
                  "unmeasured": "fewer than two closes -- no band exists"}
+# Corrected during T4: the `average` word first read "the mean is positive but zero is still
+# inside the band", which is false whenever the mean is negative -- and on the demo store it is
+# (-41.4c). A band word must be true for every sample that reaches it, so it names only what the
+# band itself says: zero is inside it.
 
 @dataclass(frozen=True)
 class HeldMark:
@@ -283,7 +287,7 @@ Status (the plan is the source of truth for completion):
 - [x] **T1** — Share the confidence interval helper, in the pure module · S · `[Backend/Logic]`
 - [x] **T2** — Signed post-fill markout, in cents, with the ticket's band · M · `[Backend/Logic]`
 - [x] **T3** — Maximum adverse excursion over the holding window, and SQN · M · `[Backend/Logic]`
-- [ ] **T4** — Payload section, the readout card, and the operator's demo store · L · `[Backend/Logic]` + `[Design/UI]`
+- [x] **T4** — Payload section, the readout card, and the operator's demo store · L · `[Backend/Logic]` + `[Design/UI]`
 
 ### T1 — Share the confidence interval helper, in the pure module · size S · `[Backend/Logic]`
 - Files: `core_brain/statistical_analytics.py`, `core_brain/kpi.py`,

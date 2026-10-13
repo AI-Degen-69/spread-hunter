@@ -1407,6 +1407,100 @@ def system_quality_number(pnls: Sequence[float]) -> dict[str, Any]:
             "mean_usd": round(mean, 6), "stdev_usd": round(stdev, 6)}
 
 
+# The confidence-interval gate, in the ticket's own words: zero outside the band on the good
+# side is a proven edge, zero inside it is suggestive only, and zero outside it on the bad side
+# is a negative edge. Shipped beside the band so the renderer prints the operator's language.
+# The middle wording is deliberately silent about the mean's SIGN: the band straddles zero
+# whenever the mean is not yet decisive, and that includes a run whose mean is negative -- copy
+# that asserted "the mean is positive" here would print a falsehood on exactly those runs.
+CI_BAND_WORDS = {
+    "good": "zero is outside the band -- the edge is statistically proven",
+    "average": "zero is inside the band -- suggestive, not proven",
+    "bad": "zero is outside the band on the wrong side -- the edge is negative",
+    "unmeasured": "fewer than two closes -- no band exists",
+}
+
+
+# The level the card reads off `mean_pnl_ci`. Selected by name rather than by position, so a
+# reorder of `CI_Z_BY_LEVEL` cannot silently relabel the 90% band as the 95% one.
+CI_CARD_LEVEL = 95
+
+
+def pnl_ci_band(lower_cents: Optional[float],
+                upper_cents: Optional[float]) -> str:
+    """The traffic-light band for a two-sided confidence interval, in cents.
+
+    `good` when the whole band sits above zero, `bad` when it sits below, `average` when it
+    contains zero -- the edge is not proven, whatever the mean's sign. Either end missing reads
+    `unmeasured`: an interval with no boundary is not a verdict.
+
+    Both arguments are the ROUNDED cents figures the payload ships, so the chip and the numbers
+    beside it can never disagree.
+    """
+    lower = _finite(lower_cents)
+    upper = _finite(upper_cents)
+    if lower is None or upper is None:
+        return "unmeasured"
+    if lower > 0:
+        return "good"
+    return "bad" if upper < 0 else "average"
+
+
+def _cents(value: Optional[float]) -> Optional[float]:
+    """Dollars to cents, rounded, or `None` when there is no figure to convert."""
+    number = _finite(value)
+    return None if number is None else round(number * 100.0, 6)
+
+
+def _mean_pnl_ci_cents(pnls: Sequence[float]) -> dict[str, Any]:
+    """The 95% band on mean close PnL in cents, with the gate's band and its words.
+
+    The band comes from `mean_pnl_ci`, the same helper the KPI payload reads, so the two screens
+    cannot report different intervals over the same closes.
+    """
+    out = mean_pnl_ci(pnls)
+    chosen = next((level for level in out["levels"]
+                   if level["level"] == CI_CARD_LEVEL), None)
+    lower = None if chosen is None else _cents(chosen["lower"])
+    upper = None if chosen is None else _cents(chosen["upper"])
+    band = pnl_ci_band(lower, upper)
+    return {
+        "level": CI_CARD_LEVEL,
+        "mean_cents": _cents(out["mean_usd"]),
+        "lower_cents": lower,
+        "upper_cents": upper,
+        "n": out["n"],
+        "band": band,
+        "meaning": CI_BAND_WORDS[band],
+    }
+
+
+def robustness(closes: Sequence[Any], markouts: Sequence[Any]) -> dict[str, Any]:
+    """The four robustness readings the Reports & Analytics card mounts, in cents.
+
+    Always present, like `fill_path_edge`, `rescue_friction` and `queue_realism`, and for the
+    same reason: a caller must never have to branch on whether a reading exists. A run with no
+    closes reports `None` and `unmeasured` rather than zeroes, which say "nothing to measure",
+    never "nothing was lost" or "no edge".
+
+    The halves are deliberately independent. `markout` and `mae` read the fill records, `mean_pnl_ci`
+    and `sqn` read the closes, and one unrecorded field must not silently blank the other half.
+
+    Each band is computed here, from the same rounded figure it ships with, so the chip a reader
+    sees can never disagree with the number beside it.
+    """
+    pnls = [pnl for pnl in
+            (_finite(_close_field(row, "realized_pnl")) for row in closes or [])
+            if pnl is not None]
+    return {
+        "units": "cents_per_share",
+        "markout": signed_markout(markouts),
+        "mae": excursion_summary(closes, markouts),
+        "mean_pnl_ci": _mean_pnl_ci_cents(pnls),
+        "sqn": system_quality_number(pnls),
+    }
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
@@ -1529,10 +1623,10 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
           quotes: Optional[Sequence[Any]] = None) -> dict[str, Any]:
     """The whole `statistical_analytics` payload the analytics tab reads.
 
-    The charts come and go with their input; `fill_path_edge`, `rescue_friction` and
-    `queue_realism` are always present, because they summarise the closes, the fills and the
-    quotes this call already holds and a caller must never have to branch on whether a
-    reading exists.
+    The charts come and go with their input; `fill_path_edge`, `rescue_friction`,
+    `queue_realism` and `robustness` are always present, because they summarise the closes, the
+    fills and the quotes this call already holds and a caller must never have to branch on
+    whether a reading exists.
 
     `quotes` is optional and additive. The queue-realism section reads the placement price
     and timestamp a close never carries, so a caller without quotes gets that section at
@@ -1552,6 +1646,9 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
             "trade_through_depth": trade_through_depth(records),
             "fill_latency": fill_latency(records),
         },
+        # The robustness gates (#516) read the closes and the markout rows, both of which this
+        # call already holds -- no new parameter, and no section above it changes.
+        "robustness": robustness(closes, markouts),
         "probability_bell": probability_bell(fills),
         "markout": markout(markouts),
     }

@@ -290,6 +290,16 @@ def test_build_populates_every_section_it_has_input_for():
     assert realism["trade_through_depth"]["median_cents"] is None
     assert realism["trade_through_depth"]["band"] == "unmeasured"
     assert realism["fill_latency"]["median_sec"] is None
+    # The robustness gates (#516) read those same closes plus the markout rows. One close is a
+    # single observation, so the band says unmeasured instead of breaks-even; this call passes no
+    # markouts and no quotes, so the markout half is absent and the MAE half counts nothing.
+    robustness = payload["robustness"]
+    assert robustness["markout"]["intervals"] == []
+    assert robustness["mae"]["measured"] == 0
+    assert robustness["mae"]["median_cents"] is None
+    assert robustness["mean_pnl_ci"]["n"] == 1
+    assert robustness["mean_pnl_ci"]["band"] == "unmeasured"
+    assert robustness["sqn"]["band"] == "unmeasured"
 
 
 def test_build_on_an_empty_run_synthesises_nothing():
@@ -324,6 +334,21 @@ def test_build_on_an_empty_run_synthesises_nothing():
         "fill_latency": {"count": 0, "excluded": 0,
                          "median_sec": None, "p90_sec": None},
     }
+    # And the robustness section (#516), same rule: present with every figure unmeasured, because
+    # a zero here would read as "no adverse selection", "no excursion" and "no edge" on a run
+    # that has measured none of the three.
+    robustness = payload["robustness"]
+    assert robustness["units"] == "cents_per_share"
+    assert robustness["markout"]["intervals"] == []
+    assert robustness["mae"]["measured"] == 0
+    assert robustness["mae"]["median_cents"] is None
+    assert robustness["mean_pnl_ci"]["n"] == 0
+    assert robustness["mean_pnl_ci"]["mean_cents"] is None
+    assert robustness["mean_pnl_ci"]["lower_cents"] is None
+    assert robustness["mean_pnl_ci"]["band"] == "unmeasured"
+    assert robustness["sqn"]["n"] == 0
+    assert robustness["sqn"]["sqn"] is None
+    assert robustness["sqn"]["band"] == "unmeasured"
 
 
 def test_build_reads_waits_from_the_quotes_it_is_given():

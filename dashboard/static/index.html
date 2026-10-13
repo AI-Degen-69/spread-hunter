@@ -510,6 +510,17 @@
         <div id="queue-realism-readout" class="queue-realism-readout"><!-- Rendered by JS --></div>
       </div>
 
+      <!-- Whether the tape behind our fills is helping or hurting, and whether the mean is an
+           edge or an accident (#516). Same placement rule as the three cards above: it explains
+           the numbers the headline counts, so it must not take part in the sub-view filter. -->
+      <div class="card" style="margin-top:16px">
+        <div class="section-title-row" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="font-display" style="font-size:13px;letter-spacing:0.06em">POST-FILL ROBUSTNESS &mdash; MARKOUT, MAE, CI &amp; SQN</div>
+          <div class="mono" style="font-size:11px;color:var(--text-muted)">Per Fill &middot; Cents &middot; Statistical Gates</div>
+        </div>
+        <div id="robustness-readout" class="robustness-readout"><!-- Rendered by JS --></div>
+      </div>
+
       <!-- Statistical Power & Distribution Chips -->
       <div id="kpi-grid" class="kpi-grid analytics-squares"></div>
 

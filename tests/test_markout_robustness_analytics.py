@@ -15,6 +15,7 @@ definition of it. `kpi.py` imports it back, so the two callers cannot drift apar
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
@@ -23,13 +24,17 @@ import pytest
 from core_brain import kpi
 from core_brain import statistical_analytics as sa
 from core_brain.statistical_analytics import (
+    CI_BAND_WORDS,
     MARKOUT_BAND_WORDS,
     MARKOUT_HORIZONS,
     SQN_BAND_WORDS,
+    build,
     excursion_summary,
     markout,
     markout_cents_band,
     max_adverse_excursion,
+    pnl_ci_band,
+    robustness,
     signed_markout,
     sqn_band,
     system_quality_number,
@@ -510,6 +515,141 @@ def test_the_sqn_band_is_classified_on_the_rounded_score():
     assert sqn_band(1.6) == "average"
     assert sqn_band(1.599999) == "bad"
     assert sqn_band(None) == "unmeasured"
+
+
+# --- T4: the payload section the dashboard reads --------------------------------
+
+
+def _closed(condition_id: str = "cid-1", realized_pnl: float = 0.02,
+            ts: float = 1300.0) -> dict:
+    return _close_row(condition_id, ts=ts, realized_pnl=realized_pnl)
+
+
+def test_the_section_is_always_present_with_all_four_readings_and_its_units():
+    out = robustness([], [])
+
+    assert out["units"] == "cents_per_share"
+    assert set(out) == {"units", "markout", "mae", "mean_pnl_ci", "sqn"}
+
+
+def test_a_winning_run_gets_a_band_that_zero_is_outside_of():
+    closes = [_closed(realized_pnl=pnl) for pnl in (0.05, 0.06, 0.04, 0.05)]
+
+    band = robustness(closes, [])["mean_pnl_ci"]
+
+    assert band["level"] == 95
+    assert band["n"] == 4
+    assert band["lower_cents"] > 0
+    assert band["band"] == "good"
+    assert band["meaning"] == CI_BAND_WORDS["good"]
+
+
+def test_a_band_that_still_contains_zero_reads_average_not_good():
+    closes = [_closed(realized_pnl=pnl) for pnl in (0.02, 0.03, -0.01)]
+
+    band = robustness(closes, [])["mean_pnl_ci"]
+
+    assert band["lower_cents"] < 0 < band["upper_cents"]
+    assert band["band"] == "average"
+    assert band["meaning"] == CI_BAND_WORDS["average"]
+
+
+def test_a_losing_run_says_so_on_the_other_side_of_zero():
+    closes = [_closed(realized_pnl=pnl) for pnl in (-0.05, -0.06, -0.04)]
+
+    band = robustness(closes, [])["mean_pnl_ci"]
+
+    assert band["upper_cents"] < 0
+    assert band["band"] == "bad"
+
+
+def test_one_close_has_no_confidence_band_at_all():
+    band = robustness([_closed(realized_pnl=0.02)], [])["mean_pnl_ci"]
+
+    assert band["n"] == 1
+    assert band["mean_cents"] == pytest.approx(2.0)
+    assert band["lower_cents"] is None
+    assert band["upper_cents"] is None
+    assert band["band"] == "unmeasured"
+    assert band["meaning"] == CI_BAND_WORDS["unmeasured"]
+
+
+def test_no_closes_reports_nothing_rather_than_breaking_even():
+    out = robustness([], [])
+
+    band = out["mean_pnl_ci"]
+    assert band["n"] == 0
+    assert band["mean_cents"] is None
+    assert band["band"] == "unmeasured"
+    sqn = out["sqn"]
+    assert sqn["n"] == 0
+    assert sqn["sqn"] is None
+    assert sqn["band"] == "unmeasured"
+
+
+def test_each_chip_reads_the_number_it_ships_beside_not_a_separate_copy():
+    """The band is computed from the rounded figure, so a chip cannot disagree with it."""
+    closes = [_closed(condition_id=f"cid-{n}", realized_pnl=pnl, ts=1300.0)
+              for n, pnl in enumerate((0.02, 0.03, -0.01))]
+    marks = [_mark("cid-0", mid_h0=0.49), _mark("cid-1", mid_h0=0.51),
+             _mark("cid-2", mid_h0=0.46)]
+
+    out = robustness(closes, marks)
+
+    band = out["mean_pnl_ci"]
+    assert band["band"] == pnl_ci_band(band["lower_cents"], band["upper_cents"])
+    for interval in out["markout"]["intervals"]:
+        assert interval["band"] == markout_cents_band(interval["markout_cents"])
+    assert out["sqn"]["band"] == sqn_band(out["sqn"]["sqn"])
+
+
+def test_the_markout_and_mae_halves_read_the_rows_they_are_handed():
+    def market(condition_id: str, ts: float) -> tuple[dict, dict]:
+        return (_closed(condition_id, realized_pnl=0.01, ts=ts),
+                _mark(condition_id, ts=ts - 300.0, mid_h0=0.49))
+
+    closes, marks = zip(*(market(f"cid-{n}", 1300.0) for n in range(3)))
+
+    out = robustness(list(closes), list(marks))
+
+    interval = out["markout"]["intervals"][0]
+    assert interval["horizon"] == "5m"
+    assert interval["markout_cents"] == -2.0
+    assert interval["band"] == "bad"
+    assert interval["samples"] == 3
+    assert out["mae"]["measured"] == 3
+    assert out["mae"]["median_cents"] == pytest.approx(1.0)
+
+
+def test_the_whole_section_is_strict_json_on_a_run_with_nothing_in_it():
+    """`allow_nan=False` is the payload's contract: a figure nobody measured is `None`."""
+    assert json.loads(json.dumps(robustness([], []), allow_nan=False))["mae"]["median_cents"] is None
+
+
+def test_build_carries_the_section_alongside_the_others():
+    payload = build([], [], [], 100.0)
+
+    assert payload["robustness"] == robustness([], [])
+
+
+def test_a_run_with_rows_moves_only_the_section_that_reads_them():
+    """`build()` gains a key and changes nothing else."""
+    closes = [_closed(realized_pnl=0.03, ts=1300.0)]
+    marks = [_mark("cid-1", mid_h0=0.49)]
+
+    bare = build([], [], [], 100.0)
+    loaded = build(closes, [], marks, 100.0)
+
+    # The new section reads those rows...
+    assert loaded["robustness"]["mae"]["measured"] == 1
+    assert loaded["robustness"]["markout"]["intervals"][0]["markout_cents"] == -2.0
+    # ...and an empty run still carries it, saying unmeasured rather than zero.
+    assert bare["robustness"]["mae"]["median_cents"] is None
+    assert bare["robustness"]["markout"]["intervals"] == []
+    # The sibling sections kept the exact shape they had: no key added, none lost.
+    for section in ("queue_realism", "fill_path_edge", "rescue_friction", "markout"):
+        assert set(bare[section]) == set(loaded[section]), section
+    assert loaded["queue_realism"]["cleared_fill_count"] == 0
 
 
 def test_importing_this_module_pulls_in_neither_the_registry_nor_kpi():
