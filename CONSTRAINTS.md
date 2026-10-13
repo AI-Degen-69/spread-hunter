@@ -1,102 +1,97 @@
-# CONSTRAINTS — #514 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #515 (locked by Station II, enforced through Station V)
 
-Governs the `i514/add-rescue-friction-analytics-for-stop-loss-drag` branch only.
+Governs the `i515/add-queue-realism-analytics` branch only. The #514 contract this file
+replaced is branch-scoped by its own header line and stays readable in git history.
 
 ## Scope & File Boundaries
 
 - Target files for modification:
-  - `core_brain/statistical_analytics.py` (new `STOP_OFFSET_FALLBACK`, `FRICTION_BAND_METRICS`
-    constants, new `rescue_drag()` / `taker_cost_drag_ratio()` / `overshoot_ratio()` /
-    `friction_band()` / `rescue_friction_summary()` functions, module docstring paragraph, and
-    the single new key inside `build()` — nothing else on that module).
-  - `tests/test_rescue_friction_analytics.py` (NEW — the ticket's required focused file).
-  - `tests/test_statistical_analytics.py` (extend the populated and empty `build()` tests only).
-  - `dashboard/static/index.html` (one new `#rescue-friction-readout` card after the
-    `#fill-path-edge-readout` card).
-  - `dashboard/static/app.js` (`renderRescueFriction`, its call inside
-    `renderAnalyticsSurface`, and its entry in the `module.exports` object — nothing else).
-  - `tests/js/analytics_surface_harness.cjs` (stub id, direct render call, printed HTML).
-  - `tests/test_analytics_surface_mount.py` (new cases for the readout).
-  - `CONSTRAINTS.md`, `SPEC.md`, `tasks/plan.md`, `tasks/todo.md`.
+  - `core_brain/statistical_analytics.py` — new `ClearedFill` dataclass, new
+    `TRADE_THROUGH_GOOD_BELOW_CENTS` / `TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS` constants,
+    new `_percentile` / `trade_through_depth_band` / `trade_through_depth` / `fill_latency`
+    functions, one new module-docstring paragraph, and the `dataclasses` import — nothing else
+    in that module. **`build()` keeps every key and value it has today; no key is added.**
+  - `tests/test_queue_realism_analytics.py` (NEW — the ticket's required focused file).
+  - `docs/issues/515-noticed-but-not-touching.md` (NEW — the recorded follow-up).
+  - `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
 - Files that must NOT be modified:
-  - `core_brain/kpi.py`, `core_brain/order_registry.py` (the `closes` schema and `CloseRecord`
-    already carry `trigger_bid` / `fresh_bid` / `fee` — nothing to add), `core_brain/config.py`,
-    `core_brain/unhedged_stop_loss.py`, `core_brain/venue_fees.py`,
-    `core_brain/pnl_crosscheck.py`, `core_brain/registry_state.py`,
-    `statistical_validation_run/artifacts.py` (`report.json` picks the new key up for free),
-    `scripts/rescue_exit_report.py`.
-  - Live execution: `core_brain/order_manager.py`, `core_brain/trader_loop.py`,
-    `core_brain/single_buy_saver.py`, `core_brain/single_leg_lifecycle.py`, `core_brain/ladder.py`,
-    `core_brain/shadow_exec.py`, `core_brain/shadow_fills.py`, `core_brain/market_resolution.py`.
-  - `dashboard/server.py`, `core_brain/statistics_report.py`, `dashboard/static/styles.css`
-    (the traffic-light palette already exists — see below).
+  - Fill logic and the crediting path: `core_brain/shadow_fills.py`,
+    `core_brain/shadow_exec.py`, `core_brain/live_fill_engine.py`.
+  - Readers and payloads that must keep reading exactly as they do now:
+    `core_brain/kpi.py`, `core_brain/order_registry.py`, `core_brain/statistics_report.py`,
+    `core_brain/markout.py`, `core_brain/cancel_report.py`, `scripts/queue_report.py`,
+    `scripts/booktape_report.py`, `scripts/family_probe_report.py`,
+    `statistical_validation_run/artifacts.py`.
+  - The dashboard and the API in front of it: `dashboard/` (including `static/app.js`,
+    `static/index.html`, `static/styles.css`), `dashboard/server.py`, `server/`, `server.ts`.
+    This ticket has no readout and no card.
+  - LIVE execution: `core_brain/order_manager.py`, `core_brain/trader_loop.py`,
+    `core_brain/single_buy_saver.py`, `core_brain/ladder.py`, `core_brain/risk.py`,
+    `core_brain/single_leg_lifecycle.py`, `core_brain/market_resolution.py`,
+    `core_brain/config.py`.
+  - Sibling telemetry sections from #513 / #514 and their tests — extended by nobody here.
+  - `SPEC.md` — it is #514's merged artifact; this Small-tier issue embeds its spec in
+    `tasks/plan.md` instead.
   - `data/orders.db` and every production store (read-only at all times).
 
 ## Zero regressions
 
-- Focused suites that must pass:
-  `tests/test_rescue_friction_analytics.py`
+- Focused suites that must pass on this branch:
+  `tests/test_queue_realism_analytics.py`
   `tests/test_statistical_analytics.py`
   `tests/test_fill_path_analytics.py`
-  `tests/test_analytics_surface_mount.py`
-  `tests/test_dashboard_server.py`
-  `tests/test_hard_stop_fresh_exit.py`
-  `tests/test_pnl_by_fill_path.py`
-  `tests/test_stat_validation_artifacts.py`
+  `tests/test_rescue_friction_analytics.py`
+  `tests/test_shadow_fills.py`
 - Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
 - Every new behavior needs a test that fails without the change (RED first, per
-  `test-driven-development`).
+  `test-driven-development`). Each task's tests are written before its implementation and the
+  RED output is reported, not assumed.
 
 ## Metric contract freeze
 
-- Population: closes whose `method` (lowercased, stripped) is in the existing
-  `statistical_analytics.RESCUE_METHODS` — `single_buy_exit` / `naked_exit` / `ladder_exit`.
-  Filter by `method` only, never by `reason` (settled operator decision).
-- Five metrics, in cents and ratios only. Percent/bps forms are NOT built (the ticket shows
-  them "where shown", and no readout shows them).
-  - `sled_cents` = `trigger_bid - exit_price`, in cents. Unclipped sign.
-  - `latency_drag_cents` = `trigger_bid - fresh_bid`, in cents. Unclipped sign. Measured only
-    when BOTH bids are recorded.
-  - `execution_drag_cents` = `fresh_bid - exit_price`, in cents. Unclipped (the ladder walk
-    makes it non-negative in theory, but a clipped number would be invented data).
-  - `tcdr` = `fee / |realized_pnl|`. Denominator is the recorded payoff, not a fee-adjusted net.
-  - `overshoot_ratio` = `sled_cents / planned_risk_cents`, `planned_risk_cents =
-    (entry_price - reference_bid) * 100`.
-- Additivity: `sled_cents` is literally the sum of the two returned hops when both are
-  measured, so the identity holds exactly on the returned values.
-- Reference price: recorded `trigger_bid` (source `recorded`); when absent,
-  `entry_price - STOP_OFFSET_FALLBACK` (0.04) with source `assumed_offset`. `fresh_bid` is
-  NEVER used as the stop reference.
-- Every unmeasurable value is `None`, with a reason string where one exists (`overshoot_ratio`
-  returns a `status`; the summary returns `unmeasured` bands). Missing is never `0`, `NaN` or
-  `Infinity`; output is `json.dumps(..., allow_nan=False)`-safe.
-- No function mutates its input. `dict` closes and `CloseRecord` objects measure identically.
-- No fee recovery from `venue_fees.recover_fee`: the `closes` table has no `usdcSize`, so a
-  recovered fee would be fabricated. A `NULL` fee stays unmeasured.
-- `build()` keeps every one of its existing keys and values; the new key is additive.
-- No classification, quoting, sizing, stop-trigger or GO-gate change. Analytics only.
+- Population: caller-supplied `ClearedFill` records — one per credited shadow fill and the
+  print that cleared its level. No database, tape, network or signer access anywhere in this
+  change; the module imports only the standard library plus the existing `_finite`.
+- `trade_through_depth_cents` = `(order_price - clearing_price) * 100`. A row is measured only
+  when both prices are finite and `clearing_price < order_price`.
+  Reported: `count`, `missing` (either price absent/non-finite), `not_trade_through`
+  (`clearing_price >= order_price` — a row the fill model cannot produce), `median_cents`,
+  `p75_cents`, `band`. Invariant: `count + missing + not_trade_through == len(fills)`.
+- `fill_latency_sec` = `filled_ts - placed_ts`, in seconds. A row is measured only when both
+  timestamps are finite and `filled_ts >= placed_ts`. Reported: `count`, `excluded`,
+  `median_sec`, `p90_sec`. Invariant: `count + excluded == len(fills)`.
+  - `placed_ts` maps to `quotes.ts`; `filled_ts` maps to the credited fill's time in SECONDS
+    (`quotes.fill_ts` / `fills.venue_ts` are milliseconds — the caller divides by 1000, exactly
+    as `kpi.py:1447-1449` does). This module receives seconds and never converts.
+- Percentiles: linear interpolation at index `fraction * (n - 1)`, so `p50` equals
+  `statistics.median`. One value returns itself. Zero values returns `None`.
+- Missing is never `0`, `NaN` or `Infinity`, and nothing is clamped: a negative wait is
+  excluded and counted, NOT clamped to `0.0` the way `kpi.median_seconds_to_fill` clamps.
+  Output is `json.dumps(..., allow_nan=False)`-safe and rounded to 6 decimals.
+- No function mutates its input.
+- The two metrics are independent: prices present without timestamps still measure for depth
+  and are `excluded` from latency, and the reverse.
 
 ## Traffic-light freeze
 
-- Band thresholds live in Python, in `friction_band()`, and reach the dashboard as data
-  (`bands` map in the payload). The renderer holds no threshold numerals.
-- Bands are exactly the ticket's table: SLED `<= 0` / `(0, 0.02]` / `> 0.02`; latency `>= 0` /
-  `(-0.02, 0)` / `<= -0.02`; execution `<= 0.02` / `(0.02, 0.05]` / `> 0.05`; TCDR `= 0` /
-  `(0, 0.10)` / `>= 0.10`; overshoot `= 0` / `(0, 1.0]` / `> 1.0`. `None` → `unmeasured`.
-- Colors come from the theme's existing status palette only: `.analytics-chip.live` (green),
-  `.analytics-chip.warn` (amber), `.analytics-chip.bad` (red), neutral chip for `unmeasured`.
-  No new CSS hue, no new class family.
+| metric | band | thresholds |
+| --- | --- | --- |
+| trade-through depth (median, cents) | `good` | `[0, TRADE_THROUGH_GOOD_BELOW_CENTS)` = `[0, 1.0)` |
+| | `average` | `[1.0, TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS]` = `[1.0, 3.0]` |
+| | `bad` | `(3.0, ∞)` |
+| | `unmeasured` | the median is `None` or non-finite |
+| fill latency | — | **no band exists.** A wait has no market reference to be judged against. |
+| `queue_ahead` / queue depth | — | **no band exists.** It stays descriptive telemetry; this ticket adds no queue metric at all. |
+
+The thresholds live in `core_brain/statistical_analytics.py` and reach any reader as data
+(`trade_through_depth_band()`, and `band` inside the depth dict). No numeral from this table
+may be hardcoded in a renderer, a script, a test fixture's expectation copy, or the docs.
 
 ## Anti-cheat
 
-- No test may be deleted, skipped, `xfail`ed or weakened to reach green.
-- No assertion may be loosened to `is not None` where an exact value is known.
-- No `# type: ignore`, `# noqa`, or lint suppression may be added.
-- No `pytest.mark.skipif` beyond the repo's existing `requires_node` marker idiom.
-- A guard branch (`planned_risk <= 0`, `|realized_pnl| <= 1e-9`) must be covered by a test that
-  would fail if the guard were removed (i.e. the case must raise `ZeroDivisionError` without it).
-
-## Dependencies
-
-- No new external dependency. Standard library only (`math`, `statistics`, `typing` — all
-  already imported in the target module).
+- No test is skipped, deleted, or weakened to reach green; no new `pytest.mark.skip` /
+  `xfail`, no swallowed exceptions, no `# type: ignore`, no narrowed assertion to fit output.
+- No new external dependency: standard library only, plus the module's existing `_finite`.
+- No change to any existing function's return shape, and no change to `build()`'s keys.
+- No new config, flag, CLI argument, dashboard element, or report script.
+- A test that passes both with and without the change is not a test for this ticket.
