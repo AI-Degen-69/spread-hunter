@@ -573,7 +573,13 @@ def scenario_quote_history(reg: OrderRegistry, t: int, out: Path) -> str:
 
 def scenario_markouts(reg: OrderRegistry, t: int, out: Path) -> str:
     """Markout trajectories the adverse-selection metrics read: adverse,
-    favorable, and flat, one still pending, one contaminated reference."""
+    favorable, and flat, one still pending, one contaminated reference.
+
+    One exit is recorded for the same market (#516), timed so the earliest
+    trajectories fall INSIDE a holding window. The excursion readout measures
+    post-fill marks between a fill and its close, so a market with no close can
+    only ever report that every position is still open -- true, and useless for
+    looking at the card."""
     m = _market("markout-mix", 14)
     rows = [
         # (fill_price, ref_mid, (h0, h1, h2, h3), done, source)
@@ -600,7 +606,19 @@ def scenario_markouts(reg: OrderRegistry, t: int, out: Path) -> str:
             mid_h0=horizon[0], mid_h1=horizon[1], mid_h2=horizon[2],
             mid_h3=horizon[3], done=done,
         ))
-    return f"markouts ........... markout-mix: {len(rows)} trajectories (adverse/favorable/flat/pending)"
+    # The exit that closes the first four positions: it sits 400s after the fourth trajectory's
+    # fill, so trajectories 0-3 have their 5m mark inside the window (trajectory 0 also has its
+    # 15m one) and the eight later fills are still open. A single_buy_exit, because a leg held
+    # past a mark and then sold back through the book is exactly the rescue this card is for.
+    reg.log_close(CloseRecord(
+        ts=float(t - 8900), condition_id=m["condition_id"], market_slug=m["slug"],
+        method="single_buy_exit", gas=0.0, shares=10, up_price=0.47,
+        cost_basis=5.00, proceeds=4.70, fee=0.0, realized_pnl=-0.30,
+        trigger_bid=0.48, fresh_bid=0.475, reason="adverse_drift",
+        tx_hash="0xdemo516exit",
+    ))
+    return (f"markouts ........... markout-mix: {len(rows)} trajectories "
+            "(adverse/favorable/flat/pending) + one holding-window exit")
 
 
 def scenario_account_curve(reg: OrderRegistry, t: int, out: Path) -> str:

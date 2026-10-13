@@ -42,6 +42,15 @@ planned alongside them are gone on purpose, not deferred: under this fill rule t
 measure a tautology or an unverifiable guess, and `queue_ahead` stays descriptive
 telemetry that gates nothing.
 
+The fourth section also is not a chart, and it asks the question a profitable-looking run
+raises: was that the tape or the strategy. `robustness` (#516) reads the markout rows and the
+closes side by side and reports four readings -- the signed post-fill displacement as a median
+across fills, in cents, with the ticket's bands; the maximum adverse excursion over a holding
+window, descriptive and deliberately unbanded; the 95% band on mean close PnL; and the system
+quality number. The last two look like the same question from different angles, and they are
+not merged into one verdict: a run can have a proven positive mean on too few trades to call
+the edge stable, and a single combined word would hide which half said so.
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -59,11 +68,12 @@ Two consequences of that rule worth stating plainly:
 """
 from __future__ import annotations
 
+import bisect
 import math
 import random
 import statistics
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 # Merge methods, mirroring `registry_state.MERGE_CLOSE_METHODS`. A merged pair
 # is the strategy's own exit; anything else unwound some other way, and the
@@ -977,6 +987,546 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
     return records
 
 
+# ---------------------------------------------------------------------------
+# Statistical robustness gates (#516) -- is the mean an edge or an accident, and
+# is the tape behind our fills helping or hurting.
+# ---------------------------------------------------------------------------
+
+# Two-sided normal critical values, by confidence level. Used once the sample
+# is large enough for the normal approximation to hold.
+#
+# This block lived in `kpi.py` until #516. It is here now because the robustness card needs the
+# same band over the same closes, and a second copy of a threshold table is how two screens start
+# disagreeing about one run. `kpi.py` imports it back as `_mean_pnl_ci`, so the KPI payload is
+# unchanged; this module still imports nothing of its own (see the subprocess test in
+# `tests/test_markout_robustness_analytics.py`).
+CI_Z_BY_LEVEL = ((90, 1.645), (95, 1.96))
+
+# Two-sided Student-t critical values by degrees of freedom (n - 1), for the
+# same two levels. On the samples this dashboard actually runs on -- three
+# closes, seven closes -- the normal value is far too narrow: two closes of
+# $1.00 and $3.00 give a 95% normal band of +$0.04 to +$3.96, a confident
+# "profitable" verdict drawn from two observations. The t band on the same two
+# closes spans zero, which is the truth. Beyond 30 degrees of freedom the two
+# agree to the third decimal and the normal value takes over.
+CI_T_BY_DF: dict[int, dict[int, float]] = {
+    1: {90: 6.314, 95: 12.706}, 2: {90: 2.920, 95: 4.303},
+    3: {90: 2.353, 95: 3.182}, 4: {90: 2.132, 95: 2.776},
+    5: {90: 2.015, 95: 2.571}, 6: {90: 1.943, 95: 2.447},
+    7: {90: 1.895, 95: 2.365}, 8: {90: 1.860, 95: 2.306},
+    9: {90: 1.833, 95: 2.262}, 10: {90: 1.812, 95: 2.228},
+    11: {90: 1.796, 95: 2.201}, 12: {90: 1.782, 95: 2.179},
+    13: {90: 1.771, 95: 2.160}, 14: {90: 1.761, 95: 2.145},
+    15: {90: 1.753, 95: 2.131}, 16: {90: 1.746, 95: 2.120},
+    17: {90: 1.740, 95: 2.110}, 18: {90: 1.734, 95: 2.101},
+    19: {90: 1.729, 95: 2.093}, 20: {90: 1.725, 95: 2.086},
+    21: {90: 1.721, 95: 2.080}, 22: {90: 1.717, 95: 2.074},
+    23: {90: 1.714, 95: 2.069}, 24: {90: 1.711, 95: 2.064},
+    25: {90: 1.708, 95: 2.060}, 26: {90: 1.706, 95: 2.056},
+    27: {90: 1.703, 95: 2.052}, 28: {90: 1.701, 95: 2.048},
+    29: {90: 1.699, 95: 2.045}, 30: {90: 1.697, 95: 2.042},
+}
+
+
+def ci_critical_value(level: int, n: int, z: float) -> float:
+    """The multiplier for a two-sided interval on a sample of `n`.
+
+    Student-t while the sample is small enough for it to matter, the normal
+    value once it is not. No new dependency: the table is the whole of what
+    `scipy.stats.t.ppf` would be used for here.
+    """
+    return CI_T_BY_DF.get(n - 1, {}).get(level, z)
+
+
+def mean_pnl_ci(pnls: Sequence[float]) -> dict[str, Any]:
+    """The 90% and 95% band on the mean realized PnL per close, in dollars.
+
+    The GO/NO-GO question #90 names is not "what is the average" but "does the
+    interval around it still contain a loss, and how deep". So each level
+    carries that answer outright rather than leaving it to be inferred from a
+    lower bound printed next to a mean.
+
+    A sample too small for a standard error reports no levels at all. A zero
+    would read as "breaks even", which is a measurement one close has not made.
+    """
+    n = len(pnls)
+    mean_usd = statistics.mean(pnls) if n else None
+    if n < 2 or mean_usd is None:
+        return {"mean_usd": mean_usd, "n": n, "levels": [], "verdict": None}
+
+    se = statistics.stdev(pnls) / math.sqrt(n)
+    levels = []
+    for level, z in CI_Z_BY_LEVEL:
+        crit = ci_critical_value(level, n, z)
+        lower = mean_usd - crit * se
+        upper = mean_usd + crit * se
+        levels.append({
+            "level": level,
+            "lower": lower,
+            "upper": upper,
+            "includes_negative": lower < 0,
+            # How far below zero the band reaches -- the "and how much" half
+            # of the question. NULL when it never gets there.
+            "negative_depth_usd": abs(lower) if lower < 0 else None,
+        })
+
+    # The verdict reads off the wider band: passing on 90% while the 95% band
+    # still spans zero is not a pass.
+    widest = levels[-1]
+    if widest["lower"] > 0:
+        verdict = "positive"
+    elif widest["upper"] < 0:
+        verdict = "negative"
+    else:
+        verdict = "spans_zero"
+
+    return {"mean_usd": mean_usd, "n": n, "levels": levels, "verdict": verdict}
+
+
+# The ticket's settled markout bands, on the MEDIAN signed post-fill displacement in cents:
+# `good` is the tape holding or moving our way after the fill, `average` a drift against us of
+# less than a tick, `bad` a full cent or more the wrong way -- we were filled, then it dropped.
+MARKOUT_GOOD_AT_OR_ABOVE_CENTS = 0.0
+MARKOUT_AVERAGE_ABOVE_CENTS = -1.0
+
+# What each band MEANS, shipped beside it as data. The renderer names a colour for the band and
+# prints these words; no threshold, and no verdict of its own, lives in the JavaScript.
+MARKOUT_BAND_WORDS = {
+    "good": "mid held or moved in our favour after the fill",
+    "average": "mid drifted against us by less than a tick",
+    "bad": "the tape moved a full cent or more against us after the fill",
+    "unmeasured": "no matured post-fill mark to measure",
+}
+
+
+def markout_cents_band(median_cents: Optional[float]) -> str:
+    """The traffic-light band for a median post-fill displacement in cents.
+
+    The ticket's table: `[0, inf)` good, `(-1.0, 0)` average, `(-inf, -1.0]` bad. `None` and
+    anything non-finite read `unmeasured` -- a figure nobody measured is not a bad figure.
+
+    The thresholds live here and reach the dashboard as data, following `friction_band`: a
+    renderer maps a band name to a colour and holds no numeral of its own.
+    """
+    number = _finite(median_cents)
+    if number is None:
+        return "unmeasured"
+    if number >= MARKOUT_GOOD_AT_OR_ABOVE_CENTS:
+        return "good"
+    return "average" if number > MARKOUT_AVERAGE_ABOVE_CENTS else "bad"
+
+
+def _side_direction(side: Any) -> Optional[float]:
+    """+1 for a BUY fill, -1 for a SELL, `None` for a side that cannot be signed.
+
+    The same convention `core_brain.markout.peer_markout` takes as its `direction`: a buyer is
+    hurt by the mid falling, a seller by it rising.
+    """
+    text = str(side or "").strip().upper()
+    if text == "BUY":
+        return 1.0
+    if text == "SELL":
+        return -1.0
+    return None
+
+
+def _markout_direction(row: Any) -> Optional[float]:
+    """The direction of the fill a markout row came from."""
+    return _side_direction(_close_field(row, "side"))
+
+
+def _markout_samples(rows: Sequence[Any], horizons: Sequence[tuple[str, str]],
+                     direction_for: Callable[[Any], Optional[float]],
+                     ) -> dict[str, list[tuple[float, float, float]]]:
+    """Per matured horizon, one `(signed displacement, fill price, size)` triple per usable fill.
+
+    Shared by `markout()` (the size-weighted mean of that displacement, unsigned, bps) and
+    `signed_markout()` (the median of it, signed by side, cents), so the two readers cannot
+    disagree about which rows count or how one displacement is derived.
+
+    The displacement is the RAW price difference in DOLLARS, and no unit is applied here on
+    purpose. Each reader names its own from the raw triple -- bps (`delta / fill * 10_000`) for
+    the chart, cents of price (`delta * 100`) for the gates -- because a unit baked into the
+    shared helper is precisely how two readers end up publishing different quantities under one
+    word. The sibling conversion is not interchangeable: bps/100 is the PERCENT move of the fill
+    price, which equals cents only when the fill happened at $1.00.
+
+    A row is skipped when `direction_for` refuses it, when the horizon's mark or the fill price
+    is missing or non-finite, when the fill price is not positive (the divisor), or when the
+    size is NEGATIVE. A missing or zero size takes unit weight instead of dropping the row,
+    mirroring `markout()`'s long-standing `_finite(size) or 1.0` -- the two readers share this
+    helper precisely so they cannot diverge on which rows count. A horizon nothing matured into
+    is absent from the mapping, which is how an unmatured fill avoids being read as a flat one.
+    """
+    samples: dict[str, list[tuple[float, float]]] = {}
+    for column, label in horizons:
+        collected: list[tuple[float, float]] = []
+        for row in rows or []:
+            direction = direction_for(row)
+            if direction is None:
+                continue
+            later = _finite(_close_field(row, column))
+            fill = _finite(_close_field(row, "fill_price"))
+            if later is None or fill is None or fill <= 0:
+                continue
+            size = _finite(_close_field(row, "size")) or 1.0
+            if size <= 0:
+                continue
+            # Raw and signed, in dollars, with the fill it happened against and the weight.
+            collected.append(((later - fill) * direction, fill, size))
+        if collected:
+            samples[label] = collected
+    return samples
+
+
+def signed_markout(rows: Sequence[Any],
+                   horizons: Sequence[tuple[str, str]] = MARKOUT_HORIZONS) -> dict[str, Any]:
+    """Post-fill mid displacement, signed for the side we traded, as a median in CENTS.
+
+    Positive means the tape moved our way after the fill -- spread capture. Negative means it
+    moved against us -- the fill we got was toxic flow. An unmatured horizon is omitted rather
+    than shown at zero, and a row whose side is neither BUY nor SELL is skipped: its sign cannot
+    be derived, and a guessed sign would put a fabricated number under a colour.
+
+    Cents of PRICE, the absolute move -- a 1c drift on a 50c fill reads `1.0` here and `200.0` on
+    the chart's bps scale, so the ticket's cent bands score the same quantity the MAE half
+    reports. Units are named outright because "a full cent against us" means a cent of price,
+    not a percent of what we paid.
+
+    The MEDIAN across fills, deliberately, not the size-weighted mean: one whale fill must not
+    move the figure the traffic-light band is computed from. `markout()` above is the
+    size-weighted mean in bps, and the two are different questions about the same rows.
+
+    `band` scores the rounded `markout_cents` a reader sees, so the number and its colour cannot
+    disagree.
+    """
+    intervals = []
+    for label, samples in _markout_samples(rows, horizons, _markout_direction).items():
+        # Dollars -> cents of PRICE (`delta * 100`), linearly interpolated, so p50 IS the median.
+        # Going via the chart's bps figure instead would report the move as a percent of what we
+        # paid -- 2.0 for a 1c move on a 50c fill -- and would score the ticket's cents bands
+        # against that percent, flagging a 0.6c drift on a cheap fill as `bad`.
+        median = _percentile([delta * 100.0 for delta, _, _ in samples], 0.50)
+        rounded = None if median is None else round(median, 4)
+        band = markout_cents_band(rounded)
+        intervals.append({
+            "horizon": label,
+            "markout_cents": rounded,
+            "samples": len(samples),
+            "band": band,
+            "meaning": MARKOUT_BAND_WORDS[band],
+        })
+    return {"intervals": intervals}
+
+
+# `mid_hN` -> how many seconds after the fill that column is sampled, in the display order the
+# chart reads them. Declared rather than imported from `core_brain.markout`, which loads config
+# and pulls in the order registry at import time; this module promises no import side effects,
+# and `tests/test_markout_robustness_analytics.py` pins these numbers against
+# `config.markout_horizons` so the copy cannot drift into mis-winding every window.
+MARKOUT_HORIZON_SECONDS = {"mid_h0": 300.0, "mid_h3": 900.0,
+                           "mid_h1": 3600.0, "mid_h2": 21600.0}
+
+
+@dataclass(frozen=True)
+class HeldMark:
+    """One entry fill and the recorded post-fill marks inside its holding window.
+
+    Field -> registry mapping. The caller converts; this module never ingests:
+
+    * `side`        -- `markouts.side`, the order book's BUY/SELL, not the UP/DOWN leg.
+    * `entry_price` -- `markouts.fill_price`, in dollars.
+    * `marks`       -- the matured `mid_hN` values whose stamp
+      (`markouts.ts` + `MARKOUT_HORIZON_SECONDS[N]`) falls at or before the position's close,
+      in dollars, in `MARKOUT_HORIZON_SECONDS` order.
+
+    `excursion_summary` builds these from the rows it is handed; the dataclass exists so the
+    per-position arithmetic can be tested on its own, without a store behind it.
+    """
+    side: str
+    entry_price: Optional[float] = None
+    marks: tuple[float, ...] = ()
+
+
+def max_adverse_excursion(entry_price: Optional[float], side: Optional[str],
+                          prices: Sequence[float]) -> dict[str, Any]:
+    """The worst the tape went against us while we held, in cents and in price.
+
+    Measured from the side we traded: a BUY is hurt by the lowest price in the series, a SELL by
+    the highest. Clamped at zero, because a position the tape never moved against has an
+    excursion of zero -- we looked, and nothing went against us.
+
+    `None` when the question has no answer: no usable price in the series, an entry price that is
+    missing or not positive (there is nothing to measure a move against), or a side that is
+    neither BUY nor SELL. Descriptive only, and deliberately unbanded -- "6c of excursion" has no
+    verdict until it can be compared against the stop distance that was meant to cap it.
+
+    Reads nothing: no tape, no registry, no clock. The series is whatever the caller recorded.
+    """
+    entry = _finite(entry_price)
+    direction = _side_direction(side)
+    series = [p for p in (_finite(p) for p in prices or []) if p is not None]
+    result: dict[str, Any] = {"mae_cents": None, "worst_price": None, "samples": len(series)}
+    if not series or entry is None or entry <= 0 or direction is None:
+        return result
+
+    worst = min(series) if direction > 0 else max(series)
+    move = (entry - worst) if direction > 0 else (worst - entry)
+    return {
+        "mae_cents": round(max(0.0, move) * 100.0, 6),
+        "worst_price": round(worst, 6),
+        "samples": len(series),
+    }
+
+
+def _closes_by_condition(closes: Sequence[Any]) -> dict[str, list[float]]:
+    """Sorted close timestamps per condition, for bounding a fill's window."""
+    stamps: dict[str, list[float]] = {}
+    for row in closes or []:
+        condition_id = _close_field(row, "condition_id")
+        ts = _finite(_close_field(row, "ts"))
+        if condition_id is None or ts is None:
+            continue
+        stamps.setdefault(str(condition_id), []).append(ts)
+    for column in stamps.values():
+        column.sort()
+    return stamps
+
+
+def _first_at_or_after(stamps: Sequence[float], moment: float) -> Optional[float]:
+    """The earliest stamp at or after `moment`, or `None` if the series has none."""
+    index = bisect.bisect_left(stamps, moment)
+    return stamps[index] if index < len(stamps) else None
+
+
+def excursion_summary(closes: Sequence[Any], markouts: Sequence[Any]) -> dict[str, Any]:
+    """How far positions ran against us while held, as a median and a p90 in cents.
+
+    The population is one entry fill at a time, and its price series is the marks the sampler
+    RECORDED for that fill -- `mid_h0`..`mid_h3`, at 5m/15m/1h/6h -- kept only where the mark's
+    own stamp falls at or before the position's close. A mark after the exit was not part of the
+    holding window the ticket defines, so including it would answer a different question.
+
+    The window's end is the EARLIEST close for that condition at or after the fill's own time: a
+    mark can share its instant with the close and still be in the window, and a close that
+    predates the fill is not this position's exit at all.
+
+    Every markout row lands in exactly one bucket, and the five partition the input:
+
+    * `measured`          -- an entry fill with at least one mark inside its window.
+    * `exit_fill`         -- any row whose side is not BUY. Our own exits are SELLs, and an exit
+      is not a position: there is no holding window to measure an excursion over.
+    * `open`              -- no close yet for that condition, so the window has not ended.
+    * `no_marks_in_window`-- the window closed before any recorded mark fell inside it.
+    * `not_recorded`      -- no entry price or no fill time to build a window from.
+
+    The buckets are counted rather than folded in, because each is a different reason for a
+    missing number and only one of them is a measurement of zero.
+    """
+    windows = _closes_by_condition(closes)
+    measured: list[float] = []
+    counts = {"open": 0, "exit_fill": 0, "no_marks_in_window": 0, "not_recorded": 0}
+
+    for row in markouts or []:
+        # Only an entry opens a position. A SELL row is our own exit, and a row with no usable
+        # side is not something a holding window can be built around -- neither is measured.
+        if _side_direction(_close_field(row, "side")) != 1.0:
+            counts["exit_fill"] += 1
+            continue
+        entry = _finite(_close_field(row, "fill_price"))
+        row_ts = _finite(_close_field(row, "ts"))
+        condition_id = _close_field(row, "condition_id")
+        if entry is None or entry <= 0 or row_ts is None or condition_id is None:
+            counts["not_recorded"] += 1
+            continue
+        stamps = windows.get(str(condition_id))
+        close_ts = None if not stamps else _first_at_or_after(stamps, row_ts)
+        if close_ts is None:
+            counts["open"] += 1
+            continue
+
+        series = [mark for mark, stamp in
+                  ((_finite(_close_field(row, column)), row_ts + offset)
+                   for column, offset in MARKOUT_HORIZON_SECONDS.items())
+                  if mark is not None and stamp <= close_ts]
+        if not series:
+            counts["no_marks_in_window"] += 1
+            continue
+        measured.append(max_adverse_excursion(entry, _close_field(row, "side"),
+                                              series)["mae_cents"])
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    return {
+        "measured": len(measured),
+        "open": counts["open"],
+        "exit_fill": counts["exit_fill"],
+        "no_marks_in_window": counts["no_marks_in_window"],
+        "not_recorded": counts["not_recorded"],
+        "median_cents": shape(_percentile(measured, 0.50)),
+        "p90_cents": shape(_percentile(measured, 0.90)),
+        "units": "cents_per_share",
+    }
+
+
+# The ticket's fixed SQN thresholds: below `SQN_NOISE_BELOW` the result could be luck, above
+# `SQN_STABLE_EDGE_ABOVE` the edge is stable, and the closed band between them is promising but
+# unproven. The band name is the dashboard's own vocabulary -- good / average / bad / unmeasured
+# -- so a reader maps one word to the theme's chip; `SQN_BAND_WORDS` carries what it means.
+SQN_NOISE_BELOW = 1.6
+SQN_STABLE_EDGE_ABOVE = 2.5
+
+SQN_BAND_WORDS = {
+    "good": "stable edge -- signal dominates noise",
+    "average": "promising but unproven",
+    "bad": "noise -- the results could be luck",
+    "unmeasured": "fewer than two closes, or no spread to measure",
+}
+
+
+def sqn_band(sqn: Optional[float]) -> str:
+    """The traffic-light band for a system quality number.
+
+    `None` and anything non-finite read `unmeasured`: one close, or a run where every close was
+    identical, has no score at all, and a score of zero would read as "no edge" when the truth
+    is "not enough evidence to say".
+    """
+    number = _finite(sqn)
+    if number is None:
+        return "unmeasured"
+    if number > SQN_STABLE_EDGE_ABOVE:
+        return "good"
+    return "bad" if number < SQN_NOISE_BELOW else "average"
+
+
+def system_quality_number(pnls: Sequence[float]) -> dict[str, Any]:
+    """How large the average trade is next to the spread of the results, times sqrt(n).
+
+    `sqrt(n) * mean / stdev` over the close PnLs: the same mean scores higher on a longer run and
+    lower on a noisier one, which is the whole point -- a positive mean over five closes is not
+    the same evidence as the same mean over five hundred.
+
+    Sample standard deviation, uncapped n, and a band classified on the ROUNDED score so the
+    ticket's 1.6 and 2.5 boundaries are exactly reproducible. Fewer than two closes, or a sample
+    with no spread at all, is `None` rather than a confident verdict.
+
+    `stdev_usd` distinguishes the two absences: a flat sample measured a spread of zero, while a
+    one-close sample never measured one.
+    """
+    sample = [p for p in (_finite(p) for p in pnls or []) if p is not None]
+    n = len(sample)
+    if not sample:
+        return {"sqn": None, "band": "unmeasured", "meaning": SQN_BAND_WORDS["unmeasured"],
+                "n": 0, "mean_usd": None, "stdev_usd": None}
+
+    mean = statistics.fmean(sample)
+    stdev = statistics.stdev(sample) if n > 1 else None
+    if stdev is None or stdev == 0:
+        return {"sqn": None, "band": "unmeasured", "meaning": SQN_BAND_WORDS["unmeasured"],
+                "n": n, "mean_usd": round(mean, 6),
+                "stdev_usd": None if stdev is None else 0.0}
+
+    score = round(math.sqrt(n) * mean / stdev, 6)
+    band = sqn_band(score)
+    return {"sqn": score, "band": band, "meaning": SQN_BAND_WORDS[band], "n": n,
+            "mean_usd": round(mean, 6), "stdev_usd": round(stdev, 6)}
+
+
+# The confidence-interval gate, in the ticket's own words: zero outside the band on the good
+# side is a proven edge, zero inside it is suggestive only, and zero outside it on the bad side
+# is a negative edge. Shipped beside the band so the renderer prints the operator's language.
+# The middle wording is deliberately silent about the mean's SIGN: the band straddles zero
+# whenever the mean is not yet decisive, and that includes a run whose mean is negative -- copy
+# that asserted "the mean is positive" here would print a falsehood on exactly those runs.
+CI_BAND_WORDS = {
+    "good": "zero is outside the band -- the edge is statistically proven",
+    "average": "zero is inside the band -- suggestive, not proven",
+    "bad": "zero is outside the band on the wrong side -- the edge is negative",
+    "unmeasured": "fewer than two closes -- no band exists",
+}
+
+
+# The level the card reads off `mean_pnl_ci`. Selected by name rather than by position, so a
+# reorder of `CI_Z_BY_LEVEL` cannot silently relabel the 90% band as the 95% one.
+CI_CARD_LEVEL = 95
+
+
+def pnl_ci_band(lower_cents: Optional[float],
+                upper_cents: Optional[float]) -> str:
+    """The traffic-light band for a two-sided confidence interval, in cents.
+
+    `good` when the whole band sits above zero, `bad` when it sits below, `average` when it
+    contains zero -- the edge is not proven, whatever the mean's sign. Either end missing reads
+    `unmeasured`: an interval with no boundary is not a verdict.
+
+    Both arguments are the ROUNDED cents figures the payload ships, so the chip and the numbers
+    beside it can never disagree.
+    """
+    lower = _finite(lower_cents)
+    upper = _finite(upper_cents)
+    if lower is None or upper is None:
+        return "unmeasured"
+    if lower > 0:
+        return "good"
+    return "bad" if upper < 0 else "average"
+
+
+def _cents(value: Optional[float]) -> Optional[float]:
+    """Dollars to cents, rounded, or `None` when there is no figure to convert."""
+    number = _finite(value)
+    return None if number is None else round(number * 100.0, 6)
+
+
+def _mean_pnl_ci_cents(pnls: Sequence[float]) -> dict[str, Any]:
+    """The 95% band on mean close PnL in cents, with the gate's band and its words.
+
+    The band comes from `mean_pnl_ci`, the same helper the KPI payload reads, so the two screens
+    cannot report different intervals over the same closes.
+    """
+    out = mean_pnl_ci(pnls)
+    chosen = next((level for level in out["levels"]
+                   if level["level"] == CI_CARD_LEVEL), None)
+    lower = None if chosen is None else _cents(chosen["lower"])
+    upper = None if chosen is None else _cents(chosen["upper"])
+    band = pnl_ci_band(lower, upper)
+    return {
+        "level": CI_CARD_LEVEL,
+        "mean_cents": _cents(out["mean_usd"]),
+        "lower_cents": lower,
+        "upper_cents": upper,
+        "n": out["n"],
+        "band": band,
+        "meaning": CI_BAND_WORDS[band],
+    }
+
+
+def robustness(closes: Sequence[Any], markouts: Sequence[Any]) -> dict[str, Any]:
+    """The four robustness readings the Reports & Analytics card mounts, in cents.
+
+    Always present, like `fill_path_edge`, `rescue_friction` and `queue_realism`, and for the
+    same reason: a caller must never have to branch on whether a reading exists. A run with no
+    closes reports `None` and `unmeasured` rather than zeroes, which say "nothing to measure",
+    never "nothing was lost" or "no edge".
+
+    The halves are deliberately independent. `markout` and `mae` read the fill records, `mean_pnl_ci`
+    and `sqn` read the closes, and one unrecorded field must not silently blank the other half.
+
+    Each band is computed here, from the same rounded figure it ships with, so the chip a reader
+    sees can never disagree with the number beside it.
+    """
+    pnls = [pnl for pnl in
+            (_finite(_close_field(row, "realized_pnl")) for row in closes or [])
+            if pnl is not None]
+    return {
+        "units": "cents_per_share",
+        "markout": signed_markout(markouts),
+        "mae": excursion_summary(closes, markouts),
+        "mean_pnl_ci": _mean_pnl_ci_cents(pnls),
+        "sqn": system_quality_number(pnls),
+    }
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
@@ -1030,30 +1580,23 @@ def markout(markouts: Sequence[dict]) -> dict[str, Any]:
     entering it as 0 bps would report "no adverse selection" for a measurement
     that has not happened. A horizon nobody has matured into is omitted rather
     than shown at zero.
+
+    Unsigned, mean, in bps -- this is the chart's reading, and it counts every row whatever the
+    side. Its signed, median, banded counterpart is `signed_markout()`; the two share a loop so
+    they cannot disagree about which fills count, and they answer different questions about the
+    same rows. `tests/test_markout_robustness_analytics.py` pins that this output did not move
+    when the loop was shared.
     """
     intervals = []
-    for column, label in MARKOUT_HORIZONS:
-        weighted = 0.0
-        weight = 0.0
-        samples = 0
-        for row in markouts or []:
-            later = _finite(row.get(column))
-            fill = _finite(row.get("fill_price"))
-            if later is None or fill is None or fill <= 0:
-                continue
-            size = _finite(row.get("size")) or 1.0
-            if size <= 0:
-                continue
-            # bps of the fill price: a 1c move on a 50c fill is 200bps.
-            weighted += ((later - fill) / fill) * 10_000.0 * size
-            weight += size
-            samples += 1
-        if samples == 0:
-            continue
+    for label, samples in _markout_samples(markouts, MARKOUT_HORIZONS,
+                                           lambda row: 1.0).items():
+        # The chart's unit, named here: bps of the fill price. A 1c move on a 50c fill is 200bps.
+        weighted = sum((delta / fill) * 10_000.0 * size for delta, fill, size in samples)
+        weight = sum(size for _, _, size in samples)
         intervals.append({
             "horizon": label,
             "displacement_bps": round(weighted / weight, 4),
-            "samples": samples,
+            "samples": len(samples),
         })
     return {"intervals": intervals}
 
@@ -1107,10 +1650,10 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
           quotes: Optional[Sequence[Any]] = None) -> dict[str, Any]:
     """The whole `statistical_analytics` payload the analytics tab reads.
 
-    The charts come and go with their input; `fill_path_edge`, `rescue_friction` and
-    `queue_realism` are always present, because they summarise the closes, the fills and the
-    quotes this call already holds and a caller must never have to branch on whether a
-    reading exists.
+    The charts come and go with their input; `fill_path_edge`, `rescue_friction`,
+    `queue_realism` and `robustness` are always present, because they summarise the closes, the
+    fills and the quotes this call already holds and a caller must never have to branch on
+    whether a reading exists.
 
     `quotes` is optional and additive. The queue-realism section reads the placement price
     and timestamp a close never carries, so a caller without quotes gets that section at
@@ -1130,6 +1673,9 @@ def build(closes: Sequence[dict], fills: Sequence[dict],
             "trade_through_depth": trade_through_depth(records),
             "fill_latency": fill_latency(records),
         },
+        # The robustness gates (#516) read the closes and the markout rows, both of which this
+        # call already holds -- no new parameter, and no section above it changes.
+        "robustness": robustness(closes, markouts),
         "probability_bell": probability_bell(fills),
         "markout": markout(markouts),
     }

@@ -1,36 +1,33 @@
-# Todo — #515 queue realism analytics (trade-through depth, fill latency)
+# Todo — #516 post-fill markout and statistical robustness analytics
 
-Branch: `i515/add-queue-realism-analytics` | Issue: #515
-Plan: `tasks/plan.md` · Guardrails: `CONSTRAINTS.md`
+Branch: `i516/add-post-fill-markout-and-statistical-robustness` | Issue: #516
+Plan: `tasks/plan.md` · Guardrails: `CONSTRAINTS.md` · Spec: `SPEC.md`
 
-- [x] T1: `core_brain/statistical_analytics.py` — `ClearedFill`,
-      `TRADE_THROUGH_GOOD_BELOW_CENTS`, `TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS`,
-      `_percentile`, `trade_through_depth_band()`, `trade_through_depth()`; new
-      `tests/test_queue_realism_analytics.py` (RED: `ImportError: cannot import name
-      'ClearedFill'`; GREEN: 20 passed). Deviation: the plan's `p75` expectation was
-      corrected `4.75 -> 4.25` in the test before implementing.
-- [x] T2: same files — `fill_latency()` (RED: `ImportError: cannot import name
-      'fill_latency'`, pytest exit 2; GREEN: 32 passed with the T1 cases)
-- [x] CHKPT 1: both metrics measured; `git status --short` limited to the module and the new
-      test file; no other file touched
-- [x] T3: `docs/issues/515-noticed-but-not-touching.md` (N1 missing clearing-print data path,
-      N2 recognition-time caveat, N3 no-clamp divergence, N4 ms→s conversion for the follow-up)
-- [x] REPAIR: `test_empty_run_is_none_not_zero_and_never_divides_by_zero` was defined
-twice (T1 depth + T2 latency), so the later definition shadowed the earlier and the depth
-empty-run case never ran. Renamed both; the file now collects 33 cases, and the focused set
-was re-run after the repair.
-- [x] CHKPT 2: focused suites green — 180 passed across
-      `tests/test_queue_realism_analytics.py`, `tests/test_statistical_analytics.py`,
-      `tests/test_fill_path_analytics.py`, `tests/test_rescue_friction_analytics.py`,
-      `tests/test_shadow_fills.py`; the operator block's exact command run and its printed
-      values matched the plan (`median_cents 2.5`, `p75_cents 2.75`, `band average`,
-      `median_sec 10.0`, `p90_sec 14.0`; `bad` at 15c, `good` at 0.01c)
-- [x] T4 (scope change, operator-approved): `cleared_fills()` builder + `queue_realism`
-      payload key + `kpi.report` passing `quotes`; `#queue-realism-readout` card,
-      `renderQueueRealism`, harness call and six mount cases. RED: `ImportError: cannot
-      import name 'cleared_fills'` (exit 2) then `39 passed`; mount suite `34 passed`.
-      One cause-fix during T4: the builder dropped a fill whose timestamp was missing
-      instead of keeping the row as an unmeasurable wait.
-- [x] T5: `CONSTRAINTS.md` amended for the scope change; this file and `tasks/plan.md`
-      updated; `docs/issues/515-noticed-but-not-touching.md` N1 restated
+- [x] T1 `[Backend/Logic]` S: move the CI helper into `core_brain/statistical_analytics.py`
+      (`CI_Z_BY_LEVEL`, `CI_T_BY_DF`, `ci_critical_value`, `mean_pnl_ci`); `kpi.py` imports
+      `mean_pnl_ci as _mean_pnl_ci` and drops its four definitions; new
+      `tests/test_markout_robustness_analytics.py` with the CI cases, the identity pin and the
+      subprocess import-side-effect check
+- [x] T2 `[Backend/Logic]` M: shared per-horizon loop with a per-row direction; `markout()`
+      output pinned unchanged; `MARKOUT_GOOD_AT_OR_ABOVE_CENTS`, `MARKOUT_AVERAGE_ABOVE_CENTS`,
+      `MARKOUT_BAND_WORDS`, `markout_cents_band()`, `signed_markout()` (median · cents · signed)
+- [x] CHKPT A: helper in one place, `tests/test_mean_pnl_ci.py` + `tests/test_trade_analytics.py`
+      green unchanged; `git status --short` limited to the planned files
+- [x] T3 `[Backend/Logic]` M: `HeldMark`, `MARKOUT_HORIZON_SECONDS`,
+      `max_adverse_excursion()`, `excursion_summary()` (window bounded by the close; every row in
+      exactly one bucket), `SQN_NOISE_BELOW`, `SQN_STABLE_EDGE_ABOVE`, `sqn_band()`,
+      `SQN_BAND_WORDS`, `system_quality_number()`; horizon-seconds pin against
+      `core_brain.config.load().markout_horizons`
+- [x] CHKPT B: the ticket's focused file green with the RED output recorded per task;
+      `tests/test_statistical_analytics.py` untouched and green so far
+- [x] T4 `[Backend/Logic]` + `[Design/UI]` L: `robustness()` always-present section + the
+      additive `build()` key; `#robustness-readout` card, `renderRobustness` and its call in
+      `renderAnalyticsSurface`, `module.exports`; harness stub + printed HTML; mount cases
+      (6 chips, MAE unbanded, no-section payload renders none); demo-store seeding +
+      `tests/test_build_demo_db.py` pin; `tests/test_statistical_analytics.py` additions only
+- [x] CHKPT C: focused suites green (`tests/test_markout_robustness_analytics.py`,
+      `tests/test_statistical_analytics.py`, `tests/test_mean_pnl_ci.py`,
+      `tests/test_trade_analytics.py`, `tests/test_analytics_surface_mount.py`,
+      `tests/test_build_demo_db.py`, `tests/test_queue_realism_analytics.py`, `tests/test_kpi.py`);
+      the card read back from the running dashboard on the demo store
 - [ ] Handoff to `/iv-review-build-and-pr`

@@ -50,6 +50,37 @@ def test_the_closes_cover_every_fill_path(tmp_path):
     assert friction["assumed_reference_count"] >= 1
 
 
+def test_the_demo_store_measures_an_excursion_and_the_robustness_gates(tmp_path):
+    """The robustness card (#516) needs store rows to be checkable by eye.
+
+    A readout that can only ever say "unmeasured" cannot be verified on the screen, so the demo
+    records one close on the markout market, timed to leave the earliest recorded marks inside
+    the holding window the excursion is measured over.
+    """
+    build(tmp_path / "demo.db")
+    reg = OrderRegistry(tmp_path / "demo.db")
+
+    gates = sa.robustness(reg.get_all_closes(), reg.get_all_markouts())
+
+    mae = gates["mae"]
+    # Four trajectories fall inside the seeded window, and the eight later fills are still open
+    # rather than being folded in as zero excursions.
+    assert mae["measured"] >= 4
+    assert mae["open"] >= 1
+    assert mae["median_cents"] is not None
+    assert mae["median_cents"] > 0.0      # a real adverse move, not a stored zero
+    assert mae["no_marks_in_window"] == 0  # the seeded window is wide enough to hold a mark
+    # The markout half has rows on this store too, with the ticket's bands on them.
+    assert gates["markout"]["intervals"]
+    assert all(i["band"] in {"good", "average", "bad"}
+               for i in gates["markout"]["intervals"]), gates["markout"]["intervals"]
+    # The two close-based gates have a real sample on this store, band and all.
+    assert gates["mean_pnl_ci"]["n"] >= 2
+    assert gates["mean_pnl_ci"]["band"] in {"good", "average", "bad"}
+    assert gates["sqn"]["sqn"] is not None
+    assert gates["sqn"]["band"] != "unmeasured"
+
+
 def test_the_ghost_fill_has_no_order_behind_it(tmp_path):
     """The corrupted-store scenario the dashboard must survive.
 

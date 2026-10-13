@@ -674,3 +674,155 @@ def test_a_store_from_before_this_section_reads_as_unmeasured():
             assert leak not in text
 
 
+# -- Robustness gates: markout, MAE, CI and SQN (#516) -----------------------
+
+# A store where all four readings have an answer: the tape took 2.5c off the mid by the five
+# minute mark, the worst position ran 3.25c against us (p90 8.6c), and twelve closes leave the
+# mean's 95% band straddling zero while SQN reads a stable edge.
+ROBUSTNESS = {
+    "units": "cents_per_share",
+    "markout": {"intervals": [
+        {"horizon": "5m", "markout_cents": -2.5, "samples": 12, "band": "bad",
+         "meaning": "the tape moved a full cent or more against us after the fill"},
+        {"horizon": "15m", "markout_cents": -0.4, "samples": 11, "band": "average",
+         "meaning": "mid drifted against us by less than a tick"},
+        {"horizon": "1h", "markout_cents": 0.0, "samples": 9, "band": "good",
+         "meaning": "mid held or moved in our favour after the fill"},
+        {"horizon": "6h", "markout_cents": 0.6, "samples": 5, "band": "good",
+         "meaning": "mid held or moved in our favour after the fill"},
+    ]},
+    "mae": {"measured": 7, "open": 3, "exit_fill": 4, "no_marks_in_window": 2,
+            "not_recorded": 1, "median_cents": 3.25, "p90_cents": 8.6,
+            "units": "cents_per_share"},
+    "mean_pnl_ci": {"level": 95, "mean_cents": 1.2, "lower_cents": -0.45,
+                    "upper_cents": 2.85, "n": 12, "band": "average",
+                    "meaning": "zero is inside the band -- suggestive, not proven"},
+    "sqn": {"sqn": 2.85, "band": "good", "meaning": "stable edge -- signal dominates noise",
+            "n": 12, "mean_usd": 0.012, "stdev_usd": 0.0146},
+}
+
+
+def _robust(payload) -> dict:
+    """A payload carrying the robustness section, or one from before it existed."""
+    return {"statistical_analytics": {} if payload is None else {"robustness": payload}}
+
+
+def test_the_robustness_card_shows_all_four_readings_in_cents():
+    # Act
+    out = _mount(_robust(ROBUSTNESS))
+
+    # Assert -- every horizon in cents, the excursion as a median and a p90, the interval as its
+    # two bounds, and the score with its own number.
+    assert out["errors"] == []
+    text = _visible(out["robustness_html"])
+    assert "Markout 5m (\u00a2)" in text
+    assert "-2.50" in text          # five-minute median, in cents
+    assert "-0.40" in text
+    assert "0.00" in text
+    assert "0.60" in text
+    assert "MAE median (\u00a2)" in text
+    assert "3.25" in text
+    assert "8.60" in text            # p90
+    assert "95% CI (\u00a2)" in text
+    assert "-0.45" in text and "2.85" in text
+    assert "SQN" in text
+    assert "2.85" in text
+
+
+def test_the_banded_tiles_carry_a_chip_and_the_excursion_carries_none():
+    """Four markout horizons, the interval and the score: six chips, and neither MAE tile.
+
+    The excursion is descriptive on purpose -- "3.25c of excursion" has no verdict until it can
+    be compared against the stop distance that was meant to cap it, so a chip there would be a
+    confident guess.
+    """
+    # Act
+    out = _mount(_robust(ROBUSTNESS))
+
+    # Assert
+    html = out["robustness_html"]
+    assert html.count("analytics-chip") == 6
+    assert html.count("analytics-chip bad") == 1        # the 5m markout
+    assert html.count("analytics-chip warn") == 2       # the 15m markout and the interval
+    assert html.count("analytics-chip live") == 3       # 1h, 6h and SQN
+    text = _visible(html)
+    assert "STABLE EDGE -- SIGNAL DOMINATES NOISE" in text.upper()
+
+
+def test_the_colour_follows_the_payload_band_not_a_copy_of_it():
+    # Arrange -- the same card where the tape went our way within the minute.
+    payload = {
+        **ROBUSTNESS,
+        "markout": {"intervals": [{**ROBUSTNESS["markout"]["intervals"][0],
+                                    "markout_cents": 0.4, "band": "good"}]},
+    }
+
+    # Act
+    out = _mount(_robust(payload))
+
+    # Assert -- one chip, green, and no red anywhere: the renderer holds no threshold, so a
+    # payload that changes its mind changes the screen.
+    html = out["robustness_html"]
+    assert html.count("analytics-chip") == 3
+    assert "analytics-chip live" in html
+    assert "analytics-chip bad" not in html
+
+
+def test_an_unmeasured_band_reads_unmeasured_without_a_colour():
+    # Arrange -- one close: the interval has no band, so the score has none either.
+    payload = {
+        "units": "cents_per_share",
+        "markout": {"intervals": []},
+        "mae": {"measured": 0, "open": 0, "exit_fill": 0, "no_marks_in_window": 0,
+                "not_recorded": 0, "median_cents": None, "p90_cents": None,
+                "units": "cents_per_share"},
+        "mean_pnl_ci": {"level": 95, "mean_cents": 2.0, "lower_cents": None,
+                        "upper_cents": None, "n": 1, "band": "unmeasured",
+                        "meaning": "fewer than two closes -- no band exists"},
+        "sqn": {"sqn": None, "band": "unmeasured",
+                "meaning": "fewer than two closes, or no spread to measure",
+                "n": 1, "mean_usd": 0.02, "stdev_usd": None},
+    }
+
+    # Act
+    out = _mount(_robust(payload))
+
+    # Assert -- unmeasured is a reading, so it names itself without claiming a colour, and the
+    # excursion that measured nothing shows no `0.00` that would read as a perfect entry.
+    assert out["errors"] == []
+    html = out["robustness_html"]
+    text = _visible(html)
+    assert "UNMEASURED" in text
+    assert "analytics-chip live" not in html
+    assert "analytics-chip warn" not in html
+    assert "analytics-chip bad" not in html
+    assert "3.25" not in text
+
+
+def test_the_card_discloses_what_it_could_not_measure():
+    # Act
+    out = _mount(_robust(ROBUSTNESS))
+
+    # Assert -- the population behind each figure, in words an operator reads off the screen.
+    text = _visible(out["robustness_html"])
+    assert "7 positions measured" in text
+    assert "open 3" in text
+    assert "no mark in window 2" in text
+    assert "fill unrecorded 1" in text
+    assert "12 closes" in text
+
+
+def test_a_payload_from_before_this_section_renders_no_chips_at_all():
+    """Back-compat is tested, not assumed: an older payload gets words, never a verdict."""
+    for payload in (None, {}):
+        out = _mount(_robust(payload))
+
+        assert out["errors"] == []
+        html = out["robustness_html"]
+        text = _visible(html)
+        assert "analytics-chip" not in html
+        assert "unmeasured" in text
+        for leak in ("NaN", "undefined", "null"):
+            assert leak not in text
+
+

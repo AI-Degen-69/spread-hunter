@@ -4765,6 +4765,118 @@ function renderQueueRealism(stats) {
     </div>`;
 }
 
+/* Is the tape behind our fills helping or hurting us, and is the mean an edge or an accident
+ * (#516).
+ *
+ * Two halves of one question about a run that looks profitable. A passive maker is filled
+ * precisely when informed flow trades through the book, so a fill the mid then walks away from is
+ * toxic flow rather than spread capture -- that is the signed markout per horizon, as a MEDIAN
+ * across fills so one whale cannot move the figure a colour rides on. The other half asks how far
+ * a position ran against us before it closed (MAE, descriptive), whether zero is outside the band
+ * on mean close PnL, and whether the mean is large next to its own spread (SQN).
+ *
+ * The colour of each banded figure is NOT decided here. The band arrives in the payload, computed
+ * beside the metric itself, and this renderer only names the theme's chip for it: this theme's
+ * green is `.live`, its amber `.warn`. A renderer holding its own copy of the thresholds is how a
+ * screen starts disagreeing with the number it is drawing.
+ *
+ * MAE carries no chip at all, deliberately: "3.25c of excursion" has no verdict until it can be
+ * compared against the stop distance that was meant to cap it. A chip there would be a confident
+ * guess.
+ *
+ * A `null` reads `unmeasured`, never `0.00`: a run with one close has no band, and `0.00` would
+ * claim it breaks even. A payload served before this section existed renders no chips at all
+ * rather than inventing a verdict. */
+function renderRobustness(stats) {
+  const host = document.getElementById('robustness-readout');
+  if (!host) return;
+
+  const section = (stats || {}).robustness || {};
+  const intervals = ((section.markout || {}).intervals) || [];
+  const mae = section.mae || {};
+  const ci = section.mean_pnl_ci || {};
+  const sqn = section.sqn || {};
+  const figure = (value) => {
+    const n = Number(value);
+    return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
+  };
+  const count = (value) => figure(value) || 0;
+  const signOf = (n) => { if (n > 0) return '+'; if (n < 0) return '-'; return ''; };
+  /* Every figure on this card is in cents, and the markout question turns on whether the tape
+   * cleared within one of them, so two decimals is the most a reader can act on. */
+  const cents = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : n.toFixed(2);
+  };
+  const signedCents = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : signOf(n) + Math.abs(n).toFixed(2);
+  };
+  const rangeCents = (lower, upper) => {
+    const lo = figure(lower);
+    const hi = figure(upper);
+    if (lo === null || hi === null) return 'unmeasured';
+    return `${signOf(lo)}${Math.abs(lo).toFixed(2)} to ${signOf(hi)}${Math.abs(hi).toFixed(2)}`;
+  };
+  const usd = (value) => {
+    const n = figure(value);
+    return n === null ? 'unmeasured' : '$' + n.toFixed(4);
+  };
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  const BAND_CHIP = { good: 'live', average: 'warn', bad: 'bad' };
+  /* A chip only when the payload carries a band. `unmeasured` still names itself -- an unmodified
+   * chip is this theme's word for a reading nobody could judge -- but a missing band is silence,
+   * not a verdict. */
+  const chip = (band) => {
+    if (typeof band !== 'string' || !band) return '';
+    const modifier = BAND_CHIP[band] ? ' ' + BAND_CHIP[band] : '';
+    return `<div><span class="analytics-chip${modifier}" style="margin-top:6px">`
+         + `${esc(band.toUpperCase())}</span></div>`;
+  };
+  const tile = (label, value, band, hint, detail) => `
+    <div class="kpi-tile">
+      <div class="kpi-label">${esc(label)}</div>
+      ${fmtVal(value, value === 'unmeasured' ? ' null' : '')}
+      ${chip(band)}
+      <div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(hint)}</div>
+      ${detail ? `<div class="mono" style="font-size:11px;color:var(--text-muted)">${esc(detail)}</div>` : ''}
+    </div>`;
+
+  /* One tile per horizon the sampler matured, each with its own chip: a run can be clean at five
+   * minutes and toxic by the hour, and a single averaged chip would hide exactly that. */
+  const markoutTiles = intervals.length
+    ? intervals.map(i => tile(`Markout ${i.horizon} (\u00a2)`, signedCents(i.markout_cents), i.band,
+                              'median across fills \u00b7 signed by side',
+                              plural(count(i.samples), 'fill', 'fills'))).join('')
+    : '<div class="empty-state"><div class="empty-state-title">Markout unmeasured</div></div>';
+
+  host.innerHTML = `
+    <div class="kpi-grid">${markoutTiles}</div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
+      Markout is the median across fills, in cents, signed by the side we traded. The chart
+      above reports the size-weighted mean in bps \u2014 the same rows, a different question.
+    </div>
+    <div class="kpi-grid" style="margin-top:14px">
+      ${tile('MAE median (\u00a2)', cents(mae.median_cents), '',
+             'worst move while the position was held', 'descriptive \u00b7 no band')}
+      ${tile('MAE p90 (\u00a2)', cents(mae.p90_cents), '',
+             '90th percentile of the same excursion', 'descriptive \u00b7 no band')}
+      ${tile('95% CI (\u00a2)', rangeCents(ci.lower_cents, ci.upper_cents), ci.band,
+             ci.meaning || 'mean close PnL \u00b7 does the edge survive the uncertainty',
+             `mean ${signedCents(ci.mean_cents)} \u00b7 ${plural(count(ci.n), 'close', 'closes')}`)}
+      ${tile('SQN', cents(sqn.sqn), sqn.band,
+             sqn.meaning || 'mean trade \u00f7 result noise \u00d7 \u221aN',
+             `${plural(count(sqn.n), 'close', 'closes')} \u00b7 mean ${usd(sqn.mean_usd)} \u00b7 spread ${usd(sqn.stdev_usd)}`)}
+    </div>
+    <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
+      ${plural(count(mae.measured), 'position measured', 'positions measured')} \u00b7
+      open ${count(mae.open)} \u00b7 exits ${count(mae.exit_fill)} \u00b7
+      no mark in window ${count(mae.no_marks_in_window)} \u00b7
+      fill unrecorded ${count(mae.not_recorded)}
+    </div>`;
+}
+
 function renderAnalyticsSurface(kpi, status) {
   const grid = document.getElementById('kpi-grid');
   const gates = document.getElementById('analytics-gates');
@@ -4818,6 +4930,7 @@ function renderAnalyticsSurface(kpi, status) {
   try { renderFillPathEdge(stats); } catch (e) { console.error('Error rendering fill-path edge', e); }
   try { renderRescueFriction(stats); } catch (e) { console.error('Error rendering rescue friction', e); }
   try { renderQueueRealism(stats); } catch (e) { console.error('Error rendering queue realism', e); }
+  try { renderRobustness(stats); } catch (e) { console.error('Error rendering robustness gates', e); }
 
   // Render Quant Grid
   renderQuantRiskGrid(ta, p, stats);
@@ -8907,7 +9020,7 @@ if (typeof module === 'undefined' || !module.exports) {
 // Node-only: lets tests reach the handlers. Browsers have no `module`, so this
 // is dead code in the page.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderQueueRealism, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
+  module.exports = { runSwitcherLabel, dbModeVerdict, renderPositionDistributionChart, renderMarkoutChart, renderMonteCarloChart, renderQuantRiskGrid, renderFillPathEdge, renderRescueFriction, renderQueueRealism, renderRobustness, signClass, fmtSignedUSD, _ciBounds,     decisionGatesHtml, decisionGatesRows,     gateBadge, methodBadge, METHOD_BADGES, fmtHoldDuration, fmtOrderAge, typesetMath, renderTrialReadiness, isMergedOrder, isActiveOrder, collapseMergedPair, renderExpandedOrders, renderDbMode, setShadowRun, renderShadowClock, fmtStopwatch, setFilterUptime, renderFilterUptime, fmtUptime, renderServiceCards, renderServiceHeader, fmtLocalTime, connectSSE, marketLink,
     EVENT_TRANSLATIONS, translateEvent, buildStreamSentence, isTradeEvent,
     streamMarketName, noteStreamTitles, quoteList, humanizeAction, appendTickerEvent,
     renderTickerFeed, tickerMatches, tickerEmptyState,
