@@ -30,6 +30,18 @@ every figure it cannot read off them is `None` with the reason attached, because
 a zero there would read as "this stop cost nothing" rather than "nobody
 recorded it".
 
+The third section is not read off closes at all. `queue realism` (#515) reads the tape
+that credited a fill, which is the only other evidence the fill model ever sees. The
+trade-through rule credits a resting order only when a print lands strictly below its
+price, so a credited fill is proof that the level cleared -- and the two numbers worth
+having from that proof are how far below our price the tape had to go (cents, with the
+ticket's traffic-light bands) and how long the quote waited for it (seconds, descriptive
+only: a wait has no market reference to be judged against, so a good/bad label on it
+would be invented). The touch-ratio, drain-ratio and depth-correlation metrics that were
+planned alongside them are gone on purpose, not deferred: under this fill rule they
+measure a tautology or an unverifiable guess, and `queue_ahead` stays descriptive
+telemetry that gates nothing.
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -50,6 +62,7 @@ from __future__ import annotations
 import math
 import random
 import statistics
+from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
 # Merge methods, mirroring `registry_state.MERGE_CLOSE_METHODS`. A merged pair
@@ -721,6 +734,141 @@ def rescue_friction_summary(closes: Sequence[Any]) -> dict[str, Any]:
         "bands": {metric: friction_band(metric, value)
                   for metric, value in means.items()},
         "units": "cents_per_share",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Queue realism (#515) -- read off the tape that credited a fill, in cents and seconds.
+# ---------------------------------------------------------------------------
+
+# The ticket's settled depth bands. They score the MEDIAN across cleared fills: under a
+# cent the level cleared on the tape we sat on, 1-3c the tape had to move past us, past
+# 3c the quote sat far from where the market actually traded.
+TRADE_THROUGH_GOOD_BELOW_CENTS = 1.0
+TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS = 3.0
+
+
+@dataclass(frozen=True)
+class ClearedFill:
+    """One credited fill, its resting price, and the print that cleared it.
+
+    Field -> registry mapping. The caller converts; this module never ingests:
+
+    * `order_price`    -- our resting price in DOLLARS (`orders.price` / `quotes.price`).
+    * `clearing_price` -- the closest tape print STRICTLY below `order_price` that credited
+      the fill, in DOLLARS. `shadow_fills.credit_fills` sees this print and drops it, so
+      nothing populates this field in production yet -- the follow-up is recorded in
+      `docs/issues/515-noticed-but-not-touching.md`.
+    * `placed_ts`      -- `quotes.ts`, in SECONDS.
+    * `filled_ts`      -- the credited fill's time in SECONDS. `quotes.fill_ts` and
+      `fills.venue_ts` are MILLISECONDS (`order_registry._attribute_fill_to_quote` builds
+      `fill_ts` as `MIN(COALESCE(venue_ts, recorded_ts))`), so the caller divides by 1000
+      before building a record -- exactly the conversion `kpi.py:1447-1449` already makes.
+
+    A shadow fill's `venue_ts` is the cycle that RECOGNISED the trade-through, not the
+    print's own time, so a wait measured from these fields is an upper bound on the real
+    rest, never its exact length.
+    """
+    order_id: str
+    order_price: Optional[float] = None
+    clearing_price: Optional[float] = None
+    placed_ts: Optional[float] = None
+    filled_ts: Optional[float] = None
+
+
+def _percentile(values: Sequence[float], fraction: float) -> Optional[float]:
+    """The value at `fraction` through a sorted sample, linearly interpolated.
+
+    `None` for an empty sample, and the value itself for a single one: an index of
+    `fraction * (n - 1)` has no neighbour to blend with at n = 1 and no meaning at all at
+    n = 0, which is where this section's zero-denominator question lives. Non-finite
+    entries are dropped rather than sorted, so one `NaN` cannot poison a whole sample.
+
+    Interpolated rather than nearest-rank so that `p50` IS the median `statistics.median`
+    returns. `scripts/family_probe_report.py` takes the nearest-rank route and documents
+    why (a thin family must still report a number) -- but that is a script's own reader,
+    while the depth band here is computed from this figure, and two conventions must not
+    meet on the number a colour rides on.
+    """
+    sample = sorted(v for v in (_finite(v) for v in values or []) if v is not None)
+    if not sample:
+        return None
+    if len(sample) == 1:
+        return sample[0]
+    index = fraction * (len(sample) - 1)
+    low = math.floor(index)
+    high = min(low + 1, len(sample) - 1)
+    return sample[low] + (sample[high] - sample[low]) * (index - low)
+
+
+def trade_through_depth_band(median_cents: Optional[float]) -> str:
+    """The traffic-light band for a trade-through depth median: good / average / bad.
+
+    The settled table, in cents: `[0, 1.0)` the level cleared on the tape we sat on,
+    `[1.0, 3.0]` the tape had to move past us, `(3.0, inf)` the quote sat far from where
+    the market actually traded. `None` and anything non-finite read `unmeasured` -- a
+    number nobody recorded is not a bad number.
+
+    A NEGATIVE figure reads `unmeasured` too, not `good`. The table starts at zero because
+    a cleared fill's depth cannot be negative: a print at or above our own price is not a
+    trade-through, and `trade_through_depth` excludes such a row before any band is
+    computed. A negative argument therefore means the caller handed over something no
+    cleared fill can produce, and the good side of a table it is not on would be the wrong
+    answer for it.
+
+    The thresholds live here and reach a reader as data, following `friction_band`: a
+    renderer maps a band name to a colour and holds no numeral of its own.
+    """
+    number = _finite(median_cents)
+    if number is None or number < 0.0:
+        return "unmeasured"
+    if number < TRADE_THROUGH_GOOD_BELOW_CENTS:
+        return "good"
+    return "average" if number <= TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS else "bad"
+
+
+def trade_through_depth(fills: Sequence[ClearedFill]) -> dict[str, Any]:
+    """How far below our own price the tape had to print to clear the level, in cents.
+
+    Always present, like `fill_path_edge` and `rescue_friction`, and for the same reason: a
+    caller must never have to branch on whether the reading exists. A run with nothing
+    measurable reports zero counts and `None` percentiles, which say "nothing to measure",
+    never "the tape sat on our price".
+
+    A fill is measured only when both prices are finite and `clearing_price` is STRICTLY
+    below `order_price` -- that strictness is the fill model itself, so a row which equals
+    or exceeds our price is disclosed as `not_trade_through` instead of being folded in as
+    a zero. `missing` and `not_trade_through` are counted apart from each other because
+    they are different claims: one is a value nobody recorded, the other a value the model
+    cannot produce. The three counts partition the input.
+
+    `band` scores `median_cents` -- the same rounded figure a reader sees, so the number
+    and its colour cannot disagree.
+    """
+    depths: list[float] = []
+    missing = 0
+    not_trade_through = 0
+    for row in fills or []:
+        order_price = _finite(row.order_price)
+        clearing = _finite(row.clearing_price)
+        if order_price is None or clearing is None:
+            missing += 1
+        elif clearing >= order_price:
+            not_trade_through += 1
+        else:
+            depths.append((order_price - clearing) * 100.0)
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    median = shape(_percentile(depths, 0.50))
+    return {
+        "count": len(depths),
+        "missing": missing,
+        "not_trade_through": not_trade_through,
+        "median_cents": median,
+        "p75_cents": shape(_percentile(depths, 0.75)),
+        "band": trade_through_depth_band(median),
     }
 
 
