@@ -1,4 +1,74 @@
-# CONSTRAINTS — #493 (locked by Station II, enforced through Station V)
+# CONSTRAINTS — #513 (locked by Station II, enforced through Station V)
+
+Governs the `i513/add-fill-path-edge-metrics-for-merge-vs-rescue` branch only.
+
+## Scope & File Boundaries
+
+- Target files for modification:
+  - `core_brain/statistical_analytics.py` (new constants `RESCUE_METHODS` /
+    `EXCLUDED_METHODS`, new `fill_path_edge()` and `break_even_rescue_rate()`, module
+    docstring, and the single new key inside `build()` — nothing else on that module).
+  - `tests/test_fill_path_analytics.py` (NEW — the ticket's required focused file).
+  - `tests/test_statistical_analytics.py` (extend the populated and empty `build()` tests only).
+  - `dashboard/static/index.html` (one new `#fill-path-edge-readout` element above `#kpi-grid`).
+  - `dashboard/static/app.js` (`renderFillPathEdge`, its call inside `renderAnalyticsSurface`,
+    and its entry in the `module.exports` object — nothing else).
+  - `tests/js/analytics_surface_harness.cjs` (stub id, direct render call, printed HTML).
+  - `tests/test_analytics_surface_mount.py` (new cases for the readout).
+  - `CONSTRAINTS.md`, `SPEC.md`, `tasks/plan.md`, `tasks/todo.md`.
+- Files that must NOT be modified:
+  - `core_brain/kpi.py` (including `evaluate_stat_gate()` and `_pnl_by_fill_path`),
+    `statistical_validation_run/artifacts.py` (including `rescue_stats()`, `build_gate_rows()`,
+    `resolve_verdict()`, `render_report_md()`), `core_brain/registry_state.py`,
+    `core_brain/order_registry.py`, `core_brain/config.py`, `core_brain/ladder.py`.
+  - Live execution: `core_brain/order_manager.py`, `core_brain/trader_loop.py`,
+    `core_brain/single_buy_saver.py`, `core_brain/single_leg_lifecycle.py`,
+    `core_brain/shadow_exec.py`, `core_brain/shadow_fills.py`, `core_brain/market_resolution.py`.
+  - `dashboard/server.py`, `core_brain/statistics_report.py`, `scripts/rescue_exit_report.py`.
+  - `data/orders.db` and every production store (read-only at all times).
+
+## Zero regressions
+
+- Focused suites that must pass:
+  `tests/test_fill_path_analytics.py`
+  `tests/test_statistical_analytics.py`
+  `tests/test_analytics_surface_mount.py`
+  `tests/test_mean_pnl_ci.py`
+  `tests/test_trade_analytics.py`
+  `tests/test_pnl_by_fill_path.py`
+  `tests/test_analytics_api.py`
+  `tests/test_stat_validation_artifacts.py`
+- Full-repo sweep stays with CI on push (Ubuntu + Windows); locally run only the focused suites.
+- Every new behavior needs a test that fails without the change (RED first, per
+  `test-driven-development`).
+
+## Metric contract freeze
+
+- The bucket sets are `merge` = `merge`/`shadow_merge`; `rescue` =
+  `single_buy_exit`/`naked_exit`/`ladder_exit`; `excluded` = `venue_sync`; everything else is
+  `other` and is disclosed, never folded in.
+- `rescue_rate` and `net_expectancy_usd` use the same denominator — merges + rescue closes —
+  and that denominator is `rescue_stats`-compatible. `other`, `excluded` and `skipped` never
+  enter it.
+- Every unmeasurable value is `None` with a `break_even_status` reason. A missing value is never
+  rendered or serialised as `0` / `NaN` / `Infinity`.
+- No stop-offset constant anywhere: the break-even comes from realized close dollars.
+- `build()` keeps every one of its existing keys and values; the new key is additive.
+- No classification, quoting, sizing, stop-trigger or GO-gate change. Analytics only.
+
+## Anti-cheat
+
+- No skipped/disabled tests, no deleted assertions, no new lint/type suppressions.
+- No new external dependencies, and no new module: the code lives in the module that already
+  owns this payload.
+- Never weaken or re-tune the frozen bucket sets to make an assertion pass — a drift-guard test
+  pins them to their canonical homes instead.
+- No live orders; no `quote`, `complete`, Trader loop, dashboard START, merge or cancel. Tests
+  are offline; the production store is read-only.
+
+---
+
+# CONSTRAINTS — #493 (history)
 
 Governs the `i493/sentry-and-offense-loops-each-price-what-they-insp` branch only.
 

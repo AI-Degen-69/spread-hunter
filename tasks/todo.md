@@ -1,7 +1,13 @@
-# Todo — #506 tsc gate config
+# Todo — #513 fill-path edge metrics (merge vs rescue)
 
-- [ ] T1: prove old/new tsc commands (evidence, no commits)
-- [ ] T2: verifying.md gate line + N1 resolution note
-- [ ] T3: tests/test_tsc_gate_config.py guard (RED then GREEN)
-- [ ] Targeted suites green (new test file)
-- [ ] Handoff to iii-build-plan auto
+Branch: `i513/add-fill-path-edge-metrics-for-merge-vs-rescue`
+
+- [ ] T1: `core_brain/statistical_analytics.py` — `RESCUE_METHODS`, `EXCLUDED_METHODS`,
+      `fill_path_edge()`, `break_even_rescue_rate()`; new `tests/test_fill_path_analytics.py`
+      (RED first: import error)
+- [ ] T2: `build()` gains the `fill_path_edge` key; extend populated/empty `build()` tests in
+      `tests/test_statistical_analytics.py` (RED first: `KeyError`)
+- [ ] T3: `#fill-path-edge-readout` card (`index.html`), `renderFillPathEdge` (`app.js` +
+      `module.exports`), harness call, mount-test cases
+- [ ] Focused suites green (nothing else in the tree touched)
+- [ ] Handoff to `/iii-build-plan auto`

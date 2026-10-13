@@ -271,6 +271,9 @@ def test_build_populates_every_section_it_has_input_for():
     assert payload["markout"]["intervals"] == []
     # One close is not a distribution.
     assert "monte_carlo" not in payload
+    # The fill-path split is always present: it is derived from the closes the
+    # payload already holds, not from a sample large enough to draw.
+    assert payload["fill_path_edge"]["merge_count"] >= 1
 
 
 def test_build_on_an_empty_run_synthesises_nothing():
@@ -283,6 +286,12 @@ def test_build_on_an_empty_run_synthesises_nothing():
     assert payload["probability_bell"]["bins"] == []
     assert payload["markout"]["intervals"] == []
     assert "monte_carlo" not in payload
+    # The split is still present, and unmeasured rather than zero: `0.0` here
+    # would read as "rescues cost nothing".
+    edge = payload["fill_path_edge"]
+    assert edge["merge_expectancy_usd"] is None
+    assert edge["rescue_rate"] is None
+    assert edge["net_expectancy_usd"] is None
 
 
 def test_closed_positions_mirrors_the_distribution_sample():

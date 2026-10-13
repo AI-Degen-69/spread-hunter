@@ -41,7 +41,7 @@ function element(id) {
 
 // Every id the Tier 1 renderers and the view filter reach for.
 for (const id of ['pnl-ci-readout', 'execution-funnel', 'sample-sufficiency-readout',
-                  'card-sample-sufficiency', 'tier1-decision-row',
+                  'card-sample-sufficiency', 'tier1-decision-row', 'fill-path-edge-readout',
                   'quant-risk-deck', 'analytics-charts-matrix',
                   'card-sensitivity-simulator', 'analytics-gates',
                   'market-inspection-card']) {
@@ -87,6 +87,14 @@ try {
 } catch (e) {
   errors.push(`sample_sufficiency: ${e && e.message}`);
 }
+/* Called directly rather than through renderAnalyticsSurface: the full mount
+ * wraps each isolated renderer in its own try/catch, which would swallow a
+ * throw instead of reporting it here. */
+try {
+  app.renderFillPathEdge(kpi.statistical_analytics || {});
+} catch (e) {
+  errors.push(`fill_path_edge: ${e && e.message}`);
+}
 
 /* Tier 1 is the row that decides whether we trade. Every sub-view filter has
  * to leave it alone -- a click on "Monte Carlo & VaR" must not blank the
@@ -107,5 +115,6 @@ process.stdout.write(JSON.stringify({
   pnl_ci_html: element('pnl-ci-readout').innerHTML,
   funnel_html: element('execution-funnel').innerHTML,
   sample_sufficiency_html: element('sample-sufficiency-readout').innerHTML,
+  fill_path_edge_html: element('fill-path-edge-readout').innerHTML,
   tier1_visibility: tier1Visibility,
 }));
