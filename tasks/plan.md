@@ -170,7 +170,12 @@ other; T2 first because it is the ticket's own acceptance criterion.
   `tests/test_statistical_analytics.py` (currently RED with a `KeyError`). Depends on: T1.
   Verify: `python -m pytest -q tests/test_fill_path_analytics.py tests/test_statistical_analytics.py`.
   Skill: `test-driven-development`.
-- [ ] **T3 (M, [Design/UI])** — the readout card. `dashboard/static/index.html`: new
+- [x] **T3 (M, [Design/UI])** — DONE: card renders on the live dashboard against `data/02_shadow_prudent_13-10_03-01.db`
+  (copy) with `+$0.10` / `-$1.25` / `50.0%` / `7.4%` / `-$0.57`, survives a sub-view switch, and the
+  singular-count fix (`1 close`, not `1 closes`) went RED→GREEN with the tree restored byte-identically
+  (md5 `a41c2b5e` before and after). Committed
+  `feat(dashboard): show fill-path edge beside the average close (#513)`.
+  The readout card. `dashboard/static/index.html`: new
   `<div id="fill-path-edge-readout">` inserted between the Tier-1 row's closing tag (after
   `:476`) and the `<!-- Statistical Power & Distribution Chips -->` comment at `:477`, i.e.
   immediately above `#kpi-grid` at `:478`. It must **not** carry `.stats-chart-card`: that class
@@ -232,9 +237,14 @@ Card title `FILL-PATH EDGE — MERGE VS RESCUE` (Title Case tag), values as:
 - Merge: `fmtSignedUSD(merge_expectancy_usd)` + ` per close` + close count; `unmeasured` when `None`.
 - Rescue: same shape.
 - Rescue rate: `(rescue_rate*100).toFixed(1) + '%'` with its divisor shown (`n of m completions`).
-- Break-even: `(break_even_rescue_rate*100).toFixed(1) + '%'`, else the status in plain words —
-  `merge_not_profitable` → "Merge closes must be profitable first.", `rescue_not_losing` →
-  "Rescue closes are not losing.", `unmeasured` → "Unmeasured — one path has no closes."
+- Break-even: `(break_even_rescue_rate*100).toFixed(1) + '%'`, else the status in plain words.
+  **Shipped wording, reconciled here (T3):** `merge_not_profitable` → "no rescue rate breaks even
+  while merges lose"; `rescue_not_losing` → "no rescue rate breaks even while rescues do not lose";
+  `unmeasured` → "unmeasured — no completed closes" (only when *both* paths are empty) or
+  "unmeasured — one path has no closes". The planning-time strings above were replaced because
+  they answer a precondition ("must be profitable first") where the slot's job is to answer
+  *why no number exists*, and because one `unmeasured` string could not tell a run with no
+  completions at all from one where a single path never resolved.
 - Net expectancy: `fmtSignedUSD(net_expectancy_usd)` + ` per close`.
 - Disclosed counts: other (count + `fmtSignedUSD(other_pnl_usd)`), excluded, skipped.
 - Caption, sentence case with a full stop (`docs/agents/glossary.md`, "Dashboard copy"):
