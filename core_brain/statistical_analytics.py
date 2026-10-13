@@ -598,7 +598,9 @@ def rescue_friction_summary(closes: Sequence[Any]) -> dict[str, Any]:
     Each mean uses the closes that carry its own metric (`latency` needs a recorded
     trigger, the fee ratio needs a measured fee), so one unrecorded field cannot drag a
     mean toward zero while looking like a measurement. The reference counts say how many
-    of the drag figures rest on the named offset assumption rather than a recorded bid.
+    of the drag figures rest on the named offset assumption rather than a recorded bid,
+    and `assumed_stop_offset` carries that offset itself so a readout prints the number
+    the computation used rather than a copy of its own.
     """
     rows = [row for row in closes or []
             if str(_close_field(row, "method") or "").strip().lower() in RESCUE_METHODS]
@@ -630,6 +632,7 @@ def rescue_friction_summary(closes: Sequence[Any]) -> dict[str, Any]:
         "measured_count": len(by_metric["sled"]),
         "recorded_reference_count": recorded,
         "assumed_reference_count": assumed,
+        "assumed_stop_offset": STOP_OFFSET_FALLBACK,
         "fee_measured_count": fee_measured,
         "non_rescue_count": len(closes or []) - len(rows),
         "mean_sled_cents": means["sled"],

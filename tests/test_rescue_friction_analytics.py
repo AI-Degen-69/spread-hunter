@@ -344,6 +344,9 @@ def test_a_close_with_no_measurable_drag_has_no_overshoot():
 
 @pytest.mark.parametrize("metric,value,expected", [
     ("sled", None, "unmeasured"),
+    # A non-finite value is not a bad value, it is no value: `build()` promises strict JSON,
+    # so this reaches the band only from a caller holding its own arithmetic.
+    ("sled", float("nan"), "unmeasured"),
     ("sled", 0.0, "good"),
     ("sled", -3.0, "good"),
     ("sled", 2.0, "average"),
@@ -421,6 +424,9 @@ def test_the_summary_discloses_how_the_reference_was_arrived_at():
     assert out["recorded_reference_count"] == 4
     assert out["assumed_reference_count"] == 1
     assert out["fee_measured_count"] == 4
+    # The offset the disclosure names travels in the payload, so the card prints the
+    # number the computation actually used instead of a copy of its own.
+    assert out["assumed_stop_offset"] == pytest.approx(STOP_OFFSET_FALLBACK)
 
 
 def test_the_summary_bands_the_means_it_reports():

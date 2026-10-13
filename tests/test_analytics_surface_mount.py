@@ -414,6 +414,7 @@ RESCUE_FRICTION = {
     "mean_overshoot_ratio": 0.40625,
     "bands": {"sled": "bad", "latency": "good", "execution": "good",
               "tcdr": "average", "overshoot": "average"},
+    "assumed_stop_offset": 0.03,
     "units": "cents_per_share",
 }
 
@@ -449,7 +450,9 @@ def test_the_readout_discloses_where_the_numbers_came_from():
     text = _visible(out["rescue_friction_html"])
     assert "Measured 5 of 5 rescue closes" in text
     assert "triggers recorded 4" in text
-    assert "assumed 0.04 offset 1" in text
+    # The offset is the payload's own number, not a copy the card carries: this store
+    # assumes 0.03, so the card has to say 0.03.
+    assert "assumed 0.03 offset 1" in text
     assert "fees measured 4" in text
     assert "3 other closes left out of every mean" in text
 

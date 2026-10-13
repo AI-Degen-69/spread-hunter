@@ -112,7 +112,8 @@ def rescue_friction_summary(closes) -> dict:
     """Always present, like `fill_path_edge`. Population = `method` in RESCUE_METHODS
     (lowercased/stripped), never narrowed by `reason`.
     Counts:  rescue_count, measured_count (SLED measurable), recorded_reference_count,
-             assumed_reference_count, fee_measured_count, non_rescue_count
+             assumed_reference_count, assumed_stop_offset (the offset itself, so a readout
+             prints the number the computation used), fee_measured_count, non_rescue_count
     Means (each over its own measured subset, None when empty):
              mean_sled_cents, mean_latency_drag_cents, mean_execution_drag_cents,
              mean_tcdr, mean_overshoot_ratio

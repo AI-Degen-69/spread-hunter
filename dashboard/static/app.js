@@ -4612,12 +4612,22 @@ function renderRescueFriction(stats) {
     return (value === null || value === undefined || !Number.isFinite(n)) ? null : n;
   };
   const count = (value) => figure(value) || 0;
+  /* The sign in front of the number, the way `fmtSignedUSD` puts one in front of a
+   * dollar: `+15.80`, never `15.80+`. Three cases, written as three returns rather than
+   * a nested ternary. */
+  const signOf = (n) => { if (n > 0) return '+'; if (n < 0) return '-'; return ''; };
   /* Cents, signed: a drag that improved on the trigger is a real reading and must not
    * print as `0.00`. Two decimals is all a cent-based metric can carry. */
   const cents = (value) => {
     const n = figure(value);
     if (n === null) return 'unmeasured';
-    return (n > 0 ? '+' : n < 0 ? '-' : '') + Math.abs(n).toFixed(2);
+    return signOf(n) + Math.abs(n).toFixed(2);
+  };
+  /* A price, to the cent. `--` when the payload does not carry one: an offset nobody
+   * reported is not `0.00`. */
+  const price = (value) => {
+    const n = figure(value);
+    return n === null ? '—' : n.toFixed(2);
   };
   const multiple = (value) => {
     const n = figure(value);
@@ -4653,7 +4663,7 @@ function renderRescueFriction(stats) {
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:10px">
       Measured ${count(friction.measured_count)} of ${count(friction.rescue_count)} rescue closes ·
       triggers recorded ${count(friction.recorded_reference_count)} ·
-      assumed ${FALLBACK_STOP_OFFSET} offset ${count(friction.assumed_reference_count)} ·
+      assumed ${price(friction.assumed_stop_offset)} offset ${count(friction.assumed_reference_count)} ·
       fees measured ${count(friction.fee_measured_count)}
     </div>
     <div class="mono" style="font-size:11px;color:var(--text-muted);margin-top:4px">
@@ -4661,11 +4671,6 @@ function renderRescueFriction(stats) {
       ${count(friction.non_rescue_count)} other closes left out of every mean.
     </div>`;
 }
-
-/* The named offset the backend assumes when a rescue close recorded no `trigger_bid`.
- * Displayed only, so the operator can see the assumption the count above refers to; the
- * computation keeps its own copy in `core_brain/statistical_analytics.py`. */
-const FALLBACK_STOP_OFFSET = '0.04';
 
 function renderAnalyticsSurface(kpi, status) {
   const grid = document.getElementById('kpi-grid');

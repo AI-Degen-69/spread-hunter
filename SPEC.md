@@ -39,7 +39,7 @@ Supersedes the #513 `fill_path_edge` spec in this file's history (kept in git).
 | `trigger_bid` and `fresh_bid` both recorded, exit at the trigger (zero slippage) | latency 0, execution 0, SLED 0, overshoot 0 |
 | Adverse slippage with a large taker fee | both hops measured, SLED = their exact sum, overshoot = SLED / planned risk, TCDR = fee / \|payoff\| |
 | Price improvement (exit above the trigger) | negative SLED and hops kept (not clipped), bands read good |
-| `trigger_bid` absent, `fresh_bid` present | reference = `entry - 0.04`, source `assumed_offset`; latency `None`; SLED still reported against the assumed reference |
+| `trigger_bid` absent, `fresh_bid` present | reference = `entry - STOP_OFFSET_FALLBACK` (0.04), source `assumed_offset`, and the summary carries that offset as `assumed_stop_offset` so a readout never keeps its own copy; latency `None`; SLED still reported against the assumed reference |
 | `fresh_bid` absent | latency `None`, execution `None`, SLED still measured off the reference |
 | `planned_risk <= 0` (trigger at or above entry) | overshoot `None` + status, never `ZeroDivisionError` |
 | `realized_pnl` 0 or missing | TCDR `None`, never `ZeroDivisionError` |
