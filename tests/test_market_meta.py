@@ -138,13 +138,15 @@ def test_venue_shorthand_canonicalizes_to_the_game(tmp_path):
         "0xcs1": ("CS2", "Counter-Strike 2"),
         "0xcanonical-lol": ("LoL", "League of Legends"),
     }
-    for cid, (venue, want) in cases.items():
-        _write_feed(tmp_path, [{
-            "cid": cid, "slug": f"match-{cid}",
-            "title": f"Some match {cid}", "category": "",
-            "venue_category": venue, "series_title": "", "market_group": "",
-            "tags": [], "volume_24h": 1.0,
-        }])
+    # One feed write for all rows: the feed cache keys on file mtime, so
+    # rapid successive rewrites can read back stale rows.
+    _write_feed(tmp_path, [{
+        "cid": cid, "slug": f"match-{cid}",
+        "title": f"Some match {cid}", "category": "",
+        "venue_category": venue, "series_title": "", "market_group": "",
+        "tags": [], "volume_24h": 1.0,
+    } for cid, (venue, _) in cases.items()])
+    for cid, (_, want) in cases.items():
         meta = mm.resolve_market_meta(cid, [], [], root=tmp_path)
 
         assert meta["category"] == want
