@@ -977,6 +977,102 @@ def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFi
     return records
 
 
+# ---------------------------------------------------------------------------
+# Statistical robustness gates (#516) -- is the mean an edge or an accident, and
+# is the tape behind our fills helping or hurting.
+# ---------------------------------------------------------------------------
+
+# Two-sided normal critical values, by confidence level. Used once the sample
+# is large enough for the normal approximation to hold.
+#
+# This block lived in `kpi.py` until #516. It is here now because the robustness card needs the
+# same band over the same closes, and a second copy of a threshold table is how two screens start
+# disagreeing about one run. `kpi.py` imports it back as `_mean_pnl_ci`, so the KPI payload is
+# unchanged; this module still imports nothing of its own (see the subprocess test in
+# `tests/test_markout_robustness_analytics.py`).
+CI_Z_BY_LEVEL = ((90, 1.645), (95, 1.96))
+
+# Two-sided Student-t critical values by degrees of freedom (n - 1), for the
+# same two levels. On the samples this dashboard actually runs on -- three
+# closes, seven closes -- the normal value is far too narrow: two closes of
+# $1.00 and $3.00 give a 95% normal band of +$0.04 to +$3.96, a confident
+# "profitable" verdict drawn from two observations. The t band on the same two
+# closes spans zero, which is the truth. Beyond 30 degrees of freedom the two
+# agree to the third decimal and the normal value takes over.
+CI_T_BY_DF: dict[int, dict[int, float]] = {
+    1: {90: 6.314, 95: 12.706}, 2: {90: 2.920, 95: 4.303},
+    3: {90: 2.353, 95: 3.182}, 4: {90: 2.132, 95: 2.776},
+    5: {90: 2.015, 95: 2.571}, 6: {90: 1.943, 95: 2.447},
+    7: {90: 1.895, 95: 2.365}, 8: {90: 1.860, 95: 2.306},
+    9: {90: 1.833, 95: 2.262}, 10: {90: 1.812, 95: 2.228},
+    11: {90: 1.796, 95: 2.201}, 12: {90: 1.782, 95: 2.179},
+    13: {90: 1.771, 95: 2.160}, 14: {90: 1.761, 95: 2.145},
+    15: {90: 1.753, 95: 2.131}, 16: {90: 1.746, 95: 2.120},
+    17: {90: 1.740, 95: 2.110}, 18: {90: 1.734, 95: 2.101},
+    19: {90: 1.729, 95: 2.093}, 20: {90: 1.725, 95: 2.086},
+    21: {90: 1.721, 95: 2.080}, 22: {90: 1.717, 95: 2.074},
+    23: {90: 1.714, 95: 2.069}, 24: {90: 1.711, 95: 2.064},
+    25: {90: 1.708, 95: 2.060}, 26: {90: 1.706, 95: 2.056},
+    27: {90: 1.703, 95: 2.052}, 28: {90: 1.701, 95: 2.048},
+    29: {90: 1.699, 95: 2.045}, 30: {90: 1.697, 95: 2.042},
+}
+
+
+def ci_critical_value(level: int, n: int, z: float) -> float:
+    """The multiplier for a two-sided interval on a sample of `n`.
+
+    Student-t while the sample is small enough for it to matter, the normal
+    value once it is not. No new dependency: the table is the whole of what
+    `scipy.stats.t.ppf` would be used for here.
+    """
+    return CI_T_BY_DF.get(n - 1, {}).get(level, z)
+
+
+def mean_pnl_ci(pnls: Sequence[float]) -> dict[str, Any]:
+    """The 90% and 95% band on the mean realized PnL per close, in dollars.
+
+    The GO/NO-GO question #90 names is not "what is the average" but "does the
+    interval around it still contain a loss, and how deep". So each level
+    carries that answer outright rather than leaving it to be inferred from a
+    lower bound printed next to a mean.
+
+    A sample too small for a standard error reports no levels at all. A zero
+    would read as "breaks even", which is a measurement one close has not made.
+    """
+    n = len(pnls)
+    mean_usd = statistics.mean(pnls) if n else None
+    if n < 2 or mean_usd is None:
+        return {"mean_usd": mean_usd, "n": n, "levels": [], "verdict": None}
+
+    se = statistics.stdev(pnls) / math.sqrt(n)
+    levels = []
+    for level, z in CI_Z_BY_LEVEL:
+        crit = ci_critical_value(level, n, z)
+        lower = mean_usd - crit * se
+        upper = mean_usd + crit * se
+        levels.append({
+            "level": level,
+            "lower": lower,
+            "upper": upper,
+            "includes_negative": lower < 0,
+            # How far below zero the band reaches -- the "and how much" half
+            # of the question. NULL when it never gets there.
+            "negative_depth_usd": abs(lower) if lower < 0 else None,
+        })
+
+    # The verdict reads off the wider band: passing on 90% while the 95% band
+    # still spans zero is not a pass.
+    widest = levels[-1]
+    if widest["lower"] > 0:
+        verdict = "positive"
+    elif widest["upper"] < 0:
+        verdict = "negative"
+    else:
+        verdict = "spans_zero"
+
+    return {"mean_usd": mean_usd, "n": n, "levels": levels, "verdict": verdict}
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 

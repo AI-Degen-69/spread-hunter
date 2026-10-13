@@ -272,6 +272,13 @@ serialised because they write the same file.
 
 ## Tasks
 
+Status (the plan is the source of truth for completion):
+
+- [x] **T1** — Share the confidence interval helper, in the pure module · S · `[Backend/Logic]`
+- [ ] **T2** — Signed post-fill markout, in cents, with the ticket's band · M · `[Backend/Logic]`
+- [ ] **T3** — Maximum adverse excursion over the holding window, and SQN · M · `[Backend/Logic]`
+- [ ] **T4** — Payload section, the readout card, and the operator's demo store · L · `[Backend/Logic]` + `[Design/UI]`
+
 ### T1 — Share the confidence interval helper, in the pure module · size S · `[Backend/Logic]`
 - Files: `core_brain/statistical_analytics.py`, `core_brain/kpi.py`,
   `tests/test_markout_robustness_analytics.py` (NEW).
