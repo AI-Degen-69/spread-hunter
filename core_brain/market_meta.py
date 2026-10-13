@@ -168,6 +168,19 @@ def classify_display_category(title: Any, event_title: Any,
     return None
 
 
+def _canonical_feed_label(label: Optional[str]) -> Optional[str]:
+    """A feed label in canonical display form, or the label untouched.
+
+    `None`/empty stays `None` so the keyword fallback still runs. A label
+    the display rules can name ("ATP Tour", "CS2", "LoL") comes back as the
+    game itself ("Tennis", "Counter-Strike 2", "League of Legends"); a label
+    they cannot name ("Crypto", "Match Winner") passes through verbatim.
+    """
+    if not label:
+        return None
+    return classify_display_category(label, "", "") or label
+
+
 class _FeedList(list):
     """List subclass holding an index of rows by cid for O(1) lookup."""
     _cid_map: dict[str, dict]
@@ -252,8 +265,12 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
 
     `root` is the caller's repo root (KPI and registry state each pass their
     own, which is also how tests redirect the feed). Precedence for category:
-    feed `venue_category` verbatim, `category`, `series_title`,
-    `market_group`, first tag label, keyword fallback, `Uncategorized`.
+    feed `venue_category`, `category`, `series_title`, `market_group`, first
+    tag label, keyword fallback, `Uncategorized`. A winning feed label is
+    canonicalized through the same display rules -- the venue names the
+    shelf ("ATP Tour", "CS2", "LoL"), the dashboard shows the game itself
+    ("Tennis", "Counter-Strike 2", "League of Legends"). A label the rules
+    cannot name passes through verbatim.
     """
     out: dict[str, Any] = {
         "condition_id": cid,
@@ -302,7 +319,12 @@ def resolve_market_meta(cid: str, closes: Optional[list[dict]] = None,
             # The live feed ships category="" on most rows, so the venue
             # label, the series, the group, and the tags are the labels that
             # actually survive. An empty cell teaches the reader nothing.
-            "category": (
+            # Canonicalize the winner: a venue shorthand ("ATP Tour", "CS2",
+            # "LoL") must read as the game itself, exactly like a market the
+            # keyword fallback classified. Only the label itself is
+            # classified, never the title alongside it, so an explicit venue
+            # label is translated but never overridden by a keyword guess.
+            "category": _canonical_feed_label(
                 _text_of(row, "venue_category")
                 or _text_of(row, "category")
                 or _text_of(row, "series_title")
