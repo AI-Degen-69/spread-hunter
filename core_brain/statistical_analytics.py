@@ -7,6 +7,13 @@ that key: not `kpi.report`, not the TS bridge, at any commit in this repo's
 history. So the charts have shown "unmeasured" since the day they were written,
 including on runs that closed positions at a profit.
 
+The payload also carries one section that is not a chart. `fill_path_edge`
+splits the same closes into the merge path and the rescue path, because a
+healthy merge edge and a rescue bleed cancel out inside one total and the
+operator cannot tell which is happening. It summarises closes rather than
+drawing them, and it discloses the closes that fall outside both paths instead
+of folding them in.
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -33,6 +40,20 @@ from typing import Any, Optional, Sequence
 # is the strategy's own exit; anything else unwound some other way, and the
 # distribution chart splits the two.
 MERGE_METHODS = ("merge", "shadow_merge")
+
+# The single-buy exits: a leg whose partner never filled, sold back through the
+# book. Mirrors `kpi.SINGLE_BUY_EXIT_METHODS`,
+# `statistical_validation_run.artifacts.EXIT_METHODS` and
+# `ladder.LADDER_EXIT_METHODS`, and shares `artifacts.rescue_stats`'
+# merges-plus-exits denominator. Declared rather than imported because `kpi`
+# imports THIS module, so the reverse import is a cycle; the copies are pinned
+# against each other in `tests/test_fill_path_analytics.py`.
+RESCUE_METHODS = ("single_buy_exit", "naked_exit", "ladder_exit")
+
+# Bookkeeping rows the account sweep writes against a market. Nothing was sold
+# and no position was lost, so they belong to no path. Mirrors
+# `kpi.NON_TRADE_CLOSE_METHODS`.
+EXCLUDED_METHODS = ("venue_sync",)
 
 # The venue pays exactly $1.00 for a merged pair, so pair cost lives just under
 # it. These bounds frame the density chart around the only region that matters.
@@ -168,6 +189,119 @@ def pair_costs(closes: Sequence[dict]) -> dict[str, Any]:
         "median": round(statistics.median(costs), 6),
         "stdev": round(statistics.stdev(costs), 6) if len(costs) > 1 else None,
         "min_observed": round(min(costs), 6),
+    }
+
+
+def _close_field(row: Any, name: str) -> Any:
+    """Read one field off a close dict or a `CloseRecord`.
+
+    `kpi.report` hands this module the registry's plain dicts; a caller may be
+    holding the records instead. Both shapes measure identically.
+    """
+    if isinstance(row, dict):
+        return row.get(name)
+    return getattr(row, name, None)
+
+
+def _fill_path(method: Any) -> str:
+    """Which path a close's `method` belongs to: merge, rescue, excluded, other.
+
+    `method` is a free-form recorded string, so this mapping is the load-bearing
+    part of the section. The buckets are an accounting proxy, not literal
+    `PAIRED_MERGE` / `RESCUE_STOP` execution labels: a merge close can follow a
+    taker completion, and a leg held to market resolution is neither path.
+    """
+    method = str(method or "").strip().lower()
+    if method in MERGE_METHODS:
+        return "merge"
+    if method in RESCUE_METHODS:
+        return "rescue"
+    if method in EXCLUDED_METHODS:
+        return "excluded"
+    return "other"
+
+
+def break_even_rescue_rate(merge_mean: Optional[float],
+                           rescue_mean: Optional[float],
+                           ) -> tuple[Optional[float], str]:
+    """The rescue share at which the two paths net to exactly zero.
+
+    Solving `(1 - r) * merge + r * rescue == 0` gives `merge / (merge - rescue)`,
+    so a run whose rescue rate sits above this number is losing on the two paths
+    even while its merges are profitable. The result is always below 1.0: a run
+    where every resolution is a rescue can never break even.
+
+    No stop-offset constant is involved, deliberately. `hard_stop_bid` is an
+    absolute bid floor and `single_buy_max_loss_usd` is a per-profile per-share
+    limit, so a constant here would drift away from execution; the realized
+    close dollars already contain the exit that actually filled.
+
+    `None` back with a reason when the question has no answer: a path with no
+    closes, a merge mean at or below zero (nothing to lose), or a rescue mean at
+    or above zero (nothing to lose to).
+    """
+    if merge_mean is None or rescue_mean is None:
+        return None, "unmeasured"
+    if merge_mean <= 0:
+        return None, "merge_not_profitable"
+    if rescue_mean >= 0:
+        return None, "rescue_not_losing"
+    return merge_mean / (merge_mean - rescue_mean), "measured"
+
+
+def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
+    """Merge expectancy against rescue expectancy, in dollars per close.
+
+    One close record is one equal observation. `other` (a leg held to
+    settlement, a generic sell) and `excluded` (bookkeeping rows) are counted
+    and disclosed, but enter no mean, no sum and no denominator -- only the two
+    paths the strategy actually chose between. A row with no usable
+    `realized_pnl` is skipped and counted, so one malformed record cannot drag a
+    mean toward zero while looking like a measurement.
+    """
+    by_path: dict[str, list[float]] = {"merge": [], "rescue": [], "other": []}
+    excluded = skipped = 0
+    for row in closes or []:
+        bucket = _fill_path(_close_field(row, "method"))
+        if bucket == "excluded":
+            excluded += 1
+            continue
+        pnl = _finite(_close_field(row, "realized_pnl"))
+        if pnl is None:
+            skipped += 1
+            continue
+        by_path[bucket].append(pnl)
+
+    merge_count, rescue_count = len(by_path["merge"]), len(by_path["rescue"])
+    merge_pnl = float(sum(by_path["merge"]))
+    rescue_pnl = float(sum(by_path["rescue"]))
+    resolved = merge_count + rescue_count
+    merge_mean = (merge_pnl / merge_count) if merge_count else None
+    rescue_mean = (rescue_pnl / rescue_count) if rescue_count else None
+    # From the raw means: rounding first and then dividing would put a rounded
+    # figure into the very threshold the operator reads as the bar.
+    break_even, status = break_even_rescue_rate(merge_mean, rescue_mean)
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    return {
+        "merge_count": merge_count,
+        "merge_pnl_usd": round(merge_pnl, 6),
+        "merge_expectancy_usd": shape(merge_mean),
+        "rescue_count": rescue_count,
+        "rescue_pnl_usd": round(rescue_pnl, 6),
+        "rescue_expectancy_usd": shape(rescue_mean),
+        "rescue_rate": shape(rescue_count / resolved) if resolved else None,
+        "net_expectancy_usd": (shape((merge_pnl + rescue_pnl) / resolved)
+                               if resolved else None),
+        "break_even_rescue_rate": shape(break_even),
+        "break_even_status": status,
+        "other_count": len(by_path["other"]),
+        "other_pnl_usd": round(float(sum(by_path["other"])), 6),
+        "excluded_count": excluded,
+        "skipped_count": skipped,
+        "units": "usd_per_close",
     }
 
 
