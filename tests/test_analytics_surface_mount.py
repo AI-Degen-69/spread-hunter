@@ -383,6 +383,39 @@ def test_the_fill_path_readout_says_unmeasured_rather_than_zero():
             assert leak not in text
 
 
+# The same edge, now carrying the traffic-light bands the server computes.
+FILL_PATH_EDGE_BANDED = dict(FILL_PATH_EDGE, bands={
+    "merge_expectancy": "good", "rescue_expectancy": "bad",
+    "rescue_rate": "good", "break_even_rescue_rate": "average",
+    "net_expectancy": "good",
+})
+
+
+def test_the_fill_path_readout_colours_every_metric_with_its_band():
+    # Arrange / Act
+    out = _mount(_stats(FILL_PATH_EDGE_BANDED))
+
+    # Assert -- each tile carries the band as a chip, in the same classes the
+    # friction card uses, so one colour vocabulary covers both readouts.
+    assert out["errors"] == []
+    html = out["fill_path_edge_html"]
+    assert 'analytics-chip live' in html   # good
+    assert 'analytics-chip warn' in html   # average
+    assert 'analytics-chip bad' in html    # bad
+    for band in ("GOOD", "AVERAGE", "BAD"):
+        assert band in _visible(html)
+
+
+def test_the_fill_path_readout_renders_no_band_without_a_bands_key():
+    # Arrange / Act -- a payload served before the key existed (or a hand-built
+    # one) must still render, and must not invent chips for it.
+    out = _mount(_stats(FILL_PATH_EDGE))
+
+    # Assert
+    assert out["errors"] == []
+    assert "analytics-chip" not in out["fill_path_edge_html"]
+
+
 def test_the_fill_path_readout_names_why_a_threshold_is_missing():
     # Arrange -- merges that lose cannot be balanced by any rescue rate, so the
     # card says so in words instead of printing a number.

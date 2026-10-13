@@ -289,6 +289,80 @@ def break_even_rescue_rate(merge_mean: Optional[float],
     return merge_mean / (merge_mean - rescue_mean), "measured"
 
 
+# The rescue-rate headroom zone: inside this share of the run's own break-even
+# bar there is little room left before the two paths net negative, so the rate
+# reads average while still under the bar.
+RESCUE_RATE_HEADROOM = 0.8
+
+# Break-even bar bands, on how large a rescue share the merge edge absorbs
+# before the run nets negative: a high bar is healthy, a low one means even a
+# few rescues sink it.
+BREAK_EVEN_GOOD_AT_OR_ABOVE = 0.5
+BREAK_EVEN_AVERAGE_AT_OR_ABOVE = 0.25
+
+
+def fill_path_bands(edge: dict[str, Any]) -> dict[str, str]:
+    """The traffic-light bands for the fill-path edge readout (#513).
+
+    Same contract as `friction_band`: the thresholds live here and reach the
+    dashboard as data, so the renderer maps a band name to a colour and holds
+    no threshold of its own. A band nobody could judge reads `unmeasured`,
+    never `bad` -- a missing bar is not a failing run.
+
+    The dollar means band on their sign: the merge path and the net are meant
+    to profit, and zero expectancy there reads average because an edge of
+    exactly zero has no edge. The rescue path is meant to lose money, so a
+    rescue mean at or above zero is the good side of that metric.
+
+    The rescue rate bands against the run's OWN break-even bar, never against
+    its size: a 25% rescue rate is comfortable when the merge edge absorbs 60%
+    of closes and fatal when it absorbs 15%. At or above the bar the run nets
+    negative on the two paths even while its merges profit, which is bad; the
+    headroom zone below the bar reads average. The bar itself bands on how
+    much rescue share the edge absorbs.
+    """
+    merge = _finite(edge.get("merge_expectancy_usd"))
+    rescue = _finite(edge.get("rescue_expectancy_usd"))
+    net = _finite(edge.get("net_expectancy_usd"))
+    rate = _finite(edge.get("rescue_rate"))
+    bar = _finite(edge.get("break_even_rescue_rate"))
+
+    def sign_band(value: Optional[float], at_zero: str) -> str:
+        if value is None:
+            return "unmeasured"
+        if value > 0:
+            return "good"
+        if value < 0:
+            return "bad"
+        return at_zero
+
+    if rate is None or bar is None:
+        rate_band = "unmeasured"
+    elif rate >= bar:
+        rate_band = "bad"
+    elif rate >= RESCUE_RATE_HEADROOM * bar:
+        rate_band = "average"
+    else:
+        rate_band = "good"
+
+    if bar is None:
+        bar_band = "unmeasured"
+    elif bar >= BREAK_EVEN_GOOD_AT_OR_ABOVE:
+        bar_band = "good"
+    elif bar >= BREAK_EVEN_AVERAGE_AT_OR_ABOVE:
+        bar_band = "average"
+    else:
+        bar_band = "bad"
+
+    return {
+        "merge_expectancy": sign_band(merge, "average"),
+        "rescue_expectancy": sign_band(rescue, "good"),
+        "rescue_rate": rate_band,
+        "break_even_rescue_rate": bar_band,
+        "net_expectancy": sign_band(net, "average"),
+    }
+
+
 def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
     """Merge expectancy against rescue expectancy, in dollars per close.
 
@@ -344,7 +418,7 @@ def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
     def shape(value: Optional[float]) -> Optional[float]:
         return None if value is None else round(value, 6)
 
-    return {
+    payload = {
         "merge_count": merge_count,
         "merge_pnl_usd": round(merge_pnl, 6),
         "merge_expectancy_usd": shape(merge_mean),
@@ -362,6 +436,10 @@ def fill_path_edge(closes: Sequence[Any]) -> dict[str, Any]:
         "skipped_count": skipped,
         "units": "usd_per_close",
     }
+    # The traffic-light bands ride along with the figures they judge, computed
+    # from the rounded payload so the readout and the chip can never disagree.
+    payload["bands"] = fill_path_bands(payload)
+    return payload
 
 
 def _entry_price(close: Any) -> Optional[float]:

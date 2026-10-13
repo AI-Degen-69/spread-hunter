@@ -27,6 +27,7 @@ from core_brain.statistical_analytics import (
     MERGE_METHODS,
     RESCUE_METHODS,
     break_even_rescue_rate,
+    fill_path_bands,
     fill_path_edge,
 )
 
@@ -334,3 +335,133 @@ def test_the_method_sets_match_their_canonical_homes():
                  ladder.LADDER_EXIT_METHODS):
         assert set(RESCUE_METHODS) == set(home)
     assert set(EXCLUDED_METHODS) == set(kpi.NON_TRADE_CLOSE_METHODS)
+
+
+# --- Traffic-light bands for the readout (#513) -----------------------------
+
+def _edge(**overrides) -> dict:
+    """One measured edge payload, with any metric swapped out."""
+    base = {"merge_expectancy_usd": 0.30, "rescue_expectancy_usd": -0.60,
+            "rescue_rate": 0.25, "break_even_rescue_rate": 0.333333,
+            "net_expectancy_usd": 0.075}
+    base.update(overrides)
+    return base
+
+
+def test_a_healthy_run_reads_good_on_every_banded_metric():
+    # Arrange / Act
+    bands = fill_path_bands(_edge())
+
+    # Assert
+    assert bands == {"merge_expectancy": "good", "rescue_expectancy": "bad",
+                     "rescue_rate": "good", "break_even_rescue_rate": "average",
+                     "net_expectancy": "good"}
+
+
+def test_the_rescue_rate_bands_against_the_runs_own_bar_not_its_size():
+    # Arrange -- the same 25% rescue rate against two different bars: 25% is
+    # comfortable headroom when the merge edge absorbs 60% of closes, and fatal
+    # when it absorbs only 15%.
+    generous = fill_path_bands(_edge(rescue_rate=0.25,
+                                     break_even_rescue_rate=0.60))
+    fragile = fill_path_bands(_edge(rescue_rate=0.25,
+                                    break_even_rescue_rate=0.15))
+
+    # Act / Assert
+    assert generous["rescue_rate"] == "good"
+    assert fragile["rescue_rate"] == "bad"
+
+
+def test_the_rescue_rate_reads_average_inside_the_headroom_zone():
+    # Arrange -- inside 80% of the bar there is little headroom left, and the
+    # rate itself is still under the bar.
+    edge = _edge(rescue_rate=0.27, break_even_rescue_rate=0.333333)
+
+    # Act / Assert
+    assert fill_path_bands(edge)["rescue_rate"] == "average"
+
+
+def test_the_rescue_rate_at_the_bar_reads_bad():
+    # Arrange / Act / Assert -- the rate that nets to exactly zero is the
+    # losing side of the bar, not the edge of the good side.
+    edge = _edge(rescue_rate=0.333333, break_even_rescue_rate=0.333333)
+    assert fill_path_bands(edge)["rescue_rate"] == "bad"
+
+
+def test_the_break_even_rate_bands_on_how_much_rescue_share_the_edge_absorbs():
+    # Arrange / Act / Assert -- a high bar means the merge edge absorbs a big
+    # rescue share; a low bar means even a few rescues sink the run.
+    assert fill_path_bands(_edge(break_even_rescue_rate=0.5))[
+        "break_even_rescue_rate"] == "good"
+    assert fill_path_bands(_edge(break_even_rescue_rate=0.25))[
+        "break_even_rescue_rate"] == "average"
+    assert fill_path_bands(_edge(break_even_rescue_rate=0.24))[
+        "break_even_rescue_rate"] == "bad"
+
+
+def test_a_zero_expectancy_reads_average_not_good():
+    # Arrange / Act / Assert -- an edge of exactly zero has no edge; it is not
+    # a profit and not a loss.
+    bands = fill_path_bands(_edge(merge_expectancy_usd=0.0,
+                                  net_expectancy_usd=0.0))
+    assert bands["merge_expectancy"] == "average"
+    assert bands["net_expectancy"] == "average"
+
+
+def test_a_rescue_that_did_not_lose_reads_good():
+    # Arrange / Act / Assert -- the rescue path is expected to lose money; a
+    # rescue mean at or above zero is the good side of that metric.
+    bands = fill_path_bands(_edge(rescue_expectancy_usd=0.0))
+    assert bands["rescue_expectancy"] == "good"
+
+
+def test_an_unmeasured_metric_bands_as_unmeasured():
+    # Arrange / Act -- no resolved closes at all: every rate and mean is None,
+    # and a None is not a bad number.
+    bands = fill_path_bands(_edge(merge_expectancy_usd=None,
+                                  rescue_expectancy_usd=None,
+                                  rescue_rate=None,
+                                  break_even_rescue_rate=None,
+                                  net_expectancy_usd=None))
+
+    # Assert
+    assert set(bands.values()) == {"unmeasured"}
+
+
+def test_a_rescue_rate_without_a_bar_is_unmeasured_not_good():
+    # Arrange / Act / Assert -- the rate is measured, but with no break-even
+    # to judge it against there is no verdict, and "good" would be invented.
+    bands = fill_path_bands(_edge(break_even_rescue_rate=None))
+    assert bands["rescue_rate"] == "unmeasured"
+
+
+def test_the_bands_leave_the_payload_untouched():
+    # Arrange
+    edge = _edge()
+
+    # Act
+    fill_path_bands(edge)
+
+    # Assert -- a band computation that mutated the figures it read would make
+    # the readout disagree with the payload it draws.
+    assert edge == _edge()
+
+
+def test_the_payload_carries_the_bands():
+    # Arrange -- the mixed case used throughout this file: three merges at
+    # +$0.30, one rescue at -$0.60, one settlement. Rescue rate 25% against a
+    # 33.3% bar leaves headroom, so the rate reads good.
+    closes = [_close(0.30, "merge"), _close(0.30, "merge"),
+              _close(0.30, "merge"), _close(-0.60, "single_buy_exit"),
+              _close(1.00, "shadow_settlement")]
+
+    # Act
+    out = fill_path_edge(closes)
+
+    # Assert
+    assert out["bands"]["merge_expectancy"] == "good"
+    assert out["bands"]["rescue_expectancy"] == "bad"
+    assert out["bands"]["rescue_rate"] == "good"
+    assert out["bands"]["break_even_rescue_rate"] == "average"
+    assert out["bands"]["net_expectancy"] == "good"
+    json.dumps(out, allow_nan=False)
