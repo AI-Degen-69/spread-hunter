@@ -1,61 +1,78 @@
-# SPEC — #514: Rescue friction analytics for stop-loss drag and taker costs
+# SPEC — #516: Post-fill markout and statistical robustness analytics
 
-Branch: `i514/add-rescue-friction-analytics-for-stop-loss-drag` | Tier: Standard | Type: Code + UX/Copy (readout)
+Branch: `i516/add-post-fill-markout-and-statistical-robustness` | Tier: Standard | Type: Code + UX/Copy (readout)
 
-Supersedes the #513 `fill_path_edge` spec in this file's history (kept in git).
+Supersedes the #514 `rescue friction` spec in this file's history (kept in git), which had
+superseded #513's. Part 4 of the 4-part execution-telemetry family (`#513` → `#514` → `#515` → this).
 
 ## Goals
 
-1. The operator can tell how much of a rescue loss was execution friction rather than planned
-   price risk, from recorded closes alone: SLED (stop-loss execution drag), its two hops
-   (latency drag, execution drag), TCDR (taker cost drag ratio) and the overshoot ratio.
-2. The numbers are pure and deterministic: no network, no signer, no store write, no execution
-   path. Same closes in, same payload out; input rows are never mutated.
-3. A value that cannot be measured reads `None` with a band of `unmeasured` — never `0`, `NaN`
-   or `Infinity`.
-4. The metrics reach the surface the run already reads: the `statistical_analytics` payload from
-   `build()`, hence `/api/kpi`, the dashboard's Performance & Analytics tab, and the run's
-   `report.json`.
-5. The dashboard colours each metric's current value by its own band, using the theme's existing
-   status palette — the threshold lives in the payload, not in the renderer.
+1. The operator can tell **toxic-flow absorption from spread capture**: signed post-fill
+   mid-price displacement per configured horizon, as a **median across fills, in cents**, with
+   the ticket's traffic-light band.
+2. The operator can see **how far a position ran against us while we held it** — maximum
+   adverse excursion (MAE) in cents, as a **median and p90**, descriptive only, no band.
+3. The operator can tell **a real edge from small-sample luck**: a 95% confidence interval on
+   mean close PnL, and a system quality number (SQN) with the ticket's noise/stable-edge bands.
+4. All four are **pure and deterministic**: values in, values out. No clock, no socket, no
+   SQLite handle, no signer, no `random`. Inputs are never mutated. Every float is rounded and
+   `json.dumps(..., allow_nan=False)`-safe. Missing stays missing — never `0`.
+5. **The four metrics are VISIBLE on the Reports & Analytics page** (`page-reports`) with their
+   band chips (MAE unbanded). A calculation-only or CLI-only implementation does not satisfy
+   this issue.
+6. Bands are computed **server-side from the rounded payload** in the same function that shapes
+   it, shipped as data; the renderer maps a band name to the existing `analytics-chip` modifier
+   and holds no threshold. A payload without the section renders no chips (tested, not assumed).
+7. The 95% CI helper is **reused, not duplicated**: one definition, in the pure module, with
+   `kpi.py` importing it back under its existing private name so the KPI payload is unchanged.
 
 ## Acceptance criteria (from the ticket, restated as testable statements)
 
-- [ ] SLED, latency drag, execution drag, TCDR and overshoot ratio computed as pure deterministic
-      functions over recorded closes, on the three-price chain
-      `trigger_bid` → `fresh_bid` → `dn_price`/`up_price`.
-- [ ] SLED is exact and additive (`latency + execution == SLED` on the returned values), and the
-      overshoot ratio divides by `planned_risk` behind a guarded zero-division branch.
-- [ ] Zero-slippage, adverse-slippage-with-fees, price-improvement and empty/zero-division cases
-      covered by unit tests that fail without the change.
-- [ ] Each metric's readout display applies the traffic-light band to its current value.
-- [ ] No network or signer side-effects; analytics-only change with no LIVE execution path touched.
-- [ ] Runnable: `python -m pytest -q tests/test_rescue_friction_analytics.py`
+- [ ] `signed_markout()` reports, per configured horizon, the **median** of per-fill signed
+      displacement in cents (BUY `+1`, SELL `-1`), with `band` + `meaning` and a sample count;
+      unmatured horizons are omitted, unknown sides skipped.
+- [ ] `max_adverse_excursion()` returns the worst adverse move of a caller-supplied price
+      series against the entry, in cents and in price, clamped at zero, `None` when the series,
+      the entry or the side is unusable.
+- [ ] `system_quality_number()` returns `sqrt(n) × mean ÷ sample stdev` with the ticket's bands
+      (`< 1.6` noise, `> 2.5` stable edge, `[1.6, 2.5]` promising but unproven), and `None` for
+      fewer than two samples or zero variance.
+- [ ] The 95% band on mean close PnL comes from the **one** helper moved into
+      `core_brain/statistical_analytics.py`; `kpi._mean_pnl_ci is statistical_analytics.mean_pnl_ci`.
+- [ ] Positive/flat/adverse trajectories, synthetic MAE series over a holding window, SQN/CI at
+      N=10 and N=100, low-variance, zero-variance and zero-sample cases are covered by unit tests
+      in `tests/test_markout_robustness_analytics.py` that **fail without the change**.
+- [ ] The `build()` payload gains exactly one additive key, `robustness`, always present and
+      shape-frozen; every existing key and value is unchanged.
+- [ ] The `#robustness-readout` card renders the four metrics on the Reports & Analytics page,
+      each banded tile carrying the chip its payload band names, and MAE carrying **no chip**.
+- [ ] No network, signer or store side effect: importing the analytics module loads neither
+      `core_brain.kpi` nor `core_brain.order_registry`; no fill or sampling logic is touched.
+- [ ] Runnable: `python -m pytest -q tests/test_markout_robustness_analytics.py`
 
-## Edge cases
+## Edge cases the tests pin
 
-| Case | Expected |
-| --- | --- |
-| `trigger_bid` and `fresh_bid` both recorded, exit at the trigger (zero slippage) | latency 0, execution 0, SLED 0, overshoot 0 |
-| Adverse slippage with a large taker fee | both hops measured, SLED = their exact sum, overshoot = SLED / planned risk, TCDR = fee / \|payoff\| |
-| Price improvement (exit above the trigger) | negative SLED and hops kept (not clipped), bands read good |
-| `trigger_bid` absent, `fresh_bid` present | reference = `entry - STOP_OFFSET_FALLBACK` (0.04), source `assumed_offset`, and the summary carries that offset as `assumed_stop_offset` so a readout never keeps its own copy; latency `None`; SLED still reported against the assumed reference |
-| `fresh_bid` absent | latency `None`, execution `None`, SLED still measured off the reference |
-| `planned_risk <= 0` (trigger at or above entry) | overshoot `None` + status, never `ZeroDivisionError` |
-| `realized_pnl` 0 or missing | TCDR `None`, never `ZeroDivisionError` |
-| `fee` `NULL` | `fee_measured` false, TCDR `None` — "not measured", never 0 |
-| No shares, or shares `<= 0` | the figures that need a share count are `None`: entry price, the `proceeds / shares` exit fallback, and therefore the assumed reference and the overshoot. The drag still measures off a recorded leg price and a recorded `trigger_bid`, and TCDR still measures off a recorded fee and payoff — a per-share price and a ratio do not need the share count. (Corrected during the build: the row first said "every per-close metric", which would have made the code require an input it does not use.) |
-| No rescue closes at all | summary present with zero counts and `None` means, all bands `unmeasured` |
-| Merge / venue-sync / other closes in the list | excluded from the summary population, counted as `non_rescue_count` |
-| Input given as `CloseRecord` objects instead of dicts | identical output |
-| Input rows mutated after the call | impossible — functions copy nothing, read only |
+- Median vs mean: `signed_markout` medians (linearly interpolated, so p50 IS
+  `statistics.median`), on an even sample and a single fill.
+- Band boundaries: `0.0` is `good`, `-0.4` is `average`, exactly `-1.0` is `bad`, `None` is
+  `unmeasured` — never `bad`.
+- Exact SQN boundaries: `1.6` and `2.5` both read `average` (the closed band is inclusive).
+- Non-finite (`NaN`) marks and PnLs are dropped, not sorted and not counted.
+- A position that closed before its first horizon: no in-window mark → counted, MAE unmeasured.
+- A mark landing exactly on the close timestamp: inside the window (`<=`).
+- A run with one close: CI has no band (a zero would read "breaks even"); SQN is `None`.
+- A run with zero closes: every figure `None`, every band `unmeasured`, no division by zero.
 
 ## Explicit out of scope
 
-- Part 1 fill-path expectancy (#513) — merged; its `RESCUE_METHODS`/`_fill_path` classifier is
-  reused as-is and not redefined.
-- Stop trigger behavior, rotation ordering (#505), quoting, sizing, LIVE execution.
-- Fill-model calibration and the validation ladder (#470, #471, #474).
-- Telemetry Parts 3–4, and any new design document (ticket says none is required).
-- Percent / bps forms of the drag metrics (the ticket shows them only "where shown").
-- Recovery of fees from the venue activity feed via `venue_fees.recover_fee`.
+- Sub-minute horizons (1s/5s/30s). The schema holds `mid_h0`–`mid_h3` only and the tape is
+  1-minute; sampling changes are out of scope on this ticket.
+- Peer-baseline subtraction. The stored baselines are unsigned (`peer_markout(direction=1.0)`),
+  so the new figures are raw signed displacement; signing the baselines is a new contract.
+- A unified robustness verdict combining the gates. The ticket defines no combination rule, and
+  the two gates may disagree on purpose (a zero-variance positive sample: CI `good`, SQN
+  `unmeasured`).
+- Reconciling the dashboard chart's normal multipliers with the backend's Student-t table
+  (`dashboard/static/app.js:3091–3130`).
+- Any change to fill simulation, markout sampling mechanics or the markout sampler's writers.
+- Parts 1–3 (siblings `#513`, `#514`, `#515`) and the validation ladder (`#470`, `#471`).
