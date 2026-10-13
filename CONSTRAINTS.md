@@ -739,3 +739,10 @@ Supersedes the previous issue plan constraints for this branch only.
 - No new external dependencies without explicit operator approval.
 - `statistical_validation_run/run.py` and `scripts/shadow_tournament.py`:
   untouched (verified out of scope, see SPEC.md).
+
+## #506 — tsc gate config (docs + guard test only)
+
+- No runtime files modified (`server.ts`, `package.json`, CI workflow untouched).
+- No `tsconfig.json` added; no new dependencies, no lockfile changes.
+- Historical N1 row text in `docs/issues/478-noticed-but-not-touching.md` stays verbatim; only a resolution note is appended.
+- Guard test asserts documented text, never runs tsc as a subprocess.
