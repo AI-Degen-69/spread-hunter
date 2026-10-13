@@ -161,8 +161,13 @@ def test_stitch_orders_filled_counterpart_holds_position():
     assert "HEDGE PENDING" in html
     assert "Position Held" in html
     assert "5 @ $0.70" in html
-    assert "Single-Fill (Hedge Active)" in html
     assert "is-hedge-pending" in html
+    # Hedge-pending: one side filled, the other resting — the commit cell
+    # shows the break-even max for the other side (cap minus resting price).
+    # UP rests at $0.25 against the default $0.99 cap: max $0.74, green.
+    commit_sub = html.split('stitch-commit-sub"')[1].split("</span>")[0]
+    assert "0.74" in commit_sub
+    assert "color:#4ade80" in commit_sub
 
 
 @requires_node
@@ -236,3 +241,131 @@ def test_stitch_orders_sorts_biggest_commit_first():
     """
     res = json.loads(_eval_js(code))
     assert res["pairedFirst"] is True
+
+
+@requires_node
+def test_stitch_orders_unpaired_row_shows_break_even_max_for_missing_side():
+    # UP rests at $0.25 against the default $0.99 cap: the missing DN leg may
+    # cost at most $0.74 before the pair stops breaking even. Green while
+    # completable; the cap itself is never stated.
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [restingUP] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "0.74" in html
+    assert "color:#4ade80" in html
+    assert "shares total" not in html
+    assert "Unhedged Risk" not in html
+    assert "0.99" not in html
+
+
+@requires_node
+def test_stitch_orders_threshold_follows_which_side_rests():
+    # DN rests at $0.70: the missing UP leg may cost at most $0.29.
+    code = _FIXTURE + """
+    const restingDN = Object.assign({}, restingUP,
+        { order_id: 'ord-d1', token_id: 'tok-d', price: 0.70 });
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [restingDN] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    assert "0.29" in res["html"]
+
+
+@requires_node
+def test_stitch_orders_posted_cap_overrides_the_default():
+    # Pair posted its cap at $0.98: $0.98 - $0.25 = $0.73, not $0.74.
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(kpi, {
+        orders: [restingUP],
+        pairs: [{ pair_id: 'pair-u1', condition_id: '0xalp',
+                  max_pair_cost_at_post: 0.98 }],
+    }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    assert "0.73" in res["html"]
+
+
+@requires_node
+def test_stitch_orders_no_room_threshold_turns_red():
+    # Resting at the full cap: any fill books over-cap, so the max shows red.
+    code = _FIXTURE + """
+    const overRester = Object.assign({}, restingUP, { price: 1.00 });
+    const html = app.stitchOpenOrdersRows(kpi, { orders: [overRester] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "color:#f87171" in html
+
+
+@requires_node
+def test_stitch_orders_paired_row_carries_no_threshold():
+    # Nothing missing and nothing filled: no break-even line, and the old
+    # committed total is gone — the column shows the max only.
+    code = _FIXTURE + """
+    const html = app.stitchOpenOrdersRows(
+        kpi, { orders: [pairedUP, pairedDN] }, null);
+    console.log(JSON.stringify({ html }));
+    """
+    res = json.loads(_eval_js(code))
+    html = res["html"]
+    assert "$9.50" not in html
+    row = html.split('data-pair="pair-p1"')[1]
+    assert "stitch-commit-sub" not in row
+    assert "color:#4ade80" not in row and "color:#f87171" not in row
+
+
+@requires_node
+def test_stitch_orders_room_sits_on_the_resting_leg_rung():
+    # Two-rung cell mirroring Dual-Leg heights: the value shares the rung
+    # of the resting (unfilled) leg, the other rung stays empty.
+    # NO rests -> value on the second rung; YES rests -> first rung.
+    code = _FIXTURE + """
+    const restingNO = Object.assign({}, restingUP,
+        { order_id: 'ord-n1', token_id: 'tok-d', price: 0.40 });
+    const htmlNo = app.stitchOpenOrdersRows(kpi, { orders: [restingNO] }, null);
+    const htmlYes = app.stitchOpenOrdersRows(kpi, { orders: [restingUP] }, null);
+    console.log(JSON.stringify({ htmlNo, htmlYes }));
+    """
+    res = json.loads(_eval_js(code))
+    for key, resting_leg in (("htmlNo", "NO"), ("htmlYes", "YES")):
+        row = res[key].split('data-pair="pair-u1"')[1]
+        rungs = row.split('stitch-quote-rung">')[1:]
+        # Col 2 contributes the first two rungs, Col 3 the next two.
+        room_rungs = rungs[2:4]
+        assert len(room_rungs) == 2
+        filled_rung = room_rungs[1] if resting_leg == "NO" else room_rungs[0]
+        empty_rung = room_rungs[0] if resting_leg == "NO" else room_rungs[1]
+        assert "0.59" in filled_rung if resting_leg == "NO" else "0.74" in filled_rung
+        assert "stitch-commit-sub" in filled_rung
+        assert "stitch-commit-sub" not in empty_rung
+        assert "font-size:11.5px" in filled_rung
+
+
+@requires_node
+def test_stitch_orders_filled_leg_shows_room_on_resting_side():
+    # Operator example: YES filled 5 @ $0.55, NO resting 5 @ $0.40 — the
+    # row shows the max the other side may cost: $0.99 - $0.40 = $0.59.
+    # Mirrored (NO filled @ $0.40, YES resting @ $0.55) it shows $0.44.
+    code = _FIXTURE + """
+    const filledYES = Object.assign({}, filledDN,
+        { order_id: 'ord-y1', token_id: 'tok-u', price: 0.55 });
+    const restingNO = Object.assign({}, restingUP,
+        { order_id: 'ord-n1', token_id: 'tok-d', price: 0.40 });
+    const html1 = app.stitchOpenOrdersRows(
+        kpi, { orders: [filledYES, restingNO] }, null);
+    const restingYES = Object.assign({}, restingUP, { price: 0.55 });
+    const filledNO = Object.assign({}, filledDN, { price: 0.40 });
+    const html2 = app.stitchOpenOrdersRows(
+        kpi, { orders: [restingYES, filledNO] }, null);
+    console.log(JSON.stringify({ html1, html2 }));
+    """
+    res = json.loads(_eval_js(code))
+    sub1 = res["html1"].split('stitch-commit-sub"')[1].split("</span>")[0]
+    sub2 = res["html2"].split('stitch-commit-sub"')[1].split("</span>")[0]
+    assert "0.59" in sub1
+    assert "0.44" in sub2
