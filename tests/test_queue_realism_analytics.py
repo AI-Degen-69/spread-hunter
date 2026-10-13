@@ -101,7 +101,7 @@ def test_negative_depth_band_is_unmeasured_not_good():
     assert trade_through_depth_band(-2.0) == "unmeasured"
 
 
-def test_empty_run_is_none_not_zero_and_never_divides_by_zero():
+def test_empty_depth_run_is_none_not_zero_and_never_divides_by_zero():
     result = trade_through_depth([])
 
     assert result == {"count": 0, "missing": 0, "not_trade_through": 0,
@@ -241,7 +241,7 @@ def test_missing_timestamps_are_excluded_not_zero():
     assert result["p90_sec"] is None
 
 
-def test_empty_run_is_none_not_zero_and_never_divides_by_zero():
+def test_empty_latency_run_is_none_not_zero_and_never_divides_by_zero():
     assert fill_latency([]) == {"count": 0, "excluded": 0,
                                 "median_sec": None, "p90_sec": None}
 

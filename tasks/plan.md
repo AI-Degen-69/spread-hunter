@@ -131,8 +131,16 @@ deviation: T1's `p75` expectation was corrected from `4.75` to `4.25` at build t
 plan's blend weight was wrong; the arithmetic was re-derived in the test before the
 implementation existed). Nothing outside `core_brain/statistical_analytics.py`,
 `tests/test_queue_realism_analytics.py` and the two documentation files was touched, and
-`build()` keeps every key it had. Focused runs at T3: 179 passed across the five files
+`build()` keeps every key it had. Focused runs at T3: 180 passed across the five files
 named in `CONSTRAINTS.md`.
+
+One defect was found by the post-build check and repaired, not papered over: T2's latency
+test had reused T1's function name for the empty-run case, so Python kept the later
+definition and the depth empty-run test never executed. Renamed, and the run then collected
+33 cases in the new file instead of 32. The lint configuration on this machine also reports
+`UP045`/`B023`/`RUF046` across the pre-existing module; those predate this branch, CI runs
+no linter (its gate is pytest), and the new code follows the file's own `Optional[...]`
+convention, so no suppression and no repo-wide reformat was applied.
 
 ### T1 — `ClearedFill`, `_percentile`, `trade_through_depth` + band · S · `[Backend/Logic]`
 - Files: `core_brain/statistical_analytics.py`, `tests/test_queue_realism_analytics.py` (NEW).
