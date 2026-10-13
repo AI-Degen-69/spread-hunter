@@ -25,9 +25,14 @@ from core_brain import statistical_analytics as sa
 from core_brain.statistical_analytics import (
     MARKOUT_BAND_WORDS,
     MARKOUT_HORIZONS,
+    SQN_BAND_WORDS,
+    excursion_summary,
     markout,
     markout_cents_band,
+    max_adverse_excursion,
     signed_markout,
+    sqn_band,
+    system_quality_number,
 )
 
 
@@ -263,6 +268,248 @@ def test_the_shared_loop_reports_every_matured_horizon_in_chart_order():
     out = signed_markout([_row(mid_h0=0.51, mid_h3=0.52, mid_h1=0.53, mid_h2=0.54)])
 
     assert [i["horizon"] for i in out["intervals"]] == [label for _, label in MARKOUT_HORIZONS]
+
+
+# --- T3: maximum adverse excursion, over the holding window -----------------------
+
+
+def _close_row(condition_id: str = "cid-1", ts: float | None = 1300.0,
+               realized_pnl: float | None = None, method: str = "merge") -> dict:
+    row = {"condition_id": condition_id, "ts": ts, "method": method}
+    if realized_pnl is not None:
+        row["realized_pnl"] = realized_pnl
+    return row
+
+
+def _mark(condition_id: str = "cid-1", ts: float = 1000.0, fill_price: float = 0.50,
+          side: str = "BUY", **horizons) -> dict:
+    """One `markouts` row: an entry fill and its recorded post-fill mids."""
+    row = {"condition_id": condition_id, "ts": ts, "fill_price": fill_price,
+           "side": side, "size": 10.0}
+    row.update(horizons)
+    return row
+
+
+def test_a_buy_that_dipped_below_the_entry_reports_the_worst_move_in_cents():
+    out = max_adverse_excursion(0.50, "BUY", [0.52, 0.47, 0.49, 0.53])
+
+    assert out["mae_cents"] == pytest.approx(3.0)
+    assert out["worst_price"] == 0.47
+    assert out["samples"] == 4
+
+
+def test_a_sell_is_measured_against_the_high_side_instead():
+    out = max_adverse_excursion(0.50, "SELL", [0.48, 0.54, 0.51])
+
+    assert out["mae_cents"] == pytest.approx(4.0)
+    assert out["worst_price"] == 0.54
+
+
+def test_a_position_the_tape_never_ran_against_measures_zero_not_missing():
+    # Zero here is a real reading: we looked, and nothing went against us.
+    assert max_adverse_excursion(0.50, "BUY", [0.50, 0.51, 0.52])["mae_cents"] == 0.0
+    assert max_adverse_excursion(0.50, "BUY", [0.50, 0.50])["mae_cents"] == 0.0
+
+
+def test_non_finite_marks_are_dropped_rather_than_sorted():
+    out = max_adverse_excursion(0.50, "BUY", [0.52, float("nan"), 0.47])
+
+    assert out["samples"] == 2
+    assert out["mae_cents"] == pytest.approx(3.0)
+
+
+def test_an_unusable_series_entry_or_side_is_none_never_zero():
+    assert max_adverse_excursion(0.50, "BUY", [])["mae_cents"] is None
+    assert max_adverse_excursion(0.0, "BUY", [0.47])["mae_cents"] is None
+    assert max_adverse_excursion(None, "BUY", [0.47])["mae_cents"] is None
+    assert max_adverse_excursion(0.50, "HOLD", [0.47])["mae_cents"] is None
+    assert max_adverse_excursion(0.50, "BUY", [float("nan")])["mae_cents"] is None
+    assert max_adverse_excursion(0.0, "BUY", [0.47])["worst_price"] is None
+
+
+def test_a_mark_at_the_close_instant_is_inside_the_window():
+    """`<=`, not `<`: the mark and the close at the same instant are one moment."""
+    row = _mark(mid_h0=0.47)                      # stamped 1000 + 300 = 1300
+
+    at_close = excursion_summary([_close_row(ts=1300.0)], [row])
+    one_second_earlier = excursion_summary([_close_row(ts=1299.0)], [row])
+
+    assert at_close["measured"] == 1
+    assert at_close["median_cents"] == pytest.approx(3.0)
+    assert one_second_earlier["measured"] == 0
+    assert one_second_earlier["no_marks_in_window"] == 1
+
+
+def test_only_the_marks_inside_the_holding_window_are_measured():
+    row = _mark(mid_h0=0.47, mid_h3=0.46)         # stamped 1300 and 1900
+
+    later = excursion_summary([_close_row(ts=1900.0)], [row])
+    earlier = excursion_summary([_close_row(ts=1300.0)], [row])
+
+    # The position held to 1900 saw both marks, so the worst move is the deeper one.
+    assert later["median_cents"] == pytest.approx(4.0)
+    # Held only to 1300, the 15-minute mark is after the exit and measures nothing.
+    assert earlier["median_cents"] == pytest.approx(3.0)
+
+
+def test_every_markout_row_lands_in_exactly_one_bucket():
+    rows = [
+        _mark(condition_id="cid-open", ts=2000.0, mid_h0=0.47),      # no close at all
+        _mark(condition_id="cid-1", side="SELL", mid_h0=0.47),       # an exit fill, not a position
+        _mark(condition_id="cid-gap", ts=5000.0, mid_h0=0.47),       # closed before its first mark
+        _mark(condition_id="cid-1", ts=None, mid_h0=0.47),           # unrecorded fill time
+        _mark(condition_id="cid-1", mid_h0=0.47),                    # the one measurable row
+    ]
+    closes = [_close_row("cid-1", ts=1300.0), _close_row("cid-gap", ts=5100.0)]
+
+    out = excursion_summary(closes, rows)
+
+    assert out["measured"] == 1
+    assert out["open"] == 1
+    assert out["exit_fill"] == 1
+    assert out["no_marks_in_window"] == 1
+    assert out["not_recorded"] == 1
+    assert (out["measured"] + out["open"] + out["exit_fill"]
+            + out["no_marks_in_window"] + out["not_recorded"]) == len(rows)
+
+
+def test_the_close_that_bounds_a_fill_is_the_first_one_after_it():
+    """A mid is its own close; the window starts at the NEXT close, not at the mid.
+
+    `_mark(ts=2000)` with closes at 500, 1900 and 2400 has no mark inside a window bounded by
+    1900 (that close predates the fill), so the bounding close is 2400.
+    """
+    row = _mark(ts=2000.0, mid_h0=0.47)            # stamped 2300
+    closes = [_close_row("cid-1", ts=500.0), _close_row("cid-1", ts=1900.0),
+              _close_row("cid-1", ts=2400.0)]
+
+    out = excursion_summary(closes, [row])
+
+    assert out["measured"] == 1
+    assert out["median_cents"] == pytest.approx(3.0)
+
+
+def test_the_summary_is_a_median_and_a_p90_across_positions():
+    rows = [_mark("cid-1", mid_h0=0.49),           # 1.0c
+            _mark("cid-2", mid_h0=0.47),           # 3.0c
+            _mark("cid-3", mid_h0=0.40)]           # 10.0c
+    closes = [_close_row(cid, ts=1300.0) for cid in ("cid-1", "cid-2", "cid-3")]
+
+    out = excursion_summary(closes, rows)
+
+    # Interpolated, so p50 is `statistics.median` and p90 is between the top two.
+    assert out["median_cents"] == pytest.approx(3.0)
+    assert out["p90_cents"] == pytest.approx(8.6)
+
+
+def test_a_store_with_nothing_to_measure_reports_none_and_no_band_key():
+    out = excursion_summary([], [])
+
+    assert out["median_cents"] is None
+    assert out["p90_cents"] is None
+    assert out["measured"] == 0
+    # Descriptive only: "6c of excursion" has no verdict without a stop distance to judge it by.
+    assert "band" not in out
+
+
+def test_the_horizon_seconds_mirror_the_configured_horizons():
+    """The window arithmetic is only honest if these offsets are the sampler's own.
+
+    They are declared rather than imported, because `core_brain.markout` loads config and pulls
+    in the order registry at import time. This pin is what keeps the copy truthful: move
+    `markout_horizons` in config and this fails instead of silently mis-windowing every MAE.
+    """
+    from core_brain.config import load as load_cfg
+
+    horizons = load_cfg().markout_horizons
+
+    assert sa.MARKOUT_HORIZON_SECONDS == {
+        "mid_h0": float(horizons[0]), "mid_h1": float(horizons[1]),
+        "mid_h2": float(horizons[2]), "mid_h3": float(horizons[3]),
+    }
+
+
+# --- T3: system quality number ----------------------------------------------------
+
+
+def test_a_steady_winner_reads_as_a_stable_edge():
+    out = system_quality_number([float(n) for n in range(1, 11)])
+
+    assert out["sqn"] == pytest.approx(5.744563, abs=1e-6)
+    assert out["band"] == "good"
+    assert out["meaning"] == SQN_BAND_WORDS["good"]
+    assert out["n"] == 10
+    assert out["mean_usd"] == pytest.approx(5.5)
+    assert out["stdev_usd"] == pytest.approx(3.027650, abs=1e-6)
+
+
+def test_a_lottery_ticket_reads_as_noise():
+    assert system_quality_number([3.0, -1.0] * 5)["sqn"] == pytest.approx(1.5)
+    assert system_quality_number([3.0, -1.0] * 5)["band"] == "bad"
+    # 0.523678, not the 0.523681 the plan carried over from the intake comment: that figure was
+    # rounded from a 6-decimal stdev. The score is computed from the full-precision one.
+    assert system_quality_number([1.0, -0.9] * 50)["sqn"] == pytest.approx(0.523678, abs=1e-6)
+    assert system_quality_number([1.0, -0.9] * 50)["band"] == "bad"
+
+
+def test_a_promising_but_unproven_sample_sits_in_the_middle_band():
+    assert system_quality_number([4.0, -1.0] * 5)["sqn"] == pytest.approx(1.8)
+    assert system_quality_number([4.0, -1.0] * 5)["band"] == "average"
+
+
+def test_the_two_fixed_boundaries_count_as_promising():
+    """`< 1.6` is noise and `> 2.5` is stable, so 1.6 and 2.5 themselves are neither."""
+    assert system_quality_number([23.0, -7.0] * 5)["sqn"] == 1.6
+    assert system_quality_number([23.0, -7.0] * 5)["band"] == "average"
+    assert system_quality_number([11.0, -1.0] * 5)["sqn"] == 2.5
+    assert system_quality_number([11.0, -1.0] * 5)["band"] == "average"
+
+
+def test_a_larger_sample_of_the_same_shape_scores_higher():
+    out = system_quality_number([1.0, -0.5] * 50)
+
+    assert out["sqn"] == pytest.approx(3.316625, abs=1e-6)
+    assert out["band"] == "good"
+    assert out["n"] == 100
+
+
+def test_a_tight_sample_of_tiny_wins_still_scores_high():
+    out = system_quality_number([0.99, 1.01] * 5)
+
+    assert out["sqn"] == pytest.approx(300.0)
+    assert out["band"] == "good"
+
+
+def test_no_spread_or_no_sample_is_none_never_a_confident_verdict():
+    flat = system_quality_number([2.0] * 5)
+    assert flat["sqn"] is None
+    assert flat["band"] == "unmeasured"
+    assert flat["stdev_usd"] == 0.0        # measured: there was no spread
+    assert flat["n"] == 5
+
+    one = system_quality_number([1.0])
+    assert one["sqn"] is None
+    assert one["stdev_usd"] is None        # not measured: one observation has no spread
+
+    none = system_quality_number([])
+    assert none["n"] == 0
+    assert none["sqn"] is None
+    assert none["mean_usd"] is None
+
+
+def test_non_finite_pnls_are_dropped_before_the_score():
+    out = system_quality_number([1.0, float("nan"), -1.0, float("inf")])
+
+    assert out["n"] == 2
+    assert out["sqn"] == pytest.approx(0.0)
+
+
+def test_the_sqn_band_is_classified_on_the_rounded_score():
+    assert sqn_band(2.500001) == "good"
+    assert sqn_band(2.5) == "average"
+    assert sqn_band(1.6) == "average"
+    assert sqn_band(1.599999) == "bad"
+    assert sqn_band(None) == "unmeasured"
 
 
 def test_importing_this_module_pulls_in_neither_the_registry_nor_kpi():

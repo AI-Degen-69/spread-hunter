@@ -225,8 +225,12 @@ def excursion_summary(closes: Sequence[Any], markouts: Sequence[Any]) -> dict
 #     no mark inside it) | not_recorded (fill_price/bucket unusable)
 #   Window: mark mid_hN counts when row.ts + MARKOUT_HORIZON_SECONDS[N] <= close.ts, the close
 #   being the EARLIEST one for that condition with ts >= row.ts.
-#   -> {"count", "measured", "open", "exit_fill", "no_marks_in_window", "not_recorded",
+#   -> {"measured", "open", "exit_fill", "no_marks_in_window", "not_recorded",
 #       "median_cents", "p90_cents", "units": "cents_per_share"}
+#   Refined during T3: the `count` key was dropped, because it was always equal to `measured`
+#   and two names for one number is how a payload starts disagreeing with itself. The five
+#   buckets partition the input: measured + open + exit_fill + no_marks_in_window + not_recorded
+#   == len(markouts). `exit_fill` is any row whose side is not BUY, our own exits included.
 #   Descriptive only: NO band key at all (a chip on a guess is a confident lie).
 def sqn_band(sqn: Optional[float]) -> str        # good/average/bad/unmeasured
 def system_quality_number(pnls: Sequence[float]) -> dict
@@ -278,7 +282,7 @@ Status (the plan is the source of truth for completion):
 
 - [x] **T1** — Share the confidence interval helper, in the pure module · S · `[Backend/Logic]`
 - [x] **T2** — Signed post-fill markout, in cents, with the ticket's band · M · `[Backend/Logic]`
-- [ ] **T3** — Maximum adverse excursion over the holding window, and SQN · M · `[Backend/Logic]`
+- [x] **T3** — Maximum adverse excursion over the holding window, and SQN · M · `[Backend/Logic]`
 - [ ] **T4** — Payload section, the readout card, and the operator's demo store · L · `[Backend/Logic]` + `[Design/UI]`
 
 ### T1 — Share the confidence interval helper, in the pure module · size S · `[Backend/Logic]`
@@ -336,7 +340,9 @@ Status (the plan is the source of truth for completion):
   of the per-row values (the interpolation pin). SQN — N=10 `range(1, 11)` → `sqn ≈ 5.744563`,
   `band == "good"`; `[3, -1] * 5` → `≈ 1.5` → `bad`; `[4, -1] * 5` → `≈ 1.8` → `average`;
   `[23, -7] * 5` → exactly `1.6` → `average`; `[11, -1] * 5` → exactly `2.5` → `average`;
-  N=100 `[1.0, -0.5] * 50` → `≈ 3.316625` → `good`; `[1.0, -0.9] * 50` → `≈ 0.523681` → `bad`;
+  N=100 `[1.0, -0.5] * 50` → `≈ 3.316625` → `good`; `[1.0, -0.9] * 50` → `≈ 0.523678` → `bad`
+  (corrected during T3: the intake comment's `0.523681` was rounded from a 6-decimal stdev, while
+  the score is computed from the full-precision one);
   low variance `[0.99, 1.01] * 5` → `≈ 300.0` → `good`; zero variance `[2.0] * 5` → `sqn is None`,
   `stdev_usd == 0.0`; one sample → `sqn is None`, `stdev_usd is None`; zero samples → `n == 0`.
   Plus: `MARKOUT_HORIZON_SECONDS` pinned against `core_brain.config.load().markout_horizons`
