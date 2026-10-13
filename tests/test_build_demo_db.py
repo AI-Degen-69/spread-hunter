@@ -81,6 +81,39 @@ def test_the_demo_store_measures_an_excursion_and_the_robustness_gates(tmp_path)
     assert gates["sqn"]["band"] != "unmeasured"
 
 
+def test_every_quote_carries_a_leg_side(tmp_path):
+    """The Active Markets tab normalizes `quotes.side` into legs.
+
+    A 'BUY' side is dropped by the renderer's `normalizeLeg`, leaving
+    YES PRICE / NO PRICE / EDGE empty -- production writes the leg label,
+    so the demo must too.
+    """
+    build(tmp_path / "demo.db")
+    reg = OrderRegistry(tmp_path / "demo.db")
+    quotes = reg.get_all_quotes()
+    assert quotes
+    assert {q["side"] for q in quotes} <= {"UP", "DOWN"}
+
+
+def test_the_pair_completion_wait_state_exists(tmp_path):
+    """One leg filled with the other leg still quoted."""
+    build(tmp_path / "demo.db")
+    reg = OrderRegistry(tmp_path / "demo.db")
+    orders = {o["id"]: o for o in reg.get_all_orders()}
+    assert orders["loc-w-up"]["status"] == "filled"
+    assert orders["loc-w-dn"]["status"] == "open"
+    assert orders["loc-w-up"]["pair_id"] == orders["loc-w-dn"]["pair_id"] == "pair-wait"
+
+
+def test_the_single_leg_missing_partner_state_exists(tmp_path):
+    """One resting leg with no order on the other side."""
+    build(tmp_path / "demo.db")
+    reg = OrderRegistry(tmp_path / "demo.db")
+    resting = [o for o in reg.get_all_orders() if o["pair_id"] == "pair-half"]
+    assert len(resting) == 1
+    assert resting[0]["status"] == "open"
+
+
 def test_the_ghost_fill_has_no_order_behind_it(tmp_path):
     """The corrupted-store scenario the dashboard must survive.
 

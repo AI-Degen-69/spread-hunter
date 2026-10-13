@@ -152,6 +152,10 @@ def _quote(
 ) -> None:
     """Log a quote intent with the telemetry the queue metrics read.
 
+    `side` is the LEG label ('UP'/'DOWN'), the same value production
+    writes: the Active Markets tab normalizes `quotes.side` into legs and
+    a 'BUY' row is dropped, leaving YES PRICE / NO PRICE / EDGE empty.
+
     Logged with ``filled=0``; when a fill follows, ``record_fill``
     attributes it to this quote automatically, exactly like production.
     """
@@ -162,7 +166,7 @@ def _quote(
             market_slug=market["slug"],
             condition_id=market["condition_id"],
             token_id=token_id,
-            side="BUY",
+            side=leg,
             price=price,
             size=size,
             queue_ahead=queue_ahead,
@@ -211,17 +215,17 @@ def scenario_resting_pair(reg: OrderRegistry, t: int, out: Path) -> str:
     """Two resting orders on one market -- the RESTING hedge state."""
     m = _market("btc-150k-oct", 1)
     _post(reg, local_id="loc-1-up", venue_id="0xvenue0001up", market=m, leg="UP",
-          price=0.47, size=20, posted_ts=t - 600, polled_ts=t - 45,
+          price=0.46, size=20, posted_ts=t - 600, polled_ts=t - 45,
           pair_id="pair-1", max_pair_cost=0.98)
-    _quote(reg, market=m, leg="UP", price=0.47, size=20, ts=t - 600,
+    _quote(reg, market=m, leg="UP", price=0.46, size=20, ts=t - 600,
            local_id="loc-1-up", venue_id="0xvenue0001up", queue_ahead=1200.0,
-           mid=0.505, t_remaining=5400.0, latency_ms=62.0)
+           mid=0.48, t_remaining=5400.0, latency_ms=62.0)
     _post(reg, local_id="loc-1-dn", venue_id="0xvenue0001dn", market=m, leg="DOWN",
-          price=0.50, size=20, posted_ts=t - 598, polled_ts=t - 45,
+          price=0.49, size=20, posted_ts=t - 598, polled_ts=t - 45,
           pair_id="pair-1", max_pair_cost=0.98)
-    _quote(reg, market=m, leg="DOWN", price=0.50, size=20, ts=t - 598,
+    _quote(reg, market=m, leg="DOWN", price=0.49, size=20, ts=t - 598,
            local_id="loc-1-dn", venue_id="0xvenue0001dn", queue_ahead=3400.0,
-           mid=0.495, t_remaining=5400.0, latency_ms=58.0)
+           mid=0.50, t_remaining=5400.0, latency_ms=58.0)
     return "resting pair ........ btc-150k-oct: 2 open orders (RESTING)"
 
 
@@ -272,7 +276,7 @@ def scenario_balanced_pair(reg: OrderRegistry, t: int, out: Path) -> str:
           pair_id="pair-3", max_pair_cost=0.98)
     _quote(reg, market=m, leg="UP", price=0.46, size=10, ts=t - 2400,
            local_id="loc-3-up", venue_id="0xvenue0003up", queue_ahead=540.0,
-           mid=0.50, t_remaining=10800.0, latency_ms=88.0)
+           mid=0.47, t_remaining=10800.0, latency_ms=88.0)
     _fill(reg, local_id="loc-3-up", trade_id="trade-3-up", size=10,
           price=0.458, venue_ts=t - 2100)
     _post(reg, local_id="loc-3-dn", venue_id="0xvenue0003dn", market=m, leg="DOWN",
@@ -280,7 +284,7 @@ def scenario_balanced_pair(reg: OrderRegistry, t: int, out: Path) -> str:
           pair_id="pair-3", max_pair_cost=0.98)
     _quote(reg, market=m, leg="DOWN", price=0.51, size=10, ts=t - 2395,
            local_id="loc-3-dn", venue_id="0xvenue0003dn", queue_ahead=2100.0,
-           mid=0.50, t_remaining=10800.0, latency_ms=91.0)
+           mid=0.51, t_remaining=10800.0, latency_ms=91.0)
     _fill(reg, local_id="loc-3-dn", trade_id="trade-3-dn", size=10,
           price=0.508, venue_ts=t - 2050)
     return "balanced pair ...... fed-cut-dec: both legs filled, awaiting merge (BALANCED)"
@@ -404,7 +408,7 @@ def scenario_ghost_fill(reg: OrderRegistry, t: int, out: Path) -> str:
         conn.commit()
     reg.log_quote(QuoteRecord(
         ts=float(t - 2400), market_slug=m["slug"],
-        condition_id=m["condition_id"], token_id=m["up_token"], side="BUY",
+        condition_id=m["condition_id"], token_id=m["up_token"], side="UP",
         price=0.48, size=5, queue_ahead=980.0, mid=0.50, edge_vs_mid=0.02,
         t_remaining=3600.0, filled=0.0, order_id="0xvenue-never-existed",
         local_id="loc-never-existed", latency_ms=70.0,
@@ -429,13 +433,13 @@ def scenario_stale_order(reg: OrderRegistry, t: int, out: Path) -> str:
           pair_id="pair-9", max_pair_cost=0.90)
     _quote(reg, market=m, leg="UP", price=0.30, size=25, ts=t - 3600,
            local_id="loc-9-up", venue_id="0xvenue0009up", queue_ahead=220.0,
-           mid=0.31, t_remaining=172800.0, latency_ms=95.0)
+           mid=0.30, t_remaining=172800.0, latency_ms=95.0)
     _post(reg, local_id="loc-9-dn", venue_id="0xvenue0009dn", market=m, leg="DOWN",
           price=0.58, size=25, posted_ts=t - 3590, polled_ts=t - 180,
           pair_id="pair-9", max_pair_cost=0.90)
     _quote(reg, market=m, leg="DOWN", price=0.58, size=25, ts=t - 3590,
            local_id="loc-9-dn", venue_id="0xvenue0009dn", queue_ahead=1750.0,
-           mid=0.69, t_remaining=172800.0, latency_ms=110.0)
+           mid=0.68, t_remaining=172800.0, latency_ms=110.0)
     return "stale pair ......... rain-in-tel-aviv: last poll 3 min ago (stale banner)"
 
 
@@ -447,7 +451,7 @@ def scenario_settled_market(reg: OrderRegistry, t: int, out: Path) -> str:
           pair_id="pair-10", max_pair_cost=0.99)
     _quote(reg, market=m, leg="UP", price=0.55, size=10, ts=t - 86400,
            local_id="loc-10-up", venue_id="0xvenue0010up", queue_ahead=4300.0,
-           mid=0.54, t_remaining=259200.0, latency_ms=150.0)
+           mid=0.53, t_remaining=259200.0, latency_ms=150.0)
     _fill(reg, local_id="loc-10-up", trade_id="trade-10-up", size=10,
           price=0.548, venue_ts=t - 86000)
     _post(reg, local_id="loc-10-dn", venue_id="0xvenue0010dn", market=m, leg="DOWN",
@@ -488,7 +492,7 @@ def scenario_refused_lifecycle(reg: OrderRegistry, t: int, out: Path) -> str:
           pair_id="pair-11", max_pair_cost=0.97)
     _quote(reg, market=m, leg="UP", price=0.38, size=10, ts=t - 5400,
            local_id="loc-11-up", venue_id="0xvenue0011up", queue_ahead=2600.0,
-           mid=0.40, t_remaining=86400.0, latency_ms=180.0)
+           mid=0.39, t_remaining=86400.0, latency_ms=180.0)
     _fill(reg, local_id="loc-11-up", trade_id="trade-11-up", size=10,
           price=0.378, venue_ts=t - 5000)
     # The second leg, resting.
@@ -522,7 +526,7 @@ def scenario_aged_cancelled(reg: OrderRegistry, t: int, out: Path) -> str:
           pair_id="pair-12", max_pair_cost=0.98)
     _quote(reg, market=m, leg="UP", price=0.50, size=10, ts=t - 432000,
            local_id="loc-12-up", venue_id="0xvenue0012up", queue_ahead=5100.0,
-           mid=0.50, t_remaining=604800.0, latency_ms=210.0)
+           mid=0.49, t_remaining=604800.0, latency_ms=210.0)
     reg.update_order_status("loc-12-up", "cancelled", _ms(t - 431500),
                             cancel_reason="market_aged_out",
                             cancel_queue_ahead=0.0)
@@ -536,6 +540,51 @@ def scenario_aged_cancelled(reg: OrderRegistry, t: int, out: Path) -> str:
                             cancel_reason="market_aged_out",
                             cancel_queue_ahead=0.0)
     return "aged cancelled ..... old-market-june: 5-day-old cancelled pair (history)"
+
+
+def scenario_pair_completion_wait(reg: OrderRegistry, t: int, out: Path) -> str:
+    """One leg filled with the other leg still quoted -- waiting for the
+    other side.
+
+    The pair-completion state the Orders tab renders with the filled
+    leg's counterpart annotation and the resting leg's break-even room
+    line (the most the missing side may still cost under the pair cap).
+    """
+    m = _market("waiting-for-other-side", 26)
+    # The leg that filled.
+    _post(reg, local_id="loc-w-up", venue_id="0xvenue0026up", market=m, leg="UP",
+          price=0.42, size=10, posted_ts=t - 2700, polled_ts=t - 2400,
+          pair_id="pair-wait", max_pair_cost=0.98)
+    _quote(reg, market=m, leg="UP", price=0.42, size=10, ts=t - 2700,
+           local_id="loc-w-up", venue_id="0xvenue0026up", queue_ahead=340.0,
+           mid=0.44, t_remaining=7200.0, latency_ms=67.0)
+    _fill(reg, local_id="loc-w-up", trade_id="trade-w-up", size=10,
+          price=0.418, venue_ts=t - 2400)
+    # The leg still quoted, waiting for the filled side to complete the pair.
+    _post(reg, local_id="loc-w-dn", venue_id="0xvenue0026dn", market=m, leg="DOWN",
+          price=0.55, size=10, posted_ts=t - 2350, polled_ts=t - 60,
+          pair_id="pair-wait", max_pair_cost=0.98)
+    _quote(reg, market=m, leg="DOWN", price=0.55, size=10, ts=t - 2350,
+           local_id="loc-w-dn", venue_id="0xvenue0026dn", queue_ahead=1100.0,
+           mid=0.55, t_remaining=7200.0, latency_ms=71.0)
+    return "pair-completion wait .. waiting-for-other-side: UP filled, DOWN quoted (hedge pending)"
+
+
+def scenario_one_leg_quoted(reg: OrderRegistry, t: int, out: Path) -> str:
+    """A single resting order with no partner leg -- one quoted, one missing.
+
+    The Orders tab renders it UNPAIRED / Missing Leg - No Position: the
+    resting leg shows its quote and break-even room line, the other side
+    reads '[Awaiting ... Quote]'.
+    """
+    m = _market("half-quoted-market", 27)
+    _post(reg, local_id="loc-h-up", venue_id="0xvenue0027up", market=m, leg="UP",
+          price=0.36, size=15, posted_ts=t - 900, polled_ts=t - 30,
+          pair_id="pair-half", max_pair_cost=0.97)
+    _quote(reg, market=m, leg="UP", price=0.36, size=15, ts=t - 900,
+           local_id="loc-h-up", venue_id="0xvenue0027up", queue_ahead=760.0,
+           mid=0.38, t_remaining=10800.0, latency_ms=59.0)
+    return "one leg quoted ...... half-quoted-market: UP resting, no DOWN order (missing leg)"
 
 
 def scenario_quote_history(reg: OrderRegistry, t: int, out: Path) -> str:
@@ -761,6 +810,8 @@ SCENARIOS = (
     scenario_settled_market,
     scenario_refused_lifecycle,
     scenario_aged_cancelled,
+    scenario_pair_completion_wait,
+    scenario_one_leg_quoted,
     scenario_quote_history,
     scenario_markouts,
     scenario_account_curve,
