@@ -380,7 +380,7 @@ class TestPairsSweep:
         record_submit(object(), reg, FakeMarket("0xabc"), intents, load(),
                       db_path=db_path, book_fn=lambda h, t: {"bids": {}})
         settle_market(reg, FakeMarket("0xabc"), db_path=db_path, seen=set(),
-                      traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                      traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     @staticmethod
     def _canonical_book(_clob_host, token_id):
@@ -1204,7 +1204,7 @@ class TestPositionInTheLog:
         seam = build_shadow_seam(
             db_path=db,
             client_fn=lambda: object(),
-            traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+            traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
         )
 
         intents = [QuoteIntent(side="UP", token_id="tok-up", price=0.47,
@@ -1399,8 +1399,8 @@ class TestSecondRotation:
 
     def test_inventory_reflects_what_settled_before_the_requote(
             self, tmp_path, monkeypatch):
-        """The tape credits 5 shares against the order resting at 0.47 on the
-        second cycle, and the lifecycle waits on exactly those shares.
+        """A price-through fills the order resting at 0.47 on the second
+        cycle, and the lifecycle waits on those shares.
 
         Full chain across the rotation: the fill is credited to the order that
         was resting when it happened (not to the replacement), the position it
@@ -1413,13 +1413,13 @@ class TestSecondRotation:
 
         self._run_cycles(
             tmp_path, monkeypatch, cycles=3, prices=[0.47, 0.48, 0.49],
-            tape=lambda n: {"tok-up": {0.47: 5.0}} if n == 2 else {})
+            tape=lambda n: {"tok-up": {0.46: 5.0}} if n == 2 else {})
 
         db = tmp_path / "shadow.db"
         reg = OrderRegistry(db_path=db)
         fills = reg.get_all_fills()
         assert [(f["token_id"], f["size"], f["price"]) for f in fills] == [
-            ("tok-up", 5.0, 0.47)]
+            ("tok-up", 20.0, 0.47)]
         # Credited to the order that was resting when the tape printed, which
         # is the one the next cycle superseded -- not the replacement.
         filled_row = next(o for o in reg.get_all_orders()
@@ -1429,7 +1429,7 @@ class TestSecondRotation:
         assert reg.get_all_closes() == []
         assert reg.get_lifecycle_state(filled_row["pair_id"]).state == "PATIENT_WAIT"
         inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
-        assert inv.up_shares == pytest.approx(5.0)
+        assert inv.up_shares == pytest.approx(20.0)
         assert inv.down_shares == pytest.approx(0.0)
 
 
@@ -2149,14 +2149,15 @@ class TestFullCycleRehearsal:
         def sleep_fn(seconds):
             rotations[0] += 1
             if rotations[0] == 1:
-                # Rotation 1 quoted into an empty tape. Arm SELLs at the
-                # exact resting prices and sizes the run chose.
+                # Rotation 1 quoted into an empty tape. Arm SELLs one tick
+                # below each resting price -- a trade-through, the only fill path.
                 reg = OrderRegistry(db_path=db)
                 for o in reg.get_all_orders():
                     quoted[o["token_id"]] = (o["price"], o["original_size"])
                 assert len(quoted) == 2, f"rotation 1 must quote both legs: {quoted}"
                 holder["taker"] = {
-                    0: [tape_row(tok, px) for tok, (px, _sz) in quoted.items()]}
+                    0: [tape_row(tok, round(px - 0.01, 4))
+                        for tok, (px, _sz) in quoted.items()]}
             if rotations[0] >= 4:
                 raise KeyboardInterrupt
 

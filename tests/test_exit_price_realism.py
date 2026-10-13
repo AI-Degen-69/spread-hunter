@@ -141,7 +141,7 @@ def test_rehearsed_buy_walks_the_ask_ladder_and_records_a_short_fill(registry):
     )
     settle_market(
         reg, market, db_path=db, seen=set(),
-        traded_fn=lambda _condition_id, _seen: {"tok-up": {0.47: 2.0}},
+        traded_fn=lambda _condition_id, _seen: {"tok-up": {0.46: 2.0}},
     )
 
     client = _client(registry, {

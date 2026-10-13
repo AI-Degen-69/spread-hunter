@@ -295,7 +295,7 @@ def test_settle_writes_a_fill_row_and_marks_the_order_filled(registry):
 
     fills = settle_market(
         reg, FakeMarket(), db_path=db, seen=set(),
-        traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+        traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
     )
 
     assert [f.token_id for f in fills] == ["tok-up"]
@@ -305,7 +305,11 @@ def test_settle_writes_a_fill_row_and_marks_the_order_filled(registry):
     assert [r.token_id for r in reg.get_active_orders()] == ["tok-dn"]
 
 
-def test_partial_credit_leaves_the_order_partial(registry):
+def test_trade_through_fills_the_order_completely(registry):
+    """A price-through fills the FULL remaining order -- there is no partial
+    fill path. Only a print strictly below the price credits a fill, and it
+    credits the whole order regardless of how small the print was."""
+    from core_brain.order_registry import inventory_from_registry
     from core_brain.shadow_exec import (
         ensure_shadow_tables, record_submit, settle_market,
     )
@@ -315,11 +319,13 @@ def test_partial_credit_leaves_the_order_partial(registry):
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
 
+    # Only 5 of tape below the price, yet the full 20-share order fills.
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 5.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 5.0}})
 
-    up_row = next(r for r in reg.get_active_orders() if r.token_id == "tok-up")
-    assert up_row.status == "partial"
+    assert not any(r.token_id == "tok-up" for r in reg.get_active_orders())
+    inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
+    assert inv.up_shares == 20.0
 
 
 def test_a_legacy_null_run_order_is_never_this_run_s(registry):
@@ -358,7 +364,7 @@ def test_a_legacy_null_run_order_is_never_this_run_s(registry):
         conn.close()
 
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     legacy = [r for r in reg.get_active_orders()
               if (r.order_id or "") == "shadow-legacy-1"]
@@ -389,17 +395,19 @@ def test_the_same_tape_volume_is_never_credited_twice(registry):
 
     def traded_fn(cid, seen):
         calls["n"] += 1
-        return {"tok-up": {0.47: 8.0}} if calls["n"] == 1 else {}
+        return {"tok-up": {0.46: 8.0}} if calls["n"] == 1 else {}
 
     seen = set()
     settle_market(reg, FakeMarket(), db_path=db, seen=seen, traded_fn=traded_fn)
     settle_market(reg, FakeMarket(), db_path=db, seen=seen, traded_fn=traded_fn)
 
     inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
-    assert inv.up_shares == 8.0
+    assert inv.up_shares == 20.0
 
 
-def test_a_shrinking_queue_without_a_fill_is_remembered(registry):
+def test_exact_price_print_leaves_the_queue_and_order_untouched(registry):
+    """A print AT our own price is not a trade-through: no fill, and the
+    recorded queue is unchanged. The exact-price consumption path is gone."""
     from core_brain.shadow_exec import (
         ensure_shadow_tables, read_queue_ahead, record_submit, settle_market,
     )
@@ -413,8 +421,10 @@ def test_a_shrinking_queue_without_a_fill_is_remembered(registry):
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
                   traded_fn=lambda cid, seen: {"tok-up": {0.47: 30.0}})
 
-    up_id = next(r.id for r in reg.get_active_orders() if r.token_id == "tok-up")
-    assert read_queue_ahead(db, reg._run_id(), up_id) == 20.0
+    up_row = next(r for r in reg.get_active_orders() if r.token_id == "tok-up")
+    # Exact-price tape neither fills nor shrinks the recorded queue.
+    assert up_row.status == "open"
+    assert read_queue_ahead(db, reg._run_id(), up_row.id) == 50.0
 
 
 def test_settle_calls_traded_fn_even_with_no_resting_orders(registry):
@@ -461,9 +471,9 @@ def test_stale_tape_does_not_credit_to_fresh_orders(registry):
         # First call (no orders resting): return stale 50 units
         # Second call (order now resting): return only fresh 10 units
         if tape_history["call"] == 1:
-            return {"tok-up": {0.47: 50.0}}
+            return {"tok-up": {0.46: 50.0}}
         else:
-            return {"tok-up": {0.47: 10.0}}
+            return {"tok-up": {0.46: 10.0}}
 
     seen = set()
 
@@ -479,7 +489,7 @@ def test_stale_tape_does_not_credit_to_fresh_orders(registry):
     settle_market(reg, FakeMarket(), db_path=db, seen=seen, traded_fn=tape_feed)
 
     inv = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
-    assert inv.up_shares == 10.0
+    assert inv.up_shares == 20.0
 
 
 def test_a_single_buy_waits_without_crossing_in_the_shadow_store(registry):
@@ -500,7 +510,7 @@ def test_a_single_buy_waits_without_crossing_in_the_shadow_store(registry):
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     # `markets.parse_book`'s canonical shape -- bids/asks as PRICE-KEYED
     # DICTS -- exactly what `book_fn` returns in production
@@ -633,7 +643,7 @@ def test_a_completion_lands_on_the_in_window_pair_not_the_stale_one(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: two_hours_ago)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: two_hours_ago)
     stale_pair_id = next(
         r.pair_id for r in reg.get_active_orders() if r.token_id == "tok-dn")
@@ -643,7 +653,7 @@ def test_a_completion_lands_on_the_in_window_pair_not_the_stale_one(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: now)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: now)
     fresh_pair_id = next(
         r.pair_id for r in reg.get_active_orders()
@@ -692,8 +702,8 @@ def test_a_completion_is_refused_when_no_naked_pair_exists(registry):
                   now_fn=lambda: long_ago)
     # Both legs filled: the pair is whole, so no pair is naked here.
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
-                                               "tok-dn": {0.51: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0},
+                                               "tok-dn": {0.50: 20.0}},
                   now_fn=lambda: long_ago)
 
     client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
@@ -730,7 +740,7 @@ def test_a_completion_is_booked_to_the_aged_out_naked_pair(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: long_ago)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: long_ago)
 
     aged_pair_id = [o["pair_id"] for o in reg.get_all_orders()
@@ -774,7 +784,7 @@ def test_two_aged_out_naked_pairs_on_one_token_are_refused_not_guessed(
                       db_path=db, book_fn=lambda h, t: {"bids": {}},
                       now_fn=lambda: long_ago)
         settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                      traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                      traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                       now_fn=lambda: long_ago)
 
     client = ShadowExecutionClient(reg, db, book_fn=lambda h, t: {},
@@ -808,7 +818,7 @@ def test_an_in_window_pair_still_wins_over_an_aged_out_one(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: long_ago)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: long_ago)
     stale_pair = [o["pair_id"] for o in reg.get_all_orders()
                   if o["token_id"] == "tok-up"][0]
@@ -817,7 +827,7 @@ def test_an_in_window_pair_still_wins_over_an_aged_out_one(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: now)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: now)
     fresh_pair = [o["pair_id"] for o in reg.get_all_orders()
                   if o["token_id"] == "tok-up"][-1]
@@ -859,7 +869,7 @@ def test_a_named_target_wins_over_an_in_window_pair(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: long_ago)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: long_ago)
     aged_pair = [o["pair_id"] for o in reg.get_all_orders()
                  if o["token_id"] == "tok-up"][0]
@@ -868,7 +878,7 @@ def test_a_named_target_wins_over_an_in_window_pair(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: now)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: now)
     fresh_pair = [o["pair_id"] for o in reg.get_all_orders()
                   if o["token_id"] == "tok-up"][-1]
@@ -909,8 +919,8 @@ def test_a_binding_that_names_a_pair_with_nothing_naked_is_refused(registry):
                   now_fn=lambda: long_ago)
     # Both legs filled: this pair has nothing naked to complete.
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
-                                               "tok-dn": {0.51: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0},
+                                               "tok-dn": {0.50: 20.0}},
                   now_fn=lambda: long_ago)
     whole_pair = reg.get_all_orders()[0]["pair_id"]
 
@@ -952,7 +962,7 @@ def test_a_spent_binding_is_not_re_aimed_at_its_own_pair(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: long_ago)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: long_ago)
     aged_pair = [o["pair_id"] for o in reg.get_all_orders()
                  if o["token_id"] == "tok-up"][0]
@@ -972,7 +982,7 @@ def test_a_spent_binding_is_not_re_aimed_at_its_own_pair(registry):
                   db_path=db, book_fn=lambda h, t: {"bids": {}},
                   now_fn=lambda: now)
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}},
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}},
                   now_fn=lambda: now)
     fresh_pair = [o["pair_id"] for o in reg.get_all_orders()
                   if o["token_id"] == "tok-up"][-1]
@@ -1006,8 +1016,8 @@ def test_a_balanced_pair_is_merged_into_one_dollar_per_share(registry):
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
-                                               "tok-dn": {0.51: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0},
+                                               "tok-dn": {0.50: 20.0}})
 
     merged = record_shadow_merges(reg, db)
 
@@ -1030,7 +1040,7 @@ def test_an_unbalanced_pair_is_left_alone(registry):
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     assert record_shadow_merges(reg, db) == []
     assert reg.get_all_closes() == []
@@ -1046,17 +1056,18 @@ def test_a_merged_pair_is_not_merged_again(registry):
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
-                                               "tok-dn": {0.51: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0},
+                                               "tok-dn": {0.50: 20.0}})
 
     assert len(record_shadow_merges(reg, db)) == 1
     assert record_shadow_merges(reg, db) == []
     assert len(reg.get_all_closes()) == 1
 
 
-def test_a_pair_that_fills_incrementally_records_merges_incrementally(registry):
-    """A pair filled 10/10 at same prices, merged, then fills another 10/10 should
-    produce a SECOND close for the newly merged 10 shares, not be excluded outright."""
+def test_a_trade_through_fills_both_legs_and_merges_once(registry):
+    """A price-through on both legs fills each completely in one event, so the
+    pair merges once at full size. Incremental partial fills no longer exist:
+    the exact-price path that produced them is removed -- a fill is all-or-nothing."""
     from core_brain.shadow_exec import (
         ensure_shadow_tables, record_shadow_merges, record_submit, settle_market,
     )
@@ -1066,38 +1077,17 @@ def test_a_pair_that_fills_incrementally_records_merges_incrementally(registry):
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
 
-    # Cycle 1: settle 10/20 on each leg at original prices
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 10.0},
-                                               "tok-dn": {0.51: 10.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0},
+                                               "tok-dn": {0.50: 20.0}})
 
-    # First merge records 10 shares
-    merged_1 = record_shadow_merges(reg, db)
-    assert len(merged_1) == 1
-    closes_after_first = reg.get_all_closes()
-    assert len(closes_after_first) == 1
-    first_close = closes_after_first[0]
-    assert first_close["shares"] == 10.0
-
-    # Cycle 2: settle remaining 10/10 on each leg
-    settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 10.0},
-                                               "tok-dn": {0.51: 10.0}})
-
-    # Second merge records the additional 10 shares
-    merged_2 = record_shadow_merges(reg, db)
-    assert len(merged_2) == 1
-    closes_after_second = reg.get_all_closes()
-    assert len(closes_after_second) == 2
-    second_close = closes_after_second[1]
-    assert second_close["shares"] == 10.0
-    # Both closes should reference the same logical pair (tx_hash starts with same pair_id)
-    first_pair_id = first_close["tx_hash"].split(":")[0]
-    second_pair_id = second_close["tx_hash"].split(":")[0]
-    assert first_pair_id == second_pair_id
-    # Sum of merged shares never exceeds min(leg fills) = 20
-    total_merged = sum(c["shares"] for c in closes_after_second)
-    assert total_merged == 20.0
+    # Both legs fully filled -> one merge of the full 20-share pair.
+    merged = record_shadow_merges(reg, db)
+    assert len(merged) == 1
+    close = reg.get_all_closes()[0]
+    assert close["shares"] == 20.0
+    # Nothing left to merge on a second pass.
+    assert record_shadow_merges(reg, db) == []
 
 
 def test_incremental_merges_charge_actual_incremental_cost(registry):
@@ -1200,8 +1190,8 @@ def test_a_shadow_merge_takes_its_shares_and_its_cost_out_of_inventory(registry)
     record_submit(object(), reg, FakeMarket(), intents, _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.48: 20.0},
-                                               "tok-dn": {0.48: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
+                                               "tok-dn": {0.47: 20.0}})
 
     before = inventory_from_registry("0xabc", "tok-up", "tok-dn", db_path=db)
     assert before.up_shares == pytest.approx(20.0)
@@ -1227,8 +1217,8 @@ def test_a_shadow_merge_removes_exactly_the_cost_it_closed(registry):
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0},
-                                               "tok-dn": {0.51: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0},
+                                               "tok-dn": {0.50: 20.0}})
 
     record_shadow_merges(reg, db)
 
@@ -1330,7 +1320,7 @@ def test_the_exit_branch_reaches_a_decision_instead_of_refusing_on_the_side(
     record_submit(object(), reg, FakeMarket(), _intents(), _cfg(),
                   db_path=db, book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, FakeMarket(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
     pair_id = next(o.pair_id for o in reg.get_active_orders())
 
     def book_fn(_host, token_id):

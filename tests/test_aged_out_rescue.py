@@ -646,7 +646,7 @@ def test_the_shadow_sweep_runs_the_aged_out_arm(tmp_path):
     record_submit(object(), reg, _Market(), intents, load(), db_path=db,
                   book_fn=lambda h, t: {"bids": {}})
     settle_market(reg, _Market(), db_path=db, seen=set(),
-                  traded_fn=lambda cid, seen: {"tok-up": {0.47: 20.0}})
+                  traded_fn=lambda cid, seen: {"tok-up": {0.46: 20.0}})
 
     # Age the fill past the rescue window, in the store only. Measured against
     # the real clock: the sweep runs on `time.time()`, so a fill dated with a
