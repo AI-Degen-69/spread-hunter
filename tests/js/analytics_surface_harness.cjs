@@ -42,7 +42,7 @@ function element(id) {
 // Every id the Tier 1 renderers and the view filter reach for.
 for (const id of ['pnl-ci-readout', 'execution-funnel', 'sample-sufficiency-readout',
                   'card-sample-sufficiency', 'tier1-decision-row', 'fill-path-edge-readout',
-                  'rescue-friction-readout',
+                  'rescue-friction-readout', 'queue-realism-readout',
                   'quant-risk-deck', 'analytics-charts-matrix',
                   'card-sensitivity-simulator', 'analytics-gates',
                   'market-inspection-card']) {
@@ -101,6 +101,11 @@ try {
 } catch (e) {
   errors.push(`rescue_friction: ${e && e.message}`);
 }
+try {
+  app.renderQueueRealism(kpi.statistical_analytics || {});
+} catch (e) {
+  errors.push(`queue_realism: ${e && e.message}`);
+}
 
 /* Tier 1 is the row that decides whether we trade. Every sub-view filter has
  * to leave it alone -- a click on "Monte Carlo & VaR" must not blank the
@@ -123,5 +128,6 @@ process.stdout.write(JSON.stringify({
   sample_sufficiency_html: element('sample-sufficiency-readout').innerHTML,
   fill_path_edge_html: element('fill-path-edge-readout').innerHTML,
   rescue_friction_html: element('rescue-friction-readout').innerHTML,
+  queue_realism_html: element('queue-realism-readout').innerHTML,
   tier1_visibility: tier1Visibility,
 }));

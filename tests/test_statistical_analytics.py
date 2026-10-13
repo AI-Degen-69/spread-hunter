@@ -282,6 +282,14 @@ def test_build_populates_every_section_it_has_input_for():
     assert friction["non_rescue_count"] == 1
     assert friction["mean_sled_cents"] is None
     assert friction["bands"]["sled"] == "unmeasured"
+    # The queue-realism section (#515) is always present as well, and this call passes no
+    # quotes, so nothing is measurable. The section says that instead of a zero depth.
+    realism = payload["queue_realism"]
+    assert realism["cleared_fill_count"] == 0
+    assert realism["trade_through_depth"]["count"] == 0
+    assert realism["trade_through_depth"]["median_cents"] is None
+    assert realism["trade_through_depth"]["band"] == "unmeasured"
+    assert realism["fill_latency"]["median_sec"] is None
 
 
 def test_build_on_an_empty_run_synthesises_nothing():
@@ -306,6 +314,38 @@ def test_build_on_an_empty_run_synthesises_nothing():
     assert friction["mean_sled_cents"] is None
     assert friction["mean_tcdr"] is None
     assert all(band == "unmeasured" for band in friction["bands"].values())
+    # And the queue-realism section, shape-frozen: a caller reading it must never branch
+    # on whether the key is there, even on a run with nothing in it.
+    assert payload["queue_realism"] == {
+        "cleared_fill_count": 0,
+        "trade_through_depth": {"count": 0, "missing": 0, "not_trade_through": 0,
+                                "median_cents": None, "p75_cents": None,
+                                "band": "unmeasured"},
+        "fill_latency": {"count": 0, "excluded": 0,
+                         "median_sec": None, "p90_sec": None},
+    }
+
+
+def test_build_reads_waits_from_the_quotes_it_is_given():
+    # Arrange -- a quote that rested ten seconds and the fill that credited it, in the
+    # registry's own units: `ts` in seconds, `venue_ts` in milliseconds.
+    quotes = [{"ts": 1000.0, "local_id": "q1", "price": 0.50}]
+    fills = [{"order_uuid": "q1", "venue_ts": 1_010_000, "size": 5.0}]
+
+    # Act
+    payload = build([], fills, [], 100.0, quotes)
+
+    # Assert -- the wait is measurable from rows the registry already holds, while the
+    # depth is not: nothing anywhere records the print that cleared the level, so the row
+    # counts as missing rather than as a depth of zero.
+    realism = payload["queue_realism"]
+    assert realism["cleared_fill_count"] == 1
+    assert realism["fill_latency"]["median_sec"] == 10.0
+    assert realism["fill_latency"]["p90_sec"] == 10.0
+    assert realism["trade_through_depth"]["count"] == 0
+    assert realism["trade_through_depth"]["missing"] == 1
+    assert realism["trade_through_depth"]["median_cents"] is None
+    assert realism["trade_through_depth"]["band"] == "unmeasured"
 
 
 def test_closed_positions_mirrors_the_distribution_sample():

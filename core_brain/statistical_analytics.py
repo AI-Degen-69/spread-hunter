@@ -30,6 +30,18 @@ every figure it cannot read off them is `None` with the reason attached, because
 a zero there would read as "this stop cost nothing" rather than "nobody
 recorded it".
 
+The third section is not read off closes at all. `queue realism` (#515) reads the tape
+that credited a fill, which is the only other evidence the fill model ever sees. The
+trade-through rule credits a resting order only when a print lands strictly below its
+price, so a credited fill is proof that the level cleared -- and the two numbers worth
+having from that proof are how far below our price the tape had to go (cents, with the
+ticket's traffic-light bands) and how long the quote waited for it (seconds, descriptive
+only: a wait has no market reference to be judged against, so a good/bad label on it
+would be invented). The touch-ratio, drain-ratio and depth-correlation metrics that were
+planned alongside them are gone on purpose, not deferred: under this fill rule they
+measure a tautology or an unverifiable guess, and `queue_ahead` stays descriptive
+telemetry that gates nothing.
+
 This builds the payload, and it builds it only from what the registry actually
 holds. The rule throughout: **a section with no input is omitted, not
 synthesised.** A chart saying "unmeasured" is information; a chart drawing a
@@ -50,6 +62,7 @@ from __future__ import annotations
 import math
 import random
 import statistics
+from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
 # Merge methods, mirroring `registry_state.MERGE_CLOSE_METHODS`. A merged pair
@@ -724,6 +737,246 @@ def rescue_friction_summary(closes: Sequence[Any]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Queue realism (#515) -- read off the tape that credited a fill, in cents and seconds.
+# ---------------------------------------------------------------------------
+
+# The ticket's settled depth bands. They score the MEDIAN across cleared fills: under a
+# cent the level cleared on the tape we sat on, 1-3c the tape had to move past us, past
+# 3c the quote sat far from where the market actually traded.
+TRADE_THROUGH_GOOD_BELOW_CENTS = 1.0
+TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS = 3.0
+
+
+@dataclass(frozen=True)
+class ClearedFill:
+    """One credited fill, its resting price, and the print that cleared it.
+
+    Field -> registry mapping. The caller converts; this module never ingests:
+
+    * `order_price`    -- our resting price in DOLLARS (`orders.price` / `quotes.price`).
+    * `clearing_price` -- the closest tape print STRICTLY below `order_price` that credited
+      the fill, in DOLLARS. The crediting path sees this print and drops it, so nothing
+      populates this field in production yet -- the follow-up, with the exact call sites, is
+      recorded in `docs/issues/515-noticed-but-not-touching.md`.
+    * `placed_ts`      -- `quotes.ts`, in SECONDS.
+    * `filled_ts`      -- the credited fill's time in SECONDS. `quotes.fill_ts` and
+      `fills.venue_ts` are MILLISECONDS (`order_registry._attribute_fill_to_quote` builds
+      `fill_ts` as `MIN(COALESCE(venue_ts, recorded_ts))`), so the caller divides by 1000
+      before building a record -- exactly the conversion `kpi.py:1447-1449` already makes.
+
+    A shadow fill's `venue_ts` is the cycle that RECOGNISED the trade-through, not the
+    print's own time, so a wait measured from these fields is an upper bound on the real
+    rest, never its exact length.
+    """
+    order_id: str
+    order_price: Optional[float] = None
+    clearing_price: Optional[float] = None
+    placed_ts: Optional[float] = None
+    filled_ts: Optional[float] = None
+
+
+def _percentile(values: Sequence[float], fraction: float) -> Optional[float]:
+    """The value at `fraction` through a sorted sample, linearly interpolated.
+
+    `None` for an empty sample, and the value itself for a single one: an index of
+    `fraction * (n - 1)` has no neighbour to blend with at n = 1 and no meaning at all at
+    n = 0, which is where this section's zero-denominator question lives. Non-finite
+    entries are dropped rather than sorted, so one `NaN` cannot poison a whole sample.
+
+    Interpolated rather than nearest-rank so that `p50` IS the median `statistics.median`
+    returns. `scripts/family_probe_report.py` takes the nearest-rank route and documents
+    why (a thin family must still report a number) -- but that is a script's own reader,
+    while the depth band here is computed from this figure, and two conventions must not
+    meet on the number a colour rides on.
+    """
+    sample = sorted(v for v in (_finite(v) for v in values or []) if v is not None)
+    if not sample:
+        return None
+    if len(sample) == 1:
+        return sample[0]
+    index = fraction * (len(sample) - 1)
+    low = math.floor(index)
+    high = min(low + 1, len(sample) - 1)
+    return sample[low] + (sample[high] - sample[low]) * (index - low)
+
+
+def trade_through_depth_band(median_cents: Optional[float]) -> str:
+    """The traffic-light band for a trade-through depth median: good / average / bad.
+
+    The settled table, in cents: `[0, 1.0)` the level cleared on the tape we sat on,
+    `[1.0, 3.0]` the tape had to move past us, `(3.0, inf)` the quote sat far from where
+    the market actually traded. `None` and anything non-finite read `unmeasured` -- a
+    number nobody recorded is not a bad number.
+
+    A NEGATIVE figure reads `unmeasured` too, not `good`. The table starts at zero because
+    a cleared fill's depth cannot be negative: a print at or above our own price is not a
+    trade-through, and `trade_through_depth` excludes such a row before any band is
+    computed. A negative argument therefore means the caller handed over something no
+    cleared fill can produce, and the good side of a table it is not on would be the wrong
+    answer for it.
+
+    The thresholds live here and reach a reader as data, following `friction_band`: a
+    renderer maps a band name to a colour and holds no numeral of its own.
+    """
+    number = _finite(median_cents)
+    if number is None or number < 0.0:
+        return "unmeasured"
+    if number < TRADE_THROUGH_GOOD_BELOW_CENTS:
+        return "good"
+    return "average" if number <= TRADE_THROUGH_AVERAGE_AT_OR_BELOW_CENTS else "bad"
+
+
+def trade_through_depth(fills: Sequence[ClearedFill]) -> dict[str, Any]:
+    """How far below our own price the tape had to print to clear the level, in cents.
+
+    Always present, like `fill_path_edge` and `rescue_friction`, and for the same reason: a
+    caller must never have to branch on whether the reading exists. A run with nothing
+    measurable reports zero counts and `None` percentiles, which say "nothing to measure",
+    never "the tape sat on our price".
+
+    A fill is measured only when both prices are finite and `clearing_price` is STRICTLY
+    below `order_price` -- that strictness is the fill model itself, so a row which equals
+    or exceeds our price is disclosed as `not_trade_through` instead of being folded in as
+    a zero. `missing` and `not_trade_through` are counted apart from each other because
+    they are different claims: one is a value nobody recorded, the other a value the model
+    cannot produce. The three counts partition the input.
+
+    `band` scores `median_cents` -- the same rounded figure a reader sees, so the number
+    and its colour cannot disagree.
+    """
+    depths: list[float] = []
+    missing = 0
+    not_trade_through = 0
+    for row in fills or []:
+        order_price = _finite(row.order_price)
+        clearing = _finite(row.clearing_price)
+        if order_price is None or clearing is None:
+            missing += 1
+        elif clearing >= order_price:
+            not_trade_through += 1
+        else:
+            depths.append((order_price - clearing) * 100.0)
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    median = shape(_percentile(depths, 0.50))
+    return {
+        "count": len(depths),
+        "missing": missing,
+        "not_trade_through": not_trade_through,
+        "median_cents": median,
+        "p75_cents": shape(_percentile(depths, 0.75)),
+        "band": trade_through_depth_band(median),
+    }
+
+
+def fill_latency(fills: Sequence[ClearedFill]) -> dict[str, Any]:
+    """How long a resting quote waited for its first credited fill, in seconds.
+
+    Descriptive only, and deliberately without a band. How far the tape had to move below
+    our price can be judged against the price itself -- that is what the depth table does.
+    A wait cannot: two seconds is neither good nor bad without a reference for how fast
+    THIS market fills, and a band invented here would be a verdict wearing a measurement's
+    clothes. The same rule leaves the queue-depth distribution unbanded.
+
+    The population is every fill whose placement and fill times were both recorded. A
+    negative wait is EXCLUDED and counted rather than clamped to `0.0`, which is where this
+    reader parts company with `kpi.median_seconds_to_fill` (`kpi.py:1449` clamps with
+    `max(0.0, ...)`): under a shadow run the fill's timestamp is the cycle that recognised
+    the trade-through, so the row whose fill appears to precede its placement is measuring
+    a settlement artefact, and reporting it as an instant fill would be a claim nobody
+    measured. `count + excluded == len(fills)`.
+
+    Independent of `trade_through_depth` on purpose: a record carrying prices but no
+    timestamps still measures for depth (and is `excluded` here), and the reverse. One
+    unrecorded field must not silently zero the other metric.
+    """
+    waits: list[float] = []
+    excluded = 0
+    for row in fills or []:
+        placed = _finite(row.placed_ts)
+        filled = _finite(row.filled_ts)
+        if placed is None or filled is None or filled < placed:
+            excluded += 1
+        else:
+            waits.append(filled - placed)
+
+    def shape(value: Optional[float]) -> Optional[float]:
+        return None if value is None else round(value, 6)
+
+    return {
+        "count": len(waits),
+        "excluded": excluded,
+        "median_sec": shape(_percentile(waits, 0.50)),
+        "p90_sec": shape(_percentile(waits, 0.90)),
+    }
+
+
+def cleared_fills(quotes: Sequence[Any], fills: Sequence[Any]) -> list[ClearedFill]:
+    """The records the two metrics read, built from rows the registry already holds.
+
+    Pure over supplied rows, like every other section here: `quotes` is
+    `get_all_quotes()` and `fills` is `get_all_fills()`, joined on
+    `fills.order_uuid == quotes.local_id` -- the identifier `record_fill`,
+    `_attribute_fill_to_quote` and `kpi.py:1443-1449` all join on.
+
+    One record per quote that a fill credits:
+
+    * `placed_ts`  -- `quotes.ts`, already in SECONDS.
+    * `filled_ts`  -- the EARLIEST fill's `venue_ts` (falling back to `recorded_ts`, which a
+      shadow fill sets to the same instant) in MILLISECONDS, divided by 1000 here, once, so
+      no second reader has to re-derive the factor. `quotes.fill_ts` carries that same
+      millisecond number. The earliest fill is the one the wait is measured to: averaging
+      the last partial in would shorten every reading.
+    * `order_price` -- `quotes.price`, in dollars.
+    * `clearing_price` -- `None`, and that is the honest state rather than a placeholder.
+      The trade-through rule proves the level cleared by a print strictly below our price;
+      the crediting path sees that print and drops it, and no writer stores it. So every
+      depth figure reads `missing` until one does -- a measurement nobody took, which is
+      not the same as a depth of zero.
+
+    A quote that never filled is left out instead of carried as an unmeasurable wait: it did
+    not wait for a fill, it was cancelled or expired, and counting it in `excluded` would
+    report a missing measurement where there is nothing to measure. A fill whose timestamp
+    nobody recorded is the opposite case and is KEPT, with `filled_ts` left `None`: a fill
+    that happened is a real row, and dropping it would hide it from the count instead of
+    reporting the wait as unmeasurable.
+    """
+    credited: set[str] = set()
+    first_fill_ms: dict[str, float] = {}
+    for fill in fills or []:
+        order_uuid = _close_field(fill, "order_uuid")
+        if order_uuid is None:
+            continue
+        key = str(order_uuid)
+        credited.add(key)
+        stamp = _finite(_close_field(fill, "venue_ts"))
+        if stamp is None:
+            stamp = _finite(_close_field(fill, "recorded_ts"))
+        if stamp is not None:
+            first_fill_ms[key] = min(stamp, first_fill_ms.get(key, stamp))
+
+    records: list[ClearedFill] = []
+    for quote in quotes or []:
+        local_id = _close_field(quote, "local_id")
+        if local_id is None:
+            continue
+        key = str(local_id)
+        if key not in credited:
+            continue
+        stamp = first_fill_ms.get(key)
+        records.append(ClearedFill(
+            order_id=key,
+            order_price=_finite(_close_field(quote, "price")),
+            clearing_price=None,
+            placed_ts=_finite(_close_field(quote, "ts")),
+            filled_ts=None if stamp is None else stamp / 1000.0,
+        ))
+    return records
+
+
 def probability_bell(fills: Sequence[dict]) -> dict[str, Any]:
     """Where our executions landed across the probability range.
 
@@ -850,20 +1103,33 @@ def monte_carlo(returns_usd: Sequence[float], starting_capital: float,
 
 
 def build(closes: Sequence[dict], fills: Sequence[dict],
-          markouts: Sequence[dict], starting_capital: float) -> dict[str, Any]:
+          markouts: Sequence[dict], starting_capital: float,
+          quotes: Optional[Sequence[Any]] = None) -> dict[str, Any]:
     """The whole `statistical_analytics` payload the analytics tab reads.
 
-    The charts come and go with their input; `fill_path_edge` and `rescue_friction` are
-    always present, because both summarise the closes this call already holds and a
-    caller must never have to branch on whether a reading exists.
+    The charts come and go with their input; `fill_path_edge`, `rescue_friction` and
+    `queue_realism` are always present, because they summarise the closes, the fills and the
+    quotes this call already holds and a caller must never have to branch on whether a
+    reading exists.
+
+    `quotes` is optional and additive. The queue-realism section reads the placement price
+    and timestamp a close never carries, so a caller without quotes gets that section at
+    zero counts rather than a missing key -- and a caller with them gets the one part of it
+    the registry can answer today, the wait between placement and the first credited fill.
     """
     returns = position_returns(closes)
+    records = cleared_fills(quotes or [], fills)
     payload: dict[str, Any] = {
         "position_returns": returns,
         "closed_positions": returns["positions"],
         "pair_costs": pair_costs(closes),
         "fill_path_edge": fill_path_edge(closes),
         "rescue_friction": rescue_friction_summary(closes),
+        "queue_realism": {
+            "cleared_fill_count": len(records),
+            "trade_through_depth": trade_through_depth(records),
+            "fill_latency": fill_latency(records),
+        },
         "probability_bell": probability_bell(fills),
         "markout": markout(markouts),
     }

@@ -561,3 +561,116 @@ def test_a_store_from_before_this_section_reads_as_unmeasured():
             assert leak not in text
 
 
+# -- Queue realism: the tape behind a fill (#515) ----------------------------
+
+# A store where both readings are measurable: four cleared fills, three of them carrying a
+# print 2.5c below our price (median), and waits of 5s / 10s / 15s.
+QUEUE_REALISM = {
+    "cleared_fill_count": 4,
+    "trade_through_depth": {"count": 3, "missing": 1, "not_trade_through": 0,
+                            "median_cents": 2.5, "p75_cents": 4.25, "band": "average"},
+    "fill_latency": {"count": 3, "excluded": 1, "median_sec": 10.0, "p90_sec": 14.0},
+}
+
+
+def _queue(payload) -> dict:
+    """A payload carrying the queue-realism section, or one from before it existed."""
+    return {"statistical_analytics": {} if payload is None else {"queue_realism": payload}}
+
+
+def test_the_queue_realism_readout_shows_cents_for_depth_and_seconds_for_the_wait():
+    # Act
+    out = _mount(_queue(QUEUE_REALISM))
+
+    # Assert -- the depth in cents, the wait in seconds with its unit attached: a wait
+    # without a unit is a number nobody can read against anything.
+    assert out["errors"] == []
+    text = _visible(out["queue_realism_html"])
+    assert "Trade-Through Depth (¢)" in text
+    assert "2.50" in text        # median depth, in cents
+    assert "4.25" in text        # p75
+    assert "10.0s" in text       # median wait
+    assert "14.0s" in text       # p90 wait
+
+
+def test_the_depth_carries_a_band_and_the_wait_carries_none():
+    # Arrange -- the band arrives as data; the renderer only names a colour for it. The
+    # wait is deliberately bandless: no market reference exists for it.
+    # Act
+    out = _mount(_queue(QUEUE_REALISM))
+
+    # Assert -- exactly one chip in the card, and it is the depth's.
+    html = out["queue_realism_html"]
+    assert html.count("analytics-chip") == 1
+    assert "analytics-chip warn" in html      # average is this theme's amber
+    assert "AVERAGE" in _visible(html)
+
+
+def test_the_depth_colour_follows_the_value_not_a_static_label():
+    # Arrange -- the same card on a store where the tape crossed us within the cent.
+    payload = {**QUEUE_REALISM,
+               "trade_through_depth": {**QUEUE_REALISM["trade_through_depth"],
+                                       "median_cents": 0.4, "band": "good"}}
+
+    # Act
+    out = _mount(_queue(payload))
+
+    # Assert
+    html = out["queue_realism_html"]
+    assert "analytics-chip live" in html
+    assert "analytics-chip warn" not in html
+    assert "0.40" in _visible(html)
+
+
+def test_a_store_with_no_recorded_print_says_unmeasured_not_a_zero_depth():
+    # Arrange -- the state every store is in today: nothing records the print that cleared
+    # our level, so the depth has no rows while the waits are real numbers.
+    # Act
+    out = _mount(_queue({
+        "cleared_fill_count": 4,
+        "trade_through_depth": {"count": 0, "missing": 4, "not_trade_through": 0,
+                                "median_cents": None, "p75_cents": None,
+                                "band": "unmeasured"},
+        "fill_latency": {"count": 4, "excluded": 0, "median_sec": 12.5, "p90_sec": 18.0},
+    }))
+
+    # Assert -- the depth reads unmeasured (never `0.00`, which would claim the tape sat on
+    # our price), the wait still shows its numbers, and the counts say why.
+    assert out["errors"] == []
+    text = _visible(out["queue_realism_html"])
+    assert "UNMEASURED" in text
+    assert "12.5s" in text and "18.0s" in text
+    assert "0.00" not in text
+    assert "prints not recorded 4" in text
+    for leak in ("NaN", "undefined", "null"):
+        assert leak not in text
+
+
+def test_the_readout_discloses_the_population_behind_each_figure():
+    # Act
+    out = _mount(_queue(QUEUE_REALISM))
+
+    # Assert -- the base population, and what each metric could not measure.
+    text = _visible(out["queue_realism_html"])
+    assert "4 cleared fills" in text
+    assert "depth measured 3" in text
+    assert "prints not recorded 1" in text
+    assert "waits measured 3" in text
+    assert "timestamps unusable 1" in text
+
+
+def test_a_store_from_before_this_section_reads_as_unmeasured():
+    # Arrange / Act -- a payload with no `queue_realism` key at all, which is what every
+    # store written before this change, and every run with no quotes, looks like.
+    for payload in (None, {}):
+        out = _mount(_queue(payload))
+
+        # Assert
+        assert out["errors"] == []
+        text = _visible(out["queue_realism_html"])
+        assert "unmeasured" in text
+        assert "0 cleared fills" in text
+        for leak in ("NaN", "undefined", "null"):
+            assert leak not in text
+
+
