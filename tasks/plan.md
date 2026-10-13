@@ -160,7 +160,7 @@ everything else in this file):
 
 - [x] T1 — SLED decomposition with its tests
 - [x] T2 — TCDR, overshoot, bands and the summary
-- [ ] T3 — wire the payload
+- [x] T3 — wire the payload
 - [x] T4 — dashboard readout with traffic-light bands
 
 All four tasks committed locally on this branch. Built as planned, with two recorded

@@ -770,13 +770,19 @@ def monte_carlo(returns_usd: Sequence[float], starting_capital: float,
 
 def build(closes: Sequence[dict], fills: Sequence[dict],
           markouts: Sequence[dict], starting_capital: float) -> dict[str, Any]:
-    """The whole `statistical_analytics` payload the analytics tab reads."""
+    """The whole `statistical_analytics` payload the analytics tab reads.
+
+    The charts come and go with their input; `fill_path_edge` and `rescue_friction` are
+    always present, because both summarise the closes this call already holds and a
+    caller must never have to branch on whether a reading exists.
+    """
     returns = position_returns(closes)
     payload: dict[str, Any] = {
         "position_returns": returns,
         "closed_positions": returns["positions"],
         "pair_costs": pair_costs(closes),
         "fill_path_edge": fill_path_edge(closes),
+        "rescue_friction": rescue_friction_summary(closes),
         "probability_bell": probability_bell(fills),
         "markout": markout(markouts),
     }
