@@ -178,15 +178,17 @@ def test_no_other_core_brain_module_writes_a_normal_multiplier_down():
 
 
 def test_the_trade_analytics_bands_read_their_multiplier_from_the_table():
-    """Behaviour-preserving: the literals moved to the table, the bands did not."""
+    """Student-t while n is small (#541): the bands follow ci_critical_value."""
     closes = [_close(pnl, cost=6.0, shares=6.0) for pnl in (0.30, 0.10, -0.20, 0.40)]
     ta = kpi.compute_trade_analytics(closes, starting_capital=100.0,
                                      equity_series=[], float_marks=[])
     se = ta["stdev_return_pct"] / (len(closes) ** 0.5)
+    t90 = ci_critical_value(90, len(closes), ci_z(90))
+    t95 = ci_critical_value(95, len(closes), ci_z(95))
 
-    assert ta["ci90_lower_pct"] == pytest.approx(ta["mean_return_pct"] - ci_z(90) * se)
+    assert ta["ci90_lower_pct"] == pytest.approx(ta["mean_return_pct"] - t90 * se)
     assert ta["ci95_return_pct"]["lower"] == pytest.approx(
-        ta["mean_return_pct"] - ci_z(95) * se)
+        ta["mean_return_pct"] - t95 * se)
 
 
 # --- the renderer reads the payload, it does not decide ----------------------

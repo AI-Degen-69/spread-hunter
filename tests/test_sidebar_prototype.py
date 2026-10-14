@@ -30,7 +30,7 @@ _STATIC = _ROOT / "dashboard" / "static"
 HARNESS = Path(__file__).resolve().parent / "js" / "prototype_nav_harness.cjs"
 LAYOUT_HARNESS = Path(__file__).resolve().parent / "js" / "prototype_layout_harness.cjs"
 
-PAGES = ("home", "data-markets", "strategy", "trades", "reports")
+PAGES = ("home", "data-markets", "strategy", "trades", "reports", "analysis")
 
 requires_node = pytest.mark.skipif(shutil.which("node") is None,
                                    reason="node is not installed on this host")

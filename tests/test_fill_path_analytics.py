@@ -331,7 +331,7 @@ def test_the_method_sets_match_their_canonical_homes():
 
     # Act / Assert
     assert set(MERGE_METHODS) == set(registry_state.MERGE_CLOSE_METHODS)
-    for home in (artifacts.EXIT_METHODS, kpi.SINGLE_BUY_EXIT_METHODS,
+    for home in (artifacts.SINGLE_BUY_EXIT_METHODS, kpi.SINGLE_BUY_EXIT_METHODS,
                  ladder.LADDER_EXIT_METHODS):
         assert set(RESCUE_METHODS) == set(home)
     assert set(EXCLUDED_METHODS) == set(kpi.NON_TRADE_CLOSE_METHODS)

@@ -93,7 +93,7 @@ MERGE_METHODS = ("merge", "shadow_merge")
 
 # The single-buy exits: a leg whose partner never filled, sold back through the
 # book. Mirrors `kpi.SINGLE_BUY_EXIT_METHODS`,
-# `statistical_validation_run.artifacts.EXIT_METHODS` and
+# `statistical_validation_run.artifacts.SINGLE_BUY_EXIT_METHODS` and
 # `ladder.LADDER_EXIT_METHODS`, and shares `artifacts.rescue_stats`'
 # merges-plus-exits denominator. Declared rather than imported because `kpi`
 # imports THIS module, so the reverse import is a cycle; the copies are pinned
