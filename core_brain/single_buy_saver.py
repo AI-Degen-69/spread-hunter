@@ -82,6 +82,12 @@ DEFAULT_TICK_SIZE: float = 0.01
 # Page size for the Data API positions read.
 POSITIONS_PAGE_SIZE: int = 500
 
+# Shadow rescue exits pay no taker fee: the rehearsal client sells into its own
+# simulated book, so there is no venue to charge one. Recorded on shadow rescue
+# closes only — live taker fees are unknown at sell time and stay NULL
+# (unmeasured), never an invented zero.
+ZERO_FEE: float = 0.0
+
 # The one invariant that makes a single logical owner real: the whole
 # venue-mutating lifecycle -- decide -> cancel -> re-read -> sell/complete --
 # runs under exactly one process-wide lock, so two executors (the rotation
@@ -696,7 +702,8 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
                        reason: Optional[str] = None,
                        method: str = "single_buy_exit",
                        trigger_bid: Optional[float] = None,
-                       fresh_bid: Optional[float] = None) -> None:
+                       fresh_bid: Optional[float] = None,
+                       fee: Optional[float] = None) -> None:
     """Ledger a completed exit: the sold leg leaves the registry for good.
 
     Written AFTER the market order succeeds, mirroring the paper run's sweep (which
@@ -754,6 +761,7 @@ def _record_exit_close(registry: OrderRegistry, pair: dict, heavy_token: str,
         reason=reason,
         trigger_bid=trigger_bid,
         fresh_bid=fresh_bid,
+        fee=fee,
     ))
 
 
@@ -989,9 +997,12 @@ def exit_single_buy(
     #    the auto pass skips conditions that have a close.
     sold = _exit_fill_size(resp, size)
     fill_price = _exit_fill_price(resp, min_price)
+    # Shadow rehearsal sells into its own book: no venue, no taker fee. Live
+    # taker fees are unknown at sell time, so live stays NULL (unmeasured).
+    fee = ZERO_FEE if hasattr(client, "_sell_into_bids") else None
     _record_exit_close(registry, after, heavy_token, heavy_side, sold,
                        fill_price, reason=reason, method=method,
-                       trigger_bid=trigger_bid, fresh_bid=bid)
+                       trigger_bid=trigger_bid, fresh_bid=bid, fee=fee)
 
     return {
         "action": "exited",
