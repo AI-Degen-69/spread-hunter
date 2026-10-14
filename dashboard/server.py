@@ -464,6 +464,23 @@ def set_db_override(path: Path | str | None) -> None:
     _ACTIVE_DB_OVERRIDE = Path(path) if path else None
 
 
+def demo_db_path() -> Path:
+    """The bogus registry `scripts/build_demo_db.py` writes.
+
+    A function rather than a constant so tests can point it at a store they
+    built; the dashboard itself always reads the repo's own demo file.
+    """
+    return LIVE_ROOT / "data" / "demo_orders.db"
+
+
+def _same_registry(a: Path | str, b: Path | str) -> bool:
+    """Do two paths name the same store file?"""
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return str(a) == str(b)
+
+
 # How long a built snapshot is served to every caller before it is rebuilt.
 # The page polls on a 2s timer, so 2.5s avoids re-triggering background builds
 # on every single cycle of a single tab.
@@ -2458,6 +2475,60 @@ def api_system_switch_db(request: Request, db: str | None = None):
     """Point the page at another store (read-only; changes no machine state)."""
     _authorize_control(request)
     return JSONResponse(switch_active_db(db))
+
+
+@app.post("/api/system/demo")
+def api_system_demo(request: Request):
+    """Toggle this page between the demo registry and the live store.
+
+    The demo registry is the bogus store `scripts/build_demo_db.py` writes,
+    built so every dashboard table and metric card can be eyeballed without
+    a live run. Loading it is the same read-only re-point the run switcher
+    performs: the stack, its processes and the production registry are
+    untouched, and the START refusals that gate on a non-production store
+    still apply -- which is the point. A button that loads bogus data sits
+    next to the controls that spend money, so the page reading the demo
+    must not be able to start the live stack.
+
+    Pressing it again (the button reads BACK TO LIVE while the demo is
+    loaded) returns the page to its launch store. When the page was
+    launched ON the demo itself, the env var that still points at it is
+    cleared too, so the fallback is the production registry and the button
+    can never trap itself on bogus data.
+    """
+    _authorize_control(request)
+    demo = demo_db_path()
+    if _same_registry(resolve_db_path(_ACTIVE_DB_OVERRIDE), demo):
+        set_db_override(None)
+        env_path = os.environ.get("LIVE_DB_PATH")
+        if env_path and _same_registry(Path(env_path), demo):
+            del os.environ["LIVE_DB_PATH"]
+        live = resolve_db_path(None)
+        return JSONResponse({
+            "ok": True,
+            "demo": False,
+            "message": f"Back to the live store: {live}.",
+            "status": get_system_status(),
+        })
+    if not demo.is_file():
+        return JSONResponse({
+            "ok": False,
+            "message": (
+                f"No demo registry at {demo}. Build one first: "
+                "python scripts/build_demo_db.py"
+            ),
+            "status": get_system_status(),
+        })
+    set_db_override(demo)
+    return JSONResponse({
+        "ok": True,
+        "demo": True,
+        "message": (
+            f"Reading the demo registry: {demo}. Orders, fills and PnL on "
+            "this page are bogus, and START is disabled while they are loaded."
+        ),
+        "status": get_system_status(),
+    })
 
 
 @app.post("/api/system/service/start")

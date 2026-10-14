@@ -1452,14 +1452,81 @@ function runSwitcherLabel(run) {
   return (run.db_path || '').split(/[\\/]/).pop() || '';
 }
 
+/* The demo row in the store switcher: load the bogus registry the demo
+ * builder writes, or hand the page back to the live store. It is a toggle
+ * because the server endpoint is one: pressing it while the demo is loaded
+ * returns the page to its launch store, and the label says which way the
+ * next press goes. */
+function demoSwitcherRow() {
+  const path = lastStatusForRuns?.db_path || '';
+  const readingDemo = /(^|[\\/])demo_orders\.db$/.test(path);
+  const label = readingDemo ? '← BACK TO LIVE' : 'LOAD DEMO DATA';
+  const title = readingDemo
+    ? 'Return this page to the live store (the demo registry is bogus data).'
+    : 'Load the demo registry: bogus orders, trades and metrics to eyeball '
+      + 'every table and card. Read-only -- START stays disabled while it is loaded.';
+  return `<div class="db-run-row db-demo-row">
+      <span class="db-run-name">Demo registry (bogus data)</span>
+      <button class="db-run-switch db-demo-load" title="${esc(title)}">${label}</button>
+    </div>`;
+}
+
+function wireDemoSwitcher(sw) {
+  sw.querySelectorAll('.db-demo-load').forEach(b => {
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        const res = await controlFetch('/api/system/demo');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert(data.message || data.detail
+            || `Could not toggle the demo store (HTTP ${res.status}).`);
+          renderRunSwitcher();  // re-render restores the label and re-enables
+          return;
+        }
+        clearPollSnapshots();
+        closeRunSwitcher();
+        pollStatus();
+      } catch {
+        alert('Could not reach the dashboard to toggle the demo store.');
+        renderRunSwitcher();
+      }
+    });
+  });
+}
+
+/* Clear retained last-good poll snapshots so the previous store's telemetry
+ * doesn't linger before pollStatus() retrieves the newly selected store.
+ * Shared by the run switcher and the demo toggle: both re-point the page at
+ * a different registry and both need the same scrub. */
+function clearPollSnapshots() {
+  lastState = null;
+  lastKpi = null;
+  clearLiveMarks();
+  lastStatus = null;
+  lastScanState = null;
+  lastTrialReadiness = null;
+  lastGuardHealth = null;
+  lastGuardAlerts = null;
+  lastStatusForRuns = null;
+  lastScanStateAtMs = null;
+  lastKpiAtMs = null;
+  lastStatusAtMs = null;
+}
+
 async function renderRunSwitcher() {
   const sw = document.getElementById('db-run-switcher');
   const badge = document.getElementById('db-mode-badge');
   if (!sw) return;
   const runs = (lastStatusForRuns?.shadow_runs || []).filter(r => r && r.db_path);
+  // The demo row renders whether or not any rehearsal is registered: the
+  // bogus store is not a run, it is a fixture, and the empty state must not
+  // hide the one control that works on a machine with no runs at all.
+  const demoRow = demoSwitcherRow();
   if (!runs.length) {
-    sw.innerHTML = `<div class="db-run-empty">No rehearsal is registered on this machine.</div>`;
+    sw.innerHTML = demoRow + `<div class="db-run-empty">No rehearsal is registered on this machine.</div>`;
     sw.style.display = 'block';
+    wireDemoSwitcher(sw);
     placeRunSwitcher(sw, badge);
     return;
   }
@@ -1481,8 +1548,9 @@ async function renderRunSwitcher() {
         ${btn}
       </div>`;
   });
-  sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + rows.join('');
+  sw.innerHTML = `<div class="db-run-head">Which run is this page reading?</div>` + demoRow + rows.join('');
   sw.style.display = 'block';
+  wireDemoSwitcher(sw);
   placeRunSwitcher(sw, badge);
   sw.querySelectorAll('.db-run-switch').forEach(b => {
     b.addEventListener('click', async () => {
@@ -1501,20 +1569,7 @@ async function renderRunSwitcher() {
           alert(data.message || data.detail
             || `Could not switch stores (HTTP ${res.status}).`);
         } else {
-          // Clear retained last-good poll snapshots so previous store's telemetry
-          // doesn't linger before pollStatus() retrieves the newly selected store.
-          lastState = null;
-          lastKpi = null;
-          clearLiveMarks();
-          lastStatus = null;
-          lastScanState = null;
-          lastTrialReadiness = null;
-          lastGuardHealth = null;
-          lastGuardAlerts = null;
-          lastStatusForRuns = null;
-          lastScanStateAtMs = null;
-          lastKpiAtMs = null;
-          lastStatusAtMs = null;
+          clearPollSnapshots();
         }
       } catch { alert('Could not reach the dashboard to switch stores.'); }
       closeRunSwitcher();
