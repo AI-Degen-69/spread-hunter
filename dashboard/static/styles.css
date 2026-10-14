@@ -166,6 +166,27 @@ header {
 }
 .top-meta.is-scrollable.is-end::after { content: none; }
 
+/* ── Top navigation groups (#504) ── */
+.top-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+.top-group > * {
+  flex-shrink: 0;
+}
+.top-group + .top-group {
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 12px;
+  margin-left: 6px;
+}
+.top-group.top-group-controls {
+  border-left: 1px solid var(--border-strong, rgba(255, 255, 255, 0.2));
+  padding-left: 14px;
+  margin-left: 8px;
+}
+
 /* One compact operational language across the header. Every status uses the
    same pill shell and the canonical state classes below; labels add context,
    not a second visual vocabulary. */
@@ -229,11 +250,11 @@ header {
 /* ── Tab switcher (DT4: text-only, no emoji) ── */
 .tab-switcher {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  padding: 4px;
+  border-radius: 12px;
+  padding: 6px;
 }
 .tab-btn {
   padding: 8px 16px;
@@ -241,8 +262,10 @@ header {
   background: var(--tab-inactive-bg);
   color: var(--tab-inactive-color);
   font-family: 'IBM Plex Sans', sans-serif;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -252,7 +275,7 @@ header {
 }
 .tab-btn:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
 .tab-btn.active {
-  background: var(--tab-active-bg);
+  background: var(--tab-active-bg, rgba(255, 255, 255, 0.08));
   color: var(--text-primary);
   border-bottom: 2px solid var(--tab-active-border);
 }
@@ -1367,6 +1390,16 @@ td { font-size: 13px; }
 @media (max-width: 900px) {
   header { align-items: flex-start; }
   .top-meta { justify-content: flex-start; flex-wrap: wrap; overflow-x: visible; }
+  .top-group {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    max-width: 100%;
+  }
+  .top-group + .top-group {
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
+  }
 }
 @media (max-width: 768px) {
   body { padding: 12px 12px 60px; }

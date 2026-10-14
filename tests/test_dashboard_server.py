@@ -1465,7 +1465,10 @@ def test_operational_statuses_share_one_top_nav_bar():
     # The former second-row console is gone; the top nav owns the at-a-glance
     # operational status surface instead.
     assert 'class="live-ops-console"' not in header
-    assert 'role="group" aria-label="Dashboard status and controls"' in top_meta
+    assert 'role="group" aria-label="Live state"' in top_meta
+    assert 'role="group" aria-label="Data source"' in top_meta
+    assert 'role="group" aria-label="Run controls"' in top_meta
+    assert 'role="group" aria-label="Dashboard status and controls"' not in top_meta
     assert 'id="master-status-indicator" class="pill state-unknown' in top_meta
     assert 'id="hud-services-pill"' in top_meta
     assert 'id="hud-guardrail-pill"' in top_meta

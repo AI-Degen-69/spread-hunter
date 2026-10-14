@@ -59,7 +59,7 @@ T1 (Groups & Landmarks)
 
 ## Tasks
 
-### T1 [Design/UI] Semantic Groups, Accessibility Landmarks & Tab Row Alignment — M
+### T1 [x] [Design/UI] Semantic Groups, Accessibility Landmarks & Tab Row Alignment — M
 - **Target files**: `dashboard/static/index.html`, `dashboard/static/styles.css`, `tests/test_ui_top_nav_groups.py`, `tests/test_dashboard_server.py`.
 - **What**:
   - Keep `.brand` as first header child.
