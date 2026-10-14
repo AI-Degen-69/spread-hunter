@@ -16,26 +16,45 @@ readable in git history.
 - `KPI_PAYLOAD_VERSION` stays 257. No payload section renames. Wilson (proportions) and
   power/planning constants are out of the switch (different estimators).
 
-## Scope & File Boundaries
+## Scope & File Boundaries (operator override 2026-10-14: original page frozen)
 
-- Target files for modification:
-  - `dashboard/static/app.js` — registry, readout routing, single `required_observations`
-    placement (today at :4136 and :5171), gates group move.
-  - `dashboard/static/index.html` — statistics page structure, `#analytics-gates` group
-    placement, dead simulator button removal.
-  - `dashboard/static/prototype.js` — mount/prune updates only.
+- FROZEN (no structural/value/layout edits): tab-2 renderers in `dashboard/static/app.js`
+  (`renderAnalyticsSurface`, `renderKPIs`, the 8 readouts, `renderQuantRiskGrid`,
+  `decisionGatesHtml/Rows`, Tier-1 row), tab-2 sections of `dashboard/static/index.html`.
+  Two information-only exceptions, both invisible to layout and values: (a) card titles
+  gain unit suffixes (`$`/`¢`/`%`/`bps`/`s`/`×`) — the operator's own screenshot complaint;
+  (b) defaulted params that preserve current behavior byte-for-byte (renderer host-id /
+  chart-ids params for the new tab's use, `renderCapitalRisk` curve-name override).
+  The 2a/2b ledger tests keep scanning `app.js` as written — no rescope needed.
+- ALLOWED on the original surface only: the tab-switcher shell (4th tab button), the
+  `<script>` include for the new module, and optional target-id params on chart fns
+  (defaults preserve current behavior byte-for-byte).
+- T3 work area: NEW `dashboard/static/data_analysis.js` (registry, claim ledger, one tile
+  builder, units, restyle — scoped CSS in the new tab's markup), a new tab-4 panel in
+  `index.html`, and mount wiring in `dashboard/static/prototype.js` if the tab needs it.
+
+- Target files for modification (T2 items below are DONE and committed):
+  - `dashboard/static/data_analysis.js` (NEW) — registry, claim ledger, one tile builder,
+    units, restyle; the only JS the new tab renders.
+  - `dashboard/static/index.html` — new tab-4 panel + tab button + module `<script>` include
+    (+ optional chart target containers). Tab-2 markup untouched.
+  - `dashboard/static/app.js` — tab-switcher 4th-tab support + optional chart target-id
+    params (defaults = current behavior) ONLY. No renderer/title/value edits.
+  - `dashboard/static/prototype.js` — mount wiring for the new tab only if needed.
   - `core_brain/statistical_analytics.py` — one public normal-interval helper (explicit `z`),
-    `_percentile` convention docstring; exact op order preserved.
+    `_percentile` convention docstring; exact op order preserved. [T2 done]
   - `core_brain/kpi.py` — call the new helper; add a public Wilson name (`_wilson_ci` kept
-    as alias); expose the sufficiency z table for import. No semantics change.
+    as alias); expose the sufficiency z table for import. No semantics change. [T2 done]
   - `core_brain/` — one neutral module for the queue-multiple formula shared by the live
-    report and the shadow fill model.
+    report and the shadow fill model. [T2 done]
   - `scripts/statistical_trade_audit.py`, `scripts/ladder_probe.py`,
     `scripts/paired_depth_report.py`, `scripts/stat_gate.py`,
     `scripts/family_probe_report.py` — import shared math; adapters only; printed layouts stay.
+    [T2 done]
   - `statistical_validation_run/artifacts.py` — import method tuples from `kpi` (no local
-    tuples). Layouts and report-only computations stay.
-  - `tests/` + `tests/js/analytics_surface_harness.cjs` — goldens, parity, registry-ledger tests.
+    tuples). Layouts and report-only computations stay. [T2 done]
+  - `tests/` + `tests/js/` — goldens, parity, registry-ledger tests (2a/2b scan `app.js`
+    as written; units land in the shared renderers).
 - MUST NOT modify: `data/orders.db` (production registry — read-only); top-nav structure
   (#504 owns it); close-method classification rules (#520 owns them); any report/artifact
   layout; `paired_depth_report`'s `.842` pilot constant and `max(2, n)` rule.

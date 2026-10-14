@@ -26,7 +26,10 @@ No new statistic, model, chart, or metric. No `/api/kpi` semantics change: `port
 
 ## Resolved open questions (defaults adopted, confirmed against code)
 
-1. **Replace or add a tab → rebuild tab 2 in place.** No fourth statistics tab exists; adding one would ship the duplicate this issue removes. Override only on explicit operator word.
+1. **Add a tab, keep the original (operator override 2026-10-14).** Tab 2 stays frozen
+    as the legacy page — no renderer or layout edits there. A new fourth tab, "Data Analysis",
+    is the canonical one-statistics page: registry, ledger, units, and restyle all land there,
+    reusing (copied or redesigned) components. Legacy-tab removal is a follow-up, out of scope.
 2. **Keep the four views → switcher becomes a filter, one placement per tick.** The Sensitivity Simulator button is already `display:none` (index.html:440) — remove the dead button rather than leaving it.
 3. **Shared-reader reach → unify duplicated readers; leave report-only stats, list them in the PR.** Lifetimes, cancel reasons, queue sections, rescue rates, run counters, validation verdict, and research-only figures (tape/probe/two-arm) stay in their products, registered as report-only with producer + reason.
 4. **Duplicate = both shapes.** Two producers of one number AND one number placed twice both count. Population rule: same population + same measure → one placed, other `aliasOf`; different population/curve → both placed, each labeled (equity-curve vs account-curve drawdown; gate input marked).

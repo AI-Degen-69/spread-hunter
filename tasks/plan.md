@@ -54,7 +54,7 @@ checks alone never count).
 
 ## Tasks
 
-- [ ] T1 (M) [Backend/Logic] Freeze today's values. Fixture: fixed shadow run in `tmp_path`
+- [x] T1 (M) [Backend/Logic] Freeze today's values. Fixture: fixed shadow run in `tmp_path`
   (reuse `_seed_closes`/`_kpi_for`/`_run_closes` from `tests/test_stat_validation_artifacts.py`;
   mixed methods, fixed-timestamp fills/quotes, one missing-PnL + one zero-cost close,
   equity + account curves starting below capital). Golden JSON of `kpi.report()` stats
@@ -67,7 +67,7 @@ checks alone never count).
   test (RED now). Files: `tests/` (+1 golden JSON, +2-3 test files).
   Helper: `test-driven-development`. Depends on: none. Verify: goldens pass on this
   branch pre-change; ledger test fails.
-- [ ] T2 (L) [Backend/Logic] One copy of the math + the t-switch, no DOM change. Core helper
+- [x] T2 (L) [Backend/Logic] One copy of the math + the t-switch, no DOM change. Core helper
   (explicit multiplier); audit script becomes thin caller (delete `Z_CRITICAL`, 3 fns;
   adapters call `ci_critical_value`, keeping tuple shapes + n≤1/no-interval edges; SQL +
   printed layout untouched). kpi inline band + `ladder_probe.mean_ci90` switch to
@@ -79,21 +79,28 @@ checks alone never count).
   Helper: `test-driven-development`. Depends on: T1. Verify: goldens regenerated once
   with per-stat t-deltas logged; non-CI values byte-identical; focused suites incl.
   `test_shadow_run` boundary green.
-- [ ] T3 (L) [Design/UI] One statistics page on the registry, charts integrated. Rebuild tab-2
-  surface in place; registry drives `renderAnalyticsSurface`, 8 readouts, quant grid; each
-  tick under exactly one subnav view; dead simulator button removed; `#analytics-gates`
-  into Reports group (`PAGE_LAYOUT`); single `required_observations`; home keeps live
-  account state only (`page: home` registered), trade stats move to stats page;
-  service-health stays; same-population → placed + `aliasOf` (`ta.sortino_ratio` under
-  `capital_risk`); different-population/curve → both labeled (equity vs account drawdown,
-  gate input marked). Charts: each chart renders registry values (parity-tested
-  chart-vs-readout), one home view each. Card restyle (operator-ordered, trading-terminal
-  minimal: value-first hierarchy, consistent type scale, spacing, alignment; new CSS scoped
-  to the stats surface, same palette family). Unit audit: every card shows its unit symbol
-  (`$`/`¢`/`%`/`bps`) or is registry-flagged `bare` (e.g. SQN); unit-coverage test in the
-  harness fails a card with a missing or wrong unit. A11y: tablist/keyboard/empty-error
-  states preserved. Files: `app.js`, `index.html`, `prototype.js`. Helpers:
-  `frontend-ui-engineering`, `incremental-implementation`. Depends on: T2. Verify: ledger
+- [ ] T3 (L) [Design/UI] NEW "Data Analysis" tab (tab-2 frozen, operator override).
+  Legacy tab-2 renderers/markup stay byte-identical; all work lands in new
+  `dashboard/static/data_analysis.js` + a tab-4 panel. Contents, copied or redesigned
+  from the legacy components: (a) registry `{id, producer, block, view, unit, aliasOf?}`
+  covering every rendered stat; claim ledger (double-claim in one pass throws);
+  ONE tile builder every card uses; (b) single `required_observations` (helper from
+  the start — the legacy double-read stays untouched on the old page); (c) deduped
+  placements — Win Rate/Sharpe/MaxDrawdown/Expectancy shown once each (richest placement
+  wins: quant w/ CI, gates row w/ threshold, surface AvgProfit top-of-page);
+  run-profitability banner keeps verdict/counts/venue (win_rate/expectancy/paths lines go,
+  they live on the new tab); capital drawdown hints name the account curve (legacy hint
+  wrongly said equity — fixed ONLY on the new tab); (d) units on all 21 bare titles
+  (`$`/`¢`/`%`/`bps`/`s`/`×`, or registry-`bare` for ratios); fabricated-zero fallbacks
+  (`$0.000`, `0.00%`) become `unmeasured`; (e) charts render registry values into new
+  containers (existing chart fns gain optional target-id params, defaults = legacy
+  behavior); (f) trading-terminal card restyle, CSS scoped to the new tab, same palette;
+  a11y (tablist/keyboard/empty-error) preserved; home keeps live account state.
+  2a/2b ledger tests keep scanning `app.js` as written (titles gain units in the shared
+  renderers, so both tabs benefit; assertion strength unchanged).
+  Files: `data_analysis.js` (new), `index.html` (tab shell only), `prototype.js`
+  (mount wiring if needed). Helpers: `frontend-ui-engineering`,
+  `incremental-implementation`. Depends on: T2. Verify: ledger
   test GREEN; harness + `test_analytics_surface_mount` green; rendered-DOM sample (incl.
   chart values) + served-asset grep.
 - [ ] T4 (S) [Docs] Findings + report-only registry. Findings doc: pre/post-switch t-deltas
@@ -112,8 +119,9 @@ checks alone never count).
 ## How to verify (hands-on, operator)
 
 Launch the stack (`.\scripts\spread-hunter-menu.ps1 start`), open
-`http://127.0.0.1:8799`, walk the statistics page: every project figure is there exactly
+`http://127.0.0.1:8799`, walk the NEW Data Analysis tab: every project figure is there exactly
 once; view buttons filter without repeating a number; chart values match the readouts
-beside them; text, sizes, and spacing look uniform. Cross-check the audit script on
+beside them; text, sizes, and spacing look uniform. Legacy tab 2 must read exactly as
+before. Cross-check the audit script on
 `data/02_shadow_prudent_13-10_03-01.db` — its printed CIs match the page for that database
 (small-sample bands read slightly wider now: that's the t-switch, deltas in the PR).
