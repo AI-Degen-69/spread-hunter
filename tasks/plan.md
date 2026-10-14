@@ -62,7 +62,9 @@ statistical_validation_run, plus the three measured defects) and #560
   sites, stays red through #559 (scripts + app.js remain), and clears only
   at #560. T1's and #559's PRs fail CI **by design** — Station IV stops
   before merge and hands the red PR to the owner; main is red until #560
-  lands. No pin, no allowlist, no xfail.
+  lands. No pin, no allowlist, no xfail. One file-class exclusion:
+  `scripts/hooks/` (operator decision — the git-workflow guard's
+  `["pr", "merge"]` is git vocabulary, not close methods).
 
 ## Interface contract (locked before business logic)
 
@@ -107,7 +109,8 @@ Guard test `tests/test_close_method_taxonomy.py` — imports **only**
 - Scan roots anchored at `Path(__file__).resolve().parent.parent` (the
   `test_ci_critical_source.py` pattern): all `*.py` recursively under
   `core_brain/`, `statistical_validation_run/`, `scripts/`, plus top-level
-  `dashboard/static/*.js`. Skip caches; skip only the canonical module.
+  `dashboard/static/*.js`. Skip caches, the canonical module, and
+  `scripts/hooks/` (CI tooling — operator decision, N4).
 - **Python rule**: flag a tuple/list/set literal whose every element is a
   string constant (or `None`) and at least one is a declared name. Do not
   flag `sell`-only lists (order side), mixed demo rows
@@ -182,8 +185,8 @@ Guard test `tests/test_close_method_taxonomy.py` — imports **only**
 - Checkpoint: **scan red by design → Station IV. The PR cannot pass CI;
   Station IV stops before merge and hands the red PR to the owner.**
 
-**Captured RED list (2026-10-14 — 18 files, 37 line hits) — the #559/#560
-work order:**
+**Captured RED list (2026-10-14 — 17 files, 36 line hits; `scripts/hooks/`
+excluded per operator decision) — the #559/#560 work order:**
 
 - **#559 scope** (core_brain/, 25 hits): `kpi.py` 826, 829, 831, 1118, 1494,
   1500, 2195; `ladder.py` 19; `market_resolution.py` 639, 653, 681, 684;
@@ -195,8 +198,11 @@ work order:**
   233; `paired_depth_report.py` 509, 1017; `rescue_exit_report.py` 43, 44;
   `statistical_trade_audit.py` 39; `tournament_cockpit_server.py` 626, 694,
   695; `tournament_hub.py` 101; `dashboard/static/app.js` 8159.
-- **False positive** (N4 — operator decision needed before #560 can reach
-  green): `scripts/hooks/git_workflow_guard.py` 131.
+- **Excluded** (N4, resolved): `scripts/hooks/git_workflow_guard.py` 131 —
+  CI tooling whose `["pr", "merge"]` check is git vocabulary, never a
+  taxonomy consumer; excluded from the scan roots by operator decision.
+  Every remaining site is #559/#560 scope, so the guard clears at #560 as
+  designed.
 - **Discoveries beyond #520's inventory**: `kpi.py:2195` (N1),
   `tournament_cockpit_server.py:626` (N2), `tournament_hub.py:101` (N3) —
   all recorded in `docs/issues/558-noticed-but-not-touching.md`.

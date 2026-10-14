@@ -27,6 +27,11 @@ CANONICAL = ROOT / "core_brain" / "close_methods.py"
 SCAN_DIRS = ("core_brain", "statistical_validation_run", "scripts")
 STATIC = ROOT / "dashboard" / "static"
 
+# scripts/hooks/ is CI tooling (the git-workflow guard), never a taxonomy
+# consumer: its `rest[:2] == ["pr", "merge"]` check is git vocabulary, not
+# close methods (operator decision on #558).
+HOOKS = ROOT / "scripts" / "hooks"
+
 # `sell` is also an order side (`("buy", "sell")`), so it never triggers the
 # scan on its own; the other eleven names do.
 TRIGGER_NAMES = cm.ALL_METHOD_NAMES - {cm.SELL}
@@ -36,13 +41,14 @@ TRIGGER_NAMES = cm.ALL_METHOD_NAMES - {cm.SELL}
 
 def _scan_files() -> list[Path]:
     """Every file the scan covers: the three Python roots plus the top-level
-    dashboard scripts, minus caches and the canonical module itself."""
+    dashboard scripts, minus caches, the canonical module, and scripts/hooks/."""
     files: list[Path] = []
     for name in SCAN_DIRS:
         base = ROOT / name
         if base.is_dir():
             files.extend(p for p in base.rglob("*.py")
-                         if "__pycache__" not in p.parts and p != CANONICAL)
+                         if "__pycache__" not in p.parts and p != CANONICAL
+                         and HOOKS not in p.parents)
     files.extend(sorted(STATIC.glob("*.js")))
     return files
 
@@ -131,6 +137,7 @@ def test_the_scan_covers_the_real_files():
     assert "scripts/rescue_exit_report.py" in rels
     assert "dashboard/static/app.js" in rels
     assert "core_brain/close_methods.py" not in rels
+    assert "scripts/hooks/git_workflow_guard.py" not in rels
 
 
 def test_the_scanner_flags_a_python_method_tuple():
