@@ -204,6 +204,37 @@ def test_stitch_closed_trades_total_cost_uses_settlement_basis_not_residual_dust
 
 
 @requires_node
+def test_stitch_closed_trades_total_cost_sort_uses_settlement_basis():
+    """#579 follow-up: the Total Cost column sort ranks by the settlement basis,
+    not the residual dust — a $12.45-basis market must outrank a $5.00 one even
+    when it holds only $0.35 of residual."""
+    code = """
+    const big = {
+        condition_id: '0xbig', title: 'Big Basis Market', category: 'Sports',
+        settlements: [{ method: 'shadow_merge', shares: 7, cost_basis: 12.45,
+            proceeds: 13.00, realized_pnl: 0.55, ts: 1700000000 }],
+        realized_pnl: 0.55, total_cost: 0.35, total_sh: 0
+    };
+    const small = {
+        condition_id: '0xsmall', title: 'Small Basis Market', category: 'Sports',
+        settlements: [{ method: 'shadow_merge', shares: 5, cost_basis: 5.00,
+            proceeds: 5.20, realized_pnl: 0.20, ts: 1700000000 }],
+        realized_pnl: 0.20, total_cost: 0.50, total_sh: 0
+    };
+    const kpi = { by_market: { '0xbig': big, '0xsmall': small } };
+    const desc = app.stitchClosedTradesRows(kpi, { orders: [] }, { col: 3, dir: 'desc' });
+    const asc = app.stitchClosedTradesRows(kpi, { orders: [] }, { col: 3, dir: 'asc' });
+    console.log(JSON.stringify({
+        descFirst: desc.indexOf('0xbig') < desc.indexOf('0xsmall'),
+        ascFirst: asc.indexOf('0xsmall') < asc.indexOf('0xbig')
+    }));
+    """
+    res = json.loads(_eval_js(code))
+    assert res["descFirst"] is True, "desc sort must put the larger basis first"
+    assert res["ascFirst"] is True, "asc sort must put the smaller basis first"
+
+
+@requires_node
 def test_stitch_open_orders_and_positions_headers_and_pills():
     code = """
     const ordersHead = app.stitchOpenOrdersHeadHtml(null);

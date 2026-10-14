@@ -7789,6 +7789,14 @@ function renderStitchClosedLedgerRows(cid, m, settlements, allOrders, nowMs) {
   return `<tr><td colspan="7" style="text-align:center;color:#64748b;padding:20px;font-family:'JetBrains Mono',monospace;">No execution details available.</td></tr>`;
 }
 
+/* The basis of everything a market CLOSED, summed from its settlements. KPI's
+ * `total_cost` is the residual open-inventory cost, so a closed market carries
+ * dust or 0 there and must never be measured by it (#579). Both the Total Cost
+ * column and the column sort read this one number. */
+function closedTradeCostBasis(m) {
+  return (m.settlements || []).reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
+}
+
 function stitchClosedTradesRows(kpi, state, sort) {
   const entries = closedTradesEntries(kpi, state);
   if (!entries.length) {
@@ -7803,7 +7811,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
       case 0: return closeTsOf(m);
       case 1: return String(m.title || m.name || m.slug || '');
       case 2: return marketCategory(m);
-      case 3: return otNum(m.total_cost || 0);
+      case 3: return otNum(closedTradeCostBasis(m));
       case 4: return otNum(m.realized_pnl || 0);
       case 5: return (m.settlements || []).length;
       case 6: return 'FINISHED';
@@ -7849,7 +7857,7 @@ function stitchClosedTradesRows(kpi, state, sort) {
     // open-inventory cost (fills minus what the closes removed). On a closed
     // market that residual is dust or 0; reading it here divides realized PnL
     // by the wrong number and prints impossible percentages (#579).
-    const totalCost = settlements.reduce((acc, s) => acc + (Number(s.cost_basis) || 0), 0);
+    const totalCost = closedTradeCostBasis(m);
     const realizedPnl = Number(m.realized_pnl || 0);
     const pnlPct = totalCost > 0 ? (realizedPnl / totalCost) * 100 : 0;
     const pnlCls = realizedPnl > 0 ? 'pos' : (realizedPnl < 0 ? 'neg' : 'flat');
