@@ -1,41 +1,52 @@
-﻿# CONSTRAINTS — #564 (locked by Station II, enforced through Station V)
+﻿# CONSTRAINTS — #558 (locked by Station II, enforced through Station V)
 
-Governs the `i564/command-palette-lists-sidebar-links-with-their-rai` branch
-only. The #562 contract this file replaces is branch-scoped by its own header
-line and stays readable in git history.
+Governs the `spread-hunter_i558-561_taxonomi` branch only. The #564 contract
+this file replaces is branch-scoped by its own header line and stays readable
+in git history.
 
 ## Scope & File Boundaries
 
-- Target files (exactly four, plus this planning set):
-  - `dashboard/static/command-palette.js` — link entries in `buildEntries`,
-    icon clone in `makeRow`; `window.open` new-tab `noopener`; every DOM read
-    guarded so pages without rail markup stay inert.
-  - `dashboard/static/styles.css` — row-icon sizing rule only (16px,
-    `currentColor`, aligned with the label); no layout, no new tokens.
-  - `tests/js/command_palette_harness.cjs` — link fixture (href + svg child),
-    `makeEl.querySelector('svg')`, `win.open` spy with `openedLinks` observation.
-  - `tests/test_dashboard_command_palette.py` — new assertions only, plus the
-    documented repin of the exclusion test to inclusion.
-  - `SPEC.md`, `CONSTRAINTS.md`, `tasks/plan.md`, `tasks/todo.md`.
+- New files (exactly two, plus this planning set):
+  - `core_brain/close_methods.py` — the canonical taxonomy; stdlib only,
+    `from __future__ import annotations`, no `core_brain` imports.
+  - `tests/test_close_method_taxonomy.py` — the guard; imports only
+    `core_brain.close_methods`.
+  - `tasks/plan.md`, `tasks/todo.md`.
 - Files that must NOT be modified:
-  - `dashboard/static/prototype.js`, `dashboard/static/app.js` — the rail owns
-    its items; the palette reads, never writes.
-  - `dashboard/static/index.html` — no markup change needed (overlay already
-    renders rows generically).
-  - Every existing test file outside the palette suite.
-  - `data/orders.db` — production registry, read-only at all times.
+  - Every consumer — `core_brain/kpi.py`, `statistical_analytics.py`,
+    `registry_state.py`, `ladder.py`, `market_resolution.py`,
+    `order_registry.py`, `paired_shadow.py`, `shadow_exec.py`,
+    `single_buy_saver.py`, `run_scorer.py`, all of
+    `statistical_validation_run/`, every `scripts/` file, and
+    `dashboard/` — those moves are #559/#560's scope. The guard FAILS on
+    them by design; do not "fix" them here.
+  - `data/orders.db` and every other store — read-only throughout.
+  - Every existing test file.
+
+## The guard is RED at T1 — by design
+
+- Issue #558's verify line: "RED before the consumers move, GREEN after".
+  Operator decision (this session): the scan asserts ZERO stray method
+  lists. It is red at T1 on the current sites and clears only at #560.
+- This is not a regression, not a bug, and not something to pin, allowlist,
+  xfail, or scope-expand away. Station IV stops before merge and hands the
+  red PR to the owner; T1 and #559 merge by owner override; main is red
+  until #560 lands.
+- Everything else in the new test file (pins, scanner self-checks) must be
+  GREEN at T1.
 
 ## Quality bar
 
-- Zero regressions: `python -m pytest -q tests/test_dashboard_command_palette.py`
-  plus the dashboard `-k` selection
-  (`live_state or input_lag or analytics_surface or start_toggle or dashboard`).
-  The full sweep is GitHub CI's merge gate, never a local step.
-- Every new behaviour carries a test that fails without the change (RED first,
-  via stash of the product file). The repinned exclusion test is a deliberate
-  expectation change — recorded here so no station mistakes it for a regression.
-- Anti-cheat: no skipped or disabled tests, no deleted assertions, no linter
-  suppression. No new external dependencies.
-- Accessibility floor (binding): cloned svgs stay `aria-hidden` (they already
-  are); rows keep `role="option"` + label text; link rows expose their URL via
-  `title` or `sub` so a screen reader user knows Enter leaves the page. Never cut.
+- Zero regressions: the module is new (no importers yet); no existing test
+  is touched. The focused run `python -m pytest -q
+  tests/test_close_method_taxonomy.py` is expected RED (scan only); pins
+  and self-checks GREEN.
+- The test file cannot import without the module — RED first by
+  construction.
+- Anti-cheat: no skipped or disabled tests, no deleted assertions, no
+  linter suppression, no baseline pin of current violations, no new
+  external dependencies.
+- Naming/typing (docs/agents/python-conventions.md): SCREAMING_SNAKE_CASE
+  constants, PascalCase record, type hints and docstrings on the module's
+  public surface, absolute repo-rooted imports, `from __future__ import
+  annotations`.
