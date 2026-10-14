@@ -429,9 +429,12 @@ def test_trigger_click_opens_and_focuses_search():
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")
 def test_trigger_close_restores_focus_to_trigger():
-    """Closing returns focus to the trigger through the opener path."""
-    res = _run({"triggerFocused": True},
-               _click_trigger() + [{"type": "observe"}, _key("Escape")])
+    """Closing returns focus to the trigger through the opener path.
+
+    The click itself moves focus to the trigger (as a real mousedown does),
+    so this covers the genuine mouse transition, not a pre-focused fixture."""
+    res = _run({},
+               [*_click_trigger(), {"type": "observe"}, _key("Escape")])
     assert res["threw"] is None
     assert res["observations"][0]["open"] is True  # the click really opened it
     assert res["open"] is False

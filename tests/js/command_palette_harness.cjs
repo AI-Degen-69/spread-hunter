@@ -114,6 +114,14 @@ function clickEl(el) {
     preventDefault() { this.defaultPrevented = true; },
     stopPropagation() { this.propagationStopped = true; },
   };
+  // Real browsers move focus to a focusable target on mousedown, before the
+  // click handlers run — so openPalette captures the trigger as its opener.
+  // DIV rows and the overlay are not focusable: no transition for them.
+  if (el && (el.tagName === 'BUTTON' || el.tagName === 'INPUT' || el.tagName === 'A'
+      || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA')) {
+    doc.activeElement = el;
+    fireFocusin(el);
+  }
   let node = el;
   const chain = [];
   while (node) { chain.push(node); node = node.parentNode; }
@@ -193,7 +201,6 @@ function buildFixture() {
   if (fixture.paletteTrigger !== false) {
     const trigger = makeEl('btn-command-palette', { tagName: 'BUTTON' });
     els['btn-command-palette'] = trigger;
-    if (fixture.triggerFocused) doc.activeElement = trigger;
   }
 
   const resetModal = makeEl('reset-modal');
